@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+dist/
+*.egg-info/
+
+# Local data and generated outputs
+data/raw/
+data/interim/
+data/processed/
+outputs/
+reports/
+figures/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
