@@ -5,13 +5,27 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
 
 from raft_uav.baselines.kalman import TrackingMeasurement
 from raft_uav.coordinates import LocalENUProjector
+
+SENSOR_CLOCK_OFFSET_S = -4.0 * 60.0 * 60.0
+TRUTH_COLUMNS = [
+    "sample",
+    "longitude",
+    "latitude",
+    "altitude_m",
+    "attitude_raw",
+    "velocity_raw",
+    "battery",
+    "timestamp_raw",
+    "field9",
+    "field10",
+]
 
 
 @dataclass(frozen=True)
@@ -45,7 +59,7 @@ def discover_flights(dataset_root: Path) -> list[FlightPaths]:
     rf_radar_root = find_rf_sensor_and_radar_root(dataset_root)
     flights: list[FlightPaths] = []
     for folder in sorted(path for path in rf_radar_root.iterdir() if path.is_dir()):
-        rf_files = sorted(folder.glob("AADM*.csv"))
+        rf_files = sorted(folder.glob("*.csv"))
         radar_files = sorted(folder.glob("radar_data*.json"))
         truth_files = sorted(folder.glob("*vehicleOut*.txt"))
         if not (rf_files or radar_files or truth_files):
@@ -54,9 +68,9 @@ def discover_flights(dataset_root: Path) -> list[FlightPaths]:
             FlightPaths(
                 name=folder.name,
                 root=folder,
-                rf_csv=rf_files[0] if rf_files else None,
-                radar_json=radar_files[0] if radar_files else None,
-                truth_txt=truth_files[0] if truth_files else None,
+                rf_csv=_preferred_variant(rf_files),
+                radar_json=_preferred_variant(radar_files),
+                truth_txt=_preferred_variant(truth_files),
             )
         )
     return flights
@@ -72,93 +86,224 @@ def select_flight(dataset_root: Path, name: str) -> FlightPaths:
     partial = [flight for flight in flights if name.lower() in flight.name.lower()]
     if len(partial) == 1:
         return partial[0]
-    available = ", ".join(flight.name for flight in flights[:20])
+    available = ", ".join(flight.name for flight in flights[:40])
     raise ValueError(f"Could not uniquely select flight {name!r}. Available: {available}")
 
 
 def read_rf_csv(path: Path) -> pd.DataFrame:
     """Read Keysight RF sensor localization outputs."""
 
-    frame = pd.read_csv(path)
+    frame = pd.read_csv(path, index_col=False)
     frame.columns = [str(column).strip() for column in frame.columns]
     return frame
 
 
 def read_truth(path: Path) -> pd.DataFrame:
-    """Read UAV telemetry text/csv data with delimiter inference."""
+    """Read no-header UAV telemetry exported as comma-separated text."""
 
-    return pd.read_csv(path, sep=None, engine="python")
+    frame = pd.read_csv(path, header=None, names=TRUTH_COLUMNS)
+    frame["timestamp_raw"] = frame["timestamp_raw"].astype(str)
+    return frame
+
+
+def read_radar_tracks_json(path: Path) -> pd.DataFrame:
+    """Read Fortem newline-delimited radar JSON logs into one row per track."""
+
+    records: list[dict[str, Any]] = []
+    with Path(path).open("r", encoding="utf-8") as handle:
+        for frame_index, line in enumerate(handle):
+            line = line.strip()
+            if not line:
+                continue
+            payload = json.loads(line)
+            params = payload.get("params", {}) if isinstance(payload, dict) else {}
+            for track_index, track in enumerate(payload.get("trackData") or []):
+                records.append(_flatten_track(frame_index, track_index, track, params))
+    return pd.DataFrame.from_records(records)
 
 
 def read_radar_json(path: Path) -> pd.DataFrame:
-    """Read Fortem radar JSON logs into a flat table."""
+    """Compatibility wrapper for the track-level radar JSON reader."""
 
-    with Path(path).open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    records = list(_iter_radar_records(payload))
-    return pd.json_normalize(records)
+    return read_radar_tracks_json(path)
 
 
-def _iter_radar_records(payload: Any) -> Iterator[dict[str, Any]]:
-    """Yield dictionaries that look like radar target records."""
+def normalize_truth(truth: pd.DataFrame) -> tuple[pd.DataFrame, LocalENUProjector, pd.Timestamp]:
+    """Normalize truth telemetry timestamps and append local ENU coordinates."""
 
-    if isinstance(payload, dict):
-        if {"range", "azimuth", "elevation"}.intersection(payload):
-            yield payload
-        for value in payload.values():
-            yield from _iter_radar_records(value)
-    elif isinstance(payload, list):
-        for item in payload:
-            yield from _iter_radar_records(item)
+    out = truth.copy()
+    out["timestamp"] = pd.to_datetime(
+        out["timestamp_raw"], format="%Y-%m-%d %H:%M:%S.%f", errors="coerce"
+    )
+    out = out.dropna(subset=["timestamp", "latitude", "longitude", "altitude_m"]).copy()
+    out = out[np.isfinite(out[["latitude", "longitude", "altitude_m"]].to_numpy()).all(axis=1)]
+    out = out.sort_values("timestamp").reset_index(drop=True)
+    if out.empty:
+        raise ValueError("truth telemetry contains no valid timestamped LLA rows")
+
+    origin_time = pd.Timestamp(out["timestamp"].iloc[0])
+    projector = projector_from_truth(out)
+    out["time_s"] = (out["timestamp"] - origin_time).dt.total_seconds()
+    return truth_to_enu(out, projector), projector, origin_time
+
+
+def normalize_rf(
+    rf: pd.DataFrame,
+    projector: LocalENUProjector,
+    truth_origin_time: pd.Timestamp,
+    default_std_m: float = 75.0,
+) -> pd.DataFrame:
+    """Normalize RF rows to truth-relative time and local ENU coordinates."""
+
+    out = rf.copy()
+    out["timestamp_raw"] = out["Time"].astype(str)
+    out["timestamp"] = pd.to_datetime(out["Time"], errors="coerce") + pd.to_timedelta(
+        SENSOR_CLOCK_OFFSET_S, unit="s"
+    )
+    out["time_s"] = (out["timestamp"] - truth_origin_time).dt.total_seconds()
+
+    numeric_cols = ["Latitude", "Longitude", "Elevation", "CEP"]
+    for column in numeric_cols:
+        if column in out.columns:
+            out[column] = pd.to_numeric(out[column], errors="coerce")
+
+    valid = (
+        out["timestamp"].notna()
+        & np.isfinite(out["Latitude"])
+        & np.isfinite(out["Longitude"])
+        & (out["Latitude"] != 0.0)
+        & (out["Longitude"] != 0.0)
+    )
+    out = out.loc[valid].sort_values("time_s").reset_index(drop=True)
+    if out.empty:
+        out[["east_m", "north_m", "up_m", "std_m"]] = np.empty((0, 4))
+        return out
+
+    enu = projector.transform_many(
+        out["Latitude"].to_numpy(),
+        out["Longitude"].to_numpy(),
+        np.full(len(out), projector.origin_altitude_m),
+    )
+    out[["east_m", "north_m", "up_m"]] = enu
+
+    cep = pd.to_numeric(out["CEP"], errors="coerce") if "CEP" in out.columns else np.nan
+    std = np.asarray(cep, dtype=float)
+    std = np.where(np.isfinite(std) & (std > 0.0), std, float(default_std_m))
+    out["std_m"] = std
+    return out
+
+
+def normalize_radar(
+    radar: pd.DataFrame,
+    projector: LocalENUProjector,
+    truth_origin_time: pd.Timestamp,
+) -> pd.DataFrame:
+    """Normalize radar track rows to truth-relative time and local ENU coordinates."""
+
+    out = radar.copy()
+    if out.empty:
+        out[["timestamp", "time_s", "east_m", "north_m", "up_m"]] = np.empty((0, 5))
+        return out
+
+    out["timestamp_raw"] = out["global_time_raw_s"]
+    out["timestamp"] = pd.to_datetime(out["global_time_raw_s"], unit="s", errors="coerce")
+    out["timestamp"] = out["timestamp"] + pd.to_timedelta(SENSOR_CLOCK_OFFSET_S, unit="s")
+    out["time_s"] = (out["timestamp"] - truth_origin_time).dt.total_seconds()
+
+    for column in ["latitude", "longitude", "altitude_m", "cat_prob_uav", "track_id"]:
+        if column in out.columns:
+            out[column] = pd.to_numeric(out[column], errors="coerce")
+
+    valid = (
+        out["timestamp"].notna()
+        & np.isfinite(out["latitude"])
+        & np.isfinite(out["longitude"])
+        & np.isfinite(out["altitude_m"])
+    )
+    out = out.loc[valid].sort_values(["time_s", "track_id"]).reset_index(drop=True)
+    if out.empty:
+        out[["east_m", "north_m", "up_m"]] = np.empty((0, 3))
+        return out
+
+    enu = projector.transform_many(
+        out["latitude"].to_numpy(),
+        out["longitude"].to_numpy(),
+        out["altitude_m"].to_numpy(),
+    )
+    out[["east_m", "north_m", "up_m"]] = enu
+    return out
+
+
+def select_radar_measurement_rows(
+    radar: pd.DataFrame,
+    *,
+    selection: str = "catprob",
+    truth: pd.DataFrame | None = None,
+    catprob_threshold: float = 0.5,
+    truth_gate_m: float = 150.0,
+    truth_time_gate_s: float = 1.0,
+) -> pd.DataFrame:
+    """Select radar track rows for the single-UAV baseline."""
+
+    if radar.empty or selection == "none":
+        return radar.iloc[0:0].copy()
+    if selection == "all":
+        return radar.copy()
+    if selection == "catprob":
+        if "cat_prob_uav" not in radar.columns:
+            raise KeyError("radar catprob selection requires cat_prob_uav")
+        return radar.loc[radar["cat_prob_uav"] >= float(catprob_threshold)].copy()
+    if selection == "truth-gated":
+        if truth is None:
+            raise ValueError("truth-gated radar selection requires normalized truth")
+        return _truth_gated_rows(radar, truth, truth_gate_m, truth_time_gate_s)
+    raise ValueError(f"unknown radar selection {selection!r}")
 
 
 def projector_from_truth(truth: pd.DataFrame) -> LocalENUProjector:
     """Create a local ENU projector from the first valid truth latitude/longitude row."""
 
-    lat_col = _first_present(truth, ["Latitude", "latitude", "lat"])
-    lon_col = _first_present(truth, ["Longitude", "longitude", "lon", "lng"])
-    alt_col = _first_present(truth, ["Altitude", "altitude", "alt"])
-    first = truth[[lat_col, lon_col, alt_col]].dropna().iloc[0]
+    first = truth[["latitude", "longitude", "altitude_m"]].dropna().iloc[0]
     return LocalENUProjector(
-        origin_latitude_deg=float(first[lat_col]),
-        origin_longitude_deg=float(first[lon_col]),
-        origin_altitude_m=float(first[alt_col]),
+        origin_latitude_deg=float(first["latitude"]),
+        origin_longitude_deg=float(first["longitude"]),
+        origin_altitude_m=float(first["altitude_m"]),
     )
 
 
 def truth_to_enu(truth: pd.DataFrame, projector: LocalENUProjector) -> pd.DataFrame:
     """Append ENU columns to a truth dataframe."""
 
-    lat_col = _first_present(truth, ["Latitude", "latitude", "lat"])
-    lon_col = _first_present(truth, ["Longitude", "longitude", "lon", "lng"])
-    alt_col = _first_present(truth, ["Altitude", "altitude", "alt"])
     out = truth.copy()
-    enu = projector.transform_many(out[lat_col].to_numpy(), out[lon_col].to_numpy(), out[alt_col].to_numpy())
+    enu = projector.transform_many(
+        out["latitude"].to_numpy(), out["longitude"].to_numpy(), out["altitude_m"].to_numpy()
+    )
     out[["east_m", "north_m", "up_m"]] = enu
     return out
 
 
 def rf_measurements_to_enu(
     rf: pd.DataFrame,
-    projector: LocalENUProjector,
+    projector: LocalENUProjector | None = None,
+    truth_origin_time: pd.Timestamp | None = None,
     default_std_m: float = 75.0,
 ) -> list[TrackingMeasurement]:
     """Convert RF localization rows to 2D ENU measurements."""
 
-    lat_col = _first_present(rf, ["Latitude", "latitude", "lat"])
-    lon_col = _first_present(rf, ["Longitude", "longitude", "lon", "lng"])
-    time_col = _first_present(rf, ["Time", "time", "timestamp"])
-    cep_col = _first_present(rf, ["CEP", "cep"], required=False)
+    frame = rf
+    if "east_m" not in frame.columns:
+        if projector is None or truth_origin_time is None:
+            raise ValueError("raw RF rows require projector and truth_origin_time")
+        frame = normalize_rf(frame, projector, truth_origin_time, default_std_m=default_std_m)
+
     measurements: list[TrackingMeasurement] = []
-    for _, row in rf.dropna(subset=[lat_col, lon_col, time_col]).iterrows():
-        enu = projector.transform(float(row[lat_col]), float(row[lon_col]), projector.origin_altitude_m)
-        std_m = float(row[cep_col]) if cep_col and np.isfinite(row[cep_col]) else float(default_std_m)
-        covariance = np.diag([std_m**2, std_m**2])
+    for _, row in frame.iterrows():
+        std_m = float(row["std_m"]) if np.isfinite(row["std_m"]) else float(default_std_m)
         measurements.append(
             TrackingMeasurement(
-                time_s=_coerce_time_s(row[time_col]),
-                vector=enu[:2],
-                covariance=covariance,
+                time_s=float(row["time_s"]),
+                vector=np.array([float(row["east_m"]), float(row["north_m"])]),
+                covariance=np.diag([std_m**2, std_m**2]),
                 source="rf",
             )
         )
@@ -167,51 +312,150 @@ def rf_measurements_to_enu(
 
 def radar_measurements_to_enu(
     radar: pd.DataFrame,
-    projector: LocalENUProjector,
+    projector: LocalENUProjector | None = None,
+    truth_origin_time: pd.Timestamp | None = None,
     default_xy_std_m: float = 25.0,
     default_z_std_m: float = 35.0,
 ) -> list[TrackingMeasurement]:
-    """Convert radar rows with LLA fields to 3D ENU measurements."""
+    """Convert radar track rows to 3D ENU measurements."""
 
-    lat_col = _first_present(radar, ["lla.latitude", "lla.lat", "latitude", "lat"], required=False)
-    lon_col = _first_present(radar, ["lla.longitude", "lla.lon", "longitude", "lon"], required=False)
-    alt_col = _first_present(radar, ["lla.altitude", "lla.alt", "altitude", "alt"], required=False)
-    time_col = _first_present(radar, ["gpsX", "time", "timestamp"], required=False)
-    if not all([lat_col, lon_col, alt_col, time_col]):
-        return []
+    frame = radar
+    if "east_m" not in frame.columns:
+        if projector is None or truth_origin_time is None:
+            raise ValueError("raw radar rows require projector and truth_origin_time")
+        frame = normalize_radar(frame, projector, truth_origin_time)
 
+    covariance = np.diag([default_xy_std_m**2, default_xy_std_m**2, default_z_std_m**2])
     measurements: list[TrackingMeasurement] = []
-    for _, row in radar.dropna(subset=[lat_col, lon_col, alt_col, time_col]).iterrows():
-        enu = projector.transform(float(row[lat_col]), float(row[lon_col]), float(row[alt_col]))
+    for _, row in frame.iterrows():
         measurements.append(
             TrackingMeasurement(
-                time_s=_coerce_time_s(row[time_col]),
-                vector=enu,
-                covariance=np.diag([default_xy_std_m**2, default_xy_std_m**2, default_z_std_m**2]),
+                time_s=float(row["time_s"]),
+                vector=np.array([float(row["east_m"]), float(row["north_m"]), float(row["up_m"])]),
+                covariance=covariance,
                 source="radar",
             )
         )
     return measurements
 
 
-def _first_present(frame: pd.DataFrame, candidates: list[str], required: bool = True) -> str | None:
-    columns = {column.lower(): column for column in frame.columns}
-    for candidate in candidates:
-        if candidate in frame.columns:
-            return candidate
-        if candidate.lower() in columns:
-            return columns[candidate.lower()]
-    if required:
-        raise KeyError(f"None of the expected columns are present: {candidates}")
-    return None
+def summarize_flight_schema(flight: FlightPaths) -> dict[str, Any]:
+    """Return row counts, columns, and time ranges for one discovered flight."""
+
+    summary: dict[str, Any] = {"flight": flight.name, "root": str(flight.root)}
+    truth: pd.DataFrame | None = None
+    projector: LocalENUProjector | None = None
+    origin_time: pd.Timestamp | None = None
+    if flight.truth_txt is not None:
+        truth_raw = read_truth(flight.truth_txt)
+        truth, projector, origin_time = normalize_truth(truth_raw)
+        summary["truth"] = _frame_summary(flight.truth_txt, truth, "timestamp_raw")
+    else:
+        summary["truth"] = None
+
+    if flight.rf_csv is not None:
+        rf_raw = read_rf_csv(flight.rf_csv)
+        rf = normalize_rf(rf_raw, projector, origin_time) if projector and origin_time else rf_raw
+        summary["rf"] = _frame_summary(flight.rf_csv, rf, "timestamp_raw")
+    else:
+        summary["rf"] = None
+
+    if flight.radar_json is not None:
+        radar_raw = read_radar_tracks_json(flight.radar_json)
+        radar = normalize_radar(radar_raw, projector, origin_time) if projector and origin_time else radar_raw
+        summary["radar"] = _frame_summary(flight.radar_json, radar, "timestamp_raw")
+        if "track_id" in radar.columns:
+            ids = sorted(int(value) for value in radar["track_id"].dropna().unique())
+            summary["radar"]["track_ids_count"] = len(ids)
+            summary["radar"]["track_ids_sample"] = ids[:12]
+    else:
+        summary["radar"] = None
+    return summary
 
 
-def _coerce_time_s(value: Any) -> float:
-    """Coerce numeric or datetime-like timestamps to seconds."""
+def _preferred_variant(paths: Iterable[Path]) -> Path | None:
+    files = list(paths)
+    if not files:
+        return None
+    rerun = [path for path in files if "rerun" in path.name.lower()]
+    return sorted(rerun or files)[0]
 
-    if isinstance(value, (int, float, np.number)):
-        return float(value)
-    parsed = pd.to_datetime(value, errors="coerce", utc=True)
-    if pd.isna(parsed):
-        return float(value)
-    return float(parsed.timestamp())
+
+def _flatten_track(
+    frame_index: int,
+    track_index: int,
+    track: dict[str, Any],
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    lla = track.get("lla") or [np.nan, np.nan, np.nan]
+    velocity_ned = track.get("velocityNed") or [np.nan, np.nan, np.nan]
+    cat_prob = track.get("catProb") or []
+    return {
+        "frame_index": frame_index,
+        "track_index": track_index,
+        "track_id": track.get("id"),
+        "latitude": _list_get(lla, 0),
+        "longitude": _list_get(lla, 1),
+        "altitude_m": _list_get(lla, 2),
+        "velocity_north_mps": _list_get(velocity_ned, 0),
+        "velocity_east_mps": _list_get(velocity_ned, 1),
+        "velocity_down_mps": _list_get(velocity_ned, 2),
+        "gps_week": track.get("gpsWeek", params.get("gpsWeek")),
+        "gps_seconds": track.get("gpsSeconds", params.get("gpsSeconds")),
+        "global_time_raw_s": track.get("globalTime", params.get("globalTime")),
+        "range_m": track.get("range"),
+        "radial_velocity_mps": track.get("radialVelocity"),
+        "num_inliers": track.get("numInliers"),
+        "cat_prob_uav": _list_get(cat_prob, 0),
+        "cat_prob_raw": cat_prob,
+    }
+
+
+def _truth_gated_rows(
+    radar: pd.DataFrame,
+    truth: pd.DataFrame,
+    truth_gate_m: float,
+    truth_time_gate_s: float,
+) -> pd.DataFrame:
+    truth_times = truth["time_s"].to_numpy(dtype=float)
+    query_times = radar["time_s"].to_numpy(dtype=float)
+    truth_indices = _nearest_time_indices(truth_times, query_times)
+    dt = np.abs(truth_times[truth_indices] - query_times)
+    radar_xyz = radar[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    truth_xyz = truth[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)[truth_indices]
+    errors = np.linalg.norm(radar_xyz - truth_xyz, axis=1)
+    keep = (dt <= float(truth_time_gate_s)) & (errors <= float(truth_gate_m))
+    return radar.loc[keep].copy()
+
+
+def _nearest_time_indices(reference_times_s: np.ndarray, query_times_s: np.ndarray) -> np.ndarray:
+    reference = np.asarray(reference_times_s, dtype=float).reshape(-1)
+    query = np.asarray(query_times_s, dtype=float).reshape(-1)
+    insertion = np.searchsorted(reference, query)
+    right = np.clip(insertion, 0, reference.size - 1)
+    left = np.clip(insertion - 1, 0, reference.size - 1)
+    use_right = np.abs(reference[right] - query) < np.abs(reference[left] - query)
+    return np.where(use_right, right, left)
+
+
+def _frame_summary(path: Path, frame: pd.DataFrame, raw_time_col: str) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "file": path.name,
+        "rows": int(len(frame)),
+        "columns": [str(column) for column in frame.columns],
+    }
+    if raw_time_col in frame.columns and len(frame):
+        raw = frame[raw_time_col].dropna()
+        summary["raw_time_min"] = str(raw.iloc[0]) if len(raw) else None
+        summary["raw_time_max"] = str(raw.iloc[-1]) if len(raw) else None
+    if "time_s" in frame.columns and len(frame):
+        times = frame["time_s"].dropna()
+        summary["time_s_min"] = float(times.min()) if len(times) else None
+        summary["time_s_max"] = float(times.max()) if len(times) else None
+    return summary
+
+
+def _list_get(values: Any, index: int) -> Any:
+    if isinstance(values, (list, tuple)) and index < len(values):
+        return values[index]
+    return np.nan

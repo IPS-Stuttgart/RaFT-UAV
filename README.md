@@ -49,3 +49,14 @@ python -m raft_uav.cli run-baseline data/raw/AADM2025Dryad --flight Opt2
 The first baseline is deliberately conservative. It is meant to reproduce the
 published constant-velocity Kalman fusion setup before adding robust gating,
 learned sensor uncertainties, maneuvering models, and smoothing.
+
+Baseline runs write gitignored per-flight artifacts under `outputs/baseline/`:
+
+- `estimates.csv`
+- `metrics.json`
+- `trajectory.png`
+
+Radar JSON frames contain many Fortem `trackData` entries. The default
+reproducibility baseline keeps radar rows whose UAV class probability
+`catProb[0]` is at least `0.5`; use `--radar-selection truth-gated` only for
+schema debugging because it uses ground truth to choose radar rows.
