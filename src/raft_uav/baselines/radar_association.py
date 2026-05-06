@@ -19,6 +19,7 @@ RADAR_ASSOCIATION_MODES = (
     "oracle-nearest-truth",
     "prediction-nis",
     "track-continuity",
+    "geometry-score",
 )
 
 
@@ -37,6 +38,10 @@ def run_async_cv_baseline_with_radar_association(
     inflation_alpha_by_source: Mapping[str, float] | None = None,
     track_switch_nis_ratio: float = 0.5,
     candidate_catprob_threshold: float | None = 0.5,
+    geometry_velocity_std_mps: float = 12.0,
+    geometry_velocity_weight: float = 0.25,
+    geometry_switch_penalty: float = 4.0,
+    geometry_catprob_weight: float = 2.0,
     truth_gate_m: float = 150.0,
     truth_time_gate_s: float = 1.0,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
@@ -46,7 +51,9 @@ def run_async_cv_baseline_with_radar_association(
     bound. ``prediction-nis`` picks the radar candidate with the lowest
     normalized innovation squared against the current predicted state.
     ``track-continuity`` prefers the current Fortem track ID and switches only
-    when another candidate has a substantially lower NIS.
+    when another candidate has a substantially lower NIS. ``geometry-score``
+    is an online score that augments NIS with radar velocity consistency,
+    track switching, and UAV class-probability penalties.
     """
 
     if association not in RADAR_ASSOCIATION_MODES:
@@ -55,6 +62,15 @@ def run_async_cv_baseline_with_radar_association(
         raise ValueError("oracle-nearest-truth association requires normalized truth")
     if track_switch_nis_ratio <= 0.0:
         raise ValueError("track_switch_nis_ratio must be positive")
+    if geometry_velocity_std_mps <= 0.0:
+        raise ValueError("geometry_velocity_std_mps must be positive")
+    for name, value in {
+        "geometry_velocity_weight": geometry_velocity_weight,
+        "geometry_switch_penalty": geometry_switch_penalty,
+        "geometry_catprob_weight": geometry_catprob_weight,
+    }.items():
+        if value < 0.0:
+            raise ValueError(f"{name} must be nonnegative")
 
     covariance = np.diag([float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2])
     events = _events(list(rf_measurements), radar)
@@ -117,6 +133,10 @@ def run_async_cv_baseline_with_radar_association(
             current_track_id=current_track_id,
             track_switch_nis_ratio=track_switch_nis_ratio,
             candidate_catprob_threshold=candidate_catprob_threshold,
+            geometry_velocity_std_mps=geometry_velocity_std_mps,
+            geometry_velocity_weight=geometry_velocity_weight,
+            geometry_switch_penalty=geometry_switch_penalty,
+            geometry_catprob_weight=geometry_catprob_weight,
             truth_gate_m=truth_gate_m,
             truth_time_gate_s=truth_time_gate_s,
         )
@@ -150,6 +170,7 @@ def run_async_cv_baseline_with_radar_association(
                 diagnostics,
                 track_id=_optional_track_id(selected),
                 association_nis=_optional_float(selected.get("association_nis")),
+                association_score=_optional_float(selected.get("association_score")),
                 association_mode=association,
             )
         )
@@ -229,6 +250,10 @@ def _select_radar_candidate(
     current_track_id: int | None,
     track_switch_nis_ratio: float,
     candidate_catprob_threshold: float | None,
+    geometry_velocity_std_mps: float,
+    geometry_velocity_weight: float,
+    geometry_switch_penalty: float,
+    geometry_catprob_weight: float,
     truth_gate_m: float,
     truth_time_gate_s: float,
 ) -> pd.Series | None:
@@ -248,6 +273,19 @@ def _select_radar_candidate(
     scored = _nis_scored_candidates(candidates, tracker, covariance)
     if scored.empty:
         return None
+    if association == "geometry-score":
+        geometry_scored = _geometry_scored_candidates(
+            scored,
+            tracker=tracker,
+            current_track_id=current_track_id,
+            velocity_std_mps=geometry_velocity_std_mps,
+            velocity_weight=geometry_velocity_weight,
+            switch_penalty=geometry_switch_penalty,
+            catprob_weight=geometry_catprob_weight,
+        )
+        best = geometry_scored.loc[geometry_scored["association_score"].idxmin()].copy()
+        best["association_action"] = "geometry_score"
+        return best
     best = scored.loc[scored["association_nis"].idxmin()].copy()
     if association == "prediction-nis" or current_track_id is None:
         return best
@@ -343,6 +381,79 @@ def _nis_scored_candidates(
     return scored
 
 
+def _geometry_scored_candidates(
+    candidates: pd.DataFrame,
+    *,
+    tracker: AsyncConstantVelocityKalmanTracker,
+    current_track_id: int | None,
+    velocity_std_mps: float,
+    velocity_weight: float,
+    switch_penalty: float,
+    catprob_weight: float,
+) -> pd.DataFrame:
+    scored = candidates.copy()
+    velocity_nis = _candidate_velocity_nis(scored, tracker.state[3:6], velocity_std_mps)
+    scored["association_velocity_nis"] = velocity_nis
+    scored["association_velocity_penalty"] = float(velocity_weight) * velocity_nis
+    scored["association_switch_penalty"] = _track_switch_penalty(
+        scored,
+        current_track_id=current_track_id,
+        switch_penalty=switch_penalty,
+    )
+    scored["association_catprob_penalty"] = _catprob_penalty(scored, catprob_weight)
+    scored["association_score"] = (
+        scored["association_nis"]
+        + scored["association_velocity_penalty"]
+        + scored["association_switch_penalty"]
+        + scored["association_catprob_penalty"]
+    )
+    return scored
+
+
+def _candidate_velocity_nis(
+    candidates: pd.DataFrame,
+    predicted_velocity_enu_mps: np.ndarray,
+    velocity_std_mps: float,
+) -> np.ndarray:
+    required = {"velocity_east_mps", "velocity_north_mps", "velocity_down_mps"}
+    if not required.issubset(candidates.columns):
+        return np.zeros(len(candidates), dtype=float)
+    velocities = np.column_stack(
+        [
+            pd.to_numeric(candidates["velocity_east_mps"], errors="coerce").to_numpy(dtype=float),
+            pd.to_numeric(candidates["velocity_north_mps"], errors="coerce").to_numpy(dtype=float),
+            -pd.to_numeric(candidates["velocity_down_mps"], errors="coerce").to_numpy(dtype=float),
+        ]
+    )
+    finite = np.isfinite(velocities).all(axis=1)
+    residuals = velocities - np.asarray(predicted_velocity_enu_mps, dtype=float).reshape(3)
+    velocity_nis = np.sum((residuals / float(velocity_std_mps)) ** 2, axis=1)
+    return np.where(finite, velocity_nis, 0.0)
+
+
+def _track_switch_penalty(
+    candidates: pd.DataFrame,
+    *,
+    current_track_id: int | None,
+    switch_penalty: float,
+) -> np.ndarray:
+    if current_track_id is None or "track_id" not in candidates.columns:
+        return np.zeros(len(candidates), dtype=float)
+    track_ids = pd.to_numeric(candidates["track_id"], errors="coerce").to_numpy(dtype=float)
+    switches = np.zeros(len(candidates), dtype=bool)
+    finite = np.isfinite(track_ids)
+    switches[finite] = track_ids[finite].astype(int) != int(current_track_id)
+    return np.where(switches, float(switch_penalty), 0.0)
+
+
+def _catprob_penalty(candidates: pd.DataFrame, catprob_weight: float) -> np.ndarray:
+    if "cat_prob_uav" not in candidates.columns:
+        return np.zeros(len(candidates), dtype=float)
+    catprob = pd.to_numeric(candidates["cat_prob_uav"], errors="coerce").fillna(1.0)
+    catprob = np.clip(catprob.to_numpy(dtype=float), 0.0, 1.0)
+    return float(catprob_weight) * (1.0 - catprob) ** 2
+
+
 def _radar_row_to_measurement(row: pd.Series, covariance: np.ndarray) -> TrackingMeasurement:
     return TrackingMeasurement(
         time_s=float(row["time_s"]),
@@ -414,6 +525,7 @@ def _record(
     *,
     track_id: int | None = None,
     association_nis: float | None = None,
+    association_score: float | None = None,
     association_mode: str | None = None,
 ) -> dict[str, object]:
     record: dict[str, object] = {
@@ -427,6 +539,8 @@ def _record(
         record["track_id"] = track_id
     if association_nis is not None:
         record["association_nis"] = association_nis
+    if association_score is not None:
+        record["association_score"] = association_score
     if association_mode is not None:
         record["association_mode"] = association_mode
     return record

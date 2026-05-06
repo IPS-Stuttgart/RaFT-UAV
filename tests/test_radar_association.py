@@ -117,9 +117,65 @@ def test_track_continuity_keeps_current_track_for_small_nis_gain():
         current_track_id=1,
         track_switch_nis_ratio=0.5,
         candidate_catprob_threshold=None,
+        geometry_velocity_std_mps=12.0,
+        geometry_velocity_weight=0.25,
+        geometry_switch_penalty=4.0,
+        geometry_catprob_weight=2.0,
         truth_gate_m=150.0,
         truth_time_gate_s=1.0,
     )
 
     assert selected is not None
     assert int(selected["track_id"]) == 1
+
+
+def test_geometry_score_prefers_velocity_consistent_candidate():
+    tracker = AsyncConstantVelocityKalmanTracker(initial_position=np.zeros(3), initial_time_s=0.0)
+    tracker.mean[3] = 20.0
+    candidates = pd.DataFrame(
+        [
+            {
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": 10.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "velocity_east_mps": 20.0,
+                "velocity_north_mps": 0.0,
+                "velocity_down_mps": 0.0,
+                "cat_prob_uav": 0.8,
+            },
+            {
+                "track_id": 2,
+                "time_s": 0.0,
+                "east_m": 10.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "velocity_east_mps": 0.0,
+                "velocity_north_mps": 0.0,
+                "velocity_down_mps": 0.0,
+                "cat_prob_uav": 0.8,
+            },
+        ]
+    )
+
+    selected = _select_radar_candidate(
+        candidates,
+        association="geometry-score",
+        tracker=tracker,
+        covariance=np.diag([25.0**2, 25.0**2, 35.0**2]),
+        truth=None,
+        current_track_id=None,
+        track_switch_nis_ratio=0.5,
+        candidate_catprob_threshold=None,
+        geometry_velocity_std_mps=12.0,
+        geometry_velocity_weight=1.0,
+        geometry_switch_penalty=4.0,
+        geometry_catprob_weight=2.0,
+        truth_gate_m=150.0,
+        truth_time_gate_s=1.0,
+    )
+
+    assert selected is not None
+    assert int(selected["track_id"]) == 1
+    assert float(selected["association_score"]) < float("inf")

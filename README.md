@@ -82,6 +82,18 @@ Run the Opt1-Opt3 smoothing ablation:
 python scripts/run_smoothing_ablation.py data/raw/AADM2025Dryad
 ```
 
+Analyze online radar association against the diagnostic oracle on Opt1:
+
+```bash
+python scripts/analyze_association_failures.py data/raw/AADM2025Dryad --flight Opt1
+```
+
+Run the Opt1-Opt3 radar candidate class-probability threshold ablation:
+
+```bash
+python scripts/run_candidate_threshold_ablation.py data/raw/AADM2025Dryad --thresholds 0.4 0.5
+```
+
 The first baseline is deliberately conservative. It is meant to reproduce the
 published constant-velocity Kalman fusion setup before adding robust gating,
 learned sensor uncertainties, maneuvering models, and smoothing.
@@ -90,6 +102,7 @@ Baseline runs write gitignored per-flight artifacts under `outputs/baseline/`:
 
 - `estimates.csv`
 - `diagnostics.csv`
+- `selected_radar.csv`
 - `metrics.json`
 - `trajectory.png`
 
@@ -98,7 +111,10 @@ reproducibility baseline uses `--radar-association catprob`, which keeps radar
 rows whose UAV class probability `catProb[0]` is at least `0.5`. Use
 `--radar-association oracle-nearest-truth` only as a diagnostic upper bound
 because it uses ground truth. The online alternatives are
-`--radar-association prediction-nis` and `--radar-association track-continuity`.
+`--radar-association prediction-nis`,
+`--radar-association track-continuity`, and the experimental
+`--radar-association geometry-score` mode, which adds velocity consistency,
+track-switch, and UAV class-probability terms to the NIS score.
 The legacy `--radar-selection truth-gated` mode is retained for schema
 debugging.
 

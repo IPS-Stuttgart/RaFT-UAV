@@ -75,6 +75,30 @@ def main(argv: list[str] | None = None) -> int:
         help="track-continuity switches IDs only when best NIS is below this ratio",
     )
     baseline_parser.add_argument(
+        "--geometry-velocity-std",
+        type=float,
+        default=12.0,
+        help="velocity standard deviation used by --radar-association geometry-score",
+    )
+    baseline_parser.add_argument(
+        "--geometry-velocity-weight",
+        type=float,
+        default=0.25,
+        help="weight for the radar velocity consistency term in geometry-score",
+    )
+    baseline_parser.add_argument(
+        "--geometry-switch-penalty",
+        type=float,
+        default=4.0,
+        help="NIS-scale penalty for changing Fortem track IDs in geometry-score",
+    )
+    baseline_parser.add_argument(
+        "--geometry-catprob-weight",
+        type=float,
+        default=2.0,
+        help="weight for low UAV class-probability penalty in geometry-score",
+    )
+    baseline_parser.add_argument(
         "--smoother",
         choices=SMOOTHER_MODES,
         default="none",
@@ -138,6 +162,10 @@ def main(argv: list[str] | None = None) -> int:
             args.truth_gate_m,
             args.truth_time_gate_s,
             args.track_switch_nis_ratio,
+            args.geometry_velocity_std,
+            args.geometry_velocity_weight,
+            args.geometry_switch_penalty,
+            args.geometry_catprob_weight,
             args.smoother,
             args.smoother_lag_s,
             args.max_eval_time_delta_s,
@@ -179,6 +207,10 @@ def _run_baseline(
     truth_gate_m: float,
     truth_time_gate_s: float,
     track_switch_nis_ratio: float,
+    geometry_velocity_std: float,
+    geometry_velocity_weight: float,
+    geometry_switch_penalty: float,
+    geometry_catprob_weight: float,
     smoother: str,
     smoother_lag_s: float,
     max_eval_time_delta_s: float,
@@ -245,6 +277,10 @@ def _run_baseline(
             inflation_alpha_by_source=inflation_alphas,
             track_switch_nis_ratio=track_switch_nis_ratio,
             candidate_catprob_threshold=radar_catprob_threshold,
+            geometry_velocity_std_mps=geometry_velocity_std,
+            geometry_velocity_weight=geometry_velocity_weight,
+            geometry_switch_penalty=geometry_switch_penalty,
+            geometry_catprob_weight=geometry_catprob_weight,
             truth_gate_m=truth_gate_m,
             truth_time_gate_s=truth_time_gate_s,
         )
@@ -295,10 +331,12 @@ def _run_baseline(
 
     estimates_path = flight_output / "estimates.csv"
     diagnostics_path = flight_output / "diagnostics.csv"
+    selected_radar_path = flight_output / "selected_radar.csv"
     metrics_path = flight_output / "metrics.json"
     plot_path = flight_output / "trajectory.png"
     estimate_frame.to_csv(estimates_path, index=False)
     diagnostics_frame.to_csv(diagnostics_path, index=False)
+    selected_radar.to_csv(selected_radar_path, index=False)
 
     metrics = _baseline_metrics(
         flight_name=flight.name,
@@ -314,6 +352,10 @@ def _run_baseline(
         truth_gate_m=truth_gate_m,
         truth_time_gate_s=truth_time_gate_s,
         track_switch_nis_ratio=track_switch_nis_ratio,
+        geometry_velocity_std=geometry_velocity_std,
+        geometry_velocity_weight=geometry_velocity_weight,
+        geometry_switch_penalty=geometry_switch_penalty,
+        geometry_catprob_weight=geometry_catprob_weight,
         smoother=smoother,
         smoother_lag_s=smoother_lag_s,
         max_eval_time_delta_s=max_eval_time_delta_s,
@@ -342,6 +384,7 @@ def _run_baseline(
     print(f"metrics_json={metrics_path}")
     print(f"estimates_csv={estimates_path}")
     print(f"diagnostics_csv={diagnostics_path}")
+    print(f"selected_radar_csv={selected_radar_path}")
     print(f"trajectory_png={plot_path}")
     print(f"rmse_2d_m={metrics['position_error_2d']['rmse_m']:.3f}")
     print(f"rmse_3d_m={metrics['position_error_3d']['rmse_m']:.3f}")
@@ -365,6 +408,7 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
                 "track_id": _optional_int(record.get("track_id")),
                 "association_mode": _optional_str(record.get("association_mode")),
                 "association_nis": _optional_float(record.get("association_nis")),
+                "association_score": _optional_float(record.get("association_score")),
                 "measurement_dim": int(record.get("measurement_dim", 0)),
                 "accepted": bool(record.get("accepted", True)),
                 "update_action": str(record.get("update_action", "updated")),
@@ -407,6 +451,10 @@ def _baseline_metrics(
     truth_gate_m: float,
     truth_time_gate_s: float,
     track_switch_nis_ratio: float,
+    geometry_velocity_std: float,
+    geometry_velocity_weight: float,
+    geometry_switch_penalty: float,
+    geometry_catprob_weight: float,
     smoother: str,
     smoother_lag_s: float,
     max_eval_time_delta_s: float,
@@ -471,6 +519,12 @@ def _baseline_metrics(
         "truth_gate_m": float(truth_gate_m),
         "truth_time_gate_s": float(truth_time_gate_s),
         "track_switch_nis_ratio": float(track_switch_nis_ratio),
+        "geometry_association": {
+            "velocity_std_mps": float(geometry_velocity_std),
+            "velocity_weight": float(geometry_velocity_weight),
+            "switch_penalty": float(geometry_switch_penalty),
+            "catprob_weight": float(geometry_catprob_weight),
+        },
         "smoother": {
             "method": smoother,
             "lag_s": float(smoother_lag_s) if smoother == "fixed-lag" else None,
