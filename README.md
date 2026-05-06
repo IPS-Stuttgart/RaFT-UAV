@@ -76,6 +76,12 @@ Run the Opt1-Opt3 radar association ablation:
 python scripts/run_radar_association_ablation.py data/raw/AADM2025Dryad
 ```
 
+Run the Opt1-Opt3 smoothing ablation:
+
+```bash
+python scripts/run_smoothing_ablation.py data/raw/AADM2025Dryad
+```
+
 The first baseline is deliberately conservative. It is meant to reproduce the
 published constant-velocity Kalman fusion setup before adding robust gating,
 learned sensor uncertainties, maneuvering models, and smoothing.
@@ -95,3 +101,7 @@ because it uses ground truth. The online alternatives are
 `--radar-association prediction-nis` and `--radar-association track-continuity`.
 The legacy `--radar-selection truth-gated` mode is retained for schema
 debugging.
+
+Use `--smoother fixed-lag --smoother-lag-s 20` to apply a 20-second RTS
+fixed-lag pass before metrics and plots are written. `--smoother rts` runs the
+full offline RTS smoother and is mainly useful as an upper-bound diagnostic.

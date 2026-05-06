@@ -48,6 +48,7 @@ def _row(method: str, metrics_path: Path, metrics: dict[str, Any]) -> dict[str, 
     source_counts = metrics.get("source_counts") or {}
     gating = metrics.get("gating") or {}
     robust_update = metrics.get("robust_update") or {}
+    smoother = metrics.get("smoother") or {}
     error_2d = metrics.get("position_error_2d") or {}
     error_3d = metrics.get("position_error_3d") or {}
 
@@ -71,6 +72,8 @@ def _row(method: str, metrics_path: Path, metrics: dict[str, Any]) -> dict[str, 
         ),
         "gating_enabled": bool(gating.get("enabled", False)),
         "robust_update": _empty_if_none(robust_update.get("method")),
+        "smoother": _empty_if_none(smoother.get("method")),
+        "smoother_lag_s": _empty_if_none(smoother.get("lag_s")),
         "rf_gate_probability": _empty_if_none(rf_gate_probability),
         "radar_gate_probability": _empty_if_none(radar_gate_probability),
         "rf_inflation_alpha": _empty_if_none(robust_update.get("rf_inflation_alpha")),

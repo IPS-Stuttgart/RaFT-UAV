@@ -16,6 +16,7 @@ from raft_uav.baselines.radar_association import (
     RADAR_ASSOCIATION_MODES,
     run_async_cv_baseline_with_radar_association,
 )
+from raft_uav.baselines.smoothing import SMOOTHER_MODES, smooth_tracking_records
 from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
 from raft_uav.io.aerpaw import (
     discover_flights,
@@ -73,6 +74,18 @@ def main(argv: list[str] | None = None) -> int:
         default=0.5,
         help="track-continuity switches IDs only when best NIS is below this ratio",
     )
+    baseline_parser.add_argument(
+        "--smoother",
+        choices=SMOOTHER_MODES,
+        default="none",
+        help="post-filter smoothing mode applied before metrics are computed",
+    )
+    baseline_parser.add_argument(
+        "--smoother-lag-s",
+        type=float,
+        default=20.0,
+        help="future horizon for --smoother fixed-lag",
+    )
     baseline_parser.add_argument("--max-eval-time-delta-s", type=float, default=2.0)
     baseline_parser.add_argument(
         "--enable-gating",
@@ -125,6 +138,8 @@ def main(argv: list[str] | None = None) -> int:
             args.truth_gate_m,
             args.truth_time_gate_s,
             args.track_switch_nis_ratio,
+            args.smoother,
+            args.smoother_lag_s,
             args.max_eval_time_delta_s,
             args.enable_gating,
             args.robust_update,
@@ -164,6 +179,8 @@ def _run_baseline(
     truth_gate_m: float,
     truth_time_gate_s: float,
     track_switch_nis_ratio: float,
+    smoother: str,
+    smoother_lag_s: float,
     max_eval_time_delta_s: float,
     enable_gating: bool,
     robust_update: str,
@@ -178,6 +195,8 @@ def _run_baseline(
         raise ValueError("inflation alphas must be positive")
     if track_switch_nis_ratio <= 0.0:
         raise ValueError("track_switch_nis_ratio must be positive")
+    if smoother == "fixed-lag" and smoother_lag_s < 0.0:
+        raise ValueError("smoother_lag_s must be nonnegative for fixed-lag smoothing")
     radar_mode = legacy_radar_selection or radar_association
     flight = select_flight(dataset_root, flight_name)
     if flight.truth_txt is None:
@@ -249,6 +268,12 @@ def _run_baseline(
         )
     if not records:
         raise RuntimeError(f"{flight.name} produced no baseline posterior records")
+    records = smooth_tracking_records(
+        records,
+        method=smoother,
+        acceleration_std_mps2=acceleration_std,
+        lag_s=smoother_lag_s,
+    )
 
     estimate_frame = _records_to_frame(records)
     diagnostics_columns = [
@@ -289,6 +314,8 @@ def _run_baseline(
         truth_gate_m=truth_gate_m,
         truth_time_gate_s=truth_time_gate_s,
         track_switch_nis_ratio=track_switch_nis_ratio,
+        smoother=smoother,
+        smoother_lag_s=smoother_lag_s,
         max_eval_time_delta_s=max_eval_time_delta_s,
         enable_gating=enable_gating,
         robust_update=robust_update,
@@ -311,6 +338,7 @@ def _run_baseline(
     print(f"radar_association={radar_mode}")
     print(f"selected_radar_rows={len(selected_radar)}")
     print(f"selected_radar_track_ids={metrics['selected_radar_track_ids']}")
+    print(f"smoother={smoother}")
     print(f"metrics_json={metrics_path}")
     print(f"estimates_csv={estimates_path}")
     print(f"diagnostics_csv={diagnostics_path}")
@@ -324,6 +352,12 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for record in records:
         state = np.asarray(record["state"], dtype=float).reshape(6)
+        filtered_state = record.get("filtered_state")
+        filtered = (
+            np.asarray(filtered_state, dtype=float).reshape(6)
+            if filtered_state is not None
+            else None
+        )
         rows.append(
             {
                 "time_s": float(record["time_s"]),
@@ -345,6 +379,14 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
                 "v_east_mps": state[3],
                 "v_north_mps": state[4],
                 "v_up_mps": state[5],
+                "filtered_east_m": None if filtered is None else filtered[0],
+                "filtered_north_m": None if filtered is None else filtered[1],
+                "filtered_up_m": None if filtered is None else filtered[2],
+                "filtered_v_east_mps": None if filtered is None else filtered[3],
+                "filtered_v_north_mps": None if filtered is None else filtered[4],
+                "filtered_v_up_mps": None if filtered is None else filtered[5],
+                "smoother_method": _optional_str(record.get("smoother_method")),
+                "smoother_lag_s": _optional_float(record.get("smoother_lag_s")),
             }
         )
     return pd.DataFrame.from_records(rows).sort_values("time_s").reset_index(drop=True)
@@ -365,6 +407,8 @@ def _baseline_metrics(
     truth_gate_m: float,
     truth_time_gate_s: float,
     track_switch_nis_ratio: float,
+    smoother: str,
+    smoother_lag_s: float,
     max_eval_time_delta_s: float,
     enable_gating: bool,
     robust_update: str,
@@ -427,6 +471,10 @@ def _baseline_metrics(
         "truth_gate_m": float(truth_gate_m),
         "truth_time_gate_s": float(truth_time_gate_s),
         "track_switch_nis_ratio": float(track_switch_nis_ratio),
+        "smoother": {
+            "method": smoother,
+            "lag_s": float(smoother_lag_s) if smoother == "fixed-lag" else None,
+        },
         "max_eval_time_delta_s": float(max_eval_time_delta_s),
         "gating": {
             "enabled": bool(enable_gating),
