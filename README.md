@@ -52,6 +52,12 @@ Run the normalized-innovation-squared gated baseline on one flight:
 python -m raft_uav.cli run-baseline data/raw/AADM2025Dryad --flight Opt2 --enable-gating --rf-gate-prob 0.99 --radar-gate-prob 0.99
 ```
 
+Run the soft NIS covariance-inflation baseline on one flight:
+
+```bash
+python -m raft_uav.cli run-baseline data/raw/AADM2025Dryad --flight Opt2 --robust-update nis-inflate --rf-gate-prob 0.99 --radar-gate-prob 0.99
+```
+
 The first baseline is deliberately conservative. It is meant to reproduce the
 published constant-velocity Kalman fusion setup before adding robust gating,
 learned sensor uncertainties, maneuvering models, and smoothing.

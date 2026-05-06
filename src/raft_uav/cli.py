@@ -64,6 +64,12 @@ def main(argv: list[str] | None = None) -> int:
         help="enable normalized-innovation-squared Mahalanobis gates before updates",
     )
     baseline_parser.add_argument(
+        "--robust-update",
+        choices=["none", "nis-inflate"],
+        default="none",
+        help="robust update rule; nis-inflate keeps high-NIS updates with inflated covariance",
+    )
+    baseline_parser.add_argument(
         "--rf-gate-prob",
         type=float,
         default=0.99,
@@ -91,6 +97,7 @@ def main(argv: list[str] | None = None) -> int:
             args.truth_time_gate_s,
             args.max_eval_time_delta_s,
             args.enable_gating,
+            args.robust_update,
             args.rf_gate_prob,
             args.radar_gate_prob,
         )
@@ -125,9 +132,12 @@ def _run_baseline(
     truth_time_gate_s: float,
     max_eval_time_delta_s: float,
     enable_gating: bool,
+    robust_update: str,
     rf_gate_prob: float,
     radar_gate_prob: float,
 ) -> int:
+    if enable_gating and robust_update != "none":
+        raise ValueError("--enable-gating and --robust-update are mutually exclusive")
     flight = select_flight(dataset_root, flight_name)
     if flight.truth_txt is None:
         raise FileNotFoundError(f"{flight.name} has no truth telemetry file")
@@ -162,13 +172,17 @@ def _run_baseline(
         measurements.extend(radar_measurements_to_enu(selected_radar))
 
     gate_probabilities = None
-    if enable_gating:
+    robust_updates = None
+    if enable_gating or robust_update != "none":
         gate_probabilities = {"rf": rf_gate_prob, "radar": radar_gate_prob}
+    if robust_update != "none":
+        robust_updates = {"rf": robust_update, "radar": robust_update}
 
     records = run_async_cv_baseline(
         measurements,
         acceleration_std_mps2=acceleration_std,
         gate_probabilities_by_source=gate_probabilities,
+        robust_update_by_source=robust_updates,
     )
     if not records:
         raise RuntimeError(f"{flight.name} produced no baseline posterior records")
@@ -179,8 +193,10 @@ def _run_baseline(
         "source",
         "measurement_dim",
         "accepted",
+        "update_action",
         "nis",
         "gate_threshold",
+        "covariance_scale",
         "residual_norm_m",
     ]
     diagnostics_frame = estimate_frame[diagnostics_columns].copy()
@@ -210,6 +226,7 @@ def _run_baseline(
         truth_time_gate_s=truth_time_gate_s,
         max_eval_time_delta_s=max_eval_time_delta_s,
         enable_gating=enable_gating,
+        robust_update=robust_update,
         rf_gate_prob=rf_gate_prob,
         radar_gate_prob=radar_gate_prob,
     )
@@ -221,6 +238,7 @@ def _run_baseline(
     print(f"posterior_records={len(records)}")
     print(f"accepted_measurements={metrics['accepted_measurements']}")
     print(f"rejected_measurements={metrics['rejected_measurements']}")
+    print(f"reweighted_measurements={metrics['reweighted_measurements']}")
     print(f"rf_rows={len(rf)}")
     print(f"radar_rows={len(radar)}")
     print(f"selected_radar_rows={len(selected_radar)}")
@@ -244,8 +262,10 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
                 "source": str(record["source"]),
                 "measurement_dim": int(record.get("measurement_dim", 0)),
                 "accepted": bool(record.get("accepted", True)),
+                "update_action": str(record.get("update_action", "updated")),
                 "nis": _optional_float(record.get("nis")),
                 "gate_threshold": _optional_float(record.get("gate_threshold")),
+                "covariance_scale": _optional_float(record.get("covariance_scale")),
                 "residual_norm_m": _optional_float(record.get("residual_norm_m")),
                 "east_m": state[0],
                 "north_m": state[1],
@@ -274,6 +294,7 @@ def _baseline_metrics(
     truth_time_gate_s: float,
     max_eval_time_delta_s: float,
     enable_gating: bool,
+    robust_update: str,
     rf_gate_prob: float,
     radar_gate_prob: float,
 ) -> dict[str, Any]:
@@ -305,6 +326,10 @@ def _baseline_metrics(
     rejected_by_source = Counter(
         str(value) for value in estimate_frame.loc[~accepted_mask, "source"]
     )
+    reweighted_mask = estimate_frame["update_action"] == "inflated"
+    reweighted_by_source = Counter(
+        str(value) for value in estimate_frame.loc[reweighted_mask, "source"]
+    )
 
     selected_ids = []
     if "track_id" in selected_radar.columns:
@@ -332,6 +357,16 @@ def _baseline_metrics(
             "rf_gate_probability": float(rf_gate_prob) if enable_gating else None,
             "radar_gate_probability": float(radar_gate_prob) if enable_gating else None,
         },
+        "robust_update": {
+            "method": None if robust_update == "none" else robust_update,
+            "test_statistic": "normalized innovation squared"
+            if robust_update != "none"
+            else None,
+            "rf_gate_probability": float(rf_gate_prob) if robust_update != "none" else None,
+            "radar_gate_probability": float(radar_gate_prob)
+            if robust_update != "none"
+            else None,
+        },
         "truth_rows": int(len(truth)),
         "rf_rows": int(len(rf)),
         "radar_rows": int(len(radar)),
@@ -340,6 +375,7 @@ def _baseline_metrics(
         "posterior_records": int(len(estimate_frame)),
         "accepted_measurements": int(accepted_mask.sum()),
         "rejected_measurements": int((~accepted_mask).sum()),
+        "reweighted_measurements": int(reweighted_mask.sum()),
         "source_counts": {key: int(value) for key, value in sorted(source_counts.items())},
         "accepted_by_source": {
             key: int(value) for key, value in sorted(accepted_by_source.items())
@@ -347,7 +383,11 @@ def _baseline_metrics(
         "rejected_by_source": {
             key: int(value) for key, value in sorted(rejected_by_source.items())
         },
+        "reweighted_by_source": {
+            key: int(value) for key, value in sorted(reweighted_by_source.items())
+        },
         "nis_by_source": _summarize_nis_by_source(estimate_frame),
+        "covariance_scale_by_source": _summarize_covariance_scale_by_source(estimate_frame),
         "time_range_s": {
             "truth_min": float(truth["time_s"].min()),
             "truth_max": float(truth["time_s"].max()),
@@ -376,6 +416,35 @@ def _summarize_nis_by_source(estimate_frame: pd.DataFrame) -> dict[str, dict[str
             "mean": float(np.mean(values)),
             "p50": float(np.percentile(values, 50)),
             "p95": float(np.percentile(values, 95)),
+        }
+    return summaries
+
+
+def _summarize_covariance_scale_by_source(
+    estimate_frame: pd.DataFrame,
+) -> dict[str, dict[str, float]]:
+    summaries: dict[str, dict[str, float]] = {}
+    for source, group in estimate_frame.groupby("source"):
+        values = (
+            pd.to_numeric(group["covariance_scale"], errors="coerce")
+            .dropna()
+            .to_numpy(dtype=float)
+        )
+        if values.size == 0:
+            summaries[str(source)] = {
+                "count": 0.0,
+                "mean": float("nan"),
+                "p50": float("nan"),
+                "p95": float("nan"),
+                "max": float("nan"),
+            }
+            continue
+        summaries[str(source)] = {
+            "count": float(values.size),
+            "mean": float(np.mean(values)),
+            "p50": float(np.percentile(values, 50)),
+            "p95": float(np.percentile(values, 95)),
+            "max": float(np.max(values)),
         }
     return summaries
 

@@ -37,6 +37,7 @@ def test_large_outlier_is_rejected_when_source_gate_is_tight():
 
     assert len(records) == 3
     assert records[-1]["accepted"] is False
+    assert records[-1]["update_action"] == "rejected"
     assert records[-1]["nis"] > 5.0
     assert np.linalg.norm(records[-1]["state"][:2]) < 100.0
 
@@ -52,3 +53,25 @@ def test_missing_source_gate_keeps_updates_accepted():
 
     assert records[-1]["accepted"] is True
     assert records[-1]["source"] == "rf"
+
+
+def test_nis_inflation_keeps_large_outlier_but_downweights_it():
+    measurements = [
+        _measurement(0.0, 0.0, 0.0),
+        _measurement(1.0, 1.0, 0.0),
+        _measurement(2.0, 10_000.0, 10_000.0),
+    ]
+    rejected = run_async_cv_baseline(measurements, gate_thresholds_by_source={"rf": 5.0})
+    inflated = run_async_cv_baseline(
+        measurements,
+        gate_thresholds_by_source={"rf": 5.0},
+        robust_update_by_source={"rf": "nis-inflate"},
+    )
+
+    assert inflated[-1]["accepted"] is True
+    assert inflated[-1]["update_action"] == "inflated"
+    assert inflated[-1]["covariance_scale"] > 1.0
+    assert np.linalg.norm(inflated[-1]["state"][:2]) > np.linalg.norm(
+        rejected[-1]["state"][:2]
+    )
+    assert np.linalg.norm(inflated[-1]["state"][:2]) < 10_000.0

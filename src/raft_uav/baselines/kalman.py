@@ -48,8 +48,10 @@ class TrackingUpdateDiagnostics:
     source: str
     measurement_dim: int
     accepted: bool
+    update_action: str
     nis: float
     gate_threshold: float | None
+    covariance_scale: float
     residual_norm_m: float
 
     def to_record(self) -> dict[str, object]:
@@ -208,13 +210,15 @@ class AsyncConstantVelocityKalmanTracker:
         self,
         measurement: TrackingMeasurement,
         gate_threshold: float | None = None,
+        robust_update: str | None = None,
     ) -> TrackingUpdateDiagnostics:
         """Predict to and conditionally update from one RF or radar measurement.
 
-        If ``gate_threshold`` is provided, the update is skipped when the
-        normalized innovation squared exceeds that threshold. Prediction to the
-        measurement time is still performed, so rejected measurements leave a
-        time-aligned posterior record.
+        If ``gate_threshold`` is provided and ``robust_update`` is ``None``, the
+        update is skipped when the normalized innovation squared exceeds that
+        threshold. If ``robust_update="nis-inflate"``, the update is kept but
+        its measurement covariance is inflated by ``nis / gate_threshold`` when
+        the threshold is exceeded.
         """
 
         self.predict_to(measurement.time_s)
@@ -226,7 +230,21 @@ class AsyncConstantVelocityKalmanTracker:
         innovation_covariance = observation @ self.covariance @ observation.T + covariance
         nis = normalized_innovation_squared(residual, innovation_covariance)
         threshold = None if gate_threshold is None else float(gate_threshold)
-        accepted = threshold is None or nis <= threshold
+        covariance_scale = 1.0
+        update_action = "updated"
+        accepted = True
+
+        if threshold is not None and nis > threshold:
+            if robust_update == "nis-inflate":
+                covariance_scale = max(1.0, float(nis / threshold))
+                covariance = covariance * covariance_scale
+                innovation_covariance = observation @ self.covariance @ observation.T + covariance
+                update_action = "inflated"
+            elif robust_update is None:
+                accepted = False
+                update_action = "rejected"
+            else:
+                raise ValueError(f"unknown robust update mode {robust_update!r}")
 
         if accepted:
             self._linear_update(observation, residual, innovation_covariance, covariance, vector)
@@ -236,8 +254,10 @@ class AsyncConstantVelocityKalmanTracker:
             source=measurement.source,
             measurement_dim=vector.size,
             accepted=bool(accepted),
+            update_action=update_action,
             nis=float(nis),
             gate_threshold=threshold,
+            covariance_scale=float(covariance_scale),
             residual_norm_m=float(np.linalg.norm(residual)),
         )
 
@@ -276,13 +296,17 @@ def run_async_cv_baseline(
     acceleration_std_mps2: float = 4.0,
     gate_probabilities_by_source: Mapping[str, float | None] | None = None,
     gate_thresholds_by_source: Mapping[str, float | None] | None = None,
+    robust_update_by_source: Mapping[str, str | None] | None = None,
 ) -> list[dict[str, object]]:
     """Run the asynchronous CV Kalman baseline and return posterior records.
 
     ``gate_probabilities_by_source`` maps source names such as ``"rf"`` or
     ``"radar"`` to chi-square gate probabilities. ``None`` or a missing source
-    disables gating. ``gate_thresholds_by_source`` can be used for deterministic
-    tests or manually tuned thresholds and takes precedence over probabilities.
+    disables NIS thresholding. ``gate_thresholds_by_source`` can be used for
+    deterministic tests or manually tuned thresholds and takes precedence over
+    probabilities. ``robust_update_by_source={"rf": "nis-inflate"}`` keeps
+    high-NIS updates and inflates their measurement covariance instead of
+    rejecting them.
     """
 
     ordered = sorted(measurements, key=lambda item: item.time_s)
@@ -302,7 +326,15 @@ def run_async_cv_baseline(
             gate_probabilities_by_source=gate_probabilities_by_source,
             gate_thresholds_by_source=gate_thresholds_by_source,
         )
-        diagnostics = tracker.update(measurement, gate_threshold=gate_threshold)
+        robust_update = _robust_update_for_measurement(
+            measurement,
+            robust_update_by_source=robust_update_by_source,
+        )
+        diagnostics = tracker.update(
+            measurement,
+            gate_threshold=gate_threshold,
+            robust_update=robust_update,
+        )
         records.append(
             {
                 "time_s": measurement.time_s,
@@ -329,6 +361,16 @@ def _gate_threshold_for_measurement(
             gate_probabilities_by_source[measurement.source],
             measurement.vector.size,
         )
+    return None
+
+
+def _robust_update_for_measurement(
+    measurement: TrackingMeasurement,
+    *,
+    robust_update_by_source: Mapping[str, str | None] | None,
+) -> str | None:
+    if robust_update_by_source and measurement.source in robust_update_by_source:
+        return robust_update_by_source[measurement.source]
     return None
 
 

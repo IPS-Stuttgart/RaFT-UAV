@@ -167,6 +167,15 @@ jobs:
               --rf-gate-prob 0.99 \
               --radar-gate-prob 0.99
             echo "::endgroup::"
+
+            echo "::group::NIS-inflated CV baseline $flight"
+            python -m raft_uav.cli run-baseline "$DATASET_ROOT" \
+              --flight "$flight" \
+              --output-dir outputs/baseline_cv_nis_inflated \
+              --robust-update nis-inflate \
+              --rf-gate-prob 0.99 \
+              --radar-gate-prob 0.99
+            echo "::endgroup::"
           done
 
       - name: Collect ablation table
@@ -176,6 +185,7 @@ jobs:
           python scripts/collect_gating_ablation.py \
             --baseline-dir outputs/baseline_cv \
             --gated-dir outputs/baseline_cv_nis_gated \
+            --inflated-dir outputs/baseline_cv_nis_inflated \
             --output outputs/gating_ablation_opt1_opt3.csv \
             --flights ${{ inputs.flights }}
           cat outputs/gating_ablation_opt1_opt3.csv
@@ -213,3 +223,6 @@ jobs:
             outputs/baseline_cv_nis_gated/*/metrics.json
             outputs/baseline_cv_nis_gated/*/diagnostics.csv
             outputs/baseline_cv_nis_gated/*/trajectory.png
+            outputs/baseline_cv_nis_inflated/*/metrics.json
+            outputs/baseline_cv_nis_inflated/*/diagnostics.csv
+            outputs/baseline_cv_nis_inflated/*/trajectory.png
