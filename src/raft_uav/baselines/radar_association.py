@@ -7,12 +7,18 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from pyrecest.filters import KalmanFilter
+from pyrecest.filters.multi_hypothesis_tracker import MultiHypothesisTracker
 
 from raft_uav.baselines.kalman import (
     AsyncConstantVelocityKalmanTracker,
     TrackingMeasurement,
+    TrackingUpdateDiagnostics,
+    constant_velocity_matrix,
     gate_threshold_from_probability,
     measurement_matrix,
+    normalized_innovation_squared,
+    white_acceleration_process_noise,
 )
 
 RADAR_ASSOCIATION_MODES = (
@@ -21,6 +27,7 @@ RADAR_ASSOCIATION_MODES = (
     "track-continuity",
     "geometry-score",
     "pda-mixture",
+    "track-bank",
 )
 
 
@@ -45,6 +52,13 @@ def run_async_cv_baseline_with_radar_association(
     geometry_catprob_weight: float = 2.0,
     pda_nis_temperature: float = 1.0,
     pda_catprob_exponent: float = 1.0,
+    track_bank_max_hypotheses: int = 16,
+    track_bank_max_assignments: int = 16,
+    track_bank_max_candidates: int = 16,
+    track_bank_gate_probability: float = 0.9999999,
+    track_bank_detection_probability: float = 0.999,
+    track_bank_clutter_intensity: float = 1.0e-12,
+    track_bank_prune_log_weight_delta: float = 80.0,
     truth_gate_m: float = 150.0,
     truth_time_gate_s: float = 1.0,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
@@ -59,6 +73,8 @@ def run_async_cv_baseline_with_radar_association(
     track switching, and UAV class-probability penalties. ``pda-mixture``
     keeps a single Kalman update but forms it from a probability-weighted
     candidate mixture and adds candidate spread to the radar covariance.
+    ``track-bank`` uses PyRecEst's track-oriented MHT to keep multiple
+    single-target association hypotheses alive across radar frames.
     """
 
     if association not in RADAR_ASSOCIATION_MODES:
@@ -80,8 +96,42 @@ def run_async_cv_baseline_with_radar_association(
         raise ValueError("pda_nis_temperature must be positive")
     if pda_catprob_exponent < 0.0:
         raise ValueError("pda_catprob_exponent must be nonnegative")
+    if track_bank_max_hypotheses < 1:
+        raise ValueError("track_bank_max_hypotheses must be positive")
+    if track_bank_max_assignments < 1:
+        raise ValueError("track_bank_max_assignments must be positive")
+    if track_bank_max_candidates < 1:
+        raise ValueError("track_bank_max_candidates must be positive")
+    if not 0.0 < track_bank_gate_probability < 1.0:
+        raise ValueError("track_bank_gate_probability must be in (0, 1)")
+    if not 0.0 < track_bank_detection_probability < 1.0:
+        raise ValueError("track_bank_detection_probability must be in (0, 1)")
+    if track_bank_clutter_intensity <= 0.0:
+        raise ValueError("track_bank_clutter_intensity must be positive")
+    if track_bank_prune_log_weight_delta <= 0.0:
+        raise ValueError("track_bank_prune_log_weight_delta must be positive")
 
     covariance = np.diag([float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2])
+    if association == "track-bank":
+        return _run_mht_track_bank(
+            rf_measurements=list(rf_measurements),
+            radar=radar,
+            covariance=covariance,
+            acceleration_std_mps2=acceleration_std_mps2,
+            gate_probabilities_by_source=gate_probabilities_by_source,
+            gate_thresholds_by_source=gate_thresholds_by_source,
+            robust_update_by_source=robust_update_by_source,
+            inflation_alpha_by_source=inflation_alpha_by_source,
+            candidate_catprob_threshold=candidate_catprob_threshold,
+            max_global_hypotheses=track_bank_max_hypotheses,
+            max_assignments_per_hypothesis=track_bank_max_assignments,
+            max_candidates_per_track=track_bank_max_candidates,
+            gate_probability=track_bank_gate_probability,
+            detection_probability=track_bank_detection_probability,
+            clutter_intensity=track_bank_clutter_intensity,
+            prune_log_weight_delta=track_bank_prune_log_weight_delta,
+        )
+
     events = _events(list(rf_measurements), radar)
     if not events:
         return [], _empty_selected_radar(radar)
@@ -207,6 +257,424 @@ def _events(
             }
         )
     return sorted(events, key=lambda item: (float(item["time_s"]), int(item["priority"])))
+
+
+def _run_mht_track_bank(
+    *,
+    rf_measurements: list[TrackingMeasurement],
+    radar: pd.DataFrame,
+    covariance: np.ndarray,
+    acceleration_std_mps2: float,
+    gate_probabilities_by_source: Mapping[str, float | None] | None,
+    gate_thresholds_by_source: Mapping[str, float | None] | None,
+    robust_update_by_source: Mapping[str, str | None] | None,
+    inflation_alpha_by_source: Mapping[str, float] | None,
+    candidate_catprob_threshold: float | None,
+    max_global_hypotheses: int,
+    max_assignments_per_hypothesis: int,
+    max_candidates_per_track: int,
+    gate_probability: float,
+    detection_probability: float,
+    clutter_intensity: float,
+    prune_log_weight_delta: float,
+) -> tuple[list[dict[str, object]], pd.DataFrame]:
+    events = _events(rf_measurements, radar)
+    if not events:
+        return [], _empty_selected_radar(radar)
+
+    initial_measurement = _initial_measurement(
+        events[0],
+        association="track-bank",
+        covariance=covariance,
+        truth=None,
+        truth_gate_m=150.0,
+        truth_time_gate_s=1.0,
+    )
+    if initial_measurement is None:
+        return [], _empty_selected_radar(radar)
+
+    tracker = _initial_mht_tracker(
+        initial_measurement,
+        max_global_hypotheses=max_global_hypotheses,
+        max_assignments_per_hypothesis=max_assignments_per_hypothesis,
+        max_candidates_per_track=max_candidates_per_track,
+        gate_probability=gate_probability,
+        detection_probability=detection_probability,
+        clutter_intensity=clutter_intensity,
+        prune_log_weight_delta=prune_log_weight_delta,
+    )
+    current_time_s = float(initial_measurement.time_s)
+    records: list[dict[str, object]] = []
+    selected_rows: list[pd.Series] = []
+
+    for event in events:
+        time_s = float(event["time_s"])
+        _predict_mht_to(
+            tracker,
+            current_time_s=current_time_s,
+            target_time_s=time_s,
+            acceleration_std_mps2=acceleration_std_mps2,
+        )
+        current_time_s = time_s
+
+        if event["kind"] == "rf":
+            measurement = event["measurement"]
+            assert isinstance(measurement, TrackingMeasurement)
+            diagnostics = _deterministic_update_mht_hypotheses(
+                tracker,
+                measurement,
+                gate_threshold=_gate_threshold_for_measurement(
+                    measurement,
+                    gate_probabilities_by_source=gate_probabilities_by_source,
+                    gate_thresholds_by_source=gate_thresholds_by_source,
+                ),
+                robust_update=_robust_update_for_measurement(
+                    measurement,
+                    robust_update_by_source=robust_update_by_source,
+                ),
+                inflation_alpha=_inflation_alpha_for_measurement(
+                    measurement,
+                    inflation_alpha_by_source=inflation_alpha_by_source,
+                ),
+            )
+            records.append(
+                _mht_record(
+                    measurement=measurement,
+                    tracker=tracker,
+                    diagnostics=diagnostics,
+                    association_mode="track-bank",
+                )
+            )
+            continue
+
+        candidates = event["candidates"]
+        assert isinstance(candidates, pd.DataFrame)
+        candidates = _catprob_candidate_pool(candidates, candidate_catprob_threshold)
+        if candidates.empty:
+            continue
+
+        pre_update_nis = _nis_scored_candidates(
+            candidates,
+            _tracker_from_best_mht_hypothesis(tracker, current_time_s, acceleration_std_mps2),
+            covariance,
+        )
+        measurements = candidates[["east_m", "north_m", "up_m"]].to_numpy(dtype=float).T
+        covariances = np.repeat(covariance[:, :, None], measurements.shape[1], axis=2)
+        tracker.update_linear(measurements, measurement_matrix(3), covariances)
+
+        selected = _selected_row_from_best_mht_assignment(
+            candidates,
+            pre_update_nis,
+            tracker,
+        )
+        if selected is not None:
+            selected_rows.append(selected)
+
+        measurement = _mht_radar_measurement(time_s=time_s, selected=selected, tracker=tracker)
+        records.append(
+            _mht_record(
+                measurement=measurement,
+                tracker=tracker,
+                diagnostics=_mht_radar_diagnostics(time_s, selected),
+                track_id=None if selected is None else _optional_track_id(selected),
+                association_nis=None if selected is None else _optional_float(selected.get("association_nis")),
+                association_score=None
+                if selected is None
+                else _optional_float(selected.get("association_score")),
+                association_mode="track-bank",
+            )
+        )
+
+    return records, _selected_rows_frame(radar, selected_rows)
+
+
+class _MHTStateView:
+    def __init__(self, filter_obj: KalmanFilter) -> None:
+        self._filter = filter_obj
+
+    @property
+    def state(self) -> np.ndarray:
+        return np.asarray(self._filter.get_point_estimate(), dtype=float).reshape(6)
+
+    @property
+    def covariance_matrix(self) -> np.ndarray:
+        return np.asarray(self._filter.filter_state.C, dtype=float).reshape(6, 6)
+
+
+def _initial_mht_tracker(
+    initial_measurement: TrackingMeasurement,
+    *,
+    max_global_hypotheses: int,
+    max_assignments_per_hypothesis: int,
+    max_candidates_per_track: int,
+    gate_probability: float,
+    detection_probability: float,
+    clutter_intensity: float,
+    prune_log_weight_delta: float,
+) -> MultiHypothesisTracker:
+    position = np.asarray(initial_measurement.vector, dtype=float).reshape(-1)
+    if position.size == 2:
+        position = np.array([position[0], position[1], 0.0])
+    state = np.zeros(6)
+    state[:3] = position
+    state_covariance = np.diag([50.0**2, 50.0**2, 50.0**2, 15.0**2, 15.0**2, 15.0**2])
+    return MultiHypothesisTracker(
+        initial_prior=[KalmanFilter((state, state_covariance))],
+        association_param={
+            "gating_probability": float(gate_probability),
+            "detection_probability": float(detection_probability),
+            "clutter_intensity": float(clutter_intensity),
+            "max_global_hypotheses": int(max_global_hypotheses),
+            "max_hypotheses_per_global_hypothesis": int(max_assignments_per_hypothesis),
+            "max_measurements_per_track": int(max_candidates_per_track),
+            "prune_log_weight_delta": float(prune_log_weight_delta),
+        },
+        log_prior_estimates=False,
+        log_posterior_estimates=False,
+    )
+
+
+def _predict_mht_to(
+    tracker: MultiHypothesisTracker,
+    *,
+    current_time_s: float,
+    target_time_s: float,
+    acceleration_std_mps2: float,
+) -> None:
+    dt_s = float(target_time_s) - float(current_time_s)
+    if dt_s < -1e-9:
+        raise ValueError("measurements must be processed in chronological order")
+    if dt_s <= 0.0:
+        return
+    tracker.predict_linear(
+        constant_velocity_matrix(dt_s),
+        white_acceleration_process_noise(dt_s, acceleration_std_mps2),
+    )
+
+
+def _deterministic_update_mht_hypotheses(
+    tracker: MultiHypothesisTracker,
+    measurement: TrackingMeasurement,
+    *,
+    gate_threshold: float | None,
+    robust_update: str | None,
+    inflation_alpha: float,
+) -> TrackingUpdateDiagnostics:
+    best_index = tracker.get_best_hypothesis_index()
+    best_diagnostics: TrackingUpdateDiagnostics | None = None
+    for hypothesis_index, filter_bank in enumerate(tracker.global_hypotheses):
+        filter_obj = filter_bank[0]
+        diagnostics = _update_filter_linear(
+            filter_obj,
+            measurement,
+            gate_threshold=gate_threshold,
+            robust_update=robust_update,
+            inflation_alpha=inflation_alpha,
+        )
+        if hypothesis_index == best_index:
+            best_diagnostics = diagnostics
+    if best_diagnostics is None:
+        raise RuntimeError("MHT track bank has no best hypothesis")
+    return best_diagnostics
+
+
+def _update_filter_linear(
+    filter_obj: KalmanFilter,
+    measurement: TrackingMeasurement,
+    *,
+    gate_threshold: float | None,
+    robust_update: str | None,
+    inflation_alpha: float,
+) -> TrackingUpdateDiagnostics:
+    state = np.asarray(filter_obj.get_point_estimate(), dtype=float).reshape(6)
+    state_covariance = np.asarray(filter_obj.filter_state.C, dtype=float).reshape(6, 6)
+    vector = np.asarray(measurement.vector, dtype=float).reshape(-1)
+    covariance = np.asarray(measurement.covariance, dtype=float)
+    observation = measurement_matrix(vector.size)
+    residual = vector - observation @ state
+    innovation_covariance = observation @ state_covariance @ observation.T + covariance
+    nis = normalized_innovation_squared(residual, innovation_covariance)
+    threshold = None if gate_threshold is None else float(gate_threshold)
+    covariance_scale = 1.0
+    update_action = "updated"
+    accepted = True
+
+    if threshold is not None and nis > threshold:
+        if robust_update == "nis-inflate":
+            covariance_scale = max(1.0, float((nis / threshold) ** float(inflation_alpha)))
+            covariance = covariance * covariance_scale
+            update_action = "inflated"
+        elif robust_update is None:
+            accepted = False
+            update_action = "rejected"
+        else:
+            raise ValueError(f"unknown robust update mode {robust_update!r}")
+
+    if accepted:
+        filter_obj.update_linear(vector, observation, covariance)
+
+    return TrackingUpdateDiagnostics(
+        time_s=float(measurement.time_s),
+        source=measurement.source,
+        measurement_dim=vector.size,
+        accepted=bool(accepted),
+        update_action=update_action,
+        nis=float(nis),
+        gate_threshold=threshold,
+        covariance_scale=float(covariance_scale),
+        inflation_alpha=float(inflation_alpha) if robust_update == "nis-inflate" else None,
+        residual_norm_m=float(np.linalg.norm(residual)),
+    )
+
+
+def _selected_row_from_best_mht_assignment(
+    candidates: pd.DataFrame,
+    scored_candidates: pd.DataFrame,
+    tracker: MultiHypothesisTracker,
+) -> pd.Series | None:
+    best_index = tracker.get_best_hypothesis_index()
+    history = tracker.global_hypothesis_histories[best_index]
+    if not history:
+        return None
+    assignment = history[-1]
+    if not assignment or int(assignment[0]) < 0:
+        return None
+    measurement_index = int(assignment[0])
+    selected = candidates.iloc[measurement_index].copy()
+    scored = scored_candidates.iloc[measurement_index]
+    selected["association_mode"] = "track-bank"
+    selected["association_action"] = "mht_assigned"
+    selected["association_nis"] = float(scored["association_nis"])
+    selected["association_score"] = _mht_best_negative_log_weight(tracker)
+    selected["association_candidate_rows"] = int(len(candidates))
+    selected["association_hypothesis_count"] = int(tracker.get_number_of_global_hypotheses())
+    selected["association_best_weight"] = _mht_best_weight(tracker)
+    selected["association_weight_margin"] = _mht_weight_margin(tracker)
+    return selected
+
+
+def _mht_radar_measurement(
+    *,
+    time_s: float,
+    selected: pd.Series | None,
+    tracker: MultiHypothesisTracker,
+) -> TrackingMeasurement:
+    best_filter = tracker.get_best_hypothesis()[0]
+    state = np.asarray(best_filter.get_point_estimate(), dtype=float).reshape(6)
+    covariance = np.asarray(best_filter.filter_state.C, dtype=float).reshape(6, 6)
+    vector = state[:3] if selected is None else selected[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    return TrackingMeasurement(
+        time_s=time_s,
+        vector=vector,
+        covariance=covariance[:3, :3],
+        source="radar",
+    )
+
+
+def _mht_radar_diagnostics(
+    time_s: float,
+    selected: pd.Series | None,
+) -> TrackingUpdateDiagnostics:
+    return TrackingUpdateDiagnostics(
+        time_s=float(time_s),
+        source="radar",
+        measurement_dim=3,
+        accepted=selected is not None,
+        update_action="mht_assigned" if selected is not None else "mht_missed",
+        nis=float("nan") if selected is None else float(selected["association_nis"]),
+        gate_threshold=None,
+        covariance_scale=1.0,
+        inflation_alpha=None,
+        residual_norm_m=float("nan"),
+    )
+
+
+def _mht_record(
+    measurement: TrackingMeasurement,
+    tracker: MultiHypothesisTracker,
+    diagnostics: TrackingUpdateDiagnostics,
+    *,
+    track_id: int | None = None,
+    association_nis: float | None = None,
+    association_score: float | None = None,
+    association_mode: str | None = None,
+) -> dict[str, object]:
+    best_filter = tracker.get_best_hypothesis()[0]
+    state = np.asarray(best_filter.get_point_estimate(), dtype=float).reshape(6)
+    covariance = np.asarray(best_filter.filter_state.C, dtype=float).reshape(6, 6)
+    record = {
+        "time_s": float(measurement.time_s),
+        "source": measurement.source,
+        "state": state.copy(),
+        "covariance": covariance.copy(),
+        "hypothesis_count": int(tracker.get_number_of_global_hypotheses()),
+        "best_hypothesis_weight": _mht_best_weight(tracker),
+        "hypothesis_weight_margin": _mht_weight_margin(tracker),
+        "hypotheses": _mht_hypothesis_snapshot(tracker, float(measurement.time_s)),
+        **diagnostics.to_record(),
+    }
+    if track_id is not None:
+        record["track_id"] = track_id
+    if association_nis is not None:
+        record["association_nis"] = association_nis
+    if association_score is not None:
+        record["association_score"] = association_score
+    if association_mode is not None:
+        record["association_mode"] = association_mode
+    return record
+
+
+def _mht_hypothesis_snapshot(
+    tracker: MultiHypothesisTracker,
+    time_s: float,
+) -> list[dict[str, float | int]]:
+    weights = tracker.get_global_hypothesis_weights()
+    order = np.argsort(-weights)
+    rows: list[dict[str, float | int]] = []
+    for rank, hypothesis_index in enumerate(order):
+        filter_obj = tracker.global_hypotheses[int(hypothesis_index)][0]
+        state = np.asarray(filter_obj.get_point_estimate(), dtype=float).reshape(6)
+        rows.append(
+            {
+                "time_s": float(time_s),
+                "rank": int(rank),
+                "hypothesis_index": int(hypothesis_index),
+                "weight": float(weights[int(hypothesis_index)]),
+                "east_m": float(state[0]),
+                "north_m": float(state[1]),
+                "up_m": float(state[2]),
+                "v_east_mps": float(state[3]),
+                "v_north_mps": float(state[4]),
+                "v_up_mps": float(state[5]),
+            }
+        )
+    return rows
+
+
+def _mht_best_weight(tracker: MultiHypothesisTracker) -> float:
+    weights = tracker.get_global_hypothesis_weights()
+    return float(np.max(weights)) if len(weights) else float("nan")
+
+
+def _mht_weight_margin(tracker: MultiHypothesisTracker) -> float:
+    weights = np.sort(tracker.get_global_hypothesis_weights())[::-1]
+    if len(weights) < 2:
+        return float(weights[0]) if len(weights) else float("nan")
+    return float(weights[0] - weights[1])
+
+
+def _mht_best_negative_log_weight(tracker: MultiHypothesisTracker) -> float:
+    weight = max(_mht_best_weight(tracker), 1e-300)
+    return float(-np.log(weight))
+
+
+def _tracker_from_best_mht_hypothesis(
+    tracker: MultiHypothesisTracker,
+    current_time_s: float,
+    acceleration_std_mps2: float,
+) -> _MHTStateView:
+    del current_time_s, acceleration_std_mps2
+    return _MHTStateView(tracker.get_best_hypothesis()[0])
 
 
 def _radar_frame_groups(radar: pd.DataFrame) -> list[pd.DataFrame]:

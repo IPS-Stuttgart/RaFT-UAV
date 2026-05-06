@@ -232,3 +232,41 @@ def test_pda_mixture_returns_weighted_position_and_spread_covariance():
     assert selected["east_m"] == 5.0
     assert selected["association_effective_candidates"] == 2.0
     assert selected["association_cov_ee"] > 1.0
+
+
+def test_track_bank_uses_pyrecest_mht_and_records_hypotheses():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 1.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.8,
+            },
+            {
+                "frame_index": 0,
+                "track_id": 2,
+                "time_s": 1.0,
+                "east_m": 100.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.8,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(0.0, 0.0)],
+        radar=radar,
+        association="track-bank",
+        track_bank_max_hypotheses=4,
+        track_bank_gate_probability=0.999999,
+    )
+
+    assert records[-1]["association_mode"] == "track-bank"
+    assert int(records[-1]["hypothesis_count"]) >= 1
+    assert records[-1]["hypotheses"]
+    assert selected["track_id"].tolist() == [1]

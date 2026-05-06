@@ -110,6 +110,13 @@ def main(argv: list[str] | None = None) -> int:
         default=1.0,
         help="exponent for UAV class-probability priors in pda-mixture association",
     )
+    baseline_parser.add_argument("--track-bank-max-hypotheses", type=int, default=16)
+    baseline_parser.add_argument("--track-bank-max-assignments", type=int, default=16)
+    baseline_parser.add_argument("--track-bank-max-candidates", type=int, default=16)
+    baseline_parser.add_argument("--track-bank-gate-prob", type=float, default=0.9999999)
+    baseline_parser.add_argument("--track-bank-detection-prob", type=float, default=0.999)
+    baseline_parser.add_argument("--track-bank-clutter-intensity", type=float, default=1.0e-12)
+    baseline_parser.add_argument("--track-bank-prune-delta", type=float, default=80.0)
     baseline_parser.add_argument(
         "--smoother",
         choices=SMOOTHER_MODES,
@@ -180,6 +187,13 @@ def main(argv: list[str] | None = None) -> int:
             args.geometry_catprob_weight,
             args.pda_nis_temperature,
             args.pda_catprob_exponent,
+            args.track_bank_max_hypotheses,
+            args.track_bank_max_assignments,
+            args.track_bank_max_candidates,
+            args.track_bank_gate_prob,
+            args.track_bank_detection_prob,
+            args.track_bank_clutter_intensity,
+            args.track_bank_prune_delta,
             args.smoother,
             args.smoother_lag_s,
             args.max_eval_time_delta_s,
@@ -227,6 +241,13 @@ def _run_baseline(
     geometry_catprob_weight: float,
     pda_nis_temperature: float,
     pda_catprob_exponent: float,
+    track_bank_max_hypotheses: int,
+    track_bank_max_assignments: int,
+    track_bank_max_candidates: int,
+    track_bank_gate_prob: float,
+    track_bank_detection_prob: float,
+    track_bank_clutter_intensity: float,
+    track_bank_prune_delta: float,
     smoother: str,
     smoother_lag_s: float,
     max_eval_time_delta_s: float,
@@ -247,6 +268,12 @@ def _run_baseline(
         raise ValueError("pda_nis_temperature must be positive")
     if pda_catprob_exponent < 0.0:
         raise ValueError("pda_catprob_exponent must be nonnegative")
+    if track_bank_max_hypotheses < 1:
+        raise ValueError("track_bank_max_hypotheses must be positive")
+    if track_bank_max_assignments < 1:
+        raise ValueError("track_bank_max_assignments must be positive")
+    if track_bank_max_candidates < 1:
+        raise ValueError("track_bank_max_candidates must be positive")
     if smoother == "fixed-lag" and smoother_lag_s < 0.0:
         raise ValueError("smoother_lag_s must be nonnegative for fixed-lag smoothing")
     radar_mode = legacy_radar_selection or radar_association
@@ -303,6 +330,13 @@ def _run_baseline(
             geometry_catprob_weight=geometry_catprob_weight,
             pda_nis_temperature=pda_nis_temperature,
             pda_catprob_exponent=pda_catprob_exponent,
+            track_bank_max_hypotheses=track_bank_max_hypotheses,
+            track_bank_max_assignments=track_bank_max_assignments,
+            track_bank_max_candidates=track_bank_max_candidates,
+            track_bank_gate_probability=track_bank_gate_prob,
+            track_bank_detection_probability=track_bank_detection_prob,
+            track_bank_clutter_intensity=track_bank_clutter_intensity,
+            track_bank_prune_log_weight_delta=track_bank_prune_delta,
             truth_gate_m=truth_gate_m,
             truth_time_gate_s=truth_time_gate_s,
         )
@@ -354,11 +388,13 @@ def _run_baseline(
     estimates_path = flight_output / "estimates.csv"
     diagnostics_path = flight_output / "diagnostics.csv"
     selected_radar_path = flight_output / "selected_radar.csv"
+    hypotheses_path = flight_output / "hypotheses.csv"
     metrics_path = flight_output / "metrics.json"
     plot_path = flight_output / "trajectory.png"
     estimate_frame.to_csv(estimates_path, index=False)
     diagnostics_frame.to_csv(diagnostics_path, index=False)
     selected_radar.to_csv(selected_radar_path, index=False)
+    _hypotheses_to_frame(records).to_csv(hypotheses_path, index=False)
 
     metrics = _baseline_metrics(
         flight_name=flight.name,
@@ -380,6 +416,13 @@ def _run_baseline(
         geometry_catprob_weight=geometry_catprob_weight,
         pda_nis_temperature=pda_nis_temperature,
         pda_catprob_exponent=pda_catprob_exponent,
+        track_bank_max_hypotheses=track_bank_max_hypotheses,
+        track_bank_max_assignments=track_bank_max_assignments,
+        track_bank_max_candidates=track_bank_max_candidates,
+        track_bank_gate_prob=track_bank_gate_prob,
+        track_bank_detection_prob=track_bank_detection_prob,
+        track_bank_clutter_intensity=track_bank_clutter_intensity,
+        track_bank_prune_delta=track_bank_prune_delta,
         smoother=smoother,
         smoother_lag_s=smoother_lag_s,
         max_eval_time_delta_s=max_eval_time_delta_s,
@@ -409,6 +452,7 @@ def _run_baseline(
     print(f"estimates_csv={estimates_path}")
     print(f"diagnostics_csv={diagnostics_path}")
     print(f"selected_radar_csv={selected_radar_path}")
+    print(f"hypotheses_csv={hypotheses_path}")
     print(f"trajectory_png={plot_path}")
     print(f"rmse_2d_m={metrics['position_error_2d']['rmse_m']:.3f}")
     print(f"rmse_3d_m={metrics['position_error_3d']['rmse_m']:.3f}")
@@ -433,6 +477,9 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
                 "association_mode": _optional_str(record.get("association_mode")),
                 "association_nis": _optional_float(record.get("association_nis")),
                 "association_score": _optional_float(record.get("association_score")),
+                "hypothesis_count": _optional_int(record.get("hypothesis_count")),
+                "best_hypothesis_weight": _optional_float(record.get("best_hypothesis_weight")),
+                "hypothesis_weight_margin": _optional_float(record.get("hypothesis_weight_margin")),
                 "measurement_dim": int(record.get("measurement_dim", 0)),
                 "accepted": bool(record.get("accepted", True)),
                 "update_action": str(record.get("update_action", "updated")),
@@ -460,6 +507,21 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
     return pd.DataFrame.from_records(rows).sort_values("time_s").reset_index(drop=True)
 
 
+def _hypotheses_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for record_index, record in enumerate(records):
+        hypotheses = record.get("hypotheses")
+        if not isinstance(hypotheses, list):
+            continue
+        for hypothesis in hypotheses:
+            if not isinstance(hypothesis, dict):
+                continue
+            row = {"record_index": int(record_index), "source": str(record["source"])}
+            row.update(hypothesis)
+            rows.append(row)
+    return pd.DataFrame.from_records(rows)
+
+
 def _baseline_metrics(
     *,
     flight_name: str,
@@ -481,6 +543,13 @@ def _baseline_metrics(
     geometry_catprob_weight: float,
     pda_nis_temperature: float,
     pda_catprob_exponent: float,
+    track_bank_max_hypotheses: int,
+    track_bank_max_assignments: int,
+    track_bank_max_candidates: int,
+    track_bank_gate_prob: float,
+    track_bank_detection_prob: float,
+    track_bank_clutter_intensity: float,
+    track_bank_prune_delta: float,
     smoother: str,
     smoother_lag_s: float,
     max_eval_time_delta_s: float,
@@ -554,6 +623,15 @@ def _baseline_metrics(
         "pda_association": {
             "nis_temperature": float(pda_nis_temperature),
             "catprob_exponent": float(pda_catprob_exponent),
+        },
+        "track_bank_association": {
+            "max_hypotheses": int(track_bank_max_hypotheses),
+            "max_assignments": int(track_bank_max_assignments),
+            "max_candidates": int(track_bank_max_candidates),
+            "gate_probability": float(track_bank_gate_prob),
+            "detection_probability": float(track_bank_detection_prob),
+            "clutter_intensity": float(track_bank_clutter_intensity),
+            "prune_log_weight_delta": float(track_bank_prune_delta),
         },
         "smoother": {
             "method": smoother,

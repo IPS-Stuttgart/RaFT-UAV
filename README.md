@@ -100,6 +100,12 @@ Run the Opt1-Opt3 PDA-mixture association ablation:
 python scripts/run_pda_association_ablation.py data/raw/AADM2025Dryad
 ```
 
+Run the Opt1-Opt3 PyRecEst MHT track-bank ablation:
+
+```bash
+python scripts/run_track_bank_ablation.py data/raw/AADM2025Dryad
+```
+
 The first baseline is deliberately conservative. It is meant to reproduce the
 published constant-velocity Kalman fusion setup before adding robust gating,
 learned sensor uncertainties, maneuvering models, and smoothing.
@@ -123,7 +129,11 @@ because it uses ground truth. The online alternatives are
 track-switch, and UAV class-probability terms to the NIS score. The
 experimental `--radar-association pda-mixture` mode keeps multiple candidates
 inside one radar update by using NIS/class-probability weights and adding the
-candidate spread to the measurement covariance.
+candidate spread to the measurement covariance. The experimental
+`--radar-association track-bank` mode uses PyRecEst's
+`MultiHypothesisTracker` to keep multiple single-UAV association hypotheses
+alive across radar frames. Baseline runs also write `hypotheses.csv` for modes
+that expose per-hypothesis diagnostics.
 The legacy `--radar-selection truth-gated` mode is retained for schema
 debugging.
 
