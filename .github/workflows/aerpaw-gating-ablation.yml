@@ -1,0 +1,192 @@
+name: AERPAW gating ablation
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset_url:
+        description: "Optional URL to the AADM2025Dryad ZIP archive. If empty, secret AADM2025DRYAD_URL is used."
+        required: false
+        type: string
+      flights:
+        description: "Space-separated flight names to run."
+        required: false
+        default: "Opt1 Opt2 Opt3"
+        type: string
+      cache_key_suffix:
+        description: "Bump this to force a fresh dataset cache."
+        required: false
+        default: "v1"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+  DATASET_ROOT: data/raw/AADM2025Dryad
+  DATASET_ZIP: data/raw/AADM2025Dryad.zip
+
+jobs:
+  opt-flight-ablation:
+    name: Opt-flight CV vs NIS-gated CV ablation
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 720
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Restore AERPAW dataset cache
+        id: cache-aerpaw
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/raw/AADM2025Dryad
+            data/raw/AADM2025Dryad.zip
+          key: aerpaw-aadm2025dryad-${{ inputs.cache_key_suffix }}
+
+      - name: Download and extract dataset if needed
+        shell: bash
+        env:
+          INPUT_DATASET_URL: ${{ inputs.dataset_url }}
+          SECRET_DATASET_URL: ${{ secrets.AADM2025DRYAD_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p data/raw
+
+          if [ -d "$DATASET_ROOT" ] && find "$DATASET_ROOT" -type d -name "RF Sensor and Radar" -print -quit | grep -q .; then
+            echo "Dataset already restored at $DATASET_ROOT"
+            du -sh "$DATASET_ROOT" || true
+            exit 0
+          fi
+
+          DATASET_URL="$INPUT_DATASET_URL"
+          if [ -z "$DATASET_URL" ]; then
+            DATASET_URL="$SECRET_DATASET_URL"
+          fi
+          if [ -z "$DATASET_URL" ]; then
+            echo "No dataset URL provided. Re-run with workflow input dataset_url or set secret AADM2025DRYAD_URL."
+            exit 1
+          fi
+          echo "::add-mask::$DATASET_URL"
+
+          if [ ! -s "$DATASET_ZIP" ]; then
+            echo "Downloading AERPAW archive to $DATASET_ZIP"
+            curl --fail --location --retry 5 --retry-delay 20 --connect-timeout 60 \
+              --output "$DATASET_ZIP" "$DATASET_URL"
+          else
+            echo "Using cached archive $DATASET_ZIP"
+          fi
+
+          echo "Archive size:"
+          du -sh "$DATASET_ZIP" || true
+
+          rm -rf "$DATASET_ROOT"
+          mkdir -p "$DATASET_ROOT"
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          archive = Path("data/raw/AADM2025Dryad.zip")
+          target = Path("data/raw/AADM2025Dryad")
+          if not zipfile.is_zipfile(archive):
+              raise SystemExit(f"{archive} is not a ZIP file. Provide a direct ZIP archive URL.")
+          with zipfile.ZipFile(archive) as zf:
+              zf.extractall(target)
+          PY
+
+          echo "Extracted dataset size:"
+          du -sh "$DATASET_ROOT" || true
+          find "$DATASET_ROOT" -maxdepth 4 -type d -name "RF Sensor and Radar" -print
+
+      - name: Install package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run gating unit tests
+        shell: bash
+        run: pytest -q tests/test_gating.py
+
+      - name: Inspect selected flights
+        shell: bash
+        run: |
+          set -euo pipefail
+          for flight in ${{ inputs.flights }}; do
+            python -m raft_uav.cli inspect "$DATASET_ROOT" --flight "$flight"
+          done
+
+      - name: Run ungated and NIS-gated ablation
+        shell: bash
+        run: |
+          set -euo pipefail
+          for flight in ${{ inputs.flights }}; do
+            echo "::group::Ungated CV baseline $flight"
+            python -m raft_uav.cli run-baseline "$DATASET_ROOT" \
+              --flight "$flight" \
+              --output-dir outputs/baseline_cv
+            echo "::endgroup::"
+
+            echo "::group::NIS-gated CV baseline $flight"
+            python -m raft_uav.cli run-baseline "$DATASET_ROOT" \
+              --flight "$flight" \
+              --output-dir outputs/baseline_cv_nis_gated \
+              --enable-gating \
+              --rf-gate-prob 0.99 \
+              --radar-gate-prob 0.99
+            echo "::endgroup::"
+          done
+
+      - name: Collect ablation table
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/collect_gating_ablation.py \
+            --baseline-dir outputs/baseline_cv \
+            --gated-dir outputs/baseline_cv_nis_gated \
+            --output outputs/gating_ablation_opt1_opt3.csv \
+            --flights ${{ inputs.flights }}
+          cat outputs/gating_ablation_opt1_opt3.csv
+
+      - name: Summarize dataset and outputs
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## AERPAW gating ablation"
+            echo
+            echo "### Dataset size"
+            echo '```text'
+            du -sh "$DATASET_ROOT" 2>/dev/null || true
+            du -sh "$DATASET_ZIP" 2>/dev/null || true
+            echo '```'
+            echo
+            echo "### Result table"
+            echo '```csv'
+            cat outputs/gating_ablation_opt1_opt3.csv 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload compact ablation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aerpaw-gating-ablation-${{ github.run_id }}
+          retention-days: 14
+          path: |
+            outputs/gating_ablation_opt1_opt3.csv
+            outputs/baseline_cv/*/metrics.json
+            outputs/baseline_cv/*/diagnostics.csv
+            outputs/baseline_cv/*/trajectory.png
+            outputs/baseline_cv_nis_gated/*/metrics.json
+            outputs/baseline_cv_nis_gated/*/diagnostics.csv
+            outputs/baseline_cv_nis_gated/*/trajectory.png
