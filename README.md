@@ -94,6 +94,12 @@ Run the Opt1-Opt3 radar candidate class-probability threshold ablation:
 python scripts/run_candidate_threshold_ablation.py data/raw/AADM2025Dryad --thresholds 0.4 0.5
 ```
 
+Run the Opt1-Opt3 PDA-mixture association ablation:
+
+```bash
+python scripts/run_pda_association_ablation.py data/raw/AADM2025Dryad
+```
+
 The first baseline is deliberately conservative. It is meant to reproduce the
 published constant-velocity Kalman fusion setup before adding robust gating,
 learned sensor uncertainties, maneuvering models, and smoothing.
@@ -114,7 +120,10 @@ because it uses ground truth. The online alternatives are
 `--radar-association prediction-nis`,
 `--radar-association track-continuity`, and the experimental
 `--radar-association geometry-score` mode, which adds velocity consistency,
-track-switch, and UAV class-probability terms to the NIS score.
+track-switch, and UAV class-probability terms to the NIS score. The
+experimental `--radar-association pda-mixture` mode keeps multiple candidates
+inside one radar update by using NIS/class-probability weights and adding the
+candidate spread to the measurement covariance.
 The legacy `--radar-selection truth-gated` mode is retained for schema
 debugging.
 

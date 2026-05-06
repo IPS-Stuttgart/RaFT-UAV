@@ -99,6 +99,18 @@ def main(argv: list[str] | None = None) -> int:
         help="weight for low UAV class-probability penalty in geometry-score",
     )
     baseline_parser.add_argument(
+        "--pda-nis-temperature",
+        type=float,
+        default=1.0,
+        help="softmax temperature for NIS likelihoods in pda-mixture association",
+    )
+    baseline_parser.add_argument(
+        "--pda-catprob-exponent",
+        type=float,
+        default=1.0,
+        help="exponent for UAV class-probability priors in pda-mixture association",
+    )
+    baseline_parser.add_argument(
         "--smoother",
         choices=SMOOTHER_MODES,
         default="none",
@@ -166,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
             args.geometry_velocity_weight,
             args.geometry_switch_penalty,
             args.geometry_catprob_weight,
+            args.pda_nis_temperature,
+            args.pda_catprob_exponent,
             args.smoother,
             args.smoother_lag_s,
             args.max_eval_time_delta_s,
@@ -211,6 +225,8 @@ def _run_baseline(
     geometry_velocity_weight: float,
     geometry_switch_penalty: float,
     geometry_catprob_weight: float,
+    pda_nis_temperature: float,
+    pda_catprob_exponent: float,
     smoother: str,
     smoother_lag_s: float,
     max_eval_time_delta_s: float,
@@ -227,6 +243,10 @@ def _run_baseline(
         raise ValueError("inflation alphas must be positive")
     if track_switch_nis_ratio <= 0.0:
         raise ValueError("track_switch_nis_ratio must be positive")
+    if pda_nis_temperature <= 0.0:
+        raise ValueError("pda_nis_temperature must be positive")
+    if pda_catprob_exponent < 0.0:
+        raise ValueError("pda_catprob_exponent must be nonnegative")
     if smoother == "fixed-lag" and smoother_lag_s < 0.0:
         raise ValueError("smoother_lag_s must be nonnegative for fixed-lag smoothing")
     radar_mode = legacy_radar_selection or radar_association
@@ -281,6 +301,8 @@ def _run_baseline(
             geometry_velocity_weight=geometry_velocity_weight,
             geometry_switch_penalty=geometry_switch_penalty,
             geometry_catprob_weight=geometry_catprob_weight,
+            pda_nis_temperature=pda_nis_temperature,
+            pda_catprob_exponent=pda_catprob_exponent,
             truth_gate_m=truth_gate_m,
             truth_time_gate_s=truth_time_gate_s,
         )
@@ -356,6 +378,8 @@ def _run_baseline(
         geometry_velocity_weight=geometry_velocity_weight,
         geometry_switch_penalty=geometry_switch_penalty,
         geometry_catprob_weight=geometry_catprob_weight,
+        pda_nis_temperature=pda_nis_temperature,
+        pda_catprob_exponent=pda_catprob_exponent,
         smoother=smoother,
         smoother_lag_s=smoother_lag_s,
         max_eval_time_delta_s=max_eval_time_delta_s,
@@ -455,6 +479,8 @@ def _baseline_metrics(
     geometry_velocity_weight: float,
     geometry_switch_penalty: float,
     geometry_catprob_weight: float,
+    pda_nis_temperature: float,
+    pda_catprob_exponent: float,
     smoother: str,
     smoother_lag_s: float,
     max_eval_time_delta_s: float,
@@ -524,6 +550,10 @@ def _baseline_metrics(
             "velocity_weight": float(geometry_velocity_weight),
             "switch_penalty": float(geometry_switch_penalty),
             "catprob_weight": float(geometry_catprob_weight),
+        },
+        "pda_association": {
+            "nis_temperature": float(pda_nis_temperature),
+            "catprob_exponent": float(pda_catprob_exponent),
         },
         "smoother": {
             "method": smoother,

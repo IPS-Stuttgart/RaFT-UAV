@@ -20,6 +20,7 @@ RADAR_ASSOCIATION_MODES = (
     "prediction-nis",
     "track-continuity",
     "geometry-score",
+    "pda-mixture",
 )
 
 
@@ -42,6 +43,8 @@ def run_async_cv_baseline_with_radar_association(
     geometry_velocity_weight: float = 0.25,
     geometry_switch_penalty: float = 4.0,
     geometry_catprob_weight: float = 2.0,
+    pda_nis_temperature: float = 1.0,
+    pda_catprob_exponent: float = 1.0,
     truth_gate_m: float = 150.0,
     truth_time_gate_s: float = 1.0,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
@@ -53,7 +56,9 @@ def run_async_cv_baseline_with_radar_association(
     ``track-continuity`` prefers the current Fortem track ID and switches only
     when another candidate has a substantially lower NIS. ``geometry-score``
     is an online score that augments NIS with radar velocity consistency,
-    track switching, and UAV class-probability penalties.
+    track switching, and UAV class-probability penalties. ``pda-mixture``
+    keeps a single Kalman update but forms it from a probability-weighted
+    candidate mixture and adds candidate spread to the radar covariance.
     """
 
     if association not in RADAR_ASSOCIATION_MODES:
@@ -71,6 +76,10 @@ def run_async_cv_baseline_with_radar_association(
     }.items():
         if value < 0.0:
             raise ValueError(f"{name} must be nonnegative")
+    if pda_nis_temperature <= 0.0:
+        raise ValueError("pda_nis_temperature must be positive")
+    if pda_catprob_exponent < 0.0:
+        raise ValueError("pda_catprob_exponent must be nonnegative")
 
     covariance = np.diag([float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2])
     events = _events(list(rf_measurements), radar)
@@ -137,6 +146,8 @@ def run_async_cv_baseline_with_radar_association(
             geometry_velocity_weight=geometry_velocity_weight,
             geometry_switch_penalty=geometry_switch_penalty,
             geometry_catprob_weight=geometry_catprob_weight,
+            pda_nis_temperature=pda_nis_temperature,
+            pda_catprob_exponent=pda_catprob_exponent,
             truth_gate_m=truth_gate_m,
             truth_time_gate_s=truth_time_gate_s,
         )
@@ -254,6 +265,8 @@ def _select_radar_candidate(
     geometry_velocity_weight: float,
     geometry_switch_penalty: float,
     geometry_catprob_weight: float,
+    pda_nis_temperature: float,
+    pda_catprob_exponent: float,
     truth_gate_m: float,
     truth_time_gate_s: float,
 ) -> pd.Series | None:
@@ -286,6 +299,13 @@ def _select_radar_candidate(
         best = geometry_scored.loc[geometry_scored["association_score"].idxmin()].copy()
         best["association_action"] = "geometry_score"
         return best
+    if association == "pda-mixture":
+        return _pda_mixture_candidate(
+            scored,
+            base_covariance=covariance,
+            nis_temperature=pda_nis_temperature,
+            catprob_exponent=pda_catprob_exponent,
+        )
     best = scored.loc[scored["association_nis"].idxmin()].copy()
     if association == "prediction-nis" or current_track_id is None:
         return best
@@ -454,12 +474,110 @@ def _catprob_penalty(candidates: pd.DataFrame, catprob_weight: float) -> np.ndar
     return float(catprob_weight) * (1.0 - catprob) ** 2
 
 
+def _pda_mixture_candidate(
+    candidates: pd.DataFrame,
+    *,
+    base_covariance: np.ndarray,
+    nis_temperature: float,
+    catprob_exponent: float,
+) -> pd.Series:
+    weights = _pda_weights(
+        candidates,
+        nis_temperature=nis_temperature,
+        catprob_exponent=catprob_exponent,
+    )
+    vectors = candidates[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    mean = weights @ vectors
+    residuals = vectors - mean
+    spread = residuals.T @ (residuals * weights[:, None])
+    covariance = np.asarray(base_covariance, dtype=float) + spread
+
+    best_index = int(np.argmax(weights))
+    selected = candidates.iloc[best_index].copy()
+    selected["east_m"] = float(mean[0])
+    selected["north_m"] = float(mean[1])
+    selected["up_m"] = float(mean[2])
+    selected["association_mode"] = "pda-mixture"
+    selected["association_action"] = "pda_mixture"
+    selected["association_candidate_rows"] = int(len(candidates))
+    selected["association_nis"] = float(
+        weights @ candidates["association_nis"].to_numpy(dtype=float)
+    )
+    selected["association_score"] = float(-np.log(float(np.max(weights))))
+    selected["association_weight_max"] = float(np.max(weights))
+    selected["association_weight_entropy"] = _weight_entropy(weights)
+    selected["association_effective_candidates"] = float(1.0 / np.sum(weights**2))
+    selected["association_best_track_id"] = _optional_track_id(selected)
+    selected["association_position_spread_trace_m2"] = float(np.trace(spread))
+    selected["association_cov_ee"] = float(covariance[0, 0])
+    selected["association_cov_nn"] = float(covariance[1, 1])
+    selected["association_cov_uu"] = float(covariance[2, 2])
+    selected["association_cov_en"] = float(covariance[0, 1])
+    selected["association_cov_eu"] = float(covariance[0, 2])
+    selected["association_cov_nu"] = float(covariance[1, 2])
+    return selected
+
+
+def _pda_weights(
+    candidates: pd.DataFrame,
+    *,
+    nis_temperature: float,
+    catprob_exponent: float,
+) -> np.ndarray:
+    nis = pd.to_numeric(candidates["association_nis"], errors="coerce").to_numpy(dtype=float)
+    log_weights = -0.5 * nis / float(nis_temperature)
+    if "cat_prob_uav" in candidates.columns and catprob_exponent > 0.0:
+        catprob = pd.to_numeric(candidates["cat_prob_uav"], errors="coerce").fillna(1e-3)
+        catprob = np.clip(catprob.to_numpy(dtype=float), 1e-3, 1.0)
+        log_weights = log_weights + float(catprob_exponent) * np.log(catprob)
+    log_weights = np.where(np.isfinite(log_weights), log_weights, -np.inf)
+    maximum = float(np.max(log_weights))
+    if not np.isfinite(maximum):
+        return np.full(len(candidates), 1.0 / len(candidates))
+    weights = np.exp(log_weights - maximum)
+    total = float(np.sum(weights))
+    if total <= 0.0 or not np.isfinite(total):
+        return np.full(len(candidates), 1.0 / len(candidates))
+    return weights / total
+
+
+def _weight_entropy(weights: np.ndarray) -> float:
+    clipped = np.clip(np.asarray(weights, dtype=float), 1e-300, 1.0)
+    return float(-np.sum(clipped * np.log(clipped)))
+
+
 def _radar_row_to_measurement(row: pd.Series, covariance: np.ndarray) -> TrackingMeasurement:
+    row_covariance = _row_covariance(row)
     return TrackingMeasurement(
         time_s=float(row["time_s"]),
         vector=np.array([float(row["east_m"]), float(row["north_m"]), float(row["up_m"])]),
-        covariance=covariance,
+        covariance=covariance if row_covariance is None else row_covariance,
         source="radar",
+    )
+
+
+def _row_covariance(row: pd.Series) -> np.ndarray | None:
+    columns = [
+        "association_cov_ee",
+        "association_cov_nn",
+        "association_cov_uu",
+        "association_cov_en",
+        "association_cov_eu",
+        "association_cov_nu",
+    ]
+    if not all(column in row for column in columns):
+        return None
+    values = [float(row[column]) for column in columns]
+    if not np.isfinite(values).all():
+        return None
+    ee, nn, uu, en, eu, nu = values
+    return np.array(
+        [
+            [ee, en, eu],
+            [en, nn, nu],
+            [eu, nu, uu],
+        ],
+        dtype=float,
     )
 
 
@@ -560,7 +678,15 @@ def _selected_rows_frame(radar: pd.DataFrame, rows: list[pd.Series]) -> pd.DataF
 
 def _empty_selected_radar(radar: pd.DataFrame) -> pd.DataFrame:
     selected = radar.iloc[0:0].copy()
-    for column in ("association_mode", "association_nis", "association_candidate_rows"):
+    for column in (
+        "association_mode",
+        "association_nis",
+        "association_score",
+        "association_candidate_rows",
+        "association_effective_candidates",
+        "association_weight_max",
+        "association_position_spread_trace_m2",
+    ):
         selected[column] = []
     return selected
 

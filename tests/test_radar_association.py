@@ -121,6 +121,8 @@ def test_track_continuity_keeps_current_track_for_small_nis_gain():
         geometry_velocity_weight=0.25,
         geometry_switch_penalty=4.0,
         geometry_catprob_weight=2.0,
+        pda_nis_temperature=1.0,
+        pda_catprob_exponent=1.0,
         truth_gate_m=150.0,
         truth_time_gate_s=1.0,
     )
@@ -172,6 +174,8 @@ def test_geometry_score_prefers_velocity_consistent_candidate():
         geometry_velocity_weight=1.0,
         geometry_switch_penalty=4.0,
         geometry_catprob_weight=2.0,
+        pda_nis_temperature=1.0,
+        pda_catprob_exponent=1.0,
         truth_gate_m=150.0,
         truth_time_gate_s=1.0,
     )
@@ -179,3 +183,52 @@ def test_geometry_score_prefers_velocity_consistent_candidate():
     assert selected is not None
     assert int(selected["track_id"]) == 1
     assert float(selected["association_score"]) < float("inf")
+
+
+def test_pda_mixture_returns_weighted_position_and_spread_covariance():
+    tracker = AsyncConstantVelocityKalmanTracker(initial_position=np.array([5.0, 0.0, 0.0]), initial_time_s=0.0)
+    candidates = pd.DataFrame(
+        [
+            {
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": 0.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 1.0,
+            },
+            {
+                "track_id": 2,
+                "time_s": 0.0,
+                "east_m": 10.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 1.0,
+            },
+        ]
+    )
+
+    selected = _select_radar_candidate(
+        candidates,
+        association="pda-mixture",
+        tracker=tracker,
+        covariance=np.diag([1.0, 1.0, 1.0]),
+        truth=None,
+        current_track_id=None,
+        track_switch_nis_ratio=0.5,
+        candidate_catprob_threshold=None,
+        geometry_velocity_std_mps=12.0,
+        geometry_velocity_weight=0.25,
+        geometry_switch_penalty=4.0,
+        geometry_catprob_weight=2.0,
+        pda_nis_temperature=1.0,
+        pda_catprob_exponent=1.0,
+        truth_gate_m=150.0,
+        truth_time_gate_s=1.0,
+    )
+
+    assert selected is not None
+    assert selected["association_mode"] == "pda-mixture"
+    assert selected["east_m"] == 5.0
+    assert selected["association_effective_candidates"] == 2.0
+    assert selected["association_cov_ee"] > 1.0
