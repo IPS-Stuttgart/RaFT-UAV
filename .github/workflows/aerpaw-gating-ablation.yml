@@ -3,6 +3,10 @@ name: AERPAW gating ablation
 on:
   workflow_dispatch:
     inputs:
+      dataset_root:
+        description: "Optional path on the self-hosted runner to an already extracted AADM2025Dryad dataset."
+        required: false
+        type: string
       dataset_url:
         description: "Optional URL to the AADM2025Dryad ZIP archive. If empty, secret AADM2025DRYAD_URL is used."
         required: false
@@ -52,14 +56,33 @@ jobs:
             data/raw/AADM2025Dryad.zip
           key: aerpaw-aadm2025dryad-${{ inputs.cache_key_suffix }}
 
-      - name: Download and extract dataset if needed
+      - name: Prepare dataset
         shell: bash
         env:
+          INPUT_DATASET_ROOT: ${{ inputs.dataset_root }}
           INPUT_DATASET_URL: ${{ inputs.dataset_url }}
           SECRET_DATASET_URL: ${{ secrets.AADM2025DRYAD_URL }}
         run: |
           set -euo pipefail
           mkdir -p data/raw
+
+          if [ -n "$INPUT_DATASET_ROOT" ]; then
+            echo "Using local dataset path from workflow input."
+            if [ ! -d "$INPUT_DATASET_ROOT" ]; then
+              echo "dataset_root does not exist on this runner: $INPUT_DATASET_ROOT"
+              exit 1
+            fi
+            if ! find "$INPUT_DATASET_ROOT" -type d -name "RF Sensor and Radar" -print -quit | grep -q .; then
+              echo "dataset_root exists but does not contain an RF Sensor and Radar directory: $INPUT_DATASET_ROOT"
+              find "$INPUT_DATASET_ROOT" -maxdepth 3 -type d | sed -n '1,80p'
+              exit 1
+            fi
+            rm -rf "$DATASET_ROOT"
+            mkdir -p "$(dirname "$DATASET_ROOT")"
+            ln -s "$INPUT_DATASET_ROOT" "$DATASET_ROOT"
+            du -sh "$INPUT_DATASET_ROOT" || true
+            exit 0
+          fi
 
           if [ -d "$DATASET_ROOT" ] && find "$DATASET_ROOT" -type d -name "RF Sensor and Radar" -print -quit | grep -q .; then
             echo "Dataset already restored at $DATASET_ROOT"
@@ -72,7 +95,7 @@ jobs:
             DATASET_URL="$SECRET_DATASET_URL"
           fi
           if [ -z "$DATASET_URL" ]; then
-            echo "No dataset URL provided. Re-run with workflow input dataset_url or set secret AADM2025DRYAD_URL."
+            echo "No dataset source provided. Re-run with dataset_root, dataset_url, or secret AADM2025DRYAD_URL."
             exit 1
           fi
           echo "::add-mask::$DATASET_URL"
