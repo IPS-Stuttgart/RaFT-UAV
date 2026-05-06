@@ -70,6 +70,12 @@ Run the Opt1-Opt3 source-specific inflation grid:
 python scripts/run_source_specific_inflation_grid.py data/raw/AADM2025Dryad
 ```
 
+Run the Opt1-Opt3 radar association ablation:
+
+```bash
+python scripts/run_radar_association_ablation.py data/raw/AADM2025Dryad
+```
+
 The first baseline is deliberately conservative. It is meant to reproduce the
 published constant-velocity Kalman fusion setup before adding robust gating,
 learned sensor uncertainties, maneuvering models, and smoothing.
@@ -82,6 +88,10 @@ Baseline runs write gitignored per-flight artifacts under `outputs/baseline/`:
 - `trajectory.png`
 
 Radar JSON frames contain many Fortem `trackData` entries. The default
-reproducibility baseline keeps radar rows whose UAV class probability
-`catProb[0]` is at least `0.5`; use `--radar-selection truth-gated` only for
-schema debugging because it uses ground truth to choose radar rows.
+reproducibility baseline uses `--radar-association catprob`, which keeps radar
+rows whose UAV class probability `catProb[0]` is at least `0.5`. Use
+`--radar-association oracle-nearest-truth` only as a diagnostic upper bound
+because it uses ground truth. The online alternatives are
+`--radar-association prediction-nis` and `--radar-association track-continuity`.
+The legacy `--radar-selection truth-gated` mode is retained for schema
+debugging.

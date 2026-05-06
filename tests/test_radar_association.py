@@ -1,0 +1,125 @@
+import numpy as np
+import pandas as pd
+
+from raft_uav.baselines.kalman import AsyncConstantVelocityKalmanTracker, TrackingMeasurement
+from raft_uav.baselines.radar_association import (
+    _select_radar_candidate,
+    run_async_cv_baseline_with_radar_association,
+)
+
+
+def _rf_measurement(time_s: float, east_m: float, north_m: float = 0.0) -> TrackingMeasurement:
+    return TrackingMeasurement(
+        time_s=time_s,
+        vector=np.array([east_m, north_m]),
+        covariance=np.diag([1.0, 1.0]),
+        source="rf",
+    )
+
+
+def test_oracle_nearest_truth_selects_closest_candidate_per_frame():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": 0.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.9,
+            },
+            {
+                "frame_index": 0,
+                "track_id": 2,
+                "time_s": 0.0,
+                "east_m": 100.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.8,
+            },
+        ]
+    )
+    truth = pd.DataFrame({"time_s": [0.0], "east_m": [101.0], "north_m": [0.0], "up_m": [0.0]})
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[],
+        radar=radar,
+        association="oracle-nearest-truth",
+        truth=truth,
+    )
+
+    assert len(records) == 1
+    assert selected["track_id"].tolist() == [2]
+
+
+def test_prediction_nis_selects_candidate_near_prediction():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 2.0,
+                "east_m": 20.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.8,
+            },
+            {
+                "frame_index": 0,
+                "track_id": 2,
+                "time_s": 2.0,
+                "east_m": -100.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.9,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(0.0, 0.0), _rf_measurement(1.0, 10.0)],
+        radar=radar,
+        association="prediction-nis",
+    )
+
+    assert len(records) == 3
+    assert selected["track_id"].tolist() == [1]
+
+
+def test_track_continuity_keeps_current_track_for_small_nis_gain():
+    tracker = AsyncConstantVelocityKalmanTracker(initial_position=np.zeros(3), initial_time_s=0.0)
+    candidates = pd.DataFrame(
+        [
+            {
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": 1.1,
+                "north_m": 0.0,
+                "up_m": 0.0,
+            },
+            {
+                "track_id": 2,
+                "time_s": 0.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+            },
+        ]
+    )
+
+    selected = _select_radar_candidate(
+        candidates,
+        association="track-continuity",
+        tracker=tracker,
+        covariance=np.diag([25.0**2, 25.0**2, 35.0**2]),
+        truth=None,
+        current_track_id=1,
+        track_switch_nis_ratio=0.5,
+        candidate_catprob_threshold=None,
+        truth_gate_m=150.0,
+        truth_time_gate_s=1.0,
+    )
+
+    assert selected is not None
+    assert int(selected["track_id"]) == 1

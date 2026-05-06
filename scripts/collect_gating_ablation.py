@@ -66,6 +66,9 @@ def _row(method: str, metrics_path: Path, metrics: dict[str, Any]) -> dict[str, 
     return {
         "flight": metrics.get("flight", metrics_path.parent.name),
         "method": method,
+        "radar_association": _empty_if_none(
+            metrics.get("radar_association", metrics.get("radar_selection"))
+        ),
         "gating_enabled": bool(gating.get("enabled", False)),
         "robust_update": _empty_if_none(robust_update.get("method")),
         "rf_gate_probability": _empty_if_none(rf_gate_probability),

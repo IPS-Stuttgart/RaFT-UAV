@@ -12,6 +12,10 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.baselines.kalman import run_async_cv_baseline
+from raft_uav.baselines.radar_association import (
+    RADAR_ASSOCIATION_MODES,
+    run_async_cv_baseline_with_radar_association,
+)
 from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
 from raft_uav.io.aerpaw import (
     discover_flights,
@@ -49,14 +53,26 @@ def main(argv: list[str] | None = None) -> int:
     baseline_parser.add_argument("--output-dir", type=Path, default=Path("outputs/baseline"))
     baseline_parser.add_argument("--acceleration-std", type=float, default=4.0)
     baseline_parser.add_argument(
+        "--radar-association",
+        choices=["catprob", *RADAR_ASSOCIATION_MODES],
+        default="catprob",
+        help="radar association mode for choosing trackData rows before radar updates",
+    )
+    baseline_parser.add_argument(
         "--radar-selection",
         choices=["catprob", "truth-gated", "all", "none"],
-        default="catprob",
-        help="trackData row selection used before fusion",
+        default=None,
+        help="legacy radar row selection; overrides --radar-association when provided",
     )
     baseline_parser.add_argument("--radar-catprob-threshold", type=float, default=0.5)
     baseline_parser.add_argument("--truth-gate-m", type=float, default=150.0)
     baseline_parser.add_argument("--truth-time-gate-s", type=float, default=1.0)
+    baseline_parser.add_argument(
+        "--track-switch-nis-ratio",
+        type=float,
+        default=0.5,
+        help="track-continuity switches IDs only when best NIS is below this ratio",
+    )
     baseline_parser.add_argument("--max-eval-time-delta-s", type=float, default=2.0)
     baseline_parser.add_argument(
         "--enable-gating",
@@ -103,10 +119,12 @@ def main(argv: list[str] | None = None) -> int:
             args.flight,
             args.output_dir,
             args.acceleration_std,
+            args.radar_association,
             args.radar_selection,
             args.radar_catprob_threshold,
             args.truth_gate_m,
             args.truth_time_gate_s,
+            args.track_switch_nis_ratio,
             args.max_eval_time_delta_s,
             args.enable_gating,
             args.robust_update,
@@ -140,10 +158,12 @@ def _run_baseline(
     flight_name: str,
     output_dir: Path,
     acceleration_std: float,
-    radar_selection: str,
+    radar_association: str,
+    legacy_radar_selection: str | None,
     radar_catprob_threshold: float,
     truth_gate_m: float,
     truth_time_gate_s: float,
+    track_switch_nis_ratio: float,
     max_eval_time_delta_s: float,
     enable_gating: bool,
     robust_update: str,
@@ -156,6 +176,9 @@ def _run_baseline(
         raise ValueError("--enable-gating and --robust-update are mutually exclusive")
     if rf_inflation_alpha <= 0.0 or radar_inflation_alpha <= 0.0:
         raise ValueError("inflation alphas must be positive")
+    if track_switch_nis_ratio <= 0.0:
+        raise ValueError("track_switch_nis_ratio must be positive")
+    radar_mode = legacy_radar_selection or radar_association
     flight = select_flight(dataset_root, flight_name)
     if flight.truth_txt is None:
         raise FileNotFoundError(f"{flight.name} has no truth telemetry file")
@@ -167,11 +190,13 @@ def _run_baseline(
     radar = pd.DataFrame()
     selected_radar = pd.DataFrame()
     measurements = []
+    rf_measurements = []
     if flight.rf_csv is not None:
         rf = _inside_truth_window(
             normalize_rf(read_rf_csv(flight.rf_csv), projector, truth_origin_time), truth
         )
-        measurements.extend(rf_measurements_to_enu(rf))
+        rf_measurements = rf_measurements_to_enu(rf)
+        measurements.extend(rf_measurements)
     if flight.radar_json is not None:
         radar = _inside_truth_window(
             normalize_radar(
@@ -179,15 +204,6 @@ def _run_baseline(
             ),
             truth,
         )
-        selected_radar = select_radar_measurement_rows(
-            radar,
-            selection=radar_selection,
-            truth=truth,
-            catprob_threshold=radar_catprob_threshold,
-            truth_gate_m=truth_gate_m,
-            truth_time_gate_s=truth_time_gate_s,
-        )
-        measurements.extend(radar_measurements_to_enu(selected_radar))
 
     gate_probabilities = None
     robust_updates = None
@@ -198,13 +214,39 @@ def _run_baseline(
         robust_updates = {"rf": robust_update, "radar": robust_update}
         inflation_alphas = {"rf": rf_inflation_alpha, "radar": radar_inflation_alpha}
 
-    records = run_async_cv_baseline(
-        measurements,
-        acceleration_std_mps2=acceleration_std,
-        gate_probabilities_by_source=gate_probabilities,
-        robust_update_by_source=robust_updates,
-        inflation_alpha_by_source=inflation_alphas,
-    )
+    if radar_mode in RADAR_ASSOCIATION_MODES:
+        records, selected_radar = run_async_cv_baseline_with_radar_association(
+            rf_measurements=rf_measurements,
+            radar=radar,
+            association=radar_mode,
+            truth=truth,
+            acceleration_std_mps2=acceleration_std,
+            gate_probabilities_by_source=gate_probabilities,
+            robust_update_by_source=robust_updates,
+            inflation_alpha_by_source=inflation_alphas,
+            track_switch_nis_ratio=track_switch_nis_ratio,
+            candidate_catprob_threshold=radar_catprob_threshold,
+            truth_gate_m=truth_gate_m,
+            truth_time_gate_s=truth_time_gate_s,
+        )
+        measurements = [*rf_measurements, *radar_measurements_to_enu(selected_radar)]
+    else:
+        selected_radar = select_radar_measurement_rows(
+            radar,
+            selection=radar_mode,
+            truth=truth,
+            catprob_threshold=radar_catprob_threshold,
+            truth_gate_m=truth_gate_m,
+            truth_time_gate_s=truth_time_gate_s,
+        )
+        measurements.extend(radar_measurements_to_enu(selected_radar))
+        records = run_async_cv_baseline(
+            measurements,
+            acceleration_std_mps2=acceleration_std,
+            gate_probabilities_by_source=gate_probabilities,
+            robust_update_by_source=robust_updates,
+            inflation_alpha_by_source=inflation_alphas,
+        )
     if not records:
         raise RuntimeError(f"{flight.name} produced no baseline posterior records")
 
@@ -242,10 +284,11 @@ def _run_baseline(
         selected_radar=selected_radar,
         estimate_frame=estimate_frame,
         acceleration_std=acceleration_std,
-        radar_selection=radar_selection,
+        radar_association=radar_mode,
         radar_catprob_threshold=radar_catprob_threshold,
         truth_gate_m=truth_gate_m,
         truth_time_gate_s=truth_time_gate_s,
+        track_switch_nis_ratio=track_switch_nis_ratio,
         max_eval_time_delta_s=max_eval_time_delta_s,
         enable_gating=enable_gating,
         robust_update=robust_update,
@@ -265,6 +308,7 @@ def _run_baseline(
     print(f"reweighted_measurements={metrics['reweighted_measurements']}")
     print(f"rf_rows={len(rf)}")
     print(f"radar_rows={len(radar)}")
+    print(f"radar_association={radar_mode}")
     print(f"selected_radar_rows={len(selected_radar)}")
     print(f"selected_radar_track_ids={metrics['selected_radar_track_ids']}")
     print(f"metrics_json={metrics_path}")
@@ -284,6 +328,9 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
             {
                 "time_s": float(record["time_s"]),
                 "source": str(record["source"]),
+                "track_id": _optional_int(record.get("track_id")),
+                "association_mode": _optional_str(record.get("association_mode")),
+                "association_nis": _optional_float(record.get("association_nis")),
                 "measurement_dim": int(record.get("measurement_dim", 0)),
                 "accepted": bool(record.get("accepted", True)),
                 "update_action": str(record.get("update_action", "updated")),
@@ -313,10 +360,11 @@ def _baseline_metrics(
     selected_radar: pd.DataFrame,
     estimate_frame: pd.DataFrame,
     acceleration_std: float,
-    radar_selection: str,
+    radar_association: str,
     radar_catprob_threshold: float,
     truth_gate_m: float,
     truth_time_gate_s: float,
+    track_switch_nis_ratio: float,
     max_eval_time_delta_s: float,
     enable_gating: bool,
     robust_update: str,
@@ -373,10 +421,12 @@ def _baseline_metrics(
         "acceleration_std_mps2": float(acceleration_std),
         "rf_covariance": "diag(CEP^2, CEP^2), default std 75 m",
         "radar_covariance": "diag(25^2, 25^2, 35^2) m^2",
-        "radar_selection": radar_selection,
+        "radar_selection": radar_association,
+        "radar_association": radar_association,
         "radar_catprob_threshold": float(radar_catprob_threshold),
         "truth_gate_m": float(truth_gate_m),
         "truth_time_gate_s": float(truth_time_gate_s),
+        "track_switch_nis_ratio": float(track_switch_nis_ratio),
         "max_eval_time_delta_s": float(max_eval_time_delta_s),
         "gating": {
             "enabled": bool(enable_gating),
@@ -486,6 +536,18 @@ def _optional_float(value: object) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    return str(value)
 
 
 def _inside_truth_window(frame: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
