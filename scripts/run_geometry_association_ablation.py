@@ -3,43 +3,45 @@
 from __future__ import annotations
 
 import argparse
-import csv
-import json
-import os
-import subprocess
-import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+import ablation_common as common
+
+
+@dataclass(frozen=True)
+class _Config:
+    name: str
+    association: str
+    velocity_weight: float | None
+    switch_penalty: float | None
+    catprob_weight: float | None
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("dataset_root", type=Path)
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("outputs/geometry_association_ablation"),
+    common.add_experiment_io_arguments(
+        parser,
+        default_output_dir=Path("outputs/geometry_association_ablation"),
+        default_summary_output=Path("outputs/geometry_association_ablation.csv"),
+        default_flights=["Opt1"],
     )
-    parser.add_argument(
-        "--summary-output",
-        type=Path,
-        default=Path("outputs/geometry_association_ablation.csv"),
-    )
-    parser.add_argument("--flights", nargs="*", default=["Opt1"])
     parser.add_argument("--velocity-weights", nargs="*", type=float, default=[0.0, 0.25, 0.5])
     parser.add_argument("--switch-penalties", nargs="*", type=float, default=[0.0, 4.0, 8.0])
     parser.add_argument("--catprob-weights", nargs="*", type=float, default=[0.0, 2.0])
     parser.add_argument("--geometry-velocity-std", type=float, default=12.0)
-    parser.add_argument("--fixed-lag-s", type=float, default=20.0)
-    parser.add_argument("--rf-gate-prob", type=float, default=0.99)
-    parser.add_argument("--radar-gate-prob", type=float, default=0.99)
-    parser.add_argument("--rf-inflation-alpha", type=float, default=0.5)
-    parser.add_argument("--radar-inflation-alpha", type=float, default=0.5)
+    common.add_fixed_lag_argument(parser)
+    common.add_soft_update_arguments(parser)
     parser.add_argument("--skip-existing", action="store_true")
     args = parser.parse_args()
 
+    rows = common.run_named_config_experiments(args, _configs(args), _run_one, _row)
+    common.write_summary_csv(args.summary_output, rows)
+    print(f"wrote {len(rows)} rows to {args.summary_output}")
+    return 0
+
+
+def _configs(args: argparse.Namespace) -> list[_Config]:
     configs = [
         _Config(
             "soft_prediction_nis_fixed_lag",
@@ -61,124 +63,54 @@ def main() -> int:
                         catprob_weight=catprob_weight,
                     )
                 )
-
-    rows: list[dict[str, object]] = []
-    for config in configs:
-        run_dir = args.output_dir / config.name
-        for flight in args.flights:
-            metrics_path = run_dir / flight / "metrics.json"
-            if not (args.skip_existing and metrics_path.exists()):
-                _run_one(args=args, output_dir=run_dir, flight=flight, config=config)
-            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-            rows.append(_row(config.name, metrics_path, metrics))
-
-    args.summary_output.parent.mkdir(parents=True, exist_ok=True)
-    with args.summary_output.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"wrote {len(rows)} rows to {args.summary_output}")
-    return 0
+    return configs
 
 
-class _Config:
-    def __init__(
-        self,
-        name: str,
-        *,
-        association: str,
-        velocity_weight: float | None,
-        switch_penalty: float | None,
-        catprob_weight: float | None,
-    ) -> None:
-        self.name = name
-        self.association = association
-        self.velocity_weight = velocity_weight
-        self.switch_penalty = switch_penalty
-        self.catprob_weight = catprob_weight
+def _row(config: _Config, metrics_path: Path, metrics: dict[str, object]) -> dict[str, object]:
+    geometry = metrics.get("geometry_association") or {}
+    return common.tracking_summary_row(
+        config.name,
+        metrics_path,
+        metrics,
+        extra_fields={
+            "geometry_velocity_std_mps": _metric_value(geometry, "velocity_std_mps"),
+            "geometry_velocity_weight": _metric_value(geometry, "velocity_weight"),
+            "geometry_switch_penalty": _metric_value(geometry, "switch_penalty"),
+            "geometry_catprob_weight": _metric_value(geometry, "catprob_weight"),
+        },
+        include_selected_track_ids=True,
+    )
 
 
 def _run_one(
-    *,
     args: argparse.Namespace,
     output_dir: Path,
     flight: str,
     config: _Config,
 ) -> None:
-    command = [
-        sys.executable,
-        "-m",
-        "raft_uav.cli",
-        "run-baseline",
-        str(args.dataset_root),
-        "--flight",
-        flight,
-        "--output-dir",
-        str(output_dir),
-        "--radar-association",
-        config.association,
-        "--robust-update",
-        "nis-inflate",
-        "--rf-gate-prob",
-        str(args.rf_gate_prob),
-        "--radar-gate-prob",
-        str(args.radar_gate_prob),
-        "--rf-inflation-alpha",
-        str(args.rf_inflation_alpha),
-        "--radar-inflation-alpha",
-        str(args.radar_inflation_alpha),
-        "--smoother",
-        "fixed-lag",
-        "--smoother-lag-s",
-        str(args.fixed_lag_s),
-    ]
+    options: list[object] = []
+    options.extend(common.robust_update_options(args))
+    options.extend(common.smoother_options("fixed-lag", args.fixed_lag_s))
     if config.association == "geometry-score":
-        command.extend(
+        options.extend(
             [
                 "--geometry-velocity-std",
-                str(args.geometry_velocity_std),
+                args.geometry_velocity_std,
                 "--geometry-velocity-weight",
-                str(config.velocity_weight),
+                config.velocity_weight,
                 "--geometry-switch-penalty",
-                str(config.switch_penalty),
+                config.switch_penalty,
                 "--geometry-catprob-weight",
-                str(config.catprob_weight),
+                config.catprob_weight,
             ]
         )
-    print(" ".join(command), flush=True)
-    subprocess.run(command, check=True, env=_subprocess_env())
-
-
-def _row(method: str, metrics_path: Path, metrics: dict[str, Any]) -> dict[str, object]:
-    error_2d = metrics.get("position_error_2d") or {}
-    error_3d = metrics.get("position_error_3d") or {}
-    robust_update = metrics.get("robust_update") or {}
-    smoother = metrics.get("smoother") or {}
-    geometry = metrics.get("geometry_association") or {}
-    return {
-        "flight": metrics.get("flight", metrics_path.parent.name),
-        "method": method,
-        "radar_association": metrics.get("radar_association", metrics.get("radar_selection", "")),
-        "robust_update": _empty_if_none(robust_update.get("method")),
-        "smoother": _empty_if_none(smoother.get("method")),
-        "smoother_lag_s": _empty_if_none(smoother.get("lag_s")),
-        "geometry_velocity_std_mps": _empty_if_none(geometry.get("velocity_std_mps")),
-        "geometry_velocity_weight": _empty_if_none(geometry.get("velocity_weight")),
-        "geometry_switch_penalty": _empty_if_none(geometry.get("switch_penalty")),
-        "geometry_catprob_weight": _empty_if_none(geometry.get("catprob_weight")),
-        "posterior_records": int(metrics.get("posterior_records", 0)),
-        "selected_radar_rows": int(metrics.get("selected_radar_rows", 0)),
-        "selected_radar_track_ids": len(metrics.get("selected_radar_track_ids") or []),
-        "rmse_2d_m": _rounded(error_2d.get("rmse_m")),
-        "mae_2d_m": _rounded(error_2d.get("mae_m")),
-        "p50_2d_m": _rounded(error_2d.get("p50_m")),
-        "p95_2d_m": _rounded(error_2d.get("p95_m")),
-        "rmse_3d_m": _rounded(error_3d.get("rmse_m")),
-        "mae_3d_m": _rounded(error_3d.get("mae_m")),
-        "p50_3d_m": _rounded(error_3d.get("p50_m")),
-        "p95_3d_m": _rounded(error_3d.get("p95_m")),
-        "metrics_path": str(metrics_path),
-    }
+    common.run_baseline(
+        dataset_root=args.dataset_root,
+        flight=flight,
+        output_dir=output_dir,
+        association=config.association,
+        extra_options=options,
+    )
 
 
 def _geometry_name(
@@ -188,32 +120,14 @@ def _geometry_name(
 ) -> str:
     return (
         "geometry_score"
-        f"_v{_slug(velocity_weight)}"
-        f"_s{_slug(switch_penalty)}"
-        f"_c{_slug(catprob_weight)}"
+        f"_v{common.slug(velocity_weight)}"
+        f"_s{common.slug(switch_penalty)}"
+        f"_c{common.slug(catprob_weight)}"
     )
 
 
-def _slug(value: float) -> str:
-    return str(float(value)).replace("-", "m").replace(".", "p")
-
-
-def _rounded(value: object) -> object:
-    if value is None:
-        return ""
-    return round(float(value), 3)
-
-
-def _empty_if_none(value: object) -> object:
-    return "" if value is None else value
-
-
-def _subprocess_env() -> dict[str, str]:
-    env = os.environ.copy()
-    src_path = str(REPO_ROOT / "src")
-    current = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = src_path if not current else os.pathsep.join([src_path, current])
-    return env
+def _metric_value(mapping: object, key: str) -> object:
+    return common.empty_if_none(mapping.get(key)) if isinstance(mapping, dict) else ""
 
 
 if __name__ == "__main__":

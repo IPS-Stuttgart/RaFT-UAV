@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import csv
-import json
 from pathlib import Path
-from typing import Any
+
+from ablation_common import empty_if_none, error_metric_columns, load_metrics, write_summary_csv
 
 
 def main() -> int:
@@ -18,6 +17,13 @@ def main() -> int:
     parser.add_argument("--flights", nargs="*", default=["Opt1", "Opt2", "Opt3"])
     args = parser.parse_args()
 
+    rows = _collect_rows(args)
+    write_summary_csv(args.output, rows)
+    print(f"wrote {len(rows)} rows to {args.output}")
+    return 0
+
+
+def _collect_rows(args: argparse.Namespace) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     methods = [("cv", args.baseline_dir), ("cv_nis_gated", args.gated_dir)]
     if args.inflated_dir is not None:
@@ -25,95 +31,84 @@ def main() -> int:
     for method, root in methods:
         for flight in args.flights:
             metrics_path = root / flight / "metrics.json"
-            if not metrics_path.exists():
-                continue
-            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-            rows.append(_row(method, metrics_path, metrics))
-
-    if not rows:
-        raise RuntimeError("No metrics.json files found for the requested flights")
-
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"wrote {len(rows)} rows to {args.output}")
-    return 0
+            if metrics_path.exists():
+                rows.append(_row(method, metrics_path, load_metrics(metrics_path)))
+    return rows
 
 
-def _row(method: str, metrics_path: Path, metrics: dict[str, Any]) -> dict[str, object]:
-    rejected_by_source = metrics.get("rejected_by_source") or {}
-    accepted_by_source = metrics.get("accepted_by_source") or {}
-    source_counts = metrics.get("source_counts") or {}
+def _row(method: str, metrics_path: Path, metrics: dict[str, object]) -> dict[str, object]:
     gating = metrics.get("gating") or {}
     robust_update = metrics.get("robust_update") or {}
-    smoother = metrics.get("smoother") or {}
-    error_2d = metrics.get("position_error_2d") or {}
-    error_3d = metrics.get("position_error_3d") or {}
-
-    posterior_records = int(metrics.get("posterior_records", 0))
-    accepted = int(metrics.get("accepted_measurements", posterior_records))
-    rejected = int(metrics.get("rejected_measurements", 0))
+    source_counts = metrics.get("source_counts") or {}
+    accepted_by_source = metrics.get("accepted_by_source") or {}
+    rejected_by_source = metrics.get("rejected_by_source") or {}
     reweighted_by_source = metrics.get("reweighted_by_source") or {}
-    reweighted = int(metrics.get("reweighted_measurements", 0))
-    rf_gate_probability = gating.get("rf_gate_probability")
-    if rf_gate_probability is None:
-        rf_gate_probability = robust_update.get("rf_gate_probability")
-    radar_gate_probability = gating.get("radar_gate_probability")
-    if radar_gate_probability is None:
-        radar_gate_probability = robust_update.get("radar_gate_probability")
+    posterior_records = int(metrics.get("posterior_records", 0))
+    rejected = int(metrics.get("rejected_measurements", 0))
 
-    return {
+    row = {
         "flight": metrics.get("flight", metrics_path.parent.name),
         "method": method,
-        "radar_association": _empty_if_none(
+        "radar_association": empty_if_none(
             metrics.get("radar_association", metrics.get("radar_selection"))
         ),
-        "gating_enabled": bool(gating.get("enabled", False)),
-        "robust_update": _empty_if_none(robust_update.get("method")),
-        "smoother": _empty_if_none(smoother.get("method")),
-        "smoother_lag_s": _empty_if_none(smoother.get("lag_s")),
-        "rf_gate_probability": _empty_if_none(rf_gate_probability),
-        "radar_gate_probability": _empty_if_none(radar_gate_probability),
-        "rf_inflation_alpha": _empty_if_none(robust_update.get("rf_inflation_alpha")),
-        "radar_inflation_alpha": _empty_if_none(
-            robust_update.get("radar_inflation_alpha")
+        "gating_enabled": _dict_get(gating, "enabled", False),
+        "robust_update": empty_if_none(_dict_get(robust_update, "method")),
+        "smoother": empty_if_none(_nested_metric(metrics, "smoother", "method")),
+        "smoother_lag_s": empty_if_none(_nested_metric(metrics, "smoother", "lag_s")),
+        "rf_gate_probability": empty_if_none(
+            _gate_probability(gating, robust_update, "rf_gate_probability")
+        ),
+        "radar_gate_probability": empty_if_none(
+            _gate_probability(gating, robust_update, "radar_gate_probability")
+        ),
+        "rf_inflation_alpha": empty_if_none(_dict_get(robust_update, "rf_inflation_alpha")),
+        "radar_inflation_alpha": empty_if_none(
+            _dict_get(robust_update, "radar_inflation_alpha")
         ),
         "posterior_records": posterior_records,
-        "accepted_measurements": accepted,
+        "accepted_measurements": int(metrics.get("accepted_measurements", posterior_records)),
         "rejected_measurements": rejected,
-        "reweighted_measurements": reweighted,
-        "accepted_rf": int(
-            accepted_by_source.get("rf", source_counts.get("rf", 0) if rejected == 0 else 0)
-        ),
-        "accepted_radar": int(
-            accepted_by_source.get("radar", source_counts.get("radar", 0) if rejected == 0 else 0)
-        ),
-        "rejected_rf": int(rejected_by_source.get("rf", 0)),
-        "rejected_radar": int(rejected_by_source.get("radar", 0)),
-        "reweighted_rf": int(reweighted_by_source.get("rf", 0)),
-        "reweighted_radar": int(reweighted_by_source.get("radar", 0)),
-        "rmse_2d_m": _rounded(error_2d.get("rmse_m")),
-        "mae_2d_m": _rounded(error_2d.get("mae_m")),
-        "p50_2d_m": _rounded(error_2d.get("p50_m")),
-        "p95_2d_m": _rounded(error_2d.get("p95_m")),
-        "rmse_3d_m": _rounded(error_3d.get("rmse_m")),
-        "mae_3d_m": _rounded(error_3d.get("mae_m")),
-        "p50_3d_m": _rounded(error_3d.get("p50_m")),
-        "p95_3d_m": _rounded(error_3d.get("p95_m")),
-        "metrics_path": str(metrics_path),
+        "reweighted_measurements": int(metrics.get("reweighted_measurements", 0)),
+        "accepted_rf": _accepted_count(accepted_by_source, source_counts, "rf", rejected),
+        "accepted_radar": _accepted_count(accepted_by_source, source_counts, "radar", rejected),
+        "rejected_rf": _source_count(rejected_by_source, "rf"),
+        "rejected_radar": _source_count(rejected_by_source, "radar"),
+        "reweighted_rf": _source_count(reweighted_by_source, "rf"),
+        "reweighted_radar": _source_count(reweighted_by_source, "radar"),
     }
+    row.update(error_metric_columns(metrics))
+    row["metrics_path"] = str(metrics_path)
+    return row
 
 
-def _rounded(value: object) -> object:
-    if value is None:
-        return ""
-    return round(float(value), 3)
+def _accepted_count(
+    accepted_by_source: object,
+    source_counts: object,
+    source: str,
+    rejected: int,
+) -> int:
+    fallback = _source_count(source_counts, source) if rejected == 0 else 0
+    if not isinstance(accepted_by_source, dict):
+        return fallback
+    return int(accepted_by_source.get(source, fallback))
 
 
-def _empty_if_none(value: object) -> object:
-    return "" if value is None else value
+def _gate_probability(gating: object, robust_update: object, key: str) -> object:
+    value = _dict_get(gating, key)
+    return _dict_get(robust_update, key) if value is None else value
+
+
+def _nested_metric(metrics: dict[str, object], section: str, key: str) -> object:
+    return _dict_get(metrics.get(section), key)
+
+
+def _source_count(counts: object, source: str) -> int:
+    return int(counts.get(source, 0)) if isinstance(counts, dict) else 0
+
+
+def _dict_get(mapping: object, key: str, default: object = None) -> object:
+    return mapping.get(key, default) if isinstance(mapping, dict) else default
 
 
 if __name__ == "__main__":
