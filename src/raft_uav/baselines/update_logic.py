@@ -8,6 +8,10 @@ from typing import Protocol
 
 import numpy as np
 
+ROBUST_UPDATE_MODES = ("nis-inflate", "student-t", "huber")
+DEFAULT_STUDENT_T_DOF = 4.0
+DEFAULT_HUBER_THRESHOLD = 2.0
+
 
 class TrackingMeasurementLike(Protocol):
     """Protocol for measurement objects used by baseline trackers."""
@@ -45,6 +49,74 @@ def normalized_innovation_squared(residual: np.ndarray, innovation_covariance: n
     return float(residual @ solved)
 
 
+def student_t_covariance_scale(
+    nis: float,
+    measurement_dim: int,
+    degrees_of_freedom: float = DEFAULT_STUDENT_T_DOF,
+) -> float:
+    """Return the Student-t robust covariance inflation factor.
+
+    A Student-t measurement model can be represented as a Gaussian scale
+    mixture. Conditioning on the current innovation gives an expected precision
+    multiplier ``(nu + d) / (nu + NIS)``. We apply the reciprocal to the
+    measurement covariance and cap at one so inliers are not made artificially
+    overconfident.
+    """
+
+    dof = float(degrees_of_freedom)
+    if dof <= 0.0:
+        raise ValueError("student_t_dof must be positive")
+    dim = int(measurement_dim)
+    if dim < 1:
+        raise ValueError("measurement_dim must be positive")
+    scale = (dof + max(0.0, float(nis))) / (dof + dim)
+    return float(max(1.0, scale))
+
+
+def huber_covariance_scale(nis: float, threshold: float = DEFAULT_HUBER_THRESHOLD) -> float:
+    """Return the multivariate Huber covariance inflation factor.
+
+    The Huber weight is applied to the innovation radius ``sqrt(NIS)``. Above
+    ``threshold`` the covariance is inflated by ``radius / threshold``.
+    """
+
+    threshold = float(threshold)
+    if threshold <= 0.0:
+        raise ValueError("huber_threshold must be positive")
+    radius = float(np.sqrt(max(0.0, float(nis))))
+    if radius <= threshold:
+        return 1.0
+    return float(radius / threshold)
+
+
+def robust_update_covariance_scale(
+    robust_update: str | None,
+    *,
+    nis: float,
+    measurement_dim: int,
+    gate_threshold: float | None,
+    inflation_alpha: float = 1.0,
+    student_t_dof: float = DEFAULT_STUDENT_T_DOF,
+    huber_threshold: float = DEFAULT_HUBER_THRESHOLD,
+) -> tuple[float, str | None]:
+    """Return covariance scale and diagnostic action for a robust update mode."""
+
+    if robust_update is None:
+        return 1.0, None
+    if robust_update == "nis-inflate":
+        if gate_threshold is None or float(nis) <= float(gate_threshold):
+            return 1.0, None
+        scale = max(1.0, float((float(nis) / float(gate_threshold)) ** inflation_alpha))
+        return scale, "inflated"
+    if robust_update == "student-t":
+        scale = student_t_covariance_scale(nis, measurement_dim, student_t_dof)
+        return scale, "student_t" if scale > 1.0 else None
+    if robust_update == "huber":
+        scale = huber_covariance_scale(nis, huber_threshold)
+        return scale, "huber" if scale > 1.0 else None
+    raise ValueError(f"unknown robust update mode {robust_update!r}")
+
+
 def plan_linear_measurement_update(
     *,
     mean: np.ndarray,
@@ -55,6 +127,8 @@ def plan_linear_measurement_update(
     gate_threshold: float | None = None,
     robust_update: str | None = None,
     inflation_alpha: float = 1.0,
+    student_t_dof: float = DEFAULT_STUDENT_T_DOF,
+    huber_threshold: float = DEFAULT_HUBER_THRESHOLD,
 ) -> LinearUpdatePlan:
     """Prepare shared NIS gating/inflation quantities for a linear update."""
 
@@ -76,17 +150,24 @@ def plan_linear_measurement_update(
     update_action = "updated"
     accepted = True
 
-    if threshold is not None and nis > threshold:
-        if robust_update == "nis-inflate":
-            covariance_scale = max(1.0, float((nis / threshold) ** alpha))
+    if threshold is not None and nis > threshold and robust_update is None:
+        accepted = False
+        update_action = "rejected"
+    else:
+        covariance_scale, robust_action = robust_update_covariance_scale(
+            robust_update,
+            nis=nis,
+            measurement_dim=vector.size,
+            gate_threshold=threshold,
+            inflation_alpha=alpha,
+            student_t_dof=student_t_dof,
+            huber_threshold=huber_threshold,
+        )
+        if covariance_scale > 1.0:
             covariance = covariance * covariance_scale
             innovation_covariance = observation @ posterior_covariance @ observation.T + covariance
-            update_action = "inflated"
-        elif robust_update is None:
-            accepted = False
-            update_action = "rejected"
-        else:
-            raise ValueError(f"unknown robust update mode {robust_update!r}")
+        if robust_action is not None:
+            update_action = robust_action
 
     return LinearUpdatePlan(
         vector=vector,
@@ -145,6 +226,30 @@ def inflation_alpha_for_measurement(
     if inflation_alpha_by_source and measurement.source in inflation_alpha_by_source:
         return float(inflation_alpha_by_source[measurement.source])
     return 1.0
+
+
+def student_t_dof_for_measurement(
+    measurement: TrackingMeasurementLike,
+    *,
+    student_t_dof_by_source: Mapping[str, float] | None,
+) -> float:
+    """Resolve a source-specific Student-t degrees-of-freedom value."""
+
+    if student_t_dof_by_source and measurement.source in student_t_dof_by_source:
+        return float(student_t_dof_by_source[measurement.source])
+    return DEFAULT_STUDENT_T_DOF
+
+
+def huber_threshold_for_measurement(
+    measurement: TrackingMeasurementLike,
+    *,
+    huber_threshold_by_source: Mapping[str, float] | None,
+) -> float:
+    """Resolve a source-specific Huber innovation-radius threshold."""
+
+    if huber_threshold_by_source and measurement.source in huber_threshold_by_source:
+        return float(huber_threshold_by_source[measurement.source])
+    return DEFAULT_HUBER_THRESHOLD
 
 
 def symmetrized(matrix: np.ndarray) -> np.ndarray:
