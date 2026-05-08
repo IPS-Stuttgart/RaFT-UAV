@@ -1,6 +1,10 @@
 import numpy as np
 import pandas as pd
 
+from raft_uav.heteroscedastic_measurements import (
+    radar_measurements_to_enu_with_uncertainty,
+    rf_measurements_to_enu_with_uncertainty,
+)
 from raft_uav.uncertainty import covariance_from_row, fit_heteroscedastic_uncertainty_model
 
 
@@ -67,3 +71,67 @@ def test_covariance_from_row_falls_back_for_missing_or_invalid_values():
     cov = covariance_from_row(row, 2, fallback)
 
     assert np.allclose(cov, fallback)
+
+
+def test_heteroscedastic_measurement_converters_consume_covariance_columns():
+    rf = pd.DataFrame(
+        {
+            "time_s": [1.0],
+            "east_m": [10.0],
+            "north_m": [20.0],
+            "std_m": [75.0],
+            "cov_ee": [4.0],
+            "cov_nn": [9.0],
+            "cov_en": [1.5],
+        }
+    )
+    radar = pd.DataFrame(
+        {
+            "time_s": [2.0],
+            "east_m": [10.0],
+            "north_m": [20.0],
+            "up_m": [30.0],
+            "cov_ee": [16.0],
+            "cov_nn": [25.0],
+            "cov_uu": [36.0],
+            "cov_en": [2.0],
+            "cov_eu": [3.0],
+            "cov_nu": [4.0],
+        }
+    )
+
+    [rf_measurement] = rf_measurements_to_enu_with_uncertainty(rf)
+    [radar_measurement] = radar_measurements_to_enu_with_uncertainty(radar)
+
+    assert np.allclose(rf_measurement.covariance, [[4.0, 1.5], [1.5, 9.0]])
+    assert np.allclose(
+        radar_measurement.covariance,
+        [[16.0, 2.0, 3.0], [2.0, 25.0, 4.0], [3.0, 4.0, 36.0]],
+    )
+
+
+def test_radar_converter_keeps_velocity_block_when_velocity_is_available():
+    radar = pd.DataFrame(
+        {
+            "time_s": [2.0],
+            "east_m": [10.0],
+            "north_m": [20.0],
+            "up_m": [30.0],
+            "velocity_east_mps": [1.0],
+            "velocity_north_mps": [2.0],
+            "velocity_down_mps": [-3.0],
+            "cov_ee": [16.0],
+            "cov_nn": [25.0],
+            "cov_uu": [36.0],
+        }
+    )
+
+    [measurement] = radar_measurements_to_enu_with_uncertainty(
+        radar,
+        default_velocity_std_mps=7.0,
+    )
+
+    assert measurement.vector.shape == (6,)
+    assert np.allclose(measurement.vector[3:], [1.0, 2.0, 3.0])
+    assert np.allclose(np.diag(measurement.covariance)[:3], [16.0, 25.0, 36.0])
+    assert np.allclose(np.diag(measurement.covariance)[3:], [49.0, 49.0, 49.0])

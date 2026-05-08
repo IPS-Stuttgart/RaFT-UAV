@@ -26,6 +26,24 @@ python scripts/run_heteroscedastic_baseline.py data/raw/AADM2025Dryad \
 
 The runner keeps the existing constant-velocity Kalman baseline and replaces static measurement covariance with per-row covariance columns predicted by the model.
 
+## Programmatic measurement conversion
+
+For experiments that already normalize RF/radar rows and want to consume learned `cov_*` columns directly, use:
+
+```python
+from raft_uav.heteroscedastic_measurements import (
+    radar_measurements_to_enu_with_uncertainty,
+    rf_measurements_to_enu_with_uncertainty,
+)
+
+rf = model.apply_rf(rf)
+radar = model.apply_radar(radar)
+rf_measurements = rf_measurements_to_enu_with_uncertainty(rf)
+radar_measurements = radar_measurements_to_enu_with_uncertainty(radar)
+```
+
+The radar converter keeps six-dimensional position-plus-velocity measurements when Fortem velocity components are present.  The learned covariance is used for the position block and the historical fixed velocity covariance is retained for the velocity block.
+
 ## Model outputs
 
 RF rows receive:
@@ -48,7 +66,7 @@ Radar rows receive:
 - `std_north_m`
 - `std_up_m`
 
-`covariance_from_row(...)` also prefers `association_cov_*` columns over `cov_*` columns so later PDA/MHT association code can override the measurement covariance with a mixture covariance.
+`covariance_from_row(...)` prefers `association_cov_*` columns over `cov_*` columns so PDA/MHT association code can override the measurement covariance with a mixture covariance.
 
 ## Notes
 
