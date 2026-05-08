@@ -19,8 +19,14 @@ from raft_uav.baselines.kalman import (
     constant_velocity_matrix,
     gate_threshold_from_probability,
     measurement_matrix,
-    normalized_innovation_squared,
     white_acceleration_process_noise,
+)
+from raft_uav.baselines.update_logic import (
+    gate_threshold_for_measurement,
+    inflation_alpha_for_measurement,
+    plan_linear_measurement_update,
+    robust_update_for_measurement,
+    symmetrized,
 )
 
 
@@ -255,54 +261,38 @@ class AsyncInteractingMultipleModelTracker:
         """Predict to and conditionally update from one RF or radar measurement."""
 
         self.predict_to(measurement.time_s)
-        inflation_alpha = float(inflation_alpha)
-        if inflation_alpha <= 0.0:
-            raise ValueError("inflation_alpha must be positive")
+        plan = plan_linear_measurement_update(
+            mean=self.mean,
+            covariance_matrix=self.covariance,
+            measurement_vector=measurement.vector,
+            measurement_covariance=measurement.covariance,
+            observation_matrix=measurement_matrix(measurement.vector.size),
+            gate_threshold=gate_threshold,
+            robust_update=robust_update,
+            inflation_alpha=inflation_alpha,
+        )
 
-        vector = np.asarray(measurement.vector, dtype=float).reshape(-1)
-        covariance = np.asarray(measurement.covariance, dtype=float)
-        observation = measurement_matrix(vector.size)
-
-        residual = vector - observation @ self.mean
-        innovation_covariance = observation @ self.covariance @ observation.T + covariance
-        nis = normalized_innovation_squared(residual, innovation_covariance)
-        threshold = None if gate_threshold is None else float(gate_threshold)
-        covariance_scale = 1.0
-        update_action = "updated"
-        accepted = True
-
-        if threshold is not None and nis > threshold:
-            if robust_update == "nis-inflate":
-                covariance_scale = max(1.0, float((nis / threshold) ** inflation_alpha))
-                covariance = covariance * covariance_scale
-                update_action = "inflated"
-            elif robust_update is None:
-                accepted = False
-                update_action = "rejected"
-            else:
-                raise ValueError(f"unknown robust update mode {robust_update!r}")
-
-        if accepted:
-            self.filter.update_linear(vector, observation, covariance)
+        if plan.accepted:
+            self.filter.update_linear(plan.vector, plan.observation, plan.covariance)
             self._sync_combined_state()
 
         return TrackingUpdateDiagnostics(
             time_s=float(measurement.time_s),
             source=measurement.source,
-            measurement_dim=vector.size,
-            accepted=bool(accepted),
-            update_action=update_action,
-            nis=float(nis),
-            gate_threshold=threshold,
-            covariance_scale=float(covariance_scale),
-            inflation_alpha=inflation_alpha if robust_update == "nis-inflate" else None,
-            residual_norm_m=float(np.linalg.norm(residual)),
+            measurement_dim=plan.vector.size,
+            accepted=plan.accepted,
+            update_action=plan.update_action,
+            nis=plan.nis,
+            gate_threshold=plan.threshold,
+            covariance_scale=plan.covariance_scale,
+            inflation_alpha=plan.inflation_alpha if robust_update == "nis-inflate" else None,
+            residual_norm_m=float(np.linalg.norm(plan.residual)),
         )
 
     def _sync_combined_state(self) -> None:
         combined = self.filter.combined_filter_state
         self.mean = np.asarray(combined.mu, dtype=float).reshape(6)
-        self.covariance = _symmetrized(np.asarray(combined.C, dtype=float).reshape(6, 6))
+        self.covariance = symmetrized(np.asarray(combined.C, dtype=float).reshape(6, 6))
 
 
 def run_async_imm_baseline(
@@ -333,16 +323,17 @@ def run_async_imm_baseline(
     for measurement in ordered:
         diagnostics = tracker.update(
             measurement,
-            gate_threshold=_gate_threshold_for_measurement(
+            gate_threshold=gate_threshold_for_measurement(
                 measurement,
                 gate_probabilities_by_source=gate_probabilities_by_source,
                 gate_thresholds_by_source=gate_thresholds_by_source,
+                probability_to_threshold=gate_threshold_from_probability,
             ),
-            robust_update=_robust_update_for_measurement(
+            robust_update=robust_update_for_measurement(
                 measurement,
                 robust_update_by_source=robust_update_by_source,
             ),
-            inflation_alpha=_inflation_alpha_for_measurement(
+            inflation_alpha=inflation_alpha_for_measurement(
                 measurement,
                 inflation_alpha_by_source=inflation_alpha_by_source,
             ),
@@ -363,42 +354,4 @@ def run_async_imm_baseline(
     return records
 
 
-def _gate_threshold_for_measurement(
-    measurement: TrackingMeasurement,
-    *,
-    gate_probabilities_by_source: Mapping[str, float | None] | None,
-    gate_thresholds_by_source: Mapping[str, float | None] | None,
-) -> float | None:
-    if gate_thresholds_by_source and measurement.source in gate_thresholds_by_source:
-        threshold = gate_thresholds_by_source[measurement.source]
-        return None if threshold is None else float(threshold)
-    if gate_probabilities_by_source and measurement.source in gate_probabilities_by_source:
-        return gate_threshold_from_probability(
-            gate_probabilities_by_source[measurement.source],
-            measurement.vector.size,
-        )
-    return None
-
-
-def _robust_update_for_measurement(
-    measurement: TrackingMeasurement,
-    *,
-    robust_update_by_source: Mapping[str, str | None] | None,
-) -> str | None:
-    if robust_update_by_source and measurement.source in robust_update_by_source:
-        return robust_update_by_source[measurement.source]
-    return None
-
-
-def _inflation_alpha_for_measurement(
-    measurement: TrackingMeasurement,
-    *,
-    inflation_alpha_by_source: Mapping[str, float] | None,
-) -> float:
-    if inflation_alpha_by_source and measurement.source in inflation_alpha_by_source:
-        return float(inflation_alpha_by_source[measurement.source])
-    return 1.0
-
-
-def _symmetrized(matrix: np.ndarray) -> np.ndarray:
-    return 0.5 * (matrix + matrix.T)
+_symmetrized = symmetrized
