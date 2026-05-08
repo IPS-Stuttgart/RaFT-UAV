@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use RaFT-UAV, please cite it using the metadata below."
+title: "RaFT-UAV: Radar-RF fusion tracking for UAVs"
+type: software
+authors:
+  - family-names: "Pfaff"
+    given-names: "Florian"
+    affiliation: "Institute of Industrial Automation and Software Engineering (IAS), University of Stuttgart"
+    email: "pfaff@ias.uni-stuttgart.de"
+repository-code: "https://github.com/IPS-Stuttgart/RaFT-UAV"
+url: "https://github.com/IPS-Stuttgart/RaFT-UAV"
+version: "0.1.0"
+license: "MIT"
+abstract: >
+  RaFT-UAV provides implementation and evaluation code for tracking UAVs with
+  radar and RF measurements, including asynchronous constant-velocity Kalman
+  fusion baselines built on PyRecEst and workflows for AERPAW Dataset-28.
+keywords:
+  - UAV tracking
+  - radar
+  - RF sensing
+  - sensor fusion
+  - Kalman filtering
+  - PyRecEst
+preferred-citation:
+  type: software
+  title: "RaFT-UAV: Radar-RF fusion tracking for UAVs"
+  authors:
+    - family-names: "Pfaff"
+      given-names: "Florian"
+  year: 2026
+  url: "https://github.com/IPS-Stuttgart/RaFT-UAV"
+  license: "MIT"
