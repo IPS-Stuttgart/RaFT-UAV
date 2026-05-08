@@ -1,6 +1,7 @@
 {
   "threshold": 1,
   "ignore": [
+    "**/.github/workflows/**",
     "src/raft_uav/cli.py",
     "src/raft_uav/io/aerpaw.py",
     "scripts/analyze_association_failures.py",
