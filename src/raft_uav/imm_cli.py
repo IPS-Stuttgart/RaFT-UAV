@@ -1,0 +1,340 @@
+"""Standalone command-line entry point for IMM fusion experiments."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+from raft_uav.baselines.imm import run_async_imm_baseline
+from raft_uav.baselines.kalman import run_async_cv_baseline
+from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
+from raft_uav.io.aerpaw import (
+    normalize_radar,
+    normalize_rf,
+    normalize_truth,
+    radar_measurements_to_enu,
+    read_radar_tracks_json,
+    read_rf_csv,
+    read_truth,
+    rf_measurements_to_enu,
+    select_flight,
+    select_radar_measurement_rows,
+)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run a CV-or-IMM baseline on one AERPAW flight."""
+
+    parser = argparse.ArgumentParser(prog="raft-uav-imm")
+    parser.add_argument("dataset_root", type=Path)
+    parser.add_argument("--flight", required=True)
+    parser.add_argument("--output-dir", type=Path, default=Path("outputs/imm-baseline"))
+    parser.add_argument("--tracker", choices=["cv", "imm"], default="imm")
+    parser.add_argument("--acceleration-std", type=float, default=4.0)
+    parser.add_argument(
+        "--imm-mode-switch-time-constant",
+        type=float,
+        default=20.0,
+        help="IMM Markov-mode switching time constant in seconds",
+    )
+    parser.add_argument(
+        "--radar-selection",
+        choices=["catprob", "truth-gated", "all", "none"],
+        default="catprob",
+        help="radar row selection before fusion",
+    )
+    parser.add_argument("--radar-catprob-threshold", type=float, default=0.5)
+    parser.add_argument("--truth-gate-m", type=float, default=150.0)
+    parser.add_argument("--truth-time-gate-s", type=float, default=1.0)
+    parser.add_argument("--max-eval-time-delta-s", type=float, default=2.0)
+    parser.add_argument(
+        "--robust-update",
+        choices=["none", "nis-inflate"],
+        default="none",
+        help="robust update rule for both RF and radar updates",
+    )
+    parser.add_argument("--rf-gate-prob", type=float, default=0.99)
+    parser.add_argument("--radar-gate-prob", type=float, default=0.99)
+    parser.add_argument("--rf-inflation-alpha", type=float, default=1.0)
+    parser.add_argument("--radar-inflation-alpha", type=float, default=1.0)
+    args = parser.parse_args(argv)
+
+    return run_experiment(
+        dataset_root=args.dataset_root,
+        flight_name=args.flight,
+        output_dir=args.output_dir,
+        tracker=args.tracker,
+        acceleration_std=args.acceleration_std,
+        imm_mode_switch_time_constant=args.imm_mode_switch_time_constant,
+        radar_selection=args.radar_selection,
+        radar_catprob_threshold=args.radar_catprob_threshold,
+        truth_gate_m=args.truth_gate_m,
+        truth_time_gate_s=args.truth_time_gate_s,
+        max_eval_time_delta_s=args.max_eval_time_delta_s,
+        robust_update=args.robust_update,
+        rf_gate_prob=args.rf_gate_prob,
+        radar_gate_prob=args.radar_gate_prob,
+        rf_inflation_alpha=args.rf_inflation_alpha,
+        radar_inflation_alpha=args.radar_inflation_alpha,
+    )
+
+
+def run_experiment(
+    *,
+    dataset_root: Path,
+    flight_name: str,
+    output_dir: Path,
+    tracker: str = "imm",
+    acceleration_std: float = 4.0,
+    imm_mode_switch_time_constant: float = 20.0,
+    radar_selection: str = "catprob",
+    radar_catprob_threshold: float = 0.5,
+    truth_gate_m: float = 150.0,
+    truth_time_gate_s: float = 1.0,
+    max_eval_time_delta_s: float = 2.0,
+    robust_update: str = "none",
+    rf_gate_prob: float = 0.99,
+    radar_gate_prob: float = 0.99,
+    rf_inflation_alpha: float = 1.0,
+    radar_inflation_alpha: float = 1.0,
+) -> int:
+    """Run one flight and write estimates, diagnostics, and metrics."""
+
+    if tracker not in {"cv", "imm"}:
+        raise ValueError("tracker must be 'cv' or 'imm'")
+    if imm_mode_switch_time_constant <= 0.0:
+        raise ValueError("imm_mode_switch_time_constant must be positive")
+    if robust_update not in {"none", "nis-inflate"}:
+        raise ValueError("robust_update must be 'none' or 'nis-inflate'")
+    if rf_inflation_alpha <= 0.0 or radar_inflation_alpha <= 0.0:
+        raise ValueError("inflation alphas must be positive")
+
+    flight = select_flight(dataset_root, flight_name)
+    if flight.truth_txt is None:
+        raise FileNotFoundError(f"{flight.name} has no truth telemetry file")
+
+    truth_raw = read_truth(flight.truth_txt)
+    truth, projector, truth_origin_time = normalize_truth(truth_raw)
+
+    rf = pd.DataFrame()
+    radar = pd.DataFrame()
+    selected_radar = pd.DataFrame()
+    measurements = []
+    if flight.rf_csv is not None:
+        rf = _inside_truth_window(
+            normalize_rf(read_rf_csv(flight.rf_csv), projector, truth_origin_time), truth
+        )
+        measurements.extend(rf_measurements_to_enu(rf))
+    if flight.radar_json is not None:
+        radar = _inside_truth_window(
+            normalize_radar(read_radar_tracks_json(flight.radar_json), projector, truth_origin_time),
+            truth,
+        )
+        selected_radar = select_radar_measurement_rows(
+            radar,
+            selection=radar_selection,
+            truth=truth,
+            catprob_threshold=radar_catprob_threshold,
+            truth_gate_m=truth_gate_m,
+            truth_time_gate_s=truth_time_gate_s,
+        )
+        measurements.extend(radar_measurements_to_enu(selected_radar))
+
+    gate_probabilities = None
+    robust_updates = None
+    inflation_alphas = None
+    if robust_update != "none":
+        gate_probabilities = {"rf": rf_gate_prob, "radar": radar_gate_prob}
+        robust_updates = {"rf": robust_update, "radar": robust_update}
+        inflation_alphas = {"rf": rf_inflation_alpha, "radar": radar_inflation_alpha}
+
+    if tracker == "imm":
+        records = run_async_imm_baseline(
+            measurements,
+            acceleration_std_mps2=acceleration_std,
+            gate_probabilities_by_source=gate_probabilities,
+            robust_update_by_source=robust_updates,
+            inflation_alpha_by_source=inflation_alphas,
+            mode_switch_time_constant_s=imm_mode_switch_time_constant,
+        )
+    else:
+        records = run_async_cv_baseline(
+            measurements,
+            acceleration_std_mps2=acceleration_std,
+            gate_probabilities_by_source=gate_probabilities,
+            robust_update_by_source=robust_updates,
+            inflation_alpha_by_source=inflation_alphas,
+        )
+    if not records:
+        raise RuntimeError(f"{flight.name} produced no posterior records")
+
+    estimate_frame = _records_to_frame(records)
+    diagnostics_columns = [
+        "time_s",
+        "source",
+        "measurement_dim",
+        "accepted",
+        "update_action",
+        "nis",
+        "gate_threshold",
+        "covariance_scale",
+        "inflation_alpha",
+        "residual_norm_m",
+    ]
+    diagnostics_frame = estimate_frame[diagnostics_columns].copy()
+
+    flight_output = output_dir / flight.name
+    flight_output.mkdir(parents=True, exist_ok=True)
+    estimates_path = flight_output / "estimates.csv"
+    diagnostics_path = flight_output / "diagnostics.csv"
+    metrics_path = flight_output / "metrics.json"
+    selected_radar_path = flight_output / "selected_radar.csv"
+
+    estimate_frame.to_csv(estimates_path, index=False)
+    diagnostics_frame.to_csv(diagnostics_path, index=False)
+    selected_radar.to_csv(selected_radar_path, index=False)
+    metrics = _metrics(
+        flight_name=flight.name,
+        truth=truth,
+        rf=rf,
+        radar=radar,
+        selected_radar=selected_radar,
+        estimate_frame=estimate_frame,
+        tracker=tracker,
+        acceleration_std=acceleration_std,
+        imm_mode_switch_time_constant=imm_mode_switch_time_constant,
+        radar_selection=radar_selection,
+        radar_catprob_threshold=radar_catprob_threshold,
+        max_eval_time_delta_s=max_eval_time_delta_s,
+        robust_update=robust_update,
+    )
+    metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+
+    print(f"flight={flight.name}")
+    print(f"tracker={tracker}")
+    print(f"posterior_records={len(records)}")
+    print(f"selected_radar_rows={len(selected_radar)}")
+    print(f"metrics_json={metrics_path}")
+    print(f"estimates_csv={estimates_path}")
+    print(f"diagnostics_csv={diagnostics_path}")
+    print(f"rmse_2d_m={metrics['position_error_2d']['rmse_m']:.3f}")
+    print(f"rmse_3d_m={metrics['position_error_3d']['rmse_m']:.3f}")
+    return 0
+
+
+def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for record in records:
+        state = np.asarray(record["state"], dtype=float).reshape(6)
+        row = {
+            "time_s": float(record["time_s"]),
+            "source": str(record["source"]),
+            "measurement_dim": int(record.get("measurement_dim", 0)),
+            "accepted": bool(record.get("accepted", True)),
+            "update_action": str(record.get("update_action", "updated")),
+            "nis": _optional_float(record.get("nis")),
+            "gate_threshold": _optional_float(record.get("gate_threshold")),
+            "covariance_scale": _optional_float(record.get("covariance_scale")),
+            "inflation_alpha": _optional_float(record.get("inflation_alpha")),
+            "residual_norm_m": _optional_float(record.get("residual_norm_m")),
+            "east_m": state[0],
+            "north_m": state[1],
+            "up_m": state[2],
+            "v_east_mps": state[3],
+            "v_north_mps": state[4],
+            "v_up_mps": state[5],
+        }
+        probabilities = record.get("mode_probability_map")
+        if isinstance(probabilities, dict):
+            for mode_name, probability in probabilities.items():
+                row[f"mode_probability_{str(mode_name).replace('-', '_')}"] = float(probability)
+        rows.append(row)
+    return pd.DataFrame.from_records(rows).sort_values("time_s").reset_index(drop=True)
+
+
+def _metrics(
+    *,
+    flight_name: str,
+    truth: pd.DataFrame,
+    rf: pd.DataFrame,
+    radar: pd.DataFrame,
+    selected_radar: pd.DataFrame,
+    estimate_frame: pd.DataFrame,
+    tracker: str,
+    acceleration_std: float,
+    imm_mode_switch_time_constant: float,
+    radar_selection: str,
+    radar_catprob_threshold: float,
+    max_eval_time_delta_s: float,
+    robust_update: str,
+) -> dict[str, Any]:
+    truth_times = truth["time_s"].to_numpy(dtype=float)
+    truth_positions = truth[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    estimate_times = estimate_frame["time_s"].to_numpy(dtype=float)
+    estimate_positions = estimate_frame[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    error_2d = position_errors_m(
+        estimate_times,
+        estimate_positions,
+        truth_times,
+        truth_positions,
+        max_time_delta_s=max_eval_time_delta_s,
+        dimensions=2,
+    )
+    error_3d = position_errors_m(
+        estimate_times,
+        estimate_positions,
+        truth_times,
+        truth_positions,
+        max_time_delta_s=max_eval_time_delta_s,
+        dimensions=3,
+    )
+    source_counts = Counter(str(value) for value in estimate_frame["source"])
+    accepted_mask = estimate_frame["accepted"].astype(bool)
+    return {
+        "flight": flight_name,
+        "tracker": {
+            "method": tracker,
+            "acceleration_std_mps2": float(acceleration_std),
+            "imm_mode_switch_time_constant_s": float(imm_mode_switch_time_constant)
+            if tracker == "imm"
+            else None,
+        },
+        "radar_selection": radar_selection,
+        "radar_catprob_threshold": float(radar_catprob_threshold),
+        "robust_update": None if robust_update == "none" else robust_update,
+        "max_eval_time_delta_s": float(max_eval_time_delta_s),
+        "truth_rows": int(len(truth)),
+        "rf_rows": int(len(rf)),
+        "radar_rows": int(len(radar)),
+        "selected_radar_rows": int(len(selected_radar)),
+        "posterior_records": int(len(estimate_frame)),
+        "accepted_measurements": int(accepted_mask.sum()),
+        "rejected_measurements": int((~accepted_mask).sum()),
+        "source_counts": {key: int(value) for key, value in sorted(source_counts.items())},
+        "position_error_2d": summarize_errors(error_2d),
+        "position_error_3d": summarize_errors(error_3d),
+    }
+
+
+def _inside_truth_window(frame: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or "time_s" not in frame.columns:
+        return frame
+    truth_min = float(truth["time_s"].min())
+    truth_max = float(truth["time_s"].max())
+    return frame.loc[(frame["time_s"] >= truth_min) & (frame["time_s"] <= truth_max)].copy()
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
