@@ -15,6 +15,7 @@ from raft_uav.baselines.kalman import (
     measurement_matrix,
     white_acceleration_process_noise,
 )
+from raft_uav.baselines.record_helpers import copy_record, record_arrays, symmetrized
 
 ROBUST_MAP_LOSSES = ("linear", "soft_l1", "huber", "cauchy", "arctan")
 
@@ -92,8 +93,8 @@ def robust_map_smooth_records(
     if lag_s is not None and lag_s < 0.0:
         raise ValueError("lag_s must be nonnegative")
 
-    out = [_copy_record(record) for record in records]
-    times, filtered_states, filtered_covariances = _record_arrays(out)
+    out = [copy_record(record) for record in records]
+    times, filtered_states, filtered_covariances = record_arrays(out)
     if measurements is None:
         factors = _record_pseudo_measurement_factors(
             out,
@@ -443,7 +444,7 @@ def _record_pseudo_measurement_factors(
         if dimension not in (2, 3, 6):
             dimension = 3
         observation = measurement_matrix(dimension)
-        covariance = _symmetrized(observation @ covariances[idx] @ observation.T)
+        covariance = symmetrized(observation @ covariances[idx] @ observation.T)
         covariance = covariance + np.eye(dimension) * 1.0e-6
         factors.append(
             _MeasurementFactor(
@@ -527,11 +528,11 @@ def _regularized_process_noise(
             velocity_floor_mps**2,
         ]
     )
-    return _symmetrized(covariance)
+    return symmetrized(covariance)
 
 
 def _whiten_covariance(covariance: np.ndarray) -> np.ndarray:
-    covariance = _symmetrized(np.asarray(covariance, dtype=float))
+    covariance = symmetrized(np.asarray(covariance, dtype=float))
     jitter = 1.0e-9
     identity = np.eye(covariance.shape[0])
     for _ in range(8):
@@ -576,22 +577,3 @@ def _write_result_to_record(
     record["map_final_cost"] = result.final_cost
     record["map_matched_measurements"] = result.matched_measurements
     record["map_message"] = result.message
-
-
-def _record_arrays(
-    records: list[dict[str, object]],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    times = np.asarray([float(record["time_s"]) for record in records], dtype=float)
-    states = np.stack([np.asarray(record["state"], dtype=float).reshape(6) for record in records])
-    covariances = np.stack(
-        [np.asarray(record["covariance"], dtype=float).reshape(6, 6) for record in records]
-    )
-    return times, states, covariances
-
-
-def _copy_record(record: dict[str, object]) -> dict[str, object]:
-    return {key: value.copy() if isinstance(value, np.ndarray) else value for key, value in record.items()}
-
-
-def _symmetrized(matrix: np.ndarray) -> np.ndarray:
-    return 0.5 * (matrix + matrix.T)
