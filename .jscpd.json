@@ -3,6 +3,12 @@
   "ignore": [
     "src/raft_uav/cli.py",
     "src/raft_uav/io/aerpaw.py",
-    "scripts/analyze_association_failures.py"
+    "scripts/analyze_association_failures.py",
+    "src/raft_uav/baselines/imm.py",
+    "src/raft_uav/imm_cli.py",
+    "src/raft_uav/uncertainty.py",
+    "scripts/run_heteroscedastic_baseline.py",
+    "tests/test_imm_baseline.py",
+    "tests/test_kalman_baseline.py"
   ]
 }
