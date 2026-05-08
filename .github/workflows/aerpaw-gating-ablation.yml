@@ -1,6 +1,7 @@
+---
 name: AERPAW gating ablation
 
-on:
+"on":
   workflow_dispatch:
     inputs:
       dataset_root:
@@ -72,24 +73,19 @@ jobs:
             mkdir -p "$RUNNER_TEMP/rclone-bin" "$RUNNER_TEMP/rclone-download"
             curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
               -o "$RUNNER_TEMP/rclone-download/rclone.zip"
-            python - <<'PY'
-          import os
-          import shutil
-          import zipfile
-          from pathlib import Path
-
-          temp = Path(os.environ["RUNNER_TEMP"])
-          zip_path = temp / "rclone-download" / "rclone.zip"
-          extract_dir = temp / "rclone-download" / "extract"
-          bin_dir = temp / "rclone-bin"
-          zipfile.ZipFile(zip_path).extractall(extract_dir)
-          matches = list(extract_dir.glob("rclone-*/rclone"))
-          if not matches:
-              raise SystemExit("Downloaded rclone archive did not contain rclone binary")
-          target = bin_dir / "rclone"
-          shutil.copy2(matches[0], target)
-          target.chmod(0o755)
-          PY
+            python_code='import os, shutil, zipfile; '
+            python_code+='from pathlib import Path; '
+            python_code+='temp = Path(os.environ["RUNNER_TEMP"]); '
+            python_code+='zip_path = temp / "rclone-download" / "rclone.zip"; '
+            python_code+='extract_dir = temp / "rclone-download" / "extract"; '
+            python_code+='bin_dir = temp / "rclone-bin"; '
+            python_code+='zipfile.ZipFile(zip_path).extractall(extract_dir); '
+            python_code+='matches = list(extract_dir.glob("rclone-*/rclone")); '
+            python_code+='assert matches, "Downloaded rclone archive did not contain rclone binary"; '
+            python_code+='target = bin_dir / "rclone"; '
+            python_code+='shutil.copy2(matches[0], target); '
+            python_code+='target.chmod(0o755)'
+            python -c "$python_code"
             echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
             export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
           fi
@@ -191,17 +187,7 @@ jobs:
             --output "$DATASET_ZIP" "$DATASET_URL"
           du -sh "$DATASET_ZIP" || true
 
-          python - <<'PY'
-          from pathlib import Path
-          import zipfile
-
-          archive = Path("data/raw/AADM2025Dryad.zip")
-          target = Path.home() / ".cache" / "datasets" / "AADM2025Dryad"
-          if not zipfile.is_zipfile(archive):
-              raise SystemExit(f"{archive} is not a ZIP file. Provide a direct ZIP archive URL.")
-          with zipfile.ZipFile(archive) as zf:
-              zf.extractall(target)
-          PY
+          python -c "from pathlib import Path; import zipfile; archive = Path('data/raw/AADM2025Dryad.zip'); target = Path.home() / '.cache' / 'datasets' / 'AADM2025Dryad'; assert zipfile.is_zipfile(archive), f'{archive} is not a ZIP file. Provide a direct ZIP archive URL.'; zipfile.ZipFile(archive).extractall(target)"
           cached_root="$(find_cached_dataset_root "$PERSISTENT_DATASET_CACHE" || true)"
           if [ -z "${cached_root:-}" ]; then
             echo "Downloaded ZIP did not contain an RF Sensor and Radar directory." >&2
