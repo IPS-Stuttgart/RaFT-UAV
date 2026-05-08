@@ -25,6 +25,7 @@ dev = [
 
 [project.scripts]
 raft-uav = "raft_uav.cli:main"
+raft-uav-imm = "raft_uav.imm_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
