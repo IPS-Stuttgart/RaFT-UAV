@@ -316,8 +316,9 @@ def radar_measurements_to_enu(
     truth_origin_time: pd.Timestamp | None = None,
     default_xy_std_m: float = 25.0,
     default_z_std_m: float = 35.0,
+    default_velocity_std_mps: float = 12.0,
 ) -> list[TrackingMeasurement]:
-    """Convert radar track rows to 3D ENU measurements."""
+    """Convert radar track rows to ENU position or position-plus-velocity measurements."""
 
     frame = radar
     if "east_m" not in frame.columns:
@@ -325,18 +326,44 @@ def radar_measurements_to_enu(
             raise ValueError("raw radar rows require projector and truth_origin_time")
         frame = normalize_radar(frame, projector, truth_origin_time)
 
-    covariance = np.diag([default_xy_std_m**2, default_xy_std_m**2, default_z_std_m**2])
+    position_covariance = np.diag(
+        [default_xy_std_m**2, default_xy_std_m**2, default_z_std_m**2]
+    )
+    full_covariance = np.zeros((6, 6), dtype=float)
+    full_covariance[:3, :3] = position_covariance
+    full_covariance[3:, 3:] = np.diag([default_velocity_std_mps**2] * 3)
     measurements: list[TrackingMeasurement] = []
     for _, row in frame.iterrows():
+        position = np.array([float(row["east_m"]), float(row["north_m"]), float(row["up_m"])])
+        velocity = _radar_velocity_vector_enu(row)
+        vector = position if velocity is None else np.concatenate([position, velocity])
+        covariance = position_covariance if velocity is None else full_covariance
         measurements.append(
             TrackingMeasurement(
                 time_s=float(row["time_s"]),
-                vector=np.array([float(row["east_m"]), float(row["north_m"]), float(row["up_m"])]),
+                vector=vector,
                 covariance=covariance,
                 source="radar",
             )
         )
     return measurements
+
+
+def _radar_velocity_vector_enu(row: pd.Series) -> np.ndarray | None:
+    """Return Fortem NED velocity as ENU velocity when all components are finite."""
+
+    required = ("velocity_east_mps", "velocity_north_mps", "velocity_down_mps")
+    if not all(column in row.index for column in required):
+        return None
+    velocity = np.array(
+        [
+            float(row["velocity_east_mps"]),
+            float(row["velocity_north_mps"]),
+            -float(row["velocity_down_mps"]),
+        ],
+        dtype=float,
+    )
+    return velocity if np.isfinite(velocity).all() else None
 
 
 def summarize_flight_schema(flight: FlightPaths) -> dict[str, Any]:

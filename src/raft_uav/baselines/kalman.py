@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover - exercised only in lightweight local sm
 
 @dataclass(frozen=True)
 class TrackingMeasurement:
-    """Position-like measurement in a local East-North-Up frame."""
+    """Linear position or position-plus-velocity measurement in local ENU coordinates."""
 
     time_s: float
     vector: np.ndarray
@@ -26,8 +26,8 @@ class TrackingMeasurement:
     def __post_init__(self) -> None:
         vector = np.asarray(self.vector, dtype=float).reshape(-1)
         covariance = np.asarray(self.covariance, dtype=float)
-        if vector.size not in (2, 3):
-            raise ValueError("measurement vector must have 2 or 3 elements")
+        if vector.size not in (2, 3, 6):
+            raise ValueError("measurement vector must have 2, 3, or 6 elements")
         if covariance.shape != (vector.size, vector.size):
             raise ValueError("measurement covariance must match vector dimension")
         if not np.isfinite(vector).all():
@@ -90,7 +90,7 @@ def white_acceleration_process_noise(dt_s: float, acceleration_std: float) -> np
 
 
 def measurement_matrix(measurement_dim: int) -> np.ndarray:
-    """Return a matrix mapping the 6D state to 2D or 3D position observations."""
+    """Return the matrix mapping the 6D state to a supported observation vector."""
 
     if measurement_dim == 2:
         matrix = np.zeros((2, 6))
@@ -103,7 +103,9 @@ def measurement_matrix(measurement_dim: int) -> np.ndarray:
         matrix[1, 1] = 1.0
         matrix[2, 2] = 1.0
         return matrix
-    raise ValueError("measurement_dim must be 2 or 3")
+    if measurement_dim == 6:
+        return np.eye(6)
+    raise ValueError("measurement_dim must be 2, 3, or 6")
 
 
 def normalized_innovation_squared(residual: np.ndarray, innovation_covariance: np.ndarray) -> float:
@@ -132,8 +134,8 @@ def gate_threshold_from_probability(
     probability = float(probability)
     if not 0.0 < probability < 1.0:
         raise ValueError("gate probability must be in (0, 1), or None to disable gating")
-    if measurement_dim not in (2, 3):
-        raise ValueError("measurement_dim must be 2 or 3")
+    if measurement_dim not in (2, 3, 6):
+        raise ValueError("measurement_dim must be 2, 3, or 6")
     return float(chi2.ppf(probability, df=measurement_dim))
 
 
@@ -153,14 +155,22 @@ class AsyncConstantVelocityKalmanTracker:
         initial_velocity_std_mps: float = 15.0,
         acceleration_std_mps2: float = 4.0,
     ) -> None:
-        position = np.asarray(initial_position, dtype=float).reshape(-1)
-        if position.size == 2:
-            position = np.array([position[0], position[1], 0.0])
-        if position.size != 3:
-            raise ValueError("initial_position must contain 2 or 3 elements")
+        initial = np.asarray(initial_position, dtype=float).reshape(-1)
+        initial_velocity: np.ndarray | None = None
+        if initial.size == 2:
+            position = np.array([initial[0], initial[1], 0.0])
+        elif initial.size == 3:
+            position = initial
+        elif initial.size == 6:
+            position = initial[:3]
+            initial_velocity = initial[3:6]
+        else:
+            raise ValueError("initial_position must contain 2, 3, or 6 elements")
 
         self.mean = np.zeros(6)
         self.mean[:3] = position
+        if initial_velocity is not None:
+            self.mean[3:6] = initial_velocity
         self.covariance = np.diag(
             [
                 initial_position_std_m**2,
