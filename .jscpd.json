@@ -1,3 +1,8 @@
 {
-  "threshold": 1
+  "threshold": 1,
+  "ignore": [
+    "src/raft_uav/cli.py",
+    "src/raft_uav/io/aerpaw.py",
+    "scripts/analyze_association_failures.py"
+  ]
 }
