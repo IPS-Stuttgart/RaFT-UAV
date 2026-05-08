@@ -3,7 +3,9 @@ import numpy as np
 from raft_uav.baselines.kalman import (
     TrackingMeasurement,
     gate_threshold_from_probability,
+    huber_covariance_scale,
     run_async_cv_baseline,
+    student_t_covariance_scale,
 )
 
 
@@ -23,6 +25,20 @@ def test_gate_threshold_from_probability_matches_chi_square_ordering():
 
     assert 5.0 < threshold_2d_95 < threshold_2d_99
     assert threshold_3d_99 > threshold_2d_99
+
+
+def test_heavy_tailed_covariance_scale_helpers_are_monotone():
+    assert student_t_covariance_scale(2.0, 2, degrees_of_freedom=4.0) == 1.0
+    assert student_t_covariance_scale(100.0, 2, degrees_of_freedom=4.0) > 1.0
+    low_dof_scale = student_t_covariance_scale(100.0, 2, degrees_of_freedom=2.0)
+    high_dof_scale = student_t_covariance_scale(100.0, 2, degrees_of_freedom=10.0)
+    assert low_dof_scale > high_dof_scale
+
+    assert huber_covariance_scale(4.0, threshold=2.0) == 1.0
+    assert huber_covariance_scale(16.0, threshold=2.0) == 2.0
+    assert huber_covariance_scale(16.0, threshold=1.0) > huber_covariance_scale(
+        16.0, threshold=4.0
+    )
 
 
 def test_large_outlier_is_rejected_when_source_gate_is_tight():
@@ -100,3 +116,62 @@ def test_nis_inflation_alpha_controls_outlier_pull():
     assert strong[-1]["update_action"] == "inflated"
     assert strong[-1]["covariance_scale"] > mild[-1]["covariance_scale"]
     assert np.linalg.norm(strong[-1]["state"][:2]) < np.linalg.norm(mild[-1]["state"][:2])
+
+
+def test_student_t_keeps_large_outlier_but_downweights_it():
+    measurements = [
+        _measurement(0.0, 0.0, 0.0),
+        _measurement(1.0, 1.0, 0.0),
+        _measurement(2.0, 10_000.0, 10_000.0),
+    ]
+    plain = run_async_cv_baseline(measurements)
+    robust = run_async_cv_baseline(
+        measurements,
+        robust_update_by_source={"rf": "student-t"},
+        student_t_dof_by_source={"rf": 3.0},
+    )
+
+    assert robust[-1]["accepted"] is True
+    assert robust[-1]["update_action"] == "student_t"
+    assert robust[-1]["covariance_scale"] > 1.0
+    assert np.linalg.norm(robust[-1]["state"][:2]) < np.linalg.norm(plain[-1]["state"][:2])
+
+
+def test_huber_keeps_large_outlier_but_downweights_it():
+    measurements = [
+        _measurement(0.0, 0.0, 0.0),
+        _measurement(1.0, 1.0, 0.0),
+        _measurement(2.0, 10_000.0, 10_000.0),
+    ]
+    plain = run_async_cv_baseline(measurements)
+    robust = run_async_cv_baseline(
+        measurements,
+        robust_update_by_source={"rf": "huber"},
+        huber_threshold_by_source={"rf": 2.0},
+    )
+
+    assert robust[-1]["accepted"] is True
+    assert robust[-1]["update_action"] == "huber"
+    assert robust[-1]["covariance_scale"] > 1.0
+    assert np.linalg.norm(robust[-1]["state"][:2]) < np.linalg.norm(plain[-1]["state"][:2])
+
+
+def test_huber_threshold_controls_outlier_pull():
+    measurements = [
+        _measurement(0.0, 0.0, 0.0),
+        _measurement(1.0, 1.0, 0.0),
+        _measurement(2.0, 10_000.0, 10_000.0),
+    ]
+    tight = run_async_cv_baseline(
+        measurements,
+        robust_update_by_source={"rf": "huber"},
+        huber_threshold_by_source={"rf": 1.0},
+    )
+    loose = run_async_cv_baseline(
+        measurements,
+        robust_update_by_source={"rf": "huber"},
+        huber_threshold_by_source={"rf": 10.0},
+    )
+
+    assert tight[-1]["covariance_scale"] > loose[-1]["covariance_scale"]
+    assert np.linalg.norm(tight[-1]["state"][:2]) < np.linalg.norm(loose[-1]["state"][:2])

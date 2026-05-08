@@ -10,10 +10,14 @@ from scipy.stats import chi2
 
 from raft_uav.baselines.update_logic import (
     gate_threshold_for_measurement,
+    huber_covariance_scale,
+    huber_threshold_for_measurement,
     inflation_alpha_for_measurement,
     normalized_innovation_squared,
     plan_linear_measurement_update,
     robust_update_for_measurement,
+    student_t_covariance_scale,
+    student_t_dof_for_measurement,
     symmetrized,
 )
 
@@ -220,6 +224,8 @@ class AsyncConstantVelocityKalmanTracker:
         gate_threshold: float | None = None,
         robust_update: str | None = None,
         inflation_alpha: float = 1.0,
+        student_t_dof: float = 4.0,
+        huber_threshold: float = 2.0,
     ) -> TrackingUpdateDiagnostics:
         """Predict to and conditionally update from one RF or radar measurement."""
 
@@ -233,6 +239,8 @@ class AsyncConstantVelocityKalmanTracker:
             gate_threshold=gate_threshold,
             robust_update=robust_update,
             inflation_alpha=inflation_alpha,
+            student_t_dof=student_t_dof,
+            huber_threshold=huber_threshold,
         )
 
         if plan.accepted:
@@ -294,6 +302,8 @@ def run_async_cv_baseline(
     gate_thresholds_by_source: Mapping[str, float | None] | None = None,
     robust_update_by_source: Mapping[str, str | None] | None = None,
     inflation_alpha_by_source: Mapping[str, float] | None = None,
+    student_t_dof_by_source: Mapping[str, float] | None = None,
+    huber_threshold_by_source: Mapping[str, float] | None = None,
 ) -> list[dict[str, object]]:
     """Run the asynchronous CV Kalman baseline and return posterior records."""
 
@@ -324,6 +334,14 @@ def run_async_cv_baseline(
             inflation_alpha=inflation_alpha_for_measurement(
                 measurement,
                 inflation_alpha_by_source=inflation_alpha_by_source,
+            ),
+            student_t_dof=student_t_dof_for_measurement(
+                measurement,
+                student_t_dof_by_source=student_t_dof_by_source,
+            ),
+            huber_threshold=huber_threshold_for_measurement(
+                measurement,
+                huber_threshold_by_source=huber_threshold_by_source,
             ),
         )
         records.append(
