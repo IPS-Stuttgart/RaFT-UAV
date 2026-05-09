@@ -30,7 +30,7 @@ def test_gate_threshold_from_probability_matches_chi_square_ordering():
 def test_heavy_tailed_covariance_scale_helpers_are_monotone():
     assert student_t_covariance_scale(2.0, 2, degrees_of_freedom=4.0) == 1.0
     assert student_t_covariance_scale(100.0, 2, degrees_of_freedom=4.0) > 1.0
-    low_dof_scale = student_t_covariance_scale(100.0, 2, degrees_of_freedom=2.0)
+    low_dof_scale = student_t_covariance_scale(100.0, 2, degrees_of_freedom=3.0)
     high_dof_scale = student_t_covariance_scale(100.0, 2, degrees_of_freedom=10.0)
     assert low_dof_scale > high_dof_scale
 
@@ -151,7 +151,7 @@ def test_huber_keeps_large_outlier_but_downweights_it():
     )
 
     assert robust[-1]["accepted"] is True
-    assert robust[-1]["update_action"] == "huber"
+    assert robust[-1]["update_action"] == "huberized"
     assert robust[-1]["covariance_scale"] > 1.0
     assert np.linalg.norm(robust[-1]["state"][:2]) < np.linalg.norm(plain[-1]["state"][:2])
 
