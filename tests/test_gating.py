@@ -151,7 +151,7 @@ def test_huber_keeps_large_outlier_but_downweights_it():
     )
 
     assert robust[-1]["accepted"] is True
-    assert robust[-1]["update_action"] == "huber"
+    assert robust[-1]["update_action"] == "huberized"
     assert robust[-1]["covariance_scale"] > 1.0
     assert np.linalg.norm(robust[-1]["state"][:2]) < np.linalg.norm(plain[-1]["state"][:2])
 
