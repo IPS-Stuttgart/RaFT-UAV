@@ -140,6 +140,15 @@ def gate_threshold_from_probability(
     return float(chi2.ppf(probability, df=measurement_dim))
 
 
+def _raft_update_action(action: object) -> str:
+    """Normalize PyRecEst diagnostic labels to RaFT-UAV's public labels."""
+
+    action_string = str(action)
+    if action_string == "huberized":
+        return "huber"
+    return action_string
+
+
 class AsyncConstantVelocityKalmanTracker:
     """Asynchronous constant-velocity Kalman tracker with optional NIS gating.
 
@@ -230,12 +239,60 @@ class AsyncConstantVelocityKalmanTracker:
         """Predict to and conditionally update from one RF or radar measurement."""
 
         self.predict_to(measurement.time_s)
+        observation = measurement_matrix(measurement.vector.size)
+
+        if self.filter is not None and hasattr(self.filter, "update_linear_robust"):
+            update_diagnostics = self.filter.update_linear_robust(
+                measurement.vector,
+                observation,
+                measurement.covariance,
+                robust_update=robust_update,
+                gate_threshold=gate_threshold,
+                student_t_dof=student_t_dof,
+                huber_threshold=huber_threshold,
+                inflation_alpha=inflation_alpha,
+                return_diagnostics=True,
+            )
+            self.mean = np.asarray(self.filter.get_point_estimate(), dtype=float)
+            self.covariance = symmetrized(
+                np.asarray(self.filter.filter_state.C, dtype=float).reshape(6, 6)
+            )
+
+            diagnostic_residual = np.asarray(
+                update_diagnostics["residual"],
+                dtype=float,
+            ).reshape(-1)
+            diagnostic_nis = float(np.asarray(update_diagnostics["nis"], dtype=float))
+            diagnostic_scale = float(np.asarray(update_diagnostics["scale"], dtype=float))
+            diagnostic_action = _raft_update_action(
+                update_diagnostics.get("action", "updated")
+            )
+            diagnostic_accepted = bool(update_diagnostics.get("accepted", True))
+
+            return TrackingUpdateDiagnostics(
+                time_s=float(measurement.time_s),
+                source=measurement.source,
+                measurement_dim=measurement.vector.size,
+                accepted=diagnostic_accepted,
+                update_action=diagnostic_action,
+                nis=diagnostic_nis,
+                gate_threshold=None if gate_threshold is None else float(gate_threshold),
+                covariance_scale=diagnostic_scale,
+                inflation_alpha=float(inflation_alpha)
+                if robust_update == "nis-inflate"
+                else None,
+                residual_norm_m=float(np.linalg.norm(diagnostic_residual)),
+            )
+
+        # Fallback for local smoke tests or older PyRecEst installations. The project
+        # dependency points at PyRecEst main, where ``update_linear_robust`` is
+        # available, so the branch above is the normal path.
         plan = plan_linear_measurement_update(
             mean=self.mean,
             covariance_matrix=self.covariance,
             measurement_vector=measurement.vector,
             measurement_covariance=measurement.covariance,
-            observation_matrix=measurement_matrix(measurement.vector.size),
+            observation_matrix=observation,
             gate_threshold=gate_threshold,
             robust_update=robust_update,
             inflation_alpha=inflation_alpha,
