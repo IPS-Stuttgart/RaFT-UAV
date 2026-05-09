@@ -230,13 +230,57 @@ class AsyncConstantVelocityKalmanTracker:
         """Predict to and conditionally update from one RF or radar measurement."""
 
         self.predict_to(measurement.time_s)
+        observation = measurement_matrix(measurement.vector.size)
+        threshold = None if gate_threshold is None else float(gate_threshold)
+        prior_mean = self.mean.copy()
+
+        if self.filter is not None and hasattr(self.filter, "update_linear_robust"):
+            diagnostics = self.filter.update_linear_robust(
+                measurement.vector,
+                observation,
+                measurement.covariance,
+                robust_update=robust_update,
+                gate_threshold=threshold,
+                student_t_dof=student_t_dof,
+                huber_threshold=huber_threshold,
+                inflation_alpha=inflation_alpha,
+                return_diagnostics=True,
+            )
+            self.mean = np.asarray(self.filter.get_point_estimate(), dtype=float)
+            self.covariance = symmetrized(
+                np.asarray(self.filter.filter_state.C, dtype=float)
+            )
+
+            action = str(diagnostics.get("action", diagnostics.get("update_action", "updated")))
+            covariance_scale = float(
+                diagnostics.get("scale", diagnostics.get("covariance_scale", 1.0))
+            )
+            residual = np.asarray(
+                diagnostics.get("residual", measurement.vector - observation @ prior_mean),
+                dtype=float,
+            ).reshape(-1)
+            return TrackingUpdateDiagnostics(
+                time_s=float(measurement.time_s),
+                source=measurement.source,
+                measurement_dim=measurement.vector.size,
+                accepted=bool(diagnostics.get("accepted", action != "rejected")),
+                update_action=action,
+                nis=float(diagnostics.get("nis", np.nan)),
+                gate_threshold=threshold,
+                covariance_scale=covariance_scale,
+                inflation_alpha=float(inflation_alpha)
+                if robust_update == "nis-inflate"
+                else None,
+                residual_norm_m=float(np.linalg.norm(residual)),
+            )
+
         plan = plan_linear_measurement_update(
             mean=self.mean,
             covariance_matrix=self.covariance,
             measurement_vector=measurement.vector,
             measurement_covariance=measurement.covariance,
-            observation_matrix=measurement_matrix(measurement.vector.size),
-            gate_threshold=gate_threshold,
+            observation_matrix=observation,
+            gate_threshold=threshold,
             robust_update=robust_update,
             inflation_alpha=inflation_alpha,
             student_t_dof=student_t_dof,
