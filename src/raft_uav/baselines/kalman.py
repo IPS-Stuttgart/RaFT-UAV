@@ -3,25 +3,37 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable, Mapping
+from typing import Iterable, Mapping
 
 import numpy as np
+from pyrecest.filters import KalmanFilter
 from scipy.stats import chi2
 
 from raft_uav.baselines.update_logic import (
     gate_threshold_for_measurement,
+    huber_covariance_scale,
     huber_threshold_for_measurement,
     inflation_alpha_for_measurement,
-    plan_linear_measurement_update,
+    normalized_innovation_squared,
     robust_update_for_measurement,
+    student_t_covariance_scale,
     student_t_dof_for_measurement,
     symmetrized,
 )
 
-try:  # Keep the reproduced baseline on PyRecEst when the dependency is installed.
-    from pyrecest.filters import KalmanFilter
-except ImportError:  # pragma: no cover - exercised only in lightweight local smoke tests.
-    KalmanFilter = None
+__all__ = [
+    "AsyncConstantVelocityKalmanTracker",
+    "TrackingMeasurement",
+    "TrackingUpdateDiagnostics",
+    "constant_velocity_matrix",
+    "gate_threshold_from_probability",
+    "huber_covariance_scale",
+    "measurement_matrix",
+    "normalized_innovation_squared",
+    "run_async_cv_baseline",
+    "student_t_covariance_scale",
+    "white_acceleration_process_noise",
+]
 
 
 @dataclass(frozen=True)
@@ -137,21 +149,13 @@ def gate_threshold_from_probability(
     return float(chi2.ppf(probability, df=measurement_dim))
 
 
-def _raft_update_action(action: object) -> str:
-    """Normalize PyRecEst diagnostic labels to RaFT-UAV's public labels."""
-
-    action_string = str(action)
-    if action_string == "huberized":
-        return "huber"
-    return action_string
-
-
 class AsyncConstantVelocityKalmanTracker:
     """Asynchronous constant-velocity Kalman tracker with optional NIS gating.
 
-    PyRecEst is used for accepted linear updates and update diagnostics when
-    available. RaFT-UAV still owns the application-level reject/robust-scale
-    policy so rejected measurements remain observable in diagnostics.
+    PyRecEst owns the linear Gaussian prediction, measurement update,
+    robust-update policy, and update diagnostics. RaFT-UAV keeps only the
+    application-specific constant-velocity model, source-specific options, and
+    CSV/plot-facing diagnostics schema.
     """
 
     def __init__(
@@ -188,11 +192,10 @@ class AsyncConstantVelocityKalmanTracker:
                 initial_velocity_std_mps**2,
             ]
         )
-        self.filter: Any | None = None
-        if KalmanFilter is not None:
-            self.filter = KalmanFilter((self.mean.copy(), self.covariance.copy()))
+        self.filter = KalmanFilter((self.mean.copy(), self.covariance.copy()))
         self.current_time_s = float(initial_time_s)
         self.acceleration_std_mps2 = float(acceleration_std_mps2)
+        self._sync_from_filter()
 
     @property
     def state(self) -> np.ndarray:
@@ -206,6 +209,14 @@ class AsyncConstantVelocityKalmanTracker:
 
         return self.covariance.copy()
 
+    def _sync_from_filter(self) -> None:
+        """Mirror the PyRecEst filter state into NumPy arrays used downstream."""
+
+        self.mean = np.asarray(self.filter.get_point_estimate(), dtype=float).reshape(6)
+        self.covariance = symmetrized(
+            np.asarray(self.filter.filter_state.C, dtype=float).reshape(6, 6)
+        )
+
     def predict_to(self, time_s: float) -> None:
         """Predict to an absolute timestamp."""
 
@@ -215,13 +226,8 @@ class AsyncConstantVelocityKalmanTracker:
         if dt_s > 0.0:
             transition = constant_velocity_matrix(dt_s)
             process_noise = white_acceleration_process_noise(dt_s, self.acceleration_std_mps2)
-            if self.filter is not None:
-                self.filter.predict_linear(transition, process_noise)
-                self.mean = np.asarray(self.filter.get_point_estimate(), dtype=float)
-            else:
-                self.mean = transition @ self.mean
-            self.covariance = transition @ self.covariance @ transition.T + process_noise
-            self.covariance = symmetrized(self.covariance)
+            self.filter.predict_linear(transition, process_noise)
+            self._sync_from_filter()
             self.current_time_s = float(time_s)
 
     def update(
@@ -237,158 +243,40 @@ class AsyncConstantVelocityKalmanTracker:
 
         self.predict_to(measurement.time_s)
         observation = measurement_matrix(measurement.vector.size)
-
-        if self.filter is not None and hasattr(self.filter, "update_linear_robust"):
-            update_diagnostics = self.filter.update_linear_robust(
-                measurement.vector,
-                observation,
-                measurement.covariance,
-                robust_update=robust_update,
-                gate_threshold=gate_threshold,
-                student_t_dof=student_t_dof,
-                huber_threshold=huber_threshold,
-                inflation_alpha=inflation_alpha,
-                return_diagnostics=True,
-            )
-            self.mean = np.asarray(self.filter.get_point_estimate(), dtype=float)
-            self.covariance = symmetrized(
-                np.asarray(self.filter.filter_state.C, dtype=float).reshape(6, 6)
-            )
-
-            diagnostic_residual = np.asarray(
-                update_diagnostics["residual"],
-                dtype=float,
-            ).reshape(-1)
-            diagnostic_nis = float(np.asarray(update_diagnostics["nis"], dtype=float))
-            diagnostic_scale = float(np.asarray(update_diagnostics["scale"], dtype=float))
-            diagnostic_action = _raft_update_action(
-                update_diagnostics.get("action", "updated")
-            )
-            diagnostic_accepted = bool(update_diagnostics.get("accepted", True))
-
-            return TrackingUpdateDiagnostics(
-                time_s=float(measurement.time_s),
-                source=measurement.source,
-                measurement_dim=measurement.vector.size,
-                accepted=diagnostic_accepted,
-                update_action=diagnostic_action,
-                nis=diagnostic_nis,
-                gate_threshold=None if gate_threshold is None else float(gate_threshold),
-                covariance_scale=diagnostic_scale,
-                inflation_alpha=float(inflation_alpha)
-                if robust_update == "nis-inflate"
-                else None,
-                residual_norm_m=float(np.linalg.norm(diagnostic_residual)),
-            )
-
-        # Fallback for local smoke tests or older PyRecEst installations. The project
-        # dependency points at PyRecEst main, where ``update_linear_robust`` is
-        # available, so the branch above is the normal path.
-        plan = plan_linear_measurement_update(
-            mean=self.mean,
-            covariance_matrix=self.covariance,
-            measurement_vector=measurement.vector,
-            measurement_covariance=measurement.covariance,
-            observation_matrix=observation,
-            gate_threshold=gate_threshold,
+        update_diagnostics = self.filter.update_linear_robust(
+            measurement.vector,
+            observation,
+            measurement.covariance,
             robust_update=robust_update,
-            inflation_alpha=inflation_alpha,
+            gate_threshold=gate_threshold,
             student_t_dof=student_t_dof,
             huber_threshold=huber_threshold,
+            inflation_alpha=inflation_alpha,
+            return_diagnostics=True,
         )
+        self._sync_from_filter()
 
-        update_diagnostics: Mapping[str, object] | None = None
-        if plan.accepted:
-            update_diagnostics = self._linear_update(
-                plan.observation,
-                plan.residual,
-                plan.innovation_covariance,
-                plan.covariance,
-                plan.vector,
-                nominal_measurement_covariance=measurement.covariance,
-                covariance_scale=plan.covariance_scale,
-                update_action=plan.update_action,
-            )
-
-        diagnostic_residual = plan.residual
-        diagnostic_nis = plan.nis
-        diagnostic_scale = plan.covariance_scale
-        diagnostic_action = plan.update_action
-        if update_diagnostics is not None:
-            diagnostic_residual = np.asarray(
-                update_diagnostics["residual"],
-                dtype=float,
-            ).reshape(-1)
-            diagnostic_nis = float(np.asarray(update_diagnostics["nis"], dtype=float))
-            diagnostic_scale = float(update_diagnostics["scale"])
-            diagnostic_action = str(update_diagnostics["action"])
+        diagnostic_residual = np.asarray(
+            update_diagnostics["residual"],
+            dtype=float,
+        ).reshape(-1)
+        diagnostic_nis = float(np.asarray(update_diagnostics["nis"], dtype=float))
+        diagnostic_scale = float(np.asarray(update_diagnostics["scale"], dtype=float))
+        diagnostic_action = str(update_diagnostics.get("action", "updated"))
+        diagnostic_accepted = bool(update_diagnostics.get("accepted", True))
 
         return TrackingUpdateDiagnostics(
             time_s=float(measurement.time_s),
             source=measurement.source,
-            measurement_dim=plan.vector.size,
-            accepted=plan.accepted,
+            measurement_dim=measurement.vector.size,
+            accepted=diagnostic_accepted,
             update_action=diagnostic_action,
             nis=diagnostic_nis,
-            gate_threshold=plan.threshold,
+            gate_threshold=None if gate_threshold is None else float(gate_threshold),
             covariance_scale=diagnostic_scale,
-            inflation_alpha=plan.inflation_alpha if robust_update == "nis-inflate" else None,
+            inflation_alpha=float(inflation_alpha) if robust_update == "nis-inflate" else None,
             residual_norm_m=float(np.linalg.norm(diagnostic_residual)),
         )
-
-    def _linear_update(
-        self,
-        observation: np.ndarray,
-        residual: np.ndarray,
-        innovation_covariance: np.ndarray,
-        measurement_covariance: np.ndarray,
-        vector: np.ndarray,
-        *,
-        nominal_measurement_covariance: np.ndarray | None = None,
-        covariance_scale: float = 1.0,
-        update_action: str = "updated",
-    ) -> Mapping[str, object] | None:
-        """Apply an accepted linear Kalman update and return PyRecEst diagnostics."""
-
-        if self.filter is not None:
-            base_covariance = (
-                measurement_covariance
-                if nominal_measurement_covariance is None
-                else nominal_measurement_covariance
-            )
-            try:
-                diagnostics = self.filter.update_linear(
-                    vector,
-                    observation,
-                    base_covariance,
-                    return_diagnostics=True,
-                    scale=covariance_scale,
-                    action=update_action,
-                )
-            except TypeError:  # pragma: no cover - compatibility with older PyRecEst.
-                self.filter.update_linear(vector, observation, measurement_covariance)
-                diagnostics = None
-            self.mean = np.asarray(self.filter.get_point_estimate(), dtype=float)
-            self.covariance = symmetrized(
-                np.asarray(self.filter.filter_state.C, dtype=float).reshape(6, 6)
-            )
-            return diagnostics
-
-        gain = np.linalg.solve(
-            innovation_covariance.T,
-            (self.covariance @ observation.T).T,
-        ).T
-        updated_mean = self.mean + gain @ residual
-        identity = np.eye(self.covariance.shape[0])
-        update_matrix = identity - gain @ observation
-        updated_covariance = (
-            update_matrix @ self.covariance @ update_matrix.T
-            + gain @ measurement_covariance @ gain.T
-        )
-
-        self.mean = updated_mean
-        self.covariance = symmetrized(updated_covariance)
-        return None
 
 
 def run_async_cv_baseline(
