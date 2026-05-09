@@ -43,6 +43,8 @@ def find_rf_sensor_and_radar_root(dataset_root: Path) -> Path:
     """Find the RF Sensor and Radar directory under an extracted Dryad dataset."""
 
     root = Path(dataset_root)
+    if root.is_dir() and root.name in {"RF Sensor and Radar", "RF_Sensor_and_Radar"}:
+        return root
     candidates = [root / "RF Sensor and Radar", root / "RF_Sensor_and_Radar"]
     for candidate in candidates:
         if candidate.exists():
