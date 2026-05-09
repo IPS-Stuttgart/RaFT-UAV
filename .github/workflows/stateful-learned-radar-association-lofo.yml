@@ -5,9 +5,10 @@ on:
   workflow_dispatch:
     inputs:
       dataset_root:
-        description: "Path on the self-hosted runner to extracted AADM2025Dryad."
-        required: true
+        description: "Path on the self-hosted runner to extracted AADM2025Dryad; if unusable, the workflow searches common runner locations."
+        required: false
         type: string
+        default: "/srv/datasets/AADM2025Dryad"
       flights_json:
         description: "JSON array of held-out flights."
         required: true
@@ -103,22 +104,109 @@ jobs:
       - name: Validate dataset input
         run: |
           set -euo pipefail
+          mkdir -p "$OUT_DIR"
 
-          if [ -z "$DATASET_ROOT" ]; then
-            echo "dataset_root is required" >&2
-            exit 1
-          fi
+          resolved_dataset_root_file="$RUNNER_TEMP/resolved_dataset_root.txt"
+          resolved_rf_root_file="$RUNNER_TEMP/resolved_rf_sensor_and_radar_root.txt"
 
-          if [ ! -d "$DATASET_ROOT" ]; then
-            echo "dataset_root does not exist: $DATASET_ROOT" >&2
-            exit 1
-          fi
+          python - "$resolved_dataset_root_file" "$resolved_rf_root_file" <<'PY'
+          from __future__ import annotations
 
-          if ! find "$DATASET_ROOT" -type d -name "RF Sensor and Radar" -print -quit | grep -q .; then
-            echo "dataset_root does not contain an RF Sensor and Radar directory: $DATASET_ROOT" >&2
-            find "$DATASET_ROOT" -maxdepth 4 -type d | sed -n '1,120p' >&2 || true
-            exit 1
-          fi
+          import os
+          import sys
+          from pathlib import Path
+
+          resolved_dataset_root_file = Path(sys.argv[1])
+          resolved_rf_root_file = Path(sys.argv[2])
+          input_root = os.environ.get("DATASET_ROOT", "").strip()
+
+          RF_DIR_NAMES = {"RF Sensor and Radar", "RF_Sensor_and_Radar"}
+
+          def unique_paths(paths: list[Path]) -> list[Path]:
+              seen: set[Path] = set()
+              out: list[Path] = []
+              for path in paths:
+                  try:
+                      expanded = path.expanduser()
+                  except RuntimeError:
+                      continue
+                  if expanded in seen:
+                      continue
+                  seen.add(expanded)
+                  out.append(expanded)
+              return out
+
+          def find_rf_root(root: Path, max_depth: int = 6) -> Path | None:
+              if not root.exists() or not root.is_dir():
+                  return None
+              if root.name in RF_DIR_NAMES:
+                  return root
+              for name in RF_DIR_NAMES:
+                  direct = root / name
+                  if direct.is_dir():
+                      return direct
+
+              root_depth = len(root.parts)
+              for dirpath, dirnames, _ in os.walk(root):
+                  current = Path(dirpath)
+                  depth = len(current.parts) - root_depth
+                  if depth >= max_depth:
+                      dirnames[:] = []
+                  if current.name in RF_DIR_NAMES:
+                      return current
+              return None
+
+          roots: list[Path] = []
+          if input_root:
+              requested = Path(input_root)
+              roots.extend([
+                  requested,
+                  requested.parent,
+                  requested.parent.parent,
+              ])
+          roots.extend([
+              Path("/srv/datasets/AADM2025Dryad"),
+              Path("/srv/datasets"),
+              Path("/srv"),
+              Path("/data/AADM2025Dryad"),
+              Path("/data"),
+              Path("/mnt/data/AADM2025Dryad"),
+              Path("/mnt/data"),
+              Path.home() / "AADM2025Dryad",
+              Path.home(),
+              Path("/home/github-runner/AADM2025Dryad"),
+              Path("/home/github-runner"),
+          ])
+
+          searched: list[str] = []
+          for root in unique_paths(roots):
+              searched.append(str(root))
+              rf_root = find_rf_root(root)
+              if rf_root is None:
+                  continue
+              # The CLIs accept the extracted Dryad root. Use the parent of the
+              # RF Sensor and Radar folder so both direct and recursive lookup work.
+              dataset_root = rf_root.parent
+              resolved_dataset_root_file.write_text(str(dataset_root), encoding="utf-8")
+              resolved_rf_root_file.write_text(str(rf_root), encoding="utf-8")
+              print(f"Resolved dataset_root={dataset_root}")
+              print(f"Resolved RF Sensor and Radar root={rf_root}")
+              raise SystemExit(0)
+
+          print("Could not locate an RF Sensor and Radar directory.", file=sys.stderr)
+          print(f"Input dataset_root={input_root!r}", file=sys.stderr)
+          print("Searched roots:", file=sys.stderr)
+          for path in searched:
+              print(f"- {path}", file=sys.stderr)
+          raise SystemExit(1)
+          PY
+
+          DATASET_ROOT="$(cat "$resolved_dataset_root_file")"
+          RF_SENSOR_AND_RADAR_ROOT="$(cat "$resolved_rf_root_file")"
+          echo "DATASET_ROOT=$DATASET_ROOT" >> "$GITHUB_ENV"
+          echo "RF_SENSOR_AND_RADAR_ROOT=$RF_SENSOR_AND_RADAR_ROOT" >> "$GITHUB_ENV"
+          echo "Resolved DATASET_ROOT=$DATASET_ROOT"
+          echo "Resolved RF_SENSOR_AND_RADAR_ROOT=$RF_SENSOR_AND_RADAR_ROOT"
 
           du -sh "$DATASET_ROOT" || true
 
@@ -169,6 +257,7 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          mkdir -p "$OUT_DIR"
 
           python - <<'PY'
           import json
@@ -202,6 +291,7 @@ jobs:
                   "metrics_path": str(metrics_path),
               }
 
+          summary_path.parent.mkdir(parents=True, exist_ok=True)
           summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
