@@ -93,10 +93,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
@@ -303,10 +303,11 @@ jobs:
 
       - name: Upload LOFO artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: stateful-lofo-${{ matrix.flight }}
           retention-days: 30
+          if-no-files-found: ignore
           path: |
             ${{ env.OUT_DIR }}/summary.json
             ${{ env.OUT_DIR }}/radar_assoc.json
@@ -332,7 +333,7 @@ jobs:
 
     steps:
       - name: Download LOFO artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -440,7 +441,7 @@ jobs:
           PY
 
       - name: Upload aggregate summary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: stateful-lofo-aggregate-summary
           retention-days: 30
