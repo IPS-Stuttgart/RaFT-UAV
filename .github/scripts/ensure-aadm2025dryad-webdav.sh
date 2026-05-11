@@ -186,10 +186,16 @@ emit(raw_url, configured_user)
 if base_url and token:
     emit(f"{base_url}/public.php/webdav/", token)
     emit(f"{base_url}/public.php/webdav", token)
+    emit(f"{base_url}/public.php/dav/files/{token}/", "anonymous")
+    emit(f"{base_url}/public.php/dav/files/{token}", "anonymous")
+    emit(f"{base_url}/public.php/dav/files/{token}/", token)
+    emit(f"{base_url}/public.php/dav/files/{token}", token)
     emit(f"{base_url}/remote.php/dav/public-files/{token}/", token)
     emit(f"{base_url}/remote.php/dav/public-files/{token}", token)
     emit(f"{base_url}/public.php/webdav/", configured_user)
     emit(f"{base_url}/public.php/webdav", configured_user)
+    emit(f"{base_url}/public.php/dav/files/{token}/", configured_user)
+    emit(f"{base_url}/public.php/dav/files/{token}", configured_user)
     emit(f"{base_url}/remote.php/dav/public-files/{token}/", configured_user)
     emit(f"{base_url}/remote.php/dav/public-files/{token}", configured_user)
 
@@ -204,7 +210,10 @@ copy_webdav_to_staging() {
   local pair=""
   local url=""
   local user=""
+  local vendor=""
+  local vendors=(owncloud nextcloud)
   local variant=0
+  local total_variants=0
   local obscured_cred=""
 
   if [ -z "${AADM2025DRYAD_DATA_WEBDAV_URL:-}" ] || [ -z "${AADM2025DRYAD_WEBDAV_CRED:-}" ]; then
@@ -216,27 +225,30 @@ copy_webdav_to_staging() {
     return 1
   fi
 
+  total_variants=$((${#pairs[@]} * ${#vendors[@]}))
   for pair in "${pairs[@]}"; do
-    variant=$((variant + 1))
     url="${pair%%$'\t'*}"
     user="${pair#*$'\t'}"
     if [ -z "${url}" ] || [ -z "${user}" ]; then
       continue
     fi
 
-    rm -rf "${staging:?}"/*
-    obscured_cred="$(rclone obscure "${AADM2025DRYAD_WEBDAV_CRED}")"
-    echo "Trying WebDAV source variant ${variant}/${#pairs[@]}."
-    if rclone copy ":webdav:" "${staging}" \
-      --webdav-url "${url}" \
-      --webdav-vendor owncloud \
-      --webdav-user "${user}" \
-      --webdav-pass "${obscured_cred}" \
-      --progress \
-      --transfers 8 \
-      --checkers 16; then
-      return 0
-    fi
+    for vendor in "${vendors[@]}"; do
+      variant=$((variant + 1))
+      rm -rf "${staging:?}"/*
+      obscured_cred="$(rclone obscure "${AADM2025DRYAD_WEBDAV_CRED}")"
+      echo "Trying WebDAV source variant ${variant}/${total_variants}."
+      if rclone copy ":webdav:" "${staging}" \
+        --webdav-url "${url}" \
+        --webdav-vendor "${vendor}" \
+        --webdav-user "${user}" \
+        --webdav-pass "${obscured_cred}" \
+        --progress \
+        --transfers 8 \
+        --checkers 16; then
+        return 0
+      fi
+    done
   done
 
   return 1
