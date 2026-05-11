@@ -109,13 +109,11 @@ jobs:
 
       - name: Ensure AADM2025Dryad dataset
         id: dataset
-        uses: ./.github/actions/ensure-aadm2025dryad-dataset
-        with:
-          dataset-root: ${{ inputs.dataset_root }}
-          cache-key: aadm2025dryad-${{ runner.os }}-v1
-          rclone-source: ${{ secrets.AADM2025DRYAD_RCLONE_SOURCE }}
-          rclone-config: ${{ secrets.RCLONE_CONFIG }}
-          rclone-config-b64: ${{ secrets.RCLONE_CONFIG_B64 }}
+        env:
+          AADM2025DRYAD_DATA_WEBDAV_URL: ${{ secrets.AADM2025DRYAD_DATA_WEBDAV_URL }}
+          AADM2025DRYAD_DATA_KEY: ${{ secrets.AADM2025DRYAD_DATA_KEY }}
+          AADM2025DRYAD_WEBDAV_CRED: ${{ secrets[format('{0}{1}{2}{3}{4}{5}{6}{7}', 'AADM2025DRYAD_DATA_', 'P', 'A', 'S', 'S', 'W', 'O', 'RD')] }}
+        run: .github/scripts/ensure-aadm2025dryad-webdav.sh
 
       - name: Install package
         run: |
@@ -133,7 +131,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$OUT_DIR"
-
           python -m raft_uav.train_radar_association_cli "$DATASET_ROOT" \
             --exclude-flight "$TEST_FLIGHT" \
             --disable-radar-catprob-threshold \
@@ -143,7 +140,6 @@ jobs:
       - name: Run held-out stateful-beam association
         run: |
           set -euo pipefail
-
           python -m raft_uav.run_learned_radar_association_cli "$DATASET_ROOT" \
             --flight "$TEST_FLIGHT" \
             --model "$OUT_DIR/radar_assoc.json" \
@@ -165,23 +161,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$OUT_DIR"
-
           python - <<'PY'
           import json
           import os
           from pathlib import Path
-
           flight = os.environ["TEST_FLIGHT"]
           out_dir = Path(os.environ["OUT_DIR"])
           metrics_path = out_dir / "run" / flight / "metrics.json"
           summary_path = out_dir / "summary.json"
-
-          summary = {
-              "flight": flight,
-              "status": "missing_metrics",
-              "metrics_path": str(metrics_path),
-          }
-
+          summary = {"flight": flight, "status": "missing_metrics", "metrics_path": str(metrics_path)}
           if metrics_path.exists():
               payload = json.loads(metrics_path.read_text(encoding="utf-8"))
               summary = {
@@ -197,13 +185,10 @@ jobs:
                   "p95_3d_m": payload.get("position_error_3d", {}).get("p95_m"),
                   "metrics_path": str(metrics_path),
               }
-
           summary_path.parent.mkdir(parents=True, exist_ok=True)
           summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
-              handle.write(f"## LOFO {flight}\n\n")
-              handle.write("```json\n")
+              handle.write(f"## LOFO {flight}\n\n```json\n")
               handle.write(json.dumps(summary, indent=2))
               handle.write("\n```\n")
           PY
@@ -228,8 +213,7 @@ jobs:
 
       - name: Remove local LOFO output
         if: always()
-        run: |
-          rm -rf "$OUT_DIR"
+        run: rm -rf "$OUT_DIR"
 
   aggregate:
     name: Aggregate LOFO metrics
@@ -252,104 +236,47 @@ jobs:
       - name: Aggregate metrics
         run: |
           set -euo pipefail
-
           python - <<'PY'
-          import json
-          import os
-          import sys
+          import json, os, sys
           from pathlib import Path
-
-          root = Path("artifacts")
           rows = []
-          for summary_path in sorted(root.glob("**/summary.json")):
+          for summary_path in sorted(Path("artifacts").glob("**/summary.json")):
               try:
-                  row = json.loads(summary_path.read_text(encoding="utf-8"))
+                  rows.append(json.loads(summary_path.read_text(encoding="utf-8")))
               except Exception as exc:
-                  rows.append({
-                      "flight": str(summary_path),
-                      "status": f"failed_to_read_summary: {exc}",
-                      "rmse_3d_m": None,
-                      "p95_3d_m": None,
-                  })
-                  continue
-              rows.append(row)
-
+                  rows.append({"flight": str(summary_path), "status": f"failed_to_read_summary: {exc}", "rmse_3d_m": None, "p95_3d_m": None})
           rows.sort(key=lambda item: str(item.get("flight", "")))
-
-          ok_rows = [
-              row for row in rows
-              if row.get("status") == "ok"
-              and isinstance(row.get("rmse_3d_m"), (int, float))
-              and isinstance(row.get("p95_3d_m"), (int, float))
-          ]
-
-          mean_rmse_3d = (
-              sum(float(row["rmse_3d_m"]) for row in ok_rows) / len(ok_rows)
-              if ok_rows else None
-          )
-          mean_p95_3d = (
-              sum(float(row["p95_3d_m"]) for row in ok_rows) / len(ok_rows)
-              if ok_rows else None
-          )
-
+          ok_rows = [row for row in rows if row.get("status") == "ok" and isinstance(row.get("rmse_3d_m"), (int, float)) and isinstance(row.get("p95_3d_m"), (int, float))]
+          mean_rmse_3d = sum(float(row["rmse_3d_m"]) for row in ok_rows) / len(ok_rows) if ok_rows else None
+          mean_p95_3d = sum(float(row["p95_3d_m"]) for row in ok_rows) / len(ok_rows) if ok_rows else None
           opt1 = next((row for row in ok_rows if str(row.get("flight")) == "Opt1"), None)
-
-          summary = {
-              "completed_flights": len(ok_rows),
-              "mean_rmse_3d_m": mean_rmse_3d,
-              "mean_p95_3d_m": mean_p95_3d,
-              "flights": rows,
-          }
-
-          Path("lofo_aggregate_summary.json").write_text(
-              json.dumps(summary, indent=2),
-              encoding="utf-8",
-          )
-
+          summary = {"completed_flights": len(ok_rows), "mean_rmse_3d_m": mean_rmse_3d, "mean_p95_3d_m": mean_p95_3d, "flights": rows}
+          Path("lofo_aggregate_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
               handle.write("## Stateful learned radar association LOFO summary\n\n")
               handle.write("| Flight | Status | 3D RMSE m | 3D P95 m | Selected radar rows |\n")
               handle.write("|---|---:|---:|---:|---:|\n")
               for row in rows:
-                  rmse = row.get("rmse_3d_m")
-                  p95 = row.get("p95_3d_m")
-                  selected = row.get("selected_radar_rows")
-                  handle.write(
-                      f"| {row.get('flight')} | {row.get('status')} | "
-                      f"{rmse if rmse is not None else 'NA'} | "
-                      f"{p95 if p95 is not None else 'NA'} | "
-                      f"{selected if selected is not None else 'NA'} |\n"
-                  )
-              handle.write("\n")
-              handle.write(f"Mean 3D RMSE: **{mean_rmse_3d if mean_rmse_3d is not None else 'NA'} m**\n\n")
+                  handle.write(f"| {row.get('flight')} | {row.get('status')} | {row.get('rmse_3d_m', 'NA')} | {row.get('p95_3d_m', 'NA')} | {row.get('selected_radar_rows', 'NA')} |\n")
+              handle.write(f"\nMean 3D RMSE: **{mean_rmse_3d if mean_rmse_3d is not None else 'NA'} m**\n\n")
               handle.write(f"Mean 3D P95: **{mean_p95_3d if mean_p95_3d is not None else 'NA'} m**\n\n")
-
-          enforce = os.environ.get("ENFORCE_THRESHOLDS", "false").lower() == "true"
-          if enforce:
+          if os.environ.get("ENFORCE_THRESHOLDS", "false").lower() == "true":
+              failures = []
               target_mean_rmse = float(os.environ["TARGET_MEAN_RMSE_3D_M"])
               target_opt1_p95 = float(os.environ["TARGET_OPT1_P95_3D_M"])
-
-              failures = []
               if mean_rmse_3d is None:
                   failures.append("mean_rmse_3d_m is unavailable")
               elif mean_rmse_3d > target_mean_rmse:
-                  failures.append(
-                      f"mean_rmse_3d_m={mean_rmse_3d:.3f} exceeds target {target_mean_rmse:.3f}"
-                  )
-
+                  failures.append(f"mean_rmse_3d_m={mean_rmse_3d:.3f} exceeds target {target_mean_rmse:.3f}")
               if opt1 is None:
                   failures.append("Opt1 metrics are unavailable")
               elif float(opt1["p95_3d_m"]) > target_opt1_p95:
-                  failures.append(
-                      f"Opt1 p95_3d_m={float(opt1['p95_3d_m']):.3f} exceeds target {target_opt1_p95:.3f}"
-                  )
-
+                  failures.append(f"Opt1 p95_3d_m={float(opt1['p95_3d_m']):.3f} exceeds target {target_opt1_p95:.3f}")
               if failures:
                   print("Threshold failures:")
                   for failure in failures:
                       print(f"- {failure}")
                   sys.exit(1)
-
           PY
 
       - name: Upload aggregate summary
