@@ -7,6 +7,7 @@ mask_secret() {
   fi
 }
 
+mask_secret "${AADM2025DRYAD_DATA_URL:-}"
 mask_secret "${AADM2025DRYAD_DATA_WEBDAV_URL:-}"
 mask_secret "${AADM2025DRYAD_DATA_KEY:-}"
 mask_secret "${AADM2025DRYAD_WEBDAV_CRED:-}"
@@ -102,6 +103,130 @@ with zipfile.ZipFile(archive) as zip_file:
 PY
 }
 
+download_archive_url() {
+  local url="$1"
+  local archive="$2"
+  local use_basic_auth="${3:-false}"
+  local auth_args=()
+  local curl_meta="${RUNNER_TEMP}/aadm2025dryad_curl_meta.txt"
+  local http_code=""
+  local content_type=""
+  local size_download=""
+
+  if [ "${use_basic_auth}" = "true" ] && [ -n "${AADM2025DRYAD_DATA_KEY:-}" ] && [ -n "${AADM2025DRYAD_WEBDAV_CRED:-}" ]; then
+    auth_args=(--user "${AADM2025DRYAD_DATA_KEY}:${AADM2025DRYAD_WEBDAV_CRED}")
+  fi
+
+  rm -f "${archive}" "${curl_meta}"
+  if ! curl --fail --location --retry 5 --retry-delay 20 --connect-timeout 60 \
+    "${auth_args[@]}" \
+    --write-out '%{http_code}\t%{content_type}\t%{size_download}\n' \
+    --output "${archive}" \
+    "${url}" > "${curl_meta}"; then
+    return 1
+  fi
+
+  IFS=$'\t' read -r http_code content_type size_download < "${curl_meta}" || true
+  echo "Downloaded archive candidate: HTTP ${http_code:-unknown}, content-type ${content_type:-unknown}, size ${size_download:-unknown} bytes."
+  du -sh "${archive}" || true
+  return 0
+}
+
+derive_webdav_pairs() {
+  python - "${AADM2025DRYAD_DATA_WEBDAV_URL:-}" "${AADM2025DRYAD_DATA_KEY:-}" <<'PY'
+from __future__ import annotations
+
+import sys
+from urllib.parse import urlsplit, urlunsplit
+
+raw_url = sys.argv[1].strip()
+configured_user = sys.argv[2].strip()
+if not raw_url:
+    raise SystemExit(0)
+
+parts = urlsplit(raw_url)
+origin = urlunsplit((parts.scheme, parts.netloc, "", "", ""))
+path = parts.path.rstrip("/")
+segments = [segment for segment in path.split("/") if segment]
+token = ""
+
+for marker in (("s",), ("index.php", "s")):
+    marker_len = len(marker)
+    for index in range(0, max(len(segments) - marker_len, 0)):
+        if tuple(segments[index:index + marker_len]) == marker and index + marker_len < len(segments):
+            token = segments[index + marker_len]
+            break
+    if token:
+        break
+
+if not token and len(segments) >= 4 and segments[:3] == ["remote.php", "dav", "public-files"]:
+    token = segments[3]
+
+pairs: list[tuple[str, str]] = []
+
+def emit(url: str, user: str) -> None:
+    if not url or not user:
+        return
+    pair = (url, user)
+    if pair not in pairs:
+        pairs.append(pair)
+
+emit(raw_url, configured_user)
+if origin and token:
+    emit(f"{origin}/public.php/webdav/", token)
+    emit(f"{origin}/public.php/webdav", token)
+    emit(f"{origin}/public.php/webdav/", configured_user)
+    emit(f"{origin}/public.php/webdav", configured_user)
+
+for url, user in pairs:
+    print(f"{url}\t{user}")
+PY
+}
+
+copy_webdav_to_staging() {
+  local staging="$1"
+  local pairs=()
+  local pair=""
+  local url=""
+  local user=""
+  local variant=0
+  local obscured_cred=""
+
+  if [ -z "${AADM2025DRYAD_DATA_WEBDAV_URL:-}" ] || [ -z "${AADM2025DRYAD_WEBDAV_CRED:-}" ]; then
+    return 1
+  fi
+
+  mapfile -t pairs < <(derive_webdav_pairs)
+  if [ "${#pairs[@]}" -eq 0 ]; then
+    return 1
+  fi
+
+  for pair in "${pairs[@]}"; do
+    variant=$((variant + 1))
+    url="${pair%%$'\t'*}"
+    user="${pair#*$'\t'}"
+    if [ -z "${url}" ] || [ -z "${user}" ]; then
+      continue
+    fi
+
+    rm -rf "${staging:?}"/*
+    obscured_cred="$(rclone obscure "${AADM2025DRYAD_WEBDAV_CRED}")"
+    echo "Trying WebDAV source variant ${variant}/${#pairs[@]}."
+    if rclone copy ":webdav:" "${staging}" \
+      --webdav-url "${url}" \
+      --webdav-vendor owncloud \
+      --webdav-user "${user}" \
+      --webdav-pass "${obscured_cred}" \
+      --progress \
+      --transfers 8 \
+      --checkers 16; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 download_webdav_archive() {
   local staging="$1"
   local archive="${RUNNER_TEMP}/AADM2025Dryad.webdav.zip"
@@ -142,16 +267,11 @@ download_webdav_archive() {
   esac
 
   for url in "${urls[@]}"; do
-    rm -f "${archive}"
     echo "Trying authenticated WebDAV archive download fallback."
-    if ! curl --fail --location --retry 5 --retry-delay 20 --connect-timeout 60 \
-      --user "${AADM2025DRYAD_DATA_KEY}:${AADM2025DRYAD_WEBDAV_CRED}" \
-      --output "${archive}" \
-      "${url}"; then
+    if ! download_archive_url "${url}" "${archive}" true; then
       continue
     fi
 
-    du -sh "${archive}" || true
     if extract_zip_archive "${archive}" "${staging}"; then
       return 0
     fi
@@ -162,35 +282,63 @@ download_webdav_archive() {
   return 1
 }
 
+download_direct_archive() {
+  local staging="$1"
+  local archive="${RUNNER_TEMP}/AADM2025Dryad.zip"
+
+  if [ -z "${AADM2025DRYAD_DATA_URL:-}" ]; then
+    return 1
+  fi
+
+  echo "Trying direct AADM2025Dryad archive download."
+  if download_archive_url "${AADM2025DRYAD_DATA_URL}" "${archive}" && extract_zip_archive "${archive}" "${staging}"; then
+    return 0
+  fi
+
+  if [ -n "${AADM2025DRYAD_DATA_KEY:-}" ] && [ -n "${AADM2025DRYAD_WEBDAV_CRED:-}" ]; then
+    echo "Trying direct AADM2025Dryad archive download with configured credentials."
+    if download_archive_url "${AADM2025DRYAD_DATA_URL}" "${archive}" true && extract_zip_archive "${archive}" "${staging}"; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+has_webdav_source() {
+  [ -n "${AADM2025DRYAD_DATA_WEBDAV_URL:-}" ] && [ -n "${AADM2025DRYAD_DATA_KEY:-}" ] && [ -n "${AADM2025DRYAD_WEBDAV_CRED:-}" ]
+}
+
 download_dataset() {
-  if [ -z "${AADM2025DRYAD_DATA_WEBDAV_URL:-}" ] || [ -z "${AADM2025DRYAD_DATA_KEY:-}" ] || [ -z "${AADM2025DRYAD_WEBDAV_CRED:-}" ]; then
-    echo "AADM2025Dryad was not found locally, and the WebDAV source secrets are incomplete." >&2
-    echo "Required secrets: AADM2025DRYAD_DATA_WEBDAV_URL, AADM2025DRYAD_DATA_KEY, AADM2025DRYAD_DATA_PASSWORD." >&2
+  if [ -z "${AADM2025DRYAD_DATA_URL:-}" ] && ! has_webdav_source; then
+    echo "AADM2025Dryad was not found locally, and no complete download source is configured." >&2
+    echo "Provide AADM2025DRYAD_DATA_URL/AADM2025DRYAD_URL, or AADM2025DRYAD_DATA_WEBDAV_URL, AADM2025DRYAD_DATA_KEY, and AADM2025DRYAD_DATA_PASSWORD." >&2
     exit 1
   fi
 
-  ensure_rclone
   staging="${cache_dataset_root}.tmp.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.${TEST_FLIGHT:-job}"
   rm -rf "${staging}"
   mkdir -p "${staging}"
 
-  obscured_cred="$(rclone obscure "${AADM2025DRYAD_WEBDAV_CRED}")"
-  echo "Dataset not found locally; downloading WebDAV source into ${cache_dataset_root}."
-  if ! rclone copy ":webdav:" "${staging}" \
-    --webdav-url "${AADM2025DRYAD_DATA_WEBDAV_URL}" \
-    --webdav-vendor owncloud \
-    --webdav-user "${AADM2025DRYAD_DATA_KEY}" \
-    --webdav-pass "${obscured_cred}" \
-    --progress \
-    --transfers 8 \
-    --checkers 16; then
-    echo "rclone WebDAV copy failed; trying authenticated archive download fallback." >&2
-    rm -rf "${staging}"
-    mkdir -p "${staging}"
-    if ! download_webdav_archive "${staging}"; then
-      echo "WebDAV archive fallback failed." >&2
+  echo "Dataset not found locally; downloading into ${cache_dataset_root}."
+  if ! download_direct_archive "${staging}"; then
+    if ! has_webdav_source; then
+      echo "Direct archive download failed, and no complete WebDAV source is configured." >&2
       rm -rf "${staging}"
       exit 1
+    fi
+    ensure_rclone
+    rm -rf "${staging}"
+    mkdir -p "${staging}"
+    if ! copy_webdav_to_staging "${staging}"; then
+      echo "rclone WebDAV copy failed; trying authenticated archive download fallback." >&2
+      rm -rf "${staging}"
+      mkdir -p "${staging}"
+      if ! download_webdav_archive "${staging}"; then
+        echo "Dataset download failed. If this is a password-protected share-page URL, configure AADM2025DRYAD_DATA_WEBDAV_URL as the share WebDAV endpoint or provide a direct ZIP URL via AADM2025DRYAD_DATA_URL." >&2
+        rm -rf "${staging}"
+        exit 1
+      fi
     fi
   fi
 
