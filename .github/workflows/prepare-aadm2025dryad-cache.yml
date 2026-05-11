@@ -1,0 +1,84 @@
+---
+name: Prepare AADM2025Dryad dataset cache
+
+on: # yamllint disable-line rule:truthy
+  workflow_dispatch:
+    inputs:
+      runs_on_json:
+        description: 'JSON runs-on value, for example ["self-hosted","Linux"] or "ubuntu-latest".'
+        required: true
+        type: string
+        default: '["self-hosted","Linux"]'
+      dataset_root:
+        description: "Optional existing extracted AADM2025Dryad root to validate before downloading."
+        required: false
+        type: string
+        default: ""
+      dataset_url:
+        description: "Optional direct ZIP archive URL used after local/rclone/WebDAV sources miss."
+        required: false
+        type: string
+        default: ""
+      force_redownload:
+        description: "Delete and repopulate the persistent dataset cache before resolving."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  prepare-cache:
+    name: Prepare dataset cache
+    runs-on: ${{ fromJSON(inputs.runs_on_json) }}
+    timeout-minutes: 720
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Ensure AADM2025Dryad dataset
+        id: dataset
+        uses: ./.github/actions/ensure-aadm2025dryad-dataset
+        with:
+          dataset-root: ${{ inputs.dataset_root }}
+          force-redownload: ${{ inputs.force_redownload }}
+          dataset-url: ${{ inputs.dataset_url || secrets.AADM2025DRYAD_URL }}
+          cache-key: aadm2025dryad-${{ runner.os }}-v1
+          rclone-source: ${{ secrets.AADM2025DRYAD_RCLONE_SOURCE }}
+          rclone-config: ${{ secrets.RCLONE_CONFIG }}
+          rclone-config-b64: ${{ secrets.RCLONE_CONFIG_B64 }}
+          webdav-url: ${{ secrets.AADM2025DRYAD_DATA_WEBDAV_URL }}
+          webdav-user: ${{ secrets.AADM2025DRYAD_DATA_KEY }}
+          webdav-password: ${{ secrets.AADM2025DRYAD_DATA_PASSWORD }}
+
+      - name: Summarize dataset cache
+        run: |
+          {
+            echo "## AADM2025Dryad dataset cache"
+            echo
+            echo "dataset-root=${{ steps.dataset.outputs.dataset-root }}"
+            echo
+            echo "actual-dataset-root=${{ steps.dataset.outputs.actual-dataset-root }}"
+            echo
+            echo "cache-dataset-root=${{ steps.dataset.outputs.cache-dataset-root }}"
+            echo
+            echo "downloaded=${{ steps.dataset.outputs.downloaded }}"
+            echo
+            echo "cache-hit=${{ steps.dataset.outputs.cache-hit }}"
+          } >> "$GITHUB_STEP_SUMMARY"

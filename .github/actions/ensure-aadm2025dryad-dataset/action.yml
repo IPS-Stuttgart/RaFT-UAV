@@ -1,0 +1,384 @@
+---
+name: Ensure AADM2025Dryad dataset
+description: Restore, locate, or download the AADM2025Dryad dataset for RaFT-UAV workflows.
+
+inputs:
+  dataset-root:
+    description: Optional existing dataset root to validate before using caches.
+    required: false
+    default: ""
+  output-root:
+    description: Optional path to symlink to the resolved dataset root.
+    required: false
+    default: ""
+  cache-root:
+    description: Optional parent directory for the persistent dataset cache.
+    required: false
+    default: ""
+  cache-key:
+    description: GitHub Actions cache key for GitHub-hosted runners.
+    required: false
+    default: aadm2025dryad-v1
+  force-redownload:
+    description: Remove the persistent cache before resolving the dataset.
+    required: false
+    default: "false"
+  dataset-url:
+    description: Optional direct ZIP archive URL used after local/rclone/WebDAV sources miss.
+    required: false
+    default: ""
+  dataset-zip:
+    description: Optional path for the temporary downloaded ZIP archive.
+    required: false
+    default: ""
+  rclone-source:
+    description: Optional rclone source path for the extracted AADM2025Dryad dataset.
+    required: false
+    default: ""
+  rclone-config:
+    description: Optional rclone config contents.
+    required: false
+    default: ""
+  rclone-config-b64:
+    description: Optional base64-encoded rclone config contents.
+    required: false
+    default: ""
+  webdav-url:
+    description: Optional WebDAV URL for rclone's inline WebDAV backend.
+    required: false
+    default: ""
+  webdav-user:
+    description: Optional WebDAV user/key for rclone's inline WebDAV backend.
+    required: false
+    default: ""
+  webdav-password:
+    description: Optional WebDAV password for rclone's inline WebDAV backend.
+    required: false
+    default: ""
+
+outputs:
+  dataset-root:
+    description: Path that downstream workflow steps should pass to RaFT-UAV CLIs.
+    value: ${{ steps.ensure.outputs.dataset-root }}
+  actual-dataset-root:
+    description: Resolved extracted dataset root before any output symlink.
+    value: ${{ steps.ensure.outputs.actual-dataset-root }}
+  rf-sensor-and-radar-root:
+    description: Resolved RF Sensor and Radar directory.
+    value: ${{ steps.ensure.outputs.rf-sensor-and-radar-root }}
+  cache-root:
+    description: Parent directory used for the persistent dataset cache.
+    value: ${{ steps.paths.outputs.cache-root }}
+  cache-dataset-root:
+    description: Persistent AADM2025Dryad cache directory.
+    value: ${{ steps.paths.outputs.cache-dataset-root }}
+  cache-hit:
+    description: GitHub Actions cache hit flag on GitHub-hosted runners.
+    value: ${{ steps.dataset-cache.outputs.cache-hit }}
+  downloaded:
+    description: Whether this action downloaded the dataset.
+    value: ${{ steps.ensure.outputs.downloaded }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve dataset cache paths
+      id: paths
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        cache_root="${{ inputs.cache-root }}"
+        if [ -z "$cache_root" ]; then
+          if [ "${{ runner.environment }}" = "self-hosted" ]; then
+            cache_root="$HOME/github-runner/.cache/datasets"
+          else
+            cache_root="$HOME/.cache/datasets"
+          fi
+        fi
+
+        cache_dataset_root="$cache_root/AADM2025Dryad"
+        mkdir -p "$cache_root"
+
+        echo "cache-root=$cache_root" >> "$GITHUB_OUTPUT"
+        echo "cache-dataset-root=$cache_dataset_root" >> "$GITHUB_OUTPUT"
+
+    - name: Restore GitHub-hosted dataset cache
+      id: dataset-cache
+      if: ${{ runner.environment != 'self-hosted' }}
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.paths.outputs.cache-dataset-root }}
+        key: ${{ inputs.cache-key }}
+
+    - name: Ensure AADM2025Dryad dataset
+      id: ensure
+      shell: bash
+      env:
+        INPUT_DATASET_ROOT: ${{ inputs.dataset-root }}
+        OUTPUT_ROOT: ${{ inputs.output-root }}
+        CACHE_ROOT: ${{ steps.paths.outputs.cache-root }}
+        CACHE_DATASET_ROOT: ${{ steps.paths.outputs.cache-dataset-root }}
+        FORCE_REDOWNLOAD: ${{ inputs.force-redownload }}
+        DATASET_URL: ${{ inputs.dataset-url }}
+        DATASET_ZIP: ${{ inputs.dataset-zip }}
+        RCLONE_SOURCE: ${{ inputs.rclone-source }}
+        RCLONE_CONFIG: ${{ inputs.rclone-config }}
+        RCLONE_CONFIG_B64: ${{ inputs.rclone-config-b64 }}
+        WEBDAV_URL: ${{ inputs.webdav-url }}
+        WEBDAV_USER: ${{ inputs.webdav-user }}
+        WEBDAV_PASSWORD: ${{ inputs.webdav-password }}
+      run: |
+        set -euo pipefail
+
+        mask_secret() {
+          if [ -n "${1:-}" ]; then
+            echo "::add-mask::$1"
+          fi
+        }
+
+        mask_secret "$DATASET_URL"
+        mask_secret "$RCLONE_SOURCE"
+        mask_secret "$RCLONE_CONFIG"
+        mask_secret "$RCLONE_CONFIG_B64"
+        mask_secret "$WEBDAV_URL"
+        mask_secret "$WEBDAV_USER"
+        mask_secret "$WEBDAV_PASSWORD"
+
+        resolved_dataset_root_file="$RUNNER_TEMP/resolved_aadm2025dryad_root.txt"
+        resolved_rf_root_file="$RUNNER_TEMP/resolved_aadm2025dryad_rf_root.txt"
+        rm -f "$resolved_dataset_root_file" "$resolved_rf_root_file"
+
+        find_dataset() {
+          python "$GITHUB_ACTION_PATH/find_dataset.py" \
+            --resolved-dataset-root-file "$resolved_dataset_root_file" \
+            --resolved-rf-root-file "$resolved_rf_root_file" \
+            --root "$INPUT_DATASET_ROOT" \
+            --root "$CACHE_DATASET_ROOT" \
+            --root "$CACHE_ROOT" \
+            --root "$HOME/.cache/datasets/AADM2025Dryad" \
+            --root "$HOME/.cache/datasets" \
+            --root "$HOME/github-runner/.cache/datasets/AADM2025Dryad" \
+            --root "$HOME/github-runner/.cache/datasets" \
+            --root "/srv/datasets/AADM2025Dryad" \
+            --root "/srv/datasets" \
+            --root "/data/AADM2025Dryad" \
+            --root "/data" \
+            --root "/mnt/data/AADM2025Dryad" \
+            --root "/mnt/data" \
+            --root "$HOME/AADM2025Dryad" \
+            --root "$HOME" \
+            --root "/home/github-runner/AADM2025Dryad" \
+            --root "/home/github-runner"
+        }
+
+        ensure_rclone() {
+          if command -v rclone >/dev/null 2>&1; then
+            return 0
+          fi
+
+          echo "rclone is not installed; installing a temporary copy in RUNNER_TEMP."
+          mkdir -p "$RUNNER_TEMP/rclone-bin" "$RUNNER_TEMP/rclone-download"
+          curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
+            -o "$RUNNER_TEMP/rclone.zip"
+          python -m zipfile -e "$RUNNER_TEMP/rclone.zip" "$RUNNER_TEMP/rclone-download"
+          rclone_bin="$(find "$RUNNER_TEMP/rclone-download" -type f -name rclone -print -quit)"
+          if [ -z "$rclone_bin" ]; then
+            echo "Could not find rclone binary after extracting download." >&2
+            exit 1
+          fi
+          cp "$rclone_bin" "$RUNNER_TEMP/rclone-bin/rclone"
+          chmod +x "$RUNNER_TEMP/rclone-bin/rclone"
+          export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
+          echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
+        }
+
+        write_rclone_config() {
+          rclone_config_file="$RUNNER_TEMP/rclone.conf"
+          if [ -n "${RCLONE_CONFIG_B64:-}" ]; then
+            printf '%s' "$RCLONE_CONFIG_B64" | base64 --decode > "$rclone_config_file"
+          elif [ -n "${RCLONE_CONFIG:-}" ]; then
+            printf '%s' "$RCLONE_CONFIG" > "$rclone_config_file"
+          else
+            echo "AADM2025Dryad was not found locally, and no rclone config is configured." >&2
+            echo "Set RCLONE_CONFIG or RCLONE_CONFIG_B64 as GitHub secrets." >&2
+            exit 1
+          fi
+          chmod 600 "$rclone_config_file"
+          echo "$rclone_config_file"
+        }
+
+        promote_staging_cache() {
+          local staging="$1"
+          if ! python "$GITHUB_ACTION_PATH/find_dataset.py" \
+            --resolved-dataset-root-file "$RUNNER_TEMP/staging_aadm2025dryad_root.txt" \
+            --resolved-rf-root-file "$RUNNER_TEMP/staging_aadm2025dryad_rf_root.txt" \
+            --root "$staging"; then
+            echo "Downloaded data did not contain an RF Sensor and Radar directory." >&2
+            find "$staging" -maxdepth 4 -type d | sed -n '1,160p' >&2 || true
+            rm -rf "$staging"
+            exit 1
+          fi
+
+          rm -rf "$CACHE_DATASET_ROOT"
+          mkdir -p "$(dirname "$CACHE_DATASET_ROOT")"
+          mv "$staging" "$CACHE_DATASET_ROOT"
+          echo "Cached dataset at $CACHE_DATASET_ROOT"
+        }
+
+        download_with_rclone_source() {
+          if [ -z "${RCLONE_SOURCE:-}" ]; then
+            return 1
+          fi
+
+          ensure_rclone
+          rclone_config_file="$(write_rclone_config)"
+          staging="${CACHE_DATASET_ROOT}.tmp.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          rm -rf "$staging"
+          mkdir -p "$staging"
+          echo "Dataset not found locally; downloading with rclone into $CACHE_DATASET_ROOT."
+          rclone copy "$RCLONE_SOURCE" "$staging" \
+            --config "$rclone_config_file" \
+            --fast-list \
+            --transfers 8 \
+            --checkers 16
+          promote_staging_cache "$staging"
+          return 0
+        }
+
+        download_with_webdav() {
+          if [ -z "${WEBDAV_URL:-}" ] || [ -z "${WEBDAV_USER:-}" ] || [ -z "${WEBDAV_PASSWORD:-}" ]; then
+            return 1
+          fi
+
+          ensure_rclone
+          staging="${CACHE_DATASET_ROOT}.tmp.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          rm -rf "$staging"
+          mkdir -p "$staging"
+          obscured_pass="$(rclone obscure "$WEBDAV_PASSWORD")"
+          echo "Dataset not found locally; downloading WebDAV source into $CACHE_DATASET_ROOT."
+          rclone copy ":webdav:" "$staging" \
+            --webdav-url "$WEBDAV_URL" \
+            --webdav-vendor owncloud \
+            --webdav-user "$WEBDAV_USER" \
+            --webdav-pass "$obscured_pass" \
+            --progress \
+            --transfers 8 \
+            --checkers 16
+          promote_staging_cache "$staging"
+          return 0
+        }
+
+        download_with_zip_url() {
+          if [ -z "${DATASET_URL:-}" ]; then
+            return 1
+          fi
+
+          archive="$DATASET_ZIP"
+          if [ -z "$archive" ]; then
+            archive="$RUNNER_TEMP/AADM2025Dryad.zip"
+          fi
+          staging="${CACHE_DATASET_ROOT}.tmp.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          rm -rf "$staging"
+          mkdir -p "$(dirname "$archive")" "$staging"
+
+          echo "Dataset not found locally; downloading AADM2025Dryad archive."
+          curl --fail --location --retry 5 --retry-delay 20 --connect-timeout 60 \
+            --output "$archive" "$DATASET_URL"
+          du -sh "$archive" || true
+
+          python - "$archive" "$staging" <<'PY'
+        from __future__ import annotations
+
+        import sys
+        import zipfile
+        from pathlib import Path
+
+        archive = Path(sys.argv[1])
+        target = Path(sys.argv[2])
+        if not zipfile.is_zipfile(archive):
+            raise SystemExit(f"{archive} is not a ZIP file. Provide a direct ZIP archive URL.")
+        with zipfile.ZipFile(archive) as zip_file:
+            zip_file.extractall(target)
+        PY
+          promote_staging_cache "$staging"
+          return 0
+        }
+
+        if [ "${FORCE_REDOWNLOAD,,}" = "true" ]; then
+          echo "force-redownload=true, removing persistent dataset cache."
+          rm -rf "$CACHE_DATASET_ROOT"
+          rm -rf "$HOME/.cache/datasets/AADM2025Dryad"
+          rm -rf "$HOME/github-runner/.cache/datasets/AADM2025Dryad"
+        fi
+
+        downloaded=false
+        downloaded_marker="$RUNNER_TEMP/aadm2025dryad_downloaded"
+        rm -f "$downloaded_marker"
+        if ! find_dataset; then
+          lock_file="$CACHE_ROOT/.AADM2025Dryad.lock"
+          (
+            flock 9
+            if ! find_dataset; then
+              if download_with_rclone_source; then
+                touch "$downloaded_marker"
+              elif download_with_webdav; then
+                touch "$downloaded_marker"
+              elif download_with_zip_url; then
+                touch "$downloaded_marker"
+              else
+                echo "No AADM2025Dryad source is configured." >&2
+                echo "Provide dataset-root, rclone-source/config, WebDAV credentials, or dataset-url." >&2
+                exit 1
+              fi
+            fi
+          ) 9>"$lock_file"
+        fi
+        if [ -f "$downloaded_marker" ]; then
+          downloaded=true
+        fi
+
+        find_dataset
+        actual_dataset_root="$(cat "$resolved_dataset_root_file")"
+        rf_root="$(cat "$resolved_rf_root_file")"
+        active_dataset_root="$actual_dataset_root"
+
+        if [ -n "$OUTPUT_ROOT" ]; then
+          rm -rf "$OUTPUT_ROOT"
+          mkdir -p "$(dirname "$OUTPUT_ROOT")"
+          ln -s "$actual_dataset_root" "$OUTPUT_ROOT"
+          active_dataset_root="$OUTPUT_ROOT"
+        fi
+
+        if [ -w "$actual_dataset_root" ]; then
+          {
+            echo "Created: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "Dataset root: $actual_dataset_root"
+            echo "RF Sensor and Radar root: $rf_root"
+            echo
+            find "$actual_dataset_root" -type f -printf '%s %p\n' | sort | sed -n '1,10000p'
+          } > "$actual_dataset_root/MANIFEST.txt" || true
+        fi
+
+        echo "DATASET_ROOT=$active_dataset_root" >> "$GITHUB_ENV"
+        echo "AADM2025DRYAD_DATASET_ROOT=$actual_dataset_root" >> "$GITHUB_ENV"
+        echo "RF_SENSOR_AND_RADAR_ROOT=$rf_root" >> "$GITHUB_ENV"
+        echo "PERSISTENT_DATASET_CACHE=$CACHE_DATASET_ROOT" >> "$GITHUB_ENV"
+
+        echo "dataset-root=$active_dataset_root" >> "$GITHUB_OUTPUT"
+        echo "actual-dataset-root=$actual_dataset_root" >> "$GITHUB_OUTPUT"
+        echo "rf-sensor-and-radar-root=$rf_root" >> "$GITHUB_OUTPUT"
+        echo "downloaded=$downloaded" >> "$GITHUB_OUTPUT"
+
+        echo "Resolved DATASET_ROOT=$active_dataset_root"
+        echo "Resolved AADM2025DRYAD_DATASET_ROOT=$actual_dataset_root"
+        echo "Resolved RF_SENSOR_AND_RADAR_ROOT=$rf_root"
+        du -sh "$actual_dataset_root" || true
+
+    - name: Save GitHub-hosted dataset cache
+      if: ${{ runner.environment != 'self-hosted' && steps.ensure.outputs.downloaded == 'true' }}
+      uses: actions/cache/save@v5
+      continue-on-error: true
+      with:
+        path: ${{ steps.paths.outputs.cache-dataset-root }}
+        key: ${{ inputs.cache-key }}
