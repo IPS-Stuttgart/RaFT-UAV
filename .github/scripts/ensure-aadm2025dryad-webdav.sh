@@ -145,22 +145,33 @@ if not raw_url:
     raise SystemExit(0)
 
 parts = urlsplit(raw_url)
-origin = urlunsplit((parts.scheme, parts.netloc, "", "", ""))
 path = parts.path.rstrip("/")
 segments = [segment for segment in path.split("/") if segment]
 token = ""
+base_segments: list[str] = []
 
 for marker in (("s",), ("index.php", "s")):
     marker_len = len(marker)
     for index in range(0, max(len(segments) - marker_len, 0)):
         if tuple(segments[index:index + marker_len]) == marker and index + marker_len < len(segments):
             token = segments[index + marker_len]
+            base_segments = segments[:index]
             break
     if token:
         break
 
 if not token and len(segments) >= 4 and segments[:3] == ["remote.php", "dav", "public-files"]:
     token = segments[3]
+    base_segments = []
+elif not token:
+    for index in range(0, max(len(segments) - 3, 0)):
+        if segments[index:index + 3] == ["remote.php", "dav", "public-files"] and index + 3 < len(segments):
+            token = segments[index + 3]
+            base_segments = segments[:index]
+            break
+
+base_path = "/" + "/".join(base_segments) if base_segments else ""
+base_url = urlunsplit((parts.scheme, parts.netloc, base_path, "", "")).rstrip("/")
 
 pairs: list[tuple[str, str]] = []
 
@@ -172,11 +183,15 @@ def emit(url: str, user: str) -> None:
         pairs.append(pair)
 
 emit(raw_url, configured_user)
-if origin and token:
-    emit(f"{origin}/public.php/webdav/", token)
-    emit(f"{origin}/public.php/webdav", token)
-    emit(f"{origin}/public.php/webdav/", configured_user)
-    emit(f"{origin}/public.php/webdav", configured_user)
+if base_url and token:
+    emit(f"{base_url}/public.php/webdav/", token)
+    emit(f"{base_url}/public.php/webdav", token)
+    emit(f"{base_url}/remote.php/dav/public-files/{token}/", token)
+    emit(f"{base_url}/remote.php/dav/public-files/{token}", token)
+    emit(f"{base_url}/public.php/webdav/", configured_user)
+    emit(f"{base_url}/public.php/webdav", configured_user)
+    emit(f"{base_url}/remote.php/dav/public-files/{token}/", configured_user)
+    emit(f"{base_url}/remote.php/dav/public-files/{token}", configured_user)
 
 for url, user in pairs:
     print(f"{url}\t{user}")
