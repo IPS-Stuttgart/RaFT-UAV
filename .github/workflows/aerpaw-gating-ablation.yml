@@ -60,11 +60,11 @@ jobs:
           dataset-root: ${{ inputs.dataset_root }}
           output-root: data/raw/AADM2025Dryad
           force-redownload: ${{ inputs.force_redownload }}
-          dataset-url: ${{ inputs.dataset_url || secrets.AADM2025DRYAD_URL }}
+          dataset-url: ${{ inputs.dataset_url || secrets.AADM2025DRYAD_DATA_URL || secrets.AADM2025DRYAD_URL || vars.AADM2025DRYAD_DATA_URL || vars.AADM2025DRYAD_URL }}
           dataset-zip: data/raw/AADM2025Dryad.zip
           cache-key: aadm2025dryad-${{ runner.os }}-v1
-          webdav-url: ${{ secrets.AADM2025DRYAD_DATA_WEBDAV_URL }}
-          webdav-user: ${{ secrets.AADM2025DRYAD_DATA_KEY }}
+          webdav-url: ${{ secrets.AADM2025DRYAD_DATA_WEBDAV_URL || vars.AADM2025DRYAD_DATA_WEBDAV_URL }}
+          webdav-user: ${{ secrets.AADM2025DRYAD_DATA_KEY || vars.AADM2025DRYAD_DATA_KEY }}
           webdav-password: ${{ secrets.AADM2025DRYAD_DATA_PASSWORD }}
 
       - name: Install package

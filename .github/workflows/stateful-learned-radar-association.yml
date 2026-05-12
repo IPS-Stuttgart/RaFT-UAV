@@ -48,6 +48,11 @@ name: Stateful learned radar association
         required: false
         type: string
         default: "/srv/datasets/AADM2025Dryad"
+      dataset_url:
+        description: "Optional direct ZIP archive URL used if the dataset is not already present on the runner."
+        required: false
+        type: string
+        default: ""
       test_flight:
         description: "Held-out flight used for the stateful-beam smoke run."
         required: false
@@ -141,10 +146,14 @@ jobs:
         uses: ./.github/actions/ensure-aadm2025dryad-dataset
         with:
           dataset-root: ${{ inputs.dataset_root }}
+          dataset-url: ${{ inputs.dataset_url || secrets.AADM2025DRYAD_DATA_URL || secrets.AADM2025DRYAD_URL || vars.AADM2025DRYAD_DATA_URL || vars.AADM2025DRYAD_URL }}
           cache-key: aadm2025dryad-${{ runner.os }}-v1
           rclone-source: ${{ secrets.AADM2025DRYAD_RCLONE_SOURCE }}
           rclone-config: ${{ secrets.RCLONE_CONFIG }}
           rclone-config-b64: ${{ secrets.RCLONE_CONFIG_B64 }}
+          webdav-url: ${{ secrets.AADM2025DRYAD_DATA_WEBDAV_URL || vars.AADM2025DRYAD_DATA_WEBDAV_URL }}
+          webdav-user: ${{ secrets.AADM2025DRYAD_DATA_KEY || vars.AADM2025DRYAD_DATA_KEY }}
+          webdav-password: ${{ secrets.AADM2025DRYAD_DATA_PASSWORD }}
 
       - name: Install package
         run: |

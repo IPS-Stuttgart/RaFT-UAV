@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+AADM2025DRYAD_DATA_URL="${AADM2025DRYAD_DATA_URL:-${AADM2025DRYAD_URL:-}}"
+AADM2025DRYAD_WEBDAV_CRED="${AADM2025DRYAD_WEBDAV_CRED:-${AADM2025DRYAD_DATA_PASSWORD:-}}"
+
 mask_secret() {
   if [ -n "${1:-}" ]; then
     echo "::add-mask::$1"
@@ -63,10 +66,25 @@ resolve_dataset() {
 }
 
 ensure_rclone() {
-  if command -v rclone >/dev/null 2>&1; then
-    return 0
+  local existing_rclone=""
+
+  existing_rclone="$(command -v rclone || true)"
+  if [ -n "${existing_rclone}" ]; then
+    case "${existing_rclone}" in
+      /snap/bin/*|*/snap/bin/*)
+        echo "Ignoring Snap-installed rclone at ${existing_rclone}; runner services cannot reliably execute Snap apps."
+        ;;
+      *)
+        if "${existing_rclone}" version >/dev/null 2>&1; then
+          return 0
+        fi
+        echo "Existing rclone at ${existing_rclone} is not usable; installing a temporary copy in RUNNER_TEMP."
+        ;;
+    esac
+  else
+    echo "rclone is not installed; installing a temporary copy in RUNNER_TEMP."
   fi
-  echo "rclone is not installed; installing a temporary copy in RUNNER_TEMP."
+
   mkdir -p "${RUNNER_TEMP}/rclone-bin" "${RUNNER_TEMP}/rclone-download"
   curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o "${RUNNER_TEMP}/rclone.zip"
   python -m zipfile -e "${RUNNER_TEMP}/rclone.zip" "${RUNNER_TEMP}/rclone-download"

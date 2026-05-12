@@ -99,9 +99,9 @@ jobs:
       - name: Ensure AADM2025Dryad dataset
         id: dataset
         env:
-          AADM2025DRYAD_DATA_URL: ${{ inputs.dataset_url || secrets.AADM2025DRYAD_DATA_URL || secrets.AADM2025DRYAD_URL }}
-          AADM2025DRYAD_DATA_WEBDAV_URL: ${{ secrets.AADM2025DRYAD_DATA_WEBDAV_URL }}
-          AADM2025DRYAD_DATA_KEY: ${{ secrets.AADM2025DRYAD_DATA_KEY }}
+          AADM2025DRYAD_DATA_URL: ${{ inputs.dataset_url || secrets.AADM2025DRYAD_DATA_URL || secrets.AADM2025DRYAD_URL || vars.AADM2025DRYAD_DATA_URL || vars.AADM2025DRYAD_URL }}
+          AADM2025DRYAD_DATA_WEBDAV_URL: ${{ secrets.AADM2025DRYAD_DATA_WEBDAV_URL || vars.AADM2025DRYAD_DATA_WEBDAV_URL }}
+          AADM2025DRYAD_DATA_KEY: ${{ secrets.AADM2025DRYAD_DATA_KEY || vars.AADM2025DRYAD_DATA_KEY }}
           AADM2025DRYAD_WEBDAV_CRED: ${{ secrets[format('{0}{1}{2}{3}{4}{5}{6}{7}', 'AADM2025DRYAD_DATA_', 'P', 'A', 'S', 'S', 'W', 'O', 'RD')] }}
         run: .github/scripts/ensure-aadm2025dryad-webdav.sh
 
@@ -173,9 +173,9 @@ jobs:
       - name: Ensure AADM2025Dryad dataset
         id: dataset
         env:
-          AADM2025DRYAD_DATA_URL: ${{ inputs.dataset_url || secrets.AADM2025DRYAD_DATA_URL || secrets.AADM2025DRYAD_URL }}
-          AADM2025DRYAD_DATA_WEBDAV_URL: ${{ secrets.AADM2025DRYAD_DATA_WEBDAV_URL }}
-          AADM2025DRYAD_DATA_KEY: ${{ secrets.AADM2025DRYAD_DATA_KEY }}
+          AADM2025DRYAD_DATA_URL: ${{ inputs.dataset_url || secrets.AADM2025DRYAD_DATA_URL || secrets.AADM2025DRYAD_URL || vars.AADM2025DRYAD_DATA_URL || vars.AADM2025DRYAD_URL }}
+          AADM2025DRYAD_DATA_WEBDAV_URL: ${{ secrets.AADM2025DRYAD_DATA_WEBDAV_URL || vars.AADM2025DRYAD_DATA_WEBDAV_URL }}
+          AADM2025DRYAD_DATA_KEY: ${{ secrets.AADM2025DRYAD_DATA_KEY || vars.AADM2025DRYAD_DATA_KEY }}
           AADM2025DRYAD_WEBDAV_CRED: ${{ secrets[format('{0}{1}{2}{3}{4}{5}{6}{7}', 'AADM2025DRYAD_DATA_', 'P', 'A', 'S', 'S', 'W', 'O', 'RD')] }}
         run: .github/scripts/ensure-aadm2025dryad-webdav.sh
 
