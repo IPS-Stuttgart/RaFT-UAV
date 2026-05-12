@@ -20,15 +20,10 @@ on:
         type: string
         default: '["Opt1","Opt2","Opt3"]'
       smoke_mode:
-        description: "Validate dataset, CLIs, and required artifacts for smoke flights; never fail on metric targets."
+        description: "Run Opt1/Opt3 smoke validation for dataset, CLIs, and required artifacts; never fail on metric targets."
         required: true
         type: boolean
         default: false
-      smoke_flights_json:
-        description: "JSON array of smoke flights used when smoke_mode=true."
-        required: true
-        type: string
-        default: '["Opt1","Opt3"]'
       beam_max_hypotheses:
         description: "Maximum stateful association hypotheses retained per radar frame."
         required: true
@@ -99,7 +94,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        flight: ${{ fromJSON(inputs.smoke_mode && inputs.smoke_flights_json || inputs.flights_json) }}
+        flight: ${{ fromJSON(inputs.smoke_mode && '["Opt1","Opt3"]' || inputs.flights_json) }}
 
     env:
       DATASET_ROOT: ${{ inputs.dataset_root }}
@@ -249,7 +244,7 @@ jobs:
     env:
       ENFORCE_THRESHOLDS: ${{ inputs.enforce_thresholds }}
       SMOKE_MODE: ${{ inputs.smoke_mode }}
-      INPUT_FLIGHTS_JSON: ${{ inputs.smoke_mode && inputs.smoke_flights_json || inputs.flights_json }}
+      INPUT_FLIGHTS_JSON: ${{ inputs.smoke_mode && '["Opt1","Opt3"]' || inputs.flights_json }}
       TARGET_MEAN_RMSE_3D_M: ${{ inputs.target_mean_rmse_3d_m }}
       TARGET_OPT1_P95_3D_M: ${{ inputs.target_opt1_p95_3d_m }}
 
