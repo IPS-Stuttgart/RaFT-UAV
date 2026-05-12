@@ -67,6 +67,7 @@ resolve_dataset() {
 
 ensure_rclone() {
   local existing_rclone=""
+  local version_output=""
 
   existing_rclone="$(command -v rclone || true)"
   if [ -n "${existing_rclone}" ]; then
@@ -75,10 +76,15 @@ ensure_rclone() {
         echo "Ignoring Snap-installed rclone at ${existing_rclone}; runner services cannot reliably execute Snap apps."
         ;;
       *)
-        if "${existing_rclone}" version >/dev/null 2>&1; then
-          return 0
+        if version_output="$("${existing_rclone}" version 2>&1)"; then
+          if printf '%s\n' "${version_output}" | grep -q "go/tags: snap"; then
+            echo "Ignoring Snap-built rclone at ${existing_rclone}; runner services cannot reliably execute Snap apps."
+          else
+            return 0
+          fi
+        else
+          echo "Existing rclone at ${existing_rclone} is not usable; installing a temporary copy in RUNNER_TEMP."
         fi
-        echo "Existing rclone at ${existing_rclone} is not usable; installing a temporary copy in RUNNER_TEMP."
         ;;
     esac
   else
@@ -97,6 +103,8 @@ ensure_rclone() {
   chmod +x "${RUNNER_TEMP}/rclone-bin/rclone"
   export PATH="${RUNNER_TEMP}/rclone-bin:${PATH}"
   echo "${RUNNER_TEMP}/rclone-bin" >> "${GITHUB_PATH}"
+  echo "Using temporary rclone at ${RUNNER_TEMP}/rclone-bin/rclone."
+  rclone version | sed -n '1,5p'
 }
 
 extract_zip_archive() {
@@ -263,7 +271,12 @@ copy_webdav_to_staging() {
         --webdav-pass "${obscured_cred}" \
         --progress \
         --transfers 8 \
-        --checkers 16; then
+        --checkers 16 \
+        --contimeout 30s \
+        --timeout 2m \
+        --low-level-retries 2 \
+        --retries 2 \
+        --retries-sleep 5s; then
         return 0
       fi
     done
