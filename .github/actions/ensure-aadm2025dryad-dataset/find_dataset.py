@@ -6,6 +6,11 @@ import sys
 from pathlib import Path
 
 RF_DIR_NAMES = {"RF Sensor and Radar", "RF_Sensor_and_Radar"}
+TRANSIENT_DATASET_PREFIX = "AADM2025Dryad.tmp."
+
+
+def is_transient_dataset_path(path: Path) -> bool:
+    return any(part.startswith(TRANSIENT_DATASET_PREFIX) for part in path.parts)
 
 
 def unique_paths(paths: list[Path]) -> list[Path]:
@@ -24,6 +29,8 @@ def unique_paths(paths: list[Path]) -> list[Path]:
 
 
 def find_rf_root(root: Path, max_depth: int) -> Path | None:
+    if is_transient_dataset_path(root):
+        return None
     if not root.exists() or not root.is_dir():
         return None
     if root.name in RF_DIR_NAMES:
@@ -36,6 +43,11 @@ def find_rf_root(root: Path, max_depth: int) -> Path | None:
     root_depth = len(root.parts)
     for dirpath, dirnames, _ in os.walk(root):
         current = Path(dirpath)
+        dirnames[:] = [
+            dirname
+            for dirname in dirnames
+            if not dirname.startswith(TRANSIENT_DATASET_PREFIX)
+        ]
         depth = len(current.parts) - root_depth
         if depth >= max_depth:
             dirnames[:] = []

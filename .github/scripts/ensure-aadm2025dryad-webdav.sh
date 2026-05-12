@@ -24,13 +24,21 @@ find_rf_root() {
     if [ -z "${root:-}" ] || [ ! -d "${root}" ]; then
       continue
     fi
+    case "${root}" in
+      *AADM2025Dryad.tmp.*)
+        continue
+        ;;
+    esac
     case "$(basename "${root}")" in
       "RF Sensor and Radar"|"RF_Sensor_and_Radar")
         printf '%s\n' "${root}"
         return 0
         ;;
     esac
-    found="$(find "${root}" -maxdepth 8 -type d \( -name "RF Sensor and Radar" -o -name "RF_Sensor_and_Radar" \) -print -quit 2>/dev/null || true)"
+    found="$(find "${root}" -maxdepth 8 \
+      \( -type d -name "AADM2025Dryad.tmp.*" -prune \) -o \
+      \( -type d \( -name "RF Sensor and Radar" -o -name "RF_Sensor_and_Radar" \) -print -quit \) \
+      2>/dev/null || true)"
     if [ -n "${found}" ]; then
       printf '%s\n' "${found}"
       return 0
