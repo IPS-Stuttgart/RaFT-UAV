@@ -24,6 +24,7 @@ from raft_uav.baselines.kalman import (
 from raft_uav.baselines.update_logic import (
     gate_threshold_for_measurement,
     inflation_alpha_for_measurement,
+    max_residual_norm_for_measurement,
     plan_linear_measurement_update,
     robust_update_for_measurement,
     symmetrized,
@@ -256,6 +257,7 @@ class AsyncInteractingMultipleModelTracker:
         measurement: TrackingMeasurement,
         gate_threshold: float | None = None,
         safety_gate_threshold: float | None = None,
+        max_residual_norm: float | None = None,
         robust_update: str | None = None,
         inflation_alpha: float = 1.0,
     ) -> TrackingUpdateDiagnostics:
@@ -270,6 +272,7 @@ class AsyncInteractingMultipleModelTracker:
             observation_matrix=measurement_matrix(measurement.vector.size),
             gate_threshold=gate_threshold,
             safety_gate_threshold=safety_gate_threshold,
+            max_residual_norm=max_residual_norm,
             robust_update=robust_update,
             inflation_alpha=inflation_alpha,
         )
@@ -287,9 +290,10 @@ class AsyncInteractingMultipleModelTracker:
             nis=plan.nis,
             gate_threshold=plan.threshold,
             safety_gate_threshold=plan.safety_threshold,
+            residual_gate_threshold_m=plan.residual_threshold,
             covariance_scale=plan.covariance_scale,
             inflation_alpha=plan.inflation_alpha if robust_update == "nis-inflate" else None,
-            residual_norm_m=float(np.linalg.norm(plan.residual)),
+            residual_norm_m=plan.residual_norm,
         )
 
     def _sync_combined_state(self) -> None:
@@ -307,6 +311,7 @@ def run_async_imm_baseline(
     safety_gate_thresholds_by_source: Mapping[str, float | None] | None = None,
     robust_update_by_source: Mapping[str, str | None] | None = None,
     inflation_alpha_by_source: Mapping[str, float] | None = None,
+    max_residual_norms_by_source: Mapping[str, float | None] | None = None,
     modes: Sequence[IMMMode] | None = None,
     mode_switch_time_constant_s: float = 20.0,
 ) -> list[dict[str, object]]:
@@ -339,6 +344,10 @@ def run_async_imm_baseline(
                 gate_probabilities_by_source=safety_gate_probabilities_by_source,
                 gate_thresholds_by_source=safety_gate_thresholds_by_source,
                 probability_to_threshold=gate_threshold_from_probability,
+            ),
+            max_residual_norm=max_residual_norm_for_measurement(
+                measurement,
+                max_residual_norms_by_source=max_residual_norms_by_source,
             ),
             robust_update=robust_update_for_measurement(
                 measurement,

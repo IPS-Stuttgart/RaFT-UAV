@@ -59,6 +59,16 @@ on:
         required: true
         type: number
         default: 0.5
+      rf_max_residual_m:
+        description: "Hard Euclidean RF residual cap before Kalman update; <=0 disables it."
+        required: true
+        type: number
+        default: 750
+      radar_max_residual_m:
+        description: "Hard Euclidean radar residual cap before Kalman update; <=0 disables it."
+        required: true
+        type: number
+        default: 0
 
 permissions:
   contents: read
@@ -158,6 +168,8 @@ jobs:
       BEAM_LAG_S: ${{ matrix.beam_lag_s }}
       RADAR_INFLATION_ALPHA: ${{ matrix.radar_inflation_alpha }}
       RF_INFLATION_ALPHA: ${{ inputs.rf_inflation_alpha }}
+      RF_MAX_RESIDUAL_M: ${{ inputs.rf_max_residual_m }}
+      RADAR_MAX_RESIDUAL_M: ${{ inputs.radar_max_residual_m }}
       OUT_ROOT: ${{ runner.temp }}/stateful_ablation
 
     steps:
@@ -235,6 +247,8 @@ jobs:
             --robust-update nis-inflate \
             --rf-inflation-alpha "$RF_INFLATION_ALPHA" \
             --radar-inflation-alpha "$RADAR_INFLATION_ALPHA" \
+            --rf-max-residual-m "$RF_MAX_RESIDUAL_M" \
+            --radar-max-residual-m "$RADAR_MAX_RESIDUAL_M" \
             --smoother fixed-lag \
             --smoother-lag-s "${{ inputs.smoother_lag_s }}" \
             --output-dir "$OUT_DIR/run" \

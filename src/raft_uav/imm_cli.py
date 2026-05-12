@@ -69,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--rf-safety-gate-prob", type=float, default=0.9999999)
     parser.add_argument("--radar-safety-gate-prob", type=float, default=0.9999999)
+    parser.add_argument("--rf-max-residual-m", type=float, default=750.0)
+    parser.add_argument("--radar-max-residual-m", type=float, default=0.0)
     parser.add_argument("--rf-inflation-alpha", type=float, default=1.0)
     parser.add_argument("--radar-inflation-alpha", type=float, default=1.0)
     args = parser.parse_args(argv)
@@ -91,6 +93,8 @@ def main(argv: list[str] | None = None) -> int:
         enable_association_safety_gate=not args.disable_association_safety_gate,
         rf_safety_gate_prob=args.rf_safety_gate_prob,
         radar_safety_gate_prob=args.radar_safety_gate_prob,
+        rf_max_residual_m=args.rf_max_residual_m,
+        radar_max_residual_m=args.radar_max_residual_m,
         rf_inflation_alpha=args.rf_inflation_alpha,
         radar_inflation_alpha=args.radar_inflation_alpha,
     )
@@ -115,6 +119,8 @@ def run_experiment(
     enable_association_safety_gate: bool = True,
     rf_safety_gate_prob: float = 0.9999999,
     radar_safety_gate_prob: float = 0.9999999,
+    rf_max_residual_m: float = 750.0,
+    radar_max_residual_m: float = 0.0,
     rf_inflation_alpha: float = 1.0,
     radar_inflation_alpha: float = 1.0,
 ) -> int:
@@ -162,12 +168,17 @@ def run_experiment(
 
     gate_probabilities = None
     safety_gate_probabilities = None
+    max_residual_norms = None
     robust_updates = None
     inflation_alphas = None
     if enable_association_safety_gate:
         safety_gate_probabilities = {
             "rf": rf_safety_gate_prob,
             "radar": radar_safety_gate_prob,
+        }
+        max_residual_norms = {
+            "rf": None if rf_max_residual_m <= 0.0 else rf_max_residual_m,
+            "radar": None if radar_max_residual_m <= 0.0 else radar_max_residual_m,
         }
     if robust_update != "none":
         gate_probabilities = {"rf": rf_gate_prob, "radar": radar_gate_prob}
@@ -182,6 +193,7 @@ def run_experiment(
             safety_gate_probabilities_by_source=safety_gate_probabilities,
             robust_update_by_source=robust_updates,
             inflation_alpha_by_source=inflation_alphas,
+            max_residual_norms_by_source=max_residual_norms,
             mode_switch_time_constant_s=imm_mode_switch_time_constant,
         )
     else:
@@ -192,6 +204,7 @@ def run_experiment(
             safety_gate_probabilities_by_source=safety_gate_probabilities,
             robust_update_by_source=robust_updates,
             inflation_alpha_by_source=inflation_alphas,
+            max_residual_norms_by_source=max_residual_norms,
         )
     if not records:
         raise RuntimeError(f"{flight.name} produced no posterior records")
@@ -206,6 +219,7 @@ def run_experiment(
         "nis",
         "gate_threshold",
         "safety_gate_threshold",
+        "residual_gate_threshold_m",
         "covariance_scale",
         "inflation_alpha",
         "residual_norm_m",
@@ -240,6 +254,8 @@ def run_experiment(
         enable_association_safety_gate=enable_association_safety_gate,
         rf_safety_gate_prob=rf_safety_gate_prob,
         radar_safety_gate_prob=radar_safety_gate_prob,
+        rf_max_residual_m=rf_max_residual_m,
+        radar_max_residual_m=radar_max_residual_m,
     )
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     diagnostic_summary = build_diagnostic_summary(
@@ -279,6 +295,9 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
             "nis": _optional_float(record.get("nis")),
             "gate_threshold": _optional_float(record.get("gate_threshold")),
             "safety_gate_threshold": _optional_float(record.get("safety_gate_threshold")),
+            "residual_gate_threshold_m": _optional_float(
+                record.get("residual_gate_threshold_m")
+            ),
             "covariance_scale": _optional_float(record.get("covariance_scale")),
             "inflation_alpha": _optional_float(record.get("inflation_alpha")),
             "residual_norm_m": _optional_float(record.get("residual_norm_m")),
@@ -315,6 +334,8 @@ def _metrics(
     enable_association_safety_gate: bool,
     rf_safety_gate_prob: float,
     radar_safety_gate_prob: float,
+    rf_max_residual_m: float,
+    radar_max_residual_m: float,
 ) -> dict[str, Any]:
     truth_times = truth["time_s"].to_numpy(dtype=float)
     truth_positions = truth[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
@@ -358,6 +379,12 @@ def _metrics(
             else None,
             "radar_gate_probability": float(radar_safety_gate_prob)
             if enable_association_safety_gate
+            else None,
+            "rf_max_residual_m": float(rf_max_residual_m)
+            if enable_association_safety_gate and rf_max_residual_m > 0.0
+            else None,
+            "radar_max_residual_m": float(radar_max_residual_m)
+            if enable_association_safety_gate and radar_max_residual_m > 0.0
             else None,
         },
         "max_eval_time_delta_s": float(max_eval_time_delta_s),

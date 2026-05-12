@@ -172,6 +172,18 @@ def main(argv: list[str] | None = None) -> int:
         help="hard chi-square gate probability for rejecting impossible 3D radar updates",
     )
     baseline_parser.add_argument(
+        "--rf-max-residual-m",
+        type=float,
+        default=750.0,
+        help="hard Euclidean residual cap for RF updates; <=0 disables it",
+    )
+    baseline_parser.add_argument(
+        "--radar-max-residual-m",
+        type=float,
+        default=0.0,
+        help="hard Euclidean residual cap for radar updates; <=0 disables it",
+    )
+    baseline_parser.add_argument(
         "--rf-inflation-alpha",
         type=float,
         default=1.0,
@@ -222,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
             not args.disable_association_safety_gate,
             args.rf_safety_gate_prob,
             args.radar_safety_gate_prob,
+            args.rf_max_residual_m,
+            args.radar_max_residual_m,
             args.rf_inflation_alpha,
             args.radar_inflation_alpha,
         )
@@ -279,6 +293,8 @@ def _run_baseline(
     enable_association_safety_gate: bool,
     rf_safety_gate_prob: float,
     radar_safety_gate_prob: float,
+    rf_max_residual_m: float,
+    radar_max_residual_m: float,
     rf_inflation_alpha: float,
     radar_inflation_alpha: float,
 ) -> int:
@@ -329,6 +345,7 @@ def _run_baseline(
 
     gate_probabilities = None
     safety_gate_probabilities = None
+    max_residual_norms = None
     robust_updates = None
     inflation_alphas = None
     if enable_gating or robust_update != "none":
@@ -337,6 +354,10 @@ def _run_baseline(
         safety_gate_probabilities = {
             "rf": rf_safety_gate_prob,
             "radar": radar_safety_gate_prob,
+        }
+        max_residual_norms = {
+            "rf": None if rf_max_residual_m <= 0.0 else rf_max_residual_m,
+            "radar": None if radar_max_residual_m <= 0.0 else radar_max_residual_m,
         }
     if robust_update != "none":
         robust_updates = {"rf": robust_update, "radar": robust_update}
@@ -353,6 +374,7 @@ def _run_baseline(
             safety_gate_probabilities_by_source=safety_gate_probabilities,
             robust_update_by_source=robust_updates,
             inflation_alpha_by_source=inflation_alphas,
+            max_residual_norms_by_source=max_residual_norms,
             track_switch_nis_ratio=track_switch_nis_ratio,
             candidate_catprob_threshold=radar_catprob_threshold,
             geometry_velocity_std_mps=geometry_velocity_std,
@@ -389,6 +411,7 @@ def _run_baseline(
             safety_gate_probabilities_by_source=safety_gate_probabilities,
             robust_update_by_source=robust_updates,
             inflation_alpha_by_source=inflation_alphas,
+            max_residual_norms_by_source=max_residual_norms,
         )
     if not records:
         raise RuntimeError(f"{flight.name} produced no baseline posterior records")
@@ -409,6 +432,7 @@ def _run_baseline(
         "nis",
         "gate_threshold",
         "safety_gate_threshold",
+        "residual_gate_threshold_m",
         "covariance_scale",
         "inflation_alpha",
         "residual_norm_m",
@@ -467,6 +491,8 @@ def _run_baseline(
         enable_association_safety_gate=enable_association_safety_gate,
         rf_safety_gate_prob=rf_safety_gate_prob,
         radar_safety_gate_prob=radar_safety_gate_prob,
+        rf_max_residual_m=rf_max_residual_m,
+        radar_max_residual_m=radar_max_residual_m,
         rf_inflation_alpha=rf_inflation_alpha,
         radar_inflation_alpha=radar_inflation_alpha,
     )
@@ -534,6 +560,9 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
                 "nis": _optional_float(record.get("nis")),
                 "gate_threshold": _optional_float(record.get("gate_threshold")),
                 "safety_gate_threshold": _optional_float(record.get("safety_gate_threshold")),
+                "residual_gate_threshold_m": _optional_float(
+                    record.get("residual_gate_threshold_m")
+                ),
                 "covariance_scale": _optional_float(record.get("covariance_scale")),
                 "inflation_alpha": _optional_float(record.get("inflation_alpha")),
                 "residual_norm_m": _optional_float(record.get("residual_norm_m")),
@@ -609,6 +638,8 @@ def _baseline_metrics(
     enable_association_safety_gate: bool,
     rf_safety_gate_prob: float,
     radar_safety_gate_prob: float,
+    rf_max_residual_m: float,
+    radar_max_residual_m: float,
     rf_inflation_alpha: float,
     radar_inflation_alpha: float,
 ) -> dict[str, Any]:
@@ -720,6 +751,12 @@ def _baseline_metrics(
             else None,
             "radar_gate_probability": float(radar_safety_gate_prob)
             if enable_association_safety_gate
+            else None,
+            "rf_max_residual_m": float(rf_max_residual_m)
+            if enable_association_safety_gate and rf_max_residual_m > 0.0
+            else None,
+            "radar_max_residual_m": float(radar_max_residual_m)
+            if enable_association_safety_gate and radar_max_residual_m > 0.0
             else None,
         },
         "truth_rows": int(len(truth)),

@@ -20,6 +20,7 @@ from raft_uav.baselines.radar_association import (
     _gate_threshold_for_measurement,
     _initial_measurement,
     _inflation_alpha_for_measurement,
+    _max_residual_norm_for_measurement,
     _nis_scored_candidates,
     _optional_float,
     _optional_track_id,
@@ -44,6 +45,7 @@ def run_async_cv_baseline_with_learned_radar_association(
     safety_gate_thresholds_by_source: Mapping[str, float | None] | None = None,
     robust_update_by_source: Mapping[str, str | None] | None = None,
     inflation_alpha_by_source: Mapping[str, float] | None = None,
+    max_residual_norms_by_source: Mapping[str, float | None] | None = None,
     candidate_catprob_threshold: float | None = 0.5,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
     """Run CV fusion with a learned radar-candidate likelihood.
@@ -98,6 +100,10 @@ def run_async_cv_baseline_with_learned_radar_association(
                     gate_probabilities_by_source=safety_gate_probabilities_by_source,
                     gate_thresholds_by_source=safety_gate_thresholds_by_source,
                 ),
+                max_residual_norm=_max_residual_norm_for_measurement(
+                    measurement,
+                    max_residual_norms_by_source=max_residual_norms_by_source,
+                ),
                 robust_update=_robust_update_for_measurement(
                     measurement,
                     robust_update_by_source=robust_update_by_source,
@@ -140,6 +146,10 @@ def run_async_cv_baseline_with_learned_radar_association(
                 measurement,
                 gate_probabilities_by_source=safety_gate_probabilities_by_source,
                 gate_thresholds_by_source=safety_gate_thresholds_by_source,
+            ),
+            max_residual_norm=_max_residual_norm_for_measurement(
+                measurement,
+                max_residual_norms_by_source=max_residual_norms_by_source,
             ),
             robust_update=_robust_update_for_measurement(
                 measurement,

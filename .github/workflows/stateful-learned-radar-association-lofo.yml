@@ -59,6 +59,16 @@ on:
         required: true
         type: number
         default: 0.5
+      rf_max_residual_m:
+        description: "Hard Euclidean RF residual cap before Kalman update; <=0 disables it."
+        required: true
+        type: number
+        default: 750
+      radar_max_residual_m:
+        description: "Hard Euclidean radar residual cap before Kalman update; <=0 disables it."
+        required: true
+        type: number
+        default: 0
       enforce_thresholds:
         description: "Fail the workflow if target metrics are not met."
         required: true
@@ -163,6 +173,8 @@ jobs:
             --robust-update nis-inflate \
             --rf-inflation-alpha "${{ inputs.rf_inflation_alpha }}" \
             --radar-inflation-alpha "${{ inputs.radar_inflation_alpha }}" \
+            --rf-max-residual-m "${{ inputs.rf_max_residual_m }}" \
+            --radar-max-residual-m "${{ inputs.radar_max_residual_m }}" \
             --smoother fixed-lag \
             --smoother-lag-s "${{ inputs.smoother_lag_s }}" \
             --output-dir "$OUT_DIR/run"

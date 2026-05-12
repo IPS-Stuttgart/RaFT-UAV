@@ -35,8 +35,10 @@ class LinearUpdatePlan:
     residual: np.ndarray
     innovation_covariance: np.ndarray
     nis: float
+    residual_norm: float
     threshold: float | None
     safety_threshold: float | None
+    residual_threshold: float | None
     covariance_scale: float
     update_action: str
     accepted: bool
@@ -124,6 +126,7 @@ def plan_linear_measurement_update(
     observation_matrix: np.ndarray,
     gate_threshold: float | None = None,
     safety_gate_threshold: float | None = None,
+    max_residual_norm: float | None = None,
     robust_update: str | None = None,
     inflation_alpha: float = 1.0,
     student_t_dof: float = DEFAULT_STUDENT_T_DOF,
@@ -144,13 +147,20 @@ def plan_linear_measurement_update(
     residual = vector - observation @ posterior_mean
     innovation_covariance = observation @ posterior_covariance @ observation.T + covariance
     nis = normalized_innovation_squared(residual, innovation_covariance)
+    residual_norm = float(np.linalg.norm(residual))
     threshold = None if gate_threshold is None else float(gate_threshold)
     safety_threshold = None if safety_gate_threshold is None else float(safety_gate_threshold)
+    residual_threshold = None if max_residual_norm is None else float(max_residual_norm)
+    if residual_threshold is not None and residual_threshold <= 0.0:
+        raise ValueError("max_residual_norm must be positive or None")
     covariance_scale = 1.0
     update_action = "updated"
     accepted = True
 
-    if safety_threshold is not None and nis > safety_threshold:
+    if residual_threshold is not None and residual_norm > residual_threshold:
+        accepted = False
+        update_action = "missed_detection"
+    elif safety_threshold is not None and nis > safety_threshold:
         accepted = False
         update_action = "missed_detection"
     elif threshold is not None and nis > threshold and robust_update is None:
@@ -179,8 +189,10 @@ def plan_linear_measurement_update(
         residual=residual,
         innovation_covariance=innovation_covariance,
         nis=float(nis),
+        residual_norm=residual_norm,
         threshold=threshold,
         safety_threshold=safety_threshold,
+        residual_threshold=residual_threshold,
         covariance_scale=float(covariance_scale),
         update_action=update_action,
         accepted=bool(accepted),
@@ -230,6 +242,22 @@ def inflation_alpha_for_measurement(
     if inflation_alpha_by_source and measurement.source in inflation_alpha_by_source:
         return float(inflation_alpha_by_source[measurement.source])
     return 1.0
+
+
+def max_residual_norm_for_measurement(
+    measurement: TrackingMeasurementLike,
+    *,
+    max_residual_norms_by_source: Mapping[str, float | None] | None,
+) -> float | None:
+    """Resolve a source-specific Euclidean residual cap for one measurement."""
+
+    if (
+        max_residual_norms_by_source
+        and measurement.source in max_residual_norms_by_source
+    ):
+        value = max_residual_norms_by_source[measurement.source]
+        return None if value is None else float(value)
+    return None
 
 
 def student_t_dof_for_measurement(

@@ -19,7 +19,10 @@ from raft_uav.baselines.kalman import (
     measurement_matrix,
     white_acceleration_process_noise,
 )
-from raft_uav.baselines.update_logic import plan_linear_measurement_update
+from raft_uav.baselines.update_logic import (
+    max_residual_norm_for_measurement,
+    plan_linear_measurement_update,
+)
 
 RADAR_ASSOCIATION_MODES = (
     "oracle-nearest-truth",
@@ -46,6 +49,7 @@ def run_async_cv_baseline_with_radar_association(
     safety_gate_thresholds_by_source: Mapping[str, float | None] | None = None,
     robust_update_by_source: Mapping[str, str | None] | None = None,
     inflation_alpha_by_source: Mapping[str, float] | None = None,
+    max_residual_norms_by_source: Mapping[str, float | None] | None = None,
     track_switch_nis_ratio: float = 0.5,
     candidate_catprob_threshold: float | None = 0.5,
     geometry_velocity_std_mps: float = 12.0,
@@ -126,6 +130,7 @@ def run_async_cv_baseline_with_radar_association(
             safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
             robust_update_by_source=robust_update_by_source,
             inflation_alpha_by_source=inflation_alpha_by_source,
+            max_residual_norms_by_source=max_residual_norms_by_source,
             candidate_catprob_threshold=candidate_catprob_threshold,
             max_global_hypotheses=track_bank_max_hypotheses,
             max_assignments_per_hypothesis=track_bank_max_assignments,
@@ -176,6 +181,10 @@ def run_async_cv_baseline_with_radar_association(
                     gate_probabilities_by_source=safety_gate_probabilities_by_source,
                     gate_thresholds_by_source=safety_gate_thresholds_by_source,
                 ),
+                max_residual_norm=_max_residual_norm_for_measurement(
+                    measurement,
+                    max_residual_norms_by_source=max_residual_norms_by_source,
+                ),
                 robust_update=_robust_update_for_measurement(
                     measurement,
                     robust_update_by_source=robust_update_by_source,
@@ -225,6 +234,10 @@ def run_async_cv_baseline_with_radar_association(
                 measurement,
                 gate_probabilities_by_source=safety_gate_probabilities_by_source,
                 gate_thresholds_by_source=safety_gate_thresholds_by_source,
+            ),
+            max_residual_norm=_max_residual_norm_for_measurement(
+                measurement,
+                max_residual_norms_by_source=max_residual_norms_by_source,
             ),
             robust_update=_robust_update_for_measurement(
                 measurement,
@@ -285,6 +298,7 @@ def _run_mht_track_bank(
     safety_gate_thresholds_by_source: Mapping[str, float | None] | None,
     robust_update_by_source: Mapping[str, str | None] | None,
     inflation_alpha_by_source: Mapping[str, float] | None,
+    max_residual_norms_by_source: Mapping[str, float | None] | None,
     candidate_catprob_threshold: float | None,
     max_global_hypotheses: int,
     max_assignments_per_hypothesis: int,
@@ -348,6 +362,10 @@ def _run_mht_track_bank(
                     measurement,
                     gate_probabilities_by_source=safety_gate_probabilities_by_source,
                     gate_thresholds_by_source=safety_gate_thresholds_by_source,
+                ),
+                max_residual_norm=_max_residual_norm_for_measurement(
+                    measurement,
+                    max_residual_norms_by_source=max_residual_norms_by_source,
                 ),
                 robust_update=_robust_update_for_measurement(
                     measurement,
@@ -479,6 +497,7 @@ def _deterministic_update_mht_hypotheses(
     *,
     gate_threshold: float | None,
     safety_gate_threshold: float | None,
+    max_residual_norm: float | None,
     robust_update: str | None,
     inflation_alpha: float,
 ) -> TrackingUpdateDiagnostics:
@@ -491,6 +510,7 @@ def _deterministic_update_mht_hypotheses(
             measurement,
             gate_threshold=gate_threshold,
             safety_gate_threshold=safety_gate_threshold,
+            max_residual_norm=max_residual_norm,
             robust_update=robust_update,
             inflation_alpha=inflation_alpha,
         )
@@ -507,6 +527,7 @@ def _update_filter_linear(
     *,
     gate_threshold: float | None,
     safety_gate_threshold: float | None,
+    max_residual_norm: float | None,
     robust_update: str | None,
     inflation_alpha: float,
 ) -> TrackingUpdateDiagnostics:
@@ -523,6 +544,7 @@ def _update_filter_linear(
         observation_matrix=observation,
         gate_threshold=gate_threshold,
         safety_gate_threshold=safety_gate_threshold,
+        max_residual_norm=max_residual_norm,
         robust_update=robust_update,
         inflation_alpha=inflation_alpha,
     )
@@ -539,9 +561,10 @@ def _update_filter_linear(
         nis=plan.nis,
         gate_threshold=plan.threshold,
         safety_gate_threshold=plan.safety_threshold,
+        residual_gate_threshold_m=plan.residual_threshold,
         covariance_scale=plan.covariance_scale,
         inflation_alpha=float(inflation_alpha) if robust_update == "nis-inflate" else None,
-        residual_norm_m=float(np.linalg.norm(plan.residual)),
+        residual_norm_m=plan.residual_norm,
     )
 
 
@@ -602,6 +625,7 @@ def _mht_radar_diagnostics(
         nis=float("nan") if selected is None else float(selected["association_nis"]),
         gate_threshold=None,
         safety_gate_threshold=None,
+        residual_gate_threshold_m=None,
         covariance_scale=1.0,
         inflation_alpha=None,
         residual_norm_m=float("nan"),
@@ -1101,6 +1125,17 @@ def _gate_threshold_for_measurement(
             measurement.vector.size,
         )
     return None
+
+
+def _max_residual_norm_for_measurement(
+    measurement: TrackingMeasurement,
+    *,
+    max_residual_norms_by_source: Mapping[str, float | None] | None,
+) -> float | None:
+    return max_residual_norm_for_measurement(
+        measurement,
+        max_residual_norms_by_source=max_residual_norms_by_source,
+    )
 
 
 def _robust_update_for_measurement(

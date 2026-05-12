@@ -87,6 +87,7 @@ def run_async_cv_baseline_with_stateful_learned_radar_association(
     safety_gate_thresholds_by_source: Mapping[str, float | None] | None = None,
     robust_update_by_source: Mapping[str, str | None] | None = None,
     inflation_alpha_by_source: Mapping[str, float] | None = None,
+    max_residual_norms_by_source: Mapping[str, float | None] | None = None,
     candidate_catprob_threshold: float | None = 0.5,
     config: StatefulAssociationConfig | None = None,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
@@ -111,6 +112,7 @@ def run_async_cv_baseline_with_stateful_learned_radar_association(
         _gate_threshold_for_measurement,
         _initial_measurement,
         _inflation_alpha_for_measurement,
+        _max_residual_norm_for_measurement,
         _nis_scored_candidates,
         _radar_row_to_measurement,
         _record,
@@ -173,6 +175,10 @@ def run_async_cv_baseline_with_stateful_learned_radar_association(
                         measurement,
                         gate_probabilities_by_source=safety_gate_probabilities_by_source,
                         gate_thresholds_by_source=safety_gate_thresholds_by_source,
+                    ),
+                    max_residual_norm=_max_residual_norm_for_measurement(
+                        measurement,
+                        max_residual_norms_by_source=max_residual_norms_by_source,
                     ),
                     robust_update=_robust_update_for_measurement(
                         measurement,
@@ -242,6 +248,10 @@ def run_async_cv_baseline_with_stateful_learned_radar_association(
                         gate_probabilities_by_source=safety_gate_probabilities_by_source,
                         gate_thresholds_by_source=safety_gate_thresholds_by_source,
                     ),
+                    max_residual_norm=_max_residual_norm_for_measurement(
+                        measurement,
+                        max_residual_norms_by_source=max_residual_norms_by_source,
+                    ),
                     robust_update=_robust_update_for_measurement(
                         measurement,
                         robust_update_by_source=robust_update_by_source,
@@ -308,9 +318,11 @@ def run_async_cv_baseline_with_stateful_learned_radar_association(
         safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
         robust_update_by_source=robust_update_by_source,
         inflation_alpha_by_source=inflation_alpha_by_source,
+        max_residual_norms_by_source=max_residual_norms_by_source,
         tracker_cls=AsyncConstantVelocityKalmanTracker,
         record_fn=_record,
         gate_threshold_fn=_gate_threshold_for_measurement,
+        max_residual_norm_fn=_max_residual_norm_for_measurement,
         robust_update_fn=_robust_update_for_measurement,
         inflation_alpha_fn=_inflation_alpha_for_measurement,
         radar_row_to_measurement_fn=_radar_row_to_measurement,
@@ -496,9 +508,11 @@ def _replay_stateful_radar_path(
     safety_gate_thresholds_by_source: Mapping[str, float | None] | None,
     robust_update_by_source: Mapping[str, str | None] | None,
     inflation_alpha_by_source: Mapping[str, float] | None,
+    max_residual_norms_by_source: Mapping[str, float | None] | None,
     tracker_cls: Any,
     record_fn: Any,
     gate_threshold_fn: Any,
+    max_residual_norm_fn: Any,
     robust_update_fn: Any,
     inflation_alpha_fn: Any,
     radar_row_to_measurement_fn: Any,
@@ -525,6 +539,10 @@ def _replay_stateful_radar_path(
                     measurement,
                     gate_probabilities_by_source=safety_gate_probabilities_by_source,
                     gate_thresholds_by_source=safety_gate_thresholds_by_source,
+                ),
+                max_residual_norm=max_residual_norm_fn(
+                    measurement,
+                    max_residual_norms_by_source=max_residual_norms_by_source,
                 ),
                 robust_update=robust_update_fn(
                     measurement,
@@ -555,6 +573,10 @@ def _replay_stateful_radar_path(
                 measurement,
                 gate_probabilities_by_source=safety_gate_probabilities_by_source,
                 gate_thresholds_by_source=safety_gate_thresholds_by_source,
+            ),
+            max_residual_norm=max_residual_norm_fn(
+                measurement,
+                max_residual_norms_by_source=max_residual_norms_by_source,
             ),
             robust_update=robust_update_fn(
                 measurement,

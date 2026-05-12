@@ -14,6 +14,7 @@ from raft_uav.baselines.update_logic import (
     huber_covariance_scale,
     huber_threshold_for_measurement,
     inflation_alpha_for_measurement,
+    max_residual_norm_for_measurement,
     normalized_innovation_squared,
     plan_linear_measurement_update,
     robust_update_for_measurement,
@@ -75,6 +76,7 @@ class TrackingUpdateDiagnostics:
     nis: float
     gate_threshold: float | None
     safety_gate_threshold: float | None
+    residual_gate_threshold_m: float | None
     covariance_scale: float
     inflation_alpha: float | None
     residual_norm_m: float
@@ -237,6 +239,7 @@ class AsyncConstantVelocityKalmanTracker:
         measurement: TrackingMeasurement,
         gate_threshold: float | None = None,
         safety_gate_threshold: float | None = None,
+        max_residual_norm: float | None = None,
         robust_update: str | None = None,
         inflation_alpha: float = 1.0,
         student_t_dof: float = 4.0,
@@ -255,6 +258,7 @@ class AsyncConstantVelocityKalmanTracker:
             robust_update=robust_update,
             gate_threshold=gate_threshold,
             safety_gate_threshold=safety_gate_threshold,
+            max_residual_norm=max_residual_norm,
             student_t_dof=student_t_dof,
             huber_threshold=huber_threshold,
             inflation_alpha=inflation_alpha,
@@ -273,9 +277,10 @@ class AsyncConstantVelocityKalmanTracker:
             nis=plan.nis,
             gate_threshold=plan.threshold,
             safety_gate_threshold=plan.safety_threshold,
+            residual_gate_threshold_m=plan.residual_threshold,
             covariance_scale=plan.covariance_scale,
             inflation_alpha=float(inflation_alpha) if robust_update == "nis-inflate" else None,
-            residual_norm_m=float(np.linalg.norm(plan.residual)),
+            residual_norm_m=plan.residual_norm,
         )
 
 
@@ -288,6 +293,7 @@ def run_async_cv_baseline(
     safety_gate_thresholds_by_source: Mapping[str, float | None] | None = None,
     robust_update_by_source: Mapping[str, str | None] | None = None,
     inflation_alpha_by_source: Mapping[str, float] | None = None,
+    max_residual_norms_by_source: Mapping[str, float | None] | None = None,
     student_t_dof_by_source: Mapping[str, float] | None = None,
     huber_threshold_by_source: Mapping[str, float] | None = None,
 ) -> list[dict[str, object]]:
@@ -318,6 +324,10 @@ def run_async_cv_baseline(
                 gate_probabilities_by_source=safety_gate_probabilities_by_source,
                 gate_thresholds_by_source=safety_gate_thresholds_by_source,
                 probability_to_threshold=gate_threshold_from_probability,
+            ),
+            max_residual_norm=max_residual_norm_for_measurement(
+                measurement,
+                max_residual_norms_by_source=max_residual_norms_by_source,
             ),
             robust_update=robust_update_for_measurement(
                 measurement,
