@@ -13,6 +13,7 @@ import pandas as pd
 
 from raft_uav.baselines.imm import run_async_imm_baseline
 from raft_uav.baselines.kalman import run_async_cv_baseline
+from raft_uav.evaluation.diagnostics import build_diagnostic_summary
 from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
 from raft_uav.io.aerpaw import (
     normalize_radar,
@@ -194,6 +195,7 @@ def run_experiment(
     estimates_path = flight_output / "estimates.csv"
     diagnostics_path = flight_output / "diagnostics.csv"
     metrics_path = flight_output / "metrics.json"
+    diagnostic_summary_path = flight_output / "diagnostic_summary.json"
     selected_radar_path = flight_output / "selected_radar.csv"
 
     estimate_frame.to_csv(estimates_path, index=False)
@@ -215,12 +217,23 @@ def run_experiment(
         robust_update=robust_update,
     )
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    diagnostic_summary = build_diagnostic_summary(
+        estimate_frame=estimate_frame,
+        selected_radar=selected_radar,
+        truth=truth,
+        max_eval_time_delta_s=max_eval_time_delta_s,
+    )
+    diagnostic_summary_path.write_text(
+        json.dumps(diagnostic_summary, indent=2),
+        encoding="utf-8",
+    )
 
     print(f"flight={flight.name}")
     print(f"tracker={tracker}")
     print(f"posterior_records={len(records)}")
     print(f"selected_radar_rows={len(selected_radar)}")
     print(f"metrics_json={metrics_path}")
+    print(f"diagnostic_summary_json={diagnostic_summary_path}")
     print(f"estimates_csv={estimates_path}")
     print(f"diagnostics_csv={diagnostics_path}")
     print(f"rmse_2d_m={metrics['position_error_2d']['rmse_m']:.3f}")

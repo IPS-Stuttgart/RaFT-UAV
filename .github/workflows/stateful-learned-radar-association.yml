@@ -12,8 +12,10 @@ name: Stateful learned radar association
       - "src/raft_uav/baselines/learned_radar_association.py"
       - "src/raft_uav/baselines/learned_radar_likelihood.py"
       - "src/raft_uav/baselines/radar_likelihood_training.py"
+      - "src/raft_uav/evaluation/diagnostics.py"
       - "src/raft_uav/run_learned_radar_association_cli.py"
       - "src/raft_uav/train_radar_association_cli.py"
+      - "tests/test_diagnostic_summary.py"
       - "tests/test_stateful_learned_radar_association.py"
   push:
     branches:
@@ -29,8 +31,10 @@ name: Stateful learned radar association
       - "src/raft_uav/baselines/learned_radar_association.py"
       - "src/raft_uav/baselines/learned_radar_likelihood.py"
       - "src/raft_uav/baselines/radar_likelihood_training.py"
+      - "src/raft_uav/evaluation/diagnostics.py"
       - "src/raft_uav/run_learned_radar_association_cli.py"
       - "src/raft_uav/train_radar_association_cli.py"
+      - "tests/test_diagnostic_summary.py"
       - "tests/test_stateful_learned_radar_association.py"
   workflow_dispatch:
     inputs:
@@ -109,7 +113,7 @@ jobs:
           python -m raft_uav.run_learned_radar_association_cli --help >/dev/null
 
       - name: Run focused stateful association tests
-        run: pytest -q tests/test_stateful_learned_radar_association.py
+        run: pytest -q tests/test_stateful_learned_radar_association.py tests/test_diagnostic_summary.py
 
   aerpaw-smoke:
     name: Optional AERPAW stateful-beam smoke
@@ -222,6 +226,7 @@ jobs:
             outputs/stateful_radar_association_smoke/radar_assoc.json
             outputs/stateful_radar_association_smoke/radar_assoc_examples.csv
             outputs/stateful_radar_association_smoke/run/*/metrics.json
+            outputs/stateful_radar_association_smoke/run/*/diagnostic_summary.json
             outputs/stateful_radar_association_smoke/run/*/diagnostics.csv
             outputs/stateful_radar_association_smoke/run/*/selected_radar.csv
             outputs/stateful_radar_association_smoke/run/*/trajectory.png

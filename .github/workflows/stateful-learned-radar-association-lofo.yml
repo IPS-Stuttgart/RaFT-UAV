@@ -174,8 +174,14 @@ jobs:
           flight = os.environ["TEST_FLIGHT"]
           out_dir = Path(os.environ["OUT_DIR"])
           metrics_path = out_dir / "run" / flight / "metrics.json"
+          diagnostic_summary_path = out_dir / "run" / flight / "diagnostic_summary.json"
           summary_path = out_dir / "summary.json"
-          summary = {"flight": flight, "status": "missing_metrics", "metrics_path": str(metrics_path)}
+          summary = {
+              "flight": flight,
+              "status": "missing_metrics",
+              "metrics_path": str(metrics_path),
+              "diagnostic_summary_path": str(diagnostic_summary_path),
+          }
           if metrics_path.exists():
               payload = json.loads(metrics_path.read_text(encoding="utf-8"))
               summary = {
@@ -190,6 +196,7 @@ jobs:
                   "rmse_3d_m": payload.get("position_error_3d", {}).get("rmse_m"),
                   "p95_3d_m": payload.get("position_error_3d", {}).get("p95_m"),
                   "metrics_path": str(metrics_path),
+                  "diagnostic_summary_path": str(diagnostic_summary_path),
               }
           summary_path.parent.mkdir(parents=True, exist_ok=True)
           summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -211,6 +218,7 @@ jobs:
             ${{ runner.temp }}/stateful_lofo/${{ matrix.flight }}/radar_assoc.json
             ${{ runner.temp }}/stateful_lofo/${{ matrix.flight }}/radar_assoc_examples.csv
             ${{ runner.temp }}/stateful_lofo/${{ matrix.flight }}/run/*/metrics.json
+            ${{ runner.temp }}/stateful_lofo/${{ matrix.flight }}/run/*/diagnostic_summary.json
             ${{ runner.temp }}/stateful_lofo/${{ matrix.flight }}/run/*/diagnostics.csv
             ${{ runner.temp }}/stateful_lofo/${{ matrix.flight }}/run/*/selected_radar.csv
             ${{ runner.temp }}/stateful_lofo/${{ matrix.flight }}/run/*/estimates.csv

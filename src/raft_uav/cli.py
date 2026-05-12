@@ -17,6 +17,7 @@ from raft_uav.baselines.radar_association import (
     run_async_cv_baseline_with_radar_association,
 )
 from raft_uav.baselines.smoothing import SMOOTHER_MODES, smooth_tracking_records
+from raft_uav.evaluation.diagnostics import build_diagnostic_summary
 from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
 from raft_uav.io.aerpaw import (
     discover_flights,
@@ -390,6 +391,7 @@ def _run_baseline(
     selected_radar_path = flight_output / "selected_radar.csv"
     hypotheses_path = flight_output / "hypotheses.csv"
     metrics_path = flight_output / "metrics.json"
+    diagnostic_summary_path = flight_output / "diagnostic_summary.json"
     plot_path = flight_output / "trajectory.png"
     estimate_frame.to_csv(estimates_path, index=False)
     diagnostics_frame.to_csv(diagnostics_path, index=False)
@@ -434,6 +436,16 @@ def _run_baseline(
         radar_inflation_alpha=radar_inflation_alpha,
     )
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    diagnostic_summary = build_diagnostic_summary(
+        estimate_frame=estimate_frame,
+        selected_radar=selected_radar,
+        truth=truth,
+        max_eval_time_delta_s=max_eval_time_delta_s,
+    )
+    diagnostic_summary_path.write_text(
+        json.dumps(diagnostic_summary, indent=2),
+        encoding="utf-8",
+    )
     _write_trajectory_plot(plot_path, truth, rf, selected_radar, estimate_frame, flight.name)
 
     print(f"flight={flight.name}")
@@ -449,6 +461,7 @@ def _run_baseline(
     print(f"selected_radar_track_ids={metrics['selected_radar_track_ids']}")
     print(f"smoother={smoother}")
     print(f"metrics_json={metrics_path}")
+    print(f"diagnostic_summary_json={diagnostic_summary_path}")
     print(f"estimates_csv={estimates_path}")
     print(f"diagnostics_csv={diagnostics_path}")
     print(f"selected_radar_csv={selected_radar_path}")

@@ -152,11 +152,14 @@ jobs:
           path: |
             outputs/gating_ablation_opt1_opt3.csv
             outputs/baseline_cv/*/metrics.json
+            outputs/baseline_cv/*/diagnostic_summary.json
             outputs/baseline_cv/*/diagnostics.csv
             outputs/baseline_cv/*/trajectory.png
             outputs/baseline_cv_nis_gated/*/metrics.json
+            outputs/baseline_cv_nis_gated/*/diagnostic_summary.json
             outputs/baseline_cv_nis_gated/*/diagnostics.csv
             outputs/baseline_cv_nis_gated/*/trajectory.png
             outputs/baseline_cv_nis_inflated/*/metrics.json
+            outputs/baseline_cv_nis_inflated/*/diagnostic_summary.json
             outputs/baseline_cv_nis_inflated/*/diagnostics.csv
             outputs/baseline_cv_nis_inflated/*/trajectory.png

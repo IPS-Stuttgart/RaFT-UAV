@@ -23,6 +23,7 @@ from raft_uav.cli import (
     _records_to_frame,
     _write_trajectory_plot,
 )
+from raft_uav.evaluation.diagnostics import build_diagnostic_summary
 from raft_uav.io.aerpaw import (
     normalize_radar,
     normalize_rf,
@@ -203,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     selected_radar_path = flight_output / "selected_radar.csv"
     hypotheses_path = flight_output / "hypotheses.csv"
     metrics_path = flight_output / "metrics.json"
+    diagnostic_summary_path = flight_output / "diagnostic_summary.json"
     plot_path = flight_output / "trajectory.png"
 
     estimate_frame.to_csv(estimates_path, index=False)
@@ -265,6 +267,16 @@ def main(argv: list[str] | None = None) -> int:
             "lag_s": float(args.beam_lag_s),
         }
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    diagnostic_summary = build_diagnostic_summary(
+        estimate_frame=estimate_frame,
+        selected_radar=selected_radar,
+        truth=truth,
+        max_eval_time_delta_s=args.max_eval_time_delta_s,
+    )
+    diagnostic_summary_path.write_text(
+        json.dumps(diagnostic_summary, indent=2),
+        encoding="utf-8",
+    )
     _write_trajectory_plot(plot_path, truth, rf, selected_radar, estimate_frame, flight.name)
 
     print(f"flight={flight.name}")
@@ -274,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"posterior_records={len(records)}")
     print(f"selected_radar_rows={len(selected_radar)}")
     print(f"metrics_json={metrics_path}")
+    print(f"diagnostic_summary_json={diagnostic_summary_path}")
     print(f"estimates_csv={estimates_path}")
     print(f"selected_radar_csv={selected_radar_path}")
     print(f"rmse_2d_m={metrics['position_error_2d']['rmse_m']:.3f}")
