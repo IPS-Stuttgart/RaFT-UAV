@@ -19,6 +19,16 @@ on:
         required: true
         type: string
         default: '["Opt1","Opt2","Opt3"]'
+      smoke_mode:
+        description: "Validate dataset, CLIs, and required artifacts for smoke flights; never fail on metric targets."
+        required: true
+        type: boolean
+        default: false
+      smoke_flights_json:
+        description: "JSON array of smoke flights used when smoke_mode=true."
+        required: true
+        type: string
+        default: '["Opt1","Opt3"]'
       beam_max_hypotheses:
         description: "Maximum stateful association hypotheses retained per radar frame."
         required: true
@@ -89,7 +99,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        flight: ${{ fromJSON(inputs.flights_json) }}
+        flight: ${{ fromJSON(inputs.smoke_mode && inputs.smoke_flights_json || inputs.flights_json) }}
 
     env:
       DATASET_ROOT: ${{ inputs.dataset_root }}
@@ -238,10 +248,15 @@ jobs:
 
     env:
       ENFORCE_THRESHOLDS: ${{ inputs.enforce_thresholds }}
+      SMOKE_MODE: ${{ inputs.smoke_mode }}
+      INPUT_FLIGHTS_JSON: ${{ inputs.smoke_mode && inputs.smoke_flights_json || inputs.flights_json }}
       TARGET_MEAN_RMSE_3D_M: ${{ inputs.target_mean_rmse_3d_m }}
       TARGET_OPT1_P95_3D_M: ${{ inputs.target_opt1_p95_3d_m }}
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
       - name: Download LOFO artifacts
         uses: actions/download-artifact@v8
         with:
@@ -250,48 +265,14 @@ jobs:
       - name: Aggregate metrics
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import json, os, sys
-          from pathlib import Path
-          rows = []
-          for summary_path in sorted(Path("artifacts").glob("**/summary.json")):
-              try:
-                  rows.append(json.loads(summary_path.read_text(encoding="utf-8")))
-              except Exception as exc:
-                  rows.append({"flight": str(summary_path), "status": f"failed_to_read_summary: {exc}", "rmse_3d_m": None, "p95_3d_m": None})
-          rows.sort(key=lambda item: str(item.get("flight", "")))
-          ok_rows = [row for row in rows if row.get("status") == "ok" and isinstance(row.get("rmse_3d_m"), (int, float)) and isinstance(row.get("p95_3d_m"), (int, float))]
-          mean_rmse_3d = sum(float(row["rmse_3d_m"]) for row in ok_rows) / len(ok_rows) if ok_rows else None
-          mean_p95_3d = sum(float(row["p95_3d_m"]) for row in ok_rows) / len(ok_rows) if ok_rows else None
-          opt1 = next((row for row in ok_rows if str(row.get("flight")) == "Opt1"), None)
-          summary = {"completed_flights": len(ok_rows), "mean_rmse_3d_m": mean_rmse_3d, "mean_p95_3d_m": mean_p95_3d, "flights": rows}
-          Path("lofo_aggregate_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
-              handle.write("## Stateful learned radar association LOFO summary\n\n")
-              handle.write("| Flight | Status | 3D RMSE m | 3D P95 m | Selected radar rows |\n")
-              handle.write("|---|---:|---:|---:|---:|\n")
-              for row in rows:
-                  handle.write(f"| {row.get('flight')} | {row.get('status')} | {row.get('rmse_3d_m', 'NA')} | {row.get('p95_3d_m', 'NA')} | {row.get('selected_radar_rows', 'NA')} |\n")
-              handle.write(f"\nMean 3D RMSE: **{mean_rmse_3d if mean_rmse_3d is not None else 'NA'} m**\n\n")
-              handle.write(f"Mean 3D P95: **{mean_p95_3d if mean_p95_3d is not None else 'NA'} m**\n\n")
-          if os.environ.get("ENFORCE_THRESHOLDS", "false").lower() == "true":
-              failures = []
-              target_mean_rmse = float(os.environ["TARGET_MEAN_RMSE_3D_M"])
-              target_opt1_p95 = float(os.environ["TARGET_OPT1_P95_3D_M"])
-              if mean_rmse_3d is None:
-                  failures.append("mean_rmse_3d_m is unavailable")
-              elif mean_rmse_3d > target_mean_rmse:
-                  failures.append(f"mean_rmse_3d_m={mean_rmse_3d:.3f} exceeds target {target_mean_rmse:.3f}")
-              if opt1 is None:
-                  failures.append("Opt1 metrics are unavailable")
-              elif float(opt1["p95_3d_m"]) > target_opt1_p95:
-                  failures.append(f"Opt1 p95_3d_m={float(opt1['p95_3d_m']):.3f} exceeds target {target_opt1_p95:.3f}")
-              if failures:
-                  print("Threshold failures:")
-                  for failure in failures:
-                      print(f"- {failure}")
-                  sys.exit(1)
-          PY
+          python .github/scripts/aggregate_stateful_lofo.py \
+            --artifacts-dir artifacts \
+            --output lofo_aggregate_summary.json \
+            --expected-flights-json "$INPUT_FLIGHTS_JSON" \
+            --smoke-mode "$SMOKE_MODE" \
+            --enforce-thresholds "$ENFORCE_THRESHOLDS" \
+            --target-mean-rmse-3d-m "$TARGET_MEAN_RMSE_3D_M" \
+            --target-opt1-p95-3d-m "$TARGET_OPT1_P95_3D_M"
 
       - name: Upload aggregate summary
         uses: actions/upload-artifact@v7
