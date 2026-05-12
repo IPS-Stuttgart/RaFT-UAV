@@ -93,6 +93,26 @@ def test_nis_inflation_keeps_large_outlier_but_downweights_it():
     assert np.linalg.norm(inflated[-1]["state"][:2]) < 10_000.0
 
 
+def test_safety_gate_turns_impossible_inflated_update_into_miss():
+    measurements = [
+        _measurement(0.0, 0.0, 0.0),
+        _measurement(1.0, 1.0, 0.0),
+        _measurement(2.0, 10_000.0, 10_000.0),
+    ]
+    records = run_async_cv_baseline(
+        measurements,
+        gate_thresholds_by_source={"rf": 5.0},
+        safety_gate_thresholds_by_source={"rf": 50.0},
+        robust_update_by_source={"rf": "nis-inflate"},
+    )
+
+    assert records[-1]["accepted"] is False
+    assert records[-1]["update_action"] == "missed_detection"
+    assert records[-1]["covariance_scale"] == 1.0
+    assert records[-1]["safety_gate_threshold"] == 50.0
+    assert np.linalg.norm(records[-1]["state"][:2]) < 100.0
+
+
 def test_nis_inflation_alpha_controls_outlier_pull():
     measurements = [
         _measurement(0.0, 0.0, 0.0),

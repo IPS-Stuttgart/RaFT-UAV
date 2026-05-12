@@ -87,6 +87,37 @@ def test_prediction_nis_selects_candidate_near_prediction():
     assert selected["track_id"].tolist() == [1]
 
 
+def test_safety_gate_makes_impossible_radar_association_a_miss():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 99,
+                "time_s": 2.0,
+                "east_m": 10_000.0,
+                "north_m": 10_000.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.99,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(0.0, 0.0), _rf_measurement(1.0, 1.0)],
+        radar=radar,
+        association="prediction-nis",
+        gate_thresholds_by_source={"radar": 5.0},
+        safety_gate_thresholds_by_source={"radar": 50.0},
+        robust_update_by_source={"radar": "nis-inflate"},
+    )
+
+    assert records[-1]["source"] == "radar"
+    assert records[-1]["accepted"] is False
+    assert records[-1]["update_action"] == "missed_detection"
+    assert records[-1]["covariance_scale"] == 1.0
+    assert selected.empty
+
+
 def test_track_continuity_keeps_current_track_for_small_nis_gain():
     tracker = AsyncConstantVelocityKalmanTracker(initial_position=np.zeros(3), initial_time_s=0.0)
     candidates = pd.DataFrame(

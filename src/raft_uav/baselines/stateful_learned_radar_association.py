@@ -83,6 +83,8 @@ def run_async_cv_baseline_with_stateful_learned_radar_association(
     radar_z_std_m: float = 35.0,
     gate_probabilities_by_source: Mapping[str, float | None] | None = None,
     gate_thresholds_by_source: Mapping[str, float | None] | None = None,
+    safety_gate_probabilities_by_source: Mapping[str, float | None] | None = None,
+    safety_gate_thresholds_by_source: Mapping[str, float | None] | None = None,
     robust_update_by_source: Mapping[str, str | None] | None = None,
     inflation_alpha_by_source: Mapping[str, float] | None = None,
     candidate_catprob_threshold: float | None = 0.5,
@@ -167,6 +169,11 @@ def run_async_cv_baseline_with_stateful_learned_radar_association(
                         gate_probabilities_by_source=gate_probabilities_by_source,
                         gate_thresholds_by_source=gate_thresholds_by_source,
                     ),
+                    safety_gate_threshold=_gate_threshold_for_measurement(
+                        measurement,
+                        gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                        gate_thresholds_by_source=safety_gate_thresholds_by_source,
+                    ),
                     robust_update=_robust_update_for_measurement(
                         measurement,
                         robust_update_by_source=robust_update_by_source,
@@ -230,6 +237,11 @@ def run_async_cv_baseline_with_stateful_learned_radar_association(
                         gate_probabilities_by_source=gate_probabilities_by_source,
                         gate_thresholds_by_source=gate_thresholds_by_source,
                     ),
+                    safety_gate_threshold=_gate_threshold_for_measurement(
+                        measurement,
+                        gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                        gate_thresholds_by_source=safety_gate_thresholds_by_source,
+                    ),
                     robust_update=_robust_update_for_measurement(
                         measurement,
                         robust_update_by_source=robust_update_by_source,
@@ -239,6 +251,8 @@ def run_async_cv_baseline_with_stateful_learned_radar_association(
                         inflation_alpha_by_source=inflation_alpha_by_source,
                     ),
                 )
+                if not diagnostics.accepted:
+                    continue
                 branch_cost = float(selected["stateful_association_cost"])
                 total_cost = float(hypothesis.log_cost + branch_cost)
                 selected["association_mode"] = "stateful-learned-likelihood"
@@ -290,6 +304,8 @@ def run_async_cv_baseline_with_stateful_learned_radar_association(
         covariance=covariance,
         gate_probabilities_by_source=gate_probabilities_by_source,
         gate_thresholds_by_source=gate_thresholds_by_source,
+        safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
+        safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
         robust_update_by_source=robust_update_by_source,
         inflation_alpha_by_source=inflation_alpha_by_source,
         tracker_cls=AsyncConstantVelocityKalmanTracker,
@@ -476,6 +492,8 @@ def _replay_stateful_radar_path(
     covariance: np.ndarray,
     gate_probabilities_by_source: Mapping[str, float | None] | None,
     gate_thresholds_by_source: Mapping[str, float | None] | None,
+    safety_gate_probabilities_by_source: Mapping[str, float | None] | None,
+    safety_gate_thresholds_by_source: Mapping[str, float | None] | None,
     robust_update_by_source: Mapping[str, str | None] | None,
     inflation_alpha_by_source: Mapping[str, float] | None,
     tracker_cls: Any,
@@ -503,6 +521,11 @@ def _replay_stateful_radar_path(
                     gate_probabilities_by_source=gate_probabilities_by_source,
                     gate_thresholds_by_source=gate_thresholds_by_source,
                 ),
+                safety_gate_threshold=gate_threshold_fn(
+                    measurement,
+                    gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                    gate_thresholds_by_source=safety_gate_thresholds_by_source,
+                ),
                 robust_update=robust_update_fn(
                     measurement,
                     robust_update_by_source=robust_update_by_source,
@@ -527,6 +550,11 @@ def _replay_stateful_radar_path(
                 measurement,
                 gate_probabilities_by_source=gate_probabilities_by_source,
                 gate_thresholds_by_source=gate_thresholds_by_source,
+            ),
+            safety_gate_threshold=gate_threshold_fn(
+                measurement,
+                gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                gate_thresholds_by_source=safety_gate_thresholds_by_source,
             ),
             robust_update=robust_update_fn(
                 measurement,

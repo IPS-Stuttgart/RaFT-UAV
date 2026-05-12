@@ -17,9 +17,9 @@ from raft_uav.baselines.kalman import (
     constant_velocity_matrix,
     gate_threshold_from_probability,
     measurement_matrix,
-    normalized_innovation_squared,
     white_acceleration_process_noise,
 )
+from raft_uav.baselines.update_logic import plan_linear_measurement_update
 
 RADAR_ASSOCIATION_MODES = (
     "oracle-nearest-truth",
@@ -42,6 +42,8 @@ def run_async_cv_baseline_with_radar_association(
     radar_z_std_m: float = 35.0,
     gate_probabilities_by_source: Mapping[str, float | None] | None = None,
     gate_thresholds_by_source: Mapping[str, float | None] | None = None,
+    safety_gate_probabilities_by_source: Mapping[str, float | None] | None = None,
+    safety_gate_thresholds_by_source: Mapping[str, float | None] | None = None,
     robust_update_by_source: Mapping[str, str | None] | None = None,
     inflation_alpha_by_source: Mapping[str, float] | None = None,
     track_switch_nis_ratio: float = 0.5,
@@ -120,6 +122,8 @@ def run_async_cv_baseline_with_radar_association(
             acceleration_std_mps2=acceleration_std_mps2,
             gate_probabilities_by_source=gate_probabilities_by_source,
             gate_thresholds_by_source=gate_thresholds_by_source,
+            safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
+            safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
             robust_update_by_source=robust_update_by_source,
             inflation_alpha_by_source=inflation_alpha_by_source,
             candidate_catprob_threshold=candidate_catprob_threshold,
@@ -167,6 +171,11 @@ def run_async_cv_baseline_with_radar_association(
                     gate_probabilities_by_source=gate_probabilities_by_source,
                     gate_thresholds_by_source=gate_thresholds_by_source,
                 ),
+                safety_gate_threshold=_gate_threshold_for_measurement(
+                    measurement,
+                    gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                    gate_thresholds_by_source=safety_gate_thresholds_by_source,
+                ),
                 robust_update=_robust_update_for_measurement(
                     measurement,
                     robust_update_by_source=robust_update_by_source,
@@ -212,6 +221,11 @@ def run_async_cv_baseline_with_radar_association(
                 gate_probabilities_by_source=gate_probabilities_by_source,
                 gate_thresholds_by_source=gate_thresholds_by_source,
             ),
+            safety_gate_threshold=_gate_threshold_for_measurement(
+                measurement,
+                gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                gate_thresholds_by_source=safety_gate_thresholds_by_source,
+            ),
             robust_update=_robust_update_for_measurement(
                 measurement,
                 robust_update_by_source=robust_update_by_source,
@@ -223,7 +237,7 @@ def run_async_cv_baseline_with_radar_association(
         )
         if diagnostics.accepted:
             current_track_id = _optional_track_id(selected)
-        selected_rows.append(selected)
+            selected_rows.append(selected)
         records.append(
             _record(
                 measurement,
@@ -267,6 +281,8 @@ def _run_mht_track_bank(
     acceleration_std_mps2: float,
     gate_probabilities_by_source: Mapping[str, float | None] | None,
     gate_thresholds_by_source: Mapping[str, float | None] | None,
+    safety_gate_probabilities_by_source: Mapping[str, float | None] | None,
+    safety_gate_thresholds_by_source: Mapping[str, float | None] | None,
     robust_update_by_source: Mapping[str, str | None] | None,
     inflation_alpha_by_source: Mapping[str, float] | None,
     candidate_catprob_threshold: float | None,
@@ -327,6 +343,11 @@ def _run_mht_track_bank(
                     measurement,
                     gate_probabilities_by_source=gate_probabilities_by_source,
                     gate_thresholds_by_source=gate_thresholds_by_source,
+                ),
+                safety_gate_threshold=_gate_threshold_for_measurement(
+                    measurement,
+                    gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                    gate_thresholds_by_source=safety_gate_thresholds_by_source,
                 ),
                 robust_update=_robust_update_for_measurement(
                     measurement,
@@ -457,6 +478,7 @@ def _deterministic_update_mht_hypotheses(
     measurement: TrackingMeasurement,
     *,
     gate_threshold: float | None,
+    safety_gate_threshold: float | None,
     robust_update: str | None,
     inflation_alpha: float,
 ) -> TrackingUpdateDiagnostics:
@@ -468,6 +490,7 @@ def _deterministic_update_mht_hypotheses(
             filter_obj,
             measurement,
             gate_threshold=gate_threshold,
+            safety_gate_threshold=safety_gate_threshold,
             robust_update=robust_update,
             inflation_alpha=inflation_alpha,
         )
@@ -483,6 +506,7 @@ def _update_filter_linear(
     measurement: TrackingMeasurement,
     *,
     gate_threshold: float | None,
+    safety_gate_threshold: float | None,
     robust_update: str | None,
     inflation_alpha: float,
 ) -> TrackingUpdateDiagnostics:
@@ -491,39 +515,33 @@ def _update_filter_linear(
     vector = np.asarray(measurement.vector, dtype=float).reshape(-1)
     covariance = np.asarray(measurement.covariance, dtype=float)
     observation = measurement_matrix(vector.size)
-    residual = vector - observation @ state
-    innovation_covariance = observation @ state_covariance @ observation.T + covariance
-    nis = normalized_innovation_squared(residual, innovation_covariance)
-    threshold = None if gate_threshold is None else float(gate_threshold)
-    covariance_scale = 1.0
-    update_action = "updated"
-    accepted = True
+    plan = plan_linear_measurement_update(
+        mean=state,
+        covariance_matrix=state_covariance,
+        measurement_vector=vector,
+        measurement_covariance=covariance,
+        observation_matrix=observation,
+        gate_threshold=gate_threshold,
+        safety_gate_threshold=safety_gate_threshold,
+        robust_update=robust_update,
+        inflation_alpha=inflation_alpha,
+    )
 
-    if threshold is not None and nis > threshold:
-        if robust_update == "nis-inflate":
-            covariance_scale = max(1.0, float((nis / threshold) ** float(inflation_alpha)))
-            covariance = covariance * covariance_scale
-            update_action = "inflated"
-        elif robust_update is None:
-            accepted = False
-            update_action = "rejected"
-        else:
-            raise ValueError(f"unknown robust update mode {robust_update!r}")
-
-    if accepted:
-        filter_obj.update_linear(vector, observation, covariance)
+    if plan.accepted:
+        filter_obj.update_linear(plan.vector, plan.observation, plan.covariance)
 
     return TrackingUpdateDiagnostics(
         time_s=float(measurement.time_s),
         source=measurement.source,
-        measurement_dim=vector.size,
-        accepted=bool(accepted),
-        update_action=update_action,
-        nis=float(nis),
-        gate_threshold=threshold,
-        covariance_scale=float(covariance_scale),
+        measurement_dim=plan.vector.size,
+        accepted=plan.accepted,
+        update_action=plan.update_action,
+        nis=plan.nis,
+        gate_threshold=plan.threshold,
+        safety_gate_threshold=plan.safety_threshold,
+        covariance_scale=plan.covariance_scale,
         inflation_alpha=float(inflation_alpha) if robust_update == "nis-inflate" else None,
-        residual_norm_m=float(np.linalg.norm(residual)),
+        residual_norm_m=float(np.linalg.norm(plan.residual)),
     )
 
 
@@ -583,6 +601,7 @@ def _mht_radar_diagnostics(
         update_action="mht_assigned" if selected is not None else "mht_missed",
         nis=float("nan") if selected is None else float(selected["association_nis"]),
         gate_threshold=None,
+        safety_gate_threshold=None,
         covariance_scale=1.0,
         inflation_alpha=None,
         residual_norm_m=float("nan"),

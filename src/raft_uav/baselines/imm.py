@@ -255,6 +255,7 @@ class AsyncInteractingMultipleModelTracker:
         self,
         measurement: TrackingMeasurement,
         gate_threshold: float | None = None,
+        safety_gate_threshold: float | None = None,
         robust_update: str | None = None,
         inflation_alpha: float = 1.0,
     ) -> TrackingUpdateDiagnostics:
@@ -268,6 +269,7 @@ class AsyncInteractingMultipleModelTracker:
             measurement_covariance=measurement.covariance,
             observation_matrix=measurement_matrix(measurement.vector.size),
             gate_threshold=gate_threshold,
+            safety_gate_threshold=safety_gate_threshold,
             robust_update=robust_update,
             inflation_alpha=inflation_alpha,
         )
@@ -284,6 +286,7 @@ class AsyncInteractingMultipleModelTracker:
             update_action=plan.update_action,
             nis=plan.nis,
             gate_threshold=plan.threshold,
+            safety_gate_threshold=plan.safety_threshold,
             covariance_scale=plan.covariance_scale,
             inflation_alpha=plan.inflation_alpha if robust_update == "nis-inflate" else None,
             residual_norm_m=float(np.linalg.norm(plan.residual)),
@@ -300,6 +303,8 @@ def run_async_imm_baseline(
     acceleration_std_mps2: float = 4.0,
     gate_probabilities_by_source: Mapping[str, float | None] | None = None,
     gate_thresholds_by_source: Mapping[str, float | None] | None = None,
+    safety_gate_probabilities_by_source: Mapping[str, float | None] | None = None,
+    safety_gate_thresholds_by_source: Mapping[str, float | None] | None = None,
     robust_update_by_source: Mapping[str, str | None] | None = None,
     inflation_alpha_by_source: Mapping[str, float] | None = None,
     modes: Sequence[IMMMode] | None = None,
@@ -327,6 +332,12 @@ def run_async_imm_baseline(
                 measurement,
                 gate_probabilities_by_source=gate_probabilities_by_source,
                 gate_thresholds_by_source=gate_thresholds_by_source,
+                probability_to_threshold=gate_threshold_from_probability,
+            ),
+            safety_gate_threshold=gate_threshold_for_measurement(
+                measurement,
+                gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                gate_thresholds_by_source=safety_gate_thresholds_by_source,
                 probability_to_threshold=gate_threshold_from_probability,
             ),
             robust_update=robust_update_for_measurement(

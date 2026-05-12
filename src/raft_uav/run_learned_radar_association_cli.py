@@ -93,6 +93,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--robust-update", choices=["none", "nis-inflate"], default="none")
     parser.add_argument("--rf-gate-prob", type=float, default=0.99)
     parser.add_argument("--radar-gate-prob", type=float, default=0.99)
+    parser.add_argument(
+        "--disable-association-safety-gate",
+        action="store_true",
+        help="disable the hard RF/radar safety gate that turns impossible updates into misses",
+    )
+    parser.add_argument("--rf-safety-gate-prob", type=float, default=0.9999999)
+    parser.add_argument("--radar-safety-gate-prob", type=float, default=0.9999999)
     parser.add_argument("--rf-inflation-alpha", type=float, default=1.0)
     parser.add_argument("--radar-inflation-alpha", type=float, default=1.0)
     args = parser.parse_args(argv)
@@ -123,10 +130,16 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     gate_probabilities = None
+    safety_gate_probabilities = None
     robust_updates = None
     inflation_alphas = None
     if args.enable_gating or args.robust_update != "none":
         gate_probabilities = {"rf": args.rf_gate_prob, "radar": args.radar_gate_prob}
+    if not args.disable_association_safety_gate:
+        safety_gate_probabilities = {
+            "rf": args.rf_safety_gate_prob,
+            "radar": args.radar_safety_gate_prob,
+        }
     if args.robust_update != "none":
         robust_updates = {"rf": args.robust_update, "radar": args.robust_update}
         inflation_alphas = {"rf": args.rf_inflation_alpha, "radar": args.radar_inflation_alpha}
@@ -145,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
             radar_xy_std_m=args.radar_xy_std,
             radar_z_std_m=args.radar_z_std,
             gate_probabilities_by_source=gate_probabilities,
+            safety_gate_probabilities_by_source=safety_gate_probabilities,
             robust_update_by_source=robust_updates,
             inflation_alpha_by_source=inflation_alphas,
             candidate_catprob_threshold=candidate_catprob_threshold,
@@ -169,6 +183,7 @@ def main(argv: list[str] | None = None) -> int:
             radar_xy_std_m=args.radar_xy_std,
             radar_z_std_m=args.radar_z_std,
             gate_probabilities_by_source=gate_probabilities,
+            safety_gate_probabilities_by_source=safety_gate_probabilities,
             robust_update_by_source=robust_updates,
             inflation_alpha_by_source=inflation_alphas,
             candidate_catprob_threshold=candidate_catprob_threshold,
@@ -191,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
         "update_action",
         "nis",
         "gate_threshold",
+        "safety_gate_threshold",
         "covariance_scale",
         "inflation_alpha",
         "residual_norm_m",
@@ -248,6 +264,9 @@ def main(argv: list[str] | None = None) -> int:
         robust_update=args.robust_update,
         rf_gate_prob=args.rf_gate_prob,
         radar_gate_prob=args.radar_gate_prob,
+        enable_association_safety_gate=not args.disable_association_safety_gate,
+        rf_safety_gate_prob=args.rf_safety_gate_prob,
+        radar_safety_gate_prob=args.radar_safety_gate_prob,
         rf_inflation_alpha=args.rf_inflation_alpha,
         radar_inflation_alpha=args.radar_inflation_alpha,
     )

@@ -36,6 +36,7 @@ class LinearUpdatePlan:
     innovation_covariance: np.ndarray
     nis: float
     threshold: float | None
+    safety_threshold: float | None
     covariance_scale: float
     update_action: str
     accepted: bool
@@ -122,6 +123,7 @@ def plan_linear_measurement_update(
     measurement_covariance: np.ndarray,
     observation_matrix: np.ndarray,
     gate_threshold: float | None = None,
+    safety_gate_threshold: float | None = None,
     robust_update: str | None = None,
     inflation_alpha: float = 1.0,
     student_t_dof: float = DEFAULT_STUDENT_T_DOF,
@@ -143,11 +145,15 @@ def plan_linear_measurement_update(
     innovation_covariance = observation @ posterior_covariance @ observation.T + covariance
     nis = normalized_innovation_squared(residual, innovation_covariance)
     threshold = None if gate_threshold is None else float(gate_threshold)
+    safety_threshold = None if safety_gate_threshold is None else float(safety_gate_threshold)
     covariance_scale = 1.0
     update_action = "updated"
     accepted = True
 
-    if threshold is not None and nis > threshold and robust_update is None:
+    if safety_threshold is not None and nis > safety_threshold:
+        accepted = False
+        update_action = "missed_detection"
+    elif threshold is not None and nis > threshold and robust_update is None:
         accepted = False
         update_action = "rejected"
     else:
@@ -174,6 +180,7 @@ def plan_linear_measurement_update(
         innovation_covariance=innovation_covariance,
         nis=float(nis),
         threshold=threshold,
+        safety_threshold=safety_threshold,
         covariance_scale=float(covariance_scale),
         update_action=update_action,
         accepted=bool(accepted),

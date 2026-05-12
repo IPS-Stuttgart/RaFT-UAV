@@ -15,6 +15,7 @@ from raft_uav.baselines.update_logic import (
     huber_threshold_for_measurement,
     inflation_alpha_for_measurement,
     normalized_innovation_squared,
+    plan_linear_measurement_update,
     robust_update_for_measurement,
     student_t_covariance_scale,
     student_t_dof_for_measurement,
@@ -73,6 +74,7 @@ class TrackingUpdateDiagnostics:
     update_action: str
     nis: float
     gate_threshold: float | None
+    safety_gate_threshold: float | None
     covariance_scale: float
     inflation_alpha: float | None
     residual_norm_m: float
@@ -234,6 +236,7 @@ class AsyncConstantVelocityKalmanTracker:
         self,
         measurement: TrackingMeasurement,
         gate_threshold: float | None = None,
+        safety_gate_threshold: float | None = None,
         robust_update: str | None = None,
         inflation_alpha: float = 1.0,
         student_t_dof: float = 4.0,
@@ -243,39 +246,36 @@ class AsyncConstantVelocityKalmanTracker:
 
         self.predict_to(measurement.time_s)
         observation = measurement_matrix(measurement.vector.size)
-        update_diagnostics = self.filter.update_linear_robust(
-            measurement.vector,
-            observation,
-            measurement.covariance,
+        plan = plan_linear_measurement_update(
+            mean=self.mean,
+            covariance_matrix=self.covariance,
+            measurement_vector=measurement.vector,
+            measurement_covariance=measurement.covariance,
+            observation_matrix=observation,
             robust_update=robust_update,
             gate_threshold=gate_threshold,
+            safety_gate_threshold=safety_gate_threshold,
             student_t_dof=student_t_dof,
             huber_threshold=huber_threshold,
             inflation_alpha=inflation_alpha,
-            return_diagnostics=True,
         )
-        self._sync_from_filter()
 
-        diagnostic_residual = np.asarray(
-            update_diagnostics["residual"],
-            dtype=float,
-        ).reshape(-1)
-        diagnostic_nis = float(np.asarray(update_diagnostics["nis"], dtype=float))
-        diagnostic_scale = float(np.asarray(update_diagnostics["scale"], dtype=float))
-        diagnostic_action = str(update_diagnostics.get("action", "updated"))
-        diagnostic_accepted = bool(update_diagnostics.get("accepted", True))
+        if plan.accepted:
+            self.filter.update_linear(plan.vector, plan.observation, plan.covariance)
+            self._sync_from_filter()
 
         return TrackingUpdateDiagnostics(
             time_s=float(measurement.time_s),
             source=measurement.source,
             measurement_dim=measurement.vector.size,
-            accepted=diagnostic_accepted,
-            update_action=diagnostic_action,
-            nis=diagnostic_nis,
-            gate_threshold=None if gate_threshold is None else float(gate_threshold),
-            covariance_scale=diagnostic_scale,
+            accepted=plan.accepted,
+            update_action=plan.update_action,
+            nis=plan.nis,
+            gate_threshold=plan.threshold,
+            safety_gate_threshold=plan.safety_threshold,
+            covariance_scale=plan.covariance_scale,
             inflation_alpha=float(inflation_alpha) if robust_update == "nis-inflate" else None,
-            residual_norm_m=float(np.linalg.norm(diagnostic_residual)),
+            residual_norm_m=float(np.linalg.norm(plan.residual)),
         )
 
 
@@ -284,6 +284,8 @@ def run_async_cv_baseline(
     acceleration_std_mps2: float = 4.0,
     gate_probabilities_by_source: Mapping[str, float | None] | None = None,
     gate_thresholds_by_source: Mapping[str, float | None] | None = None,
+    safety_gate_probabilities_by_source: Mapping[str, float | None] | None = None,
+    safety_gate_thresholds_by_source: Mapping[str, float | None] | None = None,
     robust_update_by_source: Mapping[str, str | None] | None = None,
     inflation_alpha_by_source: Mapping[str, float] | None = None,
     student_t_dof_by_source: Mapping[str, float] | None = None,
@@ -309,6 +311,12 @@ def run_async_cv_baseline(
                 measurement,
                 gate_probabilities_by_source=gate_probabilities_by_source,
                 gate_thresholds_by_source=gate_thresholds_by_source,
+                probability_to_threshold=gate_threshold_from_probability,
+            ),
+            safety_gate_threshold=gate_threshold_for_measurement(
+                measurement,
+                gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                gate_thresholds_by_source=safety_gate_thresholds_by_source,
                 probability_to_threshold=gate_threshold_from_probability,
             ),
             robust_update=robust_update_for_measurement(

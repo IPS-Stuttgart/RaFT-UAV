@@ -58,10 +58,17 @@ def main(argv: list[str] | None = None) -> int:
         "--robust-update",
         choices=["none", "nis-inflate"],
         default="none",
-        help="robust update rule for both RF and radar updates",
+        help="robust update rule for plausible RF and radar updates",
     )
     parser.add_argument("--rf-gate-prob", type=float, default=0.99)
     parser.add_argument("--radar-gate-prob", type=float, default=0.99)
+    parser.add_argument(
+        "--disable-association-safety-gate",
+        action="store_true",
+        help="disable the hard RF/radar safety gate that turns impossible updates into misses",
+    )
+    parser.add_argument("--rf-safety-gate-prob", type=float, default=0.9999999)
+    parser.add_argument("--radar-safety-gate-prob", type=float, default=0.9999999)
     parser.add_argument("--rf-inflation-alpha", type=float, default=1.0)
     parser.add_argument("--radar-inflation-alpha", type=float, default=1.0)
     args = parser.parse_args(argv)
@@ -81,6 +88,9 @@ def main(argv: list[str] | None = None) -> int:
         robust_update=args.robust_update,
         rf_gate_prob=args.rf_gate_prob,
         radar_gate_prob=args.radar_gate_prob,
+        enable_association_safety_gate=not args.disable_association_safety_gate,
+        rf_safety_gate_prob=args.rf_safety_gate_prob,
+        radar_safety_gate_prob=args.radar_safety_gate_prob,
         rf_inflation_alpha=args.rf_inflation_alpha,
         radar_inflation_alpha=args.radar_inflation_alpha,
     )
@@ -102,6 +112,9 @@ def run_experiment(
     robust_update: str = "none",
     rf_gate_prob: float = 0.99,
     radar_gate_prob: float = 0.99,
+    enable_association_safety_gate: bool = True,
+    rf_safety_gate_prob: float = 0.9999999,
+    radar_safety_gate_prob: float = 0.9999999,
     rf_inflation_alpha: float = 1.0,
     radar_inflation_alpha: float = 1.0,
 ) -> int:
@@ -148,8 +161,14 @@ def run_experiment(
         measurements.extend(radar_measurements_to_enu(selected_radar))
 
     gate_probabilities = None
+    safety_gate_probabilities = None
     robust_updates = None
     inflation_alphas = None
+    if enable_association_safety_gate:
+        safety_gate_probabilities = {
+            "rf": rf_safety_gate_prob,
+            "radar": radar_safety_gate_prob,
+        }
     if robust_update != "none":
         gate_probabilities = {"rf": rf_gate_prob, "radar": radar_gate_prob}
         robust_updates = {"rf": robust_update, "radar": robust_update}
@@ -160,6 +179,7 @@ def run_experiment(
             measurements,
             acceleration_std_mps2=acceleration_std,
             gate_probabilities_by_source=gate_probabilities,
+            safety_gate_probabilities_by_source=safety_gate_probabilities,
             robust_update_by_source=robust_updates,
             inflation_alpha_by_source=inflation_alphas,
             mode_switch_time_constant_s=imm_mode_switch_time_constant,
@@ -169,6 +189,7 @@ def run_experiment(
             measurements,
             acceleration_std_mps2=acceleration_std,
             gate_probabilities_by_source=gate_probabilities,
+            safety_gate_probabilities_by_source=safety_gate_probabilities,
             robust_update_by_source=robust_updates,
             inflation_alpha_by_source=inflation_alphas,
         )
@@ -184,6 +205,7 @@ def run_experiment(
         "update_action",
         "nis",
         "gate_threshold",
+        "safety_gate_threshold",
         "covariance_scale",
         "inflation_alpha",
         "residual_norm_m",
@@ -215,6 +237,9 @@ def run_experiment(
         radar_catprob_threshold=radar_catprob_threshold,
         max_eval_time_delta_s=max_eval_time_delta_s,
         robust_update=robust_update,
+        enable_association_safety_gate=enable_association_safety_gate,
+        rf_safety_gate_prob=rf_safety_gate_prob,
+        radar_safety_gate_prob=radar_safety_gate_prob,
     )
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     diagnostic_summary = build_diagnostic_summary(
@@ -253,6 +278,7 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
             "update_action": str(record.get("update_action", "updated")),
             "nis": _optional_float(record.get("nis")),
             "gate_threshold": _optional_float(record.get("gate_threshold")),
+            "safety_gate_threshold": _optional_float(record.get("safety_gate_threshold")),
             "covariance_scale": _optional_float(record.get("covariance_scale")),
             "inflation_alpha": _optional_float(record.get("inflation_alpha")),
             "residual_norm_m": _optional_float(record.get("residual_norm_m")),
@@ -286,6 +312,9 @@ def _metrics(
     radar_catprob_threshold: float,
     max_eval_time_delta_s: float,
     robust_update: str,
+    enable_association_safety_gate: bool,
+    rf_safety_gate_prob: float,
+    radar_safety_gate_prob: float,
 ) -> dict[str, Any]:
     truth_times = truth["time_s"].to_numpy(dtype=float)
     truth_positions = truth[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
@@ -321,6 +350,16 @@ def _metrics(
         "radar_selection": radar_selection,
         "radar_catprob_threshold": float(radar_catprob_threshold),
         "robust_update": None if robust_update == "none" else robust_update,
+        "association_safety_gate": {
+            "enabled": bool(enable_association_safety_gate),
+            "test_statistic": "normalized innovation squared",
+            "rf_gate_probability": float(rf_safety_gate_prob)
+            if enable_association_safety_gate
+            else None,
+            "radar_gate_probability": float(radar_safety_gate_prob)
+            if enable_association_safety_gate
+            else None,
+        },
         "max_eval_time_delta_s": float(max_eval_time_delta_s),
         "truth_rows": int(len(truth)),
         "rf_rows": int(len(rf)),

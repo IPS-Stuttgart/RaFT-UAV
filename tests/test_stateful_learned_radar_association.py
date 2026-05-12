@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
+from raft_uav.baselines.kalman import TrackingMeasurement
+from raft_uav.baselines.learned_radar_likelihood import LearnedRadarAssociationModel
 from raft_uav.baselines.stateful_learned_radar_association import (
     RadarDecisionNode,
     StatefulAssociationConfig,
@@ -10,7 +13,17 @@ from raft_uav.baselines.stateful_learned_radar_association import (
     _prune_hypotheses,
     _reconstruct_selected_rows,
     _score_stateful_candidates,
+    run_async_cv_baseline_with_stateful_learned_radar_association,
 )
+
+
+def _rf_measurement(time_s: float, east_m: float, north_m: float = 0.0) -> TrackingMeasurement:
+    return TrackingMeasurement(
+        time_s=time_s,
+        vector=np.array([east_m, north_m]),
+        covariance=np.diag([1.0, 1.0]),
+        source="rf",
+    )
 
 
 def test_stateful_cost_prefers_current_track_when_likelihoods_are_close() -> None:
@@ -106,3 +119,40 @@ def test_fixed_lag_commitment_discards_old_disagreement() -> None:
 
     assert len(committed) == 1
     assert committed[0].current_track_id == 5
+
+
+def test_stateful_beam_safety_gate_prefers_missed_detection_over_impossible_update() -> None:
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 99,
+                "time_s": 2.0,
+                "east_m": 10_000.0,
+                "north_m": 10_000.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.99,
+            }
+        ]
+    )
+    model = LearnedRadarAssociationModel(
+        feature_names=("cat_prob_uav",),
+        mean=np.array([0.0]),
+        scale=np.array([1.0]),
+        weights=np.array([10.0]),
+        intercept=-5.0,
+    )
+
+    records, selected = run_async_cv_baseline_with_stateful_learned_radar_association(
+        rf_measurements=[_rf_measurement(0.0, 0.0), _rf_measurement(1.0, 1.0)],
+        radar=radar,
+        model=model,
+        candidate_catprob_threshold=None,
+        gate_thresholds_by_source={"radar": 5.0},
+        safety_gate_thresholds_by_source={"radar": 50.0},
+        robust_update_by_source={"radar": "nis-inflate"},
+        config=StatefulAssociationConfig(missed_detection_cost=0.1),
+    )
+
+    assert [record["source"] for record in records] == ["rf", "rf"]
+    assert selected.empty

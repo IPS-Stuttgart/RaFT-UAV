@@ -40,6 +40,8 @@ def run_async_cv_baseline_with_learned_radar_association(
     radar_z_std_m: float = 35.0,
     gate_probabilities_by_source: Mapping[str, float | None] | None = None,
     gate_thresholds_by_source: Mapping[str, float | None] | None = None,
+    safety_gate_probabilities_by_source: Mapping[str, float | None] | None = None,
+    safety_gate_thresholds_by_source: Mapping[str, float | None] | None = None,
     robust_update_by_source: Mapping[str, str | None] | None = None,
     inflation_alpha_by_source: Mapping[str, float] | None = None,
     candidate_catprob_threshold: float | None = 0.5,
@@ -91,6 +93,11 @@ def run_async_cv_baseline_with_learned_radar_association(
                     gate_probabilities_by_source=gate_probabilities_by_source,
                     gate_thresholds_by_source=gate_thresholds_by_source,
                 ),
+                safety_gate_threshold=_gate_threshold_for_measurement(
+                    measurement,
+                    gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                    gate_thresholds_by_source=safety_gate_thresholds_by_source,
+                ),
                 robust_update=_robust_update_for_measurement(
                     measurement,
                     robust_update_by_source=robust_update_by_source,
@@ -129,6 +136,11 @@ def run_async_cv_baseline_with_learned_radar_association(
                 gate_probabilities_by_source=gate_probabilities_by_source,
                 gate_thresholds_by_source=gate_thresholds_by_source,
             ),
+            safety_gate_threshold=_gate_threshold_for_measurement(
+                measurement,
+                gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                gate_thresholds_by_source=safety_gate_thresholds_by_source,
+            ),
             robust_update=_robust_update_for_measurement(
                 measurement,
                 robust_update_by_source=robust_update_by_source,
@@ -140,7 +152,7 @@ def run_async_cv_baseline_with_learned_radar_association(
         )
         if diagnostics.accepted:
             current_track_id = _optional_track_id(selected)
-        selected_rows.append(selected)
+            selected_rows.append(selected)
         records.append(
             _record(
                 measurement,

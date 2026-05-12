@@ -140,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         "--robust-update",
         choices=["none", "nis-inflate"],
         default="none",
-        help="robust update rule; nis-inflate keeps high-NIS updates with inflated covariance",
+        help="robust update rule; nis-inflate keeps plausible high-NIS updates with inflated covariance",
     )
     baseline_parser.add_argument(
         "--rf-gate-prob",
@@ -153,6 +153,23 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=0.99,
         help="chi-square gate probability for 3D radar updates when gating is enabled",
+    )
+    baseline_parser.add_argument(
+        "--disable-association-safety-gate",
+        action="store_true",
+        help="disable the hard RF/radar safety gate that turns impossible updates into misses",
+    )
+    baseline_parser.add_argument(
+        "--rf-safety-gate-prob",
+        type=float,
+        default=0.9999999,
+        help="hard chi-square gate probability for rejecting impossible 2D RF updates",
+    )
+    baseline_parser.add_argument(
+        "--radar-safety-gate-prob",
+        type=float,
+        default=0.9999999,
+        help="hard chi-square gate probability for rejecting impossible 3D radar updates",
     )
     baseline_parser.add_argument(
         "--rf-inflation-alpha",
@@ -202,6 +219,9 @@ def main(argv: list[str] | None = None) -> int:
             args.robust_update,
             args.rf_gate_prob,
             args.radar_gate_prob,
+            not args.disable_association_safety_gate,
+            args.rf_safety_gate_prob,
+            args.radar_safety_gate_prob,
             args.rf_inflation_alpha,
             args.radar_inflation_alpha,
         )
@@ -256,6 +276,9 @@ def _run_baseline(
     robust_update: str,
     rf_gate_prob: float,
     radar_gate_prob: float,
+    enable_association_safety_gate: bool,
+    rf_safety_gate_prob: float,
+    radar_safety_gate_prob: float,
     rf_inflation_alpha: float,
     radar_inflation_alpha: float,
 ) -> int:
@@ -305,10 +328,16 @@ def _run_baseline(
         )
 
     gate_probabilities = None
+    safety_gate_probabilities = None
     robust_updates = None
     inflation_alphas = None
     if enable_gating or robust_update != "none":
         gate_probabilities = {"rf": rf_gate_prob, "radar": radar_gate_prob}
+    if enable_association_safety_gate:
+        safety_gate_probabilities = {
+            "rf": rf_safety_gate_prob,
+            "radar": radar_safety_gate_prob,
+        }
     if robust_update != "none":
         robust_updates = {"rf": robust_update, "radar": robust_update}
         inflation_alphas = {"rf": rf_inflation_alpha, "radar": radar_inflation_alpha}
@@ -321,6 +350,7 @@ def _run_baseline(
             truth=truth,
             acceleration_std_mps2=acceleration_std,
             gate_probabilities_by_source=gate_probabilities,
+            safety_gate_probabilities_by_source=safety_gate_probabilities,
             robust_update_by_source=robust_updates,
             inflation_alpha_by_source=inflation_alphas,
             track_switch_nis_ratio=track_switch_nis_ratio,
@@ -356,6 +386,7 @@ def _run_baseline(
             measurements,
             acceleration_std_mps2=acceleration_std,
             gate_probabilities_by_source=gate_probabilities,
+            safety_gate_probabilities_by_source=safety_gate_probabilities,
             robust_update_by_source=robust_updates,
             inflation_alpha_by_source=inflation_alphas,
         )
@@ -377,6 +408,7 @@ def _run_baseline(
         "update_action",
         "nis",
         "gate_threshold",
+        "safety_gate_threshold",
         "covariance_scale",
         "inflation_alpha",
         "residual_norm_m",
@@ -432,6 +464,9 @@ def _run_baseline(
         robust_update=robust_update,
         rf_gate_prob=rf_gate_prob,
         radar_gate_prob=radar_gate_prob,
+        enable_association_safety_gate=enable_association_safety_gate,
+        rf_safety_gate_prob=rf_safety_gate_prob,
+        radar_safety_gate_prob=radar_safety_gate_prob,
         rf_inflation_alpha=rf_inflation_alpha,
         radar_inflation_alpha=radar_inflation_alpha,
     )
@@ -498,6 +533,7 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
                 "update_action": str(record.get("update_action", "updated")),
                 "nis": _optional_float(record.get("nis")),
                 "gate_threshold": _optional_float(record.get("gate_threshold")),
+                "safety_gate_threshold": _optional_float(record.get("safety_gate_threshold")),
                 "covariance_scale": _optional_float(record.get("covariance_scale")),
                 "inflation_alpha": _optional_float(record.get("inflation_alpha")),
                 "residual_norm_m": _optional_float(record.get("residual_norm_m")),
@@ -570,6 +606,9 @@ def _baseline_metrics(
     robust_update: str,
     rf_gate_prob: float,
     radar_gate_prob: float,
+    enable_association_safety_gate: bool,
+    rf_safety_gate_prob: float,
+    radar_safety_gate_prob: float,
     rf_inflation_alpha: float,
     radar_inflation_alpha: float,
 ) -> dict[str, Any]:
@@ -671,6 +710,16 @@ def _baseline_metrics(
             else None,
             "radar_inflation_alpha": float(radar_inflation_alpha)
             if robust_update != "none"
+            else None,
+        },
+        "association_safety_gate": {
+            "enabled": bool(enable_association_safety_gate),
+            "test_statistic": "normalized innovation squared",
+            "rf_gate_probability": float(rf_safety_gate_prob)
+            if enable_association_safety_gate
+            else None,
+            "radar_gate_probability": float(radar_safety_gate_prob)
+            if enable_association_safety_gate
             else None,
         },
         "truth_rows": int(len(truth)),
