@@ -154,7 +154,7 @@ jobs:
           mkdir -p "$OUT_DIR"
           python -m raft_uav.train_radar_association_cli "$DATASET_ROOT" \
             --exclude-flight "$TEST_FLIGHT" \
-            --disable-radar-catprob-threshold \
+            --radar-catprob-threshold 0.40 \
             --output-model "$OUT_DIR/radar_assoc.json" \
             --output-examples "$OUT_DIR/radar_assoc_examples.csv"
 
@@ -165,7 +165,7 @@ jobs:
             --flight "$TEST_FLIGHT" \
             --model "$OUT_DIR/radar_assoc.json" \
             --association-mode stateful-beam \
-            --disable-radar-catprob-threshold \
+            --radar-catprob-threshold 0.40 \
             --beam-max-hypotheses "${{ inputs.beam_max_hypotheses }}" \
             --beam-max-candidates "${{ inputs.beam_max_candidates }}" \
             --beam-track-switch-cost "${{ inputs.beam_track_switch_cost }}" \
