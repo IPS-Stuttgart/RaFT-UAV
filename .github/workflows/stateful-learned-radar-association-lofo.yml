@@ -15,7 +15,7 @@ on:
         type: string
         default: ""
       flights_json:
-        description: "JSON array of held-out flights."
+        description: "Held-out flights as JSON or shorthand, e.g. [\"Opt1\",\"Opt2\"] or [Opt1,Opt2]."
         required: true
         type: string
         default: '["Opt1","Opt2","Opt3"]'
@@ -109,30 +109,46 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        flight: ${{ fromJSON(inputs.smoke_mode && '["Opt1","Opt3"]' || inputs.flights_json) }}
+        flight: [Opt1, Opt2, Opt3]
 
     env:
       DATASET_ROOT: ${{ inputs.dataset_root }}
       TEST_FLIGHT: ${{ matrix.flight }}
       OUT_SUBDIR: stateful_lofo/${{ matrix.flight }}
+      RAW_REQUESTED_FLIGHTS: ${{ inputs.smoke_mode && '[Opt1,Opt3]' || inputs.flights_json }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Decide whether to run this flight
+        run: |
+          set -euo pipefail
+          requested=",$(printf '%s' "$RAW_REQUESTED_FLIGHTS" | tr -d '[]"' | tr -d "'" | tr -d '[:space:]'),"
+          if [[ "$requested" == *",$TEST_FLIGHT,"* ]]; then
+            echo "SELECTED_FLIGHT=true" >> "$GITHUB_ENV"
+            echo "Running held-out flight $TEST_FLIGHT from RAW_REQUESTED_FLIGHTS=$RAW_REQUESTED_FLIGHTS"
+          else
+            echo "SELECTED_FLIGHT=false" >> "$GITHUB_ENV"
+            echo "Skipping held-out flight $TEST_FLIGHT; RAW_REQUESTED_FLIGHTS=$RAW_REQUESTED_FLIGHTS"
+          fi
+
       - name: Configure output directory
+        if: env.SELECTED_FLIGHT == 'true'
         run: |
           set -euo pipefail
           echo "OUT_DIR=$RUNNER_TEMP/$OUT_SUBDIR" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/$OUT_SUBDIR"
 
       - name: Set up Python
+        if: env.SELECTED_FLIGHT == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
 
       - name: Ensure AADM2025Dryad dataset
+        if: env.SELECTED_FLIGHT == 'true'
         id: dataset
         env:
           AADM2025DRYAD_DATA_URL: ${{ inputs.dataset_url || secrets.AADM2025DRYAD_DATA_URL || secrets.AADM2025DRYAD_URL || vars.AADM2025DRYAD_DATA_URL || vars.AADM2025DRYAD_URL }}
@@ -142,18 +158,21 @@ jobs:
         run: .github/scripts/ensure-aadm2025dryad-webdav.sh
 
       - name: Install package
+        if: env.SELECTED_FLIGHT == 'true'
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
       - name: Verify learned-association CLIs
+        if: env.SELECTED_FLIGHT == 'true'
         run: |
           set -euo pipefail
           python -m raft_uav.train_radar_association_cli --help >/dev/null
           python -m raft_uav.run_learned_radar_association_cli --help >/dev/null
 
       - name: Train leave-flight-out radar association model
+        if: env.SELECTED_FLIGHT == 'true'
         run: |
           set -euo pipefail
           mkdir -p "$OUT_DIR"
@@ -164,6 +183,7 @@ jobs:
             --output-examples "$OUT_DIR/radar_assoc_examples.csv"
 
       - name: Run held-out stateful-beam association
+        if: env.SELECTED_FLIGHT == 'true'
         run: |
           set -euo pipefail
           python -m raft_uav.run_learned_radar_association_cli "$DATASET_ROOT" \
@@ -185,7 +205,7 @@ jobs:
             --output-dir "$OUT_DIR/run"
 
       - name: Write per-flight summary
-        if: always()
+        if: always() && env.SELECTED_FLIGHT == 'true'
         run: |
           set -euo pipefail
           mkdir -p "$OUT_DIR"
@@ -229,7 +249,7 @@ jobs:
           PY
 
       - name: Upload LOFO artifacts
-        if: always()
+        if: always() && env.SELECTED_FLIGHT == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: stateful-lofo-${{ matrix.flight }}
@@ -248,7 +268,7 @@ jobs:
             ${{ runner.temp }}/stateful_lofo/${{ matrix.flight }}/run/*/trajectory.png
 
       - name: Remove local LOFO output
-        if: always()
+        if: always() && env.SELECTED_FLIGHT == 'true'
         run: rm -rf "$OUT_DIR"
 
   aggregate:
@@ -261,7 +281,7 @@ jobs:
     env:
       ENFORCE_THRESHOLDS: ${{ inputs.enforce_thresholds }}
       SMOKE_MODE: ${{ inputs.smoke_mode }}
-      INPUT_FLIGHTS_JSON: ${{ inputs.smoke_mode && '["Opt1","Opt3"]' || inputs.flights_json }}
+      INPUT_FLIGHTS_RAW: ${{ inputs.smoke_mode && '[Opt1,Opt3]' || inputs.flights_json }}
       TARGET_MEAN_RMSE_3D_M: ${{ inputs.target_mean_rmse_3d_m }}
       TARGET_OPT1_P95_3D_M: ${{ inputs.target_opt1_p95_3d_m }}
 
@@ -273,6 +293,38 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: artifacts
+
+      - name: Normalize requested flights
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import re
+
+          raw = os.environ.get("INPUT_FLIGHTS_RAW", "").strip()
+          allowed = {"Opt1", "Opt2", "Opt3"}
+          try:
+              parsed = json.loads(raw)
+              if not isinstance(parsed, list):
+                  raise ValueError("flight input is not a list")
+              flights = [str(item).strip() for item in parsed]
+          except Exception:
+              body = raw.strip()
+              if body.startswith("[") and body.endswith("]"):
+                  body = body[1:-1]
+              flights = [part.strip().strip("'\"") for part in body.split(",") if part.strip()]
+          unknown = [flight for flight in flights if flight not in allowed]
+          if unknown:
+              raise SystemExit(f"Unknown held-out flights {unknown}; allowed flights are {sorted(allowed)}")
+          if not flights:
+              raise SystemExit("No held-out flights requested")
+          normalized = json.dumps(flights)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write(f"INPUT_FLIGHTS_JSON={normalized}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
+              handle.write(f"Requested flights: `{normalized}`\n")
+          PY
 
       - name: Aggregate metrics
         run: |
