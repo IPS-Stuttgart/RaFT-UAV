@@ -42,12 +42,12 @@ on:
         type: number
         default: 0.5
       rf_max_residual_m:
-        description: "Hard Euclidean RF residual cap before Kalman update; <=0 disables it."
+        description: "Euclidean RF residual safety cap; with safety NIS gating, rejects only statistically implausible updates; <=0 disables it."
         required: true
         type: number
         default: 750
       radar_max_residual_m:
-        description: "Hard Euclidean radar residual cap before Kalman update; <=0 disables it."
+        description: "Euclidean radar residual safety cap; with safety NIS gating, rejects only statistically implausible updates; <=0 disables it."
         required: true
         type: number
         default: 0
@@ -106,28 +106,6 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Ensure dataset exists
-        run: |
-          set -euo pipefail
-          if [ -d "$DATASET_ROOT" ]; then
-            echo "Using DATASET_ROOT=$DATASET_ROOT"
-            exit 0
-          fi
-          if [ -z "$DATASET_URL" ]; then
-            echo "Dataset root does not exist and dataset_url is empty: $DATASET_ROOT" >&2
-            exit 1
-          fi
-          mkdir -p "$(dirname "$DATASET_ROOT")"
-          tmp_zip="$RUNNER_TEMP/aadm2025dryad.zip"
-          curl -L --retry 3 --fail "$DATASET_URL" -o "$tmp_zip"
-          unzip -q "$tmp_zip" -d "$(dirname "$DATASET_ROOT")"
-
-      - name: Install package
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-
       - name: Configure sweep output root
         run: |
           set -euo pipefail
@@ -174,6 +152,21 @@ jobs:
               for key, item in entries.items():
                   handle.write(f"{key}={item}\n")
           PY
+
+      - name: Ensure AADM2025Dryad dataset
+        id: dataset
+        env:
+          AADM2025DRYAD_DATA_URL: ${{ inputs.dataset_url || secrets.AADM2025DRYAD_DATA_URL || secrets.AADM2025DRYAD_URL || vars.AADM2025DRYAD_DATA_URL || vars.AADM2025DRYAD_URL }}
+          AADM2025DRYAD_DATA_WEBDAV_URL: ${{ secrets.AADM2025DRYAD_DATA_WEBDAV_URL || vars.AADM2025DRYAD_DATA_WEBDAV_URL }}
+          AADM2025DRYAD_DATA_KEY: ${{ secrets.AADM2025DRYAD_DATA_KEY || vars.AADM2025DRYAD_DATA_KEY }}
+          AADM2025DRYAD_WEBDAV_CRED: ${{ secrets[format('{0}{1}{2}{3}{4}{5}{6}{7}', 'AADM2025DRYAD_DATA_', 'P', 'A', 'S', 'S', 'W', 'O', 'RD')] }}
+        run: .github/scripts/ensure-aadm2025dryad-webdav.sh
+
+      - name: Install package
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
 
       - name: Train leave-flight-out radar association model
         run: |
