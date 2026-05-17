@@ -4,19 +4,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from raft_uav.evaluation.radar_oracle_diagnostics import (
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from raft_uav.evaluation.radar_oracle_diagnostics import (  # noqa: E402
     best_time_offset,
     nearest_candidate_oracle,
     summarize_oracle_selection,
     time_offset_sweep,
 )
-from raft_uav.io.aerpaw import (
+from raft_uav.io.aerpaw import (  # noqa: E402
     normalize_radar,
     normalize_truth,
     read_radar_tracks_json,
