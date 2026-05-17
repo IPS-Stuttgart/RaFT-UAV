@@ -19,7 +19,7 @@ from raft_uav.baselines.radar_association import (
     RADAR_ASSOCIATION_MODES as _BASE_RADAR_ASSOCIATION_MODES,
     run_async_cv_baseline_with_radar_association as _base_radar_association_runner,
 )
-from raft_uav.baselines.tracklet_viterbi import (
+from raft_uav.baselines.tracklet_viterbi_retention import (
     run_async_cv_baseline_with_tracklet_viterbi_association,
 )
 
