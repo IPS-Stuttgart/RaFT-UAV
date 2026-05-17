@@ -5,6 +5,12 @@ before applying motion and Fortem track-continuity costs.  This module wraps
 the base runner with a node builder that also retains per-track representatives,
 so a locally weak but sequence-consistent radar track remains available to the
 dynamic program.
+
+Unlike the base candidate pool, the retention builder treats the UAV class
+probability threshold as a soft prior instead of a hard deletion rule. Low
+``cat_prob_uav`` candidates receive an extra unary penalty but remain eligible,
+which lets motion and track-continuity evidence rescue temporarily misclassified
+Fortem tracks.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ from raft_uav.baselines import tracklet_viterbi as _base
 from raft_uav.baselines.kalman import TrackingMeasurement
 
 TrackletViterbiAssociationConfig = _base.TrackletViterbiAssociationConfig
+DEFAULT_BELOW_CATPROB_THRESHOLD_PENALTY = 3.0
 
 
 def run_async_cv_baseline_with_tracklet_viterbi_association(
@@ -80,30 +87,37 @@ def _nodes_for_radar_frame_with_track_retention(
 ) -> list[_base._ViterbiNode]:
     """Build Viterbi nodes while keeping top-K plus per-track candidates."""
 
-    from raft_uav.baselines.radar_association import _catprob_candidate_pool
-
     time_s = float(candidates["time_s"].median()) if "time_s" in candidates else float("nan")
     event_key = _base._radar_event_key(candidates)
     scored: list[tuple[float, int, _base._ViterbiNode]] = []
-    for candidate_rank, (_, row) in enumerate(
-        _catprob_candidate_pool(candidates, candidate_catprob_threshold).iterrows()
-    ):
+    for candidate_rank, (_, row) in enumerate(candidates.iterrows()):
         position = _base._row_position(row)
         if position is None:
             continue
-        anchor_nis, catprob_cost, range_cost = _base._candidate_cost_terms(
+        anchor_nis, base_catprob_cost, range_cost = _base._candidate_cost_terms(
             row=row,
             position=position,
             anchor=anchor,
             covariance=covariance,
             config=config,
         )
+        soft_threshold_cost = _catprob_threshold_penalty(
+            row,
+            candidate_catprob_threshold=candidate_catprob_threshold,
+            config=config,
+        )
+        catprob_cost = float(base_catprob_cost + soft_threshold_cost)
         unary_cost = float(config.anchor_nis_weight) * anchor_nis + catprob_cost + range_cost
+        selected_row = row.copy()
+        if candidate_catprob_threshold is not None:
+            selected_row["association_catprob_threshold"] = float(candidate_catprob_threshold)
+            selected_row["association_catprob_soft_penalty"] = float(soft_threshold_cost)
+            selected_row["association_catprob_below_threshold"] = bool(soft_threshold_cost > 0.0)
         node = _base._ViterbiNode(
             event_index=event_index,
             event_key=event_key,
             time_s=float(row.get("time_s", time_s)),
-            row=row.copy(),
+            row=selected_row,
             position=position,
             velocity=_base._row_velocity(row),
             track_id=_base._optional_track_id(row.get("track_id")),
@@ -132,6 +146,33 @@ def _nodes_for_radar_frame_with_track_retention(
         )
     )
     return nodes
+
+
+def _catprob_threshold_penalty(
+    row: pd.Series,
+    *,
+    candidate_catprob_threshold: float | None,
+    config: TrackletViterbiAssociationConfig,
+) -> float:
+    """Return a soft penalty for candidates below the class-probability threshold."""
+
+    if candidate_catprob_threshold is None or "cat_prob_uav" not in row.index:
+        return 0.0
+    threshold = float(candidate_catprob_threshold)
+    if threshold <= 0.0:
+        return 0.0
+    catprob = _base._optional_float(row.get("cat_prob_uav"))
+    if catprob is None or catprob >= threshold:
+        return 0.0
+    weight = float(
+        getattr(
+            config,
+            "below_catprob_threshold_penalty",
+            DEFAULT_BELOW_CATPROB_THRESHOLD_PENALTY,
+        )
+    )
+    normalized_gap = (threshold - max(float(catprob), 0.0)) / threshold
+    return float(weight * normalized_gap**2)
 
 
 def _retain_top_and_track_representatives(
