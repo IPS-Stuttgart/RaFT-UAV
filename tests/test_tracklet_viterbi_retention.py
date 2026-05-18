@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from raft_uav.baselines import tracklet_viterbi as _base
 from raft_uav.baselines.tracklet_viterbi import TrackletViterbiAssociationConfig
 from raft_uav.baselines.tracklet_viterbi_retention import (
     _catprob_threshold_penalty,
@@ -156,6 +157,26 @@ def test_track_support_diagnostics_are_added_to_retained_rows() -> None:
     assert float(supported.row["association_track_support_cost"]) < 0.0
     assert float(supported.row["association_track_support_count"]) == 4.0
     assert float(supported.row["association_track_support_continuity"]) == 1.0
+
+
+def test_retention_node_builder_does_not_monkey_patch_base_builder() -> None:
+    candidates = _radar_frame(
+        0,
+        [{"track_id": 1, "east_m": 0.0, "north_m": 0.0, "cat_prob_uav": 0.99}],
+    )
+    config = TrackletViterbiAssociationConfig(max_candidates_per_frame=1, range_gate_m=None)
+    original_builder = _base._nodes_for_radar_frame
+
+    _nodes_for_radar_frame_with_track_retention(
+        event_index=0,
+        candidates=candidates,
+        anchor=None,
+        covariance=np.eye(3),
+        candidate_catprob_threshold=None,
+        config=config,
+    )
+
+    assert _base._nodes_for_radar_frame is original_builder
 
 
 def test_track_aware_retention_still_keeps_missed_detection_node() -> None:
