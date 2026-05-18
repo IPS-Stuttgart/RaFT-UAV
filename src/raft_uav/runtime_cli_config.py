@@ -8,10 +8,25 @@ from typing import Any
 
 RADAR_COVARIANCE_MODES = ("fixed", "range-angle")
 TRACKLET_CATPROB_RETENTION_MODES = ("hard", "soft")
+DEFAULT_SENSOR_CLOCK_OFFSET_S = -4.0 * 60.0 * 60.0
 
 
 def add_runtime_configuration_arguments(parser: argparse.ArgumentParser) -> None:
     """Register reproducibility arguments shared by baseline-style CLIs."""
+
+    clock = parser.add_argument_group("sensor clock offset runtime configuration")
+    clock.add_argument(
+        "--rf-clock-offset-s",
+        type=float,
+        default=DEFAULT_SENSOR_CLOCK_OFFSET_S,
+        help="seconds added to RF timestamps before truth-relative normalization",
+    )
+    clock.add_argument(
+        "--radar-clock-offset-s",
+        type=float,
+        default=DEFAULT_SENSOR_CLOCK_OFFSET_S,
+        help="seconds added to radar globalTime timestamps before truth-relative normalization",
+    )
 
     radar = parser.add_argument_group("radar covariance runtime configuration")
     radar.add_argument(
@@ -80,6 +95,14 @@ def parse_runtime_config(argv: list[str]) -> tuple[dict[str, Any], list[str]]:
 
 def runtime_config_from_args(args: argparse.Namespace) -> dict[str, Any]:
     """Build a JSON-serializable runtime configuration from parsed args."""
+
+    sensor_clock_offsets = {
+        "rf_clock_offset_s": _finite_float(args.rf_clock_offset_s, "rf_clock_offset_s"),
+        "radar_clock_offset_s": _finite_float(
+            args.radar_clock_offset_s,
+            "radar_clock_offset_s",
+        ),
+    }
 
     radar = {
         "mode": str(args.radar_covariance_mode),
@@ -208,15 +231,22 @@ def runtime_config_from_args(args: argparse.Namespace) -> dict[str, Any]:
             "tracklet_max_candidates_per_track_id",
         ),
     }
-    return {"radar_covariance": radar, "tracklet_viterbi": tracklet}
+    return {
+        "sensor_clock_offsets": sensor_clock_offsets,
+        "radar_covariance": radar,
+        "tracklet_viterbi": tracklet,
+    }
 
 
 def apply_runtime_environment(runtime_config: dict[str, Any]) -> None:
     """Apply CLI runtime config to the existing RAFT_UAV_* runtime layer."""
 
+    sensor_clock_offsets = runtime_config["sensor_clock_offsets"]
     radar = runtime_config["radar_covariance"]
     tracklet = runtime_config["tracklet_viterbi"]
     mapping = {
+        "RAFT_UAV_RF_CLOCK_OFFSET_S": sensor_clock_offsets["rf_clock_offset_s"],
+        "RAFT_UAV_RADAR_CLOCK_OFFSET_S": sensor_clock_offsets["radar_clock_offset_s"],
         "RAFT_UAV_RADAR_COVARIANCE_MODE": radar["mode"],
         "RAFT_UAV_RADAR_XY_STD_M": radar["xy_std_m"],
         "RAFT_UAV_RADAR_Z_STD_M": radar["z_std_m"],
