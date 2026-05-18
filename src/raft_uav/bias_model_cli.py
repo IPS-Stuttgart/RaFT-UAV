@@ -19,7 +19,15 @@ def main(argv: list[str] | None = None) -> int:
     if bias_model is not None:
         os.environ[BIAS_MODEL_ENV] = str(bias_model)
         bias_runtime.install()
+        _refresh_base_cli_normalizers()
     return _base_cli.main(remaining)
+
+
+def _refresh_base_cli_normalizers() -> None:
+    from raft_uav.io import aerpaw
+
+    _base_cli.normalize_rf = aerpaw.normalize_rf
+    _base_cli.normalize_radar = aerpaw.normalize_radar
 
 
 def _extract_bias_model(argv: list[str]) -> tuple[Path | None, list[str]]:
