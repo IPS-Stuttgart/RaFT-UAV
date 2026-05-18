@@ -26,10 +26,12 @@ RADAR_SELECTIONS = (
 SUMMARY_COLUMNS = (
     "flight",
     "method",
+    "config",
     "radar_catprob_threshold",
     "radar_range_gate_m",
     "stable_segment_min_frames",
     "stable_segment_max_transition_speed_mps",
+    "flight_count",
     "candidate_count",
     "selected_count",
     "matched_count",
@@ -43,6 +45,35 @@ SUMMARY_COLUMNS = (
     "error_2d_rmse_m",
     "error_2d_p95_m",
     "table_path",
+)
+RANKING_COLUMNS = (
+    "rank",
+    "method",
+    "config",
+    "flight_count",
+    "radar_catprob_threshold",
+    "radar_range_gate_m",
+    "stable_segment_min_frames",
+    "stable_segment_max_transition_speed_mps",
+    "coverage",
+    "error_3d_mean_m",
+    "error_3d_rmse_m",
+    "error_3d_p95_m",
+    "error_3d_max_m",
+    "track_switches",
+    "selected_count",
+    "matched_count",
+    "candidate_count",
+)
+SUM_COLUMNS = ("candidate_count", "selected_count", "matched_count", "track_switches")
+MEAN_COLUMNS = (
+    "error_3d_mean_m",
+    "error_3d_rmse_m",
+    "error_3d_p95_m",
+    "error_3d_max_m",
+    "error_2d_mean_m",
+    "error_2d_rmse_m",
+    "error_2d_p95_m",
 )
 
 
@@ -68,6 +99,7 @@ def main() -> int:
     parser.add_argument("--range-gates-m", nargs="*", type=float, default=[800.0])
     parser.add_argument("--min-segment-frames", nargs="*", type=int, default=[75, 100, 150])
     parser.add_argument("--max-transition-speeds-mps", nargs="*", type=float, default=[35.0, 65.0, 100.0])
+    parser.add_argument("--ranking-output", type=Path, default=None)
     parser.add_argument("--truth-time-gate-s", type=float, default=2.0)
     parser.add_argument("--skip-existing", action="store_true")
     args = parser.parse_args()
@@ -92,8 +124,15 @@ def main() -> int:
                     include_fusion=False,
                 )
             rows.extend(_rows_from_table(config, table_path))
-    _write_summary(args.summary_output, rows)
-    print(f"wrote {len(rows)} rows to {args.summary_output}")
+    aggregate_rows = _aggregate_rows(rows)
+    ranking_rows = _ranking_rows(aggregate_rows)
+    ranking_output = args.ranking_output or args.summary_output.with_name(
+        f"{args.summary_output.stem}_ranking.csv"
+    )
+    _write_summary(args.summary_output, [*rows, *aggregate_rows])
+    _write_ranking(ranking_output, ranking_rows)
+    print(f"wrote {len(rows) + len(aggregate_rows)} rows to {args.summary_output}")
+    print(f"wrote {len(ranking_rows)} ranking rows to {ranking_output}")
     return 0
 
 
@@ -161,10 +200,12 @@ def _rows_from_table(
         row: dict[str, object] = {
             "flight": table_path.parent.name,
             "method": method,
+            "config": config.name,
             "radar_catprob_threshold": config.radar_catprob_threshold,
             "radar_range_gate_m": config.radar_range_gate_m,
             "stable_segment_min_frames": config.stable_segment_min_frames,
             "stable_segment_max_transition_speed_mps": config.stable_segment_max_transition_speed_mps,
+            "flight_count": 1,
             "table_path": str(table_path),
         }
         for column in SUMMARY_COLUMNS:
@@ -172,6 +213,72 @@ def _rows_from_table(
                 row[column] = _csv_value(item[column])
         rows.append({column: row.get(column, "") for column in SUMMARY_COLUMNS})
     return rows
+
+
+def _aggregate_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Return one aggregate row per config/method across flights."""
+
+    if not rows:
+        return []
+    frame = pd.DataFrame(rows)
+    group_columns = [
+        "method",
+        "config",
+        "radar_catprob_threshold",
+        "radar_range_gate_m",
+        "stable_segment_min_frames",
+        "stable_segment_max_transition_speed_mps",
+    ]
+    aggregate_rows: list[dict[str, object]] = []
+    for group_key, group in frame.groupby(group_columns, sort=False, dropna=False):
+        row = dict(zip(group_columns, group_key))
+        row["flight"] = "aggregate"
+        row["flight_count"] = int(group["flight"].nunique())
+        for column in SUM_COLUMNS:
+            row[column] = int(pd.to_numeric(group[column], errors="coerce").fillna(0).sum())
+        row["coverage"] = _safe_ratio(row["matched_count"], row["candidate_count"])
+        for column in MEAN_COLUMNS:
+            row[column] = _mean_column(group, column)
+        row["table_path"] = ""
+        aggregate_rows.append({column: row.get(column, "") for column in SUMMARY_COLUMNS})
+    return aggregate_rows
+
+
+def _ranking_rows(aggregate_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Return aggregate rows sorted by paper-facing stable-segment quality."""
+
+    ranking = sorted(
+        aggregate_rows,
+        key=lambda row: (
+            _sort_value(row.get("error_3d_mean_m")),
+            _sort_value(row.get("error_3d_p95_m")),
+            -float(row.get("coverage") or 0.0),
+        ),
+    )
+    rows: list[dict[str, object]] = []
+    for rank, row in enumerate(ranking, start=1):
+        ranked = {"rank": rank, **row}
+        rows.append({column: ranked.get(column, "") for column in RANKING_COLUMNS})
+    return rows
+
+
+def _mean_column(frame: pd.DataFrame, column: str) -> object:
+    values = pd.to_numeric(frame[column], errors="coerce").dropna()
+    if values.empty:
+        return ""
+    return round(float(values.mean()), 3)
+
+
+def _safe_ratio(numerator: object, denominator: object) -> object:
+    denominator_value = float(denominator or 0.0)
+    if denominator_value <= 0.0:
+        return ""
+    return round(float(numerator or 0.0) / denominator_value, 3)
+
+
+def _sort_value(value: object) -> float:
+    number = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    return float(number) if pd.notna(number) else float("inf")
 
 
 def _csv_value(value: Any) -> object:
@@ -187,6 +294,13 @@ def _write_summary(path: Path, rows: list[dict[str, object]]) -> None:
         raise RuntimeError("No stable radar segment ablation rows were produced")
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows, columns=list(SUMMARY_COLUMNS)).to_csv(path, index=False)
+
+
+def _write_ranking(path: Path, rows: list[dict[str, object]]) -> None:
+    if not rows:
+        raise RuntimeError("No stable radar segment ranking rows were produced")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows, columns=list(RANKING_COLUMNS)).to_csv(path, index=False)
 
 
 if __name__ == "__main__":

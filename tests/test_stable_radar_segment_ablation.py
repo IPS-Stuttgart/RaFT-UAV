@@ -78,8 +78,98 @@ def test_rows_from_table_extracts_only_stable_ablation_methods(tmp_path: Path) -
     assert len(rows) == 1
     assert rows[0]["flight"] == "Opt1"
     assert rows[0]["method"] == "radar-stable-segments-range-gated-interpolated"
+    assert rows[0]["config"] == "stable_cat0p40_rg800_min100_v65"
     assert rows[0]["error_3d_mean_m"] == 12.346
     assert rows[0]["stable_segment_min_frames"] == 100
+
+
+def test_aggregate_and_ranking_rows_sort_by_mean_then_tail() -> None:
+    rows = [
+        {
+            "flight": "Opt1",
+            "method": "radar-stable-segments-range-gated",
+            "config": "stable_a",
+            "radar_catprob_threshold": 0.4,
+            "radar_range_gate_m": 800.0,
+            "stable_segment_min_frames": 75,
+            "stable_segment_max_transition_speed_mps": 65.0,
+            "flight_count": 1,
+            "candidate_count": 10,
+            "selected_count": 8,
+            "matched_count": 8,
+            "coverage": 0.8,
+            "track_switches": 1,
+            "error_3d_mean_m": 50.0,
+            "error_3d_rmse_m": 60.0,
+            "error_3d_p95_m": 100.0,
+            "error_3d_max_m": 120.0,
+            "error_2d_mean_m": 40.0,
+            "error_2d_rmse_m": 55.0,
+            "error_2d_p95_m": 90.0,
+            "table_path": "a",
+        },
+        {
+            "flight": "Opt2",
+            "method": "radar-stable-segments-range-gated",
+            "config": "stable_a",
+            "radar_catprob_threshold": 0.4,
+            "radar_range_gate_m": 800.0,
+            "stable_segment_min_frames": 75,
+            "stable_segment_max_transition_speed_mps": 65.0,
+            "flight_count": 1,
+            "candidate_count": 20,
+            "selected_count": 12,
+            "matched_count": 10,
+            "coverage": 0.5,
+            "track_switches": 2,
+            "error_3d_mean_m": 70.0,
+            "error_3d_rmse_m": 80.0,
+            "error_3d_p95_m": 120.0,
+            "error_3d_max_m": 180.0,
+            "error_2d_mean_m": 60.0,
+            "error_2d_rmse_m": 75.0,
+            "error_2d_p95_m": 110.0,
+            "table_path": "b",
+        },
+        {
+            "flight": "Opt1",
+            "method": "radar-stable-segments-range-gated",
+            "config": "stable_b",
+            "radar_catprob_threshold": 0.5,
+            "radar_range_gate_m": 800.0,
+            "stable_segment_min_frames": 100,
+            "stable_segment_max_transition_speed_mps": 65.0,
+            "flight_count": 1,
+            "candidate_count": 10,
+            "selected_count": 10,
+            "matched_count": 10,
+            "coverage": 1.0,
+            "track_switches": 0,
+            "error_3d_mean_m": 40.0,
+            "error_3d_rmse_m": 70.0,
+            "error_3d_p95_m": 150.0,
+            "error_3d_max_m": 200.0,
+            "error_2d_mean_m": 35.0,
+            "error_2d_rmse_m": 65.0,
+            "error_2d_p95_m": 140.0,
+            "table_path": "c",
+        },
+    ]
+
+    aggregate_rows = ablation._aggregate_rows(rows)
+    ranking_rows = ablation._ranking_rows(aggregate_rows)
+
+    stable_a = next(row for row in aggregate_rows if row["config"] == "stable_a")
+    assert stable_a["flight"] == "aggregate"
+    assert stable_a["flight_count"] == 2
+    assert stable_a["candidate_count"] == 30
+    assert stable_a["selected_count"] == 20
+    assert stable_a["matched_count"] == 18
+    assert stable_a["coverage"] == 0.6
+    assert stable_a["track_switches"] == 3
+    assert stable_a["error_3d_mean_m"] == 60.0
+    assert ranking_rows[0]["rank"] == 1
+    assert ranking_rows[0]["config"] == "stable_b"
 
 
 def test_validate_args_rejects_empty_and_nonpositive_grids() -> None:
