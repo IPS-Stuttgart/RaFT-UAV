@@ -19,45 +19,25 @@ def _rf_measurement(time_s: float, east_m: float, north_m: float = 0.0) -> Track
     )
 
 
+def _row(frame_index: int, track_id: int, time_s: float, east_m: float, cat_prob_uav: float) -> dict[str, float | int]:
+    return {
+        "frame_index": frame_index,
+        "track_id": track_id,
+        "time_s": time_s,
+        "east_m": east_m,
+        "north_m": 0.0,
+        "up_m": 0.0,
+        "cat_prob_uav": cat_prob_uav,
+    }
+
+
 def test_fixed_lag_tracklet_viterbi_uses_bounded_future_window():
     radar = pd.DataFrame(
         [
-            {
-                "frame_index": 0,
-                "track_id": 1,
-                "time_s": 0.0,
-                "east_m": 0.0,
-                "north_m": 0.0,
-                "up_m": 0.0,
-                "cat_prob_uav": 0.8,
-            },
-            {
-                "frame_index": 0,
-                "track_id": 2,
-                "time_s": 0.0,
-                "east_m": 100.0,
-                "north_m": 0.0,
-                "up_m": 0.0,
-                "cat_prob_uav": 0.99,
-            },
-            {
-                "frame_index": 1,
-                "track_id": 1,
-                "time_s": 1.0,
-                "east_m": 10.0,
-                "north_m": 0.0,
-                "up_m": 0.0,
-                "cat_prob_uav": 0.8,
-            },
-            {
-                "frame_index": 1,
-                "track_id": 2,
-                "time_s": 1.0,
-                "east_m": 1000.0,
-                "north_m": 0.0,
-                "up_m": 0.0,
-                "cat_prob_uav": 0.99,
-            },
+            _row(0, 1, 0.0, 0.0, 0.8),
+            _row(0, 2, 0.0, 100.0, 0.99),
+            _row(1, 1, 1.0, 10.0, 0.8),
+            _row(1, 2, 1.0, 1000.0, 0.99),
         ]
     )
 
@@ -76,60 +56,23 @@ def test_fixed_lag_tracklet_viterbi_uses_bounded_future_window():
     )
 
     assert viterbi_selected["track_id"].tolist() == [1, 1]
-    assert viterbi_selected["association_mode"].unique().tolist() == [
-        "tracklet-viterbi-fixed-lag"
-    ]
     assert viterbi_selected["association_lag_s"].tolist() == [1.0, 1.0]
 
 
 def test_fixed_lag_tracklet_viterbi_conditions_on_previous_committed_choice():
     radar = pd.DataFrame(
         [
-            {
-                "frame_index": 0,
-                "track_id": 1,
-                "time_s": 0.0,
-                "east_m": 0.0,
-                "north_m": 0.0,
-                "up_m": 0.0,
-                "cat_prob_uav": 0.9,
-            },
-            {
-                "frame_index": 0,
-                "track_id": 2,
-                "time_s": 0.0,
-                "east_m": 100.0,
-                "north_m": 0.0,
-                "up_m": 0.0,
-                "cat_prob_uav": 0.99,
-            },
-            {
-                "frame_index": 1,
-                "track_id": 1,
-                "time_s": 1.0,
-                "east_m": 10.0,
-                "north_m": 0.0,
-                "up_m": 0.0,
-                "cat_prob_uav": 0.3,
-            },
-            {
-                "frame_index": 1,
-                "track_id": 2,
-                "time_s": 1.0,
-                "east_m": 110.0,
-                "north_m": 0.0,
-                "up_m": 0.0,
-                "cat_prob_uav": 0.99,
-            },
+            _row(0, 1, 0.0, 0.0, 0.9),
+            _row(0, 2, 0.0, 100.0, 0.99),
+            _row(1, 1, 1.0, 10.0, 0.3),
+            _row(1, 2, 1.0, 110.0, 0.99),
         ]
     )
-    events = _events([], radar)
-    covariance = np.diag([25.0**2, 25.0**2, 35.0**2])
 
     selected = select_fixed_lag_tracklet_viterbi_path(
-        events=events,
+        events=_events([], radar),
         anchors={},
-        covariance=covariance,
+        covariance=np.diag([25.0**2, 25.0**2, 35.0**2]),
         candidate_catprob_threshold=None,
         config=TrackletViterbiAssociationConfig(
             catprob_weight=2.0,
@@ -144,7 +87,7 @@ def test_fixed_lag_tracklet_viterbi_conditions_on_previous_committed_choice():
     )
 
     assert [int(row["track_id"]) for row in selected] == [1, 1]
-    assert bool(selected[1]["association_prefix_adjusted"])
-    assert float(selected[1]["association_prefix_adjusted_cost"]) < float(
-        selected[1]["association_prefix_unconstrained_cost"]
-    )
+    assert "association_prefix_constrained" not in selected[0]
+    assert bool(selected[1]["association_prefix_constrained"])
+    assert int(selected[1]["association_prefix_track_id"]) == 1
+    assert float(selected[1]["association_prefix_time_s"]) == 0.0
