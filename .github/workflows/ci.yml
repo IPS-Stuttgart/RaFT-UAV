@@ -2,34 +2,47 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  smoke:
+  test:
+    name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
+          cache: pip
 
       - name: Install package with test dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Compile package, scripts, and tests
+      - name: Compile importable code and tests
         run: |
-          python -m compileall src scripts tests
+          python -m compileall src tests
+          if [ -d scripts ]; then python -m compileall scripts; fi
 
-      - name: Lint focused research code
+      - name: Lint source and tests
         run: |
-          ruff check src scripts tests
+          if [ -d scripts ]; then ruff check src scripts tests; else ruff check src tests; fi
 
-      - name: Run focused unit tests
+      - name: Run unit tests
         run: |
-          pytest tests/test_tracklet_viterbi.py tests/test_radar_association.py
+          pytest
