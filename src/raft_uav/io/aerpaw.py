@@ -245,16 +245,22 @@ def select_radar_measurement_rows(
     truth_gate_m: float = 150.0,
     truth_time_gate_s: float = 1.0,
 ) -> pd.DataFrame:
-    """Select radar track rows for the single-UAV baseline."""
+    """Select radar track rows for the single-UAV baseline.
+
+    ``catprob`` is an online single-target selector: for each radar frame it
+    keeps at most the highest-probability UAV candidate above the threshold.
+    Use ``catprob-all`` only to reproduce the legacy behavior that fed every
+    above-threshold candidate in the same frame into the single-target filter.
+    """
 
     if radar.empty or selection == "none":
         return radar.iloc[0:0].copy()
     if selection == "all":
         return radar.copy()
     if selection == "catprob":
-        if "cat_prob_uav" not in radar.columns:
-            raise KeyError("radar catprob selection requires cat_prob_uav")
-        return radar.loc[radar["cat_prob_uav"] >= float(catprob_threshold)].copy()
+        return _catprob_best_per_frame_rows(radar, catprob_threshold)
+    if selection == "catprob-all":
+        return _catprob_threshold_rows(radar, catprob_threshold)
     if selection == "truth-gated":
         if truth is None:
             raise ValueError("truth-gated radar selection requires normalized truth")
@@ -449,6 +455,50 @@ def _flatten_track(
         "cat_prob_uav": _list_get(cat_prob, 0),
         "cat_prob_raw": cat_prob,
     }
+
+
+def _catprob_threshold_rows(radar: pd.DataFrame, catprob_threshold: float) -> pd.DataFrame:
+    if "cat_prob_uav" not in radar.columns:
+        raise KeyError("radar catprob selection requires cat_prob_uav")
+    return radar.loc[radar["cat_prob_uav"] >= float(catprob_threshold)].copy()
+
+
+def _catprob_best_per_frame_rows(
+    radar: pd.DataFrame, catprob_threshold: float
+) -> pd.DataFrame:
+    candidates = _catprob_threshold_rows(radar, catprob_threshold)
+    if candidates.empty:
+        return candidates
+
+    frame_column = _radar_frame_group_column(candidates)
+    ranked = _catprob_ranked_rows(candidates, frame_column)
+    if frame_column is None:
+        return ranked.head(1).sort_index()
+    return ranked.groupby(frame_column, sort=False, dropna=False).head(1).sort_index()
+
+
+def _catprob_ranked_rows(
+    candidates: pd.DataFrame, frame_column: str | None = None
+) -> pd.DataFrame:
+    sort_columns: list[str] = []
+    ascending: list[bool] = []
+    if frame_column is not None:
+        sort_columns.append(frame_column)
+        ascending.append(True)
+    sort_columns.append("cat_prob_uav")
+    ascending.append(False)
+    for tie_breaker in ("track_id", "track_index"):
+        if tie_breaker in candidates.columns:
+            sort_columns.append(tie_breaker)
+            ascending.append(True)
+    return candidates.sort_values(sort_columns, ascending=ascending, kind="mergesort")
+
+
+def _radar_frame_group_column(radar: pd.DataFrame) -> str | None:
+    for column in ("frame_index", "timestamp", "time_s"):
+        if column in radar.columns:
+            return column
+    return None
 
 
 def _truth_gated_rows(
