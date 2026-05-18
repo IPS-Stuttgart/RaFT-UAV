@@ -174,7 +174,7 @@ jobs:
           import csv
           import os
           from pathlib import Path
-          
+
           report = Path(os.environ["OUTPUT_DIR"]) / "sota_readiness_report.csv"
           with report.open(newline="") as fh:
               reader = csv.DictReader(fh)

@@ -1,7 +1,7 @@
 ---
 name: Stateful learned radar association sweep
 
-on:
+"on":
   workflow_dispatch:
     inputs:
       publish_to_paper_repo:
