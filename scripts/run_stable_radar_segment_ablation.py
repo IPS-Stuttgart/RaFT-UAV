@@ -58,6 +58,9 @@ RANKING_COLUMNS = (
     "stable_segment_min_frames",
     "stable_segment_max_transition_speed_mps",
     "coverage",
+    "coverage_penalized_error_3d_mean_m",
+    "coverage_penalized_error_3d_p95_m",
+    "pareto_front",
     "error_3d_mean_m",
     "error_3d_rmse_m",
     "error_3d_p95_m",
@@ -264,10 +267,13 @@ def _ranking_rows(
 ) -> list[dict[str, object]]:
     """Return aggregate rows sorted by paper-facing stable-segment quality."""
 
+    enriched_rows = _ranking_candidates(aggregate_rows, min_coverage=min_coverage)
     ranking = sorted(
-        aggregate_rows,
+        enriched_rows,
         key=lambda row: (
-            not _coverage_eligible(row, min_coverage=min_coverage),
+            not bool(row.get("eligible_for_recommendation")),
+            _sort_value(row.get("coverage_penalized_error_3d_mean_m")),
+            _sort_value(row.get("coverage_penalized_error_3d_p95_m")),
             _sort_value(row.get("error_3d_mean_m")),
             _sort_value(row.get("error_3d_p95_m")),
             -float(row.get("coverage") or 0.0),
@@ -275,17 +281,79 @@ def _ranking_rows(
     )
     rows: list[dict[str, object]] = []
     for rank, row in enumerate(ranking, start=1):
-        ranked = {
-            "rank": rank,
-            "eligible_for_recommendation": _coverage_eligible(
-                row,
-                min_coverage=min_coverage,
-            ),
-            "ranking_min_coverage": float(min_coverage),
-            **row,
-        }
+        ranked = {"rank": rank, **row}
         rows.append({column: ranked.get(column, "") for column in RANKING_COLUMNS})
     return rows
+
+
+def _ranking_candidates(
+    aggregate_rows: list[dict[str, object]],
+    *,
+    min_coverage: float,
+) -> list[dict[str, object]]:
+    """Return aggregate rows with recommendation and tradeoff diagnostics."""
+
+    pareto_flags = _pareto_front_flags(aggregate_rows)
+    rows: list[dict[str, object]] = []
+    for row, pareto_front in zip(aggregate_rows, pareto_flags):
+        coverage = row.get("coverage")
+        rows.append(
+            {
+                "eligible_for_recommendation": _coverage_eligible(
+                    row,
+                    min_coverage=min_coverage,
+                ),
+                "ranking_min_coverage": float(min_coverage),
+                "coverage_penalized_error_3d_mean_m": _coverage_penalized(
+                    row.get("error_3d_mean_m"),
+                    coverage,
+                ),
+                "coverage_penalized_error_3d_p95_m": _coverage_penalized(
+                    row.get("error_3d_p95_m"),
+                    coverage,
+                ),
+                "pareto_front": pareto_front,
+                **row,
+            }
+        )
+    return rows
+
+
+def _pareto_front_flags(rows: list[dict[str, object]]) -> list[bool]:
+    """Mark rows not dominated on mean error, tail error, and coverage."""
+
+    flags: list[bool] = []
+    for index, row in enumerate(rows):
+        mean_error = _numeric_value(row.get("error_3d_mean_m"))
+        tail_error = _numeric_value(row.get("error_3d_p95_m"))
+        coverage = _numeric_value(row.get("coverage"))
+        if mean_error is None or tail_error is None or coverage is None:
+            flags.append(False)
+            continue
+        dominated = False
+        for other_index, other in enumerate(rows):
+            if other_index == index:
+                continue
+            other_mean = _numeric_value(other.get("error_3d_mean_m"))
+            other_tail = _numeric_value(other.get("error_3d_p95_m"))
+            other_coverage = _numeric_value(other.get("coverage"))
+            if other_mean is None or other_tail is None or other_coverage is None:
+                continue
+            no_worse = (
+                other_mean <= mean_error
+                and other_tail <= tail_error
+                and other_coverage >= coverage
+            )
+            strictly_better = (
+                other_mean < mean_error
+                or other_tail < tail_error
+                or other_coverage > coverage
+            )
+            if no_worse and strictly_better:
+                dominated = True
+                break
+        flags.append(not dominated)
+    return flags
 
 
 def _mean_column(frame: pd.DataFrame, column: str) -> object:
@@ -303,13 +371,26 @@ def _safe_ratio(numerator: object, denominator: object) -> object:
 
 
 def _sort_value(value: object) -> float:
-    number = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    return float(number) if pd.notna(number) else float("inf")
+    number = _numeric_value(value)
+    return number if number is not None else float("inf")
 
 
 def _coverage_eligible(row: dict[str, object], *, min_coverage: float) -> bool:
-    coverage = pd.to_numeric(pd.Series([row.get("coverage")]), errors="coerce").iloc[0]
-    return bool(pd.notna(coverage) and float(coverage) >= float(min_coverage))
+    coverage = _numeric_value(row.get("coverage"))
+    return bool(coverage is not None and coverage >= float(min_coverage))
+
+
+def _coverage_penalized(value: object, coverage: object) -> object:
+    number = _numeric_value(value)
+    coverage_value = _numeric_value(coverage)
+    if number is None or coverage_value is None or coverage_value <= 0.0:
+        return ""
+    return round(number / coverage_value, 3)
+
+
+def _numeric_value(value: object) -> float | None:
+    number = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    return float(number) if pd.notna(number) else None
 
 
 def _csv_value(value: Any) -> object:
