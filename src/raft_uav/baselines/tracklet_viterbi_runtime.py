@@ -1,47 +1,64 @@
-"""Command-line wrapper that enables the tracklet-Viterbi radar association mode.
+"""Runtime integration for first-class tracklet-Viterbi association.
 
-This module reuses :mod:`raft_uav.cli` and patches only its in-process radar
-association dispatcher before argument parsing.  It keeps the default
-``raft-uav`` entry point unchanged while exposing the experimental
-sequence-level association method through ``raft-uav-tracklet-viterbi`` or
-``python -m raft_uav.tracklet_viterbi_cli``.
+This keeps the standard ``raft-uav run-baseline`` entry point usable with
+``--radar-association tracklet-viterbi`` without requiring the compatibility
+``raft-uav-tracklet-viterbi`` wrapper.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from typing import Any
+import os
 
 import pandas as pd
 
-from raft_uav import cli as _base_cli
-from raft_uav.baselines.kalman import TrackingMeasurement
-from raft_uav.baselines.radar_association import (
-    RADAR_ASSOCIATION_MODES as _BASE_RADAR_ASSOCIATION_MODES,
-    run_async_cv_baseline_with_radar_association as _base_radar_association_runner,
-)
 from raft_uav.baselines.tracklet_viterbi_retention import (
+    TrackletViterbiAssociationConfig,
     run_async_cv_baseline_with_tracklet_viterbi_association,
 )
 
 _TRACKLET_MODE = "tracklet-viterbi"
+_INSTALLED = False
+_ORIGINAL_RUNNER: Any = None
 
 
-def run_async_cv_baseline_with_radar_association(
+def install() -> None:
+    """Register tracklet-Viterbi as a normal radar association mode."""
+
+    global _INSTALLED, _ORIGINAL_RUNNER
+    if _INSTALLED:
+        return
+
+    from raft_uav.baselines import radar_association
+
+    _ORIGINAL_RUNNER = radar_association.run_async_cv_baseline_with_radar_association
+    if _TRACKLET_MODE not in radar_association.RADAR_ASSOCIATION_MODES:
+        radar_association.RADAR_ASSOCIATION_MODES = (
+            *radar_association.RADAR_ASSOCIATION_MODES,
+            _TRACKLET_MODE,
+        )
+    radar_association.run_async_cv_baseline_with_radar_association = (
+        _run_async_cv_baseline_with_tracklet_dispatch
+    )
+    _INSTALLED = True
+
+
+def _run_async_cv_baseline_with_tracklet_dispatch(
     *,
-    rf_measurements: Iterable[TrackingMeasurement],
+    rf_measurements: Any,
     radar: pd.DataFrame,
     association: str,
     truth: pd.DataFrame | None = None,
     acceleration_std_mps2: float = 4.0,
     radar_xy_std_m: float = 25.0,
     radar_z_std_m: float = 35.0,
-    gate_probabilities_by_source: Mapping[str, float | None] | None = None,
-    gate_thresholds_by_source: Mapping[str, float | None] | None = None,
-    safety_gate_probabilities_by_source: Mapping[str, float | None] | None = None,
-    safety_gate_thresholds_by_source: Mapping[str, float | None] | None = None,
-    robust_update_by_source: Mapping[str, str | None] | None = None,
-    inflation_alpha_by_source: Mapping[str, float] | None = None,
-    max_residual_norms_by_source: Mapping[str, float | None] | None = None,
+    gate_probabilities_by_source: Any = None,
+    gate_thresholds_by_source: Any = None,
+    safety_gate_probabilities_by_source: Any = None,
+    safety_gate_thresholds_by_source: Any = None,
+    robust_update_by_source: Any = None,
+    inflation_alpha_by_source: Any = None,
+    max_residual_norms_by_source: Any = None,
     track_switch_nis_ratio: float = 0.5,
     candidate_catprob_threshold: float | None = 0.5,
     geometry_velocity_std_mps: float = 12.0,
@@ -60,7 +77,7 @@ def run_async_cv_baseline_with_radar_association(
     truth_gate_m: float = 150.0,
     truth_time_gate_s: float = 1.0,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
-    """Dispatch to the experimental tracklet-Viterbi runner when requested."""
+    """Dispatch standard association modes or the tracklet-Viterbi runner."""
 
     if association == _TRACKLET_MODE:
         del truth, track_switch_nis_ratio, geometry_velocity_std_mps
@@ -83,9 +100,12 @@ def run_async_cv_baseline_with_radar_association(
             inflation_alpha_by_source=inflation_alpha_by_source,
             max_residual_norms_by_source=max_residual_norms_by_source,
             candidate_catprob_threshold=candidate_catprob_threshold,
+            config=_config_from_environment(),
         )
 
-    return _base_radar_association_runner(
+    if _ORIGINAL_RUNNER is None:
+        raise RuntimeError("tracklet-viterbi runtime was not installed correctly")
+    return _ORIGINAL_RUNNER(
         rf_measurements=rf_measurements,
         radar=radar,
         association=association,
@@ -120,16 +140,44 @@ def run_async_cv_baseline_with_radar_association(
     )
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run the standard CLI with the experimental association mode enabled."""
+def _config_from_environment() -> TrackletViterbiAssociationConfig:
+    """Read optional ``RAFT_UAV_TRACKLET_*`` tuning values."""
 
-    modes = tuple(dict.fromkeys((*_BASE_RADAR_ASSOCIATION_MODES, _TRACKLET_MODE)))
-    _base_cli.RADAR_ASSOCIATION_MODES = modes
-    _base_cli.run_async_cv_baseline_with_radar_association = (
-        run_async_cv_baseline_with_radar_association
+    range_gate = _env_float("RAFT_UAV_TRACKLET_RANGE_GATE_M", 850.0)
+    return TrackletViterbiAssociationConfig(
+        max_candidates_per_frame=int(_env_float("RAFT_UAV_TRACKLET_MAX_CANDIDATES", 8.0)),
+        missed_detection_cost=_env_float("RAFT_UAV_TRACKLET_MISSED_DETECTION_COST", 7.0),
+        consecutive_miss_cost=_env_float("RAFT_UAV_TRACKLET_CONSECUTIVE_MISS_COST", 1.0),
+        track_switch_cost=_env_float("RAFT_UAV_TRACKLET_TRACK_SWITCH_COST", 8.0),
+        missing_track_id_cost=_env_float("RAFT_UAV_TRACKLET_MISSING_TRACK_ID_COST", 1.0),
+        catprob_weight=_env_float("RAFT_UAV_TRACKLET_CATPROB_WEIGHT", 2.5),
+        anchor_nis_weight=_env_float("RAFT_UAV_TRACKLET_ANCHOR_NIS_WEIGHT", 0.35),
+        transition_nis_weight=_env_float("RAFT_UAV_TRACKLET_TRANSITION_NIS_WEIGHT", 1.0),
+        velocity_nis_weight=_env_float("RAFT_UAV_TRACKLET_VELOCITY_NIS_WEIGHT", 0.15),
+        transition_position_std_m=_env_float("RAFT_UAV_TRACKLET_TRANSITION_POSITION_STD_M", 40.0),
+        transition_speed_std_mps=_env_float("RAFT_UAV_TRACKLET_TRANSITION_SPEED_STD_MPS", 18.0),
+        velocity_std_mps=_env_float("RAFT_UAV_TRACKLET_VELOCITY_STD_MPS", 12.0),
+        max_speed_mps=_env_float("RAFT_UAV_TRACKLET_MAX_SPEED_MPS", 55.0),
+        max_speed_penalty=_env_float("RAFT_UAV_TRACKLET_MAX_SPEED_PENALTY", 10.0),
+        range_gate_m=None if range_gate <= 0.0 else range_gate,
+        range_gate_slack_m=_env_float("RAFT_UAV_TRACKLET_RANGE_GATE_SLACK_M", 150.0),
+        range_penalty=_env_float("RAFT_UAV_TRACKLET_RANGE_PENALTY", 10.0),
+        use_rf_anchor=_env_bool("RAFT_UAV_TRACKLET_USE_RF_ANCHOR", True),
     )
-    return _base_cli.main(argv)
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None:
+        return float(default)
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be numeric") from exc
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return bool(default)
+    return value.strip().lower() not in {"0", "false", "no", "off"}
