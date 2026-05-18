@@ -1,0 +1,257 @@
+---
+name: Stable radar segment ablation
+
+"on":
+  workflow_dispatch:
+    inputs:
+      dataset_root:
+        description: "Path on the runner to extracted AADM2025Dryad; if unusable, the workflow searches and populates the persistent dataset cache."
+        required: false
+        type: string
+        default: "/srv/datasets/AADM2025Dryad"
+      dataset_url:
+        description: "Optional direct ZIP archive URL used if the dataset is not already present on the runner."
+        required: false
+        type: string
+        default: ""
+      force_dataset_refresh:
+        description: "Remove the persistent AADM2025Dryad cache before resolving the dataset."
+        required: false
+        type: boolean
+        default: false
+      flights:
+        description: "Space-separated flight names passed to the ablation."
+        required: false
+        type: string
+        default: "Opt1 Opt2 Opt3"
+      catprob_thresholds:
+        description: "Space-separated radar catProb thresholds."
+        required: false
+        type: string
+        default: "0.4"
+      range_gates_m:
+        description: "Space-separated radar range gates in metres."
+        required: false
+        type: string
+        default: "800"
+      min_segment_frames:
+        description: "Space-separated stable-segment minimum frame counts."
+        required: false
+        type: string
+        default: "75 100 150"
+      max_transition_speeds_mps:
+        description: "Space-separated stable-segment max transition speeds in m/s."
+        required: false
+        type: string
+        default: "35 65 100"
+      ranking_min_coverage:
+        description: "Minimum aggregate coverage for recommendation-eligible rows."
+        required: false
+        type: string
+        default: "0.95"
+      truth_time_gate_s:
+        description: "Truth matching time gate in seconds for paper-table diagnostics."
+        required: false
+        type: string
+        default: "2.0"
+      skip_existing:
+        description: "Reuse existing per-flight paper-table outputs under the output directory."
+        required: false
+        type: boolean
+        default: false
+      output_dir:
+        description: "Relative path under runner.temp for ablation artifacts."
+        required: false
+        type: string
+        default: "stable_radar_segment_ablation"
+      retention_days:
+        description: "Artifact retention days."
+        required: false
+        type: number
+        default: 21
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  ablation:
+    name: Stable radar segment ablation
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 1440
+    env:
+      DATASET_ROOT: ${{ inputs.dataset_root }}
+      FLIGHTS: ${{ inputs.flights }}
+      CATPROB_THRESHOLDS: ${{ inputs.catprob_thresholds }}
+      RANGE_GATES_M: ${{ inputs.range_gates_m }}
+      MIN_SEGMENT_FRAMES: ${{ inputs.min_segment_frames }}
+      MAX_TRANSITION_SPEEDS_MPS: ${{ inputs.max_transition_speeds_mps }}
+      RANKING_MIN_COVERAGE: ${{ inputs.ranking_min_coverage }}
+      TRUTH_TIME_GATE_S: ${{ inputs.truth_time_gate_s }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Resolve output paths
+        id: paths
+        run: |
+          set -euo pipefail
+          requested_output_dir="${{ inputs.output_dir }}"
+          output_dir="${RUNNER_TEMP}/${requested_output_dir}"
+          mkdir -p "$output_dir"
+          {
+            echo "OUTPUT_DIR=$output_dir"
+            echo "SUMMARY_OUTPUT=$output_dir/stable_radar_segment_ablation.csv"
+            echo "RANKING_OUTPUT=$output_dir/stable_radar_segment_ablation_ranking.csv"
+            echo "RECOMMENDATION_OUTPUT=$output_dir/stable_radar_segment_ablation_recommendation.json"
+          } >> "$GITHUB_ENV"
+          {
+            echo "output-dir=$output_dir"
+            echo "summary-output=$output_dir/stable_radar_segment_ablation.csv"
+            echo "ranking-output=$output_dir/stable_radar_segment_ablation_ranking.csv"
+            echo "recommendation-output=$output_dir/stable_radar_segment_ablation_recommendation.json"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved OUTPUT_DIR=$output_dir"
+
+      - name: Ensure AADM2025Dryad dataset
+        id: dataset
+        uses: ./.github/actions/ensure-aadm2025dryad-dataset
+        with:
+          dataset-root: ${{ inputs.dataset_root }}
+          dataset-url: ${{ inputs.dataset_url || secrets.AADM2025DRYAD_DATA_URL || secrets.AADM2025DRYAD_URL || vars.AADM2025DRYAD_DATA_URL || vars.AADM2025DRYAD_URL }}
+          cache-key: aadm2025dryad-${{ runner.os }}-v1
+          force-redownload: ${{ inputs.force_dataset_refresh }}
+          rclone-source: ${{ secrets.AADM2025DRYAD_RCLONE_SOURCE }}
+          rclone-config: ${{ secrets.RCLONE_CONFIG }}
+          rclone-config-b64: ${{ secrets.RCLONE_CONFIG_B64 }}
+          webdav-url: ${{ secrets.AADM2025DRYAD_DATA_WEBDAV_URL || vars.AADM2025DRYAD_DATA_WEBDAV_URL }}
+          webdav-user: ${{ secrets.AADM2025DRYAD_DATA_KEY || vars.AADM2025DRYAD_DATA_KEY }}
+          webdav-password: ${{ secrets.AADM2025DRYAD_DATA_PASSWORD }}
+
+      - name: Install package
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run stable radar segment ablation
+        run: |
+          set -euo pipefail
+          args=(
+            scripts/run_stable_radar_segment_ablation.py
+            "${DATASET_ROOT}"
+            --output-dir "${OUTPUT_DIR}/runs"
+            --summary-output "${SUMMARY_OUTPUT}"
+            --ranking-output "${RANKING_OUTPUT}"
+            --recommendation-output "${RECOMMENDATION_OUTPUT}"
+            --flights ${FLIGHTS}
+            --catprob-thresholds ${CATPROB_THRESHOLDS}
+            --range-gates-m ${RANGE_GATES_M}
+            --min-segment-frames ${MIN_SEGMENT_FRAMES}
+            --max-transition-speeds-mps ${MAX_TRANSITION_SPEEDS_MPS}
+            --ranking-min-coverage "${RANKING_MIN_COVERAGE}"
+            --truth-time-gate-s "${TRUTH_TIME_GATE_S}"
+          )
+          if [ "${{ inputs.skip_existing }}" = "true" ]; then
+            args+=(--skip-existing)
+          fi
+          python "${args[@]}"
+
+      - name: Summarize ablation
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Stable radar segment ablation"
+            echo
+            echo "dataset_root=${DATASET_ROOT}"
+            echo "actual_dataset_root=${AADM2025DRYAD_DATASET_ROOT:-}"
+            echo "rf_sensor_and_radar_root=${RF_SENSOR_AND_RADAR_ROOT:-}"
+            echo "output_dir=${OUTPUT_DIR:-}"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -f "${RECOMMENDATION_OUTPUT:-}" ]; then
+            python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          recommendation = json.loads(Path(os.environ["RECOMMENDATION_OUTPUT"]).read_text())
+          ranking_path = Path(os.environ["RANKING_OUTPUT"])
+
+          with summary_path.open("a", encoding="utf-8") as handle:
+              print("### Recommendation", file=handle)
+              print("", file=handle)
+              best = recommendation.get("best_eligible") or {}
+              if best:
+                  fields = [
+                      "rank",
+                      "method",
+                      "config",
+                      "coverage",
+                      "error_3d_mean_m",
+                      "error_3d_rmse_m",
+                      "error_3d_p95_m",
+                      "track_switches",
+                  ]
+                  for field in fields:
+                      print(f"- {field}: {best.get(field, '')}", file=handle)
+              else:
+                  print("No recommendation-eligible row met the coverage threshold.", file=handle)
+              print("", file=handle)
+              print("### Top ranking rows", file=handle)
+              print("", file=handle)
+              print("```text", file=handle)
+
+          import csv
+
+          with ranking_path.open(newline="", encoding="utf-8") as csv_file:
+              rows = list(csv.DictReader(csv_file))
+          fields = [
+              "rank",
+              "eligible_for_recommendation",
+              "pareto_front",
+              "method",
+              "config",
+              "coverage",
+              "error_3d_mean_m",
+              "error_3d_p95_m",
+              "track_switches",
+          ]
+          with summary_path.open("a", encoding="utf-8") as handle:
+              for row in rows[:10]:
+                  print(" | ".join(f"{field}={row.get(field, '')}" for field in fields), file=handle)
+              print("```", file=handle)
+          PY
+          else
+            echo "No recommendation JSON was produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload ablation artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stable-radar-segment-ablation-${{ github.run_id }}
+          retention-days: ${{ inputs.retention_days }}
+          path: |
+            ${{ steps.paths.outputs.summary-output }}
+            ${{ steps.paths.outputs.ranking-output }}
+            ${{ steps.paths.outputs.recommendation-output }}
+            ${{ steps.paths.outputs.output-dir }}/runs/*/*/paper_table.csv
+            ${{ steps.paths.outputs.output-dir }}/runs/*/*/paper_table_summary.json
