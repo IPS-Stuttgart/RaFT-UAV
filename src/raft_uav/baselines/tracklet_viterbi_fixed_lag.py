@@ -2,9 +2,9 @@
 
 The offline tracklet-Viterbi baseline selects a single path over the full flight.
 This module keeps the same scoring objective but constrains each committed radar
-decision to use only a bounded look-ahead window. It is still an offline batch
-implementation for experiments, but each individual committed decision is made
-with at most ``lag_s`` seconds of future radar/RF information.
+decision to use only a bounded look-ahead window.  Committed decisions are made
+sequentially: each window is constrained by the previous committed radar choice,
+so later windows cannot silently ignore an earlier association decision.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from raft_uav.baselines.tracklet_viterbi import (
     _radar_event_key,
     _select_tracklet_viterbi_path,
     _selected_row_event_key,
+    _transition_cost,
 )
 from raft_uav.baselines.tracklet_viterbi_result import (
     _empty_replayed_rows,
@@ -130,21 +131,23 @@ def select_fixed_lag_tracklet_viterbi_path(
     config: TrackletViterbiAssociationConfig,
     lag_s: float,
 ) -> list[pd.Series]:
-    """Commit each radar frame using only a bounded future Viterbi window.
+    """Commit radar decisions with bounded future context and prefix memory.
 
-    For each radar event at time ``t``, the function solves the ordinary
-    Viterbi objective on events with ``t <= time <= t + lag_s`` and commits only
-    the decision for the first radar event in that window. This implements a
-    fixed-lag look-ahead diagnostic without using full-flight future context.
+    For each radar event at time ``t``, solve the ordinary Viterbi objective on
+    a local window ending at ``t + lag_s``.  Unlike independent per-frame window
+    solving, this routine prepends the previous committed row as a fixed prefix
+    node.  The newly committed choice must therefore be dynamically consistent
+    with the already committed sequence while still using at most ``lag_s``
+    seconds of future information.
     """
 
     if lag_s <= 0.0:
         raise ValueError("lag_s must be positive")
 
-    radar_indices = [
-        index for index, event in enumerate(events) if event.get("kind") == "radar"
-    ]
+    radar_indices = [index for index, event in enumerate(events) if event.get("kind") == "radar"]
     committed: dict[tuple[str, int | float], pd.Series] = {}
+    previous_committed: pd.Series | None = None
+
     for global_index in radar_indices:
         candidates = events[global_index]["candidates"]
         assert isinstance(candidates, pd.DataFrame)
@@ -176,10 +179,16 @@ def select_fixed_lag_tracklet_viterbi_path(
             candidate_catprob_threshold=candidate_catprob_threshold,
             config=config,
         )
-        selected_by_key = {
-            _selected_row_event_key(row): row for row in selected_window
-        }
+        selected_by_key = {_selected_row_event_key(row): row for row in selected_window}
         selected = selected_by_key.get(event_key)
+        selected = _choose_prefix_consistent_selection(
+            selected=selected,
+            candidates=candidates,
+            previous_committed=previous_committed,
+            config=config,
+            window_start_s=start_s,
+            lag_s=lag_s,
+        )
         if selected is None:
             continue
 
@@ -192,6 +201,98 @@ def select_fixed_lag_tracklet_viterbi_path(
         row["association_lag_window_radar_count"] = int(
             sum(event.get("kind") == "radar" for event in local_events)
         )
+        if previous_committed is not None:
+            row["association_prefix_track_id"] = previous_committed.get("track_id", np.nan)
+            row["association_prefix_time_s"] = previous_committed.get("time_s", np.nan)
         committed[event_key] = row
+        previous_committed = row
 
     return list(committed.values())
+
+
+def _choose_prefix_consistent_selection(
+    *,
+    selected: pd.Series | None,
+    candidates: pd.DataFrame,
+    previous_committed: pd.Series | None,
+    config: TrackletViterbiAssociationConfig,
+    window_start_s: float,
+    lag_s: float,
+) -> pd.Series | None:
+    """Return the first-window decision conditioned on the committed prefix.
+
+    If the unconstrained window solver selects a row that is already consistent
+    with the prefix, keep it.  Otherwise evaluate all rows in the current radar
+    frame using the prefix transition cost plus the original unary score and
+    commit the best prefix-compatible candidate.
+    """
+
+    if selected is None or previous_committed is None:
+        return selected
+    selected_cost = _prefix_adjusted_cost(
+        previous_committed=previous_committed,
+        candidate=selected,
+        config=config,
+    )
+    best = selected
+    best_cost = selected_cost
+    for _, candidate in candidates.iterrows():
+        candidate_cost = _prefix_adjusted_cost(
+            previous_committed=previous_committed,
+            candidate=candidate,
+            config=config,
+        )
+        if candidate_cost < best_cost:
+            best = candidate.copy()
+            best_cost = candidate_cost
+    out = best.copy()
+    out["association_prefix_adjusted_cost"] = float(best_cost)
+    out["association_prefix_unconstrained_cost"] = float(selected_cost)
+    out["association_prefix_adjusted"] = bool(_selected_row_event_key(out) != _selected_row_event_key(selected))
+    out["association_prefix_lag_window_start_s"] = float(window_start_s)
+    out["association_prefix_lag_s"] = float(lag_s)
+    return out
+
+
+def _prefix_adjusted_cost(
+    *,
+    previous_committed: pd.Series,
+    candidate: pd.Series,
+    config: TrackletViterbiAssociationConfig,
+) -> float:
+    from raft_uav.baselines.tracklet_viterbi import _ViterbiNode, _optional_track_id, _row_position, _row_velocity
+
+    previous_position = _row_position(previous_committed)
+    current_position = _row_position(candidate)
+    if previous_position is None or current_position is None:
+        return float("inf")
+    previous_node = _ViterbiNode(
+        event_index=-1,
+        event_key=_selected_row_event_key(previous_committed),
+        time_s=float(previous_committed.get("time_s", 0.0)),
+        row=previous_committed,
+        position=previous_position,
+        velocity=_row_velocity(previous_committed),
+        track_id=_optional_track_id(previous_committed.get("track_id")),
+        unary_cost=0.0,
+        anchor_nis=0.0,
+        catprob_cost=0.0,
+        range_cost=0.0,
+    )
+    current_node = _ViterbiNode(
+        event_index=-1,
+        event_key=_selected_row_event_key(candidate),
+        time_s=float(candidate.get("time_s", 0.0)),
+        row=candidate,
+        position=current_position,
+        velocity=_row_velocity(candidate),
+        track_id=_optional_track_id(candidate.get("track_id")),
+        unary_cost=0.0,
+        anchor_nis=0.0,
+        catprob_cost=0.0,
+        range_cost=0.0,
+    )
+    unary = float(candidate.get("association_score", 0.0))
+    if not np.isfinite(unary):
+        unary = 0.0
+    return float(unary + _transition_cost(previous_node, current_node, config))
