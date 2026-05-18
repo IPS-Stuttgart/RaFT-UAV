@@ -31,6 +31,7 @@ SUMMARY_COLUMNS = (
     "config",
     "radar_catprob_threshold",
     "radar_range_gate_m",
+    "radar_interpolation_max_gap_s",
     "stable_segment_min_frames",
     "stable_segment_max_transition_speed_mps",
     "flight_count",
@@ -57,6 +58,7 @@ RANKING_COLUMNS = (
     "flight_count",
     "radar_catprob_threshold",
     "radar_range_gate_m",
+    "radar_interpolation_max_gap_s",
     "stable_segment_min_frames",
     "stable_segment_max_transition_speed_mps",
     "coverage",
@@ -91,6 +93,7 @@ class StableSegmentConfig:
     name: str
     radar_catprob_threshold: float
     radar_range_gate_m: float
+    radar_interpolation_max_gap_s: float | None
     stable_segment_min_frames: int
     stable_segment_max_transition_speed_mps: float
 
@@ -104,6 +107,12 @@ def main() -> int:
     )
     parser.add_argument("--catprob-thresholds", nargs="*", type=float, default=[0.4])
     parser.add_argument("--range-gates-m", nargs="*", type=float, default=[800.0])
+    parser.add_argument(
+        "--interpolation-max-gaps-s",
+        nargs="*",
+        type=float,
+        default=[0.0, 2.0, 5.0, 10.0],
+    )
     parser.add_argument("--min-segment-frames", nargs="*", type=int, default=[75, 100, 150])
     parser.add_argument("--max-transition-speeds-mps", nargs="*", type=float, default=[35.0, 65.0, 100.0])
     parser.add_argument("--ranking-output", type=Path, default=None)
@@ -131,6 +140,7 @@ def main() -> int:
                     output_dir=run_dir,
                     radar_catprob_threshold=config.radar_catprob_threshold,
                     radar_range_gate_m=config.radar_range_gate_m,
+                    radar_interpolation_max_gap_s=config.radar_interpolation_max_gap_s,
                     stable_segment_min_frames=config.stable_segment_min_frames,
                     stable_segment_max_transition_speed_mps=config.stable_segment_max_transition_speed_mps,
                     radar_selections=RADAR_SELECTIONS,
@@ -170,6 +180,7 @@ def _validate_args(args: argparse.Namespace) -> None:
     for name in (
         "catprob_thresholds",
         "range_gates_m",
+        "interpolation_max_gaps_s",
         "min_segment_frames",
         "max_transition_speeds_mps",
     ):
@@ -179,6 +190,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--min-segment-frames values must be positive")
     if any(value <= 0.0 for value in args.range_gates_m):
         raise SystemExit("--range-gates-m values must be positive")
+    if any(value < 0.0 for value in args.interpolation_max_gaps_s):
+        raise SystemExit("--interpolation-max-gaps-s values must be nonnegative")
     if any(value <= 0.0 for value in args.max_transition_speeds_mps):
         raise SystemExit("--max-transition-speeds-mps values must be positive")
     if not 0.0 <= float(args.ranking_min_coverage) <= 1.0:
@@ -187,17 +200,19 @@ def _validate_args(args: argparse.Namespace) -> None:
 
 def _configs(args: argparse.Namespace) -> list[StableSegmentConfig]:
     configs: list[StableSegmentConfig] = []
-    for catprob, range_gate, min_frames, max_speed in itertools.product(
+    for catprob, range_gate, max_gap, min_frames, max_speed in itertools.product(
         args.catprob_thresholds,
         args.range_gates_m,
+        args.interpolation_max_gaps_s,
         args.min_segment_frames,
         args.max_transition_speeds_mps,
     ):
         configs.append(
             StableSegmentConfig(
-                name=_config_name(catprob, range_gate, min_frames, max_speed),
+                name=_config_name(catprob, range_gate, max_gap, min_frames, max_speed),
                 radar_catprob_threshold=float(catprob),
                 radar_range_gate_m=float(range_gate),
+                radar_interpolation_max_gap_s=None if float(max_gap) <= 0.0 else float(max_gap),
                 stable_segment_min_frames=int(min_frames),
                 stable_segment_max_transition_speed_mps=float(max_speed),
             )
@@ -208,12 +223,15 @@ def _configs(args: argparse.Namespace) -> list[StableSegmentConfig]:
 def _config_name(
     catprob: float,
     range_gate_m: float,
+    max_gap_s: float,
     min_frames: int,
     max_transition_speed_mps: float,
 ) -> str:
+    gap_slug = "none" if float(max_gap_s) <= 0.0 else common.slug(max_gap_s, precision=1)
     return (
         f"stable_cat{common.slug(catprob, precision=2)}"
         f"_rg{common.slug(range_gate_m, precision=0)}"
+        f"_gap{gap_slug}"
         f"_min{int(min_frames)}"
         f"_v{common.slug(max_transition_speed_mps, precision=0)}"
     )
@@ -235,6 +253,9 @@ def _rows_from_table(
             "config": config.name,
             "radar_catprob_threshold": config.radar_catprob_threshold,
             "radar_range_gate_m": config.radar_range_gate_m,
+            "radar_interpolation_max_gap_s": common.empty_if_none(
+                config.radar_interpolation_max_gap_s
+            ),
             "stable_segment_min_frames": config.stable_segment_min_frames,
             "stable_segment_max_transition_speed_mps": config.stable_segment_max_transition_speed_mps,
             "flight_count": 1,
@@ -258,6 +279,7 @@ def _aggregate_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
         "config",
         "radar_catprob_threshold",
         "radar_range_gate_m",
+        "radar_interpolation_max_gap_s",
         "stable_segment_min_frames",
         "stable_segment_max_transition_speed_mps",
     ]
