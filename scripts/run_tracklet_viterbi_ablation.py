@@ -1,4 +1,4 @@
-"""Run sequence-level tracklet-Viterbi radar association ablations."""
+"""Run controlled sequence-level tracklet-Viterbi radar association ablations."""
 
 from __future__ import annotations
 
@@ -19,14 +19,19 @@ from raft_uav.tracklet_viterbi_cli import (  # noqa: E402
     _MAX_CANDIDATES_PER_TRACK_ENV,
     _MAX_TRACK_SUPPORT_REWARD_ENV,
     _TRACK_SUPPORT_WEIGHT_ENV,
+    _TRACKLET_VARIANT_ENV,
     main as tracklet_viterbi_main,
 )
+
+_VARIANTS = ("base", "retention", "support", "range-covariance")
 
 
 @dataclass(frozen=True)
 class _Config:
     name: str
     threshold: float
+    variant: str
+    runner_variant: str
     max_candidates_per_frame: int
     max_candidate_pool_per_frame: int
     max_candidates_per_track_id: int
@@ -43,6 +48,7 @@ def main() -> int:
         default_summary_output=Path("outputs/tracklet_viterbi_ablation.csv"),
     )
     parser.add_argument("--thresholds", nargs="*", type=float, default=[0.3, 0.4, 0.5])
+    parser.add_argument("--variants", nargs="*", choices=_VARIANTS, default=list(_VARIANTS))
     parser.add_argument("--tracklet-max-candidates-per-frame", nargs="*", type=int, default=[8])
     parser.add_argument(
         "--tracklet-max-candidate-pool-per-frame",
@@ -86,6 +92,7 @@ def _configs(args: argparse.Namespace) -> list[_Config]:
     configs: list[_Config] = []
     for values in itertools.product(
         args.thresholds,
+        args.variants,
         args.tracklet_max_candidates_per_frame,
         args.tracklet_max_candidate_pool_per_frame,
         args.tracklet_max_candidates_per_track_id,
@@ -93,23 +100,40 @@ def _configs(args: argparse.Namespace) -> list[_Config]:
         args.tracklet_track_support_weights,
         args.tracklet_max_track_support_rewards,
     ):
+        variant = str(values[1])
+        if variant in {"base", "retention"} and float(values[6]) != 0.0:
+            continue
         config = _Config(
             name="",
             threshold=float(values[0]),
-            max_candidates_per_frame=int(values[1]),
-            max_candidate_pool_per_frame=int(values[2]),
-            max_candidates_per_track_id=int(values[3]),
-            below_catprob_threshold_penalty=float(values[4]),
-            track_support_weight=float(values[5]),
-            max_track_support_reward=float(values[6]),
+            variant=variant,
+            runner_variant=_runner_variant(variant),
+            max_candidates_per_frame=int(values[2]),
+            max_candidate_pool_per_frame=int(values[3]),
+            max_candidates_per_track_id=int(values[4]),
+            below_catprob_threshold_penalty=float(values[5]),
+            track_support_weight=float(values[6]) if variant in {"support", "range-covariance"} else 0.0,
+            max_track_support_reward=float(values[7]) if variant in {"support", "range-covariance"} else 0.0,
         )
         configs.append(_Config(name=_config_name(config), **_config_values(config)))
     return configs
 
 
+def _runner_variant(variant: str) -> str:
+    if variant == "base":
+        return "base"
+    if variant in {"retention", "support"}:
+        return "retention"
+    if variant == "range-covariance":
+        return "range-covariance"
+    raise ValueError(f"unknown variant {variant!r}")
+
+
 def _config_values(config: _Config) -> dict[str, object]:
     return {
         "threshold": config.threshold,
+        "variant": config.variant,
+        "runner_variant": config.runner_variant,
         "max_candidates_per_frame": config.max_candidates_per_frame,
         "max_candidate_pool_per_frame": config.max_candidate_pool_per_frame,
         "max_candidates_per_track_id": config.max_candidates_per_track_id,
@@ -129,6 +153,8 @@ def _candidate_row(
         metrics_path,
         metrics,
         extra_fields={
+            "variant": config.variant,
+            "runner_variant": config.runner_variant,
             "radar_catprob_threshold": metrics.get("radar_catprob_threshold", ""),
             "tracklet_max_candidates_per_frame": config.max_candidates_per_frame,
             "tracklet_max_candidate_pool_per_frame": config.max_candidate_pool_per_frame,
@@ -185,6 +211,7 @@ def _run_one(
 
 def _tracklet_environment(config: _Config) -> dict[str, str]:
     return {
+        _TRACKLET_VARIANT_ENV: config.runner_variant,
         _MAX_CANDIDATE_POOL_ENV: str(config.max_candidate_pool_per_frame),
         _MAX_CANDIDATES_PER_TRACK_ENV: str(config.max_candidates_per_track_id),
         _BELOW_CATPROB_PENALTY_ENV: str(config.below_catprob_threshold_penalty),
@@ -210,7 +237,8 @@ def _restore_environment(previous: dict[str, str | None]) -> None:
 def _config_name(config: _Config) -> str:
     return "_".join(
         [
-            f"tracklet_t{common.slug(config.threshold, precision=2)}",
+            f"tracklet_{config.variant.replace('-', '_')}",
+            f"t{common.slug(config.threshold, precision=2)}",
             f"k{config.max_candidates_per_frame}",
             f"pool{config.max_candidate_pool_per_frame}",
             f"perid{config.max_candidates_per_track_id}",
@@ -223,6 +251,7 @@ def _config_name(config: _Config) -> str:
 
 def _validate_args(args: argparse.Namespace) -> None:
     _require_nonempty("--thresholds", args.thresholds)
+    _require_nonempty("--variants", args.variants)
     _require_positive_ints(
         "--tracklet-max-candidates-per-frame",
         args.tracklet_max_candidates_per_frame,
