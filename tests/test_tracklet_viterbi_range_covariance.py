@@ -3,9 +3,12 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from raft_uav.baselines import radar_association as _radar_association
+from raft_uav.baselines import tracklet_viterbi as _base
 from raft_uav.baselines.tracklet_viterbi import TrackletViterbiAssociationConfig
 from raft_uav.baselines.tracklet_viterbi_range_covariance import (
     _radar_row_covariance,
+    _range_adaptive_covariance_hooks,
     _write_radar_covariance_diagnostics,
 )
 
@@ -52,6 +55,19 @@ def test_radar_covariance_diagnostics_mark_adaptive_rows() -> None:
     assert float(row["association_radar_xy_std_m"]) == 40.0
     assert float(row["association_radar_z_std_m"]) == 55.0
     assert bool(row["association_radar_covariance_adaptive"])
+
+
+def test_range_adaptive_covariance_hooks_restore_patched_functions() -> None:
+    config = TrackletViterbiAssociationConfig(range_gate_m=None)
+    original_candidate_cost_terms = _base._candidate_cost_terms
+    original_radar_row_to_measurement = _radar_association._radar_row_to_measurement
+
+    with _range_adaptive_covariance_hooks(config):
+        assert _base._candidate_cost_terms is not original_candidate_cost_terms
+        assert _radar_association._radar_row_to_measurement is not original_radar_row_to_measurement
+
+    assert _base._candidate_cost_terms is original_candidate_cost_terms
+    assert _radar_association._radar_row_to_measurement is original_radar_row_to_measurement
 
 
 class _Config:
