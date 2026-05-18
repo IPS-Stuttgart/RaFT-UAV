@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 import ablation_common as common  # noqa: E402
 from raft_uav.tracklet_viterbi_cli import (  # noqa: E402
     _BELOW_CATPROB_PENALTY_ENV,
+    _CATPROB_MODE_ENV,
     _MAX_CANDIDATE_POOL_ENV,
     _MAX_CANDIDATES_PER_FRAME_ENV,
     _MAX_CANDIDATES_PER_TRACK_ENV,
@@ -24,7 +25,10 @@ from raft_uav.tracklet_viterbi_cli import (  # noqa: E402
     main as tracklet_viterbi_main,
 )
 
-_VARIANTS = ("base", "retention", "support", "range-covariance")
+_VARIANTS = ("base", "retention-hard", "soft-catprob", "support", "range-covariance")
+_SUPPORT_VARIANTS = {"support", "range-covariance"}
+_SOFT_CATPROB_VARIANTS = {"soft-catprob", "support", "range-covariance"}
+_RETENTION_RUNNER_VARIANTS = {"retention-hard", "soft-catprob", "support"}
 
 
 @dataclass(frozen=True)
@@ -33,6 +37,7 @@ class _Config:
     threshold: float
     variant: str
     runner_variant: str
+    catprob_retention_mode: str
     max_candidates_per_frame: int
     max_candidate_pool_per_frame: int
     max_candidates_per_track_id: int
@@ -102,19 +107,22 @@ def _configs(args: argparse.Namespace) -> list[_Config]:
         args.tracklet_max_track_support_rewards,
     ):
         variant = str(values[1])
-        if variant in {"base", "retention"} and float(values[6]) != 0.0:
+        support_weight = float(values[6]) if variant in _SUPPORT_VARIANTS else 0.0
+        support_reward = float(values[7]) if variant in _SUPPORT_VARIANTS else 0.0
+        if variant not in _SUPPORT_VARIANTS and float(values[6]) != 0.0:
             continue
         config = _Config(
             name="",
             threshold=float(values[0]),
             variant=variant,
             runner_variant=_runner_variant(variant),
+            catprob_retention_mode=_catprob_retention_mode(variant),
             max_candidates_per_frame=int(values[2]),
             max_candidate_pool_per_frame=int(values[3]),
             max_candidates_per_track_id=int(values[4]),
             below_catprob_threshold_penalty=float(values[5]),
-            track_support_weight=float(values[6]) if variant in {"support", "range-covariance"} else 0.0,
-            max_track_support_reward=float(values[7]) if variant in {"support", "range-covariance"} else 0.0,
+            track_support_weight=support_weight,
+            max_track_support_reward=support_reward,
         )
         configs.append(_Config(name=_config_name(config), **_config_values(config)))
     return configs
@@ -123,11 +131,15 @@ def _configs(args: argparse.Namespace) -> list[_Config]:
 def _runner_variant(variant: str) -> str:
     if variant == "base":
         return "base"
-    if variant in {"retention", "support"}:
+    if variant in _RETENTION_RUNNER_VARIANTS:
         return "retention"
     if variant == "range-covariance":
         return "range-covariance"
     raise ValueError(f"unknown variant {variant!r}")
+
+
+def _catprob_retention_mode(variant: str) -> str:
+    return "soft" if variant in _SOFT_CATPROB_VARIANTS else "hard"
 
 
 def _config_values(config: _Config) -> dict[str, object]:
@@ -135,6 +147,7 @@ def _config_values(config: _Config) -> dict[str, object]:
         "threshold": config.threshold,
         "variant": config.variant,
         "runner_variant": config.runner_variant,
+        "catprob_retention_mode": config.catprob_retention_mode,
         "max_candidates_per_frame": config.max_candidates_per_frame,
         "max_candidate_pool_per_frame": config.max_candidate_pool_per_frame,
         "max_candidates_per_track_id": config.max_candidates_per_track_id,
@@ -156,6 +169,7 @@ def _candidate_row(
         extra_fields={
             "variant": config.variant,
             "runner_variant": config.runner_variant,
+            "tracklet_catprob_retention_mode": config.catprob_retention_mode,
             "radar_catprob_threshold": metrics.get("radar_catprob_threshold", ""),
             "tracklet_max_candidates_per_frame": config.max_candidates_per_frame,
             "tracklet_max_candidate_pool_per_frame": config.max_candidate_pool_per_frame,
@@ -213,6 +227,7 @@ def _run_one(
 def _tracklet_environment(config: _Config) -> dict[str, str]:
     return {
         _TRACKLET_VARIANT_ENV: config.runner_variant,
+        _CATPROB_MODE_ENV: config.catprob_retention_mode,
         _MAX_CANDIDATES_PER_FRAME_ENV: str(config.max_candidates_per_frame),
         _MAX_CANDIDATE_POOL_ENV: str(config.max_candidate_pool_per_frame),
         _MAX_CANDIDATES_PER_TRACK_ENV: str(config.max_candidates_per_track_id),
@@ -244,6 +259,7 @@ def _config_name(config: _Config) -> str:
             f"k{config.max_candidates_per_frame}",
             f"pool{config.max_candidate_pool_per_frame}",
             f"perid{config.max_candidates_per_track_id}",
+            f"cat{config.catprob_retention_mode}",
             f"catpen{common.slug(config.below_catprob_threshold_penalty, precision=1)}",
             f"sw{common.slug(config.track_support_weight, precision=2)}",
             f"sr{common.slug(config.max_track_support_reward, precision=1)}",
