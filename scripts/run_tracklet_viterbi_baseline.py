@@ -16,8 +16,8 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from raft_uav.baselines.smoothing import SMOOTHER_MODES, smooth_tracking_records  # noqa: E402
 from raft_uav.baselines.tracklet_viterbi import TrackletViterbiAssociationConfig  # noqa: E402
-from raft_uav.baselines.tracklet_viterbi_replay import (  # noqa: E402
-    run_async_cv_baseline_with_tracklet_viterbi_association_and_replay,
+from raft_uav.baselines.tracklet_viterbi_result import (  # noqa: E402
+    run_async_cv_baseline_with_tracklet_viterbi_result,
 )
 from raft_uav.evaluation.metrics import nearest_time_indices, position_errors_m, summarize_errors  # noqa: E402
 from raft_uav.io.aerpaw import (  # noqa: E402
@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     robust_updates = None if args.robust_update == "none" else {"rf": args.robust_update, "radar": args.robust_update}
     inflation_alphas = None if robust_updates is None else {"rf": args.rf_inflation_alpha, "radar": args.radar_inflation_alpha}
 
-    records, selected_radar, viterbi_selected_radar = run_async_cv_baseline_with_tracklet_viterbi_association_and_replay(
+    result = run_async_cv_baseline_with_tracklet_viterbi_result(
         rf_measurements=rf_measurements,
         radar=radar,
         acceleration_std_mps2=args.acceleration_std,
@@ -111,6 +111,9 @@ def main(argv: list[str] | None = None) -> int:
         candidate_catprob_threshold=args.radar_catprob_threshold,
         config=config,
     )
+    records = result.records
+    selected_radar = result.accepted_radar
+    viterbi_selected_radar = result.viterbi_selected_radar
     if not records:
         raise RuntimeError(f"{flight.name} produced no posterior records")
 
