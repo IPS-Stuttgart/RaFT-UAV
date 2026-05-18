@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import itertools
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +13,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import ablation_common as common  # noqa: E402
-from raft_uav.tracklet_viterbi_cli import main as tracklet_viterbi_main  # noqa: E402
+from raft_uav.tracklet_viterbi_cli import (  # noqa: E402
+    _BELOW_CATPROB_PENALTY_ENV,
+    _MAX_CANDIDATE_POOL_ENV,
+    _MAX_CANDIDATES_PER_TRACK_ENV,
+    _MAX_TRACK_SUPPORT_REWARD_ENV,
+    _TRACK_SUPPORT_WEIGHT_ENV,
+    main as tracklet_viterbi_main,
+)
 
 
 @dataclass(frozen=True)
@@ -152,25 +160,51 @@ def _run_one(
         "tracklet-viterbi",
         "--radar-catprob-threshold",
         str(config.threshold),
-        "--tracklet-max-candidates-per-frame",
-        str(config.max_candidates_per_frame),
-        "--tracklet-max-candidate-pool-per-frame",
-        str(config.max_candidate_pool_per_frame),
-        "--tracklet-max-candidates-per-track-id",
-        str(config.max_candidates_per_track_id),
-        "--tracklet-below-catprob-threshold-penalty",
-        str(config.below_catprob_threshold_penalty),
-        "--tracklet-track-support-weight",
-        str(config.track_support_weight),
-        "--tracklet-max-track-support-reward",
-        str(config.max_track_support_reward),
         *[str(option) for option in common.robust_update_options(args)],
         *[str(option) for option in common.smoother_options("fixed-lag", args.fixed_lag_s)],
     ]
-    print("raft-uav-tracklet-viterbi " + " ".join(cli_args), flush=True)
-    status = tracklet_viterbi_main(cli_args)
+    env_overrides = _tracklet_environment(config)
+    print(
+        " ".join(
+            [
+                *[f"{key}={value}" for key, value in env_overrides.items()],
+                "raft-uav-tracklet-viterbi",
+                *cli_args,
+            ]
+        ),
+        flush=True,
+    )
+    previous_env = _set_environment(env_overrides)
+    try:
+        status = tracklet_viterbi_main(cli_args)
+    finally:
+        _restore_environment(previous_env)
     if status != 0:
         raise RuntimeError(f"tracklet-viterbi run failed with status {status}")
+
+
+def _tracklet_environment(config: _Config) -> dict[str, str]:
+    return {
+        _MAX_CANDIDATE_POOL_ENV: str(config.max_candidate_pool_per_frame),
+        _MAX_CANDIDATES_PER_TRACK_ENV: str(config.max_candidates_per_track_id),
+        _BELOW_CATPROB_PENALTY_ENV: str(config.below_catprob_threshold_penalty),
+        _TRACK_SUPPORT_WEIGHT_ENV: str(config.track_support_weight),
+        _MAX_TRACK_SUPPORT_REWARD_ENV: str(config.max_track_support_reward),
+    }
+
+
+def _set_environment(overrides: dict[str, str]) -> dict[str, str | None]:
+    previous = {key: os.environ.get(key) for key in overrides}
+    os.environ.update(overrides)
+    return previous
+
+
+def _restore_environment(previous: dict[str, str | None]) -> None:
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
 
 
 def _config_name(config: _Config) -> str:
