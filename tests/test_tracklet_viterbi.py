@@ -6,6 +6,9 @@ from raft_uav.baselines.tracklet_viterbi import (
     TrackletViterbiAssociationConfig,
     run_async_cv_baseline_with_tracklet_viterbi_association,
 )
+from raft_uav.baselines.tracklet_viterbi_replay import (
+    run_async_cv_baseline_with_tracklet_viterbi_association_and_replay,
+)
 
 
 def _rf_measurement(time_s: float, east_m: float, north_m: float = 0.0) -> TrackingMeasurement:
@@ -70,3 +73,36 @@ def test_tracklet_viterbi_can_skip_implausible_radar_frame():
 
     assert selected["frame_index"].tolist() == [0, 2]
     assert selected["track_id"].tolist() == [1, 1]
+
+
+def test_tracklet_viterbi_can_return_rejected_viterbi_choices():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 99,
+                "time_s": 2.0,
+                "east_m": 1000.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.99,
+            },
+        ]
+    )
+
+    _, accepted, viterbi_selected = run_async_cv_baseline_with_tracklet_viterbi_association_and_replay(
+        rf_measurements=[_rf_measurement(0.0, 0.0), _rf_measurement(1.0, 0.0)],
+        radar=radar,
+        candidate_catprob_threshold=None,
+        safety_gate_thresholds_by_source={"radar": 1.0},
+        config=TrackletViterbiAssociationConfig(
+            missed_detection_cost=1_000.0,
+            anchor_nis_weight=0.0,
+            range_gate_m=None,
+        ),
+    )
+
+    assert accepted.empty
+    assert viterbi_selected["track_id"].tolist() == [99]
+    assert viterbi_selected["association_replay_accepted"].tolist() == [False]
+    assert viterbi_selected["association_replay_update_action"].tolist() == ["missed_detection"]
