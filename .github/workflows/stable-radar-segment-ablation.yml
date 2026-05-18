@@ -34,6 +34,11 @@ name: Stable radar segment ablation
         required: false
         type: string
         default: "800"
+      interpolation_max_gaps_s:
+        description: "Space-separated max interpolation gaps in seconds; 0 disables the gap cap."
+        required: false
+        type: string
+        default: "0 2 5 10"
       min_segment_frames:
         description: "Space-separated stable-segment minimum frame counts."
         required: false
@@ -91,6 +96,7 @@ jobs:
       FLIGHTS: ${{ inputs.flights }}
       CATPROB_THRESHOLDS: ${{ inputs.catprob_thresholds }}
       RANGE_GATES_M: ${{ inputs.range_gates_m }}
+      INTERPOLATION_MAX_GAPS_S: ${{ inputs.interpolation_max_gaps_s }}
       MIN_SEGMENT_FRAMES: ${{ inputs.min_segment_frames }}
       MAX_TRANSITION_SPEEDS_MPS: ${{ inputs.max_transition_speeds_mps }}
       RANKING_MIN_COVERAGE: ${{ inputs.ranking_min_coverage }}
@@ -161,6 +167,7 @@ jobs:
             --flights ${FLIGHTS}
             --catprob-thresholds ${CATPROB_THRESHOLDS}
             --range-gates-m ${RANGE_GATES_M}
+            --interpolation-max-gaps-s ${INTERPOLATION_MAX_GAPS_S}
             --min-segment-frames ${MIN_SEGMENT_FRAMES}
             --max-transition-speeds-mps ${MAX_TRANSITION_SPEEDS_MPS}
             --ranking-min-coverage "${RANKING_MIN_COVERAGE}"

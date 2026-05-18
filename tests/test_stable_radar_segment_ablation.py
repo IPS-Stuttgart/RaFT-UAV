@@ -17,6 +17,7 @@ def _args(**overrides: object) -> argparse.Namespace:
     defaults: dict[str, object] = {
         "catprob_thresholds": [0.4],
         "range_gates_m": [800.0],
+        "interpolation_max_gaps_s": [0.0],
         "min_segment_frames": [100],
         "max_transition_speeds_mps": [65.0],
         "ranking_min_coverage": 0.95,
@@ -35,8 +36,8 @@ def test_configs_build_stable_segment_grid() -> None:
     )
 
     assert len(configs) == 4
-    assert configs[0].name == "stable_cat0p40_rg800_min75_v35"
-    assert configs[-1].name == "stable_cat0p50_rg800_min100_v35"
+    assert configs[0].name == "stable_cat0p40_rg800_gapnone_min75_v35"
+    assert configs[-1].name == "stable_cat0p50_rg800_gapnone_min100_v35"
 
 
 def test_rows_from_table_extracts_only_stable_ablation_methods(tmp_path: Path) -> None:
@@ -68,9 +69,10 @@ def test_rows_from_table_extracts_only_stable_ablation_methods(tmp_path: Path) -
         ]
     ).to_csv(table_path, index=False)
     config = ablation.StableSegmentConfig(
-        name="stable_cat0p40_rg800_min100_v65",
+        name="stable_cat0p40_rg800_gapnone_min100_v65",
         radar_catprob_threshold=0.4,
         radar_range_gate_m=800.0,
+        radar_interpolation_max_gap_s=None,
         stable_segment_min_frames=100,
         stable_segment_max_transition_speed_mps=65.0,
     )
@@ -80,8 +82,9 @@ def test_rows_from_table_extracts_only_stable_ablation_methods(tmp_path: Path) -
     assert len(rows) == 1
     assert rows[0]["flight"] == "Opt1"
     assert rows[0]["method"] == "radar-stable-segments-range-gated-interpolated"
-    assert rows[0]["config"] == "stable_cat0p40_rg800_min100_v65"
+    assert rows[0]["config"] == "stable_cat0p40_rg800_gapnone_min100_v65"
     assert rows[0]["error_3d_mean_m"] == 12.346
+    assert rows[0]["radar_interpolation_max_gap_s"] == ""
     assert rows[0]["stable_segment_min_frames"] == 100
 
 
@@ -93,6 +96,7 @@ def test_aggregate_and_ranking_rows_sort_by_mean_then_tail() -> None:
             "config": "stable_a",
             "radar_catprob_threshold": 0.4,
             "radar_range_gate_m": 800.0,
+            "radar_interpolation_max_gap_s": "",
             "stable_segment_min_frames": 75,
             "stable_segment_max_transition_speed_mps": 65.0,
             "flight_count": 1,
@@ -116,6 +120,7 @@ def test_aggregate_and_ranking_rows_sort_by_mean_then_tail() -> None:
             "config": "stable_a",
             "radar_catprob_threshold": 0.4,
             "radar_range_gate_m": 800.0,
+            "radar_interpolation_max_gap_s": "",
             "stable_segment_min_frames": 75,
             "stable_segment_max_transition_speed_mps": 65.0,
             "flight_count": 1,
@@ -139,6 +144,7 @@ def test_aggregate_and_ranking_rows_sort_by_mean_then_tail() -> None:
             "config": "stable_b",
             "radar_catprob_threshold": 0.5,
             "radar_range_gate_m": 800.0,
+            "radar_interpolation_max_gap_s": "",
             "stable_segment_min_frames": 100,
             "stable_segment_max_transition_speed_mps": 65.0,
             "flight_count": 1,
@@ -162,6 +168,7 @@ def test_aggregate_and_ranking_rows_sort_by_mean_then_tail() -> None:
             "config": "low_coverage",
             "radar_catprob_threshold": 0.4,
             "radar_range_gate_m": 800.0,
+            "radar_interpolation_max_gap_s": "",
             "stable_segment_min_frames": 100,
             "stable_segment_max_transition_speed_mps": 65.0,
             "flight_count": 1,
@@ -185,6 +192,7 @@ def test_aggregate_and_ranking_rows_sort_by_mean_then_tail() -> None:
             "config": "dominated",
             "radar_catprob_threshold": 0.4,
             "radar_range_gate_m": 800.0,
+            "radar_interpolation_max_gap_s": "",
             "stable_segment_min_frames": 100,
             "stable_segment_max_transition_speed_mps": 65.0,
             "flight_count": 1,
@@ -289,6 +297,7 @@ def test_validate_args_rejects_empty_and_nonpositive_grids() -> None:
     for kwargs in (
         {"catprob_thresholds": []},
         {"range_gates_m": [0.0]},
+        {"interpolation_max_gaps_s": [-1.0]},
         {"min_segment_frames": [0]},
         {"max_transition_speeds_mps": [0.0]},
         {"ranking_min_coverage": 1.1},
