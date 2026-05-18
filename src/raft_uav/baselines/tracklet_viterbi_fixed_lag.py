@@ -2,9 +2,10 @@
 
 The offline tracklet-Viterbi baseline selects a single path over the full flight.
 This module keeps the same scoring objective but constrains each committed radar
-decision to use only a bounded look-ahead window. It is still an offline batch
-implementation for experiments, but each individual committed decision is made
-with at most ``lag_s`` seconds of future radar/RF information.
+decision to use only a bounded look-ahead window.  Committed decisions are made
+sequentially: each window is prepended with the previous committed radar choice
+as a forced prefix candidate, so later decisions remain dynamically consistent
+with earlier fixed-lag commitments.
 """
 
 from __future__ import annotations
@@ -130,21 +131,23 @@ def select_fixed_lag_tracklet_viterbi_path(
     config: TrackletViterbiAssociationConfig,
     lag_s: float,
 ) -> list[pd.Series]:
-    """Commit each radar frame using only a bounded future Viterbi window.
+    """Commit radar decisions with bounded future context and prefix memory.
 
-    For each radar event at time ``t``, the function solves the ordinary
-    Viterbi objective on events with ``t <= time <= t + lag_s`` and commits only
-    the decision for the first radar event in that window. This implements a
-    fixed-lag look-ahead diagnostic without using full-flight future context.
+    For each radar event at time ``t``, solve the ordinary Viterbi objective on
+    a local window ending at ``t + lag_s``.  When a previous radar decision has
+    already been committed, it is prepended to the local window as a single
+    zero-cost prefix candidate.  The first newly committed choice is therefore
+    selected by a proper prefix-constrained Viterbi objective while still using
+    at most ``lag_s`` seconds of future information.
     """
 
     if lag_s <= 0.0:
         raise ValueError("lag_s must be positive")
 
-    radar_indices = [
-        index for index, event in enumerate(events) if event.get("kind") == "radar"
-    ]
+    radar_indices = [index for index, event in enumerate(events) if event.get("kind") == "radar"]
     committed: dict[tuple[str, int | float], pd.Series] = {}
+    previous_committed: pd.Series | None = None
+
     for global_index in radar_indices:
         candidates = events[global_index]["candidates"]
         assert isinstance(candidates, pd.DataFrame)
@@ -169,6 +172,12 @@ def select_fixed_lag_tracklet_viterbi_path(
             for local_index, global_index in enumerate(window_indices)
             if global_index in anchors
         }
+        prefix_time_s = None
+        if previous_committed is not None:
+            prefix_time_s = float(previous_committed.get("time_s", start_s))
+            local_events = [_prefix_event(previous_committed)] + local_events
+            local_anchors = {local_index + 1: anchor for local_index, anchor in local_anchors.items()}
+
         selected_window = _select_tracklet_viterbi_path(
             events=local_events,
             anchors=local_anchors,
@@ -176,9 +185,7 @@ def select_fixed_lag_tracklet_viterbi_path(
             candidate_catprob_threshold=candidate_catprob_threshold,
             config=config,
         )
-        selected_by_key = {
-            _selected_row_event_key(row): row for row in selected_window
-        }
+        selected_by_key = {_selected_row_event_key(row): row for row in selected_window}
         selected = selected_by_key.get(event_key)
         if selected is None:
             continue
@@ -192,6 +199,26 @@ def select_fixed_lag_tracklet_viterbi_path(
         row["association_lag_window_radar_count"] = int(
             sum(event.get("kind") == "radar" for event in local_events)
         )
+        row["association_prefix_constrained"] = bool(previous_committed is not None)
+        if previous_committed is not None:
+            row["association_prefix_track_id"] = previous_committed.get("track_id", np.nan)
+            row["association_prefix_time_s"] = prefix_time_s
         committed[event_key] = row
+        previous_committed = row
 
     return list(committed.values())
+
+
+def _prefix_event(row: pd.Series) -> dict[str, object]:
+    """Return a synthetic one-candidate radar event that forces the prefix row."""
+
+    prefix = row.copy()
+    prefix["cat_prob_uav"] = 1.0
+    prefix["association_score"] = 0.0
+    if "range_m" in prefix.index:
+        prefix["range_m"] = 0.0
+    return {
+        "kind": "radar",
+        "time_s": float(prefix.get("time_s", 0.0)),
+        "candidates": pd.DataFrame([prefix]),
+    }

@@ -1,7 +1,7 @@
 ---
 name: Stateful learned radar association ablation
 
-on:
+"on":
   workflow_dispatch:
     inputs:
       dataset_root:

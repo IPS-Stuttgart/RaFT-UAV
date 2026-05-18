@@ -1,11 +1,10 @@
 """Native retention-aware tracklet-Viterbi association.
 
-This module keeps the public retention entry point while removing the previous
-runtime monkey-patch of :mod:`raft_uav.baselines.tracklet_viterbi`.  The runner
-uses the base module's event handling, RF-anchor construction, transition cost,
-and replay logic, but performs the Viterbi node construction and dynamic program
-locally with track-aware candidate retention, soft catProb penalties, and a
-truth-free Fortem track-support prior.
+This module keeps the public retention entry point while avoiding runtime
+monkey-patching.  It reuses the base tracklet-Viterbi event handling,
+RF-anchor construction, transition costs, and replay logic, but performs node
+construction and Viterbi selection locally with track-aware candidate retention,
+optional soft catProb penalties, and a truth-free Fortem track-support prior.
 """
 
 from __future__ import annotations
@@ -132,7 +131,9 @@ def _select_tracklet_viterbi_path(
         return []
 
     costs = [
-        np.array([n.unary_cost + (config.missed_detection_cost if n.is_miss else 0.0) for n in frames[0]])
+        np.array(
+            [n.unary_cost + (config.missed_detection_cost if n.is_miss else 0.0) for n in frames[0]]
+        )
     ]
     parents = [np.full(len(frames[0]), -1, dtype=int)]
     for frame_index in range(1, len(frames)):
@@ -192,7 +193,9 @@ def _nodes_for_radar_frame_with_track_retention(
     time_s = float(candidates["time_s"].median()) if "time_s" in candidates else float("nan")
     event_key = _base._radar_event_key(candidates)
     scored: list[tuple[float, int, _base._ViterbiNode]] = []
-    for candidate_rank, (_, row) in enumerate(candidates.iterrows()):
+    for candidate_rank, (_, row) in enumerate(
+        _candidate_pool_for_retention(candidates, candidate_catprob_threshold, config).iterrows()
+    ):
         position = _base._row_position(row)
         if position is None:
             continue
@@ -259,6 +262,23 @@ def _nodes_for_radar_frame_with_track_retention(
         )
     )
     return nodes
+
+
+def _candidate_pool_for_retention(
+    candidates: pd.DataFrame,
+    candidate_catprob_threshold: float | None,
+    config: TrackletViterbiAssociationConfig,
+) -> pd.DataFrame:
+    """Return candidate rows for hard or soft catProb retention ablations."""
+
+    mode = str(getattr(config, "catprob_retention_mode", "soft")).strip().lower()
+    if mode == "hard":
+        from raft_uav.baselines.radar_association import _catprob_candidate_pool
+
+        return _catprob_candidate_pool(candidates, candidate_catprob_threshold)
+    if mode == "soft":
+        return candidates
+    raise ValueError("catprob_retention_mode must be 'hard' or 'soft'")
 
 
 def _write_track_support_diagnostics(
@@ -364,6 +384,8 @@ def _catprob_threshold_penalty(
 ) -> float:
     """Return a soft penalty for candidates below the class-probability threshold."""
 
+    if str(getattr(config, "catprob_retention_mode", "soft")).strip().lower() != "soft":
+        return 0.0
     if candidate_catprob_threshold is None or "cat_prob_uav" not in row.index:
         return 0.0
     threshold = float(candidate_catprob_threshold)
