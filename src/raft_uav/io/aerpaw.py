@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -13,7 +14,13 @@ import pandas as pd
 from raft_uav.baselines.kalman import TrackingMeasurement
 from raft_uav.coordinates import LocalENUProjector
 
-SENSOR_CLOCK_OFFSET_S = -4.0 * 60.0 * 60.0
+DEFAULT_SENSOR_CLOCK_OFFSET_S = -4.0 * 60.0 * 60.0
+DEFAULT_RF_CLOCK_OFFSET_S = DEFAULT_SENSOR_CLOCK_OFFSET_S
+DEFAULT_RADAR_CLOCK_OFFSET_S = DEFAULT_SENSOR_CLOCK_OFFSET_S
+RF_CLOCK_OFFSET_ENV = "RAFT_UAV_RF_CLOCK_OFFSET_S"
+RADAR_CLOCK_OFFSET_ENV = "RAFT_UAV_RADAR_CLOCK_OFFSET_S"
+# Backward-compatible alias for callers that imported the historical constant.
+SENSOR_CLOCK_OFFSET_S = DEFAULT_SENSOR_CLOCK_OFFSET_S
 TRUTH_COLUMNS = [
     "sample",
     "longitude",
@@ -130,6 +137,23 @@ def read_radar_json(path: Path) -> pd.DataFrame:
     return read_radar_tracks_json(path)
 
 
+def sensor_clock_offsets_from_environment() -> dict[str, float]:
+    """Return the resolved loader default clock offsets for RF and radar rows."""
+
+    return {
+        "rf_clock_offset_s": _clock_offset_s(
+            None,
+            env_name=RF_CLOCK_OFFSET_ENV,
+            default=DEFAULT_RF_CLOCK_OFFSET_S,
+        ),
+        "radar_clock_offset_s": _clock_offset_s(
+            None,
+            env_name=RADAR_CLOCK_OFFSET_ENV,
+            default=DEFAULT_RADAR_CLOCK_OFFSET_S,
+        ),
+    }
+
+
 def normalize_truth(truth: pd.DataFrame) -> tuple[pd.DataFrame, LocalENUProjector, pd.Timestamp]:
     """Normalize truth telemetry timestamps and append local ENU coordinates."""
 
@@ -154,13 +178,19 @@ def normalize_rf(
     projector: LocalENUProjector,
     truth_origin_time: pd.Timestamp,
     default_std_m: float = 75.0,
+    clock_offset_s: float | None = None,
 ) -> pd.DataFrame:
     """Normalize RF rows to truth-relative time and local ENU coordinates."""
 
     out = rf.copy()
+    resolved_clock_offset_s = _clock_offset_s(
+        clock_offset_s,
+        env_name=RF_CLOCK_OFFSET_ENV,
+        default=DEFAULT_RF_CLOCK_OFFSET_S,
+    )
     out["timestamp_raw"] = out["Time"].astype(str)
     out["timestamp"] = pd.to_datetime(out["Time"], errors="coerce") + pd.to_timedelta(
-        SENSOR_CLOCK_OFFSET_S, unit="s"
+        resolved_clock_offset_s, unit="s"
     )
     out["time_s"] = (out["timestamp"] - truth_origin_time).dt.total_seconds()
 
@@ -199,6 +229,7 @@ def normalize_radar(
     radar: pd.DataFrame,
     projector: LocalENUProjector,
     truth_origin_time: pd.Timestamp,
+    clock_offset_s: float | None = None,
 ) -> pd.DataFrame:
     """Normalize radar track rows to truth-relative time and local ENU coordinates."""
 
@@ -207,9 +238,14 @@ def normalize_radar(
         out[["timestamp", "time_s", "east_m", "north_m", "up_m"]] = np.empty((0, 5))
         return out
 
+    resolved_clock_offset_s = _clock_offset_s(
+        clock_offset_s,
+        env_name=RADAR_CLOCK_OFFSET_ENV,
+        default=DEFAULT_RADAR_CLOCK_OFFSET_S,
+    )
     out["timestamp_raw"] = out["global_time_raw_s"]
     out["timestamp"] = pd.to_datetime(out["global_time_raw_s"], unit="s", errors="coerce")
-    out["timestamp"] = out["timestamp"] + pd.to_timedelta(SENSOR_CLOCK_OFFSET_S, unit="s")
+    out["timestamp"] = out["timestamp"] + pd.to_timedelta(resolved_clock_offset_s, unit="s")
     out["time_s"] = (out["timestamp"] - truth_origin_time).dt.total_seconds()
 
     for column in ["latitude", "longitude", "altitude_m", "cat_prob_uav", "track_id"]:
@@ -493,6 +529,27 @@ def _frame_summary(path: Path, frame: pd.DataFrame, raw_time_col: str) -> dict[s
         summary["time_s_min"] = float(times.min()) if len(times) else None
         summary["time_s_max"] = float(times.max()) if len(times) else None
     return summary
+
+
+def _clock_offset_s(
+    value: float | None,
+    *,
+    env_name: str,
+    default: float,
+) -> float:
+    if value is not None:
+        return _finite_clock_offset(value, env_name)
+    env_value = os.environ.get(env_name)
+    if env_value is None or env_value.strip() == "":
+        return float(default)
+    return _finite_clock_offset(env_value, env_name)
+
+
+def _finite_clock_offset(value: object, name: str) -> float:
+    number = float(value)
+    if not np.isfinite(number):
+        raise ValueError(f"{name} must be finite")
+    return number
 
 
 def _list_get(values: Any, index: int) -> Any:
