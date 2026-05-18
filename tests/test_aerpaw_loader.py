@@ -69,6 +69,23 @@ def test_radar_jsonl_reader_and_catprob_selection(tmp_path):
                     "id": 2,
                     "lla": [35.727, -78.696, 30.0],
                     "globalTime": 1759866140.0,
+                    "catProb": [0.9, 0.1],
+                },
+            ],
+        },
+        {
+            "params": {"globalTime": 1759866141.0},
+            "trackData": [
+                {
+                    "id": 3,
+                    "lla": [35.7272, -78.6962, 30.0],
+                    "globalTime": 1759866141.0,
+                    "catProb": [0.7, 0.1],
+                },
+                {
+                    "id": 4,
+                    "lla": [35.7273, -78.6963, 30.0],
+                    "globalTime": 1759866141.0,
                     "catProb": [0.1, 0.1],
                 },
             ],
@@ -85,6 +102,7 @@ def test_radar_jsonl_reader_and_catprob_selection(tmp_path):
     radar = normalize_radar(read_radar_tracks_json(radar_path), projector, origin_time)
     selected = select_radar_measurement_rows(radar, selection="catprob", catprob_threshold=0.5)
 
-    assert len(radar) == 2
-    assert selected["track_id"].tolist() == [1]
+    assert len(radar) == 4
+    assert selected["frame_index"].tolist() == [1, 2]
+    assert selected["track_id"].tolist() == [2, 3]
     assert len(truth) == 1
