@@ -15,9 +15,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from raft_uav.baselines.smoothing import SMOOTHER_MODES, smooth_tracking_records  # noqa: E402
-from raft_uav.baselines.tracklet_viterbi import (  # noqa: E402
-    TrackletViterbiAssociationConfig,
-    run_async_cv_baseline_with_tracklet_viterbi_association,
+from raft_uav.baselines.tracklet_viterbi import TrackletViterbiAssociationConfig  # noqa: E402
+from raft_uav.baselines.tracklet_viterbi_replay import (  # noqa: E402
+    run_async_cv_baseline_with_tracklet_viterbi_association_and_replay,
 )
 from raft_uav.evaluation.metrics import nearest_time_indices, position_errors_m, summarize_errors  # noqa: E402
 from raft_uav.io.aerpaw import (  # noqa: E402
@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     robust_updates = None if args.robust_update == "none" else {"rf": args.robust_update, "radar": args.robust_update}
     inflation_alphas = None if robust_updates is None else {"rf": args.rf_inflation_alpha, "radar": args.radar_inflation_alpha}
 
-    records, selected_radar = run_async_cv_baseline_with_tracklet_viterbi_association(
+    records, selected_radar, viterbi_selected_radar = run_async_cv_baseline_with_tracklet_viterbi_association_and_replay(
         rf_measurements=rf_measurements,
         radar=radar,
         acceleration_std_mps2=args.acceleration_std,
@@ -122,6 +122,12 @@ def main(argv: list[str] | None = None) -> int:
         radar,
         max_time_delta_s=args.max_eval_time_delta_s,
     )
+    viterbi_selected_radar_diagnostics = _selected_radar_diagnostics(
+        viterbi_selected_radar,
+        truth,
+        radar,
+        max_time_delta_s=args.max_eval_time_delta_s,
+    )
     metrics = _metrics(
         flight.name,
         truth,
@@ -129,7 +135,9 @@ def main(argv: list[str] | None = None) -> int:
         radar,
         selected_radar,
         estimates,
+        viterbi_selected_radar,
         selected_radar_diagnostics,
+        viterbi_selected_radar_diagnostics,
         args,
     )
 
@@ -137,8 +145,13 @@ def main(argv: list[str] | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     estimates.to_csv(out / "estimates.csv", index=False)
     selected_radar.to_csv(out / "selected_radar.csv", index=False)
+    viterbi_selected_radar.to_csv(out / "viterbi_selected_radar.csv", index=False)
     (out / "selected_radar_diagnostics.json").write_text(
         json.dumps(selected_radar_diagnostics, indent=2),
+        encoding="utf-8",
+    )
+    (out / "viterbi_selected_radar_diagnostics.json").write_text(
+        json.dumps(viterbi_selected_radar_diagnostics, indent=2),
         encoding="utf-8",
     )
     (out / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
@@ -148,6 +161,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"posterior_records={len(estimates)}")
     print(f"metrics_json={out / 'metrics.json'}")
     print(f"selected_radar_diagnostics_json={out / 'selected_radar_diagnostics.json'}")
+    print(f"viterbi_selected_radar_rows={len(viterbi_selected_radar)}")
+    print(f"viterbi_selected_radar_csv={out / 'viterbi_selected_radar.csv'}")
+    print(f"viterbi_selected_radar_diagnostics_json={out / 'viterbi_selected_radar_diagnostics.json'}")
     print(f"rmse_3d_m={metrics['position_error_3d']['rmse_m']:.3f}")
     print(f"p95_3d_m={metrics['position_error_3d']['p95_m']:.3f}")
     selected_rmse = selected_radar_diagnostics["position_error_3d"]["rmse_m"]
@@ -198,7 +214,9 @@ def _metrics(
     radar: pd.DataFrame,
     selected: pd.DataFrame,
     estimates: pd.DataFrame,
+    viterbi_selected: pd.DataFrame,
     selected_radar_diagnostics: dict[str, object],
+    viterbi_selected_radar_diagnostics: dict[str, object],
     args: argparse.Namespace,
 ) -> dict[str, object]:
     truth_times = truth["time_s"].to_numpy(dtype=float)
@@ -214,6 +232,7 @@ def _metrics(
         "rf_rows": int(len(rf)),
         "radar_rows": int(len(radar)),
         "selected_radar_rows": int(len(selected)),
+        "viterbi_selected_radar_rows": int(len(viterbi_selected)),
         "posterior_records": int(len(estimates)),
         "accepted_measurements": accepted,
         "rejected_measurements": int(len(estimates) - accepted),
@@ -227,6 +246,15 @@ def _metrics(
         "selected_radar_track_switch_count": selected_radar_diagnostics["track_switch_count"],
         "selected_radar_unique_track_ids": selected_radar_diagnostics["unique_track_ids"],
         "tracklet_viterbi": _tracklet_viterbi_config(args),
+        "viterbi_selected_radar_diagnostics": viterbi_selected_radar_diagnostics,
+        "viterbi_selected_radar_position_error_2d": viterbi_selected_radar_diagnostics["position_error_2d"],
+        "viterbi_selected_radar_position_error_3d": viterbi_selected_radar_diagnostics["position_error_3d"],
+        "viterbi_selected_radar_truth_coverage": viterbi_selected_radar_diagnostics["truth_coverage"],
+        "viterbi_selected_radar_frame_coverage_rate": viterbi_selected_radar_diagnostics["radar_frame_coverage_rate"],
+        "viterbi_selected_radar_rejected_rows": int(len(viterbi_selected) - len(selected)),
+        "viterbi_selected_radar_rejection_rate": float((len(viterbi_selected) - len(selected)) / len(viterbi_selected))
+        if len(viterbi_selected)
+        else float("nan"),
         "smoother": {"method": args.smoother, "lag_s": args.smoother_lag_s},
     }
 
