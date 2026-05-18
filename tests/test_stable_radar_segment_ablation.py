@@ -178,6 +178,29 @@ def test_aggregate_and_ranking_rows_sort_by_mean_then_tail() -> None:
             "error_2d_p95_m": 18.0,
             "table_path": "d",
         },
+        {
+            "flight": "Opt1",
+            "method": "radar-stable-segments-range-gated-interpolated",
+            "config": "dominated",
+            "radar_catprob_threshold": 0.4,
+            "radar_range_gate_m": 800.0,
+            "stable_segment_min_frames": 100,
+            "stable_segment_max_transition_speed_mps": 65.0,
+            "flight_count": 1,
+            "candidate_count": 10,
+            "selected_count": 5,
+            "matched_count": 5,
+            "coverage": 0.5,
+            "track_switches": 0,
+            "error_3d_mean_m": 80.0,
+            "error_3d_rmse_m": 100.0,
+            "error_3d_p95_m": 170.0,
+            "error_3d_max_m": 220.0,
+            "error_2d_mean_m": 70.0,
+            "error_2d_rmse_m": 90.0,
+            "error_2d_p95_m": 160.0,
+            "table_path": "e",
+        },
     ]
 
     aggregate_rows = ablation._aggregate_rows(rows)
@@ -199,10 +222,18 @@ def test_aggregate_and_ranking_rows_sort_by_mean_then_tail() -> None:
         True,
         False,
         False,
+        False,
     ]
+    assert ranking_rows[0]["coverage_penalized_error_3d_mean_m"] == 40.0
+    assert ranking_rows[0]["coverage_penalized_error_3d_p95_m"] == 150.0
+    assert ranking_rows[0]["pareto_front"] is True
     low_coverage = next(row for row in ranking_rows if row["config"] == "low_coverage")
     assert low_coverage["eligible_for_recommendation"] is False
     assert low_coverage["ranking_min_coverage"] == 0.95
+    assert low_coverage["coverage_penalized_error_3d_mean_m"] == 25.0
+    assert low_coverage["pareto_front"] is True
+    dominated = next(row for row in ranking_rows if row["config"] == "dominated")
+    assert dominated["pareto_front"] is False
 
 
 def test_validate_args_rejects_empty_and_nonpositive_grids() -> None:
