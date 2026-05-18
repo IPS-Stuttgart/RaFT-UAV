@@ -1,26 +1,16 @@
-"""Track-aware candidate retention for tracklet-Viterbi association.
+"""Native retention-aware tracklet-Viterbi association.
 
-The base Viterbi implementation prunes each radar frame by local unary cost
-before applying motion and Fortem track-continuity costs.  This module wraps
-the base runner with a node builder that also retains per-track representatives,
-so a locally weak but sequence-consistent radar track remains available to the
-dynamic program.
-
-Unlike the base candidate pool, the retention builder treats the UAV class
-probability threshold as a soft prior instead of a hard deletion rule. Low
-``cat_prob_uav`` candidates receive an extra unary penalty but remain eligible,
-which lets motion and track-continuity evidence rescue temporarily misclassified
-Fortem tracks.
-
-The wrapper also adds a truth-free track-support prior: long, continuous Fortem
-``track_id`` sequences receive a bounded reward, which biases the dynamic
-program toward stable radar tracks and away from one-frame clutter.
+This module keeps the public retention entry point while removing the previous
+runtime monkey-patch of :mod:`raft_uav.baselines.tracklet_viterbi`.  The runner
+uses the base module's event handling, RF-anchor construction, transition cost,
+and replay logic, but performs the Viterbi node construction and dynamic program
+locally with track-aware candidate retention, soft catProb penalties, and a
+truth-free Fortem track-support prior.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from contextlib import contextmanager
 
 import numpy as np
 import pandas as pd
@@ -51,58 +41,139 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
     candidate_catprob_threshold: float | None = 0.4,
     config: TrackletViterbiAssociationConfig | None = None,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
-    """Run tracklet-Viterbi with track-aware pre-Viterbi retention."""
+    """Run tracklet-Viterbi with native retention-aware node construction."""
 
-    track_support_by_id = _track_support_by_id(radar)
-    with _track_aware_node_builder(track_support_by_id):
-        return _base.run_async_cv_baseline_with_tracklet_viterbi_association(
-            rf_measurements=rf_measurements,
-            radar=radar,
-            acceleration_std_mps2=acceleration_std_mps2,
-            radar_xy_std_m=radar_xy_std_m,
-            radar_z_std_m=radar_z_std_m,
-            gate_probabilities_by_source=gate_probabilities_by_source,
-            gate_thresholds_by_source=gate_thresholds_by_source,
-            safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
-            safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
-            robust_update_by_source=robust_update_by_source,
-            inflation_alpha_by_source=inflation_alpha_by_source,
-            max_residual_norms_by_source=max_residual_norms_by_source,
-            candidate_catprob_threshold=candidate_catprob_threshold,
-            config=config,
-        )
+    from raft_uav.baselines.radar_association import (
+        _empty_selected_radar,
+        _events,
+        _initial_measurement,
+        _selected_rows_frame,
+    )
+
+    cfg = config or TrackletViterbiAssociationConfig()
+    covariance = np.diag(
+        [float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2]
+    )
+    events = _events(list(rf_measurements), radar)
+    if not events:
+        return [], _empty_selected_radar(radar)
+    initial = _initial_measurement(
+        events[0],
+        association="tracklet-viterbi",
+        covariance=covariance,
+        truth=None,
+        truth_gate_m=150.0,
+        truth_time_gate_s=1.0,
+    )
+    if initial is None:
+        return [], _empty_selected_radar(radar)
+
+    anchors = _base._build_rf_anchor_states(
+        events=events,
+        acceleration_std_mps2=acceleration_std_mps2,
+        gate_probabilities_by_source=gate_probabilities_by_source,
+        gate_thresholds_by_source=gate_thresholds_by_source,
+        safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
+        safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
+        robust_update_by_source=robust_update_by_source,
+        inflation_alpha_by_source=inflation_alpha_by_source,
+        max_residual_norms_by_source=max_residual_norms_by_source,
+    )
+    selected = _select_tracklet_viterbi_path(
+        events=events,
+        anchors=anchors,
+        covariance=covariance,
+        candidate_catprob_threshold=candidate_catprob_threshold,
+        config=cfg,
+        track_support_by_id=_track_support_by_id(radar),
+    )
+    records, accepted = _base._replay_selected_tracklet_path(
+        events=events,
+        selected_rows=selected,
+        initial_measurement=initial,
+        acceleration_std_mps2=acceleration_std_mps2,
+        covariance=covariance,
+        gate_probabilities_by_source=gate_probabilities_by_source,
+        gate_thresholds_by_source=gate_thresholds_by_source,
+        safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
+        safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
+        robust_update_by_source=robust_update_by_source,
+        inflation_alpha_by_source=inflation_alpha_by_source,
+        max_residual_norms_by_source=max_residual_norms_by_source,
+    )
+    return records, _selected_rows_frame(radar, accepted)
 
 
-@contextmanager
-def _track_aware_node_builder(
+def _select_tracklet_viterbi_path(
+    *,
+    events: list[dict[str, object]],
+    anchors: Mapping[int, _base._AnchorState],
+    covariance: np.ndarray,
+    candidate_catprob_threshold: float | None,
+    config: TrackletViterbiAssociationConfig,
     track_support_by_id: Mapping[int, Mapping[str, float]] | None = None,
-):
-    original = _base._nodes_for_radar_frame
+) -> list[pd.Series]:
+    """Return selected radar rows from retention-aware Viterbi scoring."""
 
-    def _builder(
-        *,
-        event_index: int,
-        candidates: pd.DataFrame,
-        anchor: _base._AnchorState | None,
-        covariance: np.ndarray,
-        candidate_catprob_threshold: float | None,
-        config: TrackletViterbiAssociationConfig,
-    ) -> list[_base._ViterbiNode]:
-        return _nodes_for_radar_frame_with_track_retention(
-            event_index=event_index,
-            candidates=candidates,
-            anchor=anchor,
+    frames = [
+        _nodes_for_radar_frame_with_track_retention(
+            event_index=i,
+            candidates=event["candidates"],
+            anchor=anchors.get(i),
             covariance=covariance,
             candidate_catprob_threshold=candidate_catprob_threshold,
             config=config,
             track_support_by_id=track_support_by_id,
         )
+        for i, event in enumerate(events)
+        if event["kind"] == "radar"
+    ]
+    if not frames:
+        return []
 
-    _base._nodes_for_radar_frame = _builder
-    try:
-        yield
-    finally:
-        _base._nodes_for_radar_frame = original
+    costs = [
+        np.array([n.unary_cost + (config.missed_detection_cost if n.is_miss else 0.0) for n in frames[0]])
+    ]
+    parents = [np.full(len(frames[0]), -1, dtype=int)]
+    for frame_index in range(1, len(frames)):
+        previous, current = frames[frame_index - 1], frames[frame_index]
+        current_costs = np.empty(len(current), dtype=float)
+        current_parents = np.empty(len(current), dtype=int)
+        for j, node in enumerate(current):
+            transition = np.array(
+                [costs[-1][k] + _base._transition_cost(prev, node, config) for k, prev in enumerate(previous)]
+            )
+            parent = int(np.argmin(transition))
+            current_parents[j] = parent
+            current_costs[j] = node.unary_cost + float(transition[parent])
+        costs.append(current_costs)
+        parents.append(current_parents)
+
+    best = int(np.argmin(costs[-1]))
+    path_cost = float(costs[-1][best])
+    path: list[_base._ViterbiNode] = []
+    for frame_index in range(len(frames) - 1, -1, -1):
+        path.append(frames[frame_index][best])
+        best = int(parents[frame_index][best])
+        if best < 0:
+            break
+    path.reverse()
+
+    rows: list[pd.Series] = []
+    for node in path:
+        if node.is_miss or node.row is None:
+            continue
+        row = node.row.copy()
+        row["association_mode"] = "tracklet-viterbi"
+        row["association_action"] = "viterbi_selected"
+        row["association_nis"] = float(node.anchor_nis)
+        row["association_score"] = float(node.unary_cost)
+        row["association_anchor_nis"] = float(node.anchor_nis)
+        row["association_catprob_cost"] = float(node.catprob_cost)
+        row["association_range_cost"] = float(node.range_cost)
+        row["association_viterbi_path_cost"] = path_cost
+        rows.append(row)
+    return rows
 
 
 def _nodes_for_radar_frame_with_track_retention(
@@ -150,16 +221,7 @@ def _nodes_for_radar_frame_with_track_retention(
             + track_support_cost
         )
         selected_row = row.copy()
-        selected_row["association_track_support_cost"] = float(track_support_cost)
-        selected_row["association_track_support_score"] = float(track_support.get("score", 0.0))
-        selected_row["association_track_support_count"] = float(track_support.get("count", 0.0))
-        selected_row["association_track_support_span_s"] = float(track_support.get("span_s", 0.0))
-        selected_row["association_track_support_continuity"] = float(
-            track_support.get("continuity", 0.0)
-        )
-        selected_row["association_track_support_median_catprob"] = float(
-            track_support.get("median_catprob", 0.0)
-        )
+        _write_track_support_diagnostics(selected_row, track_support_cost, track_support)
         if candidate_catprob_threshold is not None:
             selected_row["association_catprob_threshold"] = float(candidate_catprob_threshold)
             selected_row["association_catprob_soft_penalty"] = float(soft_threshold_cost)
@@ -197,6 +259,21 @@ def _nodes_for_radar_frame_with_track_retention(
         )
     )
     return nodes
+
+
+def _write_track_support_diagnostics(
+    row: pd.Series,
+    track_support_cost: float,
+    track_support: Mapping[str, float],
+) -> None:
+    row["association_track_support_cost"] = float(track_support_cost)
+    row["association_track_support_score"] = float(track_support.get("score", 0.0))
+    row["association_track_support_count"] = float(track_support.get("count", 0.0))
+    row["association_track_support_span_s"] = float(track_support.get("span_s", 0.0))
+    row["association_track_support_continuity"] = float(track_support.get("continuity", 0.0))
+    row["association_track_support_median_catprob"] = float(
+        track_support.get("median_catprob", 0.0)
+    )
 
 
 def _track_support_by_id(radar: pd.DataFrame) -> dict[int, dict[str, float]]:
@@ -325,18 +402,19 @@ def _retain_top_and_track_representatives(
     for _, candidate_rank, _ in ordered[:top_k]:
         keep_ranks.add(int(candidate_rank))
 
-    kept_by_track: dict[int, int] = {}
-    for _, candidate_rank, node in ordered:
-        if node.track_id is None:
-            continue
-        track_id = int(node.track_id)
-        kept = kept_by_track.get(track_id, 0)
-        if kept >= max_per_track:
-            continue
-        keep_ranks.add(int(candidate_rank))
-        kept_by_track[track_id] = kept + 1
-        if len(keep_ranks) >= max_pool:
-            break
+    if max_per_track > 0:
+        kept_by_track: dict[int, int] = {}
+        for _, candidate_rank, node in ordered:
+            if node.track_id is None:
+                continue
+            track_id = int(node.track_id)
+            kept = kept_by_track.get(track_id, 0)
+            if kept >= max_per_track:
+                continue
+            keep_ranks.add(int(candidate_rank))
+            kept_by_track[track_id] = kept + 1
+            if len(keep_ranks) >= max_pool:
+                break
 
     return [node for _, candidate_rank, node in ordered if int(candidate_rank) in keep_ranks][
         :max_pool
