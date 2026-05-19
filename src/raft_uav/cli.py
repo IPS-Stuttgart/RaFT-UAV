@@ -17,6 +17,11 @@ from raft_uav.baselines.radar_association import (
     run_async_cv_baseline_with_radar_association,
 )
 from raft_uav.baselines.smoothing import SMOOTHER_MODES, smooth_tracking_records
+from raft_uav.baselines.update_logic import (
+    DEFAULT_HUBER_THRESHOLD,
+    DEFAULT_STUDENT_T_DOF,
+    ROBUST_UPDATE_MODES,
+)
 from raft_uav.evaluation.diagnostics import build_diagnostic_summary
 from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
 from raft_uav.io.aerpaw import (
@@ -234,21 +239,31 @@ def main(argv: list[str] | None = None) -> int:
     )
     baseline_parser.add_argument(
         "--robust-update",
-        choices=["none", "nis-inflate"],
+        choices=["none", *ROBUST_UPDATE_MODES],
         default="none",
-        help="robust update rule; nis-inflate keeps plausible high-NIS updates with inflated covariance",
+        help=(
+            "robust update rule; nis-inflate gates via NIS then inflates, "
+            "student-t applies Student-t covariance scaling, and huber applies "
+            "multivariate Huber covariance scaling"
+        ),
     )
     baseline_parser.add_argument(
         "--rf-gate-prob",
         type=float,
         default=0.99,
-        help="chi-square gate probability for 2D RF updates when gating is enabled",
+        help=(
+            "chi-square gate probability for 2D RF updates when gating is enabled, "
+            "and the NIS threshold used by --robust-update nis-inflate"
+        ),
     )
     baseline_parser.add_argument(
         "--radar-gate-prob",
         type=float,
         default=0.99,
-        help="chi-square gate probability for 3D radar updates when gating is enabled",
+        help=(
+            "chi-square gate probability for 3D radar updates when gating is enabled, "
+            "and the NIS threshold used by --robust-update nis-inflate"
+        ),
     )
     baseline_parser.add_argument(
         "--disable-association-safety-gate",
@@ -430,7 +445,9 @@ def _run_baseline(
 ) -> int:
     if enable_gating and robust_update != "none":
         raise ValueError("--enable-gating and --robust-update are mutually exclusive")
-    if rf_inflation_alpha <= 0.0 or radar_inflation_alpha <= 0.0:
+    if robust_update == "nis-inflate" and (
+        rf_inflation_alpha <= 0.0 or radar_inflation_alpha <= 0.0
+    ):
         raise ValueError("inflation alphas must be positive")
     if track_switch_nis_ratio <= 0.0:
         raise ValueError("track_switch_nis_ratio must be positive")
@@ -506,7 +523,7 @@ def _run_baseline(
     max_residual_norms = None
     robust_updates = None
     inflation_alphas = None
-    if enable_gating or robust_update != "none":
+    if enable_gating or robust_update == "nis-inflate":
         gate_probabilities = {"rf": rf_gate_prob, "radar": radar_gate_prob}
     if enable_association_safety_gate:
         safety_gate_probabilities = {
@@ -519,6 +536,7 @@ def _run_baseline(
         }
     if robust_update != "none":
         robust_updates = {"rf": robust_update, "radar": robust_update}
+    if robust_update == "nis-inflate":
         inflation_alphas = {"rf": rf_inflation_alpha, "radar": radar_inflation_alpha}
 
     if radar_mode in RADAR_ASSOCIATION_MODES:
@@ -881,7 +899,12 @@ def _baseline_metrics(
     rejected_by_source = Counter(
         str(value) for value in estimate_frame.loc[~accepted_mask, "source"]
     )
-    reweighted_mask = estimate_frame["update_action"] == "inflated"
+    covariance_scale = (
+        pd.to_numeric(estimate_frame["covariance_scale"], errors="coerce")
+        .fillna(1.0)
+        .to_numpy(dtype=float)
+    )
+    reweighted_mask = covariance_scale > 1.0
     reweighted_by_source = Counter(
         str(value) for value in estimate_frame.loc[reweighted_mask, "source"]
     )
@@ -971,15 +994,23 @@ def _baseline_metrics(
             "test_statistic": "normalized innovation squared"
             if robust_update != "none"
             else None,
-            "rf_gate_probability": float(rf_gate_prob) if robust_update != "none" else None,
+            "rf_gate_probability": float(rf_gate_prob)
+            if robust_update == "nis-inflate"
+            else None,
             "radar_gate_probability": float(radar_gate_prob)
-            if robust_update != "none"
+            if robust_update == "nis-inflate"
+            else None,
+            "student_t_degrees_of_freedom": float(DEFAULT_STUDENT_T_DOF)
+            if robust_update == "student-t"
+            else None,
+            "huber_threshold": float(DEFAULT_HUBER_THRESHOLD)
+            if robust_update == "huber"
             else None,
             "rf_inflation_alpha": float(rf_inflation_alpha)
-            if robust_update != "none"
+            if robust_update == "nis-inflate"
             else None,
             "radar_inflation_alpha": float(radar_inflation_alpha)
-            if robust_update != "none"
+            if robust_update == "nis-inflate"
             else None,
         },
         "association_safety_gate": {
