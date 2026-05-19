@@ -56,6 +56,10 @@ SUMMARY_COLUMNS = (
     "interpolation_outside_anchor_dropped_count",
     "interpolation_long_gap_dropped_count",
     "interpolation_high_speed_dropped_count",
+    "interpolation_dropped_fraction",
+    "interpolation_outside_anchor_dropped_fraction",
+    "interpolation_long_gap_dropped_fraction",
+    "interpolation_high_speed_dropped_fraction",
     "error_3d_mean_m",
     "error_3d_rmse_m",
     "error_3d_p95_m",
@@ -79,8 +83,11 @@ RANKING_COLUMNS = (
     "stable_segment_min_frames",
     "stable_segment_max_transition_speed_mps",
     "coverage",
+    "interpolation_risk_factor",
     "coverage_penalized_error_3d_mean_m",
     "coverage_penalized_error_3d_p95_m",
+    "risk_adjusted_error_3d_mean_m",
+    "risk_adjusted_error_3d_p95_m",
     "pareto_front",
     "error_3d_mean_m",
     "error_3d_rmse_m",
@@ -104,6 +111,10 @@ RANKING_COLUMNS = (
     "interpolation_outside_anchor_dropped_count",
     "interpolation_long_gap_dropped_count",
     "interpolation_high_speed_dropped_count",
+    "interpolation_dropped_fraction",
+    "interpolation_outside_anchor_dropped_fraction",
+    "interpolation_long_gap_dropped_fraction",
+    "interpolation_high_speed_dropped_fraction",
 )
 SUM_COLUMNS = (
     "candidate_count",
@@ -349,6 +360,7 @@ def _rows_from_table(
         for column in SUMMARY_COLUMNS:
             if column not in row and column in item.index:
                 row[column] = _csv_value(item[column])
+        _add_interpolation_fraction_fields(row)
         rows.append({column: row.get(column, "") for column in SUMMARY_COLUMNS})
     return rows
 
@@ -381,6 +393,7 @@ def _aggregate_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
             row["selected_count"],
         )
         row["coverage"] = _safe_ratio(row["matched_count"], row["candidate_count"])
+        _add_interpolation_fraction_fields(row)
         for column in MAX_COLUMNS:
             row[column] = _max_column(group, column)
         for column in MEAN_COLUMNS:
@@ -402,6 +415,8 @@ def _ranking_rows(
         enriched_rows,
         key=lambda row: (
             not bool(row.get("eligible_for_recommendation")),
+            _sort_value(row.get("risk_adjusted_error_3d_mean_m")),
+            _sort_value(row.get("risk_adjusted_error_3d_p95_m")),
             _sort_value(row.get("coverage_penalized_error_3d_mean_m")),
             _sort_value(row.get("coverage_penalized_error_3d_p95_m")),
             _sort_value(row.get("error_3d_mean_m")),
@@ -427,6 +442,15 @@ def _ranking_candidates(
     rows: list[dict[str, object]] = []
     for row, pareto_front in zip(aggregate_rows, pareto_flags):
         coverage = row.get("coverage")
+        coverage_penalized_mean = _coverage_penalized(
+            row.get("error_3d_mean_m"),
+            coverage,
+        )
+        coverage_penalized_p95 = _coverage_penalized(
+            row.get("error_3d_p95_m"),
+            coverage,
+        )
+        interpolation_risk_factor = _interpolation_risk_factor(row)
         rows.append(
             {
                 "eligible_for_recommendation": _coverage_eligible(
@@ -434,13 +458,16 @@ def _ranking_candidates(
                     min_coverage=min_coverage,
                 ),
                 "ranking_min_coverage": float(min_coverage),
-                "coverage_penalized_error_3d_mean_m": _coverage_penalized(
-                    row.get("error_3d_mean_m"),
-                    coverage,
+                "interpolation_risk_factor": interpolation_risk_factor,
+                "coverage_penalized_error_3d_mean_m": coverage_penalized_mean,
+                "coverage_penalized_error_3d_p95_m": coverage_penalized_p95,
+                "risk_adjusted_error_3d_mean_m": _risk_adjusted(
+                    coverage_penalized_mean,
+                    interpolation_risk_factor,
                 ),
-                "coverage_penalized_error_3d_p95_m": _coverage_penalized(
-                    row.get("error_3d_p95_m"),
-                    coverage,
+                "risk_adjusted_error_3d_p95_m": _risk_adjusted(
+                    coverage_penalized_p95,
+                    interpolation_risk_factor,
                 ),
                 "pareto_front": pareto_front,
                 **row,
@@ -556,6 +583,55 @@ def _max_column(frame: pd.DataFrame, column: str) -> object:
     if values.empty:
         return ""
     return round(float(values.max()), 3)
+
+
+def _add_interpolation_fraction_fields(row: dict[str, object]) -> None:
+    """Add normalized interpolation-drop diagnostics in-place."""
+
+    fraction_fields = {
+        "interpolation_dropped_fraction": (
+            "interpolation_dropped_frame_count",
+            "interpolation_candidate_frame_count",
+        ),
+        "interpolation_outside_anchor_dropped_fraction": (
+            "interpolation_outside_anchor_dropped_count",
+            "interpolation_candidate_frame_count",
+        ),
+        "interpolation_long_gap_dropped_fraction": (
+            "interpolation_long_gap_dropped_count",
+            "interpolation_candidate_frame_count",
+        ),
+        "interpolation_high_speed_dropped_fraction": (
+            "interpolation_high_speed_dropped_count",
+            "interpolation_candidate_frame_count",
+        ),
+        "selected_interpolated_fraction": (
+            "selected_interpolated_count",
+            "selected_count",
+        ),
+    }
+    for target, (numerator, denominator) in fraction_fields.items():
+        if _numeric_value(row.get(target)) is None:
+            row[target] = _safe_ratio(row.get(numerator), row.get(denominator))
+
+
+def _interpolation_risk_factor(row: dict[str, object]) -> float:
+    """Return a compact ranking penalty for brittle interpolation coverage."""
+
+    dropped = _numeric_value(row.get("interpolation_dropped_fraction")) or 0.0
+    long_gap = _numeric_value(row.get("interpolation_long_gap_dropped_fraction")) or 0.0
+    high_speed = (
+        _numeric_value(row.get("interpolation_high_speed_dropped_fraction")) or 0.0
+    )
+    return round(1.0 + dropped + long_gap + high_speed, 3)
+
+
+def _risk_adjusted(value: object, factor: object) -> object:
+    number = _numeric_value(value)
+    factor_value = _numeric_value(factor)
+    if number is None or factor_value is None:
+        return ""
+    return round(number * factor_value, 3)
 
 
 def _safe_ratio(numerator: object, denominator: object) -> object:
