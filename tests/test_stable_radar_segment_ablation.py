@@ -116,6 +116,7 @@ def test_rows_from_table_extracts_only_stable_ablation_methods(tmp_path: Path) -
     assert stable_row["interpolation_max_anchor_gap_s"] == 3.0
     assert stable_row["interpolation_candidate_frame_count"] == 120
     assert stable_row["interpolation_dropped_frame_count"] == 20
+    assert stable_row["interpolation_dropped_fraction"] == 0.167
     assert stable_row["stable_segment_min_frames"] == 100
 
 
@@ -273,6 +274,9 @@ def test_aggregate_and_ranking_rows_sort_by_mean_then_tail() -> None:
     ]
     assert ranking_rows[0]["coverage_penalized_error_3d_mean_m"] == 40.0
     assert ranking_rows[0]["coverage_penalized_error_3d_p95_m"] == 150.0
+    assert ranking_rows[0]["interpolation_risk_factor"] == 1.0
+    assert ranking_rows[0]["risk_adjusted_error_3d_mean_m"] == 40.0
+    assert ranking_rows[0]["risk_adjusted_error_3d_p95_m"] == 150.0
     assert ranking_rows[0]["pareto_front"] is True
     low_coverage = next(row for row in ranking_rows if row["config"] == "low_coverage")
     assert low_coverage["eligible_for_recommendation"] is False
@@ -281,6 +285,42 @@ def test_aggregate_and_ranking_rows_sort_by_mean_then_tail() -> None:
     assert low_coverage["pareto_front"] is True
     dominated = next(row for row in ranking_rows if row["config"] == "dominated")
     assert dominated["pareto_front"] is False
+
+
+def test_ranking_penalizes_interpolation_drop_risk() -> None:
+    ranking_rows = ablation._ranking_rows(
+        [
+            {
+                "flight": "aggregate",
+                "method": "clean",
+                "config": "clean",
+                "coverage": 1.0,
+                "error_3d_mean_m": 50.0,
+                "error_3d_p95_m": 100.0,
+                "interpolation_dropped_fraction": 0.0,
+                "interpolation_long_gap_dropped_fraction": 0.0,
+                "interpolation_high_speed_dropped_fraction": 0.0,
+            },
+            {
+                "flight": "aggregate",
+                "method": "risky",
+                "config": "risky",
+                "coverage": 1.0,
+                "error_3d_mean_m": 45.0,
+                "error_3d_p95_m": 90.0,
+                "interpolation_dropped_fraction": 0.5,
+                "interpolation_long_gap_dropped_fraction": 0.2,
+                "interpolation_high_speed_dropped_fraction": 0.1,
+            },
+        ],
+        min_coverage=0.95,
+    )
+
+    assert ranking_rows[0]["config"] == "clean"
+    risky = next(row for row in ranking_rows if row["config"] == "risky")
+    assert risky["interpolation_risk_factor"] == 1.8
+    assert risky["coverage_penalized_error_3d_mean_m"] == 45.0
+    assert risky["risk_adjusted_error_3d_mean_m"] == 81.0
 
 
 def test_recommendation_payload_selects_decision_rows(tmp_path: Path) -> None:
