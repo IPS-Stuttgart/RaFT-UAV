@@ -24,8 +24,10 @@ import sys
 import pandas as pd
 
 from raft_uav import cli as _base_cli
+from raft_uav import robust_cli as _robust_cli
 from raft_uav.baselines import tracklet_viterbi as _base_tracklet_viterbi
 from raft_uav.baselines import tracklet_viterbi_fixed_lag as _fixed_lag_tracklet_viterbi
+from raft_uav.baselines import tracklet_viterbi_imm as _imm_tracklet_viterbi
 from raft_uav.baselines import (
     tracklet_viterbi_range_covariance as _range_covariance_tracklet_viterbi,
 )
@@ -39,6 +41,7 @@ from raft_uav.baselines.tracklet_viterbi import TrackletViterbiAssociationConfig
 
 _TRACKLET_MODE = "tracklet-viterbi"
 _TRACKLET_VARIANT_ENV = "RAFT_UAV_TRACKLET_VARIANT"
+_TRACKLET_REPLAY_TRACKER_ENV = "RAFT_UAV_TRACKLET_REPLAY_TRACKER"
 _CATPROB_MODE_ENV = "RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE"
 _BELOW_CATPROB_PENALTY_ENV = "RAFT_UAV_TRACKLET_BELOW_CATPROB_THRESHOLD_PENALTY"
 _TRACK_SUPPORT_WEIGHT_ENV = "RAFT_UAV_TRACKLET_SUPPORT_WEIGHT"
@@ -48,6 +51,7 @@ _MAX_CANDIDATE_POOL_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATE_POOL_PER_FRAME"
 _MAX_CANDIDATES_PER_TRACK_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_TRACK_ID"
 _VITERBI_LAG_S_ENV = "RAFT_UAV_TRACKLET_VITERBI_LAG_S"
 _TRACKLET_VARIANTS = ("base", "retention", "range-covariance", "fixed-lag")
+_TRACKLET_REPLAY_TRACKERS = ("cv", "imm")
 _CATPROB_RETENTION_MODES = ("soft", "hard")
 
 
@@ -210,15 +214,31 @@ def _tracklet_runner_from_environment() -> Callable[
 ]:
     variant = os.environ.get(_TRACKLET_VARIANT_ENV, "range-covariance").strip().lower()
     if variant == "base":
-        return _base_tracklet_viterbi.run_async_cv_baseline_with_tracklet_viterbi_association
-    if variant == "retention":
-        return _retention_tracklet_viterbi.run_async_cv_baseline_with_tracklet_viterbi_association
-    if variant == "range-covariance":
-        return _range_covariance_tracklet_viterbi.run_async_cv_baseline_with_tracklet_viterbi_association
-    if variant == "fixed-lag":
-        return _run_fixed_lag_tracklet_viterbi_association
+        runner = _base_tracklet_viterbi.run_async_cv_baseline_with_tracklet_viterbi_association
+    elif variant == "retention":
+        runner = _retention_tracklet_viterbi.run_async_cv_baseline_with_tracklet_viterbi_association
+    elif variant == "range-covariance":
+        runner = _range_covariance_tracklet_viterbi.run_async_cv_baseline_with_tracklet_viterbi_association
+    elif variant == "fixed-lag":
+        runner = _run_fixed_lag_tracklet_viterbi_association
+    else:
+        raise ValueError(
+            f"{_TRACKLET_VARIANT_ENV} must be one of {_TRACKLET_VARIANTS}; got {variant!r}"
+        )
+    return _wrap_tracklet_runner_for_replay_tracker(runner)
+
+
+def _wrap_tracklet_runner_for_replay_tracker(
+    runner: Callable[..., tuple[list[dict[str, object]], pd.DataFrame]],
+) -> Callable[..., tuple[list[dict[str, object]], pd.DataFrame]]:
+    tracker = os.environ.get(_TRACKLET_REPLAY_TRACKER_ENV, "cv").strip().lower()
+    if tracker == "cv":
+        return runner
+    if tracker == "imm":
+        return _imm_tracklet_viterbi.with_imm_tracklet_tracker(runner)
     raise ValueError(
-        f"{_TRACKLET_VARIANT_ENV} must be one of {_TRACKLET_VARIANTS}; got {variant!r}"
+        f"{_TRACKLET_REPLAY_TRACKER_ENV} must be one of {_TRACKLET_REPLAY_TRACKERS}; "
+        f"got {tracker!r}"
     )
 
 
@@ -255,6 +275,7 @@ def _tracklet_config_from_environment() -> _TrackletConfigOverlay:
 def _tracklet_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--tracklet-variant", choices=_TRACKLET_VARIANTS)
+    parser.add_argument("--tracklet-replay-tracker", choices=_TRACKLET_REPLAY_TRACKERS)
     parser.add_argument("--tracklet-catprob-retention-mode", choices=_CATPROB_RETENTION_MODES)
     parser.add_argument(
         "--tracklet-below-catprob-threshold-penalty",
@@ -279,6 +300,7 @@ def _extract_tracklet_args(argv: list[str] | None) -> tuple[list[str], dict[str,
 def _environment_updates_from_namespace(namespace: argparse.Namespace) -> dict[str, str]:
     updates: dict[str, str] = {}
     _maybe_add(updates, _TRACKLET_VARIANT_ENV, namespace.tracklet_variant)
+    _maybe_add(updates, _TRACKLET_REPLAY_TRACKER_ENV, namespace.tracklet_replay_tracker)
     _maybe_add(updates, _CATPROB_MODE_ENV, namespace.tracklet_catprob_retention_mode)
     _maybe_add(
         updates,
@@ -362,7 +384,8 @@ def main(argv: list[str] | None = None) -> int:
         run_async_cv_baseline_with_radar_association
     )
     with _temporary_environment(env_updates):
-        return _base_cli.main(filtered_argv)
+        with _robust_cli.expose_heavy_tailed_robust_update_modes():
+            return _base_cli.main(filtered_argv)
 
 
 if __name__ == "__main__":
