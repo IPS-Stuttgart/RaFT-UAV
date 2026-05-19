@@ -113,6 +113,38 @@ def test_tracklet_viterbi_cli_strips_fixed_lag_flags(monkeypatch) -> None:
     assert seen["variant"] is tracklet_viterbi_cli._run_fixed_lag_tracklet_viterbi_association
 
 
+def test_tracklet_viterbi_cli_strips_and_applies_rf_anchor_mode(monkeypatch) -> None:
+    seen = {}
+
+    def fake_main(argv=None):
+        seen["argv"] = list(argv or [])
+        seen["anchor_mode"] = tracklet_viterbi_cli._tracklet_config_from_environment().rf_anchor_mode
+        return 0
+
+    monkeypatch.setattr(tracklet_viterbi_cli._base_cli, "main", fake_main)
+
+    status = tracklet_viterbi_cli.main(
+        [
+            "run-baseline",
+            "data/raw/AADM2025Dryad",
+            "--radar-association",
+            "tracklet-viterbi",
+            "--tracklet-rf-anchor-mode",
+            "smoothed",
+        ]
+    )
+
+    assert status == 0
+    assert "--tracklet-rf-anchor-mode" not in seen["argv"]
+    assert seen["argv"] == [
+        "run-baseline",
+        "data/raw/AADM2025Dryad",
+        "--radar-association",
+        "tracklet-viterbi",
+    ]
+    assert seen["anchor_mode"] == "smoothed"
+
+
 def test_tracklet_viterbi_cli_restores_environment(monkeypatch) -> None:
     monkeypatch.setenv(tracklet_viterbi_cli._TRACK_SUPPORT_WEIGHT_ENV, "0.25")
 

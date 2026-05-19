@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pandas as pd
 
@@ -106,3 +108,113 @@ def test_tracklet_viterbi_result_preserves_rejected_viterbi_choices():
     assert result.viterbi_selected_radar["track_id"].tolist() == [99]
     assert result.viterbi_selected_radar["association_replay_accepted"].tolist() == [False]
     assert result.viterbi_selected_radar["association_replay_update_action"].tolist() == ["missed_detection"]
+
+
+def test_tracklet_viterbi_smoothed_rf_anchor_uses_future_rf_context():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 5.0,
+                "east_m": 50.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.5,
+            },
+            {
+                "frame_index": 0,
+                "track_id": 2,
+                "time_s": 5.0,
+                "east_m": 0.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.5,
+            },
+        ]
+    )
+    rf_measurements = [_rf_measurement(0.0, 0.0), _rf_measurement(10.0, 100.0)]
+
+    _, causal_selected = run_async_cv_baseline_with_tracklet_viterbi_association(
+        rf_measurements=rf_measurements,
+        radar=radar,
+        acceleration_std_mps2=0.05,
+        radar_xy_std_m=2.0,
+        radar_z_std_m=2.0,
+        candidate_catprob_threshold=None,
+        config=TrackletViterbiAssociationConfig(
+            anchor_nis_weight=10.0,
+            catprob_weight=0.0,
+            rf_anchor_mode="causal",
+        ),
+    )
+    _, smoothed_selected = run_async_cv_baseline_with_tracklet_viterbi_association(
+        rf_measurements=rf_measurements,
+        radar=radar,
+        acceleration_std_mps2=0.05,
+        radar_xy_std_m=2.0,
+        radar_z_std_m=2.0,
+        candidate_catprob_threshold=None,
+        config=TrackletViterbiAssociationConfig(
+            anchor_nis_weight=10.0,
+            catprob_weight=0.0,
+            rf_anchor_mode="smoothed",
+        ),
+    )
+
+    assert causal_selected["track_id"].tolist() == [2]
+    assert smoothed_selected["track_id"].tolist() == [1]
+    assert smoothed_selected["association_rf_anchor_mode"].tolist() == ["smoothed"]
+
+
+def test_tracklet_viterbi_reranker_json_changes_unary_candidate_ranking(tmp_path):
+    scorer = tmp_path / "association_reranker.json"
+    scorer.write_text(
+        json.dumps(
+            {
+                "intercept": 30.0,
+                "coefficients": {"track_id": -20.0},
+                "probability_floor": 1.0e-9,
+                "probability_ceiling": 0.999999999,
+            }
+        ),
+        encoding="utf-8",
+    )
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 1.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.1,
+            },
+            {
+                "frame_index": 0,
+                "track_id": 2,
+                "time_s": 1.0,
+                "east_m": 2.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.99,
+            },
+        ]
+    )
+
+    _, selected = run_async_cv_baseline_with_tracklet_viterbi_association(
+        rf_measurements=[_rf_measurement(0.0, 0.0)],
+        radar=radar,
+        candidate_catprob_threshold=None,
+        config=TrackletViterbiAssociationConfig(
+            use_rf_anchor=False,
+            range_gate_m=None,
+            association_reranker_path=scorer,
+            association_reranker_weight=2.0,
+        ),
+    )
+
+    assert selected["track_id"].tolist() == [1]
+    assert selected["association_reranker_probability"].iloc[0] > 0.99
+    assert selected["association_reranker_cost"].iloc[0] < 1.0e-3

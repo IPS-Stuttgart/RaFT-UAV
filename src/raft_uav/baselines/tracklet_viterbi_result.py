@@ -11,7 +11,7 @@ import pandas as pd
 from raft_uav.baselines.kalman import AsyncConstantVelocityKalmanTracker, TrackingMeasurement
 from raft_uav.baselines.tracklet_viterbi import (
     TrackletViterbiAssociationConfig,
-    _build_rf_anchor_states,
+    _build_rf_anchor_states_for_config,
     _first_rf_bootstrap_index,
     _nodes_for_radar_frame,
     _optional_float,
@@ -106,7 +106,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_result(
             _empty_candidate_ledger(radar),
         )
 
-    anchors = _build_rf_anchor_states(
+    anchors = _build_rf_anchor_states_for_config(
         events=events,
         acceleration_std_mps2=acceleration_std_mps2,
         gate_probabilities_by_source=gate_probabilities_by_source,
@@ -116,6 +116,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_result(
         robust_update_by_source=robust_update_by_source,
         inflation_alpha_by_source=inflation_alpha_by_source,
         max_residual_norms_by_source=max_residual_norms_by_source,
+        config=cfg,
     )
     selected = _select_tracklet_viterbi_path(
         events=events,
@@ -203,8 +204,12 @@ def _tracklet_candidate_ledger(
             row["association_nis"] = float(node.anchor_nis)
             row["association_score"] = float(node.unary_cost)
             row["association_anchor_nis"] = float(node.anchor_nis)
+            row["association_rf_anchor_mode"] = str(getattr(config, "rf_anchor_mode", "causal"))
             row["association_catprob_cost"] = float(node.catprob_cost)
             row["association_range_cost"] = float(node.range_cost)
+            row["association_reranker_cost"] = float(node.reranker_cost)
+            row["association_reranker_probability"] = node.reranker_probability
+            row["association_reranker_logit"] = node.reranker_logit
             row["association_viterbi_path_cost"] = (
                 _optional_float(selected.get("association_viterbi_path_cost"))
                 if selected_here and selected is not None
@@ -378,9 +383,13 @@ def _empty_candidate_ledger(frame: pd.DataFrame) -> pd.DataFrame:
         "association_viterbi_selected",
         "association_nis",
         "association_score",
+        "association_rf_anchor_mode",
         "association_anchor_nis",
         "association_catprob_cost",
         "association_range_cost",
+        "association_reranker_cost",
+        "association_reranker_probability",
+        "association_reranker_logit",
         "association_viterbi_path_cost",
     ):
         if column not in ledger.columns:

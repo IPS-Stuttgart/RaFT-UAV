@@ -74,7 +74,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
     if initial is None:
         return [], _empty_selected_radar(radar)
 
-    anchors = _base._build_rf_anchor_states(
+    anchors = _base._build_rf_anchor_states_for_config(
         events=events,
         acceleration_std_mps2=acceleration_std_mps2,
         gate_probabilities_by_source=gate_probabilities_by_source,
@@ -84,6 +84,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
         robust_update_by_source=robust_update_by_source,
         inflation_alpha_by_source=inflation_alpha_by_source,
         max_residual_norms_by_source=max_residual_norms_by_source,
+        config=cfg,
     )
     selected = _select_tracklet_viterbi_path(
         events=events,
@@ -197,6 +198,7 @@ def _select_tracklet_viterbi_path(
         row["association_nis"] = float(node.anchor_nis)
         row["association_score"] = float(node.unary_cost)
         row["association_anchor_nis"] = float(node.anchor_nis)
+        row["association_rf_anchor_mode"] = str(getattr(config, "rf_anchor_mode", "causal"))
         row["association_catprob_cost"] = float(node.catprob_cost)
         row["association_range_cost"] = float(node.range_cost)
         row["association_viterbi_path_cost"] = path_cost

@@ -48,9 +48,11 @@ _MAX_CANDIDATES_PER_FRAME_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"
 _MAX_CANDIDATE_POOL_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATE_POOL_PER_FRAME"
 _MAX_CANDIDATES_PER_TRACK_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_TRACK_ID"
 _VITERBI_LAG_S_ENV = "RAFT_UAV_TRACKLET_VITERBI_LAG_S"
+_RF_ANCHOR_MODE_ENV = "RAFT_UAV_TRACKLET_RF_ANCHOR_MODE"
 _RADAR_MEASUREMENT_MODEL_ENV = "RAFT_UAV_RADAR_MEASUREMENT_MODEL"
 _TRACKLET_VARIANTS = ("base", "retention", "range-covariance", "fixed-lag")
 _CATPROB_RETENTION_MODES = ("soft", "hard")
+_RF_ANCHOR_MODES = ("causal", "smoothed")
 
 
 class _TrackletConfigOverlay:
@@ -251,6 +253,7 @@ def _tracklet_config_from_environment() -> _TrackletConfigOverlay:
         max_track_support_reward=_env_float(_MAX_TRACK_SUPPORT_REWARD_ENV, 4.0),
         max_candidate_pool_per_frame=_env_int(_MAX_CANDIDATE_POOL_ENV, 24),
         max_candidates_per_track_id=_env_int(_MAX_CANDIDATES_PER_TRACK_ENV, 1),
+        rf_anchor_mode=_env_str(_RF_ANCHOR_MODE_ENV, str(base.rf_anchor_mode)),
     )
 
 
@@ -269,6 +272,7 @@ def _tracklet_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tracklet-max-candidate-pool-per-frame", type=_positive_int)
     parser.add_argument("--tracklet-max-candidates-per-track-id", type=_positive_int)
     parser.add_argument("--tracklet-viterbi-lag-s", type=_positive_float)
+    parser.add_argument("--tracklet-rf-anchor-mode", choices=_RF_ANCHOR_MODES)
     return parser
 
 
@@ -295,6 +299,7 @@ def _environment_updates_from_namespace(namespace: argparse.Namespace) -> dict[s
     _maybe_add(updates, _MAX_CANDIDATE_POOL_ENV, namespace.tracklet_max_candidate_pool_per_frame)
     _maybe_add(updates, _MAX_CANDIDATES_PER_TRACK_ENV, namespace.tracklet_max_candidates_per_track_id)
     _maybe_add(updates, _VITERBI_LAG_S_ENV, namespace.tracklet_viterbi_lag_s)
+    _maybe_add(updates, _RF_ANCHOR_MODE_ENV, namespace.tracklet_rf_anchor_mode)
     return updates
 
 

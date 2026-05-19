@@ -18,7 +18,7 @@ import pandas as pd
 from raft_uav.baselines.kalman import TrackingMeasurement
 from raft_uav.baselines.tracklet_viterbi import (
     TrackletViterbiAssociationConfig,
-    _build_rf_anchor_states,
+    _build_rf_anchor_states_for_config,
     _first_rf_bootstrap_index,
     _radar_event_key,
     _select_tracklet_viterbi_path,
@@ -90,7 +90,7 @@ def run_async_cv_baseline_with_fixed_lag_tracklet_viterbi_association_and_replay
         empty = _empty_selected_radar(radar)
         return [], empty, _empty_replayed_rows(empty)
 
-    anchors = _build_rf_anchor_states(
+    anchors = _build_rf_anchor_states_for_config(
         events=events,
         acceleration_std_mps2=acceleration_std_mps2,
         gate_probabilities_by_source=gate_probabilities_by_source,
@@ -100,6 +100,7 @@ def run_async_cv_baseline_with_fixed_lag_tracklet_viterbi_association_and_replay
         robust_update_by_source=robust_update_by_source,
         inflation_alpha_by_source=inflation_alpha_by_source,
         max_residual_norms_by_source=max_residual_norms_by_source,
+        config=cfg,
     )
     selected = select_fixed_lag_tracklet_viterbi_path(
         events=events,

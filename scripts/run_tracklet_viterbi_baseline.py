@@ -49,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-speed-mps", type=float, default=55.0)
     parser.add_argument("--range-gate-m", type=float, default=850.0)
     parser.add_argument("--disable-rf-anchor", action="store_true")
+    parser.add_argument("--association-reranker-json", type=Path, default=None)
+    parser.add_argument("--association-reranker-weight", type=float, default=1.0)
     parser.add_argument("--smoother", choices=SMOOTHER_MODES, default="fixed-lag")
     parser.add_argument("--smoother-lag-s", type=float, default=20.0)
     parser.add_argument("--max-eval-time-delta-s", type=float, default=2.0)
@@ -92,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
         max_speed_mps=args.max_speed_mps,
         range_gate_m=None if args.range_gate_m <= 0.0 else args.range_gate_m,
         use_rf_anchor=not args.disable_rf_anchor,
+        association_reranker_path=args.association_reranker_json,
+        association_reranker_weight=args.association_reranker_weight,
     )
     robust_updates = None if args.robust_update == "none" else {"rf": args.robust_update, "radar": args.robust_update}
     inflation_alphas = None if robust_updates is None else {"rf": args.rf_inflation_alpha, "radar": args.radar_inflation_alpha}
@@ -351,6 +355,10 @@ def _tracklet_viterbi_config(args: argparse.Namespace) -> dict[str, object]:
         "max_speed_mps": args.max_speed_mps,
         "range_gate_m": None if args.range_gate_m <= 0.0 else args.range_gate_m,
         "use_rf_anchor": not args.disable_rf_anchor,
+        "association_reranker_json": str(args.association_reranker_json)
+        if args.association_reranker_json is not None
+        else None,
+        "association_reranker_weight": args.association_reranker_weight,
     }
 
 
