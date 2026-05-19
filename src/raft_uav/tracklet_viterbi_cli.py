@@ -24,6 +24,7 @@ import sys
 import pandas as pd
 
 from raft_uav import cli as _base_cli
+from raft_uav import robust_cli as _robust_cli
 from raft_uav.baselines import tracklet_viterbi as _base_tracklet_viterbi
 from raft_uav.baselines import tracklet_viterbi_fixed_lag as _fixed_lag_tracklet_viterbi
 from raft_uav.baselines import (
@@ -42,7 +43,7 @@ _TRACKLET_VARIANT_ENV = "RAFT_UAV_TRACKLET_VARIANT"
 _CATPROB_MODE_ENV = "RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE"
 _BELOW_CATPROB_PENALTY_ENV = "RAFT_UAV_TRACKLET_BELOW_CATPROB_THRESHOLD_PENALTY"
 _TRACK_SUPPORT_WEIGHT_ENV = "RAFT_UAV_TRACKLET_SUPPORT_WEIGHT"
-_MAX_TRACK_SUPPORT_REWARD_ENV = "RAFT_UAV_TRACKLET_MAX_SUPPORT_REWARD"
+_MAX_TRACK_SUPPORT_REWARD_ENV = "RAFT_UAV_TRACKLET_MAX_TRACK_SUPPORT_REWARD"
 _MAX_CANDIDATES_PER_FRAME_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"
 _MAX_CANDIDATE_POOL_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATE_POOL_PER_FRAME"
 _MAX_CANDIDATES_PER_TRACK_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_TRACK_ID"
@@ -362,7 +363,8 @@ def main(argv: list[str] | None = None) -> int:
         run_async_cv_baseline_with_radar_association
     )
     with _temporary_environment(env_updates):
-        return _base_cli.main(filtered_argv)
+        with _robust_cli.expose_heavy_tailed_robust_update_modes():
+            return _base_cli.main(filtered_argv)
 
 
 if __name__ == "__main__":
