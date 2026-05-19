@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+import os
 from typing import Any
 
 import numpy as np
@@ -11,13 +12,17 @@ import pandas as pd
 from pyrecest.filters import KalmanFilter
 from pyrecest.filters.multi_hypothesis_tracker import MultiHypothesisTracker
 
+from raft_uav.baselines.radar_covariance import RadarCovarianceConfig
 from raft_uav.baselines.kalman import (
     AsyncConstantVelocityKalmanTracker,
+    RadarPolarMeasurement,
     TrackingMeasurement,
     TrackingUpdateDiagnostics,
     constant_velocity_matrix,
+    enu_position_to_radar_polar,
     gate_threshold_from_probability,
     measurement_matrix,
+    radar_polar_observation_and_jacobian,
     white_acceleration_process_noise,
 )
 from raft_uav.baselines.update_logic import (
@@ -46,6 +51,8 @@ _STABLE_SEGMENT_PRECOMPUTE_MODES = {
     *_STABLE_SEGMENT_ASSOCIATION_MODES,
     "stable-segments-hybrid",
 }
+RADAR_MEASUREMENT_MODELS = ("enu", "polar-ekf")
+_RADAR_MEASUREMENT_MODEL_ENV = "RAFT_UAV_RADAR_MEASUREMENT_MODEL"
 
 
 @dataclass(frozen=True)
@@ -209,6 +216,10 @@ def run_async_cv_baseline_with_radar_association(
     if stable_segment_rf_nis_cap <= 0.0:
         raise ValueError("stable_segment_rf_nis_cap must be positive")
 
+    radar_measurement_model = _radar_measurement_model_from_environment()
+    if association == "track-bank" and radar_measurement_model != "enu":
+        raise ValueError("track-bank association currently supports only ENU radar updates")
+
     rf_measurement_list = list(rf_measurements)
     covariance = np.diag([float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2])
     if association == "track-bank":
@@ -359,7 +370,11 @@ def run_async_cv_baseline_with_radar_association(
         if selected is None:
             continue
 
-        measurement = _radar_row_to_measurement(selected, covariance)
+        measurement = _radar_row_to_measurement(
+            selected,
+            covariance,
+            measurement_model=radar_measurement_model,
+        )
         diagnostics = tracker.update(
             measurement,
             gate_threshold=_gate_threshold_for_measurement(
@@ -1933,7 +1948,15 @@ def _weight_entropy(weights: np.ndarray) -> float:
     return float(-np.sum(clipped * np.log(clipped)))
 
 
-def _radar_row_to_measurement(row: pd.Series, covariance: np.ndarray) -> TrackingMeasurement:
+def _radar_row_to_measurement(
+    row: pd.Series,
+    covariance: np.ndarray,
+    measurement_model: str | None = None,
+) -> TrackingMeasurement | RadarPolarMeasurement:
+    model = _resolve_radar_measurement_model(measurement_model)
+    if model == "polar-ekf":
+        return _radar_row_to_polar_measurement(row, covariance)
+
     row_covariance = _row_covariance(row)
     return TrackingMeasurement(
         time_s=float(row["time_s"]),
@@ -1941,6 +1964,96 @@ def _radar_row_to_measurement(row: pd.Series, covariance: np.ndarray) -> Trackin
         covariance=covariance if row_covariance is None else row_covariance,
         source="radar",
     )
+
+
+def _radar_row_to_polar_measurement(
+    row: pd.Series,
+    covariance: np.ndarray,
+) -> RadarPolarMeasurement:
+    config = RadarCovarianceConfig.from_environment()
+    origin = config.origin_vector()
+    position = np.array(
+        [float(row["east_m"]), float(row["north_m"]), float(row["up_m"])],
+        dtype=float,
+    )
+    vector = enu_position_to_radar_polar(position, origin)
+    logged_range_m = _optional_float(row.get("range_m"))
+    if logged_range_m is not None and logged_range_m > 0.0:
+        vector[0] = float(logged_range_m)
+    return RadarPolarMeasurement(
+        time_s=float(row["time_s"]),
+        vector=vector,
+        covariance=_row_polar_covariance(row, covariance, config, position),
+        source="radar",
+        origin_enu_m=tuple(float(value) for value in origin),
+    )
+
+
+def _row_polar_covariance(
+    row: pd.Series,
+    fallback_covariance: np.ndarray,
+    config: RadarCovarianceConfig,
+    position: np.ndarray,
+) -> np.ndarray:
+    row_covariance = _row_covariance(row)
+    if row_covariance is None and _truthy_value(
+        row.get("association_radar_covariance_adaptive", False)
+    ):
+        row_covariance = np.asarray(fallback_covariance, dtype=float).reshape(3, 3)
+    if row_covariance is not None:
+        state = np.zeros(6, dtype=float)
+        state[:3] = np.asarray(position, dtype=float).reshape(3)
+        _, observation = radar_polar_observation_and_jacobian(
+            state,
+            config.origin_vector(),
+            include_range_rate=False,
+        )
+        projected = observation[:, :3] @ row_covariance @ observation[:, :3].T
+        if np.isfinite(projected).all():
+            return _regularized_polar_covariance(projected)
+    return np.diag(
+        [
+            float(config.range_std_m) ** 2,
+            np.deg2rad(float(config.azimuth_std_deg)) ** 2,
+            np.deg2rad(float(config.elevation_std_deg)) ** 2,
+        ]
+    )
+
+
+def _regularized_polar_covariance(covariance: np.ndarray) -> np.ndarray:
+    symmetric = 0.5 * (
+        np.asarray(covariance, dtype=float) + np.asarray(covariance, dtype=float).T
+    )
+    if symmetric.shape != (3, 3) or not np.isfinite(symmetric).all():
+        raise ValueError("polar radar covariance must be a finite 3x3 matrix")
+    eigenvalues, eigenvectors = np.linalg.eigh(symmetric)
+    eigenvalues = np.clip(eigenvalues, 1.0e-12, None)
+    regularized = (eigenvectors * eigenvalues.reshape(1, -1)) @ eigenvectors.T
+    return 0.5 * (regularized + regularized.T)
+
+
+def _radar_measurement_model_from_environment() -> str:
+    return _resolve_radar_measurement_model(
+        os.environ.get(_RADAR_MEASUREMENT_MODEL_ENV, "enu")
+    )
+
+
+def _resolve_radar_measurement_model(measurement_model: str | None) -> str:
+    model = "enu" if measurement_model is None else str(measurement_model).strip().lower()
+    aliases = {
+        "cartesian": "enu",
+        "linear": "enu",
+        "polar": "polar-ekf",
+        "spherical": "polar-ekf",
+        "native-polar": "polar-ekf",
+        "spherical-ekf": "polar-ekf",
+    }
+    model = aliases.get(model, model)
+    if model not in RADAR_MEASUREMENT_MODELS:
+        raise ValueError(
+            f"radar measurement model must be one of {RADAR_MEASUREMENT_MODELS}; got {measurement_model!r}"
+        )
+    return model
 
 
 def _row_covariance(row: pd.Series) -> np.ndarray | None:
@@ -2123,6 +2236,19 @@ def _optional_track_id(row: pd.Series) -> int | None:
     if value is None or not np.isfinite(float(value)):
         return None
     return int(value)
+
+
+def _truthy_value(value: object) -> bool:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    if value is None:
+        return False
+    try:
+        return bool(int(value))
+    except (TypeError, ValueError):
+        return bool(value)
 
 
 def _optional_float(value: object) -> float | None:

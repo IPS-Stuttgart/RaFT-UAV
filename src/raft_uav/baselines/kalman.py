@@ -18,6 +18,7 @@ from raft_uav.baselines.update_logic import (
     normalized_innovation_squared,
     plan_linear_measurement_update,
     robust_update_for_measurement,
+    robust_update_covariance_scale,
     student_t_covariance_scale,
     student_t_dof_for_measurement,
     symmetrized,
@@ -25,12 +26,15 @@ from raft_uav.baselines.update_logic import (
 
 __all__ = [
     "AsyncConstantVelocityKalmanTracker",
+    "RadarPolarMeasurement",
     "TrackingMeasurement",
     "TrackingUpdateDiagnostics",
     "constant_velocity_matrix",
+    "enu_position_to_radar_polar",
     "gate_threshold_from_probability",
     "huber_covariance_scale",
     "measurement_matrix",
+    "radar_polar_observation_and_jacobian",
     "normalized_innovation_squared",
     "run_async_cv_baseline",
     "student_t_covariance_scale",
@@ -62,6 +66,47 @@ class TrackingMeasurement:
         object.__setattr__(self, "vector", vector)
         object.__setattr__(self, "covariance", covariance)
         object.__setattr__(self, "source", str(self.source))
+
+
+@dataclass(frozen=True)
+class RadarPolarMeasurement:
+    """Native radar measurement in range/azimuth/elevation coordinates.
+
+    The coordinate convention is ENU with azimuth measured by ``atan2(east,
+    north)`` and elevation measured by ``atan2(up, horizontal_range)``.  A
+    three-element vector contains ``[range_m, azimuth_rad, elevation_rad]``.
+    A four-element vector additionally contains radial velocity in m/s.
+    """
+
+    time_s: float
+    vector: np.ndarray
+    covariance: np.ndarray
+    source: str = "radar"
+    origin_enu_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    def __post_init__(self) -> None:
+        vector = np.asarray(self.vector, dtype=float).reshape(-1)
+        covariance = np.asarray(self.covariance, dtype=float)
+        origin = np.asarray(self.origin_enu_m, dtype=float).reshape(-1)
+        if vector.size not in (3, 4):
+            raise ValueError("radar polar vector must have 3 or 4 elements")
+        if covariance.shape != (vector.size, vector.size):
+            raise ValueError("radar polar covariance must match vector dimension")
+        if origin.size != 3 or not np.isfinite(origin).all():
+            raise ValueError("radar polar origin must contain three finite ENU values")
+        if not np.isfinite(vector).all() or not np.isfinite(covariance).all():
+            raise ValueError("radar polar measurement and covariance must be finite")
+        object.__setattr__(self, "time_s", float(self.time_s))
+        object.__setattr__(self, "vector", vector)
+        object.__setattr__(self, "covariance", covariance)
+        object.__setattr__(self, "source", str(self.source))
+        object.__setattr__(self, "origin_enu_m", tuple(float(value) for value in origin))
+
+    @property
+    def origin_vector(self) -> np.ndarray:
+        """Return the radar origin as an ENU vector."""
+
+        return np.asarray(self.origin_enu_m, dtype=float)
 
 
 @dataclass(frozen=True)
@@ -140,6 +185,76 @@ def measurement_matrix(measurement_dim: int) -> np.ndarray:
     raise ValueError("measurement_dim must be 2, 3, or 6")
 
 
+def enu_position_to_radar_polar(
+    position_enu_m: np.ndarray,
+    origin_enu_m: np.ndarray | tuple[float, float, float] = (0.0, 0.0, 0.0),
+    velocity_enu_mps: np.ndarray | None = None,
+) -> np.ndarray:
+    """Convert an ENU position, and optionally velocity, to radar polar coordinates."""
+
+    state = np.zeros(6, dtype=float)
+    state[:3] = np.asarray(position_enu_m, dtype=float).reshape(3)
+    include_range_rate = velocity_enu_mps is not None
+    if velocity_enu_mps is not None:
+        state[3:6] = np.asarray(velocity_enu_mps, dtype=float).reshape(3)
+    vector, _ = radar_polar_observation_and_jacobian(
+        state,
+        origin_enu_m,
+        include_range_rate=include_range_rate,
+    )
+    return vector
+
+
+def radar_polar_observation_and_jacobian(
+    state: np.ndarray,
+    origin_enu_m: np.ndarray | tuple[float, float, float] = (0.0, 0.0, 0.0),
+    *,
+    include_range_rate: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return native radar-polar observation and EKF Jacobian for a CV state."""
+
+    state_vector = np.asarray(state, dtype=float).reshape(6)
+    origin = np.asarray(origin_enu_m, dtype=float).reshape(3)
+    position = state_vector[:3] - origin
+    velocity = state_vector[3:6]
+    east, north, up = position
+
+    horizontal2 = float(east * east + north * north)
+    horizontal = float(np.sqrt(max(horizontal2, 1.0e-18)))
+    range2 = float(horizontal2 + up * up)
+    range_m = float(np.sqrt(max(range2, 1.0e-18)))
+
+    azimuth_rad = float(np.arctan2(east, north))
+    elevation_rad = float(np.arctan2(up, horizontal))
+    dim = 4 if include_range_rate else 3
+    observation = np.zeros((dim, 6), dtype=float)
+    predicted = np.zeros(dim, dtype=float)
+    predicted[:3] = [range_m, azimuth_rad, elevation_rad]
+
+    observation[0, :3] = position / range_m
+    observation[1, 0] = north / max(horizontal2, 1.0e-18)
+    observation[1, 1] = -east / max(horizontal2, 1.0e-18)
+    observation[2, 0] = -up * east / (range_m * range_m * horizontal)
+    observation[2, 1] = -up * north / (range_m * range_m * horizontal)
+    observation[2, 2] = horizontal / (range_m * range_m)
+
+    if include_range_rate:
+        radial_velocity_mps = float(position @ velocity / range_m)
+        predicted[3] = radial_velocity_mps
+        observation[3, :3] = velocity / range_m - position * radial_velocity_mps / (
+            range_m * range_m
+        )
+        observation[3, 3:6] = position / range_m
+
+    return predicted, observation
+
+
+def _wrap_angle(angle_rad: float) -> float:
+    """Wrap an angular residual into [-pi, pi)."""
+
+    return float((float(angle_rad) + np.pi) % (2.0 * np.pi) - np.pi)
+
+
 def gate_threshold_from_probability(
     probability: float | None, measurement_dim: int
 ) -> float | None:
@@ -154,8 +269,8 @@ def gate_threshold_from_probability(
     probability = float(probability)
     if not 0.0 < probability < 1.0:
         raise ValueError("gate probability must be in (0, 1), or None to disable gating")
-    if measurement_dim not in (2, 3, 6):
-        raise ValueError("measurement_dim must be 2, 3, or 6")
+    if measurement_dim not in (2, 3, 4, 6):
+        raise ValueError("measurement_dim must be 2, 3, 4, or 6")
     return float(chi2.ppf(probability, df=measurement_dim))
 
 
@@ -240,9 +355,116 @@ class AsyncConstantVelocityKalmanTracker:
             self._sync_from_filter()
             self.current_time_s = float(time_s)
 
+    def _update_polar_radar(
+        self,
+        measurement: RadarPolarMeasurement,
+        *,
+        gate_threshold: float | None,
+        safety_gate_threshold: float | None,
+        max_residual_norm: float | None,
+        robust_update: str | None,
+        inflation_alpha: float,
+        student_t_dof: float,
+        huber_threshold: float,
+    ) -> TrackingUpdateDiagnostics:
+        """Condition the CV state on a nonlinear native radar-polar measurement."""
+
+        alpha = float(inflation_alpha)
+        if alpha <= 0.0:
+            raise ValueError("inflation_alpha must be positive")
+        vector = np.asarray(measurement.vector, dtype=float).reshape(-1)
+        covariance = np.asarray(measurement.covariance, dtype=float).copy()
+        predicted, observation = radar_polar_observation_and_jacobian(
+            self.mean,
+            measurement.origin_vector,
+            include_range_rate=vector.size == 4,
+        )
+        residual = vector - predicted
+        residual[1] = _wrap_angle(residual[1])
+        residual[2] = _wrap_angle(residual[2])
+        innovation_covariance = observation @ self.covariance @ observation.T + covariance
+        nis = normalized_innovation_squared(residual, innovation_covariance)
+        residual_norm = float(np.linalg.norm(residual))
+        threshold = None if gate_threshold is None else float(gate_threshold)
+        safety_threshold = None if safety_gate_threshold is None else float(safety_gate_threshold)
+        residual_threshold = None if max_residual_norm is None else float(max_residual_norm)
+        if residual_threshold is not None and residual_threshold <= 0.0:
+            raise ValueError("max_residual_norm must be positive or None")
+
+        covariance_scale = 1.0
+        update_action = "updated"
+        accepted = True
+        residual_over_threshold = (
+            residual_threshold is not None and residual_norm > residual_threshold
+        )
+        safety_over_threshold = safety_threshold is not None and nis > safety_threshold
+        reject_by_residual = residual_over_threshold and (
+            safety_threshold is None or safety_over_threshold
+        )
+
+        if reject_by_residual:
+            accepted = False
+            update_action = "missed_detection"
+        elif safety_over_threshold:
+            accepted = False
+            update_action = "missed_detection"
+        elif threshold is not None and nis > threshold and robust_update is None:
+            accepted = False
+            update_action = "rejected"
+        else:
+            covariance_scale, robust_action = robust_update_covariance_scale(
+                robust_update,
+                nis=nis,
+                measurement_dim=vector.size,
+                gate_threshold=threshold,
+                inflation_alpha=alpha,
+                student_t_dof=student_t_dof,
+                huber_threshold=huber_threshold,
+            )
+            if covariance_scale > 1.0:
+                covariance = covariance * covariance_scale
+                innovation_covariance = observation @ self.covariance @ observation.T + covariance
+            if robust_action is not None:
+                update_action = robust_action
+
+        if accepted:
+            prior_covariance = self.covariance.copy()
+            try:
+                kalman_gain = np.linalg.solve(
+                    innovation_covariance,
+                    observation @ prior_covariance,
+                ).T
+            except np.linalg.LinAlgError:
+                kalman_gain = prior_covariance @ observation.T @ np.linalg.pinv(
+                    innovation_covariance
+                )
+            self.mean = self.mean + kalman_gain @ residual
+            identity = np.eye(6)
+            joseph = identity - kalman_gain @ observation
+            self.covariance = symmetrized(
+                joseph @ prior_covariance @ joseph.T + kalman_gain @ covariance @ kalman_gain.T
+            )
+            self.filter = KalmanFilter((self.mean.copy(), self.covariance.copy()))
+            self._sync_from_filter()
+
+        return TrackingUpdateDiagnostics(
+            time_s=float(measurement.time_s),
+            source=measurement.source,
+            measurement_dim=vector.size,
+            accepted=bool(accepted),
+            update_action=update_action,
+            nis=float(nis),
+            gate_threshold=threshold,
+            safety_gate_threshold=safety_threshold,
+            residual_gate_threshold_m=residual_threshold,
+            covariance_scale=float(covariance_scale),
+            inflation_alpha=alpha if robust_update == "nis-inflate" else None,
+            residual_norm_m=residual_norm,
+        )
+
     def update(
         self,
-        measurement: TrackingMeasurement,
+        measurement: TrackingMeasurement | RadarPolarMeasurement,
         gate_threshold: float | None = None,
         safety_gate_threshold: float | None = None,
         max_residual_norm: float | None = None,
@@ -254,6 +476,18 @@ class AsyncConstantVelocityKalmanTracker:
         """Predict to and conditionally update from one RF or radar measurement."""
 
         self.predict_to(measurement.time_s)
+        if isinstance(measurement, RadarPolarMeasurement):
+            return self._update_polar_radar(
+                measurement,
+                gate_threshold=gate_threshold,
+                safety_gate_threshold=safety_gate_threshold,
+                max_residual_norm=max_residual_norm,
+                robust_update=robust_update,
+                inflation_alpha=inflation_alpha,
+                student_t_dof=student_t_dof,
+                huber_threshold=huber_threshold,
+            )
+
         observation = measurement_matrix(measurement.vector.size)
         plan = plan_linear_measurement_update(
             mean=self.mean,

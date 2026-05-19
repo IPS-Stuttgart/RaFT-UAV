@@ -33,6 +33,7 @@ from raft_uav.baselines import tracklet_viterbi_retention as _retention_tracklet
 from raft_uav.baselines.kalman import TrackingMeasurement
 from raft_uav.baselines.radar_association import (
     RADAR_ASSOCIATION_MODES as _BASE_RADAR_ASSOCIATION_MODES,
+    RADAR_MEASUREMENT_MODELS,
     run_async_cv_baseline_with_radar_association as _base_radar_association_runner,
 )
 from raft_uav.baselines.tracklet_viterbi import TrackletViterbiAssociationConfig
@@ -47,6 +48,7 @@ _MAX_CANDIDATES_PER_FRAME_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"
 _MAX_CANDIDATE_POOL_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATE_POOL_PER_FRAME"
 _MAX_CANDIDATES_PER_TRACK_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_TRACK_ID"
 _VITERBI_LAG_S_ENV = "RAFT_UAV_TRACKLET_VITERBI_LAG_S"
+_RADAR_MEASUREMENT_MODEL_ENV = "RAFT_UAV_RADAR_MEASUREMENT_MODEL"
 _TRACKLET_VARIANTS = ("base", "retention", "range-covariance", "fixed-lag")
 _CATPROB_RETENTION_MODES = ("soft", "hard")
 
@@ -255,6 +257,7 @@ def _tracklet_config_from_environment() -> _TrackletConfigOverlay:
 def _tracklet_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--tracklet-variant", choices=_TRACKLET_VARIANTS)
+    parser.add_argument("--radar-measurement-model", choices=RADAR_MEASUREMENT_MODELS)
     parser.add_argument("--tracklet-catprob-retention-mode", choices=_CATPROB_RETENTION_MODES)
     parser.add_argument(
         "--tracklet-below-catprob-threshold-penalty",
@@ -279,6 +282,7 @@ def _extract_tracklet_args(argv: list[str] | None) -> tuple[list[str], dict[str,
 def _environment_updates_from_namespace(namespace: argparse.Namespace) -> dict[str, str]:
     updates: dict[str, str] = {}
     _maybe_add(updates, _TRACKLET_VARIANT_ENV, namespace.tracklet_variant)
+    _maybe_add(updates, _RADAR_MEASUREMENT_MODEL_ENV, namespace.radar_measurement_model)
     _maybe_add(updates, _CATPROB_MODE_ENV, namespace.tracklet_catprob_retention_mode)
     _maybe_add(
         updates,
