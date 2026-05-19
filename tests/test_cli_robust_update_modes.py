@@ -1,8 +1,7 @@
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
-import inspect
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -21,7 +20,15 @@ def test_run_baseline_cli_accepts_all_backend_robust_update_modes(monkeypatch, m
 
     monkeypatch.setattr(cli, "_run_baseline", fake_run_baseline)
 
-    assert cli.main(["run-baseline", "dataset-root", "--flight", "flight-1", "--robust-update", mode]) == 0
+    argv = [
+        "run-baseline",
+        "dataset-root",
+        "--flight",
+        "flight-1",
+        "--robust-update",
+        mode,
+    ]
+    assert cli.main(argv) == 0
     assert captured["dataset_root"] == Path("dataset-root")
     assert captured["flight_name"] == "flight-1"
     assert captured["robust_update"] == mode
@@ -98,7 +105,10 @@ def test_baseline_metrics_documents_mode_specific_robust_update_parameters(mode,
             "north_m": [0.0, 0.0],
             "up_m": [0.0, 0.0],
             "accepted": [True, True],
-            "update_action": ["student_t" if mode == "student-t" else "updated", "huberized" if mode == "huber" else "inflated"],
+            "update_action": [
+                "student_t" if mode == "student-t" else "updated",
+                "huberized" if mode == "huber" else "inflated",
+            ],
             "nis": [1.0, 2.0],
             "covariance_scale": [1.0, 2.5],
         }
