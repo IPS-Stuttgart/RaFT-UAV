@@ -205,6 +205,7 @@ class AsyncConstantVelocityKalmanTracker:
         self.filter = KalmanFilter((self.mean.copy(), self.covariance.copy()))
         self.current_time_s = float(initial_time_s)
         self.acceleration_std_mps2 = float(acceleration_std_mps2)
+        self._initial_update_pending = True
         self._sync_from_filter()
 
     @property
@@ -225,6 +226,44 @@ class AsyncConstantVelocityKalmanTracker:
         self.mean = np.asarray(self.filter.get_point_estimate(), dtype=float).reshape(6)
         self.covariance = symmetrized(
             np.asarray(self.filter.filter_state.C, dtype=float).reshape(6, 6)
+        )
+
+    def _is_bootstrap_measurement(self, measurement: TrackingMeasurement) -> bool:
+        """Return whether ``measurement`` is the sample used to initialize the filter."""
+
+        if not self._initial_update_pending:
+            return False
+        if not np.isclose(float(measurement.time_s), self.current_time_s, atol=1.0e-9):
+            return False
+        observation = measurement_matrix(measurement.vector.size)
+        expected = observation @ self.mean
+        return bool(np.allclose(measurement.vector, expected, rtol=0.0, atol=1.0e-9))
+
+    def _bootstrap_diagnostics(
+        self,
+        measurement: TrackingMeasurement,
+        *,
+        gate_threshold: float | None,
+        safety_gate_threshold: float | None,
+        max_residual_norm: float | None,
+    ) -> TrackingUpdateDiagnostics:
+        """Return diagnostics for a bootstrap sample that is not re-assimilated."""
+
+        observation = measurement_matrix(measurement.vector.size)
+        residual = measurement.vector - observation @ self.mean
+        return TrackingUpdateDiagnostics(
+            time_s=float(measurement.time_s),
+            source=measurement.source,
+            measurement_dim=measurement.vector.size,
+            accepted=True,
+            update_action="initialized",
+            nis=0.0,
+            gate_threshold=gate_threshold,
+            safety_gate_threshold=safety_gate_threshold,
+            residual_gate_threshold_m=max_residual_norm,
+            covariance_scale=1.0,
+            inflation_alpha=None,
+            residual_norm_m=float(np.linalg.norm(residual)),
         )
 
     def predict_to(self, time_s: float) -> None:
@@ -253,6 +292,15 @@ class AsyncConstantVelocityKalmanTracker:
     ) -> TrackingUpdateDiagnostics:
         """Predict to and conditionally update from one RF or radar measurement."""
 
+        if self._is_bootstrap_measurement(measurement):
+            self._initial_update_pending = False
+            return self._bootstrap_diagnostics(
+                measurement,
+                gate_threshold=gate_threshold,
+                safety_gate_threshold=safety_gate_threshold,
+                max_residual_norm=max_residual_norm,
+            )
+        self._initial_update_pending = False
         self.predict_to(measurement.time_s)
         observation = measurement_matrix(measurement.vector.size)
         plan = plan_linear_measurement_update(
