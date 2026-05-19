@@ -144,6 +144,12 @@ def run_async_cv_baseline_with_radar_association(
     events = _events(list(rf_measurements), radar)
     if not events:
         return [], _empty_selected_radar(radar)
+    bootstrap_index = (
+        0 if association == "oracle-nearest-truth" else _first_rf_bootstrap_index(events)
+    )
+    if bootstrap_index is None:
+        return [], _empty_selected_radar(radar)
+    events = events[bootstrap_index:]
 
     initial_measurement = _initial_measurement(
         events[0],
@@ -286,6 +292,25 @@ def _events(
     return sorted(events, key=lambda item: (float(item["time_s"]), int(item["priority"])))
 
 
+def _first_rf_bootstrap_index(events: list[dict[str, object]]) -> int | None:
+    """Return the first event index that is safe for truth-free bootstrap.
+
+    Truth-free association modes should not initialize from an arbitrary
+    pre-RF radar row chosen only by class probability.  When RF measurements
+    exist, start at the first RF event and ignore earlier radar frames.  This
+    preserves the RF-anchored online interpretation and prevents early Fortem
+    candidates from setting the initial state.  Radar-only inputs keep the
+    historical radar bootstrap behavior.
+    """
+
+    if not events:
+        return None
+    for index, event in enumerate(events):
+        if event.get("kind") == "rf":
+            return index
+    return 0
+
+
 def _run_mht_track_bank(
     *,
     rf_measurements: list[TrackingMeasurement],
@@ -311,6 +336,10 @@ def _run_mht_track_bank(
     events = _events(rf_measurements, radar)
     if not events:
         return [], _empty_selected_radar(radar)
+    bootstrap_index = _first_rf_bootstrap_index(events)
+    if bootstrap_index is None:
+        return [], _empty_selected_radar(radar)
+    events = events[bootstrap_index:]
 
     initial_measurement = _initial_measurement(
         events[0],

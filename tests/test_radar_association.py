@@ -373,3 +373,81 @@ def test_track_bank_uses_pyrecest_mht_and_records_hypotheses():
     assert int(records[-1]["hypothesis_count"]) >= 1
     assert records[-1]["hypotheses"]
     assert selected["track_id"].tolist() == [1]
+
+
+def test_prediction_nis_bootstrap_starts_at_first_rf_when_radar_precedes_rf():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 99,
+                "time_s": 0.0,
+                "east_m": 1000.0,
+                "north_m": 1000.0,
+                "up_m": 1000.0,
+                "cat_prob_uav": 0.99,
+            },
+            {
+                "frame_index": 1,
+                "track_id": 1,
+                "time_s": 2.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.99,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(1.0, 0.0)],
+        radar=radar,
+        association="prediction-nis",
+        candidate_catprob_threshold=None,
+    )
+
+    assert records
+    assert records[0]["source"] == "rf"
+    assert records[0]["time_s"] == 1.0
+    assert all(record["time_s"] >= 1.0 for record in records)
+    assert selected["track_id"].tolist() == [1]
+
+
+def test_track_bank_bootstrap_starts_at_first_rf_when_radar_precedes_rf():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 99,
+                "time_s": 0.0,
+                "east_m": 1000.0,
+                "north_m": 1000.0,
+                "up_m": 1000.0,
+                "cat_prob_uav": 0.99,
+            },
+            {
+                "frame_index": 1,
+                "track_id": 1,
+                "time_s": 2.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.99,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(1.0, 0.0)],
+        radar=radar,
+        association="track-bank",
+        candidate_catprob_threshold=None,
+        track_bank_max_hypotheses=4,
+        track_bank_gate_probability=0.999999,
+    )
+
+    assert records
+    assert records[0]["source"] == "rf"
+    assert records[0]["time_s"] == 1.0
+    assert all(record["time_s"] >= 1.0 for record in records)
+    assert selected["track_id"].tolist() == [1]
