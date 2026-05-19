@@ -59,6 +59,11 @@ name: Stable radar segment ablation
         required: false
         type: string
         default: "0.95"
+      partial_clean_min_coverage:
+        description: "Minimum aggregate coverage for surfacing sparse clean-radar candidates."
+        required: false
+        type: string
+        default: "0.40"
       truth_time_gate_s:
         description: "Truth matching time gate in seconds for paper-table diagnostics."
         required: false
@@ -106,6 +111,7 @@ jobs:
       MIN_SEGMENT_FRAMES: ${{ inputs.min_segment_frames }}
       MAX_TRANSITION_SPEEDS_MPS: ${{ inputs.max_transition_speeds_mps }}
       RANKING_MIN_COVERAGE: ${{ inputs.ranking_min_coverage }}
+      PARTIAL_CLEAN_MIN_COVERAGE: ${{ inputs.partial_clean_min_coverage }}
       TRUTH_TIME_GATE_S: ${{ inputs.truth_time_gate_s }}
 
     steps:
@@ -178,6 +184,7 @@ jobs:
             --min-segment-frames ${MIN_SEGMENT_FRAMES}
             --max-transition-speeds-mps ${MAX_TRANSITION_SPEEDS_MPS}
             --ranking-min-coverage "${RANKING_MIN_COVERAGE}"
+            --partial-clean-min-coverage "${PARTIAL_CLEAN_MIN_COVERAGE}"
             --truth-time-gate-s "${TRUTH_TIME_GATE_S}"
           )
           if [ "${{ inputs.skip_existing }}" = "true" ]; then
@@ -234,6 +241,13 @@ jobs:
               else:
                   print("No recommendation-eligible row met the coverage threshold.", file=handle)
               print("", file=handle)
+              partial = recommendation.get("best_partial_clean_pareto_front") or {}
+              if partial:
+                  print("### Partial clean radar candidate", file=handle)
+                  print("", file=handle)
+                  for field in fields:
+                      print(f"- {field}: {partial.get(field, '')}", file=handle)
+                  print("", file=handle)
               print("### Top ranking rows", file=handle)
               print("", file=handle)
               print("```text", file=handle)

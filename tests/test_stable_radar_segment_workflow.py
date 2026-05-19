@@ -23,6 +23,9 @@ def test_stable_radar_segment_workflow_runs_dataset_backed_ablation() -> None:
     assert "interpolation_dropped_frame_count" in workflow
     assert "interpolation_high_speed_dropped_count" in workflow
     assert "risk_adjusted_error_3d_p95_m" in workflow
+    assert "partial_clean_min_coverage" in workflow
+    assert "--partial-clean-min-coverage" in workflow
+    assert "best_partial_clean_pareto_front" in workflow
     assert "--ranking-output" in workflow
     assert "--recommendation-output" in workflow
     assert "stable_radar_segment_ablation_recommendation.json" in workflow

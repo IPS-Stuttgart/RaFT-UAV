@@ -22,6 +22,7 @@ def _args(**overrides: object) -> argparse.Namespace:
         "min_segment_frames": [100],
         "max_transition_speeds_mps": [65.0],
         "ranking_min_coverage": 0.95,
+        "partial_clean_min_coverage": 0.4,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -358,17 +359,20 @@ def test_recommendation_payload_selects_decision_rows(tmp_path: Path) -> None:
         summary_output=tmp_path / "summary.csv",
         ranking_output=tmp_path / "ranking.csv",
         min_coverage=0.95,
+        partial_clean_min_coverage=0.4,
     )
     output = tmp_path / "recommendation.json"
     ablation._write_recommendation(output, payload)
     loaded = json.loads(output.read_text(encoding="utf-8"))
 
-    assert loaded["schema_version"] == 1
+    assert loaded["schema_version"] == 2
     assert loaded["ranking_rows"] == 2
     assert loaded["eligible_rows"] == 1
     assert loaded["pareto_front_rows"] == 2
+    assert loaded["partial_clean_rows"] == 1
     assert loaded["best_eligible"]["config"] == "stable_full"
     assert loaded["best_ineligible_pareto_front"]["config"] == "partial_clean"
+    assert loaded["best_partial_clean_pareto_front"]["config"] == "partial_clean"
 
 
 def test_validate_args_rejects_empty_and_nonpositive_grids() -> None:
@@ -380,6 +384,7 @@ def test_validate_args_rejects_empty_and_nonpositive_grids() -> None:
         {"min_segment_frames": [0]},
         {"max_transition_speeds_mps": [0.0]},
         {"ranking_min_coverage": 1.1},
+        {"partial_clean_min_coverage": -0.1},
     ):
         try:
             ablation._validate_args(_args(**kwargs))

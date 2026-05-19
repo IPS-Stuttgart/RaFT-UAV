@@ -7,6 +7,7 @@ from raft_uav.diagnostics.paper_table import (
     metric_row,
     run_paper_compatible_cv_fusion,
     run_paper_longest_track_cv_fusion,
+    run_paper_stable_segments_cv_fusion,
     select_stable_radar_segments,
     select_radar_for_table,
 )
@@ -718,3 +719,77 @@ def test_paper_longest_track_fusion_coasts_between_stable_anchors():
         "updated",
     ]
     assert selected["track_id"].tolist() == [1, 1]
+
+
+def test_paper_stable_segments_fusion_coasts_outside_selected_segments():
+    rf_measurements = [
+        TrackingMeasurement(
+            time_s=0.0,
+            vector=np.array([0.0, 0.0, 0.0]),
+            covariance=np.diag([1.0, 1.0, 1.0]),
+            source="rf",
+        )
+    ]
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 1.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 1.0,
+                "cat_prob_uav": 0.9,
+            },
+            {
+                "frame_index": 1,
+                "track_id": 1,
+                "time_s": 2.0,
+                "east_m": 2.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 2.0,
+                "cat_prob_uav": 0.9,
+            },
+            {
+                "frame_index": 2,
+                "track_id": 1,
+                "time_s": 3.0,
+                "east_m": 3.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 3.0,
+                "cat_prob_uav": 0.9,
+            },
+            {
+                "frame_index": 3,
+                "track_id": 2,
+                "time_s": 4.0,
+                "east_m": 100.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 100.0,
+                "cat_prob_uav": 0.9,
+            },
+        ]
+    )
+
+    records, selected = run_paper_stable_segments_cv_fusion(
+        rf_measurements=rf_measurements,
+        radar=radar,
+        radar_range_gate_m=800.0,
+        stable_segment_min_frames=3,
+        stable_segment_max_transition_speed_mps=65.0,
+    )
+
+    assert [record["update_action"] for record in records if record["source"] == "radar"] == [
+        "updated",
+        "updated",
+        "updated",
+        "missed_detection",
+    ]
+    assert {record["association_mode"] for record in records if record["source"] == "radar"} == {
+        "paper-stable-segments"
+    }
+    assert selected["track_id"].tolist() == [1, 1, 1]

@@ -73,6 +73,7 @@ FUSION_ASSOCIATIONS = (
     "tracklet-viterbi",
     "paper-compatible",
     "paper-longest-track",
+    "paper-stable-segments",
 )
 
 
@@ -285,6 +286,8 @@ def run_paper_table_diagnostic(
                     radar_range_gate_m=radar_range_gate_m,
                     fusion_nis_gate_prob=fusion_nis_gate_prob,
                     rf_nis_gate_prob=rf_nis_gate_prob,
+                    stable_segment_min_frames=stable_segment_min_frames,
+                    stable_segment_max_transition_speed_mps=stable_segment_max_transition_speed_mps,
                     acceleration_std_mps2=acceleration_std_mps2,
                     smoother_lag_s=smoother_lag_s,
                     max_time_delta_s=truth_time_gate_s,
@@ -331,6 +334,8 @@ def fusion_rows(
     radar_range_gate_m: float | None,
     fusion_nis_gate_prob: float,
     rf_nis_gate_prob: float,
+    stable_segment_min_frames: int,
+    stable_segment_max_transition_speed_mps: float,
     acceleration_std_mps2: float,
     smoother_lag_s: float,
     max_time_delta_s: float,
@@ -356,6 +361,18 @@ def fusion_rows(
                 radar_range_gate_m=radar_range_gate_m,
                 nis_gate_probability=fusion_nis_gate_prob,
                 rf_nis_gate_probability=rf_nis_gate_prob,
+            )
+        elif association == "paper-stable-segments":
+            records, selected = run_paper_stable_segments_cv_fusion(
+                rf_measurements=rf_measurements,
+                radar=radar,
+                acceleration_std_mps2=acceleration_std_mps2,
+                radar_range_gate_m=radar_range_gate_m,
+                radar_catprob_threshold=radar_catprob_threshold,
+                nis_gate_probability=fusion_nis_gate_prob,
+                rf_nis_gate_probability=rf_nis_gate_prob,
+                stable_segment_min_frames=stable_segment_min_frames,
+                stable_segment_max_transition_speed_mps=stable_segment_max_transition_speed_mps,
             )
         else:
             records, selected = run_async_cv_baseline_with_radar_association(
@@ -675,13 +692,6 @@ def run_paper_longest_track_cv_fusion(
     if not 0.0 < float(rf_nis_gate_probability) < 1.0:
         raise ValueError("rf_nis_gate_probability must be in (0, 1)")
 
-    covariance = np.diag(
-        [float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2]
-    )
-    events = _events(list(rf_measurements), radar)
-    if not events:
-        return [], _selected_rows_frame(radar, [])
-
     anchors = select_radar_for_table(
         radar=radar,
         truth=pd.DataFrame(),
@@ -690,6 +700,92 @@ def run_paper_longest_track_cv_fusion(
         range_gate_m=radar_range_gate_m,
         max_time_delta_s=float("inf"),
     )
+    return _run_anchor_cv_fusion(
+        rf_measurements=rf_measurements,
+        radar=radar,
+        anchors=anchors,
+        acceleration_std_mps2=acceleration_std_mps2,
+        radar_xy_std_m=radar_xy_std_m,
+        radar_z_std_m=radar_z_std_m,
+        nis_gate_probability=nis_gate_probability,
+        rf_nis_gate_probability=rf_nis_gate_probability,
+        association_mode="paper-longest-track",
+    )
+
+
+def run_paper_stable_segments_cv_fusion(
+    *,
+    rf_measurements: list[TrackingMeasurement],
+    radar: pd.DataFrame,
+    acceleration_std_mps2: float = 4.0,
+    radar_xy_std_m: float = 25.0,
+    radar_z_std_m: float = 35.0,
+    radar_range_gate_m: float | None = 800.0,
+    radar_catprob_threshold: float | None = 0.4,
+    nis_gate_probability: float = 0.99,
+    rf_nis_gate_probability: float = 0.99,
+    stable_segment_min_frames: int = 100,
+    stable_segment_max_transition_speed_mps: float = 65.0,
+) -> tuple[list[dict[str, object]], pd.DataFrame]:
+    """Run CV fusion using only stitched stable radar segment anchors."""
+
+    if radar_range_gate_m is not None and float(radar_range_gate_m) <= 0.0:
+        raise ValueError("radar_range_gate_m must be positive or None")
+    if radar_catprob_threshold is not None and not 0.0 <= float(radar_catprob_threshold) <= 1.0:
+        raise ValueError("radar_catprob_threshold must be in [0, 1] or None")
+    if not 0.0 < float(nis_gate_probability) < 1.0:
+        raise ValueError("nis_gate_probability must be in (0, 1)")
+    if not 0.0 < float(rf_nis_gate_probability) < 1.0:
+        raise ValueError("rf_nis_gate_probability must be in (0, 1)")
+    if stable_segment_min_frames < 1:
+        raise ValueError("stable_segment_min_frames must be positive")
+    if stable_segment_max_transition_speed_mps <= 0.0:
+        raise ValueError("stable_segment_max_transition_speed_mps must be positive")
+
+    anchors = select_radar_for_table(
+        radar=radar,
+        truth=pd.DataFrame(),
+        selection="radar-stable-segments-range-gated",
+        catprob_threshold=radar_catprob_threshold,
+        range_gate_m=radar_range_gate_m,
+        stable_segment_min_frames=stable_segment_min_frames,
+        stable_segment_max_transition_speed_mps=stable_segment_max_transition_speed_mps,
+        max_time_delta_s=float("inf"),
+    )
+    return _run_anchor_cv_fusion(
+        rf_measurements=rf_measurements,
+        radar=radar,
+        anchors=anchors,
+        acceleration_std_mps2=acceleration_std_mps2,
+        radar_xy_std_m=radar_xy_std_m,
+        radar_z_std_m=radar_z_std_m,
+        nis_gate_probability=nis_gate_probability,
+        rf_nis_gate_probability=rf_nis_gate_probability,
+        association_mode="paper-stable-segments",
+    )
+
+
+def _run_anchor_cv_fusion(
+    *,
+    rf_measurements: list[TrackingMeasurement],
+    radar: pd.DataFrame,
+    anchors: pd.DataFrame,
+    acceleration_std_mps2: float,
+    radar_xy_std_m: float,
+    radar_z_std_m: float,
+    nis_gate_probability: float,
+    rf_nis_gate_probability: float,
+    association_mode: str,
+) -> tuple[list[dict[str, object]], pd.DataFrame]:
+    """Run CV fusion with updates only at preselected radar anchor frames."""
+
+    covariance = np.diag(
+        [float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2]
+    )
+    events = _events(list(rf_measurements), radar)
+    if not events:
+        return [], _selected_rows_frame(radar, [])
+
     anchor_by_key = {_radar_row_key(row): row for _, row in anchors.iterrows()}
     initial = _initial_anchor_measurement(events, anchor_by_key=anchor_by_key, covariance=covariance)
     if initial is None:
@@ -719,7 +815,14 @@ def run_paper_longest_track_cv_fusion(
         tracker.predict_to(time_s)
         selected = anchor_by_key.get(_radar_event_key(event))
         if selected is None:
-            records.append(_coast_record(time_s=time_s, tracker=tracker, source="radar"))
+            records.append(
+                _coast_record(
+                    time_s=time_s,
+                    tracker=tracker,
+                    source="radar",
+                    association_mode=association_mode,
+                )
+            )
             continue
         measurement = _radar_row_to_measurement(selected, covariance)
         diagnostics = tracker.update(measurement, gate_threshold=nis_threshold)
@@ -732,7 +835,7 @@ def run_paper_longest_track_cv_fusion(
                 diagnostics,
                 track_id=_optional_track_id(selected),
                 association_nis=_optional_float(selected.get("association_nis")),
-                association_mode="paper-longest-track",
+                association_mode=association_mode,
             )
         )
 
@@ -1219,6 +1322,7 @@ def _coast_record(
     time_s: float,
     tracker: AsyncConstantVelocityKalmanTracker,
     source: str,
+    association_mode: str = "paper-compatible",
 ) -> dict[str, object]:
     diagnostics = TrackingUpdateDiagnostics(
         time_s=float(time_s),
@@ -1240,7 +1344,7 @@ def _coast_record(
         "state": tracker.state.copy(),
         "covariance": tracker.covariance_matrix.copy(),
         **diagnostics.to_record(),
-        "association_mode": "paper-compatible",
+        "association_mode": association_mode,
     }
 
 
