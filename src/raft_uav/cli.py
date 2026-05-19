@@ -602,6 +602,7 @@ def _run_baseline(
         method=smoother,
         acceleration_std_mps2=acceleration_std,
         lag_s=smoother_lag_s,
+        measurements=measurements,
     )
 
     estimate_frame = _records_to_frame(records)
