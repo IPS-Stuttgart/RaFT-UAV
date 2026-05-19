@@ -192,6 +192,12 @@ def main() -> int:
         default=0.95,
         help="minimum aggregate coverage for a row to be ranked as recommendation-eligible",
     )
+    parser.add_argument(
+        "--partial-clean-min-coverage",
+        type=float,
+        default=0.4,
+        help="minimum aggregate coverage for surfacing a clean sparse-radar candidate",
+    )
     parser.add_argument("--truth-time-gate-s", type=float, default=2.0)
     parser.add_argument("--skip-existing", action="store_true")
     args = parser.parse_args()
@@ -240,6 +246,7 @@ def main() -> int:
             summary_output=args.summary_output,
             ranking_output=ranking_output,
             min_coverage=args.ranking_min_coverage,
+            partial_clean_min_coverage=args.partial_clean_min_coverage,
         ),
     )
     print(f"wrote {len(rows) + len(aggregate_rows)} rows to {args.summary_output}")
@@ -271,6 +278,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--max-transition-speeds-mps values must be positive")
     if not 0.0 <= float(args.ranking_min_coverage) <= 1.0:
         raise SystemExit("--ranking-min-coverage must be in [0, 1]")
+    if not 0.0 <= float(args.partial_clean_min_coverage) <= 1.0:
+        raise SystemExit("--partial-clean-min-coverage must be in [0, 1]")
 
 
 def _configs(args: argparse.Namespace) -> list[StableSegmentConfig]:
@@ -482,6 +491,7 @@ def _recommendation_payload(
     summary_output: Path,
     ranking_output: Path,
     min_coverage: float,
+    partial_clean_min_coverage: float = 0.4,
 ) -> dict[str, object]:
     """Return a compact JSON payload for downstream paper/workflow decisions."""
 
@@ -498,19 +508,35 @@ def _recommendation_payload(
         lambda row: bool(row.get("pareto_front"))
         and not bool(row.get("eligible_for_recommendation")),
     )
+    best_partial_clean = _first_row(
+        ranking_rows,
+        lambda row: bool(row.get("pareto_front"))
+        and not bool(row.get("eligible_for_recommendation"))
+        and _coverage_eligible(row, min_coverage=partial_clean_min_coverage),
+    )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "summary_csv": str(summary_output),
         "ranking_csv": str(ranking_output),
         "ranking_min_coverage": float(min_coverage),
+        "partial_clean_min_coverage": float(partial_clean_min_coverage),
         "ranking_rows": int(len(ranking_rows)),
         "eligible_rows": int(
             sum(bool(row.get("eligible_for_recommendation")) for row in ranking_rows)
         ),
         "pareto_front_rows": int(sum(bool(row.get("pareto_front")) for row in ranking_rows)),
+        "partial_clean_rows": int(
+            sum(
+                bool(row.get("pareto_front"))
+                and not bool(row.get("eligible_for_recommendation"))
+                and _coverage_eligible(row, min_coverage=partial_clean_min_coverage)
+                for row in ranking_rows
+            )
+        ),
         "best_eligible": _json_row(best_eligible),
         "best_pareto_front": _json_row(best_pareto),
         "best_ineligible_pareto_front": _json_row(best_ineligible_pareto),
+        "best_partial_clean_pareto_front": _json_row(best_partial_clean),
     }
 
 
