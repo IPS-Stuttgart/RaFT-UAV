@@ -258,6 +258,10 @@ def test_interpolated_radar_selection_does_not_extrapolate_outside_anchors():
     )
 
     assert selected["time_s"].tolist() == [0.0, 1.0]
+    assert selected["association_anchor_count"].tolist() == [2, 2]
+    assert selected["association_interpolation_candidate_frame_count"].tolist() == [3, 3]
+    assert selected["association_interpolation_dropped_frame_count"].tolist() == [1, 1]
+    assert selected["association_interpolation_outside_anchor_dropped_count"].tolist() == [1, 1]
 
 
 def test_interpolated_radar_selection_respects_max_anchor_gap():
@@ -307,6 +311,10 @@ def test_interpolated_radar_selection_respects_max_anchor_gap():
     )
 
     assert selected["time_s"].tolist() == [0.0, 10.0]
+    assert selected["association_anchor_count"].tolist() == [2, 2]
+    assert selected["association_max_anchor_gap_s"].tolist() == [10.0, 10.0]
+    assert selected["association_interpolation_dropped_frame_count"].tolist() == [1, 1]
+    assert selected["association_interpolation_long_gap_dropped_count"].tolist() == [1, 1]
     assert selected["association_interpolation_max_gap_s"].tolist() == [3.0, 3.0]
 
 

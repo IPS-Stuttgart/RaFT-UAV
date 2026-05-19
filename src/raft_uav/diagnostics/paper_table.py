@@ -252,6 +252,7 @@ def run_paper_table_diagnostic(
                     selected_count=len(selected),
                     max_time_delta_s=truth_time_gate_s,
                     track_ids=_track_ids(selected),
+                    extra_fields=_radar_selection_diagnostics(selected),
                 )
             )
     if include_fusion and not radar.empty:
@@ -976,11 +977,11 @@ def _interpolate_selected_radar_to_frame_times(
         return radar.iloc[0:0].copy()
     if max_gap_s is not None and max_gap_s <= 0.0:
         raise ValueError("max_gap_s must be positive or None")
-    frame_times = np.array(
+    all_frame_times = np.array(
         [float(group["time_s"].median()) for group in radar_frame_groups(radar)],
         dtype=float,
     )
-    if frame_times.size == 0:
+    if all_frame_times.size == 0:
         return radar.iloc[0:0].copy()
 
     anchors = (
@@ -991,12 +992,22 @@ def _interpolate_selected_radar_to_frame_times(
     anchor_times = anchors["time_s"].to_numpy(dtype=float)
     if anchor_times.size == 0:
         return radar.iloc[0:0].copy()
-    keep = (frame_times >= anchor_times[0]) & (frame_times <= anchor_times[-1])
+    keep = (all_frame_times >= anchor_times[0]) & (all_frame_times <= anchor_times[-1])
+    outside_anchor_dropped_count = int(np.count_nonzero(~keep))
+    long_gap_dropped_count = 0
     if max_gap_s is not None:
-        keep &= _within_interpolation_gap(frame_times, anchor_times, max_gap_s=float(max_gap_s))
-    frame_times = frame_times[keep]
+        gap_keep = _within_interpolation_gap(
+            all_frame_times,
+            anchor_times,
+            max_gap_s=float(max_gap_s),
+        )
+        long_gap_dropped_count = int(np.count_nonzero(keep & ~gap_keep))
+        keep &= gap_keep
+    frame_times = all_frame_times[keep]
     if frame_times.size == 0:
         return radar.iloc[0:0].copy()
+    anchor_gaps_s = np.diff(anchor_times)
+    max_anchor_gap_s = float(np.max(anchor_gaps_s)) if anchor_gaps_s.size else 0.0
 
     out = pd.DataFrame({"time_s": frame_times})
     for column in ("east_m", "north_m", "up_m"):
@@ -1007,6 +1018,17 @@ def _interpolate_selected_radar_to_frame_times(
         )
     out["association_mode"] = association_mode
     out["association_interpolated"] = True
+    out["association_anchor_count"] = int(anchor_times.size)
+    out["association_anchor_span_s"] = float(anchor_times[-1] - anchor_times[0])
+    out["association_max_anchor_gap_s"] = max_anchor_gap_s
+    out["association_interpolation_candidate_frame_count"] = int(all_frame_times.size)
+    out["association_interpolation_dropped_frame_count"] = int(
+        all_frame_times.size - frame_times.size
+    )
+    out["association_interpolation_outside_anchor_dropped_count"] = (
+        outside_anchor_dropped_count
+    )
+    out["association_interpolation_long_gap_dropped_count"] = long_gap_dropped_count
     if max_gap_s is not None:
         out["association_interpolation_max_gap_s"] = float(max_gap_s)
     if "track_id" in anchors.columns:
@@ -1142,6 +1164,7 @@ def metric_row(
     selected_count: int,
     max_time_delta_s: float,
     track_ids: list[int] | None,
+    extra_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return one paper-style metric row."""
 
@@ -1172,9 +1195,65 @@ def metric_row(
         "track_switches": int(_track_switches(track_ids or [])),
         "track_ids": ",".join(str(value) for value in (track_ids or [])),
     }
+    if extra_fields:
+        row.update(extra_fields)
     row.update(_error_summary(errors_2d, prefix="error_2d"))
     row.update(_error_summary(errors_3d, prefix="error_3d"))
     return row
+
+
+def _radar_selection_diagnostics(selected: pd.DataFrame) -> dict[str, object]:
+    """Return compact diagnostics for selected radar rows."""
+
+    if selected.empty:
+        return {
+            "selected_interpolated_count": 0,
+            "selected_interpolated_fraction": 0.0,
+        }
+    fields: dict[str, object] = {}
+    interpolated = _bool_column_count(selected, "association_interpolated")
+    fields["selected_interpolated_count"] = interpolated
+    fields["selected_interpolated_fraction"] = _safe_ratio(interpolated, len(selected))
+    count_columns = {
+        "association_anchor_count": "interpolation_anchor_count",
+        "association_interpolation_candidate_frame_count": "interpolation_candidate_frame_count",
+        "association_interpolation_dropped_frame_count": "interpolation_dropped_frame_count",
+        "association_interpolation_outside_anchor_dropped_count": (
+            "interpolation_outside_anchor_dropped_count"
+        ),
+        "association_interpolation_long_gap_dropped_count": "interpolation_long_gap_dropped_count",
+        "association_segment_count": "segment_count",
+    }
+    for source, target in count_columns.items():
+        value = _finite_numeric_column_max(selected, source)
+        if value is not None:
+            fields[target] = int(value)
+    float_columns = {
+        "association_anchor_span_s": "interpolation_anchor_span_s",
+        "association_max_anchor_gap_s": "interpolation_max_anchor_gap_s",
+        "association_interpolation_max_gap_s": "interpolation_max_gap_cap_s",
+    }
+    for source, target in float_columns.items():
+        value = _finite_numeric_column_max(selected, source)
+        if value is not None:
+            fields[target] = round(float(value), 3)
+    return fields
+
+
+def _bool_column_count(frame: pd.DataFrame, column: str) -> int:
+    if column not in frame.columns:
+        return 0
+    return int(frame[column].fillna(False).astype(bool).sum())
+
+
+def _finite_numeric_column_max(frame: pd.DataFrame, column: str) -> float | None:
+    if column not in frame.columns:
+        return None
+    values = pd.to_numeric(frame[column], errors="coerce")
+    values = values[np.isfinite(values)]
+    if values.empty:
+        return None
+    return float(values.max())
 
 
 def _error_summary(errors_m: np.ndarray, *, prefix: str) -> dict[str, float]:
