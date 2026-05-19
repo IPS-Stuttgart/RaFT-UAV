@@ -52,10 +52,17 @@ def _extract_range_args(argv: list[str] | None) -> tuple[list[str], dict[str, ob
 def _range_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--tracklet-use-range-adaptive-radar-covariance", type=_bool_value)
+    parser.add_argument(
+        "--tracklet-radar-covariance-model",
+        choices=("fixed", "range-adaptive", "polar-projected"),
+    )
     parser.add_argument("--tracklet-radar-range-xy-floor-std-m", type=_nonnegative_float)
     parser.add_argument("--tracklet-radar-range-z-floor-std-m", type=_nonnegative_float)
     parser.add_argument("--tracklet-radar-range-xy-scale", type=_nonnegative_float)
     parser.add_argument("--tracklet-radar-range-z-scale", type=_nonnegative_float)
+    parser.add_argument("--tracklet-radar-polar-range-std-m", type=_nonnegative_float)
+    parser.add_argument("--tracklet-radar-polar-azimuth-std-deg", type=_nonnegative_float)
+    parser.add_argument("--tracklet-radar-polar-elevation-std-deg", type=_nonnegative_float)
     return parser
 
 
@@ -66,10 +73,22 @@ def _overrides_from_namespace(namespace: argparse.Namespace) -> dict[str, object
         "use_range_adaptive_radar_covariance",
         namespace.tracklet_use_range_adaptive_radar_covariance,
     )
+    _maybe_add(overrides, "radar_covariance_model", namespace.tracklet_radar_covariance_model)
     _maybe_add(overrides, "radar_range_xy_floor_std_m", namespace.tracklet_radar_range_xy_floor_std_m)
     _maybe_add(overrides, "radar_range_z_floor_std_m", namespace.tracklet_radar_range_z_floor_std_m)
     _maybe_add(overrides, "radar_range_xy_scale", namespace.tracklet_radar_range_xy_scale)
     _maybe_add(overrides, "radar_range_z_scale", namespace.tracklet_radar_range_z_scale)
+    _maybe_add(overrides, "radar_polar_range_std_m", namespace.tracklet_radar_polar_range_std_m)
+    _maybe_add(
+        overrides,
+        "radar_polar_azimuth_std_deg",
+        namespace.tracklet_radar_polar_azimuth_std_deg,
+    )
+    _maybe_add(
+        overrides,
+        "radar_polar_elevation_std_deg",
+        namespace.tracklet_radar_polar_elevation_std_deg,
+    )
     return overrides
 
 

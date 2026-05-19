@@ -13,6 +13,10 @@ def test_range_cli_extracts_range_args_and_forwards_base_args() -> None:
             "0.041",
             "--tracklet-radar-range-z-scale",
             "0.063",
+            "--tracklet-radar-covariance-model",
+            "polar-projected",
+            "--tracklet-radar-polar-azimuth-std-deg",
+            "1.5",
             "run-baseline",
             "dataset",
             "--flight",
@@ -23,6 +27,8 @@ def test_range_cli_extracts_range_args_and_forwards_base_args() -> None:
     assert forwarded == ["run-baseline", "dataset", "--flight", "Opt1"]
     assert overrides["radar_range_xy_scale"] == 0.041
     assert overrides["radar_range_z_scale"] == 0.063
+    assert overrides["radar_covariance_model"] == "polar-projected"
+    assert overrides["radar_polar_azimuth_std_deg"] == 1.5
 
 
 def test_range_cli_overlays_tracklet_config(monkeypatch) -> None:
@@ -35,6 +41,10 @@ def test_range_cli_overlays_tracklet_config(monkeypatch) -> None:
             "radar_range_z_floor_std_m": 33.0,
             "radar_range_xy_scale": 0.044,
             "radar_range_z_scale": 0.066,
+            "radar_covariance_model": "polar-projected",
+            "radar_polar_range_std_m": 12.0,
+            "radar_polar_azimuth_std_deg": 1.2,
+            "radar_polar_elevation_std_deg": 2.3,
         }
     ):
         config = tracklet_viterbi_cli._tracklet_config_from_environment()
@@ -44,6 +54,10 @@ def test_range_cli_overlays_tracklet_config(monkeypatch) -> None:
         assert config.radar_range_z_floor_std_m == 33.0
         assert config.radar_range_xy_scale == 0.044
         assert config.radar_range_z_scale == 0.066
+        assert config.radar_covariance_model == "polar-projected"
+        assert config.radar_polar_range_std_m == 12.0
+        assert config.radar_polar_azimuth_std_deg == 1.2
+        assert config.radar_polar_elevation_std_deg == 2.3
 
     assert tracklet_viterbi_range_cli._RANGE_VARIANT_ENV not in os.environ
 
