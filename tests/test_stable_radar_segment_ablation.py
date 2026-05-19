@@ -55,9 +55,15 @@ def test_rows_from_table_extracts_only_stable_ablation_methods(tmp_path: Path) -
                 "method": "radar-stable-segments-range-gated-interpolated",
                 "candidate_count": 100,
                 "selected_count": 100,
+                "selected_interpolated_count": 100,
+                "selected_interpolated_fraction": 1.0,
                 "matched_count": 100,
                 "coverage": 1.0,
                 "track_switches": 0,
+                "interpolation_anchor_count": 50,
+                "interpolation_max_anchor_gap_s": 3.0,
+                "interpolation_candidate_frame_count": 120,
+                "interpolation_dropped_frame_count": 20,
                 "error_3d_mean_m": 12.34567,
                 "error_3d_rmse_m": 20.0,
                 "error_3d_p95_m": 40.0,
@@ -85,6 +91,12 @@ def test_rows_from_table_extracts_only_stable_ablation_methods(tmp_path: Path) -
     assert rows[0]["config"] == "stable_cat0p40_rg800_gapnone_min100_v65"
     assert rows[0]["error_3d_mean_m"] == 12.346
     assert rows[0]["radar_interpolation_max_gap_s"] == ""
+    assert rows[0]["selected_interpolated_count"] == 100
+    assert rows[0]["selected_interpolated_fraction"] == 1.0
+    assert rows[0]["interpolation_anchor_count"] == 50
+    assert rows[0]["interpolation_max_anchor_gap_s"] == 3.0
+    assert rows[0]["interpolation_candidate_frame_count"] == 120
+    assert rows[0]["interpolation_dropped_frame_count"] == 20
     assert rows[0]["stable_segment_min_frames"] == 100
 
 
@@ -220,6 +232,8 @@ def test_aggregate_and_ranking_rows_sort_by_mean_then_tail() -> None:
     assert stable_a["flight_count"] == 2
     assert stable_a["candidate_count"] == 30
     assert stable_a["selected_count"] == 20
+    assert stable_a["selected_interpolated_count"] == 0
+    assert stable_a["selected_interpolated_fraction"] == 0.0
     assert stable_a["matched_count"] == 18
     assert stable_a["coverage"] == 0.6
     assert stable_a["track_switches"] == 3

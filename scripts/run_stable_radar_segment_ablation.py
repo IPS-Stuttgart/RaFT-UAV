@@ -37,9 +37,20 @@ SUMMARY_COLUMNS = (
     "flight_count",
     "candidate_count",
     "selected_count",
+    "selected_interpolated_count",
+    "selected_interpolated_fraction",
     "matched_count",
     "coverage",
     "track_switches",
+    "segment_count",
+    "interpolation_anchor_count",
+    "interpolation_anchor_span_s",
+    "interpolation_max_anchor_gap_s",
+    "interpolation_max_gap_cap_s",
+    "interpolation_candidate_frame_count",
+    "interpolation_dropped_frame_count",
+    "interpolation_outside_anchor_dropped_count",
+    "interpolation_long_gap_dropped_count",
     "error_3d_mean_m",
     "error_3d_rmse_m",
     "error_3d_p95_m",
@@ -71,10 +82,38 @@ RANKING_COLUMNS = (
     "error_3d_max_m",
     "track_switches",
     "selected_count",
+    "selected_interpolated_count",
+    "selected_interpolated_fraction",
     "matched_count",
     "candidate_count",
+    "segment_count",
+    "interpolation_anchor_count",
+    "interpolation_anchor_span_s",
+    "interpolation_max_anchor_gap_s",
+    "interpolation_max_gap_cap_s",
+    "interpolation_candidate_frame_count",
+    "interpolation_dropped_frame_count",
+    "interpolation_outside_anchor_dropped_count",
+    "interpolation_long_gap_dropped_count",
 )
-SUM_COLUMNS = ("candidate_count", "selected_count", "matched_count", "track_switches")
+SUM_COLUMNS = (
+    "candidate_count",
+    "selected_count",
+    "selected_interpolated_count",
+    "matched_count",
+    "track_switches",
+    "segment_count",
+    "interpolation_anchor_count",
+    "interpolation_candidate_frame_count",
+    "interpolation_dropped_frame_count",
+    "interpolation_outside_anchor_dropped_count",
+    "interpolation_long_gap_dropped_count",
+)
+MAX_COLUMNS = (
+    "interpolation_anchor_span_s",
+    "interpolation_max_anchor_gap_s",
+    "interpolation_max_gap_cap_s",
+)
 MEAN_COLUMNS = (
     "error_3d_mean_m",
     "error_3d_rmse_m",
@@ -289,8 +328,14 @@ def _aggregate_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
         row["flight"] = "aggregate"
         row["flight_count"] = int(group["flight"].nunique())
         for column in SUM_COLUMNS:
-            row[column] = int(pd.to_numeric(group[column], errors="coerce").fillna(0).sum())
+            row[column] = _sum_column(group, column)
+        row["selected_interpolated_fraction"] = _safe_ratio(
+            row["selected_interpolated_count"],
+            row["selected_count"],
+        )
         row["coverage"] = _safe_ratio(row["matched_count"], row["candidate_count"])
+        for column in MAX_COLUMNS:
+            row[column] = _max_column(group, column)
         for column in MEAN_COLUMNS:
             row[column] = _mean_column(group, column)
         row["table_path"] = ""
@@ -443,10 +488,27 @@ def _pareto_front_flags(rows: list[dict[str, object]]) -> list[bool]:
 
 
 def _mean_column(frame: pd.DataFrame, column: str) -> object:
+    if column not in frame:
+        return ""
     values = pd.to_numeric(frame[column], errors="coerce").dropna()
     if values.empty:
         return ""
     return round(float(values.mean()), 3)
+
+
+def _sum_column(frame: pd.DataFrame, column: str) -> int:
+    if column not in frame:
+        return 0
+    return int(pd.to_numeric(frame[column], errors="coerce").fillna(0).sum())
+
+
+def _max_column(frame: pd.DataFrame, column: str) -> object:
+    if column not in frame:
+        return ""
+    values = pd.to_numeric(frame[column], errors="coerce").dropna()
+    if values.empty:
+        return ""
+    return round(float(values.max()), 3)
 
 
 def _safe_ratio(numerator: object, denominator: object) -> object:
