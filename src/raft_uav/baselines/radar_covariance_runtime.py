@@ -4,7 +4,8 @@ This module is intentionally small and conservative: it preserves the existing
 public API and teaches the existing radar-association helpers to consume
 candidate-specific covariance columns.  The active covariance model is controlled
 by environment variables and defaults to ``range-angle`` when ``range_m`` and ENU
-position columns are present.
+position columns are present.  Radar association now consumes those covariance
+columns natively; the runtime hook only annotates radar rows at ingestion points.
 """
 
 from __future__ import annotations
@@ -41,9 +42,6 @@ def install() -> None:
     _ORIGINAL_RADAR_MEASUREMENTS_TO_ENU = aerpaw.radar_measurements_to_enu
 
     association._events = _events_with_covariance
-    association._nis_scored_candidates = _nis_scored_candidates_with_candidate_covariance
-    association._row_covariance = row_radar_covariance
-    association._pda_mixture_candidate = _pda_mixture_candidate_with_candidate_covariance
     aerpaw.radar_measurements_to_enu = _radar_measurements_to_enu_with_candidate_covariance
 
     _INSTALLED = True
@@ -148,6 +146,7 @@ def _radar_measurements_to_enu_with_candidate_covariance(
     default_z_std_m: float = 35.0,
     default_velocity_std_mps: float = 12.0,
     include_velocity: bool = False,
+    clock_offset_s: float = -4.0 * 60.0 * 60.0,
 ) -> list[Any]:
     from raft_uav.baselines.kalman import TrackingMeasurement
     from raft_uav.io import aerpaw
@@ -156,7 +155,12 @@ def _radar_measurements_to_enu_with_candidate_covariance(
     if "east_m" not in frame.columns:
         if projector is None or truth_origin_time is None:
             raise ValueError("raw radar rows require projector and truth_origin_time")
-        frame = aerpaw.normalize_radar(frame, projector, truth_origin_time)
+        frame = aerpaw.normalize_radar(
+            frame,
+            projector,
+            truth_origin_time,
+            clock_offset_s=clock_offset_s,
+        )
 
     fallback_position_covariance = fixed_radar_covariance(default_xy_std_m, default_z_std_m)
     measurements: list[TrackingMeasurement] = []

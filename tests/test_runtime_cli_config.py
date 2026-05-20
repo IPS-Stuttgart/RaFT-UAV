@@ -4,10 +4,12 @@ import os
 import pytest
 
 from raft_uav.baselines.tracklet_viterbi_runtime import _config_from_environment
+from raft_uav.tracklet_viterbi_cli import _extract_tracklet_args
 from raft_uav.runtime_cli_config import (
     add_runtime_configuration_arguments,
     apply_runtime_environment,
     parse_runtime_config,
+    runtime_environment_names_from_argv,
     runtime_config_from_args,
 )
 
@@ -77,6 +79,8 @@ def test_parse_runtime_config_preserves_standard_cli_arguments():
             "16",
             "--tracklet-track-support-weight",
             "0.9",
+            "--tracklet-max-candidates-per-frame",
+            "13",
             "--radar-covariance-mode",
             "fixed",
             "--smoother",
@@ -94,7 +98,95 @@ def test_parse_runtime_config_preserves_standard_cli_arguments():
     ]
     assert config["tracklet_viterbi"]["track_switch_cost"] == 16.0
     assert config["tracklet_viterbi"]["track_support_weight"] == 0.9
+    assert config["tracklet_viterbi"]["max_candidates"] == 13
     assert config["radar_covariance"]["mode"] == "fixed"
+
+
+def test_parse_runtime_config_accepts_zero_per_track_candidate_limit():
+    config, remaining = parse_runtime_config(
+        [
+            "run-baseline",
+            "/data/aerpaw",
+            "--tracklet-max-candidates-per-track-id",
+            "0",
+        ]
+    )
+
+    assert remaining == ["run-baseline", "/data/aerpaw"]
+    assert config["tracklet_viterbi"]["max_candidates_per_track_id"] == 0
+
+
+def test_tracklet_wrapper_leaves_runtime_owned_tracklet_arguments_for_runtime_parser():
+    raw_argv = [
+        "run-baseline",
+        "/data/aerpaw",
+        "--flight",
+        "Opt1",
+        "--tracklet-variant",
+        "retention",
+        "--tracklet-catprob-retention-mode",
+        "hard",
+        "--tracklet-track-support-weight",
+        "0.9",
+        "--tracklet-max-candidates-per-frame",
+        "11",
+        "--tracklet-max-candidate-pool-per-frame",
+        "32",
+        "--tracklet-viterbi-lag-s",
+        "12",
+    ]
+
+    remaining, env_updates = _extract_tracklet_args(raw_argv)
+    config, cli_remaining = parse_runtime_config(remaining)
+
+    assert cli_remaining == [
+        "run-baseline",
+        "/data/aerpaw",
+        "--flight",
+        "Opt1",
+    ]
+    assert env_updates == {
+        "RAFT_UAV_TRACKLET_VARIANT": "retention",
+        "RAFT_UAV_TRACKLET_VITERBI_LAG_S": "12.0",
+    }
+    assert config["tracklet_viterbi"]["catprob_retention_mode"] == "hard"
+    assert config["tracklet_viterbi"]["track_support_weight"] == 0.9
+    assert config["tracklet_viterbi"]["max_candidates"] == 11
+    assert config["tracklet_viterbi"]["max_candidate_pool_per_frame"] == 32
+
+
+def test_apply_runtime_environment_preserves_stripped_wrapper_env(monkeypatch):
+    monkeypatch.setenv("RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE", "hard")
+    monkeypatch.setenv("RAFT_UAV_TRACKLET_SUPPORT_WEIGHT", "0.9")
+    argv = ["run-baseline", "/data/aerpaw"]
+    config, _ = parse_runtime_config(argv)
+
+    apply_runtime_environment(
+        config,
+        overwrite_existing_env_names=runtime_environment_names_from_argv(argv),
+    )
+
+    assert os.environ["RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE"] == "hard"
+    assert os.environ["RAFT_UAV_TRACKLET_SUPPORT_WEIGHT"] == "0.9"
+    assert os.environ["RAFT_UAV_TRACKLET_BELOW_CATPROB_THRESHOLD_PENALTY"] == "3.0"
+
+
+def test_apply_runtime_environment_overwrites_explicit_runtime_flags(monkeypatch):
+    monkeypatch.setenv("RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE", "hard")
+    argv = [
+        "run-baseline",
+        "/data/aerpaw",
+        "--tracklet-catprob-retention-mode",
+        "soft",
+    ]
+    config, _ = parse_runtime_config(argv)
+
+    apply_runtime_environment(
+        config,
+        overwrite_existing_env_names=runtime_environment_names_from_argv(argv),
+    )
+
+    assert os.environ["RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE"] == "soft"
 
 
 def test_apply_runtime_environment_sets_expected_variables(monkeypatch):

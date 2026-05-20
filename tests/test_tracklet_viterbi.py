@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+from raft_uav.baselines.learned_radar_likelihood import LearnedRadarAssociationModel
 from raft_uav.baselines.kalman import TrackingMeasurement
 from raft_uav.baselines.tracklet_viterbi import (
     TrackletViterbiAssociationConfig,
@@ -49,6 +50,73 @@ def test_tracklet_viterbi_prefers_rf_supported_coherent_track():
 
     assert selected["track_id"].tolist() == [1, 1, 1]
     assert selected["association_mode"].unique().tolist() == ["tracklet-viterbi"]
+
+
+def test_tracklet_viterbi_learned_candidate_model_can_replace_manual_unary_terms():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": 0.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.10,
+            },
+            {
+                "frame_index": 0,
+                "track_id": 2,
+                "time_s": 0.0,
+                "east_m": 100.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.99,
+            },
+            {
+                "frame_index": 1,
+                "track_id": 1,
+                "time_s": 1.0,
+                "east_m": 10.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.10,
+            },
+            {
+                "frame_index": 1,
+                "track_id": 2,
+                "time_s": 1.0,
+                "east_m": 110.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.99,
+            },
+        ]
+    )
+    learned_model = LearnedRadarAssociationModel(
+        feature_names=("cat_prob_uav",),
+        mean=np.array([0.0]),
+        scale=np.array([1.0]),
+        weights=np.array([-20.0]),
+        intercept=0.0,
+    )
+
+    _, selected = run_async_cv_baseline_with_tracklet_viterbi_association(
+        rf_measurements=[_rf_measurement(0.0, 0.0), _rf_measurement(1.0, 10.0)],
+        radar=radar,
+        candidate_catprob_threshold=None,
+        config=TrackletViterbiAssociationConfig(
+            use_rf_anchor=True,
+            missed_detection_cost=100.0,
+            track_switch_cost=0.0,
+            learned_candidate_model=learned_model,
+            learned_candidate_score_mode="replace",
+        ),
+    )
+
+    assert selected["track_id"].tolist() == [1, 1]
+    assert selected["association_candidate_score_mode"].tolist() == ["replace", "replace"]
+    assert selected["association_learned_candidate_probability"].notna().all()
 
 
 def test_tracklet_viterbi_can_skip_implausible_radar_frame():

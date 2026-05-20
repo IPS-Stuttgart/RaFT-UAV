@@ -176,17 +176,17 @@ def _interpolate_positions(
     return np.column_stack(columns)
 
 
-def summarize_errors(errors_m: np.ndarray) -> dict[str, float]:
+def summarize_errors(errors_m: np.ndarray) -> dict[str, float | None]:
     """Summarize scalar position errors."""
 
     errors = np.asarray(errors_m, dtype=float).reshape(-1)
     if errors.size == 0:
         return {
             "count": 0.0,
-            "rmse_m": float("nan"),
-            "mae_m": float("nan"),
-            "p50_m": float("nan"),
-            "p95_m": float("nan"),
+            "rmse_m": None,
+            "mae_m": None,
+            "p50_m": None,
+            "p95_m": None,
         }
     return {
         "count": float(errors.size),

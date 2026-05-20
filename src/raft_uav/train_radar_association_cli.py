@@ -9,6 +9,8 @@ import pandas as pd
 
 from raft_uav.baselines.learned_radar_likelihood import (
     DEFAULT_FEATURE_NAMES,
+    STATEFUL_COST_METADATA_KEY,
+    estimate_stateful_transition_costs,
     fit_learned_radar_association_model,
 )
 from raft_uav.baselines.radar_likelihood_training import collect_radar_association_training_frame
@@ -56,9 +58,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--positive-gate-m", type=float, default=50.0)
     parser.add_argument("--truth-gate-m", type=float, default=150.0)
     parser.add_argument("--truth-time-gate-s", type=float, default=1.0)
+    parser.add_argument(
+        "--teacher-association",
+        choices=["oracle", "prediction-nis", "track-continuity", "none"],
+        default="oracle",
+        help="tracker context used while collecting training examples",
+    )
     parser.add_argument("--l2", type=float, default=1.0e-3)
     parser.add_argument("--max-iter", type=int, default=500)
     parser.add_argument("--no-balance-classes", action="store_true")
+    parser.add_argument(
+        "--disable-stateful-cost-calibration",
+        action="store_true",
+        help="do not store empirical stateful decoder costs in the learned model metadata",
+    )
+    parser.add_argument(
+        "--stateful-cost-smoothing",
+        type=float,
+        default=1.0,
+        help="Laplace smoothing used for empirical stateful decoder cost estimation",
+    )
+    parser.add_argument(
+        "--stateful-max-cost",
+        type=float,
+        default=12.0,
+        help="upper clamp for empirical stateful decoder costs",
+    )
     args = parser.parse_args(argv)
 
     flights = (
@@ -105,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
             positive_gate_m=args.positive_gate_m,
             truth_gate_m=args.truth_gate_m,
             truth_time_gate_s=args.truth_time_gate_s,
+            teacher_association=args.teacher_association,
         )
         if not examples.empty:
             frames.append(examples)
@@ -113,6 +139,27 @@ def main(argv: list[str] | None = None) -> int:
     if not frames:
         raise RuntimeError("no training examples were collected")
     examples = pd.concat(frames, ignore_index=True)
+    metadata = {
+        "training_flights": used_flights,
+        "excluded_flights": list(args.exclude_flight or []),
+        "positive_gate_m": float(args.positive_gate_m),
+        "truth_gate_m": float(args.truth_gate_m),
+        "truth_time_gate_s": float(args.truth_time_gate_s),
+        "teacher_association": args.teacher_association,
+        "radar_catprob_threshold": None
+        if args.disable_radar_catprob_threshold
+        else float(args.radar_catprob_threshold),
+        "radar_xy_std_m": float(args.radar_xy_std),
+        "radar_z_std_m": float(args.radar_z_std),
+        "acceleration_std_mps2": float(args.acceleration_std),
+    }
+    if not args.disable_stateful_cost_calibration:
+        metadata[STATEFUL_COST_METADATA_KEY] = estimate_stateful_transition_costs(
+            examples,
+            label_column="label",
+            smoothing=args.stateful_cost_smoothing,
+            max_cost=args.stateful_max_cost,
+        )
     model = fit_learned_radar_association_model(
         examples,
         feature_names=DEFAULT_FEATURE_NAMES,
@@ -120,19 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         l2=args.l2,
         max_iter=args.max_iter,
         balance_classes=not args.no_balance_classes,
-        metadata={
-            "training_flights": used_flights,
-            "excluded_flights": list(args.exclude_flight or []),
-            "positive_gate_m": float(args.positive_gate_m),
-            "truth_gate_m": float(args.truth_gate_m),
-            "truth_time_gate_s": float(args.truth_time_gate_s),
-            "radar_catprob_threshold": None
-            if args.disable_radar_catprob_threshold
-            else float(args.radar_catprob_threshold),
-            "radar_xy_std_m": float(args.radar_xy_std),
-            "radar_z_std_m": float(args.radar_z_std),
-            "acceleration_std_mps2": float(args.acceleration_std),
-        },
+        metadata=metadata,
     )
     model.save(args.output_model)
     if args.output_examples is not None:
@@ -146,6 +181,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"positive_examples={positives}")
     print(f"negative_examples={negatives}")
     print(f"features={','.join(model.feature_names)}")
+    if STATEFUL_COST_METADATA_KEY in model.metadata:
+        costs = model.metadata[STATEFUL_COST_METADATA_KEY]
+        print(
+            "stateful_costs="
+            f"miss={costs['missed_detection_cost']:.3f},"
+            f"consecutive_miss={costs['consecutive_miss_cost']:.3f},"
+            f"switch={costs['track_switch_cost']:.3f},"
+            f"missing_track={costs['missing_track_id_cost']:.3f}"
+        )
     print(f"model_json={args.output_model}")
     if args.output_examples is not None:
         print(f"examples_csv={args.output_examples}")

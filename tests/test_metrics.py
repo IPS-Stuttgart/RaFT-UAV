@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 
 from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
@@ -102,3 +104,14 @@ def test_position_errors_are_order_and_duplicate_timestamp_stable():
     )
 
     np.testing.assert_allclose(errors, np.zeros(2))
+
+
+def test_summarize_errors_empty_input_is_strict_json_compatible():
+    summary = summarize_errors(np.array([]))
+
+    assert summary["count"] == 0.0
+    assert summary["rmse_m"] is None
+    assert summary["mae_m"] is None
+    assert summary["p50_m"] is None
+    assert summary["p95_m"] is None
+    json.dumps(summary, allow_nan=False)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -66,3 +67,71 @@ def test_aggregate_method_rows_pools_errors_and_ranks_methods() -> None:
     assert by_method["method_b"]["truth_coverage_rate"] == 1.0
     assert by_method["method_b"]["rank_rmse_3d"] == 1
     assert by_method["method_a"]["rank_rmse_3d"] == 2
+
+
+def test_sota_protocol_exposes_online_fixed_lag_and_rts_imm_rows() -> None:
+    assert lfo.METHODS["imm_catprob"].runner == "imm"
+    assert lfo.METHODS["imm_catprob_fixed_lag"].fixed_lag is True
+    assert lfo.METHODS["imm_catprob_rts"].rts is True
+    assert lfo.METHODS["imm_tracklet_viterbi_fixed_lag"].fixed_lag is True
+
+
+def test_calibrated_heteroscedastic_method_is_available() -> None:
+    method = lfo.METHODS["hetero_cv_lofo_nis_fixed_lag"]
+
+    assert method.runner == "hetero"
+    assert method.fixed_lag
+    assert method.nis_calibrated
+
+
+def test_nis_calibration_summary_csv_flattens_groups(tmp_path: Path) -> None:
+    payload = {
+        "groups": {
+            "radar:3": {
+                "source": "radar",
+                "measurement_dim": 3,
+                "count": 42,
+                "enabled": True,
+                "applied_scale": 1.5,
+            }
+        }
+    }
+    path = tmp_path / "summary.csv"
+
+    lfo._write_nis_calibration_summary_csv(payload, path)
+
+    text = path.read_text(encoding="utf-8")
+    assert "radar:3" in text
+    assert "applied_scale" in text
+
+
+def test_imm_runner_forwards_smoother_options(monkeypatch, tmp_path: Path) -> None:
+    captured: list[list[str]] = []
+    monkeypatch.setattr(lfo, "_run", lambda command: captured.append(list(command)))
+    args = SimpleNamespace(
+        dataset_root=tmp_path / "dataset",
+        acceleration_std=4.0,
+        candidate_threshold=0.4,
+        fixed_lag_s=12.0,
+        rf_gate_prob=0.99,
+        radar_gate_prob=0.99,
+        rf_inflation_alpha=0.5,
+        radar_inflation_alpha=0.5,
+    )
+
+    lfo._run_method(
+        args,
+        lfo.METHODS["imm_catprob_fixed_lag"],
+        "Opt1",
+        tmp_path / "run",
+        tmp_path / "model.json",
+    )
+
+    command = captured[0]
+    assert command[:3] == [sys.executable, "-m", "raft_uav.imm_cli"]
+    assert "--smoother" in command
+    assert command[command.index("--smoother") + 1] == "fixed-lag"
+    assert "--smoother-lag-s" in command
+    assert command[command.index("--smoother-lag-s") + 1] == "12.0"
+    assert "--acceleration-std" in command
+    assert command[command.index("--acceleration-std") + 1] == "4.0"

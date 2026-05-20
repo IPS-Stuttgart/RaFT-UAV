@@ -1,9 +1,11 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.baselines.kalman import AsyncConstantVelocityKalmanTracker, TrackingMeasurement
 from raft_uav.baselines.radar_association import (
     _catprob_candidate_pool,
+    _initial_measurement,
     _select_radar_candidate,
     run_async_cv_baseline_with_radar_association,
 )
@@ -16,6 +18,62 @@ def _rf_measurement(time_s: float, east_m: float, north_m: float = 0.0) -> Track
         covariance=np.diag([1.0, 1.0]),
         source="rf",
     )
+
+
+def test_radar_association_rejects_raw_radar_without_normalized_columns():
+    radar = pd.DataFrame(
+        [
+            {
+                "global_time_raw_s": 0.0,
+                "latitude": 48.0,
+                "longitude": 9.0,
+                "altitude_m": 100.0,
+                "cat_prob_uav": 0.9,
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="requires normalized radar rows"):
+        run_async_cv_baseline_with_radar_association(
+            rf_measurements=[],
+            radar=radar,
+            association="prediction-nis",
+        )
+
+
+def test_track_bank_does_not_reprocess_bootstrap_radar_frame():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": 0.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.9,
+            },
+            {
+                "frame_index": 1,
+                "track_id": 1,
+                "time_s": 1.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.9,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[],
+        radar=radar,
+        association="track-bank",
+        candidate_catprob_threshold=None,
+    )
+
+    assert records[0]["update_action"] == "initialized"
+    assert selected["frame_index"].tolist()[0] == 0
 
 
 def test_oracle_nearest_truth_selects_closest_candidate_per_frame():
@@ -137,7 +195,7 @@ def test_catprob_candidate_pool_filters_when_possible():
     assert pool["association_catprob_fallback"].tolist() == [False]
 
 
-def test_catprob_candidate_pool_returns_empty_when_threshold_empty():
+def test_catprob_candidate_pool_falls_back_to_unfiltered_candidates_when_threshold_empty():
     candidates = pd.DataFrame(
         {
             "track_id": [1, 2],
@@ -150,12 +208,54 @@ def test_catprob_candidate_pool_returns_empty_when_threshold_empty():
 
     pool = _catprob_candidate_pool(candidates, 0.4)
 
-    assert pool.empty
-    assert "association_catprob_threshold" in pool.columns
-    assert "association_catprob_fallback" in pool.columns
+    assert pool["track_id"].tolist() == [1, 2]
+    assert pool["association_catprob_threshold"].tolist() == [0.4, 0.4]
+    assert pool["association_catprob_fallback"].tolist() == [True, True]
+    assert pool["association_catprob_candidate_rows"].tolist() == [2, 2]
+    assert pool["association_catprob_fallback_reason"].tolist() == [
+        "all_candidates_below_threshold",
+        "all_candidates_below_threshold",
+    ]
 
 
-def test_prediction_nis_treats_empty_catprob_pool_as_no_radar_selection():
+def test_initial_radar_measurement_respects_catprob_threshold_from_radar_frame():
+    candidates = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": 0.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.2,
+            },
+            {
+                "frame_index": 0,
+                "track_id": 2,
+                "time_s": 0.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.3,
+            },
+        ]
+    )
+
+    measurement = _initial_measurement(
+        {"kind": "radar", "time_s": 0.0, "candidates": candidates},
+        association="prediction-nis",
+        covariance=np.diag([25.0**2, 25.0**2, 35.0**2]),
+        candidate_catprob_threshold=0.4,
+        truth=None,
+        truth_gate_m=150.0,
+        truth_time_gate_s=1.0,
+    )
+
+    assert measurement is None
+
+
+def test_prediction_nis_uses_geometry_when_all_catprob_candidates_are_below_threshold():
     radar = pd.DataFrame(
         [
             {
@@ -171,7 +271,7 @@ def test_prediction_nis_treats_empty_catprob_pool_as_no_radar_selection():
                 "frame_index": 0,
                 "track_id": 2,
                 "time_s": 2.0,
-                "east_m": 3.0,
+                "east_m": 100.0,
                 "north_m": 0.0,
                 "up_m": 0.0,
                 "cat_prob_uav": 0.3,
@@ -186,8 +286,53 @@ def test_prediction_nis_treats_empty_catprob_pool_as_no_radar_selection():
         candidate_catprob_threshold=0.4,
     )
 
-    assert [record["source"] for record in records] == ["rf", "rf"]
-    assert selected.empty
+    assert [record["source"] for record in records] == ["rf", "rf", "radar"]
+    assert selected["track_id"].tolist() == [1]
+    assert selected["association_catprob_fallback"].tolist() == [True]
+    assert selected["association_catprob_fallback_reason"].tolist() == [
+        "all_candidates_below_threshold"
+    ]
+
+
+def test_initial_radar_measurement_respects_catprob_threshold():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": 0.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.2,
+            },
+            {
+                "frame_index": 0,
+                "track_id": 2,
+                "time_s": 0.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.3,
+            },
+        ]
+    )
+
+    measurement = _initial_measurement(
+        {
+            "kind": "radar",
+            "time_s": 0.0,
+            "candidates": radar,
+        },
+        association="prediction-nis",
+        covariance=np.diag([25.0**2, 25.0**2, 35.0**2]),
+        truth=None,
+        truth_gate_m=150.0,
+        truth_time_gate_s=1.0,
+        candidate_catprob_threshold=0.4,
+    )
+
+    assert measurement is None
 
 
 def test_track_continuity_keeps_current_track_for_small_nis_gain():
@@ -205,6 +350,98 @@ def test_track_continuity_keeps_current_track_for_small_nis_gain():
                 "track_id": 2,
                 "time_s": 0.0,
                 "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+            },
+        ]
+    )
+
+    selected = _select_radar_candidate(
+        candidates,
+        association="track-continuity",
+        tracker=tracker,
+        covariance=np.diag([25.0**2, 25.0**2, 35.0**2]),
+        truth=None,
+        current_track_id=1,
+        track_switch_nis_ratio=0.5,
+        candidate_catprob_threshold=None,
+        geometry_velocity_std_mps=12.0,
+        geometry_velocity_weight=0.25,
+        geometry_switch_penalty=4.0,
+        geometry_catprob_weight=2.0,
+        pda_nis_temperature=1.0,
+        pda_catprob_exponent=1.0,
+        truth_gate_m=150.0,
+        truth_time_gate_s=1.0,
+    )
+
+    assert selected is not None
+    assert int(selected["track_id"]) == 1
+
+
+def test_track_continuity_without_track_id_falls_back_to_prediction_nis():
+    tracker = AsyncConstantVelocityKalmanTracker(
+        initial_position=np.zeros(3),
+        initial_time_s=0.0,
+    )
+    candidates = pd.DataFrame(
+        [
+            {
+                "time_s": 0.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+            },
+            {
+                "time_s": 0.0,
+                "east_m": 10.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+            },
+        ]
+    )
+
+    selected = _select_radar_candidate(
+        candidates,
+        association="track-continuity",
+        tracker=tracker,
+        covariance=np.diag([25.0**2, 25.0**2, 35.0**2]),
+        truth=None,
+        current_track_id=1,
+        track_switch_nis_ratio=0.5,
+        candidate_catprob_threshold=None,
+        geometry_velocity_std_mps=12.0,
+        geometry_velocity_weight=0.25,
+        geometry_switch_penalty=4.0,
+        geometry_catprob_weight=2.0,
+        pda_nis_temperature=1.0,
+        pda_catprob_exponent=1.0,
+        truth_gate_m=150.0,
+        truth_time_gate_s=1.0,
+    )
+
+    assert selected is not None
+    assert selected["east_m"] == 1.0
+
+
+def test_track_continuity_ignores_malformed_track_ids_when_matching_current_track():
+    tracker = AsyncConstantVelocityKalmanTracker(
+        initial_position=np.zeros(3),
+        initial_time_s=0.0,
+    )
+    candidates = pd.DataFrame(
+        [
+            {
+                "track_id": "not-a-number",
+                "time_s": 0.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+            },
+            {
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": 1.1,
                 "north_m": 0.0,
                 "up_m": 0.0,
             },
@@ -545,6 +782,75 @@ def test_track_bank_uses_pyrecest_mht_and_records_hypotheses():
     assert int(records[-1]["hypothesis_count"]) >= 1
     assert records[-1]["hypotheses"]
     assert selected["track_id"].tolist() == [1]
+
+
+def test_track_bank_bootstrap_respects_catprob_threshold():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": 0.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.2,
+            },
+            {
+                "frame_index": 0,
+                "track_id": 2,
+                "time_s": 0.0,
+                "east_m": 10.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.3,
+            },
+        ]
+    )
+
+    measurement = _initial_measurement(
+        {"kind": "radar", "time_s": 0.0, "candidates": radar},
+        association="track-bank",
+        covariance=np.diag([25.0**2, 25.0**2, 35.0**2]),
+        candidate_catprob_threshold=0.4,
+        stable_anchor_by_key=None,
+        truth=None,
+        truth_gate_m=150.0,
+        truth_time_gate_s=1.0,
+    )
+
+    assert measurement is None
+
+
+def test_track_bank_does_not_reassimilate_bootstrap_radar_frame():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 7,
+                "time_s": 0.0,
+                "east_m": 10.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.9,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[],
+        radar=radar,
+        association="track-bank",
+        track_bank_max_hypotheses=4,
+        track_bank_gate_probability=0.999999,
+    )
+
+    assert len(records) == 1
+    assert records[0]["source"] == "radar"
+    assert records[0]["association_mode"] == "track-bank"
+    assert records[0]["update_action"] == "initialized"
+    assert records[0]["nis"] == 0.0
+    assert selected["track_id"].tolist() == [7]
 
 
 def test_stable_segments_updates_only_on_stitched_high_confidence_segments():

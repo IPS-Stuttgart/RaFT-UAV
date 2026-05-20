@@ -2,25 +2,28 @@
 
 The base tracklet-Viterbi implementation uses one Cartesian covariance for all
 selected radar rows.  This wrapper keeps the existing retention-aware Viterbi
-path but patches the replay and RF-anchor scoring hooks so long-range radar
-rows are down-weighted according to their ``range_m`` field.
+path but passes an explicit per-row covariance callback into scoring and replay
+so long-range radar rows are down-weighted according to their ``range_m`` field.
+
+If an upstream runner already attached learned ``cov_*`` or ``association_cov_*``
+columns, those calibrated row-wise covariances take precedence over the generic
+range heuristic.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from raft_uav.baselines import radar_association as _radar_association
 from raft_uav.baselines import tracklet_viterbi as _base
 from raft_uav.baselines.kalman import TrackingMeasurement
 from raft_uav.baselines.tracklet_viterbi_retention import (
     run_async_cv_baseline_with_tracklet_viterbi_association as _run_retention_association,
 )
+from raft_uav.uncertainty import covariance_from_row
 
 TrackletViterbiAssociationConfig = _base.TrackletViterbiAssociationConfig
 DEFAULT_USE_RANGE_ADAPTIVE_RADAR_COVARIANCE = True
@@ -50,62 +53,40 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
     """Run retention-aware Viterbi with range-adaptive radar covariance."""
 
     cfg = config or TrackletViterbiAssociationConfig()
-    with _range_adaptive_covariance_hooks(cfg):
-        return _run_retention_association(
-            rf_measurements=rf_measurements,
-            radar=radar,
-            acceleration_std_mps2=acceleration_std_mps2,
-            radar_xy_std_m=radar_xy_std_m,
-            radar_z_std_m=radar_z_std_m,
-            gate_probabilities_by_source=gate_probabilities_by_source,
-            gate_thresholds_by_source=gate_thresholds_by_source,
-            safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
-            safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
-            robust_update_by_source=robust_update_by_source,
-            inflation_alpha_by_source=inflation_alpha_by_source,
-            max_residual_norms_by_source=max_residual_norms_by_source,
-            candidate_catprob_threshold=candidate_catprob_threshold,
-            config=cfg,
-        )
+    radar_covariance_fn = _range_adaptive_covariance_fn(cfg)
+    return _run_retention_association(
+        rf_measurements=rf_measurements,
+        radar=radar,
+        acceleration_std_mps2=acceleration_std_mps2,
+        radar_xy_std_m=radar_xy_std_m,
+        radar_z_std_m=radar_z_std_m,
+        gate_probabilities_by_source=gate_probabilities_by_source,
+        gate_thresholds_by_source=gate_thresholds_by_source,
+        safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
+        safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
+        robust_update_by_source=robust_update_by_source,
+        inflation_alpha_by_source=inflation_alpha_by_source,
+        max_residual_norms_by_source=max_residual_norms_by_source,
+        candidate_catprob_threshold=candidate_catprob_threshold,
+        config=cfg,
+        radar_covariance_fn=radar_covariance_fn,
+    )
 
 
-@contextmanager
-def _range_adaptive_covariance_hooks(config: TrackletViterbiAssociationConfig):
-    original_candidate_cost_terms = _base._candidate_cost_terms
-    original_radar_row_to_measurement = _radar_association._radar_row_to_measurement
+def _range_adaptive_covariance_fn(
+    config: TrackletViterbiAssociationConfig,
+) -> _base.RadarCovarianceFn:
+    """Return a per-row covariance callback without patching module globals."""
 
-    def candidate_cost_terms_with_adaptive_covariance(
-        *,
+    def radar_covariance_fn(
         row: pd.Series,
-        position: np.ndarray,
-        anchor: _base._AnchorState | None,
-        covariance: np.ndarray,
-        config: TrackletViterbiAssociationConfig,
-    ) -> tuple[float, float, float]:
-        row_covariance = _radar_row_covariance(row, covariance, config)
-        return original_candidate_cost_terms(
-            row=row,
-            position=position,
-            anchor=anchor,
-            covariance=row_covariance,
-            config=config,
-        )
+        default_covariance: np.ndarray,
+    ) -> np.ndarray:
+        row_covariance = _radar_row_covariance(row, default_covariance, config)
+        _write_radar_covariance_diagnostics(row, row_covariance, default_covariance)
+        return row_covariance
 
-    def radar_row_to_measurement_with_adaptive_covariance(
-        row: pd.Series,
-        covariance: np.ndarray,
-    ) -> TrackingMeasurement:
-        row_covariance = _radar_row_covariance(row, covariance, config)
-        _write_radar_covariance_diagnostics(row, row_covariance, covariance)
-        return original_radar_row_to_measurement(row, row_covariance)
-
-    _base._candidate_cost_terms = candidate_cost_terms_with_adaptive_covariance
-    _radar_association._radar_row_to_measurement = radar_row_to_measurement_with_adaptive_covariance
-    try:
-        yield
-    finally:
-        _base._candidate_cost_terms = original_candidate_cost_terms
-        _radar_association._radar_row_to_measurement = original_radar_row_to_measurement
+    return radar_covariance_fn
 
 
 def _radar_row_covariance(
@@ -122,6 +103,10 @@ def _radar_row_covariance(
     """
 
     default_covariance = np.asarray(default_covariance, dtype=float)
+    row_covariance = covariance_from_row(row, 3, default_covariance)
+    if _has_row_position_covariance(row):
+        return row_covariance
+
     if not bool(
         getattr(
             config,
@@ -158,6 +143,27 @@ def _radar_row_covariance(
         * float(range_m),
     )
     return np.diag([xy_std_m**2, xy_std_m**2, z_std_m**2])
+
+
+def _has_row_position_covariance(row: pd.Series) -> bool:
+    """Return whether a row carries a complete positive 3-D covariance diagonal."""
+
+    for prefix in ("association_cov", "cov"):
+        has_diagonal = all(
+            _positive_float(row.get(f"{prefix}_{suffix}")) is not None
+            for suffix in ("ee", "nn", "uu")
+        )
+        if has_diagonal:
+            return True
+    return False
+
+
+def _positive_float(value: object) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) and number > 0.0 else None
 
 
 def _write_radar_covariance_diagnostics(

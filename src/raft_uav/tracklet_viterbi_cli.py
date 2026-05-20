@@ -8,9 +8,10 @@ older experiment notes.
 
 Controlled ablation runs can select the base, retention-aware,
 range-covariance-aware, or fixed-lag implementation through wrapper-only
-command-line arguments or matching environment variables. The wrapper strips
-those ``--tracklet-*`` arguments before forwarding to the shared base CLI
-parser.
+command-line arguments or matching environment variables. The wrapper strips only
+wrapper-owned ``--tracklet-*`` arguments before forwarding to the shared base CLI
+parser; runtime-owned tracklet options remain visible to the runtime
+configuration shim so explicit CLI values are not replaced by defaults.
 """
 
 from __future__ import annotations
@@ -25,6 +26,8 @@ import pandas as pd
 
 from raft_uav import cli as _base_cli
 from raft_uav import robust_cli as _robust_cli
+from raft_uav import runtime_cli_config as _runtime_cli_config
+from raft_uav.baselines import learned_tracklet_viterbi as _learned_tracklet_viterbi
 from raft_uav.baselines import tracklet_viterbi as _base_tracklet_viterbi
 from raft_uav.baselines import tracklet_viterbi_fixed_lag as _fixed_lag_tracklet_viterbi
 from raft_uav.baselines import tracklet_viterbi_imm as _imm_tracklet_viterbi
@@ -33,6 +36,7 @@ from raft_uav.baselines import (
 )
 from raft_uav.baselines import tracklet_viterbi_retention as _retention_tracklet_viterbi
 from raft_uav.baselines.kalman import TrackingMeasurement
+from raft_uav.baselines.learned_radar_likelihood import LearnedRadarAssociationModel
 from raft_uav.baselines.radar_association import (
     RADAR_ASSOCIATION_MODES as _BASE_RADAR_ASSOCIATION_MODES,
     run_async_cv_baseline_with_radar_association as _base_radar_association_runner,
@@ -40,6 +44,7 @@ from raft_uav.baselines.radar_association import (
 from raft_uav.baselines.tracklet_viterbi import TrackletViterbiAssociationConfig
 
 _TRACKLET_MODE = "tracklet-viterbi"
+_LEARNED_TRACKLET_MODE = "learned-tracklet-viterbi"
 _TRACKLET_VARIANT_ENV = "RAFT_UAV_TRACKLET_VARIANT"
 _TRACKLET_REPLAY_TRACKER_ENV = "RAFT_UAV_TRACKLET_REPLAY_TRACKER"
 _CATPROB_MODE_ENV = "RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE"
@@ -50,9 +55,14 @@ _MAX_CANDIDATES_PER_FRAME_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"
 _MAX_CANDIDATE_POOL_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATE_POOL_PER_FRAME"
 _MAX_CANDIDATES_PER_TRACK_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_TRACK_ID"
 _VITERBI_LAG_S_ENV = "RAFT_UAV_TRACKLET_VITERBI_LAG_S"
+_TRACKLET_ASSOCIATION_MODEL_ENV = "RAFT_UAV_TRACKLET_ASSOCIATION_MODEL"
+_TRACKLET_LEARNED_UNARY_WEIGHT_ENV = "RAFT_UAV_TRACKLET_LEARNED_UNARY_WEIGHT"
+_TRACKLET_HAND_UNARY_WEIGHT_ENV = "RAFT_UAV_TRACKLET_HAND_UNARY_WEIGHT"
+_LEARNED_CANDIDATE_MODEL_ENV = "RAFT_UAV_TRACKLET_LEARNED_CANDIDATE_MODEL"
+_LEARNED_CANDIDATE_SCORE_MODE_ENV = "RAFT_UAV_TRACKLET_LEARNED_CANDIDATE_SCORE_MODE"
 _TRACKLET_VARIANTS = ("base", "retention", "range-covariance", "fixed-lag")
 _TRACKLET_REPLAY_TRACKERS = ("cv", "imm")
-_CATPROB_RETENTION_MODES = ("soft", "hard")
+_LEARNED_CANDIDATE_SCORE_MODES = ("additive", "replace")
 
 
 class _TrackletConfigOverlay:
@@ -71,7 +81,9 @@ class _TrackletConfigOverlay:
 def enabled_radar_association_modes() -> tuple[str, ...]:
     """Return base radar association modes plus the canonical tracklet mode."""
 
-    return tuple(dict.fromkeys((*_BASE_RADAR_ASSOCIATION_MODES, _TRACKLET_MODE)))
+    return tuple(
+        dict.fromkeys((*_BASE_RADAR_ASSOCIATION_MODES, _TRACKLET_MODE, _LEARNED_TRACKLET_MODE))
+    )
 
 
 def run_async_cv_baseline_with_radar_association(
@@ -124,7 +136,7 @@ def run_async_cv_baseline_with_radar_association(
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
     """Dispatch to the tracklet-Viterbi runner when requested."""
 
-    if association == _TRACKLET_MODE:
+    if association in {_TRACKLET_MODE, _LEARNED_TRACKLET_MODE}:
         del truth, track_switch_nis_ratio, geometry_velocity_std_mps
         del geometry_velocity_weight, geometry_switch_penalty, geometry_catprob_weight
         del rf_anchor_weight, rf_anchor_time_gate_s, rf_anchor_nis_cap
@@ -141,8 +153,35 @@ def run_async_cv_baseline_with_radar_association(
         del stable_segment_rf_score_weight, stable_segment_rf_time_gate_s
         del stable_segment_rf_nis_cap
         del truth_gate_m, truth_time_gate_s
-        runner = _tracklet_runner_from_environment()
         config = _tracklet_config_from_environment()
+        if association == _TRACKLET_MODE:
+            runner = _tracklet_runner_from_environment()
+            return runner(
+                rf_measurements=list(rf_measurements),
+                radar=radar,
+                acceleration_std_mps2=acceleration_std_mps2,
+                radar_xy_std_m=radar_xy_std_m,
+                radar_z_std_m=radar_z_std_m,
+                gate_probabilities_by_source=gate_probabilities_by_source,
+                gate_thresholds_by_source=gate_thresholds_by_source,
+                safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
+                robust_update_by_source=robust_update_by_source,
+                inflation_alpha_by_source=inflation_alpha_by_source,
+                max_residual_norms_by_source=max_residual_norms_by_source,
+                candidate_catprob_threshold=candidate_catprob_threshold,
+                config=config,
+            )
+
+        model_path = os.environ.get(_TRACKLET_ASSOCIATION_MODEL_ENV)
+        if not model_path:
+            raise ValueError(
+                f"{_LEARNED_TRACKLET_MODE} requires --tracklet-association-model "
+                f"or {_TRACKLET_ASSOCIATION_MODEL_ENV}"
+            )
+        runner = _wrap_tracklet_runner_for_replay_tracker(
+            _learned_tracklet_viterbi.run_async_cv_baseline_with_learned_tracklet_viterbi_association
+        )
         return runner(
             rf_measurements=list(rf_measurements),
             radar=radar,
@@ -158,6 +197,9 @@ def run_async_cv_baseline_with_radar_association(
             max_residual_norms_by_source=max_residual_norms_by_source,
             candidate_catprob_threshold=candidate_catprob_threshold,
             config=config,
+            model=model_path,
+            learned_unary_weight=_env_float(_TRACKLET_LEARNED_UNARY_WEIGHT_ENV, 1.0),
+            hand_unary_weight=_env_float(_TRACKLET_HAND_UNARY_WEIGHT_ENV, 0.25),
         )
 
     return _base_radar_association_runner(
@@ -269,24 +311,38 @@ def _tracklet_config_from_environment() -> _TrackletConfigOverlay:
         max_track_support_reward=_env_float(_MAX_TRACK_SUPPORT_REWARD_ENV, 4.0),
         max_candidate_pool_per_frame=_env_int(_MAX_CANDIDATE_POOL_ENV, 24),
         max_candidates_per_track_id=_env_int(_MAX_CANDIDATES_PER_TRACK_ENV, 1),
+        learned_candidate_model=_learned_candidate_model_from_environment(),
+        learned_candidate_score_mode=_env_str(
+            _LEARNED_CANDIDATE_SCORE_MODE_ENV,
+            base.learned_candidate_score_mode,
+        ),
     )
+
+
+def _learned_candidate_model_from_environment() -> LearnedRadarAssociationModel | None:
+    path = os.environ.get(_LEARNED_CANDIDATE_MODEL_ENV)
+    if path is None or path == "":
+        return None
+    return LearnedRadarAssociationModel.load(path)
 
 
 def _tracklet_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--tracklet-variant", choices=_TRACKLET_VARIANTS)
     parser.add_argument("--tracklet-replay-tracker", choices=_TRACKLET_REPLAY_TRACKERS)
-    parser.add_argument("--tracklet-catprob-retention-mode", choices=_CATPROB_RETENTION_MODES)
-    parser.add_argument(
-        "--tracklet-below-catprob-threshold-penalty",
-        type=_nonnegative_float,
-    )
-    parser.add_argument("--tracklet-track-support-weight", type=_nonnegative_float)
-    parser.add_argument("--tracklet-max-track-support-reward", type=_nonnegative_float)
-    parser.add_argument("--tracklet-max-candidates-per-frame", type=_positive_int)
-    parser.add_argument("--tracklet-max-candidate-pool-per-frame", type=_positive_int)
-    parser.add_argument("--tracklet-max-candidates-per-track-id", type=_positive_int)
+    # Runtime-backed tracklet tuning options are intentionally not registered
+    # here. They must remain in ``remaining`` so the runtime CLI shim can parse
+    # the explicit user values, apply matching environment variables, and record
+    # the same resolved settings in metrics.json.
     parser.add_argument("--tracklet-viterbi-lag-s", type=_positive_float)
+    parser.add_argument("--tracklet-association-model")
+    parser.add_argument("--tracklet-learned-unary-weight", type=_nonnegative_float)
+    parser.add_argument("--tracklet-hand-unary-weight", type=_nonnegative_float)
+    parser.add_argument("--tracklet-learned-candidate-model")
+    parser.add_argument(
+        "--tracklet-learned-candidate-score-mode",
+        choices=_LEARNED_CANDIDATE_SCORE_MODES,
+    )
     return parser
 
 
@@ -297,22 +353,47 @@ def _extract_tracklet_args(argv: list[str] | None) -> tuple[list[str], dict[str,
     return remaining, updates
 
 
+def _runtime_updates_for_test_dispatch(argv: list[str]) -> tuple[list[str], dict[str, str]]:
+    """Strip runtime flags when the runtime-patched base CLI is bypassed."""
+
+    before = {
+        name: os.environ.get(name)
+        for names in _runtime_cli_config._RUNTIME_FLAG_ENV_NAMES.values()
+        for name in names
+    }
+    explicit_names = _runtime_cli_config.runtime_environment_names_from_argv(argv)
+    runtime_config, remaining = _runtime_cli_config.parse_runtime_config(argv)
+    _runtime_cli_config.apply_runtime_environment(
+        runtime_config,
+        overwrite_existing_env_names=explicit_names,
+    )
+    updates = {name: os.environ[name] for name in explicit_names if name in os.environ}
+    for name, value in before.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
+    return remaining, updates
+
+
 def _environment_updates_from_namespace(namespace: argparse.Namespace) -> dict[str, str]:
     updates: dict[str, str] = {}
     _maybe_add(updates, _TRACKLET_VARIANT_ENV, namespace.tracklet_variant)
     _maybe_add(updates, _TRACKLET_REPLAY_TRACKER_ENV, namespace.tracklet_replay_tracker)
-    _maybe_add(updates, _CATPROB_MODE_ENV, namespace.tracklet_catprob_retention_mode)
+    _maybe_add(updates, _VITERBI_LAG_S_ENV, namespace.tracklet_viterbi_lag_s)
+    _maybe_add(updates, _TRACKLET_ASSOCIATION_MODEL_ENV, namespace.tracklet_association_model)
     _maybe_add(
         updates,
-        _BELOW_CATPROB_PENALTY_ENV,
-        namespace.tracklet_below_catprob_threshold_penalty,
+        _TRACKLET_LEARNED_UNARY_WEIGHT_ENV,
+        namespace.tracklet_learned_unary_weight,
     )
-    _maybe_add(updates, _TRACK_SUPPORT_WEIGHT_ENV, namespace.tracklet_track_support_weight)
-    _maybe_add(updates, _MAX_TRACK_SUPPORT_REWARD_ENV, namespace.tracklet_max_track_support_reward)
-    _maybe_add(updates, _MAX_CANDIDATES_PER_FRAME_ENV, namespace.tracklet_max_candidates_per_frame)
-    _maybe_add(updates, _MAX_CANDIDATE_POOL_ENV, namespace.tracklet_max_candidate_pool_per_frame)
-    _maybe_add(updates, _MAX_CANDIDATES_PER_TRACK_ENV, namespace.tracklet_max_candidates_per_track_id)
-    _maybe_add(updates, _VITERBI_LAG_S_ENV, namespace.tracklet_viterbi_lag_s)
+    _maybe_add(updates, _TRACKLET_HAND_UNARY_WEIGHT_ENV, namespace.tracklet_hand_unary_weight)
+    _maybe_add(updates, _LEARNED_CANDIDATE_MODEL_ENV, namespace.tracklet_learned_candidate_model)
+    _maybe_add(
+        updates,
+        _LEARNED_CANDIDATE_SCORE_MODE_ENV,
+        namespace.tracklet_learned_candidate_score_mode,
+    )
     return updates
 
 
@@ -379,6 +460,9 @@ def main(argv: list[str] | None = None) -> int:
     """Run the standard CLI with tracklet-Viterbi association enabled."""
 
     filtered_argv, env_updates = _extract_tracklet_args(argv)
+    if _base_cli.main.__module__ != "raft_uav.runtime_cli_patch":
+        filtered_argv, runtime_updates = _runtime_updates_for_test_dispatch(filtered_argv)
+        env_updates = {**env_updates, **runtime_updates}
     _base_cli.RADAR_ASSOCIATION_MODES = enabled_radar_association_modes()
     _base_cli.run_async_cv_baseline_with_radar_association = (
         run_async_cv_baseline_with_radar_association

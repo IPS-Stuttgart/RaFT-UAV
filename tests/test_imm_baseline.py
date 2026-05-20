@@ -42,3 +42,29 @@ def test_async_imm_baseline_returns_mode_probabilities():
     probabilities = np.asarray(records[-1]["mode_probabilities"], dtype=float)
     np.testing.assert_allclose(probabilities.sum(), 1.0)
     assert len(records[-1]["mode_names"]) == probabilities.size
+
+
+def test_async_imm_baseline_does_not_reprocess_bootstrap_measurement():
+    covariance = np.eye(3)
+    measurements = [
+        TrackingMeasurement(
+            time_s=0.0,
+            vector=np.array([10.0, 20.0, 30.0]),
+            covariance=covariance,
+            source="radar",
+        ),
+        TrackingMeasurement(
+            time_s=1.0,
+            vector=np.array([11.0, 20.0, 30.0]),
+            covariance=covariance,
+            source="radar",
+        ),
+    ]
+
+    records = run_async_imm_baseline(measurements, acceleration_std_mps2=0.0)
+
+    assert len(records) == 2
+    assert records[0]["update_action"] == "initialized"
+    assert records[0]["accepted"] is True
+    np.testing.assert_allclose(records[0]["state"][:3], [10.0, 20.0, 30.0])
+    assert records[1]["covariance"][0, 0] < records[0]["covariance"][0, 0]

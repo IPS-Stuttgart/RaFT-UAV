@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -17,8 +18,12 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from raft_uav.baselines.kalman import TrackingMeasurement, run_async_cv_baseline  # noqa: E402
 from raft_uav.baselines.smoothing import SMOOTHER_MODES, smooth_tracking_records  # noqa: E402
+from raft_uav.calibration.nis_covariance import (  # noqa: E402
+    ENV_NIS_COVARIANCE_CALIBRATION_JSON,
+)
 from raft_uav.evaluation.metrics import position_errors_m, summarize_errors  # noqa: E402
 from raft_uav.io.aerpaw import (  # noqa: E402
+    RADAR_SELECTION_MODES,
     normalize_radar,
     normalize_rf,
     normalize_truth,
@@ -40,7 +45,7 @@ def main() -> int:
     parser.add_argument("--acceleration-std", type=float, default=4.0)
     parser.add_argument(
         "--radar-selection",
-        choices=["catprob", "truth-gated", "all", "none"],
+        choices=RADAR_SELECTION_MODES,
         default="catprob",
     )
     parser.add_argument("--radar-catprob-threshold", type=float, default=0.5)
@@ -89,6 +94,7 @@ def main() -> int:
     records = run_async_cv_baseline(measurements, acceleration_std_mps2=args.acceleration_std)
     if not records:
         raise RuntimeError(f"{flight.name} produced no heteroscedastic baseline records")
+    diagnostics_frame = _diagnostics_to_frame(records)
     records = smooth_tracking_records(
         records,
         method=args.smoother,
@@ -114,6 +120,7 @@ def main() -> int:
     output_dir = args.output_dir / flight.name
     output_dir.mkdir(parents=True, exist_ok=True)
     estimate_frame.to_csv(output_dir / "estimates.csv", index=False)
+    diagnostics_frame.to_csv(output_dir / "diagnostics.csv", index=False)
     selected_radar.to_csv(output_dir / "selected_radar.csv", index=False)
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
@@ -179,10 +186,37 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
                 "v_east_mps": state[3],
                 "v_north_mps": state[4],
                 "v_up_mps": state[5],
+                "measurement_dim": _optional_int(record.get("measurement_dim")),
                 "accepted": bool(record.get("accepted", True)),
                 "update_action": str(record.get("update_action", "updated")),
                 "nis": _optional_float(record.get("nis")),
                 "covariance_scale": _optional_float(record.get("covariance_scale")),
+                "residual_norm_m": _optional_float(record.get("residual_norm_m")),
+            }
+        )
+    return pd.DataFrame.from_records(rows).sort_values("time_s").reset_index(drop=True)
+
+
+def _diagnostics_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
+    """Return unsmoothed update diagnostics in the NIS-calibration schema."""
+
+    rows: list[dict[str, Any]] = []
+    for record in records:
+        rows.append(
+            {
+                "time_s": float(record["time_s"]),
+                "source": str(record["source"]),
+                "measurement_dim": _optional_int(record.get("measurement_dim")),
+                "accepted": bool(record.get("accepted", True)),
+                "update_action": str(record.get("update_action", "updated")),
+                "nis": _optional_float(record.get("nis")),
+                "gate_threshold": _optional_float(record.get("gate_threshold")),
+                "safety_gate_threshold": _optional_float(record.get("safety_gate_threshold")),
+                "residual_gate_threshold_m": _optional_float(
+                    record.get("residual_gate_threshold_m")
+                ),
+                "covariance_scale": _optional_float(record.get("covariance_scale")),
+                "inflation_alpha": _optional_float(record.get("inflation_alpha")),
                 "residual_norm_m": _optional_float(record.get("residual_norm_m")),
             }
         )
@@ -208,6 +242,7 @@ def _metrics(
     estimate_times = estimate_frame["time_s"].to_numpy(dtype=float)
     estimate_positions = estimate_frame[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
     source_counts = Counter(str(value) for value in estimate_frame["source"])
+    nis_calibration = os.environ.get(ENV_NIS_COVARIANCE_CALIBRATION_JSON)
     return {
         "flight": flight_name,
         "uncertainty_model": str(uncertainty_model),
@@ -219,6 +254,8 @@ def _metrics(
             "method": smoother,
             "lag_s": float(smoother_lag_s) if smoother == "fixed-lag" else None,
         },
+        "nis_covariance_calibrated": bool(nis_calibration),
+        "nis_covariance_calibration": str(nis_calibration or ""),
         "truth_rows": int(len(truth)),
         "rf_rows": int(len(rf)),
         "radar_rows": int(len(radar)),
@@ -263,6 +300,15 @@ def _positive_float(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if np.isfinite(number) and number > 0.0 else None
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _optional_float(value: object) -> float | None:

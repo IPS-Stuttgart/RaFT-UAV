@@ -18,6 +18,7 @@ DEFAULT_RF_CLOCK_OFFSET_S = DEFAULT_SENSOR_CLOCK_OFFSET_S
 DEFAULT_RADAR_CLOCK_OFFSET_S = DEFAULT_SENSOR_CLOCK_OFFSET_S
 # Backward-compatible alias for callers that imported the historical shared name.
 SENSOR_CLOCK_OFFSET_S = DEFAULT_SENSOR_CLOCK_OFFSET_S
+RADAR_SELECTION_MODES = ("catprob", "catprob-all", "truth-gated", "all", "none")
 TRUTH_COLUMNS = [
     "sample",
     "longitude",
@@ -116,15 +117,38 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
     """Read Fortem newline-delimited radar JSON logs into one row per track."""
 
     records: list[dict[str, Any]] = []
+    saw_non_object_payload = False
     with Path(path).open("r", encoding="utf-8") as handle:
         for frame_index, line in enumerate(handle):
             line = line.strip()
             if not line:
                 continue
-            payload = json.loads(line)
-            params = payload.get("params", {}) if isinstance(payload, dict) else {}
-            for track_index, track in enumerate(payload.get("trackData") or []):
+            line_number = frame_index + 1
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"{path}: invalid radar JSON on line {line_number}: {exc.msg}"
+                ) from exc
+            if not isinstance(payload, dict):
+                saw_non_object_payload = True
+                continue
+
+            params = payload.get("params", {})
+            if params is None:
+                params = {}
+            if not isinstance(params, dict):
+                params = {}
+
+            track_data = payload.get("trackData") or []
+            if not isinstance(track_data, list):
+                continue
+            for track_index, track in enumerate(track_data):
+                if not isinstance(track, dict):
+                    continue
                 records.append(_flatten_track(frame_index, track_index, track, params))
+    if saw_non_object_payload and not records:
+        raise ValueError("radar JSON must contain a JSON object")
     return pd.DataFrame.from_records(records)
 
 

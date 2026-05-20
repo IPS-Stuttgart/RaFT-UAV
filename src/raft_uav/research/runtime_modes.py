@@ -1,0 +1,157 @@
+"""Runtime-mode helpers: flight phases, recovery mode, and backward repair."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+import pandas as pd
+
+PositionColumns = ("east_m", "north_m", "up_m")
+
+
+@dataclass(frozen=True)
+class RecoveryDecision:
+    """Configuration multipliers used while the tracker is in recovery mode."""
+
+    active: bool
+    reason: str
+    candidate_pool_multiplier: float = 1.0
+    rf_anchor_weight_multiplier: float = 1.0
+    track_switch_penalty_multiplier: float = 1.0
+    gate_probability: float | None = None
+
+
+@dataclass
+class RecoveryModeController:
+    """Simple state machine for association-collapse recovery."""
+
+    nis_threshold: float = 25.0
+    low_confidence_threshold: float = 0.2
+    miss_streak_threshold: int = 3
+    recovery_frames: int = 5
+    remaining_frames: int = 0
+
+    def update(
+        self,
+        *,
+        nis: float | None = None,
+        association_confidence: float | None = None,
+        miss_streak: int = 0,
+        track_switched: bool = False,
+    ) -> RecoveryDecision:
+        triggers = []
+        if nis is not None and np.isfinite(float(nis)) and float(nis) > float(self.nis_threshold):
+            triggers.append("high_nis")
+        if association_confidence is not None and float(association_confidence) < float(self.low_confidence_threshold):
+            triggers.append("low_confidence")
+        if int(miss_streak) >= int(self.miss_streak_threshold):
+            triggers.append("miss_streak")
+        if track_switched:
+            triggers.append("track_switch")
+        if triggers:
+            self.remaining_frames = int(self.recovery_frames)
+        elif self.remaining_frames > 0:
+            self.remaining_frames -= 1
+        active = self.remaining_frames > 0
+        return RecoveryDecision(
+            active=active,
+            reason="+".join(triggers) if triggers else ("cooldown" if active else "nominal"),
+            candidate_pool_multiplier=3.0 if active else 1.0,
+            rf_anchor_weight_multiplier=2.0 if active else 1.0,
+            track_switch_penalty_multiplier=0.25 if active else 1.0,
+            gate_probability=0.999 if active else None,
+        )
+
+
+def segment_flight_phases(frame: pd.DataFrame) -> pd.Series:
+    """Assign coarse test-time flight phases from positions and timestamps."""
+
+    if frame.empty:
+        return pd.Series(dtype=str)
+    ordered = frame.sort_values("time_s") if "time_s" in frame.columns else frame.copy()
+    times = pd.to_numeric(ordered.get("time_s", pd.Series(range(len(ordered)))), errors="coerce").to_numpy(dtype=float)
+    positions = ordered.loc[:, [c for c in PositionColumns if c in ordered.columns]].to_numpy(dtype=float)
+    if positions.shape[1] < 2 or len(ordered) < 3:
+        return pd.Series(["unknown"] * len(ordered), index=ordered.index)
+    dt = np.diff(times, prepend=times[0])
+    dt = np.where(dt > 1e-6, dt, np.nan)
+    velocity = np.vstack([np.zeros(positions.shape[1]), np.diff(positions, axis=0)]) / dt[:, None]
+    speed = np.linalg.norm(np.nan_to_num(velocity[:, :2]), axis=1)
+    altitude = positions[:, 2] if positions.shape[1] >= 3 else np.zeros(len(positions))
+    speed_hi = np.nanpercentile(speed, 75) if np.isfinite(speed).any() else 0.0
+    alt_lo = np.nanpercentile(altitude, 20) if np.isfinite(altitude).any() else 0.0
+    phase = np.full(len(ordered), "cruise", dtype=object)
+    phase[speed < max(speed_hi * 0.25, 1.0)] = "slow"
+    phase[altitude <= alt_lo] = "low-altitude"
+    if len(phase) >= 4:
+        phase[: max(1, len(phase) // 10)] = "takeoff-or-start"
+        phase[-max(1, len(phase) // 10) :] = "landing-or-end"
+    headings = np.unwrap(np.arctan2(velocity[:, 1], velocity[:, 0]))
+    turn_rate = np.abs(np.diff(headings, prepend=headings[0]))
+    phase[turn_rate > np.nanpercentile(turn_rate, 90)] = "turn"
+    return pd.Series(phase, index=ordered.index).reindex(frame.index)
+
+
+def backward_repair_associations(
+    selected: pd.DataFrame,
+    candidates: pd.DataFrame,
+    *,
+    max_gap_s: float = 10.0,
+    max_repair_distance_m: float = 200.0,
+) -> pd.DataFrame:
+    """Repair suspicious selected-radar gaps using a backward anchor pass.
+
+    The function interpolates between selected anchors and fills missing radar
+    frames with the candidate closest to the interpolated path.  It is intended
+    for offline/fixed-lag diagnostics, not strict causal tracking.
+    """
+
+    if selected.empty or candidates.empty:
+        return selected.copy()
+    selected = selected.sort_values("time_s").reset_index(drop=True)
+    repaired = [row.copy() for _, row in selected.iterrows()]
+    candidate_groups = _frame_groups(candidates)
+    selected_keys = {_row_key(row) for _, row in selected.iterrows()}
+    for left, right in zip(selected.iloc[:-1].itertuples(index=False), selected.iloc[1:].itertuples(index=False)):
+        left_time = float(left.time_s)
+        right_time = float(right.time_s)
+        gap_s = right_time - left_time
+        if gap_s <= 0.0 or gap_s > float(max_gap_s):
+            continue
+        left_pos = np.array([left.east_m, left.north_m, left.up_m], dtype=float)
+        right_pos = np.array([right.east_m, right.north_m, right.up_m], dtype=float)
+        for key, frame in candidate_groups:
+            if key in selected_keys:
+                continue
+            time_s = float(frame["time_s"].median())
+            if not left_time < time_s < right_time:
+                continue
+            alpha = (time_s - left_time) / gap_s
+            target = (1.0 - alpha) * left_pos + alpha * right_pos
+            positions = frame.loc[:, PositionColumns].to_numpy(dtype=float)
+            distances = np.linalg.norm(positions - target.reshape(1, 3), axis=1)
+            best_idx = int(np.nanargmin(distances))
+            if float(distances[best_idx]) <= float(max_repair_distance_m):
+                row = frame.iloc[best_idx].copy()
+                row["association_mode"] = "backward-repair"
+                row["association_score"] = float(distances[best_idx])
+                row["association_repaired"] = True
+                repaired.append(row)
+                selected_keys.add(key)
+    return pd.DataFrame(repaired).sort_values("time_s").reset_index(drop=True)
+
+
+def _frame_groups(frame: pd.DataFrame) -> list[tuple[object, pd.DataFrame]]:
+    group = "frame_index" if "frame_index" in frame.columns else "time_s"
+    return [(key, rows.copy()) for key, rows in frame.groupby(group, sort=True)]
+
+
+def _row_key(row: pd.Series | object) -> object:
+    if isinstance(row, pd.Series):
+        if "frame_index" in row.index and np.isfinite(float(row.get("frame_index", np.nan))):
+            return int(row["frame_index"])
+        return round(float(row["time_s"]), 9)
+    if hasattr(row, "frame_index") and np.isfinite(float(getattr(row, "frame_index"))):
+        return int(getattr(row, "frame_index"))
+    return round(float(getattr(row, "time_s")), 9)

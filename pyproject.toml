@@ -27,7 +27,9 @@ dev = [
 raft-uav = "raft_uav.tracklet_viterbi_cli:main"
 raft-uav-legacy = "raft_uav.robust_cli:main"
 raft-uav-heteroscedastic = "raft_uav.heteroscedastic_cli:main"
+raft-uav-heteroscedastic-tracklet-viterbi = "raft_uav.heteroscedastic_tracklet_viterbi_cli:main"
 raft-uav-imm = "raft_uav.imm_cli:main"
+raft-uav-best-non-oracle = "raft_uav.best_non_oracle_cli:main"
 raft-uav-train-radar-association = "raft_uav.train_radar_association_cli:main"
 raft-uav-run-learned-radar-association = "raft_uav.run_learned_radar_association_cli:main"
 raft-uav-train-bias-model = "raft_uav.bias_cli:main"
@@ -40,6 +42,7 @@ raft-uav-lofo-bias-time-offset = "raft_uav.calibration.lofo_cli:main"
 raft-uav-calibrate-nis-covariance = "raft_uav.calibration.nis_covariance_cli:main"
 raft-uav-diagnose-paper-table = "raft_uav.diagnostics.paper_table:main"
 raft-uav-sweep-tracklet-viterbi = "raft_uav.sweep_tracklet_viterbi_cli:main"
+raft-uav-oracle-coverage = "raft_uav.oracle_coverage_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

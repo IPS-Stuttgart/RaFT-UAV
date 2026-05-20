@@ -42,6 +42,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
     max_residual_norms_by_source: Mapping[str, float | None] | None = None,
     candidate_catprob_threshold: float | None = 0.4,
     config: TrackletViterbiAssociationConfig | None = None,
+    radar_covariance_fn: _base.RadarCovarianceFn | None = None,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
     """Run tracklet-Viterbi with native retention-aware node construction."""
 
@@ -70,6 +71,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
         truth=None,
         truth_gate_m=150.0,
         truth_time_gate_s=1.0,
+        radar_covariance_fn=radar_covariance_fn,
     )
     if initial is None:
         return [], _empty_selected_radar(radar)
@@ -92,6 +94,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
         candidate_catprob_threshold=candidate_catprob_threshold,
         config=cfg,
         track_support_by_event=_track_support_by_event_prefix(events),
+        radar_covariance_fn=radar_covariance_fn,
     )
     records, accepted = _base._replay_selected_tracklet_path(
         events=events,
@@ -106,6 +109,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
         robust_update_by_source=robust_update_by_source,
         inflation_alpha_by_source=inflation_alpha_by_source,
         max_residual_norms_by_source=max_residual_norms_by_source,
+        radar_covariance_fn=radar_covariance_fn,
     )
     return records, _selected_rows_frame(radar, accepted)
 
@@ -119,6 +123,7 @@ def _select_tracklet_viterbi_path(
     config: TrackletViterbiAssociationConfig,
     track_support_by_id: Mapping[int, Mapping[str, float]] | None = None,
     track_support_by_event: Mapping[int, Mapping[int, Mapping[str, float]]] | None = None,
+    radar_covariance_fn: _base.RadarCovarianceFn | None = None,
 ) -> list[pd.Series]:
     """Return selected radar rows from retention-aware Viterbi scoring.
 
@@ -149,6 +154,7 @@ def _select_tracklet_viterbi_path(
                 candidate_catprob_threshold=candidate_catprob_threshold,
                 config=config,
                 track_support_by_id=support_by_id,
+                radar_covariance_fn=radar_covariance_fn,
             )
         )
     if not frames:
@@ -210,6 +216,7 @@ def _nodes_for_radar_frame_with_track_retention(
     candidate_catprob_threshold: float | None,
     config: TrackletViterbiAssociationConfig,
     track_support_by_id: Mapping[int, Mapping[str, float]] | None = None,
+    radar_covariance_fn: _base.RadarCovarianceFn | None = None,
 ) -> list[_base._ViterbiNode]:
     """Build Viterbi nodes while keeping top-K plus per-track candidates."""
 
@@ -223,11 +230,16 @@ def _nodes_for_radar_frame_with_track_retention(
         position = _base._row_position(row)
         if position is None:
             continue
+        row_covariance = _base._radar_covariance_for_row(
+            row,
+            covariance,
+            radar_covariance_fn,
+        )
         anchor_nis, base_catprob_cost, range_cost = _base._candidate_cost_terms(
             row=row,
             position=position,
             anchor=anchor,
-            covariance=covariance,
+            covariance=row_covariance,
             config=config,
         )
         soft_threshold_cost = _catprob_threshold_penalty(

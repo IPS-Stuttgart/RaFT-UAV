@@ -11,7 +11,7 @@ bad.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import copy
 import math
 from pathlib import Path
@@ -34,6 +34,8 @@ class StatefulAssociationConfig:
     min_candidate_probability: float = 1.0e-9
     allow_missed_detection: bool = True
     lag_s: float | None = None
+    use_learned_transition_costs: bool = False
+    learned_transition_cost_scale: float = 1.0
 
     def __post_init__(self) -> None:
         if self.max_hypotheses < 1:
@@ -52,6 +54,8 @@ class StatefulAssociationConfig:
             raise ValueError("min_candidate_probability must be in (0, 1]")
         if self.lag_s is not None and float(self.lag_s) < 0.0:
             raise ValueError("lag_s must be nonnegative or None")
+        if float(self.learned_transition_cost_scale) < 0.0:
+            raise ValueError("learned_transition_cost_scale must be nonnegative")
 
 
 @dataclass(frozen=True)
@@ -102,6 +106,7 @@ def run_async_cv_baseline_with_stateful_learned_radar_association(
 
     from raft_uav.baselines.kalman import AsyncConstantVelocityKalmanTracker
     from raft_uav.baselines.learned_radar_likelihood import (
+        STATEFUL_COST_METADATA_KEY,
         LearnedRadarAssociationModel,
         score_radar_candidates_with_learned_likelihood,
     )
@@ -125,6 +130,11 @@ def run_async_cv_baseline_with_stateful_learned_radar_association(
         model
         if isinstance(model, LearnedRadarAssociationModel)
         else LearnedRadarAssociationModel.load(model)
+    )
+    cfg = _config_with_learned_transition_costs(
+        cfg,
+        metadata=getattr(learned_model, "metadata", {}),
+        metadata_key=STATEFUL_COST_METADATA_KEY,
     )
     covariance = np.diag(
         [float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2]
@@ -271,6 +281,9 @@ def run_async_cv_baseline_with_stateful_learned_radar_association(
                 selected["stateful_parent_log_cost"] = float(hypothesis.log_cost)
                 selected["stateful_branch_log_cost"] = branch_cost
                 selected["stateful_hypothesis_missed_frames"] = int(hypothesis.missed_frames)
+                selected["stateful_transition_cost_source"] = (
+                    "learned" if cfg.use_learned_transition_costs else "manual"
+                )
                 selected["association_candidate_rows"] = int(len(costed))
 
                 track_id = _optional_track_id(selected.get("track_id"))
@@ -328,6 +341,35 @@ def run_async_cv_baseline_with_stateful_learned_radar_association(
         radar_row_to_measurement_fn=_radar_row_to_measurement,
     )
     return records, _selected_rows_frame(radar, selected_rows)
+
+
+def _config_with_learned_transition_costs(
+    config: StatefulAssociationConfig,
+    *,
+    metadata: Mapping[str, Any] | None,
+    metadata_key: str,
+) -> StatefulAssociationConfig:
+    """Overlay data-derived stateful costs from the saved likelihood model."""
+
+    if not config.use_learned_transition_costs:
+        return config
+    transition_costs = dict((metadata or {}).get(metadata_key) or {})
+    if not transition_costs:
+        return replace(config, use_learned_transition_costs=False)
+    scale = float(config.learned_transition_cost_scale)
+    updates: dict[str, float] = {}
+    for name in (
+        "missed_detection_cost",
+        "consecutive_miss_cost",
+        "track_switch_cost",
+        "missing_track_id_cost",
+    ):
+        value = _optional_float(transition_costs.get(name))
+        if value is not None and value >= 0.0:
+            updates[name] = float(value) * scale
+    if updates:
+        return replace(config, **updates)
+    return replace(config, use_learned_transition_costs=False)
 
 
 def _clone_tracker(tracker: Any) -> Any:
