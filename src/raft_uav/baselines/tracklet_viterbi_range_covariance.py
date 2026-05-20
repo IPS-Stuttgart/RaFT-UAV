@@ -4,6 +4,10 @@ The base tracklet-Viterbi implementation uses one Cartesian covariance for all
 selected radar rows.  This wrapper keeps the existing retention-aware Viterbi
 path but patches the replay and RF-anchor scoring hooks so long-range radar
 rows are down-weighted according to their ``range_m`` field.
+
+If an upstream runner already attached learned ``cov_*`` or ``association_cov_*``
+columns, those calibrated row-wise covariances take precedence over the generic
+range heuristic.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from raft_uav.baselines.kalman import TrackingMeasurement
 from raft_uav.baselines.tracklet_viterbi_retention import (
     run_async_cv_baseline_with_tracklet_viterbi_association as _run_retention_association,
 )
+from raft_uav.uncertainty import covariance_from_row
 
 TrackletViterbiAssociationConfig = _base.TrackletViterbiAssociationConfig
 DEFAULT_USE_RANGE_ADAPTIVE_RADAR_COVARIANCE = True
@@ -122,6 +127,10 @@ def _radar_row_covariance(
     """
 
     default_covariance = np.asarray(default_covariance, dtype=float)
+    row_covariance = covariance_from_row(row, 3, default_covariance)
+    if _has_row_position_covariance(row):
+        return row_covariance
+
     if not bool(
         getattr(
             config,
@@ -158,6 +167,27 @@ def _radar_row_covariance(
         * float(range_m),
     )
     return np.diag([xy_std_m**2, xy_std_m**2, z_std_m**2])
+
+
+def _has_row_position_covariance(row: pd.Series) -> bool:
+    """Return whether a row carries a complete positive 3-D covariance diagonal."""
+
+    for prefix in ("association_cov", "cov"):
+        has_diagonal = all(
+            _positive_float(row.get(f"{prefix}_{suffix}")) is not None
+            for suffix in ("ee", "nn", "uu")
+        )
+        if has_diagonal:
+            return True
+    return False
+
+
+def _positive_float(value: object) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) and number > 0.0 else None
 
 
 def _write_radar_covariance_diagnostics(

@@ -31,7 +31,13 @@ def add_runtime_configuration_arguments(parser: argparse.ArgumentParser) -> None
     radar.add_argument("--radar-origin-up-m", type=float, default=0.0)
 
     tracklet = parser.add_argument_group("tracklet-viterbi runtime configuration")
-    tracklet.add_argument("--tracklet-max-candidates", type=int, default=8)
+    tracklet.add_argument(
+        "--tracklet-max-candidates",
+        "--tracklet-max-candidates-per-frame",
+        dest="tracklet_max_candidates",
+        type=int,
+        default=8,
+    )
     tracklet.add_argument("--tracklet-missed-detection-cost", type=float, default=7.0)
     tracklet.add_argument("--tracklet-consecutive-miss-cost", type=float, default=1.0)
     tracklet.add_argument("--tracklet-track-switch-cost", type=float, default=8.0)

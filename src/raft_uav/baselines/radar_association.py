@@ -20,6 +20,10 @@ from raft_uav.baselines.kalman import (
     measurement_matrix,
     white_acceleration_process_noise,
 )
+from raft_uav.baselines.radar_covariance import (
+    candidate_radar_covariances,
+    row_radar_covariance,
+)
 from raft_uav.baselines.update_logic import (
     max_residual_norm_for_measurement,
     plan_linear_measurement_update,
@@ -46,6 +50,34 @@ _STABLE_SEGMENT_PRECOMPUTE_MODES = {
     *_STABLE_SEGMENT_ASSOCIATION_MODES,
     "stable-segments-hybrid",
 }
+RADAR_COVARIANCE_MODELS = ("cartesian", "geometry")
+_ASSOCIATION_COVARIANCE_COLUMNS = (
+    "association_cov_ee",
+    "association_cov_nn",
+    "association_cov_uu",
+    "association_cov_en",
+    "association_cov_eu",
+    "association_cov_nu",
+)
+
+
+@dataclass(frozen=True)
+class _RadarGeometryCovarianceConfig:
+    model: str = "cartesian"
+    radial_std_m: float = 12.0
+    radial_range_fraction: float = 0.005
+    crossrange_angle_std_deg: float = 1.5
+    crossrange_min_std_m: float = 5.0
+    crossrange_max_std_m: float = 80.0
+    min_std_m: float = 1.0
+
+    @property
+    def enabled(self) -> bool:
+        return self.model == "geometry"
+
+    @property
+    def crossrange_angle_std_rad(self) -> float:
+        return float(np.deg2rad(self.crossrange_angle_std_deg))
 
 
 @dataclass(frozen=True)
@@ -78,6 +110,12 @@ def run_async_cv_baseline_with_radar_association(
     acceleration_std_mps2: float = 4.0,
     radar_xy_std_m: float = 25.0,
     radar_z_std_m: float = 35.0,
+    radar_covariance_model: str = "cartesian",
+    radar_range_std_m: float = 12.0,
+    radar_range_std_fraction: float = 0.005,
+    radar_crossrange_angle_std_deg: float = 1.5,
+    radar_crossrange_min_std_m: float = 5.0,
+    radar_crossrange_max_std_m: float = 80.0,
     gate_probabilities_by_source: Mapping[str, float | None] | None = None,
     gate_thresholds_by_source: Mapping[str, float | None] | None = None,
     safety_gate_probabilities_by_source: Mapping[str, float | None] | None = None,
@@ -143,6 +181,20 @@ def run_async_cv_baseline_with_radar_association(
 
     if association not in RADAR_ASSOCIATION_MODES:
         raise ValueError(f"unknown radar association mode {association!r}")
+    if radar_covariance_model not in RADAR_COVARIANCE_MODELS:
+        raise ValueError(f"unknown radar covariance model {radar_covariance_model!r}")
+    if radar_xy_std_m <= 0.0 or radar_z_std_m <= 0.0:
+        raise ValueError("radar_xy_std_m and radar_z_std_m must be positive")
+    if radar_range_std_m <= 0.0:
+        raise ValueError("radar_range_std_m must be positive")
+    if radar_range_std_fraction < 0.0:
+        raise ValueError("radar_range_std_fraction must be nonnegative")
+    if radar_crossrange_angle_std_deg <= 0.0:
+        raise ValueError("radar_crossrange_angle_std_deg must be positive")
+    if radar_crossrange_min_std_m <= 0.0:
+        raise ValueError("radar_crossrange_min_std_m must be positive")
+    if radar_crossrange_max_std_m < radar_crossrange_min_std_m:
+        raise ValueError("radar_crossrange_max_std_m must be >= radar_crossrange_min_std_m")
     if association == "oracle-nearest-truth" and truth is None:
         raise ValueError("oracle-nearest-truth association requires normalized truth")
     if track_switch_nis_ratio <= 0.0:
@@ -210,12 +262,23 @@ def run_async_cv_baseline_with_radar_association(
         raise ValueError("stable_segment_rf_nis_cap must be positive")
 
     rf_measurement_list = list(rf_measurements)
-    covariance = np.diag([float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2])
+    covariance = np.diag(
+        [float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2]
+    )
+    covariance_config = _RadarGeometryCovarianceConfig(
+        model=radar_covariance_model,
+        radial_std_m=float(radar_range_std_m),
+        radial_range_fraction=float(radar_range_std_fraction),
+        crossrange_angle_std_deg=float(radar_crossrange_angle_std_deg),
+        crossrange_min_std_m=float(radar_crossrange_min_std_m),
+        crossrange_max_std_m=float(radar_crossrange_max_std_m),
+    )
     if association == "track-bank":
         return _run_mht_track_bank(
             rf_measurements=rf_measurement_list,
             radar=radar,
             covariance=covariance,
+            covariance_config=covariance_config,
             acceleration_std_mps2=acceleration_std_mps2,
             gate_probabilities_by_source=gate_probabilities_by_source,
             gate_thresholds_by_source=gate_thresholds_by_source,
@@ -277,6 +340,7 @@ def run_async_cv_baseline_with_radar_association(
             association=association,
             covariance=covariance,
             stable_anchor_by_key=stable_anchor_by_key,
+            candidate_catprob_threshold=candidate_catprob_threshold,
             truth=truth,
             truth_gate_m=truth_gate_m,
             truth_time_gate_s=truth_time_gate_s,
@@ -337,6 +401,7 @@ def run_async_cv_baseline_with_radar_association(
             association=association,
             tracker=tracker,
             covariance=covariance,
+            covariance_config=covariance_config,
             truth=truth,
             current_track_id=current_track_id,
             track_switch_nis_ratio=track_switch_nis_ratio,
@@ -428,6 +493,7 @@ def _run_mht_track_bank(
     rf_measurements: list[TrackingMeasurement],
     radar: pd.DataFrame,
     covariance: np.ndarray,
+    covariance_config: _RadarGeometryCovarianceConfig | None,
     acceleration_std_mps2: float,
     gate_probabilities_by_source: Mapping[str, float | None] | None,
     gate_thresholds_by_source: Mapping[str, float | None] | None,
@@ -454,6 +520,7 @@ def _run_mht_track_bank(
         association="track-bank",
         covariance=covariance,
         stable_anchor_by_key=None,
+        candidate_catprob_threshold=candidate_catprob_threshold,
         truth=None,
         truth_gate_m=150.0,
         truth_time_gate_s=1.0,
@@ -475,7 +542,9 @@ def _run_mht_track_bank(
     records: list[dict[str, object]] = []
     selected_rows: list[pd.Series] = []
 
-    for event in events:
+    # The first event was already assimilated into the MHT prior above.
+    # Replaying it here would double-count the bootstrap measurement.
+    for event in events[1:]:
         time_s = float(event["time_s"])
         _predict_mht_to(
             tracker,
@@ -534,9 +603,10 @@ def _run_mht_track_bank(
             candidates,
             _tracker_from_best_mht_hypothesis(tracker, current_time_s, acceleration_std_mps2),
             covariance,
+            covariance_config=covariance_config,
         )
         measurements = candidates[["east_m", "north_m", "up_m"]].to_numpy(dtype=float).T
-        covariances = np.repeat(covariance[:, :, None], measurements.shape[1], axis=2)
+        covariances = _candidate_covariance_tensor(pre_update_nis, covariance)
         tracker.update_linear(measurements, measurement_matrix(3), covariances)
 
         selected = _selected_row_from_best_mht_assignment(
@@ -729,6 +799,13 @@ def _selected_row_from_best_mht_assignment(
     selected["association_hypothesis_count"] = int(tracker.get_number_of_global_hypotheses())
     selected["association_best_weight"] = _mht_best_weight(tracker)
     selected["association_weight_margin"] = _mht_weight_margin(tracker)
+    for column in (
+        *_ASSOCIATION_COVARIANCE_COLUMNS,
+        "association_covariance_mode",
+        "association_cov_trace_m2",
+    ):
+        if column in scored:
+            selected[column] = scored[column]
     return selected
 
 
@@ -741,11 +818,16 @@ def _mht_radar_measurement(
     best_filter = tracker.get_best_hypothesis()[0]
     state = np.asarray(best_filter.get_point_estimate(), dtype=float).reshape(6)
     covariance = np.asarray(best_filter.filter_state.C, dtype=float).reshape(6, 6)
-    vector = state[:3] if selected is None else selected[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    vector = (
+        state[:3]
+        if selected is None
+        else selected[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    )
+    row_covariance = None if selected is None else _row_covariance(selected)
     return TrackingMeasurement(
         time_s=time_s,
         vector=vector,
-        covariance=covariance[:3, :3],
+        covariance=covariance[:3, :3] if row_covariance is None else row_covariance,
         source="radar",
     )
 
@@ -1456,6 +1538,7 @@ def _initial_measurement(
     association: str,
     covariance: np.ndarray,
     stable_anchor_by_key: dict[object, pd.Series] | None = None,
+    candidate_catprob_threshold: float | None = None,
     truth: pd.DataFrame | None,
     truth_gate_m: float,
     truth_time_gate_s: float,
@@ -1480,9 +1563,11 @@ def _initial_measurement(
             else stable_anchor_by_key.get(_radar_event_key(event))
         )
     else:
+        candidates = _catprob_candidate_pool(candidates, candidate_catprob_threshold)
         selected = _highest_catprob(candidates)
     if selected is None:
         return None
+    selected = _annotate_radar_geometry_covariance(selected, covariance, covariance_config)
     return _radar_row_to_measurement(selected, covariance)
 
 
@@ -1492,6 +1577,7 @@ def _select_radar_candidate(
     association: str,
     tracker: AsyncConstantVelocityKalmanTracker,
     covariance: np.ndarray,
+    covariance_config: _RadarGeometryCovarianceConfig | None,
     truth: pd.DataFrame | None,
     current_track_id: int | None,
     track_switch_nis_ratio: float,
@@ -1533,7 +1619,7 @@ def _select_radar_candidate(
         else:
             selected["association_action"] = "stable_segment_update"
         selected["association_candidate_rows"] = int(len(candidates))
-        return selected
+        return _annotate_radar_geometry_covariance(selected, covariance, covariance_config)
 
     candidates = _catprob_candidate_pool(candidates, candidate_catprob_threshold)
     if candidates.empty:
@@ -1545,8 +1631,13 @@ def _select_radar_candidate(
             selected["association_mode"] = association
             selected["association_action"] = "stable_segment_hybrid_update"
             selected["association_candidate_rows"] = int(len(candidates))
-            return selected
-    scored = _nis_scored_candidates(candidates, tracker, covariance)
+            return _annotate_radar_geometry_covariance(selected, covariance, covariance_config)
+    scored = _nis_scored_candidates(
+        candidates,
+        tracker,
+        covariance,
+        covariance_config=covariance_config,
+    )
     if scored.empty:
         return None
     if association == "stable-segments-hybrid":
@@ -1681,21 +1772,38 @@ def _nis_scored_candidates(
     candidates: pd.DataFrame,
     tracker: AsyncConstantVelocityKalmanTracker,
     covariance: np.ndarray,
+    *,
+    covariance_config: _RadarGeometryCovarianceConfig | None = None,
 ) -> pd.DataFrame:
     if candidates.empty:
         return candidates.iloc[0:0].copy()
     observation = measurement_matrix(3)
     state_position = observation @ tracker.state
-    innovation_covariance = observation @ tracker.covariance_matrix @ observation.T + covariance
-    try:
-        precision = np.linalg.inv(innovation_covariance)
-    except np.linalg.LinAlgError:
-        precision = np.linalg.pinv(innovation_covariance)
+    predicted_covariance = observation @ tracker.covariance_matrix @ observation.T
     vectors = candidates[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
     residuals = vectors - state_position
+    measurement_covariances = _candidate_covariances(candidates, covariance, covariance_config)
+
+    association_nis = np.empty(len(candidates), dtype=float)
+    for index, (residual, measurement_covariance) in enumerate(
+        zip(residuals, measurement_covariances, strict=True)
+    ):
+        innovation_covariance = predicted_covariance + measurement_covariance
+        try:
+            precision = np.linalg.inv(innovation_covariance)
+        except np.linalg.LinAlgError:
+            precision = np.linalg.pinv(innovation_covariance)
+        association_nis[index] = float(residual.T @ precision @ residual)
+
     scored = candidates.copy()
-    scored["association_nis"] = np.einsum("ij,jk,ik->i", residuals, precision, residuals)
+    scored["association_nis"] = association_nis
     scored["association_candidate_rows"] = int(len(candidates))
+    if covariance_config is not None and covariance_config.enabled:
+        scored = _attach_covariance_columns(
+            scored,
+            measurement_covariances,
+            covariance_mode="radar-geometry",
+        )
     return scored
 
 
@@ -1877,7 +1985,12 @@ def _pda_mixture_candidate(
     mean = weights @ vectors
     residuals = vectors - mean
     spread = residuals.T @ (residuals * weights[:, None])
-    covariance = np.asarray(base_covariance, dtype=float) + spread
+    measurement_covariance = np.einsum(
+        "i,ijk->jk",
+        weights,
+        _candidate_row_covariances(candidates, base_covariance),
+    )
+    covariance = measurement_covariance + spread
 
     best_index = int(np.argmax(weights))
     selected = candidates.iloc[best_index].copy()
@@ -1896,6 +2009,8 @@ def _pda_mixture_candidate(
     selected["association_effective_candidates"] = float(1.0 / np.sum(weights**2))
     selected["association_best_track_id"] = _optional_track_id(selected)
     selected["association_position_spread_trace_m2"] = float(np.trace(spread))
+    selected["association_covariance_mode"] = _pda_covariance_mode(candidates)
+    selected["association_cov_trace_m2"] = float(np.trace(covariance))
     selected["association_cov_ee"] = float(covariance[0, 0])
     selected["association_cov_nn"] = float(covariance[1, 1])
     selected["association_cov_uu"] = float(covariance[2, 2])
@@ -1933,6 +2048,147 @@ def _weight_entropy(weights: np.ndarray) -> float:
     return float(-np.sum(clipped * np.log(clipped)))
 
 
+
+def _candidate_covariances(
+    candidates: pd.DataFrame,
+    base_covariance: np.ndarray,
+    covariance_config: _RadarGeometryCovarianceConfig | None,
+) -> np.ndarray:
+    base = np.asarray(base_covariance, dtype=float).reshape(3, 3)
+    if len(candidates) == 0:
+        return np.empty((0, 3, 3), dtype=float)
+    if covariance_config is None or not covariance_config.enabled:
+        return np.repeat(base[None, :, :], len(candidates), axis=0)
+    return np.stack(
+        [
+            _radar_geometry_covariance_for_row(row, base, covariance_config)
+            for _, row in candidates.iterrows()
+        ],
+        axis=0,
+    )
+
+
+def _candidate_covariance_tensor(
+    candidates: pd.DataFrame,
+    base_covariance: np.ndarray,
+) -> np.ndarray:
+    covariances = _candidate_row_covariances(candidates, base_covariance)
+    return np.moveaxis(covariances, 0, -1)
+
+
+def _candidate_row_covariances(
+    candidates: pd.DataFrame,
+    base_covariance: np.ndarray,
+) -> np.ndarray:
+    base = np.asarray(base_covariance, dtype=float).reshape(3, 3)
+    if len(candidates) == 0:
+        return np.empty((0, 3, 3), dtype=float)
+    covariances = []
+    for _, row in candidates.iterrows():
+        row_covariance = _row_covariance(row)
+        covariances.append(base if row_covariance is None else row_covariance)
+    return np.stack(covariances, axis=0)
+
+
+def _annotate_radar_geometry_covariance(
+    row: pd.Series,
+    base_covariance: np.ndarray,
+    covariance_config: _RadarGeometryCovarianceConfig | None,
+) -> pd.Series:
+    if covariance_config is None or not covariance_config.enabled:
+        return row
+    if _row_covariance(row) is not None:
+        return row
+    covariance = _radar_geometry_covariance_for_row(row, base_covariance, covariance_config)
+    return _attach_covariance_columns(
+        row.to_frame().T,
+        covariance[None, :, :],
+        covariance_mode="radar-geometry",
+    ).iloc[0]
+
+
+def _attach_covariance_columns(
+    frame: pd.DataFrame,
+    covariances: np.ndarray,
+    *,
+    covariance_mode: str,
+) -> pd.DataFrame:
+    annotated = frame.copy()
+    covariances = np.asarray(covariances, dtype=float)
+    annotated["association_cov_ee"] = covariances[:, 0, 0]
+    annotated["association_cov_nn"] = covariances[:, 1, 1]
+    annotated["association_cov_uu"] = covariances[:, 2, 2]
+    annotated["association_cov_en"] = covariances[:, 0, 1]
+    annotated["association_cov_eu"] = covariances[:, 0, 2]
+    annotated["association_cov_nu"] = covariances[:, 1, 2]
+    annotated["association_covariance_mode"] = covariance_mode
+    annotated["association_cov_trace_m2"] = np.trace(covariances, axis1=1, axis2=2)
+    return annotated
+
+
+def _radar_geometry_covariance_for_row(
+    row: pd.Series,
+    base_covariance: np.ndarray,
+    covariance_config: _RadarGeometryCovarianceConfig,
+) -> np.ndarray:
+    base = np.asarray(base_covariance, dtype=float).reshape(3, 3)
+    try:
+        position = row[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    except (KeyError, TypeError, ValueError):
+        return base
+    if position.shape != (3,) or not np.all(np.isfinite(position)):
+        return base
+    position_norm = float(np.linalg.norm(position))
+    range_m = _radar_row_range_m(row, fallback=position_norm)
+    if position_norm <= 1.0e-9 or range_m <= 0.0:
+        return base
+
+    radial_std_m = max(
+        float(covariance_config.radial_std_m),
+        float(covariance_config.radial_range_fraction) * range_m,
+        float(covariance_config.min_std_m),
+    )
+    crossrange_std_m = float(
+        np.clip(
+            covariance_config.crossrange_angle_std_rad * range_m,
+            covariance_config.crossrange_min_std_m,
+            covariance_config.crossrange_max_std_m,
+        )
+    )
+    unit_los = position / position_norm
+    los_projector = np.outer(unit_los, unit_los)
+    covariance = (crossrange_std_m**2) * np.eye(3)
+    covariance += (radial_std_m**2 - crossrange_std_m**2) * los_projector
+    covariance += (float(covariance_config.min_std_m) ** 2) * np.eye(3)
+    covariance = 0.5 * (covariance + covariance.T)
+    if not np.all(np.isfinite(covariance)):
+        return base
+    return covariance
+
+
+def _radar_row_range_m(row: pd.Series, *, fallback: float) -> float:
+    for column in ("range_m", "slant_range_m", "radar_range_m"):
+        if column in row.index:
+            value = _optional_float(row[column])
+            if value is not None and np.isfinite(value) and value > 0.0:
+                return float(value)
+    return float(fallback)
+
+
+def _pda_covariance_mode(candidates: pd.DataFrame) -> str:
+    if "association_covariance_mode" not in candidates.columns:
+        return "pda-mixture"
+    modes = [
+        str(mode)
+        for mode in candidates["association_covariance_mode"].dropna().unique().tolist()
+        if str(mode)
+    ]
+    if not modes:
+        return "pda-mixture"
+    if len(modes) == 1:
+        return f"pda-mixture+{modes[0]}"
+    return "pda-mixture+row-covariance"
+
 def _radar_row_to_measurement(row: pd.Series, covariance: np.ndarray) -> TrackingMeasurement:
     row_covariance = _row_covariance(row)
     return TrackingMeasurement(
@@ -1944,21 +2200,13 @@ def _radar_row_to_measurement(row: pd.Series, covariance: np.ndarray) -> Trackin
 
 
 def _row_covariance(row: pd.Series) -> np.ndarray | None:
-    columns = [
-        "association_cov_ee",
-        "association_cov_nn",
-        "association_cov_uu",
-        "association_cov_en",
-        "association_cov_eu",
-        "association_cov_nu",
-    ]
-    if not all(column in row for column in columns):
+    if not all(column in row for column in _ASSOCIATION_COVARIANCE_COLUMNS):
         return None
-    values = [float(row[column]) for column in columns]
+    values = [float(row[column]) for column in _ASSOCIATION_COVARIANCE_COLUMNS]
     if not np.isfinite(values).all():
         return None
     ee, nn, uu, en, eu, nu = values
-    return np.array(
+    covariance = np.array(
         [
             [ee, en, eu],
             [en, nn, nu],
@@ -1966,6 +2214,7 @@ def _row_covariance(row: pd.Series) -> np.ndarray | None:
         ],
         dtype=float,
     )
+    return 0.5 * (covariance + covariance.T)
 
 
 def _nearest_truth_position(

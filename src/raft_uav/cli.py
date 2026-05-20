@@ -14,6 +14,7 @@ import pandas as pd
 from raft_uav.baselines.kalman import run_async_cv_baseline
 from raft_uav.baselines.radar_association import (
     RADAR_ASSOCIATION_MODES,
+    RADAR_COVARIANCE_MODELS,
     run_async_cv_baseline_with_radar_association,
 )
 from raft_uav.baselines.smoothing import SMOOTHER_MODES, smooth_tracking_records
@@ -25,6 +26,7 @@ from raft_uav.baselines.update_logic import (
 from raft_uav.evaluation.diagnostics import build_diagnostic_summary
 from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
 from raft_uav.io.aerpaw import (
+    RADAR_SELECTION_MODES,
     discover_flights,
     normalize_radar,
     normalize_rf,
@@ -51,6 +53,18 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         help="inspect only this flight; can be passed multiple times",
     )
+    inspect_parser.add_argument(
+        "--rf-clock-offset-s",
+        type=float,
+        default=DEFAULT_RF_CLOCK_OFFSET_S,
+        help="RF raw timestamp offset added before truth-relative normalization",
+    )
+    inspect_parser.add_argument(
+        "--radar-clock-offset-s",
+        type=float,
+        default=DEFAULT_RADAR_CLOCK_OFFSET_S,
+        help="radar raw timestamp offset added before truth-relative normalization",
+    )
 
     baseline_parser = subparsers.add_parser(
         "run-baseline", help="run the initial CV fusion baseline"
@@ -60,6 +74,36 @@ def main(argv: list[str] | None = None) -> int:
     baseline_parser.add_argument("--output-dir", type=Path, default=Path("outputs/baseline"))
     baseline_parser.add_argument("--acceleration-std", type=float, default=4.0)
     baseline_parser.add_argument(
+        "--rf-clock-offset-s",
+        type=float,
+        default=DEFAULT_RF_CLOCK_OFFSET_S,
+        help=(
+            "RF raw timestamp offset, in seconds, added before truth-relative "
+            "normalization"
+        ),
+    )
+    baseline_parser.add_argument(
+        "--radar-clock-offset-s",
+        type=float,
+        default=DEFAULT_RADAR_CLOCK_OFFSET_S,
+        help=(
+            "radar raw timestamp offset, in seconds, added before truth-relative "
+            "normalization"
+        ),
+    )
+    baseline_parser.add_argument(
+        "--rf-time-offset-correction-s",
+        type=float,
+        default=0.0,
+        help="residual calibrated correction added to normalized RF time_s",
+    )
+    baseline_parser.add_argument(
+        "--radar-time-offset-correction-s",
+        type=float,
+        default=0.0,
+        help="residual calibrated correction added to normalized radar time_s",
+    )
+    baseline_parser.add_argument(
         "--radar-association",
         choices=["catprob", *RADAR_ASSOCIATION_MODES],
         default="catprob",
@@ -67,11 +111,57 @@ def main(argv: list[str] | None = None) -> int:
     )
     baseline_parser.add_argument(
         "--radar-selection",
-        choices=["catprob", "truth-gated", "all", "none"],
+        choices=RADAR_SELECTION_MODES,
         default=None,
         help="legacy radar row selection; overrides --radar-association when provided",
     )
     baseline_parser.add_argument("--radar-catprob-threshold", type=float, default=0.5)
+    baseline_parser.add_argument(
+        "--radar-covariance-model",
+        choices=RADAR_COVARIANCE_MODELS,
+        default="cartesian",
+        help=(
+            "Radar measurement covariance model for association modes. "
+            "'cartesian' keeps the fixed ENU diagonal covariance; 'geometry' builds "
+            "a row-wise line-of-sight/cross-range ENU covariance from radar range."
+        ),
+    )
+    baseline_parser.add_argument(
+        "--radar-range-std-m",
+        type=float,
+        default=12.0,
+        help="Base radial radar standard deviation for --radar-covariance-model geometry.",
+    )
+    baseline_parser.add_argument(
+        "--radar-range-std-fraction",
+        type=float,
+        default=0.005,
+        help=(
+            "Range-proportional radial radar standard deviation fraction for "
+            "--radar-covariance-model geometry."
+        ),
+    )
+    baseline_parser.add_argument(
+        "--radar-crossrange-angle-std-deg",
+        type=float,
+        default=1.5,
+        help=(
+            "Angular cross-range radar standard deviation in degrees for "
+            "--radar-covariance-model geometry."
+        ),
+    )
+    baseline_parser.add_argument(
+        "--radar-crossrange-min-std-m",
+        type=float,
+        default=5.0,
+        help="Minimum cross-range standard deviation for geometry radar covariance.",
+    )
+    baseline_parser.add_argument(
+        "--radar-crossrange-max-std-m",
+        type=float,
+        default=80.0,
+        help="Maximum cross-range standard deviation for geometry radar covariance.",
+    )
     baseline_parser.add_argument("--truth-gate-m", type=float, default=150.0)
     baseline_parser.add_argument("--truth-time-gate-s", type=float, default=1.0)
     baseline_parser.add_argument(
@@ -315,16 +405,28 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "inspect":
-        return _inspect(args.dataset_root, args.flight)
+        return _inspect(
+            args.dataset_root, args.flight, args.rf_clock_offset_s, args.radar_clock_offset_s
+        )
     if args.command == "run-baseline":
         return _run_baseline(
             args.dataset_root,
             args.flight,
             args.output_dir,
             args.acceleration_std,
+            args.rf_clock_offset_s,
+            args.radar_clock_offset_s,
+            args.rf_time_offset_correction_s,
+            args.radar_time_offset_correction_s,
             args.radar_association,
             args.radar_selection,
             args.radar_catprob_threshold,
+            args.radar_covariance_model,
+            args.radar_range_std_m,
+            args.radar_range_std_fraction,
+            args.radar_crossrange_angle_std_deg,
+            args.radar_crossrange_min_std_m,
+            args.radar_crossrange_max_std_m,
             args.truth_gate_m,
             args.truth_time_gate_s,
             args.track_switch_nis_ratio,
@@ -373,7 +475,12 @@ def main(argv: list[str] | None = None) -> int:
     raise ValueError(args.command)
 
 
-def _inspect(dataset_root: Path, requested_flights: list[str] | None) -> int:
+def _inspect(
+    dataset_root: Path,
+    requested_flights: list[str] | None,
+    rf_clock_offset_s: float,
+    radar_clock_offset_s: float,
+) -> int:
     if requested_flights:
         flights = [select_flight(dataset_root, name) for name in requested_flights]
         discovered_count = len(discover_flights(dataset_root))
@@ -383,7 +490,11 @@ def _inspect(dataset_root: Path, requested_flights: list[str] | None) -> int:
 
     print(f"discovered_flights={discovered_count}")
     for flight in flights:
-        summary = summarize_flight_schema(flight)
+        summary = summarize_flight_schema(
+            flight,
+            rf_clock_offset_s=rf_clock_offset_s,
+            radar_clock_offset_s=radar_clock_offset_s,
+        )
         print(f"\nflight={summary['flight']}")
         for modality in ("truth", "rf", "radar"):
             _print_modality_summary(modality, summary.get(modality))
@@ -395,9 +506,19 @@ def _run_baseline(
     flight_name: str,
     output_dir: Path,
     acceleration_std: float,
+    rf_clock_offset_s: float,
+    radar_clock_offset_s: float,
+    rf_time_offset_correction_s: float,
+    radar_time_offset_correction_s: float,
     radar_association: str,
     legacy_radar_selection: str | None,
     radar_catprob_threshold: float,
+    radar_covariance_model: str,
+    radar_range_std_m: float,
+    radar_range_std_fraction: float,
+    radar_crossrange_angle_std_deg: float,
+    radar_crossrange_min_std_m: float,
+    radar_crossrange_max_std_m: float,
     truth_gate_m: float,
     truth_time_gate_s: float,
     track_switch_nis_ratio: float,
@@ -489,9 +610,26 @@ def _run_baseline(
         raise ValueError("stable_segment_rf_time_gate_s must be nonnegative")
     if stable_segment_rf_nis_cap <= 0.0:
         raise ValueError("stable_segment_rf_nis_cap must be positive")
+    if radar_covariance_model not in RADAR_COVARIANCE_MODELS:
+        raise ValueError(f"--radar-covariance-model must be one of {RADAR_COVARIANCE_MODELS}")
+    if radar_range_std_m <= 0.0:
+        raise ValueError("--radar-range-std-m must be positive")
+    if radar_range_std_fraction < 0.0:
+        raise ValueError("--radar-range-std-fraction must be nonnegative")
+    if radar_crossrange_angle_std_deg <= 0.0:
+        raise ValueError("--radar-crossrange-angle-std-deg must be positive")
+    if radar_crossrange_min_std_m <= 0.0:
+        raise ValueError("--radar-crossrange-min-std-m must be positive")
+    if radar_crossrange_max_std_m < radar_crossrange_min_std_m:
+        raise ValueError("--radar-crossrange-max-std-m must be >= --radar-crossrange-min-std-m")
     if smoother == "fixed-lag" and smoother_lag_s < 0.0:
         raise ValueError("smoother_lag_s must be nonnegative for fixed-lag smoothing")
     radar_mode = legacy_radar_selection or radar_association
+    if radar_covariance_model != "cartesian" and radar_mode not in RADAR_ASSOCIATION_MODES:
+        raise ValueError(
+            "--radar-covariance-model geometry requires a radar association mode; "
+            f"got {radar_mode!r}"
+        )
     flight = select_flight(dataset_root, flight_name)
     if flight.truth_txt is None:
         raise FileNotFoundError(f"{flight.name} has no truth telemetry file")
@@ -506,14 +644,29 @@ def _run_baseline(
     rf_measurements = []
     if flight.rf_csv is not None:
         rf = _inside_truth_window(
-            normalize_rf(read_rf_csv(flight.rf_csv), projector, truth_origin_time), truth
+            _apply_time_offset_correction(
+                normalize_rf(
+                    read_rf_csv(flight.rf_csv),
+                    projector,
+                    truth_origin_time,
+                    clock_offset_s=rf_clock_offset_s,
+                ),
+                rf_time_offset_correction_s,
+            ),
+            truth,
         )
         rf_measurements = rf_measurements_to_enu(rf)
         measurements.extend(rf_measurements)
     if flight.radar_json is not None:
         radar = _inside_truth_window(
-            normalize_radar(
-                read_radar_tracks_json(flight.radar_json), projector, truth_origin_time
+            _apply_time_offset_correction(
+                normalize_radar(
+                    read_radar_tracks_json(flight.radar_json),
+                    projector,
+                    truth_origin_time,
+                    clock_offset_s=radar_clock_offset_s,
+                ),
+                radar_time_offset_correction_s,
             ),
             truth,
         )
@@ -546,6 +699,12 @@ def _run_baseline(
             association=radar_mode,
             truth=truth,
             acceleration_std_mps2=acceleration_std,
+            radar_covariance_model=radar_covariance_model,
+            radar_range_std_m=radar_range_std_m,
+            radar_range_std_fraction=radar_range_std_fraction,
+            radar_crossrange_angle_std_deg=radar_crossrange_angle_std_deg,
+            radar_crossrange_min_std_m=radar_crossrange_min_std_m,
+            radar_crossrange_max_std_m=radar_crossrange_max_std_m,
             gate_probabilities_by_source=gate_probabilities,
             safety_gate_probabilities_by_source=safety_gate_probabilities,
             robust_update_by_source=robust_updates,
@@ -665,6 +824,12 @@ def _run_baseline(
         acceleration_std=acceleration_std,
         radar_association=radar_mode,
         radar_catprob_threshold=radar_catprob_threshold,
+        radar_covariance_model=radar_covariance_model,
+        radar_range_std_m=radar_range_std_m,
+        radar_range_std_fraction=radar_range_std_fraction,
+        radar_crossrange_angle_std_deg=radar_crossrange_angle_std_deg,
+        radar_crossrange_min_std_m=radar_crossrange_min_std_m,
+        radar_crossrange_max_std_m=radar_crossrange_max_std_m,
         truth_gate_m=truth_gate_m,
         truth_time_gate_s=truth_time_gate_s,
         track_switch_nis_ratio=track_switch_nis_ratio,
@@ -731,6 +896,10 @@ def _run_baseline(
     print(f"reweighted_measurements={metrics['reweighted_measurements']}")
     print(f"rf_rows={len(rf)}")
     print(f"radar_rows={len(radar)}")
+    print(f"rf_clock_offset_s={rf_clock_offset_s:.3f}")
+    print(f"radar_clock_offset_s={radar_clock_offset_s:.3f}")
+    print(f"rf_time_offset_correction_s={rf_time_offset_correction_s:.3f}")
+    print(f"radar_time_offset_correction_s={radar_time_offset_correction_s:.3f}")
     print(f"radar_association={radar_mode}")
     print(f"selected_radar_rows={len(selected_radar)}")
     print(f"selected_radar_track_ids={metrics['selected_radar_track_ids']}")
@@ -826,6 +995,12 @@ def _baseline_metrics(
     acceleration_std: float,
     radar_association: str,
     radar_catprob_threshold: float,
+    radar_covariance_model: str,
+    radar_range_std_m: float,
+    radar_range_std_fraction: float,
+    radar_crossrange_angle_std_deg: float,
+    radar_crossrange_min_std_m: float,
+    radar_crossrange_max_std_m: float,
     truth_gate_m: float,
     truth_time_gate_s: float,
     track_switch_nis_ratio: float,
@@ -928,7 +1103,15 @@ def _baseline_metrics(
         "state": ["east", "north", "up", "v_east", "v_north", "v_up"],
         "acceleration_std_mps2": float(acceleration_std),
         "rf_covariance": "diag(CEP^2, CEP^2), default std 75 m",
-        "radar_covariance": "diag(25^2, 25^2, 35^2) m^2",
+        "radar_covariance": {
+            "model": radar_covariance_model,
+            "cartesian_fallback": "diag(25^2, 25^2, 35^2) m^2",
+            "range_std_m": radar_range_std_m,
+            "range_std_fraction": radar_range_std_fraction,
+            "crossrange_angle_std_deg": radar_crossrange_angle_std_deg,
+            "crossrange_min_std_m": radar_crossrange_min_std_m,
+            "crossrange_max_std_m": radar_crossrange_max_std_m,
+        },
         "radar_selection": radar_association,
         "radar_association": radar_association,
         "radar_catprob_threshold": float(radar_catprob_threshold),
@@ -1136,6 +1319,15 @@ def _inside_truth_window(frame: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFra
     truth_min = float(truth["time_s"].min())
     truth_max = float(truth["time_s"].max())
     return frame.loc[(frame["time_s"] >= truth_min) & (frame["time_s"] <= truth_max)].copy()
+
+
+def _apply_time_offset_correction(frame: pd.DataFrame, correction_s: float) -> pd.DataFrame:
+    """Apply a residual calibrated time correction to an already-normalized frame."""
+
+    correction = float(correction_s)
+    if frame.empty or "time_s" not in frame.columns or correction == 0.0:
+        return frame
+    return apply_time_offset(frame, correction)
 
 
 def _write_trajectory_plot(

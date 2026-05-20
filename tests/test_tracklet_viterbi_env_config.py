@@ -19,3 +19,28 @@ def test_tracklet_viterbi_config_reads_environment(monkeypatch) -> None:
     assert config.below_catprob_threshold_penalty == 1.5
     assert config.track_support_weight == 0.25
     assert config.max_track_support_reward == 3.0
+
+
+def test_tracklet_cli_leaves_runtime_tracklet_args_for_runtime_parser() -> None:
+    remaining, updates = tracklet_viterbi_cli._extract_tracklet_args(
+        [
+            "run-baseline",
+            "/data/aerpaw",
+            "--tracklet-track-support-weight",
+            "0.9",
+            "--tracklet-max-candidates-per-frame",
+            "12",
+            "--tracklet-variant",
+            "retention",
+        ]
+    )
+
+    assert updates == {tracklet_viterbi_cli._TRACKLET_VARIANT_ENV: "retention"}
+    assert remaining == [
+        "run-baseline",
+        "/data/aerpaw",
+        "--tracklet-track-support-weight",
+        "0.9",
+        "--tracklet-max-candidates-per-frame",
+        "12",
+    ]

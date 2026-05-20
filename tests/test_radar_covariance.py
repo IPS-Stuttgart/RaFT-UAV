@@ -8,6 +8,7 @@ from raft_uav.baselines.radar_covariance import (
     append_radar_covariance_columns,
     row_radar_covariance,
 )
+from raft_uav.baselines.tracklet_viterbi_range_covariance import _radar_row_covariance
 from raft_uav.baselines.radar_association import _nis_scored_candidates
 from raft_uav.calibration.bias import BIAS_RESIDUAL_STD_COLUMN_PREFIX
 
@@ -77,6 +78,28 @@ def test_nis_scoring_uses_candidate_specific_covariance_columns():
 
     assert scored.loc[scored["track_id"] == 1, "association_nis"].iloc[0] == 100.0
     assert scored.loc[scored["track_id"] == 2, "association_nis"].iloc[0] == 1.0
+
+
+def test_tracklet_range_covariance_prefers_learned_row_covariance_columns():
+    default_covariance = np.diag([25.0**2, 25.0**2, 35.0**2])
+    row = pd.Series(
+        {
+            "range_m": 10_000.0,
+            "cov_ee": 9.0,
+            "cov_nn": 16.0,
+            "cov_uu": 25.0,
+            "cov_en": 1.0,
+            "cov_eu": 2.0,
+            "cov_nu": 3.0,
+        }
+    )
+
+    covariance = _radar_row_covariance(row, default_covariance, object())
+
+    np.testing.assert_allclose(
+        covariance,
+        [[9.0, 1.0, 2.0], [1.0, 16.0, 3.0], [2.0, 3.0, 25.0]],
+    )
 
 
 def test_bias_residual_std_inflates_fallback_radar_covariance():

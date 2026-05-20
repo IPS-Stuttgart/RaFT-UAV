@@ -18,6 +18,7 @@ DEFAULT_RF_CLOCK_OFFSET_S = DEFAULT_SENSOR_CLOCK_OFFSET_S
 DEFAULT_RADAR_CLOCK_OFFSET_S = DEFAULT_SENSOR_CLOCK_OFFSET_S
 # Backward-compatible alias for callers that imported the historical shared name.
 SENSOR_CLOCK_OFFSET_S = DEFAULT_SENSOR_CLOCK_OFFSET_S
+RADAR_SELECTION_MODES = ("catprob", "catprob-all", "truth-gated", "all", "none")
 TRUTH_COLUMNS = [
     "sample",
     "longitude",
@@ -121,9 +122,40 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
             line = line.strip()
             if not line:
                 continue
-            payload = json.loads(line)
-            params = payload.get("params", {}) if isinstance(payload, dict) else {}
-            for track_index, track in enumerate(payload.get("trackData") or []):
+            line_number = frame_index + 1
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"{path}: invalid radar JSON on line {line_number}: {exc.msg}"
+                ) from exc
+            if not isinstance(payload, dict):
+                raise ValueError(
+                    f"{path}: expected radar JSON object on line {line_number}, "
+                    f"got {type(payload).__name__}"
+                )
+
+            params = payload.get("params", {})
+            if params is None:
+                params = {}
+            if not isinstance(params, dict):
+                raise ValueError(
+                    f"{path}: expected params object on line {line_number}, "
+                    f"got {type(params).__name__}"
+                )
+
+            track_data = payload.get("trackData") or []
+            if not isinstance(track_data, list):
+                raise ValueError(
+                    f"{path}: expected trackData list on line {line_number}, "
+                    f"got {type(track_data).__name__}"
+                )
+            for track_index, track in enumerate(track_data):
+                if not isinstance(track, dict):
+                    raise ValueError(
+                        f"{path}: expected trackData[{track_index}] object on line "
+                        f"{line_number}, got {type(track).__name__}"
+                    )
                 records.append(_flatten_track(frame_index, track_index, track, params))
     return pd.DataFrame.from_records(records)
 

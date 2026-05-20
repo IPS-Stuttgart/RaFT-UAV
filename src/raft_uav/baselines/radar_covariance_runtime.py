@@ -4,7 +4,8 @@ This module is intentionally small and conservative: it preserves the existing
 public API and teaches the existing radar-association helpers to consume
 candidate-specific covariance columns.  The active covariance model is controlled
 by environment variables and defaults to ``range-angle`` when ``range_m`` and ENU
-position columns are present.
+position columns are present.  Radar association now consumes those covariance
+columns natively; the runtime hook only annotates radar rows at ingestion points.
 """
 
 from __future__ import annotations
@@ -41,9 +42,6 @@ def install() -> None:
     _ORIGINAL_RADAR_MEASUREMENTS_TO_ENU = aerpaw.radar_measurements_to_enu
 
     association._events = _events_with_covariance
-    association._nis_scored_candidates = _nis_scored_candidates_with_candidate_covariance
-    association._row_covariance = row_radar_covariance
-    association._pda_mixture_candidate = _pda_mixture_candidate_with_candidate_covariance
     aerpaw.radar_measurements_to_enu = _radar_measurements_to_enu_with_candidate_covariance
 
     _INSTALLED = True

@@ -13,9 +13,11 @@ import pandas as pd
 
 from raft_uav.baselines.imm import run_async_imm_baseline
 from raft_uav.baselines.kalman import run_async_cv_baseline
+from raft_uav.baselines.smoothing import SMOOTHER_MODES, smooth_tracking_records
 from raft_uav.evaluation.diagnostics import build_diagnostic_summary
 from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
 from raft_uav.io.aerpaw import (
+    RADAR_SELECTION_MODES,
     normalize_radar,
     normalize_rf,
     normalize_truth,
@@ -45,8 +47,20 @@ def main(argv: list[str] | None = None) -> int:
         help="IMM Markov-mode switching time constant in seconds",
     )
     parser.add_argument(
+        "--smoother",
+        choices=SMOOTHER_MODES,
+        default="none",
+        help="post-filter smoothing mode applied before metrics are computed",
+    )
+    parser.add_argument(
+        "--smoother-lag-s",
+        type=float,
+        default=20.0,
+        help="future horizon for --smoother fixed-lag",
+    )
+    parser.add_argument(
         "--radar-selection",
-        choices=["catprob", "truth-gated", "all", "none"],
+        choices=RADAR_SELECTION_MODES,
         default="catprob",
         help="radar row selection before fusion",
     )
@@ -82,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
         tracker=args.tracker,
         acceleration_std=args.acceleration_std,
         imm_mode_switch_time_constant=args.imm_mode_switch_time_constant,
+        smoother=args.smoother,
+        smoother_lag_s=args.smoother_lag_s,
         radar_selection=args.radar_selection,
         radar_catprob_threshold=args.radar_catprob_threshold,
         truth_gate_m=args.truth_gate_m,
@@ -108,6 +124,8 @@ def run_experiment(
     tracker: str = "imm",
     acceleration_std: float = 4.0,
     imm_mode_switch_time_constant: float = 20.0,
+    smoother: str = "none",
+    smoother_lag_s: float = 20.0,
     radar_selection: str = "catprob",
     radar_catprob_threshold: float = 0.5,
     truth_gate_m: float = 150.0,
@@ -130,6 +148,10 @@ def run_experiment(
         raise ValueError("tracker must be 'cv' or 'imm'")
     if imm_mode_switch_time_constant <= 0.0:
         raise ValueError("imm_mode_switch_time_constant must be positive")
+    if smoother not in SMOOTHER_MODES:
+        raise ValueError(f"smoother must be one of {SMOOTHER_MODES}; got {smoother!r}")
+    if smoother in {"fixed-lag", "fixed-lag-map"} and smoother_lag_s < 0.0:
+        raise ValueError(f"smoother_lag_s must be nonnegative for {smoother} smoothing")
     if robust_update not in {"none", "nis-inflate"}:
         raise ValueError("robust_update must be 'none' or 'nis-inflate'")
     if rf_inflation_alpha <= 0.0 or radar_inflation_alpha <= 0.0:
@@ -209,6 +231,13 @@ def run_experiment(
     if not records:
         raise RuntimeError(f"{flight.name} produced no posterior records")
 
+    records = smooth_tracking_records(
+        records,
+        method=smoother,
+        acceleration_std_mps2=acceleration_std,
+        lag_s=smoother_lag_s,
+        measurements=measurements,
+    )
     estimate_frame = _records_to_frame(records)
     diagnostics_columns = [
         "time_s",
@@ -247,6 +276,8 @@ def run_experiment(
         tracker=tracker,
         acceleration_std=acceleration_std,
         imm_mode_switch_time_constant=imm_mode_switch_time_constant,
+        smoother=smoother,
+        smoother_lag_s=smoother_lag_s,
         radar_selection=radar_selection,
         radar_catprob_threshold=radar_catprob_threshold,
         max_eval_time_delta_s=max_eval_time_delta_s,
@@ -271,6 +302,7 @@ def run_experiment(
 
     print(f"flight={flight.name}")
     print(f"tracker={tracker}")
+    print(f"smoother={smoother}")
     print(f"posterior_records={len(records)}")
     print(f"selected_radar_rows={len(selected_radar)}")
     print(f"metrics_json={metrics_path}")
@@ -286,6 +318,12 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for record in records:
         state = np.asarray(record["state"], dtype=float).reshape(6)
+        filtered_state = record.get("filtered_state")
+        filtered = (
+            np.asarray(filtered_state, dtype=float).reshape(6)
+            if filtered_state is not None
+            else None
+        )
         row = {
             "time_s": float(record["time_s"]),
             "source": str(record["source"]),
@@ -307,6 +345,14 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
             "v_east_mps": state[3],
             "v_north_mps": state[4],
             "v_up_mps": state[5],
+            "filtered_east_m": None if filtered is None else filtered[0],
+            "filtered_north_m": None if filtered is None else filtered[1],
+            "filtered_up_m": None if filtered is None else filtered[2],
+            "filtered_v_east_mps": None if filtered is None else filtered[3],
+            "filtered_v_north_mps": None if filtered is None else filtered[4],
+            "filtered_v_up_mps": None if filtered is None else filtered[5],
+            "smoother_method": _optional_str(record.get("smoother_method")),
+            "smoother_lag_s": _optional_float(record.get("smoother_lag_s")),
         }
         probabilities = record.get("mode_probability_map")
         if isinstance(probabilities, dict):
@@ -327,6 +373,8 @@ def _metrics(
     tracker: str,
     acceleration_std: float,
     imm_mode_switch_time_constant: float,
+    smoother: str,
+    smoother_lag_s: float,
     radar_selection: str,
     radar_catprob_threshold: float,
     max_eval_time_delta_s: float,
@@ -367,6 +415,10 @@ def _metrics(
             "imm_mode_switch_time_constant_s": float(imm_mode_switch_time_constant)
             if tracker == "imm"
             else None,
+        },
+        "smoother": {
+            "method": smoother,
+            "lag_s": float(smoother_lag_s) if smoother in {"fixed-lag", "fixed-lag-map"} else None,
         },
         "radar_selection": radar_selection,
         "radar_catprob_threshold": float(radar_catprob_threshold),
@@ -413,6 +465,12 @@ def _optional_float(value: object) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    return str(value)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,10 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.baselines.kalman import AsyncConstantVelocityKalmanTracker, TrackingMeasurement
+from raft_uav.baselines.learned_radar_likelihood import (
+    LearnedRadarAssociationModel,
+    radar_association_feature_frame,
+)
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,9 @@ class TrackletViterbiAssociationConfig:
     reacquisition_reward: float = 3.0
     reacquisition_outside_gate_penalty: float = 4.0
     use_rf_anchor: bool = True
+    learned_candidate_model: LearnedRadarAssociationModel | None = None
+    learned_candidate_score_mode: str = "additive"
+    min_learned_candidate_probability: float = 1.0e-9
     min_catprob: float = 1.0e-3
 
     def __post_init__(self) -> None:
@@ -86,6 +93,11 @@ class TrackletViterbiAssociationConfig:
             raise ValueError("range_gate_m must be positive or None")
         if not 0.0 < float(self.min_catprob) <= 1.0:
             raise ValueError("min_catprob must be in (0, 1]")
+        if not 0.0 < float(self.min_learned_candidate_probability) <= 1.0:
+            raise ValueError("min_learned_candidate_probability must be in (0, 1]")
+        mode = str(self.learned_candidate_score_mode).strip().lower()
+        if mode not in {"additive", "replace"}:
+            raise ValueError("learned_candidate_score_mode must be 'additive' or 'replace'")
 
 
 @dataclass(frozen=True)
@@ -109,6 +121,9 @@ class _ViterbiNode:
     range_cost: float
     is_miss: bool = False
     has_anchor: bool = False
+    learned_cost: float = 0.0
+    learned_probability: float | None = None
+    base_unary_cost: float | None = None
 
 
 def run_async_cv_baseline_with_tracklet_viterbi_association(
@@ -373,6 +388,18 @@ def _selected_rows_from_viterbi_path(
         row["association_score"] = float(node.unary_cost)
         row["association_anchor_nis"] = float(node.anchor_nis)
         row["association_catprob_cost"] = float(node.catprob_cost)
+        row["association_base_unary_cost"] = float(
+            node.unary_cost if node.base_unary_cost is None else node.base_unary_cost
+        )
+        row["association_learned_candidate_cost"] = float(node.learned_cost)
+        row["association_learned_candidate_probability"] = (
+            np.nan if node.learned_probability is None else float(node.learned_probability)
+        )
+        row["association_candidate_score_mode"] = (
+            str(config.learned_candidate_score_mode)
+            if node.learned_probability is not None
+            else "hand_tuned"
+        )
         row["association_range_cost"] = float(node.range_cost)
         row["association_viterbi_path_cost"] = path_cost
         row["association_preceding_miss_streak"] = int(preceding_miss_streak)
@@ -413,7 +440,19 @@ def _nodes_for_radar_frame(
             covariance=covariance,
             config=config,
         )
-        unary_cost = float(config.anchor_nis_weight) * anchor_nis + catprob_cost + range_cost
+        base_unary_cost = float(config.anchor_nis_weight) * anchor_nis + catprob_cost + range_cost
+        learned_cost, learned_probability = _learned_candidate_unary_cost(
+            row=row,
+            anchor=anchor,
+            anchor_nis=anchor_nis,
+            config=config,
+        )
+        unary_cost = _combine_candidate_cost(
+            base_unary_cost,
+            learned_cost,
+            learned_probability,
+            config,
+        )
         node = _ViterbiNode(
             event_index=event_index,
             event_key=event_key,
@@ -426,6 +465,9 @@ def _nodes_for_radar_frame(
             anchor_nis=float(anchor_nis),
             catprob_cost=float(catprob_cost),
             range_cost=float(range_cost),
+            learned_cost=float(learned_cost),
+            learned_probability=learned_probability,
+            base_unary_cost=float(base_unary_cost),
             has_anchor=bool(config.use_rf_anchor and anchor is not None),
         )
         scored.append((float(unary_cost), node))
@@ -462,6 +504,50 @@ def _candidate_cost_terms(
             scale = max(float(config.range_gate_slack_m), 1.0)
             range_cost = float(config.range_penalty) * (excess_m / scale) ** 2
     return float(anchor_nis), float(catprob_cost), float(range_cost)
+
+
+def _learned_candidate_unary_cost(
+    *,
+    row: pd.Series,
+    anchor: _AnchorState | None,
+    anchor_nis: float,
+    config: TrackletViterbiAssociationConfig,
+) -> tuple[float, float | None]:
+    """Return learned per-candidate NLL cost from an existing association model."""
+
+    model = config.learned_candidate_model
+    if model is None or anchor is None:
+        return 0.0, None
+    candidate = pd.DataFrame([row.copy()])
+    candidate["association_nis"] = float(anchor_nis)
+    features = radar_association_feature_frame(
+        candidate,
+        tracker_state=np.asarray(anchor.state, dtype=float).reshape(6),
+        current_track_id=None,
+    )
+    probability = float(model.predict_proba_features(features)[0])
+    if not np.isfinite(probability):
+        return 0.0, None
+    probability = float(
+        np.clip(probability, float(config.min_learned_candidate_probability), 1.0)
+    )
+    return float(-math.log(probability)), probability
+
+
+def _combine_candidate_cost(
+    base_unary_cost: float,
+    learned_cost: float,
+    learned_probability: float | None,
+    config: TrackletViterbiAssociationConfig,
+) -> float:
+    if config.learned_candidate_model is None or learned_probability is None:
+        return float(base_unary_cost)
+    mode = str(config.learned_candidate_score_mode).strip().lower()
+    if mode == "replace":
+        return float(learned_cost)
+    if mode == "additive":
+        return float(base_unary_cost) + float(learned_cost)
+    raise ValueError("learned_candidate_score_mode must be 'additive' or 'replace'")
 
 
 def _transition_cost(

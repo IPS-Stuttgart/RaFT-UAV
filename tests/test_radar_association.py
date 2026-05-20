@@ -4,6 +4,7 @@ import pandas as pd
 from raft_uav.baselines.kalman import AsyncConstantVelocityKalmanTracker, TrackingMeasurement
 from raft_uav.baselines.radar_association import (
     _catprob_candidate_pool,
+    _initial_measurement,
     _select_radar_candidate,
     run_async_cv_baseline_with_radar_association,
 )
@@ -155,6 +156,43 @@ def test_catprob_candidate_pool_returns_empty_when_threshold_empty():
     assert "association_catprob_fallback" in pool.columns
 
 
+def test_initial_radar_measurement_respects_catprob_threshold():
+    candidates = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": 0.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.2,
+            },
+            {
+                "frame_index": 0,
+                "track_id": 2,
+                "time_s": 0.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.3,
+            },
+        ]
+    )
+
+    measurement = _initial_measurement(
+        {"kind": "radar", "time_s": 0.0, "candidates": candidates},
+        association="prediction-nis",
+        covariance=np.diag([25.0**2, 25.0**2, 35.0**2]),
+        candidate_catprob_threshold=0.4,
+        truth=None,
+        truth_gate_m=150.0,
+        truth_time_gate_s=1.0,
+    )
+
+    assert measurement is None
+
+
 def test_prediction_nis_treats_empty_catprob_pool_as_no_radar_selection():
     radar = pd.DataFrame(
         [
@@ -188,6 +226,47 @@ def test_prediction_nis_treats_empty_catprob_pool_as_no_radar_selection():
 
     assert [record["source"] for record in records] == ["rf", "rf"]
     assert selected.empty
+
+
+def test_initial_radar_measurement_respects_catprob_threshold():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": 0.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.2,
+            },
+            {
+                "frame_index": 0,
+                "track_id": 2,
+                "time_s": 0.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.3,
+            },
+        ]
+    )
+
+    measurement = _initial_measurement(
+        {
+            "kind": "radar",
+            "time_s": 0.0,
+            "candidates": radar,
+        },
+        association="prediction-nis",
+        covariance=np.diag([25.0**2, 25.0**2, 35.0**2]),
+        truth=None,
+        truth_gate_m=150.0,
+        truth_time_gate_s=1.0,
+        candidate_catprob_threshold=0.4,
+    )
+
+    assert measurement is None
 
 
 def test_track_continuity_keeps_current_track_for_small_nis_gain():

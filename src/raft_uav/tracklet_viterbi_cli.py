@@ -8,9 +8,10 @@ older experiment notes.
 
 Controlled ablation runs can select the base, retention-aware,
 range-covariance-aware, or fixed-lag implementation through wrapper-only
-command-line arguments or matching environment variables. The wrapper strips
-those ``--tracklet-*`` arguments before forwarding to the shared base CLI
-parser.
+command-line arguments or matching environment variables. The wrapper strips only
+wrapper-owned ``--tracklet-*`` arguments before forwarding to the shared base CLI
+parser; runtime-owned tracklet options remain visible to the runtime
+configuration shim so explicit CLI values are not replaced by defaults.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from raft_uav.baselines import (
 )
 from raft_uav.baselines import tracklet_viterbi_retention as _retention_tracklet_viterbi
 from raft_uav.baselines.kalman import TrackingMeasurement
+from raft_uav.baselines.learned_radar_likelihood import LearnedRadarAssociationModel
 from raft_uav.baselines.radar_association import (
     RADAR_ASSOCIATION_MODES as _BASE_RADAR_ASSOCIATION_MODES,
     run_async_cv_baseline_with_radar_association as _base_radar_association_runner,
@@ -50,9 +52,11 @@ _MAX_CANDIDATES_PER_FRAME_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"
 _MAX_CANDIDATE_POOL_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATE_POOL_PER_FRAME"
 _MAX_CANDIDATES_PER_TRACK_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_TRACK_ID"
 _VITERBI_LAG_S_ENV = "RAFT_UAV_TRACKLET_VITERBI_LAG_S"
+_LEARNED_CANDIDATE_MODEL_ENV = "RAFT_UAV_TRACKLET_LEARNED_CANDIDATE_MODEL"
+_LEARNED_CANDIDATE_SCORE_MODE_ENV = "RAFT_UAV_TRACKLET_LEARNED_CANDIDATE_SCORE_MODE"
 _TRACKLET_VARIANTS = ("base", "retention", "range-covariance", "fixed-lag")
 _TRACKLET_REPLAY_TRACKERS = ("cv", "imm")
-_CATPROB_RETENTION_MODES = ("soft", "hard")
+_LEARNED_CANDIDATE_SCORE_MODES = ("additive", "replace")
 
 
 class _TrackletConfigOverlay:
@@ -269,24 +273,35 @@ def _tracklet_config_from_environment() -> _TrackletConfigOverlay:
         max_track_support_reward=_env_float(_MAX_TRACK_SUPPORT_REWARD_ENV, 4.0),
         max_candidate_pool_per_frame=_env_int(_MAX_CANDIDATE_POOL_ENV, 24),
         max_candidates_per_track_id=_env_int(_MAX_CANDIDATES_PER_TRACK_ENV, 1),
+        learned_candidate_model=_learned_candidate_model_from_environment(),
+        learned_candidate_score_mode=_env_str(
+            _LEARNED_CANDIDATE_SCORE_MODE_ENV,
+            base.learned_candidate_score_mode,
+        ),
     )
+
+
+def _learned_candidate_model_from_environment() -> LearnedRadarAssociationModel | None:
+    path = os.environ.get(_LEARNED_CANDIDATE_MODEL_ENV)
+    if path is None or path == "":
+        return None
+    return LearnedRadarAssociationModel.load(path)
 
 
 def _tracklet_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--tracklet-variant", choices=_TRACKLET_VARIANTS)
     parser.add_argument("--tracklet-replay-tracker", choices=_TRACKLET_REPLAY_TRACKERS)
-    parser.add_argument("--tracklet-catprob-retention-mode", choices=_CATPROB_RETENTION_MODES)
-    parser.add_argument(
-        "--tracklet-below-catprob-threshold-penalty",
-        type=_nonnegative_float,
-    )
-    parser.add_argument("--tracklet-track-support-weight", type=_nonnegative_float)
-    parser.add_argument("--tracklet-max-track-support-reward", type=_nonnegative_float)
-    parser.add_argument("--tracklet-max-candidates-per-frame", type=_positive_int)
-    parser.add_argument("--tracklet-max-candidate-pool-per-frame", type=_positive_int)
-    parser.add_argument("--tracklet-max-candidates-per-track-id", type=_positive_int)
+    # Runtime-backed tracklet tuning options are intentionally not registered
+    # here. They must remain in ``remaining`` so the runtime CLI shim can parse
+    # the explicit user values, apply matching environment variables, and record
+    # the same resolved settings in metrics.json.
     parser.add_argument("--tracklet-viterbi-lag-s", type=_positive_float)
+    parser.add_argument("--tracklet-learned-candidate-model")
+    parser.add_argument(
+        "--tracklet-learned-candidate-score-mode",
+        choices=_LEARNED_CANDIDATE_SCORE_MODES,
+    )
     return parser
 
 
@@ -301,18 +316,13 @@ def _environment_updates_from_namespace(namespace: argparse.Namespace) -> dict[s
     updates: dict[str, str] = {}
     _maybe_add(updates, _TRACKLET_VARIANT_ENV, namespace.tracklet_variant)
     _maybe_add(updates, _TRACKLET_REPLAY_TRACKER_ENV, namespace.tracklet_replay_tracker)
-    _maybe_add(updates, _CATPROB_MODE_ENV, namespace.tracklet_catprob_retention_mode)
+    _maybe_add(updates, _VITERBI_LAG_S_ENV, namespace.tracklet_viterbi_lag_s)
+    _maybe_add(updates, _LEARNED_CANDIDATE_MODEL_ENV, namespace.tracklet_learned_candidate_model)
     _maybe_add(
         updates,
-        _BELOW_CATPROB_PENALTY_ENV,
-        namespace.tracklet_below_catprob_threshold_penalty,
+        _LEARNED_CANDIDATE_SCORE_MODE_ENV,
+        namespace.tracklet_learned_candidate_score_mode,
     )
-    _maybe_add(updates, _TRACK_SUPPORT_WEIGHT_ENV, namespace.tracklet_track_support_weight)
-    _maybe_add(updates, _MAX_TRACK_SUPPORT_REWARD_ENV, namespace.tracklet_max_track_support_reward)
-    _maybe_add(updates, _MAX_CANDIDATES_PER_FRAME_ENV, namespace.tracklet_max_candidates_per_frame)
-    _maybe_add(updates, _MAX_CANDIDATE_POOL_ENV, namespace.tracklet_max_candidate_pool_per_frame)
-    _maybe_add(updates, _MAX_CANDIDATES_PER_TRACK_ENV, namespace.tracklet_max_candidates_per_track_id)
-    _maybe_add(updates, _VITERBI_LAG_S_ENV, namespace.tracklet_viterbi_lag_s)
     return updates
 
 

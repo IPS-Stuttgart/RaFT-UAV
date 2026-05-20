@@ -9,6 +9,7 @@ scores while leaving the Kalman update unchanged.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +20,8 @@ import pandas as pd
 from scipy.optimize import minimize
 
 MODEL_TYPE = "raft-uav.learned-radar-association-logistic-v1"
+STATEFUL_COST_METADATA_KEY = "stateful_transition_costs"
+
 
 DEFAULT_FEATURE_NAMES: tuple[str, ...] = (
     "log1p_association_nis",
@@ -269,6 +272,204 @@ def fit_learned_radar_association_model(
         intercept=float(result.x[-1]),
         metadata=dict(metadata or {}),
     )
+
+
+def estimate_stateful_transition_costs(
+    examples: pd.DataFrame,
+    *,
+    label_column: str = "label",
+    smoothing: float = 1.0,
+    min_cost: float = 0.0,
+    max_cost: float = 12.0,
+) -> dict[str, Any]:
+    """Estimate stateful decoder penalties from truth-labeled association rows.
+
+    The learned per-candidate likelihood already captures most geometric and
+    Fortem-track evidence.  The stateful decoder still needs discrete costs for
+    missed detections, consecutive misses, track-ID switches, and missing track
+    IDs.  This helper turns the training labels into empirical log-odds costs so
+    the decoder can use data-derived penalties instead of hand-tuned defaults.
+    """
+
+    if examples.empty:
+        return _empty_stateful_cost_metadata(smoothing=smoothing)
+    if smoothing <= 0.0:
+        raise ValueError("smoothing must be positive")
+    if max_cost < min_cost:
+        raise ValueError("max_cost must be greater than or equal to min_cost")
+    if label_column not in examples.columns:
+        raise ValueError(f"missing label column {label_column!r}")
+
+    labels = pd.to_numeric(examples[label_column], errors="coerce").fillna(0.0) > 0.0
+    frame_keys = _stateful_frame_keys(examples)
+    frame_labels = pd.DataFrame(
+        {
+            "flight": frame_keys["flight"],
+            "frame_key": frame_keys["frame_key"],
+            "time_s": frame_keys["time_s"],
+            "label": labels.to_numpy(dtype=bool),
+        }
+    )
+    frame_summary = (
+        frame_labels.groupby(["flight", "frame_key"], dropna=False)
+        .agg(label=("label", "max"), time_s=("time_s", "median"))
+        .reset_index()
+        .sort_values(["flight", "time_s", "frame_key"], kind="mergesort")
+    )
+    positive_frames = int(frame_summary["label"].sum())
+    missed_frames = int(len(frame_summary) - positive_frames)
+    missed_detection_cost = _log_odds_cost(
+        positive_frames,
+        missed_frames,
+        smoothing=smoothing,
+        min_cost=min_cost,
+        max_cost=max_cost,
+    )
+
+    continued_misses = 0
+    recoveries_after_miss = 0
+    for _, group in frame_summary.groupby("flight", dropna=False, sort=False):
+        values = group["label"].to_numpy(dtype=bool)
+        if values.size < 2:
+            continue
+        previous_missed = ~values[:-1]
+        continued_misses += int(np.sum(previous_missed & ~values[1:]))
+        recoveries_after_miss += int(np.sum(previous_missed & values[1:]))
+    consecutive_miss_cost = _log_odds_cost(
+        recoveries_after_miss,
+        continued_misses,
+        smoothing=smoothing,
+        min_cost=min_cost,
+        max_cost=max_cost,
+    )
+
+    positive_rows = examples.loc[labels].copy()
+    if positive_rows.empty:
+        finite_track_count = 0
+        missing_track_count = 0
+        stay_count = 0
+        switch_count = 0
+    else:
+        positive_keys = _stateful_frame_keys(positive_rows)
+        positive_rows["_stateful_flight"] = positive_keys["flight"].to_numpy()
+        positive_rows["_stateful_frame_key"] = positive_keys["frame_key"].to_numpy()
+        positive_rows["_stateful_time_s"] = positive_keys["time_s"].to_numpy()
+        track_ids = pd.to_numeric(positive_rows.get("track_id"), errors="coerce")
+        positive_rows["_stateful_track_id"] = track_ids
+        finite_track_count = int(track_ids.notna().sum())
+        missing_track_count = int(track_ids.isna().sum())
+        positive_rows = positive_rows.sort_values(
+            ["_stateful_flight", "_stateful_time_s", "_stateful_frame_key"],
+            kind="mergesort",
+        )
+        stay_count = 0
+        switch_count = 0
+        for _, group in positive_rows.groupby("_stateful_flight", dropna=False, sort=False):
+            track = group["_stateful_track_id"].to_numpy(dtype=float)
+            if track.size < 2:
+                continue
+            prev = track[:-1]
+            curr = track[1:]
+            comparable = np.isfinite(prev) & np.isfinite(curr)
+            stay_count += int(np.sum(comparable & (prev == curr)))
+            switch_count += int(np.sum(comparable & (prev != curr)))
+
+    missing_track_id_cost = _log_odds_cost(
+        finite_track_count,
+        missing_track_count,
+        smoothing=smoothing,
+        min_cost=min_cost,
+        max_cost=max_cost,
+    )
+    track_switch_cost = _log_odds_cost(
+        stay_count,
+        switch_count,
+        smoothing=smoothing,
+        min_cost=min_cost,
+        max_cost=max_cost,
+    )
+
+    return {
+        "estimator": "empirical-log-odds-v1",
+        "smoothing": float(smoothing),
+        "min_cost": float(min_cost),
+        "max_cost": float(max_cost),
+        "missed_detection_cost": float(missed_detection_cost),
+        "consecutive_miss_cost": float(consecutive_miss_cost),
+        "track_switch_cost": float(track_switch_cost),
+        "missing_track_id_cost": float(missing_track_id_cost),
+        "positive_frames": positive_frames,
+        "missed_frames": missed_frames,
+        "recoveries_after_miss": int(recoveries_after_miss),
+        "continued_misses": int(continued_misses),
+        "finite_positive_track_ids": int(finite_track_count),
+        "missing_positive_track_ids": int(missing_track_count),
+        "same_positive_track_transitions": int(stay_count),
+        "switched_positive_track_transitions": int(switch_count),
+    }
+
+
+def _empty_stateful_cost_metadata(*, smoothing: float) -> dict[str, Any]:
+    return {
+        "estimator": "empirical-log-odds-v1",
+        "smoothing": float(smoothing),
+        "missed_detection_cost": 0.0,
+        "consecutive_miss_cost": 0.0,
+        "track_switch_cost": 0.0,
+        "missing_track_id_cost": 0.0,
+        "positive_frames": 0,
+        "missed_frames": 0,
+        "recoveries_after_miss": 0,
+        "continued_misses": 0,
+        "finite_positive_track_ids": 0,
+        "missing_positive_track_ids": 0,
+        "same_positive_track_transitions": 0,
+        "switched_positive_track_transitions": 0,
+    }
+
+
+def _stateful_frame_keys(frame: pd.DataFrame) -> pd.DataFrame:
+    if "flight" in frame.columns:
+        flight = frame["flight"].fillna("").astype(str)
+    else:
+        flight = pd.Series([""] * len(frame), index=frame.index, dtype=object)
+    if "frame_index" in frame.columns:
+        frame_index = pd.to_numeric(frame["frame_index"], errors="coerce")
+    else:
+        frame_index = pd.Series(np.nan, index=frame.index, dtype=float)
+    if "time_s" in frame.columns:
+        time_s = pd.to_numeric(frame["time_s"], errors="coerce")
+    else:
+        time_s = pd.Series(np.nan, index=frame.index, dtype=float)
+    rounded_time = time_s.round(9)
+    frame_key = np.where(
+        frame_index.notna(),
+        frame_index.astype("Int64").astype(str),
+        rounded_time.astype(str),
+    )
+    return pd.DataFrame(
+        {
+            "flight": flight.to_numpy(),
+            "frame_key": pd.Series(frame_key, index=frame.index).to_numpy(),
+            "time_s": time_s.fillna(0.0).to_numpy(dtype=float),
+        },
+        index=frame.index,
+    )
+
+
+def _log_odds_cost(
+    preferred_count: int,
+    discouraged_count: int,
+    *,
+    smoothing: float,
+    min_cost: float,
+    max_cost: float,
+) -> float:
+    odds = (float(preferred_count) + float(smoothing)) / (
+        float(discouraged_count) + float(smoothing)
+    )
+    cost = math.log(max(odds, 1.0e-12))
+    return float(np.clip(cost, float(min_cost), float(max_cost)))
 
 
 def _loss_and_grad(params: np.ndarray, x: np.ndarray, y: np.ndarray, w: np.ndarray, l2: float) -> tuple[float, np.ndarray]:

@@ -86,6 +86,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="do not keep miss branches in stateful-beam mode",
     )
+    parser.add_argument(
+        "--use-learned-stateful-costs",
+        action="store_true",
+        help=(
+            "replace beam miss/switch/missing-track costs with empirical costs "
+            "stored in the learned model metadata"
+        ),
+    )
+    parser.add_argument(
+        "--learned-stateful-cost-scale",
+        type=float,
+        default=1.0,
+        help="scale applied to learned stateful costs before decoding",
+    )
     parser.add_argument("--smoother", choices=SMOOTHER_MODES, default="none")
     parser.add_argument("--smoother-lag-s", type=float, default=20.0)
     parser.add_argument("--max-eval-time-delta-s", type=float, default=2.0)
@@ -197,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
                 missing_track_id_cost=args.beam_missing_track_id_cost,
                 allow_missed_detection=not args.disable_beam_missed_detection,
                 lag_s=args.beam_lag_s,
+                use_learned_transition_costs=args.use_learned_stateful_costs,
+                learned_transition_cost_scale=args.learned_stateful_cost_scale,
             ),
         )
     else:

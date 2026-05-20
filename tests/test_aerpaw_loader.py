@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pytest
 
 from raft_uav.coordinates import LocalENUProjector
 from raft_uav.io.aerpaw import (
@@ -113,6 +114,30 @@ def test_rf_and_radar_clock_offsets_are_independent(tmp_path):
     )
 
 
+def test_radar_jsonl_reader_rejects_non_object_frames(tmp_path):
+    radar_path = tmp_path / "radar.json"
+    radar_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"trackData": []}),
+                json.dumps(["not", "an", "object"]),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="expected radar JSON object on line 2"):
+        read_radar_tracks_json(radar_path)
+
+
+def test_radar_jsonl_reader_rejects_non_object_payload(tmp_path):
+    radar_path = tmp_path / "radar.json"
+    radar_path.write_text(json.dumps([]), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="expected radar JSON object on line 1"):
+        read_radar_tracks_json(radar_path)
+
+
 def test_radar_jsonl_reader_and_catprob_selection(tmp_path):
     radar_path = tmp_path / "radar.json"
     frames = [
@@ -132,6 +157,12 @@ def test_radar_jsonl_reader_and_catprob_selection(tmp_path):
                     "globalTime": 1759866140.0,
                     "catProb": [0.1, 0.1],
                 },
+                {
+                    "id": 3,
+                    "lla": [35.7271, -78.6961, 30.0],
+                    "globalTime": 1759866140.0,
+                    "catProb": [0.55, 0.1],
+                },
             ],
         },
     ]
@@ -145,7 +176,13 @@ def test_radar_jsonl_reader_and_catprob_selection(tmp_path):
     truth, projector, origin_time = normalize_truth(read_truth(truth_path))
     radar = normalize_radar(read_radar_tracks_json(radar_path), projector, origin_time)
     selected = select_radar_measurement_rows(radar, selection="catprob", catprob_threshold=0.5)
+    selected_all = select_radar_measurement_rows(
+        radar,
+        selection="catprob-all",
+        catprob_threshold=0.5,
+    )
 
-    assert len(radar) == 2
+    assert len(radar) == 3
     assert selected["track_id"].tolist() == [1]
+    assert selected_all["track_id"].tolist() == [1, 3]
     assert len(truth) == 1
