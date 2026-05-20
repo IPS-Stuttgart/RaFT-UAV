@@ -26,6 +26,7 @@ import pandas as pd
 
 from raft_uav import cli as _base_cli
 from raft_uav import robust_cli as _robust_cli
+from raft_uav.baselines import learned_tracklet_viterbi as _learned_tracklet_viterbi
 from raft_uav.baselines import tracklet_viterbi as _base_tracklet_viterbi
 from raft_uav.baselines import tracklet_viterbi_fixed_lag as _fixed_lag_tracklet_viterbi
 from raft_uav.baselines import tracklet_viterbi_imm as _imm_tracklet_viterbi
@@ -42,6 +43,7 @@ from raft_uav.baselines.radar_association import (
 from raft_uav.baselines.tracklet_viterbi import TrackletViterbiAssociationConfig
 
 _TRACKLET_MODE = "tracklet-viterbi"
+_LEARNED_TRACKLET_MODE = "learned-tracklet-viterbi"
 _TRACKLET_VARIANT_ENV = "RAFT_UAV_TRACKLET_VARIANT"
 _TRACKLET_REPLAY_TRACKER_ENV = "RAFT_UAV_TRACKLET_REPLAY_TRACKER"
 _CATPROB_MODE_ENV = "RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE"
@@ -52,6 +54,9 @@ _MAX_CANDIDATES_PER_FRAME_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"
 _MAX_CANDIDATE_POOL_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATE_POOL_PER_FRAME"
 _MAX_CANDIDATES_PER_TRACK_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_TRACK_ID"
 _VITERBI_LAG_S_ENV = "RAFT_UAV_TRACKLET_VITERBI_LAG_S"
+_TRACKLET_ASSOCIATION_MODEL_ENV = "RAFT_UAV_TRACKLET_ASSOCIATION_MODEL"
+_TRACKLET_LEARNED_UNARY_WEIGHT_ENV = "RAFT_UAV_TRACKLET_LEARNED_UNARY_WEIGHT"
+_TRACKLET_HAND_UNARY_WEIGHT_ENV = "RAFT_UAV_TRACKLET_HAND_UNARY_WEIGHT"
 _LEARNED_CANDIDATE_MODEL_ENV = "RAFT_UAV_TRACKLET_LEARNED_CANDIDATE_MODEL"
 _LEARNED_CANDIDATE_SCORE_MODE_ENV = "RAFT_UAV_TRACKLET_LEARNED_CANDIDATE_SCORE_MODE"
 _TRACKLET_VARIANTS = ("base", "retention", "range-covariance", "fixed-lag")
@@ -75,7 +80,9 @@ class _TrackletConfigOverlay:
 def enabled_radar_association_modes() -> tuple[str, ...]:
     """Return base radar association modes plus the canonical tracklet mode."""
 
-    return tuple(dict.fromkeys((*_BASE_RADAR_ASSOCIATION_MODES, _TRACKLET_MODE)))
+    return tuple(
+        dict.fromkeys((*_BASE_RADAR_ASSOCIATION_MODES, _TRACKLET_MODE, _LEARNED_TRACKLET_MODE))
+    )
 
 
 def run_async_cv_baseline_with_radar_association(
@@ -128,7 +135,7 @@ def run_async_cv_baseline_with_radar_association(
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
     """Dispatch to the tracklet-Viterbi runner when requested."""
 
-    if association == _TRACKLET_MODE:
+    if association in {_TRACKLET_MODE, _LEARNED_TRACKLET_MODE}:
         del truth, track_switch_nis_ratio, geometry_velocity_std_mps
         del geometry_velocity_weight, geometry_switch_penalty, geometry_catprob_weight
         del rf_anchor_weight, rf_anchor_time_gate_s, rf_anchor_nis_cap
@@ -145,8 +152,35 @@ def run_async_cv_baseline_with_radar_association(
         del stable_segment_rf_score_weight, stable_segment_rf_time_gate_s
         del stable_segment_rf_nis_cap
         del truth_gate_m, truth_time_gate_s
-        runner = _tracklet_runner_from_environment()
         config = _tracklet_config_from_environment()
+        if association == _TRACKLET_MODE:
+            runner = _tracklet_runner_from_environment()
+            return runner(
+                rf_measurements=list(rf_measurements),
+                radar=radar,
+                acceleration_std_mps2=acceleration_std_mps2,
+                radar_xy_std_m=radar_xy_std_m,
+                radar_z_std_m=radar_z_std_m,
+                gate_probabilities_by_source=gate_probabilities_by_source,
+                gate_thresholds_by_source=gate_thresholds_by_source,
+                safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
+                robust_update_by_source=robust_update_by_source,
+                inflation_alpha_by_source=inflation_alpha_by_source,
+                max_residual_norms_by_source=max_residual_norms_by_source,
+                candidate_catprob_threshold=candidate_catprob_threshold,
+                config=config,
+            )
+
+        model_path = os.environ.get(_TRACKLET_ASSOCIATION_MODEL_ENV)
+        if not model_path:
+            raise ValueError(
+                f"{_LEARNED_TRACKLET_MODE} requires --tracklet-association-model "
+                f"or {_TRACKLET_ASSOCIATION_MODEL_ENV}"
+            )
+        runner = _wrap_tracklet_runner_for_replay_tracker(
+            _learned_tracklet_viterbi.run_async_cv_baseline_with_learned_tracklet_viterbi_association
+        )
         return runner(
             rf_measurements=list(rf_measurements),
             radar=radar,
@@ -162,6 +196,9 @@ def run_async_cv_baseline_with_radar_association(
             max_residual_norms_by_source=max_residual_norms_by_source,
             candidate_catprob_threshold=candidate_catprob_threshold,
             config=config,
+            model=model_path,
+            learned_unary_weight=_env_float(_TRACKLET_LEARNED_UNARY_WEIGHT_ENV, 1.0),
+            hand_unary_weight=_env_float(_TRACKLET_HAND_UNARY_WEIGHT_ENV, 0.25),
         )
 
     return _base_radar_association_runner(
@@ -297,6 +334,9 @@ def _tracklet_parser() -> argparse.ArgumentParser:
     # the explicit user values, apply matching environment variables, and record
     # the same resolved settings in metrics.json.
     parser.add_argument("--tracklet-viterbi-lag-s", type=_positive_float)
+    parser.add_argument("--tracklet-association-model")
+    parser.add_argument("--tracklet-learned-unary-weight", type=_nonnegative_float)
+    parser.add_argument("--tracklet-hand-unary-weight", type=_nonnegative_float)
     parser.add_argument("--tracklet-learned-candidate-model")
     parser.add_argument(
         "--tracklet-learned-candidate-score-mode",
@@ -317,6 +357,13 @@ def _environment_updates_from_namespace(namespace: argparse.Namespace) -> dict[s
     _maybe_add(updates, _TRACKLET_VARIANT_ENV, namespace.tracklet_variant)
     _maybe_add(updates, _TRACKLET_REPLAY_TRACKER_ENV, namespace.tracklet_replay_tracker)
     _maybe_add(updates, _VITERBI_LAG_S_ENV, namespace.tracklet_viterbi_lag_s)
+    _maybe_add(updates, _TRACKLET_ASSOCIATION_MODEL_ENV, namespace.tracklet_association_model)
+    _maybe_add(
+        updates,
+        _TRACKLET_LEARNED_UNARY_WEIGHT_ENV,
+        namespace.tracklet_learned_unary_weight,
+    )
+    _maybe_add(updates, _TRACKLET_HAND_UNARY_WEIGHT_ENV, namespace.tracklet_hand_unary_weight)
     _maybe_add(updates, _LEARNED_CANDIDATE_MODEL_ENV, namespace.tracklet_learned_candidate_model)
     _maybe_add(
         updates,

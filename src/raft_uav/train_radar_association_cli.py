@@ -58,6 +58,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--positive-gate-m", type=float, default=50.0)
     parser.add_argument("--truth-gate-m", type=float, default=150.0)
     parser.add_argument("--truth-time-gate-s", type=float, default=1.0)
+    parser.add_argument(
+        "--teacher-association",
+        choices=["oracle", "prediction-nis", "track-continuity", "none"],
+        default="oracle",
+        help="tracker context used while collecting training examples",
+    )
     parser.add_argument("--l2", type=float, default=1.0e-3)
     parser.add_argument("--max-iter", type=int, default=500)
     parser.add_argument("--no-balance-classes", action="store_true")
@@ -124,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
             positive_gate_m=args.positive_gate_m,
             truth_gate_m=args.truth_gate_m,
             truth_time_gate_s=args.truth_time_gate_s,
+            teacher_association=args.teacher_association,
         )
         if not examples.empty:
             frames.append(examples)
@@ -138,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         "positive_gate_m": float(args.positive_gate_m),
         "truth_gate_m": float(args.truth_gate_m),
         "truth_time_gate_s": float(args.truth_time_gate_s),
+        "teacher_association": args.teacher_association,
         "radar_catprob_threshold": None
         if args.disable_radar_catprob_threshold
         else float(args.radar_catprob_threshold),

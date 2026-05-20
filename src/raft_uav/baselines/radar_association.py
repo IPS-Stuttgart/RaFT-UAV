@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+import os
 from typing import Any
 
 import numpy as np
@@ -50,6 +51,10 @@ _STABLE_SEGMENT_PRECOMPUTE_MODES = {
     *_STABLE_SEGMENT_ASSOCIATION_MODES,
     "stable-segments-hybrid",
 }
+_SOFT_CATPROB_RETENTION_ENV = "RAFT_UAV_SOFT_CATPROB_RETENTION"
+_SOFT_CATPROB_BELOW_THRESHOLD_PENALTY_ENV = "RAFT_UAV_SOFT_CATPROB_BELOW_THRESHOLD_PENALTY"
+_RADAR_VELOCITY_UPDATE_ENV = "RAFT_UAV_RADAR_UPDATE_USES_VELOCITY"
+_RADAR_VELOCITY_STD_MPS_ENV = "RAFT_UAV_RADAR_VELOCITY_STD_MPS"
 RADAR_COVARIANCE_MODELS = ("cartesian", "geometry")
 _ASSOCIATION_COVARIANCE_COLUMNS = (
     "association_cov_ee",
@@ -1722,7 +1727,8 @@ def _select_radar_candidate(
             nis_temperature=pda_nis_temperature,
             catprob_exponent=pda_catprob_exponent,
         )
-    best = scored.loc[scored["association_nis"].idxmin()].copy()
+    score_column = "association_score" if "association_score" in scored.columns else "association_nis"
+    best = scored.loc[scored[score_column].idxmin()].copy()
     if association == "prediction-nis" or current_track_id is None:
         return best
     if association != "track-continuity":
@@ -1735,10 +1741,10 @@ def _select_radar_candidate(
     ]
     if current.empty:
         return best
-    current_best = current.loc[current["association_nis"].idxmin()].copy()
+    current_best = current.loc[current[score_column].idxmin()].copy()
     if _optional_track_id(best) == current_track_id:
         return best
-    if float(best["association_nis"]) < float(current_best["association_nis"]) * float(
+    if float(best[score_column]) < float(current_best[score_column]) * float(
         track_switch_nis_ratio
     ):
         return best
@@ -1785,6 +1791,21 @@ def _catprob_candidate_pool(
         return candidates
     catprob = pd.to_numeric(candidates["cat_prob_uav"], errors="coerce")
     threshold = float(candidate_catprob_threshold)
+    if _env_flag(_SOFT_CATPROB_RETENTION_ENV):
+        pool = candidates.copy()
+        values = catprob.fillna(0.0).to_numpy(dtype=float)
+        below = values < threshold
+        scale = max(threshold, 1.0e-9)
+        penalty = _env_float(_SOFT_CATPROB_BELOW_THRESHOLD_PENALTY_ENV, 3.0)
+        pool["association_catprob_threshold"] = threshold
+        pool["association_catprob_fallback"] = below
+        pool["association_catprob_below_threshold"] = below
+        pool["association_catprob_penalty"] = penalty * np.square(
+            np.maximum(0.0, threshold - values) / scale
+        )
+        pool["association_catprob_retention_mode"] = "soft"
+        pool["association_catprob_candidate_rows"] = int(len(candidates))
+        return pool
     keep = catprob >= threshold
     fallback = bool(fallback_to_unfiltered and not candidates.empty and not bool(keep.any()))
     if fallback:
@@ -1853,6 +1874,10 @@ def _nis_scored_candidates(
             measurement_covariances,
             covariance_mode="radar-geometry",
         )
+    if "association_catprob_penalty" in scored.columns:
+        scored["association_score"] = scored["association_nis"].to_numpy(dtype=float) + pd.to_numeric(
+            scored["association_catprob_penalty"], errors="coerce"
+        ).fillna(0.0).to_numpy(dtype=float)
     return scored
 
 
@@ -2240,10 +2265,21 @@ def _pda_covariance_mode(candidates: pd.DataFrame) -> str:
 
 def _radar_row_to_measurement(row: pd.Series, covariance: np.ndarray) -> TrackingMeasurement:
     row_covariance = _row_covariance(row)
+    position = np.array([float(row["east_m"]), float(row["north_m"]), float(row["up_m"])])
+    measurement_covariance = covariance if row_covariance is None else row_covariance
+    velocity = _row_velocity_vector(row) if _env_flag(_RADAR_VELOCITY_UPDATE_ENV) else None
+    if velocity is not None:
+        measurement_covariance = _position_velocity_covariance(
+            measurement_covariance,
+            velocity_std_mps=_env_float(_RADAR_VELOCITY_STD_MPS_ENV, 12.0),
+        )
+        vector = np.concatenate([position, velocity])
+    else:
+        vector = position
     return TrackingMeasurement(
         time_s=float(row["time_s"]),
-        vector=np.array([float(row["east_m"]), float(row["north_m"]), float(row["up_m"])]),
-        covariance=covariance if row_covariance is None else row_covariance,
+        vector=vector,
+        covariance=measurement_covariance,
         source="radar",
     )
 
@@ -2264,6 +2300,51 @@ def _row_covariance(row: pd.Series) -> np.ndarray | None:
         dtype=float,
     )
     return 0.5 * (covariance + covariance.T)
+
+
+def _frame_has_row_covariance(frame: pd.DataFrame) -> bool:
+    return all(column in frame.columns for column in _ASSOCIATION_COVARIANCE_COLUMNS)
+
+
+def _row_velocity_vector(row: pd.Series) -> np.ndarray | None:
+    required = ("velocity_east_mps", "velocity_north_mps", "velocity_down_mps")
+    if not all(column in row.index for column in required):
+        return None
+    try:
+        velocity = np.array(
+            [
+                float(row["velocity_east_mps"]),
+                float(row["velocity_north_mps"]),
+                -float(row["velocity_down_mps"]),
+            ],
+            dtype=float,
+        )
+    except (TypeError, ValueError):
+        return None
+    return velocity if np.isfinite(velocity).all() else None
+
+
+def _position_velocity_covariance(
+    position_covariance: np.ndarray,
+    *,
+    velocity_std_mps: float,
+) -> np.ndarray:
+    velocity_variance = float(velocity_std_mps) ** 2
+    covariance = np.zeros((6, 6), dtype=float)
+    covariance[:3, :3] = np.asarray(position_covariance, dtype=float).reshape(3, 3)
+    covariance[3:, 3:] = np.eye(3) * velocity_variance
+    return covariance
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return float(default)
+    return float(value)
 
 
 def _nearest_truth_position(

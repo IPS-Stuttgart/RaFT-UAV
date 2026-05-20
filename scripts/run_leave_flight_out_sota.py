@@ -40,6 +40,8 @@ class MethodSpec:
     robust: bool = False
     rts: bool = False
     nis_calibrated: bool = False
+    needs_association_model: bool = False
+    replay_tracker: str = "cv"
 
 
 @dataclass(frozen=True)
@@ -143,6 +145,16 @@ METHODS: dict[str, MethodSpec] = {
         fixed_lag=True,
         robust=True,
     ),
+    "imm_learned_tracklet_viterbi_fixed_lag": MethodSpec(
+        "imm_learned_tracklet_viterbi_fixed_lag",
+        "learned_tracklet",
+        "IMM learned tracklet-Viterbi fixed-lag",
+        association="learned-tracklet-viterbi",
+        fixed_lag=True,
+        robust=True,
+        needs_association_model=True,
+        replay_tracker="imm",
+    ),
     "hetero_cv": MethodSpec("hetero_cv", "hetero", "Heteroscedastic CV"),
     "hetero_cv_fixed_lag": MethodSpec(
         "hetero_cv_fixed_lag", "hetero", "Heteroscedastic CV fixed-lag", fixed_lag=True
@@ -210,6 +222,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--nis-calibration-min-scale", type=float, default=0.25)
     parser.add_argument("--nis-calibration-max-scale", type=float, default=25.0)
     parser.add_argument("--nis-calibration-include-rejected", action="store_true")
+    parser.add_argument(
+        "--learned-association-teacher",
+        choices=["oracle", "prediction-nis", "track-continuity", "none"],
+        default="prediction-nis",
+    )
+    parser.add_argument("--tracklet-learned-unary-weight", type=float, default=1.0)
+    parser.add_argument("--tracklet-hand-unary-weight", type=float, default=0.25)
+    parser.add_argument("--enable-soft-catprob-retention", action="store_true")
+    parser.add_argument("--enable-radar-velocity-update", action="store_true")
+    parser.add_argument("--nis-covariance-calibration-json", type=Path, default=None)
     parser.add_argument("--skip-existing", action="store_true")
     args = parser.parse_args(argv)
 
@@ -228,8 +250,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         train_flights = [flight for flight in flights if flight != heldout]
         fold_dir = args.output_dir / f"heldout_{_slug(heldout)}"
         model_path = fold_dir / "models" / "heteroscedastic_uncertainty.json"
+        association_model_path = fold_dir / "models" / "radar_association_likelihood.json"
         if any(_uses_heteroscedastic_uncertainty(method) for method in methods):
             _train_uncertainty_model(args, train_flights, model_path)
+        if any(method.needs_association_model for method in methods):
+            _train_association_model(
+                args,
+                train_flights,
+                association_model_path,
+                excluded_flight=heldout,
+            )
         for method in methods:
             nis_calibration_path: Path | None = None
             if method.nis_calibrated:
@@ -481,6 +511,36 @@ def _run_method(
         ]
         _run(command)
         return
+    if method.runner == "learned_tracklet":
+        model_path = run_dir.parent / "models" / "radar_association_likelihood.json"
+        command = [
+            sys.executable,
+            "-m",
+            "raft_uav.tracklet_viterbi_cli",
+            "run-baseline",
+            str(args.dataset_root),
+            "--flight",
+            flight,
+            "--output-dir",
+            str(run_dir),
+            "--radar-association",
+            method.association,
+            "--radar-catprob-threshold",
+            str(args.candidate_threshold),
+            "--tracklet-variant",
+            "range-covariance",
+            "--tracklet-replay-tracker",
+            method.replay_tracker,
+            "--tracklet-association-model",
+            str(model_path),
+            "--tracklet-learned-unary-weight",
+            str(args.tracklet_learned_unary_weight),
+            "--tracklet-hand-unary-weight",
+            str(args.tracklet_hand_unary_weight),
+            *[str(option) for option in options],
+        ]
+        _run(command, env_overrides=_runtime_env_updates(args))
+        return
     if method.runner == "imm":
         command = [
             sys.executable,
@@ -580,6 +640,35 @@ def _train_uncertainty_model(args: argparse.Namespace, train_flights: Sequence[s
     _run(command)
 
 
+def _train_association_model(
+    args: argparse.Namespace,
+    train_flights: Sequence[str],
+    model_path: Path,
+    *,
+    excluded_flight: str,
+) -> None:
+    if args.skip_existing and model_path.exists():
+        return
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        sys.executable,
+        "-m",
+        "raft_uav.train_radar_association_cli",
+        str(args.dataset_root),
+        "--output-model",
+        str(model_path),
+        "--radar-catprob-threshold",
+        str(args.candidate_threshold),
+        "--teacher-association",
+        args.learned_association_teacher,
+        "--exclude-flight",
+        excluded_flight,
+    ]
+    for flight in train_flights:
+        command.extend(["--flight", flight])
+    _run(command)
+
+
 def _prepare_nis_covariance_calibration(
     args: argparse.Namespace,
     train_flights: Sequence[str],
@@ -663,6 +752,17 @@ def _write_nis_calibration_summary_csv(payload: Mapping[str, object], path: Path
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("group\n", encoding="utf-8")
+
+
+def _runtime_env_updates(args: argparse.Namespace) -> dict[str, str]:
+    env: dict[str, str] = {}
+    if args.enable_soft_catprob_retention:
+        env["RAFT_UAV_SOFT_CATPROB_RETENTION"] = "1"
+    if args.enable_radar_velocity_update:
+        env["RAFT_UAV_RADAR_UPDATE_USES_VELOCITY"] = "1"
+    if args.nis_covariance_calibration_json is not None:
+        env[ENV_NIS_COVARIANCE_CALIBRATION_JSON] = str(args.nis_covariance_calibration_json)
+    return env
 
 
 def _run(command: Sequence[str], *, env_overrides: Mapping[str, str] | None = None) -> None:

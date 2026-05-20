@@ -382,8 +382,10 @@ def _selected_rows_from_viterbi_path(
             node,
             config,
         )
-        row["association_mode"] = "tracklet-viterbi"
-        row["association_action"] = "viterbi_selected"
+        if "association_mode" not in row.index or pd.isna(row.get("association_mode")):
+            row["association_mode"] = "tracklet-viterbi"
+        if "association_action" not in row.index or pd.isna(row.get("association_action")):
+            row["association_action"] = "viterbi_selected"
         row["association_nis"] = float(node.anchor_nis)
         row["association_score"] = float(node.unary_cost)
         row["association_anchor_nis"] = float(node.anchor_nis)
@@ -489,9 +491,18 @@ def _candidate_cost_terms(
 ) -> tuple[float, float, float]:
     anchor_nis = 0.0
     if config.use_rf_anchor and anchor is not None:
+        candidate_covariance = np.asarray(covariance, dtype=float)
+        try:
+            from raft_uav.baselines.radar_association import _row_covariance
+
+            row_covariance = _row_covariance(row)
+            if row_covariance is not None:
+                candidate_covariance = row_covariance
+        except Exception:
+            candidate_covariance = np.asarray(covariance, dtype=float)
         anchor_nis = _quadratic_form(
             position - np.asarray(anchor.state[:3], dtype=float),
-            np.asarray(anchor.covariance[:3, :3], dtype=float) + covariance,
+            np.asarray(anchor.covariance[:3, :3], dtype=float) + candidate_covariance,
         )
     catprob = _optional_float(row.get("cat_prob_uav"))
     catprob = 1.0 if catprob is None else float(np.clip(catprob, config.min_catprob, 1.0))
@@ -758,7 +769,7 @@ def _replay_selected_tracklet_path(
                 track_id=_optional_track_id(selected.get("track_id")),
                 association_nis=_optional_float(selected.get("association_nis")),
                 association_score=_optional_float(selected.get("association_score")),
-                association_mode="tracklet-viterbi",
+                association_mode=str(selected.get("association_mode", "tracklet-viterbi")),
             )
         )
     return records, accepted_rows

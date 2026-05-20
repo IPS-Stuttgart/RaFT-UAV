@@ -32,6 +32,8 @@ def collect_radar_association_training_frame(
     positive_gate_m: float = 50.0,
     truth_gate_m: float = 150.0,
     truth_time_gate_s: float = 1.0,
+    teacher_association: str = "oracle",
+    track_switch_nis_ratio: float = 0.5,
 ) -> pd.DataFrame:
     """Collect truth-labeled radar candidates from one normalized flight.
 
@@ -45,6 +47,10 @@ def collect_radar_association_training_frame(
         return pd.DataFrame()
     if positive_gate_m <= 0.0:
         raise ValueError("positive_gate_m must be positive")
+    if teacher_association not in {"oracle", "prediction-nis", "track-continuity", "none"}:
+        raise ValueError(
+            "teacher_association must be one of oracle, prediction-nis, track-continuity, none"
+        )
     covariance = np.diag(
         [float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2]
     )
@@ -124,12 +130,48 @@ def collect_radar_association_training_frame(
             )
             rows.append(row)
 
-        if labels.any():
+        selected = None
+        if teacher_association == "oracle" and labels.any():
             selected = scored.iloc[best_position].copy()
+        elif teacher_association in {"prediction-nis", "track-continuity"}:
+            selected = _student_selected_candidate(
+                scored,
+                teacher_association=teacher_association,
+                current_track_id=current_track_id,
+                track_switch_nis_ratio=track_switch_nis_ratio,
+            )
+        if selected is not None:
             tracker.update(_radar_row_to_measurement(selected, covariance))
             current_track_id = _optional_int(selected.get("track_id"))
 
     return pd.DataFrame.from_records(rows)
+
+
+def _student_selected_candidate(
+    scored: pd.DataFrame,
+    *,
+    teacher_association: str,
+    current_track_id: int | None,
+    track_switch_nis_ratio: float,
+) -> pd.Series | None:
+    if scored.empty:
+        return None
+    score_column = "association_score" if "association_score" in scored.columns else "association_nis"
+    best = scored.loc[scored[score_column].idxmin()].copy()
+    if teacher_association == "prediction-nis" or current_track_id is None or "track_id" not in scored:
+        return best
+    current = scored.loc[scored["track_id"] == current_track_id]
+    if current.empty:
+        return best
+    current_best = current.loc[current[score_column].idxmin()].copy()
+    best_track_id = _optional_int(best.get("track_id"))
+    if best_track_id == current_track_id:
+        return best
+    if float(best["association_nis"]) < float(current_best["association_nis"]) * float(
+        track_switch_nis_ratio
+    ):
+        return best
+    return current_best
 
 
 def _optional_int(value: object) -> int | None:
