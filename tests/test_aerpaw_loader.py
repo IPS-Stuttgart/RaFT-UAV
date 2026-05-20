@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pytest
 
 from raft_uav.coordinates import LocalENUProjector
 from raft_uav.io.aerpaw import (
@@ -113,7 +114,7 @@ def test_rf_and_radar_clock_offsets_are_independent(tmp_path):
     )
 
 
-def test_radar_jsonl_reader_skips_non_object_frames(tmp_path):
+def test_radar_jsonl_reader_rejects_non_object_frames(tmp_path):
     radar_path = tmp_path / "radar.json"
     radar_path.write_text(
         "\n".join(
@@ -125,14 +126,16 @@ def test_radar_jsonl_reader_skips_non_object_frames(tmp_path):
         encoding="utf-8",
     )
 
-    assert read_radar_tracks_json(radar_path).empty
+    with pytest.raises(ValueError, match="must contain a JSON object"):
+        read_radar_tracks_json(radar_path)
 
 
-def test_radar_jsonl_reader_skips_non_object_payload(tmp_path):
+def test_radar_jsonl_reader_rejects_non_object_payload(tmp_path):
     radar_path = tmp_path / "radar.json"
     radar_path.write_text(json.dumps([]), encoding="utf-8")
 
-    assert read_radar_tracks_json(radar_path).empty
+    with pytest.raises(ValueError, match="must contain a JSON object"):
+        read_radar_tracks_json(radar_path)
 
 
 def test_radar_jsonl_reader_and_catprob_selection(tmp_path):

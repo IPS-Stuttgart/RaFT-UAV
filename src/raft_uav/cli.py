@@ -40,6 +40,8 @@ from raft_uav.io.aerpaw import (
     select_radar_measurement_rows,
     summarize_flight_schema,
 )
+from raft_uav.numeric import optional_float as _optional_float
+from raft_uav.numeric import optional_int as _optional_int
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -875,7 +877,7 @@ def _run_baseline(
         rf_inflation_alpha=rf_inflation_alpha,
         radar_inflation_alpha=radar_inflation_alpha,
     )
-    metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    metrics_path.write_text(_json_dump_text(metrics), encoding="utf-8")
     diagnostic_summary = build_diagnostic_summary(
         estimate_frame=estimate_frame,
         selected_radar=selected_radar,
@@ -883,7 +885,7 @@ def _run_baseline(
         max_eval_time_delta_s=max_eval_time_delta_s,
     )
     diagnostic_summary_path.write_text(
-        json.dumps(diagnostic_summary, indent=2),
+        _json_dump_text(diagnostic_summary),
         encoding="utf-8",
     )
     _write_trajectory_plot(plot_path, truth, rf, selected_radar, estimate_frame, flight.name)
@@ -1245,16 +1247,18 @@ def _baseline_metrics(
     }
 
 
-def _summarize_nis_by_source(estimate_frame: pd.DataFrame) -> dict[str, dict[str, float]]:
-    summaries: dict[str, dict[str, float]] = {}
+def _summarize_nis_by_source(
+    estimate_frame: pd.DataFrame,
+) -> dict[str, dict[str, float | None]]:
+    summaries: dict[str, dict[str, float | None]] = {}
     for source, group in estimate_frame.groupby("source"):
         values = pd.to_numeric(group["nis"], errors="coerce").dropna().to_numpy(dtype=float)
         if values.size == 0:
             summaries[str(source)] = {
                 "count": 0.0,
-                "mean": float("nan"),
-                "p50": float("nan"),
-                "p95": float("nan"),
+                "mean": None,
+                "p50": None,
+                "p95": None,
             }
             continue
         summaries[str(source)] = {
@@ -1268,8 +1272,8 @@ def _summarize_nis_by_source(estimate_frame: pd.DataFrame) -> dict[str, dict[str
 
 def _summarize_covariance_scale_by_source(
     estimate_frame: pd.DataFrame,
-) -> dict[str, dict[str, float]]:
-    summaries: dict[str, dict[str, float]] = {}
+) -> dict[str, dict[str, float | None]]:
+    summaries: dict[str, dict[str, float | None]] = {}
     for source, group in estimate_frame.groupby("source"):
         values = (
             pd.to_numeric(group["covariance_scale"], errors="coerce")
@@ -1279,10 +1283,10 @@ def _summarize_covariance_scale_by_source(
         if values.size == 0:
             summaries[str(source)] = {
                 "count": 0.0,
-                "mean": float("nan"),
-                "p50": float("nan"),
-                "p95": float("nan"),
-                "max": float("nan"),
+                "mean": None,
+                "p50": None,
+                "p95": None,
+                "max": None,
             }
             continue
         summaries[str(source)] = {
@@ -1295,22 +1299,33 @@ def _summarize_covariance_scale_by_source(
     return summaries
 
 
-def _optional_float(value: object) -> float | None:
-    if value is None:
-        return None
-    return float(value)
-
-
-def _optional_int(value: object) -> int | None:
-    if value is None:
-        return None
-    return int(value)
-
-
 def _optional_str(value: object) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _json_dump_text(payload: Any) -> str:
+    """Serialize JSON artifacts without non-standard NaN/Infinity tokens."""
+
+    return json.dumps(_json_safe(payload), indent=2, allow_nan=False)
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return _json_safe(value.tolist())
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, (np.floating, float)):
+        scalar = float(value)
+        return scalar if np.isfinite(scalar) else None
+    return value
 
 
 def _inside_truth_window(frame: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:

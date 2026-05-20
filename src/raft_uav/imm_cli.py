@@ -29,6 +29,7 @@ from raft_uav.io.aerpaw import (
     select_flight,
     select_radar_measurement_rows,
 )
+from raft_uav.numeric import optional_float as _optional_float
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -459,12 +460,6 @@ def _inside_truth_window(frame: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFra
     truth_min = float(truth["time_s"].min())
     truth_max = float(truth["time_s"].max())
     return frame.loc[(frame["time_s"] >= truth_min) & (frame["time_s"] <= truth_max)].copy()
-
-
-def _optional_float(value: object) -> float | None:
-    if value is None:
-        return None
-    return float(value)
 
 
 def _optional_str(value: object) -> str | None:

@@ -1,0 +1,35 @@
+from __future__ import annotations
+
+import pytest
+
+from raft_uav.numeric import optional_float, optional_int
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, "", "not-a-number", "nan", "inf", "-inf", float("nan"), float("inf"), object()],
+)
+def test_optional_float_rejects_absent_malformed_and_nonfinite_values(value: object) -> None:
+    assert optional_float(value) is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0, 0.0),
+        (1.25, 1.25),
+        ("3.5", 3.5),
+    ],
+)
+def test_optional_float_accepts_finite_values(value: object, expected: float) -> None:
+    assert optional_float(value) == expected
+
+
+@pytest.mark.parametrize("value", [None, "", "nan", float("nan"), float("inf"), object()])
+def test_optional_int_rejects_absent_malformed_and_nonfinite_values(value: object) -> None:
+    assert optional_int(value) is None
+
+
+@pytest.mark.parametrize(("value", "expected"), [("4", 4), (4.9, 4), (-2.1, -2)])
+def test_optional_int_accepts_finite_values(value: object, expected: int) -> None:
+    assert optional_int(value) == expected

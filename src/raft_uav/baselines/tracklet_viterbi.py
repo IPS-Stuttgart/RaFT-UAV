@@ -9,7 +9,7 @@ missed-detection branch.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 import math
 
@@ -21,6 +21,10 @@ from raft_uav.baselines.learned_radar_likelihood import (
     LearnedRadarAssociationModel,
     radar_association_feature_frame,
 )
+from raft_uav.numeric import optional_float as _optional_float
+from raft_uav.numeric import optional_int as _optional_track_id
+
+RadarCovarianceFn = Callable[[pd.Series, np.ndarray], np.ndarray]
 
 
 @dataclass(frozen=True)
@@ -142,6 +146,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
     max_residual_norms_by_source: Mapping[str, float | None] | None = None,
     candidate_catprob_threshold: float | None = 0.4,
     config: TrackletViterbiAssociationConfig | None = None,
+    radar_covariance_fn: RadarCovarianceFn | None = None,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
     """Run CV fusion after Viterbi radar-tracklet selection."""
 
@@ -170,6 +175,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
         truth=None,
         truth_gate_m=150.0,
         truth_time_gate_s=1.0,
+        radar_covariance_fn=radar_covariance_fn,
     )
     if initial is None:
         return [], _empty_selected_radar(radar)
@@ -191,6 +197,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
         covariance=covariance,
         candidate_catprob_threshold=candidate_catprob_threshold,
         config=cfg,
+        radar_covariance_fn=radar_covariance_fn,
     )
     records, accepted = _replay_selected_tracklet_path(
         events=events,
@@ -205,6 +212,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
         robust_update_by_source=robust_update_by_source,
         inflation_alpha_by_source=inflation_alpha_by_source,
         max_residual_norms_by_source=max_residual_norms_by_source,
+        radar_covariance_fn=radar_covariance_fn,
     )
     return records, _selected_rows_frame(radar, accepted)
 
@@ -301,6 +309,7 @@ def _select_tracklet_viterbi_path(
     covariance: np.ndarray,
     candidate_catprob_threshold: float | None,
     config: TrackletViterbiAssociationConfig,
+    radar_covariance_fn: RadarCovarianceFn | None = None,
 ) -> list[pd.Series]:
     """Return selected radar rows from the lowest-cost Viterbi path."""
 
@@ -312,6 +321,7 @@ def _select_tracklet_viterbi_path(
             covariance=covariance,
             candidate_catprob_threshold=candidate_catprob_threshold,
             config=config,
+            radar_covariance_fn=radar_covariance_fn,
         )
         for i, event in enumerate(events)
         if event["kind"] == "radar"
@@ -425,6 +435,7 @@ def _nodes_for_radar_frame(
     covariance: np.ndarray,
     candidate_catprob_threshold: float | None,
     config: TrackletViterbiAssociationConfig,
+    radar_covariance_fn: RadarCovarianceFn | None = None,
 ) -> list[_ViterbiNode]:
     from raft_uav.baselines.radar_association import _catprob_candidate_pool
 
@@ -435,11 +446,12 @@ def _nodes_for_radar_frame(
         position = _row_position(row)
         if position is None:
             continue
+        row_covariance = _radar_covariance_for_row(row, covariance, radar_covariance_fn)
         anchor_nis, catprob_cost, range_cost = _candidate_cost_terms(
             row=row,
             position=position,
             anchor=anchor,
-            covariance=covariance,
+            covariance=row_covariance,
             config=config,
         )
         base_unary_cost = float(config.anchor_nis_weight) * anchor_nis + catprob_cost + range_cost
@@ -479,6 +491,18 @@ def _nodes_for_radar_frame(
         _ViterbiNode(event_index, event_key, time_s, None, None, None, None, 0.0, 0.0, 0.0, 0.0, True)
     )
     return nodes
+
+
+def _radar_covariance_for_row(
+    row: pd.Series,
+    covariance: np.ndarray,
+    radar_covariance_fn: RadarCovarianceFn | None,
+) -> np.ndarray:
+    """Return the covariance to use for scoring or replaying one radar row."""
+
+    if radar_covariance_fn is None:
+        return np.asarray(covariance, dtype=float)
+    return np.asarray(radar_covariance_fn(row, covariance), dtype=float)
 
 
 def _candidate_cost_terms(
@@ -676,6 +700,7 @@ def _replay_selected_tracklet_path(
     robust_update_by_source: Mapping[str, str | None] | None,
     inflation_alpha_by_source: Mapping[str, float] | None,
     max_residual_norms_by_source: Mapping[str, float | None] | None,
+    radar_covariance_fn: RadarCovarianceFn | None = None,
 ) -> tuple[list[dict[str, object]], list[pd.Series]]:
     from raft_uav.baselines.radar_association import (
         _gate_threshold_for_measurement,
@@ -730,7 +755,12 @@ def _replay_selected_tracklet_path(
         selected = selected_by_key.get(_radar_event_key(candidates))
         if selected is None:
             continue
-        measurement = _radar_row_to_measurement(selected, covariance)
+        measurement_covariance = _radar_covariance_for_row(
+            selected,
+            covariance,
+            radar_covariance_fn,
+        )
+        measurement = _radar_row_to_measurement(selected, measurement_covariance)
         diagnostics = tracker.update(
             measurement,
             gate_threshold=_gate_threshold_for_measurement(
@@ -828,18 +858,3 @@ def _quadratic_form(residual: np.ndarray, covariance: np.ndarray) -> float:
         solved = np.linalg.pinv(covariance) @ residual
     value = float(residual.T @ solved)
     return value if np.isfinite(value) else 0.0
-
-
-def _optional_track_id(value: object) -> int | None:
-    number = _optional_float(value)
-    return None if number is None else int(number)
-
-
-def _optional_float(value: object) -> float | None:
-    if value is None:
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if np.isfinite(number) else None

@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.baselines.kalman import AsyncConstantVelocityKalmanTracker, TrackingMeasurement
 from raft_uav.baselines.radar_association import (
@@ -17,6 +18,62 @@ def _rf_measurement(time_s: float, east_m: float, north_m: float = 0.0) -> Track
         covariance=np.diag([1.0, 1.0]),
         source="rf",
     )
+
+
+def test_radar_association_rejects_raw_radar_without_normalized_columns():
+    radar = pd.DataFrame(
+        [
+            {
+                "global_time_raw_s": 0.0,
+                "latitude": 48.0,
+                "longitude": 9.0,
+                "altitude_m": 100.0,
+                "cat_prob_uav": 0.9,
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="requires normalized radar rows"):
+        run_async_cv_baseline_with_radar_association(
+            rf_measurements=[],
+            radar=radar,
+            association="prediction-nis",
+        )
+
+
+def test_track_bank_does_not_reprocess_bootstrap_radar_frame():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": 0.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.9,
+            },
+            {
+                "frame_index": 1,
+                "track_id": 1,
+                "time_s": 1.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.9,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[],
+        radar=radar,
+        association="track-bank",
+        candidate_catprob_threshold=None,
+    )
+
+    assert records[0]["update_action"] == "initialized"
+    assert selected["frame_index"].tolist()[0] == 0
 
 
 def test_oracle_nearest_truth_selects_closest_candidate_per_frame():

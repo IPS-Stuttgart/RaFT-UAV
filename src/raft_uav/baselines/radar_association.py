@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 import os
 from typing import Any
@@ -29,6 +29,9 @@ from raft_uav.baselines.update_logic import (
     max_residual_norm_for_measurement,
     plan_linear_measurement_update,
 )
+from raft_uav.numeric import optional_float, optional_int
+
+RadarCovarianceFn = Callable[[pd.Series, np.ndarray], np.ndarray]
 
 RADAR_ASSOCIATION_MODES = (
     "oracle-nearest-truth",
@@ -270,6 +273,7 @@ def run_async_cv_baseline_with_radar_association(
     covariance = np.diag(
         [float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2]
     )
+    _validate_normalized_radar_for_association(radar)
     covariance_config = _RadarGeometryCovarianceConfig(
         model=radar_covariance_model,
         radial_std_m=float(radar_range_std_m),
@@ -279,6 +283,7 @@ def run_async_cv_baseline_with_radar_association(
         crossrange_max_std_m=float(radar_crossrange_max_std_m),
     )
     if association == "track-bank":
+        _validate_normalized_radar_for_association(radar)
         return _run_mht_track_bank(
             rf_measurements=rf_measurement_list,
             radar=radar,
@@ -336,21 +341,24 @@ def run_async_cv_baseline_with_radar_association(
 
     start_index = 0
     initial_measurement = None
+    initial_selected_row: pd.Series | None = None
     initial_events = (
         enumerate(events) if association in _STABLE_SEGMENT_ASSOCIATION_MODES else [(0, events[0])]
     )
     for index, event in initial_events:
-        initial_measurement = _initial_measurement(
+        initial = _initial_measurement_and_row(
             event,
             association=association,
             covariance=covariance,
+            covariance_config=covariance_config,
             stable_anchor_by_key=stable_anchor_by_key,
             candidate_catprob_threshold=candidate_catprob_threshold,
             truth=truth,
             truth_gate_m=truth_gate_m,
             truth_time_gate_s=truth_time_gate_s,
         )
-        if initial_measurement is not None:
+        if initial is not None:
+            initial_measurement, initial_selected_row = initial
             start_index = int(index)
             break
     if initial_measurement is None:
@@ -365,7 +373,44 @@ def run_async_cv_baseline_with_radar_association(
     selected_rows: list[pd.Series] = []
     current_track_id: int | None = None
 
-    for event in events[start_index:]:
+    initial_diagnostics = tracker.update(
+        initial_measurement,
+        gate_threshold=_gate_threshold_for_measurement(
+            initial_measurement,
+            gate_probabilities_by_source=gate_probabilities_by_source,
+            gate_thresholds_by_source=gate_thresholds_by_source,
+        ),
+        safety_gate_threshold=_gate_threshold_for_measurement(
+            initial_measurement,
+            gate_probabilities_by_source=safety_gate_probabilities_by_source,
+            gate_thresholds_by_source=safety_gate_thresholds_by_source,
+        ),
+        max_residual_norm=_max_residual_norm_for_measurement(
+            initial_measurement,
+            max_residual_norms_by_source=max_residual_norms_by_source,
+        ),
+        robust_update=_robust_update_for_measurement(
+            initial_measurement,
+            robust_update_by_source=robust_update_by_source,
+        ),
+        inflation_alpha=_inflation_alpha_for_measurement(
+            initial_measurement,
+            inflation_alpha_by_source=inflation_alpha_by_source,
+        ),
+    )
+    if initial_selected_row is not None and initial_diagnostics.accepted:
+        current_track_id = _optional_track_id(initial_selected_row)
+        selected_rows.append(initial_selected_row)
+    records.append(
+        _record(
+            initial_measurement,
+            tracker,
+            initial_diagnostics,
+            **_selected_row_record_kwargs(initial_selected_row, association),
+        )
+    )
+
+    for event in events[start_index + 1:]:
         if event["kind"] == "rf":
             measurement = event["measurement"]
             assert isinstance(measurement, TrackingMeasurement)
@@ -473,6 +518,20 @@ def run_async_cv_baseline_with_radar_association(
     return records, _selected_rows_frame(radar, selected_rows)
 
 
+def _validate_normalized_radar_for_association(radar: pd.DataFrame) -> None:
+    """Fail early when association receives raw radar rows instead of ENU rows."""
+
+    if radar.empty:
+        return
+    required = {"time_s", "east_m", "north_m", "up_m"}
+    missing = sorted(required.difference(radar.columns))
+    if missing:
+        raise ValueError(
+            "radar association requires normalized radar rows with columns "
+            f"{sorted(required)}; missing {missing}"
+        )
+
+
 def _events(
     rf_measurements: list[TrackingMeasurement],
     radar: pd.DataFrame,
@@ -521,18 +580,20 @@ def _run_mht_track_bank(
         return [], _empty_selected_radar(radar)
 
     initial_event = events[0]
-    initial_measurement = _initial_measurement(
+    initial = _initial_measurement_and_row(
         initial_event,
         association="track-bank",
         covariance=covariance,
+        covariance_config=covariance_config,
         stable_anchor_by_key=None,
         candidate_catprob_threshold=candidate_catprob_threshold,
         truth=None,
         truth_gate_m=150.0,
         truth_time_gate_s=1.0,
     )
-    if initial_measurement is None:
+    if initial is None:
         return [], _empty_selected_radar(radar)
+    initial_measurement, initial_selected_row = initial
 
     tracker = _initial_mht_tracker(
         initial_measurement,
@@ -547,6 +608,33 @@ def _run_mht_track_bank(
     current_time_s = float(initial_measurement.time_s)
     records: list[dict[str, object]] = []
     selected_rows: list[pd.Series] = []
+    initial_diagnostics = _mht_bootstrap_diagnostics(
+        initial_measurement,
+        gate_threshold=_gate_threshold_for_measurement(
+            initial_measurement,
+            gate_probabilities_by_source=gate_probabilities_by_source,
+            gate_thresholds_by_source=gate_thresholds_by_source,
+        ),
+        safety_gate_threshold=_gate_threshold_for_measurement(
+            initial_measurement,
+            gate_probabilities_by_source=safety_gate_probabilities_by_source,
+            gate_thresholds_by_source=safety_gate_thresholds_by_source,
+        ),
+        max_residual_norm=_max_residual_norm_for_measurement(
+            initial_measurement,
+            max_residual_norms_by_source=max_residual_norms_by_source,
+        ),
+    )
+    if initial_selected_row is not None:
+        selected_rows.append(initial_selected_row)
+    records.append(
+        _mht_record(
+            initial_measurement,
+            tracker,
+            initial_diagnostics,
+            **_selected_row_record_kwargs(initial_selected_row, "track-bank"),
+        )
+    )
 
     # The first event was already assimilated into the MHT prior above.
     # Replaying it here would double-count the bootstrap measurement.
@@ -1567,21 +1655,25 @@ def _integer_like(values: np.ndarray) -> bool:
     return bool(finite.size and np.allclose(finite, np.round(finite)))
 
 
-def _initial_measurement(
+def _initial_measurement_and_row(
     event: dict[str, object],
     *,
     association: str,
     covariance: np.ndarray,
+    covariance_config: _RadarGeometryCovarianceConfig | None = None,
     stable_anchor_by_key: dict[object, pd.Series] | None = None,
     candidate_catprob_threshold: float | None = None,
     truth: pd.DataFrame | None,
     truth_gate_m: float,
     truth_time_gate_s: float,
-) -> TrackingMeasurement | None:
+    radar_covariance_fn: RadarCovarianceFn | None = None,
+) -> tuple[TrackingMeasurement, pd.Series | None] | None:
+    """Return the bootstrap measurement and selected radar row, if any."""
+
     if event["kind"] == "rf":
         measurement = event["measurement"]
         assert isinstance(measurement, TrackingMeasurement)
-        return measurement
+        return measurement, None
     candidates = event["candidates"]
     assert isinstance(candidates, pd.DataFrame)
     if association == "oracle-nearest-truth":
@@ -1604,8 +1696,39 @@ def _initial_measurement(
         selected = _highest_catprob(candidates)
     if selected is None:
         return None
+    selected = selected.copy()
     selected = _annotate_radar_geometry_covariance(selected, covariance, covariance_config)
-    return _radar_row_to_measurement(selected, covariance)
+    if radar_covariance_fn is not None:
+        covariance = radar_covariance_fn(selected, covariance)
+    return _radar_row_to_measurement(selected, covariance), selected
+
+
+def _initial_measurement(
+    event: dict[str, object],
+    *,
+    association: str,
+    covariance: np.ndarray,
+    covariance_config: _RadarGeometryCovarianceConfig | None = None,
+    stable_anchor_by_key: dict[object, pd.Series] | None = None,
+    candidate_catprob_threshold: float | None = None,
+    truth: pd.DataFrame | None,
+    truth_gate_m: float,
+    truth_time_gate_s: float,
+    radar_covariance_fn: RadarCovarianceFn | None = None,
+) -> TrackingMeasurement | None:
+    initial = _initial_measurement_and_row(
+        event,
+        association=association,
+        covariance=covariance,
+        covariance_config=covariance_config,
+        stable_anchor_by_key=stable_anchor_by_key,
+        candidate_catprob_threshold=candidate_catprob_threshold,
+        truth=truth,
+        truth_gate_m=truth_gate_m,
+        truth_time_gate_s=truth_time_gate_s,
+        radar_covariance_fn=radar_covariance_fn,
+    )
+    return None if initial is None else initial[0]
 
 
 def _select_radar_candidate(
@@ -2413,6 +2536,25 @@ def _inflation_alpha_for_measurement(
     return 1.0
 
 
+def _selected_row_record_kwargs(
+    row: pd.Series | None,
+    association: str,
+) -> dict[str, int | float | str | None]:
+    """Return optional record metadata derived from a selected radar row."""
+
+    if row is None:
+        return {}
+    mode = row.get("association_mode", association)
+    if mode is None or pd.isna(mode):
+        mode = association
+    return {
+        "track_id": _optional_track_id(row),
+        "association_nis": _optional_float(row.get("association_nis")),
+        "association_score": _optional_float(row.get("association_score")),
+        "association_mode": str(mode),
+    }
+
+
 def _record(
     measurement: TrackingMeasurement,
     tracker: AsyncConstantVelocityKalmanTracker,
@@ -2508,19 +2650,8 @@ def _track_id_equals(value: object, track_id: int) -> bool:
 
 
 def _optional_track_id(row: pd.Series) -> int | None:
-    value = row.get("track_id")
-    if value is None:
-        return None
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not np.isfinite(numeric):
-        return None
-    return int(numeric)
+    return optional_int(row.get("track_id"))
 
 
 def _optional_float(value: object) -> float | None:
-    if value is None:
-        return None
-    return float(value)
+    return optional_float(value)

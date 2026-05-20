@@ -130,7 +130,9 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
                     f"{path}: invalid radar JSON on line {line_number}: {exc.msg}"
                 ) from exc
             if not isinstance(payload, dict):
-                continue
+                raise ValueError(
+                    f"radar JSON line {line_number} must contain a JSON object"
+                )
 
             params = payload.get("params", {})
             if params is None:
@@ -140,10 +142,14 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
 
             track_data = payload.get("trackData") or []
             if not isinstance(track_data, list):
-                continue
+                raise ValueError(
+                    f"radar JSON line {line_number} field 'trackData' must be a list"
+                )
             for track_index, track in enumerate(track_data):
                 if not isinstance(track, dict):
-                    continue
+                    raise ValueError(
+                        f"radar JSON line {line_number} track {track_index} must be an object"
+                    )
                 records.append(_flatten_track(frame_index, track_index, track, params))
     return pd.DataFrame.from_records(records)
 

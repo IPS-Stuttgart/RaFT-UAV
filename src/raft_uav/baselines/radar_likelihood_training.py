@@ -17,6 +17,7 @@ from raft_uav.baselines.radar_association import (
     _nis_scored_candidates,
     _radar_row_to_measurement,
 )
+from raft_uav.numeric import optional_int as _optional_int
 
 
 def collect_radar_association_training_frame(
@@ -172,15 +173,3 @@ def _student_selected_candidate(
     ):
         return best
     return current_best
-
-
-def _optional_int(value: object) -> int | None:
-    if value is None:
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not np.isfinite(number):
-        return None
-    return int(number)

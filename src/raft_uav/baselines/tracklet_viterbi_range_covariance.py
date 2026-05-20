@@ -2,8 +2,8 @@
 
 The base tracklet-Viterbi implementation uses one Cartesian covariance for all
 selected radar rows.  This wrapper keeps the existing retention-aware Viterbi
-path but patches the replay and RF-anchor scoring hooks so long-range radar
-rows are down-weighted according to their ``range_m`` field.
+path but passes an explicit per-row covariance callback into scoring and replay
+so long-range radar rows are down-weighted according to their ``range_m`` field.
 
 If an upstream runner already attached learned ``cov_*`` or ``association_cov_*``
 columns, those calibrated row-wise covariances take precedence over the generic
@@ -13,13 +13,11 @@ range heuristic.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from raft_uav.baselines import radar_association as _radar_association
 from raft_uav.baselines import tracklet_viterbi as _base
 from raft_uav.baselines.kalman import TrackingMeasurement
 from raft_uav.baselines.tracklet_viterbi_retention import (
@@ -55,62 +53,40 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
     """Run retention-aware Viterbi with range-adaptive radar covariance."""
 
     cfg = config or TrackletViterbiAssociationConfig()
-    with _range_adaptive_covariance_hooks(cfg):
-        return _run_retention_association(
-            rf_measurements=rf_measurements,
-            radar=radar,
-            acceleration_std_mps2=acceleration_std_mps2,
-            radar_xy_std_m=radar_xy_std_m,
-            radar_z_std_m=radar_z_std_m,
-            gate_probabilities_by_source=gate_probabilities_by_source,
-            gate_thresholds_by_source=gate_thresholds_by_source,
-            safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
-            safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
-            robust_update_by_source=robust_update_by_source,
-            inflation_alpha_by_source=inflation_alpha_by_source,
-            max_residual_norms_by_source=max_residual_norms_by_source,
-            candidate_catprob_threshold=candidate_catprob_threshold,
-            config=cfg,
-        )
+    radar_covariance_fn = _range_adaptive_covariance_fn(cfg)
+    return _run_retention_association(
+        rf_measurements=rf_measurements,
+        radar=radar,
+        acceleration_std_mps2=acceleration_std_mps2,
+        radar_xy_std_m=radar_xy_std_m,
+        radar_z_std_m=radar_z_std_m,
+        gate_probabilities_by_source=gate_probabilities_by_source,
+        gate_thresholds_by_source=gate_thresholds_by_source,
+        safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
+        safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
+        robust_update_by_source=robust_update_by_source,
+        inflation_alpha_by_source=inflation_alpha_by_source,
+        max_residual_norms_by_source=max_residual_norms_by_source,
+        candidate_catprob_threshold=candidate_catprob_threshold,
+        config=cfg,
+        radar_covariance_fn=radar_covariance_fn,
+    )
 
 
-@contextmanager
-def _range_adaptive_covariance_hooks(config: TrackletViterbiAssociationConfig):
-    original_candidate_cost_terms = _base._candidate_cost_terms
-    original_radar_row_to_measurement = _radar_association._radar_row_to_measurement
+def _range_adaptive_covariance_fn(
+    config: TrackletViterbiAssociationConfig,
+) -> _base.RadarCovarianceFn:
+    """Return a per-row covariance callback without patching module globals."""
 
-    def candidate_cost_terms_with_adaptive_covariance(
-        *,
+    def radar_covariance_fn(
         row: pd.Series,
-        position: np.ndarray,
-        anchor: _base._AnchorState | None,
-        covariance: np.ndarray,
-        config: TrackletViterbiAssociationConfig,
-    ) -> tuple[float, float, float]:
-        row_covariance = _radar_row_covariance(row, covariance, config)
-        return original_candidate_cost_terms(
-            row=row,
-            position=position,
-            anchor=anchor,
-            covariance=row_covariance,
-            config=config,
-        )
+        default_covariance: np.ndarray,
+    ) -> np.ndarray:
+        row_covariance = _radar_row_covariance(row, default_covariance, config)
+        _write_radar_covariance_diagnostics(row, row_covariance, default_covariance)
+        return row_covariance
 
-    def radar_row_to_measurement_with_adaptive_covariance(
-        row: pd.Series,
-        covariance: np.ndarray,
-    ) -> TrackingMeasurement:
-        row_covariance = _radar_row_covariance(row, covariance, config)
-        _write_radar_covariance_diagnostics(row, row_covariance, covariance)
-        return original_radar_row_to_measurement(row, row_covariance)
-
-    _base._candidate_cost_terms = candidate_cost_terms_with_adaptive_covariance
-    _radar_association._radar_row_to_measurement = radar_row_to_measurement_with_adaptive_covariance
-    try:
-        yield
-    finally:
-        _base._candidate_cost_terms = original_candidate_cost_terms
-        _radar_association._radar_row_to_measurement = original_radar_row_to_measurement
+    return radar_covariance_fn
 
 
 def _radar_row_covariance(
