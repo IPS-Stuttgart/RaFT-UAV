@@ -21,10 +21,6 @@ from raft_uav.baselines.kalman import (
     measurement_matrix,
     white_acceleration_process_noise,
 )
-from raft_uav.baselines.radar_covariance import (
-    candidate_radar_covariances,
-    row_radar_covariance,
-)
 from raft_uav.baselines.update_logic import (
     max_residual_norm_for_measurement,
     plan_linear_measurement_update,

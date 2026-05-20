@@ -218,7 +218,7 @@ def test_catprob_candidate_pool_falls_back_to_unfiltered_candidates_when_thresho
     ]
 
 
-def test_initial_radar_measurement_respects_catprob_threshold():
+def test_initial_radar_measurement_respects_catprob_threshold_from_radar_frame():
     candidates = pd.DataFrame(
         [
             {

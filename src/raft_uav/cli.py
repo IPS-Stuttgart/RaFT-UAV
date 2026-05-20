@@ -23,9 +23,12 @@ from raft_uav.baselines.update_logic import (
     DEFAULT_STUDENT_T_DOF,
     ROBUST_UPDATE_MODES,
 )
+from raft_uav.calibration.time_offset import apply_time_offset
 from raft_uav.evaluation.diagnostics import build_diagnostic_summary
 from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
 from raft_uav.io.aerpaw import (
+    DEFAULT_RADAR_CLOCK_OFFSET_S,
+    DEFAULT_RF_CLOCK_OFFSET_S,
     RADAR_SELECTION_MODES,
     discover_flights,
     normalize_radar,

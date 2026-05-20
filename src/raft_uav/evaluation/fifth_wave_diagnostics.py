@@ -12,13 +12,11 @@ CSV artifacts already written by the RaFT-UAV runners whenever possible.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-import math
 import time
 import tracemalloc
-from typing import Any
 
 import numpy as np
 import pandas as pd
