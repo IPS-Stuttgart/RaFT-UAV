@@ -26,6 +26,7 @@ import pandas as pd
 
 from raft_uav import cli as _base_cli
 from raft_uav import robust_cli as _robust_cli
+from raft_uav import runtime_cli_config as _runtime_cli_config
 from raft_uav.baselines import learned_tracklet_viterbi as _learned_tracklet_viterbi
 from raft_uav.baselines import tracklet_viterbi as _base_tracklet_viterbi
 from raft_uav.baselines import tracklet_viterbi_fixed_lag as _fixed_lag_tracklet_viterbi
@@ -352,6 +353,29 @@ def _extract_tracklet_args(argv: list[str] | None) -> tuple[list[str], dict[str,
     return remaining, updates
 
 
+def _runtime_updates_for_test_dispatch(argv: list[str]) -> tuple[list[str], dict[str, str]]:
+    """Strip runtime flags when the runtime-patched base CLI is bypassed."""
+
+    before = {
+        name: os.environ.get(name)
+        for names in _runtime_cli_config._RUNTIME_FLAG_ENV_NAMES.values()
+        for name in names
+    }
+    explicit_names = _runtime_cli_config.runtime_environment_names_from_argv(argv)
+    runtime_config, remaining = _runtime_cli_config.parse_runtime_config(argv)
+    _runtime_cli_config.apply_runtime_environment(
+        runtime_config,
+        overwrite_existing_env_names=explicit_names,
+    )
+    updates = {name: os.environ[name] for name in explicit_names if name in os.environ}
+    for name, value in before.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
+    return remaining, updates
+
+
 def _environment_updates_from_namespace(namespace: argparse.Namespace) -> dict[str, str]:
     updates: dict[str, str] = {}
     _maybe_add(updates, _TRACKLET_VARIANT_ENV, namespace.tracklet_variant)
@@ -436,6 +460,9 @@ def main(argv: list[str] | None = None) -> int:
     """Run the standard CLI with tracklet-Viterbi association enabled."""
 
     filtered_argv, env_updates = _extract_tracklet_args(argv)
+    if _base_cli.main.__module__ != "raft_uav.runtime_cli_patch":
+        filtered_argv, runtime_updates = _runtime_updates_for_test_dispatch(filtered_argv)
+        env_updates = {**env_updates, **runtime_updates}
     _base_cli.RADAR_ASSOCIATION_MODES = enabled_radar_association_modes()
     _base_cli.run_async_cv_baseline_with_radar_association = (
         run_async_cv_baseline_with_radar_association

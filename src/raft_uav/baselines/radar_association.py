@@ -553,7 +553,7 @@ def _run_mht_track_bank(
     rf_measurements: list[TrackingMeasurement],
     radar: pd.DataFrame,
     covariance: np.ndarray,
-    covariance_config: _RadarGeometryCovarianceConfig | None,
+    covariance_config: _RadarGeometryCovarianceConfig | None = None,
     acceleration_std_mps2: float,
     gate_probabilities_by_source: Mapping[str, float | None] | None,
     gate_thresholds_by_source: Mapping[str, float | None] | None,
@@ -622,15 +622,17 @@ def _run_mht_track_bank(
         ),
     )
     if initial_selected_row is not None:
+        initial_selected_row = initial_selected_row.copy()
+        initial_selected_row["association_mode"] = "track-bank"
         selected_rows.append(initial_selected_row)
-    records.append(
-        _mht_record(
-            initial_measurement,
-            tracker,
-            initial_diagnostics,
-            **_selected_row_record_kwargs(initial_selected_row, "track-bank"),
+        records.append(
+            _mht_record(
+                measurement=initial_measurement,
+                tracker=tracker,
+                diagnostics=initial_diagnostics,
+                **_selected_row_record_kwargs(initial_selected_row, "track-bank"),
+            )
         )
-    )
 
     # The first event was already assimilated into the MHT prior above.
     # Replaying it here would double-count the bootstrap measurement.
@@ -1686,7 +1688,11 @@ def _initial_measurement_and_row(
             else stable_anchor_by_key.get(_radar_event_key(event))
         )
     else:
-        candidates = _catprob_candidate_pool(candidates, candidate_catprob_threshold)
+        candidates = _catprob_candidate_pool(
+            candidates,
+            candidate_catprob_threshold,
+            fallback_to_unfiltered=False,
+        )
         if candidates.empty:
             return None
         selected = _highest_catprob(candidates)
@@ -1733,7 +1739,7 @@ def _select_radar_candidate(
     association: str,
     tracker: AsyncConstantVelocityKalmanTracker,
     covariance: np.ndarray,
-    covariance_config: _RadarGeometryCovarianceConfig | None,
+    covariance_config: _RadarGeometryCovarianceConfig | None = None,
     truth: pd.DataFrame | None,
     current_track_id: int | None,
     track_switch_nis_ratio: float,
@@ -2250,15 +2256,16 @@ def _candidate_covariances(
     base = np.asarray(base_covariance, dtype=float).reshape(3, 3)
     if len(candidates) == 0:
         return np.empty((0, 3, 3), dtype=float)
-    if covariance_config is None or not covariance_config.enabled:
-        return np.repeat(base[None, :, :], len(candidates), axis=0)
-    return np.stack(
-        [
-            _radar_geometry_covariance_for_row(row, base, covariance_config)
-            for _, row in candidates.iterrows()
-        ],
-        axis=0,
-    )
+    covariances = []
+    for _, row in candidates.iterrows():
+        row_covariance = _row_covariance(row)
+        if row_covariance is not None:
+            covariances.append(row_covariance)
+        elif covariance_config is not None and covariance_config.enabled:
+            covariances.append(_radar_geometry_covariance_for_row(row, base, covariance_config))
+        else:
+            covariances.append(base)
+    return np.stack(covariances, axis=0)
 
 
 def _candidate_covariance_tensor(

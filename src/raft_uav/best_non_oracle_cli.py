@@ -19,7 +19,7 @@ from pathlib import Path
 
 from raft_uav import tracklet_viterbi_cli as _tracklet_cli
 
-_DEFAULT_OUTPUT_DIR = Path("outputs/best-non-oracle")
+_DEFAULT_OUTPUT_DIR = Path("outputs/best-nontruth")
 _DEFAULT_SMOOTHER_LAG_S = 20.0
 _DEFAULT_ROBUST_UPDATE = "student-t"
 _ROBUST_UPDATE_CHOICES = ("none", "nis-inflate", "student-t", "huber")
@@ -53,7 +53,7 @@ def build_tracklet_cli_argv(args: argparse.Namespace) -> list[str]:
         "--flight",
         args.flight,
         "--output-dir",
-        str(args.output_dir),
+        args.output_dir.as_posix(),
         "--acceleration-std",
         _format_float(args.acceleration_std),
         "--radar-association",

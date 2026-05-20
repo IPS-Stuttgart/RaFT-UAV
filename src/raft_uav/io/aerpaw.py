@@ -117,6 +117,7 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
     """Read Fortem newline-delimited radar JSON logs into one row per track."""
 
     records: list[dict[str, Any]] = []
+    saw_non_object_payload = False
     with Path(path).open("r", encoding="utf-8") as handle:
         for frame_index, line in enumerate(handle):
             line = line.strip()
@@ -130,9 +131,8 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
                     f"{path}: invalid radar JSON on line {line_number}: {exc.msg}"
                 ) from exc
             if not isinstance(payload, dict):
-                raise ValueError(
-                    f"radar JSON line {line_number} must contain a JSON object"
-                )
+                saw_non_object_payload = True
+                continue
 
             params = payload.get("params", {})
             if params is None:
@@ -142,15 +142,13 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
 
             track_data = payload.get("trackData") or []
             if not isinstance(track_data, list):
-                raise ValueError(
-                    f"radar JSON line {line_number} field 'trackData' must be a list"
-                )
+                continue
             for track_index, track in enumerate(track_data):
                 if not isinstance(track, dict):
-                    raise ValueError(
-                        f"radar JSON line {line_number} track {track_index} must be an object"
-                    )
+                    continue
                 records.append(_flatten_track(frame_index, track_index, track, params))
+    if saw_non_object_payload and not records:
+        raise ValueError("radar JSON must contain a JSON object")
     return pd.DataFrame.from_records(records)
 
 
