@@ -3,9 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from typing import Mapping
 
 import numpy as np
+
+ENV_ADAPTIVE_PROCESS_NOISE = "RAFT_UAV_ADAPTIVE_PROCESS_NOISE"
+ENV_ADAPTIVE_PROCESS_NOISE_MIN_SCALE = "RAFT_UAV_ADAPTIVE_PROCESS_NOISE_MIN_SCALE"
+ENV_ADAPTIVE_PROCESS_NOISE_MAX_SCALE = "RAFT_UAV_ADAPTIVE_PROCESS_NOISE_MAX_SCALE"
+ENV_ADAPTIVE_PROCESS_NOISE_EWMA_ALPHA = "RAFT_UAV_ADAPTIVE_PROCESS_NOISE_EWMA_ALPHA"
+ENV_ADAPTIVE_PROCESS_NOISE_HIGH_NIS_RATIO = (
+    "RAFT_UAV_ADAPTIVE_PROCESS_NOISE_HIGH_NIS_RATIO"
+)
+ENV_ADAPTIVE_PROCESS_NOISE_LOW_NIS_RATIO = (
+    "RAFT_UAV_ADAPTIVE_PROCESS_NOISE_LOW_NIS_RATIO"
+)
+ENV_ADAPTIVE_PROCESS_NOISE_SCALE_GAIN = "RAFT_UAV_ADAPTIVE_PROCESS_NOISE_SCALE_GAIN"
 
 
 @dataclass(frozen=True)
@@ -79,3 +92,41 @@ def adaptive_scale_from_ratio(ratio: float, config: AdaptiveProcessNoiseConfig) 
     else:
         scale = 1.0
     return float(np.clip(scale, float(config.min_scale), float(config.max_scale)))
+
+
+def adaptive_process_noise_from_environment(
+    *,
+    base_acceleration_std_mps2: float,
+) -> RollingNISAdaptiveAcceleration | None:
+    """Return an online process-noise adapter when the env flag is enabled.
+
+    The adapter is deliberately environment-driven so existing CLIs and scripts
+    remain bit-for-bit unchanged unless experiments opt in with
+    ``RAFT_UAV_ADAPTIVE_PROCESS_NOISE=1``.  All values are leakage-safe because
+    they are derived from the tracker's own accepted innovations.
+    """
+
+    if not _env_flag(ENV_ADAPTIVE_PROCESS_NOISE):
+        return None
+    return RollingNISAdaptiveAcceleration(
+        AdaptiveProcessNoiseConfig(
+            base_acceleration_std_mps2=float(base_acceleration_std_mps2),
+            min_scale=_env_float(ENV_ADAPTIVE_PROCESS_NOISE_MIN_SCALE, 0.35),
+            max_scale=_env_float(ENV_ADAPTIVE_PROCESS_NOISE_MAX_SCALE, 4.0),
+            ewma_alpha=_env_float(ENV_ADAPTIVE_PROCESS_NOISE_EWMA_ALPHA, 0.05),
+            high_nis_ratio=_env_float(ENV_ADAPTIVE_PROCESS_NOISE_HIGH_NIS_RATIO, 1.5),
+            low_nis_ratio=_env_float(ENV_ADAPTIVE_PROCESS_NOISE_LOW_NIS_RATIO, 0.6),
+            scale_gain=_env_float(ENV_ADAPTIVE_PROCESS_NOISE_SCALE_GAIN, 0.5),
+        )
+    )
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return float(default)
+    return float(value)

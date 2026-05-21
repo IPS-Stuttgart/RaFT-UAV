@@ -9,6 +9,7 @@ import numpy as np
 from pyrecest.filters import KalmanFilter
 from scipy.stats import chi2
 
+from raft_uav.baselines.adaptive_process_noise import adaptive_process_noise_from_environment
 from raft_uav.baselines.update_logic import (
     gate_threshold_for_measurement,
     huber_covariance_scale,
@@ -212,6 +213,9 @@ class AsyncConstantVelocityKalmanTracker:
         self.filter = KalmanFilter((self.mean.copy(), self.covariance.copy()))
         self.current_time_s = float(initial_time_s)
         self.acceleration_std_mps2 = float(acceleration_std_mps2)
+        self._adaptive_process_noise = adaptive_process_noise_from_environment(
+            base_acceleration_std_mps2=acceleration_std_mps2,
+        )
         self._initial_update_pending = True
         self._sync_from_filter()
 
@@ -281,7 +285,10 @@ class AsyncConstantVelocityKalmanTracker:
             raise ValueError("measurements must be processed in chronological order")
         if dt_s > 0.0:
             transition = constant_velocity_matrix(dt_s)
-            process_noise = white_acceleration_process_noise(dt_s, self.acceleration_std_mps2)
+            acceleration_std = self.acceleration_std_mps2
+            if self._adaptive_process_noise is not None:
+                acceleration_std = self._adaptive_process_noise.acceleration_std_mps2()
+            process_noise = white_acceleration_process_noise(dt_s, acceleration_std)
             self.filter.predict_linear(transition, process_noise)
             self._sync_from_filter()
             self.current_time_s = float(time_s)
@@ -329,7 +336,7 @@ class AsyncConstantVelocityKalmanTracker:
             self.filter.update_linear(plan.vector, plan.observation, plan.covariance)
             self._sync_from_filter()
 
-        return TrackingUpdateDiagnostics(
+        diagnostics = TrackingUpdateDiagnostics(
             time_s=float(measurement.time_s),
             source=measurement.source,
             measurement_dim=measurement.vector.size,
@@ -342,6 +349,18 @@ class AsyncConstantVelocityKalmanTracker:
             covariance_scale=plan.covariance_scale,
             inflation_alpha=float(inflation_alpha) if robust_update == "nis-inflate" else None,
             residual_norm_m=plan.residual_norm,
+        )
+        self._observe_adaptive_process_noise(diagnostics)
+        return diagnostics
+
+    def _observe_adaptive_process_noise(self, diagnostics: TrackingUpdateDiagnostics) -> None:
+        if self._adaptive_process_noise is None:
+            return
+        self._adaptive_process_noise.observe(
+            source=str(diagnostics.source),
+            measurement_dim=int(diagnostics.measurement_dim),
+            nis=float(diagnostics.nis),
+            accepted=bool(diagnostics.accepted),
         )
 
 

@@ -13,6 +13,7 @@ import numpy as np
 
 from pyrecest.filters import InteractingMultipleModelFilter, KalmanFilter
 
+from raft_uav.baselines.adaptive_process_noise import adaptive_process_noise_from_environment
 from raft_uav.baselines.kalman import (
     TrackingMeasurement,
     TrackingUpdateDiagnostics,
@@ -168,6 +169,10 @@ class AsyncInteractingMultipleModelTracker:
             raise ValueError("modes must contain at least one IMMMode")
         self.mode_names = tuple(mode.name for mode in self.modes)
         self.mode_switch_time_constant_s = float(mode_switch_time_constant_s)
+        self.base_acceleration_std_mps2 = float(acceleration_std_mps2)
+        self._adaptive_process_noise = adaptive_process_noise_from_environment(
+            base_acceleration_std_mps2=acceleration_std_mps2,
+        )
 
         self.mean = np.zeros(6)
         self.mean[:3] = position
@@ -248,7 +253,11 @@ class AsyncInteractingMultipleModelTracker:
             mode_switch_time_constant_s=self.mode_switch_time_constant_s,
         )
         system_matrices = [mode.transition_matrix(dt_s) for mode in self.modes]
-        process_noises = [mode.process_noise(dt_s) for mode in self.modes]
+        adaptive_scale = self._adaptive_acceleration_scale()
+        process_noises = [
+            white_acceleration_process_noise(dt_s, mode.acceleration_std_mps2 * adaptive_scale)
+            for mode in self.modes
+        ]
         self.filter.predict_linear(system_matrices, process_noises)
         self.current_time_s = float(time_s)
         self._sync_combined_state()
@@ -330,7 +339,7 @@ class AsyncInteractingMultipleModelTracker:
             self.filter.update_linear(plan.vector, plan.observation, plan.covariance)
             self._sync_combined_state()
 
-        return TrackingUpdateDiagnostics(
+        diagnostics = TrackingUpdateDiagnostics(
             time_s=float(measurement.time_s),
             source=measurement.source,
             measurement_dim=plan.vector.size,
@@ -343,6 +352,26 @@ class AsyncInteractingMultipleModelTracker:
             covariance_scale=plan.covariance_scale,
             inflation_alpha=plan.inflation_alpha if robust_update == "nis-inflate" else None,
             residual_norm_m=plan.residual_norm,
+        )
+        self._observe_adaptive_process_noise(diagnostics)
+        return diagnostics
+
+    def _adaptive_acceleration_scale(self) -> float:
+        if self._adaptive_process_noise is None:
+            return 1.0
+        adapted = self._adaptive_process_noise.acceleration_std_mps2()
+        denominator = max(float(self.base_acceleration_std_mps2), 1.0e-9)
+        scale = float(adapted) / denominator
+        return float(np.clip(scale, 1.0e-6, 1.0e6))
+
+    def _observe_adaptive_process_noise(self, diagnostics: TrackingUpdateDiagnostics) -> None:
+        if self._adaptive_process_noise is None:
+            return
+        self._adaptive_process_noise.observe(
+            source=str(diagnostics.source),
+            measurement_dim=int(diagnostics.measurement_dim),
+            nis=float(diagnostics.nis),
+            accepted=bool(diagnostics.accepted),
         )
 
     def _sync_combined_state(self) -> None:
