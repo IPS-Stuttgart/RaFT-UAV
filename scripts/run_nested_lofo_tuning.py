@@ -158,9 +158,10 @@ def _run_candidate(args: argparse.Namespace, candidate: dict[str, Any], holdout:
     association = candidate.get("association")
     if association:
         command.extend(["--radar-association", str(association)])
-    command.extend(str(option) for option in candidate.get("options", []))
+    context = _candidate_context(args, candidate, holdout, flight, split)
+    command.extend(str(option) for option in _format_candidate_values(candidate.get("options", []), context))
     env = _subprocess_env()
-    env.update({str(k): str(v) for k, v in dict(candidate.get("env", {}) or {}).items()})
+    env.update({str(k): str(v) for k, v in _format_candidate_mapping(candidate.get("env", {}), context).items()})
     if args.dry_run:
         print(" ".join(command))
         return metrics_path
@@ -191,6 +192,40 @@ def _aggregate(values: np.ndarray, method: str) -> float:
     if method == "max":
         return float(np.max(values))
     raise ValueError(method)
+
+
+def _candidate_context(
+    args: argparse.Namespace,
+    candidate: dict[str, Any],
+    holdout: str,
+    flight: str,
+    split: str,
+) -> dict[str, str]:
+    return {
+        "dataset_root": str(args.dataset_root),
+        "output_dir": str(args.output_dir),
+        "candidate": str(candidate["name"]),
+        "holdout": str(holdout),
+        "flight": str(flight),
+        "split": str(split),
+    }
+
+
+def _format_candidate_values(values: Any, context: dict[str, str]) -> list[Any]:
+    return [_format_candidate_value(value, context) for value in list(values or [])]
+
+
+def _format_candidate_mapping(mapping: Any, context: dict[str, str]) -> dict[str, Any]:
+    return {
+        str(key): _format_candidate_value(value, context)
+        for key, value in dict(mapping or {}).items()
+    }
+
+
+def _format_candidate_value(value: Any, context: dict[str, str]) -> Any:
+    if isinstance(value, str):
+        return value.format(**context)
+    return value
 
 
 def _subprocess_env() -> dict[str, str]:
