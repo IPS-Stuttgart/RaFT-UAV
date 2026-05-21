@@ -2,6 +2,7 @@ import json
 
 from raft_uav.sweep_tracklet_viterbi_cli import (
     TrackletSweepConfig,
+    baseline_command,
     build_sweep_configs,
     flatten_metrics,
     parse_float_grid,
@@ -36,6 +37,25 @@ def test_tracklet_config_environment():
     assert env["RAFT_UAV_TRACKLET_MISSED_DETECTION_COST"] == "7.0"
     assert env["RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"] == "8"
     assert "RAFT_UAV_TRACKLET_MAX_CANDIDATES" not in env
+
+
+def test_baseline_command_uses_tracklet_wrapper():
+    command = baseline_command(
+        dataset_root="data",
+        flight="Opt1",
+        output_dir="out",
+        radar_catprob_threshold=0.4,
+        acceleration_std=4.0,
+        smoother="fixed-lag",
+        smoother_lag_s=20.0,
+        max_eval_time_delta_s=2.0,
+        robust_update="none",
+        enable_gating=False,
+    )
+
+    assert "raft_uav.tracklet_viterbi_cli" in command
+    assert "raft_uav.cli" not in command
+    assert "tracklet-viterbi" in command
 
 
 def test_flatten_metrics_extracts_key_scores(tmp_path):
