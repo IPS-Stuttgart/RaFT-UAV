@@ -21,6 +21,7 @@ import pandas as pd
 from raft_uav.baselines.kalman import TrackingMeasurement
 from raft_uav.baselines.learned_radar_likelihood import (
     LearnedRadarAssociationModel,
+    STATEFUL_COST_METADATA_KEY,
     radar_association_feature_frame,
 )
 from raft_uav.baselines.radar_association import (
@@ -32,12 +33,14 @@ from raft_uav.baselines.radar_association import (
 )
 from raft_uav.baselines.tracklet_viterbi import (
     TrackletViterbiAssociationConfig,
+    RadarCovarianceFn,
     _AnchorState,
     _ViterbiNode,
     _build_rf_anchor_states,
     _candidate_cost_terms,
     _first_rf_bootstrap_index,
     _optional_track_id,
+    _radar_covariance_for_row,
     _radar_event_key,
     _replay_selected_tracklet_path,
     _row_position,
@@ -66,6 +69,7 @@ def run_async_cv_baseline_with_learned_tracklet_viterbi_association(
     config: TrackletViterbiAssociationConfig | None = None,
     learned_unary_weight: float = 1.0,
     hand_unary_weight: float = 0.25,
+    radar_covariance_fn: RadarCovarianceFn | None = None,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
     """Run fusion after learned-likelihood tracklet-Viterbi selection.
 
@@ -86,6 +90,7 @@ def run_async_cv_baseline_with_learned_tracklet_viterbi_association(
         else LearnedRadarAssociationModel.load(model)
     )
     cfg = config or TrackletViterbiAssociationConfig()
+    cfg = _config_with_learned_transition_costs(cfg, learned_model)
     covariance = np.diag(
         [float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2]
     )
@@ -127,6 +132,7 @@ def run_async_cv_baseline_with_learned_tracklet_viterbi_association(
         model=learned_model,
         learned_unary_weight=learned_unary_weight,
         hand_unary_weight=hand_unary_weight,
+        radar_covariance_fn=radar_covariance_fn,
     )
     records, accepted = _replay_selected_tracklet_path(
         events=events,
@@ -141,6 +147,7 @@ def run_async_cv_baseline_with_learned_tracklet_viterbi_association(
         robust_update_by_source=robust_update_by_source,
         inflation_alpha_by_source=inflation_alpha_by_source,
         max_residual_norms_by_source=max_residual_norms_by_source,
+        radar_covariance_fn=radar_covariance_fn,
     )
     return records, _selected_rows_frame(radar, accepted)
 
@@ -155,6 +162,7 @@ def _select_learned_tracklet_viterbi_path(
     model: LearnedRadarAssociationModel,
     learned_unary_weight: float,
     hand_unary_weight: float,
+    radar_covariance_fn: RadarCovarianceFn | None = None,
 ) -> list[pd.Series]:
     frames = [
         _learned_nodes_for_radar_frame(
@@ -167,6 +175,7 @@ def _select_learned_tracklet_viterbi_path(
             model=model,
             learned_unary_weight=learned_unary_weight,
             hand_unary_weight=hand_unary_weight,
+            radar_covariance_fn=radar_covariance_fn,
         )
         for i, event in enumerate(events)
         if event["kind"] == "radar"
@@ -226,6 +235,7 @@ def _learned_nodes_for_radar_frame(
     model: LearnedRadarAssociationModel,
     learned_unary_weight: float,
     hand_unary_weight: float,
+    radar_covariance_fn: RadarCovarianceFn | None = None,
 ) -> list[_ViterbiNode]:
     time_s = float(candidates["time_s"].median()) if "time_s" in candidates else float("nan")
     event_key = _radar_event_key(candidates)
@@ -239,11 +249,16 @@ def _learned_nodes_for_radar_frame(
         position = _row_position(row)
         if position is None:
             continue
+        row_covariance = _radar_covariance_for_row(
+            row,
+            covariance,
+            radar_covariance_fn,
+        )
         anchor_nis, catprob_cost, range_cost = _candidate_cost_terms(
             row=row,
             position=position,
             anchor=anchor,
-            covariance=covariance,
+            covariance=row_covariance,
             config=config,
         )
         hand_cost = float(config.anchor_nis_weight) * anchor_nis + catprob_cost + range_cost
@@ -297,6 +312,63 @@ def _learned_nodes_for_radar_frame(
         )
     nodes.sort(key=lambda node: node.unary_cost)
     return nodes[: int(config.max_candidates_per_frame)] + [_miss_node(event_index, event_key, time_s)]
+
+
+class _ConfigOverlay:
+    """Read-only config overlay for learned transition-cost calibration."""
+
+    def __init__(self, base: object, **overrides: float) -> None:
+        self._base = base
+        self._overrides = overrides
+
+    def __getattr__(self, name: str) -> object:
+        if name in self._overrides:
+            return self._overrides[name]
+        return getattr(self._base, name)
+
+
+def _config_with_learned_transition_costs(
+    config: TrackletViterbiAssociationConfig,
+    model: LearnedRadarAssociationModel,
+) -> TrackletViterbiAssociationConfig:
+    """Overlay empirical sequence costs stored in the association model metadata.
+
+    The association trainer already estimates data-derived costs for missed
+    detections, consecutive misses, missing track IDs, and Fortem track-ID
+    switches.  Applying those costs here removes one of the most brittle
+    hand-tuned parts of the learned tracklet decoder while keeping the protocol
+    leakage-safe: the model and the metadata are fitted only on training folds.
+    """
+
+    transition_costs = dict(
+        (getattr(model, "metadata", {}) or {}).get(STATEFUL_COST_METADATA_KEY) or {}
+    )
+    if not transition_costs:
+        return config
+
+    updates: dict[str, float] = {}
+    for name in (
+        "missed_detection_cost",
+        "consecutive_miss_cost",
+        "track_switch_cost",
+        "missing_track_id_cost",
+    ):
+        value = _optional_nonnegative_float(transition_costs.get(name))
+        if value is not None:
+            updates[name] = value
+    if not updates:
+        return config
+    return _ConfigOverlay(config, **updates)  # type: ignore[return-value]
+
+
+def _optional_nonnegative_float(value: object) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(parsed) or parsed < 0.0:
+        return None
+    return parsed
 
 
 def _feature_tracker_state(
