@@ -182,6 +182,9 @@ def run_async_cv_baseline_with_radar_association(
         runner = _wrap_tracklet_runner_for_replay_tracker(
             _learned_tracklet_viterbi.run_async_cv_baseline_with_learned_tracklet_viterbi_association
         )
+        radar_covariance_fn = _learned_tracklet_radar_covariance_fn_from_environment(
+            config
+        )
         return runner(
             rf_measurements=list(rf_measurements),
             radar=radar,
@@ -200,6 +203,7 @@ def run_async_cv_baseline_with_radar_association(
             model=model_path,
             learned_unary_weight=_env_float(_TRACKLET_LEARNED_UNARY_WEIGHT_ENV, 1.0),
             hand_unary_weight=_env_float(_TRACKLET_HAND_UNARY_WEIGHT_ENV, 0.25),
+            radar_covariance_fn=radar_covariance_fn,
         )
 
     return _base_radar_association_runner(
@@ -254,7 +258,7 @@ def run_async_cv_baseline_with_radar_association(
 def _tracklet_runner_from_environment() -> Callable[
     ..., tuple[list[dict[str, object]], pd.DataFrame]
 ]:
-    variant = os.environ.get(_TRACKLET_VARIANT_ENV, "range-covariance").strip().lower()
+    variant = _tracklet_variant_from_environment()
     if variant == "base":
         runner = _base_tracklet_viterbi.run_async_cv_baseline_with_tracklet_viterbi_association
     elif variant == "retention":
@@ -270,6 +274,15 @@ def _tracklet_runner_from_environment() -> Callable[
     return _wrap_tracklet_runner_for_replay_tracker(runner)
 
 
+def _tracklet_variant_from_environment() -> str:
+    variant = os.environ.get(_TRACKLET_VARIANT_ENV, "range-covariance").strip().lower()
+    if variant not in _TRACKLET_VARIANTS:
+        raise ValueError(
+            f"{_TRACKLET_VARIANT_ENV} must be one of {_TRACKLET_VARIANTS}; got {variant!r}"
+        )
+    return variant
+
+
 def _wrap_tracklet_runner_for_replay_tracker(
     runner: Callable[..., tuple[list[dict[str, object]], pd.DataFrame]],
 ) -> Callable[..., tuple[list[dict[str, object]], pd.DataFrame]]:
@@ -282,6 +295,22 @@ def _wrap_tracklet_runner_for_replay_tracker(
         f"{_TRACKLET_REPLAY_TRACKER_ENV} must be one of {_TRACKLET_REPLAY_TRACKERS}; "
         f"got {tracker!r}"
     )
+
+
+def _learned_tracklet_radar_covariance_fn_from_environment(
+    config: object,
+) -> _base_tracklet_viterbi.RadarCovarianceFn | None:
+    """Return the covariance callback used by learned tracklet scoring/replay.
+
+    Learned tracklet-Viterbi historically bypassed the range-covariance wrapper.
+    Reusing the same callback here lets the learned decoder benefit from
+    range-adaptive covariance and, under the heteroscedastic wrapper, learned
+    row-wise ``cov_*`` columns.
+    """
+
+    if _tracklet_variant_from_environment() == "range-covariance":
+        return _range_covariance_tracklet_viterbi._range_adaptive_covariance_fn(config)
+    return None
 
 
 def _run_fixed_lag_tracklet_viterbi_association(

@@ -155,6 +155,16 @@ METHODS: dict[str, MethodSpec] = {
         needs_association_model=True,
         replay_tracker="imm",
     ),
+    "hetero_imm_learned_tracklet_viterbi_fixed_lag": MethodSpec(
+        "hetero_imm_learned_tracklet_viterbi_fixed_lag",
+        "hetero_learned_tracklet",
+        "LOFO heteroscedastic IMM learned tracklet-Viterbi fixed-lag",
+        association="learned-tracklet-viterbi",
+        fixed_lag=True,
+        robust=True,
+        needs_association_model=True,
+        replay_tracker="imm",
+    ),
     "hetero_cv": MethodSpec("hetero_cv", "hetero", "Heteroscedastic CV"),
     "hetero_cv_fixed_lag": MethodSpec(
         "hetero_cv_fixed_lag", "hetero", "Heteroscedastic CV fixed-lag", fixed_lag=True
@@ -226,6 +236,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--learned-association-teacher",
         choices=["oracle", "prediction-nis", "track-continuity", "none"],
         default="prediction-nis",
+    )
+    parser.add_argument(
+        "--learned-association-disable-catprob-threshold",
+        action="store_true",
+        help="train learned radar association on all candidates instead of hard catProb-filtered candidates",
     )
     parser.add_argument("--tracklet-learned-unary-weight", type=float, default=1.0)
     parser.add_argument("--tracklet-hand-unary-weight", type=float, default=0.25)
@@ -541,6 +556,38 @@ def _run_method(
         ]
         _run(command, env_overrides=_runtime_env_updates(args))
         return
+    if method.runner == "hetero_learned_tracklet":
+        association_model_path = run_dir.parent / "models" / "radar_association_likelihood.json"
+        command = [
+            sys.executable,
+            "-m",
+            "raft_uav.heteroscedastic_tracklet_viterbi_cli",
+            "run-baseline",
+            str(args.dataset_root),
+            "--flight",
+            flight,
+            "--uncertainty-model",
+            str(model_path),
+            "--output-dir",
+            str(run_dir),
+            "--radar-association",
+            method.association,
+            "--radar-catprob-threshold",
+            str(args.candidate_threshold),
+            "--tracklet-variant",
+            "range-covariance",
+            "--tracklet-replay-tracker",
+            method.replay_tracker,
+            "--tracklet-association-model",
+            str(association_model_path),
+            "--tracklet-learned-unary-weight",
+            str(args.tracklet_learned_unary_weight),
+            "--tracklet-hand-unary-weight",
+            str(args.tracklet_hand_unary_weight),
+            *[str(option) for option in options],
+        ]
+        _run(command, env_overrides=_runtime_env_updates(args))
+        return
     if method.runner == "imm":
         command = [
             sys.executable,
@@ -617,7 +664,7 @@ def _run_method(
 
 
 def _uses_heteroscedastic_uncertainty(method: MethodSpec) -> bool:
-    return method.runner in {"hetero", "hetero_tracklet"}
+    return method.runner in {"hetero", "hetero_tracklet", "hetero_learned_tracklet"}
 
 
 def _train_uncertainty_model(args: argparse.Namespace, train_flights: Sequence[str], model_path: Path) -> None:
@@ -657,13 +704,15 @@ def _train_association_model(
         str(args.dataset_root),
         "--output-model",
         str(model_path),
-        "--radar-catprob-threshold",
-        str(args.candidate_threshold),
         "--teacher-association",
         args.learned_association_teacher,
         "--exclude-flight",
         excluded_flight,
     ]
+    if args.learned_association_disable_catprob_threshold:
+        command.append("--disable-radar-catprob-threshold")
+    else:
+        command.extend(["--radar-catprob-threshold", str(args.candidate_threshold)])
     for flight in train_flights:
         command.extend(["--flight", flight])
     _run(command)
