@@ -104,6 +104,27 @@ connects the leakage-safe pieces above into one auditable workflow:
 6. Conservative constrained ranking that can require coverage and identity
    stability before a method is considered recommendation-eligible.
 
+The suite now forwards the fold-selected LOFO time-offset and radar covariance
+artifacts into the held-out SOTA commands instead of treating them as standalone
+diagnostics. The SOTA runner also exposes two calibrated best-path rows:
+
+- `hetero_imm_tracklet_viterbi_lofo_nis_fixed_lag`
+- `hetero_imm_learned_tracklet_viterbi_lofo_nis_fixed_lag`
+
+These rows reuse the fold-specific NIS covariance calibration JSON that was
+previously only applied to the heteroscedastic CV row.
+
+For tail-risk and ambiguity experiments, the suite enables:
+
+```text
+RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY=1
+RAFT_UAV_TRACKLET_SOFT_TOP_K_PATHS=3
+RAFT_UAV_TRACKLET_SOFT_PATH_TEMPERATURE=2.0
+```
+
+The lower-level defaults remain unchanged: hard Viterbi replay and ordinary
+radar updates are used unless these switches are set explicitly.
+
 Example:
 
 ```bash

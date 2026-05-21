@@ -197,6 +197,26 @@ METHODS: dict[str, MethodSpec] = {
         fixed_lag=True,
         robust=True,
     ),
+    "hetero_imm_tracklet_viterbi_lofo_nis_fixed_lag": MethodSpec(
+        "hetero_imm_tracklet_viterbi_lofo_nis_fixed_lag",
+        "hetero_tracklet",
+        "LOFO NIS-calibrated heteroscedastic IMM tracklet-Viterbi fixed-lag",
+        association="tracklet-viterbi",
+        fixed_lag=True,
+        robust=True,
+        nis_calibrated=True,
+    ),
+    "hetero_imm_learned_tracklet_viterbi_lofo_nis_fixed_lag": MethodSpec(
+        "hetero_imm_learned_tracklet_viterbi_lofo_nis_fixed_lag",
+        "hetero_learned_tracklet",
+        "LOFO NIS-calibrated heteroscedastic IMM learned tracklet-Viterbi fixed-lag",
+        association="learned-tracklet-viterbi",
+        fixed_lag=True,
+        robust=True,
+        nis_calibrated=True,
+        needs_association_model=True,
+        replay_tracker="imm",
+    ),
 }
 
 
@@ -228,6 +248,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "hetero_imm_tracklet_viterbi_fixed_lag",
             "hetero_imm_learned_tracklet_viterbi_fixed_lag",
             "hetero_cv_lofo_nis_fixed_lag",
+            "hetero_imm_tracklet_viterbi_lofo_nis_fixed_lag",
+            "hetero_imm_learned_tracklet_viterbi_lofo_nis_fixed_lag",
         ],
     )
     parser.add_argument("--candidate-threshold", type=float, default=0.4)
@@ -265,6 +287,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--soft-catprob-below-threshold-penalty", type=float, default=3.0)
     parser.add_argument("--enable-radar-velocity-update", action="store_true")
     parser.add_argument("--radar-velocity-std-mps", type=float, default=12.0)
+    parser.add_argument(
+        "--enable-do-no-harm-radar-policy",
+        dest="enable_do_no_harm_radar_updates",
+        action="store_true",
+    )
     parser.add_argument("--enable-do-no-harm-radar-updates", action="store_true")
     parser.add_argument("--do-no-harm-soften-nis", type=float, default=16.0)
     parser.add_argument("--do-no-harm-skip-nis", type=float, default=36.0)
@@ -275,6 +302,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--do-no-harm-effective-candidates-soften", type=float, default=2.0)
     parser.add_argument("--do-no-harm-effective-candidates-defer", type=float, default=3.0)
     parser.add_argument("--do-no-harm-max-covariance-scale", type=float, default=25.0)
+    parser.add_argument("--tracklet-soft-top-k-paths", type=int, default=1)
+    parser.add_argument("--tracklet-soft-path-temperature", type=float, default=1.0)
+    parser.add_argument(
+        "--lofo-time-offset-summary",
+        type=Path,
+        default=None,
+        help="Optional lofo_time_offset_summary.csv; selected offsets are applied to each held-out fold.",
+    )
+    parser.add_argument(
+        "--lofo-radar-covariance-summary",
+        type=Path,
+        default=None,
+        help="Optional lofo_radar_covariance_summary.csv; selected held-out covariance settings become RAFT_UAV_RADAR_* env vars.",
+    )
     parser.add_argument("--nis-covariance-calibration-json", type=Path, default=None)
     parser.add_argument("--skip-existing", action="store_true")
     args = parser.parse_args(argv)
@@ -548,7 +589,13 @@ def _run_method(
     nis_calibration_path: Path | None = None,
 ) -> None:
     options: list[object] = ["--acceleration-std", args.acceleration_std]
-    runtime_env = _runtime_env_updates(args)
+    if method.runner not in {"imm", "hetero"}:
+        options.extend(_time_offset_options(args, flight))
+    runtime_env = _runtime_env_updates(
+        args,
+        flight=flight,
+        nis_calibration_path=nis_calibration_path,
+    )
     if method.robust:
         options.extend(common.robust_update_options(args))
     if method.fixed_lag:
@@ -866,10 +913,16 @@ def _write_nis_calibration_summary_csv(payload: Mapping[str, object], path: Path
         path.write_text("group\n", encoding="utf-8")
 
 
-def _runtime_env_updates(args: argparse.Namespace) -> dict[str, str]:
+def _runtime_env_updates(
+    args: argparse.Namespace,
+    *,
+    flight: str | None = None,
+    nis_calibration_path: Path | None = None,
+) -> dict[str, str]:
     env: dict[str, str] = {}
     if getattr(args, "enable_soft_catprob_retention", False):
         env["RAFT_UAV_SOFT_CATPROB_RETENTION"] = "1"
+        env["RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE"] = "soft"
         env["RAFT_UAV_SOFT_CATPROB_BELOW_THRESHOLD_PENALTY"] = str(
             getattr(args, "soft_catprob_below_threshold_penalty", 3.0)
         )
@@ -905,10 +958,104 @@ def _runtime_env_updates(args: argparse.Namespace) -> dict[str, str]:
         env["RAFT_UAV_DNH_MAX_COVARIANCE_SCALE"] = str(
             getattr(args, "do_no_harm_max_covariance_scale", 25.0)
         )
+        env["RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY"] = "1"
+    tracklet_soft_top_k_paths = int(getattr(args, "tracklet_soft_top_k_paths", 1))
+    if tracklet_soft_top_k_paths > 1:
+        env["RAFT_UAV_TRACKLET_SOFT_TOP_K_PATHS"] = str(tracklet_soft_top_k_paths)
+    tracklet_soft_path_temperature = float(
+        getattr(args, "tracklet_soft_path_temperature", 1.0)
+    )
+    if tracklet_soft_path_temperature != 1.0:
+        env["RAFT_UAV_TRACKLET_SOFT_PATH_TEMPERATURE"] = str(
+            tracklet_soft_path_temperature
+        )
     calibration_json = getattr(args, "nis_covariance_calibration_json", None)
-    if calibration_json is not None:
+    if nis_calibration_path is not None:
+        env[ENV_NIS_COVARIANCE_CALIBRATION_JSON] = str(nis_calibration_path)
+    elif calibration_json is not None:
         env[ENV_NIS_COVARIANCE_CALIBRATION_JSON] = str(calibration_json)
+    if flight is not None and getattr(args, "lofo_radar_covariance_summary", None) is not None:
+        env.update(_lofo_radar_covariance_env(args, flight))
     return env
+
+
+def _time_offset_options(args: argparse.Namespace, flight: str) -> list[object]:
+    """Return held-out-safe time-offset correction flags for one fold."""
+
+    summary_path = getattr(args, "lofo_time_offset_summary", None)
+    if summary_path is None:
+        return []
+    row = _lookup_fold_row(
+        summary_path,
+        flight,
+        key_columns=("flight", "holdout_flight", "heldout_flight"),
+    )
+    if row is None:
+        return []
+    options: list[object] = []
+    rf_offset = _row_float(row, "rf_offset_s", "applied_rf_time_offset_s")
+    radar_offset = _row_float(row, "radar_offset_s", "applied_radar_time_offset_s")
+    if rf_offset is not None:
+        options.extend(["--rf-time-offset-correction-s", rf_offset])
+    if radar_offset is not None:
+        options.extend(["--radar-time-offset-correction-s", radar_offset])
+    return options
+
+
+def _lofo_radar_covariance_env(args: argparse.Namespace, flight: str) -> dict[str, str]:
+    """Return selected LOFO range-angle radar covariance env for one held-out fold."""
+
+    row = _lookup_fold_row(
+        args.lofo_radar_covariance_summary,
+        flight,
+        key_columns=("holdout_flight", "heldout_flight", "flight"),
+    )
+    if row is None:
+        return {}
+    mapping = {
+        "range_std_m": "RAFT_UAV_RADAR_RANGE_STD_M",
+        "azimuth_std_deg": "RAFT_UAV_RADAR_AZIMUTH_STD_DEG",
+        "elevation_std_deg": "RAFT_UAV_RADAR_ELEVATION_STD_DEG",
+        "min_std_m": "RAFT_UAV_RADAR_COVARIANCE_MIN_STD_M",
+        "max_std_m": "RAFT_UAV_RADAR_COVARIANCE_MAX_STD_M",
+    }
+    env = {"RAFT_UAV_RADAR_COVARIANCE_MODE": "range-angle"}
+    for column, env_name in mapping.items():
+        value = _row_float(row, column)
+        if value is not None:
+            env[env_name] = str(value)
+    return env
+
+
+def _lookup_fold_row(
+    path: Path | None,
+    flight: str,
+    *,
+    key_columns: Sequence[str],
+) -> pd.Series | None:
+    if path is None or not path.exists():
+        return None
+    frame = pd.read_csv(path)
+    for column in key_columns:
+        if column not in frame.columns:
+            continue
+        matches = frame.loc[frame[column].astype(str) == str(flight)]
+        if not matches.empty:
+            return matches.iloc[0]
+    return None
+
+
+def _row_float(row: pd.Series, *columns: str) -> float | None:
+    for column in columns:
+        if column not in row.index:
+            continue
+        try:
+            value = float(row[column])
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(value):
+            return value
+    return None
 
 
 def _run(command: Sequence[str], *, env_overrides: Mapping[str, str] | None = None) -> None:

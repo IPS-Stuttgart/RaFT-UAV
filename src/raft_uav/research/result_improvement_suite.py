@@ -25,7 +25,8 @@ DEFAULT_METHODS: tuple[str, ...] = (
     "imm_tracklet_viterbi_fixed_lag",
     "imm_learned_tracklet_viterbi_fixed_lag",
     "hetero_imm_tracklet_viterbi_fixed_lag",
-    "hetero_imm_learned_tracklet_viterbi_fixed_lag",
+    "hetero_imm_tracklet_viterbi_lofo_nis_fixed_lag",
+    "hetero_imm_learned_tracklet_viterbi_lofo_nis_fixed_lag",
     "hetero_cv_lofo_nis_fixed_lag",
 )
 DEFAULT_FLIGHTS: tuple[str, ...] = ("Opt1", "Opt2", "Opt3")
@@ -49,6 +50,12 @@ DEFAULT_RUNTIME_ENV: dict[str, str] = {
     # Enable runtime hooks used by learned/heteroscedastic tracklet variants.
     "RAFT_UAV_SOFT_CATPROB_RETENTION": "1",
     "RAFT_UAV_RADAR_UPDATE_USES_VELOCITY": "1",
+    # Tail-risk reduction and ambiguity preservation. Both are optional in the
+    # lower-level runner, but the integrated suite enables them to evaluate the
+    # full result-improvement stack in one reproducible workflow.
+    "RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY": "1",
+    "RAFT_UAV_TRACKLET_SOFT_TOP_K_PATHS": "3",
+    "RAFT_UAV_TRACKLET_SOFT_PATH_TEMPERATURE": "2.0",
 }
 
 
@@ -230,8 +237,17 @@ def _sota_command(config: ImprovementSuiteConfig) -> CommandSpec:
         f"{config.fixed_lag_s:g}",
         "--methods",
         *config.methods,
+        "--lofo-time-offset-summary",
+        str(config.output_dir / "lofo_time_offset" / "lofo_time_offset_summary.csv"),
+        "--lofo-radar-covariance-summary",
+        str(config.output_dir / "lofo_radar_covariance" / "lofo_radar_covariance_summary.csv"),
         "--enable-soft-catprob-retention",
         "--enable-radar-velocity-update",
+        "--enable-do-no-harm-radar-policy",
+        "--tracklet-soft-top-k-paths",
+        "3",
+        "--tracklet-soft-path-temperature",
+        "2.0",
     ]
     if config.flights:
         argv.append("--flights")
