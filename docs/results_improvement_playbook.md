@@ -117,10 +117,15 @@ previously only applied to the heteroscedastic CV row.
 For tail-risk and ambiguity experiments, the suite enables:
 
 ```text
+RAFT_UAV_DO_NO_HARM_RADAR_UPDATES=1
 RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY=1
 RAFT_UAV_TRACKLET_SOFT_TOP_K_PATHS=3
 RAFT_UAV_TRACKLET_SOFT_PATH_TEMPERATURE=2.0
 ```
+
+The first two switches intentionally appear together: the former activates the
+conservative radar-update policy, while the latter keeps compatibility with the
+suite and SOTA-runner naming used in experiment manifests.
 
 The lower-level defaults remain unchanged: hard Viterbi replay and ordinary
 radar updates are used unless these switches are set explicitly.
