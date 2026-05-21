@@ -210,7 +210,7 @@ def baseline_command(
     command = [
         sys.executable,
         "-m",
-        "raft_uav.cli",
+        "raft_uav.tracklet_viterbi_cli",
         "run-baseline",
         str(dataset_root),
         "--flight",
