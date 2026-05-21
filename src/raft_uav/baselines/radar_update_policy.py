@@ -109,8 +109,13 @@ def classify_radar_update_row(
     policy = policy or RadarUpdatePolicy()
     nis = _first_finite(row, "association_nis", "nis", "association_score")
     anchor_nis = _first_finite(row, "association_anchor_nis", "rf_anchor_nis")
-    entropy = _first_finite(row, "association_weight_entropy", "candidate_ambiguity_index")
-    effective = _first_finite(row, "association_effective_candidates")
+    entropy = _first_finite(
+        row,
+        "association_soft_path_weight_entropy",
+        "association_weight_entropy",
+        "candidate_ambiguity_index",
+    )
+    effective = _effective_candidate_count(row, entropy)
     miss_streak = _finite_int(_get(row, "association_preceding_miss_streak")) or 0
 
     reasons: list[str] = []
@@ -194,6 +199,8 @@ def apply_radar_update_policy(
     annotated["association_update_policy"] = plan.action
     annotated["association_update_policy_reason"] = plan.reason
     annotated["association_update_policy_covariance_scale"] = float(plan.covariance_scale)
+    annotated["association_update_policy_entropy"] = plan.entropy
+    annotated["association_update_policy_effective_candidates"] = plan.effective_candidates
 
     if plan.skipped:
         return annotated, measurement, TrackingUpdateDiagnostics(
@@ -225,6 +232,8 @@ def policy_record_fields(row: pd.Series | dict[str, Any]) -> dict[str, object]:
         "association_update_policy",
         "association_update_policy_reason",
         "association_update_policy_covariance_scale",
+        "association_update_policy_entropy",
+        "association_update_policy_effective_candidates",
     )
     out: dict[str, object] = {}
     for field in fields:
@@ -246,6 +255,28 @@ def _copy_measurement_with_covariance(
     object.__setattr__(copied, "covariance", np.asarray(covariance, dtype=float).copy())
     object.__setattr__(copied, "source", str(measurement.source))
     return copied
+
+
+def _effective_candidate_count(row: pd.Series | dict[str, Any], entropy: float | None) -> float | None:
+    """Return an effective ambiguity count from explicit columns or entropy.
+
+    Soft tracklet-Viterbi rows currently expose Shannon entropy as
+    ``association_soft_path_weight_entropy``.  The effective number of equally
+    plausible alternatives is ``exp(entropy)``.  Falling back to the raw soft
+    path count is intentionally last because it is only an upper bound when path
+    weights are strongly peaked.
+    """
+
+    explicit = _first_finite(
+        row,
+        "association_effective_candidates",
+        "association_soft_path_effective_candidates",
+    )
+    if explicit is not None:
+        return explicit
+    if entropy is not None:
+        return float(np.exp(float(entropy)))
+    return _first_finite(row, "association_soft_path_count")
 
 
 def _first_finite(row: pd.Series | dict[str, Any], *names: str) -> float | None:
