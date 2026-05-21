@@ -40,7 +40,7 @@ class TrackletSweepConfig:
             "RAFT_UAV_TRACKLET_TRACK_SWITCH_COST": str(float(self.track_switch_cost)),
             "RAFT_UAV_TRACKLET_ANCHOR_NIS_WEIGHT": str(float(self.anchor_nis_weight)),
             "RAFT_UAV_TRACKLET_MISSED_DETECTION_COST": str(float(self.missed_detection_cost)),
-            "RAFT_UAV_TRACKLET_MAX_CANDIDATES": str(int(self.max_candidates)),
+            "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME": str(int(self.max_candidates)),
         }
 
 
@@ -257,53 +257,37 @@ def flatten_metrics(metrics_path: Path) -> dict[str, Any]:
 
 
 def write_sweep_outputs(
-    rows: list[dict[str, Any]], output_dir: Path, *, opt1_name: str = "Opt1"
-) -> None:
+    rows: list[dict[str, Any]], output_dir: Path, *, opt1_name: str = "Opt1") -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    results = pd.DataFrame.from_records(rows)
-    results.to_csv(output_dir / "sweep_results.csv", index=False)
-    if results.empty or "rmse_3d_m" not in results:
+    frame = pd.DataFrame(rows)
+    frame.to_csv(output_dir / "sweep_results.csv", index=False)
+    if frame.empty or "config_id" not in frame:
+        pd.DataFrame().to_csv(output_dir / "sweep_summary.csv", index=False)
         return
-    ok = results.loc[results["status"] == "ok"].copy()
+    ok = frame.loc[frame.get("status") == "ok"].copy()
     if ok.empty:
+        pd.DataFrame().to_csv(output_dir / "sweep_summary.csv", index=False)
         return
-    summary = summarize_by_config(ok)
+    numeric_columns = [
+        "rmse_2d_m",
+        "p95_2d_m",
+        "rmse_3d_m",
+        "p95_3d_m",
+        "accepted_measurements",
+        "rejected_measurements",
+        "selected_radar_rows",
+    ]
+    summary = ok.groupby("config_id", dropna=False)[numeric_columns].mean().reset_index()
+    counts = ok.groupby("config_id", dropna=False).size().rename("ok_runs").reset_index()
+    summary = summary.merge(counts, on="config_id", how="left")
+    if "flight" in ok:
+        opt1 = ok.loc[ok["flight"].astype(str) == str(opt1_name), ["config_id", "rmse_3d_m"]]
+        if not opt1.empty:
+            opt1 = opt1.rename(columns={"rmse_3d_m": "opt1_rmse_3d_m"})
+            summary = summary.merge(opt1, on="config_id", how="left")
+    summary = summary.sort_values(["rmse_3d_m", "p95_3d_m"], kind="mergesort")
+    summary["rank_rmse_3d"] = range(1, len(summary) + 1)
     summary.to_csv(output_dir / "sweep_summary.csv", index=False)
-    write_best_json(summary, output_dir / "best_by_rmse.json", "mean_rmse_3d_m")
-    write_best_json(summary, output_dir / "best_by_p95.json", "mean_p95_3d_m")
-    if "worst_p95_3d_m" in summary:
-        write_best_json(summary, output_dir / "best_by_worst_p95.json", "worst_p95_3d_m")
-    opt1 = ok.loc[ok["flight"] == opt1_name]
-    if not opt1.empty:
-        write_best_json(opt1, output_dir / "best_by_opt1_p95.json", "p95_3d_m")
-
-
-def summarize_by_config(results: pd.DataFrame) -> pd.DataFrame:
-    grouped = results.groupby(
-        [
-            "config_id",
-            "track_switch_cost",
-            "anchor_nis_weight",
-            "missed_detection_cost",
-            "max_candidates",
-        ],
-        dropna=False,
-    )
-    summary = grouped.agg(
-        flights=("flight", "nunique"),
-        mean_rmse_3d_m=("rmse_3d_m", "mean"),
-        mean_p95_3d_m=("p95_3d_m", "mean"),
-        worst_p95_3d_m=("p95_3d_m", "max"),
-        mean_selected_radar_rows=("selected_radar_rows", "mean"),
-    )
-    return summary.reset_index().sort_values(["mean_rmse_3d_m", "mean_p95_3d_m"])
-
-
-def write_best_json(frame: pd.DataFrame, path: Path, column: str) -> None:
-    if column not in frame or frame.empty:
-        return
-    best = frame.sort_values(column, kind="mergesort").iloc[0].to_dict()
-    path.write_text(json.dumps(best, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":  # pragma: no cover

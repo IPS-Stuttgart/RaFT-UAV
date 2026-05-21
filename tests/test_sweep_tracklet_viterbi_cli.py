@@ -30,10 +30,12 @@ def test_tracklet_config_environment():
         missed_detection_cost=7.0,
         max_candidates=8,
     )
-    assert config.environment()["RAFT_UAV_TRACKLET_TRACK_SWITCH_COST"] == "12.0"
-    assert config.environment()["RAFT_UAV_TRACKLET_ANCHOR_NIS_WEIGHT"] == "0.5"
-    assert config.environment()["RAFT_UAV_TRACKLET_MISSED_DETECTION_COST"] == "7.0"
-    assert config.environment()["RAFT_UAV_TRACKLET_MAX_CANDIDATES"] == "8"
+    env = config.environment()
+    assert env["RAFT_UAV_TRACKLET_TRACK_SWITCH_COST"] == "12.0"
+    assert env["RAFT_UAV_TRACKLET_ANCHOR_NIS_WEIGHT"] == "0.5"
+    assert env["RAFT_UAV_TRACKLET_MISSED_DETECTION_COST"] == "7.0"
+    assert env["RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"] == "8"
+    assert "RAFT_UAV_TRACKLET_MAX_CANDIDATES" not in env
 
 
 def test_flatten_metrics_extracts_key_scores(tmp_path):
