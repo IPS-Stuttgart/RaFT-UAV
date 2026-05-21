@@ -8,7 +8,7 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -119,6 +119,7 @@ def run_baseline(
     output_dir: Path,
     association: str | None = None,
     extra_options: Iterable[object] = (),
+    env_overrides: Mapping[str, str] | None = None,
 ) -> None:
     """Invoke ``raft_uav.cli run-baseline`` with repository-local src on PYTHONPATH."""
 
@@ -137,7 +138,10 @@ def run_baseline(
         command.extend(["--radar-association", association])
     command.extend(str(option) for option in extra_options)
     print(" ".join(command), flush=True)
-    subprocess.run(command, check=True, env=subprocess_env())
+    env = subprocess_env()
+    if env_overrides:
+        env.update({str(key): str(value) for key, value in env_overrides.items()})
+    subprocess.run(command, check=True, env=env)
 
 
 def subprocess_env() -> dict[str, str]:

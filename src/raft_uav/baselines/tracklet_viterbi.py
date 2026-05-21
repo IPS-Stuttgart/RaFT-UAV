@@ -20,7 +20,6 @@ import pandas as pd
 from raft_uav.baselines.kalman import (
     AsyncConstantVelocityKalmanTracker,
     TrackingMeasurement,
-    TrackingUpdateDiagnostics,
 )
 from raft_uav.baselines.learned_radar_likelihood import (
     LearnedRadarAssociationModel,
@@ -213,7 +212,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
         config=cfg,
         radar_covariance_fn=radar_covariance_fn,
     )
-    records, accepted = _replay_selected_tracklet_path(
+    records, accepted, replayed = _replay_selected_tracklet_path(
         events=events,
         selected_rows=selected,
         initial_measurement=initial,
@@ -228,7 +227,9 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
         max_residual_norms_by_source=max_residual_norms_by_source,
         radar_covariance_fn=radar_covariance_fn,
     )
-    return records, _selected_rows_frame(radar, accepted)
+    accepted_frame = _selected_rows_frame(radar, accepted)
+    accepted_frame.attrs["attempted_selected_radar"] = _selected_rows_frame(radar, replayed)
+    return records, accepted_frame
 
 
 def _first_rf_bootstrap_index(events: list[dict[str, object]]) -> int | None:
@@ -801,7 +802,7 @@ def _replay_selected_tracklet_path(
     inflation_alpha_by_source: Mapping[str, float] | None,
     max_residual_norms_by_source: Mapping[str, float | None] | None,
     radar_covariance_fn: RadarCovarianceFn | None = None,
-) -> tuple[list[dict[str, object]], list[pd.Series]]:
+) -> tuple[list[dict[str, object]], list[pd.Series], list[pd.Series]]:
     from raft_uav.baselines.radar_association import (
         _gate_threshold_for_measurement,
         _inflation_alpha_for_measurement,
@@ -809,6 +810,10 @@ def _replay_selected_tracklet_path(
         _radar_row_to_measurement,
         _record,
         _robust_update_for_measurement,
+    )
+    from raft_uav.baselines.radar_update_policy import (
+        apply_radar_update_policy,
+        policy_record_fields,
     )
 
     selected_by_key = {_selected_row_event_key(row): row for row in selected_rows}
@@ -819,6 +824,7 @@ def _replay_selected_tracklet_path(
     )
     records: list[dict[str, object]] = []
     accepted_rows: list[pd.Series] = []
+    replayed_rows: list[pd.Series] = []
     for event in events:
         if event["kind"] == "rf":
             measurement = event["measurement"]
@@ -861,52 +867,19 @@ def _replay_selected_tracklet_path(
             radar_covariance_fn,
         )
         measurement = _radar_row_to_measurement(selected, measurement_covariance)
-        gate_threshold = _gate_threshold_for_measurement(
+        selected, measurement, policy_diagnostics = apply_radar_update_policy(selected, measurement)
+        diagnostics = policy_diagnostics or tracker.update(
             measurement,
-            gate_probabilities_by_source=gate_probabilities_by_source,
-            gate_thresholds_by_source=gate_thresholds_by_source,
-        )
-        safety_gate_threshold = _gate_threshold_for_measurement(
-            measurement,
-            gate_probabilities_by_source=safety_gate_probabilities_by_source,
-            gate_thresholds_by_source=safety_gate_thresholds_by_source,
-        )
-        decision = _do_no_harm_decision(selected, measurement, gate_threshold)
-        selected = _annotate_do_no_harm(selected, decision)
-        if decision is not None and decision.action in {"skip", "defer"}:
-            tracker.predict_to(measurement.time_s)
-            diagnostics = TrackingUpdateDiagnostics(
-                time_s=float(measurement.time_s),
-                source="radar",
-                measurement_dim=int(measurement.vector.size),
-                accepted=False,
-                update_action=f"do_no_harm_{decision.action}",
-                nis=float(_optional_float(selected.get("association_nis")) or np.nan),
-                gate_threshold=gate_threshold,
-                safety_gate_threshold=safety_gate_threshold,
-                residual_gate_threshold_m=None,
-                covariance_scale=float(decision.covariance_scale),
-                inflation_alpha=None,
-                residual_norm_m=float("nan"),
-            )
-            records.append(
-                _record(
-                    measurement,
-                    tracker,
-                    diagnostics,
-                    track_id=_optional_track_id(selected.get("track_id")),
-                    association_nis=_optional_float(selected.get("association_nis")),
-                    association_score=_optional_float(selected.get("association_score")),
-                    association_mode=str(selected.get("association_mode", "tracklet-viterbi")),
-                )
-            )
-            continue
-        if decision is not None and decision.action == "soften":
-            measurement = _scaled_tracking_measurement(measurement, decision.covariance_scale)
-        diagnostics = tracker.update(
-            measurement,
-            gate_threshold=gate_threshold,
-            safety_gate_threshold=safety_gate_threshold,
+            gate_threshold=_gate_threshold_for_measurement(
+                measurement,
+                gate_probabilities_by_source=gate_probabilities_by_source,
+                gate_thresholds_by_source=gate_thresholds_by_source,
+            ),
+            safety_gate_threshold=_gate_threshold_for_measurement(
+                measurement,
+                gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                gate_thresholds_by_source=safety_gate_thresholds_by_source,
+            ),
             max_residual_norm=_max_residual_norm_for_measurement(
                 measurement,
                 max_residual_norms_by_source=max_residual_norms_by_source,
@@ -923,20 +896,23 @@ def _replay_selected_tracklet_path(
         replayed = selected.copy()
         replayed["association_replay_accepted"] = bool(diagnostics.accepted)
         replayed["association_replay_nis"] = float(diagnostics.nis)
+        for key, value in policy_record_fields(selected).items():
+            replayed[key] = value
+        replayed_rows.append(replayed)
         if diagnostics.accepted:
             accepted_rows.append(replayed)
-        records.append(
-            _record(
-                measurement,
-                tracker,
-                diagnostics,
-                track_id=_optional_track_id(selected.get("track_id")),
-                association_nis=_optional_float(selected.get("association_nis")),
-                association_score=_optional_float(selected.get("association_score")),
-                association_mode=str(selected.get("association_mode", "tracklet-viterbi")),
-            )
+        record = _record(
+            measurement,
+            tracker,
+            diagnostics,
+            track_id=_optional_track_id(selected.get("track_id")),
+            association_nis=_optional_float(selected.get("association_nis")),
+            association_score=_optional_float(selected.get("association_score")),
+            association_mode=str(selected.get("association_mode", "tracklet-viterbi")),
         )
-    return records, accepted_rows
+        record.update(policy_record_fields(selected))
+        records.append(record)
+    return records, accepted_rows, replayed_rows
 
 
 def _radar_event_key(candidates: pd.DataFrame) -> tuple[str, int | float]:

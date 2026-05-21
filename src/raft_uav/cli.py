@@ -869,6 +869,8 @@ def _run_baseline(
     estimates_path = flight_output / "estimates.csv"
     diagnostics_path = flight_output / "diagnostics.csv"
     selected_radar_path = flight_output / "selected_radar.csv"
+    selected_radar_attempted = _attempted_selected_radar_frame(selected_radar)
+    selected_radar_attempted_path = flight_output / "selected_radar_attempted.csv"
     hypotheses_path = flight_output / "hypotheses.csv"
     metrics_path = flight_output / "metrics.json"
     diagnostic_summary_path = flight_output / "diagnostic_summary.json"
@@ -876,6 +878,7 @@ def _run_baseline(
     estimate_frame.to_csv(estimates_path, index=False)
     diagnostics_frame.to_csv(diagnostics_path, index=False)
     selected_radar.to_csv(selected_radar_path, index=False)
+    selected_radar_attempted.to_csv(selected_radar_attempted_path, index=False)
     _hypotheses_to_frame(records).to_csv(hypotheses_path, index=False)
 
     metrics = _baseline_metrics(
@@ -885,6 +888,7 @@ def _run_baseline(
         rf=rf,
         radar=radar,
         selected_radar=selected_radar,
+        attempted_selected_radar=selected_radar_attempted,
         estimate_frame=estimate_frame,
         acceleration_std=acceleration_std,
         radar_association=radar_mode,
@@ -970,6 +974,7 @@ def _run_baseline(
     print(f"radar_time_offset_correction_s={radar_time_offset_correction_s:.3f}")
     print(f"radar_association={radar_mode}")
     print(f"selected_radar_rows={len(selected_radar)}")
+    print(f"attempted_selected_radar_rows={len(selected_radar_attempted)}")
     print(f"selected_radar_track_ids={metrics['selected_radar_track_ids']}")
     print(f"smoother={smoother}")
     print(f"metrics_json={metrics_path}")
@@ -977,6 +982,7 @@ def _run_baseline(
     print(f"estimates_csv={estimates_path}")
     print(f"diagnostics_csv={diagnostics_path}")
     print(f"selected_radar_csv={selected_radar_path}")
+    print(f"selected_radar_attempted_csv={selected_radar_attempted_path}")
     print(f"hypotheses_csv={hypotheses_path}")
     print(f"trajectory_png={plot_path}")
     print(f"rmse_2d_m={metrics['position_error_2d']['rmse_m']:.3f}")
@@ -1051,6 +1057,15 @@ def _hypotheses_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
     return pd.DataFrame.from_records(rows)
 
 
+def _attempted_selected_radar_frame(selected_radar: pd.DataFrame) -> pd.DataFrame:
+    """Return attempted radar selections when a runner exposes them via attrs."""
+
+    attempted = selected_radar.attrs.get("attempted_selected_radar")
+    if isinstance(attempted, pd.DataFrame):
+        return attempted
+    return selected_radar
+
+
 def _baseline_metrics(
     *,
     flight_name: str,
@@ -1059,6 +1074,7 @@ def _baseline_metrics(
     rf: pd.DataFrame,
     radar: pd.DataFrame,
     selected_radar: pd.DataFrame,
+    attempted_selected_radar: pd.DataFrame | None = None,
     estimate_frame: pd.DataFrame,
     acceleration_std: float,
     radar_association: str,
@@ -1163,6 +1179,8 @@ def _baseline_metrics(
         catprob_fallback_rows = int(
             selected_radar["association_catprob_fallback"].fillna(False).astype(bool).sum()
         )
+    if attempted_selected_radar is None:
+        attempted_selected_radar = selected_radar
 
     return {
         "flight": flight_name,
@@ -1294,6 +1312,7 @@ def _baseline_metrics(
         "rf_rows": int(len(rf)),
         "radar_rows": int(len(radar)),
         "selected_radar_rows": int(len(selected_radar)),
+        "attempted_selected_radar_rows": int(len(attempted_selected_radar)),
         "radar_catprob_fallback_rows": catprob_fallback_rows,
         "selected_radar_track_ids": selected_ids,
         "posterior_records": int(len(estimate_frame)),

@@ -21,6 +21,10 @@ from raft_uav.baselines.kalman import (
     measurement_matrix,
     white_acceleration_process_noise,
 )
+from raft_uav.baselines.radar_update_policy import (
+    apply_radar_update_policy,
+    policy_record_fields,
+)
 from raft_uav.baselines.update_logic import (
     max_residual_norm_for_measurement,
     plan_linear_measurement_update,
@@ -471,7 +475,8 @@ def run_async_cv_baseline_with_radar_association(
             continue
 
         measurement = _radar_row_to_measurement(selected, covariance)
-        diagnostics = tracker.update(
+        selected, measurement, policy_diagnostics = apply_radar_update_policy(selected, measurement)
+        diagnostics = policy_diagnostics or tracker.update(
             measurement,
             gate_threshold=_gate_threshold_for_measurement(
                 measurement,
@@ -499,17 +504,17 @@ def run_async_cv_baseline_with_radar_association(
         if diagnostics.accepted:
             current_track_id = _optional_track_id(selected)
             selected_rows.append(selected)
-        records.append(
-            _record(
-                measurement,
-                tracker,
-                diagnostics,
-                track_id=_optional_track_id(selected),
-                association_nis=_optional_float(selected.get("association_nis")),
-                association_score=_optional_float(selected.get("association_score")),
-                association_mode=association,
-            )
+        record = _record(
+            measurement,
+            tracker,
+            diagnostics,
+            track_id=_optional_track_id(selected),
+            association_nis=_optional_float(selected.get("association_nis")),
+            association_score=_optional_float(selected.get("association_score")),
+            association_mode=association,
         )
+        record.update(policy_record_fields(selected))
+        records.append(record)
 
     return records, _selected_rows_frame(radar, selected_rows)
 
@@ -548,6 +553,20 @@ def _events(
     return sorted(events, key=lambda item: (float(item["time_s"]), int(item["priority"])))
 
 
+def _first_rf_bootstrap_index(events: list[dict[str, object]]) -> int | None:
+    """Return the preferred causal bootstrap point for association modes with RF support.
+
+    If RF measurements are present, skip pre-RF radar frames rather than seeding
+    a single-target track bank from an arbitrary class-probability radar row.
+    Radar-only inputs retain the historical first-event bootstrap.
+    """
+
+    for index, event in enumerate(events):
+        if event.get("kind") == "rf":
+            return int(index)
+    return 0 if events else None
+
+
 def _run_mht_track_bank(
     *,
     rf_measurements: list[TrackingMeasurement],
@@ -574,6 +593,10 @@ def _run_mht_track_bank(
     events = _events(rf_measurements, radar)
     if not events:
         return [], _empty_selected_radar(radar)
+    initial_event_index = _first_rf_bootstrap_index(events)
+    if initial_event_index is None:
+        return [], _empty_selected_radar(radar)
+    events = events[initial_event_index:]
 
     initial_event = events[0]
     initial = _initial_measurement_and_row(
@@ -625,12 +648,15 @@ def _run_mht_track_bank(
         initial_selected_row = initial_selected_row.copy()
         initial_selected_row["association_mode"] = "track-bank"
         selected_rows.append(initial_selected_row)
+    if initial_event["kind"] != "rf":
+        initial_record_kwargs = _selected_row_record_kwargs(initial_selected_row, "track-bank")
+        initial_record_kwargs.setdefault("association_mode", "track-bank")
         records.append(
             _mht_record(
                 measurement=initial_measurement,
                 tracker=tracker,
                 diagnostics=initial_diagnostics,
-                **_selected_row_record_kwargs(initial_selected_row, "track-bank"),
+                **initial_record_kwargs,
             )
         )
 
@@ -2618,6 +2644,9 @@ def _empty_selected_radar(radar: pd.DataFrame) -> pd.DataFrame:
         "association_mode",
         "association_nis",
         "association_score",
+        "association_replay_accepted",
+        "association_replay_nis",
+        "association_replay_update_action",
         "association_candidate_rows",
         "association_anchor_nis",
         "association_anchor_penalty",

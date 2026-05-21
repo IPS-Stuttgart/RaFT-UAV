@@ -318,13 +318,14 @@ def _learned_tracklet_radar_covariance_fn_from_environment(
 def _run_fixed_lag_tracklet_viterbi_association(
     **kwargs: object,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
-    records, accepted, _ = (
+    records, accepted, replayed = (
         _fixed_lag_tracklet_viterbi
         .run_async_cv_baseline_with_fixed_lag_tracklet_viterbi_association_and_replay(
             lag_s=_env_float(_VITERBI_LAG_S_ENV, 20.0),
             **kwargs,
         )
     )
+    accepted.attrs["attempted_selected_radar"] = replayed
     return records, accepted
 
 
