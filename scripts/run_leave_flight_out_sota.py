@@ -215,6 +215,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "cv_catprob",
             "cv_rf_anchored_nis_fixed_lag",
             "cv_rf_gated_nis_fixed_lag",
+            "cv_pda_fixed_lag",
             "cv_track_bank_fixed_lag",
             "cv_stable_segments_fixed_lag",
             "cv_stable_segments_hybrid_fixed_lag",
@@ -223,7 +224,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "imm_catprob_fixed_lag",
             "imm_catprob_rts",
             "imm_tracklet_viterbi_fixed_lag",
+            "imm_learned_tracklet_viterbi_fixed_lag",
             "hetero_imm_tracklet_viterbi_fixed_lag",
+            "hetero_imm_learned_tracklet_viterbi_fixed_lag",
             "hetero_cv_lofo_nis_fixed_lag",
         ],
     )
@@ -259,7 +262,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--tracklet-learned-unary-weight", type=float, default=1.0)
     parser.add_argument("--tracklet-hand-unary-weight", type=float, default=0.25)
     parser.add_argument("--enable-soft-catprob-retention", action="store_true")
+    parser.add_argument("--soft-catprob-below-threshold-penalty", type=float, default=3.0)
     parser.add_argument("--enable-radar-velocity-update", action="store_true")
+    parser.add_argument("--radar-velocity-std-mps", type=float, default=12.0)
+    parser.add_argument("--enable-do-no-harm-radar-updates", action="store_true")
+    parser.add_argument("--do-no-harm-soften-nis", type=float, default=16.0)
+    parser.add_argument("--do-no-harm-skip-nis", type=float, default=36.0)
+    parser.add_argument("--do-no-harm-anchor-soften-nis", type=float, default=16.0)
+    parser.add_argument("--do-no-harm-anchor-skip-nis", type=float, default=25.0)
+    parser.add_argument("--do-no-harm-entropy-soften", type=float, default=1.0)
+    parser.add_argument("--do-no-harm-entropy-defer", type=float, default=1.35)
+    parser.add_argument("--do-no-harm-effective-candidates-soften", type=float, default=2.0)
+    parser.add_argument("--do-no-harm-effective-candidates-defer", type=float, default=3.0)
+    parser.add_argument("--do-no-harm-max-covariance-scale", type=float, default=25.0)
     parser.add_argument("--nis-covariance-calibration-json", type=Path, default=None)
     parser.add_argument("--skip-existing", action="store_true")
     args = parser.parse_args(argv)

@@ -712,6 +712,10 @@ def _replay_selected_tracklet_path(
         _record,
         _robust_update_for_measurement,
     )
+    from raft_uav.baselines.radar_update_policy import (
+        apply_radar_update_policy,
+        policy_record_fields,
+    )
 
     selected_by_key = {_selected_row_event_key(row): row for row in selected_rows}
     tracker = AsyncConstantVelocityKalmanTracker(
@@ -764,7 +768,8 @@ def _replay_selected_tracklet_path(
             radar_covariance_fn,
         )
         measurement = _radar_row_to_measurement(selected, measurement_covariance)
-        diagnostics = tracker.update(
+        selected, measurement, policy_diagnostics = apply_radar_update_policy(selected, measurement)
+        diagnostics = policy_diagnostics or tracker.update(
             measurement,
             gate_threshold=_gate_threshold_for_measurement(
                 measurement,
@@ -792,20 +797,22 @@ def _replay_selected_tracklet_path(
         replayed = selected.copy()
         replayed["association_replay_accepted"] = bool(diagnostics.accepted)
         replayed["association_replay_nis"] = float(diagnostics.nis)
+        for key, value in policy_record_fields(selected).items():
+            replayed[key] = value
         replayed_rows.append(replayed)
         if diagnostics.accepted:
             accepted_rows.append(replayed)
-        records.append(
-            _record(
-                measurement,
-                tracker,
-                diagnostics,
-                track_id=_optional_track_id(selected.get("track_id")),
-                association_nis=_optional_float(selected.get("association_nis")),
-                association_score=_optional_float(selected.get("association_score")),
-                association_mode=str(selected.get("association_mode", "tracklet-viterbi")),
-            )
+        record = _record(
+            measurement,
+            tracker,
+            diagnostics,
+            track_id=_optional_track_id(selected.get("track_id")),
+            association_nis=_optional_float(selected.get("association_nis")),
+            association_score=_optional_float(selected.get("association_score")),
+            association_mode=str(selected.get("association_mode", "tracklet-viterbi")),
         )
+        record.update(policy_record_fields(selected))
+        records.append(record)
     return records, accepted_rows, replayed_rows
 
 
