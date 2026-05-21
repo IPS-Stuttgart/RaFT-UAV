@@ -205,6 +205,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "cv_catprob",
             "cv_rf_anchored_nis_fixed_lag",
             "cv_rf_gated_nis_fixed_lag",
+            "cv_pda_fixed_lag",
             "cv_track_bank_fixed_lag",
             "cv_stable_segments_fixed_lag",
             "cv_stable_segments_hybrid_fixed_lag",
@@ -213,6 +214,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "imm_catprob_fixed_lag",
             "imm_catprob_rts",
             "imm_tracklet_viterbi_fixed_lag",
+            "imm_learned_tracklet_viterbi_fixed_lag",
+            "hetero_imm_tracklet_viterbi_fixed_lag",
+            "hetero_imm_learned_tracklet_viterbi_fixed_lag",
             "hetero_cv_lofo_nis_fixed_lag",
         ],
     )
@@ -248,7 +252,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--tracklet-learned-unary-weight", type=float, default=1.0)
     parser.add_argument("--tracklet-hand-unary-weight", type=float, default=0.25)
     parser.add_argument("--enable-soft-catprob-retention", action="store_true")
+    parser.add_argument("--soft-catprob-below-threshold-penalty", type=float, default=3.0)
     parser.add_argument("--enable-radar-velocity-update", action="store_true")
+    parser.add_argument("--radar-velocity-std-mps", type=float, default=12.0)
+    parser.add_argument("--enable-do-no-harm-radar-updates", action="store_true")
+    parser.add_argument("--do-no-harm-soften-nis", type=float, default=16.0)
+    parser.add_argument("--do-no-harm-skip-nis", type=float, default=36.0)
+    parser.add_argument("--do-no-harm-anchor-soften-nis", type=float, default=16.0)
+    parser.add_argument("--do-no-harm-anchor-skip-nis", type=float, default=25.0)
+    parser.add_argument("--do-no-harm-entropy-soften", type=float, default=1.0)
+    parser.add_argument("--do-no-harm-entropy-defer", type=float, default=1.35)
+    parser.add_argument("--do-no-harm-effective-candidates-soften", type=float, default=2.0)
+    parser.add_argument("--do-no-harm-effective-candidates-defer", type=float, default=3.0)
+    parser.add_argument("--do-no-harm-max-covariance-scale", type=float, default=25.0)
     parser.add_argument("--nis-covariance-calibration-json", type=Path, default=None)
     parser.add_argument("--skip-existing", action="store_true")
     args = parser.parse_args(argv)
@@ -525,6 +541,7 @@ def _run_method(
             output_dir=run_dir,
             association=method.association,
             extra_options=options,
+            env_overrides=_runtime_env_updates(args),
         )
         return
     if method.runner == "tracklet":
@@ -548,7 +565,7 @@ def _run_method(
             "imm",
             *[str(option) for option in options],
         ]
-        _run(command)
+        _run(command, env_overrides=_runtime_env_updates(args))
         return
     if method.runner == "learned_tracklet":
         model_path = run_dir.parent / "models" / "radar_association_likelihood.json"
@@ -630,7 +647,7 @@ def _run_method(
             str(args.candidate_threshold),
             *[str(option) for option in options],
         ]
-        _run(command)
+        _run(command, env_overrides=_runtime_env_updates(args))
         return
     if method.runner == "hetero_tracklet":
         command = [
@@ -655,7 +672,7 @@ def _run_method(
             "imm",
             *[str(option) for option in options],
         ]
-        _run(command)
+        _run(command, env_overrides=_runtime_env_updates(args))
         return
     if method.runner == "hetero":
         command = [
@@ -677,11 +694,11 @@ def _run_method(
         ]
         if method.fixed_lag:
             command.extend(["--smoother", "fixed-lag", "--smoother-lag-s", str(args.fixed_lag_s)])
-        env_overrides: dict[str, str] | None = None
+        env_overrides = _runtime_env_updates(args)
         if method.nis_calibrated:
             if nis_calibration_path is None:
                 raise RuntimeError(f"{method.name} requires a NIS calibration JSON")
-            env_overrides = {ENV_NIS_COVARIANCE_CALIBRATION_JSON: str(nis_calibration_path)}
+            env_overrides[ENV_NIS_COVARIANCE_CALIBRATION_JSON] = str(nis_calibration_path)
         _run(command, env_overrides=env_overrides)
         return
     raise ValueError(f"unknown method runner {method.runner!r}")
@@ -831,8 +848,29 @@ def _runtime_env_updates(args: argparse.Namespace) -> dict[str, str]:
     env: dict[str, str] = {}
     if args.enable_soft_catprob_retention:
         env["RAFT_UAV_SOFT_CATPROB_RETENTION"] = "1"
+        env["RAFT_UAV_SOFT_CATPROB_BELOW_THRESHOLD_PENALTY"] = str(
+            args.soft_catprob_below_threshold_penalty
+        )
     if args.enable_radar_velocity_update:
         env["RAFT_UAV_RADAR_UPDATE_USES_VELOCITY"] = "1"
+        env["RAFT_UAV_RADAR_VELOCITY_STD_MPS"] = str(args.radar_velocity_std_mps)
+    if args.enable_do_no_harm_radar_updates:
+        env["RAFT_UAV_DO_NO_HARM_RADAR_UPDATES"] = "1"
+        env["RAFT_UAV_DNH_SOFTEN_NIS"] = str(args.do_no_harm_soften_nis)
+        env["RAFT_UAV_DNH_SKIP_NIS"] = str(args.do_no_harm_skip_nis)
+        env["RAFT_UAV_DNH_ANCHOR_SOFTEN_NIS"] = str(
+            args.do_no_harm_anchor_soften_nis
+        )
+        env["RAFT_UAV_DNH_ANCHOR_SKIP_NIS"] = str(args.do_no_harm_anchor_skip_nis)
+        env["RAFT_UAV_DNH_ENTROPY_SOFTEN"] = str(args.do_no_harm_entropy_soften)
+        env["RAFT_UAV_DNH_ENTROPY_DEFER"] = str(args.do_no_harm_entropy_defer)
+        env["RAFT_UAV_DNH_EFFECTIVE_CANDIDATES_SOFTEN"] = str(
+            args.do_no_harm_effective_candidates_soften
+        )
+        env["RAFT_UAV_DNH_EFFECTIVE_CANDIDATES_DEFER"] = str(
+            args.do_no_harm_effective_candidates_defer
+        )
+        env["RAFT_UAV_DNH_MAX_COVARIANCE_SCALE"] = str(args.do_no_harm_max_covariance_scale)
     if args.nis_covariance_calibration_json is not None:
         env[ENV_NIS_COVARIANCE_CALIBRATION_JSON] = str(args.nis_covariance_calibration_json)
     return env

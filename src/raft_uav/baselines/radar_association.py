@@ -21,6 +21,10 @@ from raft_uav.baselines.kalman import (
     measurement_matrix,
     white_acceleration_process_noise,
 )
+from raft_uav.baselines.radar_update_policy import (
+    apply_radar_update_policy,
+    policy_record_fields,
+)
 from raft_uav.baselines.update_logic import (
     max_residual_norm_for_measurement,
     plan_linear_measurement_update,
@@ -471,7 +475,8 @@ def run_async_cv_baseline_with_radar_association(
             continue
 
         measurement = _radar_row_to_measurement(selected, covariance)
-        diagnostics = tracker.update(
+        selected, measurement, policy_diagnostics = apply_radar_update_policy(selected, measurement)
+        diagnostics = policy_diagnostics or tracker.update(
             measurement,
             gate_threshold=_gate_threshold_for_measurement(
                 measurement,
@@ -499,17 +504,17 @@ def run_async_cv_baseline_with_radar_association(
         if diagnostics.accepted:
             current_track_id = _optional_track_id(selected)
             selected_rows.append(selected)
-        records.append(
-            _record(
-                measurement,
-                tracker,
-                diagnostics,
-                track_id=_optional_track_id(selected),
-                association_nis=_optional_float(selected.get("association_nis")),
-                association_score=_optional_float(selected.get("association_score")),
-                association_mode=association,
-            )
+        record = _record(
+            measurement,
+            tracker,
+            diagnostics,
+            track_id=_optional_track_id(selected),
+            association_nis=_optional_float(selected.get("association_nis")),
+            association_score=_optional_float(selected.get("association_score")),
+            association_mode=association,
         )
+        record.update(policy_record_fields(selected))
+        records.append(record)
 
     return records, _selected_rows_frame(radar, selected_rows)
 
