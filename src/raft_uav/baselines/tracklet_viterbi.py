@@ -199,7 +199,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
         config=cfg,
         radar_covariance_fn=radar_covariance_fn,
     )
-    records, accepted = _replay_selected_tracklet_path(
+    records, accepted, replayed = _replay_selected_tracklet_path(
         events=events,
         selected_rows=selected,
         initial_measurement=initial,
@@ -214,7 +214,9 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
         max_residual_norms_by_source=max_residual_norms_by_source,
         radar_covariance_fn=radar_covariance_fn,
     )
-    return records, _selected_rows_frame(radar, accepted)
+    accepted_frame = _selected_rows_frame(radar, accepted)
+    accepted_frame.attrs["attempted_selected_radar"] = _selected_rows_frame(radar, replayed)
+    return records, accepted_frame
 
 
 def _first_rf_bootstrap_index(events: list[dict[str, object]]) -> int | None:
@@ -701,7 +703,7 @@ def _replay_selected_tracklet_path(
     inflation_alpha_by_source: Mapping[str, float] | None,
     max_residual_norms_by_source: Mapping[str, float | None] | None,
     radar_covariance_fn: RadarCovarianceFn | None = None,
-) -> tuple[list[dict[str, object]], list[pd.Series]]:
+) -> tuple[list[dict[str, object]], list[pd.Series], list[pd.Series]]:
     from raft_uav.baselines.radar_association import (
         _gate_threshold_for_measurement,
         _inflation_alpha_for_measurement,
@@ -723,6 +725,7 @@ def _replay_selected_tracklet_path(
     )
     records: list[dict[str, object]] = []
     accepted_rows: list[pd.Series] = []
+    replayed_rows: list[pd.Series] = []
     for event in events:
         if event["kind"] == "rf":
             measurement = event["measurement"]
@@ -796,6 +799,7 @@ def _replay_selected_tracklet_path(
         replayed["association_replay_nis"] = float(diagnostics.nis)
         for key, value in policy_record_fields(selected).items():
             replayed[key] = value
+        replayed_rows.append(replayed)
         if diagnostics.accepted:
             accepted_rows.append(replayed)
         record = _record(
@@ -809,7 +813,7 @@ def _replay_selected_tracklet_path(
         )
         record.update(policy_record_fields(selected))
         records.append(record)
-    return records, accepted_rows
+    return records, accepted_rows, replayed_rows
 
 
 def _radar_event_key(candidates: pd.DataFrame) -> tuple[str, int | float]:
