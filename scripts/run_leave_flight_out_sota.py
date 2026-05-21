@@ -853,12 +853,46 @@ def _write_nis_calibration_summary_csv(payload: Mapping[str, object], path: Path
 
 def _runtime_env_updates(args: argparse.Namespace) -> dict[str, str]:
     env: dict[str, str] = {}
-    if args.enable_soft_catprob_retention:
+    if getattr(args, "enable_soft_catprob_retention", False):
         env["RAFT_UAV_SOFT_CATPROB_RETENTION"] = "1"
-    if args.enable_radar_velocity_update:
+        env["RAFT_UAV_SOFT_CATPROB_BELOW_THRESHOLD_PENALTY"] = str(
+            getattr(args, "soft_catprob_below_threshold_penalty", 3.0)
+        )
+    if getattr(args, "enable_radar_velocity_update", False):
         env["RAFT_UAV_RADAR_UPDATE_USES_VELOCITY"] = "1"
-    if args.nis_covariance_calibration_json is not None:
-        env[ENV_NIS_COVARIANCE_CALIBRATION_JSON] = str(args.nis_covariance_calibration_json)
+        env["RAFT_UAV_RADAR_VELOCITY_STD_MPS"] = str(
+            getattr(args, "radar_velocity_std_mps", 12.0)
+        )
+    if getattr(args, "enable_do_no_harm_radar_updates", False):
+        env["RAFT_UAV_DO_NO_HARM_RADAR_UPDATES"] = "1"
+        env["RAFT_UAV_DNH_SOFTEN_NIS"] = str(
+            getattr(args, "do_no_harm_soften_nis", 16.0)
+        )
+        env["RAFT_UAV_DNH_SKIP_NIS"] = str(getattr(args, "do_no_harm_skip_nis", 36.0))
+        env["RAFT_UAV_DNH_ANCHOR_SOFTEN_NIS"] = str(
+            getattr(args, "do_no_harm_anchor_soften_nis", 16.0)
+        )
+        env["RAFT_UAV_DNH_ANCHOR_SKIP_NIS"] = str(
+            getattr(args, "do_no_harm_anchor_skip_nis", 25.0)
+        )
+        env["RAFT_UAV_DNH_ENTROPY_SOFTEN"] = str(
+            getattr(args, "do_no_harm_entropy_soften", 1.0)
+        )
+        env["RAFT_UAV_DNH_ENTROPY_DEFER"] = str(
+            getattr(args, "do_no_harm_entropy_defer", 1.35)
+        )
+        env["RAFT_UAV_DNH_EFFECTIVE_CANDIDATES_SOFTEN"] = str(
+            getattr(args, "do_no_harm_effective_candidates_soften", 2.0)
+        )
+        env["RAFT_UAV_DNH_EFFECTIVE_CANDIDATES_DEFER"] = str(
+            getattr(args, "do_no_harm_effective_candidates_defer", 3.0)
+        )
+        env["RAFT_UAV_DNH_MAX_COVARIANCE_SCALE"] = str(
+            getattr(args, "do_no_harm_max_covariance_scale", 25.0)
+        )
+    calibration_json = getattr(args, "nis_covariance_calibration_json", None)
+    if calibration_json is not None:
+        env[ENV_NIS_COVARIANCE_CALIBRATION_JSON] = str(calibration_json)
     return env
 
 
