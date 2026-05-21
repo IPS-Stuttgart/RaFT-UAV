@@ -12,6 +12,10 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.baselines.imm import run_async_imm_baseline
+from raft_uav.baselines.imm_radar_association import (
+    IMM_RADAR_ASSOCIATION_MODES,
+    run_async_imm_baseline_with_radar_association,
+)
 from raft_uav.baselines.kalman import run_async_cv_baseline
 from raft_uav.baselines.smoothing import SMOOTHER_MODES, smooth_tracking_records
 from raft_uav.evaluation.diagnostics import build_diagnostic_summary
@@ -65,6 +69,12 @@ def main(argv: list[str] | None = None) -> int:
         default="catprob",
         help="radar row selection before fusion",
     )
+    parser.add_argument(
+        "--radar-association",
+        choices=["catprob", *IMM_RADAR_ASSOCIATION_MODES],
+        default="catprob",
+        help="IMM-native online radar association mode; catprob keeps legacy preselection",
+    )
     parser.add_argument("--radar-catprob-threshold", type=float, default=0.5)
     parser.add_argument("--truth-gate-m", type=float, default=150.0)
     parser.add_argument("--truth-time-gate-s", type=float, default=1.0)
@@ -100,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
         smoother=args.smoother,
         smoother_lag_s=args.smoother_lag_s,
         radar_selection=args.radar_selection,
+        radar_association=args.radar_association,
         radar_catprob_threshold=args.radar_catprob_threshold,
         truth_gate_m=args.truth_gate_m,
         truth_time_gate_s=args.truth_time_gate_s,
@@ -128,6 +139,7 @@ def run_experiment(
     smoother: str = "none",
     smoother_lag_s: float = 20.0,
     radar_selection: str = "catprob",
+    radar_association: str = "catprob",
     radar_catprob_threshold: float = 0.5,
     truth_gate_m: float = 150.0,
     truth_time_gate_s: float = 1.0,
@@ -153,6 +165,10 @@ def run_experiment(
         raise ValueError(f"smoother must be one of {SMOOTHER_MODES}; got {smoother!r}")
     if smoother in {"fixed-lag", "fixed-lag-map"} and smoother_lag_s < 0.0:
         raise ValueError(f"smoother_lag_s must be nonnegative for {smoother} smoothing")
+    if radar_association not in {"catprob", *IMM_RADAR_ASSOCIATION_MODES}:
+        raise ValueError(f"unknown radar_association {radar_association!r}")
+    if tracker != "imm" and radar_association in IMM_RADAR_ASSOCIATION_MODES:
+        raise ValueError("IMM-native radar association requires --tracker imm")
     if robust_update not in {"none", "nis-inflate"}:
         raise ValueError("robust_update must be 'none' or 'nis-inflate'")
     if rf_inflation_alpha <= 0.0 or radar_inflation_alpha <= 0.0:
@@ -169,25 +185,29 @@ def run_experiment(
     radar = pd.DataFrame()
     selected_radar = pd.DataFrame()
     measurements = []
+    rf_measurements = []
+    use_imm_radar_association = tracker == "imm" and radar_association in IMM_RADAR_ASSOCIATION_MODES
     if flight.rf_csv is not None:
         rf = _inside_truth_window(
             normalize_rf(read_rf_csv(flight.rf_csv), projector, truth_origin_time), truth
         )
-        measurements.extend(rf_measurements_to_enu(rf))
+        rf_measurements = rf_measurements_to_enu(rf)
+        measurements.extend(rf_measurements)
     if flight.radar_json is not None:
         radar = _inside_truth_window(
             normalize_radar(read_radar_tracks_json(flight.radar_json), projector, truth_origin_time),
             truth,
         )
-        selected_radar = select_radar_measurement_rows(
-            radar,
-            selection=radar_selection,
-            truth=truth,
-            catprob_threshold=radar_catprob_threshold,
-            truth_gate_m=truth_gate_m,
-            truth_time_gate_s=truth_time_gate_s,
-        )
-        measurements.extend(radar_measurements_to_enu(selected_radar))
+        if not use_imm_radar_association:
+            selected_radar = select_radar_measurement_rows(
+                radar,
+                selection=radar_selection,
+                truth=truth,
+                catprob_threshold=radar_catprob_threshold,
+                truth_gate_m=truth_gate_m,
+                truth_time_gate_s=truth_time_gate_s,
+            )
+            measurements.extend(radar_measurements_to_enu(selected_radar))
 
     gate_probabilities = None
     safety_gate_probabilities = None
@@ -208,7 +228,25 @@ def run_experiment(
         robust_updates = {"rf": robust_update, "radar": robust_update}
         inflation_alphas = {"rf": rf_inflation_alpha, "radar": radar_inflation_alpha}
 
-    if tracker == "imm":
+    if use_imm_radar_association:
+        records, selected_radar = run_async_imm_baseline_with_radar_association(
+            rf_measurements=rf_measurements,
+            radar=radar,
+            association=radar_association,
+            acceleration_std_mps2=acceleration_std,
+            gate_probabilities_by_source=gate_probabilities,
+            safety_gate_probabilities_by_source=safety_gate_probabilities,
+            robust_update_by_source=robust_updates,
+            inflation_alpha_by_source=inflation_alphas,
+            max_residual_norms_by_source=max_residual_norms,
+            candidate_catprob_threshold=radar_catprob_threshold,
+            mode_switch_time_constant_s=imm_mode_switch_time_constant,
+        )
+        measurements = [
+            *rf_measurements,
+            *radar_measurements_to_enu(selected_radar),
+        ]
+    elif tracker == "imm":
         records = run_async_imm_baseline(
             measurements,
             acceleration_std_mps2=acceleration_std,
@@ -279,7 +317,7 @@ def run_experiment(
         imm_mode_switch_time_constant=imm_mode_switch_time_constant,
         smoother=smoother,
         smoother_lag_s=smoother_lag_s,
-        radar_selection=radar_selection,
+        radar_selection=radar_association if use_imm_radar_association else radar_selection,
         radar_catprob_threshold=radar_catprob_threshold,
         max_eval_time_delta_s=max_eval_time_delta_s,
         robust_update=robust_update,
