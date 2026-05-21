@@ -1,0 +1,81 @@
+"""Tests for conservative radar update policy feature wiring."""
+
+from __future__ import annotations
+
+import math
+
+import pandas as pd
+
+from raft_uav.baselines.radar_update_policy import (
+    RadarUpdatePolicy,
+    classify_radar_update_row,
+    policy_record_fields,
+)
+
+
+def test_do_no_harm_uses_soft_path_entropy_as_effective_candidate_count() -> None:
+    row = pd.Series(
+        {
+            "association_nis": 1.0,
+            "association_anchor_nis": 1.0,
+            "association_soft_path_weight_entropy": math.log(3.2),
+            "association_preceding_miss_streak": 0,
+        }
+    )
+
+    plan = classify_radar_update_row(
+        row,
+        RadarUpdatePolicy(
+            entropy_soften=10.0,
+            entropy_defer=11.0,
+            effective_candidates_soften=2.0,
+            effective_candidates_defer=4.0,
+        ),
+    )
+
+    assert plan.action == "soften"
+    assert plan.entropy == math.log(3.2)
+    assert plan.effective_candidates is not None
+    assert plan.effective_candidates == pytest_approx(3.2)
+    assert "effective_candidates>=2" in plan.reason
+
+
+def test_do_no_harm_defers_severe_soft_path_entropy_after_recovery_streak() -> None:
+    row = pd.Series(
+        {
+            "association_nis": 1.0,
+            "association_anchor_nis": 1.0,
+            "association_soft_path_weight_entropy": 1.5,
+            "association_preceding_miss_streak": 2,
+        }
+    )
+
+    plan = classify_radar_update_row(
+        row,
+        RadarUpdatePolicy(entropy_soften=1.0, entropy_defer=1.35, recovery_miss_streak=2),
+    )
+
+    assert plan.action == "defer"
+    assert "entropy>=1.35" in plan.reason
+
+
+def test_policy_record_fields_include_ambiguity_diagnostics() -> None:
+    fields = policy_record_fields(
+        {
+            "association_update_policy": "soften",
+            "association_update_policy_reason": "entropy>=1",
+            "association_update_policy_covariance_scale": 2.0,
+            "association_update_policy_entropy": 1.2,
+            "association_update_policy_effective_candidates": 3.3,
+        }
+    )
+
+    assert fields["association_update_policy_entropy"] == 1.2
+    assert fields["association_update_policy_effective_candidates"] == 3.3
+
+
+def pytest_approx(value: float):
+    # Local helper avoids importing pytest at module import time in CLI smoke contexts.
+    import pytest
+
+    return pytest.approx(value)
