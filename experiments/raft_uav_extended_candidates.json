@@ -1,0 +1,107 @@
+[
+  {
+    "name": "tracklet_range_cov_imm_student_t",
+    "runner": "tracklet",
+    "association": "tracklet-viterbi",
+    "options": [
+      "--tracklet-variant", "range-covariance",
+      "--tracklet-replay-tracker", "imm",
+      "--radar-catprob-threshold", "0.4",
+      "--robust-update", "student-t",
+      "--smoother", "fixed-lag",
+      "--smoother-lag-s", "20"
+    ]
+  },
+  {
+    "name": "tracklet_range_cov_imm_learned_additive",
+    "runner": "tracklet",
+    "association": "tracklet-viterbi",
+    "options": [
+      "--tracklet-variant", "range-covariance",
+      "--tracklet-replay-tracker", "imm",
+      "--tracklet-learned-candidate-model", "outputs/lofo_calibration/{holdout}/radar_association_model.json",
+      "--tracklet-learned-candidate-score-mode", "additive",
+      "--radar-catprob-threshold", "0.4",
+      "--robust-update", "student-t",
+      "--smoother", "fixed-lag",
+      "--smoother-lag-s", "20"
+    ]
+  },
+  {
+    "name": "tracklet_range_cov_imm_learned_replace",
+    "runner": "tracklet",
+    "association": "tracklet-viterbi",
+    "options": [
+      "--tracklet-variant", "range-covariance",
+      "--tracklet-replay-tracker", "imm",
+      "--tracklet-learned-candidate-model", "outputs/lofo_calibration/{holdout}/radar_association_model.json",
+      "--tracklet-learned-candidate-score-mode", "replace",
+      "--radar-catprob-threshold", "0.4",
+      "--robust-update", "student-t",
+      "--smoother", "fixed-lag",
+      "--smoother-lag-s", "20"
+    ]
+  },
+  {
+    "name": "tracklet_range_cov_imm_calibrated",
+    "runner": "tracklet",
+    "association": "tracklet-viterbi",
+    "options": [
+      "--tracklet-variant", "range-covariance",
+      "--tracklet-replay-tracker", "imm",
+      "--calibration-bundle", "outputs/lofo_calibration/{holdout}/calibration_bundle.json",
+      "--radar-catprob-threshold", "0.4",
+      "--robust-update", "student-t",
+      "--smoother", "fixed-lag",
+      "--smoother-lag-s", "20"
+    ]
+  },
+  {
+    "name": "tracklet_range_cov_imm_calibrated_learned_additive",
+    "runner": "tracklet",
+    "association": "tracklet-viterbi",
+    "options": [
+      "--tracklet-variant", "range-covariance",
+      "--tracklet-replay-tracker", "imm",
+      "--calibration-bundle", "outputs/lofo_calibration/{holdout}/calibration_bundle.json",
+      "--tracklet-learned-candidate-model", "outputs/lofo_calibration/{holdout}/radar_association_model.json",
+      "--tracklet-learned-candidate-score-mode", "additive",
+      "--radar-catprob-threshold", "0.4",
+      "--robust-update", "student-t",
+      "--smoother", "fixed-lag",
+      "--smoother-lag-s", "20"
+    ]
+  },
+  {
+    "name": "tracklet_range_cov_imm_velocity12",
+    "runner": "tracklet",
+    "association": "tracklet-viterbi",
+    "options": [
+      "--tracklet-variant", "range-covariance",
+      "--tracklet-replay-tracker", "imm",
+      "--enable-radar-velocity-update",
+      "--radar-velocity-std-mps", "12",
+      "--radar-catprob-threshold", "0.4",
+      "--robust-update", "student-t",
+      "--smoother", "fixed-lag",
+      "--smoother-lag-s", "20"
+    ]
+  },
+  {
+    "name": "tracklet_range_cov_imm_retention_wide",
+    "runner": "tracklet",
+    "association": "tracklet-viterbi",
+    "options": [
+      "--tracklet-variant", "range-covariance",
+      "--tracklet-replay-tracker", "imm",
+      "--tracklet-catprob-retention-mode", "soft",
+      "--tracklet-max-candidates", "16",
+      "--tracklet-max-candidate-pool-per-frame", "48",
+      "--tracklet-max-candidates-per-track-id", "2",
+      "--radar-catprob-threshold", "0.3",
+      "--robust-update", "student-t",
+      "--smoother", "fixed-lag",
+      "--smoother-lag-s", "20"
+    ]
+  }
+]

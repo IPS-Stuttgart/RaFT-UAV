@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from raft_uav.baselines.update_logic import (
     DEFAULT_STUDENT_T_DOF,
     ROBUST_UPDATE_MODES,
 )
+from raft_uav.calibration.bundle import apply_calibration_bundle, load_calibration_bundle
 from raft_uav.calibration.time_offset import apply_time_offset
 from raft_uav.evaluation.diagnostics import build_diagnostic_summary
 from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
@@ -107,6 +109,12 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=0.0,
         help="residual calibrated correction added to normalized radar time_s",
+    )
+    baseline_parser.add_argument(
+        "--calibration-bundle",
+        type=Path,
+        default=None,
+        help="LOFO calibration manifest with time offsets, bias, and uncertainty models",
     )
     baseline_parser.add_argument(
         "--radar-association",
@@ -407,6 +415,20 @@ def main(argv: list[str] | None = None) -> int:
         default=1.0,
         help="radar exponent for --robust-update nis-inflate covariance scaling",
     )
+    baseline_parser.add_argument(
+        "--enable-radar-velocity-update",
+        action="store_true",
+        help=(
+            "include Fortem velocity components in radar measurement updates when "
+            "they are available; use only as an explicit ablation"
+        ),
+    )
+    baseline_parser.add_argument(
+        "--radar-velocity-std-mps",
+        type=float,
+        default=12.0,
+        help="radar velocity standard deviation used when --enable-radar-velocity-update is set",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "inspect":
@@ -425,6 +447,7 @@ def main(argv: list[str] | None = None) -> int:
             args.radar_clock_offset_s,
             args.rf_time_offset_correction_s,
             args.radar_time_offset_correction_s,
+            args.calibration_bundle,
             args.radar_catprob_threshold,
             args.radar_covariance_model,
             args.radar_range_std_m,
@@ -476,6 +499,8 @@ def main(argv: list[str] | None = None) -> int:
             args.radar_max_residual_m,
             args.rf_inflation_alpha,
             args.radar_inflation_alpha,
+            args.enable_radar_velocity_update,
+            args.radar_velocity_std_mps,
         )
     raise ValueError(args.command)
 
@@ -517,6 +542,7 @@ def _run_baseline(
     radar_clock_offset_s: float,
     rf_time_offset_correction_s: float,
     radar_time_offset_correction_s: float,
+    calibration_bundle_path: Path | None,
     radar_catprob_threshold: float,
     radar_covariance_model: str,
     radar_range_std_m: float,
@@ -568,6 +594,8 @@ def _run_baseline(
     radar_max_residual_m: float,
     rf_inflation_alpha: float,
     radar_inflation_alpha: float,
+    enable_radar_velocity_update: bool,
+    radar_velocity_std_mps: float,
 ) -> int:
     if enable_gating and robust_update != "none":
         raise ValueError("--enable-gating and --robust-update are mutually exclusive")
@@ -625,6 +653,8 @@ def _run_baseline(
         raise ValueError("--radar-crossrange-angle-std-deg must be positive")
     if radar_crossrange_min_std_m <= 0.0:
         raise ValueError("--radar-crossrange-min-std-m must be positive")
+    if radar_velocity_std_mps <= 0.0:
+        raise ValueError("--radar-velocity-std-mps must be positive")
     if radar_crossrange_max_std_m < radar_crossrange_min_std_m:
         raise ValueError("--radar-crossrange-max-std-m must be >= --radar-crossrange-min-std-m")
     if smoother == "fixed-lag" and smoother_lag_s < 0.0:
@@ -647,6 +677,7 @@ def _run_baseline(
     selected_radar = pd.DataFrame()
     measurements = []
     rf_measurements = []
+    calibration_summary: dict[str, Any] | None = None
     if flight.rf_csv is not None:
         rf = _inside_truth_window(
             _apply_time_offset_correction(
@@ -660,8 +691,6 @@ def _run_baseline(
             ),
             truth,
         )
-        rf_measurements = rf_measurements_to_enu(rf)
-        measurements.extend(rf_measurements)
     if flight.radar_json is not None:
         radar = _inside_truth_window(
             _apply_time_offset_correction(
@@ -675,6 +704,24 @@ def _run_baseline(
             ),
             truth,
         )
+
+    if calibration_bundle_path is not None:
+        bundle = load_calibration_bundle(calibration_bundle_path)
+        rf, radar, calibration_summary = apply_calibration_bundle(
+            rf=rf,
+            radar=radar,
+            bundle=bundle,
+        )
+        rf = _inside_truth_window(rf, truth)
+        radar = _inside_truth_window(radar, truth)
+
+    if not rf.empty:
+        rf_measurements = rf_measurements_to_enu(rf)
+        measurements.extend(rf_measurements)
+
+    if enable_radar_velocity_update:
+        os.environ["RAFT_UAV_RADAR_UPDATE_USES_VELOCITY"] = "1"
+        os.environ["RAFT_UAV_RADAR_VELOCITY_STD_MPS"] = f"{radar_velocity_std_mps:g}"
 
     gate_probabilities = None
     safety_gate_probabilities = None
@@ -757,7 +804,14 @@ def _run_baseline(
             truth_gate_m=truth_gate_m,
             truth_time_gate_s=truth_time_gate_s,
         )
-        measurements = [*rf_measurements, *radar_measurements_to_enu(selected_radar)]
+        measurements = [
+            *rf_measurements,
+            *radar_measurements_to_enu(
+                selected_radar,
+                include_velocity=enable_radar_velocity_update,
+                default_velocity_std_mps=radar_velocity_std_mps,
+            ),
+        ]
     else:
         selected_radar = select_radar_measurement_rows(
             radar,
@@ -767,7 +821,13 @@ def _run_baseline(
             truth_gate_m=truth_gate_m,
             truth_time_gate_s=truth_time_gate_s,
         )
-        measurements.extend(radar_measurements_to_enu(selected_radar))
+        measurements.extend(
+            radar_measurements_to_enu(
+                selected_radar,
+                include_velocity=enable_radar_velocity_update,
+                default_velocity_std_mps=radar_velocity_std_mps,
+            )
+        )
         records = run_async_cv_baseline(
             measurements,
             acceleration_std_mps2=acceleration_std,
@@ -879,6 +939,9 @@ def _run_baseline(
         radar_max_residual_m=radar_max_residual_m,
         rf_inflation_alpha=rf_inflation_alpha,
         radar_inflation_alpha=radar_inflation_alpha,
+        calibration_summary=calibration_summary,
+        enable_radar_velocity_update=enable_radar_velocity_update,
+        radar_velocity_std_mps=radar_velocity_std_mps,
     )
     metrics_path.write_text(_json_dump_text(metrics), encoding="utf-8")
     diagnostic_summary = build_diagnostic_summary(
@@ -1050,6 +1113,9 @@ def _baseline_metrics(
     radar_max_residual_m: float,
     rf_inflation_alpha: float,
     radar_inflation_alpha: float,
+    calibration_summary: dict[str, Any] | None = None,
+    enable_radar_velocity_update: bool = False,
+    radar_velocity_std_mps: float = 12.0,
 ) -> dict[str, Any]:
     truth_times = truth["time_s"].to_numpy(dtype=float)
     truth_positions = truth[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
@@ -1199,6 +1265,13 @@ def _baseline_metrics(
             else None,
             "radar_inflation_alpha": float(radar_inflation_alpha)
             if robust_update == "nis-inflate"
+            else None,
+        },
+        "calibration_bundle": calibration_summary,
+        "radar_velocity_update": {
+            "enabled": bool(enable_radar_velocity_update),
+            "velocity_std_mps": float(radar_velocity_std_mps)
+            if enable_radar_velocity_update
             else None,
         },
         "association_safety_gate": {

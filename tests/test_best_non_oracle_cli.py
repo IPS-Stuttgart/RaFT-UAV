@@ -70,3 +70,34 @@ def test_best_non_oracle_dry_run_does_not_call_tracker(monkeypatch, capsys) -> N
     assert "--tracklet-replay-tracker imm" in printed
     assert "--smoother fixed-lag" in printed
     assert "--flight Opt3" in printed
+
+
+def test_best_non_oracle_forwards_calibration_learned_candidate_and_velocity() -> None:
+    args = best_non_oracle_cli._parse_args(
+        [
+            "dataset",
+            "--flight",
+            "Opt2",
+            "--calibration-bundle",
+            "outputs/lofo_calibration/Opt2/calibration_bundle.json",
+            "--learned-candidate-model",
+            "outputs/lofo_calibration/Opt2/radar_association_model.json",
+            "--learned-candidate-score-mode",
+            "additive",
+            "--enable-radar-velocity-update",
+            "--radar-velocity-std-mps",
+            "20",
+        ]
+    )
+
+    forwarded = best_non_oracle_cli.build_tracklet_cli_argv(args)
+
+    assert _arg_after(forwarded, "--calibration-bundle") == (
+        "outputs/lofo_calibration/Opt2/calibration_bundle.json"
+    )
+    assert _arg_after(forwarded, "--tracklet-learned-candidate-model") == (
+        "outputs/lofo_calibration/Opt2/radar_association_model.json"
+    )
+    assert _arg_after(forwarded, "--tracklet-learned-candidate-score-mode") == "additive"
+    assert "--enable-radar-velocity-update" in forwarded
+    assert _arg_after(forwarded, "--radar-velocity-std-mps") == "20"

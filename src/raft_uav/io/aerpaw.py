@@ -12,6 +12,7 @@ import pandas as pd
 
 from raft_uav.baselines.kalman import TrackingMeasurement
 from raft_uav.coordinates import LocalENUProjector
+from raft_uav.uncertainty import covariance_from_row
 
 DEFAULT_SENSOR_CLOCK_OFFSET_S = -4.0 * 60.0 * 60.0
 DEFAULT_RF_CLOCK_OFFSET_S = DEFAULT_SENSOR_CLOCK_OFFSET_S
@@ -354,11 +355,12 @@ def rf_measurements_to_enu(
     measurements: list[TrackingMeasurement] = []
     for _, row in frame.iterrows():
         std_m = float(row["std_m"]) if np.isfinite(row["std_m"]) else float(default_std_m)
+        fallback_covariance = np.diag([std_m**2, std_m**2])
         measurements.append(
             TrackingMeasurement(
                 time_s=float(row["time_s"]),
                 vector=np.array([float(row["east_m"]), float(row["north_m"])]),
-                covariance=np.diag([std_m**2, std_m**2]),
+                covariance=covariance_from_row(row, 2, fallback_covariance),
                 source="rf",
             )
         )
@@ -395,13 +397,14 @@ def radar_measurements_to_enu(
             clock_offset_s=clock_offset_s,
         )
 
-    position_covariance = np.diag(
+    fallback_position_covariance = np.diag(
         [default_xy_std_m**2, default_xy_std_m**2, default_z_std_m**2]
     )
     measurements: list[TrackingMeasurement] = []
     for _, row in frame.iterrows():
         position = np.array([float(row["east_m"]), float(row["north_m"]), float(row["up_m"])])
         velocity = _radar_velocity_vector_enu(row) if include_velocity else None
+        position_covariance = covariance_from_row(row, 3, fallback_position_covariance)
         if velocity is None:
             vector = position
             covariance = position_covariance

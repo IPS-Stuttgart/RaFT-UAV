@@ -2411,25 +2411,39 @@ def _radar_row_to_measurement(row: pd.Series, covariance: np.ndarray) -> Trackin
 
 
 def _row_covariance(row: pd.Series) -> np.ndarray | None:
-    if not all(column in row for column in _ASSOCIATION_COVARIANCE_COLUMNS):
-        return None
-    values = [float(row[column]) for column in _ASSOCIATION_COVARIANCE_COLUMNS]
-    if not np.isfinite(values).all():
-        return None
-    ee, nn, uu, en, eu, nu = values
-    covariance = np.array(
-        [
-            [ee, en, eu],
-            [en, nn, nu],
-            [eu, nu, uu],
-        ],
-        dtype=float,
-    )
-    return 0.5 * (covariance + covariance.T)
+    """Return row-wise radar position covariance, if available.
+
+    Association-specific covariance columns remain preferred, but calibrated
+    heteroscedastic ``cov_*`` columns are accepted as a second choice.
+    """
+
+    for prefix in ("association_cov", "cov"):
+        columns = tuple(f"{prefix}_{suffix}" for suffix in ("ee", "nn", "uu", "en", "eu", "nu"))
+        if not all(column in row for column in columns):
+            continue
+        values = [float(row[column]) for column in columns]
+        if not np.isfinite(values).all():
+            continue
+        ee, nn, uu, en, eu, nu = values
+        covariance = np.array(
+            [
+                [ee, en, eu],
+                [en, nn, nu],
+                [eu, nu, uu],
+            ],
+            dtype=float,
+        )
+        covariance = 0.5 * (covariance + covariance.T)
+        if np.all(np.diag(covariance) > 0.0):
+            return covariance
+    return None
 
 
 def _frame_has_row_covariance(frame: pd.DataFrame) -> bool:
-    return all(column in frame.columns for column in _ASSOCIATION_COVARIANCE_COLUMNS)
+    return any(
+        all(f"{prefix}_{suffix}" in frame.columns for suffix in ("ee", "nn", "uu", "en", "eu", "nu"))
+        for prefix in ("association_cov", "cov")
+    )
 
 
 def _row_velocity_vector(row: pd.Series) -> np.ndarray | None:
