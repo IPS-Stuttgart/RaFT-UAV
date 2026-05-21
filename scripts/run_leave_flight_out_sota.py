@@ -25,10 +25,20 @@ from raft_uav.calibration.nis_covariance import (  # noqa: E402
     write_nis_covariance_calibration,
 )
 from raft_uav.evaluation.oracle_gap_decomposition import (  # noqa: E402
+    OracleGapConfig,
+    decompose_radar_oracle_gap,
     selected_track_stability_metrics,
+    write_oracle_gap_report,
 )
 from raft_uav.evaluation.metrics import nearest_time_indices, position_errors_m  # noqa: E402
-from raft_uav.io.aerpaw import discover_flights, normalize_truth, read_truth, select_flight  # noqa: E402
+from raft_uav.io.aerpaw import (  # noqa: E402
+    discover_flights,
+    normalize_radar,
+    normalize_truth,
+    read_radar_tracks_json,
+    read_truth,
+    select_flight,
+)
 
 
 @dataclass(frozen=True)
@@ -213,6 +223,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "imm_catprob_fixed_lag",
             "imm_catprob_rts",
             "imm_tracklet_viterbi_fixed_lag",
+            "hetero_imm_tracklet_viterbi_fixed_lag",
             "hetero_cv_lofo_nis_fixed_lag",
         ],
     )
@@ -387,6 +398,16 @@ def evaluate_run(
     if selected_radar is None:
         stability.pop("selected_radar_rows", None)
     row.update(stability)
+    row.update(
+        _oracle_gap_summary_columns(
+            dataset_root=dataset_root,
+            flight=flight,
+            truth=truth,
+            estimates=estimates,
+            run_dir=metrics_path.parent,
+            max_eval_time_delta_s=max_eval_time_delta_s,
+        )
+    )
     return RunEvaluation(
         row=row,
         errors_2d_m=errors_2d,
@@ -489,6 +510,7 @@ def _aggregate_method_rows(
         }
         row.update(_prefixed_summary("error_2d", summarize_scalar_errors(errors_2d)))
         row.update(_prefixed_summary("error_3d", summarize_scalar_errors(errors_3d)))
+        row.update(_aggregate_oracle_gap_rows(runs))
         rows.append(row)
     ranked = sorted(
         enumerate(rows),
@@ -511,6 +533,7 @@ def _run_method(
     nis_calibration_path: Path | None = None,
 ) -> None:
     options: list[object] = ["--acceleration-std", args.acceleration_std]
+    runtime_env = _runtime_env_updates(args)
     if method.robust:
         options.extend(common.robust_update_options(args))
     if method.fixed_lag:
@@ -525,6 +548,7 @@ def _run_method(
             output_dir=run_dir,
             association=method.association,
             extra_options=options,
+            env_overrides=runtime_env,
         )
         return
     if method.runner == "tracklet":
@@ -548,7 +572,7 @@ def _run_method(
             "imm",
             *[str(option) for option in options],
         ]
-        _run(command)
+        _run(command, env_overrides=runtime_env)
         return
     if method.runner == "learned_tracklet":
         model_path = run_dir.parent / "models" / "radar_association_likelihood.json"
@@ -578,7 +602,7 @@ def _run_method(
             str(args.tracklet_hand_unary_weight),
             *[str(option) for option in options],
         ]
-        _run(command, env_overrides=_runtime_env_updates(args))
+        _run(command, env_overrides=runtime_env)
         return
     if method.runner == "hetero_learned_tracklet":
         association_model_path = run_dir.parent / "models" / "radar_association_likelihood.json"
@@ -610,7 +634,7 @@ def _run_method(
             str(args.tracklet_hand_unary_weight),
             *[str(option) for option in options],
         ]
-        _run(command, env_overrides=_runtime_env_updates(args))
+        _run(command, env_overrides=runtime_env)
         return
     if method.runner == "imm":
         command = [
@@ -630,7 +654,7 @@ def _run_method(
             str(args.candidate_threshold),
             *[str(option) for option in options],
         ]
-        _run(command)
+        _run(command, env_overrides=runtime_env)
         return
     if method.runner == "hetero_tracklet":
         command = [
@@ -655,7 +679,7 @@ def _run_method(
             "imm",
             *[str(option) for option in options],
         ]
-        _run(command)
+        _run(command, env_overrides=runtime_env)
         return
     if method.runner == "hetero":
         command = [
@@ -677,11 +701,11 @@ def _run_method(
         ]
         if method.fixed_lag:
             command.extend(["--smoother", "fixed-lag", "--smoother-lag-s", str(args.fixed_lag_s)])
-        env_overrides: dict[str, str] | None = None
+        env_overrides: dict[str, str] = dict(runtime_env)
         if method.nis_calibrated:
             if nis_calibration_path is None:
                 raise RuntimeError(f"{method.name} requires a NIS calibration JSON")
-            env_overrides = {ENV_NIS_COVARIANCE_CALIBRATION_JSON: str(nis_calibration_path)}
+            env_overrides[ENV_NIS_COVARIANCE_CALIBRATION_JSON] = str(nis_calibration_path)
         _run(command, env_overrides=env_overrides)
         return
     raise ValueError(f"unknown method runner {method.runner!r}")
@@ -861,8 +885,140 @@ def _load_truth(dataset_root: Path, flight_name: str) -> pd.DataFrame:
     return truth
 
 
+def _load_normalized_radar(dataset_root: Path, flight_name: str) -> pd.DataFrame:
+    flight = select_flight(dataset_root, flight_name)
+    if flight.truth_txt is None:
+        raise FileNotFoundError(f"{flight.name} has no truth telemetry file")
+    if flight.radar_json is None:
+        return pd.DataFrame()
+    truth, projector, truth_origin_time = normalize_truth(read_truth(flight.truth_txt))
+    radar = normalize_radar(read_radar_tracks_json(flight.radar_json), projector, truth_origin_time)
+    return _inside_truth_window(radar, truth)
+
+
+def _inside_truth_window(frame: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or "time_s" not in frame.columns:
+        return frame
+    truth_min = float(truth["time_s"].min())
+    truth_max = float(truth["time_s"].max())
+    return frame.loc[(frame["time_s"] >= truth_min) & (frame["time_s"] <= truth_max)].copy()
+
+
 def _read_optional_csv(path: Path) -> pd.DataFrame | None:
     return pd.read_csv(path) if path.exists() else None
+
+
+def _read_csv_if_exists(path: Path) -> pd.DataFrame:
+    try:
+        return pd.read_csv(path)
+    except (FileNotFoundError, pd.errors.EmptyDataError):
+        return pd.DataFrame()
+
+
+def _oracle_gap_summary_columns(
+    *,
+    dataset_root: Path,
+    flight: str,
+    truth: pd.DataFrame,
+    estimates: pd.DataFrame,
+    run_dir: Path,
+    max_eval_time_delta_s: float,
+) -> dict[str, object]:
+    """Write and return oracle-gap diagnostics for one completed run."""
+
+    radar = _load_normalized_radar(dataset_root, flight)
+    if radar.empty:
+        return {}
+    selected_radar = _read_csv_if_exists(run_dir / "selected_radar.csv")
+    attempted_selected = _read_csv_if_exists(run_dir / "selected_radar_attempted.csv")
+    diagnostic_selected = attempted_selected if not attempted_selected.empty else selected_radar
+    selected_arg = None if diagnostic_selected.empty else diagnostic_selected
+    config = OracleGapConfig(estimate_time_gate_s=float(max_eval_time_delta_s))
+    frame_rows = decompose_radar_oracle_gap(
+        radar=radar,
+        truth=truth,
+        selected_radar=selected_arg,
+        estimates=estimates,
+        config=config,
+    )
+    summary = write_oracle_gap_report(
+        frame_rows=frame_rows,
+        selected_radar=selected_arg,
+        output_csv=run_dir / "oracle_gap.csv",
+        output_json=run_dir / "oracle_gap_summary.json",
+    )
+    summary["attempted_selected_radar_rows"] = int(len(diagnostic_selected))
+    return {f"oracle_{key}": value for key, value in summary.items()}
+
+
+_ORACLE_GAP_CATEGORIES = (
+    "no_truth",
+    "empty_radar_frame",
+    "no_plausible_candidate",
+    "plausible_candidate_not_selected",
+    "selected_candidate_rejected_by_filter",
+    "wrong_candidate_selected",
+    "filter_or_timing_drift_after_correct_selection",
+    "correct_candidate_selected",
+)
+
+
+def _aggregate_oracle_gap_rows(runs: Sequence[RunEvaluation]) -> dict[str, object]:
+    rows = [run.row for run in runs]
+    if not any("oracle_radar_frame_count" in row for row in rows):
+        return {}
+    out: dict[str, object] = {}
+    for key in (
+        "oracle_radar_frame_count",
+        "oracle_truth_matched_frame_count",
+        "oracle_plausible_candidate_frame_count",
+        "oracle_selected_plausible_frame_count",
+        "oracle_selected_radar_rows",
+        "oracle_attempted_selected_radar_rows",
+        "oracle_finite_track_id_rows",
+        "oracle_unique_selected_track_ids",
+        "oracle_track_switch_count",
+    ):
+        if any(key in row for row in rows):
+            out[key] = int(sum(_as_int(row.get(key, 0)) for row in rows))
+    truth_matched = _as_int(out.get("oracle_truth_matched_frame_count", 0))
+    plausible = _as_int(out.get("oracle_plausible_candidate_frame_count", 0))
+    selected_plausible = _as_int(out.get("oracle_selected_plausible_frame_count", 0))
+    radar_frames = _as_int(out.get("oracle_radar_frame_count", 0))
+    out["oracle_candidate_availability_rate"] = _safe_rate(plausible, truth_matched)
+    out["oracle_association_recall_given_candidate_rate"] = _safe_rate(
+        selected_plausible,
+        plausible,
+    )
+    for category in _ORACLE_GAP_CATEGORIES:
+        count_key = f"oracle_category_{category}_count"
+        if not any(count_key in row for row in rows):
+            continue
+        count = int(sum(_as_int(row.get(count_key, 0)) for row in rows))
+        out[count_key] = count
+        out[f"oracle_category_{category}_rate"] = _safe_rate(count, radar_frames)
+    switch_denominator = sum(
+        max(_as_int(row.get("oracle_finite_track_id_rows", 0)) - 1, 0)
+        for row in rows
+    )
+    if "oracle_track_switch_count" in out:
+        out["oracle_track_switch_rate"] = _safe_rate(
+            _as_int(out["oracle_track_switch_count"]),
+            switch_denominator,
+        )
+    return out
+
+
+def _as_int(value: object) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_rate(numerator: int | float, denominator: int | float) -> float:
+    denominator = float(denominator)
+    return float("nan") if denominator <= 0.0 else float(numerator) / denominator
 
 
 def _mean_finite(values: Sequence[object]) -> float:

@@ -96,7 +96,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
         track_support_by_event=_track_support_by_event_prefix(events),
         radar_covariance_fn=radar_covariance_fn,
     )
-    records, accepted = _base._replay_selected_tracklet_path(
+    records, accepted, replayed = _base._replay_selected_tracklet_path(
         events=events,
         selected_rows=selected,
         initial_measurement=initial,
@@ -111,7 +111,9 @@ def run_async_cv_baseline_with_tracklet_viterbi_association(
         max_residual_norms_by_source=max_residual_norms_by_source,
         radar_covariance_fn=radar_covariance_fn,
     )
-    return records, _selected_rows_frame(radar, accepted)
+    accepted_frame = _selected_rows_frame(radar, accepted)
+    accepted_frame.attrs["attempted_selected_radar"] = _selected_rows_frame(radar, replayed)
+    return records, accepted_frame
 
 
 def _select_tracklet_viterbi_path(
