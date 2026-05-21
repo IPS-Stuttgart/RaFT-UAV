@@ -60,6 +60,8 @@ _TRACKLET_LEARNED_UNARY_WEIGHT_ENV = "RAFT_UAV_TRACKLET_LEARNED_UNARY_WEIGHT"
 _TRACKLET_HAND_UNARY_WEIGHT_ENV = "RAFT_UAV_TRACKLET_HAND_UNARY_WEIGHT"
 _LEARNED_CANDIDATE_MODEL_ENV = "RAFT_UAV_TRACKLET_LEARNED_CANDIDATE_MODEL"
 _LEARNED_CANDIDATE_SCORE_MODE_ENV = "RAFT_UAV_TRACKLET_LEARNED_CANDIDATE_SCORE_MODE"
+_TRACKLET_SOFT_TOP_K_PATHS_ENV = "RAFT_UAV_TRACKLET_SOFT_TOP_K_PATHS"
+_TRACKLET_SOFT_PATH_TEMPERATURE_ENV = "RAFT_UAV_TRACKLET_SOFT_PATH_TEMPERATURE"
 _TRACKLET_VARIANTS = ("base", "retention", "range-covariance", "fixed-lag")
 _TRACKLET_REPLAY_TRACKERS = ("cv", "imm")
 _LEARNED_CANDIDATE_SCORE_MODES = ("additive", "replace")
@@ -345,6 +347,14 @@ def _tracklet_config_from_environment() -> _TrackletConfigOverlay:
             _LEARNED_CANDIDATE_SCORE_MODE_ENV,
             base.learned_candidate_score_mode,
         ),
+        soft_top_k_paths=_env_int(
+            _TRACKLET_SOFT_TOP_K_PATHS_ENV,
+            int(base.soft_top_k_paths),
+        ),
+        soft_path_temperature=_env_float(
+            _TRACKLET_SOFT_PATH_TEMPERATURE_ENV,
+            float(base.soft_path_temperature),
+        ),
     )
 
 
@@ -372,6 +382,8 @@ def _tracklet_parser() -> argparse.ArgumentParser:
         "--tracklet-learned-candidate-score-mode",
         choices=_LEARNED_CANDIDATE_SCORE_MODES,
     )
+    parser.add_argument("--tracklet-soft-top-k-paths", type=_positive_int)
+    parser.add_argument("--tracklet-soft-path-temperature", type=_positive_float)
     return parser
 
 
@@ -423,6 +435,8 @@ def _environment_updates_from_namespace(namespace: argparse.Namespace) -> dict[s
         _LEARNED_CANDIDATE_SCORE_MODE_ENV,
         namespace.tracklet_learned_candidate_score_mode,
     )
+    _maybe_add(updates, _TRACKLET_SOFT_TOP_K_PATHS_ENV, namespace.tracklet_soft_top_k_paths)
+    _maybe_add(updates, _TRACKLET_SOFT_PATH_TEMPERATURE_ENV, namespace.tracklet_soft_path_temperature)
     return updates
 
 

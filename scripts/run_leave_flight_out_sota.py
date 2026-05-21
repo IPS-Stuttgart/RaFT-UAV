@@ -187,6 +187,26 @@ METHODS: dict[str, MethodSpec] = {
         fixed_lag=True,
         robust=True,
     ),
+    "hetero_imm_tracklet_viterbi_lofo_nis_fixed_lag": MethodSpec(
+        "hetero_imm_tracklet_viterbi_lofo_nis_fixed_lag",
+        "hetero_tracklet",
+        "LOFO NIS-calibrated heteroscedastic IMM tracklet-Viterbi fixed-lag",
+        association="tracklet-viterbi",
+        fixed_lag=True,
+        robust=True,
+        nis_calibrated=True,
+    ),
+    "hetero_imm_learned_tracklet_viterbi_lofo_nis_fixed_lag": MethodSpec(
+        "hetero_imm_learned_tracklet_viterbi_lofo_nis_fixed_lag",
+        "hetero_learned_tracklet",
+        "LOFO NIS-calibrated heteroscedastic IMM learned tracklet-Viterbi fixed-lag",
+        association="learned-tracklet-viterbi",
+        fixed_lag=True,
+        robust=True,
+        nis_calibrated=True,
+        needs_association_model=True,
+        replay_tracker="imm",
+    ),
 }
 
 
@@ -214,6 +234,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "imm_catprob_rts",
             "imm_tracklet_viterbi_fixed_lag",
             "hetero_cv_lofo_nis_fixed_lag",
+            "hetero_imm_tracklet_viterbi_lofo_nis_fixed_lag",
+            "hetero_imm_learned_tracklet_viterbi_lofo_nis_fixed_lag",
         ],
     )
     parser.add_argument("--candidate-threshold", type=float, default=0.4)
@@ -249,6 +271,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--tracklet-hand-unary-weight", type=float, default=0.25)
     parser.add_argument("--enable-soft-catprob-retention", action="store_true")
     parser.add_argument("--enable-radar-velocity-update", action="store_true")
+    parser.add_argument("--enable-do-no-harm-radar-policy", action="store_true")
+    parser.add_argument("--tracklet-soft-top-k-paths", type=int, default=1)
+    parser.add_argument("--tracklet-soft-path-temperature", type=float, default=1.0)
+    parser.add_argument(
+        "--lofo-time-offset-summary",
+        type=Path,
+        default=None,
+        help="Optional lofo_time_offset_summary.csv; selected offsets are applied to each held-out fold.",
+    )
+    parser.add_argument(
+        "--lofo-radar-covariance-summary",
+        type=Path,
+        default=None,
+        help="Optional lofo_radar_covariance_summary.csv; selected held-out covariance settings become RAFT_UAV_RADAR_* env vars.",
+    )
     parser.add_argument("--nis-covariance-calibration-json", type=Path, default=None)
     parser.add_argument("--skip-existing", action="store_true")
     args = parser.parse_args(argv)
@@ -511,6 +548,9 @@ def _run_method(
     nis_calibration_path: Path | None = None,
 ) -> None:
     options: list[object] = ["--acceleration-std", args.acceleration_std]
+    if method.runner not in {"imm", "hetero"}:
+        options.extend(_time_offset_options(args, flight))
+    env_overrides = _runtime_env_updates(args, flight=flight, nis_calibration_path=nis_calibration_path)
     if method.robust:
         options.extend(common.robust_update_options(args))
     if method.fixed_lag:
@@ -519,13 +559,21 @@ def _run_method(
         options.extend(common.smoother_options("rts", args.fixed_lag_s))
     if method.runner == "baseline":
         options.extend(["--radar-catprob-threshold", args.candidate_threshold])
-        common.run_baseline(
-            dataset_root=args.dataset_root,
-            flight=flight,
-            output_dir=run_dir,
-            association=method.association,
-            extra_options=options,
-        )
+        command = [
+            sys.executable,
+            "-m",
+            "raft_uav.cli",
+            "run-baseline",
+            str(args.dataset_root),
+            "--flight",
+            flight,
+            "--output-dir",
+            str(run_dir),
+            "--radar-association",
+            method.association,
+            *[str(option) for option in options],
+        ]
+        _run(command, env_overrides=env_overrides)
         return
     if method.runner == "tracklet":
         command = [
@@ -548,7 +596,7 @@ def _run_method(
             "imm",
             *[str(option) for option in options],
         ]
-        _run(command)
+        _run(command, env_overrides=env_overrides)
         return
     if method.runner == "learned_tracklet":
         model_path = run_dir.parent / "models" / "radar_association_likelihood.json"
@@ -578,7 +626,7 @@ def _run_method(
             str(args.tracklet_hand_unary_weight),
             *[str(option) for option in options],
         ]
-        _run(command, env_overrides=_runtime_env_updates(args))
+        _run(command, env_overrides=env_overrides)
         return
     if method.runner == "hetero_learned_tracklet":
         association_model_path = run_dir.parent / "models" / "radar_association_likelihood.json"
@@ -610,7 +658,7 @@ def _run_method(
             str(args.tracklet_hand_unary_weight),
             *[str(option) for option in options],
         ]
-        _run(command, env_overrides=_runtime_env_updates(args))
+        _run(command, env_overrides=env_overrides)
         return
     if method.runner == "imm":
         command = [
@@ -630,7 +678,7 @@ def _run_method(
             str(args.candidate_threshold),
             *[str(option) for option in options],
         ]
-        _run(command)
+        _run(command, env_overrides=env_overrides)
         return
     if method.runner == "hetero_tracklet":
         command = [
@@ -655,7 +703,7 @@ def _run_method(
             "imm",
             *[str(option) for option in options],
         ]
-        _run(command)
+        _run(command, env_overrides=env_overrides)
         return
     if method.runner == "hetero":
         command = [
@@ -677,11 +725,6 @@ def _run_method(
         ]
         if method.fixed_lag:
             command.extend(["--smoother", "fixed-lag", "--smoother-lag-s", str(args.fixed_lag_s)])
-        env_overrides: dict[str, str] | None = None
-        if method.nis_calibrated:
-            if nis_calibration_path is None:
-                raise RuntimeError(f"{method.name} requires a NIS calibration JSON")
-            env_overrides = {ENV_NIS_COVARIANCE_CALIBRATION_JSON: str(nis_calibration_path)}
         _run(command, env_overrides=env_overrides)
         return
     raise ValueError(f"unknown method runner {method.runner!r}")
@@ -827,15 +870,107 @@ def _write_nis_calibration_summary_csv(payload: Mapping[str, object], path: Path
         path.write_text("group\n", encoding="utf-8")
 
 
-def _runtime_env_updates(args: argparse.Namespace) -> dict[str, str]:
+def _runtime_env_updates(
+    args: argparse.Namespace,
+    *,
+    flight: str | None = None,
+    nis_calibration_path: Path | None = None,
+) -> dict[str, str]:
     env: dict[str, str] = {}
     if args.enable_soft_catprob_retention:
         env["RAFT_UAV_SOFT_CATPROB_RETENTION"] = "1"
+        env["RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE"] = "soft"
     if args.enable_radar_velocity_update:
         env["RAFT_UAV_RADAR_UPDATE_USES_VELOCITY"] = "1"
-    if args.nis_covariance_calibration_json is not None:
+    if args.enable_do_no_harm_radar_policy:
+        env["RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY"] = "1"
+    if args.tracklet_soft_top_k_paths > 1:
+        env["RAFT_UAV_TRACKLET_SOFT_TOP_K_PATHS"] = str(args.tracklet_soft_top_k_paths)
+    if float(args.tracklet_soft_path_temperature) != 1.0:
+        env["RAFT_UAV_TRACKLET_SOFT_PATH_TEMPERATURE"] = str(args.tracklet_soft_path_temperature)
+    if nis_calibration_path is not None:
+        env[ENV_NIS_COVARIANCE_CALIBRATION_JSON] = str(nis_calibration_path)
+    elif args.nis_covariance_calibration_json is not None:
         env[ENV_NIS_COVARIANCE_CALIBRATION_JSON] = str(args.nis_covariance_calibration_json)
+    if flight is not None:
+        env.update(_lofo_radar_covariance_env(args, flight))
     return env
+
+
+def _time_offset_options(args: argparse.Namespace, flight: str) -> list[object]:
+    """Return held-out-safe time-offset correction flags for one fold."""
+
+    row = _lookup_fold_row(
+        args.lofo_time_offset_summary,
+        flight,
+        key_columns=("flight", "holdout_flight", "heldout_flight"),
+    )
+    if row is None:
+        return []
+    options: list[object] = []
+    rf_offset = _row_float(row, "rf_offset_s", "applied_rf_time_offset_s")
+    radar_offset = _row_float(row, "radar_offset_s", "applied_radar_time_offset_s")
+    if rf_offset is not None:
+        options.extend(["--rf-time-offset-correction-s", rf_offset])
+    if radar_offset is not None:
+        options.extend(["--radar-time-offset-correction-s", radar_offset])
+    return options
+
+
+def _lofo_radar_covariance_env(args: argparse.Namespace, flight: str) -> dict[str, str]:
+    """Return selected LOFO range-angle radar covariance env for one held-out fold."""
+
+    row = _lookup_fold_row(
+        args.lofo_radar_covariance_summary,
+        flight,
+        key_columns=("holdout_flight", "heldout_flight", "flight"),
+    )
+    if row is None:
+        return {}
+    mapping = {
+        "range_std_m": "RAFT_UAV_RADAR_RANGE_STD_M",
+        "azimuth_std_deg": "RAFT_UAV_RADAR_AZIMUTH_STD_DEG",
+        "elevation_std_deg": "RAFT_UAV_RADAR_ELEVATION_STD_DEG",
+        "min_std_m": "RAFT_UAV_RADAR_COVARIANCE_MIN_STD_M",
+        "max_std_m": "RAFT_UAV_RADAR_COVARIANCE_MAX_STD_M",
+    }
+    env = {"RAFT_UAV_RADAR_COVARIANCE_MODE": "range-angle"}
+    for column, env_name in mapping.items():
+        value = _row_float(row, column)
+        if value is not None:
+            env[env_name] = str(value)
+    return env
+
+
+def _lookup_fold_row(
+    path: Path | None,
+    flight: str,
+    *,
+    key_columns: Sequence[str],
+) -> pd.Series | None:
+    if path is None or not path.exists():
+        return None
+    frame = pd.read_csv(path)
+    for column in key_columns:
+        if column not in frame.columns:
+            continue
+        matches = frame.loc[frame[column].astype(str) == str(flight)]
+        if not matches.empty:
+            return matches.iloc[0]
+    return None
+
+
+def _row_float(row: pd.Series, *columns: str) -> float | None:
+    for column in columns:
+        if column not in row.index:
+            continue
+        try:
+            value = float(row[column])
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(value):
+            return value
+    return None
 
 
 def _run(command: Sequence[str], *, env_overrides: Mapping[str, str] | None = None) -> None:

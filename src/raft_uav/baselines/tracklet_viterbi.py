@@ -12,11 +12,16 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 import math
+import os
 
 import numpy as np
 import pandas as pd
 
-from raft_uav.baselines.kalman import AsyncConstantVelocityKalmanTracker, TrackingMeasurement
+from raft_uav.baselines.kalman import (
+    AsyncConstantVelocityKalmanTracker,
+    TrackingMeasurement,
+    TrackingUpdateDiagnostics,
+)
 from raft_uav.baselines.learned_radar_likelihood import (
     LearnedRadarAssociationModel,
     radar_association_feature_frame,
@@ -25,6 +30,9 @@ from raft_uav.numeric import optional_float as _optional_float
 from raft_uav.numeric import optional_int as _optional_track_id
 
 RadarCovarianceFn = Callable[[pd.Series, np.ndarray], np.ndarray]
+_DO_NO_HARM_RADAR_POLICY_ENV = "RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY"
+_TRACKLET_SOFT_TOP_K_PATHS_ENV = "RAFT_UAV_TRACKLET_SOFT_TOP_K_PATHS"
+_TRACKLET_SOFT_PATH_TEMPERATURE_ENV = "RAFT_UAV_TRACKLET_SOFT_PATH_TEMPERATURE"
 
 
 @dataclass(frozen=True)
@@ -58,10 +66,16 @@ class TrackletViterbiAssociationConfig:
     learned_candidate_score_mode: str = "additive"
     min_learned_candidate_probability: float = 1.0e-9
     min_catprob: float = 1.0e-3
+    soft_top_k_paths: int = 1
+    soft_path_temperature: float = 1.0
 
     def __post_init__(self) -> None:
         if self.max_candidates_per_frame < 1:
             raise ValueError("max_candidates_per_frame must be positive")
+        if self.soft_top_k_paths < 1:
+            raise ValueError("soft_top_k_paths must be positive")
+        if self.soft_path_temperature <= 0.0:
+            raise ValueError("soft_path_temperature must be positive")
         if self.reacquisition_miss_streak_threshold < 1:
             raise ValueError("reacquisition_miss_streak_threshold must be positive")
         positive = (
@@ -360,8 +374,27 @@ def _select_tracklet_viterbi_path(
         miss_streaks.append(current_miss_streaks)
         parents.append(current_parents)
 
-    best = int(np.argmin(costs[-1]))
-    path_cost = float(costs[-1][best])
+    terminal_count = min(_soft_top_k_paths(config), len(costs[-1]))
+    terminal_indices = np.argsort(costs[-1])[:terminal_count]
+    paths = [
+        (
+            float(costs[-1][int(best)]),
+            _reconstruct_viterbi_path(frames, parents, int(best)),
+        )
+        for best in terminal_indices
+    ]
+    if terminal_count <= 1:
+        path_cost, path = paths[0]
+        return _selected_rows_from_viterbi_path(path, path_cost, config)
+    return _selected_rows_from_soft_viterbi_paths(paths, config)
+
+
+def _reconstruct_viterbi_path(
+    frames: list[list[_ViterbiNode]],
+    parents: list[np.ndarray],
+    terminal_index: int,
+) -> list[_ViterbiNode]:
+    best = int(terminal_index)
     path: list[_ViterbiNode] = []
     for frame_index in range(len(frames) - 1, -1, -1):
         path.append(frames[frame_index][best])
@@ -369,7 +402,14 @@ def _select_tracklet_viterbi_path(
         if best < 0:
             break
     path.reverse()
-    return _selected_rows_from_viterbi_path(path, path_cost, config)
+    return path
+
+
+def _soft_top_k_paths(config: object) -> int:
+    env_value = os.environ.get(_TRACKLET_SOFT_TOP_K_PATHS_ENV)
+    if env_value:
+        return max(1, int(env_value))
+    return max(1, int(getattr(config, "soft_top_k_paths", 1)))
 
 
 def _selected_rows_from_viterbi_path(
@@ -425,6 +465,66 @@ def _selected_rows_from_viterbi_path(
         rows.append(row)
         preceding_miss_streak = 0
     return rows
+
+
+def _selected_rows_from_soft_viterbi_paths(
+    paths: list[tuple[float, list[_ViterbiNode]]],
+    config: TrackletViterbiAssociationConfig,
+) -> list[pd.Series]:
+    """Moment-match radar positions from the best few full-sequence paths."""
+
+    per_path_rows: list[tuple[float, list[pd.Series]]] = [
+        (path_cost, _selected_rows_from_viterbi_path(path, path_cost, config))
+        for path_cost, path in paths
+    ]
+    grouped: dict[tuple[str, int | float], list[tuple[float, pd.Series]]] = {}
+    for path_cost, rows in per_path_rows:
+        for row in rows:
+            grouped.setdefault(_selected_row_event_key(row), []).append((path_cost, row))
+
+    selected: list[pd.Series] = []
+    for key in sorted(grouped, key=lambda item: (str(item[0]), item[1])):
+        alternatives = grouped[key]
+        if len(alternatives) == 1:
+            row = alternatives[0][1].copy()
+            row["association_soft_path_count"] = 1
+            row["association_soft_path_weight_max"] = 1.0
+            row["association_soft_path_weight_entropy"] = 0.0
+            selected.append(row)
+            continue
+        costs = np.array([cost for cost, _ in alternatives], dtype=float)
+        weights = _soft_path_weights(costs, config)
+        frame = pd.DataFrame([row for _, row in alternatives]).reset_index(drop=True)
+        positions = frame[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+        mean = weights @ positions
+        covariance = np.zeros((3, 3), dtype=float)
+        for index, (_, row) in enumerate(alternatives):
+            row_covariance = _row_position_covariance_or_default(row)
+            diff = positions[index] - mean
+            covariance += float(weights[index]) * (row_covariance + np.outer(diff, diff))
+        best_index = int(np.argmin(costs))
+        fused = alternatives[best_index][1].copy()
+        fused["east_m"] = float(mean[0])
+        fused["north_m"] = float(mean[1])
+        fused["up_m"] = float(mean[2])
+        fused["association_mode"] = "tracklet-viterbi"
+        fused["association_action"] = "soft_viterbi_path_mixture"
+        fused["association_soft_path_count"] = int(len(alternatives))
+        fused["association_soft_path_weight_max"] = float(np.max(weights))
+        fused["association_soft_path_weight_entropy"] = _weight_entropy(weights)
+        fused["association_soft_path_temperature"] = _soft_path_temperature(config)
+        fused["association_viterbi_path_cost"] = float(np.min(costs))
+        fused["association_soft_path_cost_mean"] = float(weights @ costs)
+        fused["association_cov_ee"] = float(covariance[0, 0])
+        fused["association_cov_nn"] = float(covariance[1, 1])
+        fused["association_cov_uu"] = float(covariance[2, 2])
+        fused["association_cov_en"] = float(covariance[0, 1])
+        fused["association_cov_eu"] = float(covariance[0, 2])
+        fused["association_cov_nu"] = float(covariance[1, 2])
+        fused["association_covariance_mode"] = "soft-viterbi-path-mixture"
+        fused["association_cov_trace_m2"] = float(np.trace(covariance))
+        selected.append(fused)
+    return selected
 
 
 def _nodes_for_radar_frame(
@@ -761,18 +861,52 @@ def _replay_selected_tracklet_path(
             radar_covariance_fn,
         )
         measurement = _radar_row_to_measurement(selected, measurement_covariance)
+        gate_threshold = _gate_threshold_for_measurement(
+            measurement,
+            gate_probabilities_by_source=gate_probabilities_by_source,
+            gate_thresholds_by_source=gate_thresholds_by_source,
+        )
+        safety_gate_threshold = _gate_threshold_for_measurement(
+            measurement,
+            gate_probabilities_by_source=safety_gate_probabilities_by_source,
+            gate_thresholds_by_source=safety_gate_thresholds_by_source,
+        )
+        decision = _do_no_harm_decision(selected, measurement, gate_threshold)
+        selected = _annotate_do_no_harm(selected, decision)
+        if decision is not None and decision.action in {"skip", "defer"}:
+            tracker.predict_to(measurement.time_s)
+            diagnostics = TrackingUpdateDiagnostics(
+                time_s=float(measurement.time_s),
+                source="radar",
+                measurement_dim=int(measurement.vector.size),
+                accepted=False,
+                update_action=f"do_no_harm_{decision.action}",
+                nis=float(_optional_float(selected.get("association_nis")) or np.nan),
+                gate_threshold=gate_threshold,
+                safety_gate_threshold=safety_gate_threshold,
+                residual_gate_threshold_m=None,
+                covariance_scale=float(decision.covariance_scale),
+                inflation_alpha=None,
+                residual_norm_m=float("nan"),
+            )
+            records.append(
+                _record(
+                    measurement,
+                    tracker,
+                    diagnostics,
+                    track_id=_optional_track_id(selected.get("track_id")),
+                    association_nis=_optional_float(selected.get("association_nis")),
+                    association_score=_optional_float(selected.get("association_score")),
+                    association_mode=str(selected.get("association_mode", "tracklet-viterbi")),
+                )
+            )
+            continue
+        if decision is not None and decision.action == "soften":
+            measurement = _scaled_tracking_measurement(measurement, decision.covariance_scale)
         diagnostics = tracker.update(
             measurement,
-            gate_threshold=_gate_threshold_for_measurement(
-                measurement,
-                gate_probabilities_by_source=gate_probabilities_by_source,
-                gate_thresholds_by_source=gate_thresholds_by_source,
-            ),
-            safety_gate_threshold=_gate_threshold_for_measurement(
-                measurement,
-                gate_probabilities_by_source=safety_gate_probabilities_by_source,
-                gate_thresholds_by_source=safety_gate_thresholds_by_source,
-            ),
+            gate_threshold=gate_threshold,
+            safety_gate_threshold=safety_gate_threshold,
             max_residual_norm=_max_residual_norm_for_measurement(
                 measurement,
                 max_residual_norms_by_source=max_residual_norms_by_source,
@@ -821,6 +955,99 @@ def _selected_row_event_key(row: pd.Series) -> tuple[str, int | float]:
         return "frame_index", int(frame_index)
     time_s = _optional_float(row.get("time_s"))
     return ("time_s", float("nan")) if time_s is None else ("time_s", round(float(time_s), 9))
+
+
+def _do_no_harm_decision(
+    selected: pd.Series,
+    measurement: TrackingMeasurement,
+    gate_threshold: float | None,
+):
+    if not _env_flag(_DO_NO_HARM_RADAR_POLICY_ENV):
+        return None
+    from raft_uav.evaluation.fifth_wave_diagnostics import do_no_harm_radar_decision
+
+    confidence = _optional_float(selected.get("association_learned_candidate_probability"))
+    entropy = _optional_float(selected.get("association_soft_path_weight_entropy"))
+    rf_anchor_nis = _optional_float(selected.get("association_anchor_nis"))
+    rf_anchor_gate_nis = _optional_float(selected.get("association_reacquisition_gate_nis"))
+    preceding_miss_streak = int(_optional_float(selected.get("association_preceding_miss_streak")) or 0)
+    recent_recovery_mode = bool(selected.get("association_reacquisition_active", False))
+    return do_no_harm_radar_decision(
+        association_nis=_optional_float(selected.get("association_nis")),
+        gate_threshold=gate_threshold,
+        association_confidence=confidence,
+        candidate_entropy=entropy,
+        rf_anchor_nis=rf_anchor_nis,
+        rf_anchor_gate_nis=rf_anchor_gate_nis,
+        miss_streak=preceding_miss_streak,
+        recent_recovery_mode=recent_recovery_mode,
+    )
+
+
+def _annotate_do_no_harm(selected: pd.Series, decision) -> pd.Series:
+    if decision is None:
+        return selected
+    row = selected.copy()
+    row["do_no_harm_action"] = decision.action
+    row["do_no_harm_risk_score"] = float(decision.risk_score)
+    row["do_no_harm_reasons"] = ";".join(decision.reasons)
+    row["do_no_harm_covariance_scale"] = float(decision.covariance_scale)
+    row["do_no_harm_defer_lag_s"] = float(decision.defer_lag_s)
+    return row
+
+
+def _scaled_tracking_measurement(
+    measurement: TrackingMeasurement,
+    scale: float,
+) -> TrackingMeasurement:
+    covariance = np.asarray(measurement.covariance, dtype=float)
+    return TrackingMeasurement(
+        time_s=measurement.time_s,
+        vector=measurement.vector,
+        covariance=covariance * float(scale),
+        source=measurement.source,
+    )
+
+
+def _soft_path_temperature(config: object) -> float:
+    env_value = os.environ.get(_TRACKLET_SOFT_PATH_TEMPERATURE_ENV)
+    if env_value:
+        return max(float(env_value), 1.0e-9)
+    return max(float(getattr(config, "soft_path_temperature", 1.0)), 1.0e-9)
+
+
+def _soft_path_weights(costs: np.ndarray, config: object) -> np.ndarray:
+    temperature = _soft_path_temperature(config)
+    values = -np.asarray(costs, dtype=float).reshape(-1) / temperature
+    maximum = float(np.max(values))
+    if not np.isfinite(maximum):
+        return np.full(values.size, 1.0 / max(values.size, 1))
+    weights = np.exp(values - maximum)
+    total = float(np.sum(weights))
+    if total <= 0.0 or not np.isfinite(total):
+        return np.full(values.size, 1.0 / max(values.size, 1))
+    return weights / total
+
+
+def _row_position_covariance_or_default(row: pd.Series) -> np.ndarray:
+    try:
+        from raft_uav.baselines.radar_association import _row_covariance
+
+        covariance = _row_covariance(row)
+        if covariance is not None:
+            return covariance
+    except Exception:
+        pass
+    return np.diag([25.0**2, 25.0**2, 35.0**2])
+
+
+def _weight_entropy(weights: np.ndarray) -> float:
+    clipped = np.clip(np.asarray(weights, dtype=float), 1e-300, 1.0)
+    return float(-np.sum(clipped * np.log(clipped)))
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _row_position(row: pd.Series) -> np.ndarray | None:
