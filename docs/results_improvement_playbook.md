@@ -5,7 +5,8 @@ results without using held-out truth for online decisions.
 
 ## Failure budget / oracle gap
 
-Use `raft-uav-oracle-gap-report` after a run to classify radar frames into:
+Use `python scripts/run_oracle_gap_decomposition.py` after a completed run to
+classify radar frames into:
 
 - no usable radar candidate,
 - missed association,
@@ -67,15 +68,17 @@ and keep it tightly bounded.
 
 ## Stress perturbations
 
-`raft-uav-stress-perturbations` generates deterministic perturbation CSVs: frame
-drops, false tracks, timestamp jitter, class-probability attenuation, velocity
-noise, and position noise.  Use degradation curves rather than a single nominal
-score when claiming robustness.
+Planned tooling should generate deterministic perturbation CSVs: frame drops,
+false tracks, timestamp jitter, class-probability attenuation, velocity noise,
+and position noise.  Use degradation curves rather than a single nominal score
+when claiming robustness.  No installed `raft-uav-*` command is currently
+exposed for this step.
 
 ## Golden artifacts
 
-`raft-uav-golden-artifact-checks` validates tiny smoke-test runs: required files,
-parseability, monotonic times, basic metrics keys, and NaN fractions.
+Planned golden-artifact checks should validate tiny smoke-test runs: required
+files, parseability, monotonic times, basic metrics keys, and NaN fractions.  No
+installed `raft-uav-*` command is currently exposed for this step.
 
 ## Track-switch reporting
 
