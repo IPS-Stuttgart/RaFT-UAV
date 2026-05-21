@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import re
 import sys
 import tomllib
 from pathlib import Path
 
 
-def test_documented_nested_lofo_tuning_entrypoint_is_exposed() -> None:
+def _project_scripts() -> dict[str, str]:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-    scripts = pyproject["project"]["scripts"]
+    return dict(pyproject["project"]["scripts"])
+
+
+def test_documented_nested_lofo_tuning_entrypoint_is_exposed() -> None:
+    scripts = _project_scripts()
 
     assert (
         scripts["raft-uav-nested-lofo-tuning"]
@@ -16,12 +21,16 @@ def test_documented_nested_lofo_tuning_entrypoint_is_exposed() -> None:
 
 
 def test_nested_lofo_tuning_entrypoint_target_imports() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-    module_name, function_name = pyproject["project"]["scripts"][
-        "raft-uav-nested-lofo-tuning"
-    ].split(":", 1)
+    module_name, function_name = _project_scripts()["raft-uav-nested-lofo-tuning"].split(":", 1)
 
     __import__(module_name)
     module = sys.modules[module_name]
 
     assert callable(getattr(module, function_name))
+
+
+def test_playbook_runnable_commands_are_installed_entrypoints() -> None:
+    playbook = Path("docs/results_improvement_playbook.md").read_text(encoding="utf-8")
+    documented = set(re.findall(r"`(raft-uav-[^`\s]+)`", playbook))
+
+    assert documented <= set(_project_scripts())
