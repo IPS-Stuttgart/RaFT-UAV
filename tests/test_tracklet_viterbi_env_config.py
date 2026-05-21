@@ -21,6 +21,23 @@ def test_tracklet_viterbi_config_reads_environment(monkeypatch) -> None:
     assert config.max_track_support_reward == 3.0
 
 
+def test_tracklet_viterbi_config_supports_legacy_candidate_env_alias(monkeypatch) -> None:
+    monkeypatch.setenv(tracklet_viterbi_cli._MAX_CANDIDATES_PER_FRAME_LEGACY_ENV, "13")
+
+    config = tracklet_viterbi_cli._tracklet_config_from_environment()
+
+    assert config.max_candidates_per_frame == 13
+
+
+def test_tracklet_viterbi_canonical_candidate_env_overrides_legacy_alias(monkeypatch) -> None:
+    monkeypatch.setenv(tracklet_viterbi_cli._MAX_CANDIDATES_PER_FRAME_LEGACY_ENV, "13")
+    monkeypatch.setenv(tracklet_viterbi_cli._MAX_CANDIDATES_PER_FRAME_ENV, "17")
+
+    config = tracklet_viterbi_cli._tracklet_config_from_environment()
+
+    assert config.max_candidates_per_frame == 17
+
+
 def test_tracklet_cli_leaves_runtime_tracklet_args_for_runtime_parser() -> None:
     remaining, updates = tracklet_viterbi_cli._extract_tracklet_args(
         [
