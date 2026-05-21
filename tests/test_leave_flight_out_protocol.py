@@ -107,7 +107,9 @@ def test_nis_calibration_summary_csv_flattens_groups(tmp_path: Path) -> None:
 
 def test_imm_runner_forwards_smoother_options(monkeypatch, tmp_path: Path) -> None:
     captured: list[list[str]] = []
-    monkeypatch.setattr(lfo, "_run", lambda command: captured.append(list(command)))
+    monkeypatch.setattr(
+        lfo, "_run", lambda command, **_kwargs: captured.append(list(command))
+    )
     args = SimpleNamespace(
         dataset_root=tmp_path / "dataset",
         acceleration_std=4.0,
