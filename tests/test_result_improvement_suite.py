@@ -2,6 +2,7 @@ from pathlib import Path
 
 from raft_uav.research.result_improvement_suite import (
     CommandSpec,
+    DEFAULT_RUNTIME_ENV,
     ImprovementSuiteConfig,
     build_improvement_suite_plan,
 )
@@ -44,3 +45,29 @@ def test_suite_plan_can_disable_diagnostic_steps() -> None:
 
     assert not any(name.startswith("oracle_gap_") for name in names)
     assert "constrained_leaderboard_ranking" not in names
+
+
+def test_suite_uses_tracklet_cli_candidate_env_key() -> None:
+    assert DEFAULT_RUNTIME_ENV["RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"] == "12"
+    assert "RAFT_UAV_TRACKLET_MAX_CANDIDATES" not in DEFAULT_RUNTIME_ENV
+
+
+def test_sota_command_carries_fixed_runtime_env() -> None:
+    config = ImprovementSuiteConfig(
+        dataset_root=Path("data/raw/AADM2025Dryad"),
+        output_dir=Path("outputs/result_improvement_suite"),
+        flights=("Opt1", "Opt2"),
+        methods=("imm_tracklet_viterbi_fixed_lag",),
+        include_time_offset_calibration=False,
+        include_covariance_tuning=False,
+        include_nested_tuning=False,
+        include_oracle_gap=False,
+        include_constrained_ranking=False,
+    )
+
+    commands = build_improvement_suite_plan(config)
+
+    assert len(commands) == 1
+    assert commands[0].name == "leave_flight_out_sota"
+    assert commands[0].env["RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"] == "12"
+    assert "RAFT_UAV_TRACKLET_MAX_CANDIDATES" not in commands[0].env

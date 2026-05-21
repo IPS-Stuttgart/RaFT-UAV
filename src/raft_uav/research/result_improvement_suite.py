@@ -34,7 +34,7 @@ DEFAULT_RUNTIME_ENV: dict[str, str] = {
     # Full candidate-retention path: keep ambiguous low-catProb candidates, but
     # penalize them softly instead of pruning them before sequence decoding.
     "RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE": "soft",
-    "RAFT_UAV_TRACKLET_MAX_CANDIDATES": "12",
+    "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME": "12",
     "RAFT_UAV_TRACKLET_MAX_CANDIDATE_POOL_PER_FRAME": "36",
     "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_TRACK_ID": "2",
     "RAFT_UAV_TRACKLET_SUPPORT_WEIGHT": "0.45",
