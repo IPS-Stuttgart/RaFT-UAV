@@ -137,6 +137,28 @@ raft-uav-diagnose-paper-table data/raw/AADM2025Dryad \
   --stable-segment-max-transition-speed-mps 65
 ```
 
+Run the strict Table-II parity diagnostic. This path uses a 95% chi-square NIS
+gate, disables catProb by default, requires Fortem `range_m` for the 800 m
+radar gate, estimates RF/radar covariances from truth residuals, evaluates
+errors at measurement/output timestamps, and bootstraps the Kalman filter from
+the selected radar track rather than the first RF row:
+
+```bash
+raft-uav-paper-strict data/raw/AADM2025Dryad \
+  --flight Opt1 \
+  --output-dir outputs/paper-strict
+```
+
+For LW1-origin reproduction, pass the origin explicitly because the coordinates
+are not hard-coded in the repository:
+
+```bash
+raft-uav-paper-strict data/raw/AADM2025Dryad \
+  --flight Opt1 \
+  --enu-origin lw1 \
+  --lw1-origin-lla <LAT>,<LON>,<ALT>
+```
+
 Run the same paper-compatible hard-preselector path directly through the
 baseline runner, so the output artifacts are comparable with other
 `run-baseline` rows:

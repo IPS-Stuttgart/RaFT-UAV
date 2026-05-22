@@ -159,8 +159,17 @@ def read_radar_json(path: Path) -> pd.DataFrame:
     return read_radar_tracks_json(path)
 
 
-def normalize_truth(truth: pd.DataFrame) -> tuple[pd.DataFrame, LocalENUProjector, pd.Timestamp]:
-    """Normalize truth telemetry timestamps and append local ENU coordinates."""
+def normalize_truth(
+    truth: pd.DataFrame,
+    projector: LocalENUProjector | None = None,
+) -> tuple[pd.DataFrame, LocalENUProjector, pd.Timestamp]:
+    """Normalize truth telemetry timestamps and append local ENU coordinates.
+
+    When ``projector`` is omitted, the ENU origin remains the first valid truth
+    row, preserving the historical behavior. Passing a projector makes the
+    origin explicit, which is required for strict paper-parity diagnostics that
+    use a named site origin such as LW1.
+    """
 
     out = truth.copy()
     out["timestamp"] = pd.to_datetime(
@@ -173,7 +182,8 @@ def normalize_truth(truth: pd.DataFrame) -> tuple[pd.DataFrame, LocalENUProjecto
         raise ValueError("truth telemetry contains no valid timestamped LLA rows")
 
     origin_time = pd.Timestamp(out["timestamp"].iloc[0])
-    projector = projector_from_truth(out)
+    if projector is None:
+        projector = projector_from_truth(out)
     out["time_s"] = (out["timestamp"] - origin_time).dt.total_seconds()
     return truth_to_enu(out, projector), projector, origin_time
 
@@ -317,6 +327,20 @@ def projector_from_truth(truth: pd.DataFrame) -> LocalENUProjector:
         origin_latitude_deg=float(first["latitude"]),
         origin_longitude_deg=float(first["longitude"]),
         origin_altitude_m=float(first["altitude_m"]),
+    )
+
+
+def projector_from_lla(
+    latitude_deg: float,
+    longitude_deg: float,
+    altitude_m: float,
+) -> LocalENUProjector:
+    """Create a local ENU projector from an explicit WGS84 LLA origin."""
+
+    return LocalENUProjector(
+        origin_latitude_deg=float(latitude_deg),
+        origin_longitude_deg=float(longitude_deg),
+        origin_altitude_m=float(altitude_m),
     )
 
 
