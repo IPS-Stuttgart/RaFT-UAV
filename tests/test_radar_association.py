@@ -310,6 +310,48 @@ def test_paper_compatible_association_uses_largest_continuous_range_gated_track(
     assert selected["association_preselector_track_id"].tolist() == [2, 2, 2]
 
 
+def test_paper_compatible_association_stays_inside_selected_continuous_segment():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": frame,
+                "track_id": 7,
+                "time_s": float(frame),
+                "east_m": float(frame),
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": float(frame),
+                "cat_prob_uav": 0.99,
+            }
+            for frame in (1, 2)
+        ]
+        + [
+            {
+                "frame_index": frame,
+                "track_id": 7,
+                "time_s": float(frame),
+                "east_m": float(frame),
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": float(frame),
+                "cat_prob_uav": 0.99,
+            }
+            for frame in (10, 11, 12)
+        ]
+    )
+
+    _, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(0.0, 0.0)],
+        radar=radar,
+        association="paper-compatible",
+        candidate_catprob_threshold=0.4,
+        stable_segment_range_gate_m=800.0,
+    )
+
+    assert selected["frame_index"].tolist() == [10, 11, 12]
+    assert selected["association_preselector_segment_rows"].tolist() == [1, 1, 1]
+
+
 def test_catprob_candidate_pool_filters_when_possible():
     candidates = pd.DataFrame(
         {

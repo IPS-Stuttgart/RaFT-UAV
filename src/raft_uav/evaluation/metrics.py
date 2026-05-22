@@ -86,7 +86,75 @@ def position_errors_m(
     return errors[np.isfinite(errors)]
 
 
+def position_errors_at_estimates_m(
+    estimate_times_s: np.ndarray,
+    estimate_positions_m: np.ndarray,
+    truth_times_s: np.ndarray,
+    truth_positions_m: np.ndarray,
+    max_time_delta_s: float | None = None,
+    dimensions: int = 3,
+) -> np.ndarray:
+    """Compute paper-style per-estimate position errors against nearest truth.
+
+    ``position_errors_m`` is intentionally truth-grid/interpolation based so
+    RMSE/P95 are comparable across methods with different update rates.  The
+    AERPAW paper tables, however, report mean/std/max errors at the sensor or
+    fusion sample timestamps.  This helper preserves every finite estimate row,
+    including duplicate timestamps, and compares it to the nearest truth sample
+    within ``max_time_delta_s``.
+    """
+
+    if dimensions not in (2, 3):
+        raise ValueError("dimensions must be 2 or 3")
+
+    estimate_times, estimate_positions = _prepare_time_position_samples(
+        estimate_times_s,
+        estimate_positions_m,
+        dimensions=dimensions,
+    )
+    truth_times, truth_positions = _prepare_time_position_samples(
+        truth_times_s,
+        truth_positions_m,
+        dimensions=dimensions,
+    )
+    if estimate_times.size == 0 or truth_times.size == 0:
+        return np.array([], dtype=float)
+
+    truth_indices = nearest_time_indices(truth_times, estimate_times)
+    time_deltas = np.abs(truth_times[truth_indices] - estimate_times)
+    keep = np.ones(estimate_times.size, dtype=bool)
+    if max_time_delta_s is not None:
+        keep &= time_deltas <= float(max_time_delta_s)
+    if not keep.any():
+        return np.array([], dtype=float)
+
+    deltas = (
+        estimate_positions[keep, :dimensions]
+        - truth_positions[truth_indices[keep], :dimensions]
+    )
+    errors = np.linalg.norm(deltas, axis=1)
+    return errors[np.isfinite(errors)]
+
+
 def _prepare_time_position_series(
+    times_s: np.ndarray,
+    positions_m: np.ndarray,
+    *,
+    dimensions: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    times, positions = _prepare_time_position_samples(
+        times_s,
+        positions_m,
+        dimensions=dimensions,
+    )
+    if times.size == 0:
+        return times, positions
+    keep_last_duplicate = np.ones(times.size, dtype=bool)
+    keep_last_duplicate[:-1] = times[:-1] != times[1:]
+    return times[keep_last_duplicate], positions[keep_last_duplicate]
+
+
+def _prepare_time_position_samples(
     times_s: np.ndarray,
     positions_m: np.ndarray,
     *,
@@ -111,9 +179,7 @@ def _prepare_time_position_series(
     order = np.argsort(times, kind="mergesort")
     times = times[order]
     positions = positions[order]
-    keep_last_duplicate = np.ones(times.size, dtype=bool)
-    keep_last_duplicate[:-1] = times[:-1] != times[1:]
-    return times[keep_last_duplicate], positions[keep_last_duplicate]
+    return times, positions
 
 
 def _single_sample_position_errors_m(

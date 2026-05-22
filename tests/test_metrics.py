@@ -2,7 +2,12 @@ import json
 
 import numpy as np
 
-from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
+from raft_uav.evaluation.metrics import (
+    position_errors_at_estimates_m,
+    position_errors_m,
+    sampled_position_errors_m,
+    summarize_errors,
+)
 
 
 def test_metrics_return_finite_summaries_on_synthetic_trajectories():
@@ -61,6 +66,32 @@ def test_position_errors_interpolate_estimates_to_truth_time_grid():
     np.testing.assert_allclose(errors, np.ones(4))
 
 
+def test_sampled_position_errors_use_nearest_truth_samples_and_time_gate():
+    truth_times = np.array([0.0, 10.0, 20.0])
+    truth_positions = np.column_stack(
+        [truth_times, np.zeros_like(truth_times), np.zeros_like(truth_times)]
+    )
+    estimate_times = np.array([0.2, 9.8, 30.0])
+    estimate_positions = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [8.0, 0.0, 0.0],
+            [30.0, 0.0, 0.0],
+        ]
+    )
+
+    errors = sampled_position_errors_m(
+        estimate_times,
+        estimate_positions,
+        truth_times,
+        truth_positions,
+        max_time_delta_s=0.5,
+        dimensions=3,
+    )
+
+    np.testing.assert_allclose(errors, np.array([1.0, 2.0]))
+
+
 def test_position_errors_skip_truth_samples_without_local_estimate_support():
     truth_times = np.array([0.0, 1.0, 2.0, 3.0, 10.0])
     truth_positions = np.column_stack(
@@ -107,6 +138,66 @@ def test_position_errors_are_order_and_duplicate_timestamp_stable():
     )
 
     np.testing.assert_allclose(errors, np.zeros(2))
+
+
+def test_position_errors_at_estimates_uses_nearest_truth_and_time_gate():
+    truth_times = np.array([0.0, 10.0])
+    truth_positions = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+        ]
+    )
+    estimate_times = np.array([0.0, 5.0, 10.0])
+    estimate_positions = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [5.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+        ]
+    )
+
+    errors = position_errors_at_estimates_m(
+        estimate_times,
+        estimate_positions,
+        truth_times,
+        truth_positions,
+        max_time_delta_s=10.0,
+        dimensions=3,
+    )
+    gated = position_errors_at_estimates_m(
+        estimate_times,
+        estimate_positions,
+        truth_times,
+        truth_positions,
+        max_time_delta_s=2.0,
+        dimensions=3,
+    )
+
+    np.testing.assert_allclose(errors, np.array([0.0, 5.0, 0.0]))
+    np.testing.assert_allclose(gated, np.array([0.0, 0.0]))
+
+
+def test_position_errors_at_estimates_preserves_duplicate_estimate_times():
+    truth_times = np.array([0.0])
+    truth_positions = np.array([[0.0, 0.0, 0.0]])
+    estimate_times = np.array([0.0, 0.0])
+    estimate_positions = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+        ]
+    )
+
+    errors = position_errors_at_estimates_m(
+        estimate_times,
+        estimate_positions,
+        truth_times,
+        truth_positions,
+        dimensions=3,
+    )
+
+    np.testing.assert_allclose(errors, np.array([1.0, 2.0]))
 
 
 def test_summarize_errors_empty_input_is_strict_json_compatible():

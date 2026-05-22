@@ -948,6 +948,11 @@ def _paper_compatible_preselector_pool(
             "association_preselector_range_gated_rows",
             range_count,
         )
+        pool["association_preselector_segment_rows"] = _preselector_count(
+            candidates,
+            "association_preselector_segment_rows",
+            int(len(pool)),
+        )
         pool["association_preselector_catprob_rows"] = _preselector_count(
             candidates,
             "association_preselector_catprob_rows",
