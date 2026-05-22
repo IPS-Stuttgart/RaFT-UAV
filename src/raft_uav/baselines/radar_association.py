@@ -42,16 +42,19 @@ RADAR_ASSOCIATION_MODES = (
     "geometry-score",
     "pda-mixture",
     "track-bank",
+    "paper-compatible",
     "paper-largest-continuous-track",
     "stable-segments",
     "stable-segments-hybrid",
     "stable-segments-interpolated",
 )
 _STABLE_SEGMENT_ASSOCIATION_MODES = {
+    "paper-compatible",
     "paper-largest-continuous-track",
     "stable-segments",
     "stable-segments-interpolated",
 }
+_MISSED_DETECTION_ASSOCIATION_MODES = {"paper-compatible"}
 _STABLE_SEGMENT_PRECOMPUTE_MODES = {
     *_STABLE_SEGMENT_ASSOCIATION_MODES,
     "stable-segments-hybrid",
@@ -180,6 +183,11 @@ def run_async_cv_baseline_with_radar_association(
     track switching, and UAV class-probability penalties. ``pda-mixture``
     keeps a single Kalman update but forms it from a probability-weighted
     candidate mixture and adds candidate spread to the radar covariance.
+    ``paper-compatible`` applies the paper-reproduction hard preselector:
+    range gate, UAV class-probability threshold, largest continuous Fortem
+    track segment, and NIS-validated RF/radar updates. Radar frames without a
+    valid preselected candidate record a ``missed_detection`` posterior instead
+    of silently disappearing from the output trajectory.
     ``track-bank`` uses PyRecEst's track-oriented MHT to keep multiple
     single-target association hypotheses alive across radar frames.
     ``paper-largest-continuous-track`` applies the reference-paper style
@@ -287,6 +295,13 @@ def run_async_cv_baseline_with_radar_association(
         crossrange_min_std_m=float(radar_crossrange_min_std_m),
         crossrange_max_std_m=float(radar_crossrange_max_std_m),
     )
+    if (
+        association == "paper-compatible"
+        and gate_probabilities_by_source is None
+        and gate_thresholds_by_source is None
+    ):
+        gate_probabilities_by_source = {"rf": 0.99, "radar": 0.99}
+
     if association == "track-bank":
         _validate_normalized_radar_for_association(radar)
         return _run_mht_track_bank(
@@ -318,7 +333,13 @@ def run_async_cv_baseline_with_radar_association(
 
     stable_anchor_by_key: dict[object, pd.Series] | None = None
     if association in _STABLE_SEGMENT_PRECOMPUTE_MODES:
-        if association == "paper-largest-continuous-track":
+        if association == "paper-compatible":
+            stable_anchors = _select_paper_compatible_radar_track(
+                radar,
+                range_gate_m=stable_segment_range_gate_m,
+                catprob_threshold=candidate_catprob_threshold,
+            )
+        elif association == "paper-largest-continuous-track":
             stable_anchors = _select_largest_continuous_radar_track(
                 radar,
                 range_gate_m=stable_segment_range_gate_m,
@@ -483,6 +504,15 @@ def run_async_cv_baseline_with_radar_association(
             truth_time_gate_s=truth_time_gate_s,
         )
         if selected is None:
+            if association in _MISSED_DETECTION_ASSOCIATION_MODES:
+                records.append(
+                    _missed_detection_record(
+                        time_s=time_s,
+                        tracker=tracker,
+                        source="radar",
+                        association_mode=association,
+                    )
+                )
             continue
 
         measurement = _radar_row_to_measurement(selected, covariance)
@@ -1215,6 +1245,37 @@ def _select_largest_continuous_radar_track(
     ]
     return selected.sort_values(sort_columns).reset_index(drop=True)
 
+
+def _select_paper_compatible_radar_track(
+    radar: pd.DataFrame,
+    *,
+    range_gate_m: float | None,
+    catprob_threshold: float | None,
+) -> pd.DataFrame:
+    """Select paper-compatible anchors after hard range and class filtering."""
+
+    range_pool = _range_candidate_pool(radar, range_gate_m)
+    catprob_pool = _catprob_candidate_pool(
+        range_pool,
+        catprob_threshold,
+        fallback_to_unfiltered=False,
+    )
+    selected = _select_largest_continuous_radar_track(catprob_pool, range_gate_m=None)
+    if selected.empty:
+        return selected
+    selected = selected.copy()
+    selected["association_mode"] = "paper-compatible"
+    selected["association_action"] = "paper_compatible_largest_continuous_track_anchor"
+    selected["association_preselector_raw_rows"] = int(len(radar))
+    selected["association_preselector_range_gated_rows"] = int(len(range_pool))
+    selected["association_preselector_catprob_rows"] = int(len(catprob_pool))
+    if range_gate_m is not None:
+        selected["association_range_gate_m"] = float(range_gate_m)
+    if catprob_threshold is not None:
+        selected["association_catprob_threshold"] = float(catprob_threshold)
+    return selected
+
+
 def _interpolate_stable_radar_segments_to_frame_times(
     radar: pd.DataFrame,
     anchors: pd.DataFrame,
@@ -1869,7 +1930,9 @@ def _select_radar_candidate(
             return None
         selected = selected.copy()
         selected["association_mode"] = association
-        if association == "paper-largest-continuous-track":
+        if association == "paper-compatible":
+            selected["association_action"] = "paper_compatible_update"
+        elif association == "paper-largest-continuous-track":
             selected["association_action"] = "paper_largest_continuous_track_update"
         elif bool(selected.get("association_interpolated", False)):
             selected["association_action"] = "stable_segment_interpolated_update"
@@ -2667,6 +2730,39 @@ def _selected_row_record_kwargs(
     }
 
 
+def _missed_detection_record(
+    *,
+    time_s: float,
+    tracker: AsyncConstantVelocityKalmanTracker,
+    source: str,
+    association_mode: str,
+) -> dict[str, object]:
+    """Return a posterior record for a radar frame intentionally treated as a miss."""
+
+    diagnostics = TrackingUpdateDiagnostics(
+        time_s=float(time_s),
+        source=source,
+        measurement_dim=3,
+        accepted=False,
+        update_action="missed_detection",
+        nis=float("nan"),
+        gate_threshold=None,
+        safety_gate_threshold=None,
+        residual_gate_threshold_m=None,
+        covariance_scale=1.0,
+        inflation_alpha=None,
+        residual_norm_m=float("nan"),
+    )
+    return {
+        "time_s": float(time_s),
+        "source": source,
+        "state": tracker.state.copy(),
+        "covariance": tracker.covariance_matrix.copy(),
+        **diagnostics.to_record(),
+        "association_mode": association_mode,
+    }
+
+
 def _record(
     measurement: TrackingMeasurement,
     tracker: AsyncConstantVelocityKalmanTracker,
@@ -2711,6 +2807,7 @@ def _empty_selected_radar(radar: pd.DataFrame) -> pd.DataFrame:
     selected = radar.iloc[0:0].copy()
     for column in (
         "association_mode",
+        "association_action",
         "association_nis",
         "association_score",
         "association_replay_accepted",
@@ -2749,6 +2846,9 @@ def _empty_selected_radar(radar: pd.DataFrame) -> pd.DataFrame:
         "association_cov_nu",
         "association_covariance_mode",
         "association_cov_trace_m2",
+        "association_preselector_raw_rows",
+        "association_preselector_range_gated_rows",
+        "association_preselector_catprob_rows",
     ):
         selected[column] = []
     return selected
