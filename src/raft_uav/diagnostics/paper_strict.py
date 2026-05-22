@@ -14,8 +14,11 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
+import tomllib
 from typing import Any, Iterable
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -46,6 +49,9 @@ from raft_uav.io.aerpaw import (
 
 PAPER_STRICT_NIS_GATE_PROBABILITY = 0.95
 PAPER_STRICT_RANGE_GATE_M = 800.0
+PAPER_STRICT_LW1_ORIGIN_LLA_ENV = "RAFT_UAV_LW1_ORIGIN_LLA"
+PAPER_STRICT_ORIGINS_FILE_ENV = "RAFT_UAV_ORIGINS_FILE"
+COUNT_MISMATCH_ACTIONS = ("ignore", "warn", "fail")
 PAPER_REFERENCE_COUNTS = {
     "RF raw": 206,
     "RF after NIS": 125,
@@ -70,6 +76,7 @@ class PaperStrictConfig:
 
     range_gate_m: float = PAPER_STRICT_RANGE_GATE_M
     nis_gate_probability: float = PAPER_STRICT_NIS_GATE_PROBABILITY
+    rf_nis_gate_probability: float | None = None
     truth_time_gate_s: float = 2.0
     acceleration_std_mps2: float = 4.0
     radar_catprob_threshold: float | None = None
@@ -89,7 +96,7 @@ class PaperStrictInputs:
     truth: pd.DataFrame
     rf: pd.DataFrame
     radar: pd.DataFrame
-    projector: LocalENUProjector
+    projector: LocalENUProjector | None
     truth_origin_time: pd.Timestamp
     enu_origin_mode: str
 
@@ -124,6 +131,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/paper-strict"))
     parser.add_argument("--range-gate-m", type=float, default=PAPER_STRICT_RANGE_GATE_M)
     parser.add_argument("--nis-gate-prob", type=float, default=PAPER_STRICT_NIS_GATE_PROBABILITY)
+    parser.add_argument(
+        "--rf-nis-gate-prob",
+        type=float,
+        default=None,
+        help="optional RF-specific NIS gate probability; defaults to --nis-gate-prob",
+    )
     parser.add_argument("--truth-time-gate-s", type=float, default=2.0)
     parser.add_argument("--acceleration-std", type=float, default=4.0)
     parser.add_argument(
@@ -149,10 +162,16 @@ def main(argv: list[str] | None = None) -> int:
         help="radar avoids initializing from unvalidated RF outliers",
     )
     parser.add_argument(
+        "--count-mismatch-action",
+        choices=COUNT_MISMATCH_ACTIONS,
+        default="warn",
+        help="how to handle strict Table-II reference-count mismatches",
+    )
+    parser.add_argument(
         "--enu-origin",
         choices=["truth-first", "lla", "lw1"],
-        default="truth-first",
-        help="use truth-first unless an explicit paper/LW1 LLA origin is supplied",
+        default="lw1",
+        help="LW1 is the paper-parity default; pass truth-first only for diagnostics",
     )
     parser.add_argument(
         "--enu-origin-lla",
@@ -160,9 +179,15 @@ def main(argv: list[str] | None = None) -> int:
         help="LAT,LON,ALT origin for --enu-origin lla",
     )
     parser.add_argument(
+        "--origin-config",
+        type=Path,
+        default=None,
+        help="optional JSON/TOML origin registry; also read from RAFT_UAV_ORIGINS_FILE",
+    )
+    parser.add_argument(
         "--lw1-origin-lla",
         default=None,
-        help="LAT,LON,ALT origin for --enu-origin lw1; no coordinate is hard-coded in the repo",
+        help="LAT,LON,ALT origin for --enu-origin lw1; also accepted via RAFT_UAV_LW1_ORIGIN_LLA",
     )
     parser.add_argument("--rf-default-std-m", type=float, default=75.0)
     parser.add_argument("--radar-default-xy-std-m", type=float, default=25.0)
@@ -172,6 +197,7 @@ def main(argv: list[str] | None = None) -> int:
     config = PaperStrictConfig(
         range_gate_m=args.range_gate_m,
         nis_gate_probability=args.nis_gate_prob,
+        rf_nis_gate_probability=args.rf_nis_gate_prob,
         truth_time_gate_s=args.truth_time_gate_s,
         acceleration_std_mps2=args.acceleration_std,
         radar_catprob_threshold=args.radar_catprob_threshold,
@@ -187,9 +213,11 @@ def main(argv: list[str] | None = None) -> int:
         flights=args.flight,
         output_dir=args.output_dir,
         config=config,
+        count_mismatch_action=args.count_mismatch_action,
         enu_origin=args.enu_origin,
         enu_origin_lla=args.enu_origin_lla,
         lw1_origin_lla=args.lw1_origin_lla,
+        origin_config=args.origin_config,
     )
     print(f"output_dir={result['output_dir']}")
     print(f"summary_csv={result['summary_csv']}")
@@ -203,13 +231,16 @@ def run_paper_strict_reproduction(
     flights: Iterable[str] | None,
     output_dir: Path = Path("outputs/paper-strict"),
     config: PaperStrictConfig = PaperStrictConfig(),
-    enu_origin: str = "truth-first",
+    count_mismatch_action: str = "warn",
+    enu_origin: str = "lw1",
     enu_origin_lla: str | None = None,
     lw1_origin_lla: str | None = None,
+    origin_config: Path | None = None,
 ) -> dict[str, Any]:
     """Run strict paper-parity diagnostics and write per-flight artifacts."""
 
     _validate_config(config)
+    _validate_count_mismatch_action(count_mismatch_action)
     selected_flights = _resolve_flights(Path(dataset_root), flights)
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -223,6 +254,7 @@ def run_paper_strict_reproduction(
             enu_origin=enu_origin,
             enu_origin_lla=enu_origin_lla,
             lw1_origin_lla=lw1_origin_lla,
+            origin_config=origin_config,
             rf_default_std_m=config.rf_default_std_m,
         )
         flight_dir = output / inputs.flight_name
@@ -230,6 +262,11 @@ def run_paper_strict_reproduction(
         fusion = run_paper_strict_fusion(inputs=inputs, config=config)
         table = build_paper_strict_table(inputs=inputs, fusion=fusion, config=config)
         count_audit = build_count_audit(table)
+        _handle_count_mismatch(
+            count_audit,
+            flight_name=inputs.flight_name,
+            action=count_mismatch_action,
+        )
         range_audit = radar_range_audit(inputs.radar)
 
         table_csv = flight_dir / "paper_strict_table.csv"
@@ -265,6 +302,7 @@ def run_paper_strict_reproduction(
             "truth_origin_time": str(inputs.truth_origin_time),
             "range_audit": range_audit,
             "stage_counts": paper_strict_stage_counts(inputs=inputs, fusion=fusion),
+            "count_mismatch_action": count_mismatch_action,
             "config": _jsonable_config(config),
         }
         manifest_json.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -281,6 +319,7 @@ def run_paper_strict_reproduction(
         "flights": manifests,
         "reference_counts": PAPER_REFERENCE_COUNTS,
         "reference_errors_m": PAPER_REFERENCE_ERROR_M,
+        "count_mismatch_action": count_mismatch_action,
     }
     summary_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return {**payload, "summary_json": str(summary_json)}
@@ -294,6 +333,7 @@ def load_paper_strict_inputs(
     enu_origin_lla: str | None,
     lw1_origin_lla: str | None,
     rf_default_std_m: float,
+    origin_config: Path | None = None,
 ) -> PaperStrictInputs:
     """Load one flight and normalize all streams into a shared ENU frame."""
 
@@ -309,6 +349,7 @@ def load_paper_strict_inputs(
         enu_origin=enu_origin,
         enu_origin_lla=enu_origin_lla,
         lw1_origin_lla=lw1_origin_lla,
+        origin_config=origin_config,
     )
     truth_raw = read_truth(flight.truth_txt)
     truth, projector, truth_origin_time = normalize_truth(truth_raw, projector=projector)
@@ -401,7 +442,12 @@ def run_paper_strict_fusion(
         )
     start_index, initial_measurement, initial_row = bootstrap
     radar_gate_threshold = gate_threshold_from_probability(config.nis_gate_probability, 3)
-    rf_gate_threshold = gate_threshold_from_probability(config.nis_gate_probability, 2)
+    rf_gate_probability = (
+        config.nis_gate_probability
+        if config.rf_nis_gate_probability is None
+        else config.rf_nis_gate_probability
+    )
+    rf_gate_threshold = gate_threshold_from_probability(rf_gate_probability, 2)
     assert radar_gate_threshold is not None
     assert rf_gate_threshold is not None
 
@@ -613,6 +659,11 @@ def build_paper_strict_table(
     )
     table["paper_strict_empirical_covariance"] = bool(config.empirical_covariance)
     table["paper_strict_bootstrap_source"] = config.bootstrap_source
+    table["paper_strict_rf_nis_gate_probability"] = (
+        float(config.nis_gate_probability)
+        if config.rf_nis_gate_probability is None
+        else float(config.rf_nis_gate_probability)
+    )
     table["enu_origin_mode"] = inputs.enu_origin_mode
     return table
 
@@ -640,6 +691,44 @@ def build_count_audit(table: pd.DataFrame) -> pd.DataFrame:
             }
         )
     return pd.DataFrame.from_records(rows)
+
+
+def _handle_count_mismatch(
+    count_audit: pd.DataFrame,
+    *,
+    flight_name: str,
+    action: str,
+) -> None:
+    """Warn or fail when strict paper row counts do not match the reference table."""
+
+    _validate_count_mismatch_action(action)
+    if action == "ignore" or count_audit.empty:
+        return
+    mismatches = count_audit.loc[~count_audit["matches_reference"].fillna(False).astype(bool)]
+    if mismatches.empty:
+        return
+    message = (
+        f"paper-strict reference-count mismatch for {flight_name}: "
+        f"{_format_count_mismatches(mismatches)}"
+    )
+    if action == "fail":
+        raise RuntimeError(message)
+    warnings.warn(message, RuntimeWarning, stacklevel=2)
+
+
+def _format_count_mismatches(mismatches: pd.DataFrame) -> str:
+    parts: list[str] = []
+    for _, row in mismatches.iterrows():
+        parts.append(
+            f"{row['method']} observed={row['observed_count']} "
+            f"reference={row['reference_count']} delta={row['delta']}"
+        )
+    return "; ".join(parts)
+
+
+def _validate_count_mismatch_action(action: str) -> None:
+    if action not in COUNT_MISMATCH_ACTIONS:
+        raise ValueError(f"count_mismatch_action must be one of {COUNT_MISMATCH_ACTIONS}")
 
 
 def measurement_covariances(
@@ -1174,6 +1263,7 @@ def _projector_for_origin(
     enu_origin: str,
     enu_origin_lla: str | None,
     lw1_origin_lla: str | None,
+    origin_config: Path | None = None,
 ) -> LocalENUProjector | None:
     if enu_origin == "truth-first":
         return None
@@ -1182,10 +1272,66 @@ def _projector_for_origin(
             raise ValueError("--enu-origin lla requires --enu-origin-lla LAT,LON,ALT")
         return projector_from_lla(*_parse_lla(enu_origin_lla))
     if enu_origin == "lw1":
-        if not lw1_origin_lla:
-            raise ValueError("--enu-origin lw1 requires --lw1-origin-lla LAT,LON,ALT")
-        return projector_from_lla(*_parse_lla(lw1_origin_lla))
+        origin = lw1_origin_lla or os.environ.get(PAPER_STRICT_LW1_ORIGIN_LLA_ENV)
+        lla = _parse_lla(origin) if origin else _origin_lla_from_config(origin_config, "lw1")
+        if lla is None:
+            raise ValueError(
+                "--enu-origin lw1 requires --lw1-origin-lla LAT,LON,ALT, "
+                f"{PAPER_STRICT_LW1_ORIGIN_LLA_ENV}=LAT,LON,ALT, or an origin config"
+            )
+        return projector_from_lla(*lla)
     raise ValueError(f"unknown enu_origin {enu_origin!r}")
+
+
+def _origin_lla_from_config(
+    origin_config: Path | None,
+    name: str,
+) -> tuple[float, float, float] | None:
+    raw_path = origin_config or os.environ.get(PAPER_STRICT_ORIGINS_FILE_ENV)
+    if raw_path is None:
+        return None
+    path = Path(raw_path)
+    if not path.exists():
+        raise FileNotFoundError(f"origin config does not exist: {path}")
+    if path.suffix.lower() == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        with path.open("rb") as handle:
+            payload = tomllib.load(handle)
+    origins = payload.get("origins", payload) if isinstance(payload, dict) else {}
+    entry = origins.get(name) if isinstance(origins, dict) else None
+    if entry is None:
+        return None
+    return _origin_entry_to_lla(entry, name)
+
+
+def _origin_entry_to_lla(entry: Any, name: str) -> tuple[float, float, float]:
+    if isinstance(entry, (list, tuple)) and len(entry) == 3:
+        return float(entry[0]), float(entry[1]), float(entry[2])
+    if not isinstance(entry, dict):
+        raise ValueError(f"origin {name!r} must be a mapping or a 3-item list")
+    latitude = _origin_value(entry, "latitude_deg", "latitude", "lat")
+    longitude = _origin_value(entry, "longitude_deg", "longitude", "lon", "lng")
+    altitude = _origin_value(entry, "altitude_m", "altitude", "alt")
+    missing = [
+        label
+        for label, value in (
+            ("latitude_deg", latitude),
+            ("longitude_deg", longitude),
+            ("altitude_m", altitude),
+        )
+        if value is None
+    ]
+    if missing:
+        raise ValueError(f"origin {name!r} missing required fields: {', '.join(missing)}")
+    return float(latitude), float(longitude), float(altitude)
+
+
+def _origin_value(entry: dict[str, Any], *names: str) -> float | None:
+    for key in names:
+        if key in entry and entry[key] is not None:
+            return float(entry[key])
+    return None
 
 
 def _parse_lla(value: str) -> tuple[float, float, float]:
@@ -1216,6 +1362,9 @@ def _validate_config(config: PaperStrictConfig) -> None:
         raise ValueError("range_gate_m must be positive")
     if not 0.0 < config.nis_gate_probability < 1.0:
         raise ValueError("nis_gate_probability must be in (0, 1)")
+    if config.rf_nis_gate_probability is not None:
+        if not 0.0 < config.rf_nis_gate_probability < 1.0:
+            raise ValueError("rf_nis_gate_probability must be in (0, 1) or None")
     if config.truth_time_gate_s <= 0.0:
         raise ValueError("truth_time_gate_s must be positive")
     if config.acceleration_std_mps2 <= 0.0:
@@ -1230,6 +1379,7 @@ def _jsonable_config(config: PaperStrictConfig) -> dict[str, Any]:
     return {
         "range_gate_m": float(config.range_gate_m),
         "nis_gate_probability": float(config.nis_gate_probability),
+        "rf_nis_gate_probability": config.rf_nis_gate_probability,
         "truth_time_gate_s": float(config.truth_time_gate_s),
         "acceleration_std_mps2": float(config.acceleration_std_mps2),
         "radar_catprob_threshold": config.radar_catprob_threshold,

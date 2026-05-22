@@ -137,6 +137,10 @@ raft-uav-diagnose-paper-table data/raw/AADM2025Dryad \
   --stable-segment-max-transition-speed-mps 65
 ```
 
+By default, `raft-uav-diagnose-paper-table` emits unsmoothed paper-table fusion
+rows. Pass `--include-smoothed-fusion` only when fixed-lag rows are desired as
+offline enhancement diagnostics.
+
 Run the strict Table-II parity diagnostic. This path uses a 95% chi-square NIS
 gate, disables catProb by default, requires Fortem `range_m` for the 800 m
 radar gate, estimates RF/radar covariances from truth residuals, evaluates
@@ -146,8 +150,13 @@ the selected radar track rather than the first RF row:
 ```bash
 raft-uav-paper-strict data/raw/AADM2025Dryad \
   --flight Opt1 \
+  --origin-config config/origins.toml \
+  --count-mismatch-action fail \
   --output-dir outputs/paper-strict
 ```
+
+Create `config/origins.toml` from `config/origins.example.toml` and fill in the
+LW1 coordinates before running strict paper-parity reproduction.
 
 Before comparing algorithms against Table II, run the count-fingerprint audit.
 It writes the RF/radar/KF stage counts, file paths, and count deltas against the
@@ -167,7 +176,7 @@ are not hard-coded in the repository:
 raft-uav-paper-strict data/raw/AADM2025Dryad \
   --flight Opt1 \
   --enu-origin lw1 \
-  --lw1-origin-lla <LAT>,<LON>,<ALT>
+  --lw1-origin-lla <LAT>,<LON>,<ALT>  # or set RAFT_UAV_LW1_ORIGIN_LLA
 ```
 
 Run the same paper-compatible hard-preselector path directly through the

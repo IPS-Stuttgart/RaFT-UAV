@@ -5,10 +5,14 @@ import pandas as pd
 import pytest
 
 from raft_uav.diagnostics.paper_strict import (
+    PAPER_STRICT_LW1_ORIGIN_LLA_ENV,
     PAPER_STRICT_NIS_GATE_PROBABILITY,
+    _handle_count_mismatch,
+    _projector_for_origin,
+    build_count_audit,
     require_fortem_range_m,
-    select_paper_strict_radar_track,
     paper_strict_range_gated_radar_candidates,
+    select_paper_strict_radar_track,
 )
 from raft_uav.evaluation.metrics import (
     empirical_position_covariance_at_times,
@@ -138,3 +142,53 @@ def test_paper_strict_range_gated_candidates_use_fortem_range() -> None:
 
     assert len(selected) == 1
     assert selected["frame_index"].tolist() == [0]
+
+
+def test_lw1_origin_can_be_supplied_by_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(PAPER_STRICT_LW1_ORIGIN_LLA_ENV, "35.0,-78.0,100.0")
+
+    projector = _projector_for_origin(
+        enu_origin="lw1",
+        enu_origin_lla=None,
+        lw1_origin_lla=None,
+    )
+
+    assert projector is not None
+    assert projector.origin_latitude_deg == pytest.approx(35.0)
+    assert projector.origin_longitude_deg == pytest.approx(-78.0)
+    assert projector.origin_altitude_m == pytest.approx(100.0)
+
+
+def test_lw1_origin_can_be_supplied_by_config(tmp_path) -> None:
+    origin_config = tmp_path / "origins.toml"
+    origin_config.write_text(
+        "\n".join(
+            [
+                "[origins.lw1]",
+                "latitude_deg = 35.1",
+                "longitude_deg = -78.2",
+                "altitude_m = 123.4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    projector = _projector_for_origin(
+        enu_origin="lw1",
+        enu_origin_lla=None,
+        lw1_origin_lla=None,
+        origin_config=origin_config,
+    )
+
+    assert projector is not None
+    assert projector.origin_latitude_deg == pytest.approx(35.1)
+    assert projector.origin_longitude_deg == pytest.approx(-78.2)
+    assert projector.origin_altitude_m == pytest.approx(123.4)
+
+
+def test_count_mismatch_action_fail_raises() -> None:
+    table = pd.DataFrame({"method": ["RF raw"], "selected_count": [999]})
+    count_audit = build_count_audit(table)
+
+    with pytest.raises(RuntimeError, match="RF raw"):
+        _handle_count_mismatch(count_audit, flight_name="example", action="fail")
