@@ -345,7 +345,12 @@ def position_errors_at_times_m(
 
     if dimensions not in (2, 3):
         raise ValueError("dimensions must be 2 or 3")
-    estimate_times, estimate_positions = _prepare_time_position_series(
+
+    # Paper-table metrics are sample metrics: every emitted sensor/fusion row
+    # contributes one error.  Do not collapse duplicate estimate timestamps here;
+    # radar frames and fused outputs can legitimately contain repeated times, and
+    # dropping them changes both the count fingerprint and the mean/std/max rows.
+    estimate_times, estimate_positions = _prepare_time_position_samples(
         estimate_times_s,
         estimate_positions_m,
         dimensions=dimensions,
@@ -388,7 +393,10 @@ def empirical_position_covariance_at_times(
 
     if dimensions not in (2, 3):
         raise ValueError("dimensions must be 2 or 3")
-    estimate_times, estimate_positions = _prepare_time_position_series(
+    # Match the paper-table sample convention used by
+    # ``position_errors_at_times_m``: every finite measurement/output row gets a
+    # residual.  Only the truth trajectory is de-duplicated for interpolation.
+    estimate_times, estimate_positions = _prepare_time_position_samples(
         estimate_times_s,
         estimate_positions_m,
         dimensions=dimensions,

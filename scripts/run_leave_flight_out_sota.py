@@ -55,6 +55,15 @@ class MethodSpec:
     nis_calibrated: bool = False
     needs_association_model: bool = False
     replay_tracker: str = "cv"
+    runtime_env: Mapping[str, str] | None = None
+
+
+SOFT_TOP_K_DO_NO_HARM_ENV: Mapping[str, str] = {
+    "RAFT_UAV_TRACKLET_SOFT_TOP_K_PATHS": "3",
+    "RAFT_UAV_TRACKLET_SOFT_PATH_TEMPERATURE": "2.0",
+    "RAFT_UAV_DO_NO_HARM_RADAR_UPDATES": "1",
+    "RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY": "1",
+}
 
 
 @dataclass(frozen=True)
@@ -158,6 +167,15 @@ METHODS: dict[str, MethodSpec] = {
         fixed_lag=True,
         robust=True,
     ),
+    "imm_tracklet_viterbi_fixed_lag_softk_dnh": MethodSpec(
+        "imm_tracklet_viterbi_fixed_lag_softk_dnh",
+        "tracklet",
+        "IMM tracklet-Viterbi fixed-lag soft-top-k + DNH",
+        association="tracklet-viterbi",
+        fixed_lag=True,
+        robust=True,
+        runtime_env=SOFT_TOP_K_DO_NO_HARM_ENV,
+    ),
     "imm_learned_tracklet_viterbi_fixed_lag": MethodSpec(
         "imm_learned_tracklet_viterbi_fixed_lag",
         "learned_tracklet",
@@ -206,6 +224,16 @@ METHODS: dict[str, MethodSpec] = {
         robust=True,
         nis_calibrated=True,
     ),
+    "hetero_imm_tracklet_viterbi_lofo_nis_fixed_lag_softk_dnh": MethodSpec(
+        "hetero_imm_tracklet_viterbi_lofo_nis_fixed_lag_softk_dnh",
+        "hetero_tracklet",
+        "LOFO NIS-calibrated heteroscedastic IMM tracklet-Viterbi fixed-lag soft-top-k + DNH",
+        association="tracklet-viterbi",
+        fixed_lag=True,
+        robust=True,
+        nis_calibrated=True,
+        runtime_env=SOFT_TOP_K_DO_NO_HARM_ENV,
+    ),
     "hetero_imm_learned_tracklet_viterbi_lofo_nis_fixed_lag": MethodSpec(
         "hetero_imm_learned_tracklet_viterbi_lofo_nis_fixed_lag",
         "hetero_learned_tracklet",
@@ -216,6 +244,19 @@ METHODS: dict[str, MethodSpec] = {
         nis_calibrated=True,
         needs_association_model=True,
         replay_tracker="imm",
+    ),
+    "hetero_imm_learned_tracklet_viterbi_lofo_nis_fixed_lag_softk_dnh": MethodSpec(
+        "hetero_imm_learned_tracklet_viterbi_lofo_nis_fixed_lag_softk_dnh",
+        "hetero_learned_tracklet",
+        "LOFO NIS-calibrated heteroscedastic IMM learned tracklet-Viterbi "
+        "fixed-lag soft-top-k + DNH",
+        association="learned-tracklet-viterbi",
+        fixed_lag=True,
+        robust=True,
+        nis_calibrated=True,
+        needs_association_model=True,
+        replay_tracker="imm",
+        runtime_env=SOFT_TOP_K_DO_NO_HARM_ENV,
     ),
 }
 
@@ -596,6 +637,8 @@ def _run_method(
         flight=flight,
         nis_calibration_path=nis_calibration_path,
     )
+    if method.runtime_env:
+        runtime_env.update(method.runtime_env)
     if method.robust:
         options.extend(common.robust_update_options(args))
     if method.fixed_lag:
@@ -923,9 +966,11 @@ def _runtime_env_updates(
     if getattr(args, "enable_soft_catprob_retention", False):
         env["RAFT_UAV_SOFT_CATPROB_RETENTION"] = "1"
         env["RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE"] = "soft"
-        env["RAFT_UAV_SOFT_CATPROB_BELOW_THRESHOLD_PENALTY"] = str(
+        below_threshold_penalty = str(
             getattr(args, "soft_catprob_below_threshold_penalty", 3.0)
         )
+        env["RAFT_UAV_SOFT_CATPROB_BELOW_THRESHOLD_PENALTY"] = below_threshold_penalty
+        env["RAFT_UAV_TRACKLET_BELOW_CATPROB_THRESHOLD_PENALTY"] = below_threshold_penalty
     if getattr(args, "enable_radar_velocity_update", False):
         env["RAFT_UAV_RADAR_UPDATE_USES_VELOCITY"] = "1"
         env["RAFT_UAV_RADAR_VELOCITY_STD_MPS"] = str(
