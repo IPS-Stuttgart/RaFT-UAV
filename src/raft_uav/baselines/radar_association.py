@@ -42,11 +42,13 @@ RADAR_ASSOCIATION_MODES = (
     "geometry-score",
     "pda-mixture",
     "track-bank",
+    "paper-largest-continuous-track",
     "stable-segments",
     "stable-segments-hybrid",
     "stable-segments-interpolated",
 )
 _STABLE_SEGMENT_ASSOCIATION_MODES = {
+    "paper-largest-continuous-track",
     "stable-segments",
     "stable-segments-interpolated",
 }
@@ -180,6 +182,9 @@ def run_async_cv_baseline_with_radar_association(
     candidate mixture and adds candidate spread to the radar covariance.
     ``track-bank`` uses PyRecEst's track-oriented MHT to keep multiple
     single-target association hypotheses alive across radar frames.
+    ``paper-largest-continuous-track`` applies the reference-paper style
+    800 m range-gated longest continuous Fortem track preselector and skips
+    all other radar frames.
     ``stable-segments`` preselects stitched high-confidence Fortem track
     segments and skips all other radar frames. ``stable-segments-hybrid``
     uses those anchors when available and falls back to prediction-NIS
@@ -313,17 +318,23 @@ def run_async_cv_baseline_with_radar_association(
 
     stable_anchor_by_key: dict[object, pd.Series] | None = None
     if association in _STABLE_SEGMENT_PRECOMPUTE_MODES:
-        stable_anchors = _select_stable_radar_segments(
-            radar,
-            range_gate_m=stable_segment_range_gate_m,
-            catprob_threshold=candidate_catprob_threshold,
-            min_segment_frames=stable_segment_min_frames,
-            max_transition_speed_mps=stable_segment_max_transition_speed_mps,
-            rf_measurements=rf_measurement_list,
-            rf_score_weight=stable_segment_rf_score_weight,
-            rf_time_gate_s=stable_segment_rf_time_gate_s,
-            rf_nis_cap=stable_segment_rf_nis_cap,
-        )
+        if association == "paper-largest-continuous-track":
+            stable_anchors = _select_largest_continuous_radar_track(
+                radar,
+                range_gate_m=stable_segment_range_gate_m,
+            )
+        else:
+            stable_anchors = _select_stable_radar_segments(
+                radar,
+                range_gate_m=stable_segment_range_gate_m,
+                catprob_threshold=candidate_catprob_threshold,
+                min_segment_frames=stable_segment_min_frames,
+                max_transition_speed_mps=stable_segment_max_transition_speed_mps,
+                rf_measurements=rf_measurement_list,
+                rf_score_weight=stable_segment_rf_score_weight,
+                rf_time_gate_s=stable_segment_rf_time_gate_s,
+                rf_nis_cap=stable_segment_rf_nis_cap,
+            )
         if association == "stable-segments-interpolated":
             stable_anchors = _interpolate_stable_radar_segments_to_frame_times(
                 radar,
@@ -1148,6 +1159,62 @@ def _select_stable_radar_segments(
     return selected.sort_values(sort_columns).reset_index(drop=True)
 
 
+def _select_largest_continuous_radar_track(
+    radar: pd.DataFrame,
+    *,
+    range_gate_m: float | None,
+) -> pd.DataFrame:
+    """Select the reference-paper style largest continuous Fortem track segment.
+
+    The reference baseline describes a hard radar preselector: apply the radar
+    range gate, identify continuous Fortem ``track_id`` runs, then keep the
+    largest continuous track.  Unlike ``stable-segments``, this path does not
+    use UAV class probability, RF-consistency scoring, or segment stitching.
+    That makes it useful as a paper-reproduction diagnostic before running
+    more adaptive association policies.
+    """
+
+    pool = _range_candidate_pool(radar, range_gate_m)
+    if pool.empty or "track_id" not in pool.columns:
+        return _empty_selected_radar(radar)
+
+    segments = _stable_track_segments(
+        pool,
+        min_segment_frames=1,
+        rf_measurements=[],
+        rf_score_weight=0.0,
+        rf_time_gate_s=0.0,
+        rf_nis_cap=1.0,
+    )
+    if not segments:
+        return _empty_selected_radar(radar)
+
+    selected_segment = max(
+        segments,
+        key=lambda item: (
+            item.frames,
+            item.end_time_s - item.start_time_s,
+            item.mean_catprob,
+            -item.start_time_s,
+        ),
+    )
+    selected = selected_segment.frame.copy()
+    selected["association_mode"] = "paper-largest-continuous-track"
+    selected["association_action"] = "paper_largest_continuous_track_anchor"
+    selected["association_segment_count"] = 1
+    selected["association_segment_track_id"] = int(selected_segment.track_id)
+    selected["association_segment_frames"] = int(selected_segment.frames)
+    selected["association_segment_start_time_s"] = float(selected_segment.start_time_s)
+    selected["association_segment_end_time_s"] = float(selected_segment.end_time_s)
+    selected["association_preselector_raw_rows"] = int(len(radar))
+    selected["association_preselector_range_gated_rows"] = int(len(pool))
+    sort_columns = [
+        column
+        for column in ("time_s", "frame_index", "track_id", "track_index")
+        if column in selected.columns
+    ]
+    return selected.sort_values(sort_columns).reset_index(drop=True)
+
 def _interpolate_stable_radar_segments_to_frame_times(
     radar: pd.DataFrame,
     anchors: pd.DataFrame,
@@ -1802,7 +1869,9 @@ def _select_radar_candidate(
             return None
         selected = selected.copy()
         selected["association_mode"] = association
-        if bool(selected.get("association_interpolated", False)):
+        if association == "paper-largest-continuous-track":
+            selected["association_action"] = "paper_largest_continuous_track_update"
+        elif bool(selected.get("association_interpolated", False)):
             selected["association_action"] = "stable_segment_interpolated_update"
         else:
             selected["association_action"] = "stable_segment_update"
