@@ -137,6 +137,19 @@ raft-uav-diagnose-paper-table data/raw/AADM2025Dryad \
   --stable-segment-max-transition-speed-mps 65
 ```
 
+Run the same paper-compatible hard-preselector path directly through the
+baseline runner, so the output artifacts are comparable with other
+`run-baseline` rows:
+
+```bash
+raft-uav run-baseline data/raw/AADM2025Dryad \
+  --flight Opt1 \
+  --radar-association paper-compatible \
+  --radar-catprob-threshold 0.4 \
+  --stable-segment-range-gate-m 800 \
+  --smoother fixed-lag --smoother-lag-s 20
+```
+
 The `paper-compatible` fusion path applies an 800 m radar range gate, radar
 class-probability thresholding, NIS gates for RF/radar updates, and records a
 radar `missed_detection` posterior when no radar candidate passes the hard
