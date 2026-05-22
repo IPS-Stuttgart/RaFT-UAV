@@ -136,6 +136,26 @@ def position_errors_at_estimates_m(
     return errors[np.isfinite(errors)]
 
 
+def sampled_position_errors_m(
+    estimate_times_s: np.ndarray,
+    estimate_positions_m: np.ndarray,
+    truth_times_s: np.ndarray,
+    truth_positions_m: np.ndarray,
+    max_time_delta_s: float | None = None,
+    dimensions: int = 3,
+) -> np.ndarray:
+    """Compute position errors at estimate sample times against nearest truth."""
+
+    return position_errors_at_estimates_m(
+        estimate_times_s,
+        estimate_positions_m,
+        truth_times_s,
+        truth_positions_m,
+        max_time_delta_s=max_time_delta_s,
+        dimensions=dimensions,
+    )
+
+
 def _prepare_time_position_series(
     times_s: np.ndarray,
     positions_m: np.ndarray,
