@@ -249,7 +249,9 @@ README spell it out to avoid accidental regressions to the base dispatcher.
 Use `--radar-association oracle-nearest-truth` only as a diagnostic upper bound
 because it uses ground truth. The online alternatives are
 `--radar-association prediction-nis`,
-`--radar-association track-continuity`, and the experimental
+`--radar-association track-continuity`,
+`--radar-association paper-compatible`, which applies hard range/catProb/NIS
+validation with radar coasting, and the experimental
 `--radar-association geometry-score` mode, which adds velocity consistency,
 track-switch, and UAV class-probability terms to the NIS score. The
 paper-reproduction-oriented `--radar-association paper-largest-continuous-track`
