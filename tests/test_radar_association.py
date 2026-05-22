@@ -4,6 +4,7 @@ import pytest
 
 from raft_uav.baselines.kalman import AsyncConstantVelocityKalmanTracker, TrackingMeasurement
 from raft_uav.baselines.radar_association import (
+    RADAR_ASSOCIATION_MODES,
     _catprob_candidate_pool,
     _initial_measurement,
     _select_radar_candidate,
@@ -926,6 +927,73 @@ def test_stable_segments_respects_range_gate_and_min_frames():
 
     assert [record["source"] for record in records] == ["rf"]
     assert selected.empty
+
+
+def test_paper_largest_continuous_track_selects_longest_range_gated_segment():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": frame,
+                "track_id": 1,
+                "time_s": float(frame),
+                "east_m": float(frame),
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 100.0,
+                "cat_prob_uav": 0.05,
+            }
+            for frame in (1, 2, 3)
+        ]
+        + [
+            {
+                "frame_index": frame,
+                "track_id": 2,
+                "time_s": float(frame),
+                "east_m": 100.0 + float(frame),
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 100.0,
+                "cat_prob_uav": 0.99,
+            }
+            for frame in (1, 2)
+        ]
+        + [
+            {
+                "frame_index": frame,
+                "track_id": 3,
+                "time_s": float(frame),
+                "east_m": 200.0 + float(frame),
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 900.0,
+                "cat_prob_uav": 0.99,
+            }
+            for frame in (1, 2, 3, 4)
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(0.0, 0.0)],
+        radar=radar,
+        association="paper-largest-continuous-track",
+        candidate_catprob_threshold=0.95,
+        stable_segment_range_gate_m=800.0,
+    )
+
+    assert "paper-largest-continuous-track" in RADAR_ASSOCIATION_MODES
+    assert [record["source"] for record in records] == ["rf", "radar", "radar", "radar"]
+    assert selected["track_id"].tolist() == [1, 1, 1]
+    assert selected["frame_index"].tolist() == [1, 2, 3]
+    assert selected["association_mode"].unique().tolist() == [
+        "paper-largest-continuous-track"
+    ]
+    assert selected["association_action"].tolist() == [
+        "paper_largest_continuous_track_update",
+        "paper_largest_continuous_track_update",
+        "paper_largest_continuous_track_update",
+    ]
+    assert selected["association_preselector_raw_rows"].tolist() == [9, 9, 9]
+    assert selected["association_preselector_range_gated_rows"].tolist() == [5, 5, 5]
 
 
 def test_stable_segments_hybrid_uses_stable_anchor_then_prediction_fallback():

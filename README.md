@@ -239,6 +239,10 @@ because it uses ground truth. The online alternatives are
 `--radar-association track-continuity`, and the experimental
 `--radar-association geometry-score` mode, which adds velocity consistency,
 track-switch, and UAV class-probability terms to the NIS score. The
+paper-reproduction-oriented `--radar-association paper-largest-continuous-track`
+mode applies the configured radar range gate, defaults to 800 m via
+`--stable-segment-range-gate-m`, and keeps the longest continuous Fortem
+`track_id` segment without class-probability scoring or segment stitching. The
 experimental `--radar-association pda-mixture` mode keeps multiple candidates
 inside one radar update by using NIS/class-probability weights and adding the
 candidate spread to the measurement covariance. The experimental
