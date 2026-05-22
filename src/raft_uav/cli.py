@@ -27,7 +27,11 @@ from raft_uav.baselines.update_logic import (
 from raft_uav.calibration.bundle import apply_calibration_bundle, load_calibration_bundle
 from raft_uav.calibration.time_offset import apply_time_offset
 from raft_uav.evaluation.diagnostics import build_diagnostic_summary
-from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
+from raft_uav.evaluation.metrics import (
+    position_errors_m,
+    sampled_position_errors_m,
+    summarize_errors,
+)
 from raft_uav.io.aerpaw import (
     DEFAULT_RADAR_CLOCK_OFFSET_S,
     DEFAULT_RF_CLOCK_OFFSET_S,
@@ -1159,6 +1163,22 @@ def _baseline_metrics(
         max_time_delta_s=max_eval_time_delta_s,
         dimensions=3,
     )
+    paper_sampled_error_2d = sampled_position_errors_m(
+        estimate_times,
+        estimate_positions,
+        truth_times,
+        truth_positions,
+        max_time_delta_s=max_eval_time_delta_s,
+        dimensions=2,
+    )
+    paper_sampled_error_3d = sampled_position_errors_m(
+        estimate_times,
+        estimate_positions,
+        truth_times,
+        truth_positions,
+        max_time_delta_s=max_eval_time_delta_s,
+        dimensions=3,
+    )
     source_counts = Counter(str(value) for value in estimate_frame["source"])
     accepted_mask = estimate_frame["accepted"].astype(bool)
     accepted_by_source = Counter(
@@ -1345,6 +1365,8 @@ def _baseline_metrics(
         },
         "position_error_2d": summarize_errors(error_2d),
         "position_error_3d": summarize_errors(error_3d),
+        "paper_sampled_position_error_2d": summarize_errors(paper_sampled_error_2d),
+        "paper_sampled_position_error_3d": summarize_errors(paper_sampled_error_3d),
     }
 
 

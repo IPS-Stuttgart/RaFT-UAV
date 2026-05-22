@@ -21,6 +21,48 @@ def nearest_time_indices(
     return np.where(use_right, right, left)
 
 
+def sampled_position_errors_m(
+    estimate_times_s: np.ndarray,
+    estimate_positions_m: np.ndarray,
+    truth_times_s: np.ndarray,
+    truth_positions_m: np.ndarray,
+    max_time_delta_s: float | None = None,
+    dimensions: int = 3,
+) -> np.ndarray:
+    """Compute estimate-sample errors against nearest truth timestamps."""
+
+    if dimensions not in (2, 3):
+        raise ValueError("dimensions must be 2 or 3")
+
+    estimate_times, estimate_positions = _prepare_time_position_series(
+        estimate_times_s,
+        estimate_positions_m,
+        dimensions=dimensions,
+    )
+    truth_times, truth_positions = _prepare_time_position_series(
+        truth_times_s,
+        truth_positions_m,
+        dimensions=dimensions,
+    )
+    if estimate_times.size == 0 or truth_times.size == 0:
+        return np.array([], dtype=float)
+
+    truth_indices = nearest_time_indices(truth_times, estimate_times)
+    time_deltas_s = np.abs(truth_times[truth_indices] - estimate_times)
+    keep = np.ones(estimate_times.size, dtype=bool)
+    if max_time_delta_s is not None:
+        keep &= time_deltas_s <= float(max_time_delta_s)
+    if not bool(np.any(keep)):
+        return np.array([], dtype=float)
+
+    deltas = (
+        estimate_positions[keep, :dimensions]
+        - truth_positions[truth_indices[keep], :dimensions]
+    )
+    errors = np.linalg.norm(deltas, axis=1)
+    return errors[np.isfinite(errors)]
+
+
 def position_errors_m(
     estimate_times_s: np.ndarray,
     estimate_positions_m: np.ndarray,
