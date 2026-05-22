@@ -8,6 +8,7 @@ from raft_uav.diagnostics.paper_strict import (
     PAPER_STRICT_NIS_GATE_PROBABILITY,
     require_fortem_range_m,
     select_paper_strict_radar_track,
+    paper_strict_range_gated_radar_candidates,
 )
 from raft_uav.evaluation.metrics import (
     empirical_position_covariance_at_times,
@@ -28,6 +29,19 @@ def test_position_errors_at_times_interpolates_truth_to_measurement_time() -> No
     assert np.allclose(errors, np.array([1.0]))
 
 
+def test_position_errors_at_times_preserves_duplicate_estimate_timestamps() -> None:
+    errors = position_errors_at_times_m(
+        estimate_times_s=np.array([5.0, 5.0]),
+        estimate_positions_m=np.array([[5.0, 0.0, 0.0], [7.0, 0.0, 0.0]]),
+        truth_times_s=np.array([0.0, 10.0]),
+        truth_positions_m=np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]]),
+        dimensions=3,
+    )
+
+    assert errors.shape == (2,)
+    assert np.allclose(errors, np.array([0.0, 2.0]))
+
+
 def test_empirical_covariance_uses_residuals_at_measurement_times() -> None:
     covariance = empirical_position_covariance_at_times(
         estimate_times_s=np.array([0.0, 1.0, 2.0]),
@@ -38,6 +52,19 @@ def test_empirical_covariance_uses_residuals_at_measurement_times() -> None:
     )
 
     residuals = np.array([[1.0, 0.0], [1.0, 1.0], [2.0, 0.0]])
+    assert np.allclose(covariance, np.cov(residuals, rowvar=False, ddof=1))
+
+
+def test_empirical_covariance_preserves_duplicate_estimate_timestamps() -> None:
+    covariance = empirical_position_covariance_at_times(
+        estimate_times_s=np.array([1.0, 1.0, 2.0]),
+        estimate_positions_m=np.array([[2.0, 0.0], [4.0, 0.0], [5.0, 1.0]]),
+        truth_times_s=np.array([0.0, 1.0, 2.0]),
+        truth_positions_m=np.array([[0.0, 0.0], [1.0, 0.0], [3.0, 1.0]]),
+        dimensions=2,
+    )
+
+    residuals = np.array([[1.0, 0.0], [3.0, 0.0], [2.0, 0.0]])
     assert np.allclose(covariance, np.cov(residuals, rowvar=False, ddof=1))
 
 
@@ -85,3 +112,29 @@ def test_select_paper_strict_radar_track_largest_continuous_segment() -> None:
 
     assert selected["track_id"].astype(int).unique().tolist() == [2]
     assert len(selected) == 3
+
+
+def test_paper_strict_range_gated_candidates_use_fortem_range() -> None:
+    radar = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0],
+            "frame_index": [0, 1],
+            "track_id": [1, 1],
+            # ENU norm is below 800 m for both rows, but Fortem range excludes
+            # the second.  Paper parity must use the native radar range.
+            "east_m": [1.0, 1.0],
+            "north_m": [1.0, 1.0],
+            "up_m": [1.0, 1.0],
+            "range_m": [100.0, 900.0],
+            "cat_prob_uav": [0.5, 0.5],
+        }
+    )
+
+    selected = paper_strict_range_gated_radar_candidates(
+        radar,
+        range_gate_m=800.0,
+        require_range_m=True,
+    )
+
+    assert len(selected) == 1
+    assert selected["frame_index"].tolist() == [0]

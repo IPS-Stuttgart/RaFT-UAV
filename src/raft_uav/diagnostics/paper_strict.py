@@ -100,6 +100,7 @@ class PaperStrictFusionResult:
 
     records: list[dict[str, object]]
     preselected_radar: pd.DataFrame
+    range_gated_radar: pd.DataFrame
     accepted_radar: pd.DataFrame
     accepted_rf: pd.DataFrame
     rf_covariance: np.ndarray
@@ -263,6 +264,7 @@ def run_paper_strict_reproduction(
             "enu_origin_mode": inputs.enu_origin_mode,
             "truth_origin_time": str(inputs.truth_origin_time),
             "range_audit": range_audit,
+            "stage_counts": paper_strict_stage_counts(inputs=inputs, fusion=fusion),
             "config": _jsonable_config(config),
         }
         manifest_json.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -346,6 +348,12 @@ def run_paper_strict_fusion(
     radar = inputs.radar
     if config.require_radar_range_m:
         require_fortem_range_m(radar)
+    range_gated_radar = paper_strict_range_gated_radar_candidates(
+        radar,
+        range_gate_m=config.range_gate_m,
+        catprob_threshold=config.radar_catprob_threshold,
+        require_range_m=config.require_radar_range_m,
+    )
     preselected_radar = select_paper_strict_radar_track(
         radar,
         range_gate_m=config.range_gate_m,
@@ -363,6 +371,7 @@ def run_paper_strict_fusion(
         return PaperStrictFusionResult(
             records=[],
             preselected_radar=preselected_radar,
+            range_gated_radar=range_gated_radar,
             accepted_radar=preselected_radar.iloc[0:0].copy(),
             accepted_rf=inputs.rf.iloc[0:0].copy(),
             rf_covariance=rf_covariance,
@@ -382,6 +391,7 @@ def run_paper_strict_fusion(
         return PaperStrictFusionResult(
             records=[],
             preselected_radar=preselected_radar,
+            range_gated_radar=range_gated_radar,
             accepted_radar=preselected_radar.iloc[0:0].copy(),
             accepted_rf=inputs.rf.iloc[0:0].copy(),
             rf_covariance=rf_covariance,
@@ -479,6 +489,7 @@ def run_paper_strict_fusion(
     return PaperStrictFusionResult(
         records=records,
         preselected_radar=preselected_radar,
+        range_gated_radar=range_gated_radar,
         accepted_radar=accepted_radar,
         accepted_rf=accepted_rf,
         rf_covariance=rf_covariance,
@@ -523,12 +534,32 @@ def build_paper_strict_table(
             max_time_delta_s=config.truth_time_gate_s,
         ),
         _metric_row(
+            method="Radar all Fortem track rows",
+            source="radar",
+            frame=inputs.radar,
+            truth=inputs.truth,
+            dimensions=3,
+            candidate_count=len(inputs.radar),
+            selected_count=len(inputs.radar),
+            max_time_delta_s=config.truth_time_gate_s,
+        ),
+        _metric_row(
+            method="Radar after 800 m range gate",
+            source="radar",
+            frame=fusion.range_gated_radar,
+            truth=inputs.truth,
+            dimensions=3,
+            candidate_count=len(inputs.radar),
+            selected_count=len(fusion.range_gated_radar),
+            max_time_delta_s=config.truth_time_gate_s,
+        ),
+        _metric_row(
             method="Radar raw",
             source="radar",
             frame=fusion.preselected_radar,
             truth=inputs.truth,
             dimensions=3,
-            candidate_count=len(fusion.preselected_radar),
+            candidate_count=len(inputs.radar),
             selected_count=len(fusion.preselected_radar),
             max_time_delta_s=config.truth_time_gate_s,
         ),
@@ -538,7 +569,7 @@ def build_paper_strict_table(
             frame=fusion.accepted_radar,
             truth=inputs.truth,
             dimensions=3,
-            candidate_count=len(fusion.preselected_radar),
+            candidate_count=len(inputs.radar),
             selected_count=len(fusion.accepted_radar),
             max_time_delta_s=config.truth_time_gate_s,
         ),
@@ -652,6 +683,22 @@ def measurement_covariances(
     )
 
 
+def paper_strict_range_gated_radar_candidates(
+    radar: pd.DataFrame,
+    *,
+    range_gate_m: float = PAPER_STRICT_RANGE_GATE_M,
+    catprob_threshold: float | None = None,
+    require_range_m: bool = True,
+) -> pd.DataFrame:
+    """Return strict radar rows after the Fortem range gate and optional catProb gate."""
+
+    if require_range_m:
+        require_fortem_range_m(radar)
+    pool = _range_candidate_pool(radar, range_gate_m=range_gate_m, require_range_m=require_range_m)
+    pool = _catprob_candidate_pool(pool, catprob_threshold)
+    return _sort_radar_rows(pool).reset_index(drop=True)
+
+
 def select_paper_strict_radar_track(
     radar: pd.DataFrame,
     *,
@@ -663,8 +710,12 @@ def select_paper_strict_radar_track(
 
     if require_range_m:
         require_fortem_range_m(radar)
-    pool = _range_candidate_pool(radar, range_gate_m=range_gate_m, require_range_m=require_range_m)
-    pool = _catprob_candidate_pool(pool, catprob_threshold)
+    pool = paper_strict_range_gated_radar_candidates(
+        radar,
+        range_gate_m=range_gate_m,
+        catprob_threshold=catprob_threshold,
+        require_range_m=require_range_m,
+    )
     if pool.empty or "track_id" not in pool.columns:
         return radar.iloc[0:0].copy()
     segments = _continuous_track_segments(pool)
@@ -690,6 +741,34 @@ def select_paper_strict_radar_track(
     if catprob_threshold is not None:
         selected["association_catprob_threshold"] = float(catprob_threshold)
     return _sort_radar_rows(selected).reset_index(drop=True)
+
+
+def paper_strict_stage_counts(
+    *,
+    inputs: PaperStrictInputs,
+    fusion: PaperStrictFusionResult,
+) -> dict[str, int]:
+    """Return count fingerprints for paper-parity debugging."""
+
+    estimates = _records_to_estimate_frame(fusion.records)
+    if estimates.empty:
+        updated = 0
+        coasted = 0
+    else:
+        accepted = estimates["accepted"].fillna(False).astype(bool)
+        updated = int(accepted.sum())
+        coasted = int((~accepted).sum())
+    return {
+        "rf_raw_rows": int(len(inputs.rf)),
+        "rf_after_nis_rows": int(len(fusion.accepted_rf)),
+        "radar_all_track_rows": int(len(inputs.radar)),
+        "radar_after_range_gate_rows": int(len(fusion.range_gated_radar)),
+        "radar_largest_continuous_track_rows": int(len(fusion.preselected_radar)),
+        "radar_after_nis_rows": int(len(fusion.accepted_radar)),
+        "kf_all_steps_rows": int(len(estimates)),
+        "kf_updated_rows": updated,
+        "kf_coasted_rows": coasted,
+    }
 
 
 def require_fortem_range_m(radar: pd.DataFrame) -> None:

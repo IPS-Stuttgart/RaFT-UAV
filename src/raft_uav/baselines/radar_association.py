@@ -931,7 +931,12 @@ def _paper_compatible_preselector_pool(
     """Apply hard range and catProb preselection."""
 
     raw_count = int(len(candidates))
-    pool = _range_candidate_pool(candidates, range_gate_m)
+    pool = _range_candidate_pool(
+        candidates,
+        range_gate_m,
+        require_fortem_range=range_gate_m is not None,
+        context="paper-compatible",
+    )
     range_count = int(len(pool))
     pool = _catprob_candidate_pool(
         pool,
@@ -974,7 +979,12 @@ def _preselector_count(candidates: pd.DataFrame, column: str, fallback: int) -> 
 def _paper_compatible_track_id(radar: pd.DataFrame, *, range_gate_m: float | None) -> int | None:
     """Return the track ID of the largest continuous range-gated radar segment."""
 
-    pool = _range_candidate_pool(radar, range_gate_m)
+    pool = _range_candidate_pool(
+        radar,
+        range_gate_m,
+        require_fortem_range=range_gate_m is not None,
+        context="paper-compatible",
+    )
     if pool.empty or "track_id" not in pool.columns:
         return None
     segments = _stable_track_segments(
@@ -1628,7 +1638,12 @@ def _select_stable_radar_segments(
 ) -> pd.DataFrame:
     """Select stitched high-confidence Fortem track segments for sparse updates."""
 
-    pool = _range_candidate_pool(radar, range_gate_m)
+    pool = _range_candidate_pool(
+        radar,
+        range_gate_m,
+        require_fortem_range=False,
+        context="stable-segments",
+    )
     pool = _catprob_candidate_pool(
         pool,
         catprob_threshold,
@@ -1681,7 +1696,12 @@ def _select_largest_continuous_radar_track(
     more adaptive association policies.
     """
 
-    pool = _range_candidate_pool(radar, range_gate_m)
+    pool = _range_candidate_pool(
+        radar,
+        range_gate_m,
+        require_fortem_range=range_gate_m is not None,
+        context="paper-largest-continuous-track",
+    )
     if pool.empty or "track_id" not in pool.columns:
         return _empty_selected_radar(radar)
 
@@ -1731,7 +1751,12 @@ def _select_paper_compatible_radar_track(
 ) -> pd.DataFrame:
     """Select paper-compatible anchors after hard range and class filtering."""
 
-    range_pool = _range_candidate_pool(radar, range_gate_m)
+    range_pool = _range_candidate_pool(
+        radar,
+        range_gate_m,
+        require_fortem_range=range_gate_m is not None,
+        context="paper-compatible",
+    )
     catprob_pool = _catprob_candidate_pool(
         range_pool,
         catprob_threshold,
@@ -2243,22 +2268,54 @@ def _segments_can_follow(
     return distance_m / dt_s <= float(max_transition_speed_mps)
 
 
-def _range_candidate_pool(candidates: pd.DataFrame, range_gate_m: float | None) -> pd.DataFrame:
+def _range_candidate_pool(
+    candidates: pd.DataFrame,
+    range_gate_m: float | None,
+    *,
+    require_fortem_range: bool = False,
+    context: str = "radar-association",
+) -> pd.DataFrame:
     if candidates.empty or range_gate_m is None:
-        return candidates
-    ranges = _candidate_ranges_m(candidates)
+        return candidates.copy()
+    ranges, range_source = _candidate_ranges_m(
+        candidates,
+        require_fortem_range=require_fortem_range,
+        context=context,
+    )
     pool = candidates.loc[np.isfinite(ranges) & (ranges <= float(range_gate_m))].copy()
-    pool["association_range_gate_m"] = float(range_gate_m)
+    if not pool.empty:
+        pool["association_range_gate_m"] = float(range_gate_m)
+        pool["association_range_source"] = range_source
+        pool["association_range_fortem_required"] = bool(require_fortem_range)
     return pool
 
 
-def _candidate_ranges_m(candidates: pd.DataFrame) -> np.ndarray:
+def _candidate_ranges_m(
+    candidates: pd.DataFrame,
+    *,
+    require_fortem_range: bool = False,
+    context: str = "radar-association",
+) -> tuple[np.ndarray, str]:
     if "range_m" in candidates.columns:
         ranges = pd.to_numeric(candidates["range_m"], errors="coerce").to_numpy(dtype=float)
-        if np.isfinite(ranges).any():
-            return ranges
+        finite = np.isfinite(ranges)
+        if require_fortem_range and not finite.all():
+            finite_fraction = float(np.mean(finite)) if ranges.size else 0.0
+            raise ValueError(
+                f"{context} range gating requires finite Fortem range_m for all rows; "
+                f"observed finite fraction {finite_fraction:.3f}"
+            )
+        if finite.any():
+            return ranges, "range_m"
+        if require_fortem_range:
+            raise ValueError(f"{context} range gating found no finite Fortem range_m values")
+    elif require_fortem_range:
+        raise ValueError(
+            f"{context} range gating requires Fortem range_m; "
+            "falling back to ENU norm would change the 800 m paper gate"
+        )
     positions = candidates[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
-    return np.linalg.norm(positions, axis=1)
+    return np.linalg.norm(positions, axis=1), "enu_norm_fallback"
 
 
 def _radar_event_key(event: dict[str, object]) -> object:

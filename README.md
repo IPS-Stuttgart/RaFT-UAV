@@ -149,6 +149,17 @@ raft-uav-paper-strict data/raw/AADM2025Dryad \
   --output-dir outputs/paper-strict
 ```
 
+Before comparing algorithms against Table II, run the count-fingerprint audit.
+It writes the RF/radar/KF stage counts, file paths, and count deltas against the
+published reference rows so wrong flight variants, timestamp normalization, or
+range-gate semantics show up before tuning starts:
+
+```bash
+raft-uav-paper-fingerprint data/raw/AADM2025Dryad \
+  --flight Opt1 \
+  --output-dir outputs/paper-fingerprint
+```
+
 For LW1-origin reproduction, pass the origin explicitly because the coordinates
 are not hard-coded in the repository:
 
