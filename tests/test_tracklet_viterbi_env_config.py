@@ -22,6 +22,7 @@ def test_tracklet_viterbi_config_reads_environment(monkeypatch) -> None:
 
 
 def test_tracklet_viterbi_config_supports_legacy_candidate_env_alias(monkeypatch) -> None:
+    monkeypatch.delenv(tracklet_viterbi_cli._MAX_CANDIDATES_PER_FRAME_ENV, raising=False)
     monkeypatch.setenv(tracklet_viterbi_cli._MAX_CANDIDATES_PER_FRAME_LEGACY_ENV, "13")
 
     config = tracklet_viterbi_cli._tracklet_config_from_environment()

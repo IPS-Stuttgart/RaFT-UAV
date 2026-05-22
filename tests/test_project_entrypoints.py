@@ -31,6 +31,6 @@ def test_nested_lofo_tuning_entrypoint_target_imports() -> None:
 
 def test_playbook_runnable_commands_are_installed_entrypoints() -> None:
     playbook = Path("docs/results_improvement_playbook.md").read_text(encoding="utf-8")
-    documented = set(re.findall(r"`(raft-uav-[^`\s]+)`", playbook))
+    documented = set(re.findall(r"`(raft-uav-[a-z0-9][a-z0-9-]*)`", playbook))
 
     assert documented <= set(_project_scripts())
