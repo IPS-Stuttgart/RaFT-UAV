@@ -27,7 +27,12 @@ from raft_uav.baselines.update_logic import (
 from raft_uav.calibration.bundle import apply_calibration_bundle, load_calibration_bundle
 from raft_uav.calibration.time_offset import apply_time_offset
 from raft_uav.evaluation.diagnostics import build_diagnostic_summary
-from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
+from raft_uav.evaluation.metrics import (
+    position_errors_at_estimates_m,
+    position_errors_m,
+    sampled_position_errors_m,
+    summarize_errors,
+)
 from raft_uav.io.aerpaw import (
     DEFAULT_RADAR_CLOCK_OFFSET_S,
     DEFAULT_RF_CLOCK_OFFSET_S,
@@ -993,6 +998,16 @@ def _run_baseline(
     print(f"std_3d_m={_format_optional_metric(metrics['position_error_3d'].get('std_m'))}")
     print(f"rmse_3d_m={metrics['position_error_3d']['rmse_m']:.3f}")
     print(f"max_3d_m={_format_optional_metric(metrics['position_error_3d'].get('max_m'))}")
+    paper_2d = metrics["paper_position_error_2d"]
+    paper_3d = metrics["paper_position_error_3d"]
+    if paper_2d["mean_m"] is not None:
+        print(f"paper_mean_2d_m={paper_2d['mean_m']:.3f}")
+        print(f"paper_std_2d_m={paper_2d['std_m']:.3f}")
+        print(f"paper_max_2d_m={paper_2d['max_m']:.3f}")
+    if paper_3d["mean_m"] is not None:
+        print(f"paper_mean_3d_m={paper_3d['mean_m']:.3f}")
+        print(f"paper_std_3d_m={paper_3d['std_m']:.3f}")
+        print(f"paper_max_3d_m={paper_3d['max_m']:.3f}")
     return 0
 
 
@@ -1159,6 +1174,38 @@ def _baseline_metrics(
         max_time_delta_s=max_eval_time_delta_s,
         dimensions=3,
     )
+    paper_sampled_error_2d = sampled_position_errors_m(
+        estimate_times,
+        estimate_positions,
+        truth_times,
+        truth_positions,
+        max_time_delta_s=max_eval_time_delta_s,
+        dimensions=2,
+    )
+    paper_sampled_error_3d = sampled_position_errors_m(
+        estimate_times,
+        estimate_positions,
+        truth_times,
+        truth_positions,
+        max_time_delta_s=max_eval_time_delta_s,
+        dimensions=3,
+    )
+    paper_error_2d = position_errors_at_estimates_m(
+        estimate_times,
+        estimate_positions,
+        truth_times,
+        truth_positions,
+        max_time_delta_s=max_eval_time_delta_s,
+        dimensions=2,
+    )
+    paper_error_3d = position_errors_at_estimates_m(
+        estimate_times,
+        estimate_positions,
+        truth_times,
+        truth_positions,
+        max_time_delta_s=max_eval_time_delta_s,
+        dimensions=3,
+    )
     source_counts = Counter(str(value) for value in estimate_frame["source"])
     accepted_mask = estimate_frame["accepted"].astype(bool)
     accepted_by_source = Counter(
@@ -1194,6 +1241,14 @@ def _baseline_metrics(
             "truth": flight.truth_txt.name if flight.truth_txt else None,
             "rf": flight.rf_csv.name if flight.rf_csv else None,
             "radar": flight.radar_json.name if flight.radar_json else None,
+        },
+        "metric_notes": {
+            "position_error_2d/3d": (
+                "truth-grid errors: estimates are linearly interpolated to truth timestamps"
+            ),
+            "paper_position_error_2d/3d": (
+                "paper-style errors: every finite estimate row is compared to nearest truth"
+            ),
         },
         "state": ["east", "north", "up", "v_east", "v_north", "v_up"],
         "acceleration_std_mps2": float(acceleration_std),
@@ -1345,6 +1400,10 @@ def _baseline_metrics(
         },
         "position_error_2d": summarize_errors(error_2d),
         "position_error_3d": summarize_errors(error_3d),
+        "paper_position_error_2d": summarize_errors(paper_error_2d),
+        "paper_position_error_3d": summarize_errors(paper_error_3d),
+        "paper_sampled_position_error_2d": summarize_errors(paper_sampled_error_2d),
+        "paper_sampled_position_error_3d": summarize_errors(paper_sampled_error_3d),
     }
 
 
