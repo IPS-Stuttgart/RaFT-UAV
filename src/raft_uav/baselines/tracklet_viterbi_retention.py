@@ -16,7 +16,6 @@ from collections.abc import Iterable, Mapping
 
 import numpy as np
 import pandas as pd
-from pyrecest.filters.tracklet_viterbi import solve_tracklet_viterbi
 
 from raft_uav.baselines import tracklet_viterbi as _base
 from raft_uav.baselines.kalman import TrackingMeasurement
@@ -163,28 +162,12 @@ def _select_tracklet_viterbi_path(
     if not frames:
         return []
 
-    generic_frames = [
-        _base._generic_candidates_for_frame(frame_index, frame)
-        for frame_index, frame in enumerate(frames)
-    ]
-    result = solve_tracklet_viterbi(
-        generic_frames,
-        config=_base._generic_viterbi_config(config),
-        transition_cost=lambda previous, current, miss_streak: _base._transition_cost(
-            _base._node_from_generic_candidate(previous),
-            _base._node_from_generic_candidate(current),
-            config,
-            previous_miss_streak=miss_streak,
-        ),
-        include_missed_detection=True,
-    )
-    path = [
-        _base._miss_node_for_frame(frames[index])
-        if candidate is None
-        else _base._node_from_generic_candidate(candidate)
-        for index, candidate in enumerate(result.path)
-    ]
-    return _base._selected_rows_from_viterbi_path(path, float(result.total_cost), config)
+    path_cost, path = _base._top_k_viterbi_paths_with_pyrecest(
+        frames,
+        config,
+        terminal_count=1,
+    )[0]
+    return _base._selected_rows_from_viterbi_path(path, float(path_cost), config)
 
 
 def _nodes_for_radar_frame_with_track_retention(
