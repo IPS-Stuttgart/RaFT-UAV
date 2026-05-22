@@ -16,6 +16,11 @@ import os
 
 import numpy as np
 import pandas as pd
+from pyrecest.filters.tracklet_viterbi import (
+    TrackletAssociationCandidate,
+    TrackletViterbiConfig,
+    solve_tracklet_viterbi,
+)
 
 from raft_uav.baselines.kalman import (
     AsyncConstantVelocityKalmanTracker,
@@ -326,7 +331,11 @@ def _select_tracklet_viterbi_path(
     config: TrackletViterbiAssociationConfig,
     radar_covariance_fn: RadarCovarianceFn | None = None,
 ) -> list[pd.Series]:
-    """Return selected radar rows from the lowest-cost Viterbi path."""
+    """Return selected radar rows from the lowest-cost Viterbi path.
+
+    RaFT-UAV builds UAV/radar-specific candidate costs here, then delegates the
+    generic dynamic-programming recursion to PyRecEst.
+    """
 
     frames = [
         _nodes_for_radar_frame(
@@ -343,6 +352,108 @@ def _select_tracklet_viterbi_path(
     ]
     if not frames:
         return []
+
+    terminal_count = _soft_top_k_paths(config)
+    if terminal_count > 1:
+        # Soft path mixtures are a RaFT-UAV-specific extension that relies on
+        # covariance annotations in pandas rows. Keep that specialized branch
+        # local; the ordinary hard path below is delegated to PyRecEst.
+        costs, _miss_streaks, parents = _legacy_viterbi_tables(frames, config)
+        terminal_indices = np.argsort(costs[-1])[: min(terminal_count, len(costs[-1]))]
+        paths = [
+            (
+                float(costs[-1][int(best)]),
+                _reconstruct_viterbi_path(frames, parents, int(best)),
+            )
+            for best in terminal_indices
+        ]
+        return _selected_rows_from_soft_viterbi_paths(paths, config)
+
+    generic_frames = [
+        _generic_candidates_for_frame(frame_index, frame)
+        for frame_index, frame in enumerate(frames)
+    ]
+    result = solve_tracklet_viterbi(
+        generic_frames,
+        config=_generic_viterbi_config(config),
+        transition_cost=lambda previous, current, miss_streak: _transition_cost(
+            _node_from_generic_candidate(previous),
+            _node_from_generic_candidate(current),
+            config,
+            previous_miss_streak=miss_streak,
+        ),
+        include_missed_detection=True,
+    )
+    path = [
+        _miss_node_for_frame(frames[index])
+        if candidate is None
+        else _node_from_generic_candidate(candidate)
+        for index, candidate in enumerate(result.path)
+    ]
+    return _selected_rows_from_viterbi_path(path, float(result.total_cost), config)
+
+
+def _generic_viterbi_config(config: TrackletViterbiAssociationConfig) -> TrackletViterbiConfig:
+    return TrackletViterbiConfig(
+        max_candidates_per_frame=None,
+        missed_detection_cost=float(config.missed_detection_cost),
+        consecutive_miss_cost=float(config.consecutive_miss_cost),
+        switch_cost=float(config.track_switch_cost),
+        missing_track_id_cost=float(config.missing_track_id_cost),
+        motion_weight=0.0,
+    )
+
+
+def _generic_candidates_for_frame(
+    frame_index: int,
+    frame: list[_ViterbiNode],
+) -> list[TrackletAssociationCandidate]:
+    return [
+        TrackletAssociationCandidate(
+            candidate_id=(frame_index, candidate_index),
+            unary_cost=float(node.unary_cost),
+            time_s=float(node.time_s),
+            track_id=node.track_id,
+            position=node.position,
+            velocity=node.velocity,
+            metadata={"raft_viterbi_node": node},
+        )
+        for candidate_index, node in enumerate(frame)
+        if not node.is_miss
+    ]
+
+
+def _node_from_generic_candidate(candidate: TrackletAssociationCandidate | None) -> _ViterbiNode:
+    if candidate is None:
+        return _ViterbiNode(
+            -1,
+            ("miss", -1),
+            float("nan"),
+            None,
+            None,
+            None,
+            None,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            True,
+        )
+    return candidate.metadata["raft_viterbi_node"]
+
+
+def _miss_node_for_frame(frame: list[_ViterbiNode]) -> _ViterbiNode:
+    for node in frame:
+        if node.is_miss:
+            return node
+    return _ViterbiNode(-1, ("miss", -1), float("nan"), None, None, None, None, 0.0, 0.0, 0.0, 0.0, True)
+
+
+def _legacy_viterbi_tables(
+    frames: list[list[_ViterbiNode]],
+    config: TrackletViterbiAssociationConfig,
+) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
+    """Return local DP tables for RaFT-UAV's soft top-k path-mixture branch."""
 
     costs = [np.array([n.unary_cost + (config.missed_detection_cost if n.is_miss else 0.0) for n in frames[0]])]
     miss_streaks = [np.array([1 if n.is_miss else 0 for n in frames[0]], dtype=int)]
@@ -368,26 +479,11 @@ def _select_tracklet_viterbi_path(
             parent = int(np.argmin(transition))
             current_parents[j] = parent
             current_costs[j] = node.unary_cost + float(transition[parent])
-            current_miss_streaks[j] = (
-                int(miss_streaks[-1][parent]) + 1 if node.is_miss else 0
-            )
+            current_miss_streaks[j] = int(miss_streaks[-1][parent]) + 1 if node.is_miss else 0
         costs.append(current_costs)
         miss_streaks.append(current_miss_streaks)
         parents.append(current_parents)
-
-    terminal_count = min(_soft_top_k_paths(config), len(costs[-1]))
-    terminal_indices = np.argsort(costs[-1])[:terminal_count]
-    paths = [
-        (
-            float(costs[-1][int(best)]),
-            _reconstruct_viterbi_path(frames, parents, int(best)),
-        )
-        for best in terminal_indices
-    ]
-    if terminal_count <= 1:
-        path_cost, path = paths[0]
-        return _selected_rows_from_viterbi_path(path, path_cost, config)
-    return _selected_rows_from_soft_viterbi_paths(paths, config)
+    return costs, miss_streaks, parents
 
 
 def _reconstruct_viterbi_path(

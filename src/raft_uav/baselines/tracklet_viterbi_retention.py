@@ -16,6 +16,7 @@ from collections.abc import Iterable, Mapping
 
 import numpy as np
 import pandas as pd
+from pyrecest.filters.tracklet_viterbi import solve_tracklet_viterbi
 
 from raft_uav.baselines import tracklet_viterbi as _base
 from raft_uav.baselines.kalman import TrackingMeasurement
@@ -162,51 +163,28 @@ def _select_tracklet_viterbi_path(
     if not frames:
         return []
 
-    costs = [
-        np.array(
-            [n.unary_cost + (config.missed_detection_cost if n.is_miss else 0.0) for n in frames[0]]
-        )
+    generic_frames = [
+        _base._generic_candidates_for_frame(frame_index, frame)
+        for frame_index, frame in enumerate(frames)
     ]
-    miss_streaks = [np.array([1 if n.is_miss else 0 for n in frames[0]], dtype=int)]
-    parents = [np.full(len(frames[0]), -1, dtype=int)]
-    for frame_index in range(1, len(frames)):
-        previous, current = frames[frame_index - 1], frames[frame_index]
-        current_costs = np.empty(len(current), dtype=float)
-        current_miss_streaks = np.empty(len(current), dtype=int)
-        current_parents = np.empty(len(current), dtype=int)
-        for j, node in enumerate(current):
-            transition = np.array(
-                [
-                    costs[-1][k]
-                    + _base._transition_cost(
-                        prev,
-                        node,
-                        config,
-                        previous_miss_streak=int(miss_streaks[-1][k]),
-                    )
-                    for k, prev in enumerate(previous)
-                ]
-            )
-            parent = int(np.argmin(transition))
-            current_parents[j] = parent
-            current_costs[j] = node.unary_cost + float(transition[parent])
-            current_miss_streaks[j] = (
-                int(miss_streaks[-1][parent]) + 1 if node.is_miss else 0
-            )
-        costs.append(current_costs)
-        miss_streaks.append(current_miss_streaks)
-        parents.append(current_parents)
-
-    best = int(np.argmin(costs[-1]))
-    path_cost = float(costs[-1][best])
-    path: list[_base._ViterbiNode] = []
-    for frame_index in range(len(frames) - 1, -1, -1):
-        path.append(frames[frame_index][best])
-        best = int(parents[frame_index][best])
-        if best < 0:
-            break
-    path.reverse()
-    return _base._selected_rows_from_viterbi_path(path, path_cost, config)
+    result = solve_tracklet_viterbi(
+        generic_frames,
+        config=_base._generic_viterbi_config(config),
+        transition_cost=lambda previous, current, miss_streak: _base._transition_cost(
+            _base._node_from_generic_candidate(previous),
+            _base._node_from_generic_candidate(current),
+            config,
+            previous_miss_streak=miss_streak,
+        ),
+        include_missed_detection=True,
+    )
+    path = [
+        _base._miss_node_for_frame(frames[index])
+        if candidate is None
+        else _base._node_from_generic_candidate(candidate)
+        for index, candidate in enumerate(result.path)
+    ]
+    return _base._selected_rows_from_viterbi_path(path, float(result.total_cost), config)
 
 
 def _nodes_for_radar_frame_with_track_retention(

@@ -7,6 +7,10 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from pyrecest.calibration.time_offset import (
+    apply_time_offset as _pyrecest_apply_time_offset,
+    make_offset_grid as _pyrecest_make_offset_grid,
+)
 
 from raft_uav.evaluation.radar_oracle_diagnostics import (
     best_time_offset,
@@ -60,15 +64,7 @@ class TimeOffsetFitResult:
 def make_offset_grid(min_s: float, max_s: float, step_s: float) -> np.ndarray:
     """Return an inclusive timestamp-offset grid."""
 
-    if step_s <= 0.0:
-        raise ValueError("step_s must be positive")
-    if max_s < min_s:
-        raise ValueError("max_s must be greater than or equal to min_s")
-    count = int(np.floor((float(max_s) - float(min_s)) / float(step_s))) + 1
-    offsets = float(min_s) + np.arange(count, dtype=float) * float(step_s)
-    if offsets.size == 0 or offsets[-1] < float(max_s) - 1.0e-9:
-        offsets = np.append(offsets, float(max_s))
-    return np.round(offsets, decimals=9)
+    return _pyrecest_make_offset_grid(min_s, max_s, step_s)
 
 
 def apply_time_offset(
@@ -80,16 +76,19 @@ def apply_time_offset(
 ) -> pd.DataFrame:
     """Return a copy whose time column is shifted by ``offset_s`` seconds."""
 
-    if time_column not in frame.columns:
-        raise KeyError(f"frame is missing time column {time_column!r}")
     offset = 0.0 if offset_s is None else float(offset_s)
     out = frame.copy()
+    if time_column not in out.columns:
+        raise KeyError(f"frame is missing time column {time_column!r}")
     raw_time = pd.to_numeric(out[time_column], errors="coerce")
     if copy_uncorrected:
         raw_column = f"{time_column}_uncorrected"
         if raw_column not in out.columns:
             out[raw_column] = raw_time
-    out[time_column] = raw_time + offset
+    out[time_column] = _pyrecest_apply_time_offset(
+        raw_time.to_numpy(dtype=float),
+        offset,
+    )
     out["time_offset_correction_s"] = offset
     return out
 
