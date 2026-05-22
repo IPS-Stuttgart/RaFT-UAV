@@ -183,15 +183,21 @@ def summarize_errors(errors_m: np.ndarray) -> dict[str, float | None]:
     if errors.size == 0:
         return {
             "count": 0.0,
+            "mean_m": None,
+            "std_m": None,
             "rmse_m": None,
             "mae_m": None,
             "p50_m": None,
             "p95_m": None,
+            "max_m": None,
         }
     return {
         "count": float(errors.size),
+        "mean_m": float(np.mean(errors)),
+        "std_m": float(np.std(errors)),
         "rmse_m": float(np.sqrt(np.mean(errors**2))),
         "mae_m": float(np.mean(np.abs(errors))),
         "p50_m": float(np.percentile(errors, 50)),
         "p95_m": float(np.percentile(errors, 95)),
+        "max_m": float(np.max(errors)),
     }

@@ -618,7 +618,9 @@ def run_paper_compatible_cv_fusion(
     records: list[dict[str, object]] = []
     selected_rows: list[pd.Series] = []
     current_track_id: int | None = None
-    longest_track_id = _longest_track_id(radar)
+    longest_track_id = _longest_continuous_track_id(
+        _range_candidate_pool(radar, radar_range_gate_m)
+    )
     nis_threshold = gate_threshold_from_probability(float(nis_gate_probability), 3)
     rf_gate_threshold = gate_threshold_from_probability(float(rf_nis_gate_probability), 2)
     assert nis_threshold is not None
@@ -899,9 +901,9 @@ def select_paper_compatible_candidate(
         return None
     if longest_track_id is not None and "track_id" in pool.columns:
         track_ids = pd.to_numeric(pool["track_id"], errors="coerce")
-        longest_pool = pool.loc[track_ids == int(longest_track_id)]
-        if not longest_pool.empty:
-            pool = longest_pool
+        pool = pool.loc[track_ids == int(longest_track_id)].copy()
+        if pool.empty:
+            return None
     pool = _catprob_hard_candidate_pool(pool, radar_catprob_threshold)
     if pool.empty:
         return None

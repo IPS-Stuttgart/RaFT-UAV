@@ -178,6 +178,138 @@ def test_safety_gate_makes_impossible_radar_association_a_miss():
     assert selected.empty
 
 
+def test_paper_compatible_association_coasts_when_range_gate_fails():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 1.0,
+                "east_m": 900.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 900.0,
+                "cat_prob_uav": 0.99,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(0.0, 0.0)],
+        radar=radar,
+        association="paper-compatible",
+        candidate_catprob_threshold=0.4,
+        stable_segment_range_gate_m=800.0,
+    )
+
+    assert "paper-compatible" in RADAR_ASSOCIATION_MODES
+    assert [record["source"] for record in records] == ["rf", "radar"]
+    assert records[-1]["association_mode"] == "paper-compatible"
+    assert records[-1]["update_action"] == "missed_detection"
+    assert selected.empty
+
+
+def test_paper_compatible_association_has_no_catprob_fallback():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 1.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 1.0,
+                "cat_prob_uav": 0.1,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(0.0, 0.0)],
+        radar=radar,
+        association="paper-compatible",
+        candidate_catprob_threshold=0.4,
+        stable_segment_range_gate_m=800.0,
+    )
+
+    assert records[-1]["update_action"] == "missed_detection"
+    assert selected.empty
+
+
+def test_paper_compatible_association_updates_candidate_passing_hard_gates():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 1.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 1.0,
+                "cat_prob_uav": 0.99,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(0.0, 0.0)],
+        radar=radar,
+        association="paper-compatible",
+        candidate_catprob_threshold=0.4,
+        stable_segment_range_gate_m=800.0,
+    )
+
+    assert records[-1]["association_mode"] == "paper-compatible"
+    assert records[-1]["update_action"] == "updated"
+    assert selected["track_id"].tolist() == [1]
+    assert selected["association_action"].tolist() == ["hard_gated_update"]
+
+
+def test_paper_compatible_association_uses_largest_continuous_range_gated_track():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": frame,
+                "track_id": 1,
+                "time_s": float(frame),
+                "east_m": float(frame),
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": float(frame),
+                "cat_prob_uav": 0.99,
+            }
+            for frame in (1, 3)
+        ]
+        + [
+            {
+                "frame_index": frame,
+                "track_id": 2,
+                "time_s": float(frame),
+                "east_m": float(frame),
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": float(frame),
+                "cat_prob_uav": 0.8,
+            }
+            for frame in (1, 2, 3)
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(0.0, 0.0)],
+        radar=radar,
+        association="paper-compatible",
+        candidate_catprob_threshold=0.4,
+        stable_segment_range_gate_m=800.0,
+    )
+
+    assert [record["source"] for record in records] == ["rf", "radar", "radar", "radar"]
+    assert selected["track_id"].tolist() == [2, 2, 2]
+    assert selected["association_preselector_track_id"].tolist() == [2, 2, 2]
+
+
 def test_catprob_candidate_pool_filters_when_possible():
     candidates = pd.DataFrame(
         {
