@@ -622,12 +622,12 @@ def _run_paper_compatible_association(
     if not events:
         return [], _empty_selected_radar(radar)
 
-    paper_track_id = _paper_compatible_track_id(radar, range_gate_m=range_gate_m)
+    paper_track = _paper_compatible_track_segment(radar, range_gate_m=range_gate_m)
     initial = _initial_paper_compatible_measurement_and_row(
         events,
         covariance=covariance,
         covariance_config=covariance_config,
-        paper_track_id=paper_track_id,
+        paper_track=paper_track,
         range_gate_m=range_gate_m,
         candidate_catprob_threshold=candidate_catprob_threshold,
     )
@@ -729,7 +729,7 @@ def _run_paper_compatible_association(
             tracker=tracker,
             covariance=covariance,
             covariance_config=covariance_config,
-            paper_track_id=paper_track_id,
+            paper_track=paper_track,
             current_track_id=current_track_id,
             range_gate_m=range_gate_m,
             candidate_catprob_threshold=candidate_catprob_threshold,
@@ -799,7 +799,7 @@ def _initial_paper_compatible_measurement_and_row(
     *,
     covariance: np.ndarray,
     covariance_config: _RadarGeometryCovarianceConfig | None,
-    paper_track_id: int | None,
+    paper_track: _TrackSegment | None,
     range_gate_m: float | None,
     candidate_catprob_threshold: float | None,
 ) -> tuple[int, TrackingMeasurement, pd.Series | None] | None:
@@ -816,7 +816,7 @@ def _initial_paper_compatible_measurement_and_row(
             candidates,
             covariance=covariance,
             covariance_config=covariance_config,
-            paper_track_id=paper_track_id,
+            paper_track=paper_track,
             range_gate_m=range_gate_m,
             candidate_catprob_threshold=candidate_catprob_threshold,
         )
@@ -830,13 +830,13 @@ def _select_paper_compatible_bootstrap_candidate(
     *,
     covariance: np.ndarray,
     covariance_config: _RadarGeometryCovarianceConfig | None,
-    paper_track_id: int | None,
+    paper_track: _TrackSegment | None,
     range_gate_m: float | None,
     candidate_catprob_threshold: float | None,
 ) -> pd.Series | None:
     pool = _paper_compatible_preselector_pool(
         candidates,
-        paper_track_id=paper_track_id,
+        paper_track=paper_track,
         range_gate_m=range_gate_m,
         candidate_catprob_threshold=candidate_catprob_threshold,
     )
@@ -856,7 +856,7 @@ def _select_paper_compatible_candidate(
     tracker: AsyncConstantVelocityKalmanTracker,
     covariance: np.ndarray,
     covariance_config: _RadarGeometryCovarianceConfig | None,
-    paper_track_id: int | None,
+    paper_track: _TrackSegment | None,
     current_track_id: int | None,
     range_gate_m: float | None,
     candidate_catprob_threshold: float | None,
@@ -866,7 +866,7 @@ def _select_paper_compatible_candidate(
 ) -> pd.Series | None:
     pool = _paper_compatible_preselector_pool(
         candidates,
-        paper_track_id=paper_track_id,
+        paper_track=paper_track,
         range_gate_m=range_gate_m,
         candidate_catprob_threshold=candidate_catprob_threshold,
     )
@@ -917,7 +917,7 @@ def _select_paper_compatible_candidate(
 def _paper_compatible_preselector_pool(
     candidates: pd.DataFrame,
     *,
-    paper_track_id: int | None,
+    paper_track: _TrackSegment | None,
     range_gate_m: float | None,
     candidate_catprob_threshold: float | None,
 ) -> pd.DataFrame:
@@ -927,10 +927,18 @@ def _paper_compatible_preselector_pool(
     pool = _range_candidate_pool(candidates, range_gate_m)
     range_count = int(len(pool))
     track_count = range_count
-    if paper_track_id is not None and "track_id" in pool.columns:
-        track_ids = pd.to_numeric(pool["track_id"], errors="coerce")
-        pool = pool.loc[track_ids == int(paper_track_id)].copy()
-        track_count = int(len(pool))
+    segment_count = range_count
+    if paper_track is not None:
+        paper_track_id = int(paper_track.track_id)
+        if "track_id" in pool.columns:
+            track_ids = pd.to_numeric(pool["track_id"], errors="coerce")
+            pool = pool.loc[track_ids == paper_track_id].copy()
+            track_count = int(len(pool))
+        segment_keys = _paper_track_segment_keys(paper_track)
+        if segment_keys:
+            in_segment = pool.apply(lambda row: _radar_row_key(row) in segment_keys, axis=1)
+            pool = pool.loc[in_segment].copy()
+        segment_count = int(len(pool))
     pool = _catprob_candidate_pool(
         pool,
         candidate_catprob_threshold,
@@ -940,15 +948,33 @@ def _paper_compatible_preselector_pool(
         pool["association_preselector_raw_rows"] = raw_count
         pool["association_preselector_range_gated_rows"] = range_count
         pool["association_preselector_track_id"] = (
-            np.nan if paper_track_id is None else int(paper_track_id)
+            np.nan if paper_track is None else int(paper_track.track_id)
         )
         pool["association_preselector_track_rows"] = track_count
+        pool["association_preselector_segment_rows"] = segment_count
         pool["association_preselector_catprob_rows"] = int(len(pool))
+        if paper_track is not None:
+            pool["association_preselector_segment_frames"] = int(paper_track.frames)
+            pool["association_preselector_segment_start_time_s"] = float(
+                paper_track.start_time_s
+            )
+            pool["association_preselector_segment_end_time_s"] = float(
+                paper_track.end_time_s
+            )
     return pool
 
 
-def _paper_compatible_track_id(radar: pd.DataFrame, *, range_gate_m: float | None) -> int | None:
-    """Return the track ID of the largest continuous range-gated radar segment."""
+def _paper_compatible_track_segment(
+    radar: pd.DataFrame,
+    *,
+    range_gate_m: float | None,
+) -> _TrackSegment | None:
+    """Return the largest continuous range-gated radar segment.
+
+    Fortem IDs may reappear after gaps.  Returning the full segment, not just
+    the ID, prevents the paper-compatible selector from admitting later rows
+    that share the same ``track_id`` but are outside the selected continuous run.
+    """
 
     pool = _range_candidate_pool(radar, range_gate_m)
     if pool.empty or "track_id" not in pool.columns:
@@ -973,7 +999,22 @@ def _paper_compatible_track_id(radar: pd.DataFrame, *, range_gate_m: float | Non
             -item.track_id,
         ),
     )
-    return int(selected_segment.track_id)
+    return selected_segment
+
+
+def _paper_compatible_track_id(
+    radar: pd.DataFrame,
+    *,
+    range_gate_m: float | None,
+) -> int | None:
+    """Return the selected paper-compatible track ID for legacy callers."""
+
+    segment = _paper_compatible_track_segment(radar, range_gate_m=range_gate_m)
+    return None if segment is None else int(segment.track_id)
+
+
+def _paper_track_segment_keys(segment: _TrackSegment) -> frozenset[object]:
+    return frozenset(_radar_row_key(row) for _, row in segment.frame.iterrows())
 
 
 def _paper_gate_threshold_for_measurement(

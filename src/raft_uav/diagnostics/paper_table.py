@@ -344,14 +344,18 @@ def fusion_rows(
 
     try:
         if association == "paper-compatible":
-            records, selected = run_paper_compatible_cv_fusion(
+            records, selected = run_async_cv_baseline_with_radar_association(
                 rf_measurements=rf_measurements,
                 radar=radar,
+                association="paper-compatible",
+                truth=truth,
                 acceleration_std_mps2=acceleration_std_mps2,
-                radar_range_gate_m=radar_range_gate_m,
-                radar_catprob_threshold=radar_catprob_threshold,
-                nis_gate_probability=fusion_nis_gate_prob,
-                rf_nis_gate_probability=rf_nis_gate_prob,
+                candidate_catprob_threshold=radar_catprob_threshold,
+                stable_segment_range_gate_m=radar_range_gate_m,
+                gate_probabilities_by_source={
+                    "rf": rf_nis_gate_probability,
+                    "radar": fusion_nis_gate_prob,
+                },
             )
         elif association == "paper-longest-track":
             records, selected = run_paper_longest_track_cv_fusion(
@@ -504,16 +508,27 @@ def select_radar_for_table(
         )
 
     groups = radar_frame_groups(radar)
-    longest_track_source = _range_candidate_pool(radar, range_gate_m) if selection == "radar-longest-continuous-track-range-gated" else radar
+    longest_track_source = (
+        _range_candidate_pool(radar, range_gate_m)
+        if selection == "radar-longest-continuous-track-range-gated"
+        else radar
+    )
+    longest_segment = (
+        _longest_continuous_track_segment(longest_track_source)
+        if selection == "radar-longest-continuous-track-range-gated"
+        else None
+    )
+    longest_segment_keys = (
+        _radar_keys_from_frame(longest_segment.frame) if longest_segment else None
+    )
     longest_track = (
-        _longest_continuous_track_id(longest_track_source)
+        int(longest_segment.track_id)
         if selection == "radar-longest-continuous-track-range-gated"
         else _longest_track_id(longest_track_source)
         if selection
         in {
             "radar-longest-track",
             "radar-longest-track-range-gated",
-            "radar-longest-continuous-track-range-gated",
         }
         else None
     )
@@ -540,7 +555,14 @@ def select_radar_for_table(
             else:
                 track_rows = group.loc[
                     pd.to_numeric(group["track_id"], errors="coerce") == longest_track
-                ]
+                ].copy()
+                if (
+                    selection == "radar-longest-continuous-track-range-gated"
+                    and longest_segment_keys is not None
+                ):
+                    track_rows = track_rows.loc[
+                        track_rows.apply(lambda row: _radar_row_key(row) in longest_segment_keys, axis=1)
+                    ].copy()
                 selected = highest_catprob_candidate(track_rows)
         elif selection == "radar-oracle-nearest-truth":
             selected = nearest_candidate_to_truth(group, truth_xyz)
@@ -618,9 +640,11 @@ def run_paper_compatible_cv_fusion(
     records: list[dict[str, object]] = []
     selected_rows: list[pd.Series] = []
     current_track_id: int | None = None
-    longest_track_id = _longest_continuous_track_id(
+    longest_segment = _longest_continuous_track_segment(
         _range_candidate_pool(radar, radar_range_gate_m)
     )
+    longest_track_id = None if longest_segment is None else int(longest_segment.track_id)
+    longest_track_keys = _radar_keys_from_frame(longest_segment.frame) if longest_segment else None
     nis_threshold = gate_threshold_from_probability(float(nis_gate_probability), 3)
     rf_gate_threshold = gate_threshold_from_probability(float(rf_nis_gate_probability), 2)
     assert nis_threshold is not None
@@ -643,6 +667,7 @@ def run_paper_compatible_cv_fusion(
             tracker=tracker,
             covariance=covariance,
             longest_track_id=longest_track_id,
+            longest_track_keys=longest_track_keys,
             current_track_id=current_track_id,
             radar_range_gate_m=radar_range_gate_m,
             radar_catprob_threshold=radar_catprob_threshold,
@@ -888,6 +913,7 @@ def select_paper_compatible_candidate(
     covariance: np.ndarray,
     longest_track_id: int | None,
     current_track_id: int | None,
+    longest_track_keys: frozenset[object] | None,
     radar_range_gate_m: float | None,
     radar_catprob_threshold: float | None,
     nis_gate_threshold: float,
@@ -904,6 +930,11 @@ def select_paper_compatible_candidate(
         pool = pool.loc[track_ids == int(longest_track_id)].copy()
         if pool.empty:
             return None
+        if longest_track_keys is not None:
+            in_segment = pool.apply(lambda row: _radar_row_key(row) in longest_track_keys, axis=1)
+            pool = pool.loc[in_segment].copy()
+            if pool.empty:
+                return None
     pool = _catprob_hard_candidate_pool(pool, radar_catprob_threshold)
     if pool.empty:
         return None
@@ -1521,7 +1552,34 @@ def _longest_track_id(radar: pd.DataFrame) -> int | None:
     return int(values.astype(int).value_counts().idxmax())
 
 
+def _longest_continuous_track_segment(radar: pd.DataFrame) -> _TrackSegment | None:
+    """Return the actual longest continuous Fortem track segment."""
+
+    if radar.empty or "track_id" not in radar.columns:
+        return None
+    segments = _stable_track_segments(radar, min_segment_frames=1)
+    if not segments:
+        return None
+    return max(
+        segments,
+        key=lambda item: (
+            item.frames,
+            item.end_time_s - item.start_time_s,
+            item.mean_catprob,
+            -item.start_time_s,
+            -item.track_id,
+        ),
+    )
+
+
+def _radar_keys_from_frame(frame: pd.DataFrame) -> frozenset[object]:
+    return frozenset(_radar_row_key(row) for _, row in frame.iterrows())
+
+
 def _longest_continuous_track_id(radar: pd.DataFrame) -> int | None:
+    segment = _longest_continuous_track_segment(radar)
+    if segment is not None:
+        return int(segment.track_id)
     if radar.empty or "track_id" not in radar.columns:
         return None
     if "frame_index" in radar.columns:
