@@ -10,6 +10,7 @@ import numpy as np
 from pyrecest.filters.linear_update_planning import (
     DEFAULT_HUBER_THRESHOLD,
     DEFAULT_STUDENT_T_DOF,
+    ROBUST_UPDATE_MODES as _PYRECEST_ROBUST_UPDATE_MODES,
     huber_covariance_scale as _pyrecest_huber_covariance_scale,
     normalized_innovation_squared as _pyrecest_normalized_innovation_squared,
     plan_linear_measurement_update as _pyrecest_plan_linear_measurement_update,
@@ -18,6 +19,8 @@ from pyrecest.filters.linear_update_planning import (
     source_float_value as _pyrecest_source_float_value,
     student_t_covariance_scale as _pyrecest_student_t_covariance_scale,
 )
+
+ROBUST_UPDATE_MODES = _PYRECEST_ROBUST_UPDATE_MODES
 
 
 class TrackingMeasurementLike(Protocol):
