@@ -52,6 +52,7 @@ _BELOW_CATPROB_PENALTY_ENV = "RAFT_UAV_TRACKLET_BELOW_CATPROB_THRESHOLD_PENALTY"
 _TRACK_SUPPORT_WEIGHT_ENV = "RAFT_UAV_TRACKLET_SUPPORT_WEIGHT"
 _MAX_TRACK_SUPPORT_REWARD_ENV = "RAFT_UAV_TRACKLET_MAX_SUPPORT_REWARD"
 _MAX_CANDIDATES_PER_FRAME_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"
+_MAX_CANDIDATES_PER_FRAME_LEGACY_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES"
 _MAX_CANDIDATE_POOL_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATE_POOL_PER_FRAME"
 _MAX_CANDIDATES_PER_TRACK_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_TRACK_ID"
 _VITERBI_LAG_S_ENV = "RAFT_UAV_TRACKLET_VITERBI_LAG_S"
@@ -333,8 +334,8 @@ def _tracklet_config_from_environment() -> _TrackletConfigOverlay:
     base = TrackletViterbiAssociationConfig()
     return _TrackletConfigOverlay(
         base,
-        max_candidates_per_frame=_env_int(
-            _MAX_CANDIDATES_PER_FRAME_ENV,
+        max_candidates_per_frame=_env_int_any(
+            (_MAX_CANDIDATES_PER_FRAME_ENV, _MAX_CANDIDATES_PER_FRAME_LEGACY_ENV),
             int(base.max_candidates_per_frame),
         ),
         catprob_retention_mode=_env_str(_CATPROB_MODE_ENV, "soft"),
@@ -494,10 +495,15 @@ def _env_float(name: str, default: float) -> float:
 
 
 def _env_int(name: str, default: int) -> int:
-    value = os.environ.get(name)
-    if value is None or value == "":
-        return default
-    return int(value)
+    return _env_int_any((name,), default)
+
+
+def _env_int_any(names: tuple[str, ...], default: int) -> int:
+    for name in names:
+        value = os.environ.get(name)
+        if value is not None and value != "":
+            return int(value)
+    return default
 
 
 def main(argv: list[str] | None = None) -> int:
