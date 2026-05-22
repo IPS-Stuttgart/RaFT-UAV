@@ -186,6 +186,22 @@ def test_lw1_origin_can_be_supplied_by_config(tmp_path) -> None:
     assert projector.origin_altitude_m == pytest.approx(123.4)
 
 
+def test_lw1_origin_rejects_example_placeholder(tmp_path) -> None:
+    origin_config = tmp_path / "origins.toml"
+    origin_config.write_text(
+        "[origins.lw1]\nlatitude_deg = 0.0\nlongitude_deg = 0.0\naltitude_m = 0.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="0,0,0"):
+        _projector_for_origin(
+            enu_origin="lw1",
+            enu_origin_lla=None,
+            lw1_origin_lla=None,
+            origin_config=origin_config,
+        )
+
+
 def test_count_mismatch_action_fail_raises() -> None:
     table = pd.DataFrame({"method": ["RF raw"], "selected_count": [999]})
     count_audit = build_count_audit(table)

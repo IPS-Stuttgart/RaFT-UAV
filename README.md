@@ -151,6 +151,7 @@ the selected radar track rather than the first RF row:
 raft-uav-paper-strict data/raw/AADM2025Dryad \
   --flight Opt1 \
   --origin-config config/origins.toml \
+  --variant rerun \
   --count-mismatch-action fail \
   --output-dir outputs/paper-strict
 ```
@@ -166,6 +167,8 @@ range-gate semantics show up before tuning starts:
 ```bash
 raft-uav-paper-fingerprint data/raw/AADM2025Dryad \
   --flight Opt1 \
+  --origin-config config/origins.toml \
+  --variant rerun \
   --output-dir outputs/paper-fingerprint
 ```
 
@@ -178,6 +181,14 @@ raft-uav-paper-strict data/raw/AADM2025Dryad \
   --enu-origin lw1 \
   --lw1-origin-lla <LAT>,<LON>,<ALT>  # or set RAFT_UAV_LW1_ORIGIN_LLA
 ```
+
+Paper-parity commands persist the selected RF/radar/truth filenames, variants,
+sizes, SHA-256 digests, and ENU origin in their manifests. Use
+`--variant original` or `--variant rerun` when reproducing a specific Opt1 file
+choice; `--variant auto` keeps the historical behavior of preferring rerun files
+when present. The example `config/origins.example.toml` intentionally contains a
+`0,0,0` placeholder and strict paper diagnostics reject it until the actual LW1
+origin is supplied.
 
 Run the same paper-compatible hard-preselector path directly through the
 baseline runner, so the output artifacts are comparable with other

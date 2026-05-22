@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,7 @@ DEFAULT_RADAR_CLOCK_OFFSET_S = DEFAULT_SENSOR_CLOCK_OFFSET_S
 # Backward-compatible alias for callers that imported the historical shared name.
 SENSOR_CLOCK_OFFSET_S = DEFAULT_SENSOR_CLOCK_OFFSET_S
 RADAR_SELECTION_MODES = ("catprob", "catprob-all", "truth-gated", "all", "none")
+FLIGHT_FILE_VARIANTS = ("auto", "original", "rerun")
 TRUTH_COLUMNS = [
     "sample",
     "longitude",
@@ -43,6 +45,9 @@ class FlightPaths:
     rf_csv: Path | None
     radar_json: Path | None
     truth_txt: Path | None
+    rf_variant: str | None = None
+    radar_variant: str | None = None
+    truth_variant: str | None = None
 
 
 def find_rf_sensor_and_radar_root(dataset_root: Path) -> Path:
@@ -61,33 +66,40 @@ def find_rf_sensor_and_radar_root(dataset_root: Path) -> Path:
     raise FileNotFoundError(f"Could not find RF Sensor and Radar folder under {root}")
 
 
-def discover_flights(dataset_root: Path) -> list[FlightPaths]:
+def discover_flights(dataset_root: Path, *, variant: str = "auto") -> list[FlightPaths]:
     """Discover candidate flights with RF, radar, and ground-truth files."""
 
+    _validate_file_variant(variant)
     rf_radar_root = find_rf_sensor_and_radar_root(dataset_root)
     flights: list[FlightPaths] = []
     for folder in sorted(path for path in rf_radar_root.iterdir() if path.is_dir()):
         rf_files = sorted(folder.glob("*.csv"))
         radar_files = sorted(folder.glob("radar_data*.json"))
         truth_files = sorted(folder.glob("*vehicleOut*.txt"))
+        rf_csv = _preferred_variant(rf_files, variant=variant)
+        radar_json = _preferred_variant(radar_files, variant=variant)
+        truth_txt = _preferred_variant(truth_files, variant=variant)
         if not (rf_files or radar_files or truth_files):
             continue
         flights.append(
             FlightPaths(
                 name=folder.name,
                 root=folder,
-                rf_csv=_preferred_variant(rf_files),
-                radar_json=_preferred_variant(radar_files),
-                truth_txt=_preferred_variant(truth_files),
+                rf_csv=rf_csv,
+                radar_json=radar_json,
+                truth_txt=truth_txt,
+                rf_variant=_path_variant(rf_csv),
+                radar_variant=_path_variant(radar_json),
+                truth_variant=_path_variant(truth_txt),
             )
         )
     return flights
 
 
-def select_flight(dataset_root: Path, name: str) -> FlightPaths:
+def select_flight(dataset_root: Path, name: str, *, variant: str = "auto") -> FlightPaths:
     """Select a discovered flight by exact name or case-insensitive substring."""
 
-    flights = discover_flights(dataset_root)
+    flights = discover_flights(dataset_root, variant=variant)
     exact = [flight for flight in flights if flight.name == name]
     if len(exact) == 1:
         return exact[0]
@@ -96,6 +108,64 @@ def select_flight(dataset_root: Path, name: str) -> FlightPaths:
         return partial[0]
     available = ", ".join(flight.name for flight in flights[:40])
     raise ValueError(f"Could not uniquely select flight {name!r}. Available: {available}")
+
+
+def flight_file_manifest(
+    flight: FlightPaths,
+    *,
+    dataset_root: Path | None = None,
+    include_sha256: bool = True,
+) -> dict[str, Any]:
+    """Return reproducibility metadata for the files selected for one flight.
+
+    Paper-parity runs are extremely sensitive to Opt1/original/rerun file
+    selection.  Persisting the exact path, size, variant, and digest makes silent
+    file-selection drift visible before a tracker is tuned around the wrong
+    inputs.
+    """
+
+    return {
+        "flight": flight.name,
+        "root": _manifest_path(flight.root, dataset_root),
+        "rf": _file_manifest_entry(
+            flight.rf_csv,
+            dataset_root=dataset_root,
+            variant=flight.rf_variant,
+            include_sha256=include_sha256,
+        ),
+        "radar": _file_manifest_entry(
+            flight.radar_json,
+            dataset_root=dataset_root,
+            variant=flight.radar_variant,
+            include_sha256=include_sha256,
+        ),
+        "truth": _file_manifest_entry(
+            flight.truth_txt,
+            dataset_root=dataset_root,
+            variant=flight.truth_variant,
+            include_sha256=include_sha256,
+        ),
+    }
+
+
+def _file_manifest_entry(
+    path: Path | None,
+    *,
+    dataset_root: Path | None,
+    variant: str | None,
+    include_sha256: bool,
+) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    entry: dict[str, Any] = {
+        "path": _manifest_path(path, dataset_root),
+        "name": path.name,
+        "variant": variant or _path_variant(path),
+        "size_bytes": int(path.stat().st_size) if path.exists() else None,
+    }
+    if include_sha256 and path.exists():
+        entry["sha256"] = _sha256_file(path)
+    return entry
 
 
 def read_rf_csv(path: Path) -> pd.DataFrame:
@@ -263,7 +333,21 @@ def normalize_radar(
     out["timestamp"] = out["timestamp"] + pd.to_timedelta(clock_offset_s, unit="s")
     out["time_s"] = (out["timestamp"] - truth_origin_time).dt.total_seconds()
 
-    for column in ["latitude", "longitude", "altitude_m", "cat_prob_uav", "track_id"]:
+    for column in [
+        "latitude",
+        "longitude",
+        "altitude_m",
+        "cat_prob_uav",
+        "track_id",
+        "range_m",
+        "azimuth_deg",
+        "elevation_deg",
+        "rcs_dbsm",
+        "radial_velocity_mps",
+        "num_inliers",
+        "track_age",
+        "confidence",
+    ]:
         if column in out.columns:
             out[column] = pd.to_numeric(out[column], errors="coerce")
 
@@ -522,12 +606,55 @@ def summarize_flight_schema(
     return summary
 
 
-def _preferred_variant(paths: Iterable[Path]) -> Path | None:
+def _preferred_variant(paths: Iterable[Path], *, variant: str = "auto") -> Path | None:
+    """Return the requested file variant without silently crossing variants.
+
+    ``auto`` preserves the historical behavior: prefer files whose names contain
+    ``rerun`` and otherwise use the first sorted file.  ``original`` and
+    ``rerun`` are explicit and return ``None`` when that variant is absent so
+    downstream strict loaders fail loudly instead of using the wrong benchmark
+    stream.
+    """
+
+    _validate_file_variant(variant)
     files = list(paths)
     if not files:
         return None
     rerun = [path for path in files if "rerun" in path.name.lower()]
-    return sorted(rerun or files)[0]
+    if variant == "auto":
+        return sorted(rerun or files)[0]
+    if variant == "rerun":
+        return sorted(rerun)[0] if rerun else None
+    original = [path for path in files if "rerun" not in path.name.lower()]
+    return sorted(original)[0] if original else None
+
+
+def _validate_file_variant(variant: str) -> None:
+    if variant not in FLIGHT_FILE_VARIANTS:
+        raise ValueError(f"variant must be one of {FLIGHT_FILE_VARIANTS}, got {variant!r}")
+
+
+def _path_variant(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    return "rerun" if "rerun" in path.name.lower() else "original"
+
+
+def _manifest_path(path: Path, dataset_root: Path | None) -> str:
+    if dataset_root is not None:
+        try:
+            return str(path.relative_to(dataset_root))
+        except ValueError:
+            pass
+    return str(path)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _flatten_track(
@@ -539,10 +666,13 @@ def _flatten_track(
     lla = track.get("lla") or [np.nan, np.nan, np.nan]
     velocity_ned = track.get("velocityNed") or [np.nan, np.nan, np.nan]
     cat_prob = track.get("catProb") or []
+    confidence = track.get("confidence") or track.get("confidenceScore")
     return {
         "frame_index": frame_index,
         "track_index": track_index,
         "track_id": track.get("id"),
+        "track_age": _first_present(track, "trackAge", "age", "hits", "hitCount"),
+        "track_status": _first_present(track, "status", "trackStatus"),
         "latitude": _list_get(lla, 0),
         "longitude": _list_get(lla, 1),
         "altitude_m": _list_get(lla, 2),
@@ -553,11 +683,22 @@ def _flatten_track(
         "gps_seconds": track.get("gpsSeconds", params.get("gpsSeconds")),
         "global_time_raw_s": track.get("globalTime", params.get("globalTime")),
         "range_m": track.get("range"),
+        "azimuth_deg": _first_present(track, "azimuth", "azimuthDeg", "azimuth_deg"),
+        "elevation_deg": _first_present(track, "elevation", "elevationDeg", "elevation_deg"),
+        "rcs_dbsm": _first_present(track, "rcsDbsm", "rcs_dbsm", "rcs", "radarCrossSection"),
         "radial_velocity_mps": track.get("radialVelocity"),
         "num_inliers": track.get("numInliers"),
+        "confidence": confidence,
         "cat_prob_uav": _list_get(cat_prob, 0),
         "cat_prob_raw": cat_prob,
     }
+
+
+def _first_present(mapping: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in mapping:
+            return mapping[key]
+    return np.nan
 
 
 def _catprob_threshold_rows(radar: pd.DataFrame, catprob_threshold: float) -> pd.DataFrame:

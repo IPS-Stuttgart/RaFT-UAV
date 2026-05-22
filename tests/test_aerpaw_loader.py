@@ -5,6 +5,8 @@ import pytest
 
 from raft_uav.coordinates import LocalENUProjector
 from raft_uav.io.aerpaw import (
+    discover_flights,
+    flight_file_manifest,
     normalize_radar,
     normalize_rf,
     normalize_truth,
@@ -128,6 +130,63 @@ def test_radar_jsonl_reader_rejects_non_object_frames(tmp_path):
 
     with pytest.raises(ValueError, match="must contain a JSON object"):
         read_radar_tracks_json(radar_path)
+
+
+def test_radar_jsonl_reader_exposes_fortem_quality_fields(tmp_path):
+    radar_path = tmp_path / "radar.json"
+    radar_path.write_text(
+        json.dumps(
+            {
+                "params": {"globalTime": 1759866140.0},
+                "trackData": [
+                    {
+                        "id": 4,
+                        "lla": [35.72749, -78.69621, 30.0],
+                        "globalTime": 1759866140.0,
+                        "range": 123.0,
+                        "azimuth": 14.5,
+                        "elevation": -2.0,
+                        "rcsDbsm": -9.25,
+                        "radialVelocity": 3.5,
+                        "numInliers": 17,
+                        "trackAge": 8,
+                        "catProb": [0.8, 0.1],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    radar = read_radar_tracks_json(radar_path)
+    row = radar.iloc[0]
+
+    assert row["azimuth_deg"] == 14.5
+    assert row["elevation_deg"] == -2.0
+    assert row["rcs_dbsm"] == -9.25
+    assert row["radial_velocity_mps"] == 3.5
+    assert row["num_inliers"] == 17
+    assert row["track_age"] == 8
+
+
+def test_discover_flights_can_select_original_or_rerun_variant(tmp_path):
+    flight_dir = tmp_path / "RF Sensor and Radar" / "Opt1"
+    flight_dir.mkdir(parents=True)
+    (flight_dir / "AADM.csv").write_text("x\n", encoding="utf-8")
+    (flight_dir / "AADM_rerun.csv").write_text("y\n", encoding="utf-8")
+    (flight_dir / "radar_data.json").write_text("{}\n", encoding="utf-8")
+    (flight_dir / "radar_data_rerun.json").write_text("{}\n", encoding="utf-8")
+    (flight_dir / "date_time_vehicleOut.txt").write_text("truth\n", encoding="utf-8")
+    (flight_dir / "date_time_vehicleOut_rerun.txt").write_text("truth\n", encoding="utf-8")
+
+    auto = discover_flights(tmp_path)[0]
+    original = discover_flights(tmp_path, variant="original")[0]
+    rerun = discover_flights(tmp_path, variant="rerun")[0]
+
+    assert auto.rf_csv is not None and "rerun" in auto.rf_csv.name
+    assert original.rf_csv is not None and "rerun" not in original.rf_csv.name
+    assert rerun.rf_csv is not None and "rerun" in rerun.rf_csv.name
+    assert flight_file_manifest(rerun, dataset_root=tmp_path)["rf"]["variant"] == "rerun"
 
 
 def test_radar_jsonl_reader_rejects_non_object_payload(tmp_path):
