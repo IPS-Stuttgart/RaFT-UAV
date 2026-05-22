@@ -35,6 +35,24 @@ def test_range_adaptive_radar_covariance_keeps_default_as_lower_bound() -> None:
     assert np.allclose(covariance, default_covariance)
 
 
+def test_range_angle_covariance_uses_fortem_angles_when_available() -> None:
+    default_covariance = np.diag([1.0, 1.0, 1.0])
+    config = _Config(
+        use_range_adaptive_radar_covariance=True,
+        radar_range_std_m=5.0,
+        radar_azimuth_std_deg=2.0,
+        radar_elevation_std_deg=3.0,
+    )
+    row = pd.Series({"range_m": 1000.0, "azimuth_deg": 0.0, "elevation_deg": 0.0})
+
+    covariance = _radar_row_covariance(row, default_covariance, config)
+
+    assert np.isclose(np.sqrt(covariance[1, 1]), 5.0)
+    assert np.isclose(np.sqrt(covariance[0, 0]), np.deg2rad(2.0) * 1000.0)
+    assert np.isclose(np.sqrt(covariance[2, 2]), np.deg2rad(3.0) * 1000.0)
+    assert np.all(np.linalg.eigvalsh(covariance) > 0.0)
+
+
 def test_range_adaptive_radar_covariance_can_be_disabled() -> None:
     default_covariance = np.diag([25.0**2, 25.0**2, 35.0**2])
     config = _Config(use_range_adaptive_radar_covariance=False)

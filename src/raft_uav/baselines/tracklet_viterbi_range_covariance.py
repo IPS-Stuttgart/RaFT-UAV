@@ -31,6 +31,9 @@ DEFAULT_RADAR_RANGE_XY_FLOOR_STD_M = 20.0
 DEFAULT_RADAR_RANGE_Z_FLOOR_STD_M = 30.0
 DEFAULT_RADAR_RANGE_XY_SCALE = 0.035
 DEFAULT_RADAR_RANGE_Z_SCALE = 0.050
+DEFAULT_RADAR_RANGE_STD_M = 5.0
+DEFAULT_RADAR_AZIMUTH_STD_DEG = 2.0
+DEFAULT_RADAR_ELEVATION_STD_DEG = 2.0
 
 
 def run_async_cv_baseline_with_tracklet_viterbi_association(
@@ -120,6 +123,10 @@ def _radar_row_covariance(
     if range_m is None or range_m <= 0.0:
         return default_covariance
 
+    range_angle_covariance = _radar_range_angle_covariance(row, range_m, default_covariance, config)
+    if range_angle_covariance is not None:
+        return range_angle_covariance
+
     default_xy_std_m = float(
         np.sqrt(max(default_covariance[0, 0], default_covariance[1, 1], 0.0))
     )
@@ -156,6 +163,73 @@ def _has_row_position_covariance(row: pd.Series) -> bool:
         if has_diagonal:
             return True
     return False
+
+
+def _radar_range_angle_covariance(
+    row: pd.Series,
+    range_m: float,
+    default_covariance: np.ndarray,
+    config: Any,
+) -> np.ndarray | None:
+    """Return first-order ENU covariance from Fortem range/azimuth/elevation.
+
+    Fortem reports native polar-like observables in the radar frame.  When
+    azimuth/elevation are present, prefer their Jacobian-projected uncertainty
+    over isotropic range inflation.  The convention here assumes azimuth is
+    clockwise from North and elevation is positive upward, yielding local ENU
+    coordinates ``[r cos(el) sin(az), r cos(el) cos(az), r sin(el)]``.
+    """
+
+    azimuth_deg = _optional_row_float(row, "azimuth_deg", "azimuth")
+    elevation_deg = _optional_row_float(row, "elevation_deg", "elevation")
+    if azimuth_deg is None or elevation_deg is None:
+        return None
+
+    range_std_m = float(getattr(config, "radar_range_std_m", DEFAULT_RADAR_RANGE_STD_M))
+    azimuth_std_deg = float(
+        getattr(config, "radar_azimuth_std_deg", DEFAULT_RADAR_AZIMUTH_STD_DEG)
+    )
+    elevation_std_deg = float(
+        getattr(config, "radar_elevation_std_deg", DEFAULT_RADAR_ELEVATION_STD_DEG)
+    )
+    if min(range_std_m, azimuth_std_deg, elevation_std_deg) <= 0.0:
+        return None
+
+    az = np.deg2rad(float(azimuth_deg))
+    el = np.deg2rad(float(elevation_deg))
+    sin_az, cos_az = np.sin(az), np.cos(az)
+    sin_el, cos_el = np.sin(el), np.cos(el)
+    r = float(range_m)
+    jacobian = np.array(
+        [
+            [cos_el * sin_az, r * cos_el * cos_az, -r * sin_el * sin_az],
+            [cos_el * cos_az, -r * cos_el * sin_az, -r * sin_el * cos_az],
+            [sin_el, 0.0, r * cos_el],
+        ],
+        dtype=float,
+    )
+    polar_covariance = np.diag(
+        [range_std_m**2, np.deg2rad(azimuth_std_deg) ** 2, np.deg2rad(elevation_std_deg) ** 2]
+    )
+    covariance = jacobian @ polar_covariance @ jacobian.T
+    covariance = 0.5 * (covariance + covariance.T)
+    if not np.isfinite(covariance).all():
+        return None
+    # Keep the caller's fixed covariance as a diagonal lower bound.  This avoids
+    # over-trusting a nearly radial axis while preserving range/angle coupling.
+    default_diag = np.diag(np.asarray(default_covariance, dtype=float))
+    for index, floor in enumerate(default_diag):
+        if covariance[index, index] < float(floor):
+            covariance[index, index] = float(floor)
+    return covariance
+
+
+def _optional_row_float(row: pd.Series, *names: str) -> float | None:
+    for name in names:
+        value = _base._optional_float(row.get(name))
+        if value is not None:
+            return value
+    return None
 
 
 def _positive_float(value: object) -> float | None:

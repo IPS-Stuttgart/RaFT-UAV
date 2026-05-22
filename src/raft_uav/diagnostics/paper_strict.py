@@ -37,6 +37,7 @@ from raft_uav.evaluation.metrics import (
 )
 from raft_uav.io.aerpaw import (
     discover_flights,
+    flight_file_manifest,
     normalize_radar,
     normalize_rf,
     normalize_truth,
@@ -99,6 +100,7 @@ class PaperStrictInputs:
     projector: LocalENUProjector | None
     truth_origin_time: pd.Timestamp
     enu_origin_mode: str
+    file_manifest: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -129,6 +131,12 @@ def main(argv: list[str] | None = None) -> int:
         help="flight name or substring; repeat to process multiple flights; defaults to all discovered flights",
     )
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/paper-strict"))
+    parser.add_argument(
+        "--variant",
+        choices=["auto", "original", "rerun"],
+        default="auto",
+        help="RF/radar/truth file variant; auto preserves historical rerun preference",
+    )
     parser.add_argument("--range-gate-m", type=float, default=PAPER_STRICT_RANGE_GATE_M)
     parser.add_argument("--nis-gate-prob", type=float, default=PAPER_STRICT_NIS_GATE_PROBABILITY)
     parser.add_argument(
@@ -218,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
         enu_origin_lla=args.enu_origin_lla,
         lw1_origin_lla=args.lw1_origin_lla,
         origin_config=args.origin_config,
+        variant=args.variant,
     )
     print(f"output_dir={result['output_dir']}")
     print(f"summary_csv={result['summary_csv']}")
@@ -236,12 +245,13 @@ def run_paper_strict_reproduction(
     enu_origin_lla: str | None = None,
     lw1_origin_lla: str | None = None,
     origin_config: Path | None = None,
+    variant: str = "auto",
 ) -> dict[str, Any]:
     """Run strict paper-parity diagnostics and write per-flight artifacts."""
 
     _validate_config(config)
     _validate_count_mismatch_action(count_mismatch_action)
-    selected_flights = _resolve_flights(Path(dataset_root), flights)
+    selected_flights = _resolve_flights(Path(dataset_root), flights, variant=variant)
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
@@ -256,6 +266,7 @@ def run_paper_strict_reproduction(
             lw1_origin_lla=lw1_origin_lla,
             origin_config=origin_config,
             rf_default_std_m=config.rf_default_std_m,
+            variant=variant,
         )
         flight_dir = output / inputs.flight_name
         flight_dir.mkdir(parents=True, exist_ok=True)
@@ -300,9 +311,12 @@ def run_paper_strict_reproduction(
             "covariance_json": str(covariance_json),
             "enu_origin_mode": inputs.enu_origin_mode,
             "truth_origin_time": str(inputs.truth_origin_time),
+            "origin": _origin_manifest(inputs.projector),
+            "file_manifest": inputs.file_manifest,
             "range_audit": range_audit,
             "stage_counts": paper_strict_stage_counts(inputs=inputs, fusion=fusion),
             "count_mismatch_action": count_mismatch_action,
+            "variant": variant,
             "config": _jsonable_config(config),
         }
         manifest_json.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -320,6 +334,7 @@ def run_paper_strict_reproduction(
         "reference_counts": PAPER_REFERENCE_COUNTS,
         "reference_errors_m": PAPER_REFERENCE_ERROR_M,
         "count_mismatch_action": count_mismatch_action,
+        "variant": variant,
     }
     summary_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return {**payload, "summary_json": str(summary_json)}
@@ -334,10 +349,11 @@ def load_paper_strict_inputs(
     lw1_origin_lla: str | None,
     rf_default_std_m: float,
     origin_config: Path | None = None,
+    variant: str = "auto",
 ) -> PaperStrictInputs:
     """Load one flight and normalize all streams into a shared ENU frame."""
 
-    flight = select_flight(Path(dataset_root), flight_name)
+    flight = select_flight(Path(dataset_root), flight_name, variant=variant)
     if flight.truth_txt is None:
         raise FileNotFoundError(f"{flight.name} has no truth telemetry file")
     if flight.rf_csv is None:
@@ -375,6 +391,7 @@ def load_paper_strict_inputs(
         projector=projector,
         truth_origin_time=truth_origin_time,
         enu_origin_mode=enu_origin,
+        file_manifest=flight_file_manifest(flight, dataset_root=Path(dataset_root)),
     )
 
 
@@ -1270,7 +1287,9 @@ def _projector_for_origin(
     if enu_origin == "lla":
         if not enu_origin_lla:
             raise ValueError("--enu-origin lla requires --enu-origin-lla LAT,LON,ALT")
-        return projector_from_lla(*_parse_lla(enu_origin_lla))
+        lla = _parse_lla(enu_origin_lla)
+        _validate_explicit_origin_lla(lla, name="lla")
+        return projector_from_lla(*lla)
     if enu_origin == "lw1":
         origin = lw1_origin_lla or os.environ.get(PAPER_STRICT_LW1_ORIGIN_LLA_ENV)
         lla = _parse_lla(origin) if origin else _origin_lla_from_config(origin_config, "lw1")
@@ -1279,6 +1298,7 @@ def _projector_for_origin(
                 "--enu-origin lw1 requires --lw1-origin-lla LAT,LON,ALT, "
                 f"{PAPER_STRICT_LW1_ORIGIN_LLA_ENV}=LAT,LON,ALT, or an origin config"
             )
+        _validate_explicit_origin_lla(lla, name="lw1")
         return projector_from_lla(*lla)
     raise ValueError(f"unknown enu_origin {enu_origin!r}")
 
@@ -1342,6 +1362,32 @@ def _parse_lla(value: str) -> tuple[float, float, float]:
     return lat, lon, alt
 
 
+def _validate_explicit_origin_lla(lla: tuple[float, float, float], *, name: str) -> None:
+    lat, lon, alt = (float(lla[0]), float(lla[1]), float(lla[2]))
+    if not np.isfinite([lat, lon, alt]).all():
+        raise ValueError(f"origin {name!r} must contain finite LAT,LON,ALT")
+    if not -90.0 <= lat <= 90.0:
+        raise ValueError(f"origin {name!r} latitude outside [-90, 90]: {lat}")
+    if not -180.0 <= lon <= 180.0:
+        raise ValueError(f"origin {name!r} longitude outside [-180, 180]: {lon}")
+    if np.allclose([lat, lon, alt], [0.0, 0.0, 0.0], rtol=0.0, atol=1.0e-12):
+        raise ValueError(
+            f"origin {name!r} is 0,0,0. Replace config/origins.example.toml with the "
+            "actual AERPAW LW1 origin before running paper-parity diagnostics."
+        )
+
+
+def _origin_manifest(projector: LocalENUProjector | None) -> dict[str, Any]:
+    if projector is None:
+        return {"mode": "truth-first", "latitude_deg": None, "longitude_deg": None, "altitude_m": None}
+    return {
+        "mode": "explicit",
+        "latitude_deg": float(projector.origin_latitude_deg),
+        "longitude_deg": float(projector.origin_longitude_deg),
+        "altitude_m": float(projector.origin_altitude_m),
+    }
+
+
 def _inside_truth_window(frame: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
     if frame.empty or "time_s" not in frame.columns:
         return frame.copy()
@@ -1350,11 +1396,16 @@ def _inside_truth_window(frame: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFra
     return frame.loc[(frame["time_s"] >= truth_min) & (frame["time_s"] <= truth_max)].copy()
 
 
-def _resolve_flights(dataset_root: Path, flights: Iterable[str] | None) -> list[str]:
+def _resolve_flights(
+    dataset_root: Path,
+    flights: Iterable[str] | None,
+    *,
+    variant: str = "auto",
+) -> list[str]:
     requested = list(flights or [])
     if requested:
-        return [select_flight(dataset_root, name).name for name in requested]
-    return [flight.name for flight in discover_flights(dataset_root)]
+        return [select_flight(dataset_root, name, variant=variant).name for name in requested]
+    return [flight.name for flight in discover_flights(dataset_root, variant=variant)]
 
 
 def _validate_config(config: PaperStrictConfig) -> None:
