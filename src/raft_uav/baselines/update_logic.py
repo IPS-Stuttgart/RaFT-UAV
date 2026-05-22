@@ -78,7 +78,7 @@ def student_t_covariance_scale(
         _pyrecest_student_t_covariance_scale(
             nis,
             measurement_dim,
-            dof=degrees_of_freedom,
+            degrees_of_freedom=degrees_of_freedom,
         )
     )
 
@@ -90,7 +90,7 @@ def huber_covariance_scale(
     """Return the PyRecEst multivariate Huber covariance inflation factor."""
 
     return _backend_scalar_to_float(
-        _pyrecest_huber_covariance_scale(nis, huber_threshold=threshold)
+        _pyrecest_huber_covariance_scale(nis, threshold=threshold)
     )
 
 
@@ -115,6 +115,12 @@ def robust_update_covariance_scale(
         student_t_dof=student_t_dof,
         huber_threshold=huber_threshold,
     )
+
+
+def _raft_update_action(action: str) -> str:
+    if action in {"residual_rejected", "safety_rejected"}:
+        return "missed_detection"
+    return action
 
 
 def plan_linear_measurement_update(
@@ -160,7 +166,7 @@ def plan_linear_measurement_update(
         safety_threshold=plan.safety_gate_threshold,
         residual_threshold=plan.residual_threshold,
         covariance_scale=float(plan.covariance_scale),
-        update_action=plan.action,
+        update_action=_raft_update_action(plan.action),
         accepted=bool(plan.accepted),
         inflation_alpha=float(plan.inflation_alpha),
     )
