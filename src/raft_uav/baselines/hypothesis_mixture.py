@@ -2,60 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
 import pandas as pd
-
-
-@dataclass(frozen=True)
-class GaussianHypothesis:
-    """One weighted Gaussian tracking hypothesis."""
-
-    mean: np.ndarray
-    covariance: np.ndarray
-    log_weight: float = 0.0
-    metadata: dict[str, object] | None = None
-
-    def __post_init__(self) -> None:
-        mean = np.asarray(self.mean, dtype=float).reshape(-1)
-        covariance = np.asarray(self.covariance, dtype=float)
-        if covariance.shape != (mean.size, mean.size):
-            raise ValueError("covariance must match mean dimension")
-        object.__setattr__(self, "mean", mean)
-        object.__setattr__(self, "covariance", covariance)
-        object.__setattr__(self, "log_weight", float(self.log_weight))
-
-
-def moment_match_hypotheses(hypotheses: list[GaussianHypothesis]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return moment-matched mean/covariance and normalized weights."""
-
-    if not hypotheses:
-        raise ValueError("hypotheses must not be empty")
-    weights = normalize_log_weights([hypothesis.log_weight for hypothesis in hypotheses])
-    means = np.stack([hypothesis.mean for hypothesis in hypotheses], axis=0)
-    mean = weights @ means
-    covariance = np.zeros((mean.size, mean.size), dtype=float)
-    for weight, hypothesis in zip(weights, hypotheses):
-        diff = hypothesis.mean - mean
-        covariance += float(weight) * (hypothesis.covariance + np.outer(diff, diff))
-    return mean, _symmetrized(covariance), weights
-
-
-def normalize_log_weights(log_weights: list[float] | np.ndarray) -> np.ndarray:
-    """Normalize log weights to probabilities."""
-
-    values = np.asarray(log_weights, dtype=float).reshape(-1)
-    if values.size == 0:
-        raise ValueError("log_weights must not be empty")
-    maximum = float(np.max(values))
-    if not np.isfinite(maximum):
-        return np.full(values.size, 1.0 / values.size)
-    weights = np.exp(values - maximum)
-    total = float(np.sum(weights))
-    if total <= 0.0 or not np.isfinite(total):
-        return np.full(values.size, 1.0 / values.size)
-    return weights / total
+from pyrecest.filters.gaussian_hypothesis_mixture import (
+    WeightedGaussianHypothesis as GaussianHypothesis,
+    moment_match_gaussian_hypotheses as moment_match_hypotheses,
+)
 
 
 def position_mixture_from_association_rows(
@@ -71,22 +23,34 @@ def position_mixture_from_association_rows(
     ),
     score_column: str = "association_score",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Moment-match candidate rows into one soft position update."""
+    """Moment-match candidate rows into one soft position update.
+
+    RaFT-UAV keeps the pandas/column conversion here and delegates Gaussian
+    log-weight normalization and moment matching to PyRecEst.
+    """
 
     if rows.empty:
         raise ValueError("rows must not be empty")
     positions = rows[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
     scores = pd.to_numeric(rows.get(score_column, pd.Series(0.0, index=rows.index)), errors="coerce")
     log_weights = -scores.fillna(scores.max() if scores.notna().any() else 0.0).to_numpy(dtype=float)
-    weights = normalize_log_weights(log_weights)
-    mean = weights @ positions
-    covariance = np.zeros((3, 3), dtype=float)
     has_covariance = all(column in rows.columns for column in covariance_columns)
+    hypotheses = []
     for index, (_, row) in enumerate(rows.iterrows()):
-        row_covariance = _covariance_from_row(row, covariance_columns) if has_covariance else np.diag([25.0**2, 25.0**2, 35.0**2])
-        diff = positions[index] - mean
-        covariance += float(weights[index]) * (row_covariance + np.outer(diff, diff))
-    return mean, _symmetrized(covariance), weights
+        row_covariance = (
+            _covariance_from_row(row, covariance_columns)
+            if has_covariance
+            else np.diag([25.0**2, 25.0**2, 35.0**2])
+        )
+        hypotheses.append(
+            GaussianHypothesis(
+                mean=positions[index],
+                covariance=row_covariance,
+                log_weight=float(log_weights[index]),
+                metadata={"row_index": int(index)},
+            )
+        )
+    return moment_match_hypotheses(hypotheses)
 
 
 def _covariance_from_row(row: pd.Series, columns: tuple[str, str, str, str, str, str]) -> np.ndarray:
