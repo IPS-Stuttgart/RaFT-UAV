@@ -7,7 +7,6 @@ import pandas as pd
 from pyrecest.filters.gaussian_hypothesis_mixture import (
     WeightedGaussianHypothesis as GaussianHypothesis,
     moment_match_gaussian_hypotheses as moment_match_hypotheses,
-    normalize_log_weights,
 )
 
 
