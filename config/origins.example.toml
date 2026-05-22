@@ -1,0 +1,10 @@
+# Copy this file to config/origins.toml and fill in the LW1 coordinates from
+# dataset/paper metadata before running paper-strict parity reproduction.
+# The repository intentionally does not hard-code the LW1 coordinates.
+
+[origins.lw1]
+latitude_deg = 0.0
+longitude_deg = 0.0
+altitude_m = 0.0
+description = "Replace with the AERPAW LW1 ENU origin"
+source = "AERPAW Dataset-28 / paper metadata"

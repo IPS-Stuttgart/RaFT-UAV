@@ -129,6 +129,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--truth-time-gate-s", type=float, default=2.0)
     parser.add_argument("--acceleration-std", type=float, default=4.0)
     parser.add_argument("--smoother-lag-s", type=float, default=20.0)
+    parser.add_argument(
+        "--include-smoothed-fusion",
+        action="store_true",
+        help="also emit fixed-lag fusion rows; disabled by default for paper-table parity",
+    )
     parser.add_argument("--skip-fusion", action="store_true")
     parser.add_argument(
         "--fusion-association",
@@ -159,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         truth_time_gate_s=args.truth_time_gate_s,
         acceleration_std_mps2=args.acceleration_std,
         smoother_lag_s=args.smoother_lag_s,
+        include_smoothed_fusion=args.include_smoothed_fusion,
         include_fusion=not args.skip_fusion,
         fusion_associations=tuple(args.fusion_association or FUSION_ASSOCIATIONS),
     )
@@ -186,6 +192,7 @@ def run_paper_table_diagnostic(
     truth_time_gate_s: float = 2.0,
     acceleration_std_mps2: float = 4.0,
     smoother_lag_s: float = 20.0,
+    include_smoothed_fusion: bool = False,
     include_fusion: bool = True,
     fusion_associations: tuple[str, ...] = FUSION_ASSOCIATIONS,
 ) -> dict[str, Any]:
@@ -290,6 +297,7 @@ def run_paper_table_diagnostic(
                     stable_segment_max_transition_speed_mps=stable_segment_max_transition_speed_mps,
                     acceleration_std_mps2=acceleration_std_mps2,
                     smoother_lag_s=smoother_lag_s,
+                    include_smoothed_fusion=include_smoothed_fusion,
                     max_time_delta_s=truth_time_gate_s,
                 )
             )
@@ -317,6 +325,7 @@ def run_paper_table_diagnostic(
         "fusion_nis_gate_prob": float(fusion_nis_gate_prob),
         "rf_nis_gate_prob": float(rf_nis_gate_prob),
         "truth_time_gate_s": float(truth_time_gate_s),
+        "include_smoothed_fusion": bool(include_smoothed_fusion),
         "table_csv": str(table_csv),
         "methods": table["method"].tolist() if "method" in table else [],
     }
@@ -339,19 +348,22 @@ def fusion_rows(
     acceleration_std_mps2: float,
     smoother_lag_s: float,
     max_time_delta_s: float,
+    include_smoothed_fusion: bool = False,
 ) -> list[dict[str, Any]]:
-    """Run one fusion association and return unsmoothed/smoothed metric rows."""
+    """Run one fusion association and return paper-table rows plus optional smoother rows."""
 
     try:
         if association == "paper-compatible":
-            records, selected = run_paper_compatible_cv_fusion(
+            records, selected = run_paper_strict_cv_fusion_for_table(
                 rf_measurements=rf_measurements,
                 radar=radar,
+                truth=truth,
                 acceleration_std_mps2=acceleration_std_mps2,
                 radar_range_gate_m=radar_range_gate_m,
                 radar_catprob_threshold=radar_catprob_threshold,
                 nis_gate_probability=fusion_nis_gate_prob,
                 rf_nis_gate_probability=rf_nis_gate_prob,
+                truth_time_gate_s=max_time_delta_s,
             )
         elif association == "paper-longest-track":
             records, selected = run_paper_longest_track_cv_fusion(
@@ -403,6 +415,8 @@ def fusion_rows(
             track_ids=_track_ids(selected),
         )
     )
+    if not include_smoothed_fusion:
+        return rows
     smoothed_records = smooth_tracking_records(
         records,
         method="fixed-lag",
@@ -412,7 +426,7 @@ def fusion_rows(
     smoothed = _records_to_frame(smoothed_records)
     rows.append(
         metric_row(
-            method=f"fusion-{association}-fixed-lag",
+            method=f"fusion-{association}-fixed-lag-enhanced",
             modality="fusion",
             times_s=smoothed["time_s"].to_numpy(dtype=float),
             positions_m=smoothed[["east_m", "north_m", "up_m"]].to_numpy(dtype=float),
@@ -424,6 +438,76 @@ def fusion_rows(
         )
     )
     return rows
+
+
+def run_paper_strict_cv_fusion_for_table(
+    *,
+    rf_measurements: list[Any],
+    radar: pd.DataFrame,
+    truth: pd.DataFrame,
+    acceleration_std_mps2: float,
+    radar_range_gate_m: float | None,
+    radar_catprob_threshold: float | None,
+    nis_gate_probability: float,
+    rf_nis_gate_probability: float,
+    truth_time_gate_s: float,
+) -> tuple[list[dict[str, object]], pd.DataFrame]:
+    """Delegate the paper-compatible table row to the strict parity implementation."""
+
+    from raft_uav.coordinates import LocalENUProjector
+    from raft_uav.diagnostics.paper_strict import (
+        PaperStrictConfig,
+        PaperStrictInputs,
+        run_paper_strict_fusion,
+    )
+
+    rf_frame = _rf_measurements_frame_for_strict(rf_measurements)
+    inputs = PaperStrictInputs(
+        flight_name="paper-table-normalized",
+        truth=truth,
+        rf=rf_frame,
+        radar=radar,
+        projector=LocalENUProjector(0.0, 0.0, 0.0),
+        truth_origin_time=pd.Timestamp("1970-01-01"),
+        enu_origin_mode="paper-table-normalized",
+    )
+    config = PaperStrictConfig(
+        range_gate_m=800.0 if radar_range_gate_m is None else float(radar_range_gate_m),
+        nis_gate_probability=float(nis_gate_probability),
+        rf_nis_gate_probability=float(rf_nis_gate_probability),
+        truth_time_gate_s=float(truth_time_gate_s),
+        acceleration_std_mps2=float(acceleration_std_mps2),
+        radar_catprob_threshold=radar_catprob_threshold,
+        empirical_covariance=len(rf_frame) >= 2 and len(radar) >= 2,
+        require_radar_range_m=True,
+        bootstrap_source="radar",
+    )
+    fusion = run_paper_strict_fusion(inputs=inputs, config=config)
+    return fusion.records, fusion.accepted_radar
+
+
+def _rf_measurements_frame_for_strict(rf_measurements: list[Any]) -> pd.DataFrame:
+    rows: list[dict[str, float]] = []
+    for measurement in rf_measurements:
+        vector = np.asarray(measurement.vector, dtype=float).reshape(-1)
+        if vector.size < 2:
+            continue
+        rows.append(
+            {
+                "time_s": float(measurement.time_s),
+                "east_m": float(vector[0]),
+                "north_m": float(vector[1]),
+                "up_m": 0.0,
+            }
+        )
+    columns = ["time_s", "east_m", "north_m", "up_m"]
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return (
+        pd.DataFrame.from_records(rows, columns=columns)
+        .sort_values("time_s")
+        .reset_index(drop=True)
+    )
 
 
 def _normalize_radar_selections(selections: tuple[str, ...]) -> tuple[str, ...]:
