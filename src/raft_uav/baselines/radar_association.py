@@ -49,12 +49,10 @@ RADAR_ASSOCIATION_MODES = (
     "stable-segments-interpolated",
 )
 _STABLE_SEGMENT_ASSOCIATION_MODES = {
-    "paper-compatible",
     "paper-largest-continuous-track",
     "stable-segments",
     "stable-segments-interpolated",
 }
-_MISSED_DETECTION_ASSOCIATION_MODES = {"paper-compatible"}
 _STABLE_SEGMENT_PRECOMPUTE_MODES = {
     *_STABLE_SEGMENT_ASSOCIATION_MODES,
     "stable-segments-hybrid",
@@ -183,13 +181,13 @@ def run_async_cv_baseline_with_radar_association(
     track switching, and UAV class-probability penalties. ``pda-mixture``
     keeps a single Kalman update but forms it from a probability-weighted
     candidate mixture and adds candidate spread to the radar covariance.
-    ``paper-compatible`` applies the paper-reproduction hard preselector:
-    range gate, UAV class-probability threshold, largest continuous Fortem
-    track segment, and NIS-validated RF/radar updates. Radar frames without a
-    valid preselected candidate record a ``missed_detection`` posterior instead
-    of silently disappearing from the output trajectory.
     ``track-bank`` uses PyRecEst's track-oriented MHT to keep multiple
     single-target association hypotheses alive across radar frames.
+    ``paper-compatible`` applies the reference-style hard preselector directly
+    in the baseline runner: 800 m-style range gating via
+    ``stable_segment_range_gate_m``, largest continuous Fortem track retention,
+    hard UAV class-probability thresholding, NIS validation, and explicit
+    missed-detection coasting when no radar candidate passes.
     ``paper-largest-continuous-track`` applies the reference-paper style
     800 m range-gated longest continuous Fortem track preselector and skips
     all other radar frames.
@@ -295,13 +293,25 @@ def run_async_cv_baseline_with_radar_association(
         crossrange_min_std_m=float(radar_crossrange_min_std_m),
         crossrange_max_std_m=float(radar_crossrange_max_std_m),
     )
-    if (
-        association == "paper-compatible"
-        and gate_probabilities_by_source is None
-        and gate_thresholds_by_source is None
-    ):
-        gate_probabilities_by_source = {"rf": 0.99, "radar": 0.99}
-
+    if association == "paper-compatible":
+        return _run_paper_compatible_association(
+            rf_measurements=rf_measurement_list,
+            radar=radar,
+            covariance=covariance,
+            covariance_config=covariance_config,
+            acceleration_std_mps2=acceleration_std_mps2,
+            gate_probabilities_by_source=gate_probabilities_by_source,
+            gate_thresholds_by_source=gate_thresholds_by_source,
+            safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
+            safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
+            robust_update_by_source=robust_update_by_source,
+            inflation_alpha_by_source=inflation_alpha_by_source,
+            max_residual_norms_by_source=max_residual_norms_by_source,
+            candidate_catprob_threshold=candidate_catprob_threshold,
+            range_gate_m=stable_segment_range_gate_m,
+            track_switch_penalty=geometry_switch_penalty,
+            catprob_weight=geometry_catprob_weight,
+        )
     if association == "track-bank":
         _validate_normalized_radar_for_association(radar)
         return _run_mht_track_bank(
@@ -333,13 +343,7 @@ def run_async_cv_baseline_with_radar_association(
 
     stable_anchor_by_key: dict[object, pd.Series] | None = None
     if association in _STABLE_SEGMENT_PRECOMPUTE_MODES:
-        if association == "paper-compatible":
-            stable_anchors = _select_paper_compatible_radar_track(
-                radar,
-                range_gate_m=stable_segment_range_gate_m,
-                catprob_threshold=candidate_catprob_threshold,
-            )
-        elif association == "paper-largest-continuous-track":
+        if association == "paper-largest-continuous-track":
             stable_anchors = _select_largest_continuous_radar_track(
                 radar,
                 range_gate_m=stable_segment_range_gate_m,
@@ -504,15 +508,6 @@ def run_async_cv_baseline_with_radar_association(
             truth_time_gate_s=truth_time_gate_s,
         )
         if selected is None:
-            if association in _MISSED_DETECTION_ASSOCIATION_MODES:
-                records.append(
-                    _missed_detection_record(
-                        time_s=time_s,
-                        tracker=tracker,
-                        source="radar",
-                        association_mode=association,
-                    )
-                )
             continue
 
         measurement = _radar_row_to_measurement(selected, covariance)
@@ -592,6 +587,479 @@ def _events(
             }
         )
     return sorted(events, key=lambda item: (float(item["time_s"]), int(item["priority"])))
+
+
+def _run_paper_compatible_association(
+    *,
+    rf_measurements: list[TrackingMeasurement],
+    radar: pd.DataFrame,
+    covariance: np.ndarray,
+    covariance_config: _RadarGeometryCovarianceConfig | None,
+    acceleration_std_mps2: float,
+    gate_probabilities_by_source: Mapping[str, float | None] | None,
+    gate_thresholds_by_source: Mapping[str, float | None] | None,
+    safety_gate_probabilities_by_source: Mapping[str, float | None] | None,
+    safety_gate_thresholds_by_source: Mapping[str, float | None] | None,
+    robust_update_by_source: Mapping[str, str | None] | None,
+    inflation_alpha_by_source: Mapping[str, float] | None,
+    max_residual_norms_by_source: Mapping[str, float | None] | None,
+    candidate_catprob_threshold: float | None,
+    range_gate_m: float | None,
+    track_switch_penalty: float,
+    catprob_weight: float,
+) -> tuple[list[dict[str, object]], pd.DataFrame]:
+    """Run the paper-compatible hard-gated radar association inside the baseline.
+
+    This mode intentionally differs from the exploratory association modes: it
+    has no class-probability fallback, uses the range-gated largest continuous
+    Fortem track as the radar preselector, and records a posterior at every
+    radar frame.  Frames that fail range/class/NIS validation become explicit
+    ``missed_detection`` records so the output timeline and metrics are
+    comparable to the diagnostic paper-table implementation.
+    """
+
+    events = _events(rf_measurements, radar)
+    if not events:
+        return [], _empty_selected_radar(radar)
+
+    paper_track = _select_paper_compatible_radar_track(
+        radar,
+        range_gate_m=range_gate_m,
+        catprob_threshold=candidate_catprob_threshold,
+    )
+    paper_track_by_key = {_radar_row_key(row): row for _, row in paper_track.iterrows()}
+    initial = _initial_paper_compatible_measurement_and_row(
+        events,
+        covariance=covariance,
+        covariance_config=covariance_config,
+        preselected_radar_by_key=paper_track_by_key,
+        range_gate_m=range_gate_m,
+        candidate_catprob_threshold=candidate_catprob_threshold,
+    )
+    if initial is None:
+        return [], _empty_selected_radar(radar)
+    start_index, initial_measurement, initial_selected_row = initial
+
+    tracker = AsyncConstantVelocityKalmanTracker(
+        initial_position=initial_measurement.vector,
+        initial_time_s=initial_measurement.time_s,
+        acceleration_std_mps2=acceleration_std_mps2,
+    )
+    records: list[dict[str, object]] = []
+    selected_rows: list[pd.Series] = []
+    current_track_id: int | None = None
+
+    initial_diagnostics = tracker.update(
+        initial_measurement,
+        gate_threshold=_paper_gate_threshold_for_measurement(
+            initial_measurement,
+            gate_probabilities_by_source=gate_probabilities_by_source,
+            gate_thresholds_by_source=gate_thresholds_by_source,
+        ),
+        safety_gate_threshold=_gate_threshold_for_measurement(
+            initial_measurement,
+            gate_probabilities_by_source=safety_gate_probabilities_by_source,
+            gate_thresholds_by_source=safety_gate_thresholds_by_source,
+        ),
+        max_residual_norm=_max_residual_norm_for_measurement(
+            initial_measurement,
+            max_residual_norms_by_source=max_residual_norms_by_source,
+        ),
+        robust_update=_robust_update_for_measurement(
+            initial_measurement,
+            robust_update_by_source=robust_update_by_source,
+        ),
+        inflation_alpha=_inflation_alpha_for_measurement(
+            initial_measurement,
+            inflation_alpha_by_source=inflation_alpha_by_source,
+        ),
+    )
+    if initial_selected_row is not None and initial_diagnostics.accepted:
+        current_track_id = _optional_track_id(initial_selected_row)
+        selected_rows.append(initial_selected_row)
+    records.append(
+        _record(
+            initial_measurement,
+            tracker,
+            initial_diagnostics,
+            **_selected_row_record_kwargs(initial_selected_row, "paper-compatible"),
+        )
+    )
+
+    radar_nis_threshold = _paper_source_gate_threshold(
+        source="radar",
+        measurement_dim=3,
+        gate_probabilities_by_source=gate_probabilities_by_source,
+        gate_thresholds_by_source=gate_thresholds_by_source,
+    )
+
+    for event in events[start_index + 1:]:
+        time_s = float(event["time_s"])
+        if event["kind"] == "rf":
+            measurement = event["measurement"]
+            assert isinstance(measurement, TrackingMeasurement)
+            diagnostics = tracker.update(
+                measurement,
+                gate_threshold=_paper_gate_threshold_for_measurement(
+                    measurement,
+                    gate_probabilities_by_source=gate_probabilities_by_source,
+                    gate_thresholds_by_source=gate_thresholds_by_source,
+                ),
+                safety_gate_threshold=_gate_threshold_for_measurement(
+                    measurement,
+                    gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                    gate_thresholds_by_source=safety_gate_thresholds_by_source,
+                ),
+                max_residual_norm=_max_residual_norm_for_measurement(
+                    measurement,
+                    max_residual_norms_by_source=max_residual_norms_by_source,
+                ),
+                robust_update=_robust_update_for_measurement(
+                    measurement,
+                    robust_update_by_source=robust_update_by_source,
+                ),
+                inflation_alpha=_inflation_alpha_for_measurement(
+                    measurement,
+                    inflation_alpha_by_source=inflation_alpha_by_source,
+                ),
+            )
+            records.append(_record(measurement, tracker, diagnostics))
+            continue
+
+        candidates = event["candidates"]
+        assert isinstance(candidates, pd.DataFrame)
+        tracker.predict_to(time_s)
+        preselected_row = paper_track_by_key.get(_radar_event_key(event))
+        selected = _select_paper_compatible_candidate(
+            candidates,
+            tracker=tracker,
+            covariance=covariance,
+            covariance_config=covariance_config,
+            preselected_row=preselected_row,
+            current_track_id=current_track_id,
+            range_gate_m=range_gate_m,
+            candidate_catprob_threshold=candidate_catprob_threshold,
+            nis_gate_threshold=radar_nis_threshold,
+            track_switch_penalty=track_switch_penalty,
+            catprob_weight=catprob_weight,
+        )
+        if selected is None:
+            records.append(
+                _missed_detection_record(
+                    time_s=time_s,
+                    tracker=tracker,
+                    source="radar",
+                    association_mode="paper-compatible",
+                    gate_threshold=radar_nis_threshold,
+                )
+            )
+            continue
+
+        measurement = _radar_row_to_measurement(selected, covariance)
+        selected, measurement, policy_diagnostics = apply_radar_update_policy(selected, measurement)
+        diagnostics = policy_diagnostics or tracker.update(
+            measurement,
+            gate_threshold=_paper_gate_threshold_for_measurement(
+                measurement,
+                gate_probabilities_by_source=gate_probabilities_by_source,
+                gate_thresholds_by_source=gate_thresholds_by_source,
+            ),
+            safety_gate_threshold=_gate_threshold_for_measurement(
+                measurement,
+                gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                gate_thresholds_by_source=safety_gate_thresholds_by_source,
+            ),
+            max_residual_norm=_max_residual_norm_for_measurement(
+                measurement,
+                max_residual_norms_by_source=max_residual_norms_by_source,
+            ),
+            robust_update=_robust_update_for_measurement(
+                measurement,
+                robust_update_by_source=robust_update_by_source,
+            ),
+            inflation_alpha=_inflation_alpha_for_measurement(
+                measurement,
+                inflation_alpha_by_source=inflation_alpha_by_source,
+            ),
+        )
+        if diagnostics.accepted:
+            current_track_id = _optional_track_id(selected)
+            selected_rows.append(selected)
+        record = _record(
+            measurement,
+            tracker,
+            diagnostics,
+            track_id=_optional_track_id(selected),
+            association_nis=_optional_float(selected.get("association_nis")),
+            association_score=_optional_float(selected.get("association_score")),
+            association_mode="paper-compatible",
+        )
+        record.update(policy_record_fields(selected))
+        records.append(record)
+
+    return records, _selected_rows_frame(radar, selected_rows)
+
+
+def _initial_paper_compatible_measurement_and_row(
+    events: list[dict[str, object]],
+    *,
+    covariance: np.ndarray,
+    covariance_config: _RadarGeometryCovarianceConfig | None,
+    preselected_radar_by_key: dict[object, pd.Series],
+    range_gate_m: float | None,
+    candidate_catprob_threshold: float | None,
+) -> tuple[int, TrackingMeasurement, pd.Series | None] | None:
+    """Return the first valid bootstrap event for paper-compatible fusion."""
+
+    for index, event in enumerate(events):
+        if event["kind"] == "rf":
+            measurement = event["measurement"]
+            assert isinstance(measurement, TrackingMeasurement)
+            return int(index), measurement, None
+        candidates = event["candidates"]
+        assert isinstance(candidates, pd.DataFrame)
+        selected_row = preselected_radar_by_key.get(_radar_event_key(event))
+        if selected_row is None:
+            continue
+        selected = _select_paper_compatible_bootstrap_candidate(
+            covariance=covariance,
+            covariance_config=covariance_config,
+            preselected_row=selected_row,
+            range_gate_m=range_gate_m,
+            candidate_catprob_threshold=candidate_catprob_threshold,
+        )
+        if selected is not None:
+            return int(index), _radar_row_to_measurement(selected, covariance), selected
+    return None
+
+
+def _select_paper_compatible_bootstrap_candidate(
+    *,
+    covariance: np.ndarray,
+    covariance_config: _RadarGeometryCovarianceConfig | None,
+    preselected_row: pd.Series,
+    range_gate_m: float | None,
+    candidate_catprob_threshold: float | None,
+) -> pd.Series | None:
+    pool = _paper_compatible_preselector_pool(
+        pd.DataFrame([preselected_row.copy()]),
+        range_gate_m=range_gate_m,
+        candidate_catprob_threshold=candidate_catprob_threshold,
+    )
+    selected = _highest_catprob(pool)
+    if selected is None:
+        return None
+    selected = selected.copy()
+    selected["association_mode"] = "paper-compatible"
+    selected["association_action"] = "paper_compatible_bootstrap"
+    selected["association_effective_candidates"] = int(len(pool))
+    return _annotate_radar_geometry_covariance(selected, covariance, covariance_config)
+
+
+def _select_paper_compatible_candidate(
+    candidates: pd.DataFrame,
+    *,
+    tracker: AsyncConstantVelocityKalmanTracker,
+    covariance: np.ndarray,
+    covariance_config: _RadarGeometryCovarianceConfig | None,
+    preselected_row: pd.Series | None,
+    current_track_id: int | None,
+    range_gate_m: float | None,
+    candidate_catprob_threshold: float | None,
+    nis_gate_threshold: float | None,
+    track_switch_penalty: float,
+    catprob_weight: float,
+) -> pd.Series | None:
+    if preselected_row is None:
+        return None
+    pool = _paper_compatible_preselector_pool(
+        pd.DataFrame([preselected_row.copy()]),
+        range_gate_m=range_gate_m,
+        candidate_catprob_threshold=candidate_catprob_threshold,
+    )
+    if pool.empty:
+        return None
+
+    scored = _nis_scored_candidates(
+        pool,
+        tracker,
+        covariance,
+        covariance_config=covariance_config,
+    )
+    if scored.empty:
+        return None
+    nis_values = pd.to_numeric(scored["association_nis"], errors="coerce")
+    if nis_gate_threshold is None:
+        kept = scored.copy()
+        rejected_count = 0
+    else:
+        keep = nis_values <= float(nis_gate_threshold)
+        rejected_count = int((~keep).sum())
+        kept = scored.loc[keep].copy()
+    if kept.empty:
+        return None
+
+    kept["association_track_switch_penalty"] = _track_switch_penalty(
+        kept,
+        current_track_id=current_track_id,
+        switch_penalty=float(track_switch_penalty),
+    )
+    kept["association_catprob_penalty"] = _catprob_penalty(kept, catprob_weight)
+    kept["association_score"] = (
+        kept["association_nis"].to_numpy(dtype=float)
+        + kept["association_track_switch_penalty"].to_numpy(dtype=float)
+        + kept["association_catprob_penalty"].to_numpy(dtype=float)
+    )
+    selected = kept.loc[kept["association_score"].idxmin()].copy()
+    selected["association_mode"] = "paper-compatible"
+    selected["association_action"] = "hard_gated_update"
+    selected["association_effective_candidates"] = int(len(kept))
+    selected["association_nis_gate_threshold"] = (
+        np.nan if nis_gate_threshold is None else float(nis_gate_threshold)
+    )
+    selected["association_nis_gate_rejected_count"] = int(rejected_count)
+    return _annotate_radar_geometry_covariance(selected, covariance, covariance_config)
+
+
+def _paper_compatible_preselector_pool(
+    candidates: pd.DataFrame,
+    *,
+    range_gate_m: float | None,
+    candidate_catprob_threshold: float | None,
+) -> pd.DataFrame:
+    """Apply hard range and catProb preselection."""
+
+    raw_count = int(len(candidates))
+    pool = _range_candidate_pool(candidates, range_gate_m)
+    range_count = int(len(pool))
+    pool = _catprob_candidate_pool(
+        pool,
+        candidate_catprob_threshold,
+        fallback_to_unfiltered=False,
+    )
+    if not pool.empty:
+        pool["association_preselector_raw_rows"] = _preselector_count(
+            candidates,
+            "association_preselector_raw_rows",
+            raw_count,
+        )
+        pool["association_preselector_range_gated_rows"] = _preselector_count(
+            candidates,
+            "association_preselector_range_gated_rows",
+            range_count,
+        )
+        pool["association_preselector_catprob_rows"] = _preselector_count(
+            candidates,
+            "association_preselector_catprob_rows",
+            int(len(pool)),
+        )
+    return pool
+
+
+def _preselector_count(candidates: pd.DataFrame, column: str, fallback: int) -> int:
+    if column not in candidates.columns or candidates.empty:
+        return int(fallback)
+    values = pd.to_numeric(candidates[column], errors="coerce").dropna()
+    if values.empty:
+        return int(fallback)
+    return int(values.iloc[0])
+
+
+def _paper_compatible_track_id(radar: pd.DataFrame, *, range_gate_m: float | None) -> int | None:
+    """Return the track ID of the largest continuous range-gated radar segment."""
+
+    pool = _range_candidate_pool(radar, range_gate_m)
+    if pool.empty or "track_id" not in pool.columns:
+        return None
+    segments = _stable_track_segments(
+        pool,
+        min_segment_frames=1,
+        rf_measurements=[],
+        rf_score_weight=0.0,
+        rf_time_gate_s=0.0,
+        rf_nis_cap=1.0,
+    )
+    if not segments:
+        return None
+    selected_segment = max(
+        segments,
+        key=lambda item: (
+            item.frames,
+            item.end_time_s - item.start_time_s,
+            item.mean_catprob,
+            -item.start_time_s,
+            -item.track_id,
+        ),
+    )
+    return int(selected_segment.track_id)
+
+
+def _paper_gate_threshold_for_measurement(
+    measurement: TrackingMeasurement,
+    *,
+    gate_probabilities_by_source: Mapping[str, float | None] | None,
+    gate_thresholds_by_source: Mapping[str, float | None] | None,
+) -> float | None:
+    return _paper_source_gate_threshold(
+        source=measurement.source,
+        measurement_dim=measurement.vector.size,
+        gate_probabilities_by_source=gate_probabilities_by_source,
+        gate_thresholds_by_source=gate_thresholds_by_source,
+    )
+
+
+def _paper_source_gate_threshold(
+    *,
+    source: str,
+    measurement_dim: int,
+    gate_probabilities_by_source: Mapping[str, float | None] | None,
+    gate_thresholds_by_source: Mapping[str, float | None] | None,
+) -> float | None:
+    """Return explicit gates or the paper-compatible default 0.99 NIS gate."""
+
+    if gate_thresholds_by_source and source in gate_thresholds_by_source:
+        threshold = gate_thresholds_by_source[source]
+        return None if threshold is None else float(threshold)
+    if gate_probabilities_by_source and source in gate_probabilities_by_source:
+        return gate_threshold_from_probability(
+            gate_probabilities_by_source[source],
+            measurement_dim,
+        )
+    if source in {"rf", "radar"}:
+        return gate_threshold_from_probability(0.99, measurement_dim)
+    return None
+
+
+def _missed_detection_record(
+    *,
+    time_s: float,
+    tracker: AsyncConstantVelocityKalmanTracker,
+    source: str,
+    association_mode: str,
+    gate_threshold: float | None,
+) -> dict[str, object]:
+    diagnostics = TrackingUpdateDiagnostics(
+        time_s=float(time_s),
+        source=source,
+        measurement_dim=3,
+        accepted=False,
+        update_action="missed_detection",
+        nis=float("nan"),
+        gate_threshold=gate_threshold,
+        safety_gate_threshold=None,
+        residual_gate_threshold_m=None,
+        covariance_scale=1.0,
+        inflation_alpha=None,
+        residual_norm_m=float("nan"),
+    )
+    return {
+        "time_s": float(time_s),
+        "source": source,
+        "state": tracker.state.copy(),
+        "covariance": tracker.covariance_matrix.copy(),
+        **diagnostics.to_record(),
+        "association_mode": association_mode,
+    }
 
 
 def _first_rf_bootstrap_index(events: list[dict[str, object]]) -> int | None:
@@ -1268,6 +1736,8 @@ def _select_paper_compatible_radar_track(
     selected["association_action"] = "paper_compatible_largest_continuous_track_anchor"
     selected["association_preselector_raw_rows"] = int(len(radar))
     selected["association_preselector_range_gated_rows"] = int(len(range_pool))
+    selected["association_preselector_track_id"] = int(selected["association_segment_track_id"].iloc[0])
+    selected["association_preselector_track_rows"] = int(len(selected))
     selected["association_preselector_catprob_rows"] = int(len(catprob_pool))
     if range_gate_m is not None:
         selected["association_range_gate_m"] = float(range_gate_m)
@@ -1930,9 +2400,7 @@ def _select_radar_candidate(
             return None
         selected = selected.copy()
         selected["association_mode"] = association
-        if association == "paper-compatible":
-            selected["association_action"] = "paper_compatible_update"
-        elif association == "paper-largest-continuous-track":
+        if association == "paper-largest-continuous-track":
             selected["association_action"] = "paper_largest_continuous_track_update"
         elif bool(selected.get("association_interpolated", False)):
             selected["association_action"] = "stable_segment_interpolated_update"
@@ -2730,39 +3198,6 @@ def _selected_row_record_kwargs(
     }
 
 
-def _missed_detection_record(
-    *,
-    time_s: float,
-    tracker: AsyncConstantVelocityKalmanTracker,
-    source: str,
-    association_mode: str,
-) -> dict[str, object]:
-    """Return a posterior record for a radar frame intentionally treated as a miss."""
-
-    diagnostics = TrackingUpdateDiagnostics(
-        time_s=float(time_s),
-        source=source,
-        measurement_dim=3,
-        accepted=False,
-        update_action="missed_detection",
-        nis=float("nan"),
-        gate_threshold=None,
-        safety_gate_threshold=None,
-        residual_gate_threshold_m=None,
-        covariance_scale=1.0,
-        inflation_alpha=None,
-        residual_norm_m=float("nan"),
-    )
-    return {
-        "time_s": float(time_s),
-        "source": source,
-        "state": tracker.state.copy(),
-        "covariance": tracker.covariance_matrix.copy(),
-        **diagnostics.to_record(),
-        "association_mode": association_mode,
-    }
-
-
 def _record(
     measurement: TrackingMeasurement,
     tracker: AsyncConstantVelocityKalmanTracker,
@@ -2822,6 +3257,13 @@ def _empty_selected_radar(radar: pd.DataFrame) -> pd.DataFrame:
         "association_anchor_gate_nis",
         "association_anchor_gate_rejected_count",
         "association_anchor_gate_candidate_count",
+        "association_nis_gate_threshold",
+        "association_nis_gate_rejected_count",
+        "association_preselector_raw_rows",
+        "association_preselector_track_id",
+        "association_preselector_track_rows",
+        "association_preselector_catprob_rows",
+        "association_preselector_range_gated_rows",
         "association_effective_candidates",
         "association_weight_max",
         "association_position_spread_trace_m2",
@@ -2846,9 +3288,6 @@ def _empty_selected_radar(radar: pd.DataFrame) -> pd.DataFrame:
         "association_cov_nu",
         "association_covariance_mode",
         "association_cov_trace_m2",
-        "association_preselector_raw_rows",
-        "association_preselector_range_gated_rows",
-        "association_preselector_catprob_rows",
     ):
         selected[column] = []
     return selected

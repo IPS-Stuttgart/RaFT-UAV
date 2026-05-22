@@ -137,16 +137,16 @@ raft-uav-diagnose-paper-table data/raw/AADM2025Dryad \
   --stable-segment-max-transition-speed-mps 65
 ```
 
-Run the same hard preselector through the normal baseline artifact path:
+Run the same paper-compatible hard-preselector path directly through the
+baseline runner, so the output artifacts are comparable with other
+`run-baseline` rows:
 
 ```bash
 raft-uav run-baseline data/raw/AADM2025Dryad \
   --flight Opt1 \
   --radar-association paper-compatible \
   --radar-catprob-threshold 0.4 \
-  --enable-gating \
-  --rf-gate-prob 0.99 \
-  --radar-gate-prob 0.99 \
+  --stable-segment-range-gate-m 800 \
   --smoother fixed-lag --smoother-lag-s 20
 ```
 
@@ -252,9 +252,6 @@ because it uses ground truth. The online alternatives are
 `--radar-association track-continuity`, and the experimental
 `--radar-association geometry-score` mode, which adds velocity consistency,
 track-switch, and UAV class-probability terms to the NIS score. The
-paper-reproduction-oriented `--radar-association paper-compatible` mode applies
-the 800 m range-gated largest-continuous-track preselector, hard UAV
-class-probability filtering, and NIS validation. The
 paper-reproduction-oriented `--radar-association paper-largest-continuous-track`
 mode applies the configured radar range gate, defaults to 800 m via
 `--stable-segment-range-gate-m`, and keeps the longest continuous Fortem

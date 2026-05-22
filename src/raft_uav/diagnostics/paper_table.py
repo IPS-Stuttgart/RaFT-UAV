@@ -598,9 +598,7 @@ def run_paper_compatible_cv_fusion(
         radar,
         range_gate_m=radar_range_gate_m,
     )
-    paper_track_by_key = {
-        _radar_row_key(row): row for _, row in paper_track.iterrows()
-    }
+    paper_track_by_key = {_radar_row_key(row): row for _, row in paper_track.iterrows()}
     longest_track_id = _longest_track_id(paper_track)
 
     initial = _initial_paper_measurement(
@@ -894,12 +892,12 @@ def select_paper_compatible_candidate(
     covariance: np.ndarray,
     longest_track_id: int | None,
     current_track_id: int | None,
-    preselected_row: pd.Series | None = None,
     radar_range_gate_m: float | None,
     radar_catprob_threshold: float | None,
     nis_gate_threshold: float,
     track_switch_cost: float,
     catprob_weight: float,
+    preselected_row: pd.Series | None = None,
 ) -> pd.Series | None:
     """Return the best hard-gated paper-compatible candidate, or ``None`` to coast."""
 
@@ -914,9 +912,9 @@ def select_paper_compatible_candidate(
         return None
     if preselected_row is None and longest_track_id is not None and "track_id" in pool.columns:
         track_ids = pd.to_numeric(pool["track_id"], errors="coerce")
-        longest_pool = pool.loc[track_ids == int(longest_track_id)]
-        if not longest_pool.empty:
-            pool = longest_pool
+        pool = pool.loc[track_ids == int(longest_track_id)].copy()
+        if pool.empty:
+            return None
     pool = _catprob_hard_candidate_pool(pool, radar_catprob_threshold)
     if pool.empty:
         return None

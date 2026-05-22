@@ -192,10 +192,9 @@ def summarize_errors(errors_m: np.ndarray) -> dict[str, float | None]:
             "p95_m": None,
             "max_m": None,
         }
-    mean_m = float(np.mean(errors))
     return {
         "count": float(errors.size),
-        "mean_m": mean_m,
+        "mean_m": float(np.mean(errors)),
         "std_m": float(np.std(errors)),
         "rmse_m": float(np.sqrt(np.mean(errors**2))),
         "mae_m": float(np.mean(np.abs(errors))),

@@ -28,9 +28,12 @@ def test_metrics_return_finite_summaries_on_synthetic_trajectories():
     summary = summarize_errors(errors)
 
     assert summary["count"] == 3.0
+    assert np.isfinite(summary["mean_m"])
+    assert np.isfinite(summary["std_m"])
     assert np.isfinite(summary["rmse_m"])
     assert np.isfinite(summary["mae_m"])
     assert np.isfinite(summary["p95_m"])
+    assert np.isfinite(summary["max_m"])
 
 
 def test_position_errors_interpolate_estimates_to_truth_time_grid():
@@ -110,8 +113,11 @@ def test_summarize_errors_empty_input_is_strict_json_compatible():
     summary = summarize_errors(np.array([]))
 
     assert summary["count"] == 0.0
+    assert summary["mean_m"] is None
+    assert summary["std_m"] is None
     assert summary["rmse_m"] is None
     assert summary["mae_m"] is None
     assert summary["p50_m"] is None
     assert summary["p95_m"] is None
+    assert summary["max_m"] is None
     json.dumps(summary, allow_nan=False)
