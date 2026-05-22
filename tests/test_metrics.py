@@ -121,3 +121,14 @@ def test_summarize_errors_empty_input_is_strict_json_compatible():
     assert summary["p95_m"] is None
     assert summary["max_m"] is None
     json.dumps(summary, allow_nan=False)
+
+
+def test_summarize_errors_ignores_non_finite_values():
+    summary = summarize_errors(np.array([3.0, np.nan, np.inf, 4.0]))
+
+    assert summary["count"] == 2.0
+    assert summary["mean_m"] == 3.5
+    assert summary["mae_m"] == 3.5
+    assert summary["std_m"] == 0.5
+    assert summary["max_m"] == 4.0
+    json.dumps(summary, allow_nan=False)

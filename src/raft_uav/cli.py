@@ -985,8 +985,14 @@ def _run_baseline(
     print(f"selected_radar_attempted_csv={selected_radar_attempted_path}")
     print(f"hypotheses_csv={hypotheses_path}")
     print(f"trajectory_png={plot_path}")
+    print(f"mean_2d_m={_format_optional_metric(metrics['position_error_2d'].get('mean_m'))}")
+    print(f"std_2d_m={_format_optional_metric(metrics['position_error_2d'].get('std_m'))}")
     print(f"rmse_2d_m={metrics['position_error_2d']['rmse_m']:.3f}")
+    print(f"max_2d_m={_format_optional_metric(metrics['position_error_2d'].get('max_m'))}")
+    print(f"mean_3d_m={_format_optional_metric(metrics['position_error_3d'].get('mean_m'))}")
+    print(f"std_3d_m={_format_optional_metric(metrics['position_error_3d'].get('std_m'))}")
     print(f"rmse_3d_m={metrics['position_error_3d']['rmse_m']:.3f}")
+    print(f"max_3d_m={_format_optional_metric(metrics['position_error_3d'].get('max_m'))}")
     return 0
 
 
@@ -1438,6 +1444,13 @@ def _apply_time_offset_correction(frame: pd.DataFrame, correction_s: float) -> p
     if frame.empty or "time_s" not in frame.columns or correction == 0.0:
         return frame
     return apply_time_offset(frame, correction)
+
+
+def _format_optional_metric(value: object) -> str:
+    if value is None:
+        return "nan"
+    scalar = float(value)
+    return f"{scalar:.3f}" if np.isfinite(scalar) else "nan"
 
 
 def _write_trajectory_plot(
