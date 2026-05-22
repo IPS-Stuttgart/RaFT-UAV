@@ -62,6 +62,7 @@ _SOFT_CATPROB_BELOW_THRESHOLD_PENALTY_ENV = "RAFT_UAV_SOFT_CATPROB_BELOW_THRESHO
 _RADAR_VELOCITY_UPDATE_ENV = "RAFT_UAV_RADAR_UPDATE_USES_VELOCITY"
 _RADAR_VELOCITY_STD_MPS_ENV = "RAFT_UAV_RADAR_VELOCITY_STD_MPS"
 RADAR_COVARIANCE_MODELS = ("cartesian", "geometry")
+PAPER_COMPATIBLE_NIS_GATE_PROBABILITY = 0.95
 _ASSOCIATION_COVARIANCE_COLUMNS = (
     "association_cov_ee",
     "association_cov_nn",
@@ -1020,7 +1021,7 @@ def _paper_source_gate_threshold(
     gate_probabilities_by_source: Mapping[str, float | None] | None,
     gate_thresholds_by_source: Mapping[str, float | None] | None,
 ) -> float | None:
-    """Return explicit gates or the paper-compatible default 0.99 NIS gate."""
+    """Return explicit gates or the paper-compatible default 0.95 NIS gate."""
 
     if gate_thresholds_by_source and source in gate_thresholds_by_source:
         threshold = gate_thresholds_by_source[source]
@@ -1031,7 +1032,10 @@ def _paper_source_gate_threshold(
             measurement_dim,
         )
     if source in {"rf", "radar"}:
-        return gate_threshold_from_probability(0.99, measurement_dim)
+        return gate_threshold_from_probability(
+            PAPER_COMPATIBLE_NIS_GATE_PROBABILITY,
+            measurement_dim,
+        )
     return None
 
 

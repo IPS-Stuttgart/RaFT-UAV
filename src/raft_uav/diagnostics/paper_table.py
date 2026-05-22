@@ -124,8 +124,8 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="radar table row to include; repeat to limit the diagnostic to selected rows",
     )
-    parser.add_argument("--fusion-nis-gate-prob", type=float, default=0.99)
-    parser.add_argument("--rf-nis-gate-prob", type=float, default=0.99)
+    parser.add_argument("--fusion-nis-gate-prob", type=float, default=0.95)
+    parser.add_argument("--rf-nis-gate-prob", type=float, default=0.95)
     parser.add_argument("--truth-time-gate-s", type=float, default=2.0)
     parser.add_argument("--acceleration-std", type=float, default=4.0)
     parser.add_argument("--smoother-lag-s", type=float, default=20.0)
@@ -181,8 +181,8 @@ def run_paper_table_diagnostic(
     stable_segment_min_frames: int = 100,
     stable_segment_max_transition_speed_mps: float = 65.0,
     radar_selections: tuple[str, ...] = RADAR_SELECTIONS,
-    fusion_nis_gate_prob: float = 0.99,
-    rf_nis_gate_prob: float = 0.99,
+    fusion_nis_gate_prob: float = 0.95,
+    rf_nis_gate_prob: float = 0.95,
     truth_time_gate_s: float = 2.0,
     acceleration_std_mps2: float = 4.0,
     smoother_lag_s: float = 20.0,
@@ -561,8 +561,8 @@ def run_paper_compatible_cv_fusion(
     radar_z_std_m: float = 35.0,
     radar_range_gate_m: float | None = 800.0,
     radar_catprob_threshold: float | None = 0.4,
-    nis_gate_probability: float = 0.99,
-    rf_nis_gate_probability: float = 0.99,
+    nis_gate_probability: float = 0.95,
+    rf_nis_gate_probability: float = 0.95,
     track_switch_cost: float = 3.0,
     catprob_weight: float = 2.0,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
@@ -686,8 +686,8 @@ def run_paper_longest_track_cv_fusion(
     radar_xy_std_m: float = 25.0,
     radar_z_std_m: float = 35.0,
     radar_range_gate_m: float | None = 800.0,
-    nis_gate_probability: float = 0.99,
-    rf_nis_gate_probability: float = 0.99,
+    nis_gate_probability: float = 0.95,
+    rf_nis_gate_probability: float = 0.95,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
     """Run CV fusion using only stable longest-track radar anchors."""
 
@@ -728,8 +728,8 @@ def run_paper_stable_segments_cv_fusion(
     radar_z_std_m: float = 35.0,
     radar_range_gate_m: float | None = 800.0,
     radar_catprob_threshold: float | None = 0.4,
-    nis_gate_probability: float = 0.99,
-    rf_nis_gate_probability: float = 0.99,
+    nis_gate_probability: float = 0.95,
+    rf_nis_gate_probability: float = 0.95,
     stable_segment_min_frames: int = 100,
     stable_segment_max_transition_speed_mps: float = 65.0,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:

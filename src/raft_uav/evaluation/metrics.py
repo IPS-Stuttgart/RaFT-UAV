@@ -289,3 +289,127 @@ def summarize_errors(errors_m: np.ndarray) -> dict[str, float | None]:
         "p95_m": float(np.percentile(errors, 95)),
         "max_m": float(np.max(errors)),
     }
+
+def interpolate_positions_at_times(
+    reference_times_s: np.ndarray,
+    reference_positions_m: np.ndarray,
+    query_times_s: np.ndarray,
+    *,
+    max_time_delta_s: float | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Interpolate a position trajectory onto arbitrary query timestamps.
+
+    The returned mask is true only for query times inside the reference time
+    span and, when ``max_time_delta_s`` is provided, close enough to the nearest
+    reference sample.  This is the paper-table direction: evaluate an estimate
+    or sensor measurement at its own timestamp against interpolated truth.
+    """
+
+    reference_array = np.asarray(reference_positions_m, dtype=float)
+    reference_dimensions = reference_array.shape[1] if reference_array.ndim == 2 else 3
+    reference_times, reference_positions = _prepare_time_position_series(
+        reference_times_s,
+        reference_array,
+        dimensions=reference_dimensions,
+    )
+    query = np.asarray(query_times_s, dtype=float).reshape(-1)
+    if reference_times.size == 0:
+        return np.full((query.size, reference_positions.shape[1] if reference_positions.ndim == 2 else 3), np.nan), np.zeros(query.size, dtype=bool)
+    interpolated = _interpolate_positions(reference_times, reference_positions, query)
+    valid = np.isfinite(query) & (query >= reference_times[0]) & (query <= reference_times[-1])
+    if max_time_delta_s is not None:
+        insertion = np.searchsorted(reference_times, query)
+        right = np.clip(insertion, 0, reference_times.size - 1)
+        left = np.clip(insertion - 1, 0, reference_times.size - 1)
+        nearest_delta = np.minimum(np.abs(reference_times[right] - query), np.abs(reference_times[left] - query))
+        valid &= nearest_delta <= float(max_time_delta_s)
+    return interpolated, valid
+
+
+def position_errors_at_times_m(
+    estimate_times_s: np.ndarray,
+    estimate_positions_m: np.ndarray,
+    truth_times_s: np.ndarray,
+    truth_positions_m: np.ndarray,
+    max_time_delta_s: float | None = None,
+    dimensions: int = 3,
+) -> np.ndarray:
+    """Compute position errors at estimate/measurement timestamps.
+
+    This is distinct from :func:`position_errors_m`, which interpolates the
+    estimate trajectory to the truth grid.  The reference paper table compares
+    RF/radar/KF outputs to truth interpolated at each output timestamp, so this
+    helper preserves the output count and timestamp support of the method under
+    evaluation.
+    """
+
+    if dimensions not in (2, 3):
+        raise ValueError("dimensions must be 2 or 3")
+    estimate_times, estimate_positions = _prepare_time_position_series(
+        estimate_times_s,
+        estimate_positions_m,
+        dimensions=dimensions,
+    )
+    truth_times, truth_positions = _prepare_time_position_series(
+        truth_times_s,
+        truth_positions_m,
+        dimensions=dimensions,
+    )
+    if estimate_times.size == 0 or truth_times.size == 0:
+        return np.array([], dtype=float)
+    truth_at_estimate, valid = interpolate_positions_at_times(
+        truth_times,
+        truth_positions,
+        estimate_times,
+        max_time_delta_s=max_time_delta_s,
+    )
+    finite = valid & np.isfinite(estimate_positions[:, :dimensions]).all(axis=1) & np.isfinite(truth_at_estimate[:, :dimensions]).all(axis=1)
+    if not finite.any():
+        return np.array([], dtype=float)
+    deltas = estimate_positions[finite, :dimensions] - truth_at_estimate[finite, :dimensions]
+    errors = np.linalg.norm(deltas, axis=1)
+    return errors[np.isfinite(errors)]
+
+
+def empirical_position_covariance_at_times(
+    estimate_times_s: np.ndarray,
+    estimate_positions_m: np.ndarray,
+    truth_times_s: np.ndarray,
+    truth_positions_m: np.ndarray,
+    max_time_delta_s: float | None = None,
+    dimensions: int = 3,
+) -> np.ndarray:
+    """Estimate residual covariance against truth interpolated to output times.
+
+    The covariance convention matches NumPy/MATLAB's unbiased sample covariance
+    (``ddof=1``).  A ``ValueError`` is raised if fewer than two valid residuals
+    are available.
+    """
+
+    if dimensions not in (2, 3):
+        raise ValueError("dimensions must be 2 or 3")
+    estimate_times, estimate_positions = _prepare_time_position_series(
+        estimate_times_s,
+        estimate_positions_m,
+        dimensions=dimensions,
+    )
+    truth_times, truth_positions = _prepare_time_position_series(
+        truth_times_s,
+        truth_positions_m,
+        dimensions=dimensions,
+    )
+    if estimate_times.size == 0 or truth_times.size == 0:
+        raise ValueError("cannot estimate covariance from empty estimate/truth series")
+    truth_at_estimate, valid = interpolate_positions_at_times(
+        truth_times,
+        truth_positions,
+        estimate_times,
+        max_time_delta_s=max_time_delta_s,
+    )
+    finite = valid & np.isfinite(estimate_positions[:, :dimensions]).all(axis=1) & np.isfinite(truth_at_estimate[:, :dimensions]).all(axis=1)
+    residuals = estimate_positions[finite, :dimensions] - truth_at_estimate[finite, :dimensions]
+    if residuals.shape[0] < 2:
+        raise ValueError("at least two valid residuals are required to estimate covariance")
+    covariance = np.cov(residuals, rowvar=False, ddof=1)
+    covariance = np.asarray(covariance, dtype=float).reshape(dimensions, dimensions)
+    return 0.5 * (covariance + covariance.T)
