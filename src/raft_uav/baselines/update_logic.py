@@ -7,15 +7,20 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
-from pyrecest.filters._linear_gaussian import (
+from pyrecest.filters.linear_update_planning import (
+    DEFAULT_HUBER_THRESHOLD,
+    DEFAULT_STUDENT_T_DOF,
+    ROBUST_UPDATE_MODES as _PYRECEST_ROBUST_UPDATE_MODES,
     huber_covariance_scale as _pyrecest_huber_covariance_scale,
     normalized_innovation_squared as _pyrecest_normalized_innovation_squared,
+    plan_linear_measurement_update as _pyrecest_plan_linear_measurement_update,
+    robust_update_covariance_scale as _pyrecest_robust_update_covariance_scale,
+    robust_update_for_measurement as _pyrecest_robust_update_for_measurement,
+    source_float_value as _pyrecest_source_float_value,
     student_t_covariance_scale as _pyrecest_student_t_covariance_scale,
 )
 
-ROBUST_UPDATE_MODES = ("nis-inflate", "student-t", "huber")
-DEFAULT_STUDENT_T_DOF = 4.0
-DEFAULT_HUBER_THRESHOLD = 2.0
+ROBUST_UPDATE_MODES = _PYRECEST_ROBUST_UPDATE_MODES
 
 
 class TrackingMeasurementLike(Protocol):
@@ -73,7 +78,7 @@ def student_t_covariance_scale(
         _pyrecest_student_t_covariance_scale(
             nis,
             measurement_dim,
-            dof=degrees_of_freedom,
+            degrees_of_freedom=degrees_of_freedom,
         )
     )
 
@@ -85,7 +90,7 @@ def huber_covariance_scale(
     """Return the PyRecEst multivariate Huber covariance inflation factor."""
 
     return _backend_scalar_to_float(
-        _pyrecest_huber_covariance_scale(nis, huber_threshold=threshold)
+        _pyrecest_huber_covariance_scale(nis, threshold=threshold)
     )
 
 
@@ -101,20 +106,21 @@ def robust_update_covariance_scale(
 ) -> tuple[float, str | None]:
     """Return covariance scale and diagnostic action for a robust update mode."""
 
-    if robust_update is None:
-        return 1.0, None
-    if robust_update == "nis-inflate":
-        if gate_threshold is None or float(nis) <= float(gate_threshold):
-            return 1.0, None
-        scale = max(1.0, float((float(nis) / float(gate_threshold)) ** inflation_alpha))
-        return scale, "inflated"
-    if robust_update == "student-t":
-        scale = student_t_covariance_scale(nis, measurement_dim, student_t_dof)
-        return scale, "student_t" if scale > 1.0 else None
-    if robust_update == "huber":
-        scale = huber_covariance_scale(nis, huber_threshold)
-        return scale, "huberized" if scale > 1.0 else None
-    raise ValueError(f"unknown robust update mode {robust_update!r}")
+    return _pyrecest_robust_update_covariance_scale(
+        robust_update,
+        nis=nis,
+        measurement_dim=measurement_dim,
+        gate_threshold=gate_threshold,
+        inflation_alpha=inflation_alpha,
+        student_t_dof=student_t_dof,
+        huber_threshold=huber_threshold,
+    )
+
+
+def _raft_update_action(action: str) -> str:
+    if action in {"residual_rejected", "safety_rejected"}:
+        return "missed_detection"
+    return action
 
 
 def plan_linear_measurement_update(
@@ -134,77 +140,35 @@ def plan_linear_measurement_update(
 ) -> LinearUpdatePlan:
     """Prepare shared NIS gating/inflation quantities for a linear update."""
 
-    alpha = float(inflation_alpha)
-    if alpha <= 0.0:
-        raise ValueError("inflation_alpha must be positive")
-
-    vector = np.asarray(measurement_vector, dtype=float).reshape(-1)
-    covariance = np.asarray(measurement_covariance, dtype=float)
-    observation = np.asarray(observation_matrix, dtype=float)
-    posterior_mean = np.asarray(mean, dtype=float)
-    posterior_covariance = np.asarray(covariance_matrix, dtype=float)
-
-    residual = vector - observation @ posterior_mean
-    innovation_covariance = observation @ posterior_covariance @ observation.T + covariance
-    nis = normalized_innovation_squared(residual, innovation_covariance)
-    residual_norm = float(np.linalg.norm(residual))
-    threshold = None if gate_threshold is None else float(gate_threshold)
-    safety_threshold = None if safety_gate_threshold is None else float(safety_gate_threshold)
-    residual_threshold = None if max_residual_norm is None else float(max_residual_norm)
-    if residual_threshold is not None and residual_threshold <= 0.0:
-        raise ValueError("max_residual_norm must be positive or None")
-    covariance_scale = 1.0
-    update_action = "updated"
-    accepted = True
-
-    residual_over_threshold = (
-        residual_threshold is not None and residual_norm > residual_threshold
+    plan = _pyrecest_plan_linear_measurement_update(
+        mean=mean,
+        covariance_matrix=covariance_matrix,
+        measurement_vector=measurement_vector,
+        measurement_covariance=measurement_covariance,
+        observation_matrix=observation_matrix,
+        gate_threshold=gate_threshold,
+        safety_gate_threshold=safety_gate_threshold,
+        max_residual_norm=max_residual_norm,
+        robust_update=robust_update,
+        inflation_alpha=inflation_alpha,
+        student_t_dof=student_t_dof,
+        huber_threshold=huber_threshold,
     )
-    safety_over_threshold = safety_threshold is not None and nis > safety_threshold
-    reject_by_residual = residual_over_threshold and (
-        safety_threshold is None or safety_over_threshold
-    )
-
-    if reject_by_residual:
-        accepted = False
-        update_action = "missed_detection"
-    elif safety_over_threshold:
-        accepted = False
-        update_action = "missed_detection"
-    elif threshold is not None and nis > threshold and robust_update is None:
-        accepted = False
-        update_action = "rejected"
-    else:
-        covariance_scale, robust_action = robust_update_covariance_scale(
-            robust_update,
-            nis=nis,
-            measurement_dim=vector.size,
-            gate_threshold=threshold,
-            inflation_alpha=alpha,
-            student_t_dof=student_t_dof,
-            huber_threshold=huber_threshold,
-        )
-        if covariance_scale > 1.0:
-            covariance = covariance * covariance_scale
-            innovation_covariance = observation @ posterior_covariance @ observation.T + covariance
-        if robust_action is not None:
-            update_action = robust_action
-
     return LinearUpdatePlan(
-        vector=vector,
-        covariance=covariance,
-        observation=observation,
-        residual=residual,
-        innovation_covariance=innovation_covariance,
-        nis=float(nis),
-        residual_norm=residual_norm,
-        threshold=threshold,
-        safety_threshold=safety_threshold,
-        residual_threshold=residual_threshold,
-        covariance_scale=float(covariance_scale),
-        update_action=update_action,
-        accepted=bool(accepted),
-        inflation_alpha=alpha,
+        vector=plan.vector,
+        covariance=plan.covariance,
+        observation=plan.observation,
+        residual=plan.residual,
+        innovation_covariance=plan.innovation_covariance,
+        nis=float(plan.nis),
+        residual_norm=float(plan.residual_norm),
+        threshold=plan.gate_threshold,
+        safety_threshold=plan.safety_gate_threshold,
+        residual_threshold=plan.residual_threshold,
+        covariance_scale=float(plan.covariance_scale),
+        update_action=_raft_update_action(plan.action),
+        accepted=bool(plan.accepted),
+        inflation_alpha=float(plan.inflation_alpha),
     )
 
 
@@ -235,9 +199,10 @@ def robust_update_for_measurement(
 ) -> str | None:
     """Resolve a source-specific robust update mode for one measurement."""
 
-    if robust_update_by_source and measurement.source in robust_update_by_source:
-        return robust_update_by_source[measurement.source]
-    return None
+    return _pyrecest_robust_update_for_measurement(
+        measurement,
+        robust_update_by_source=robust_update_by_source,
+    )
 
 
 def inflation_alpha_for_measurement(
@@ -247,9 +212,13 @@ def inflation_alpha_for_measurement(
 ) -> float:
     """Resolve a source-specific NIS-inflation exponent for one measurement."""
 
-    if inflation_alpha_by_source and measurement.source in inflation_alpha_by_source:
-        return float(inflation_alpha_by_source[measurement.source])
-    return 1.0
+    value = _pyrecest_source_float_value(
+        measurement,
+        inflation_alpha_by_source,
+        default=1.0,
+    )
+    assert value is not None
+    return float(value)
 
 
 def max_residual_norm_for_measurement(
@@ -259,13 +228,11 @@ def max_residual_norm_for_measurement(
 ) -> float | None:
     """Resolve a source-specific Euclidean residual cap for one measurement."""
 
-    if (
-        max_residual_norms_by_source
-        and measurement.source in max_residual_norms_by_source
-    ):
-        value = max_residual_norms_by_source[measurement.source]
-        return None if value is None else float(value)
-    return None
+    return _pyrecest_source_float_value(
+        measurement,
+        max_residual_norms_by_source,
+        default=None,
+    )
 
 
 def student_t_dof_for_measurement(
@@ -275,9 +242,13 @@ def student_t_dof_for_measurement(
 ) -> float:
     """Resolve a source-specific Student-t degrees-of-freedom value."""
 
-    if student_t_dof_by_source and measurement.source in student_t_dof_by_source:
-        return float(student_t_dof_by_source[measurement.source])
-    return DEFAULT_STUDENT_T_DOF
+    return float(
+        _pyrecest_source_float_value(
+            measurement,
+            student_t_dof_by_source,
+            default=DEFAULT_STUDENT_T_DOF,
+        )
+    )
 
 
 def huber_threshold_for_measurement(
@@ -287,9 +258,13 @@ def huber_threshold_for_measurement(
 ) -> float:
     """Resolve a source-specific Huber innovation-radius threshold."""
 
-    if huber_threshold_by_source and measurement.source in huber_threshold_by_source:
-        return float(huber_threshold_by_source[measurement.source])
-    return DEFAULT_HUBER_THRESHOLD
+    return float(
+        _pyrecest_source_float_value(
+            measurement,
+            huber_threshold_by_source,
+            default=DEFAULT_HUBER_THRESHOLD,
+        )
+    )
 
 
 def symmetrized(matrix: np.ndarray) -> np.ndarray:

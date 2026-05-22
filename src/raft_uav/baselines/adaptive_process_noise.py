@@ -6,7 +6,11 @@ from dataclasses import dataclass, field
 import os
 from typing import Mapping
 
-import numpy as np
+from pyrecest.filters.adaptive_process_noise import (
+    AdaptiveProcessNoiseConfig as _PyRecEstAdaptiveProcessNoiseConfig,
+    RollingNISProcessNoiseAdapter,
+    adaptive_scale_from_ratio as _pyrecest_adaptive_scale_from_ratio,
+)
 
 ENV_ADAPTIVE_PROCESS_NOISE = "RAFT_UAV_ADAPTIVE_PROCESS_NOISE"
 ENV_ADAPTIVE_PROCESS_NOISE_MIN_SCALE = "RAFT_UAV_ADAPTIVE_PROCESS_NOISE_MIN_SCALE"
@@ -47,51 +51,62 @@ class RollingNISAdaptiveAcceleration:
     """Maintain per-source EWMA NIS ratios and return an acceleration scale."""
 
     config: AdaptiveProcessNoiseConfig = field(default_factory=AdaptiveProcessNoiseConfig)
-    ratios_by_source: dict[str, float] = field(default_factory=dict)
-    updates_by_source: dict[str, int] = field(default_factory=dict)
+    adapter: RollingNISProcessNoiseAdapter = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.adapter = RollingNISProcessNoiseAdapter(
+            _PyRecEstAdaptiveProcessNoiseConfig(
+                base_scale=1.0,
+                min_scale=self.config.min_scale,
+                max_scale=self.config.max_scale,
+                ewma_alpha=self.config.ewma_alpha,
+                high_nis_ratio=self.config.high_nis_ratio,
+                low_nis_ratio=self.config.low_nis_ratio,
+                scale_gain=self.config.scale_gain,
+            )
+        )
+
+    @property
+    def ratios_by_source(self) -> dict[str, float]:
+        """Expose the upstream adapter state under the historical RaFT-UAV name."""
+
+        return self.adapter.ratios_by_source
+
+    @property
+    def updates_by_source(self) -> dict[str, int]:
+        """Expose the upstream adapter counts under the historical RaFT-UAV name."""
+
+        return self.adapter.updates_by_source
 
     def observe(self, *, source: str, measurement_dim: int, nis: float, accepted: bool = True) -> float:
         """Ingest one innovation and return the updated source ratio."""
 
-        if not accepted or measurement_dim <= 0 or not np.isfinite(nis):
-            return self.ratios_by_source.get(source, 1.0)
-        ratio = max(float(nis) / float(measurement_dim), 0.0)
-        previous = self.ratios_by_source.get(source, 1.0)
-        alpha = float(self.config.ewma_alpha)
-        updated = (1.0 - alpha) * previous + alpha * ratio
-        self.ratios_by_source[source] = updated
-        self.updates_by_source[source] = self.updates_by_source.get(source, 0) + 1
-        return updated
+        return self.adapter.observe(
+            source=source,
+            measurement_dim=measurement_dim,
+            nis=nis,
+            accepted=accepted,
+        )
 
     def acceleration_std_mps2(self, source_weights: Mapping[str, float] | None = None) -> float:
         """Return the adapted acceleration standard deviation."""
 
-        if not self.ratios_by_source:
-            return float(self.config.base_acceleration_std_mps2)
-        if source_weights:
-            numerator = 0.0
-            denominator = 0.0
-            for source, ratio in self.ratios_by_source.items():
-                weight = float(source_weights.get(source, 0.0))
-                numerator += weight * ratio
-                denominator += weight
-            ratio = numerator / denominator if denominator > 0.0 else np.mean(list(self.ratios_by_source.values()))
-        else:
-            ratio = float(np.mean(list(self.ratios_by_source.values())))
-        return float(self.config.base_acceleration_std_mps2 * adaptive_scale_from_ratio(ratio, self.config))
+        return float(self.config.base_acceleration_std_mps2 * self.adapter.scale(source_weights))
 
 
 def adaptive_scale_from_ratio(ratio: float, config: AdaptiveProcessNoiseConfig) -> float:
     """Map a normalized NIS ratio to a bounded process-noise scale."""
 
-    ratio = float(ratio)
-    if ratio > float(config.high_nis_ratio):
-        scale = 1.0 + float(config.scale_gain) * (ratio - float(config.high_nis_ratio))
-    elif ratio < float(config.low_nis_ratio):
-        scale = 1.0 - float(config.scale_gain) * (float(config.low_nis_ratio) - ratio)
-    else:
-        scale = 1.0
-    return float(np.clip(scale, float(config.min_scale), float(config.max_scale)))
+    upstream_config = _PyRecEstAdaptiveProcessNoiseConfig(
+        base_scale=1.0,
+        min_scale=config.min_scale,
+        max_scale=config.max_scale,
+        ewma_alpha=config.ewma_alpha,
+        high_nis_ratio=config.high_nis_ratio,
+        low_nis_ratio=config.low_nis_ratio,
+        scale_gain=config.scale_gain,
+    )
+    return _pyrecest_adaptive_scale_from_ratio(ratio, upstream_config)
 
 
 def adaptive_process_noise_from_environment(

@@ -18,6 +18,11 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
+from pyrecest.calibration.bias import (
+    BiasTrainingExamples as _PyRecEstBiasTrainingExamples,
+    fit_sensor_bias_correction_from_examples as _pyrecest_fit_bias_from_examples,
+    make_bias_training_examples as _pyrecest_make_bias_training_examples,
+)
 
 BIAS_MODEL_VERSION = 1
 RF_TARGET_COLUMNS = ("east_m", "north_m")
@@ -271,30 +276,28 @@ def fit_sensor_bias_correction_from_examples(
         selected_features = tuple()
         x = np.empty((y.shape[0], 0), dtype=float)
 
-    feature_mean = _nanmean_or_zero(x)
-    feature_scale = np.nanstd(x, axis=0) if x.shape[1] else np.empty(0, dtype=float)
-    feature_scale = np.where(np.isfinite(feature_scale) & (feature_scale > 1.0e-12), feature_scale, 1.0)
-    standardized = (x - feature_mean) / feature_scale if x.shape[1] else x
-    design = np.column_stack([np.ones(y.shape[0]), standardized])
-    regularizer = np.eye(design.shape[1]) * float(ridge_alpha)
-    regularizer[0, 0] = 0.0
-    lhs = design.T @ design + regularizer
-    rhs = design.T @ y
-    try:
-        beta = np.linalg.solve(lhs, rhs)
-    except np.linalg.LinAlgError:
-        beta = np.linalg.pinv(lhs) @ rhs
-    residual = y - design @ beta
-    residual_std = np.std(residual, axis=0) if residual.size else np.zeros(len(targets))
+    upstream_examples = _PyRecEstBiasTrainingExamples(
+        measured=np.zeros_like(y),
+        reference=-y,
+        residual=y,
+        features=x,
+        time_delta_s=np.zeros(y.shape[0], dtype=float),
+    )
+    upstream_model = _pyrecest_fit_bias_from_examples(
+        upstream_examples,
+        ridge_alpha=ridge_alpha,
+        min_samples=min_samples,
+        metadata={"source": str(source)},
+    )
     return SensorBiasCorrectionModel(
         source=str(source),
         target_columns=targets,
         feature_columns=selected_features,
-        intercept=beta[0],
-        coefficients=beta[1:],
-        feature_mean=feature_mean,
-        feature_scale=feature_scale,
-        residual_std=residual_std,
+        intercept=upstream_model.intercept,
+        coefficients=upstream_model.coefficients,
+        feature_mean=upstream_model.feature_mean,
+        feature_scale=upstream_model.feature_scale,
+        residual_std=upstream_model.residual_std,
         training_rows=int(y.shape[0]),
         ridge_alpha=float(ridge_alpha),
         time_gate_s=float(time_gate_s),
@@ -327,6 +330,15 @@ def make_bias_training_examples(
     rows = rows.loc[valid_measurement].reset_index(drop=True)
     query_times = query_times[valid_measurement]
     if not len(truth_times) or not len(query_times):
+        return pd.DataFrame()
+    upstream_examples = _pyrecest_make_bias_training_examples(
+        query_times,
+        rows.loc[:, targets].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float),
+        truth_times,
+        truth_sorted.loc[:, targets].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float),
+        max_time_delta_s=time_gate_s,
+    )
+    if upstream_examples.measured.shape[0] == 0:
         return pd.DataFrame()
     nearest = _nearest_time_indices(truth_times, query_times)
     delta_s = np.abs(truth_times[nearest] - query_times)
