@@ -622,12 +622,17 @@ def _run_paper_compatible_association(
     if not events:
         return [], _empty_selected_radar(radar)
 
-    paper_track_id = _paper_compatible_track_id(radar, range_gate_m=range_gate_m)
+    paper_track = _select_paper_compatible_radar_track(
+        radar,
+        range_gate_m=range_gate_m,
+        catprob_threshold=candidate_catprob_threshold,
+    )
+    paper_track_by_key = {_radar_row_key(row): row for _, row in paper_track.iterrows()}
     initial = _initial_paper_compatible_measurement_and_row(
         events,
         covariance=covariance,
         covariance_config=covariance_config,
-        paper_track_id=paper_track_id,
+        preselected_radar_by_key=paper_track_by_key,
         range_gate_m=range_gate_m,
         candidate_catprob_threshold=candidate_catprob_threshold,
     )
@@ -724,12 +729,13 @@ def _run_paper_compatible_association(
         candidates = event["candidates"]
         assert isinstance(candidates, pd.DataFrame)
         tracker.predict_to(time_s)
+        preselected_row = paper_track_by_key.get(_radar_event_key(event))
         selected = _select_paper_compatible_candidate(
             candidates,
             tracker=tracker,
             covariance=covariance,
             covariance_config=covariance_config,
-            paper_track_id=paper_track_id,
+            preselected_row=preselected_row,
             current_track_id=current_track_id,
             range_gate_m=range_gate_m,
             candidate_catprob_threshold=candidate_catprob_threshold,
@@ -799,7 +805,7 @@ def _initial_paper_compatible_measurement_and_row(
     *,
     covariance: np.ndarray,
     covariance_config: _RadarGeometryCovarianceConfig | None,
-    paper_track_id: int | None,
+    preselected_radar_by_key: dict[object, pd.Series],
     range_gate_m: float | None,
     candidate_catprob_threshold: float | None,
 ) -> tuple[int, TrackingMeasurement, pd.Series | None] | None:
@@ -812,11 +818,13 @@ def _initial_paper_compatible_measurement_and_row(
             return int(index), measurement, None
         candidates = event["candidates"]
         assert isinstance(candidates, pd.DataFrame)
+        selected_row = preselected_radar_by_key.get(_radar_event_key(event))
+        if selected_row is None:
+            continue
         selected = _select_paper_compatible_bootstrap_candidate(
-            candidates,
             covariance=covariance,
             covariance_config=covariance_config,
-            paper_track_id=paper_track_id,
+            preselected_row=selected_row,
             range_gate_m=range_gate_m,
             candidate_catprob_threshold=candidate_catprob_threshold,
         )
@@ -826,17 +834,15 @@ def _initial_paper_compatible_measurement_and_row(
 
 
 def _select_paper_compatible_bootstrap_candidate(
-    candidates: pd.DataFrame,
     *,
     covariance: np.ndarray,
     covariance_config: _RadarGeometryCovarianceConfig | None,
-    paper_track_id: int | None,
+    preselected_row: pd.Series,
     range_gate_m: float | None,
     candidate_catprob_threshold: float | None,
 ) -> pd.Series | None:
     pool = _paper_compatible_preselector_pool(
-        candidates,
-        paper_track_id=paper_track_id,
+        pd.DataFrame([preselected_row.copy()]),
         range_gate_m=range_gate_m,
         candidate_catprob_threshold=candidate_catprob_threshold,
     )
@@ -856,7 +862,7 @@ def _select_paper_compatible_candidate(
     tracker: AsyncConstantVelocityKalmanTracker,
     covariance: np.ndarray,
     covariance_config: _RadarGeometryCovarianceConfig | None,
-    paper_track_id: int | None,
+    preselected_row: pd.Series | None,
     current_track_id: int | None,
     range_gate_m: float | None,
     candidate_catprob_threshold: float | None,
@@ -864,9 +870,10 @@ def _select_paper_compatible_candidate(
     track_switch_penalty: float,
     catprob_weight: float,
 ) -> pd.Series | None:
+    if preselected_row is None:
+        return None
     pool = _paper_compatible_preselector_pool(
-        candidates,
-        paper_track_id=paper_track_id,
+        pd.DataFrame([preselected_row.copy()]),
         range_gate_m=range_gate_m,
         candidate_catprob_threshold=candidate_catprob_threshold,
     )
@@ -917,34 +924,45 @@ def _select_paper_compatible_candidate(
 def _paper_compatible_preselector_pool(
     candidates: pd.DataFrame,
     *,
-    paper_track_id: int | None,
     range_gate_m: float | None,
     candidate_catprob_threshold: float | None,
 ) -> pd.DataFrame:
-    """Apply range, largest-continuous-track, and hard catProb preselection."""
+    """Apply hard range and catProb preselection."""
 
     raw_count = int(len(candidates))
     pool = _range_candidate_pool(candidates, range_gate_m)
     range_count = int(len(pool))
-    track_count = range_count
-    if paper_track_id is not None and "track_id" in pool.columns:
-        track_ids = pd.to_numeric(pool["track_id"], errors="coerce")
-        pool = pool.loc[track_ids == int(paper_track_id)].copy()
-        track_count = int(len(pool))
     pool = _catprob_candidate_pool(
         pool,
         candidate_catprob_threshold,
         fallback_to_unfiltered=False,
     )
     if not pool.empty:
-        pool["association_preselector_raw_rows"] = raw_count
-        pool["association_preselector_range_gated_rows"] = range_count
-        pool["association_preselector_track_id"] = (
-            np.nan if paper_track_id is None else int(paper_track_id)
+        pool["association_preselector_raw_rows"] = _preselector_count(
+            candidates,
+            "association_preselector_raw_rows",
+            raw_count,
         )
-        pool["association_preselector_track_rows"] = track_count
-        pool["association_preselector_catprob_rows"] = int(len(pool))
+        pool["association_preselector_range_gated_rows"] = _preselector_count(
+            candidates,
+            "association_preselector_range_gated_rows",
+            range_count,
+        )
+        pool["association_preselector_catprob_rows"] = _preselector_count(
+            candidates,
+            "association_preselector_catprob_rows",
+            int(len(pool)),
+        )
     return pool
+
+
+def _preselector_count(candidates: pd.DataFrame, column: str, fallback: int) -> int:
+    if column not in candidates.columns or candidates.empty:
+        return int(fallback)
+    values = pd.to_numeric(candidates[column], errors="coerce").dropna()
+    if values.empty:
+        return int(fallback)
+    return int(values.iloc[0])
 
 
 def _paper_compatible_track_id(radar: pd.DataFrame, *, range_gate_m: float | None) -> int | None:
@@ -1694,6 +1712,39 @@ def _select_largest_continuous_radar_track(
         if column in selected.columns
     ]
     return selected.sort_values(sort_columns).reset_index(drop=True)
+
+
+def _select_paper_compatible_radar_track(
+    radar: pd.DataFrame,
+    *,
+    range_gate_m: float | None,
+    catprob_threshold: float | None,
+) -> pd.DataFrame:
+    """Select paper-compatible anchors after hard range and class filtering."""
+
+    range_pool = _range_candidate_pool(radar, range_gate_m)
+    catprob_pool = _catprob_candidate_pool(
+        range_pool,
+        catprob_threshold,
+        fallback_to_unfiltered=False,
+    )
+    selected = _select_largest_continuous_radar_track(catprob_pool, range_gate_m=None)
+    if selected.empty:
+        return selected
+    selected = selected.copy()
+    selected["association_mode"] = "paper-compatible"
+    selected["association_action"] = "paper_compatible_largest_continuous_track_anchor"
+    selected["association_preselector_raw_rows"] = int(len(radar))
+    selected["association_preselector_range_gated_rows"] = int(len(range_pool))
+    selected["association_preselector_track_id"] = int(selected["association_segment_track_id"].iloc[0])
+    selected["association_preselector_track_rows"] = int(len(selected))
+    selected["association_preselector_catprob_rows"] = int(len(catprob_pool))
+    if range_gate_m is not None:
+        selected["association_range_gate_m"] = float(range_gate_m)
+    if catprob_threshold is not None:
+        selected["association_catprob_threshold"] = float(catprob_threshold)
+    return selected
+
 
 def _interpolate_stable_radar_segments_to_frame_times(
     radar: pd.DataFrame,
@@ -3191,6 +3242,7 @@ def _empty_selected_radar(radar: pd.DataFrame) -> pd.DataFrame:
     selected = radar.iloc[0:0].copy()
     for column in (
         "association_mode",
+        "association_action",
         "association_nis",
         "association_score",
         "association_replay_accepted",
@@ -3207,6 +3259,7 @@ def _empty_selected_radar(radar: pd.DataFrame) -> pd.DataFrame:
         "association_anchor_gate_candidate_count",
         "association_nis_gate_threshold",
         "association_nis_gate_rejected_count",
+        "association_preselector_raw_rows",
         "association_preselector_track_id",
         "association_preselector_track_rows",
         "association_preselector_catprob_rows",

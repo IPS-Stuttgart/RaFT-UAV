@@ -502,21 +502,18 @@ def select_radar_for_table(
             min_segment_frames=stable_segment_min_frames,
             max_transition_speed_mps=stable_segment_max_transition_speed_mps,
         )
+    if selection == "radar-longest-continuous-track-range-gated":
+        return _select_largest_continuous_track_for_table(
+            radar,
+            range_gate_m=range_gate_m,
+        )
 
     groups = radar_frame_groups(radar)
-    longest_track_source = _range_candidate_pool(radar, range_gate_m) if selection == "radar-longest-continuous-track-range-gated" else radar
-    longest_track = (
-        _longest_continuous_track_id(longest_track_source)
-        if selection == "radar-longest-continuous-track-range-gated"
-        else _longest_track_id(longest_track_source)
-        if selection
-        in {
-            "radar-longest-track",
-            "radar-longest-track-range-gated",
-            "radar-longest-continuous-track-range-gated",
-        }
-        else None
-    )
+    longest_track = None
+    if selection == "radar-longest-track":
+        longest_track = _longest_track_id(radar)
+    elif selection == "radar-longest-track-range-gated":
+        longest_track = _longest_track_id(_range_candidate_pool(radar, range_gate_m))
     selected_rows: list[pd.Series] = []
     for group in groups:
         group = _range_candidate_pool(group, range_gate_m)
@@ -530,11 +527,7 @@ def select_radar_for_table(
         )
         if selection == "radar-highest-catprob":
             selected = highest_catprob_candidate(group)
-        elif selection in {
-            "radar-longest-track",
-            "radar-longest-track-range-gated",
-            "radar-longest-continuous-track-range-gated",
-        }:
+        elif selection in {"radar-longest-track", "radar-longest-track-range-gated"}:
             if longest_track is None or "track_id" not in group:
                 selected = None
             else:
@@ -601,11 +594,19 @@ def run_paper_compatible_cv_fusion(
     if not events:
         return [], _selected_rows_frame(radar, [])
 
+    paper_track = _select_largest_continuous_track_for_table(
+        radar,
+        range_gate_m=radar_range_gate_m,
+    )
+    paper_track_by_key = {_radar_row_key(row): row for _, row in paper_track.iterrows()}
+    longest_track_id = _longest_track_id(paper_track)
+
     initial = _initial_paper_measurement(
         events,
         covariance=covariance,
         radar_range_gate_m=radar_range_gate_m,
         radar_catprob_threshold=radar_catprob_threshold,
+        preselected_radar_by_key=paper_track_by_key,
     )
     if initial is None:
         return [], _selected_rows_frame(radar, [])
@@ -618,9 +619,6 @@ def run_paper_compatible_cv_fusion(
     records: list[dict[str, object]] = []
     selected_rows: list[pd.Series] = []
     current_track_id: int | None = None
-    longest_track_id = _longest_continuous_track_id(
-        _range_candidate_pool(radar, radar_range_gate_m)
-    )
     nis_threshold = gate_threshold_from_probability(float(nis_gate_probability), 3)
     rf_gate_threshold = gate_threshold_from_probability(float(rf_nis_gate_probability), 2)
     assert nis_threshold is not None
@@ -638,12 +636,18 @@ def run_paper_compatible_cv_fusion(
         candidates = event["candidates"]
         assert isinstance(candidates, pd.DataFrame)
         tracker.predict_to(time_s)
+        preselected_row = paper_track_by_key.get(_radar_event_key(event))
+        if preselected_row is None:
+            records.append(_coast_record(time_s=time_s, tracker=tracker, source="radar"))
+            continue
+
         selected = select_paper_compatible_candidate(
             candidates,
             tracker=tracker,
             covariance=covariance,
             longest_track_id=longest_track_id,
             current_track_id=current_track_id,
+            preselected_row=preselected_row,
             radar_range_gate_m=radar_range_gate_m,
             radar_catprob_threshold=radar_catprob_threshold,
             nis_gate_threshold=nis_threshold,
@@ -893,13 +897,20 @@ def select_paper_compatible_candidate(
     nis_gate_threshold: float,
     track_switch_cost: float,
     catprob_weight: float,
+    preselected_row: pd.Series | None = None,
 ) -> pd.Series | None:
     """Return the best hard-gated paper-compatible candidate, or ``None`` to coast."""
 
-    pool = _range_candidate_pool(candidates, radar_range_gate_m)
+    if preselected_row is None:
+        pool = _range_candidate_pool(candidates, radar_range_gate_m)
+    else:
+        pool = _range_candidate_pool(
+            pd.DataFrame([preselected_row.copy()]),
+            radar_range_gate_m,
+        )
     if pool.empty:
         return None
-    if longest_track_id is not None and "track_id" in pool.columns:
+    if preselected_row is None and longest_track_id is not None and "track_id" in pool.columns:
         track_ids = pd.to_numeric(pool["track_id"], errors="coerce")
         pool = pool.loc[track_ids == int(longest_track_id)].copy()
         if pool.empty:
@@ -940,6 +951,7 @@ def _initial_paper_measurement(
     covariance: np.ndarray,
     radar_range_gate_m: float | None,
     radar_catprob_threshold: float | None,
+    preselected_radar_by_key: dict[object, pd.Series] | None = None,
 ) -> TrackingMeasurement | None:
     for event in events:
         if event["kind"] == "rf":
@@ -948,10 +960,17 @@ def _initial_paper_measurement(
             return measurement
         candidates = event["candidates"]
         assert isinstance(candidates, pd.DataFrame)
-        pool = _catprob_hard_candidate_pool(
-            _range_candidate_pool(candidates, radar_range_gate_m),
-            radar_catprob_threshold,
-        )
+        if preselected_radar_by_key is None:
+            pool = _range_candidate_pool(candidates, radar_range_gate_m)
+        else:
+            selected = preselected_radar_by_key.get(_radar_event_key(event))
+            if selected is None:
+                continue
+            pool = _range_candidate_pool(
+                pd.DataFrame([selected.copy()]),
+                radar_range_gate_m,
+            )
+        pool = _catprob_hard_candidate_pool(pool, radar_catprob_threshold)
         selected = highest_catprob_candidate(pool)
         if selected is not None:
             return _radar_row_to_measurement(selected, covariance)
@@ -1095,6 +1114,43 @@ def _range_candidate_pool(candidates: pd.DataFrame, range_gate_m: float | None) 
     pool = candidates.loc[np.isfinite(ranges) & (ranges <= float(range_gate_m))].copy()
     pool["association_range_gate_m"] = float(range_gate_m)
     return pool
+
+
+def _select_largest_continuous_track_for_table(
+    radar: pd.DataFrame,
+    *,
+    range_gate_m: float | None,
+) -> pd.DataFrame:
+    """Select only the largest continuous range-gated Fortem track segment."""
+
+    pool = _range_candidate_pool(radar, range_gate_m)
+    if pool.empty or "track_id" not in pool.columns:
+        return radar.iloc[0:0].copy()
+    segments = _stable_track_segments(pool, min_segment_frames=1)
+    if not segments:
+        return radar.iloc[0:0].copy()
+    selected_segment = max(
+        segments,
+        key=lambda item: (
+            item.frames,
+            item.end_time_s - item.start_time_s,
+            item.mean_catprob,
+            -item.start_time_s,
+        ),
+    )
+    selected = selected_segment.frame.copy()
+    selected["association_mode"] = "radar-longest-continuous-track-range-gated"
+    selected["association_action"] = "paper_largest_continuous_track_anchor"
+    selected["association_segment_track_id"] = int(selected_segment.track_id)
+    selected["association_segment_frames"] = int(selected_segment.frames)
+    selected["association_preselector_raw_rows"] = int(len(radar))
+    selected["association_preselector_range_gated_rows"] = int(len(pool))
+    sort_columns = [
+        column
+        for column in ("time_s", "frame_index", "track_id", "track_index")
+        if column in selected.columns
+    ]
+    return selected.sort_values(sort_columns).reset_index(drop=True)
 
 
 def _interpolate_selected_radar_to_frame_times(
