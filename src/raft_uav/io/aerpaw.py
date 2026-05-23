@@ -7,7 +7,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -235,6 +235,8 @@ def read_radar_json(path: Path) -> pd.DataFrame:
 def normalize_truth(
     truth: pd.DataFrame,
     projector: LocalENUProjector | None = None,
+    *,
+    enu_origin_lla: Sequence[float] | None = None,
 ) -> tuple[pd.DataFrame, LocalENUProjector, pd.Timestamp]:
     """Normalize truth telemetry timestamps and append local ENU coordinates.
 
@@ -255,6 +257,18 @@ def normalize_truth(
         raise ValueError("truth telemetry contains no valid timestamped LLA rows")
 
     origin_time = pd.Timestamp(out["timestamp"].iloc[0])
+    if projector is not None and enu_origin_lla is not None:
+        raise ValueError("Pass either projector or enu_origin_lla, not both")
+    if enu_origin_lla is not None:
+        if len(enu_origin_lla) != 3:
+            raise ValueError("enu_origin_lla must contain latitude, longitude, and altitude")
+        if not np.isfinite([float(value) for value in enu_origin_lla]).all():
+            raise ValueError("enu_origin_lla values must be finite")
+        projector = projector_from_lla(
+            float(enu_origin_lla[0]),
+            float(enu_origin_lla[1]),
+            float(enu_origin_lla[2]),
+        )
     if projector is None:
         projector = projector_from_truth(out)
     out["time_s"] = (out["timestamp"] - origin_time).dt.total_seconds()
