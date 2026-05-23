@@ -12,6 +12,7 @@ from raft_uav.diagnostics.paper_strict import (
     build_count_audit,
     require_fortem_range_m,
     paper_strict_range_gated_radar_candidates,
+    paper_strict_radar_track_stages,
     select_paper_strict_radar_track,
     select_paper_strict_raw_radar_track,
 )
@@ -140,6 +141,65 @@ def test_paper_strict_selects_raw_track_before_range_gate() -> None:
     assert len(raw) == 3
     assert gated["track_id"].astype(int).unique().tolist() == [2]
     assert gated["frame_index"].tolist() == [0, 2]
+
+
+def test_paper_strict_can_range_gate_before_largest_track_selection() -> None:
+    radar = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0, 0.0, 1.0, 2.0],
+            "frame_index": [0, 1, 0, 1, 2],
+            "track_id": [1, 1, 2, 2, 2],
+            "east_m": [0.0, 1.0, 0.0, 1.0, 2.0],
+            "north_m": [0.0, 0.0, 1.0, 1.0, 1.0],
+            "up_m": [0.0, 0.0, 0.0, 0.0, 0.0],
+            # Track 2 is the largest raw segment, but the out-of-range middle
+            # frame splits it after range gating.  Range-first selection should
+            # therefore choose track 1's two-frame continuous segment.
+            "range_m": [100.0, 100.0, 100.0, 900.0, 100.0],
+            "cat_prob_uav": [0.9, 0.9, 0.4, 0.4, 0.4],
+        }
+    )
+
+    raw_target, range_gated, selected = paper_strict_radar_track_stages(
+        radar,
+        range_gate_m=800.0,
+        radar_track_selection_order="range-then-largest-track",
+    )
+
+    assert raw_target["track_id"].astype(int).unique().tolist() == [1]
+    assert raw_target["frame_index"].tolist() == [0, 1]
+    assert range_gated["track_id"].astype(int).unique().tolist() == [1]
+    assert selected["track_id"].astype(int).unique().tolist() == [1]
+    assert selected["association_track_selection_order"].unique().tolist() == [
+        "range-then-largest-track"
+    ]
+
+
+def test_paper_strict_can_apply_catprob_before_largest_track_selection() -> None:
+    radar = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0, 2.0, 0.0, 1.0],
+            "frame_index": [0, 1, 2, 0, 1],
+            "track_id": [1, 1, 1, 2, 2],
+            "east_m": [0.0, 1.0, 2.0, 0.0, 1.0],
+            "north_m": [0.0, 0.0, 0.0, 1.0, 1.0],
+            "up_m": [0.0, 0.0, 0.0, 0.0, 0.0],
+            "range_m": [100.0, 100.0, 100.0, 100.0, 100.0],
+            "cat_prob_uav": [0.1, 0.1, 0.1, 0.9, 0.9],
+        }
+    )
+
+    raw_target, range_gated, selected = paper_strict_radar_track_stages(
+        radar,
+        range_gate_m=800.0,
+        catprob_threshold=0.5,
+        radar_track_selection_order="range-catprob-then-largest-track",
+    )
+
+    assert raw_target["track_id"].astype(int).unique().tolist() == [2]
+    assert range_gated["track_id"].astype(int).unique().tolist() == [2]
+    assert selected["track_id"].astype(int).unique().tolist() == [2]
+    assert selected["association_catprob_threshold"].unique().tolist() == [0.5]
 
 
 def test_paper_strict_range_gated_candidates_use_fortem_range() -> None:
