@@ -55,6 +55,12 @@ PAPER_STRICT_RANGE_GATE_M = 800.0
 PAPER_STRICT_LW1_ORIGIN_LLA_ENV = "RAFT_UAV_LW1_ORIGIN_LLA"
 PAPER_STRICT_ORIGINS_FILE_ENV = "RAFT_UAV_ORIGINS_FILE"
 COUNT_MISMATCH_ACTIONS = ("ignore", "warn", "fail")
+PAPER_STRICT_RADAR_TRACK_SELECTION_ORDERS = (
+    "raw-track-then-range",
+    "range-then-largest-track",
+    "range-catprob-then-largest-track",
+)
+PAPER_STRICT_DEFAULT_RADAR_TRACK_SELECTION_ORDER = "raw-track-then-range"
 PAPER_REFERENCE_COUNTS = {
     "RF raw": 206,
     "RF after NIS": 125,
@@ -83,6 +89,7 @@ class PaperStrictConfig:
     truth_time_gate_s: float = 2.0
     acceleration_std_mps2: float = 4.0
     radar_catprob_threshold: float | None = None
+    radar_track_selection_order: str = PAPER_STRICT_DEFAULT_RADAR_TRACK_SELECTION_ORDER
     empirical_covariance: bool = True
     require_radar_range_m: bool = True
     bootstrap_source: str = "radar"
@@ -181,6 +188,15 @@ def main(argv: list[str] | None = None) -> int:
         help="optional hard UAV catProb cut; omitted by default because the reference text does not require it",
     )
     parser.add_argument(
+        "--radar-track-selection-order",
+        choices=PAPER_STRICT_RADAR_TRACK_SELECTION_ORDERS,
+        default=PAPER_STRICT_DEFAULT_RADAR_TRACK_SELECTION_ORDER,
+        help=(
+            "resolve the paper's largest-continuous-track/range-gate ordering ambiguity; "
+            "the default preserves the historical raw-track-then-range implementation"
+        ),
+    )
+    parser.add_argument(
         "--no-empirical-covariance",
         action="store_true",
         help="use diagonal fallback RF/radar covariance instead of truth residual covariance",
@@ -236,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         truth_time_gate_s=args.truth_time_gate_s,
         acceleration_std_mps2=args.acceleration_std,
         radar_catprob_threshold=args.radar_catprob_threshold,
+        radar_track_selection_order=args.radar_track_selection_order,
         empirical_covariance=not args.no_empirical_covariance,
         require_radar_range_m=not args.allow_missing_radar_range,
         bootstrap_source=args.bootstrap_source,
@@ -485,19 +502,12 @@ def run_paper_strict_fusion(
     radar = inputs.radar
     if config.require_radar_range_m:
         require_fortem_range_m(radar)
-    raw_target_radar = select_paper_strict_raw_radar_track(radar)
-    range_gated_radar = paper_strict_range_gated_radar_candidates(
-        raw_target_radar,
+    raw_target_radar, range_gated_radar, preselected_radar = paper_strict_radar_track_stages(
+        radar,
         range_gate_m=config.range_gate_m,
         catprob_threshold=config.radar_catprob_threshold,
         require_range_m=config.require_radar_range_m,
-    )
-    preselected_radar = _annotate_strict_update_radar(
-        range_gated_radar,
-        raw_radar=radar,
-        raw_target_radar=raw_target_radar,
-        range_gate_m=config.range_gate_m,
-        catprob_threshold=config.radar_catprob_threshold,
+        radar_track_selection_order=config.radar_track_selection_order,
     )
     rf_covariance, radar_covariance = measurement_covariances(
         inputs=inputs,
@@ -766,6 +776,7 @@ def build_paper_strict_table(
     table["paper_strict_catprob_threshold"] = (
         np.nan if config.radar_catprob_threshold is None else float(config.radar_catprob_threshold)
     )
+    table["paper_strict_radar_track_selection_order"] = config.radar_track_selection_order
     table["paper_strict_empirical_covariance"] = bool(config.empirical_covariance)
     table["paper_strict_bootstrap_source"] = config.bootstrap_source
     table["paper_strict_rf_nis_gate_probability"] = (
@@ -966,12 +977,14 @@ def select_paper_strict_raw_radar_track(radar: pd.DataFrame) -> pd.DataFrame:
     selected = _largest_continuous_track_segment(radar)
     if selected.empty:
         return selected
-    selected = selected.copy()
-    selected["association_mode"] = "paper-strict-raw-largest-continuous-track"
-    selected["association_action"] = "raw_largest_continuous_track_anchor"
-    selected["association_preselector_raw_rows"] = int(len(radar))
-    selected["association_raw_target_track_rows"] = int(len(selected))
-    return _sort_radar_rows(selected).reset_index(drop=True)
+    return _annotate_strict_raw_target_track(
+        selected,
+        raw_radar=radar,
+        candidate_rows=len(radar),
+        radar_track_selection_order=PAPER_STRICT_DEFAULT_RADAR_TRACK_SELECTION_ORDER,
+        association_mode="paper-strict-raw-largest-continuous-track",
+        association_action="raw_largest_continuous_track_anchor",
+    )
 
 
 def select_paper_strict_radar_track(
@@ -980,25 +993,130 @@ def select_paper_strict_radar_track(
     range_gate_m: float = PAPER_STRICT_RANGE_GATE_M,
     catprob_threshold: float | None = None,
     require_range_m: bool = True,
+    radar_track_selection_order: str = PAPER_STRICT_DEFAULT_RADAR_TRACK_SELECTION_ORDER,
 ) -> pd.DataFrame:
     """Select strict radar update rows after raw-track, range, and catProb gates."""
 
+    _, _, preselected = paper_strict_radar_track_stages(
+        radar,
+        range_gate_m=range_gate_m,
+        catprob_threshold=catprob_threshold,
+        require_range_m=require_range_m,
+        radar_track_selection_order=radar_track_selection_order,
+    )
+    return preselected
+
+
+def paper_strict_radar_track_stages(
+    radar: pd.DataFrame,
+    *,
+    range_gate_m: float = PAPER_STRICT_RANGE_GATE_M,
+    catprob_threshold: float | None = None,
+    require_range_m: bool = True,
+    radar_track_selection_order: str = PAPER_STRICT_DEFAULT_RADAR_TRACK_SELECTION_ORDER,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Return raw-target, range-gated, and update-ready radar stages.
+
+    The reference paper describes both an 800 m Fortem range gate and retaining
+    the largest continuous radar track, but leaves the ordering ambiguous. This
+    helper makes the ordering explicit and records it in selected-row metadata.
+    """
+
+    _validate_radar_track_selection_order(radar_track_selection_order)
     if require_range_m:
         require_fortem_range_m(radar)
-    raw_target = select_paper_strict_raw_radar_track(radar)
-    range_gated = paper_strict_range_gated_radar_candidates(
-        raw_target,
+
+    if radar_track_selection_order == "raw-track-then-range":
+        raw_target = select_paper_strict_raw_radar_track(radar)
+        range_gated = paper_strict_range_gated_radar_candidates(
+            raw_target,
+            range_gate_m=range_gate_m,
+            catprob_threshold=catprob_threshold,
+            require_range_m=require_range_m,
+        )
+        preselected = _annotate_strict_update_radar(
+            range_gated,
+            raw_radar=radar,
+            raw_target_radar=raw_target,
+            range_gate_m=range_gate_m,
+            catprob_threshold=catprob_threshold,
+            radar_track_selection_order=radar_track_selection_order,
+            association_action="range_gated_raw_track_anchor",
+        )
+        return raw_target, range_gated, preselected
+
+    if radar_track_selection_order == "range-then-largest-track":
+        range_pool = paper_strict_range_gated_radar_candidates(
+            radar,
+            range_gate_m=range_gate_m,
+            catprob_threshold=None,
+            require_range_m=require_range_m,
+        )
+        raw_target = _annotate_strict_raw_target_track(
+            _largest_continuous_track_segment(range_pool),
+            raw_radar=radar,
+            candidate_rows=len(range_pool),
+            radar_track_selection_order=radar_track_selection_order,
+            association_mode="paper-strict-range-then-largest-track",
+            association_action="range_then_largest_track_anchor",
+        )
+        range_gated = _catprob_candidate_pool(raw_target, catprob_threshold)
+        preselected = _annotate_strict_update_radar(
+            range_gated,
+            raw_radar=radar,
+            raw_target_radar=raw_target,
+            range_gate_m=range_gate_m,
+            catprob_threshold=catprob_threshold,
+            radar_track_selection_order=radar_track_selection_order,
+            association_action="range_then_largest_track_anchor",
+        )
+        return raw_target, range_gated, preselected
+
+    range_catprob_pool = paper_strict_range_gated_radar_candidates(
+        radar,
         range_gate_m=range_gate_m,
         catprob_threshold=catprob_threshold,
         require_range_m=require_range_m,
     )
-    return _annotate_strict_update_radar(
-        range_gated,
+    raw_target = _annotate_strict_raw_target_track(
+        _largest_continuous_track_segment(range_catprob_pool),
+        raw_radar=radar,
+        candidate_rows=len(range_catprob_pool),
+        radar_track_selection_order=radar_track_selection_order,
+        association_mode="paper-strict-range-catprob-then-largest-track",
+        association_action="range_catprob_then_largest_track_anchor",
+    )
+    preselected = _annotate_strict_update_radar(
+        raw_target,
         raw_radar=radar,
         raw_target_radar=raw_target,
         range_gate_m=range_gate_m,
         catprob_threshold=catprob_threshold,
+        radar_track_selection_order=radar_track_selection_order,
+        association_action="range_catprob_then_largest_track_anchor",
     )
+    return raw_target, raw_target.copy(), preselected
+
+
+def _annotate_strict_raw_target_track(
+    selected: pd.DataFrame,
+    *,
+    raw_radar: pd.DataFrame,
+    candidate_rows: int,
+    radar_track_selection_order: str,
+    association_mode: str,
+    association_action: str,
+) -> pd.DataFrame:
+    if selected.empty:
+        return selected.copy()
+    out = selected.copy()
+    out["association_mode"] = association_mode
+    out["association_action"] = association_action
+    out["association_track_selection_order"] = radar_track_selection_order
+    out["association_preselector_raw_rows"] = int(len(raw_radar))
+    out["association_preselector_candidate_rows"] = int(candidate_rows)
+    out["association_raw_target_track_rows"] = int(len(out))
+    return _sort_radar_rows(out).reset_index(drop=True)
 
 
 def _largest_continuous_track_segment(radar: pd.DataFrame) -> pd.DataFrame:
@@ -1027,12 +1145,15 @@ def _annotate_strict_update_radar(
     raw_target_radar: pd.DataFrame,
     range_gate_m: float,
     catprob_threshold: float | None,
+    radar_track_selection_order: str = PAPER_STRICT_DEFAULT_RADAR_TRACK_SELECTION_ORDER,
+    association_action: str = "range_gated_raw_track_anchor",
 ) -> pd.DataFrame:
     if selected.empty:
         return selected.copy()
     out = selected.copy()
     out["association_mode"] = "paper-strict-largest-continuous-track"
-    out["association_action"] = "range_gated_raw_track_anchor"
+    out["association_action"] = association_action
+    out["association_track_selection_order"] = radar_track_selection_order
     out["association_range_gate_m"] = float(range_gate_m)
     out["association_preselector_raw_rows"] = int(len(raw_radar))
     out["association_raw_target_track_rows"] = int(len(raw_target_radar))
@@ -1667,12 +1788,21 @@ def _validate_config(config: PaperStrictConfig) -> None:
             raise ValueError("rf_nis_gate_probability must be in (0, 1) or None")
     if config.truth_time_gate_s <= 0.0:
         raise ValueError("truth_time_gate_s must be positive")
+    _validate_radar_track_selection_order(config.radar_track_selection_order)
     if config.acceleration_std_mps2 <= 0.0:
         raise ValueError("acceleration_std_mps2 must be positive")
     if config.radar_catprob_threshold is not None and not 0.0 <= config.radar_catprob_threshold <= 1.0:
         raise ValueError("radar_catprob_threshold must be in [0, 1] or None")
     if config.bootstrap_source not in {"radar", "first-event"}:
         raise ValueError("bootstrap_source must be 'radar' or 'first-event'")
+
+
+def _validate_radar_track_selection_order(value: str) -> None:
+    if value not in PAPER_STRICT_RADAR_TRACK_SELECTION_ORDERS:
+        raise ValueError(
+            "radar_track_selection_order must be one of "
+            f"{PAPER_STRICT_RADAR_TRACK_SELECTION_ORDERS}"
+        )
 
 
 def _jsonable_config(config: PaperStrictConfig) -> dict[str, Any]:
@@ -1683,6 +1813,7 @@ def _jsonable_config(config: PaperStrictConfig) -> dict[str, Any]:
         "truth_time_gate_s": float(config.truth_time_gate_s),
         "acceleration_std_mps2": float(config.acceleration_std_mps2),
         "radar_catprob_threshold": config.radar_catprob_threshold,
+        "radar_track_selection_order": config.radar_track_selection_order,
         "empirical_covariance": bool(config.empirical_covariance),
         "require_radar_range_m": bool(config.require_radar_range_m),
         "bootstrap_source": config.bootstrap_source,
