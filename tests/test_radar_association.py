@@ -206,10 +206,9 @@ def test_paper_compatible_association_coasts_when_range_gate_fails():
     assert "paper-compatible" in RADAR_ASSOCIATION_MODES
     assert [record["source"] for record in records] == ["rf", "radar"]
     assert records[-1]["association_mode"] == "paper-compatible"
-    assert records[0]["source"] == "radar"
-    assert records[0]["update_action"] == "initialized"
-    assert selected["track_id"].tolist() == [1]
-    assert selected["association_action"].tolist() == ["paper_compatible_bootstrap"]
+    assert records[-1]["source"] == "radar"
+    assert records[-1]["update_action"] == "missed_detection"
+    assert selected.empty
 
 
 def test_paper_compatible_association_explicit_catprob_gate_has_no_fallback():
@@ -262,11 +261,13 @@ def test_paper_compatible_association_default_ignores_generic_catprob_threshold(
         radar=radar,
         association="paper-compatible",
         candidate_catprob_threshold=0.4,
+        paper_compatible_bootstrap_source="first-event",
         stable_segment_range_gate_m=800.0,
     )
 
-    assert records[-1]["update_action"] == "missed_detection"
-    assert selected.empty
+    assert records[-1]["update_action"] == "updated"
+    assert selected["track_id"].tolist() == [1]
+    assert selected["association_action"].tolist() == ["hard_gated_update"]
 
 
 def test_paper_compatible_association_updates_candidate_passing_hard_gates():
@@ -290,6 +291,7 @@ def test_paper_compatible_association_updates_candidate_passing_hard_gates():
         radar=radar,
         association="paper-compatible",
         candidate_catprob_threshold=0.4,
+        paper_compatible_bootstrap_source="first-event",
         stable_segment_range_gate_m=800.0,
     )
 
