@@ -15,6 +15,7 @@ VALIDATE_ALL_CODEBASE: true
 PRINT_ALPACA: false
 SHOW_ELAPSED_TIME: true
 FLAVOR_SUGGESTIONS: false
+GITHUB_COMMENT_REPORTER: false
 PYTHON_RUFF_CONFIG_FILE: pyproject.toml
 
 # actionlint's YAML/workflow checks remain enabled. The embedded shellcheck pass
