@@ -24,7 +24,10 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from raft_uav.evaluation.metrics import position_errors_m  # noqa: E402
+from raft_uav.evaluation.metrics import (  # noqa: E402
+    position_errors_at_times_m,
+    position_errors_m,
+)
 from raft_uav.evaluation.radar_oracle_diagnostics import (  # noqa: E402
     best_time_offset,
     nearest_candidate_oracle,
@@ -55,7 +58,7 @@ DEFAULT_METHODS = [
     "tracklet-viterbi",
 ]
 ORACLE_METHODS = ["oracle-nearest-candidate-offset0", "oracle-nearest-candidate-best-offset"]
-PAPER_PRIMARY_METRIC = "mean_3d_error_m"
+PAPER_PRIMARY_METRIC = "paper_sample_mean_3d_error_m"
 REPORT_COLUMNS = [
     "flight",
     "method",
@@ -64,6 +67,32 @@ REPORT_COLUMNS = [
     "matched_count",
     "eval_sample_count",
     "coverage",
+    "paper_sample_matched_count",
+    "paper_sample_eval_sample_count",
+    "paper_sample_coverage",
+    "paper_sample_mean_3d_error_m",
+    "paper_sample_std_3d_error_m",
+    "paper_sample_max_3d_error_m",
+    "paper_sample_p95_3d_error_m",
+    "paper_sample_rmse_3d_error_m",
+    "paper_sample_mean_2d_error_m",
+    "paper_sample_std_2d_error_m",
+    "paper_sample_max_2d_error_m",
+    "paper_sample_p95_2d_error_m",
+    "paper_sample_rmse_2d_error_m",
+    "truth_grid_matched_count",
+    "truth_grid_eval_sample_count",
+    "truth_grid_coverage",
+    "truth_grid_mean_3d_error_m",
+    "truth_grid_std_3d_error_m",
+    "truth_grid_max_3d_error_m",
+    "truth_grid_p95_3d_error_m",
+    "truth_grid_rmse_3d_error_m",
+    "truth_grid_mean_2d_error_m",
+    "truth_grid_std_2d_error_m",
+    "truth_grid_max_2d_error_m",
+    "truth_grid_p95_2d_error_m",
+    "truth_grid_rmse_2d_error_m",
     "mean_3d_error_m",
     "std_3d_error_m",
     "max_3d_error_m",
@@ -102,6 +131,32 @@ PAPER_LEADERBOARD_COLUMNS = [
     "matched_count",
     "eval_sample_count",
     "coverage",
+    "paper_sample_matched_count",
+    "paper_sample_eval_sample_count",
+    "paper_sample_coverage",
+    "paper_sample_mean_3d_error_m",
+    "paper_sample_std_3d_error_m",
+    "paper_sample_max_3d_error_m",
+    "paper_sample_p95_3d_error_m",
+    "paper_sample_rmse_3d_error_m",
+    "paper_sample_mean_2d_error_m",
+    "paper_sample_std_2d_error_m",
+    "paper_sample_max_2d_error_m",
+    "paper_sample_p95_2d_error_m",
+    "paper_sample_rmse_2d_error_m",
+    "truth_grid_matched_count",
+    "truth_grid_eval_sample_count",
+    "truth_grid_coverage",
+    "truth_grid_mean_3d_error_m",
+    "truth_grid_std_3d_error_m",
+    "truth_grid_max_3d_error_m",
+    "truth_grid_p95_3d_error_m",
+    "truth_grid_rmse_3d_error_m",
+    "truth_grid_mean_2d_error_m",
+    "truth_grid_std_2d_error_m",
+    "truth_grid_max_2d_error_m",
+    "truth_grid_p95_2d_error_m",
+    "truth_grid_rmse_2d_error_m",
     "mean_3d_error_m",
     "std_3d_error_m",
     "max_3d_error_m",
@@ -132,6 +187,19 @@ PAPER_LEADERBOARD_COLUMNS = [
     "oracle_sweep_path",
 ]
 ROW_TYPE_SORT = {"tracking": 0, "oracle": 1}
+ERROR_VALUE_KEYS = [
+    "coverage",
+    "mean_3d_error_m",
+    "std_3d_error_m",
+    "rmse_3d_error_m",
+    "p95_3d_error_m",
+    "max_3d_error_m",
+    "mean_2d_error_m",
+    "std_2d_error_m",
+    "rmse_2d_error_m",
+    "p95_2d_error_m",
+    "max_2d_error_m",
+]
 
 
 def main() -> int:
@@ -344,6 +412,32 @@ def base_row(*, method: str, flight: str, row_type: str) -> dict[str, object]:
         "matched_count": "",
         "eval_sample_count": "",
         "coverage": "",
+        "paper_sample_matched_count": "",
+        "paper_sample_eval_sample_count": "",
+        "paper_sample_coverage": "",
+        "paper_sample_mean_3d_error_m": "",
+        "paper_sample_std_3d_error_m": "",
+        "paper_sample_rmse_3d_error_m": "",
+        "paper_sample_p95_3d_error_m": "",
+        "paper_sample_max_3d_error_m": "",
+        "paper_sample_mean_2d_error_m": "",
+        "paper_sample_std_2d_error_m": "",
+        "paper_sample_rmse_2d_error_m": "",
+        "paper_sample_p95_2d_error_m": "",
+        "paper_sample_max_2d_error_m": "",
+        "truth_grid_matched_count": "",
+        "truth_grid_eval_sample_count": "",
+        "truth_grid_coverage": "",
+        "truth_grid_mean_3d_error_m": "",
+        "truth_grid_std_3d_error_m": "",
+        "truth_grid_rmse_3d_error_m": "",
+        "truth_grid_p95_3d_error_m": "",
+        "truth_grid_max_3d_error_m": "",
+        "truth_grid_mean_2d_error_m": "",
+        "truth_grid_std_2d_error_m": "",
+        "truth_grid_rmse_2d_error_m": "",
+        "truth_grid_p95_2d_error_m": "",
+        "truth_grid_max_2d_error_m": "",
         "mean_3d_error_m": "",
         "std_3d_error_m": "",
         "rmse_3d_error_m": "",
@@ -433,6 +527,22 @@ def error_summary_from_estimates(
     positions = estimates[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
     truth_times = truth["time_s"].to_numpy(dtype=float)
     truth_positions = truth[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    paper_sample_errors_3d = position_errors_at_times_m(
+        times,
+        positions,
+        truth_times,
+        truth_positions,
+        max_time_delta_s=max_time_delta_s,
+        dimensions=3,
+    )
+    paper_sample_errors_2d = position_errors_at_times_m(
+        times,
+        positions,
+        truth_times,
+        truth_positions,
+        max_time_delta_s=max_time_delta_s,
+        dimensions=2,
+    )
     errors_3d = position_errors_m(
         times,
         positions,
@@ -449,37 +559,53 @@ def error_summary_from_estimates(
         max_time_delta_s=max_time_delta_s,
         dimensions=2,
     )
-    summary = {
+    paper_sample_summary = {
+        "matched_count": int(paper_sample_errors_3d.size),
+        "eval_sample_count": int(len(estimates)),
+        "coverage": safe_divide(float(paper_sample_errors_3d.size), float(len(estimates))),
+        **stats(paper_sample_errors_3d, "3d"),
+        **stats(paper_sample_errors_2d, "2d"),
+    }
+    truth_grid_summary = {
         "matched_count": int(errors_3d.size),
         "eval_sample_count": int(len(estimates)),
         "coverage": safe_divide(float(errors_3d.size), float(len(estimates))),
         **stats(errors_3d, "3d"),
         **stats(errors_2d, "2d"),
     }
-    return paper_error_columns(summary)
+    out = paper_error_columns(paper_sample_summary)
+    out.update(prefixed_error_columns(truth_grid_summary, prefix="truth_grid"))
+    return out
 
 
 def paper_error_columns(summary: dict[str, Any]) -> dict[str, object]:
+    """Return legacy paper-style columns plus explicit sample-time aliases."""
+
+    out = classic_error_columns(summary)
+    out.update(prefixed_error_columns(summary, prefix="paper_sample"))
+    return out
+
+
+def classic_error_columns(summary: dict[str, Any]) -> dict[str, object]:
+    """Return the historical unprefixed report columns.
+
+    These aliases now represent paper-sample metrics for tracking/oracle rows.
+    Truth-grid metrics are emitted separately with the ``truth_grid_`` prefix.
+    """
+
     matched_count = summary.get("matched_count", summary.get("count"))
-    keys = [
-        "coverage",
-        "mean_3d_error_m",
-        "std_3d_error_m",
-        "rmse_3d_error_m",
-        "p95_3d_error_m",
-        "max_3d_error_m",
-        "mean_2d_error_m",
-        "std_2d_error_m",
-        "rmse_2d_error_m",
-        "p95_2d_error_m",
-        "max_2d_error_m",
-    ]
     out: dict[str, object] = {
         "matched_count": integer(matched_count),
         "eval_sample_count": integer(summary.get("eval_sample_count")),
     }
-    out.update({key: rounded(summary.get(key)) for key in keys})
+    out.update({key: rounded(summary.get(key)) for key in ERROR_VALUE_KEYS})
     return out
+
+
+def prefixed_error_columns(summary: dict[str, Any], *, prefix: str) -> dict[str, object]:
+    """Return paper-error columns with an explicit metric-family prefix."""
+
+    return {f"{prefix}_{key}": value for key, value in classic_error_columns(summary).items()}
 
 
 def stats(errors: np.ndarray, suffix: str) -> dict[str, float]:
@@ -527,7 +653,7 @@ def build_leaderboard_rows(rows: list[dict[str, object]]) -> list[dict[str, obje
             ),
         )
         for entry in ordered:
-            metric_value = finite_float(entry.get(PAPER_PRIMARY_METRIC))
+            metric_value = primary_metric_value(entry)
             entry["rank"] = rank if metric_value is not None else ""
             if metric_value is not None:
                 rank += 1
@@ -549,7 +675,18 @@ def sort_report_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
 
 def metric_sort_value(row: dict[str, object], metric: str) -> float:
     value = finite_float(row.get(metric))
+    if value is None and metric == PAPER_PRIMARY_METRIC:
+        value = finite_float(row.get("mean_3d_error_m"))
     return value if value is not None else float("inf")
+
+
+def primary_metric_value(row: dict[str, object]) -> float | None:
+    """Return the explicit primary metric, falling back for older LOFO summaries."""
+
+    value = finite_float(row.get(PAPER_PRIMARY_METRIC))
+    if value is None:
+        value = finite_float(row.get("mean_3d_error_m"))
+    return value
 
 
 def finite_float(value: object) -> float | None:

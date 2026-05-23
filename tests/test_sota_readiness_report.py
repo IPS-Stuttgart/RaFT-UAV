@@ -90,4 +90,4 @@ def test_leaderboard_ranks_by_mean_3d_error_with_rmse_secondary_only():
     assert [row["rank"] for row in opt1_tracking] == [1, 2]
     assert opt1_oracle[0]["rank"] == 1
     assert opt2_tracking[0]["rank"] == ""
-    assert all(row["paper_primary_metric"] == "mean_3d_error_m" for row in leaderboard)
+    assert all(row["paper_primary_metric"] == report.PAPER_PRIMARY_METRIC for row in leaderboard)
