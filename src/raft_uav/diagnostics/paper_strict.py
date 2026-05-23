@@ -50,18 +50,23 @@ from raft_uav.io.aerpaw import (
     read_truth,
     select_flight,
 )
+from raft_uav.paper_selection import (
+    DEFAULT_PAPER_RADAR_TRACK_SELECTION_ORDER,
+    PAPER_RADAR_TRACK_SELECTION_ORDERS,
+    paper_radar_track_stages as _shared_paper_radar_track_stages,
+    range_gated_radar_candidates as _shared_range_gated_radar_candidates,
+    require_fortem_range_m as _shared_require_fortem_range_m,
+    select_paper_strict_raw_radar_track as _shared_select_paper_strict_raw_radar_track,
+    select_paper_update_radar_track as _shared_select_paper_update_radar_track,
+)
 
 PAPER_STRICT_NIS_GATE_PROBABILITY = 0.95
 PAPER_STRICT_RANGE_GATE_M = 800.0
 PAPER_STRICT_LW1_ORIGIN_LLA_ENV = "RAFT_UAV_LW1_ORIGIN_LLA"
 PAPER_STRICT_ORIGINS_FILE_ENV = "RAFT_UAV_ORIGINS_FILE"
 COUNT_MISMATCH_ACTIONS = ("ignore", "warn", "fail")
-PAPER_STRICT_RADAR_TRACK_SELECTION_ORDERS = (
-    "raw-track-then-range",
-    "range-then-largest-track",
-    "range-catprob-then-largest-track",
-)
-PAPER_STRICT_DEFAULT_RADAR_TRACK_SELECTION_ORDER = "raw-track-then-range"
+PAPER_STRICT_RADAR_TRACK_SELECTION_ORDERS = PAPER_RADAR_TRACK_SELECTION_ORDERS
+PAPER_STRICT_DEFAULT_RADAR_TRACK_SELECTION_ORDER = DEFAULT_PAPER_RADAR_TRACK_SELECTION_ORDER
 PAPER_REFERENCE_COUNTS = {
     "RF raw": 206,
     "RF after NIS": 125,
@@ -981,11 +986,12 @@ def paper_strict_range_gated_radar_candidates(
 ) -> pd.DataFrame:
     """Return strict radar rows after the Fortem range gate and optional catProb gate."""
 
-    if require_range_m:
-        require_fortem_range_m(radar)
-    pool = _range_candidate_pool(radar, range_gate_m=range_gate_m, require_range_m=require_range_m)
-    pool = _catprob_candidate_pool(pool, catprob_threshold)
-    return _sort_radar_rows(pool).reset_index(drop=True)
+    return _shared_range_gated_radar_candidates(
+        radar,
+        range_gate_m=range_gate_m,
+        catprob_threshold=catprob_threshold,
+        require_range_m=require_range_m,
+    )
 
 
 def select_paper_strict_raw_radar_track(radar: pd.DataFrame) -> pd.DataFrame:
@@ -996,17 +1002,7 @@ def select_paper_strict_raw_radar_track(radar: pd.DataFrame) -> pd.DataFrame:
     target track is chosen so their count deltas remain auditable.
     """
 
-    selected = _largest_continuous_track_segment(radar)
-    if selected.empty:
-        return selected
-    return _annotate_strict_raw_target_track(
-        selected,
-        raw_radar=radar,
-        candidate_rows=len(radar),
-        radar_track_selection_order=PAPER_STRICT_DEFAULT_RADAR_TRACK_SELECTION_ORDER,
-        association_mode="paper-strict-raw-largest-continuous-track",
-        association_action="raw_largest_continuous_track_anchor",
-    )
+    return _shared_select_paper_strict_raw_radar_track(radar)
 
 
 def select_paper_strict_radar_track(
@@ -1019,14 +1015,13 @@ def select_paper_strict_radar_track(
 ) -> pd.DataFrame:
     """Select strict radar update rows after raw-track, range, and catProb gates."""
 
-    _, _, preselected = paper_strict_radar_track_stages(
+    return _shared_select_paper_update_radar_track(
         radar,
         range_gate_m=range_gate_m,
         catprob_threshold=catprob_threshold,
         require_range_m=require_range_m,
         radar_track_selection_order=radar_track_selection_order,
     )
-    return preselected
 
 
 def paper_strict_radar_track_stages(
@@ -1044,80 +1039,14 @@ def paper_strict_radar_track_stages(
     helper makes the ordering explicit and records it in selected-row metadata.
     """
 
-    _validate_radar_track_selection_order(radar_track_selection_order)
-    if require_range_m:
-        require_fortem_range_m(radar)
-
-    if radar_track_selection_order == "raw-track-then-range":
-        raw_target = select_paper_strict_raw_radar_track(radar)
-        range_gated = paper_strict_range_gated_radar_candidates(
-            raw_target,
-            range_gate_m=range_gate_m,
-            catprob_threshold=catprob_threshold,
-            require_range_m=require_range_m,
-        )
-        preselected = _annotate_strict_update_radar(
-            range_gated,
-            raw_radar=radar,
-            raw_target_radar=raw_target,
-            range_gate_m=range_gate_m,
-            catprob_threshold=catprob_threshold,
-            radar_track_selection_order=radar_track_selection_order,
-            association_action="range_gated_raw_track_anchor",
-        )
-        return raw_target, range_gated, preselected
-
-    if radar_track_selection_order == "range-then-largest-track":
-        range_pool = paper_strict_range_gated_radar_candidates(
-            radar,
-            range_gate_m=range_gate_m,
-            catprob_threshold=None,
-            require_range_m=require_range_m,
-        )
-        raw_target = _annotate_strict_raw_target_track(
-            _largest_continuous_track_segment(range_pool),
-            raw_radar=radar,
-            candidate_rows=len(range_pool),
-            radar_track_selection_order=radar_track_selection_order,
-            association_mode="paper-strict-range-then-largest-track",
-            association_action="range_then_largest_track_anchor",
-        )
-        range_gated = _catprob_candidate_pool(raw_target, catprob_threshold)
-        preselected = _annotate_strict_update_radar(
-            range_gated,
-            raw_radar=radar,
-            raw_target_radar=raw_target,
-            range_gate_m=range_gate_m,
-            catprob_threshold=catprob_threshold,
-            radar_track_selection_order=radar_track_selection_order,
-            association_action="range_then_largest_track_anchor",
-        )
-        return raw_target, range_gated, preselected
-
-    range_catprob_pool = paper_strict_range_gated_radar_candidates(
+    stages = _shared_paper_radar_track_stages(
         radar,
         range_gate_m=range_gate_m,
         catprob_threshold=catprob_threshold,
         require_range_m=require_range_m,
-    )
-    raw_target = _annotate_strict_raw_target_track(
-        _largest_continuous_track_segment(range_catprob_pool),
-        raw_radar=radar,
-        candidate_rows=len(range_catprob_pool),
         radar_track_selection_order=radar_track_selection_order,
-        association_mode="paper-strict-range-catprob-then-largest-track",
-        association_action="range_catprob_then_largest_track_anchor",
     )
-    preselected = _annotate_strict_update_radar(
-        raw_target,
-        raw_radar=radar,
-        raw_target_radar=raw_target,
-        range_gate_m=range_gate_m,
-        catprob_threshold=catprob_threshold,
-        radar_track_selection_order=radar_track_selection_order,
-        association_action="range_catprob_then_largest_track_anchor",
-    )
-    return raw_target, raw_target.copy(), preselected
+    return stages.raw_target, stages.range_gated, stages.preselected
 
 
 def _annotate_strict_raw_target_track(
@@ -1220,20 +1149,7 @@ def paper_strict_stage_counts(
 def require_fortem_range_m(radar: pd.DataFrame) -> None:
     """Fail if strict range gating would have to fall back to ENU distance."""
 
-    if radar.empty:
-        return
-    if "range_m" not in radar.columns:
-        raise ValueError(
-            "paper-strict range gating requires Fortem range_m; pass "
-            "--allow-missing-radar-range only for non-parity diagnostics"
-        )
-    ranges = pd.to_numeric(radar["range_m"], errors="coerce").to_numpy(dtype=float)
-    finite_fraction = float(np.mean(np.isfinite(ranges))) if ranges.size else 0.0
-    if finite_fraction < 0.99:
-        raise ValueError(
-            f"paper-strict range gating requires finite range_m for >=99% of rows; "
-            f"observed {finite_fraction:.3f}"
-        )
+    _shared_require_fortem_range_m(radar, minimum_finite_fraction=0.99)
 
 
 def radar_range_audit(radar: pd.DataFrame) -> dict[str, Any]:

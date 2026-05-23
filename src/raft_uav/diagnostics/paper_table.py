@@ -470,6 +470,11 @@ def run_paper_strict_cv_fusion_for_table(
         projector=LocalENUProjector(0.0, 0.0, 0.0),
         truth_origin_time=pd.Timestamp("1970-01-01"),
         enu_origin_mode="paper-table-normalized",
+        file_manifest={"flight": "paper-table-normalized"},
+        raw_rf_rows=int(len(rf_frame)),
+        raw_radar_rows=int(len(radar)),
+        rf_clock_offset_s=0.0,
+        radar_clock_offset_s=0.0,
     )
     config = PaperStrictConfig(
         range_gate_m=800.0 if radar_range_gate_m is None else float(radar_range_gate_m),
