@@ -13,6 +13,7 @@ from raft_uav.diagnostics.paper_strict import (
     require_fortem_range_m,
     paper_strict_range_gated_radar_candidates,
     select_paper_strict_radar_track,
+    select_paper_strict_raw_radar_track,
 )
 from raft_uav.evaluation.metrics import (
     empirical_position_covariance_at_times,
@@ -116,6 +117,29 @@ def test_select_paper_strict_radar_track_largest_continuous_segment() -> None:
 
     assert selected["track_id"].astype(int).unique().tolist() == [2]
     assert len(selected) == 3
+
+
+def test_paper_strict_selects_raw_track_before_range_gate() -> None:
+    radar = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0, 0.0, 1.0, 2.0],
+            "frame_index": [0, 1, 0, 1, 2],
+            "track_id": [1, 1, 2, 2, 2],
+            "east_m": [0.0, 1.0, 0.0, 1.0, 2.0],
+            "north_m": [0.0, 0.0, 1.0, 1.0, 1.0],
+            "up_m": [0.0, 0.0, 0.0, 0.0, 0.0],
+            "range_m": [100.0, 100.0, 100.0, 900.0, 100.0],
+            "cat_prob_uav": [0.9, 0.9, 0.4, 0.4, 0.4],
+        }
+    )
+
+    raw = select_paper_strict_raw_radar_track(radar)
+    gated = select_paper_strict_radar_track(radar, range_gate_m=800.0)
+
+    assert raw["track_id"].astype(int).unique().tolist() == [2]
+    assert len(raw) == 3
+    assert gated["track_id"].astype(int).unique().tolist() == [2]
+    assert gated["frame_index"].tolist() == [0, 2]
 
 
 def test_paper_strict_range_gated_candidates_use_fortem_range() -> None:

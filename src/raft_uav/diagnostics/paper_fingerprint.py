@@ -56,6 +56,13 @@ def main(argv: list[str] | None = None) -> int:
         default="auto",
         help="RF/radar/truth file variant; auto preserves historical rerun preference",
     )
+    parser.add_argument(
+        "--enumerate-file-variants",
+        action="store_true",
+        help="run original and rerun variants and rank them by paper-reference count deltas",
+    )
+    parser.add_argument("--rf-clock-offset-s", type=float, default=None)
+    parser.add_argument("--radar-clock-offset-s", type=float, default=None)
     parser.add_argument("--range-gate-m", type=float, default=PAPER_STRICT_RANGE_GATE_M)
     parser.add_argument("--nis-gate-prob", type=float, default=PAPER_STRICT_NIS_GATE_PROBABILITY)
     parser.add_argument("--truth-time-gate-s", type=float, default=2.0)
@@ -139,7 +146,10 @@ def main(argv: list[str] | None = None) -> int:
         lw1_origin_lla=args.lw1_origin_lla,
         origin_config=args.origin_config,
         variant=args.variant,
+        enumerate_file_variants=args.enumerate_file_variants,
         count_mismatch_action=args.count_mismatch_action,
+        rf_clock_offset_s=args.rf_clock_offset_s,
+        radar_clock_offset_s=args.radar_clock_offset_s,
     )
     print(f"output_dir={result['output_dir']}")
     print(f"summary_csv={result['summary_csv']}")
@@ -158,68 +168,88 @@ def run_paper_fingerprint(
     lw1_origin_lla: str | None = None,
     origin_config: Path | None = None,
     variant: str = "auto",
+    enumerate_file_variants: bool = False,
     count_mismatch_action: str = "warn",
+    rf_clock_offset_s: float | None = None,
+    radar_clock_offset_s: float | None = None,
 ) -> dict[str, Any]:
     """Run strict count-fingerprint diagnostics and write CSV/JSON artifacts."""
 
     dataset_root = Path(dataset_root)
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    selected_flights = _resolve_flights(dataset_root, flights, variant=variant)
+    variants_to_run = ["original", "rerun"] if enumerate_file_variants else [variant]
 
     rows: list[dict[str, Any]] = []
     manifests: list[dict[str, Any]] = []
-    for flight_name in selected_flights:
-        flight = select_flight(dataset_root, flight_name, variant=variant)
-        inputs = load_paper_strict_inputs(
-            dataset_root=dataset_root,
-            flight_name=flight.name,
-            enu_origin=enu_origin,
-            enu_origin_lla=enu_origin_lla,
-            lw1_origin_lla=lw1_origin_lla,
-            origin_config=origin_config,
-            rf_default_std_m=config.rf_default_std_m,
-            variant=variant,
-        )
-        fusion = run_paper_strict_fusion(inputs=inputs, config=config)
-        table = build_paper_strict_table(inputs=inputs, fusion=fusion, config=config)
-        count_audit = build_count_audit(table)
-        _handle_count_mismatch(
-            count_audit,
-            flight_name=inputs.flight_name,
-            action=count_mismatch_action,
-        )
-        row = _fingerprint_row(
-            dataset_root=dataset_root,
-            flight_name=flight.name,
-            rf_csv=flight.rf_csv,
-            radar_json=flight.radar_json,
-            truth_txt=flight.truth_txt,
-            inputs=inputs,
-            fusion=fusion,
-            table=table,
-            count_audit=count_audit,
-        )
-        rows.append(row)
+    for variant_name in variants_to_run:
+        selected_flights = _resolve_flights(dataset_root, flights, variant=variant_name)
+        for flight_name in selected_flights:
+            flight = select_flight(dataset_root, flight_name, variant=variant_name)
+            if flight.rf_csv is None or flight.radar_json is None or flight.truth_txt is None:
+                continue
+            load_kwargs: dict[str, float] = {}
+            if rf_clock_offset_s is not None:
+                load_kwargs["rf_clock_offset_s"] = float(rf_clock_offset_s)
+            if radar_clock_offset_s is not None:
+                load_kwargs["radar_clock_offset_s"] = float(radar_clock_offset_s)
+            inputs = load_paper_strict_inputs(
+                dataset_root=dataset_root,
+                flight_name=flight.name,
+                enu_origin=enu_origin,
+                enu_origin_lla=enu_origin_lla,
+                lw1_origin_lla=lw1_origin_lla,
+                origin_config=origin_config,
+                rf_default_std_m=config.rf_default_std_m,
+                variant=variant_name,
+                **load_kwargs,
+            )
+            fusion = run_paper_strict_fusion(inputs=inputs, config=config)
+            table = build_paper_strict_table(inputs=inputs, fusion=fusion, config=config)
+            count_audit = build_count_audit(table)
+            _handle_count_mismatch(
+                count_audit,
+                flight_name=inputs.flight_name,
+                action=count_mismatch_action,
+            )
+            row = _fingerprint_row(
+                dataset_root=dataset_root,
+                flight_name=flight.name,
+                rf_csv=flight.rf_csv,
+                radar_json=flight.radar_json,
+                truth_txt=flight.truth_txt,
+                inputs=inputs,
+                fusion=fusion,
+                table=table,
+                count_audit=count_audit,
+            )
+            row["variant"] = variant_name
+            rows.append(row)
 
-        flight_dir = output / flight.name
-        flight_dir.mkdir(parents=True, exist_ok=True)
-        table_csv = flight_dir / "paper_strict_table.csv"
-        count_csv = flight_dir / "paper_count_audit.csv"
-        table.to_csv(table_csv, index=False)
-        count_audit.to_csv(count_csv, index=False)
-        manifest = {
-            **row,
-            "table_csv": str(table_csv),
-            "count_audit_csv": str(count_csv),
-            "range_audit": radar_range_audit(inputs.radar),
-            "file_manifest": inputs.file_manifest,
-        }
-        manifest_json = flight_dir / "fingerprint_manifest.json"
-        manifest_json.write_text(json.dumps(_jsonable(manifest), indent=2), encoding="utf-8")
-        manifests.append({**manifest, "manifest_json": str(manifest_json)})
+            flight_dir = output / (flight.name if not enumerate_file_variants else f"{flight.name}_{variant_name}")
+            flight_dir.mkdir(parents=True, exist_ok=True)
+            table_csv = flight_dir / "paper_strict_table.csv"
+            count_csv = flight_dir / "paper_count_audit.csv"
+            table.to_csv(table_csv, index=False)
+            count_audit.to_csv(count_csv, index=False)
+            manifest = {
+                **row,
+                "table_csv": str(table_csv),
+                "count_audit_csv": str(count_csv),
+                "range_audit": radar_range_audit(inputs.radar),
+                "file_manifest": inputs.file_manifest,
+            }
+            manifest_json = flight_dir / "fingerprint_manifest.json"
+            manifest_json.write_text(json.dumps(_jsonable(manifest), indent=2), encoding="utf-8")
+            manifests.append({**manifest, "manifest_json": str(manifest_json)})
 
     summary = pd.DataFrame.from_records(rows)
+    if not summary.empty and "reference_count_abs_delta_sum" in summary.columns:
+        summary = summary.sort_values(
+            ["reference_count_abs_delta_sum", "flight", "variant"],
+            na_position="last",
+        ).reset_index(drop=True)
+        summary["reference_count_rank"] = np.arange(1, len(summary) + 1)
     summary_csv = output / "paper_fingerprint_summary.csv"
     summary_json = output / "paper_fingerprint_summary.json"
     summary.to_csv(summary_csv, index=False)
@@ -229,7 +259,10 @@ def run_paper_fingerprint(
         "reference_counts": PAPER_REFERENCE_COUNTS,
         "config": asdict(config),
         "variant": variant,
+        "enumerate_file_variants": bool(enumerate_file_variants),
         "count_mismatch_action": count_mismatch_action,
+        "rf_clock_offset_s": rf_clock_offset_s,
+        "radar_clock_offset_s": radar_clock_offset_s,
         "flights": manifests,
     }
     summary_json.write_text(json.dumps(_jsonable(payload), indent=2), encoding="utf-8")
@@ -274,6 +307,8 @@ def _fingerprint_row(
         "rf_file_variant": _manifest_variant(inputs.file_manifest, "rf"),
         "radar_file_variant": _manifest_variant(inputs.file_manifest, "radar"),
         "truth_file_variant": _manifest_variant(inputs.file_manifest, "truth"),
+        "rf_clock_offset_s": float(inputs.rf_clock_offset_s),
+        "radar_clock_offset_s": float(inputs.radar_clock_offset_s),
         **stage_counts,
         **count_deltas,
         "reference_count_abs_delta_sum": float(sum(abs_deltas)) if abs_deltas else np.nan,
