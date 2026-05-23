@@ -6,6 +6,10 @@ import pandas as pd
 from raft_uav.baselines.radar_association import _select_paper_compatible_radar_track
 from raft_uav.diagnostics.paper_table import select_radar_for_table
 from raft_uav.evaluation.metrics import summarize_errors
+from raft_uav.paper_selection import (
+    paper_radar_track_stages,
+    select_paper_compatible_radar_track as shared_select_paper_compatible_radar_track,
+)
 
 
 def test_summarize_errors_includes_paper_style_fields() -> None:
@@ -47,6 +51,66 @@ def test_paper_compatible_preselector_is_range_and_catprob_gated() -> None:
     assert selected["association_preselector_raw_rows"].max() == len(radar)
     assert selected["association_preselector_range_gated_rows"].max() == 8
     assert selected["association_preselector_catprob_rows"].max() == 3
+
+
+def test_paper_compatible_preselector_uses_shared_selection() -> None:
+    radar = pd.DataFrame(
+        [
+            *_rows(track_id=1, frames=range(4), range_m=900.0, catprob=0.95),
+            *_rows(track_id=2, frames=range(3), range_m=700.0, catprob=0.80),
+            *_rows(track_id=3, frames=range(5), range_m=650.0, catprob=0.10),
+        ]
+    )
+
+    online = _select_paper_compatible_radar_track(
+        radar,
+        range_gate_m=800.0,
+        catprob_threshold=0.4,
+    )
+    shared = shared_select_paper_compatible_radar_track(
+        radar,
+        range_gate_m=800.0,
+        catprob_threshold=0.4,
+    )
+
+    compare_columns = [
+        "frame_index",
+        "track_id",
+        "association_preselector_raw_rows",
+        "association_preselector_range_gated_rows",
+        "association_preselector_catprob_rows",
+        "association_preselector_track_rows",
+    ]
+    pd.testing.assert_frame_equal(
+        online[compare_columns].reset_index(drop=True),
+        shared[compare_columns].reset_index(drop=True),
+        check_dtype=False,
+    )
+
+
+def test_paper_radar_track_stages_make_selection_order_explicit() -> None:
+    radar = pd.DataFrame(
+        [
+            *_rows(track_id=1, frames=range(4), range_m=900.0, catprob=0.95),
+            *_rows(track_id=2, frames=range(3), range_m=700.0, catprob=0.80),
+        ]
+    )
+
+    raw_first = paper_radar_track_stages(
+        radar,
+        range_gate_m=800.0,
+        radar_track_selection_order="raw-track-then-range",
+    )
+    range_first = paper_radar_track_stages(
+        radar,
+        range_gate_m=800.0,
+        radar_track_selection_order="range-then-largest-track",
+    )
+
+    assert raw_first.raw_target["track_id"].astype(int).unique().tolist() == [1]
+    assert raw_first.preselected.empty
+    assert range_first.raw_target["track_id"].astype(int).unique().tolist() == [2]
+    assert range_first.preselected["frame_index"].astype(int).tolist() == [0, 1, 2]
 
 
 def test_longest_continuous_table_selection_returns_one_segment_not_whole_id() -> None:
