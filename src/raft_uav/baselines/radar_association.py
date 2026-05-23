@@ -1850,46 +1850,71 @@ def _select_paper_compatible_radar_track(
     range_gate_m: float | None,
     catprob_threshold: float | None,
 ) -> pd.DataFrame:
-    """Select paper-compatible anchors in the same order as the strict path.
+    """Select paper-compatible anchors after hard range and class gates.
 
-    The reference-table fingerprint is sensitive to gate ordering.  Select the
-    raw target-track stream first, then apply the 800 m Fortem range gate and
-    optional class-probability gate.  Do not select the largest segment from the
-    range-filtered pool, because that can silently choose a different target
-    track from the strict reproduction path.
+    The reference-table fingerprint is sensitive to gate ordering.  Apply the
+    Fortem range gate and optional class-probability gate first, then choose the
+    largest continuous Fortem segment from the surviving candidates.
     """
 
-    raw_target = _select_largest_continuous_raw_radar_track(radar)
-    if raw_target.empty:
-        raw_target.attrs["paper_compatible_stage_counts"] = {
-            "radar_all_track_rows": int(len(radar)),
-            "radar_raw_target_track_rows": 0,
-            "radar_after_range_gate_rows": 0,
-            "radar_largest_continuous_track_rows": 0,
-        }
-        return raw_target
-    selected = _paper_compatible_preselector_pool(
-        raw_target,
-        range_gate_m=range_gate_m,
-        candidate_catprob_threshold=catprob_threshold,
+    range_pool = _range_candidate_pool(
+        radar,
+        range_gate_m,
+        require_fortem_range=range_gate_m is not None,
+        context="paper-compatible",
     )
-    if selected.empty:
-        selected.attrs["attempted_selected_radar"] = raw_target.copy()
-        selected.attrs["paper_compatible_stage_counts"] = {
+    selected_pool = _catprob_candidate_pool(
+        range_pool,
+        catprob_threshold,
+        fallback_to_unfiltered=False,
+    )
+    if selected_pool.empty or "track_id" not in selected_pool.columns:
+        selected_pool.attrs["paper_compatible_stage_counts"] = {
             "radar_all_track_rows": int(len(radar)),
-            "radar_raw_target_track_rows": int(len(raw_target)),
-            "radar_after_range_gate_rows": 0,
+            "radar_raw_target_track_rows": int(len(selected_pool)),
+            "radar_after_range_gate_rows": int(len(range_pool)),
             "radar_largest_continuous_track_rows": 0,
         }
-        return selected
-    selected = selected.copy()
+        return selected_pool
+
+    segments = _stable_track_segments(
+        selected_pool,
+        min_segment_frames=1,
+        rf_measurements=[],
+        rf_score_weight=0.0,
+        rf_time_gate_s=0.0,
+        rf_nis_cap=1.0,
+    )
+    if not segments:
+        empty = _empty_selected_radar(radar)
+        empty.attrs["attempted_selected_radar"] = selected_pool.copy()
+        empty.attrs["paper_compatible_stage_counts"] = {
+            "radar_all_track_rows": int(len(radar)),
+            "radar_raw_target_track_rows": int(len(selected_pool)),
+            "radar_after_range_gate_rows": int(len(range_pool)),
+            "radar_largest_continuous_track_rows": 0,
+        }
+        return empty
+
+    selected_segment = max(
+        segments,
+        key=lambda item: (
+            item.frames,
+            item.end_time_s - item.start_time_s,
+            item.mean_catprob,
+            -item.start_time_s,
+            -item.track_id,
+        ),
+    )
+    selected = selected_segment.frame.copy()
     selected["association_mode"] = "paper-compatible"
     selected["association_action"] = "paper_compatible_largest_continuous_track_anchor"
     selected["association_preselector_raw_rows"] = int(len(radar))
-    selected["association_raw_target_track_rows"] = int(len(raw_target))
-    selected["association_preselector_range_gated_rows"] = int(len(selected))
+    selected["association_preselector_track_id"] = int(selected_segment.track_id)
+    selected["association_raw_target_track_rows"] = int(len(selected))
+    selected["association_preselector_range_gated_rows"] = int(len(range_pool))
     selected["association_preselector_track_rows"] = int(len(selected))
-    selected["association_preselector_catprob_rows"] = int(len(selected))
+    selected["association_preselector_catprob_rows"] = int(len(selected_pool))
     if range_gate_m is not None:
         selected["association_range_gate_m"] = float(range_gate_m)
     if catprob_threshold is not None:
@@ -1903,8 +1928,8 @@ def _select_paper_compatible_radar_track(
     selected.attrs["attempted_selected_radar"] = selected.copy()
     selected.attrs["paper_compatible_stage_counts"] = {
         "radar_all_track_rows": int(len(radar)),
-        "radar_raw_target_track_rows": int(len(raw_target)),
-        "radar_after_range_gate_rows": int(len(selected)),
+        "radar_raw_target_track_rows": int(len(selected_pool)),
+        "radar_after_range_gate_rows": int(len(range_pool)),
         "radar_largest_continuous_track_rows": int(len(selected)),
         "radar_preselected_track_id": _optional_track_id(selected.iloc[0]),
     }
