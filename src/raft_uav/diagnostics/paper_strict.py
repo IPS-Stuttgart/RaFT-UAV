@@ -295,6 +295,7 @@ def run_paper_strict_reproduction(
     output.mkdir(parents=True, exist_ok=True)
 
     all_rows: list[dict[str, Any]] = []
+    all_parity_rows: list[dict[str, Any]] = []
     manifests: list[dict[str, Any]] = []
     for flight_name in selected_flights:
         inputs = load_paper_strict_inputs(
@@ -317,6 +318,7 @@ def run_paper_strict_reproduction(
         fusion = run_paper_strict_fusion(inputs=inputs, config=config)
         table = build_paper_strict_table(inputs=inputs, fusion=fusion, config=config)
         count_audit = build_count_audit(table)
+        parity_report = build_paper_parity_report(table, count_audit)
         _handle_count_mismatch(
             count_audit,
             flight_name=inputs.flight_name,
@@ -326,6 +328,7 @@ def run_paper_strict_reproduction(
 
         table_csv = flight_dir / "paper_strict_table.csv"
         count_csv = flight_dir / "paper_count_audit.csv"
+        parity_csv = flight_dir / "paper_parity_report.csv"
         estimates_csv = flight_dir / "paper_strict_estimates.csv"
         selected_radar_csv = flight_dir / "selected_radar.csv"
         accepted_rf_csv = flight_dir / "accepted_rf.csv"
@@ -334,6 +337,7 @@ def run_paper_strict_reproduction(
 
         table.to_csv(table_csv, index=False)
         count_audit.to_csv(count_csv, index=False)
+        parity_report.to_csv(parity_csv, index=False)
         _records_to_estimate_frame(fusion.records).to_csv(estimates_csv, index=False)
         fusion.accepted_radar.to_csv(selected_radar_csv, index=False)
         fusion.accepted_rf.to_csv(accepted_rf_csv, index=False)
@@ -349,6 +353,7 @@ def run_paper_strict_reproduction(
             "flight": inputs.flight_name,
             "table_csv": str(table_csv),
             "count_audit_csv": str(count_csv),
+            "parity_report_csv": str(parity_csv),
             "estimates_csv": str(estimates_csv),
             "selected_radar_csv": str(selected_radar_csv),
             "accepted_rf_csv": str(accepted_rf_csv),
@@ -368,14 +373,19 @@ def run_paper_strict_reproduction(
         manifest_json.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         manifests.append({**manifest, "manifest_json": str(manifest_json)})
         all_rows.extend(table.to_dict(orient="records"))
+        all_parity_rows.extend(parity_report.to_dict(orient="records"))
 
     summary = pd.DataFrame.from_records(all_rows)
+    parity_summary = pd.DataFrame.from_records(all_parity_rows)
     summary_csv = output / "paper_strict_summary.csv"
+    parity_summary_csv = output / "paper_parity_summary.csv"
     summary_json = output / "paper_strict_summary.json"
     summary.to_csv(summary_csv, index=False)
+    parity_summary.to_csv(parity_summary_csv, index=False)
     payload = {
         "output_dir": str(output),
         "summary_csv": str(summary_csv),
+        "parity_summary_csv": str(parity_summary_csv),
         "flights": manifests,
         "reference_counts": PAPER_REFERENCE_COUNTS,
         "reference_errors_m": PAPER_REFERENCE_ERROR_M,
@@ -789,6 +799,62 @@ def build_count_audit(table: pd.DataFrame) -> pd.DataFrame:
                 "observed_count": observed_int,
                 "delta": delta,
                 "matches_reference": bool(delta == 0) if delta is not None else False,
+            }
+        )
+    return pd.DataFrame.from_records(rows)
+
+
+def build_paper_parity_report(table: pd.DataFrame, count_audit: pd.DataFrame) -> pd.DataFrame:
+    """Return one compact count/error parity row per paper-strict table stage.
+
+    The strict table is intentionally rich enough for detailed diagnostics.  This
+    report is the machine-readable stoplight used before tracker tuning: it keeps
+    observed counts, reference counts, paper-style mean/std/max errors, and their
+    deltas in one CSV.
+    """
+
+    count_by_method = {str(row["method"]): row for _, row in count_audit.iterrows()}
+    rows: list[dict[str, Any]] = []
+    for _, table_row in table.iterrows():
+        method = str(table_row["method"])
+        count_row = count_by_method.get(method)
+        observed_count = _nullable_int(table_row.get("selected_count"))
+        reference_count = (
+            _nullable_int(count_row.get("reference_count"))
+            if count_row is not None
+            else _nullable_int(PAPER_REFERENCE_COUNTS.get(method))
+        )
+        count_delta = (
+            None
+            if observed_count is None or reference_count is None
+            else int(observed_count) - int(reference_count)
+        )
+        reference_error = PAPER_REFERENCE_ERROR_M.get(method, {})
+        observed_mean = _nullable_float(table_row.get("paper_error_mean_m"))
+        observed_std = _nullable_float(table_row.get("paper_error_std_m"))
+        observed_max = _nullable_float(table_row.get("paper_error_max_m"))
+        reference_mean = _nullable_float(reference_error.get("mean"))
+        reference_std = _nullable_float(reference_error.get("std"))
+        reference_max = _nullable_float(reference_error.get("max"))
+        rows.append(
+            {
+                "flight": table_row.get("flight"),
+                "method": method,
+                "source": table_row.get("source"),
+                "observed_count": observed_count,
+                "reference_count": reference_count,
+                "count_delta": count_delta,
+                "count_matches_reference": None if count_delta is None else count_delta == 0,
+                "observed_mean_m": observed_mean,
+                "reference_mean_m": reference_mean,
+                "mean_delta_m": _delta_or_none(observed_mean, reference_mean),
+                "observed_std_m": observed_std,
+                "reference_std_m": reference_std,
+                "std_delta_m": _delta_or_none(observed_std, reference_std),
+                "observed_max_m": observed_max,
+                "reference_max_m": reference_max,
+                "max_delta_m": _delta_or_none(observed_max, reference_max),
+                "metric_protocol": "sample_time_interpolated_truth_mean_std_max",
             }
         )
     return pd.DataFrame.from_records(rows)
@@ -1628,6 +1694,29 @@ def _jsonable_config(config: PaperStrictConfig) -> dict[str, Any]:
 
 def _safe_ratio(numerator: int, denominator: int) -> float:
     return float(numerator) / float(denominator) if denominator > 0 else float("nan")
+
+
+def _nullable_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except TypeError:
+        pass
+    scalar = float(value)
+    return scalar if np.isfinite(scalar) else None
+
+
+def _nullable_int(value: Any) -> int | None:
+    scalar = _nullable_float(value)
+    return None if scalar is None else int(scalar)
+
+
+def _delta_or_none(observed: float | None, reference: float | None) -> float | None:
+    if observed is None or reference is None:
+        return None
+    return float(observed) - float(reference)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -198,13 +198,20 @@ baseline runner, so the output artifacts are comparable with other
 raft-uav run-baseline data/raw/AADM2025Dryad \
   --flight Opt1 \
   --radar-association paper-compatible \
-  --radar-catprob-threshold 0.4 \
+  --paper-compatible-bootstrap-source radar \
   --stable-segment-range-gate-m 800 \
   --smoother fixed-lag --smoother-lag-s 20
 ```
 
+For a deliberate catProb ablation of the paper-compatible path, use
+`--paper-compatible-catprob-threshold <value>`. The generic
+`--radar-catprob-threshold` continues to configure legacy catProb and
+non-paper association modes, but it does not affect paper-compatible parity
+runs.
+
 The `paper-compatible` fusion path applies an 800 m radar range gate, radar
-class-probability thresholding, NIS gates for RF/radar updates, and records a
+bootstrap by default, optional radar class-probability thresholding, NIS gates
+for RF/radar updates, and records a
 radar `missed_detection` posterior when no radar candidate passes the hard
 preselector. The table also includes stable range-gated radar segment rows,
 including an interpolated full-frame diagnostic, to separate clean radar

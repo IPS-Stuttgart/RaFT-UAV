@@ -199,17 +199,49 @@ def test_paper_compatible_association_coasts_when_range_gate_fails():
         radar=radar,
         association="paper-compatible",
         candidate_catprob_threshold=0.4,
+        paper_compatible_bootstrap_source="first-event",
         stable_segment_range_gate_m=800.0,
     )
 
     assert "paper-compatible" in RADAR_ASSOCIATION_MODES
     assert [record["source"] for record in records] == ["rf", "radar"]
     assert records[-1]["association_mode"] == "paper-compatible"
+    assert records[0]["source"] == "radar"
+    assert records[0]["update_action"] == "initialized"
+    assert selected["track_id"].tolist() == [1]
+    assert selected["association_action"].tolist() == ["paper_compatible_bootstrap"]
+
+
+def test_paper_compatible_association_explicit_catprob_gate_has_no_fallback():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 1.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 1.0,
+                "cat_prob_uav": 0.1,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(0.0, 0.0)],
+        radar=radar,
+        association="paper-compatible",
+        paper_compatible_catprob_threshold=0.4,
+        paper_compatible_bootstrap_source="first-event",
+        stable_segment_range_gate_m=800.0,
+    )
+
     assert records[-1]["update_action"] == "missed_detection"
     assert selected.empty
 
 
-def test_paper_compatible_association_has_no_catprob_fallback():
+def test_paper_compatible_association_default_ignores_generic_catprob_threshold():
     radar = pd.DataFrame(
         [
             {
@@ -302,6 +334,8 @@ def test_paper_compatible_association_uses_largest_continuous_range_gated_track(
         radar=radar,
         association="paper-compatible",
         candidate_catprob_threshold=0.4,
+        paper_compatible_catprob_threshold=0.4,
+        paper_compatible_bootstrap_source="first-event",
         stable_segment_range_gate_m=800.0,
     )
 
@@ -345,11 +379,41 @@ def test_paper_compatible_association_stays_inside_selected_continuous_segment()
         radar=radar,
         association="paper-compatible",
         candidate_catprob_threshold=0.4,
+        paper_compatible_catprob_threshold=0.4,
+        paper_compatible_bootstrap_source="first-event",
         stable_segment_range_gate_m=800.0,
     )
 
     assert selected["frame_index"].tolist() == [10, 11, 12]
     assert selected["association_preselector_segment_rows"].tolist() == [1, 1, 1]
+
+
+def test_paper_compatible_association_defaults_to_radar_bootstrap():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 1.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 1.0,
+                "cat_prob_uav": 0.99,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(0.0, 1000.0)],
+        radar=radar,
+        association="paper-compatible",
+        stable_segment_range_gate_m=800.0,
+    )
+
+    assert [record["source"] for record in records] == ["radar"]
+    assert records[0]["update_action"] == "initialized"
+    assert selected["track_id"].tolist() == [1]
 
 
 def test_catprob_candidate_pool_filters_when_possible():

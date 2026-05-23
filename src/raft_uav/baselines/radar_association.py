@@ -63,6 +63,7 @@ _RADAR_VELOCITY_UPDATE_ENV = "RAFT_UAV_RADAR_UPDATE_USES_VELOCITY"
 _RADAR_VELOCITY_STD_MPS_ENV = "RAFT_UAV_RADAR_VELOCITY_STD_MPS"
 RADAR_COVARIANCE_MODELS = ("cartesian", "geometry")
 PAPER_COMPATIBLE_NIS_GATE_PROBABILITY = 0.95
+PAPER_COMPATIBLE_BOOTSTRAP_SOURCES = ("radar", "first-event")
 _ASSOCIATION_COVARIANCE_COLUMNS = (
     "association_cov_ee",
     "association_cov_nn",
@@ -164,6 +165,8 @@ def run_async_cv_baseline_with_radar_association(
     stable_segment_rf_score_weight: float = 1.0,
     stable_segment_rf_time_gate_s: float = 2.0,
     stable_segment_rf_nis_cap: float = 25.0,
+    paper_compatible_catprob_threshold: float | None = None,
+    paper_compatible_bootstrap_source: str = "radar",
     truth_gate_m: float = 150.0,
     truth_time_gate_s: float = 1.0,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
@@ -185,10 +188,13 @@ def run_async_cv_baseline_with_radar_association(
     ``track-bank`` uses PyRecEst's track-oriented MHT to keep multiple
     single-target association hypotheses alive across radar frames.
     ``paper-compatible`` applies the reference-style hard preselector directly
-    in the baseline runner: 800 m-style range gating via
+    in the baseline runner: 800 m-style Fortem range gating via
     ``stable_segment_range_gate_m``, largest continuous Fortem track retention,
-    hard UAV class-probability thresholding, NIS validation, and explicit
-    missed-detection coasting when no radar candidate passes.
+    radar bootstrap by default, optional UAV class-probability thresholding via
+    ``paper_compatible_catprob_threshold``, NIS validation, and explicit
+    missed-detection coasting when no radar candidate passes.  The generic
+    ``candidate_catprob_threshold`` is deliberately ignored by this mode so the
+    CLI's historical 0.5 default cannot silently change paper-parity runs.
     ``paper-largest-continuous-track`` applies the reference-paper style
     800 m range-gated longest continuous Fortem track preselector and skips
     all other radar frames.
@@ -280,6 +286,10 @@ def run_async_cv_baseline_with_radar_association(
         raise ValueError("stable_segment_rf_time_gate_s must be nonnegative")
     if stable_segment_rf_nis_cap <= 0.0:
         raise ValueError("stable_segment_rf_nis_cap must be positive")
+    if paper_compatible_bootstrap_source not in PAPER_COMPATIBLE_BOOTSTRAP_SOURCES:
+        raise ValueError(
+            f"paper_compatible_bootstrap_source must be one of {PAPER_COMPATIBLE_BOOTSTRAP_SOURCES}"
+        )
 
     rf_measurement_list = list(rf_measurements)
     covariance = np.diag(
@@ -308,10 +318,11 @@ def run_async_cv_baseline_with_radar_association(
             robust_update_by_source=robust_update_by_source,
             inflation_alpha_by_source=inflation_alpha_by_source,
             max_residual_norms_by_source=max_residual_norms_by_source,
-            candidate_catprob_threshold=candidate_catprob_threshold,
+            candidate_catprob_threshold=paper_compatible_catprob_threshold,
             range_gate_m=stable_segment_range_gate_m,
             track_switch_penalty=geometry_switch_penalty,
             catprob_weight=geometry_catprob_weight,
+            bootstrap_source=paper_compatible_bootstrap_source,
         )
     if association == "track-bank":
         _validate_normalized_radar_for_association(radar)
@@ -608,6 +619,7 @@ def _run_paper_compatible_association(
     range_gate_m: float | None,
     track_switch_penalty: float,
     catprob_weight: float,
+    bootstrap_source: str,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
     """Run the paper-compatible hard-gated radar association inside the baseline.
 
@@ -635,6 +647,7 @@ def _run_paper_compatible_association(
         covariance_config=covariance_config,
         preselected_radar_by_key=paper_track_by_key,
         range_gate_m=range_gate_m,
+        bootstrap_source=bootstrap_source,
         candidate_catprob_threshold=candidate_catprob_threshold,
     )
     if initial is None:
@@ -808,15 +821,24 @@ def _initial_paper_compatible_measurement_and_row(
     covariance_config: _RadarGeometryCovarianceConfig | None,
     preselected_radar_by_key: dict[object, pd.Series],
     range_gate_m: float | None,
+    bootstrap_source: str,
     candidate_catprob_threshold: float | None,
 ) -> tuple[int, TrackingMeasurement, pd.Series | None] | None:
     """Return the first valid bootstrap event for paper-compatible fusion."""
 
+    if bootstrap_source not in PAPER_COMPATIBLE_BOOTSTRAP_SOURCES:
+        raise ValueError(
+            f"bootstrap_source must be one of {PAPER_COMPATIBLE_BOOTSTRAP_SOURCES}"
+        )
+
     for index, event in enumerate(events):
         if event["kind"] == "rf":
+            if bootstrap_source != "first-event":
+                continue
             measurement = event["measurement"]
             assert isinstance(measurement, TrackingMeasurement)
             return int(index), measurement, None
+
         candidates = event["candidates"]
         assert isinstance(candidates, pd.DataFrame)
         selected_row = preselected_radar_by_key.get(_radar_event_key(event))
