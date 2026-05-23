@@ -28,6 +28,7 @@ from raft_uav.baselines.update_logic import (
 from raft_uav.calibration.bundle import apply_calibration_bundle, load_calibration_bundle
 from raft_uav.calibration.time_offset import apply_time_offset
 from raft_uav.evaluation.diagnostics import build_diagnostic_summary
+from raft_uav.diagnostics.paper_parity import build_baseline_paper_parity
 from raft_uav.evaluation.metrics import (
     position_errors_at_estimates_m,
     position_errors_m,
@@ -1261,6 +1262,26 @@ def _baseline_metrics(
     if attempted_selected_radar is None:
         attempted_selected_radar = selected_radar
 
+    position_error_2d_summary = summarize_errors(error_2d)
+    position_error_3d_summary = summarize_errors(error_3d)
+    paper_error_2d_summary = summarize_errors(paper_error_2d)
+    paper_error_3d_summary = summarize_errors(paper_error_3d)
+    paper_sampled_error_2d_summary = summarize_errors(paper_sampled_error_2d)
+    paper_sampled_error_3d_summary = summarize_errors(paper_sampled_error_3d)
+    paper_stage_counts = selected_radar.attrs.get("paper_compatible_stage_counts")
+    if not isinstance(paper_stage_counts, dict):
+        paper_stage_counts = None
+    paper_parity = build_baseline_paper_parity(
+        stage_counts=paper_stage_counts,
+        rf_rows=len(rf),
+        radar_rows=len(radar),
+        selected_radar_rows=len(selected_radar),
+        posterior_records=len(estimate_frame),
+        accepted_by_source={key: int(value) for key, value in accepted_by_source.items()},
+        rejected_by_source={key: int(value) for key, value in rejected_by_source.items()},
+        paper_position_error_3d=paper_error_3d_summary,
+    )
+
     return {
         "flight": flight_name,
         "files": {
@@ -1418,6 +1439,7 @@ def _baseline_metrics(
         "accepted_measurements": int(accepted_mask.sum()),
         "rejected_measurements": int((~accepted_mask).sum()),
         "reweighted_measurements": int(reweighted_mask.sum()),
+        "paper_parity": paper_parity,
         "source_counts": {key: int(value) for key, value in sorted(source_counts.items())},
         "accepted_by_source": {
             key: int(value) for key, value in sorted(accepted_by_source.items())
@@ -1436,12 +1458,12 @@ def _baseline_metrics(
             "estimate_min": float(estimate_frame["time_s"].min()),
             "estimate_max": float(estimate_frame["time_s"].max()),
         },
-        "position_error_2d": summarize_errors(error_2d),
-        "position_error_3d": summarize_errors(error_3d),
-        "paper_position_error_2d": summarize_errors(paper_error_2d),
-        "paper_position_error_3d": summarize_errors(paper_error_3d),
-        "paper_sampled_position_error_2d": summarize_errors(paper_sampled_error_2d),
-        "paper_sampled_position_error_3d": summarize_errors(paper_sampled_error_3d),
+        "position_error_2d": position_error_2d_summary,
+        "position_error_3d": position_error_3d_summary,
+        "paper_position_error_2d": paper_error_2d_summary,
+        "paper_position_error_3d": paper_error_3d_summary,
+        "paper_sampled_position_error_2d": paper_sampled_error_2d_summary,
+        "paper_sampled_position_error_3d": paper_sampled_error_3d_summary,
     }
 
 

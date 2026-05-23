@@ -30,6 +30,7 @@ from raft_uav.baselines.kalman import (
     gate_threshold_from_probability,
 )
 from raft_uav.coordinates import LocalENUProjector
+from raft_uav.diagnostics.paper_manifest import validate_paper_manifest
 from raft_uav.evaluation.metrics import (
     empirical_position_covariance_at_times,
     position_errors_at_times_m,
@@ -243,6 +244,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rf-default-std-m", type=float, default=75.0)
     parser.add_argument("--radar-default-xy-std-m", type=float, default=25.0)
     parser.add_argument("--radar-default-z-std-m", type=float, default=35.0)
+    parser.add_argument(
+        "--disable-manifest-validation",
+        action="store_true",
+        help="allow non-explicit origins or incomplete file manifests for exploratory diagnostics",
+    )
     args = parser.parse_args(argv)
 
     config = PaperStrictConfig(
@@ -276,6 +282,7 @@ def main(argv: list[str] | None = None) -> int:
         truth_file=args.truth_file,
         rf_clock_offset_s=args.rf_clock_offset_s,
         radar_clock_offset_s=args.radar_clock_offset_s,
+        validate_manifest=not args.disable_manifest_validation,
     )
     print(f"output_dir={result['output_dir']}")
     print(f"summary_csv={result['summary_csv']}")
@@ -300,6 +307,7 @@ def run_paper_strict_reproduction(
     truth_file: Path | None = None,
     rf_clock_offset_s: float = DEFAULT_RF_CLOCK_OFFSET_S,
     radar_clock_offset_s: float = DEFAULT_RADAR_CLOCK_OFFSET_S,
+    validate_manifest: bool = True,
 ) -> dict[str, Any]:
     """Run strict paper-parity diagnostics and write per-flight artifacts."""
 
@@ -329,6 +337,18 @@ def run_paper_strict_reproduction(
             truth_file=truth_file,
             rf_clock_offset_s=rf_clock_offset_s,
             radar_clock_offset_s=radar_clock_offset_s,
+        )
+        origin_manifest = _origin_manifest(inputs.projector)
+        manifest_validation = (
+            validate_paper_manifest(
+                file_manifest=inputs.file_manifest,
+                enu_origin_mode=inputs.enu_origin_mode,
+                origin=origin_manifest,
+                rf_clock_offset_s=inputs.rf_clock_offset_s,
+                radar_clock_offset_s=inputs.radar_clock_offset_s,
+            )
+            if validate_manifest
+            else {"enabled": False, "valid": None, "errors": [], "warnings": []}
         )
         flight_dir = output / inputs.flight_name
         flight_dir.mkdir(parents=True, exist_ok=True)
@@ -377,7 +397,8 @@ def run_paper_strict_reproduction(
             "covariance_json": str(covariance_json),
             "enu_origin_mode": inputs.enu_origin_mode,
             "truth_origin_time": str(inputs.truth_origin_time),
-            "origin": _origin_manifest(inputs.projector),
+            "origin": origin_manifest,
+            "manifest_validation": manifest_validation,
             "file_manifest": inputs.file_manifest,
             "range_audit": range_audit,
             "stage_counts": paper_strict_stage_counts(inputs=inputs, fusion=fusion),
@@ -408,6 +429,7 @@ def run_paper_strict_reproduction(
         "reference_errors_m": PAPER_REFERENCE_ERROR_M,
         "count_mismatch_action": count_mismatch_action,
         "variant": variant,
+        "manifest_validation_enabled": bool(validate_manifest),
     }
     summary_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return {**payload, "summary_json": str(summary_json)}
