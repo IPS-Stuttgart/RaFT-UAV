@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pandas as pd
@@ -13,6 +14,33 @@ module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
+
+
+def _command_args(**overrides):
+    values = {
+        "dataset_root": Path("data/raw/AADM2025Dryad"),
+        "baseline_runner": "canonical-tracklet",
+        "baseline_script": None,
+        "baseline_arg": [],
+        "radar_catprob_threshold": 0.4,
+        "acceleration_std": 4.0,
+        "fixed_lag_s": 20.0,
+        "rf_gate_prob": 0.99,
+        "radar_gate_prob": 0.99,
+        "rf_safety_gate_prob": 0.9999999,
+        "radar_safety_gate_prob": 0.9999999,
+        "rf_max_residual_m": 750.0,
+        "radar_max_residual_m": 0.0,
+        "robust_update": "nis-inflate",
+        "rf_inflation_alpha": 0.5,
+        "radar_inflation_alpha": 0.5,
+    }
+    values.update(overrides)
+    return module.argparse.Namespace(**values)
+
+
+def _value_after(command: list[str], flag: str) -> str:
+    return command[command.index(flag) + 1]
 
 
 def test_parse_float_list_rejects_nonpositive_values():
@@ -60,3 +88,52 @@ def test_select_candidate_aggregates_training_metric():
     assert selected["candidate_id"] == "good"
     assert selected["aggregate_metric_value"] == 8.5
     assert selected["finite_train_flights"] == 2
+
+
+def test_default_baseline_command_uses_canonical_sota_tracklet_wrapper():
+    args = _command_args(baseline_arg=["--max-eval-time-delta-s", "1.5"])
+
+    command = module._baseline_command(args, flight="Opt2", output_dir=Path("out"))
+
+    assert command[:4] == [
+        module.sys.executable,
+        "-m",
+        "raft_uav.tracklet_viterbi_cli",
+        "run-baseline",
+    ]
+    assert _value_after(command, "--radar-association") == "tracklet-viterbi"
+    assert _value_after(command, "--tracklet-variant") == "range-covariance"
+    assert _value_after(command, "--tracklet-replay-tracker") == "imm"
+    assert _value_after(command, "--radar-catprob-threshold") == "0.4"
+    assert _value_after(command, "--acceleration-std") == "4"
+    assert _value_after(command, "--rf-gate-prob") == "0.99"
+    assert _value_after(command, "--radar-gate-prob") == "0.99"
+    assert _value_after(command, "--rf-safety-gate-prob") == "0.9999999"
+    assert _value_after(command, "--radar-safety-gate-prob") == "0.9999999"
+    assert _value_after(command, "--rf-max-residual-m") == "750"
+    assert _value_after(command, "--radar-max-residual-m") == "0"
+    assert _value_after(command, "--robust-update") == "nis-inflate"
+    assert _value_after(command, "--rf-inflation-alpha") == "0.5"
+    assert _value_after(command, "--radar-inflation-alpha") == "0.5"
+    assert _value_after(command, "--smoother") == "fixed-lag"
+    assert _value_after(command, "--smoother-lag-s") == "20"
+    assert command[-2:] == ["--max-eval-time-delta-s", "1.5"]
+
+
+def test_baseline_script_option_preserves_legacy_command_path():
+    args = _command_args(
+        baseline_script=Path("scripts/custom_tracklet.py"),
+        baseline_arg=["--sentinel"],
+    )
+
+    command = module._baseline_command(args, flight="Opt1", output_dir=Path("out"))
+
+    assert command[:2] == [module.sys.executable, "scripts/custom_tracklet.py"]
+    assert command[2:7] == [
+        "data/raw/AADM2025Dryad",
+        "--flight",
+        "Opt1",
+        "--output-dir",
+        "out",
+    ]
+    assert command[-1] == "--sentinel"

@@ -310,23 +310,44 @@ def run_baseline(args: argparse.Namespace, method: str, flight: str, output_dir:
 
 
 def run_tracklet_viterbi(args: argparse.Namespace, flight: str, output_dir: Path) -> None:
+    command = _tracklet_viterbi_command(args, flight, output_dir)
+    print(" ".join(command), flush=True)
+    subprocess.run(command, check=True, env=subprocess_env())
+
+
+def _tracklet_viterbi_command(args: argparse.Namespace, flight: str, output_dir: Path) -> list[str]:
+    """Return the SOTA-readiness command for the canonical tracklet wrapper."""
+
     command: list[str] = [
         sys.executable,
-        str(REPO_ROOT / "scripts" / "run_tracklet_viterbi_baseline.py"),
+        "-m",
+        "raft_uav.tracklet_viterbi_cli",
+        "run-baseline",
         str(args.dataset_root),
         "--flight",
         flight,
         "--output-dir",
         str(output_dir),
+        "--radar-association",
+        "tracklet-viterbi",
         "--radar-catprob-threshold",
         str(args.radar_catprob_threshold),
+        "--tracklet-variant",
+        "range-covariance",
+        "--tracklet-replay-tracker",
+        "imm",
         "--smoother",
         args.smoother,
         "--smoother-lag-s",
         str(args.smoother_lag_s),
+        "--robust-update",
+        "nis-inflate",
+        "--rf-inflation-alpha",
+        "0.5",
+        "--radar-inflation-alpha",
+        "0.5",
     ]
-    print(" ".join(command), flush=True)
-    subprocess.run(command, check=True, env=subprocess_env())
+    return command
 
 
 def oracle_rows(args: argparse.Namespace, flight: str) -> list[dict[str, object]]:

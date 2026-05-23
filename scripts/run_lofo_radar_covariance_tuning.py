@@ -17,6 +17,14 @@ import numpy as np
 import pandas as pd
 
 
+DEFAULT_LEGACY_BASELINE_SCRIPT = Path("scripts/run_tracklet_viterbi_baseline.py")
+BASELINE_RUNNERS = ("canonical-tracklet", "legacy-script")
+
+
+CANONICAL_TRACKLET_MODULE = "raft_uav.tracklet_viterbi_cli"
+LEGACY_TRACKLET_BASELINE_SCRIPT = Path("scripts/run_tracklet_viterbi_baseline.py")
+
+
 @dataclass(frozen=True)
 class RadarCovarianceCandidate:
     """One runtime radar-covariance setting."""
@@ -46,8 +54,38 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("dataset_root", type=Path)
     parser.add_argument("--flight", action="append", default=None)
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/lofo_radar_covariance"))
-    parser.add_argument("--baseline-script", type=Path, default=Path("scripts/run_tracklet_viterbi_baseline.py"))
+    parser.add_argument(
+        "--baseline-runner",
+        choices=BASELINE_RUNNERS,
+        default="canonical-tracklet",
+        help=(
+            "Baseline command used for each covariance candidate. The default matches the "
+            "canonical tracklet wrapper used by the SOTA runner; legacy-script preserves "
+            "the historical standalone script path."
+        ),
+    )
+    parser.add_argument(
+        "--baseline-script",
+        type=Path,
+        default=None,
+        help=(
+            "Legacy baseline script to execute. Supplying this option implies "
+            "--baseline-runner legacy-script for backward compatibility."
+        ),
+    )
     parser.add_argument("--metric", default="position_error_3d.rmse_m")
+    parser.add_argument("--radar-catprob-threshold", "--candidate-threshold", dest="radar_catprob_threshold", type=float, default=0.4)
+    parser.add_argument("--acceleration-std", type=float, default=4.0)
+    parser.add_argument("--fixed-lag-s", type=float, default=20.0)
+    parser.add_argument("--rf-gate-prob", type=float, default=0.99)
+    parser.add_argument("--radar-gate-prob", type=float, default=0.99)
+    parser.add_argument("--rf-safety-gate-prob", type=float, default=0.9999999)
+    parser.add_argument("--radar-safety-gate-prob", type=float, default=0.9999999)
+    parser.add_argument("--rf-max-residual-m", type=float, default=750.0)
+    parser.add_argument("--radar-max-residual-m", type=float, default=0.0)
+    parser.add_argument("--robust-update", choices=["none", "nis-inflate"], default="nis-inflate")
+    parser.add_argument("--rf-inflation-alpha", type=float, default=0.5)
+    parser.add_argument("--radar-inflation-alpha", type=float, default=0.5)
     parser.add_argument("--aggregate", choices=["mean", "median", "max"], default="mean")
     parser.add_argument("--range-std-m", default="3,5,10,20")
     parser.add_argument("--azimuth-std-deg", default="1,2,3,4")
@@ -60,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
         "--baseline-arg",
         action="append",
         default=[],
-        help="Extra token forwarded to run_tracklet_viterbi_baseline.py; repeat as needed.",
+        help="Extra token forwarded to the selected baseline runner; repeat as needed.",
     )
     args = parser.parse_args(argv)
 
@@ -181,16 +219,7 @@ def _run_baseline(
     metrics_path = output_dir / flight / "metrics.json"
     if args.skip_existing and metrics_path.exists():
         return metrics_path
-    command = [
-        sys.executable,
-        str(args.baseline_script),
-        str(args.dataset_root),
-        "--flight",
-        flight,
-        "--output-dir",
-        str(output_dir),
-        *args.baseline_arg,
-    ]
+    command = _baseline_command(args, flight=flight, output_dir=output_dir)
     env = os.environ.copy()
     env.update(candidate.environment())
     if args.dry_run:
@@ -200,6 +229,89 @@ def _run_baseline(
     if not metrics_path.exists():
         raise FileNotFoundError(f"missing expected metrics file: {metrics_path}")
     return metrics_path
+
+
+def _baseline_command(
+    args: argparse.Namespace,
+    *,
+    flight: str,
+    output_dir: Path,
+) -> list[str]:
+    """Return the baseline command for one covariance-candidate run.
+
+    The default path intentionally mirrors the maintained SOTA tracklet preset:
+    canonical wrapper, range-covariance Viterbi association, IMM replay, robust
+    NIS inflation, and fixed-lag smoothing.  The legacy standalone script remains
+    available for historical experiments through ``--baseline-script``.
+    """
+
+    extra_args = [str(arg) for arg in getattr(args, "baseline_arg", [])]
+    runner = _resolved_baseline_runner(args)
+    if runner == "legacy-script":
+        baseline_script = getattr(args, "baseline_script", None) or DEFAULT_LEGACY_BASELINE_SCRIPT
+        return [
+            sys.executable,
+            str(baseline_script),
+            str(args.dataset_root),
+            "--flight",
+            flight,
+            "--output-dir",
+            str(output_dir),
+            *extra_args,
+        ]
+    if runner == "canonical-tracklet":
+        return [
+            sys.executable,
+            "-m",
+            "raft_uav.tracklet_viterbi_cli",
+            "run-baseline",
+            str(args.dataset_root),
+            "--flight",
+            flight,
+            "--output-dir",
+            str(output_dir),
+            "--radar-association",
+            "tracklet-viterbi",
+            "--radar-catprob-threshold",
+            _format_float(getattr(args, "radar_catprob_threshold", 0.4)),
+            "--tracklet-variant",
+            "range-covariance",
+            "--tracklet-replay-tracker",
+            "imm",
+            "--acceleration-std",
+            _format_float(getattr(args, "acceleration_std", 4.0)),
+            "--rf-gate-prob",
+            _format_float(getattr(args, "rf_gate_prob", 0.99)),
+            "--radar-gate-prob",
+            _format_float(getattr(args, "radar_gate_prob", 0.99)),
+            "--rf-safety-gate-prob",
+            _format_float(getattr(args, "rf_safety_gate_prob", 0.9999999)),
+            "--radar-safety-gate-prob",
+            _format_float(getattr(args, "radar_safety_gate_prob", 0.9999999)),
+            "--rf-max-residual-m",
+            _format_float(getattr(args, "rf_max_residual_m", 750.0)),
+            "--radar-max-residual-m",
+            _format_float(getattr(args, "radar_max_residual_m", 0.0)),
+            "--robust-update",
+            str(getattr(args, "robust_update", "nis-inflate")),
+            "--rf-inflation-alpha",
+            _format_float(getattr(args, "rf_inflation_alpha", 0.5)),
+            "--radar-inflation-alpha",
+            _format_float(getattr(args, "radar_inflation_alpha", 0.5)),
+            "--smoother",
+            "fixed-lag",
+            "--smoother-lag-s",
+            _format_float(getattr(args, "fixed_lag_s", 20.0)),
+            *extra_args,
+        ]
+    raise ValueError(f"unknown baseline runner {runner!r}")
+
+
+def _resolved_baseline_runner(args: argparse.Namespace) -> str:
+    runner = getattr(args, "baseline_runner", "canonical-tracklet")
+    if getattr(args, "baseline_script", None) is not None and runner == "canonical-tracklet":
+        return "legacy-script"
+    return str(runner)
 
 
 def _select_candidate(
