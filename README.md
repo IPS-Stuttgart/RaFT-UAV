@@ -172,6 +172,21 @@ raft-uav-paper-fingerprint data/raw/AADM2025Dryad \
   --output-dir outputs/paper-fingerprint
 ```
 
+When the paper-reference counts still do not match, enumerate both likely file
+variants and the radar-track selection-order ambiguity before changing tracker
+parameters. The summary CSV is ranked by absolute count delta, so the top row is
+the best paper-fingerprint candidate for a subsequent `raft-uav-paper-strict`
+run:
+
+```bash
+raft-uav-paper-fingerprint data/raw/AADM2025Dryad \
+  --flight Opt1 \
+  --origin-config config/origins.toml \
+  --enumerate-file-variants \
+  --enumerate-radar-track-selection-orders \
+  --output-dir outputs/paper-fingerprint-grid
+```
+
 For LW1-origin reproduction, pass the origin explicitly because the coordinates
 are not hard-coded in the repository:
 
