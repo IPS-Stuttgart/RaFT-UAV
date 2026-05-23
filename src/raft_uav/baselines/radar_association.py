@@ -570,27 +570,6 @@ def run_async_cv_baseline_with_radar_association(
         records.append(record)
 
     selected_frame = _selected_rows_frame(radar, selected_rows)
-    selected_frame.attrs["attempted_selected_radar"] = paper_track.copy()
-    stage_counts = dict(paper_track.attrs.get("paper_compatible_stage_counts", {}))
-    accepted_rf = int(
-        sum(
-            1
-            for record in records
-            if str(record.get("source")) == "rf" and bool(record.get("accepted", False))
-        )
-    )
-    updated = int(sum(1 for record in records if bool(record.get("accepted", False))))
-    stage_counts.update(
-        {
-            "rf_raw_rows": int(len(rf_measurements)),
-            "rf_after_nis_rows": accepted_rf,
-            "radar_after_nis_rows": int(len(selected_frame)),
-            "kf_all_steps_rows": int(len(records)),
-            "kf_updated_rows": updated,
-            "kf_coasted_rows": int(len(records) - updated),
-        }
-    )
-    selected_frame.attrs["paper_compatible_stage_counts"] = stage_counts
     return records, selected_frame
 
 
@@ -854,7 +833,29 @@ def _run_paper_compatible_association(
         record.update(policy_record_fields(selected))
         records.append(record)
 
-    return records, _selected_rows_frame(radar, selected_rows)
+    selected_frame = _selected_rows_frame(radar, selected_rows)
+    selected_frame.attrs["attempted_selected_radar"] = paper_track.copy()
+    stage_counts = dict(paper_track.attrs.get("paper_compatible_stage_counts", {}))
+    accepted_rf = int(
+        sum(
+            1
+            for record in records
+            if str(record.get("source")) == "rf" and bool(record.get("accepted", False))
+        )
+    )
+    updated = int(sum(1 for record in records if bool(record.get("accepted", False))))
+    stage_counts.update(
+        {
+            "rf_raw_rows": int(len(rf_measurements)),
+            "rf_after_nis_rows": accepted_rf,
+            "radar_after_nis_rows": int(len(selected_frame)),
+            "kf_all_steps_rows": int(len(records)),
+            "kf_updated_rows": updated,
+            "kf_coasted_rows": int(len(records) - updated),
+        }
+    )
+    selected_frame.attrs["paper_compatible_stage_counts"] = stage_counts
+    return records, selected_frame
 
 
 def _initial_paper_compatible_measurement_and_row(
@@ -1019,11 +1020,7 @@ def _paper_compatible_preselector_pool(
             "association_preselector_range_gated_rows",
             range_count,
         )
-        pool["association_preselector_segment_rows"] = _preselector_count(
-            candidates,
-            "association_preselector_segment_rows",
-            int(len(pool)),
-        )
+        pool["association_preselector_segment_rows"] = int(len(pool))
         pool["association_preselector_catprob_rows"] = _preselector_count(
             candidates,
             "association_preselector_catprob_rows",
