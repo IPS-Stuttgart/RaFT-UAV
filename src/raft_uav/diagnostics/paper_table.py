@@ -11,6 +11,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.calibration.empirical_covariance import (
+    apply_empirical_covariance,
+    estimate_empirical_measurement_covariances,
+)
 from raft_uav.baselines.kalman import (
     AsyncConstantVelocityKalmanTracker,
     TrackingMeasurement,
@@ -75,6 +79,14 @@ FUSION_ASSOCIATIONS = (
     "paper-longest-track",
     "paper-stable-segments",
 )
+PAPER_NIS_GATE_PROBABILITY = 0.95
+PAPER_REFERENCE_COUNT_CHECKS = (
+    ("RF raw", "selected_count", 206),
+    ("radar-longest-continuous-track-range-gated", "selected_count", 2403),
+    ("fusion-paper-compatible", "selected_count", 2655),
+    ("fusion-paper-compatible", "accepted_measurements", 2528),
+    ("fusion-paper-compatible", "coasted_measurements", 127),
+)
 
 
 @dataclass(frozen=True)
@@ -118,14 +130,39 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stable-segment-min-frames", type=int, default=100)
     parser.add_argument("--stable-segment-max-transition-speed-mps", type=float, default=65.0)
     parser.add_argument(
+        "--empirical-covariance",
+        action="store_true",
+        help="estimate paper-style RF/radar covariance from residuals to truth and use it for NIS/update covariances",
+    )
+    parser.add_argument(
+        "--empirical-covariance-min-variance-m2",
+        type=float,
+        default=1.0,
+        help="diagonal variance floor for empirical covariance matrices",
+    )
+    parser.add_argument(
+        "--disable-radar-catprob-threshold",
+        action="store_true",
+        help="disable hard radar catProb filtering in paper-compatible fusion rows",
+    )
+    parser.add_argument(
+        "--assert-reference-counts",
+        action="store_true",
+        help="fail if paper-compatible diagnostic counts differ from the reference table",
+    )
+    parser.add_argument("--reference-count-tolerance", type=int, default=0)
+    parser.add_argument("--enu-origin-lat", type=float, default=None)
+    parser.add_argument("--enu-origin-lon", type=float, default=None)
+    parser.add_argument("--enu-origin-alt-m", type=float, default=None)
+    parser.add_argument(
         "--radar-selection",
         action="append",
         choices=RADAR_SELECTIONS,
         default=None,
         help="radar table row to include; repeat to limit the diagnostic to selected rows",
     )
-    parser.add_argument("--fusion-nis-gate-prob", type=float, default=0.95)
-    parser.add_argument("--rf-nis-gate-prob", type=float, default=0.95)
+    parser.add_argument("--fusion-nis-gate-prob", type=float, default=PAPER_NIS_GATE_PROBABILITY)
+    parser.add_argument("--rf-nis-gate-prob", type=float, default=PAPER_NIS_GATE_PROBABILITY)
     parser.add_argument("--truth-time-gate-s", type=float, default=2.0)
     parser.add_argument("--acceleration-std", type=float, default=4.0)
     parser.add_argument("--smoother-lag-s", type=float, default=20.0)
@@ -158,6 +195,11 @@ def main(argv: list[str] | None = None) -> int:
         ),
         stable_segment_min_frames=args.stable_segment_min_frames,
         stable_segment_max_transition_speed_mps=args.stable_segment_max_transition_speed_mps,
+        empirical_covariance=args.empirical_covariance,
+        empirical_covariance_min_variance_m2=args.empirical_covariance_min_variance_m2,
+        assert_reference_counts=args.assert_reference_counts,
+        reference_count_tolerance=args.reference_count_tolerance,
+        enu_origin_lla=_enu_origin_lla_from_args(args),
         radar_selections=tuple(args.radar_selection or RADAR_SELECTIONS),
         fusion_nis_gate_prob=args.fusion_nis_gate_prob,
         rf_nis_gate_prob=args.rf_nis_gate_prob,
@@ -166,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         smoother_lag_s=args.smoother_lag_s,
         include_smoothed_fusion=args.include_smoothed_fusion,
         include_fusion=not args.skip_fusion,
+        disable_radar_catprob_threshold=args.disable_radar_catprob_threshold,
         fusion_associations=tuple(args.fusion_association or FUSION_ASSOCIATIONS),
     )
     print(f"flight={result['flight']}")
@@ -186,14 +229,20 @@ def run_paper_table_diagnostic(
     radar_interpolation_max_speed_mps: float | None = None,
     stable_segment_min_frames: int = 100,
     stable_segment_max_transition_speed_mps: float = 65.0,
+    empirical_covariance: bool = False,
+    empirical_covariance_min_variance_m2: float = 1.0,
+    assert_reference_counts: bool = False,
+    reference_count_tolerance: int = 0,
+    enu_origin_lla: tuple[float, float, float] | None = None,
     radar_selections: tuple[str, ...] = RADAR_SELECTIONS,
-    fusion_nis_gate_prob: float = 0.95,
-    rf_nis_gate_prob: float = 0.95,
+    fusion_nis_gate_prob: float = PAPER_NIS_GATE_PROBABILITY,
+    rf_nis_gate_prob: float = PAPER_NIS_GATE_PROBABILITY,
     truth_time_gate_s: float = 2.0,
     acceleration_std_mps2: float = 4.0,
     smoother_lag_s: float = 20.0,
     include_smoothed_fusion: bool = False,
     include_fusion: bool = True,
+    disable_radar_catprob_threshold: bool = False,
     fusion_associations: tuple[str, ...] = FUSION_ASSOCIATIONS,
 ) -> dict[str, Any]:
     """Build and write a paper-style comparison table for one flight."""
@@ -215,7 +264,10 @@ def run_paper_table_diagnostic(
     if flight.truth_txt is None:
         raise FileNotFoundError(f"{flight.name} has no truth telemetry file")
     truth_raw = read_truth(flight.truth_txt)
-    truth, projector, truth_origin_time = normalize_truth(truth_raw)
+    truth, projector, truth_origin_time = normalize_truth(
+        truth_raw,
+        enu_origin_lla=enu_origin_lla,
+    )
     truth = truth.sort_values("time_s").reset_index(drop=True)
 
     rf = pd.DataFrame()
@@ -233,6 +285,31 @@ def run_paper_table_diagnostic(
             normalize_radar(read_radar_tracks_json(flight.radar_json), projector, truth_origin_time),
             truth,
         )
+
+    empirical_covariance_summary: dict[str, Any] | None = None
+    if empirical_covariance:
+        empirical_covariance_summary = estimate_empirical_measurement_covariances(
+            rf=rf,
+            radar=radar,
+            truth=truth,
+            max_time_delta_s=truth_time_gate_s,
+            min_variance_m2=empirical_covariance_min_variance_m2,
+        )
+        rf = apply_empirical_covariance(
+            rf,
+            source="rf",
+            covariance_payload=empirical_covariance_summary,
+        )
+        radar = apply_empirical_covariance(
+            radar,
+            source="radar",
+            covariance_payload=empirical_covariance_summary,
+        )
+        rf_measurements = rf_measurements_to_enu(rf) if not rf.empty else []
+
+    effective_radar_catprob_threshold = (
+        None if disable_radar_catprob_threshold else radar_catprob_threshold
+    )
 
     rows: list[dict[str, Any]] = []
     if not rf.empty:
@@ -255,7 +332,7 @@ def run_paper_table_diagnostic(
                 radar=radar,
                 truth=truth,
                 selection=selection,
-                catprob_threshold=radar_catprob_threshold,
+                catprob_threshold=effective_radar_catprob_threshold,
                 range_gate_m=radar_range_gate_m if selection in RANGE_GATED_RADAR_SELECTIONS else None,
                 radar_interpolation_max_gap_s=radar_interpolation_max_gap_s,
                 radar_interpolation_max_speed_mps=radar_interpolation_max_speed_mps,
@@ -290,6 +367,7 @@ def run_paper_table_diagnostic(
                     radar=radar,
                     truth=truth,
                     radar_catprob_threshold=radar_catprob_threshold,
+                    fusion_radar_catprob_threshold=effective_radar_catprob_threshold,
                     radar_range_gate_m=radar_range_gate_m,
                     fusion_nis_gate_prob=fusion_nis_gate_prob,
                     rf_nis_gate_prob=rf_nis_gate_prob,
@@ -308,6 +386,19 @@ def run_paper_table_diagnostic(
     table_csv = flight_output / "paper_table.csv"
     summary_json = flight_output / "paper_table_summary.json"
     table.to_csv(table_csv, index=False)
+    empirical_covariance_json = None
+    if empirical_covariance_summary is not None:
+        empirical_covariance_json = flight_output / "empirical_covariance.json"
+        empirical_covariance_json.write_text(
+            json.dumps(empirical_covariance_summary, indent=2, allow_nan=False),
+            encoding="utf-8",
+        )
+    reference_count_check = paper_reference_count_check(
+        table,
+        tolerance=reference_count_tolerance,
+    )
+    if assert_reference_counts and not reference_count_check["passed"]:
+        raise AssertionError(reference_count_check["message"])
     payload = {
         "flight": flight.name,
         "rows": int(len(table)),
@@ -321,10 +412,17 @@ def run_paper_table_diagnostic(
         else float(radar_interpolation_max_speed_mps),
         "stable_segment_min_frames": int(stable_segment_min_frames),
         "stable_segment_max_transition_speed_mps": float(stable_segment_max_transition_speed_mps),
+        "empirical_covariance": bool(empirical_covariance),
+        "empirical_covariance_json": None
+        if empirical_covariance_json is None
+        else str(empirical_covariance_json),
+        "enu_origin_lla": None if enu_origin_lla is None else list(enu_origin_lla),
+        "disable_radar_catprob_threshold": bool(disable_radar_catprob_threshold),
         "radar_selections": list(radar_selections),
         "fusion_nis_gate_prob": float(fusion_nis_gate_prob),
         "rf_nis_gate_prob": float(rf_nis_gate_prob),
         "truth_time_gate_s": float(truth_time_gate_s),
+        "reference_count_check": reference_count_check,
         "include_smoothed_fusion": bool(include_smoothed_fusion),
         "table_csv": str(table_csv),
         "methods": table["method"].tolist() if "method" in table else [],
@@ -340,6 +438,7 @@ def fusion_rows(
     radar: pd.DataFrame,
     truth: pd.DataFrame,
     radar_catprob_threshold: float,
+    fusion_radar_catprob_threshold: float | None,
     radar_range_gate_m: float | None,
     fusion_nis_gate_prob: float,
     rf_nis_gate_prob: float,
@@ -360,7 +459,7 @@ def fusion_rows(
                 truth=truth,
                 acceleration_std_mps2=acceleration_std_mps2,
                 radar_range_gate_m=radar_range_gate_m,
-                radar_catprob_threshold=radar_catprob_threshold,
+                radar_catprob_threshold=fusion_radar_catprob_threshold,
                 nis_gate_probability=fusion_nis_gate_prob,
                 rf_nis_gate_probability=rf_nis_gate_prob,
                 truth_time_gate_s=max_time_delta_s,
@@ -380,7 +479,7 @@ def fusion_rows(
                 radar=radar,
                 acceleration_std_mps2=acceleration_std_mps2,
                 radar_range_gate_m=radar_range_gate_m,
-                radar_catprob_threshold=radar_catprob_threshold,
+                radar_catprob_threshold=fusion_radar_catprob_threshold,
                 nis_gate_probability=fusion_nis_gate_prob,
                 rf_nis_gate_probability=rf_nis_gate_prob,
                 stable_segment_min_frames=stable_segment_min_frames,
@@ -393,7 +492,7 @@ def fusion_rows(
                 association=association,
                 truth=truth,
                 acceleration_std_mps2=acceleration_std_mps2,
-                candidate_catprob_threshold=radar_catprob_threshold,
+                candidate_catprob_threshold=fusion_radar_catprob_threshold,
             )
     except Exception as exc:
         return [_failed_row(f"fusion-{association}", exc)]
@@ -402,6 +501,7 @@ def fusion_rows(
 
     rows = []
     estimate = _records_to_frame(records)
+    fusion_extra = _fusion_run_diagnostics(estimate, selected)
     rows.append(
         metric_row(
             method=f"fusion-{association}",
@@ -413,6 +513,7 @@ def fusion_rows(
             selected_count=len(estimate),
             max_time_delta_s=max_time_delta_s,
             track_ids=_track_ids(selected),
+            extra_fields=fusion_extra,
         )
     )
     if not include_smoothed_fusion:
@@ -435,6 +536,7 @@ def fusion_rows(
             selected_count=len(smoothed),
             max_time_delta_s=max_time_delta_s,
             track_ids=_track_ids(selected),
+            extra_fields=fusion_extra,
         )
     )
     return rows
@@ -1542,6 +1644,78 @@ def metric_row(
     row.update(_error_summary(errors_2d, prefix="error_2d"))
     row.update(_error_summary(errors_3d, prefix="error_3d"))
     return row
+
+
+def _fusion_run_diagnostics(estimate: pd.DataFrame, selected_radar: pd.DataFrame) -> dict[str, int]:
+    """Return count diagnostics needed to reproduce the paper table."""
+
+    if estimate.empty:
+        return {
+            "selected_radar_count": int(len(selected_radar)),
+            "accepted_measurements": 0,
+            "coasted_measurements": 0,
+            "accepted_rf_measurements": 0,
+            "accepted_radar_measurements": 0,
+        }
+    accepted = estimate["accepted"].fillna(False).astype(bool)
+    source = estimate["source"].astype(str)
+    update_action = estimate["update_action"].astype(str)
+    return {
+        "selected_radar_count": int(len(selected_radar)),
+        "accepted_measurements": int(accepted.sum()),
+        "coasted_measurements": int((update_action == "missed_detection").sum()),
+        "accepted_rf_measurements": int((accepted & (source == "rf")).sum()),
+        "accepted_radar_measurements": int((accepted & (source == "radar")).sum()),
+    }
+
+
+def paper_reference_count_check(table: pd.DataFrame, *, tolerance: int = 0) -> dict[str, Any]:
+    """Compare diagnostic counts against the reference-paper count targets."""
+
+    rows: list[dict[str, Any]] = []
+    passed = True
+    for method, column, expected in PAPER_REFERENCE_COUNT_CHECKS:
+        match = table.loc[table.get("method") == method] if "method" in table else pd.DataFrame()
+        if match.empty or column not in match.columns:
+            rows.append(
+                {
+                    "method": method,
+                    "column": column,
+                    "expected": int(expected),
+                    "actual": None,
+                    "delta": None,
+                    "passed": False,
+                }
+            )
+            passed = False
+            continue
+        actual = int(pd.to_numeric(match.iloc[0][column], errors="coerce"))
+        delta = actual - int(expected)
+        ok = abs(delta) <= int(tolerance)
+        rows.append(
+            {
+                "method": method,
+                "column": column,
+                "expected": int(expected),
+                "actual": actual,
+                "delta": int(delta),
+                "passed": bool(ok),
+            }
+        )
+        passed &= bool(ok)
+    message = "paper reference counts matched" if passed else f"paper reference count mismatch: {rows}"
+    return {"passed": bool(passed), "tolerance": int(tolerance), "checks": rows, "message": message}
+
+
+def _enu_origin_lla_from_args(args: argparse.Namespace) -> tuple[float, float, float] | None:
+    values = (args.enu_origin_lat, args.enu_origin_lon, args.enu_origin_alt_m)
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise ValueError(
+            "--enu-origin-lat, --enu-origin-lon, and --enu-origin-alt-m must be provided together"
+        )
+    return (float(values[0]), float(values[1]), float(values[2]))
 
 
 def _radar_selection_diagnostics(selected: pd.DataFrame) -> dict[str, object]:

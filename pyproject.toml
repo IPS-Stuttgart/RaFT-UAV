@@ -55,6 +55,7 @@ raft-uav-result-improvement-suite = "raft_uav.research.result_improvement_suite:
 raft-uav-comprehensive-result-report = "raft_uav.research.comprehensive_result_report_cli:main"
 raft-uav-radar-segment-fingerprint = "raft_uav.diagnostics.radar_fingerprint:main"
 raft-uav-paper-offset-sweep = "raft_uav.diagnostics.paper_offset_sweep:main"
+raft-uav-paper-parity-grid = "raft_uav.diagnostics.paper_parity_grid:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
