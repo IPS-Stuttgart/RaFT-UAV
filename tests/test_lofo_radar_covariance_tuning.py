@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from types import SimpleNamespace
 from pathlib import Path
 
 import pandas as pd
@@ -128,9 +127,10 @@ def test_baseline_script_option_preserves_legacy_command_path():
 
     command = module._baseline_command(args, flight="Opt1", output_dir=Path("out"))
 
-    assert command[:2] == [module.sys.executable, "scripts/custom_tracklet.py"]
-    assert command[2:7] == [
-        "data/raw/AADM2025Dryad",
+    assert command[0] == module.sys.executable
+    assert Path(command[1]) == Path("scripts/custom_tracklet.py")
+    assert Path(command[2]) == Path("data/raw/AADM2025Dryad")
+    assert command[3:7] == [
         "--flight",
         "Opt1",
         "--output-dir",

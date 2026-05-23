@@ -20,7 +20,9 @@ import numpy as np
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(SCRIPT_DIR))
 
 import ablation_common as common  # noqa: E402
 from raft_uav.evaluation.metrics import nearest_time_indices, position_errors_m  # noqa: E402
