@@ -14,6 +14,7 @@ import pandas as pd
 
 from raft_uav.baselines.kalman import run_async_cv_baseline
 from raft_uav.baselines.radar_association import (
+    PAPER_COMPATIBLE_BOOTSTRAP_SOURCES,
     RADAR_ASSOCIATION_MODES,
     RADAR_COVARIANCE_MODELS,
     run_async_cv_baseline_with_radar_association,
@@ -134,6 +135,21 @@ def main(argv: list[str] | None = None) -> int:
         help="legacy radar row selection; overrides --radar-association when provided",
     )
     baseline_parser.add_argument("--radar-catprob-threshold", type=float, default=0.5)
+    baseline_parser.add_argument(
+        "--paper-compatible-catprob-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Optional UAV class-probability gate for --radar-association paper-compatible. "
+            "By default paper-compatible does not apply catProb, matching the strict paper path."
+        ),
+    )
+    baseline_parser.add_argument(
+        "--paper-compatible-bootstrap-source",
+        choices=PAPER_COMPATIBLE_BOOTSTRAP_SOURCES,
+        default="radar",
+        help="Bootstrap source for paper-compatible fusion; radar is the paper-parity default.",
+    )
     baseline_parser.add_argument(
         "--radar-covariance-model",
         choices=RADAR_COVARIANCE_MODELS,
@@ -454,6 +470,8 @@ def main(argv: list[str] | None = None) -> int:
             args.radar_time_offset_correction_s,
             args.calibration_bundle,
             args.radar_catprob_threshold,
+            args.paper_compatible_catprob_threshold,
+            args.paper_compatible_bootstrap_source,
             args.radar_covariance_model,
             args.radar_range_std_m,
             args.radar_range_std_fraction,
@@ -549,6 +567,8 @@ def _run_baseline(
     radar_time_offset_correction_s: float,
     calibration_bundle_path: Path | None,
     radar_catprob_threshold: float,
+    paper_compatible_catprob_threshold: float | None,
+    paper_compatible_bootstrap_source: str,
     radar_covariance_model: str,
     radar_range_std_m: float,
     radar_range_std_fraction: float,
@@ -806,6 +826,8 @@ def _run_baseline(
             stable_segment_rf_score_weight=stable_segment_rf_score_weight,
             stable_segment_rf_time_gate_s=stable_segment_rf_time_gate_s,
             stable_segment_rf_nis_cap=stable_segment_rf_nis_cap,
+            paper_compatible_catprob_threshold=paper_compatible_catprob_threshold,
+            paper_compatible_bootstrap_source=paper_compatible_bootstrap_source,
             truth_gate_m=truth_gate_m,
             truth_time_gate_s=truth_time_gate_s,
         )
@@ -898,6 +920,8 @@ def _run_baseline(
         acceleration_std=acceleration_std,
         radar_association=radar_mode,
         radar_catprob_threshold=radar_catprob_threshold,
+        paper_compatible_catprob_threshold=paper_compatible_catprob_threshold,
+        paper_compatible_bootstrap_source=paper_compatible_bootstrap_source,
         radar_covariance_model=radar_covariance_model,
         radar_range_std_m=radar_range_std_m,
         radar_range_std_fraction=radar_range_std_fraction,
@@ -1100,6 +1124,8 @@ def _baseline_metrics(
     acceleration_std: float,
     radar_association: str,
     radar_catprob_threshold: float,
+    paper_compatible_catprob_threshold: float | None = None,
+    paper_compatible_bootstrap_source: str = "radar",
     radar_covariance_model: str = "cartesian",
     radar_range_std_m: float = 12.0,
     radar_range_std_fraction: float = 0.005,
@@ -1249,6 +1275,11 @@ def _baseline_metrics(
             "paper_position_error_2d/3d": (
                 "paper-style errors: every finite estimate row is compared to nearest truth"
             ),
+            "metric_protocols": {
+                "position_error_2d/3d": "truth_grid_interpolated_rmse_p95",
+                "paper_position_error_2d/3d": "sample_time_nearest_truth_mean_std_max",
+                "paper_sampled_position_error_2d/3d": "sample_time_nearest_truth_mean_std_max",
+            },
         },
         "state": ["east", "north", "up", "v_east", "v_north", "v_up"],
         "acceleration_std_mps2": float(acceleration_std),
@@ -1265,6 +1296,13 @@ def _baseline_metrics(
         "radar_selection": radar_association,
         "radar_association": radar_association,
         "radar_catprob_threshold": float(radar_catprob_threshold),
+        "paper_compatible": {
+            "catprob_threshold": None
+            if paper_compatible_catprob_threshold is None
+            else float(paper_compatible_catprob_threshold),
+            "bootstrap_source": str(paper_compatible_bootstrap_source),
+            "range_gate_source": "Fortem range_m when a range gate is configured",
+        },
         "truth_gate_m": float(truth_gate_m),
         "truth_time_gate_s": float(truth_time_gate_s),
         "track_switch_nis_ratio": float(track_switch_nis_ratio),

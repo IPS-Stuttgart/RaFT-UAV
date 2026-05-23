@@ -64,3 +64,6 @@ line-length = 100
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "--basetemp=.pytest-tmp"
+markers = [
+    "integration: tests that require the external AERPAW/Dryad dataset",
+]
