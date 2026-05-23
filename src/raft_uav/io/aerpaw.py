@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -20,6 +21,8 @@ DEFAULT_RF_CLOCK_OFFSET_S = DEFAULT_SENSOR_CLOCK_OFFSET_S
 DEFAULT_RADAR_CLOCK_OFFSET_S = DEFAULT_SENSOR_CLOCK_OFFSET_S
 # Backward-compatible alias for callers that imported the historical shared name.
 SENSOR_CLOCK_OFFSET_S = DEFAULT_SENSOR_CLOCK_OFFSET_S
+RADAR_SENSOR_ORIGIN_LLA_ENV = "RAFT_UAV_RADAR_SENSOR_ORIGIN_LLA"
+RADAR_SENSOR_ORIGIN_ENU_ENV = "RAFT_UAV_RADAR_SENSOR_ORIGIN_ENU"
 RADAR_SELECTION_MODES = ("catprob", "catprob-all", "truth-gated", "all", "none")
 FLIGHT_FILE_VARIANTS = ("auto", "original", "rerun")
 TRUTH_COLUMNS = [
@@ -368,6 +371,12 @@ def normalize_radar(
         out["altitude_m"].to_numpy(),
     )
     out[["east_m", "north_m", "up_m"]] = enu
+    sensor_origin = _radar_sensor_origin_enu_from_environment(projector)
+    if sensor_origin is not None:
+        out["radar_sensor_east_m"] = float(sensor_origin[0])
+        out["radar_sensor_north_m"] = float(sensor_origin[1])
+        out["radar_sensor_up_m"] = float(sensor_origin[2])
+        out["radar_sensor_origin_source"] = "environment"
     return out
 
 
@@ -692,6 +701,44 @@ def _flatten_track(
         "cat_prob_uav": _list_get(cat_prob, 0),
         "cat_prob_raw": cat_prob,
     }
+
+
+def _radar_sensor_origin_enu_from_environment(
+    projector: LocalENUProjector,
+) -> np.ndarray | None:
+    """Return optional Fortem sensor origin in ENU coordinates."""
+
+    enu_value = os.environ.get(RADAR_SENSOR_ORIGIN_ENU_ENV)
+    if enu_value:
+        return _parse_env_vector(enu_value, expected=3, name=RADAR_SENSOR_ORIGIN_ENU_ENV)
+
+    lla_value = os.environ.get(RADAR_SENSOR_ORIGIN_LLA_ENV)
+    if not lla_value:
+        return None
+    lla = _parse_env_vector(lla_value, expected=3, name=RADAR_SENSOR_ORIGIN_LLA_ENV)
+    sensor_enu = projector.transform_many(
+        np.array([lla[0]], dtype=float),
+        np.array([lla[1]], dtype=float),
+        np.array([lla[2]], dtype=float),
+    )
+    return np.asarray(sensor_enu[0], dtype=float)
+
+
+def _parse_env_vector(value: str, *, expected: int, name: str) -> np.ndarray:
+    parts = [part.strip() for part in str(value).split(",")]
+    if len(parts) != expected:
+        raise ValueError(f"{name} must contain {expected} comma-separated numbers")
+    try:
+        vector = np.array([float(part) for part in parts], dtype=float)
+    except ValueError as exc:
+        raise ValueError(f"{name} must contain numeric values") from exc
+    if not np.isfinite(vector).all():
+        raise ValueError(f"{name} must contain finite values")
+    if name == RADAR_SENSOR_ORIGIN_LLA_ENV:
+        lat, lon, _alt = vector
+        if not -90.0 <= lat <= 90.0 or not -180.0 <= lon <= 180.0:
+            raise ValueError(f"{name} must contain LAT,LON,ALT")
+    return vector
 
 
 def _first_present(mapping: dict[str, Any], *keys: str) -> Any:

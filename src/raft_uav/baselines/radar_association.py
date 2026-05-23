@@ -29,6 +29,7 @@ from raft_uav.baselines.update_logic import (
     max_residual_norm_for_measurement,
     plan_linear_measurement_update,
 )
+from raft_uav.evaluation.metrics import empirical_position_covariance_at_times
 from raft_uav.numeric import optional_float, optional_int
 
 RadarCovarianceFn = Callable[[pd.Series, np.ndarray], np.ndarray]
@@ -167,6 +168,7 @@ def run_async_cv_baseline_with_radar_association(
     stable_segment_rf_nis_cap: float = 25.0,
     paper_compatible_catprob_threshold: float | None = None,
     paper_compatible_bootstrap_source: str = "radar",
+    paper_compatible_empirical_covariance: bool = True,
     truth_gate_m: float = 150.0,
     truth_time_gate_s: float = 1.0,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
@@ -323,6 +325,9 @@ def run_async_cv_baseline_with_radar_association(
             track_switch_penalty=geometry_switch_penalty,
             catprob_weight=geometry_catprob_weight,
             bootstrap_source=paper_compatible_bootstrap_source,
+            truth=truth,
+            empirical_covariance=paper_compatible_empirical_covariance,
+            truth_time_gate_s=truth_time_gate_s,
         )
     if association == "track-bank":
         _validate_normalized_radar_for_association(radar)
@@ -564,7 +569,8 @@ def run_async_cv_baseline_with_radar_association(
         record.update(policy_record_fields(selected))
         records.append(record)
 
-    return records, _selected_rows_frame(radar, selected_rows)
+    selected_frame = _selected_rows_frame(radar, selected_rows)
+    return records, selected_frame
 
 
 def _validate_normalized_radar_for_association(radar: pd.DataFrame) -> None:
@@ -620,6 +626,9 @@ def _run_paper_compatible_association(
     track_switch_penalty: float,
     catprob_weight: float,
     bootstrap_source: str,
+    truth: pd.DataFrame | None,
+    empirical_covariance: bool,
+    truth_time_gate_s: float,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
     """Run the paper-compatible hard-gated radar association inside the baseline.
 
@@ -640,6 +649,19 @@ def _run_paper_compatible_association(
         range_gate_m=range_gate_m,
         catprob_threshold=candidate_catprob_threshold,
     )
+    if empirical_covariance and truth is not None:
+        covariance = _empirical_radar_covariance_from_frame(
+            paper_track,
+            truth=truth,
+            fallback=covariance,
+            truth_time_gate_s=truth_time_gate_s,
+        )
+        rf_covariance = _empirical_rf_covariance_from_measurements(
+            rf_measurements,
+            truth=truth,
+            truth_time_gate_s=truth_time_gate_s,
+        )
+        rf_measurements = _with_shared_measurement_covariance(rf_measurements, rf_covariance)
     paper_track_by_key = {_radar_row_key(row): row for _, row in paper_track.iterrows()}
     initial = _initial_paper_compatible_measurement_and_row(
         events,
@@ -811,7 +833,29 @@ def _run_paper_compatible_association(
         record.update(policy_record_fields(selected))
         records.append(record)
 
-    return records, _selected_rows_frame(radar, selected_rows)
+    selected_frame = _selected_rows_frame(radar, selected_rows)
+    selected_frame.attrs["attempted_selected_radar"] = paper_track.copy()
+    stage_counts = dict(paper_track.attrs.get("paper_compatible_stage_counts", {}))
+    accepted_rf = int(
+        sum(
+            1
+            for record in records
+            if str(record.get("source")) == "rf" and bool(record.get("accepted", False))
+        )
+    )
+    updated = int(sum(1 for record in records if bool(record.get("accepted", False))))
+    stage_counts.update(
+        {
+            "rf_raw_rows": int(len(rf_measurements)),
+            "rf_after_nis_rows": accepted_rf,
+            "radar_after_nis_rows": int(len(selected_frame)),
+            "kf_all_steps_rows": int(len(records)),
+            "kf_updated_rows": updated,
+            "kf_coasted_rows": int(len(records) - updated),
+        }
+    )
+    selected_frame.attrs["paper_compatible_stage_counts"] = stage_counts
+    return records, selected_frame
 
 
 def _initial_paper_compatible_measurement_and_row(
@@ -976,11 +1020,7 @@ def _paper_compatible_preselector_pool(
             "association_preselector_range_gated_rows",
             range_count,
         )
-        pool["association_preselector_segment_rows"] = _preselector_count(
-            candidates,
-            "association_preselector_segment_rows",
-            int(len(pool)),
-        )
+        pool["association_preselector_segment_rows"] = int(len(pool))
         pool["association_preselector_catprob_rows"] = _preselector_count(
             candidates,
             "association_preselector_catprob_rows",
@@ -1765,13 +1805,57 @@ def _select_largest_continuous_radar_track(
     return selected.sort_values(sort_columns).reset_index(drop=True)
 
 
+def _select_largest_continuous_raw_radar_track(radar: pd.DataFrame) -> pd.DataFrame:
+    """Select the largest continuous Fortem track before paper range/class gates."""
+
+    if radar.empty or "track_id" not in radar.columns:
+        return _empty_selected_radar(radar)
+    segments = _stable_track_segments(
+        radar,
+        min_segment_frames=1,
+        rf_measurements=[],
+        rf_score_weight=0.0,
+        rf_time_gate_s=0.0,
+        rf_nis_cap=1.0,
+    )
+    if not segments:
+        return _empty_selected_radar(radar)
+    selected_segment = max(
+        segments,
+        key=lambda item: (
+            item.frames,
+            item.end_time_s - item.start_time_s,
+            item.mean_catprob,
+            -item.start_time_s,
+            -item.track_id,
+        ),
+    )
+    selected = selected_segment.frame.copy()
+    selected["association_mode"] = "paper-compatible"
+    selected["association_action"] = "paper_compatible_raw_largest_continuous_track"
+    selected["association_raw_target_track_rows"] = int(len(selected))
+    selected["association_preselector_raw_rows"] = int(len(radar))
+    selected["association_preselector_track_id"] = int(selected_segment.track_id)
+    sort_columns = [
+        column
+        for column in ("time_s", "frame_index", "track_id", "track_index")
+        if column in selected.columns
+    ]
+    return selected.sort_values(sort_columns).reset_index(drop=True)
+
+
 def _select_paper_compatible_radar_track(
     radar: pd.DataFrame,
     *,
     range_gate_m: float | None,
     catprob_threshold: float | None,
 ) -> pd.DataFrame:
-    """Select paper-compatible anchors after hard range and class filtering."""
+    """Select paper-compatible anchors after hard range and class gates.
+
+    The reference-table fingerprint is sensitive to gate ordering.  Apply the
+    Fortem range gate and optional class-probability gate first, then choose the
+    largest continuous Fortem segment from the surviving candidates.
+    """
 
     range_pool = _range_candidate_pool(
         radar,
@@ -1779,26 +1863,76 @@ def _select_paper_compatible_radar_track(
         require_fortem_range=range_gate_m is not None,
         context="paper-compatible",
     )
-    catprob_pool = _catprob_candidate_pool(
+    selected_pool = _catprob_candidate_pool(
         range_pool,
         catprob_threshold,
         fallback_to_unfiltered=False,
     )
-    selected = _select_largest_continuous_radar_track(catprob_pool, range_gate_m=None)
-    if selected.empty:
-        return selected
-    selected = selected.copy()
+    if selected_pool.empty or "track_id" not in selected_pool.columns:
+        selected_pool.attrs["paper_compatible_stage_counts"] = {
+            "radar_all_track_rows": int(len(radar)),
+            "radar_raw_target_track_rows": int(len(selected_pool)),
+            "radar_after_range_gate_rows": int(len(range_pool)),
+            "radar_largest_continuous_track_rows": 0,
+        }
+        return selected_pool
+
+    segments = _stable_track_segments(
+        selected_pool,
+        min_segment_frames=1,
+        rf_measurements=[],
+        rf_score_weight=0.0,
+        rf_time_gate_s=0.0,
+        rf_nis_cap=1.0,
+    )
+    if not segments:
+        empty = _empty_selected_radar(radar)
+        empty.attrs["attempted_selected_radar"] = selected_pool.copy()
+        empty.attrs["paper_compatible_stage_counts"] = {
+            "radar_all_track_rows": int(len(radar)),
+            "radar_raw_target_track_rows": int(len(selected_pool)),
+            "radar_after_range_gate_rows": int(len(range_pool)),
+            "radar_largest_continuous_track_rows": 0,
+        }
+        return empty
+
+    selected_segment = max(
+        segments,
+        key=lambda item: (
+            item.frames,
+            item.end_time_s - item.start_time_s,
+            item.mean_catprob,
+            -item.start_time_s,
+            -item.track_id,
+        ),
+    )
+    selected = selected_segment.frame.copy()
     selected["association_mode"] = "paper-compatible"
     selected["association_action"] = "paper_compatible_largest_continuous_track_anchor"
     selected["association_preselector_raw_rows"] = int(len(radar))
+    selected["association_preselector_track_id"] = int(selected_segment.track_id)
+    selected["association_raw_target_track_rows"] = int(len(selected))
     selected["association_preselector_range_gated_rows"] = int(len(range_pool))
-    selected["association_preselector_track_id"] = int(selected["association_segment_track_id"].iloc[0])
     selected["association_preselector_track_rows"] = int(len(selected))
-    selected["association_preselector_catprob_rows"] = int(len(catprob_pool))
+    selected["association_preselector_catprob_rows"] = int(len(selected_pool))
     if range_gate_m is not None:
         selected["association_range_gate_m"] = float(range_gate_m)
     if catprob_threshold is not None:
         selected["association_catprob_threshold"] = float(catprob_threshold)
+    sort_columns = [
+        column
+        for column in ("time_s", "frame_index", "track_id", "track_index")
+        if column in selected.columns
+    ]
+    selected = selected.sort_values(sort_columns).reset_index(drop=True)
+    selected.attrs["attempted_selected_radar"] = selected.copy()
+    selected.attrs["paper_compatible_stage_counts"] = {
+        "radar_all_track_rows": int(len(radar)),
+        "radar_raw_target_track_rows": int(len(selected_pool)),
+        "radar_after_range_gate_rows": int(len(range_pool)),
+        "radar_largest_continuous_track_rows": int(len(selected)),
+        "radar_preselected_track_id": _optional_track_id(selected.iloc[0]),
+    }
     return selected
 
 
@@ -3052,9 +3186,11 @@ def _radar_geometry_covariance_for_row(
         return base
     if position.shape != (3,) or not np.all(np.isfinite(position)):
         return base
-    position_norm = float(np.linalg.norm(position))
-    range_m = _radar_row_range_m(row, fallback=position_norm)
-    if position_norm <= 1.0e-9 or range_m <= 0.0:
+    sensor_position = _radar_sensor_position_from_row(row)
+    relative_position = position if sensor_position is None else position - sensor_position
+    relative_norm = float(np.linalg.norm(relative_position))
+    range_m = _radar_row_range_m(row, fallback=relative_norm)
+    if relative_norm <= 1.0e-9 or range_m <= 0.0:
         return base
 
     radial_std_m = max(
@@ -3069,7 +3205,7 @@ def _radar_geometry_covariance_for_row(
             covariance_config.crossrange_max_std_m,
         )
     )
-    unit_los = position / position_norm
+    unit_los = relative_position / relative_norm
     los_projector = np.outer(unit_los, unit_los)
     covariance = (crossrange_std_m**2) * np.eye(3)
     covariance += (radial_std_m**2 - crossrange_std_m**2) * los_projector
@@ -3087,6 +3223,106 @@ def _radar_row_range_m(row: pd.Series, *, fallback: float) -> float:
             if value is not None and np.isfinite(value) and value > 0.0:
                 return float(value)
     return float(fallback)
+
+
+def _radar_sensor_position_from_row(row: pd.Series) -> np.ndarray | None:
+    columns = ("radar_sensor_east_m", "radar_sensor_north_m", "radar_sensor_up_m")
+    if not all(column in row.index for column in columns):
+        return None
+    try:
+        sensor = np.array([float(row[column]) for column in columns], dtype=float)
+    except (TypeError, ValueError):
+        return None
+    return sensor if np.isfinite(sensor).all() else None
+
+
+def _empirical_rf_covariance_from_measurements(
+    measurements: list[TrackingMeasurement],
+    *,
+    truth: pd.DataFrame,
+    truth_time_gate_s: float,
+) -> np.ndarray:
+    fallback = _mean_measurement_covariance(measurements, dim=2, fallback=np.diag([75.0**2, 75.0**2]))
+    if not measurements or truth.empty:
+        return fallback
+    times = np.array([float(measurement.time_s) for measurement in measurements if measurement.vector.size >= 2])
+    positions = np.array([measurement.vector[:2] for measurement in measurements if measurement.vector.size >= 2], dtype=float)
+    if times.size == 0:
+        return fallback
+    covariance = empirical_position_covariance_at_times(
+        estimate_times_s=times,
+        estimate_positions_m=positions,
+        truth_times_s=truth["time_s"].to_numpy(dtype=float),
+        truth_positions_m=truth[["east_m", "north_m"]].to_numpy(dtype=float),
+        max_time_delta_s=truth_time_gate_s,
+        dimensions=2,
+    )
+    return _safe_positive_covariance(covariance, fallback)
+
+
+def _empirical_radar_covariance_from_frame(
+    frame: pd.DataFrame,
+    *,
+    truth: pd.DataFrame,
+    fallback: np.ndarray,
+    truth_time_gate_s: float,
+) -> np.ndarray:
+    fallback = np.asarray(fallback, dtype=float).reshape(3, 3)
+    if frame.empty or truth.empty:
+        return fallback
+    covariance = empirical_position_covariance_at_times(
+        estimate_times_s=frame["time_s"].to_numpy(dtype=float),
+        estimate_positions_m=frame[["east_m", "north_m", "up_m"]].to_numpy(dtype=float),
+        truth_times_s=truth["time_s"].to_numpy(dtype=float),
+        truth_positions_m=truth[["east_m", "north_m", "up_m"]].to_numpy(dtype=float),
+        max_time_delta_s=truth_time_gate_s,
+        dimensions=3,
+    )
+    return _safe_positive_covariance(covariance, fallback)
+
+
+def _with_shared_measurement_covariance(
+    measurements: list[TrackingMeasurement],
+    covariance: np.ndarray,
+) -> list[TrackingMeasurement]:
+    return [
+        TrackingMeasurement(
+            time_s=measurement.time_s,
+            vector=measurement.vector,
+            covariance=np.asarray(covariance, dtype=float).reshape(measurement.vector.size, measurement.vector.size),
+            source=measurement.source,
+        )
+        if measurement.vector.size == np.asarray(covariance).shape[0]
+        else measurement
+        for measurement in measurements
+    ]
+
+
+def _mean_measurement_covariance(
+    measurements: list[TrackingMeasurement],
+    *,
+    dim: int,
+    fallback: np.ndarray,
+) -> np.ndarray:
+    covariances = [measurement.covariance for measurement in measurements if measurement.covariance.shape == (dim, dim)]
+    if not covariances:
+        return np.asarray(fallback, dtype=float).reshape(dim, dim)
+    return _safe_positive_covariance(np.mean(np.stack(covariances, axis=0), axis=0), fallback)
+
+
+def _safe_positive_covariance(candidate: np.ndarray, fallback: np.ndarray) -> np.ndarray:
+    covariance = np.asarray(candidate, dtype=float)
+    fallback = np.asarray(fallback, dtype=float)
+    if covariance.shape != fallback.shape or not np.isfinite(covariance).all():
+        return fallback
+    covariance = 0.5 * (covariance + covariance.T)
+    try:
+        eigvals = np.linalg.eigvalsh(covariance)
+    except np.linalg.LinAlgError:
+        return fallback
+    if np.min(eigvals) <= 0.0:
+        covariance = covariance + np.eye(covariance.shape[0]) * (abs(float(np.min(eigvals))) + 1.0e-6)
+    return covariance
 
 
 def _pda_covariance_mode(candidates: pd.DataFrame) -> str:
