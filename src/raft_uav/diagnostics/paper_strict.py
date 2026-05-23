@@ -33,9 +33,11 @@ from raft_uav.coordinates import LocalENUProjector
 from raft_uav.evaluation.metrics import (
     empirical_position_covariance_at_times,
     position_errors_at_times_m,
-    summarize_errors,
 )
 from raft_uav.io.aerpaw import (
+    DEFAULT_RADAR_CLOCK_OFFSET_S,
+    DEFAULT_RF_CLOCK_OFFSET_S,
+    FlightPaths,
     discover_flights,
     flight_file_manifest,
     normalize_radar,
@@ -101,6 +103,10 @@ class PaperStrictInputs:
     truth_origin_time: pd.Timestamp
     enu_origin_mode: str
     file_manifest: dict[str, Any]
+    raw_rf_rows: int
+    raw_radar_rows: int
+    rf_clock_offset_s: float
+    radar_clock_offset_s: float
 
 
 @dataclass(frozen=True)
@@ -108,6 +114,7 @@ class PaperStrictFusionResult:
     """Fusion outputs and selected measurement streams."""
 
     records: list[dict[str, object]]
+    raw_target_radar: pd.DataFrame
     preselected_radar: pd.DataFrame
     range_gated_radar: pd.DataFrame
     accepted_radar: pd.DataFrame
@@ -137,6 +144,26 @@ def main(argv: list[str] | None = None) -> int:
         default="auto",
         help="RF/radar/truth file variant; auto preserves historical rerun preference",
     )
+    parser.add_argument(
+        "--rf-file",
+        type=Path,
+        default=None,
+        help="explicit RF CSV path for single-flight paper-parity audits",
+    )
+    parser.add_argument(
+        "--radar-file",
+        type=Path,
+        default=None,
+        help="explicit Fortem radar JSON path for single-flight paper-parity audits",
+    )
+    parser.add_argument(
+        "--truth-file",
+        type=Path,
+        default=None,
+        help="explicit truth telemetry path for single-flight paper-parity audits",
+    )
+    parser.add_argument("--rf-clock-offset-s", type=float, default=DEFAULT_RF_CLOCK_OFFSET_S)
+    parser.add_argument("--radar-clock-offset-s", type=float, default=DEFAULT_RADAR_CLOCK_OFFSET_S)
     parser.add_argument("--range-gate-m", type=float, default=PAPER_STRICT_RANGE_GATE_M)
     parser.add_argument("--nis-gate-prob", type=float, default=PAPER_STRICT_NIS_GATE_PROBABILITY)
     parser.add_argument(
@@ -227,6 +254,11 @@ def main(argv: list[str] | None = None) -> int:
         lw1_origin_lla=args.lw1_origin_lla,
         origin_config=args.origin_config,
         variant=args.variant,
+        rf_file=args.rf_file,
+        radar_file=args.radar_file,
+        truth_file=args.truth_file,
+        rf_clock_offset_s=args.rf_clock_offset_s,
+        radar_clock_offset_s=args.radar_clock_offset_s,
     )
     print(f"output_dir={result['output_dir']}")
     print(f"summary_csv={result['summary_csv']}")
@@ -246,12 +278,19 @@ def run_paper_strict_reproduction(
     lw1_origin_lla: str | None = None,
     origin_config: Path | None = None,
     variant: str = "auto",
+    rf_file: Path | None = None,
+    radar_file: Path | None = None,
+    truth_file: Path | None = None,
+    rf_clock_offset_s: float = DEFAULT_RF_CLOCK_OFFSET_S,
+    radar_clock_offset_s: float = DEFAULT_RADAR_CLOCK_OFFSET_S,
 ) -> dict[str, Any]:
     """Run strict paper-parity diagnostics and write per-flight artifacts."""
 
     _validate_config(config)
     _validate_count_mismatch_action(count_mismatch_action)
     selected_flights = _resolve_flights(Path(dataset_root), flights, variant=variant)
+    if (rf_file is not None or radar_file is not None or truth_file is not None) and len(selected_flights) != 1:
+        raise ValueError("explicit --rf-file/--radar-file/--truth-file requires exactly one flight")
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
@@ -267,6 +306,11 @@ def run_paper_strict_reproduction(
             origin_config=origin_config,
             rf_default_std_m=config.rf_default_std_m,
             variant=variant,
+            rf_file=rf_file,
+            radar_file=radar_file,
+            truth_file=truth_file,
+            rf_clock_offset_s=rf_clock_offset_s,
+            radar_clock_offset_s=radar_clock_offset_s,
         )
         flight_dir = output / inputs.flight_name
         flight_dir.mkdir(parents=True, exist_ok=True)
@@ -317,6 +361,8 @@ def run_paper_strict_reproduction(
             "stage_counts": paper_strict_stage_counts(inputs=inputs, fusion=fusion),
             "count_mismatch_action": count_mismatch_action,
             "variant": variant,
+            "rf_clock_offset_s": float(inputs.rf_clock_offset_s),
+            "radar_clock_offset_s": float(inputs.radar_clock_offset_s),
             "config": _jsonable_config(config),
         }
         manifest_json.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -350,10 +396,21 @@ def load_paper_strict_inputs(
     rf_default_std_m: float,
     origin_config: Path | None = None,
     variant: str = "auto",
+    rf_file: Path | None = None,
+    radar_file: Path | None = None,
+    truth_file: Path | None = None,
+    rf_clock_offset_s: float = DEFAULT_RF_CLOCK_OFFSET_S,
+    radar_clock_offset_s: float = DEFAULT_RADAR_CLOCK_OFFSET_S,
 ) -> PaperStrictInputs:
     """Load one flight and normalize all streams into a shared ENU frame."""
 
-    flight = select_flight(Path(dataset_root), flight_name, variant=variant)
+    discovered = select_flight(Path(dataset_root), flight_name, variant=variant)
+    flight = _explicit_flight_paths(
+        discovered,
+        rf_file=rf_file,
+        radar_file=radar_file,
+        truth_file=truth_file,
+    )
     if flight.truth_txt is None:
         raise FileNotFoundError(f"{flight.name} has no truth telemetry file")
     if flight.rf_csv is None:
@@ -368,19 +425,27 @@ def load_paper_strict_inputs(
         origin_config=origin_config,
     )
     truth_raw = read_truth(flight.truth_txt)
+    rf_raw = read_rf_csv(flight.rf_csv)
+    radar_raw = read_radar_tracks_json(flight.radar_json)
     truth, projector, truth_origin_time = normalize_truth(truth_raw, projector=projector)
     truth = truth.sort_values("time_s").reset_index(drop=True)
     rf = _inside_truth_window(
         normalize_rf(
-            read_rf_csv(flight.rf_csv),
+            rf_raw,
             projector,
             truth_origin_time,
             default_std_m=rf_default_std_m,
+            clock_offset_s=rf_clock_offset_s,
         ),
         truth,
     )
     radar = _inside_truth_window(
-        normalize_radar(read_radar_tracks_json(flight.radar_json), projector, truth_origin_time),
+        normalize_radar(
+            radar_raw,
+            projector,
+            truth_origin_time,
+            clock_offset_s=radar_clock_offset_s,
+        ),
         truth,
     )
     return PaperStrictInputs(
@@ -392,6 +457,10 @@ def load_paper_strict_inputs(
         truth_origin_time=truth_origin_time,
         enu_origin_mode=enu_origin,
         file_manifest=flight_file_manifest(flight, dataset_root=Path(dataset_root)),
+        raw_rf_rows=int(len(rf_raw)),
+        raw_radar_rows=int(len(radar_raw)),
+        rf_clock_offset_s=float(rf_clock_offset_s),
+        radar_clock_offset_s=float(radar_clock_offset_s),
     )
 
 
@@ -406,17 +475,19 @@ def run_paper_strict_fusion(
     radar = inputs.radar
     if config.require_radar_range_m:
         require_fortem_range_m(radar)
+    raw_target_radar = select_paper_strict_raw_radar_track(radar)
     range_gated_radar = paper_strict_range_gated_radar_candidates(
-        radar,
+        raw_target_radar,
         range_gate_m=config.range_gate_m,
         catprob_threshold=config.radar_catprob_threshold,
         require_range_m=config.require_radar_range_m,
     )
-    preselected_radar = select_paper_strict_radar_track(
-        radar,
+    preselected_radar = _annotate_strict_update_radar(
+        range_gated_radar,
+        raw_radar=radar,
+        raw_target_radar=raw_target_radar,
         range_gate_m=config.range_gate_m,
         catprob_threshold=config.radar_catprob_threshold,
-        require_range_m=config.require_radar_range_m,
     )
     rf_covariance, radar_covariance = measurement_covariances(
         inputs=inputs,
@@ -424,10 +495,14 @@ def run_paper_strict_fusion(
         config=config,
     )
     rf_measurements = rf_measurements_with_covariance(inputs.rf, rf_covariance)
-    events = _events(rf_measurements=rf_measurements, radar=radar)
+    # Paper Table-II parity evaluates the KF over RF rows plus the selected
+    # target-track radar rows after range/class prevalidation.  Rows that never
+    # enter the selected target stream must not become synthetic coasted outputs.
+    events = _events(rf_measurements=rf_measurements, radar=preselected_radar)
     if not events:
         return PaperStrictFusionResult(
             records=[],
+            raw_target_radar=raw_target_radar,
             preselected_radar=preselected_radar,
             range_gated_radar=range_gated_radar,
             accepted_radar=preselected_radar.iloc[0:0].copy(),
@@ -448,6 +523,7 @@ def run_paper_strict_fusion(
     if bootstrap is None:
         return PaperStrictFusionResult(
             records=[],
+            raw_target_radar=raw_target_radar,
             preselected_radar=preselected_radar,
             range_gated_radar=range_gated_radar,
             accepted_radar=preselected_radar.iloc[0:0].copy(),
@@ -551,6 +627,7 @@ def run_paper_strict_fusion(
         accepted_rf = accepted_rf.sort_values("time_s").reset_index(drop=True)
     return PaperStrictFusionResult(
         records=records,
+        raw_target_radar=raw_target_radar,
         preselected_radar=preselected_radar,
         range_gated_radar=range_gated_radar,
         accepted_radar=accepted_radar,
@@ -582,9 +659,10 @@ def build_paper_strict_table(
             frame=inputs.rf,
             truth=inputs.truth,
             dimensions=2,
-            candidate_count=len(inputs.rf),
+            candidate_count=inputs.raw_rf_rows,
             selected_count=len(inputs.rf),
             max_time_delta_s=config.truth_time_gate_s,
+            coverage_denominator=inputs.raw_rf_rows,
         ),
         _metric_row(
             method="RF after NIS",
@@ -592,9 +670,10 @@ def build_paper_strict_table(
             frame=fusion.accepted_rf,
             truth=inputs.truth,
             dimensions=2,
-            candidate_count=len(inputs.rf),
+            candidate_count=inputs.raw_rf_rows,
             selected_count=len(fusion.accepted_rf),
             max_time_delta_s=config.truth_time_gate_s,
+            coverage_denominator=inputs.raw_rf_rows,
         ),
         _metric_row(
             method="Radar all Fortem track rows",
@@ -607,24 +686,26 @@ def build_paper_strict_table(
             max_time_delta_s=config.truth_time_gate_s,
         ),
         _metric_row(
+            method="Radar raw",
+            source="radar",
+            frame=fusion.raw_target_radar,
+            truth=inputs.truth,
+            dimensions=3,
+            candidate_count=len(inputs.radar),
+            selected_count=len(fusion.raw_target_radar),
+            max_time_delta_s=config.truth_time_gate_s,
+            coverage_denominator=len(inputs.radar),
+        ),
+        _metric_row(
             method="Radar after 800 m range gate",
             source="radar",
             frame=fusion.range_gated_radar,
             truth=inputs.truth,
             dimensions=3,
-            candidate_count=len(inputs.radar),
+            candidate_count=len(fusion.raw_target_radar),
             selected_count=len(fusion.range_gated_radar),
             max_time_delta_s=config.truth_time_gate_s,
-        ),
-        _metric_row(
-            method="Radar raw",
-            source="radar",
-            frame=fusion.preselected_radar,
-            truth=inputs.truth,
-            dimensions=3,
-            candidate_count=len(inputs.radar),
-            selected_count=len(fusion.preselected_radar),
-            max_time_delta_s=config.truth_time_gate_s,
+            coverage_denominator=len(fusion.raw_target_radar),
         ),
         _metric_row(
             method="Radar after NIS",
@@ -632,9 +713,10 @@ def build_paper_strict_table(
             frame=fusion.accepted_radar,
             truth=inputs.truth,
             dimensions=3,
-            candidate_count=len(inputs.radar),
+            candidate_count=len(fusion.raw_target_radar),
             selected_count=len(fusion.accepted_radar),
             max_time_delta_s=config.truth_time_gate_s,
+            coverage_denominator=len(fusion.raw_target_radar),
         ),
         _metric_row(
             method="KF all steps",
@@ -682,6 +764,8 @@ def build_paper_strict_table(
         else float(config.rf_nis_gate_probability)
     )
     table["enu_origin_mode"] = inputs.enu_origin_mode
+    table["rf_clock_offset_s"] = float(inputs.rf_clock_offset_s)
+    table["radar_clock_offset_s"] = float(inputs.radar_clock_offset_s)
     return table
 
 
@@ -805,6 +889,25 @@ def paper_strict_range_gated_radar_candidates(
     return _sort_radar_rows(pool).reset_index(drop=True)
 
 
+def select_paper_strict_raw_radar_track(radar: pd.DataFrame) -> pd.DataFrame:
+    """Select the largest continuous Fortem track before validation gates.
+
+    Table-II ``Radar raw`` is a target-track stream, not the post-range-gate
+    stream.  Range and class-probability gates are applied only after this raw
+    target track is chosen so their count deltas remain auditable.
+    """
+
+    selected = _largest_continuous_track_segment(radar)
+    if selected.empty:
+        return selected
+    selected = selected.copy()
+    selected["association_mode"] = "paper-strict-raw-largest-continuous-track"
+    selected["association_action"] = "raw_largest_continuous_track_anchor"
+    selected["association_preselector_raw_rows"] = int(len(radar))
+    selected["association_raw_target_track_rows"] = int(len(selected))
+    return _sort_radar_rows(selected).reset_index(drop=True)
+
+
 def select_paper_strict_radar_track(
     radar: pd.DataFrame,
     *,
@@ -812,19 +915,30 @@ def select_paper_strict_radar_track(
     catprob_threshold: float | None = None,
     require_range_m: bool = True,
 ) -> pd.DataFrame:
-    """Select the largest continuous Fortem track after a radar-range gate."""
+    """Select strict radar update rows after raw-track, range, and catProb gates."""
 
     if require_range_m:
         require_fortem_range_m(radar)
-    pool = paper_strict_range_gated_radar_candidates(
-        radar,
+    raw_target = select_paper_strict_raw_radar_track(radar)
+    range_gated = paper_strict_range_gated_radar_candidates(
+        raw_target,
         range_gate_m=range_gate_m,
         catprob_threshold=catprob_threshold,
         require_range_m=require_range_m,
     )
-    if pool.empty or "track_id" not in pool.columns:
+    return _annotate_strict_update_radar(
+        range_gated,
+        raw_radar=radar,
+        raw_target_radar=raw_target,
+        range_gate_m=range_gate_m,
+        catprob_threshold=catprob_threshold,
+    )
+
+
+def _largest_continuous_track_segment(radar: pd.DataFrame) -> pd.DataFrame:
+    if radar.empty or "track_id" not in radar.columns:
         return radar.iloc[0:0].copy()
-    segments = _continuous_track_segments(pool)
+    segments = _continuous_track_segments(radar)
     if not segments:
         return radar.iloc[0:0].copy()
     selected_segment = max(
@@ -837,16 +951,30 @@ def select_paper_strict_radar_track(
             -int(pd.to_numeric(segment["track_id"], errors="coerce").iloc[0]),
         ),
     )
-    selected = selected_segment.copy()
-    selected["association_mode"] = "paper-strict-largest-continuous-track"
-    selected["association_action"] = "range_gated_largest_continuous_track_anchor"
-    selected["association_range_gate_m"] = float(range_gate_m)
-    selected["association_preselector_raw_rows"] = int(len(radar))
-    selected["association_preselector_range_gated_rows"] = int(len(pool))
-    selected["association_segment_frames"] = int(len(selected))
+    return selected_segment.copy()
+
+
+def _annotate_strict_update_radar(
+    selected: pd.DataFrame,
+    *,
+    raw_radar: pd.DataFrame,
+    raw_target_radar: pd.DataFrame,
+    range_gate_m: float,
+    catprob_threshold: float | None,
+) -> pd.DataFrame:
+    if selected.empty:
+        return selected.copy()
+    out = selected.copy()
+    out["association_mode"] = "paper-strict-largest-continuous-track"
+    out["association_action"] = "range_gated_raw_track_anchor"
+    out["association_range_gate_m"] = float(range_gate_m)
+    out["association_preselector_raw_rows"] = int(len(raw_radar))
+    out["association_raw_target_track_rows"] = int(len(raw_target_radar))
+    out["association_preselector_range_gated_rows"] = int(len(out))
+    out["association_segment_frames"] = int(len(out))
     if catprob_threshold is not None:
-        selected["association_catprob_threshold"] = float(catprob_threshold)
-    return _sort_radar_rows(selected).reset_index(drop=True)
+        out["association_catprob_threshold"] = float(catprob_threshold)
+    return _sort_radar_rows(out).reset_index(drop=True)
 
 
 def paper_strict_stage_counts(
@@ -865,9 +993,12 @@ def paper_strict_stage_counts(
         updated = int(accepted.sum())
         coasted = int((~accepted).sum())
     return {
+        "rf_file_rows": int(inputs.raw_rf_rows),
         "rf_raw_rows": int(len(inputs.rf)),
         "rf_after_nis_rows": int(len(fusion.accepted_rf)),
+        "radar_file_rows": int(inputs.raw_radar_rows),
         "radar_all_track_rows": int(len(inputs.radar)),
+        "radar_raw_target_track_rows": int(len(fusion.raw_target_radar)),
         "radar_after_range_gate_rows": int(len(fusion.range_gated_radar)),
         "radar_largest_continuous_track_rows": int(len(fusion.preselected_radar)),
         "radar_after_nis_rows": int(len(fusion.accepted_radar)),
@@ -955,6 +1086,8 @@ def _metric_row(
     candidate_count: int,
     selected_count: int,
     max_time_delta_s: float,
+    coverage_denominator: int | None = None,
+    coverage_numerator: int | None = None,
 ) -> dict[str, Any]:
     if frame.empty:
         errors = np.empty(0, dtype=float)
@@ -970,8 +1103,10 @@ def _metric_row(
             dimensions=dimensions,
         )
         matched_count = int(errors.size)
-    summary = summarize_errors(errors)
+    summary = _paper_error_summary(errors)
     reference = PAPER_REFERENCE_ERROR_M.get(method, {})
+    denominator = int(candidate_count if coverage_denominator is None else coverage_denominator)
+    numerator = int(selected_count if coverage_numerator is None else coverage_numerator)
     row: dict[str, Any] = {
         "method": method,
         "source": source,
@@ -979,7 +1114,9 @@ def _metric_row(
         "candidate_count": int(candidate_count),
         "selected_count": int(selected_count),
         "matched_count": matched_count,
-        "coverage": _safe_ratio(matched_count, candidate_count),
+        "coverage_numerator": numerator,
+        "coverage_denominator": denominator,
+        "coverage": _safe_ratio(numerator, denominator),
         "reference_count": PAPER_REFERENCE_COUNTS.get(method),
         "count_delta": None
         if method not in PAPER_REFERENCE_COUNTS
@@ -987,6 +1124,7 @@ def _metric_row(
         "paper_error_mean_m": summary["mean_m"],
         "paper_error_std_m": summary["std_m"],
         "paper_error_rmse_m": summary["rmse_m"],
+        "paper_error_min_m": summary["min_m"],
         "paper_error_p50_m": summary["p50_m"],
         "paper_error_p95_m": summary["p95_m"],
         "paper_error_max_m": summary["max_m"],
@@ -999,6 +1137,30 @@ def _metric_row(
         row["std_delta_m"] = None if summary["std_m"] is None else float(summary["std_m"]) - float(reference["std"])
         row["max_delta_m"] = None if summary["max_m"] is None else float(summary["max_m"]) - float(reference["max"])
     return row
+
+
+def _paper_error_summary(errors_m: np.ndarray) -> dict[str, float | None]:
+    errors = np.asarray(errors_m, dtype=float).reshape(-1)
+    errors = errors[np.isfinite(errors)]
+    if errors.size == 0:
+        return {
+            "mean_m": None,
+            "std_m": None,
+            "rmse_m": None,
+            "min_m": None,
+            "p50_m": None,
+            "p95_m": None,
+            "max_m": None,
+        }
+    return {
+        "mean_m": float(np.mean(errors)),
+        "std_m": float(np.std(errors, ddof=1)) if errors.size > 1 else 0.0,
+        "rmse_m": float(np.sqrt(np.mean(errors**2))),
+        "min_m": float(np.min(errors)),
+        "p50_m": float(np.percentile(errors, 50.0)),
+        "p95_m": float(np.percentile(errors, 95.0)),
+        "max_m": float(np.max(errors)),
+    }
 
 
 def _events(
@@ -1386,6 +1548,27 @@ def _origin_manifest(projector: LocalENUProjector | None) -> dict[str, Any]:
         "longitude_deg": float(projector.origin_longitude_deg),
         "altitude_m": float(projector.origin_altitude_m),
     }
+
+
+def _explicit_flight_paths(
+    flight: FlightPaths,
+    *,
+    rf_file: Path | None,
+    radar_file: Path | None,
+    truth_file: Path | None,
+) -> FlightPaths:
+    if rf_file is None and radar_file is None and truth_file is None:
+        return flight
+    return FlightPaths(
+        name=flight.name,
+        root=flight.root,
+        rf_csv=Path(rf_file) if rf_file is not None else flight.rf_csv,
+        radar_json=Path(radar_file) if radar_file is not None else flight.radar_json,
+        truth_txt=Path(truth_file) if truth_file is not None else flight.truth_txt,
+        rf_variant=None if rf_file is not None else flight.rf_variant,
+        radar_variant=None if radar_file is not None else flight.radar_variant,
+        truth_variant=None if truth_file is not None else flight.truth_variant,
+    )
 
 
 def _inside_truth_window(frame: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
