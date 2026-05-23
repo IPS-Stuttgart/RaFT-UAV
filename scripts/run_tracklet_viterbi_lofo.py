@@ -2,7 +2,7 @@
 
 This script gives the offline truth-free tracklet-Viterbi method the same
 fold/aggregate reporting shape as ``run_leave_flight_out_sota.py`` without
-requiring it to be exposed as an online ``run-baseline`` association mode.
+going through the deprecated standalone tracklet script.
 """
 
 from __future__ import annotations
@@ -20,7 +20,9 @@ import numpy as np
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(SCRIPT_DIR))
 
 import ablation_common as common  # noqa: E402
 from raft_uav.evaluation.metrics import nearest_time_indices, position_errors_m  # noqa: E402
@@ -120,9 +122,21 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _run_tracklet_viterbi(args: argparse.Namespace, flight: str, run_dir: Path) -> None:
+    _run(_tracklet_viterbi_command(args, flight, run_dir))
+
+
+def _tracklet_viterbi_command(
+    args: argparse.Namespace,
+    flight: str,
+    run_dir: Path,
+) -> list[object]:
+    """Return the canonical wrapper command for the maintained tracklet path."""
+
     command: list[object] = [
         sys.executable,
-        "scripts/run_tracklet_viterbi_baseline.py",
+        "-m",
+        "raft_uav.tracklet_viterbi_cli",
+        "run-baseline",
         str(args.dataset_root),
         "--flight",
         flight,
@@ -130,25 +144,31 @@ def _run_tracklet_viterbi(args: argparse.Namespace, flight: str, run_dir: Path) 
         run_dir,
         "--acceleration-std",
         args.acceleration_std,
+        "--radar-association",
+        "tracklet-viterbi",
         "--radar-catprob-threshold",
         args.candidate_threshold,
-        "--max-candidates-per-frame",
+        "--tracklet-variant",
+        "range-covariance",
+        "--tracklet-replay-tracker",
+        "imm",
+        "--tracklet-max-candidates",
         args.max_candidates_per_frame,
-        "--missed-detection-cost",
+        "--tracklet-missed-detection-cost",
         args.missed_detection_cost,
-        "--track-switch-cost",
+        "--tracklet-track-switch-cost",
         args.track_switch_cost,
-        "--catprob-weight",
+        "--tracklet-catprob-weight",
         args.catprob_weight,
-        "--anchor-nis-weight",
+        "--tracklet-anchor-nis-weight",
         args.anchor_nis_weight,
-        "--transition-nis-weight",
+        "--tracklet-transition-nis-weight",
         args.transition_nis_weight,
-        "--velocity-nis-weight",
+        "--tracklet-velocity-nis-weight",
         args.velocity_nis_weight,
-        "--max-speed-mps",
+        "--tracklet-max-speed-mps",
         args.max_speed_mps,
-        "--range-gate-m",
+        "--tracklet-range-gate-m",
         args.range_gate_m,
         "--smoother",
         "fixed-lag",
@@ -176,8 +196,8 @@ def _run_tracklet_viterbi(args: argparse.Namespace, flight: str, run_dir: Path) 
         args.radar_inflation_alpha,
     ]
     if args.disable_rf_anchor:
-        command.append("--disable-rf-anchor")
-    _run(command)
+        command.append("--disable-tracklet-rf-anchor")
+    return command
 
 
 def _evaluate_run(
