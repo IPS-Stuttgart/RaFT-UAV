@@ -9,7 +9,7 @@ as the reference paper table?
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 from typing import Any, Iterable
@@ -20,7 +20,9 @@ import pandas as pd
 from raft_uav.diagnostics.paper_strict import (
     COUNT_MISMATCH_ACTIONS,
     PAPER_REFERENCE_COUNTS,
+    PAPER_STRICT_DEFAULT_RADAR_TRACK_SELECTION_ORDER,
     PAPER_STRICT_NIS_GATE_PROBABILITY,
+    PAPER_STRICT_RADAR_TRACK_SELECTION_ORDERS,
     PAPER_STRICT_RANGE_GATE_M,
     PaperStrictConfig,
     _handle_count_mismatch,
@@ -60,6 +62,25 @@ def main(argv: list[str] | None = None) -> int:
         "--enumerate-file-variants",
         action="store_true",
         help="run original and rerun variants and rank them by paper-reference count deltas",
+    )
+    parser.add_argument(
+        "--radar-track-selection-order",
+        choices=PAPER_STRICT_RADAR_TRACK_SELECTION_ORDERS,
+        default=PAPER_STRICT_DEFAULT_RADAR_TRACK_SELECTION_ORDER,
+        help=(
+            "resolve the paper's largest-continuous-track/range-gate ordering ambiguity; "
+            "use --enumerate-radar-track-selection-orders to rank all supported orders"
+        ),
+    )
+    parser.add_argument(
+        "--enumerate-radar-track-selection-orders",
+        action="store_true",
+        help=(
+            "run all supported radar track-selection orders and rank them by paper-reference "
+            "count deltas; this is useful before tracker tuning because Table-II reproduction "
+            "is sensitive to whether the largest Fortem track is selected before or after the "
+            "800 m range/class gates"
+        ),
     )
     parser.add_argument("--rf-clock-offset-s", type=float, default=None)
     parser.add_argument("--radar-clock-offset-s", type=float, default=None)
@@ -129,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         truth_time_gate_s=args.truth_time_gate_s,
         acceleration_std_mps2=args.acceleration_std,
         radar_catprob_threshold=args.radar_catprob_threshold,
+        radar_track_selection_order=args.radar_track_selection_order,
         empirical_covariance=not args.no_empirical_covariance,
         require_radar_range_m=not args.allow_missing_radar_range,
         bootstrap_source=args.bootstrap_source,
@@ -147,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         origin_config=args.origin_config,
         variant=args.variant,
         enumerate_file_variants=args.enumerate_file_variants,
+        enumerate_radar_track_selection_orders=args.enumerate_radar_track_selection_orders,
         count_mismatch_action=args.count_mismatch_action,
         rf_clock_offset_s=args.rf_clock_offset_s,
         radar_clock_offset_s=args.radar_clock_offset_s,
@@ -169,6 +192,7 @@ def run_paper_fingerprint(
     origin_config: Path | None = None,
     variant: str = "auto",
     enumerate_file_variants: bool = False,
+    enumerate_radar_track_selection_orders: bool = False,
     count_mismatch_action: str = "warn",
     rf_clock_offset_s: float | None = None,
     radar_clock_offset_s: float | None = None,
@@ -179,6 +203,10 @@ def run_paper_fingerprint(
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     variants_to_run = ["original", "rerun"] if enumerate_file_variants else [variant]
+    radar_track_selection_orders_to_run = _radar_track_selection_orders_to_run(
+        config,
+        enumerate_radar_track_selection_orders=enumerate_radar_track_selection_orders,
+    )
 
     rows: list[dict[str, Any]] = []
     manifests: list[dict[str, Any]] = []
@@ -204,51 +232,64 @@ def run_paper_fingerprint(
                 variant=variant_name,
                 **load_kwargs,
             )
-            fusion = run_paper_strict_fusion(inputs=inputs, config=config)
-            table = build_paper_strict_table(inputs=inputs, fusion=fusion, config=config)
-            count_audit = build_count_audit(table)
-            _handle_count_mismatch(
-                count_audit,
-                flight_name=inputs.flight_name,
-                action=count_mismatch_action,
-            )
-            row = _fingerprint_row(
-                dataset_root=dataset_root,
-                flight_name=flight.name,
-                rf_csv=flight.rf_csv,
-                radar_json=flight.radar_json,
-                truth_txt=flight.truth_txt,
-                inputs=inputs,
-                fusion=fusion,
-                table=table,
-                count_audit=count_audit,
-            )
-            row["variant"] = variant_name
-            rows.append(row)
+            for radar_track_selection_order in radar_track_selection_orders_to_run:
+                run_config = replace(
+                    config,
+                    radar_track_selection_order=radar_track_selection_order,
+                )
+                fusion = run_paper_strict_fusion(inputs=inputs, config=run_config)
+                table = build_paper_strict_table(inputs=inputs, fusion=fusion, config=run_config)
+                count_audit = build_count_audit(table)
+                _handle_count_mismatch(
+                    count_audit,
+                    flight_name=inputs.flight_name,
+                    action=count_mismatch_action,
+                )
+                row = _fingerprint_row(
+                    dataset_root=dataset_root,
+                    flight_name=flight.name,
+                    rf_csv=flight.rf_csv,
+                    radar_json=flight.radar_json,
+                    truth_txt=flight.truth_txt,
+                    inputs=inputs,
+                    fusion=fusion,
+                    table=table,
+                    count_audit=count_audit,
+                )
+                row["variant"] = variant_name
+                row["radar_track_selection_order"] = radar_track_selection_order
+                rows.append(row)
 
-            flight_dir = output / (flight.name if not enumerate_file_variants else f"{flight.name}_{variant_name}")
-            flight_dir.mkdir(parents=True, exist_ok=True)
-            table_csv = flight_dir / "paper_strict_table.csv"
-            count_csv = flight_dir / "paper_count_audit.csv"
-            table.to_csv(table_csv, index=False)
-            count_audit.to_csv(count_csv, index=False)
-            manifest = {
-                **row,
-                "table_csv": str(table_csv),
-                "count_audit_csv": str(count_csv),
-                "range_audit": radar_range_audit(inputs.radar),
-                "file_manifest": inputs.file_manifest,
-            }
-            manifest_json = flight_dir / "fingerprint_manifest.json"
-            manifest_json.write_text(json.dumps(_jsonable(manifest), indent=2), encoding="utf-8")
-            manifests.append({**manifest, "manifest_json": str(manifest_json)})
+                flight_dir = output / _fingerprint_run_dir_name(
+                    flight.name,
+                    variant=variant_name,
+                    radar_track_selection_order=radar_track_selection_order,
+                    include_variant=enumerate_file_variants,
+                    include_track_order=enumerate_radar_track_selection_orders,
+                )
+                flight_dir.mkdir(parents=True, exist_ok=True)
+                table_csv = flight_dir / "paper_strict_table.csv"
+                count_csv = flight_dir / "paper_count_audit.csv"
+                table.to_csv(table_csv, index=False)
+                count_audit.to_csv(count_csv, index=False)
+                manifest = {
+                    **row,
+                    "table_csv": str(table_csv),
+                    "count_audit_csv": str(count_csv),
+                    "range_audit": radar_range_audit(inputs.radar),
+                    "file_manifest": inputs.file_manifest,
+                    "config": asdict(run_config),
+                }
+                manifest_json = flight_dir / "fingerprint_manifest.json"
+                manifest_json.write_text(json.dumps(_jsonable(manifest), indent=2), encoding="utf-8")
+                manifests.append({**manifest, "manifest_json": str(manifest_json)})
 
     summary = pd.DataFrame.from_records(rows)
     if not summary.empty and "reference_count_abs_delta_sum" in summary.columns:
-        summary = summary.sort_values(
-            ["reference_count_abs_delta_sum", "flight", "variant"],
-            na_position="last",
-        ).reset_index(drop=True)
+        sort_columns = ["reference_count_abs_delta_sum", "flight", "variant"]
+        if "radar_track_selection_order" in summary.columns:
+            sort_columns.append("radar_track_selection_order")
+        summary = summary.sort_values(sort_columns, na_position="last").reset_index(drop=True)
         summary["reference_count_rank"] = np.arange(1, len(summary) + 1)
     summary_csv = output / "paper_fingerprint_summary.csv"
     summary_json = output / "paper_fingerprint_summary.json"
@@ -258,8 +299,10 @@ def run_paper_fingerprint(
         "summary_csv": str(summary_csv),
         "reference_counts": PAPER_REFERENCE_COUNTS,
         "config": asdict(config),
+        "track_selection_orders": radar_track_selection_orders_to_run,
         "variant": variant,
         "enumerate_file_variants": bool(enumerate_file_variants),
+        "enumerate_radar_track_selection_orders": bool(enumerate_radar_track_selection_orders),
         "count_mismatch_action": count_mismatch_action,
         "rf_clock_offset_s": rf_clock_offset_s,
         "radar_clock_offset_s": radar_clock_offset_s,
@@ -309,6 +352,11 @@ def _fingerprint_row(
         "truth_file_variant": _manifest_variant(inputs.file_manifest, "truth"),
         "rf_clock_offset_s": float(inputs.rf_clock_offset_s),
         "radar_clock_offset_s": float(inputs.radar_clock_offset_s),
+        "radar_track_selection_order": _table_string_value(
+            table_rows,
+            "KF all steps",
+            "paper_strict_radar_track_selection_order",
+        ),
         **stage_counts,
         **count_deltas,
         "reference_count_abs_delta_sum": float(sum(abs_deltas)) if abs_deltas else np.nan,
@@ -317,6 +365,36 @@ def _fingerprint_row(
         "kf_all_steps_std_m": _table_value(table_rows, "KF all steps", "paper_error_std_m"),
         "kf_all_steps_max_m": _table_value(table_rows, "KF all steps", "paper_error_max_m"),
     }
+
+
+def _radar_track_selection_orders_to_run(
+    config: PaperStrictConfig,
+    *,
+    enumerate_radar_track_selection_orders: bool,
+) -> list[str]:
+    """Return the strict radar-track selection orders for a fingerprint run."""
+
+    if enumerate_radar_track_selection_orders:
+        return list(PAPER_STRICT_RADAR_TRACK_SELECTION_ORDERS)
+    return [str(config.radar_track_selection_order)]
+
+
+def _fingerprint_run_dir_name(
+    flight_name: str,
+    *,
+    variant: str,
+    radar_track_selection_order: str,
+    include_variant: bool,
+    include_track_order: bool,
+) -> str:
+    """Return a stable per-run artifact directory name."""
+
+    parts = [str(flight_name)]
+    if include_variant:
+        parts.append(_slug(variant))
+    if include_track_order:
+        parts.append(_slug(radar_track_selection_order))
+    return "_".join(parts)
 
 
 def _resolve_flights(dataset_root: Path, flights: Iterable[str] | None, *, variant: str = "auto") -> list[str]:
@@ -348,6 +426,13 @@ def _table_value(rows: dict[str, pd.Series], method: str, column: str) -> float 
     if row is None or column not in row or pd.isna(row[column]):
         return None
     return float(row[column])
+
+
+def _table_string_value(rows: dict[str, pd.Series], method: str, column: str) -> str | None:
+    row = rows.get(method)
+    if row is None or column not in row or pd.isna(row[column]):
+        return None
+    return str(row[column])
 
 
 def _slug(value: str) -> str:
