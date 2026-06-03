@@ -1,4 +1,11 @@
-"""Shared linear-update gating utilities for RaFT-UAV baselines."""
+"""PyRecEst-backed robust linear-update planning for RaFT-UAV.
+
+RaFT-UAV keeps source-specific policy plumbing here, but delegates the generic
+linear-Gaussian NIS, gating, Student-t/Huber scaling, and NIS-inflation
+semantics to PyRecEst.  This module intentionally mirrors the public
+``raft_uav.baselines.update_logic`` API so the legacy import path can re-export
+these names while downstream code remains unchanged.
+"""
 
 from __future__ import annotations
 
@@ -118,6 +125,8 @@ def robust_update_covariance_scale(
 
 
 def _raft_update_action(action: str) -> str:
+    """Map PyRecEst-generic update actions to RaFT-UAV record labels."""
+
     if action in {"residual_rejected", "safety_rejected"}:
         return "missed_detection"
     return action
@@ -140,7 +149,7 @@ def plan_linear_measurement_update(
 ) -> LinearUpdatePlan:
     """Prepare shared NIS gating/inflation quantities for a linear update."""
 
-    plan = _pyrecest_plan_linear_measurement_update(
+    pyrecest_plan = _pyrecest_plan_linear_measurement_update(
         mean=mean,
         covariance_matrix=covariance_matrix,
         measurement_vector=measurement_vector,
@@ -155,20 +164,20 @@ def plan_linear_measurement_update(
         huber_threshold=huber_threshold,
     )
     return LinearUpdatePlan(
-        vector=plan.vector,
-        covariance=plan.covariance,
-        observation=plan.observation,
-        residual=plan.residual,
-        innovation_covariance=plan.innovation_covariance,
-        nis=float(plan.nis),
-        residual_norm=float(plan.residual_norm),
-        threshold=plan.gate_threshold,
-        safety_threshold=plan.safety_gate_threshold,
-        residual_threshold=plan.residual_threshold,
-        covariance_scale=float(plan.covariance_scale),
-        update_action=_raft_update_action(plan.action),
-        accepted=bool(plan.accepted),
-        inflation_alpha=float(plan.inflation_alpha),
+        vector=pyrecest_plan.vector,
+        covariance=pyrecest_plan.covariance,
+        observation=pyrecest_plan.observation,
+        residual=pyrecest_plan.residual,
+        innovation_covariance=pyrecest_plan.innovation_covariance,
+        nis=float(pyrecest_plan.nis),
+        residual_norm=float(pyrecest_plan.residual_norm),
+        threshold=pyrecest_plan.gate_threshold,
+        safety_threshold=pyrecest_plan.safety_gate_threshold,
+        residual_threshold=pyrecest_plan.residual_threshold,
+        covariance_scale=float(pyrecest_plan.covariance_scale),
+        update_action=_raft_update_action(pyrecest_plan.action),
+        accepted=bool(pyrecest_plan.accepted),
+        inflation_alpha=float(pyrecest_plan.inflation_alpha),
     )
 
 
@@ -273,27 +282,22 @@ def symmetrized(matrix: np.ndarray) -> np.ndarray:
     return 0.5 * (matrix + matrix.T)
 
 
-# Keep the public RaFT-UAV import path stable, but delegate the robust
-# linear-update planning implementation to PyRecEst.  The legacy definitions
-# above are intentionally shadowed here so downstream modules can continue to
-# import from ``raft_uav.baselines.update_logic`` while the generic NIS,
-# Student-t, Huber, and NIS-inflation logic lives upstream in PyRecEst.
-from raft_uav.baselines.pyrecest_update_logic import (  # noqa: E402,F401
-    DEFAULT_HUBER_THRESHOLD,
-    DEFAULT_STUDENT_T_DOF,
-    ROBUST_UPDATE_MODES,
-    LinearUpdatePlan,
-    TrackingMeasurementLike,
-    gate_threshold_for_measurement,
-    huber_covariance_scale,
-    huber_threshold_for_measurement,
-    inflation_alpha_for_measurement,
-    max_residual_norm_for_measurement,
-    normalized_innovation_squared,
-    plan_linear_measurement_update,
-    robust_update_covariance_scale,
-    robust_update_for_measurement,
-    student_t_covariance_scale,
-    student_t_dof_for_measurement,
-    symmetrized,
-)
+__all__ = [
+    "DEFAULT_HUBER_THRESHOLD",
+    "DEFAULT_STUDENT_T_DOF",
+    "LinearUpdatePlan",
+    "ROBUST_UPDATE_MODES",
+    "TrackingMeasurementLike",
+    "gate_threshold_for_measurement",
+    "huber_covariance_scale",
+    "huber_threshold_for_measurement",
+    "inflation_alpha_for_measurement",
+    "max_residual_norm_for_measurement",
+    "normalized_innovation_squared",
+    "plan_linear_measurement_update",
+    "robust_update_covariance_scale",
+    "robust_update_for_measurement",
+    "student_t_covariance_scale",
+    "student_t_dof_for_measurement",
+    "symmetrized",
+]
