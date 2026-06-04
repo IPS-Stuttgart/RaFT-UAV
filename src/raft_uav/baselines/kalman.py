@@ -7,6 +7,7 @@ from typing import Iterable, Mapping
 
 import numpy as np
 from pyrecest.filters import KalmanFilter
+from pyrecest.models import selection_matrix
 from scipy.stats import chi2
 
 from raft_uav.baselines.adaptive_process_noise import adaptive_process_noise_from_environment
@@ -133,16 +134,9 @@ def measurement_matrix(measurement_dim: int) -> np.ndarray:
     """Return the matrix mapping the 6D state to a supported observation vector."""
 
     if measurement_dim == 2:
-        matrix = np.zeros((2, 6))
-        matrix[0, 0] = 1.0
-        matrix[1, 1] = 1.0
-        return matrix
+        return selection_matrix(6, [0, 1])
     if measurement_dim == 3:
-        matrix = np.zeros((3, 6))
-        matrix[0, 0] = 1.0
-        matrix[1, 1] = 1.0
-        matrix[2, 2] = 1.0
-        return matrix
+        return selection_matrix(6, [0, 1, 2])
     if measurement_dim == 6:
         return np.eye(6)
     raise ValueError("measurement_dim must be 2, 3, or 6")
