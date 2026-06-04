@@ -12,13 +12,89 @@ from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
-from pyrecest.tracking import (
-    MeasurementReliabilityConfig,
-    MeasurementReliabilityResult,
-    apply_measurement_reliability,
-    reliability_to_covariance_scale,
-    scale_covariance_by_reliability,
-)
+
+try:
+    from pyrecest.tracking import (
+        MeasurementReliabilityConfig,
+        MeasurementReliabilityResult,
+        apply_measurement_reliability,
+        reliability_to_covariance_scale,
+        scale_covariance_by_reliability,
+    )
+except (ImportError, ModuleNotFoundError):
+
+    @dataclass(frozen=True)
+    class MeasurementReliabilityConfig:
+        """Fallback for released PyRecEst versions without reliability helpers."""
+
+        mode: str = "off"
+        threshold: float | None = None
+        floor: float = 0.05
+        exponent: float = 1.0
+        max_scale: float | None = None
+
+    @dataclass(frozen=True)
+    class MeasurementReliabilityResult:
+        """Fallback result matching PyRecEst's measurement reliability contract."""
+
+        accepted: bool
+        action: str
+        covariance_scale: float
+        covariance: np.ndarray
+        reliability: float
+
+    def reliability_to_covariance_scale(
+        reliability: float,
+        *,
+        floor: float = 0.05,
+        exponent: float = 1.0,
+        max_scale: float | None = None,
+    ) -> float:
+        reliability = float(np.clip(reliability, floor, 1.0))
+        scale = float(reliability ** (-float(exponent)))
+        if max_scale is not None:
+            scale = min(scale, float(max_scale))
+        return scale
+
+    def scale_covariance_by_reliability(
+        covariance: np.ndarray,
+        reliability: float,
+        *,
+        floor: float = 0.05,
+        exponent: float = 1.0,
+        max_scale: float | None = None,
+    ) -> tuple[np.ndarray, float]:
+        scale = reliability_to_covariance_scale(
+            reliability,
+            floor=floor,
+            exponent=exponent,
+            max_scale=max_scale,
+        )
+        return scale * np.asarray(covariance, dtype=float), scale
+
+    def apply_measurement_reliability(
+        covariance: np.ndarray,
+        *,
+        reliability: float,
+        config: MeasurementReliabilityConfig,
+    ) -> MeasurementReliabilityResult:
+        covariance = np.asarray(covariance, dtype=float)
+        mode = str(config.mode)
+        if mode == "off":
+            return MeasurementReliabilityResult(True, "accepted", 1.0, covariance, reliability)
+        if mode == "hard":
+            accepted = bool(float(reliability) >= float(config.threshold))
+            return MeasurementReliabilityResult(accepted, "accepted" if accepted else "rejected", 1.0, covariance, reliability)
+        if mode == "inflate":
+            scaled, scale = scale_covariance_by_reliability(
+                covariance,
+                reliability,
+                floor=config.floor,
+                exponent=config.exponent,
+                max_scale=config.max_scale,
+            )
+            return MeasurementReliabilityResult(True, "scaled", scale, scaled, reliability)
+        raise ValueError("mode must be one of 'off', 'inflate', or 'hard'")
 
 RaftReliabilityMode = Literal["off", "soft", "hard"] | str
 
