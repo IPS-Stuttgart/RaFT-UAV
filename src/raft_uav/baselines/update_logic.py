@@ -13,7 +13,6 @@ from raft_uav.baselines.pyrecest_update_logic import (
     huber_threshold_for_measurement,
     inflation_alpha_for_measurement,
     max_residual_norm_for_measurement,
-    normalized_innovation_squared,
     plan_linear_measurement_update,
     robust_update_covariance_scale,
     robust_update_for_measurement,
@@ -21,6 +20,7 @@ from raft_uav.baselines.pyrecest_update_logic import (
     student_t_dof_for_measurement,
     symmetrized,
 )
+from raft_uav.baselines.pyrecest_innovation_diagnostics import normalized_innovation_squared
 
 __all__ = [
     "DEFAULT_HUBER_THRESHOLD",
