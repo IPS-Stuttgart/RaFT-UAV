@@ -10,7 +10,7 @@ from pyrecest.filters import KalmanFilter
 from scipy.stats import chi2
 
 from raft_uav.baselines.adaptive_process_noise import adaptive_process_noise_from_environment
-from raft_uav.baselines.update_logic import (
+from raft_uav.baselines.pyrecest_robust_update import (
     gate_threshold_for_measurement,
     huber_covariance_scale,
     huber_threshold_for_measurement,
