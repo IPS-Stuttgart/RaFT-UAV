@@ -16,6 +16,8 @@ from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
+from pyrecest.diagnostics import EvidenceSupport, coerce_evidence_support
+
 
 @dataclass(frozen=True)
 class MethodSpec:
@@ -28,12 +30,14 @@ class MethodSpec:
     tags: tuple[str, ...] = ()
     leakage_safe: bool = True
     notes: str = ""
+    evidence_support: EvidenceSupport = field(default_factory=EvidenceSupport.unknown)
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
         record["command"] = list(self.command)
         record["env"] = dict(self.env)
         record["tags"] = list(self.tags)
+        record["evidence_support"] = self.evidence_support.to_dict()
         return record
 
     def shell_command(self) -> str:
@@ -42,6 +46,31 @@ class MethodSpec:
         env_prefix = " ".join(f"{key}={_shell_quote(value)}" for key, value in self.env.items())
         command = " ".join(_shell_quote(part) for part in self.command)
         return f"{env_prefix} {command}".strip()
+
+
+def _tracking_metric_support(reason: str) -> EvidenceSupport:
+    return EvidenceSupport.unknown({"reason": reason})
+
+
+def _single_association_path_support(reason: str) -> EvidenceSupport:
+    return EvidenceSupport.truncated_lower_bound(
+        {
+            "reason": reason,
+            "path_semantics": "single_selected_association_path",
+            "headline": False,
+        }
+    )
+
+
+def _topk_association_path_support(top_k: int, reason: str) -> EvidenceSupport:
+    return EvidenceSupport.truncated_lower_bound(
+        {
+            "reason": reason,
+            "path_semantics": "top_k_truncated_association_paths",
+            "top_k": int(top_k),
+            "headline": False,
+        }
+    )
 
 
 METHOD_REGISTRY: dict[str, MethodSpec] = {
@@ -64,6 +93,9 @@ METHOD_REGISTRY: dict[str, MethodSpec] = {
         tags=("paper", "diagnostic", "strict"),
         leakage_safe=False,
         notes="Uses same-flight empirical covariance by default for paper reproduction.",
+        evidence_support=_tracking_metric_support(
+            "strict paper-parity row reports tracking-error metrics, not a marginal model evidence"
+        ),
     ),
     "radar_geometry_audit": MethodSpec(
         method_id="radar_geometry_audit",
@@ -110,6 +142,9 @@ METHOD_REGISTRY: dict[str, MethodSpec] = {
         ),
         tags=("diagnostic", "association", "features"),
         leakage_safe=False,
+        evidence_support=_tracking_metric_support(
+            "oracle ranks and regret rows are diagnostic and should not be used as model evidence"
+        ),
         notes="Oracle ranks and regret use truth for post-run diagnostics only.",
     ),
     "cv_catprob": MethodSpec(
@@ -126,6 +161,9 @@ METHOD_REGISTRY: dict[str, MethodSpec] = {
             "catprob",
         ),
         tags=("baseline", "cv", "catprob"),
+        evidence_support=_tracking_metric_support(
+            "greedy/heuristic association row reports tracking metrics rather than a comparable evidence"
+        ),
     ),
     "cv_prediction_nis_fixed_lag": MethodSpec(
         method_id="cv_prediction_nis_fixed_lag",
@@ -151,6 +189,9 @@ METHOD_REGISTRY: dict[str, MethodSpec] = {
             "20",
         ),
         tags=("baseline", "cv", "nis", "fixed-lag"),
+        evidence_support=_tracking_metric_support(
+            "NIS-gated tracking row reports trajectory errors rather than a full association marginal evidence"
+        ),
     ),
     "imm_tracklet_viterbi_fixed_lag": MethodSpec(
         method_id="imm_tracklet_viterbi_fixed_lag",
@@ -178,6 +219,9 @@ METHOD_REGISTRY: dict[str, MethodSpec] = {
             "20",
         ),
         tags=("sota", "imm", "tracklet", "fixed-lag"),
+        evidence_support=_single_association_path_support(
+            "Viterbi tracklet association keeps one best path and is a lower-bound/audit score if treated as evidence"
+        ),
     ),
     "imm_tracklet_viterbi_fixed_lag_softk": MethodSpec(
         method_id="imm_tracklet_viterbi_fixed_lag_softk",
@@ -209,6 +253,9 @@ METHOD_REGISTRY: dict[str, MethodSpec] = {
             "RAFT_UAV_TRACKLET_SOFT_PATH_TEMPERATURE": "1.5",
         },
         tags=("sota", "imm", "tracklet", "soft-top-k", "fixed-lag"),
+        evidence_support=_topk_association_path_support(
+            3, "soft top-k path retention is truncated and must remain an audit/support row"
+        ),
     ),
     "imm_tracklet_viterbi_fixed_lag_dnh": MethodSpec(
         method_id="imm_tracklet_viterbi_fixed_lag_dnh",
@@ -239,6 +286,9 @@ METHOD_REGISTRY: dict[str, MethodSpec] = {
             "RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY": "posterior-error-nondegrading",
         },
         tags=("sota", "imm", "tracklet", "do-no-harm", "fixed-lag"),
+        evidence_support=_single_association_path_support(
+            "Viterbi tracklet association keeps one best path; do-no-harm gating does not make it an exact marginal evidence"
+        ),
     ),
     "imm_tracklet_viterbi_fixed_lag_softk_dnh": MethodSpec(
         method_id="imm_tracklet_viterbi_fixed_lag_softk_dnh",
@@ -278,6 +328,9 @@ METHOD_REGISTRY: dict[str, MethodSpec] = {
             "do-no-harm",
             "fixed-lag",
         ),
+        evidence_support=_topk_association_path_support(
+            3, "soft top-k path retention with do-no-harm gating is a truncated support audit row"
+        ),
     ),
     "hetero_cv_lofo_nis_fixed_lag": MethodSpec(
         method_id="hetero_cv_lofo_nis_fixed_lag",
@@ -298,6 +351,9 @@ METHOD_REGISTRY: dict[str, MethodSpec] = {
             "20",
         ),
         tags=("heteroscedastic", "lofo", "nis", "fixed-lag"),
+        evidence_support=_tracking_metric_support(
+            "LOFO-calibrated heteroscedastic tracker reports tracking metrics rather than exact evidence"
+        ),
     ),
 }
 
@@ -362,10 +418,15 @@ def method_registry_frame(methods: Mapping[str, MethodSpec] | None = None) -> pd
     registry = METHOD_REGISTRY if methods is None else methods
     rows = []
     for spec in registry.values():
+        support = coerce_evidence_support(spec.evidence_support)
         rows.append(
             {
                 "method_id": spec.method_id,
                 "leakage_safe": bool(spec.leakage_safe),
+                "evidence_support_type": support.support_type,
+                "evidence_comparable": bool(support.comparable),
+                "evidence_lower_bound": bool(support.lower_bound),
+                "evidence_headline_comparable": bool(support.headline_comparable),
                 "tags": ",".join(spec.tags),
                 "env": " ".join(f"{key}={value}" for key, value in spec.env.items()),
                 "command": " ".join(spec.command),

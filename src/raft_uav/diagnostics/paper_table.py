@@ -10,6 +10,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from pyrecest.models import diagonal_measurement_covariance
 
 from raft_uav.calibration.empirical_covariance import (
     apply_empirical_covariance,
@@ -778,8 +779,8 @@ def run_paper_compatible_cv_fusion(
     if catprob_weight < 0.0:
         raise ValueError("catprob_weight must be nonnegative")
 
-    covariance = np.diag(
-        [float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2]
+    covariance = diagonal_measurement_covariance(
+        [float(radar_xy_std_m), float(radar_xy_std_m), float(radar_z_std_m)]
     )
     events = _events(list(rf_measurements), radar)
     if not events:
@@ -976,8 +977,8 @@ def _run_anchor_cv_fusion(
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
     """Run CV fusion with updates only at preselected radar anchor frames."""
 
-    covariance = np.diag(
-        [float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2]
+    covariance = diagonal_measurement_covariance(
+        [float(radar_xy_std_m), float(radar_xy_std_m), float(radar_z_std_m)]
     )
     events = _events(list(rf_measurements), radar)
     if not events:
