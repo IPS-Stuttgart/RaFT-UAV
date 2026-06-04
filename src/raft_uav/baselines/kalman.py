@@ -8,6 +8,7 @@ from typing import Iterable, Mapping
 import numpy as np
 from pyrecest.filters import KalmanFilter
 from pyrecest.models import selection_matrix
+from pyrecest.tracking import TrackingEvent, record_from_update
 from scipy.stats import chi2
 
 from raft_uav.baselines.adaptive_process_noise import adaptive_process_noise_from_environment
@@ -212,6 +213,8 @@ class AsyncConstantVelocityKalmanTracker:
         )
         self._initial_update_pending = True
         self._sync_from_filter()
+        self._last_prior_mean = self.mean.copy()
+        self._last_prior_covariance = self.covariance.copy()
 
     @property
     def state(self) -> np.ndarray:
@@ -224,6 +227,18 @@ class AsyncConstantVelocityKalmanTracker:
         """Return the current posterior covariance."""
 
         return self.covariance.copy()
+
+    @property
+    def last_prior_state(self) -> np.ndarray:
+        """Return the prior mean used for the most recent event update."""
+
+        return self._last_prior_mean.copy()
+
+    @property
+    def last_prior_covariance_matrix(self) -> np.ndarray:
+        """Return the prior covariance used for the most recent event update."""
+
+        return self._last_prior_covariance.copy()
 
     def _sync_from_filter(self) -> None:
         """Mirror the PyRecEst filter state into NumPy arrays used downstream."""
@@ -310,6 +325,8 @@ class AsyncConstantVelocityKalmanTracker:
             )
         self._initial_update_pending = False
         self.predict_to(measurement.time_s)
+        self._last_prior_mean = self.mean.copy()
+        self._last_prior_covariance = self.covariance.copy()
         observation = measurement_matrix(measurement.vector.size)
         plan = plan_linear_measurement_update(
             mean=self.mean,
@@ -356,6 +373,47 @@ class AsyncConstantVelocityKalmanTracker:
             nis=float(diagnostics.nis),
             accepted=bool(diagnostics.accepted),
         )
+
+
+def _tracking_record_for_measurement(
+    tracker: AsyncConstantVelocityKalmanTracker,
+    measurement: TrackingMeasurement,
+    diagnostics: TrackingUpdateDiagnostics,
+) -> dict[str, object]:
+    """Return a PyRecEst tracking-record dictionary with RaFT legacy aliases."""
+
+    prior_mean = tracker.last_prior_state
+    prior_covariance = tracker.last_prior_covariance_matrix
+    posterior_mean = tracker.state.copy()
+    posterior_covariance = tracker.covariance_matrix.copy()
+    observation = measurement_matrix(measurement.vector.size)
+    innovation = measurement.vector - observation @ prior_mean
+    innovation_covariance = symmetrized(
+        observation @ prior_covariance @ observation.T + measurement.covariance
+    )
+    event = TrackingEvent(
+        time=float(measurement.time_s),
+        source=measurement.source,
+        action=diagnostics.update_action,
+        measurement=measurement.vector,
+        covariance=measurement.covariance,
+        accepted=diagnostics.accepted,
+        metadata={"measurement_dim": int(measurement.vector.size)},
+    )
+    record = record_from_update(
+        event=event,
+        prior_mean=prior_mean,
+        prior_cov=prior_covariance,
+        posterior_mean=posterior_mean,
+        posterior_cov=posterior_covariance,
+        innovation=innovation,
+        innovation_cov=innovation_covariance,
+        nis=diagnostics.nis,
+        action=diagnostics.update_action,
+        accepted=diagnostics.accepted,
+    ).to_dict(include_legacy_aliases=True)
+    record.update(diagnostics.to_record())
+    return record
 
 
 def run_async_cv_baseline(
@@ -420,15 +478,7 @@ def run_async_cv_baseline(
                 huber_threshold_by_source=huber_threshold_by_source,
             ),
         )
-        records.append(
-            {
-                "time_s": measurement.time_s,
-                "source": measurement.source,
-                "state": tracker.state.copy(),
-                "covariance": tracker.covariance_matrix.copy(),
-                **diagnostics.to_record(),
-            }
-        )
+        records.append(_tracking_record_for_measurement(tracker, measurement, diagnostics))
     return records
 
 
