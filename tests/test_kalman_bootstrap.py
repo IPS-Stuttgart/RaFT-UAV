@@ -49,4 +49,6 @@ def test_bootstrap_detection_does_not_skip_distinct_same_time_measurement() -> N
     assert records[0]["update_action"] == "initialized"
     assert records[1]["update_action"] != "initialized"
     assert records[1]["accepted"] is True
-    assert records[1]["covariance"][0, 0] < records[0]["covariance"][0, 0]
+    updated_covariance = np.asarray(records[1]["covariance"])
+    initial_covariance = np.asarray(records[0]["covariance"])
+    assert updated_covariance[0, 0] < initial_covariance[0, 0]
