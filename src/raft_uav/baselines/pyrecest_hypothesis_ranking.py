@@ -12,12 +12,122 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Hashable
 
-from pyrecest.tracking import (
-    HypothesisReplay,
-    InnovationConsistencyScoreConfig,
-    rank_hypothesis_replays,
-    scores_to_dicts,
-)
+try:
+    from pyrecest.tracking import (
+        HypothesisReplay,
+        InnovationConsistencyScoreConfig,
+        rank_hypothesis_replays,
+        scores_to_dicts,
+    )
+except ImportError:
+
+    @dataclass(frozen=True)
+    class HypothesisReplay:
+        """Fallback replay container matching PyRecEst's public fields."""
+
+        hypothesis_id: Hashable
+        records: Sequence[Any]
+        graph_cost: float = 0.0
+        track_switches: int = 0
+        missed_detection_count: int = 0
+        rejected_count: int = 0
+        coast_count: int = 0
+        unsupported_measurement_count: int = 0
+        hard_quarantine_count: int = 0
+        tail_duration_s: float = 0.0
+        coverage_count: int = 0
+        metadata: Mapping[str, Any] | None = None
+
+    @dataclass(frozen=True)
+    class InnovationConsistencyScoreConfig:
+        """Fallback score-weight container compatible with PyRecEst."""
+
+        graph_cost_weight: float = 1.0
+        nis_weight: float = 1.0
+        residual_weight: float = 0.01
+        switch_weight: float = 2.0
+        missed_detection_weight: float = 1.0
+        rejected_weight: float = 0.25
+        coast_weight: float = 0.25
+        unsupported_measurement_weight: float = 5.0
+        hard_quarantine_weight: float = 1000.0
+        tail_duration_weight: float = 0.05
+        coverage_reward: float = 0.001
+        nis_clip: float = 50.0
+        residual_clip: float = 500.0
+        residual_normalizer: float = 100.0
+
+    def rank_hypothesis_replays(
+        replays: Sequence[HypothesisReplay],
+        *,
+        config: InnovationConsistencyScoreConfig,
+    ) -> list[dict[str, Any]]:
+        """Return fallback innovation-consistency scores sorted by objective."""
+
+        return sorted(
+            (_score_replay(replay, config) for replay in replays),
+            key=lambda row: (float(row["total_score"]), str(row["hypothesis_id"])),
+        )
+
+    def scores_to_dicts(scores: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        """Return score dictionaries in the shape provided by PyRecEst."""
+
+        return [dict(score) for score in scores]
+
+    def _score_replay(
+        replay: HypothesisReplay,
+        config: InnovationConsistencyScoreConfig,
+    ) -> dict[str, Any]:
+        nis_score = sum(
+            min(_record_float(record, ("nis", "normalized_innovation_squared"), 0.0), config.nis_clip)
+            for record in replay.records
+        )
+        residual_score = sum(
+            min(
+                _record_float(record, ("residual_norm_m", "residual_norm"), 0.0)
+                / max(float(config.residual_normalizer), 1e-12),
+                config.residual_clip / max(float(config.residual_normalizer), 1e-12),
+            )
+            for record in replay.records
+        )
+        total_score = (
+            float(config.graph_cost_weight) * float(replay.graph_cost)
+            + float(config.nis_weight) * float(nis_score)
+            + float(config.residual_weight) * float(residual_score)
+            + float(config.switch_weight) * int(replay.track_switches)
+            + float(config.missed_detection_weight) * int(replay.missed_detection_count)
+            + float(config.rejected_weight) * int(replay.rejected_count)
+            + float(config.coast_weight) * int(replay.coast_count)
+            + float(config.unsupported_measurement_weight) * int(replay.unsupported_measurement_count)
+            + float(config.hard_quarantine_weight) * int(replay.hard_quarantine_count)
+            + float(config.tail_duration_weight) * float(replay.tail_duration_s)
+            - float(config.coverage_reward) * int(replay.coverage_count)
+        )
+        row: dict[str, Any] = {
+            "hypothesis_id": replay.hypothesis_id,
+            "total_score": float(total_score),
+            "graph_cost": float(replay.graph_cost),
+            "innovation_score": float(nis_score),
+            "residual_score": float(residual_score),
+            "track_switches": int(replay.track_switches),
+            "missed_detection_count": int(replay.missed_detection_count),
+            "rejected_count": int(replay.rejected_count),
+            "coast_count": int(replay.coast_count),
+            "unsupported_measurement_count": int(replay.unsupported_measurement_count),
+            "hard_quarantine_count": int(replay.hard_quarantine_count),
+            "tail_duration_s": float(replay.tail_duration_s),
+            "coverage_count": int(replay.coverage_count),
+        }
+        for key, value in (replay.metadata or {}).items():
+            row[f"metadata_{key}"] = value
+        return row
+
+    def _record_float(record: Any, keys: tuple[str, ...], default: float) -> float:
+        if isinstance(record, Mapping):
+            for key in keys:
+                if key in record and record[key] is not None:
+                    return float(record[key])
+        return float(default)
 
 
 @dataclass(frozen=True)
