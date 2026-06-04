@@ -271,29 +271,3 @@ def symmetrized(matrix: np.ndarray) -> np.ndarray:
     """Return the symmetric part of a square matrix."""
 
     return 0.5 * (matrix + matrix.T)
-
-
-# Keep the public RaFT-UAV import path stable, but delegate the robust
-# linear-update planning implementation to PyRecEst.  The legacy definitions
-# above are intentionally shadowed here so downstream modules can continue to
-# import from ``raft_uav.baselines.update_logic`` while the generic NIS,
-# Student-t, Huber, and NIS-inflation logic lives upstream in PyRecEst.
-from raft_uav.baselines.pyrecest_update_logic import (  # noqa: E402,F401
-    DEFAULT_HUBER_THRESHOLD,
-    DEFAULT_STUDENT_T_DOF,
-    ROBUST_UPDATE_MODES,
-    LinearUpdatePlan,
-    TrackingMeasurementLike,
-    gate_threshold_for_measurement,
-    huber_covariance_scale,
-    huber_threshold_for_measurement,
-    inflation_alpha_for_measurement,
-    max_residual_norm_for_measurement,
-    normalized_innovation_squared,
-    plan_linear_measurement_update,
-    robust_update_covariance_scale,
-    robust_update_for_measurement,
-    student_t_covariance_scale,
-    student_t_dof_for_measurement,
-    symmetrized,
-)
