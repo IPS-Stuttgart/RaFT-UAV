@@ -12,15 +12,141 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from pyrecest.tracking import (
-    Tracklet,
-    TrackletGraphConfig,
-    TrackletPath,
-    constant_velocity_edge_cost,
-    diverse_k_best_tracklet_paths,
-    k_best_tracklet_paths,
-    tracklet_paths_to_dicts,
-)
+try:
+    from pyrecest.tracking import (
+        Tracklet,
+        TrackletGraphConfig,
+        TrackletPath,
+        constant_velocity_edge_cost,
+        diverse_k_best_tracklet_paths,
+        k_best_tracklet_paths,
+        tracklet_paths_to_dicts,
+    )
+except ImportError:
+
+    @dataclass(frozen=True)
+    class Tracklet:
+        """Fallback tracklet container matching the PyRecEst fields used here."""
+
+        id: Any
+        start_time: float
+        end_time: float
+        start_state: np.ndarray
+        end_state: np.ndarray
+        cost: float = 0.0
+        metadata: Mapping[str, Any] | None = None
+
+    @dataclass(frozen=True)
+    class TrackletGraphConfig:
+        """Fallback k-best graph search configuration."""
+
+        top_k: int = 8
+        beam_width: int | None = None
+        max_gap: float = 30.0
+        diversity_weight: float = 0.0
+        candidate_multiplier: int = 5
+
+    @dataclass(frozen=True)
+    class TrackletPath:
+        """Fallback tracklet path result."""
+
+        tracklet_ids: tuple[Any, ...]
+        cost: float
+
+        @property
+        def length(self) -> int:
+            return len(self.tracklet_ids)
+
+    def constant_velocity_edge_cost(
+        *,
+        max_gap: float,
+        max_speed: float,
+        state_slice: Sequence[int],
+        gap_weight: float,
+        speed_weight: float,
+        switch_metadata_key: str,
+        switch_penalty: float,
+    ):
+        """Return a fallback Fortem-compatible transition cost function."""
+
+        def edge_cost(left: Tracklet, right: Tracklet) -> float | None:
+            gap = float(right.start_time) - float(left.end_time)
+            if gap < 0.0 or gap > float(max_gap):
+                return None
+            start = np.asarray(right.start_state, dtype=float)[list(state_slice)]
+            end = np.asarray(left.end_state, dtype=float)[list(state_slice)]
+            distance = float(np.linalg.norm(start - end))
+            speed = distance / max(gap, 1e-12)
+            if speed > float(max_speed):
+                return None
+            cost = float(gap_weight) * gap + float(speed_weight) * speed
+            left_track = (left.metadata or {}).get(switch_metadata_key)
+            right_track = (right.metadata or {}).get(switch_metadata_key)
+            if left_track is not None and right_track is not None and left_track != right_track:
+                cost += float(switch_penalty)
+            return float(cost)
+
+        return edge_cost
+
+    def k_best_tracklet_paths(
+        tracklets: Sequence[Tracklet],
+        *,
+        edge_cost_fn,
+        config: TrackletGraphConfig,
+        node_cost_fn,
+    ) -> list[TrackletPath]:
+        """Enumerate simple fallback DAG paths ordered by cost."""
+
+        ordered = sorted(tracklets, key=lambda item: (float(item.start_time), float(item.end_time), str(item.id)))
+        by_id = {tracklet.id: tracklet for tracklet in ordered}
+        paths: list[TrackletPath] = []
+
+        def extend(path: tuple[Any, ...], cost: float) -> None:
+            paths.append(TrackletPath(path, float(cost)))
+            last = by_id[path[-1]]
+            for candidate in ordered:
+                if candidate.id in path:
+                    continue
+                transition = edge_cost_fn(last, candidate)
+                if transition is None:
+                    continue
+                extend((*path, candidate.id), cost + float(transition) + float(node_cost_fn(candidate)))
+
+        for tracklet in ordered:
+            extend((tracklet.id,), float(node_cost_fn(tracklet)))
+        return sorted(paths, key=lambda path: (path.cost, tuple(str(item) for item in path.tracklet_ids)))[: int(config.top_k)]
+
+    def diverse_k_best_tracklet_paths(
+        tracklets: Sequence[Tracklet],
+        *,
+        edge_cost_fn,
+        config: TrackletGraphConfig,
+        node_cost_fn,
+    ) -> list[TrackletPath]:
+        """Fallback diverse search delegates to k-best enumeration."""
+
+        return k_best_tracklet_paths(
+            tracklets,
+            edge_cost_fn=edge_cost_fn,
+            config=config,
+            node_cost_fn=node_cost_fn,
+        )
+
+    def tracklet_paths_to_dicts(
+        paths: Sequence[TrackletPath],
+        *,
+        tracklets: Mapping[Any, Tracklet] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return fallback path rows using PyRecEst-compatible column names."""
+
+        return [
+            {
+                "rank": rank,
+                "tracklet_ids": ";".join(str(item) for item in path.tracklet_ids),
+                "cost": float(path.cost),
+            }
+            for rank, path in enumerate(paths)
+        ]
 
 
 @dataclass(frozen=True)
