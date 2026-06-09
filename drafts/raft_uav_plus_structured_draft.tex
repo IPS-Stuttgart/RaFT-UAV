@@ -1,0 +1,395 @@
+% !TEX program = pdflatex
+% First structured draft for the RaFT-UAV / RaFT-UAV++ paper.
+% This file is intentionally bullet-point-ish: it is meant as a scaffold for a
+% fast conference draft, not as final prose.
+
+\documentclass[10pt,conference]{IEEEtran}
+
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{siunitx}
+\usepackage{xcolor}
+\usepackage{xspace}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+\sisetup{detect-all,per-mode=symbol}
+\newcommand{\raftpp}{RaFT-UAV++\xspace}
+\newcommand{\aerpaw}{AERPAW Dataset-28\xspace}
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+\newcommand{\figplaceholder}[2]{%
+  \fbox{\begin{minipage}[c][#2][c]{0.92\linewidth}\centering\small #1\end{minipage}}%
+}
+
+\title{\raftpp: Artifact-Aware RF/Radar Fusion for UAV Tracking on AERPAW Dataset-28}
+
+\author{%
+  \IEEEauthorblockN{Author One, Author Two, Author Three}
+  \IEEEauthorblockA{Affiliation(s) redacted for draft\\
+  Email: \texttt{TODO@example.edu}}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\begin{itemize}[leftmargin=*,nosep]
+  \item Problem: published RF/radar UAV tracking baselines on \aerpaw are hard to reproduce from raw streams because dataset artifacts, MATLAB post-processing, radar target selection, RF filtering, and evaluation windows are under-specified.
+  \item We separate two questions that are often conflated: (i) Table-II-style artifact parity and (ii) raw-stream UAV tracking from RF CSV + Fortem radar JSON.
+  \item We reproduce the paper-style Opt2 MATLAB artifact statistics and show why these artifact vectors are not equivalent to direct raw-stream replay.
+  \item We introduce \raftpp, a truth-free raw-stream tracker combining global radar tracklet association, bounded unsupported-RF soft anchoring, same-track post-gap radar reacquisition, terminal short-segment guarding, and first-selected-radar bootstrap.
+  \item On the repository raw-stream benchmark over Opt1--Opt3, \raftpp improves pooled 3D mean/p95/max from \SI{85.79}/\SI{398.03}/\SI{748.55}{m} to \SI{59.37}/\SI{106.21}/\SI{573.22}{m}.
+\end{itemize}
+\end{abstract}
+
+\begin{IEEEkeywords}
+UAV tracking, RF sensing, radar tracking, sensor fusion, data association, benchmark reproducibility, AERPAW, fixed-lag smoothing.
+\end{IEEEkeywords}
+
+\section{Introduction}
+\label{sec:introduction}
+
+\subsection{Problem statement}
+\begin{itemize}[leftmargin=*]
+  \item UAV tracking from passive/cellular RF localization and Fortem radar is attractive because each modality compensates for the other's failure modes.
+  \item In practice, published results depend heavily on:\vspace{-0.25em}
+  \begin{itemize}[leftmargin=*]
+    \item which RF file/variant is used;
+    \item how timestamps are corrected;
+    \item whether radar positions come from Fortem LLA, raw polar fields, MATLAB-rotated tracks, or precomputed error vectors;
+    \item how Fortem track IDs are selected and stitched;
+    \item whether metrics are raw measurement errors, posterior-state errors, or artifact/proxy rows.
+  \end{itemize}
+  \item Our initial attempts with direct raw JSON/CSV replay could not match the reference paper, motivating a forensic split between paper-artifact parity and raw-stream tracking.
+\end{itemize}
+
+\subsection{Contributions}
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Artifact-level reproduction.} We identify and reproduce the Opt2 MATLAB artifact path used for paper-style RF/radar standalone statistics.
+  \item \textbf{Raw-stream benchmark protocol.} We define a non-oracle raw-stream comparison over Opt1--Opt3 using RF CSV, Fortem radar JSON, and truth only for evaluation.
+  \item \textbf{\raftpp method.} We propose global tracklet association with bounded unsupported-RF updates and radar-path bootstrap.
+  \item \textbf{Failure analysis.} We show that Opt3's previous catastrophic failure is primarily an initialization/support problem, not a missing graph path or global RF clock offset.
+  \item \textbf{Reproducible result.} \raftpp improves pooled raw-stream 3D mean/p95/max from \SI{85.79}/\SI{398.03}/\SI{748.55}{m} to \SI{59.37}/\SI{106.21}/\SI{573.22}{m}.
+\end{enumerate}
+
+\begin{figure}[t]
+  \centering
+  \figplaceholder{Overview placeholder: raw RF CSV + Fortem radar JSON $\rightarrow$ artifact audit and raw-stream \raftpp pipeline. Include two clearly separated lanes: ``paper-artifact parity'' and ``raw-stream method''.}{3.5cm}
+  \caption{Proposed paper structure and evaluation split. Artifact parity explains the reference-paper statistics; \raftpp is evaluated separately on raw RF/radar streams.}
+  \label{fig:overview}
+\end{figure}
+
+\section{Dataset and Reproducibility Pitfalls}
+\label{sec:dataset}
+
+\subsection{AERPAW Dataset-28 / AADM2025Dryad}
+\begin{itemize}[leftmargin=*]
+  \item Flights used in raw-stream benchmark: Opt1, Opt2, Opt3.
+  \item Inputs for raw-stream tracker:\vspace{-0.25em}
+  \begin{itemize}[leftmargin=*]
+    \item Keysight RF localization CSV files;
+    \item Fortem radar JSON track candidates;
+    \item vehicleOut ground truth files used \emph{only} for post-run evaluation.
+  \end{itemize}
+  \item Table-II artifact path uses a distinct Opt2 MATLAB post-processing route; this is \emph{not} the same as raw JSON/CSV tracking.
+\end{itemize}
+
+\subsection{Artifact parity versus raw-stream tracking}
+\begin{itemize}[leftmargin=*]
+  \item Artifact parity reproduces paper-style RF/radar error vectors and proxy fusion statistics.
+  \item Raw-stream tracking must operate only on raw RF/radar streams and truth-free association/scoring.
+  \item We report these separately to avoid claiming that artifact/proxy rows are direct filter reproduction.
+\end{itemize}
+
+\begin{figure}[t]
+  \centering
+  \figplaceholder{Placeholder for a data-flow diagram: Opt2 MATLAB artifact path (Opt2.csv, -4 h RF correction, drop first 25 RF samples, radarerrorstandalone.mat) versus raw-stream Opt1--Opt3 path.}{3.25cm}
+  \caption{Data-path ambiguity. The MATLAB artifact path reproduces Table-II-style statistics, while the raw-stream path uses RF CSV and Fortem JSON directly.}
+  \label{fig:artifact-vs-raw}
+\end{figure}
+
+\section{Paper-Artifact Forensics}
+\label{sec:artifact_forensics}
+
+\subsection{Opt2 MATLAB artifact path}
+\begin{itemize}[leftmargin=*]
+  \item RF artifact source:\vspace{-0.25em}
+  \begin{itemize}[leftmargin=*]
+    \item \texttt{RF Sensor and Radar/Post\_Processing\_Scripts/Opt2.csv}
+    \item subtract \SI{4}{h} from RF timestamps;
+    \item nearest-timestamp truth matching;
+    \item drop first 25 RF samples;
+    \item keep finite nonzero fixes.
+  \end{itemize}
+  \item Radar artifact source:\vspace{-0.25em}
+  \begin{itemize}[leftmargin=*]
+    \item \texttt{radarerrorstandalone.mat}
+    \item synthetic MATLAB radar timing $t_0=\SI{0.25}{s}$, $T_s=\SI{0.25}{s}$.
+  \end{itemize}
+  \item Actual CV/fixed-lag replay over \texttt{radar\_outputOpt2.mat} is diagnostic and differs from the artifact vector.
+\end{itemize}
+
+\begin{table}[t]
+\centering
+\caption{Artifact-level parity summary. Fill exact values from \texttt{paper\_table\_ii\_artifact\_opt2\_conclusion\_table.csv}.}
+\label{tab:artifact_parity}
+\begin{tabular}{lrrrr}
+\toprule
+Row & Count & Mean [m] & Std/P95 [m] & Max [m] \\
+\midrule
+RF raw artifact & 206 & 471.75 & 885.24 & 4831.63 \\
+RF after NIS selected & 125 & \todo{25--28} & \todo{} & \todo{} \\
+Radar raw artifact & 3106 & 26.19 & \todo{} & 195.57 \\
+Radar after NIS artifact & 2403 & 20.95 & \todo{} & 97.20 \\
+KF all-steps proxy & 2655 & 22.09 & \todo{} & \todo{} \\
+Actual CV replay diagnostic & \todo{} & 25.20 & 82.12 & 102.20 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Key forensic finding}
+\begin{itemize}[leftmargin=*]
+  \item The artifact error vectors are reproducible, but the row-level radar coordinate stream used for actual replay is not identical to the artifact vector.
+  \item This explains why artifact parity is achievable while direct raw replay cannot be treated as exact Table-II fusion reproduction.
+  \item Paper claim should be: \emph{artifact-level statistics are reproduced; raw-stream tracking is evaluated separately.}
+\end{itemize}
+
+\section{RaFT-UAV++ Method}
+\label{sec:method}
+
+\subsection{Overview}
+\begin{itemize}[leftmargin=*]
+  \item State: constant-velocity 3D state $x_t=[e,n,u,\dot e,\dot n,\dot u]^\top$.
+  \item Radar provides 3D ENU candidate track points, but altitude is treated weakly or with large covariance.
+  \item RF provides 2D position fixes with highly variable reliability; unsupported RF is not fully trusted and not fully rejected.
+  \item Fixed-lag smoothing with lag \SI{20}{s} is used in the final raw-stream method.
+\end{itemize}
+
+\begin{figure}[t]
+  \centering
+  \figplaceholder{Algorithm placeholder: global segment DAG $\rightarrow$ top-k path generation $\rightarrow$ replay ranking $\rightarrow$ first-selected-radar bootstrap $\rightarrow$ bounded RF soft-anchor $\rightarrow$ fixed-lag smoothing.}{4.0cm}
+  \caption{\raftpp raw-stream method. The graph is selected without truth; truth is used only for evaluation.}
+  \label{fig:method_pipeline}
+\end{figure}
+
+\subsection{Global radar tracklet graph}
+\begin{itemize}[leftmargin=*]
+  \item Split Fortem radar candidates into continuous same-track-ID microsegments.
+  \item Segment costs include:\vspace{-0.25em}
+  \begin{itemize}[leftmargin=*]
+    \item motion plausibility;
+    \item internal speed/range discontinuities;
+    \item RF contradiction;
+    \item catProb/confidence when available;
+    \item path-switch penalties;
+    \item terminal short-segment penalties.
+  \end{itemize}
+  \item A diverse top-$K$ path set is generated and replay-ranked by truth-free innovation/residual summaries.
+\end{itemize}
+
+\subsection{First-selected-radar bootstrap}
+\begin{itemize}[leftmargin=*]
+  \item Problem: early RF/coast records can initialize the filter far from the radar-supported path, especially in Opt3.
+  \item Fix: after graph association, initialize replay from the first graph-selected radar event.
+  \item Pre-bootstrap events are dropped/recorded, not assimilated silently.
+  \item Optional variants considered but not final: first selected radar with local-linear velocity, first radar after 30 s.
+\end{itemize}
+
+\begin{figure}[t]
+  \centering
+  \figplaceholder{Opt3 bootstrap placeholder: plot error over time before/after first-selected-radar bootstrap, highlighting early coast/unsupported RF blow-up and its removal.}{3.25cm}
+  \caption{First-selected-radar bootstrap removes the Opt3 early-state failure that dominated the previous raw-stream method.}
+  \label{fig:opt3_bootstrap}
+\end{figure}
+
+\subsection{Unsupported-RF soft-anchor}
+\begin{itemize}[leftmargin=*]
+  \item Unsupported RF is mixed quality: some fixes are useful; others have kilometer-scale errors.
+  \item Binary choices fail:\vspace{-0.25em}
+  \begin{itemize}[leftmargin=*]
+    \item fully trusting unsupported RF causes drift/jumps;
+    \item rejecting/coasting through unsupported RF can also drift.
+  \end{itemize}
+  \item Soft-anchor policy:\vspace{-0.25em}
+  \begin{itemize}[leftmargin=*]
+    \item predict to RF time;
+    \item compute 2D innovation;
+    \item cap correction length at \SI{5}{m};
+    \item apply conservative covariance;
+    \item leave vertical state policy as \texttt{keep} in final method.
+  \end{itemize}
+\end{itemize}
+
+\subsection{Post-gap radar bridge and terminal guard}
+\begin{itemize}[leftmargin=*]
+  \item Same-track post-gap radar bridge allows short radar reacquisitions after unsupported-RF blocks.
+  \item Bridge updates are allowed only for eligible same-track post-gap rows.
+  \item Terminal short-segment guard penalizes unsupported late terminal segments, preventing Opt1-style track-2351 tails.
+\end{itemize}
+
+\section{Experimental Protocol}
+\label{sec:experiments}
+
+\subsection{Raw-stream benchmark}
+\begin{itemize}[leftmargin=*]
+  \item Flights: Opt1, Opt2, Opt3.
+  \item Metrics:\vspace{-0.25em}
+  \begin{itemize}[leftmargin=*]
+    \item truth-grid 3D mean, RMSE, p95, max;
+    \item paper-style nearest-truth sample-time metrics;
+    \item selected radar rows;
+    \item accepted RF rows;
+    \item track switches;
+    \item unsupported RF count and max.
+  \end{itemize}
+  \item Paper-artifact rows are excluded from raw-stream comparison tables.
+\end{itemize}
+
+\subsection{Baselines}
+\begin{itemize}[leftmargin=*]
+  \item CV catProb fixed-lag baseline.
+  \item Prediction-NIS fixed-lag baseline.
+  \item Range-covariance tracklet-Viterbi fixed-lag baseline.
+  \item Previous best non-oracle preset.
+  \item \raftpp final method.
+\end{itemize}
+
+\begin{table*}[t]
+\centering
+\caption{Raw-stream pooled comparison over Opt1--Opt3. Artifact/proxy rows are excluded.}
+\label{tab:raw_pooled}
+\begin{tabular}{lrrrr}
+\toprule
+Method & Mean 3D [m] & RMSE 3D [m] & P95 3D [m] & Max 3D [m] \\
+\midrule
+CV catProb fixed-lag & 109.88 & 226.32 & 410.97 & 2098.57 \\
+Prediction-NIS fixed-lag & 169.94 & 493.09 & 471.11 & 5108.39 \\
+Range-covariance tracklet-Viterbi & 93.06 & 177.67 & 391.51 & 1744.58 \\
+Best previous non-oracle preset & 85.79 & 130.98 & 398.03 & 748.55 \\
+\textbf{\raftpp} & \textbf{59.37} & \todo{fill} & \textbf{106.21} & \textbf{573.22} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table}[t]
+\centering
+\caption{Per-flight \raftpp result.}
+\label{tab:raftpp_by_flight}
+\begin{tabular}{lrrrr}
+\toprule
+Flight & Mean 3D [m] & P50 [m] & P95 [m] & Max [m] \\
+\midrule
+Opt1 & 57.92 & 51.79 & 106.93 & 573.22 \\
+Opt2 & 57.16 & 48.17 & 126.60 & 290.47 \\
+Opt3 & 62.44 & 56.51 & 85.71 & 334.75 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Ablation Plan}
+\label{sec:ablation}
+
+\begin{itemize}[leftmargin=*]
+  \item Required before final paper submission: generate the table below from clean committed runs.
+  \item Important rows:\vspace{-0.25em}
+  \begin{itemize}[leftmargin=*]
+    \item previous best non-oracle preset;
+    \item global tracklet without soft-anchor;
+    \item soft-anchor cap5 without post-gap/terminal logic;
+    \item post-gap bridge without terminal guard;
+    \item terminal guard without first-radar bootstrap;
+    \item full \raftpp.
+  \end{itemize}
+\end{itemize}
+
+\begin{table*}[t]
+\centering
+\caption{Ablation placeholder. Fill from clean all-flight reruns.}
+\label{tab:ablation}
+\begin{tabular}{lrrrrrr}
+\toprule
+Method variant & Mean 3D & P95 3D & Max 3D & Unsupported RF max & Track switches & Notes \\
+\midrule
+Previous best non-oracle & 85.79 & 398.03 & 748.55 & \todo{} & \todo{} & baseline \\
+Global tracklet only & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & path graph \\
++ soft-anchor cap5 & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & bounded RF \\
++ post-gap bridge & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & reacquisition \\
++ terminal guard & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} & tail control \\
++ first-radar bootstrap (\raftpp) & 59.37 & 106.21 & 573.22 & \todo{} & \todo{} & final \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{What was learned from artifact parity}
+\begin{itemize}[leftmargin=*]
+  \item Table-II artifact vectors can be reproduced, but this is not the same as raw-stream Kalman replay.
+  \item Hidden post-processing, selected radar targets, timestamp correction, and MATLAB artifacts materially affect reported results.
+\end{itemize}
+
+\subsection{What was learned from raw-stream tracking}
+\begin{itemize}[leftmargin=*]
+  \item Unsupported RF should neither be fully trusted nor fully rejected; bounded soft anchoring is effective.
+  \item Radar association must be global/path-level rather than frame-local.
+  \item Bootstrap from the graph-selected radar path fixes early-state failures, especially in Opt3.
+  \item Terminal short radar segments can harm p95/mean when unsupported by RF or continuity.
+\end{itemize}
+
+\subsection{Limitations}
+\begin{itemize}[leftmargin=*]
+  \item Method was developed on Dataset-28; if no LOFO scalar validation is included, avoid claiming held-out generalization.
+  \item Fixed-lag smoothing introduces latency; report offline/fixed-lag status clearly.
+  \item Artifact parity and raw-stream method are separate claims.
+  \item Future work: recover the hidden radar coordinate stream behind \texttt{radarerrorstandalone.mat}; evaluate additional AERPAW flights; test online-only variants.
+\end{itemize}
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+\begin{itemize}[leftmargin=*]
+  \item We provide a reproducible separation between paper-artifact parity and raw-stream RF/radar UAV tracking.
+  \item We introduce \raftpp, a global-tracklet fixed-lag tracker with bounded RF anchoring and radar-path bootstrap.
+  \item On Opt1--Opt3, \raftpp improves pooled raw-stream 3D mean/p95/max from \SI{85.79}/\SI{398.03}/\SI{748.55}{m} to \SI{59.37}/\SI{106.21}/\SI{573.22}{m}.
+\end{itemize}
+
+\section*{Checklist before submission}
+\begin{itemize}[leftmargin=*]
+  \item Regenerate all tables from a clean commit.
+  \item Fill ablation table.
+  \item Add method pseudocode as Algorithm 1 if page budget allows.
+  \item Add trajectory/error-over-time figures for Opt1--Opt3.
+  \item Add artifact parity table and short data-flow figure.
+  \item Add non-oracle guardrail tests for first-selected-radar bootstrap and path scoring.
+  \item Decide exact target venue format: IEEE 6-page conference or longer journal version.
+\end{itemize}
+
+\begin{thebibliography}{9}
+
+\bibitem{aerpaw_dataset28}
+AERPAW / Dryad Dataset-28 authors,
+``Multi-modal RF Sensor and Radar Dataset for UAV Tracking,''
+Dryad DOI: \texttt{10.5061/dryad.7d7wm3898},
+\todo{complete citation}.
+
+\bibitem{reference_paper}
+\todo{Authors},
+``Fusion of Cellular ISAC and Passive RF Sensing for UAV Detection and Tracking,''
+\todo{venue, year}.
+
+\bibitem{kalman}
+R.~E. Kalman,
+``A New Approach to Linear Filtering and Prediction Problems,''
+\todo{complete citation}.
+
+\bibitem{tracklet_data_association}
+\todo{Add representative tracklet / multi-target tracking / data association references.}
+
+\bibitem{robust_sensor_fusion}
+\todo{Add robust sensor fusion / NIS / Student-t / Huber references if used in final comparison.}
+
+\end{thebibliography}
+
+\end{document}
