@@ -84,6 +84,26 @@ def test_calibrated_heteroscedastic_method_is_available() -> None:
     assert method.nis_calibrated
 
 
+def test_soft_catprob_retention_sets_generic_and_tracklet_penalty_env() -> None:
+    args = SimpleNamespace(
+        enable_soft_catprob_retention=True,
+        soft_catprob_below_threshold_penalty=5.5,
+        enable_radar_velocity_update=False,
+        enable_do_no_harm_radar_updates=False,
+        tracklet_soft_top_k_paths=1,
+        tracklet_soft_path_temperature=1.0,
+        nis_covariance_calibration_json=None,
+        lofo_radar_covariance_summary=None,
+    )
+
+    env = lfo._runtime_env_updates(args)
+
+    assert env["RAFT_UAV_SOFT_CATPROB_RETENTION"] == "1"
+    assert env["RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE"] == "soft"
+    assert env["RAFT_UAV_SOFT_CATPROB_BELOW_THRESHOLD_PENALTY"] == "5.5"
+    assert env["RAFT_UAV_TRACKLET_BELOW_CATPROB_THRESHOLD_PENALTY"] == "5.5"
+
+
 def test_nis_calibration_summary_csv_flattens_groups(tmp_path: Path) -> None:
     payload = {
         "groups": {
