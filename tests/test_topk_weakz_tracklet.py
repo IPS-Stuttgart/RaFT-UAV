@@ -70,6 +70,23 @@ def test_build_fortem_tracklets_splits_by_track_id() -> None:
     assert best.track_id == 10
 
 
+def test_selected_radar_for_tracklet_path_uses_positions_not_external_index() -> None:
+    radar = _radar_frame()
+    radar.index = np.arange(100, 100 + len(radar))
+    cfg = TopKWeakZTrackletConfig(top_k_paths=2, beam_width=8, min_tracklet_length=3)
+    tracklets = build_fortem_tracklets(radar, cfg)
+    path = top_k_tracklet_paths(tracklets, cfg)[0]
+    segment_by_id = {segment.segment_id: segment for segment in tracklets}
+
+    selected = selected_radar_for_tracklet_path(radar, path, segment_by_id)
+
+    assert not selected.empty
+    assert selected["track_id"].eq(10).all()
+    assert selected["east_m"].tolist() == [10.0 * i for i in range(8)]
+    assert selected["topk_weakz_segment_id"].ge(0).all()
+    assert selected["topk_weakz_path_order"].eq(0).all()
+
+
 def test_top_k_paths_prefers_high_quality_tracklet() -> None:
     cfg = TopKWeakZTrackletConfig(top_k_paths=2, beam_width=8, min_tracklet_length=3)
     tracklets = build_fortem_tracklets(_radar_frame(), cfg)

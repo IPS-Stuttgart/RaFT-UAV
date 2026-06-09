@@ -11,6 +11,12 @@ RADAR_COVARIANCE_MODES = ("fixed", "range-angle")
 TRACKLET_CATPROB_RETENTION_MODES = ("hard", "soft")
 
 
+_TRACKLET_MAX_CANDIDATE_ENV_NAMES = (
+    "RAFT_UAV_TRACKLET_MAX_CANDIDATES",
+    "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME",
+)
+
+
 _RUNTIME_FLAG_ENV_NAMES: dict[str, tuple[str, ...]] = {
     "--radar-covariance-mode": ("RAFT_UAV_RADAR_COVARIANCE_MODE",),
     "--radar-xy-std-m": ("RAFT_UAV_RADAR_XY_STD_M",),
@@ -23,10 +29,8 @@ _RUNTIME_FLAG_ENV_NAMES: dict[str, tuple[str, ...]] = {
     "--radar-origin-east-m": ("RAFT_UAV_RADAR_ORIGIN_EAST_M",),
     "--radar-origin-north-m": ("RAFT_UAV_RADAR_ORIGIN_NORTH_M",),
     "--radar-origin-up-m": ("RAFT_UAV_RADAR_ORIGIN_UP_M",),
-    "--tracklet-max-candidates": (
-        "RAFT_UAV_TRACKLET_MAX_CANDIDATES",
-        "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME",
-    ),
+    "--tracklet-max-candidates": _TRACKLET_MAX_CANDIDATE_ENV_NAMES,
+    "--tracklet-max-candidates-per-frame": _TRACKLET_MAX_CANDIDATE_ENV_NAMES,
     "--tracklet-missed-detection-cost": (
         "RAFT_UAV_TRACKLET_MISSED_DETECTION_COST",
     ),

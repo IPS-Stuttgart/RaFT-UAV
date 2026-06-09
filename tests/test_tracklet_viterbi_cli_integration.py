@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 from raft_uav import tracklet_viterbi_cli
 from raft_uav.baselines.tracklet_viterbi import (
@@ -35,6 +36,81 @@ def test_tracklet_viterbi_wrapper_registers_standard_association_mode(monkeypatc
     assert tracklet_viterbi_cli.main([]) == 0
     assert "tracklet-viterbi" in seen["modes"]
     assert seen["dispatcher"] is tracklet_viterbi_cli.run_async_cv_baseline_with_radar_association
+
+
+def test_tracklet_viterbi_dispatcher_accepts_base_cli_runner_options(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_tracklet_runner(**kwargs):
+        seen.update(kwargs)
+        return [], pd.DataFrame()
+
+    monkeypatch.setattr(
+        tracklet_viterbi_cli,
+        "_tracklet_runner_from_environment",
+        lambda: fake_tracklet_runner,
+    )
+
+    records, selected = tracklet_viterbi_cli.run_async_cv_baseline_with_radar_association(
+        rf_measurements=[],
+        radar=pd.DataFrame(),
+        association="tracklet-viterbi",
+        radar_covariance_model="geometry",
+        radar_range_std_m=9.0,
+        radar_range_std_fraction=0.01,
+        radar_crossrange_angle_std_deg=2.0,
+        radar_crossrange_min_std_m=4.0,
+        radar_crossrange_max_std_m=90.0,
+        paper_compatible_catprob_threshold=0.42,
+        paper_compatible_bootstrap_source="first-event",
+        paper_compatible_empirical_covariance=False,
+    )
+
+    assert records == []
+    assert selected.empty
+    assert "radar_covariance_model" not in seen
+    assert "paper_compatible_bootstrap_source" not in seen
+
+
+def test_tracklet_viterbi_dispatcher_forwards_base_cli_runner_options(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_base_runner(**kwargs):
+        seen.update(kwargs)
+        return [], pd.DataFrame()
+
+    monkeypatch.setattr(
+        tracklet_viterbi_cli,
+        "_base_radar_association_runner",
+        fake_base_runner,
+    )
+
+    records, selected = tracklet_viterbi_cli.run_async_cv_baseline_with_radar_association(
+        rf_measurements=[],
+        radar=pd.DataFrame(),
+        association="prediction-nis",
+        radar_covariance_model="geometry",
+        radar_range_std_m=9.0,
+        radar_range_std_fraction=0.01,
+        radar_crossrange_angle_std_deg=2.0,
+        radar_crossrange_min_std_m=4.0,
+        radar_crossrange_max_std_m=90.0,
+        paper_compatible_catprob_threshold=0.42,
+        paper_compatible_bootstrap_source="first-event",
+        paper_compatible_empirical_covariance=False,
+    )
+
+    assert records == []
+    assert selected.empty
+    assert seen["radar_covariance_model"] == "geometry"
+    assert seen["radar_range_std_m"] == 9.0
+    assert seen["radar_range_std_fraction"] == 0.01
+    assert seen["radar_crossrange_angle_std_deg"] == 2.0
+    assert seen["radar_crossrange_min_std_m"] == 4.0
+    assert seen["radar_crossrange_max_std_m"] == 90.0
+    assert seen["paper_compatible_catprob_threshold"] == 0.42
+    assert seen["paper_compatible_bootstrap_source"] == "first-event"
+    assert seen["paper_compatible_empirical_covariance"] is False
 
 
 def test_tracklet_viterbi_cli_strips_and_applies_tuning_flags(monkeypatch) -> None:

@@ -189,6 +189,33 @@ def test_apply_runtime_environment_overwrites_explicit_runtime_flags(monkeypatch
     assert os.environ["RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE"] == "soft"
 
 
+def test_apply_runtime_environment_overwrites_explicit_tracklet_candidate_alias(
+    monkeypatch,
+):
+    monkeypatch.setenv("RAFT_UAV_TRACKLET_MAX_CANDIDATES", "4")
+    monkeypatch.setenv("RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME", "4")
+    argv = [
+        "run-baseline",
+        "/data/aerpaw",
+        "--tracklet-max-candidates-per-frame",
+        "13",
+    ]
+    config, _ = parse_runtime_config(argv)
+
+    explicit_env_names = runtime_environment_names_from_argv(argv)
+    apply_runtime_environment(
+        config,
+        overwrite_existing_env_names=explicit_env_names,
+    )
+
+    assert explicit_env_names == {
+        "RAFT_UAV_TRACKLET_MAX_CANDIDATES",
+        "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME",
+    }
+    assert os.environ["RAFT_UAV_TRACKLET_MAX_CANDIDATES"] == "13"
+    assert os.environ["RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"] == "13"
+
+
 def test_apply_runtime_environment_sets_expected_variables(monkeypatch):
     args = _parse_args(
         [
