@@ -288,7 +288,10 @@ def build_fortem_tracklets(
     if missing:
         raise ValueError(f"radar frame missing required columns: {sorted(missing)}")
 
-    frame = radar.copy().reset_index(drop=False).rename(columns={"index": "radar_row_index"})
+    # The selected path is projected back into the caller's frame with iloc, so
+    # keep stable row positions instead of caller-owned index labels.
+    frame = radar.copy().reset_index(drop=True)
+    frame["radar_row_index"] = np.arange(len(frame), dtype=int)
     for column in ("time_s", "east_m", "north_m", "up_m", "range_m", "track_id"):
         if column in frame.columns:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
@@ -396,8 +399,8 @@ def selected_radar_for_tracklet_path(
         for index in segment_by_id[int(segment_id)].row_indices:
             segment_lookup[int(index)] = int(segment_id)
             path_order_lookup[int(index)] = int(path_order)
-    selected["topk_weakz_segment_id"] = [segment_lookup.get(int(i), -1) for i in selected.index]
-    selected["topk_weakz_path_order"] = [path_order_lookup.get(int(i), -1) for i in selected.index]
+    selected["topk_weakz_segment_id"] = [segment_lookup.get(int(i), -1) for i in indices]
+    selected["topk_weakz_path_order"] = [path_order_lookup.get(int(i), -1) for i in indices]
     selected["topk_weakz_path_cost"] = float(path.cost)
     return selected.sort_values(["time_s", "topk_weakz_path_order"]).reset_index(drop=True)
 
