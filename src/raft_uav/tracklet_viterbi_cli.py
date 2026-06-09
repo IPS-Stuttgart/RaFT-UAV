@@ -48,6 +48,23 @@ _LEARNED_TRACKLET_MODE = "learned-tracklet-viterbi"
 _TRACKLET_VARIANT_ENV = "RAFT_UAV_TRACKLET_VARIANT"
 _TRACKLET_REPLAY_TRACKER_ENV = "RAFT_UAV_TRACKLET_REPLAY_TRACKER"
 _CATPROB_MODE_ENV = "RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE"
+_MISSED_DETECTION_COST_ENV = "RAFT_UAV_TRACKLET_MISSED_DETECTION_COST"
+_CONSECUTIVE_MISS_COST_ENV = "RAFT_UAV_TRACKLET_CONSECUTIVE_MISS_COST"
+_TRACK_SWITCH_COST_ENV = "RAFT_UAV_TRACKLET_TRACK_SWITCH_COST"
+_MISSING_TRACK_ID_COST_ENV = "RAFT_UAV_TRACKLET_MISSING_TRACK_ID_COST"
+_CATPROB_WEIGHT_ENV = "RAFT_UAV_TRACKLET_CATPROB_WEIGHT"
+_ANCHOR_NIS_WEIGHT_ENV = "RAFT_UAV_TRACKLET_ANCHOR_NIS_WEIGHT"
+_TRANSITION_NIS_WEIGHT_ENV = "RAFT_UAV_TRACKLET_TRANSITION_NIS_WEIGHT"
+_VELOCITY_NIS_WEIGHT_ENV = "RAFT_UAV_TRACKLET_VELOCITY_NIS_WEIGHT"
+_TRANSITION_POSITION_STD_M_ENV = "RAFT_UAV_TRACKLET_TRANSITION_POSITION_STD_M"
+_TRANSITION_SPEED_STD_MPS_ENV = "RAFT_UAV_TRACKLET_TRANSITION_SPEED_STD_MPS"
+_VELOCITY_STD_MPS_ENV = "RAFT_UAV_TRACKLET_VELOCITY_STD_MPS"
+_MAX_SPEED_MPS_ENV = "RAFT_UAV_TRACKLET_MAX_SPEED_MPS"
+_MAX_SPEED_PENALTY_ENV = "RAFT_UAV_TRACKLET_MAX_SPEED_PENALTY"
+_RANGE_GATE_M_ENV = "RAFT_UAV_TRACKLET_RANGE_GATE_M"
+_RANGE_GATE_SLACK_M_ENV = "RAFT_UAV_TRACKLET_RANGE_GATE_SLACK_M"
+_RANGE_PENALTY_ENV = "RAFT_UAV_TRACKLET_RANGE_PENALTY"
+_USE_RF_ANCHOR_ENV = "RAFT_UAV_TRACKLET_USE_RF_ANCHOR"
 _BELOW_CATPROB_PENALTY_ENV = "RAFT_UAV_TRACKLET_BELOW_CATPROB_THRESHOLD_PENALTY"
 _TRACK_SUPPORT_WEIGHT_ENV = "RAFT_UAV_TRACKLET_SUPPORT_WEIGHT"
 _MAX_TRACK_SUPPORT_REWARD_ENV = "RAFT_UAV_TRACKLET_MAX_SUPPORT_REWARD"
@@ -354,32 +371,84 @@ def _run_fixed_lag_tracklet_viterbi_association(
 
 
 def _tracklet_config_from_environment() -> _TrackletConfigOverlay:
-    base = TrackletViterbiAssociationConfig()
-    return _TrackletConfigOverlay(
-        base,
+    defaults = TrackletViterbiAssociationConfig()
+    base = TrackletViterbiAssociationConfig(
         max_candidates_per_frame=_env_int_any(
             (_MAX_CANDIDATES_PER_FRAME_ENV, _MAX_CANDIDATES_PER_FRAME_LEGACY_ENV),
-            int(base.max_candidates_per_frame),
+            int(defaults.max_candidates_per_frame),
         ),
+        missed_detection_cost=_env_float(
+            _MISSED_DETECTION_COST_ENV,
+            float(defaults.missed_detection_cost),
+        ),
+        consecutive_miss_cost=_env_float(
+            _CONSECUTIVE_MISS_COST_ENV,
+            float(defaults.consecutive_miss_cost),
+        ),
+        track_switch_cost=_env_float(
+            _TRACK_SWITCH_COST_ENV,
+            float(defaults.track_switch_cost),
+        ),
+        missing_track_id_cost=_env_float(
+            _MISSING_TRACK_ID_COST_ENV,
+            float(defaults.missing_track_id_cost),
+        ),
+        catprob_weight=_env_float(_CATPROB_WEIGHT_ENV, float(defaults.catprob_weight)),
+        anchor_nis_weight=_env_float(
+            _ANCHOR_NIS_WEIGHT_ENV,
+            float(defaults.anchor_nis_weight),
+        ),
+        transition_nis_weight=_env_float(
+            _TRANSITION_NIS_WEIGHT_ENV,
+            float(defaults.transition_nis_weight),
+        ),
+        velocity_nis_weight=_env_float(
+            _VELOCITY_NIS_WEIGHT_ENV,
+            float(defaults.velocity_nis_weight),
+        ),
+        transition_position_std_m=_env_float(
+            _TRANSITION_POSITION_STD_M_ENV,
+            float(defaults.transition_position_std_m),
+        ),
+        transition_speed_std_mps=_env_float(
+            _TRANSITION_SPEED_STD_MPS_ENV,
+            float(defaults.transition_speed_std_mps),
+        ),
+        velocity_std_mps=_env_float(_VELOCITY_STD_MPS_ENV, float(defaults.velocity_std_mps)),
+        max_speed_mps=_env_float(_MAX_SPEED_MPS_ENV, float(defaults.max_speed_mps)),
+        max_speed_penalty=_env_float(
+            _MAX_SPEED_PENALTY_ENV,
+            float(defaults.max_speed_penalty),
+        ),
+        range_gate_m=_env_optional_positive_float(_RANGE_GATE_M_ENV, defaults.range_gate_m),
+        range_gate_slack_m=_env_float(
+            _RANGE_GATE_SLACK_M_ENV,
+            float(defaults.range_gate_slack_m),
+        ),
+        range_penalty=_env_float(_RANGE_PENALTY_ENV, float(defaults.range_penalty)),
+        use_rf_anchor=_env_bool(_USE_RF_ANCHOR_ENV, bool(defaults.use_rf_anchor)),
+        learned_candidate_model=_learned_candidate_model_from_environment(),
+        learned_candidate_score_mode=_env_str(
+            _LEARNED_CANDIDATE_SCORE_MODE_ENV,
+            defaults.learned_candidate_score_mode,
+        ),
+        soft_top_k_paths=_env_int(
+            _TRACKLET_SOFT_TOP_K_PATHS_ENV,
+            int(defaults.soft_top_k_paths),
+        ),
+        soft_path_temperature=_env_float(
+            _TRACKLET_SOFT_PATH_TEMPERATURE_ENV,
+            float(defaults.soft_path_temperature),
+        ),
+    )
+    return _TrackletConfigOverlay(
+        base,
         catprob_retention_mode=_env_str(_CATPROB_MODE_ENV, "soft"),
         below_catprob_threshold_penalty=_env_float(_BELOW_CATPROB_PENALTY_ENV, 3.0),
         track_support_weight=_env_float(_TRACK_SUPPORT_WEIGHT_ENV, 0.45),
         max_track_support_reward=_env_float(_MAX_TRACK_SUPPORT_REWARD_ENV, 4.0),
         max_candidate_pool_per_frame=_env_int(_MAX_CANDIDATE_POOL_ENV, 24),
         max_candidates_per_track_id=_env_int(_MAX_CANDIDATES_PER_TRACK_ENV, 1),
-        learned_candidate_model=_learned_candidate_model_from_environment(),
-        learned_candidate_score_mode=_env_str(
-            _LEARNED_CANDIDATE_SCORE_MODE_ENV,
-            base.learned_candidate_score_mode,
-        ),
-        soft_top_k_paths=_env_int(
-            _TRACKLET_SOFT_TOP_K_PATHS_ENV,
-            int(base.soft_top_k_paths),
-        ),
-        soft_path_temperature=_env_float(
-            _TRACKLET_SOFT_PATH_TEMPERATURE_ENV,
-            float(base.soft_path_temperature),
-        ),
     )
 
 
@@ -515,6 +584,21 @@ def _env_float(name: str, default: float) -> float:
     if value is None or value == "":
         return default
     return float(value)
+
+
+def _env_optional_positive_float(name: str, default: float | None) -> float | None:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    parsed = float(value)
+    return None if parsed <= 0.0 else parsed
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _env_int(name: str, default: int) -> int:
