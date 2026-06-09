@@ -21,6 +21,30 @@ def test_tracklet_viterbi_config_reads_environment(monkeypatch) -> None:
     assert config.max_track_support_reward == 3.0
 
 
+def test_tracklet_viterbi_config_reads_core_runtime_environment(monkeypatch) -> None:
+    monkeypatch.setenv(tracklet_viterbi_cli._TRACK_SWITCH_COST_ENV, "17")
+    monkeypatch.setenv(tracklet_viterbi_cli._ANCHOR_NIS_WEIGHT_ENV, "0.7")
+    monkeypatch.setenv(tracklet_viterbi_cli._TRANSITION_POSITION_STD_M_ENV, "55")
+    monkeypatch.setenv(tracklet_viterbi_cli._TRANSITION_SPEED_STD_MPS_ENV, "22")
+    monkeypatch.setenv(tracklet_viterbi_cli._VELOCITY_STD_MPS_ENV, "14")
+    monkeypatch.setenv(tracklet_viterbi_cli._MAX_SPEED_MPS_ENV, "65")
+    monkeypatch.setenv(tracklet_viterbi_cli._RANGE_GATE_M_ENV, "0")
+    monkeypatch.setenv(tracklet_viterbi_cli._RANGE_GATE_SLACK_M_ENV, "200")
+    monkeypatch.setenv(tracklet_viterbi_cli._USE_RF_ANCHOR_ENV, "0")
+
+    config = tracklet_viterbi_cli._tracklet_config_from_environment()
+
+    assert config.track_switch_cost == 17.0
+    assert config.anchor_nis_weight == 0.7
+    assert config.transition_position_std_m == 55.0
+    assert config.transition_speed_std_mps == 22.0
+    assert config.velocity_std_mps == 14.0
+    assert config.max_speed_mps == 65.0
+    assert config.range_gate_m is None
+    assert config.range_gate_slack_m == 200.0
+    assert config.use_rf_anchor is False
+
+
 def test_tracklet_viterbi_config_supports_legacy_candidate_env_alias(monkeypatch) -> None:
     monkeypatch.delenv(tracklet_viterbi_cli._MAX_CANDIDATES_PER_FRAME_ENV, raising=False)
     monkeypatch.setenv(tracklet_viterbi_cli._MAX_CANDIDATES_PER_FRAME_LEGACY_ENV, "13")
