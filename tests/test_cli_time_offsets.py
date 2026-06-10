@@ -1,6 +1,6 @@
 import pandas as pd
 
-from raft_uav.cli import _apply_time_offset_correction
+from raft_uav.cli import _apply_time_offset_correction, _format_optional_metric
 
 
 def test_apply_time_offset_correction_shifts_normalized_time():
@@ -21,3 +21,9 @@ def test_zero_time_offset_correction_is_noop():
 
     assert corrected is frame
     assert corrected["time_s"].tolist() == [1.0]
+
+
+def test_format_optional_metric_handles_missing_values():
+    assert _format_optional_metric(None) == "nan"
+    assert _format_optional_metric(float("nan")) == "nan"
+    assert _format_optional_metric(1.25) == "1.250"
