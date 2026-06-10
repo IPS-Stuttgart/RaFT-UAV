@@ -24,6 +24,29 @@ class StandardizedLogisticModel:
     weights: np.ndarray
     intercept: float
 
+    def __post_init__(self) -> None:
+        names = tuple(str(name) for name in self.feature_names)
+        mean = np.asarray(self.mean, dtype=float).reshape(-1)
+        scale = np.asarray(self.scale, dtype=float).reshape(-1)
+        weights = np.asarray(self.weights, dtype=float).reshape(-1)
+        intercept = float(self.intercept)
+        if not names:
+            raise ValueError("feature_names must not be empty")
+        if mean.size != len(names) or scale.size != len(names) or weights.size != len(names):
+            raise ValueError("mean, scale, and weights must match feature_names")
+        if not np.isfinite(mean).all():
+            raise ValueError("mean must be finite")
+        if not np.isfinite(weights).all():
+            raise ValueError("weights must be finite")
+        if not np.isfinite(intercept):
+            raise ValueError("intercept must be finite")
+        scale = np.where(np.isfinite(scale) & (scale > 1.0e-12), scale, 1.0)
+        object.__setattr__(self, "feature_names", names)
+        object.__setattr__(self, "mean", mean)
+        object.__setattr__(self, "scale", scale)
+        object.__setattr__(self, "weights", weights)
+        object.__setattr__(self, "intercept", intercept)
+
     def predict_proba(self, frame: pd.DataFrame) -> np.ndarray:
         x = _feature_matrix(frame, self.feature_names)
         filled = np.where(np.isfinite(x), x, self.mean.reshape(1, -1))
@@ -51,7 +74,9 @@ class StandardizedLogisticModel:
         )
 
     def save(self, path: str | Path) -> None:
-        Path(path).write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+        destination = Path(path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(self.to_dict(), indent=2, allow_nan=False), encoding="utf-8")
 
     @classmethod
     def load(cls, path: str | Path) -> "StandardizedLogisticModel":

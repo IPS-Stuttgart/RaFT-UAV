@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.research.factor_graph import (
     coordinate_descent_association_and_smoothing,
@@ -147,6 +151,50 @@ def test_standardized_logistic_probabilities_are_stable_for_extreme_logits() -> 
         rtol=0.0,
         atol=0.0,
     )
+
+
+def test_standardized_logistic_model_save_round_trips_strict_json(tmp_path: Path) -> None:
+    model = StandardizedLogisticModel(
+        feature_names=("x",),
+        mean=np.array([0.0]),
+        scale=np.array([0.0]),
+        weights=np.array([1.0]),
+        intercept=0.0,
+    )
+    path = tmp_path / "nested" / "tracklet_model.json"
+
+    model.save(path)
+
+    payload_text = path.read_text(encoding="utf-8")
+    payload = json.loads(payload_text)
+    loaded = StandardizedLogisticModel.load(path)
+
+    assert "NaN" not in payload_text
+    assert payload["scale"] == [1.0]
+    np.testing.assert_allclose(
+        loaded.predict_proba(pd.DataFrame({"x": [0.0]})),
+        np.array([0.5]),
+    )
+
+
+def test_standardized_logistic_model_rejects_non_finite_parameters() -> None:
+    with pytest.raises(ValueError, match="mean"):
+        StandardizedLogisticModel(
+            feature_names=("x",),
+            mean=np.array([np.nan]),
+            scale=np.array([1.0]),
+            weights=np.array([1.0]),
+            intercept=0.0,
+        )
+
+    with pytest.raises(ValueError, match="intercept"):
+        StandardizedLogisticModel(
+            feature_names=("x",),
+            mean=np.array([0.0]),
+            scale=np.array([1.0]),
+            weights=np.array([1.0]),
+            intercept=float("nan"),
+        )
 
 
 def test_conformal_and_constrained_optimizer() -> None:
