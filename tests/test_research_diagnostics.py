@@ -53,6 +53,38 @@ def test_association_regret_and_switch_metrics() -> None:
     assert metrics["unique_track_ids"] == 2
 
 
+def test_association_diagnostics_handle_unsorted_truth_times() -> None:
+    truth = pd.DataFrame(
+        {
+            "time_s": [1.0, 0.0],
+            "east_m": [10.0, 0.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+    radar = pd.DataFrame(
+        {
+            "frame_index": [0, 1],
+            "time_s": [0.05, 1.05],
+            "east_m": [0.5, 10.5],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+            "track_id": [1, 2],
+        }
+    )
+
+    recall = candidate_set_recall(
+        radar,
+        truth,
+        distance_gate_m=1.0,
+        max_time_delta_s=0.2,
+    )
+    regret = association_regret(radar, radar, truth, max_time_delta_s=0.2)
+
+    assert recall["target_present"].tolist() == [True, True]
+    np.testing.assert_allclose(regret["selected_error_m"], [0.5, 0.5])
+
+
 def test_leakage_sentinel_flags_training_reference() -> None:
     payload = {"training_flights": ["Opt1", "Opt3"], "heldout_flight": "Opt3"}
     violations = leakage_sentinel(payload, heldout_flight="Opt3")

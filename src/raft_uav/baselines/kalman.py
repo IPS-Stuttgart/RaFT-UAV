@@ -304,6 +304,19 @@ class AsyncConstantVelocityKalmanTracker:
             self._sync_from_filter()
             self.current_time_s = float(time_s)
 
+    def coast_to(self, time_s: float) -> None:
+        """Predict to an event timestamp without applying a measurement update.
+
+        Explicitly skipped or deferred updates should still advance the tracker
+        timeline. Keeping ``last_prior_*`` aligned with the predicted state gives
+        diagnostic records the same time semantics as gated missed detections.
+        """
+
+        self._initial_update_pending = False
+        self.predict_to(time_s)
+        self._last_prior_mean = self.mean.copy()
+        self._last_prior_covariance = self.covariance.copy()
+
     def update(
         self,
         measurement: TrackingMeasurement,

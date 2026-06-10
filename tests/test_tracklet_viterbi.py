@@ -21,6 +21,15 @@ def _rf_measurement(time_s: float, east_m: float, north_m: float = 0.0) -> Track
     )
 
 
+def _rf_state_measurement(time_s: float, east_m: float, velocity_east_mps: float) -> TrackingMeasurement:
+    return TrackingMeasurement(
+        time_s=time_s,
+        vector=np.array([east_m, 0.0, 0.0, velocity_east_mps, 0.0, 0.0]),
+        covariance=np.diag([1.0, 1.0, 1.0, 0.25, 0.25, 0.25]),
+        source="rf",
+    )
+
+
 def test_tracklet_viterbi_prefers_rf_supported_coherent_track():
     radar = pd.DataFrame(
         [
@@ -50,6 +59,43 @@ def test_tracklet_viterbi_prefers_rf_supported_coherent_track():
 
     assert selected["track_id"].tolist() == [1, 1, 1]
     assert selected["association_mode"].unique().tolist() == ["tracklet-viterbi"]
+
+
+def test_tracklet_do_no_harm_skip_coasts_to_radar_timestamp(monkeypatch):
+    monkeypatch.setenv("RAFT_UAV_DO_NO_HARM_RADAR_UPDATES", "1")
+    monkeypatch.setenv("RAFT_UAV_DNH_ANCHOR_SOFTEN_NIS", "0.1")
+    monkeypatch.setenv("RAFT_UAV_DNH_ANCHOR_SKIP_NIS", "0.2")
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 99,
+                "time_s": 10.0,
+                "east_m": 1000.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.99,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_tracklet_viterbi_association(
+        rf_measurements=[_rf_state_measurement(0.0, 0.0, 10.0)],
+        radar=radar,
+        candidate_catprob_threshold=None,
+        config=TrackletViterbiAssociationConfig(
+            missed_detection_cost=1_000_000.0,
+            anchor_nis_weight=0.0,
+            range_gate_m=None,
+        ),
+    )
+
+    assert records[-1]["source"] == "radar"
+    assert records[-1]["update_action"] == "do_no_harm_skip"
+    assert records[-1]["accepted"] is False
+    assert records[-1]["time_s"] == 10.0
+    np.testing.assert_allclose(records[-1]["state"][0], 100.0)
+    assert selected.empty
 
 
 def test_tracklet_viterbi_learned_candidate_model_can_replace_manual_unary_terms():

@@ -404,7 +404,7 @@ def _nearest_truth_position(
     max_time_delta_s: float,
 ) -> tuple[np.ndarray | None, float]:
     times = truth["time_s"].to_numpy(dtype=float)
-    if times.size == 0:
+    if not bool(np.any(np.isfinite(times))):
         return None, float("nan")
     idx = int(_nearest_time_indices(times, np.array([float(time_s)]))[0])
     dt_s = float(abs(times[idx] - float(time_s)))
@@ -416,12 +416,21 @@ def _nearest_truth_position(
 def _nearest_time_indices(source_times: np.ndarray, query_times: np.ndarray) -> np.ndarray:
     source = np.asarray(source_times, dtype=float).reshape(-1)
     query = np.asarray(query_times, dtype=float).reshape(-1)
-    if source.size == 0:
+    finite_source = np.isfinite(source)
+    if not bool(np.any(finite_source)):
         return np.zeros(query.size, dtype=int)
-    insertion = np.searchsorted(source, query)
-    right = np.clip(insertion, 0, source.size - 1)
-    left = np.clip(insertion - 1, 0, source.size - 1)
-    return np.where(np.abs(source[right] - query) < np.abs(source[left] - query), right, left)
+
+    original_indices = np.flatnonzero(finite_source)
+    finite_values = source[finite_source]
+    sort_order = np.argsort(finite_values, kind="mergesort")
+    sorted_source = finite_values[sort_order]
+    sorted_original_indices = original_indices[sort_order]
+
+    insertion = np.searchsorted(sorted_source, query)
+    right = np.clip(insertion, 0, sorted_source.size - 1)
+    left = np.clip(insertion - 1, 0, sorted_source.size - 1)
+    use_right = np.abs(sorted_source[right] - query) < np.abs(sorted_source[left] - query)
+    return sorted_original_indices[np.where(use_right, right, left)]
 
 
 def _ks_distance(a: np.ndarray, b: np.ndarray) -> float:

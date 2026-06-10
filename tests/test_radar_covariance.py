@@ -11,6 +11,7 @@ from raft_uav.baselines.radar_covariance import (
 from raft_uav.baselines.tracklet_viterbi_range_covariance import _radar_row_covariance
 from raft_uav.baselines.radar_association import _nis_scored_candidates
 from raft_uav.calibration.bias import BIAS_RESIDUAL_STD_COLUMN_PREFIX
+from raft_uav.calibration.empirical_covariance import aligned_residuals
 
 
 def test_range_angle_radar_covariance_grows_with_range():
@@ -153,3 +154,29 @@ def test_bias_residual_std_is_added_once_to_range_angle_covariance():
         rtol=1e-6,
         atol=1e-6,
     )
+
+
+def test_empirical_covariance_residual_alignment_handles_unsorted_truth_times():
+    frame = pd.DataFrame(
+        {
+            "time_s": [0.05, 0.95],
+            "east_m": [13.0, 18.0],
+            "north_m": [4.0, 4.0],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "time_s": [1.0, 0.0],
+            "east_m": [20.0, 10.0],
+            "north_m": [5.0, 3.0],
+        }
+    )
+
+    residuals = aligned_residuals(
+        frame,
+        truth,
+        source="rf",
+        max_time_delta_s=0.1,
+    )
+
+    np.testing.assert_allclose(residuals, [[3.0, 1.0], [-2.0, -1.0]])
