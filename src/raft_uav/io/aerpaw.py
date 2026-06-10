@@ -214,7 +214,7 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
             if not isinstance(params, dict):
                 params = {}
 
-            track_data = payload.get("trackData") or []
+            track_data = _track_data_from_payload(payload, params)
             if not isinstance(track_data, list):
                 continue
             for track_index, track in enumerate(track_data):
@@ -715,6 +715,18 @@ def _flatten_track(
         "cat_prob_uav": _list_get(cat_prob, 0),
         "cat_prob_raw": cat_prob,
     }
+
+
+def _track_data_from_payload(payload: dict[str, Any], params: dict[str, Any]) -> Any:
+    """Return Fortem track rows from either top-level or JSON-RPC params payloads."""
+
+    if "trackData" in payload:
+        track_data = payload.get("trackData")
+    else:
+        track_data = params.get("trackData")
+    if track_data is None:
+        return []
+    return track_data
 
 
 def _radar_sensor_origin_enu_from_environment(
