@@ -162,12 +162,16 @@ def _select_tracklet_viterbi_path(
     if not frames:
         return []
 
-    path_cost, path = _base._top_k_viterbi_paths_with_pyrecest(
+    terminal_count = min(_base._soft_top_k_paths(config), len(frames[-1]))
+    paths = _base._top_k_viterbi_paths_with_pyrecest(
         frames,
         config,
-        terminal_count=1,
-    )[0]
-    return _base._selected_rows_from_viterbi_path(path, float(path_cost), config)
+        terminal_count=terminal_count,
+    )
+    if terminal_count <= 1:
+        path_cost, path = paths[0]
+        return _base._selected_rows_from_viterbi_path(path, float(path_cost), config)
+    return _base._selected_rows_from_soft_viterbi_paths(paths, config)
 
 
 def _nodes_for_radar_frame_with_track_retention(

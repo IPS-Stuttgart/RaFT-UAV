@@ -196,6 +196,56 @@ def test_retention_viterbi_uses_prefix_track_support_by_event() -> None:
     assert support_counts == {0: 0.0, 1: 1.0, 2: 2.0}
 
 
+def test_retention_viterbi_honors_soft_top_k_runtime(monkeypatch) -> None:
+    events = [
+        {
+            "kind": "radar",
+            "time_s": 0.0,
+            "candidates": _radar_frame(
+                0,
+                [
+                    {"track_id": 1, "east_m": 0.0, "north_m": 0.0, "cat_prob_uav": 0.99},
+                    {"track_id": 2, "east_m": 1.0, "north_m": 0.0, "cat_prob_uav": 0.95},
+                    {"track_id": 3, "east_m": 2.0, "north_m": 0.0, "cat_prob_uav": 0.90},
+                ],
+            ),
+        }
+    ]
+    config = TrackletViterbiAssociationConfig(max_candidates_per_frame=3, range_gate_m=None)
+    seen: dict[str, int] = {}
+
+    def fake_top_k_viterbi_paths(frames, config, terminal_count):
+        seen["terminal_count"] = int(terminal_count)
+        return [(float(index), []) for index in range(int(terminal_count))]
+
+    def fake_selected_rows_from_soft_viterbi_paths(paths, config):
+        seen["soft_path_count"] = len(paths)
+        return []
+
+    monkeypatch.setenv("RAFT_UAV_TRACKLET_SOFT_TOP_K_PATHS", "3")
+    monkeypatch.setattr(
+        _base,
+        "_top_k_viterbi_paths_with_pyrecest",
+        fake_top_k_viterbi_paths,
+    )
+    monkeypatch.setattr(
+        _base,
+        "_selected_rows_from_soft_viterbi_paths",
+        fake_selected_rows_from_soft_viterbi_paths,
+    )
+
+    selected = _select_tracklet_viterbi_path(
+        events=events,
+        anchors={},
+        covariance=np.eye(3),
+        candidate_catprob_threshold=None,
+        config=config,
+    )
+
+    assert selected == []
+    assert seen == {"terminal_count": 3, "soft_path_count": 3}
+
+
 def test_track_support_diagnostics_are_added_to_retained_rows() -> None:
     candidates = _radar_frame(
         3,
