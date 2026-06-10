@@ -22,9 +22,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import math
 from pathlib import Path
 from typing import Any, Mapping
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.calibration.bias import (
@@ -189,7 +191,7 @@ def write_calibration_bundle_manifest(
             Path(uncertainty_model_path),
         )
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    destination.write_text(json.dumps(_jsonable(payload), indent=2, allow_nan=False), encoding="utf-8")
 
 
 def _apply_offset_if_possible(frame: pd.DataFrame, offset_s: float) -> pd.DataFrame:
@@ -225,9 +227,10 @@ def _optional_path(payload: Mapping[str, Any], bundle_path: Path, *keys: str) ->
 
 def _optional_float(value: object) -> float | None:
     try:
-        return float(value)
+        scalar = float(value)
     except (TypeError, ValueError):
         return None
+    return scalar if math.isfinite(scalar) else None
 
 
 def _relative_or_string(manifest_path: Path, model_path: Path) -> str:
@@ -235,6 +238,30 @@ def _relative_or_string(manifest_path: Path, model_path: Path) -> str:
         return str(model_path.relative_to(manifest_path.parent))
     except ValueError:
         return str(model_path)
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return _jsonable(value.tolist())
+    if isinstance(value, np.generic):
+        return _jsonable(value.item())
+    if isinstance(value, Path):
+        return str(value)
+    if value is None:
+        return None
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return value
 
 
 __all__ = [
