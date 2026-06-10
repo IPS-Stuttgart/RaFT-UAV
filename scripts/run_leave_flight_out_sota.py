@@ -616,8 +616,8 @@ def _aggregate_method_rows(
     ranked = sorted(
         enumerate(rows),
         key=lambda item: (
-            float(item[1].get("error_3d_rmse_m", float("inf"))),
-            -float(item[1].get("truth_coverage_rate", 0.0)),
+            _finite_float_or(item[1].get("error_3d_rmse_m"), float("inf")),
+            -_finite_float_or(item[1].get("truth_coverage_rate"), 0.0),
         ),
     )
     for rank, (original_index, _) in enumerate(ranked, start=1):
@@ -1264,6 +1264,16 @@ def _as_int(value: object) -> int:
 def _safe_rate(numerator: int | float, denominator: int | float) -> float:
     denominator = float(denominator)
     return float("nan") if denominator <= 0.0 else float(numerator) / denominator
+
+
+def _finite_float_or(value: object, default: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if not np.isfinite(number):
+        return float(default)
+    return number
 
 
 def _mean_finite(values: Sequence[object]) -> float:

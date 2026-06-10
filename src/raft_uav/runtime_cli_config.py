@@ -11,9 +11,11 @@ RADAR_COVARIANCE_MODES = ("fixed", "range-angle")
 TRACKLET_CATPROB_RETENTION_MODES = ("hard", "soft")
 
 
+_TRACKLET_MAX_CANDIDATES_PER_FRAME_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"
+_TRACKLET_MAX_CANDIDATES_LEGACY_ENV = "RAFT_UAV_TRACKLET_MAX_CANDIDATES"
 _TRACKLET_MAX_CANDIDATE_ENV_NAMES = (
-    "RAFT_UAV_TRACKLET_MAX_CANDIDATES",
-    "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME",
+    _TRACKLET_MAX_CANDIDATES_PER_FRAME_ENV,
+    _TRACKLET_MAX_CANDIDATES_LEGACY_ENV,
 )
 
 
@@ -314,6 +316,14 @@ def apply_runtime_environment(
 
     radar = runtime_config["radar_covariance"]
     tracklet = runtime_config["tracklet_viterbi"]
+    overwrite_all = overwrite_existing_env_names is None
+    overwrite_names = set(overwrite_existing_env_names or ())
+    max_candidates_env_value = _tracklet_max_candidates_env_value(
+        tracklet["max_candidates"],
+        overwrite_all=overwrite_all,
+        overwrite_names=overwrite_names,
+    )
+
     mapping = {
         "RAFT_UAV_RADAR_COVARIANCE_MODE": radar["mode"],
         "RAFT_UAV_RADAR_XY_STD_M": radar["xy_std_m"],
@@ -326,8 +336,8 @@ def apply_runtime_environment(
         "RAFT_UAV_RADAR_ORIGIN_EAST_M": radar["origin_east_m"],
         "RAFT_UAV_RADAR_ORIGIN_NORTH_M": radar["origin_north_m"],
         "RAFT_UAV_RADAR_ORIGIN_UP_M": radar["origin_up_m"],
-        "RAFT_UAV_TRACKLET_MAX_CANDIDATES": tracklet["max_candidates"],
-        "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME": tracklet["max_candidates"],
+        _TRACKLET_MAX_CANDIDATES_LEGACY_ENV: max_candidates_env_value,
+        _TRACKLET_MAX_CANDIDATES_PER_FRAME_ENV: max_candidates_env_value,
         "RAFT_UAV_TRACKLET_MISSED_DETECTION_COST": tracklet["missed_detection_cost"],
         "RAFT_UAV_TRACKLET_CONSECUTIVE_MISS_COST": tracklet["consecutive_miss_cost"],
         "RAFT_UAV_TRACKLET_TRACK_SWITCH_COST": tracklet["track_switch_cost"],
@@ -362,8 +372,6 @@ def apply_runtime_environment(
             "max_candidates_per_track_id"
         ],
     }
-    overwrite_all = overwrite_existing_env_names is None
-    overwrite_names = set(overwrite_existing_env_names or ())
     for name, value in mapping.items():
         if overwrite_all or name in overwrite_names or name not in os.environ:
             os.environ[name] = str(value)
@@ -371,6 +379,23 @@ def apply_runtime_environment(
 
 def _range_gate_env_value(tracklet: dict[str, Any]) -> float:
     return 0.0 if tracklet["range_gate_m"] is None else float(tracklet["range_gate_m"])
+
+
+def _tracklet_max_candidates_env_value(
+    default: object,
+    *,
+    overwrite_all: bool,
+    overwrite_names: set[str],
+) -> object:
+    """Return the resolved max-candidate value while honoring env aliases."""
+
+    if overwrite_all or overwrite_names.intersection(_TRACKLET_MAX_CANDIDATE_ENV_NAMES):
+        return default
+    for name in _TRACKLET_MAX_CANDIDATE_ENV_NAMES:
+        value = os.environ.get(name)
+        if value is not None and value != "":
+            return value
+    return default
 
 
 def _finite_float(value: object, name: str) -> float:
