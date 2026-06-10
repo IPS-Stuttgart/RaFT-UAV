@@ -3437,9 +3437,24 @@ def _row_covariance(row: pd.Series) -> np.ndarray | None:
             dtype=float,
         )
         covariance = 0.5 * (covariance + covariance.T)
-        if np.all(np.diag(covariance) > 0.0):
+        if np.all(np.diag(covariance) > 0.0) and _is_positive_semidefinite(covariance):
             return covariance
     return None
+
+
+def _is_positive_semidefinite(covariance: np.ndarray, *, rtol: float = 1.0e-9) -> bool:
+    covariance = np.asarray(covariance, dtype=float)
+    if covariance.ndim != 2 or covariance.shape[0] != covariance.shape[1]:
+        return False
+    if not np.isfinite(covariance).all():
+        return False
+    symmetric = 0.5 * (covariance + covariance.T)
+    try:
+        eigenvalues = np.linalg.eigvalsh(symmetric)
+    except np.linalg.LinAlgError:
+        return False
+    scale = max(1.0, float(np.max(np.abs(np.diag(symmetric)))))
+    return bool(float(np.min(eigenvalues)) >= -float(rtol) * scale)
 
 
 def _frame_has_row_covariance(frame: pd.DataFrame) -> bool:

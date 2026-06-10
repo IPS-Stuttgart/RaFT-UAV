@@ -16,6 +16,7 @@ from raft_uav.research.optimizer import select_constrained_configs
 from raft_uav.research.runtime_modes import backward_repair_associations
 from raft_uav.research.tracklet_models import (
     StandardizedLogisticModel,
+    fit_logistic_model,
     fit_platt_scaler,
     tracklet_feature_frame,
 )
@@ -151,6 +152,22 @@ def test_standardized_logistic_probabilities_are_stable_for_extreme_logits() -> 
         rtol=0.0,
         atol=0.0,
     )
+
+
+def test_fit_logistic_model_accepts_sequence_labels_with_auto_features() -> None:
+    examples = pd.DataFrame(
+        {
+            "score": [0.1, 0.2, 0.8, 0.9],
+            "range_m": [120.0, 130.0, 70.0, 60.0],
+        }
+    )
+    labels = np.array([0, 0, 1, 1])
+
+    model = fit_logistic_model(examples, labels)
+    probabilities = model.predict_proba(examples)
+
+    assert model.feature_names == ("score", "range_m")
+    assert probabilities[-1] > probabilities[0]
 
 
 def test_standardized_logistic_model_save_round_trips_strict_json(tmp_path: Path) -> None:

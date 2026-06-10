@@ -209,7 +209,7 @@ def covariance_from_row(
     *,
     prefixes: Sequence[str] = ("association_cov", "cov"),
 ) -> np.ndarray:
-    """Read row-wise covariance columns with a safe fallback."""
+    """Read row-wise covariance columns with a safe PSD fallback."""
 
     fallback = np.asarray(fallback, dtype=float)
     if dim == 2:
@@ -228,7 +228,8 @@ def covariance_from_row(
                 value = _finite(row.get(f"{prefix}_{suffix}"))
                 if value is not None:
                     cov[i, j] = cov[j, i] = value
-            return cov
+            if _is_positive_semidefinite(cov):
+                return cov
     return fallback.copy()
 
 
@@ -349,6 +350,21 @@ def _finite(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return out if np.isfinite(out) else None
+
+
+def _is_positive_semidefinite(covariance: np.ndarray, *, rtol: float = 1.0e-9) -> bool:
+    covariance = np.asarray(covariance, dtype=float)
+    if covariance.ndim != 2 or covariance.shape[0] != covariance.shape[1]:
+        return False
+    if not np.isfinite(covariance).all():
+        return False
+    symmetric = 0.5 * (covariance + covariance.T)
+    try:
+        eigenvalues = np.linalg.eigvalsh(symmetric)
+    except np.linalg.LinAlgError:
+        return False
+    scale = max(1.0, float(np.max(np.abs(np.diag(symmetric)))))
+    return bool(float(np.min(eigenvalues)) >= -float(rtol) * scale)
 
 
 def _jsonable(value: Any) -> Any:
