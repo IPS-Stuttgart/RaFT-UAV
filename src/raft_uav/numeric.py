@@ -10,6 +10,8 @@ def optional_float(value: object) -> float | None:
 
     if value is None:
         return None
+    if isinstance(value, bool):
+        return None
     try:
         number = float(value)
     except (TypeError, ValueError):

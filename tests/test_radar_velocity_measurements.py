@@ -1,6 +1,9 @@
+import os
+
 import numpy as np
 import pandas as pd
 
+from raft_uav import cli
 from raft_uav.baselines import radar_covariance_runtime
 from raft_uav.baselines.kalman import TrackingMeasurement, measurement_matrix, run_async_cv_baseline
 from raft_uav.io import aerpaw
@@ -156,3 +159,31 @@ def test_async_cv_baseline_uses_radar_velocity_measurements():
 
     assert records[-1]["measurement_dim"] == 6
     assert float(np.asarray(records[-1]["state"])[3]) > 4.0
+
+
+def test_cli_radar_velocity_environment_is_scoped(monkeypatch):
+    monkeypatch.delenv("RAFT_UAV_RADAR_UPDATE_USES_VELOCITY", raising=False)
+    monkeypatch.delenv("RAFT_UAV_RADAR_VELOCITY_STD_MPS", raising=False)
+
+    with cli._temporary_radar_velocity_update_environment(True, 7.5):
+        assert os.environ["RAFT_UAV_RADAR_UPDATE_USES_VELOCITY"] == "1"
+        assert os.environ["RAFT_UAV_RADAR_VELOCITY_STD_MPS"] == "7.5"
+
+    assert "RAFT_UAV_RADAR_UPDATE_USES_VELOCITY" not in os.environ
+    assert "RAFT_UAV_RADAR_VELOCITY_STD_MPS" not in os.environ
+
+
+def test_cli_radar_velocity_environment_restores_existing_values(monkeypatch):
+    monkeypatch.setenv("RAFT_UAV_RADAR_UPDATE_USES_VELOCITY", "yes")
+    monkeypatch.setenv("RAFT_UAV_RADAR_VELOCITY_STD_MPS", "3.25")
+
+    with cli._temporary_radar_velocity_update_environment(True, 9.0):
+        assert os.environ["RAFT_UAV_RADAR_UPDATE_USES_VELOCITY"] == "1"
+        assert os.environ["RAFT_UAV_RADAR_VELOCITY_STD_MPS"] == "9"
+
+    assert os.environ["RAFT_UAV_RADAR_UPDATE_USES_VELOCITY"] == "yes"
+    assert os.environ["RAFT_UAV_RADAR_VELOCITY_STD_MPS"] == "3.25"
+
+    with cli._temporary_radar_velocity_update_environment(False, 12.0):
+        assert os.environ["RAFT_UAV_RADAR_UPDATE_USES_VELOCITY"] == "yes"
+        assert os.environ["RAFT_UAV_RADAR_VELOCITY_STD_MPS"] == "3.25"

@@ -147,7 +147,8 @@ def _run_one(args: argparse.Namespace, flight_name: str) -> dict[str, Any]:
 
     print(
         f"flight={flight.name} selected_radar_rows={len(selected_radar)} "
-        f"rmse_3d_m={metrics['position_error_3d']['rmse_m']:.3f} metrics_json={metrics_path}"
+        f"rmse_3d_m={_format_optional_metric(metrics['position_error_3d'].get('rmse_m'))} "
+        f"metrics_json={metrics_path}"
     )
     return {
         "flight": flight.name,
@@ -239,6 +240,16 @@ def _metrics(
         "position_error_2d": summarize_errors(error_2d),
         "position_error_3d": summarize_errors(error_3d),
     }
+
+
+def _format_optional_metric(value: object) -> str:
+    try:
+        metric = float(value)
+    except (TypeError, ValueError):
+        return "nan"
+    if not np.isfinite(metric):
+        return "nan"
+    return f"{metric:.3f}"
 
 
 def _inside_truth_window(frame: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:

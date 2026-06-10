@@ -132,8 +132,8 @@ def main() -> int:
     print(f"radar_rows={len(radar)}")
     print(f"selected_radar_rows={len(selected_radar)}")
     print(f"metrics_json={output_dir / 'metrics.json'}")
-    print(f"rmse_2d_m={metrics['position_error_2d']['rmse_m']:.3f}")
-    print(f"rmse_3d_m={metrics['position_error_3d']['rmse_m']:.3f}")
+    print(f"rmse_2d_m={_format_optional_metric(metrics['position_error_2d'].get('rmse_m'))}")
+    print(f"rmse_3d_m={_format_optional_metric(metrics['position_error_3d'].get('rmse_m'))}")
     return 0
 
 
@@ -318,6 +318,16 @@ def _optional_float(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _format_optional_metric(value: object) -> str:
+    try:
+        metric = float(value)
+    except (TypeError, ValueError):
+        return "nan"
+    if not np.isfinite(metric):
+        return "nan"
+    return f"{metric:.3f}"
 
 
 if __name__ == "__main__":

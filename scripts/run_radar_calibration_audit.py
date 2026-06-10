@@ -172,7 +172,8 @@ def main() -> int:
     for row in best.to_dict(orient="records"):
         print(
             f"heldout={row['heldout_flight']} best={row['method']} "
-            f"rmse_3d_m={row['rmse_3d_m']:.3f} p95_3d_m={row['p95_3d_m']:.3f}"
+            f"rmse_3d_m={_format_optional_metric(row.get('rmse_3d_m'))} "
+            f"p95_3d_m={_format_optional_metric(row.get('p95_3d_m'))}"
         )
     return 0
 
@@ -185,6 +186,16 @@ def _offset_grid(min_s: float, max_s: float, step_s: float) -> np.ndarray:
     if grid.size == 0 or grid[-1] < max_s - 1.0e-9:
         grid = np.append(grid, max_s)
     return grid
+
+
+def _format_optional_metric(value: object) -> str:
+    try:
+        metric = float(value)
+    except (TypeError, ValueError):
+        return "nan"
+    if not np.isfinite(metric):
+        return "nan"
+    return f"{metric:.3f}"
 
 
 if __name__ == "__main__":
