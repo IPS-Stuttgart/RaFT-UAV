@@ -41,6 +41,12 @@ def run_async_cv_baseline_with_radar_association(
     acceleration_std_mps2: float = 4.0,
     radar_xy_std_m: float = 25.0,
     radar_z_std_m: float = 35.0,
+    radar_covariance_model: str = "cartesian",
+    radar_range_std_m: float = 12.0,
+    radar_range_std_fraction: float = 0.005,
+    radar_crossrange_angle_std_deg: float = 1.5,
+    radar_crossrange_min_std_m: float = 5.0,
+    radar_crossrange_max_std_m: float = 80.0,
     gate_probabilities_by_source: Mapping[str, float | None] | None = None,
     gate_thresholds_by_source: Mapping[str, float | None] | None = None,
     safety_gate_probabilities_by_source: Mapping[str, float | None] | None = None,
@@ -77,6 +83,9 @@ def run_async_cv_baseline_with_radar_association(
     stable_segment_rf_score_weight: float = 1.0,
     stable_segment_rf_time_gate_s: float = 2.0,
     stable_segment_rf_nis_cap: float = 25.0,
+    paper_compatible_catprob_threshold: float | None = None,
+    paper_compatible_bootstrap_source: str = "radar",
+    paper_compatible_empirical_covariance: bool = True,
     truth_gate_m: float = 150.0,
     truth_time_gate_s: float = 1.0,
 ) -> tuple[list[dict[str, object]], pd.DataFrame]:
@@ -84,6 +93,9 @@ def run_async_cv_baseline_with_radar_association(
 
     if association == _TRACKLET_FIXED_LAG_MODE:
         del truth, track_switch_nis_ratio, geometry_velocity_std_mps
+        del radar_covariance_model, radar_range_std_m, radar_range_std_fraction
+        del radar_crossrange_angle_std_deg, radar_crossrange_min_std_m
+        del radar_crossrange_max_std_m
         del geometry_velocity_weight, geometry_switch_penalty, geometry_catprob_weight
         del rf_anchor_weight, rf_anchor_time_gate_s, rf_anchor_nis_cap
         del rf_anchor_gate_nis
@@ -98,6 +110,8 @@ def run_async_cv_baseline_with_radar_association(
         del stable_segment_interpolation_gap_std_mps
         del stable_segment_rf_score_weight, stable_segment_rf_time_gate_s
         del stable_segment_rf_nis_cap
+        del paper_compatible_catprob_threshold, paper_compatible_bootstrap_source
+        del paper_compatible_empirical_covariance
         del truth_gate_m, truth_time_gate_s
         with _track_aware_node_builder(_track_support_by_id(radar)):
             records, accepted, _replayed = (
@@ -128,6 +142,12 @@ def run_async_cv_baseline_with_radar_association(
         acceleration_std_mps2=acceleration_std_mps2,
         radar_xy_std_m=radar_xy_std_m,
         radar_z_std_m=radar_z_std_m,
+        radar_covariance_model=radar_covariance_model,
+        radar_range_std_m=radar_range_std_m,
+        radar_range_std_fraction=radar_range_std_fraction,
+        radar_crossrange_angle_std_deg=radar_crossrange_angle_std_deg,
+        radar_crossrange_min_std_m=radar_crossrange_min_std_m,
+        radar_crossrange_max_std_m=radar_crossrange_max_std_m,
         gate_probabilities_by_source=gate_probabilities_by_source,
         gate_thresholds_by_source=gate_thresholds_by_source,
         safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
@@ -164,6 +184,9 @@ def run_async_cv_baseline_with_radar_association(
         stable_segment_rf_score_weight=stable_segment_rf_score_weight,
         stable_segment_rf_time_gate_s=stable_segment_rf_time_gate_s,
         stable_segment_rf_nis_cap=stable_segment_rf_nis_cap,
+        paper_compatible_catprob_threshold=paper_compatible_catprob_threshold,
+        paper_compatible_bootstrap_source=paper_compatible_bootstrap_source,
+        paper_compatible_empirical_covariance=paper_compatible_empirical_covariance,
         truth_gate_m=truth_gate_m,
         truth_time_gate_s=truth_time_gate_s,
     )

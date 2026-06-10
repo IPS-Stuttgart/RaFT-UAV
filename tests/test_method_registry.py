@@ -16,13 +16,30 @@ def test_method_registry_resolves_softk_dnh_environment_and_command() -> None:
     )
 
     assert resolved["env"]["RAFT_UAV_TRACKLET_SOFT_TOP_K_PATHS"] == "3"
-    assert resolved["env"]["RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY"]
+    assert resolved["env"]["RAFT_UAV_DO_NO_HARM_RADAR_UPDATES"] == "1"
+    assert resolved["env"]["RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY"] == "1"
     assert resolved["command"][:3] == [
         "raft-uav",
         "run-baseline",
         "data/raw/AADM2025Dryad",
     ]
     assert "outputs/demo" in resolved["command"]
+
+
+def test_method_registry_dnh_rows_enable_radar_update_policy_gate() -> None:
+    for method_id in (
+        "imm_tracklet_viterbi_fixed_lag_dnh",
+        "imm_tracklet_viterbi_fixed_lag_softk_dnh",
+    ):
+        resolved = resolve_method_spec(
+            method_id,
+            dataset_root="data/raw/AADM2025Dryad",
+            flight="Opt2",
+            output_dir="outputs/demo",
+        )
+
+        assert resolved["env"]["RAFT_UAV_DO_NO_HARM_RADAR_UPDATES"] == "1"
+        assert resolved["env"]["RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY"] == "1"
 
 
 def test_method_registry_resolves_pyrecest_evidence_support_metadata() -> None:

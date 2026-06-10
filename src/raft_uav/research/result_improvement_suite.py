@@ -53,6 +53,7 @@ DEFAULT_RUNTIME_ENV: dict[str, str] = {
     # Tail-risk reduction and ambiguity preservation. Both are optional in the
     # lower-level runner, but the integrated suite enables them to evaluate the
     # full result-improvement stack in one reproducible workflow.
+    "RAFT_UAV_DO_NO_HARM_RADAR_UPDATES": "1",
     "RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY": "1",
     "RAFT_UAV_TRACKLET_SOFT_TOP_K_PATHS": "3",
     "RAFT_UAV_TRACKLET_SOFT_PATH_TEMPERATURE": "2.0",
