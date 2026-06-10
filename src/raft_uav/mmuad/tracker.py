@@ -365,8 +365,12 @@ def compute_metrics(estimates: pd.DataFrame, truth: pd.DataFrame | None) -> dict
     del truth
     if estimates is None or estimates.empty or "error_3d_m" not in estimates.columns:
         return {"count": int(len(estimates)) if estimates is not None else 0}
-    err3 = estimates["error_3d_m"].to_numpy(float)
-    err2 = estimates["error_2d_m"].to_numpy(float)
+    err3 = pd.to_numeric(estimates["error_3d_m"], errors="coerce").to_numpy(float)
+    err2 = (
+        pd.to_numeric(estimates["error_2d_m"], errors="coerce").to_numpy(float)
+        if "error_2d_m" in estimates.columns
+        else np.array([], dtype=float)
+    )
     finite3 = err3[np.isfinite(err3)]
     finite2 = err2[np.isfinite(err2)]
     if finite3.size == 0:

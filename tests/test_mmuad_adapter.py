@@ -32,6 +32,7 @@ from raft_uav.mmuad.submission import (
 from raft_uav.mmuad.tracker import (
     TrackerConfig,
     add_truth_errors,
+    compute_metrics,
     run_mmuad_tracker,
     write_tracker_output,
 )
@@ -253,6 +254,16 @@ def test_add_truth_errors_sorts_truth_times() -> None:
     scored = add_truth_errors(estimates, truth)
 
     assert scored["error_3d_m"].tolist() == [0.0, 0.0, 0.0]
+
+
+def test_compute_metrics_accepts_3d_errors_without_2d_column() -> None:
+    estimates = pd.DataFrame({"error_3d_m": [3.0, "bad", np.nan]})
+
+    metrics = compute_metrics(estimates, truth=None)
+
+    assert metrics["count"] == 1
+    assert metrics["mean_3d_m"] == 3.0
+    assert metrics["mean_2d_m"] is None
 
 
 def test_calibration_json_transforms_candidate_coordinates(tmp_path: Path) -> None:
