@@ -391,7 +391,7 @@ def _tracklet_max_candidates_env_value(
 
     if overwrite_all or overwrite_names.intersection(_TRACKLET_MAX_CANDIDATE_ENV_NAMES):
         return default
-    for name in _TRACKLET_MAX_CANDIDATE_ENV_NAMES:
+    for name in (_TRACKLET_MAX_CANDIDATES_LEGACY_ENV, _TRACKLET_MAX_CANDIDATES_PER_FRAME_ENV):
         value = os.environ.get(name)
         if value is not None and value != "":
             return value
