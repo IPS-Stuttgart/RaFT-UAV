@@ -85,7 +85,7 @@ def decompose_radar_oracle_gap(
             rows.append(row)
             continue
 
-        positions = _positions(frame)
+        positions, positioned_rows = _positions_and_rows(frame)
         if positions.size == 0:
             row["category"] = "empty_radar_frame"
             rows.append(row)
@@ -93,7 +93,7 @@ def decompose_radar_oracle_gap(
         candidate_errors = np.linalg.norm(positions - truth_position.reshape(1, 3), axis=1)
         nearest_index = int(np.argmin(candidate_errors))
         nearest_error = float(candidate_errors[nearest_index])
-        nearest_row = frame.iloc[nearest_index]
+        nearest_row = positioned_rows.iloc[nearest_index]
         row.update(
             {
                 "nearest_candidate_error_m": nearest_error,
@@ -338,12 +338,13 @@ def _row_key(row: pd.Series) -> tuple[str, int | float]:
     return "time_s", float("nan") if time_s is None else round(float(time_s), 9)
 
 
-def _positions(frame: pd.DataFrame) -> np.ndarray:
+def _positions_and_rows(frame: pd.DataFrame) -> tuple[np.ndarray, pd.DataFrame]:
     required = ["east_m", "north_m", "up_m"]
     if not all(column in frame.columns for column in required):
-        return np.empty((0, 3), dtype=float)
+        return np.empty((0, 3), dtype=float), frame.iloc[0:0].copy()
     positions = frame[required].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
-    return positions[np.isfinite(positions).all(axis=1)]
+    keep = np.isfinite(positions).all(axis=1)
+    return positions[keep], frame.loc[keep].reset_index(drop=True)
 
 
 def _row_position(row: pd.Series) -> np.ndarray | None:
