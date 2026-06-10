@@ -170,6 +170,38 @@ def test_radar_jsonl_reader_exposes_fortem_quality_fields(tmp_path):
     assert row["track_age"] == 8
 
 
+def test_radar_jsonl_reader_falls_back_to_frame_time_when_track_time_is_null(tmp_path):
+    radar_path = tmp_path / "radar.json"
+    radar_path.write_text(
+        json.dumps(
+            {
+                "params": {
+                    "globalTime": 1759866140.0,
+                    "gpsWeek": 2388,
+                    "gpsSeconds": 12345.0,
+                },
+                "trackData": [
+                    {
+                        "id": 4,
+                        "lla": [35.72749, -78.69621, 30.0],
+                        "globalTime": None,
+                        "gpsWeek": None,
+                        "gpsSeconds": None,
+                        "catProb": [0.8, 0.1],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    radar = read_radar_tracks_json(radar_path)
+
+    assert radar.loc[0, "global_time_raw_s"] == 1759866140.0
+    assert radar.loc[0, "gps_week"] == 2388
+    assert radar.loc[0, "gps_seconds"] == 12345.0
+
+
 def test_radar_jsonl_reader_preserves_explicit_zero_confidence(tmp_path):
     radar_path = tmp_path / "radar.json"
     radar_path.write_text(
