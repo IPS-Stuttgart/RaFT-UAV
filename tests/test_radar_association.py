@@ -113,6 +113,43 @@ def test_oracle_nearest_truth_selects_closest_candidate_per_frame():
     assert selected["track_id"].tolist() == [2]
 
 
+def test_oracle_nearest_truth_ignores_invalid_candidate_positions():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": np.nan,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.99,
+            },
+            {
+                "frame_index": 0,
+                "track_id": 2,
+                "time_s": 0.0,
+                "east_m": 10.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.1,
+            },
+        ]
+    )
+    truth = pd.DataFrame({"time_s": [0.0], "east_m": [10.0], "north_m": [0.0], "up_m": [0.0]})
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[],
+        radar=radar,
+        association="oracle-nearest-truth",
+        truth=truth,
+    )
+
+    assert len(records) == 1
+    assert selected["track_id"].tolist() == [2]
+    assert selected["association_truth_error_m"].tolist() == [0.0]
+
+
 def test_prediction_nis_selects_candidate_near_prediction():
     radar = pd.DataFrame(
         [
