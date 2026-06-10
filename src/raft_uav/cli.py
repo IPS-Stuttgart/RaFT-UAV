@@ -1017,11 +1017,11 @@ def _run_baseline(
     print(f"trajectory_png={plot_path}")
     print(f"mean_2d_m={_format_optional_metric(metrics['position_error_2d'].get('mean_m'))}")
     print(f"std_2d_m={_format_optional_metric(metrics['position_error_2d'].get('std_m'))}")
-    print(f"rmse_2d_m={metrics['position_error_2d']['rmse_m']:.3f}")
+    print(f"rmse_2d_m={_format_optional_metric(metrics['position_error_2d'].get('rmse_m'))}")
     print(f"max_2d_m={_format_optional_metric(metrics['position_error_2d'].get('max_m'))}")
     print(f"mean_3d_m={_format_optional_metric(metrics['position_error_3d'].get('mean_m'))}")
     print(f"std_3d_m={_format_optional_metric(metrics['position_error_3d'].get('std_m'))}")
-    print(f"rmse_3d_m={metrics['position_error_3d']['rmse_m']:.3f}")
+    print(f"rmse_3d_m={_format_optional_metric(metrics['position_error_3d'].get('rmse_m'))}")
     print(f"max_3d_m={_format_optional_metric(metrics['position_error_3d'].get('max_m'))}")
     paper_2d = metrics["paper_position_error_2d"]
     paper_3d = metrics["paper_position_error_3d"]
