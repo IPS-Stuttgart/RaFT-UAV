@@ -13,6 +13,7 @@ from raft_uav.mmuad.io import (
     load_point_cloud_csv_as_candidates,
     load_point_cloud_file_as_candidates,
     load_truth_csv,
+    merge_candidate_frames,
 )
 from raft_uav.mmuad.mot import (
     MultiObjectTrackerConfig,
@@ -70,6 +71,31 @@ def test_point_cloud_csv_clusters_points(tmp_path: Path) -> None:
     frame = load_point_cloud_csv_as_candidates(path, voxel_size_m=0.5, min_points=3)
     assert len(frame.rows) == 2
     assert set(frame.rows["source"]) == {"lidar-cluster"}
+
+
+def test_point_cloud_csv_without_clusters_returns_empty_candidates(tmp_path: Path) -> None:
+    path = tmp_path / "points.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["s1", "s1"],
+            "time_s": [0.0, 0.0],
+            "x_m": [0.0, 10.0],
+            "y_m": [0.0, 10.0],
+            "z_m": [1.0, 2.0],
+        }
+    ).to_csv(path, index=False)
+
+    frame = load_point_cloud_csv_as_candidates(path, voxel_size_m=0.5, min_points=3)
+
+    assert frame.rows.empty
+    frame.validate()
+
+
+def test_merge_empty_candidate_frames_returns_valid_empty_frame() -> None:
+    frame = merge_candidate_frames([CandidateFrame(pd.DataFrame())])
+
+    assert frame.rows.empty
+    frame.validate()
 
 
 def test_tracker_runs_and_writes_metrics(tmp_path: Path) -> None:
