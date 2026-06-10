@@ -140,31 +140,35 @@ def run_async_cv_baseline_with_learned_radar_association(
 
         measurement = _radar_row_to_measurement(selected, covariance)
         selected, measurement, policy_diagnostics = apply_radar_update_policy(selected, measurement)
-        diagnostics = policy_diagnostics or tracker.update(
-            measurement,
-            gate_threshold=_gate_threshold_for_measurement(
+        if policy_diagnostics is None:
+            diagnostics = tracker.update(
                 measurement,
-                gate_probabilities_by_source=gate_probabilities_by_source,
-                gate_thresholds_by_source=gate_thresholds_by_source,
-            ),
-            safety_gate_threshold=_gate_threshold_for_measurement(
-                measurement,
-                gate_probabilities_by_source=safety_gate_probabilities_by_source,
-                gate_thresholds_by_source=safety_gate_thresholds_by_source,
-            ),
-            max_residual_norm=_max_residual_norm_for_measurement(
-                measurement,
-                max_residual_norms_by_source=max_residual_norms_by_source,
-            ),
-            robust_update=_robust_update_for_measurement(
-                measurement,
-                robust_update_by_source=robust_update_by_source,
-            ),
-            inflation_alpha=_inflation_alpha_for_measurement(
-                measurement,
-                inflation_alpha_by_source=inflation_alpha_by_source,
-            ),
-        )
+                gate_threshold=_gate_threshold_for_measurement(
+                    measurement,
+                    gate_probabilities_by_source=gate_probabilities_by_source,
+                    gate_thresholds_by_source=gate_thresholds_by_source,
+                ),
+                safety_gate_threshold=_gate_threshold_for_measurement(
+                    measurement,
+                    gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                    gate_thresholds_by_source=safety_gate_thresholds_by_source,
+                ),
+                max_residual_norm=_max_residual_norm_for_measurement(
+                    measurement,
+                    max_residual_norms_by_source=max_residual_norms_by_source,
+                ),
+                robust_update=_robust_update_for_measurement(
+                    measurement,
+                    robust_update_by_source=robust_update_by_source,
+                ),
+                inflation_alpha=_inflation_alpha_for_measurement(
+                    measurement,
+                    inflation_alpha_by_source=inflation_alpha_by_source,
+                ),
+            )
+        else:
+            tracker.coast_to(measurement.time_s)
+            diagnostics = policy_diagnostics
         if diagnostics.accepted:
             current_track_id = _optional_track_id(selected)
             selected_rows.append(selected)

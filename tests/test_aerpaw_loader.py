@@ -243,6 +243,35 @@ def test_radar_jsonl_reader_falls_back_to_frame_time_when_track_time_is_null(tmp
     assert radar.loc[0, "gps_seconds"] == 12345.0
 
 
+def test_radar_jsonl_reader_accepts_params_nested_track_data(tmp_path):
+    radar_path = tmp_path / "radar.json"
+    radar_path.write_text(
+        json.dumps(
+            {
+                "params": {
+                    "globalTime": 1759866140.0,
+                    "trackData": [
+                        {
+                            "id": 4,
+                            "lla": [35.72749, -78.69621, 30.0],
+                            "globalTime": None,
+                            "catProb": [0.8, 0.1],
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    radar = read_radar_tracks_json(radar_path)
+
+    assert len(radar) == 1
+    assert radar.loc[0, "track_id"] == 4
+    assert radar.loc[0, "global_time_raw_s"] == 1759866140.0
+    assert radar.loc[0, "cat_prob_uav"] == 0.8
+
+
 def test_radar_jsonl_reader_preserves_explicit_zero_confidence(tmp_path):
     radar_path = tmp_path / "radar.json"
     radar_path.write_text(
