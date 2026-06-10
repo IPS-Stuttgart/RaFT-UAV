@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from raft_uav.coordinates import LocalENUProjector
@@ -278,6 +279,36 @@ def test_radar_jsonl_reader_and_catprob_selection(tmp_path):
     assert selected["track_id"].tolist() == [1]
     assert selected_all["track_id"].tolist() == [1, 3]
     assert len(truth) == 1
+
+
+def test_truth_gated_radar_selection_handles_unsorted_truth_times():
+    radar = pd.DataFrame(
+        {
+            "track_id": [1, 2],
+            "time_s": [0.05, 1.05],
+            "east_m": [10.0, 20.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "time_s": [1.0, 0.0],
+            "east_m": [20.0, 10.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+
+    selected = select_radar_measurement_rows(
+        radar,
+        selection="truth-gated",
+        truth=truth,
+        truth_gate_m=1.0,
+        truth_time_gate_s=0.2,
+    )
+
+    assert selected["track_id"].tolist() == [1, 2]
 
 
 def test_radar_jsonl_reader_skips_malformed_records(tmp_path):

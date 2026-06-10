@@ -5,7 +5,11 @@ from raft_uav.heteroscedastic_measurements import (
     radar_measurements_to_enu_with_uncertainty,
     rf_measurements_to_enu_with_uncertainty,
 )
-from raft_uav.uncertainty import covariance_from_row, fit_heteroscedastic_uncertainty_model
+from raft_uav.uncertainty import (
+    _aligned_residuals,
+    covariance_from_row,
+    fit_heteroscedastic_uncertainty_model,
+)
 
 
 def test_fit_model_adds_positive_rf_and_radar_covariance_columns():
@@ -44,6 +48,34 @@ def test_fit_model_adds_positive_rf_and_radar_covariance_columns():
     assert (rf_out[["cov_ee", "cov_nn"]] > 0.0).all().all()
     assert (radar_out[["cov_ee", "cov_nn", "cov_uu"]] > 0.0).all().all()
     assert "heteroscedastic" in rf_out["uncertainty_model"].iloc[0]
+
+
+def test_aligned_residuals_handles_unsorted_truth_times():
+    frame = pd.DataFrame(
+        {
+            "time_s": [0.05, 0.95],
+            "east_m": [13.0, 18.0],
+            "north_m": [4.0, 4.0],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "time_s": [1.0, 0.0],
+            "east_m": [20.0, 10.0],
+            "north_m": [5.0, 3.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+
+    aligned = _aligned_residuals(
+        frame,
+        truth,
+        max_time_delta_s=0.1,
+    )
+
+    assert aligned["time_s"].tolist() == [0.05, 0.95]
+    assert aligned["residual_east_m"].tolist() == [3.0, -2.0]
+    assert aligned["residual_north_m"].tolist() == [1.0, -1.0]
 
 
 def test_covariance_from_row_prefers_association_covariance_then_model_covariance():
