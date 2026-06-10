@@ -53,6 +53,50 @@ def test_learned_radar_association_prefers_higher_likelihood_candidate():
     assert selected["association_learned_probability"].iloc[0] > 0.5
 
 
+def test_learned_radar_association_ignores_invalid_candidate_positions():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 99,
+                "time_s": 1.0,
+                "east_m": np.nan,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.99,
+            },
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 1.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.1,
+            },
+        ]
+    )
+    model = LearnedRadarAssociationModel(
+        feature_names=("cat_prob_uav",),
+        mean=np.array([0.0]),
+        scale=np.array([1.0]),
+        weights=np.array([10.0]),
+        intercept=-5.0,
+    )
+
+    records, selected = run_async_cv_baseline_with_learned_radar_association(
+        rf_measurements=[],
+        radar=radar,
+        model=model,
+        candidate_catprob_threshold=None,
+    )
+
+    assert len(records) == 1
+    assert selected["track_id"].tolist() == [1]
+    assert selected["association_candidate_rows"].tolist() == [2]
+    assert selected["association_invalid_candidate_rows"].tolist() == [1]
+
+
 def test_model_scores_candidate_features_without_sklearn():
     tracker = AsyncConstantVelocityKalmanTracker(initial_position=np.zeros(3), initial_time_s=0.0)
     candidates = pd.DataFrame(

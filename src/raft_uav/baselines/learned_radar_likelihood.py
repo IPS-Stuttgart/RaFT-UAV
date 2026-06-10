@@ -210,7 +210,8 @@ def score_radar_candidates_with_learned_likelihood(
     scored["association_action"] = "learned_likelihood"
     scored["association_learned_probability"] = probabilities
     scored["association_score"] = -np.log(probabilities)
-    scored["association_candidate_rows"] = int(len(scored))
+    if "association_candidate_rows" not in scored.columns:
+        scored["association_candidate_rows"] = int(len(scored))
     return scored
 
 

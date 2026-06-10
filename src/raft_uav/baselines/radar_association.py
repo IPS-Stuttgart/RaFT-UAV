@@ -2542,6 +2542,7 @@ def _initial_measurement_and_row(
             else stable_anchor_by_key.get(_radar_event_key(event))
         )
     else:
+        candidates = _finite_position_candidates(candidates)
         candidates = _catprob_candidate_pool(
             candidates,
             candidate_catprob_threshold,
@@ -2553,6 +2554,8 @@ def _initial_measurement_and_row(
     if selected is None:
         return None
     selected = selected.copy()
+    if not _row_has_finite_position(selected):
+        return None
     selected = _annotate_radar_geometry_covariance(selected, covariance, covariance_config)
     if radar_covariance_fn is not None:
         covariance = radar_covariance_fn(selected, covariance)
@@ -2831,7 +2834,17 @@ def _nis_scored_candidates(
     observation = measurement_matrix(3)
     state_position = observation @ tracker.state
     predicted_covariance = observation @ tracker.covariance_matrix @ observation.T
-    vectors = candidates[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    vectors = candidates[["east_m", "north_m", "up_m"]].apply(
+        pd.to_numeric,
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    finite_position = np.isfinite(vectors).all(axis=1)
+    if not finite_position.any():
+        return candidates.iloc[0:0].copy()
+    original_candidate_count = int(len(candidates))
+    invalid_candidate_count = int(original_candidate_count - np.count_nonzero(finite_position))
+    candidates = candidates.loc[finite_position].copy()
+    vectors = vectors[finite_position]
     residuals = vectors - state_position
     measurement_covariances = _candidate_covariances(candidates, covariance, covariance_config)
 
@@ -2848,7 +2861,8 @@ def _nis_scored_candidates(
 
     scored = candidates.copy()
     scored["association_nis"] = association_nis
-    scored["association_candidate_rows"] = int(len(candidates))
+    scored["association_candidate_rows"] = original_candidate_count
+    scored["association_invalid_candidate_rows"] = invalid_candidate_count
     if covariance_config is not None and covariance_config.enabled:
         scored = _attach_covariance_columns(
             scored,
@@ -2860,6 +2874,22 @@ def _nis_scored_candidates(
             scored["association_catprob_penalty"], errors="coerce"
         ).fillna(0.0).to_numpy(dtype=float)
     return scored
+
+
+def _finite_position_candidates(candidates: pd.DataFrame) -> pd.DataFrame:
+    required = ["east_m", "north_m", "up_m"]
+    if not all(column in candidates.columns for column in required):
+        return candidates.iloc[0:0].copy()
+    positions = candidates[required].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    return candidates.loc[np.isfinite(positions).all(axis=1)].copy()
+
+
+def _row_has_finite_position(row: pd.Series) -> bool:
+    try:
+        position = np.array([float(row["east_m"]), float(row["north_m"]), float(row["up_m"])])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return bool(np.isfinite(position).all())
 
 
 def _geometry_scored_candidates(
