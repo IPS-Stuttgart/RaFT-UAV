@@ -19,6 +19,7 @@ from raft_uav.mmuad.schema import CandidateFrame, TruthFrame
 from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_export
 from raft_uav.mmuad.splits import filter_sequences_by_split, load_split_manifest
 from raft_uav.mmuad.submission import (
+    compute_trajectory_metrics,
     estimates_to_submission_frame,
     write_submission_json,
     write_submission_zip,
@@ -269,6 +270,25 @@ def test_submission_writers_use_estimate_state_columns(tmp_path: Path) -> None:
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     assert payload["schema"] == "raft-uav-mmuad-single-uav-trajectory-v1"
     assert len(payload["sequences"]["s1"]) == 2
+
+
+def test_trajectory_metrics_use_latest_time_for_fde() -> None:
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["s1", "s1", "s1"],
+            "time_s": [2.0, 0.0, 1.0],
+            "error_3d_m": [20.0, 0.0, 10.0],
+            "error_2d_m": [12.0, 0.0, 6.0],
+        }
+    )
+
+    metrics = compute_trajectory_metrics(estimates)
+
+    assert metrics["pooled"]["fde_3d_m"] == 20.0
+    assert metrics["pooled"]["fde_2d_m"] == 12.0
+    assert metrics["sequences"]["s1"]["fde_3d_m"] == 20.0
+
+
 def test_ascii_pcd_point_cloud_is_clustered(tmp_path: Path) -> None:
     pcd = tmp_path / "frame_12.5.pcd"
     pcd.write_text(

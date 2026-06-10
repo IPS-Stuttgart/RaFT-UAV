@@ -150,7 +150,7 @@ def _metrics_for_frame(frame: pd.DataFrame) -> dict[str, Any]:
         "p95_3d_m": float(np.percentile(finite, 95.0)),
         "max_3d_m": float(np.max(finite)),
         "ade_3d_m": float(np.mean(finite)),
-        "fde_3d_m": float(finite[-1]),
+        "fde_3d_m": _final_error(frame, "error_3d_m"),
     }
     if "error_2d_m" in frame.columns:
         err2 = frame["error_2d_m"].to_numpy(float)
@@ -162,7 +162,24 @@ def _metrics_for_frame(frame: pd.DataFrame) -> dict[str, Any]:
                     "p95_2d_m": float(np.percentile(finite2, 95.0)),
                     "max_2d_m": float(np.max(finite2)),
                     "ade_2d_m": float(np.mean(finite2)),
-                    "fde_2d_m": float(finite2[-1]),
+                    "fde_2d_m": _final_error(frame, "error_2d_m"),
                 }
             )
     return out
+
+
+def _final_error(frame: pd.DataFrame, column: str) -> float:
+    values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+    finite = np.isfinite(values)
+    if not finite.any():
+        return float("nan")
+    if "time_s" not in frame.columns:
+        return float(values[np.flatnonzero(finite)[-1]])
+    times = pd.to_numeric(frame["time_s"], errors="coerce").to_numpy(dtype=float)
+    timed = finite & np.isfinite(times)
+    if not timed.any():
+        return float(values[np.flatnonzero(finite)[-1]])
+    timed_indices = np.flatnonzero(timed)
+    latest_time = float(np.max(times[timed_indices]))
+    latest_indices = timed_indices[times[timed_indices] == latest_time]
+    return float(values[latest_indices[-1]])
