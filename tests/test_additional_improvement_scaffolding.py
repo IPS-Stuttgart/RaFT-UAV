@@ -40,6 +40,30 @@ def test_oracle_gap_decomposition_flags_wrong_selection() -> None:
     assert rows.loc[0, "category"] == "wrong_candidate_selected"
 
 
+def test_oracle_gap_ignores_invalid_candidate_positions_when_reporting_nearest() -> None:
+    radar = pd.DataFrame(
+        {
+            "time_s": [0.0, 0.0],
+            "frame_index": [0, 0],
+            "track_id": [99, 7],
+            "east_m": [np.nan, 0.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+    truth = pd.DataFrame({"time_s": [0.0], "east_m": [0.0], "north_m": [0.0], "up_m": [0.0]})
+
+    rows = decompose_radar_oracle_gap(
+        radar=radar,
+        truth=truth,
+        config=OracleGapConfig(plausible_candidate_gate_m=10.0),
+    )
+
+    assert rows.loc[0, "nearest_candidate_track_id"] == 7
+    assert rows.loc[0, "nearest_candidate_error_m"] == 0.0
+    assert rows.loc[0, "category"] == "plausible_candidate_not_selected"
+
+
 def test_track_stability_counts_switches() -> None:
     selected = pd.DataFrame({"time_s": [0, 1, 2, 3], "track_id": [1, 1, 2, 1]})
     metrics = selected_track_stability_metrics(selected)
