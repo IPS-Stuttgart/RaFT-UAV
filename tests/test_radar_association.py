@@ -184,6 +184,42 @@ def test_prediction_nis_selects_candidate_near_prediction():
     assert selected["track_id"].tolist() == [1]
 
 
+def test_prediction_nis_ignores_invalid_candidate_positions():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 99,
+                "time_s": 2.0,
+                "east_m": np.nan,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.99,
+            },
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 2.0,
+                "east_m": 2.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.1,
+            },
+        ]
+    )
+
+    _records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(0.0, 0.0), _rf_measurement(1.0, 1.0)],
+        radar=radar,
+        association="prediction-nis",
+        candidate_catprob_threshold=None,
+    )
+
+    assert selected["track_id"].tolist() == [1]
+    assert selected["association_candidate_rows"].tolist() == [2]
+    assert selected["association_invalid_candidate_rows"].tolist() == [1]
+
+
 def test_safety_gate_makes_impossible_radar_association_a_miss():
     radar = pd.DataFrame(
         [
