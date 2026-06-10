@@ -276,6 +276,42 @@ def test_submission_writers_use_estimate_state_columns(tmp_path: Path) -> None:
     assert len(payload["sequences"]["s1"]) == 2
 
 
+def test_submission_frame_drops_nonfinite_estimates() -> None:
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["s1", "s1", "s1"],
+            "time_s": [0.0, 1.0, np.nan],
+            "output_track_id": ["mot_1", None, "mot_bad"],
+            "state_x_m": [1.0, np.nan, 3.0],
+            "state_y_m": [2.0, 2.0, 2.0],
+            "state_z_m": [3.0, 3.0, 3.0],
+        }
+    )
+
+    frame = estimates_to_submission_frame(estimates, track_id="fallback")
+
+    assert len(frame) == 1
+    assert frame.loc[0, "track_id"] == "mot_1"
+    assert np.isfinite(frame[["time_s", "x_m", "y_m", "z_m"]].to_numpy(dtype=float)).all()
+
+
+def test_submission_frame_fills_missing_estimate_track_ids() -> None:
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["s1"],
+            "time_s": [0.0],
+            "output_track_id": [None],
+            "state_x_m": [1.0],
+            "state_y_m": [2.0],
+            "state_z_m": [3.0],
+        }
+    )
+
+    frame = estimates_to_submission_frame(estimates, track_id="fallback")
+
+    assert frame.loc[0, "track_id"] == "fallback"
+
+
 def test_trajectory_metrics_use_latest_time_for_fde() -> None:
     estimates = pd.DataFrame(
         {
