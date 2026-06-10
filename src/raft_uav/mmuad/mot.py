@@ -211,7 +211,7 @@ def compute_multi_object_metrics(
         "false_negative": int(false_negative),
         "id_switches": int(id_switches),
         "mota_like": float(mota),
-        "motp_3d_m": float(np.mean(matched_distances)) if matched_distances else float("nan"),
+        "motp_3d_m": float(np.mean(matched_distances)) if matched_distances else None,
         "recall": float(match_count / max(1, gt_count)),
         "precision": float(match_count / max(1, len(estimates))),
     }
