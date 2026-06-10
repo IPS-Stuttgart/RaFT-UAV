@@ -31,6 +31,9 @@ class TrackerOutput:
     selected_tracklets: pd.DataFrame
 
 
+_CANDIDATE_ROW_ID = "_candidate_row_id"
+
+
 def run_mmuad_tracker(
     candidates: CandidateFrame,
     truth: TruthFrame | None = None,
@@ -57,8 +60,14 @@ def run_mmuad_tracker(
     metrics_by_sequence: dict[str, Any] = {}
     truth_rows = truth.rows if truth is not None else None
     for sequence_id, sequence_candidates in rows.groupby("sequence_id", sort=True):
+        sequence_candidates = sequence_candidates.copy()
+        sequence_candidates[_CANDIDATE_ROW_ID] = np.arange(len(sequence_candidates), dtype=int)
         selected = select_tracklet_path(sequence_candidates, config=config)
-        selected_by_sequence.append(selected.assign(sequence_id=sequence_id))
+        selected_by_sequence.append(
+            selected.drop(columns=[_CANDIDATE_ROW_ID], errors="ignore").assign(
+                sequence_id=sequence_id
+            )
+        )
         sequence_truth = None
         if truth_rows is not None:
             sequence_truth = truth_rows.loc[truth_rows["sequence_id"] == sequence_id]
@@ -249,12 +258,14 @@ def _run_sequence_filter(
     return estimates
 
 
-def _candidate_keys(frame: pd.DataFrame) -> list[tuple[float, str, str]]:
+def _candidate_keys(frame: pd.DataFrame) -> list[tuple[object, ...]]:
     return [_candidate_key(row) for _, row in frame.iterrows()]
 
 
-def _candidate_key(row: pd.Series) -> tuple[float, str, str]:
-    return (float(row["time_s"]), str(row.get("source", "")), str(row.get("track_id", "")))
+def _candidate_key(row: pd.Series) -> tuple[object, ...]:
+    if _CANDIDATE_ROW_ID in row.index and pd.notna(row[_CANDIDATE_ROW_ID]):
+        return ("row", int(row[_CANDIDATE_ROW_ID]))
+    return ("fields", float(row["time_s"]), str(row.get("source", "")), str(row.get("track_id", "")))
 
 
 def _finite_position_mask(frame: pd.DataFrame) -> np.ndarray:

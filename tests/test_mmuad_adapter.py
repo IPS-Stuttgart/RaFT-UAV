@@ -154,6 +154,58 @@ def test_tracker_ignores_invalid_manual_candidate_rows() -> None:
     ).all()
 
 
+def test_tracker_replays_only_selected_duplicate_rows_without_track_ids() -> None:
+    rows = []
+    truth_rows = []
+    for time_s in range(3):
+        truth_rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": float(time_s),
+                "x_m": float(time_s),
+                "y_m": 0.0,
+                "z_m": 2.0,
+            }
+        )
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": float(time_s),
+                "source": "candidate",
+                "track_id": np.nan,
+                "x_m": float(time_s),
+                "y_m": 0.0,
+                "z_m": 2.0,
+                "confidence": 1.0,
+                "std_xy_m": 1.0,
+                "std_z_m": 1.0,
+            }
+        )
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": float(time_s),
+                "source": "candidate",
+                "track_id": np.nan,
+                "x_m": 100.0 + float(time_s),
+                "y_m": 0.0,
+                "z_m": 2.0,
+                "confidence": 0.5,
+                "std_xy_m": 1.0,
+                "std_z_m": 1.0,
+            }
+        )
+    candidates = CandidateFrame(pd.DataFrame(rows))
+    truth = TruthFrame(pd.DataFrame(truth_rows))
+
+    output = run_mmuad_tracker(candidates, truth, config=TrackerConfig())
+
+    assert output.estimates["update_action"].tolist().count("selected_update") == 3
+    assert output.estimates["update_action"].tolist().count("soft_anchor") == 3
+    assert output.selected_tracklets["x_m"].tolist() == [0.0, 1.0, 2.0]
+    assert "_candidate_row_id" not in output.selected_tracklets.columns
+
+
 def test_add_truth_errors_sorts_truth_times() -> None:
     estimates = pd.DataFrame(
         {
