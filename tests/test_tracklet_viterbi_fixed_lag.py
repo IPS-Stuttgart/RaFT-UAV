@@ -91,3 +91,51 @@ def test_fixed_lag_tracklet_viterbi_conditions_on_previous_committed_choice():
     assert bool(selected[1]["association_prefix_constrained"])
     assert int(selected[1]["association_prefix_track_id"]) == 1
     assert float(selected[1]["association_prefix_time_s"]) == 0.0
+
+
+def test_fixed_lag_replay_applies_do_no_harm_policy(monkeypatch):
+    monkeypatch.setenv("RAFT_UAV_DO_NO_HARM_RADAR_UPDATES", "1")
+    monkeypatch.setenv("RAFT_UAV_DNH_ANCHOR_SOFTEN_NIS", "0.1")
+    monkeypatch.setenv("RAFT_UAV_DNH_ANCHOR_SKIP_NIS", "0.2")
+    radar = pd.DataFrame(
+        [
+            _row(
+                frame_index=0,
+                track_id=99,
+                time_s=10.0,
+                east_m=1000.0,
+                cat_prob_uav=0.99,
+            ),
+        ]
+    )
+    rf = TrackingMeasurement(
+        time_s=0.0,
+        vector=np.array([0.0, 0.0, 0.0, 10.0, 0.0, 0.0]),
+        covariance=np.diag([1.0, 1.0, 1.0, 0.25, 0.25, 0.25]),
+        source="rf",
+    )
+
+    records, accepted, replayed = (
+        run_async_cv_baseline_with_fixed_lag_tracklet_viterbi_association_and_replay(
+            rf_measurements=[rf],
+            radar=radar,
+            lag_s=20.0,
+            candidate_catprob_threshold=None,
+            config=TrackletViterbiAssociationConfig(
+                missed_detection_cost=1_000_000.0,
+                anchor_nis_weight=0.0,
+                range_gate_m=None,
+            ),
+        )
+    )
+
+    assert accepted.empty
+    assert records[-1]["source"] == "radar"
+    assert records[-1]["association_mode"] == "tracklet-viterbi-fixed-lag"
+    assert records[-1]["update_action"] == "do_no_harm_skip"
+    assert records[-1]["accepted"] is False
+    assert records[-1]["time_s"] == 10.0
+    np.testing.assert_allclose(records[-1]["state"][0], 100.0)
+    assert replayed["association_replay_accepted"].tolist() == [False]
+    assert replayed["association_replay_update_action"].tolist() == ["do_no_harm_skip"]
+    assert replayed["association_update_policy"].tolist() == ["skip"]
