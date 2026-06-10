@@ -121,6 +121,8 @@ def backward_repair_associations(
             continue
         left_pos = np.array([left.east_m, left.north_m, left.up_m], dtype=float)
         right_pos = np.array([right.east_m, right.north_m, right.up_m], dtype=float)
+        if not np.isfinite(left_pos).all() or not np.isfinite(right_pos).all():
+            continue
         for key, frame in candidate_groups:
             if key in selected_keys:
                 continue
@@ -129,9 +131,17 @@ def backward_repair_associations(
                 continue
             alpha = (time_s - left_time) / gap_s
             target = (1.0 - alpha) * left_pos + alpha * right_pos
-            positions = frame.loc[:, PositionColumns].to_numpy(dtype=float)
-            distances = np.linalg.norm(positions - target.reshape(1, 3), axis=1)
-            best_idx = int(np.nanargmin(distances))
+            positions = (
+                frame.loc[:, PositionColumns]
+                .apply(pd.to_numeric, errors="coerce")
+                .to_numpy(dtype=float)
+            )
+            finite = np.isfinite(positions).all(axis=1)
+            if not finite.any():
+                continue
+            distances = np.full(len(frame), np.inf, dtype=float)
+            distances[finite] = np.linalg.norm(positions[finite] - target.reshape(1, 3), axis=1)
+            best_idx = int(np.argmin(distances))
             if float(distances[best_idx]) <= float(max_repair_distance_m):
                 row = frame.iloc[best_idx].copy()
                 row["association_mode"] = "backward-repair"
