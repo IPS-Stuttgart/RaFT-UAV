@@ -129,16 +129,33 @@ def association_regret(
             "candidate_count": 0 if candidates is None else int(len(candidates)),
         }
         if truth_xyz is not None and candidates is not None and not candidates.empty:
-            selected_xyz = row.loc[list(PositionColumns)].to_numpy(dtype=float)
-            selected_error = float(np.linalg.norm(selected_xyz - truth_xyz))
-            candidate_xyz = candidates.loc[:, PositionColumns].to_numpy(dtype=float)
-            errors = np.linalg.norm(candidate_xyz - truth_xyz.reshape(1, 3), axis=1)
-            best_idx = int(np.nanargmin(errors))
-            best_error = float(errors[best_idx])
-            out["selected_error_m"] = selected_error
-            out["best_candidate_error_m"] = best_error
-            out["association_regret_m"] = selected_error - best_error
-            out["best_track_id"] = _optional_int(candidates.iloc[best_idx].get("track_id"))
+            selected_xyz = pd.to_numeric(
+                row.loc[list(PositionColumns)], errors="coerce"
+            ).to_numpy(dtype=float)
+            selected_error = float("nan")
+            if np.isfinite(selected_xyz).all():
+                selected_error = float(np.linalg.norm(selected_xyz - truth_xyz))
+                out["selected_error_m"] = selected_error
+
+            candidate_xyz = (
+                candidates.loc[:, PositionColumns]
+                .apply(pd.to_numeric, errors="coerce")
+                .to_numpy(dtype=float)
+            )
+            finite_candidates = np.isfinite(candidate_xyz).all(axis=1)
+            if finite_candidates.any():
+                valid_indices = np.flatnonzero(finite_candidates)
+                errors = np.linalg.norm(
+                    candidate_xyz[finite_candidates] - truth_xyz.reshape(1, 3),
+                    axis=1,
+                )
+                best_valid_idx = int(np.argmin(errors))
+                best_idx = int(valid_indices[best_valid_idx])
+                best_error = float(errors[best_valid_idx])
+                out["best_candidate_error_m"] = best_error
+                out["best_track_id"] = _optional_int(candidates.iloc[best_idx].get("track_id"))
+                if math.isfinite(selected_error):
+                    out["association_regret_m"] = selected_error - best_error
         rows.append(out)
     return pd.DataFrame.from_records(rows)
 
