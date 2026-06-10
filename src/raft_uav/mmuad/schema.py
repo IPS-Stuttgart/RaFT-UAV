@@ -81,6 +81,8 @@ def normalize_candidate_columns(frame: pd.DataFrame) -> pd.DataFrame:
     """
 
     out = _rename_aliases(frame.copy())
+    if out.empty:
+        return pd.DataFrame(columns=CANONICAL_CANDIDATE_COLUMNS)
     if "sequence_id" not in out.columns:
         out["sequence_id"] = "default"
     if "source" not in out.columns:
@@ -95,6 +97,12 @@ def normalize_candidate_columns(frame: pd.DataFrame) -> pd.DataFrame:
         out["confidence"] = 1.0
     if "class_name" not in out.columns:
         out["class_name"] = "uav"
+    missing_required = {"time_s", "x_m", "y_m", "z_m"}.difference(out.columns)
+    if missing_required:
+        raise ValueError(
+            f"candidate table missing required columns: {sorted(missing_required)}; "
+            f"available={list(out.columns)}"
+        )
     for col in ("time_s", "x_m", "y_m", "z_m", "std_xy_m", "std_z_m", "confidence"):
         out[col] = pd.to_numeric(out[col], errors="coerce")
     out["sequence_id"] = out["sequence_id"].astype(str)
