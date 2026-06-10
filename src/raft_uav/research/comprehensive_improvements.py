@@ -115,9 +115,8 @@ def candidate_recall_regret_table(
             rows.append({**base, "failure_bucket": "no_nearby_truth"})
             continue
 
-        positions = frame[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
-        errors = np.linalg.norm(positions - truth_position.reshape(1, 3), axis=1)
-        best_index = int(np.argmin(errors)) if errors.size else -1
+        errors = _candidate_truth_errors(frame, truth_position)
+        best_index = int(np.argmin(errors)) if np.isfinite(errors).any() else -1
         best_error = float(errors[best_index]) if best_index >= 0 else float("nan")
         candidate_available = bool(best_index >= 0 and best_error <= float(truth_gate_m))
         best_rank_by_catprob = _rank_of_index_by_column(frame, best_index, "cat_prob_uav", descending=True)
@@ -158,6 +157,21 @@ def candidate_recall_regret_table(
             }
         )
     return pd.DataFrame(rows)
+
+
+def _candidate_truth_errors(frame: pd.DataFrame, truth_position: np.ndarray) -> np.ndarray:
+    positions = frame[["east_m", "north_m", "up_m"]].apply(
+        pd.to_numeric,
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    finite = np.isfinite(positions).all(axis=1)
+    errors = np.full(len(frame), np.inf, dtype=float)
+    if finite.any():
+        errors[finite] = np.linalg.norm(
+            positions[finite] - truth_position.reshape(1, 3),
+            axis=1,
+        )
+    return errors
 
 
 def summarize_candidate_recall_regret(table: pd.DataFrame) -> dict[str, object]:
