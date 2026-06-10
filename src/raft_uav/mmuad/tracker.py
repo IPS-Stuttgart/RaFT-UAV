@@ -96,6 +96,9 @@ def select_tracklet_path(candidates: pd.DataFrame, *, config: TrackerConfig) -> 
     """
 
     frame = candidates.copy().sort_values("time_s")
+    frame = frame.loc[_finite_position_mask(frame)].copy()
+    if frame.empty:
+        return candidates.iloc[0:0].copy()
     non_null_track = frame.loc[frame["track_id"].notna()].copy()
     if not non_null_track.empty:
         rows: list[dict[str, object]] = []
@@ -156,7 +159,9 @@ def _greedy_path(frame: pd.DataFrame, *, config: TrackerConfig) -> pd.DataFrame:
     last_xyz: np.ndarray | None = None
     last_time: float | None = None
     for time_s, group in ranked.groupby("time_s", sort=True):
-        group = group.copy()
+        group = group.loc[_finite_position_mask(group)].copy()
+        if group.empty:
+            continue
         if last_xyz is None or last_time is None:
             chosen = group.sort_values("confidence", ascending=False).iloc[0]
         else:
@@ -167,6 +172,8 @@ def _greedy_path(frame: pd.DataFrame, *, config: TrackerConfig) -> pd.DataFrame:
         last_xyz = chosen[["x_m", "y_m", "z_m"]].to_numpy(float)
         last_time = float(chosen["time_s"])
         chosen_rows.append(chosen)
+    if not chosen_rows:
+        return frame.iloc[0:0].copy()
     selected = pd.DataFrame(chosen_rows).reset_index(drop=True)
     selected["selected_path_rank"] = 0
     selected["selected_path_score"] = 0.0
@@ -180,9 +187,16 @@ def _run_sequence_filter(
     sequence_truth: pd.DataFrame | None,
     config: TrackerConfig,
 ) -> pd.DataFrame:
-    selected_keys = set(_candidate_keys(selected))
-    events = candidates.sort_values("time_s").reset_index(drop=True)
+    selected = selected.loc[_finite_position_mask(selected)].copy()
     if selected.empty:
+        return pd.DataFrame()
+    selected_keys = set(_candidate_keys(selected))
+    events = (
+        candidates.loc[_finite_position_mask(candidates)]
+        .sort_values("time_s")
+        .reset_index(drop=True)
+    )
+    if events.empty:
         return pd.DataFrame()
     bootstrap = selected.sort_values("time_s").iloc[0]
     filt = _ConstantVelocityFilter(
@@ -199,8 +213,8 @@ def _run_sequence_filter(
         key = _candidate_key(row)
         is_selected = key in selected_keys
         z = row[["x_m", "y_m", "z_m"]].to_numpy(float)
-        std_xy = float(row.get("std_xy_m", 10.0))
-        std_z = float(row.get("std_z_m", std_xy))
+        std_xy = _positive_float(row.get("std_xy_m", 10.0), default=10.0)
+        std_z = _positive_float(row.get("std_z_m", std_xy), default=std_xy)
         covariance = np.diag([std_xy**2, std_xy**2, std_z**2])
         if is_selected:
             action = "selected_update"
@@ -241,6 +255,22 @@ def _candidate_keys(frame: pd.DataFrame) -> list[tuple[float, str, str]]:
 
 def _candidate_key(row: pd.Series) -> tuple[float, str, str]:
     return (float(row["time_s"]), str(row.get("source", "")), str(row.get("track_id", "")))
+
+
+def _finite_position_mask(frame: pd.DataFrame) -> np.ndarray:
+    if frame.empty:
+        return np.zeros(0, dtype=bool)
+    positions = frame[["x_m", "y_m", "z_m"]].apply(pd.to_numeric, errors="coerce")
+    times = pd.to_numeric(frame["time_s"], errors="coerce")
+    return (np.isfinite(positions).all(axis=1) & np.isfinite(times)).to_numpy(dtype=bool)
+
+
+def _positive_float(value: object, *, default: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    return number if np.isfinite(number) and number > 0.0 else float(default)
 
 
 class _ConstantVelocityFilter:

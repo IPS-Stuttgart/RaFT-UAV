@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from zipfile import ZipFile
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.calibration import load_calibration_json, transform_candidate_frame
@@ -14,6 +15,7 @@ from raft_uav.mmuad.io import (
     load_truth_csv,
 )
 from raft_uav.mmuad.mot import MultiObjectTrackerConfig, run_mmuad_multi_object_tracker
+from raft_uav.mmuad.schema import CandidateFrame, TruthFrame
 from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_export
 from raft_uav.mmuad.splits import filter_sequences_by_split, load_split_manifest
 from raft_uav.mmuad.submission import (
@@ -103,6 +105,46 @@ def test_tracker_runs_and_writes_metrics(tmp_path: Path) -> None:
     paths = write_tracker_output(output, tmp_path / "out")
     assert Path(paths["estimates_csv"]).exists()
     assert json.loads(Path(paths["metrics_json"]).read_text())["pooled"]["mean_3d_m"] < 5.0
+
+
+def test_tracker_ignores_invalid_manual_candidate_rows() -> None:
+    candidates = CandidateFrame(
+        pd.DataFrame(
+            {
+                "sequence_id": ["s1", "s1", "s1", "s1"],
+                "time_s": [0.0, 1.0, 1.0, 2.0],
+                "source": ["radar", "bad", "radar", "radar"],
+                "track_id": [None, None, None, None],
+                "x_m": [0.0, np.nan, 1.0, 2.0],
+                "y_m": [0.0, 0.0, 0.0, 0.0],
+                "z_m": [2.0, 2.0, 2.0, 2.0],
+                "confidence": [1.0, 1.0, 0.1, 1.0],
+                "std_xy_m": [10.0, np.nan, 10.0, 10.0],
+                "std_z_m": [10.0, np.nan, 10.0, 10.0],
+            }
+        )
+    )
+    truth = TruthFrame(
+        pd.DataFrame(
+            {
+                "sequence_id": ["s1", "s1", "s1"],
+                "time_s": [0.0, 1.0, 2.0],
+                "x_m": [0.0, 1.0, 2.0],
+                "y_m": [0.0, 0.0, 0.0],
+                "z_m": [2.0, 2.0, 2.0],
+            }
+        )
+    )
+
+    output = run_mmuad_tracker(candidates, truth, config=TrackerConfig())
+
+    assert output.selected_tracklets["source"].tolist() == ["radar", "radar", "radar"]
+    assert output.estimates["source"].tolist() == ["radar", "radar", "radar"]
+    assert np.isfinite(
+        output.estimates[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(dtype=float)
+    ).all()
+
+
 def test_calibration_json_transforms_candidate_coordinates(tmp_path: Path) -> None:
     cand_path = tmp_path / "candidates.csv"
     calib_path = tmp_path / "calibration.json"
