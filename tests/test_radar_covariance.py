@@ -96,6 +96,30 @@ def test_radar_association_rejects_indefinite_row_covariance():
     assert _row_covariance(row) is None
 
 
+def test_association_row_covariance_rejects_indefinite_primary_covariance():
+    row = pd.Series(
+        {
+            "association_cov_ee": 1.0,
+            "association_cov_nn": 1.0,
+            "association_cov_uu": 1.0,
+            "association_cov_en": 2.0,
+            "association_cov_eu": 0.0,
+            "association_cov_nu": 0.0,
+            "cov_ee": 4.0,
+            "cov_nn": 5.0,
+            "cov_uu": 6.0,
+            "cov_en": 0.0,
+            "cov_eu": 0.0,
+            "cov_nu": 0.0,
+        }
+    )
+
+    covariance = _row_covariance(row)
+
+    assert covariance is not None
+    np.testing.assert_allclose(covariance, np.diag([4.0, 5.0, 6.0]))
+
+
 def test_tracklet_range_covariance_prefers_learned_row_covariance_columns():
     default_covariance = np.diag([25.0**2, 25.0**2, 35.0**2])
     row = pd.Series(

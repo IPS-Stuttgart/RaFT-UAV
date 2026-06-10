@@ -160,6 +160,21 @@ def test_covariance_from_row_falls_back_for_indefinite_cross_covariance():
     assert np.allclose(cov, fallback)
 
 
+def test_covariance_from_row_falls_back_for_indefinite_covariance():
+    fallback = np.diag([10.0, 20.0])
+    row = pd.Series(
+        {
+            "cov_ee": 1.0,
+            "cov_nn": 1.0,
+            "cov_en": 2.0,
+        }
+    )
+
+    cov = covariance_from_row(row, 2, fallback)
+
+    assert np.allclose(cov, fallback)
+
+
 def test_heteroscedastic_measurement_converters_consume_covariance_columns():
     rf = pd.DataFrame(
         {
