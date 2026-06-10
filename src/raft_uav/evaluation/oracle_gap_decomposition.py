@@ -265,7 +265,7 @@ def write_oracle_gap_report(
     summary.update(selected_track_stability_metrics(selected_radar))
     if output_json is not None:
         output_json.parent.mkdir(parents=True, exist_ok=True)
-        output_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        output_json.write_text(json.dumps(_jsonable(summary), indent=2, allow_nan=False), encoding="utf-8")
     return summary
 
 
@@ -466,6 +466,28 @@ def _percentile_or_nan(values: np.ndarray, percentile: float) -> float:
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
     return float(np.percentile(values, percentile)) if values.size else float("nan")
+
+
+def _jsonable(value: object) -> object:
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return _jsonable(value.tolist())
+    if isinstance(value, np.generic):
+        return _jsonable(value.item())
+    if value is None:
+        return None
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return value
 
 
 def _optional_track_id(value: object) -> object:

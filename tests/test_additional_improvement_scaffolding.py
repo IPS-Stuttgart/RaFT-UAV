@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -14,6 +17,7 @@ from raft_uav.evaluation.oracle_gap_decomposition import (
     OracleGapConfig,
     decompose_radar_oracle_gap,
     selected_track_stability_metrics,
+    write_oracle_gap_report,
 )
 from raft_uav.stress.perturbations import PerturbationConfig, perturb_radar
 
@@ -69,6 +73,39 @@ def test_track_stability_counts_switches() -> None:
     metrics = selected_track_stability_metrics(selected)
     assert metrics["track_switch_count"] == 2
     assert metrics["unique_selected_track_ids"] == 2
+
+
+def test_oracle_gap_report_json_converts_missing_numeric_summaries(tmp_path: Path) -> None:
+    radar = pd.DataFrame(
+        {
+            "time_s": [100.0],
+            "frame_index": [0],
+            "track_id": [1],
+            "east_m": [0.0],
+            "north_m": [0.0],
+            "up_m": [0.0],
+        }
+    )
+    truth = pd.DataFrame({"time_s": [0.0], "east_m": [0.0], "north_m": [0.0], "up_m": [0.0]})
+    rows = decompose_radar_oracle_gap(
+        radar=radar,
+        truth=truth,
+        config=OracleGapConfig(truth_time_gate_s=1.0),
+    )
+
+    write_oracle_gap_report(
+        frame_rows=rows,
+        output_csv=tmp_path / "oracle_gap.csv",
+        output_json=tmp_path / "oracle_gap.json",
+        selected_radar=pd.DataFrame(),
+    )
+
+    payload_text = (tmp_path / "oracle_gap.json").read_text(encoding="utf-8")
+    payload = json.loads(payload_text)
+
+    assert "NaN" not in payload_text
+    assert payload["candidate_availability_rate"] is None
+    assert payload["dominant_track_fraction"] is None
 
 
 def test_track_features_are_causal() -> None:
