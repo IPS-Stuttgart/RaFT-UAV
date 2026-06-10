@@ -14,7 +14,11 @@ from raft_uav.mmuad.io import (
     load_point_cloud_file_as_candidates,
     load_truth_csv,
 )
-from raft_uav.mmuad.mot import MultiObjectTrackerConfig, run_mmuad_multi_object_tracker
+from raft_uav.mmuad.mot import (
+    MultiObjectTrackerConfig,
+    compute_multi_object_metrics,
+    run_mmuad_multi_object_tracker,
+)
 from raft_uav.mmuad.schema import CandidateFrame, TruthFrame
 from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_export
 from raft_uav.mmuad.splits import filter_sequences_by_split, load_split_manifest
@@ -385,6 +389,37 @@ def test_multi_object_tracker_ignores_invalid_manual_detections() -> None:
     assert np.isfinite(
         output.estimates[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(dtype=float)
     ).all()
+
+
+def test_multi_object_metrics_ignore_invalid_truth_and_estimates() -> None:
+    estimates = pd.DataFrame(
+        {
+            "time_s": [0.0, 0.0],
+            "output_track_id": ["mot_1", "mot_bad"],
+            "state_x_m": [0.0, np.nan],
+            "state_y_m": [0.0, 0.0],
+            "state_z_m": [2.0, 2.0],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "time_s": [0.0, 0.0],
+            "track_id": ["uav", "bad_truth"],
+            "x_m": [0.0, np.nan],
+            "y_m": [0.0, 0.0],
+            "z_m": [2.0, 2.0],
+        }
+    )
+
+    metrics = compute_multi_object_metrics(estimates, truth, match_distance_m=1.0)
+
+    assert metrics["count"] == 1
+    assert metrics["gt_count"] == 1
+    assert metrics["matches"] == 1
+    assert metrics["false_positive"] == 0
+    assert metrics["false_negative"] == 0
+    assert metrics["precision"] == 1.0
+    assert metrics["recall"] == 1.0
 
 
 def test_submission_zip_preserves_multi_object_track_ids(tmp_path: Path) -> None:

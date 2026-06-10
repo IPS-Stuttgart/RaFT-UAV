@@ -173,9 +173,12 @@ def compute_multi_object_metrics(
     if estimates.empty:
         return {"count": 0}
     if truth is None or truth.empty:
-        return {"count": int(len(estimates)), "track_count": int(estimates["output_track_id"].nunique())}
+        estimates = _finite_mot_estimates(estimates)
+        return {"count": int(len(estimates)), "track_count": _track_count(estimates)}
     if "track_id" not in truth.columns:
         return compute_metrics(add_truth_errors(estimates.copy(), truth), truth)
+    estimates = _finite_mot_estimates(estimates)
+    truth = _finite_mot_truth(truth)
     matched_distances: list[float] = []
     false_positive = 0
     false_negative = 0
@@ -202,7 +205,7 @@ def compute_multi_object_metrics(
     return {
         "count": int(len(estimates)),
         "gt_count": gt_count,
-        "track_count": int(estimates["output_track_id"].nunique()),
+        "track_count": _track_count(estimates),
         "matches": int(match_count),
         "false_positive": int(false_positive),
         "false_negative": int(false_negative),
@@ -212,6 +215,38 @@ def compute_multi_object_metrics(
         "recall": float(match_count / max(1, gt_count)),
         "precision": float(match_count / max(1, len(estimates))),
     }
+
+
+def _finite_mot_estimates(estimates: pd.DataFrame) -> pd.DataFrame:
+    if estimates.empty:
+        return estimates.copy()
+    required = ["time_s", "state_x_m", "state_y_m", "state_z_m"]
+    if any(column not in estimates.columns for column in required):
+        return estimates.iloc[0:0].copy()
+    numeric = estimates.loc[:, required].apply(pd.to_numeric, errors="coerce")
+    finite = np.isfinite(numeric.to_numpy(dtype=float)).all(axis=1)
+    if "output_track_id" in estimates.columns:
+        finite &= estimates["output_track_id"].notna().to_numpy(dtype=bool)
+    return estimates.loc[finite].copy()
+
+
+def _track_count(estimates: pd.DataFrame) -> int:
+    if estimates.empty or "output_track_id" not in estimates.columns:
+        return 0
+    return int(estimates["output_track_id"].nunique())
+
+
+def _finite_mot_truth(truth: pd.DataFrame) -> pd.DataFrame:
+    if truth.empty:
+        return truth.copy()
+    required = ["time_s", "x_m", "y_m", "z_m"]
+    if any(column not in truth.columns for column in required):
+        return truth.iloc[0:0].copy()
+    numeric = truth.loc[:, required].apply(pd.to_numeric, errors="coerce")
+    finite = np.isfinite(numeric.to_numpy(dtype=float)).all(axis=1)
+    if "track_id" in truth.columns:
+        finite &= truth["track_id"].notna().to_numpy(dtype=bool)
+    return truth.loc[finite].copy()
 
 
 def _greedy_truth_matches(
