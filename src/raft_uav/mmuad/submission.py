@@ -32,17 +32,32 @@ def estimates_to_submission_frame(
 
     if estimates.empty:
         return pd.DataFrame(columns=SUBMISSION_COLUMNS)
-    track_values: object = track_id
+    numeric = pd.DataFrame(
+        {
+            "time_s": pd.to_numeric(estimates["time_s"], errors="coerce"),
+            "x_m": pd.to_numeric(estimates["state_x_m"], errors="coerce"),
+            "y_m": pd.to_numeric(estimates["state_y_m"], errors="coerce"),
+            "z_m": pd.to_numeric(estimates["state_z_m"], errors="coerce"),
+        },
+        index=estimates.index,
+    )
+    finite = np.isfinite(numeric.to_numpy(dtype=float)).all(axis=1)
+    work = estimates.loc[finite].copy()
+    numeric = numeric.loc[finite]
+    if work.empty:
+        return pd.DataFrame(columns=SUBMISSION_COLUMNS)
+
+    track_values = pd.Series(str(track_id), index=work.index)
     if use_estimate_track_ids and "output_track_id" in estimates.columns:
-        track_values = estimates["output_track_id"].astype(str)
+        track_values = work["output_track_id"].where(work["output_track_id"].notna(), str(track_id)).astype(str)
     rows = pd.DataFrame(
         {
-            "sequence_id": estimates.get("sequence_id", "default"),
-            "time_s": estimates["time_s"].astype(float),
+            "sequence_id": work.get("sequence_id", "default"),
+            "time_s": numeric["time_s"],
             "track_id": track_values,
-            "x_m": estimates["state_x_m"].astype(float),
-            "y_m": estimates["state_y_m"].astype(float),
-            "z_m": estimates["state_z_m"].astype(float),
+            "x_m": numeric["x_m"],
+            "y_m": numeric["y_m"],
+            "z_m": numeric["z_m"],
             "score": 1.0,
         }
     )
