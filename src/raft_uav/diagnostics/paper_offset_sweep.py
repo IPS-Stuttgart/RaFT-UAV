@@ -138,7 +138,7 @@ def run_offset_sweep(
     summary_csv = output / "paper_offset_sweep_summary.csv"
     best_json = output / "paper_offset_sweep_best.json"
     summary.to_csv(summary_csv, index=False)
-    best = summary.iloc[0].to_dict() if not summary.empty else {}
+    best = _jsonable_mapping(summary.iloc[0].to_dict()) if not summary.empty else {}
     payload = {
         "output_dir": str(output),
         "summary_csv": str(summary_csv),
@@ -148,7 +148,7 @@ def run_offset_sweep(
         "base_radar_clock_offset_s": float(radar_clock_offset_s),
         "best": best,
     }
-    best_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    best_json.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
     return {**payload, "best_json": str(best_json)}
 
 
@@ -232,6 +232,22 @@ def _optional_float(value: Any) -> float | None:
 def _optional_int(value: Any) -> int | None:
     scalar = _optional_float(value)
     return None if scalar is None else int(round(scalar))
+
+
+def _jsonable_mapping(row: dict[str, Any]) -> dict[str, Any]:
+    return {str(key): _jsonable_value(value) for key, value in row.items()}
+
+
+def _jsonable_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return _jsonable_mapping(value)
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_value(item) for item in value]
+    if isinstance(value, np.generic):
+        return _jsonable_value(value.item())
+    if isinstance(value, float):
+        return value if np.isfinite(value) else None
+    return value
 
 
 if __name__ == "__main__":  # pragma: no cover
