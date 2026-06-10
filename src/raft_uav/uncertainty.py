@@ -123,7 +123,7 @@ class HeteroscedasticUncertaintyModel:
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+        path.write_text(json.dumps(_jsonable(self.to_dict()), indent=2, allow_nan=False), encoding="utf-8")
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "HeteroscedasticUncertaintyModel":
@@ -349,3 +349,27 @@ def _finite(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return out if np.isfinite(out) else None
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return _jsonable(value.tolist())
+    if isinstance(value, np.generic):
+        return _jsonable(value.item())
+    if isinstance(value, Path):
+        return str(value)
+    if value is None:
+        return None
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
+    if isinstance(value, float):
+        return value if np.isfinite(value) else None
+    return value
