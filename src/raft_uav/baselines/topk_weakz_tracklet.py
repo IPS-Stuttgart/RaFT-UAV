@@ -307,10 +307,20 @@ def build_fortem_tracklets(
     if frame.empty:
         return []
 
-    group_column = "track_id" if "track_id" in frame.columns else None
-    if group_column is None:
-        frame["_synthetic_track_id"] = np.arange(len(frame), dtype=int)
-        group_column = "_synthetic_track_id"
+    if "track_id" in frame.columns:
+        track_ids = frame["track_id"].to_numpy(dtype=float)
+        row_positions = frame["radar_row_index"].to_numpy(dtype=int)
+        frame["_tracklet_group_id"] = [
+            f"track:{int(track_id)}"
+            if np.isfinite(track_id)
+            else f"row:{int(row_index)}"
+            for track_id, row_index in zip(track_ids, row_positions, strict=True)
+        ]
+    else:
+        frame["_tracklet_group_id"] = [
+            f"row:{int(row_index)}" for row_index in frame["radar_row_index"]
+        ]
+    group_column = "_tracklet_group_id"
 
     segments: list[TrackletSegment] = []
     segment_id = 0

@@ -74,6 +74,26 @@ def test_build_fortem_tracklets_splits_by_track_id() -> None:
     assert best.track_id == 10
 
 
+def test_build_fortem_tracklets_does_not_stitch_missing_track_ids() -> None:
+    radar = pd.DataFrame.from_records(
+        [
+            {
+                "track_id": np.nan,
+                "time_s": float(i),
+                "east_m": float(i * 100.0),
+                "north_m": float(i * 50.0),
+                "up_m": 100.0,
+            }
+            for i in range(3)
+        ]
+    )
+    cfg = TopKWeakZTrackletConfig(min_tracklet_length=3)
+
+    tracklets = build_fortem_tracklets(radar, cfg)
+
+    assert tracklets == []
+
+
 def test_selected_radar_for_tracklet_path_uses_positions_not_external_index() -> None:
     radar = _radar_frame()
     radar.index = np.arange(100, 100 + len(radar))

@@ -141,13 +141,15 @@ def fit_logistic_model(
 
     if isinstance(labels, str):
         y = pd.to_numeric(examples[labels], errors="coerce").to_numpy(dtype=float)
+        label_column = labels
     else:
         y = np.asarray(labels, dtype=float).reshape(-1)
+        label_column = None
     if feature_names is None:
         feature_names = [
             col
             for col in examples.columns
-            if col != labels and pd.api.types.is_numeric_dtype(examples[col])
+            if col != label_column and pd.api.types.is_numeric_dtype(examples[col])
         ]
     names = tuple(str(name) for name in feature_names)
     keep = np.isfinite(y)

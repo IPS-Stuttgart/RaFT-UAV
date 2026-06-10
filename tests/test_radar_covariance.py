@@ -9,7 +9,7 @@ from raft_uav.baselines.radar_covariance import (
     row_radar_covariance,
 )
 from raft_uav.baselines.tracklet_viterbi_range_covariance import _radar_row_covariance
-from raft_uav.baselines.radar_association import _nis_scored_candidates
+from raft_uav.baselines.radar_association import _nis_scored_candidates, _row_covariance
 from raft_uav.calibration.bias import BIAS_RESIDUAL_STD_COLUMN_PREFIX
 from raft_uav.calibration.empirical_covariance import aligned_residuals
 
@@ -79,6 +79,21 @@ def test_nis_scoring_uses_candidate_specific_covariance_columns():
 
     assert scored.loc[scored["track_id"] == 1, "association_nis"].iloc[0] == 100.0
     assert scored.loc[scored["track_id"] == 2, "association_nis"].iloc[0] == 1.0
+
+
+def test_radar_association_rejects_indefinite_row_covariance():
+    row = pd.Series(
+        {
+            "association_cov_ee": 1.0,
+            "association_cov_nn": 1.0,
+            "association_cov_uu": 1.0,
+            "association_cov_en": 2.0,
+            "association_cov_eu": 0.0,
+            "association_cov_nu": 0.0,
+        }
+    )
+
+    assert _row_covariance(row) is None
 
 
 def test_tracklet_range_covariance_prefers_learned_row_covariance_columns():
