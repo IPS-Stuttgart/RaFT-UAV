@@ -75,3 +75,24 @@ def test_model_scores_candidate_features_without_sklearn():
     )
 
     assert probabilities[0] > probabilities[1]
+
+
+def test_model_probabilities_are_stable_for_extreme_logits():
+    model = LearnedRadarAssociationModel(
+        feature_names=("x",),
+        mean=np.array([0.0]),
+        scale=np.array([1.0]),
+        weights=np.array([1.0]),
+        intercept=0.0,
+    )
+    features = pd.DataFrame({"x": [-1000.0, 0.0, 1000.0]})
+
+    with np.errstate(over="raise", invalid="raise", under="ignore"):
+        probabilities = model.predict_proba_features(features)
+
+    np.testing.assert_allclose(
+        probabilities,
+        np.array([0.0, 0.5, 1.0]),
+        rtol=0.0,
+        atol=0.0,
+    )

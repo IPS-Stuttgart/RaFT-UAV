@@ -702,9 +702,9 @@ def _flatten_track(
         "velocity_north_mps": _list_get(velocity_ned, 0),
         "velocity_east_mps": _list_get(velocity_ned, 1),
         "velocity_down_mps": _list_get(velocity_ned, 2),
-        "gps_week": track.get("gpsWeek", params.get("gpsWeek")),
-        "gps_seconds": track.get("gpsSeconds", params.get("gpsSeconds")),
-        "global_time_raw_s": track.get("globalTime", params.get("globalTime")),
+        "gps_week": _first_non_missing(track.get("gpsWeek"), params.get("gpsWeek")),
+        "gps_seconds": _first_non_missing(track.get("gpsSeconds"), params.get("gpsSeconds")),
+        "global_time_raw_s": _first_non_missing(track.get("globalTime"), params.get("globalTime")),
         "range_m": track.get("range"),
         "azimuth_deg": _first_present(track, "azimuth", "azimuthDeg", "azimuth_deg"),
         "elevation_deg": _first_present(track, "elevation", "elevationDeg", "elevation_deg"),
@@ -760,6 +760,22 @@ def _first_present(mapping: dict[str, Any], *keys: str) -> Any:
         if key in mapping:
             return mapping[key]
     return np.nan
+
+
+def _first_non_missing(*values: Any) -> Any:
+    for value in values:
+        if not _is_missing_scalar(value):
+            return value
+    return np.nan
+
+
+def _is_missing_scalar(value: Any) -> bool:
+    if value is None:
+        return True
+    missing = pd.isna(value)
+    if isinstance(missing, (bool, np.bool_)):
+        return bool(missing)
+    return False
 
 
 def _catprob_threshold_rows(radar: pd.DataFrame, catprob_threshold: float) -> pd.DataFrame:
