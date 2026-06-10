@@ -689,7 +689,7 @@ def _flatten_track(
     lla = track.get("lla") or [np.nan, np.nan, np.nan]
     velocity_ned = track.get("velocityNed") or [np.nan, np.nan, np.nan]
     cat_prob = track.get("catProb") or []
-    confidence = track.get("confidence") or track.get("confidenceScore")
+    confidence = _first_present(track, "confidence", "confidenceScore")
     return {
         "frame_index": frame_index,
         "track_index": track_index,

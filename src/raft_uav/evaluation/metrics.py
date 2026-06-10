@@ -8,17 +8,28 @@ import numpy as np
 def nearest_time_indices(
     reference_times_s: np.ndarray, query_times_s: np.ndarray
 ) -> np.ndarray:
-    """Return indices of nearest reference timestamps for each query timestamp."""
+    """Return indices of nearest reference timestamps for each query timestamp.
+
+    The returned indices refer to the input ``reference_times_s`` array.  Callers
+    do not have to pre-sort the reference timestamps; this helper sorts a finite
+    working copy internally before using ``searchsorted``.
+    """
 
     reference = np.asarray(reference_times_s, dtype=float).reshape(-1)
     query = np.asarray(query_times_s, dtype=float).reshape(-1)
-    if reference.size == 0:
-        raise ValueError("reference_times_s must not be empty")
-    insertion = np.searchsorted(reference, query)
-    right = np.clip(insertion, 0, reference.size - 1)
-    left = np.clip(insertion - 1, 0, reference.size - 1)
-    use_right = np.abs(reference[right] - query) < np.abs(reference[left] - query)
-    return np.where(use_right, right, left)
+    finite_reference = np.isfinite(reference)
+    if not bool(np.any(finite_reference)):
+        raise ValueError("reference_times_s must contain at least one finite timestamp")
+    original_indices = np.flatnonzero(finite_reference)
+    finite_values = reference[finite_reference]
+    sort_order = np.argsort(finite_values, kind="mergesort")
+    sorted_reference = finite_values[sort_order]
+    sorted_original_indices = original_indices[sort_order]
+    insertion = np.searchsorted(sorted_reference, query)
+    right = np.clip(insertion, 0, sorted_reference.size - 1)
+    left = np.clip(insertion - 1, 0, sorted_reference.size - 1)
+    use_right = np.abs(sorted_reference[right] - query) < np.abs(sorted_reference[left] - query)
+    return sorted_original_indices[np.where(use_right, right, left)]
 
 
 def position_errors_m(
