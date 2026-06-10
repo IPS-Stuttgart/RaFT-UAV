@@ -12,7 +12,7 @@ from raft_uav.mmuad.calibration import (
 )
 from raft_uav.mmuad.io import (
     load_candidate_csv,
-    load_point_cloud_csv_as_candidates,
+    load_point_cloud_file_as_candidates,
     load_truth_csv,
     merge_candidate_frames,
 )
@@ -26,7 +26,7 @@ class SequencePaths:
     sequence_id: str
     root: Path
     candidate_csvs: tuple[Path, ...]
-    point_cloud_csvs: tuple[Path, ...]
+    point_cloud_files: tuple[Path, ...]
     truth_csv: Path | None
     calibration_json: Path | None
 
@@ -36,7 +36,7 @@ def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[Seq
 
     The helper intentionally supports normalized/exported files rather than the
     official raw archive.  It looks for common names such as ``candidates.csv``,
-    ``*_candidates.csv``, ``points.csv``, ``*_points.csv``, ``truth.csv``, and
+    ``*_candidates.csv``, ``points.csv``, ``*_points.csv``, ASCII ``*.pcd``, ASCII ``*.ply``, ``truth.csv``, and
     ``calibration.json`` under each sequence folder.  If ``root`` itself holds
     such files, it is treated as a single sequence.
     """
@@ -63,16 +63,16 @@ def load_sequence_export(
 
     candidate_frames = [load_candidate_csv(path) for path in paths.candidate_csvs]
     candidate_frames.extend(
-        load_point_cloud_csv_as_candidates(
+        load_point_cloud_file_as_candidates(
             path,
             source=path.stem.replace("_points", "-cluster"),
             voxel_size_m=voxel_size_m,
             min_points=min_cluster_points,
         )
-        for path in paths.point_cloud_csvs
+        for path in paths.point_cloud_files
     )
     if not candidate_frames:
-        raise ValueError(f"no candidate or point-cloud CSVs discovered for {paths.root}")
+        raise ValueError(f"no candidate or point-cloud files discovered for {paths.root}")
     candidates = merge_candidate_frames(candidate_frames)
     truth = load_truth_csv(paths.truth_csv) if paths.truth_csv is not None else None
     calibration = None
@@ -101,7 +101,7 @@ def _sequence_from_dir(path: Path) -> SequencePaths:
         sequence_id=path.name,
         root=path,
         candidate_csvs=tuple(_candidate_files(path)),
-        point_cloud_csvs=tuple(_point_files(path)),
+        point_cloud_files=tuple(_point_files(path)),
         truth_csv=_truth_file(path),
         calibration_json=calibration,
     )
@@ -119,6 +119,8 @@ def _point_files(path: Path) -> list[Path]:
     names = [path / "points.csv", path / "point_cloud.csv", path / "lidar_points.csv"]
     files = [item for item in names if item.exists()]
     files.extend(sorted(path.glob("*_points.csv")))
+    files.extend(sorted(path.glob("*.pcd")))
+    files.extend(sorted(path.glob("*.ply")))
     return _unique_paths(files)
 
 

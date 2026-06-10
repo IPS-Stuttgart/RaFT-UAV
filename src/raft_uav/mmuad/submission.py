@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 from typing import Any
 
 import numpy as np
@@ -25,16 +26,20 @@ def estimates_to_submission_frame(
     estimates: pd.DataFrame,
     *,
     track_id: str = "raft_uav_pp",
+    use_estimate_track_ids: bool = True,
 ) -> pd.DataFrame:
     """Convert tracker estimates into a simple challenge-ready trajectory table."""
 
     if estimates.empty:
         return pd.DataFrame(columns=SUBMISSION_COLUMNS)
+    track_values: object = track_id
+    if use_estimate_track_ids and "output_track_id" in estimates.columns:
+        track_values = estimates["output_track_id"].astype(str)
     rows = pd.DataFrame(
         {
             "sequence_id": estimates.get("sequence_id", "default"),
             "time_s": estimates["time_s"].astype(float),
-            "track_id": track_id,
+            "track_id": track_values,
             "x_m": estimates["state_x_m"].astype(float),
             "y_m": estimates["state_y_m"].astype(float),
             "z_m": estimates["state_z_m"].astype(float),
@@ -88,6 +93,36 @@ def write_submission_json(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
+
+
+def write_submission_zip(
+    estimates: pd.DataFrame,
+    path: Path,
+    *,
+    track_id: str = "raft_uav_pp",
+    include_json: bool = True,
+) -> Path:
+    """Write a portable ZIP bundle with CSV and optional JSON trajectory files."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame = estimates_to_submission_frame(estimates, track_id=track_id)
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("submission.csv", frame.to_csv(index=False))
+        if include_json:
+            payload: dict[str, Any] = {
+                "schema": "raft-uav-mmuad-single-uav-trajectory-v1",
+                "track_id": track_id,
+                "sequences": {},
+            }
+            for sequence_id, group in frame.groupby("sequence_id", sort=True):
+                payload["sequences"][str(sequence_id)] = group.drop(
+                    columns=["sequence_id"]
+                ).to_dict(orient="records")
+            archive.writestr("submission.json", json.dumps(payload, indent=2))
     return path
 
 

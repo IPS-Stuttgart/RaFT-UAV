@@ -191,3 +191,122 @@ def test_submission_writers_use_estimate_state_columns(tmp_path: Path) -> None:
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     assert payload["schema"] == "raft-uav-mmuad-single-uav-trajectory-v1"
     assert len(payload["sequences"]["s1"]) == 2
+
+from zipfile import ZipFile
+
+from raft_uav.mmuad.io import load_point_cloud_file_as_candidates
+from raft_uav.mmuad.mot import MultiObjectTrackerConfig, run_mmuad_multi_object_tracker
+from raft_uav.mmuad.splits import filter_sequences_by_split, load_split_manifest
+from raft_uav.mmuad.submission import write_submission_zip
+
+
+def test_ascii_pcd_point_cloud_is_clustered(tmp_path: Path) -> None:
+    pcd = tmp_path / "frame_12.5.pcd"
+    pcd.write_text(
+        "\n".join(
+            [
+                "# .PCD v0.7",
+                "VERSION 0.7",
+                "FIELDS x y z",
+                "SIZE 4 4 4",
+                "TYPE F F F",
+                "COUNT 1 1 1",
+                "WIDTH 3",
+                "HEIGHT 1",
+                "POINTS 3",
+                "DATA ascii",
+                "0 0 1",
+                "0.1 0 1.1",
+                "0.2 0.1 1.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    frame = load_point_cloud_file_as_candidates(pcd, voxel_size_m=0.5, min_points=3)
+    assert len(frame.rows) == 1
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 12.5) < 1e-9
+
+
+def test_split_manifest_filters_discovered_sequences(tmp_path: Path) -> None:
+    for name in ("seq_train", "seq_val"):
+        seq = tmp_path / name
+        seq.mkdir()
+        pd.DataFrame(
+            {
+                "sequence_id": [name],
+                "time_s": [0.0],
+                "source": ["radar"],
+                "track_id": ["r1"],
+                "x_m": [0.0],
+                "y_m": [0.0],
+                "z_m": [1.0],
+            }
+        ).to_csv(seq / "candidates.csv", index=False)
+    split = tmp_path / "splits.json"
+    split.write_text(json.dumps({"train": ["seq_train"], "val": ["seq_val"]}))
+    manifest = load_split_manifest(split)
+    discovered = discover_sequence_paths(tmp_path)
+    val_sequences = filter_sequences_by_split(discovered, manifest, "val")
+    assert [sequence.sequence_id for sequence in val_sequences] == ["seq_val"]
+
+
+def test_multi_object_tracker_outputs_tracks_and_mot_metrics(tmp_path: Path) -> None:
+    cand_rows = []
+    truth_rows = []
+    for i in range(4):
+        t = float(i)
+        for object_id, y in (("a", 0.0), ("b", 10.0)):
+            truth_rows.append(
+                {
+                    "sequence_id": "s1",
+                    "time_s": t,
+                    "object_id": object_id,
+                    "x_m": t,
+                    "y_m": y,
+                    "z_m": 1.0,
+                }
+            )
+            cand_rows.append(
+                {
+                    "sequence_id": "s1",
+                    "time_s": t,
+                    "source": "lidar",
+                    "track_id": object_id,
+                    "x_m": t,
+                    "y_m": y,
+                    "z_m": 1.0,
+                    "confidence": 0.9,
+                }
+            )
+    cand_path = tmp_path / "mot_candidates.csv"
+    truth_path = tmp_path / "mot_truth.csv"
+    pd.DataFrame(cand_rows).to_csv(cand_path, index=False)
+    pd.DataFrame(truth_rows).to_csv(truth_path, index=False)
+    output = run_mmuad_multi_object_tracker(
+        load_candidate_csv(cand_path),
+        load_truth_csv(truth_path),
+        config=MultiObjectTrackerConfig(max_association_distance_m=3.0),
+    )
+    assert output.estimates["output_track_id"].nunique() == 2
+    assert output.metrics["pooled"]["matches"] == 8
+    assert output.metrics["pooled"]["id_switches"] == 0
+
+
+def test_submission_zip_preserves_multi_object_track_ids(tmp_path: Path) -> None:
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["s1", "s1"],
+            "time_s": [0.0, 1.0],
+            "output_track_id": ["mot_1", "mot_2"],
+            "state_x_m": [1.0, 2.0],
+            "state_y_m": [3.0, 4.0],
+            "state_z_m": [5.0, 6.0],
+        }
+    )
+    zip_path = write_submission_zip(estimates, tmp_path / "submission.zip")
+    with ZipFile(zip_path) as archive:
+        names = set(archive.namelist())
+        assert {"submission.csv", "submission.json"}.issubset(names)
+        csv_text = archive.read("submission.csv").decode("utf-8")
+    assert "mot_1" in csv_text
+    assert "mot_2" in csv_text

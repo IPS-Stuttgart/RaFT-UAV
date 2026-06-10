@@ -148,3 +148,80 @@ Still not implemented:
 - official challenge metric/submission reproduction;
 - multi-object tracking or ID metrics;
 - leaderboard upload tooling.
+
+## Third incremental patch: portability features
+
+The next patch adds several missing-but-safe pieces that do not require guessing
+private binary archive internals.
+
+### ASCII PCD/PLY point-cloud exports
+
+In addition to point-cloud CSV files, exported ASCII `.pcd` and `.ply` files can
+be clustered into candidate centroids.  If the file does not contain per-row
+sequence/time columns, the sequence is inferred from the parent folder and the
+last numeric token in the filename is used as the timestamp.
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --point-cloud-file data/mmuad_export/seq001/lidar_12.50.pcd \
+  --truth-csv data/mmuad_export/seq001/truth.csv \
+  --output-dir outputs/mmuad_pcd_smoke
+```
+
+This is still an exported-file bridge, not a native Livox packet reader.
+
+### Split manifests
+
+Sequence-root mode can be restricted to a split manifest:
+
+```json
+{
+  "train": ["seq001", "seq002"],
+  "val": ["seq003"]
+}
+```
+
+Run one split with:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --sequence-root data/mmuad_export \
+  --split-file data/mmuad_export/splits.json \
+  --split-name val \
+  --output-dir outputs/mmuad_val
+```
+
+A CSV manifest with columns `sequence_id,split` is also supported.
+
+### Basic multi-object mode
+
+A lightweight greedy MOT backend is available for exported detections with
+multiple UAV/object candidates:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --sequence-root data/mmuad_export \
+  --tracker-mode multi-object \
+  --mot-max-association-distance-m 15 \
+  --output-dir outputs/mmuad_mot_smoke \
+  --submission-zip outputs/mmuad_mot_smoke/submission.zip
+```
+
+When truth contains `track_id` or `object_id`, the metrics include simple
+MOT-style diagnostics: matches, false positives, false negatives, ID switches,
+MOTA-like score, MOTP-like 3D distance, precision, and recall.  These are
+repository diagnostics, not official UG2+ challenge metrics.
+
+### ZIP submission bundle
+
+The submission helper can now package the stable CSV/JSON trajectory outputs in
+one ZIP file.  The ZIP is an interchange bundle, not an official leaderboard
+upload format.
+
+Still not implemented:
+
+- official raw MMUAD archive parser;
+- native camera/radar/Livox packet readers;
+- official UG2+ evaluator/submission reproduction;
+- detector or classifier training;
+- official leaderboard upload tooling.

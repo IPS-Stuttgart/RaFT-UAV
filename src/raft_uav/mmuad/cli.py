@@ -8,15 +8,19 @@ from pathlib import Path
 from raft_uav.mmuad.calibration import load_calibration_json, transform_candidate_frame
 from raft_uav.mmuad.io import (
     load_candidate_csv,
+    load_point_cloud_file_as_candidates,
     load_point_cloud_csv_as_candidates,
     load_truth_csv,
     merge_candidate_frames,
 )
+from raft_uav.mmuad.mot import MultiObjectTrackerConfig, run_mmuad_multi_object_tracker
 from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_export
+from raft_uav.mmuad.splits import filter_sequences_by_split, load_split_manifest, split_manifest_summary
 from raft_uav.mmuad.submission import (
     compute_trajectory_metrics,
     write_submission_csv,
     write_submission_json,
+    write_submission_zip,
 )
 from raft_uav.mmuad.tracker import TrackerConfig, run_mmuad_tracker, write_tracker_output
 
@@ -28,12 +32,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--candidate-csv", action="append", type=Path, default=[])
     parser.add_argument("--point-cloud-csv", action="append", type=Path, default=[])
+    parser.add_argument("--point-cloud-file", action="append", type=Path, default=[])
     parser.add_argument("--sequence-root", type=Path)
     parser.add_argument("--sequence-glob", default="*")
+    parser.add_argument("--split-file", type=Path)
+    parser.add_argument("--split-name")
     parser.add_argument("--truth-csv", type=Path)
     parser.add_argument("--calibration-json", type=Path)
     parser.add_argument("--no-apply-calibration", action="store_true")
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--tracker-mode", choices=("single-uav", "multi-object"), default="single-uav")
+    parser.add_argument("--mot-max-association-distance-m", type=float, default=15.0)
+    parser.add_argument("--mot-max-track-age-s", type=float, default=1.5)
     parser.add_argument("--point-source", default="lidar-cluster")
     parser.add_argument("--voxel-size-m", type=float, default=0.75)
     parser.add_argument("--min-cluster-points", type=int, default=3)
@@ -42,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--acceleration-std-mps2", type=float, default=8.0)
     parser.add_argument("--submission-csv", type=Path)
     parser.add_argument("--submission-json", type=Path)
+    parser.add_argument("--submission-zip", type=Path)
     parser.add_argument("--submission-track-id", default="raft_uav_pp")
     args = parser.parse_args(argv)
 
@@ -63,6 +74,14 @@ def main(argv: list[str] | None = None) -> int:
             write_submission_json(
                 output.estimates,
                 args.submission_json,
+                track_id=args.submission_track_id,
+            )
+        )
+    if args.submission_zip is not None:
+        paths["submission_zip"] = str(
+            write_submission_zip(
+                output.estimates,
+                args.submission_zip,
                 track_id=args.submission_track_id,
             )
         )
@@ -95,6 +114,15 @@ def _run_explicit_files(args: argparse.Namespace):
         )
         for path in args.point_cloud_csv
     )
+    frames.extend(
+        load_point_cloud_file_as_candidates(
+            path,
+            source=args.point_source,
+            voxel_size_m=args.voxel_size_m,
+            min_points=args.min_cluster_points,
+        )
+        for path in args.point_cloud_file
+    )
     if not frames:
         raise SystemExit(
             "provide --sequence-root or at least one --candidate-csv/--point-cloud-csv"
@@ -104,19 +132,18 @@ def _run_explicit_files(args: argparse.Namespace):
         calibration = load_calibration_json(args.calibration_json)
         candidates = transform_candidate_frame(candidates, calibration)
     truth = load_truth_csv(args.truth_csv) if args.truth_csv else None
-    return run_mmuad_tracker(
-        candidates,
-        truth,
-        config=TrackerConfig(
-            acceleration_std_mps2=args.acceleration_std_mps2,
-            soft_anchor_cap_m=args.soft_anchor_cap_m,
-            secondary_covariance_scale=args.secondary_covariance_scale,
-        ),
-    )
+    return _run_tracker_for_mode(args, candidates, truth)
 
 
 def _run_sequence_root(args: argparse.Namespace):
     sequences = discover_sequence_paths(args.sequence_root, sequence_glob=args.sequence_glob)
+    if args.split_file is not None:
+        if not args.split_name:
+            raise SystemExit("--split-name is required when --split-file is provided")
+        manifest = load_split_manifest(args.split_file)
+        sequences = filter_sequences_by_split(sequences, manifest, args.split_name)
+        split_summary = split_manifest_summary(manifest)
+        print(f"split={args.split_name} sequences={split_summary[args.split_name]['count']}")
     if not sequences:
         raise SystemExit(f"no MMUAD sequence exports found under {args.sequence_root}")
     candidate_frames = []
@@ -133,6 +160,22 @@ def _run_sequence_root(args: argparse.Namespace):
             truth_frames.append(truth)
     candidates = merge_candidate_frames(candidate_frames)
     truth = merge_truth_frames(truth_frames) if truth_frames else None
+    return _run_tracker_for_mode(args, candidates, truth)
+
+
+
+
+def _run_tracker_for_mode(args, candidates, truth):
+    if args.tracker_mode == "multi-object":
+        return run_mmuad_multi_object_tracker(
+            candidates,
+            truth,
+            config=MultiObjectTrackerConfig(
+                acceleration_std_mps2=args.acceleration_std_mps2,
+                max_association_distance_m=args.mot_max_association_distance_m,
+                max_track_age_s=args.mot_max_track_age_s,
+            ),
+        )
     return run_mmuad_tracker(
         candidates,
         truth,
