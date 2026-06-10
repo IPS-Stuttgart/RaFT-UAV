@@ -64,16 +64,23 @@ class LearnedRadarAssociationModel:
         mean = np.asarray(self.mean, dtype=float).reshape(-1)
         scale = np.asarray(self.scale, dtype=float).reshape(-1)
         weights = np.asarray(self.weights, dtype=float).reshape(-1)
+        intercept = float(self.intercept)
         if not names:
             raise ValueError("feature_names must not be empty")
         if mean.size != len(names) or scale.size != len(names) or weights.size != len(names):
             raise ValueError("mean, scale, and weights must match feature_names")
+        if not np.isfinite(mean).all():
+            raise ValueError("mean must be finite")
+        if not np.isfinite(weights).all():
+            raise ValueError("weights must be finite")
+        if not math.isfinite(intercept):
+            raise ValueError("intercept must be finite")
         scale = np.where(np.isfinite(scale) & (scale > 1.0e-12), scale, 1.0)
         object.__setattr__(self, "feature_names", names)
         object.__setattr__(self, "mean", mean)
         object.__setattr__(self, "scale", scale)
         object.__setattr__(self, "weights", weights)
-        object.__setattr__(self, "intercept", float(self.intercept))
+        object.__setattr__(self, "intercept", intercept)
 
     def logits_from_features(self, features: pd.DataFrame) -> np.ndarray:
         matrix = _raw_feature_matrix(features, self.feature_names)
@@ -115,7 +122,10 @@ class LearnedRadarAssociationModel:
     def save(self, path: str | Path) -> None:
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+        destination.write_text(
+            json.dumps(_jsonable(self.to_dict()), indent=2, allow_nan=False),
+            encoding="utf-8",
+        )
 
 
 def radar_association_feature_frame(
@@ -527,3 +537,27 @@ def _sigmoid(value: np.ndarray) -> np.ndarray:
     exp_value = np.exp(value[~nonnegative])
     probabilities[~nonnegative] = exp_value / (1.0 + exp_value)
     return probabilities
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return _jsonable(value.tolist())
+    if isinstance(value, np.generic):
+        return _jsonable(value.item())
+    if isinstance(value, Path):
+        return str(value)
+    if value is None:
+        return None
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return value

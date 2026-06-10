@@ -1,5 +1,9 @@
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.baselines import learned_radar_association as learned_assoc
 from raft_uav.baselines.kalman import (
@@ -315,3 +319,51 @@ def test_radar_association_training_ignores_invalid_oracle_candidates():
     truth_errors = dict(zip(examples["track_id"], examples["truth_error_m"], strict=True))
     assert labels == {2: 1}
     assert truth_errors[2] == 0.0
+
+
+def test_learned_radar_model_save_writes_json_safe_metadata(tmp_path: Path) -> None:
+    model = LearnedRadarAssociationModel(
+        feature_names=("cat_prob_uav",),
+        mean=np.array([0.0]),
+        scale=np.array([1.0]),
+        weights=np.array([2.0]),
+        intercept=-1.0,
+        metadata={
+            "fold": np.int64(3),
+            "validation_loss": np.nan,
+            "source_path": tmp_path / "training.csv",
+        },
+    )
+
+    path = tmp_path / "learned_radar_model.json"
+    model.save(path)
+
+    payload_text = path.read_text(encoding="utf-8")
+    payload = json.loads(payload_text)
+    loaded = LearnedRadarAssociationModel.load(path)
+
+    assert "NaN" not in payload_text
+    assert payload["metadata"]["fold"] == 3
+    assert payload["metadata"]["validation_loss"] is None
+    assert payload["metadata"]["source_path"] == str(tmp_path / "training.csv")
+    assert loaded.metadata["validation_loss"] is None
+
+
+def test_learned_radar_model_rejects_non_finite_parameters() -> None:
+    with pytest.raises(ValueError, match="weights"):
+        LearnedRadarAssociationModel(
+            feature_names=("cat_prob_uav",),
+            mean=np.array([0.0]),
+            scale=np.array([1.0]),
+            weights=np.array([np.nan]),
+            intercept=0.0,
+        )
+
+    with pytest.raises(ValueError, match="intercept"):
+        LearnedRadarAssociationModel(
+            feature_names=("cat_prob_uav",),
+            mean=np.array([0.0]),
+            scale=np.array([1.0]),
+            weights=np.array([1.0]),
+            intercept=float("inf"),
+        )
