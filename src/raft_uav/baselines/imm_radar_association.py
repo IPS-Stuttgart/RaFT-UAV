@@ -266,6 +266,8 @@ def _select_imm_radar_candidate(
     if pool.empty:
         return None
     scored = _imm_scored_candidates(pool, tracker=tracker, base_covariance=base_covariance)
+    if scored.empty:
+        return None
     if association == "imm-rf-anchored-nis":
         scored = _add_rf_anchor_penalty(
             scored,
@@ -274,6 +276,8 @@ def _select_imm_radar_candidate(
             time_gate_s=rf_anchor_time_gate_s,
             nis_cap=rf_anchor_nis_cap,
         )
+        if scored.empty:
+            return None
     best = scored.loc[scored["association_score"].idxmin()].copy()
     best["association_mode"] = association
     best["association_action"] = association.replace("-", "_")
@@ -286,17 +290,32 @@ def _imm_scored_candidates(
     tracker: AsyncInteractingMultipleModelTracker,
     base_covariance: np.ndarray,
 ) -> pd.DataFrame:
-    vectors = candidates[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    required = ["east_m", "north_m", "up_m"]
+    if candidates.empty or not all(column in candidates.columns for column in required):
+        return candidates.iloc[0:0].copy()
+    vectors = candidates[required].apply(
+        pd.to_numeric,
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    finite_position = np.isfinite(vectors).all(axis=1)
+    if not finite_position.any():
+        return candidates.iloc[0:0].copy()
+    original_candidate_count = int(len(candidates))
+    invalid_candidate_count = int(original_candidate_count - np.count_nonzero(finite_position))
+    candidates = candidates.loc[finite_position].copy()
+    vectors = vectors[finite_position]
     covariances = _candidate_covariances(candidates, base_covariance)
     rows = candidates.copy()
     scores: list[_CandidateScore] = []
     for vector, covariance in zip(vectors, covariances, strict=True):
         scores.append(_candidate_score(vector, covariance, tracker=tracker))
+
     rows["association_nis"] = [score.nis for score in scores]
     rows["association_score"] = [score.score for score in scores]
     rows["association_imm_log_likelihood"] = [score.log_likelihood for score in scores]
     rows["association_imm_best_mode"] = [score.best_mode for score in scores]
-    rows["association_candidate_rows"] = int(len(rows))
+    rows["association_candidate_rows"] = original_candidate_count
+    rows["association_invalid_candidate_rows"] = invalid_candidate_count
     return rows
 
 

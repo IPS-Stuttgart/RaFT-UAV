@@ -7,9 +7,23 @@ from raft_uav.numeric import optional_float, optional_int
 
 @pytest.mark.parametrize(
     "value",
-    [None, "", "not-a-number", "nan", "inf", "-inf", float("nan"), float("inf"), object()],
+    [
+        None,
+        "",
+        "not-a-number",
+        "nan",
+        "inf",
+        "-inf",
+        float("nan"),
+        float("inf"),
+        object(),
+        True,
+        False,
+    ],
 )
-def test_optional_float_rejects_absent_malformed_and_nonfinite_values(value: object) -> None:
+def test_optional_float_rejects_absent_malformed_nonfinite_and_boolean_values(
+    value: object,
+) -> None:
     assert optional_float(value) is None
 
 
@@ -25,8 +39,11 @@ def test_optional_float_accepts_finite_values(value: object, expected: float) ->
     assert optional_float(value) == expected
 
 
-@pytest.mark.parametrize("value", [None, "", "nan", float("nan"), float("inf"), object()])
-def test_optional_int_rejects_absent_malformed_and_nonfinite_values(value: object) -> None:
+@pytest.mark.parametrize(
+    "value",
+    [None, "", "nan", float("nan"), float("inf"), object(), True, False],
+)
+def test_optional_int_rejects_absent_malformed_nonfinite_and_boolean_values(value: object) -> None:
     assert optional_int(value) is None
 
 

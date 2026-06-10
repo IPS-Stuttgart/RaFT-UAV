@@ -232,9 +232,9 @@ def fit_time_offset(
             {
                 "time_offset_s": float(offset_s),
                 "matched_rows": float(matched_rows),
-                "rmse_m": float(summary["rmse_m"]),
-                "mae_m": float(summary["mae_m"]),
-                "p95_m": float(summary["p95_m"]),
+                "rmse_m": _finite_or_nan(summary["rmse_m"]),
+                "mae_m": _finite_or_nan(summary["mae_m"]),
+                "p95_m": _finite_or_nan(summary["p95_m"]),
             }
         )
     sweep = pd.DataFrame(rows)
@@ -243,6 +243,14 @@ def fit_time_offset(
         raise RuntimeError("no finite time-offset candidates")
     best_index = valid["rmse_m"].astype(float).idxmin()
     return float(valid.loc[best_index, "time_offset_s"]), sweep
+
+
+def _finite_or_nan(value: object) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+    return number if np.isfinite(number) else float("nan")
 
 
 def _require_pair_count(pairs: MeasurementTruthPairs, *, minimum: int) -> None:

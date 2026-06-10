@@ -85,24 +85,19 @@ def load_point_cloud_file_as_candidates(
     suffix = path.suffix.lower()
     source = source or path.stem.replace("_points", "-cluster")
     if suffix == ".csv":
-        return load_point_cloud_csv_as_candidates(
-            path,
-            source=source,
-            voxel_size_m=voxel_size_m,
-            min_points=min_points,
-            min_confidence=min_confidence,
-        )
-    if suffix == ".pcd":
+        points = _read_point_cloud_csv(path)
+    elif suffix == ".pcd":
         points = _read_ascii_pcd(path)
     elif suffix == ".ply":
         points = _read_ascii_ply(path)
     else:
         raise ValueError(f"unsupported point-cloud extension: {path.suffix}")
-    sequence_id = sequence_id or path.parent.name
-    if time_s is None:
-        time_s = infer_time_s_from_filename(path)
-    points["sequence_id"] = str(sequence_id)
-    points["time_s"] = float(time_s)
+    points = _add_point_cloud_metadata(
+        points,
+        path=path,
+        sequence_id=sequence_id,
+        time_s=time_s,
+    )
     return _point_rows_to_candidates(
         points,
         source=source,
@@ -110,6 +105,38 @@ def load_point_cloud_file_as_candidates(
         min_points=min_points,
         min_confidence=min_confidence,
     )
+
+
+def _read_point_cloud_csv(path: Path) -> pd.DataFrame:
+    frame = pd.read_csv(path)
+    try:
+        return normalize_truth_columns(frame)
+    except ValueError as exc:
+        if "time_s" not in str(exc):
+            raise
+    return _normalize_point_frame(frame, path=path)
+
+
+def _add_point_cloud_metadata(
+    points: pd.DataFrame,
+    *,
+    path: Path,
+    sequence_id: str | None,
+    time_s: float | None,
+) -> pd.DataFrame:
+    out = points.copy()
+    default_sequence_id = str(sequence_id) if sequence_id is not None else path.parent.name
+    if sequence_id is not None or "sequence_id" not in out.columns:
+        out["sequence_id"] = default_sequence_id
+    else:
+        out["sequence_id"] = out["sequence_id"].fillna(default_sequence_id).astype(str)
+
+    default_time_s = float(time_s) if time_s is not None else infer_time_s_from_filename(path)
+    if time_s is not None or "time_s" not in out.columns:
+        out["time_s"] = default_time_s
+    else:
+        out["time_s"] = pd.to_numeric(out["time_s"], errors="coerce").fillna(default_time_s)
+    return out
 
 
 def infer_time_s_from_filename(path: Path) -> float:

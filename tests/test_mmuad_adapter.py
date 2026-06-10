@@ -445,6 +445,25 @@ def test_ascii_pcd_point_cloud_is_clustered(tmp_path: Path) -> None:
     assert abs(float(frame.rows.loc[0, "time_s"]) - 12.5) < 1e-9
 
 
+def test_csv_point_cloud_file_infers_missing_metadata(tmp_path: Path) -> None:
+    csv = tmp_path / "frame_12.5.csv"
+    pd.DataFrame(
+        {
+            "x": [0.0, 0.1, 0.2],
+            "y": [0.0, 0.0, 0.1],
+            "z": [1.0, 1.1, 1.0],
+        }
+    ).to_csv(csv, index=False)
+
+    frame = load_point_cloud_file_as_candidates(
+        csv, sequence_id="seq_csv", voxel_size_m=0.5, min_points=3
+    )
+
+    assert len(frame.rows) == 1
+    assert frame.rows.loc[0, "sequence_id"] == "seq_csv"
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 12.5) < 1e-9
+
+
 def test_split_manifest_filters_discovered_sequences(tmp_path: Path) -> None:
     for name in ("seq_train", "seq_val"):
         seq = tmp_path / name

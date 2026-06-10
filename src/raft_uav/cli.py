@@ -6,6 +6,8 @@ import argparse
 import json
 import os
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +56,9 @@ from raft_uav.io.aerpaw import (
 )
 from raft_uav.numeric import optional_float as _optional_float
 from raft_uav.numeric import optional_int as _optional_int
+
+_RADAR_VELOCITY_UPDATE_ENV = "RAFT_UAV_RADAR_UPDATE_USES_VELOCITY"
+_RADAR_VELOCITY_STD_MPS_ENV = "RAFT_UAV_RADAR_VELOCITY_STD_MPS"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -551,8 +556,33 @@ def _inspect(
         )
         print(f"\nflight={summary['flight']}")
         for modality in ("truth", "rf", "radar"):
-            _print_modality_summary(modality, summary.get(modality))
+        _print_modality_summary(modality, summary.get(modality))
     return 0
+
+
+@contextmanager
+def _temporary_radar_velocity_update_environment(
+    enabled: bool,
+    velocity_std_mps: float,
+) -> Iterator[None]:
+    """Temporarily enable radar velocity updates for association helpers."""
+
+    if not enabled:
+        yield
+        return
+
+    names = (_RADAR_VELOCITY_UPDATE_ENV, _RADAR_VELOCITY_STD_MPS_ENV)
+    previous = {name: os.environ.get(name) for name in names}
+    os.environ[_RADAR_VELOCITY_UPDATE_ENV] = "1"
+    os.environ[_RADAR_VELOCITY_STD_MPS_ENV] = f"{velocity_std_mps:g}"
+    try:
+        yield
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 def _run_baseline(
@@ -745,10 +775,6 @@ def _run_baseline(
         rf_measurements = rf_measurements_to_enu(rf)
         measurements.extend(rf_measurements)
 
-    if enable_radar_velocity_update:
-        os.environ["RAFT_UAV_RADAR_UPDATE_USES_VELOCITY"] = "1"
-        os.environ["RAFT_UAV_RADAR_VELOCITY_STD_MPS"] = f"{radar_velocity_std_mps:g}"
-
     gate_probabilities = None
     safety_gate_probabilities = None
     max_residual_norms = None
@@ -770,101 +796,105 @@ def _run_baseline(
     if robust_update == "nis-inflate":
         inflation_alphas = {"rf": rf_inflation_alpha, "radar": radar_inflation_alpha}
 
-    if radar_mode in RADAR_ASSOCIATION_MODES:
-        records, selected_radar = run_async_cv_baseline_with_radar_association(
-            rf_measurements=rf_measurements,
-            radar=radar,
-            association=radar_mode,
-            truth=truth,
-            acceleration_std_mps2=acceleration_std,
-            radar_covariance_model=radar_covariance_model,
-            radar_range_std_m=radar_range_std_m,
-            radar_range_std_fraction=radar_range_std_fraction,
-            radar_crossrange_angle_std_deg=radar_crossrange_angle_std_deg,
-            radar_crossrange_min_std_m=radar_crossrange_min_std_m,
-            radar_crossrange_max_std_m=radar_crossrange_max_std_m,
-            gate_probabilities_by_source=gate_probabilities,
-            safety_gate_probabilities_by_source=safety_gate_probabilities,
-            robust_update_by_source=robust_updates,
-            inflation_alpha_by_source=inflation_alphas,
-            max_residual_norms_by_source=max_residual_norms,
-            track_switch_nis_ratio=track_switch_nis_ratio,
-            candidate_catprob_threshold=radar_catprob_threshold,
-            geometry_velocity_std_mps=geometry_velocity_std,
-            geometry_velocity_weight=geometry_velocity_weight,
-            geometry_switch_penalty=geometry_switch_penalty,
-            geometry_catprob_weight=geometry_catprob_weight,
-            rf_anchor_weight=rf_anchor_weight,
-            rf_anchor_time_gate_s=rf_anchor_time_gate_s,
-            rf_anchor_nis_cap=rf_anchor_nis_cap,
-            rf_anchor_gate_nis=rf_anchor_gate_nis,
-            pda_nis_temperature=pda_nis_temperature,
-            pda_catprob_exponent=pda_catprob_exponent,
-            track_bank_max_hypotheses=track_bank_max_hypotheses,
-            track_bank_max_assignments=track_bank_max_assignments,
-            track_bank_max_candidates=track_bank_max_candidates,
-            track_bank_gate_probability=track_bank_gate_prob,
-            track_bank_detection_probability=track_bank_detection_prob,
-            track_bank_clutter_intensity=track_bank_clutter_intensity,
-            track_bank_prune_log_weight_delta=track_bank_prune_delta,
-            stable_segment_min_frames=stable_segment_min_frames,
-            stable_segment_max_transition_speed_mps=stable_segment_max_transition_speed_mps,
-            stable_segment_range_gate_m=(
-                None if stable_segment_range_gate_m <= 0.0 else stable_segment_range_gate_m
-            ),
-            stable_segment_interpolation_max_gap_s=(
-                None
-                if stable_segment_interpolation_max_gap_s <= 0.0
-                else stable_segment_interpolation_max_gap_s
-            ),
-            stable_segment_interpolation_max_speed_mps=(
-                None
-                if stable_segment_interpolation_max_speed_mps <= 0.0
-                else stable_segment_interpolation_max_speed_mps
-            ),
-            stable_segment_interpolation_std_scale=stable_segment_interpolation_std_scale,
-            stable_segment_interpolation_gap_std_mps=stable_segment_interpolation_gap_std_mps,
-            stable_segment_rf_score_weight=stable_segment_rf_score_weight,
-            stable_segment_rf_time_gate_s=stable_segment_rf_time_gate_s,
-            stable_segment_rf_nis_cap=stable_segment_rf_nis_cap,
-            paper_compatible_catprob_threshold=paper_compatible_catprob_threshold,
-            paper_compatible_bootstrap_source=paper_compatible_bootstrap_source,
-            truth_gate_m=truth_gate_m,
-            truth_time_gate_s=truth_time_gate_s,
-        )
-        measurements = [
-            *rf_measurements,
-            *radar_measurements_to_enu(
-                selected_radar,
-                include_velocity=enable_radar_velocity_update,
-                default_velocity_std_mps=radar_velocity_std_mps,
-            ),
-        ]
-    else:
-        selected_radar = select_radar_measurement_rows(
-            radar,
-            selection=radar_mode,
-            truth=truth,
-            catprob_threshold=radar_catprob_threshold,
-            truth_gate_m=truth_gate_m,
-            truth_time_gate_s=truth_time_gate_s,
-        )
-        measurements.extend(
-            radar_measurements_to_enu(
-                selected_radar,
-                include_velocity=enable_radar_velocity_update,
-                default_velocity_std_mps=radar_velocity_std_mps,
+    with _temporary_radar_velocity_update_environment(
+        enable_radar_velocity_update,
+        radar_velocity_std_mps,
+    ):
+        if radar_mode in RADAR_ASSOCIATION_MODES:
+            records, selected_radar = run_async_cv_baseline_with_radar_association(
+                rf_measurements=rf_measurements,
+                radar=radar,
+                association=radar_mode,
+                truth=truth,
+                acceleration_std_mps2=acceleration_std,
+                radar_covariance_model=radar_covariance_model,
+                radar_range_std_m=radar_range_std_m,
+                radar_range_std_fraction=radar_range_std_fraction,
+                radar_crossrange_angle_std_deg=radar_crossrange_angle_std_deg,
+                radar_crossrange_min_std_m=radar_crossrange_min_std_m,
+                radar_crossrange_max_std_m=radar_crossrange_max_std_m,
+                gate_probabilities_by_source=gate_probabilities,
+                safety_gate_probabilities_by_source=safety_gate_probabilities,
+                robust_update_by_source=robust_updates,
+                inflation_alpha_by_source=inflation_alphas,
+                max_residual_norms_by_source=max_residual_norms,
+                track_switch_nis_ratio=track_switch_nis_ratio,
+                candidate_catprob_threshold=radar_catprob_threshold,
+                geometry_velocity_std_mps=geometry_velocity_std,
+                geometry_velocity_weight=geometry_velocity_weight,
+                geometry_switch_penalty=geometry_switch_penalty,
+                geometry_catprob_weight=geometry_catprob_weight,
+                rf_anchor_weight=rf_anchor_weight,
+                rf_anchor_time_gate_s=rf_anchor_time_gate_s,
+                rf_anchor_nis_cap=rf_anchor_nis_cap,
+                rf_anchor_gate_nis=rf_anchor_gate_nis,
+                pda_nis_temperature=pda_nis_temperature,
+                pda_catprob_exponent=pda_catprob_exponent,
+                track_bank_max_hypotheses=track_bank_max_hypotheses,
+                track_bank_max_assignments=track_bank_max_assignments,
+                track_bank_max_candidates=track_bank_max_candidates,
+                track_bank_gate_probability=track_bank_gate_prob,
+                track_bank_detection_probability=track_bank_detection_prob,
+                track_bank_clutter_intensity=track_bank_clutter_intensity,
+                track_bank_prune_log_weight_delta=track_bank_prune_delta,
+                stable_segment_min_frames=stable_segment_min_frames,
+                stable_segment_max_transition_speed_mps=stable_segment_max_transition_speed_mps,
+                stable_segment_range_gate_m=(
+                    None if stable_segment_range_gate_m <= 0.0 else stable_segment_range_gate_m
+                ),
+                stable_segment_interpolation_max_gap_s=(
+                    None
+                    if stable_segment_interpolation_max_gap_s <= 0.0
+                    else stable_segment_interpolation_max_gap_s
+                ),
+                stable_segment_interpolation_max_speed_mps=(
+                    None
+                    if stable_segment_interpolation_max_speed_mps <= 0.0
+                    else stable_segment_interpolation_max_speed_mps
+                ),
+                stable_segment_interpolation_std_scale=stable_segment_interpolation_std_scale,
+                stable_segment_interpolation_gap_std_mps=stable_segment_interpolation_gap_std_mps,
+                stable_segment_rf_score_weight=stable_segment_rf_score_weight,
+                stable_segment_rf_time_gate_s=stable_segment_rf_time_gate_s,
+                stable_segment_rf_nis_cap=stable_segment_rf_nis_cap,
+                paper_compatible_catprob_threshold=paper_compatible_catprob_threshold,
+                paper_compatible_bootstrap_source=paper_compatible_bootstrap_source,
+                truth_gate_m=truth_gate_m,
+                truth_time_gate_s=truth_time_gate_s,
             )
-        )
-        records = run_async_cv_baseline(
-            measurements,
-            acceleration_std_mps2=acceleration_std,
-            gate_probabilities_by_source=gate_probabilities,
-            safety_gate_probabilities_by_source=safety_gate_probabilities,
-            robust_update_by_source=robust_updates,
-            inflation_alpha_by_source=inflation_alphas,
-            max_residual_norms_by_source=max_residual_norms,
-        )
+            measurements = [
+                *rf_measurements,
+                *radar_measurements_to_enu(
+                    selected_radar,
+                    include_velocity=enable_radar_velocity_update,
+                    default_velocity_std_mps=radar_velocity_std_mps,
+                ),
+            ]
+        else:
+            selected_radar = select_radar_measurement_rows(
+                radar,
+                selection=radar_mode,
+                truth=truth,
+                catprob_threshold=radar_catprob_threshold,
+                truth_gate_m=truth_gate_m,
+                truth_time_gate_s=truth_time_gate_s,
+            )
+            measurements.extend(
+                radar_measurements_to_enu(
+                    selected_radar,
+                    include_velocity=enable_radar_velocity_update,
+                    default_velocity_std_mps=radar_velocity_std_mps,
+                )
+            )
+            records = run_async_cv_baseline(
+                measurements,
+                acceleration_std_mps2=acceleration_std,
+                gate_probabilities_by_source=gate_probabilities,
+                safety_gate_probabilities_by_source=safety_gate_probabilities,
+                robust_update_by_source=robust_updates,
+                inflation_alpha_by_source=inflation_alphas,
+                max_residual_norms_by_source=max_residual_norms,
+            )
     if not records:
         raise RuntimeError(f"{flight.name} produced no baseline posterior records")
     records = smooth_tracking_records(

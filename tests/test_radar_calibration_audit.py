@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.evaluation.radar_calibration_audit import (
     IDENTITY_CALIBRATION,
@@ -65,6 +66,40 @@ def test_time_offset_fit_recovers_training_shift() -> None:
 
     assert best == 1.0
     assert set(sweep["time_offset_s"]) == {-1.0, 0.0, 1.0}
+
+
+def test_time_offset_fit_skips_candidates_without_matches() -> None:
+    truth = _truth_frame()
+    measurements = truth.copy()
+    measurements["time_s"] = measurements["time_s"] - 1.0
+
+    best, sweep = fit_time_offset(
+        {"Opt1": measurements},
+        {"Opt1": truth},
+        offsets_s=[100.0, 1.0],
+        calibration=IDENTITY_CALIBRATION,
+        max_time_delta_s=0.5,
+    )
+
+    assert best == 1.0
+    invalid = sweep.loc[sweep["time_offset_s"] == 100.0].iloc[0]
+    assert invalid["matched_rows"] == 0.0
+    assert np.isnan(invalid["rmse_m"])
+
+
+def test_time_offset_fit_raises_when_all_candidates_have_no_matches() -> None:
+    truth = _truth_frame()
+    measurements = truth.copy()
+    measurements["time_s"] = measurements["time_s"] + 100.0
+
+    with pytest.raises(RuntimeError, match="no finite time-offset candidates"):
+        fit_time_offset(
+            {"Opt1": measurements},
+            {"Opt1": truth},
+            offsets_s=[0.0, 1.0],
+            calibration=IDENTITY_CALIBRATION,
+            max_time_delta_s=0.5,
+        )
 
 
 def _truth_frame() -> pd.DataFrame:

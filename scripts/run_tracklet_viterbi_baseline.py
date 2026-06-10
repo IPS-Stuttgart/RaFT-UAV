@@ -178,11 +178,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"viterbi_selected_radar_diagnostics_json={out / 'viterbi_selected_radar_diagnostics.json'}")
     print(f"radar_candidate_ledger_rows={len(radar_candidate_ledger)}")
     print(f"radar_candidate_ledger_csv={out / 'radar_candidate_ledger.csv'}")
-    print(f"rmse_3d_m={metrics['position_error_3d']['rmse_m']:.3f}")
-    print(f"p95_3d_m={metrics['position_error_3d']['p95_m']:.3f}")
-    selected_rmse = selected_radar_diagnostics["position_error_3d"]["rmse_m"]
-    if np.isfinite(float(selected_rmse)):
-        print(f"selected_radar_rmse_3d_m={float(selected_rmse):.3f}")
+    print(f"rmse_3d_m={_format_optional_metric(metrics['position_error_3d']['rmse_m'])}")
+    print(f"p95_3d_m={_format_optional_metric(metrics['position_error_3d']['p95_m'])}")
+    selected_rmse = _finite_float(selected_radar_diagnostics["position_error_3d"]["rmse_m"])
+    if selected_rmse is not None:
+        print(f"selected_radar_rmse_3d_m={selected_rmse:.3f}")
     return 0
 
 
@@ -473,6 +473,21 @@ def _empty_numeric_column_stats() -> dict[str, float]:
         "p95": float("nan"),
         "max": float("nan"),
     }
+
+
+def _finite_float(value: object) -> float | None:
+    try:
+        metric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return metric if np.isfinite(metric) else None
+
+
+def _format_optional_metric(value: object) -> str:
+    metric = _finite_float(value)
+    if metric is None:
+        return "nan"
+    return f"{metric:.3f}"
 
 
 def _optional_float(value: object) -> float | None:
