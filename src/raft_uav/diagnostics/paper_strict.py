@@ -390,7 +390,10 @@ def run_paper_strict_reproduction(
             "rf_gate_threshold": float(fusion.rf_gate_threshold),
             "radar_gate_threshold": float(fusion.radar_gate_threshold),
         }
-        covariance_json.write_text(json.dumps(covariance_payload, indent=2), encoding="utf-8")
+        covariance_json.write_text(
+            json.dumps(_jsonable(covariance_payload), indent=2, allow_nan=False),
+            encoding="utf-8",
+        )
         manifest = {
             "flight": inputs.flight_name,
             "table_csv": str(table_csv),
@@ -413,8 +416,12 @@ def run_paper_strict_reproduction(
             "radar_clock_offset_s": float(inputs.radar_clock_offset_s),
             "config": _jsonable_config(config),
         }
-        manifest_json.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        manifests.append({**manifest, "manifest_json": str(manifest_json)})
+        manifest_payload = _jsonable(manifest)
+        manifest_json.write_text(
+            json.dumps(manifest_payload, indent=2, allow_nan=False),
+            encoding="utf-8",
+        )
+        manifests.append({**manifest_payload, "manifest_json": str(manifest_json)})
         all_rows.extend(table.to_dict(orient="records"))
         all_parity_rows.extend(parity_report.to_dict(orient="records"))
 
@@ -425,7 +432,7 @@ def run_paper_strict_reproduction(
     summary_json = output / "paper_strict_summary.json"
     summary.to_csv(summary_csv, index=False)
     parity_summary.to_csv(parity_summary_csv, index=False)
-    payload = {
+    payload = _jsonable({
         "output_dir": str(output),
         "summary_csv": str(summary_csv),
         "parity_summary_csv": str(parity_summary_csv),
@@ -435,8 +442,8 @@ def run_paper_strict_reproduction(
         "count_mismatch_action": count_mismatch_action,
         "variant": variant,
         "manifest_validation_enabled": bool(validate_manifest),
-    }
-    summary_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    })
+    summary_json.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
     return {**payload, "summary_json": str(summary_json)}
 
 
@@ -1759,6 +1766,28 @@ def _jsonable_config(config: PaperStrictConfig) -> dict[str, Any]:
         "radar_default_xy_std_m": float(config.radar_default_xy_std_m),
         "radar_default_z_std_m": float(config.radar_default_z_std_m),
     }
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return _jsonable(value.tolist())
+    if isinstance(value, np.generic):
+        return _jsonable(value.item())
+    if value is None:
+        return None
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
+    if isinstance(value, float):
+        return value if np.isfinite(value) else None
+    return value
 
 
 def _safe_ratio(numerator: int, denominator: int) -> float:

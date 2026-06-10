@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -8,6 +10,7 @@ from raft_uav.diagnostics.paper_strict import (
     PAPER_STRICT_LW1_ORIGIN_LLA_ENV,
     PAPER_STRICT_NIS_GATE_PROBABILITY,
     _handle_count_mismatch,
+    _jsonable,
     _projector_for_origin,
     build_count_audit,
     require_fortem_range_m,
@@ -292,3 +295,22 @@ def test_count_mismatch_action_fail_raises() -> None:
 
     with pytest.raises(RuntimeError, match="RF raw"):
         _handle_count_mismatch(count_audit, flight_name="example", action="fail")
+
+
+def test_paper_strict_jsonable_converts_non_finite_artifact_values() -> None:
+    payload = _jsonable(
+        {
+            "covariance": np.array([[1.0, np.nan], [np.inf, 4.0]]),
+            "gate_threshold": float("nan"),
+            "missing_value": pd.NA,
+            "count": np.int64(3),
+        }
+    )
+
+    assert payload == {
+        "covariance": [[1.0, None], [None, 4.0]],
+        "gate_threshold": None,
+        "missing_value": None,
+        "count": 3,
+    }
+    json.dumps(payload, allow_nan=False)
