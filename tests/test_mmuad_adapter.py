@@ -23,7 +23,12 @@ from raft_uav.mmuad.submission import (
     write_submission_json,
     write_submission_zip,
 )
-from raft_uav.mmuad.tracker import TrackerConfig, run_mmuad_tracker, write_tracker_output
+from raft_uav.mmuad.tracker import (
+    TrackerConfig,
+    add_truth_errors,
+    run_mmuad_tracker,
+    write_tracker_output,
+)
 
 
 def test_candidate_loader_accepts_aliases(tmp_path: Path) -> None:
@@ -106,7 +111,6 @@ def test_tracker_runs_and_writes_metrics(tmp_path: Path) -> None:
     assert Path(paths["estimates_csv"]).exists()
     assert json.loads(Path(paths["metrics_json"]).read_text())["pooled"]["mean_3d_m"] < 5.0
 
-
 def test_tracker_ignores_invalid_manual_candidate_rows() -> None:
     candidates = CandidateFrame(
         pd.DataFrame(
@@ -143,6 +147,29 @@ def test_tracker_ignores_invalid_manual_candidate_rows() -> None:
     assert np.isfinite(
         output.estimates[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(dtype=float)
     ).all()
+
+
+def test_add_truth_errors_sorts_truth_times() -> None:
+    estimates = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0, 2.0],
+            "state_x_m": [0.0, 1.0, 2.0],
+            "state_y_m": [0.0, 0.0, 0.0],
+            "state_z_m": [2.0, 2.0, 2.0],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "time_s": [2.0, 0.0, 1.0],
+            "x_m": [2.0, 0.0, 1.0],
+            "y_m": [0.0, 0.0, 0.0],
+            "z_m": [2.0, 2.0, 2.0],
+        }
+    )
+
+    scored = add_truth_errors(estimates, truth)
+
+    assert scored["error_3d_m"].tolist() == [0.0, 0.0, 0.0]
 
 
 def test_calibration_json_transforms_candidate_coordinates(tmp_path: Path) -> None:
