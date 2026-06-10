@@ -6,7 +6,11 @@ import pandas as pd
 from raft_uav.research.factor_graph import smooth_position_trajectory
 from raft_uav.research.measurement_models import enu_covariance_from_range_az_el
 from raft_uav.research.optimizer import select_constrained_configs
-from raft_uav.research.tracklet_models import fit_platt_scaler, tracklet_feature_frame
+from raft_uav.research.tracklet_models import (
+    StandardizedLogisticModel,
+    fit_platt_scaler,
+    tracklet_feature_frame,
+)
 from raft_uav.research.uncertainty import fit_conformal_radius
 
 
@@ -56,6 +60,27 @@ def test_tracklet_features_and_platt_scaler() -> None:
     model = fit_platt_scaler([0.1, 0.2, 0.8, 0.9], [0, 0, 1, 1])
     probabilities = model.predict_proba(pd.DataFrame({"logit_probability": [-3.0, 3.0]}))
     assert probabilities[1] > probabilities[0]
+
+
+def test_standardized_logistic_probabilities_are_stable_for_extreme_logits() -> None:
+    model = StandardizedLogisticModel(
+        feature_names=("x",),
+        mean=np.array([0.0]),
+        scale=np.array([1.0]),
+        weights=np.array([1.0]),
+        intercept=0.0,
+    )
+    features = pd.DataFrame({"x": [-1000.0, 0.0, 1000.0]})
+
+    with np.errstate(over="raise", invalid="raise", under="ignore"):
+        probabilities = model.predict_proba(features)
+
+    np.testing.assert_allclose(
+        probabilities,
+        np.array([0.0, 0.5, 1.0]),
+        rtol=0.0,
+        atol=0.0,
+    )
 
 
 def test_conformal_and_constrained_optimizer() -> None:
