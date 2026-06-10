@@ -677,11 +677,15 @@ def _scaled_measurement(
     measurement: TrackingMeasurement,
     covariance_scale: float,
 ) -> TrackingMeasurement:
+    # ``measurement.covariance`` has already passed through
+    # ``TrackingMeasurement.__post_init__``. Skip runtime calibration here so
+    # soft reliability scaling is applied exactly once.
     return TrackingMeasurement(
         time_s=measurement.time_s,
         vector=measurement.vector.copy(),
         covariance=measurement.covariance.copy() * float(covariance_scale),
         source=measurement.source,
+        _apply_runtime_calibration=False,
     )
 
 
