@@ -22,10 +22,6 @@ from raft_uav.baselines.radar_association import (
 from raft_uav.baselines.tracklet_viterbi_fixed_lag import (
     run_async_cv_baseline_with_fixed_lag_tracklet_viterbi_association_and_replay,
 )
-from raft_uav.baselines.tracklet_viterbi_retention import (
-    _track_aware_node_builder,
-    _track_support_by_id,
-)
 
 _TRACKLET_FIXED_LAG_MODE = "tracklet-viterbi-fixed-lag"
 _FIXED_LAG_ENV = "RAFT_UAV_TRACKLET_VITERBI_LAG_S"
@@ -113,25 +109,24 @@ def run_async_cv_baseline_with_radar_association(
         del paper_compatible_catprob_threshold, paper_compatible_bootstrap_source
         del paper_compatible_empirical_covariance
         del truth_gate_m, truth_time_gate_s
-        with _track_aware_node_builder(_track_support_by_id(radar)):
-            records, accepted, _replayed = (
-                run_async_cv_baseline_with_fixed_lag_tracklet_viterbi_association_and_replay(
-                    rf_measurements=list(rf_measurements),
-                    radar=radar,
-                    lag_s=_fixed_lag_s_from_env(),
-                    acceleration_std_mps2=acceleration_std_mps2,
-                    radar_xy_std_m=radar_xy_std_m,
-                    radar_z_std_m=radar_z_std_m,
-                    gate_probabilities_by_source=gate_probabilities_by_source,
-                    gate_thresholds_by_source=gate_thresholds_by_source,
-                    safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
-                    safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
-                    robust_update_by_source=robust_update_by_source,
-                    inflation_alpha_by_source=inflation_alpha_by_source,
-                    max_residual_norms_by_source=max_residual_norms_by_source,
-                    candidate_catprob_threshold=candidate_catprob_threshold,
-                )
+        records, accepted, _replayed = (
+            run_async_cv_baseline_with_fixed_lag_tracklet_viterbi_association_and_replay(
+                rf_measurements=list(rf_measurements),
+                radar=radar,
+                lag_s=_fixed_lag_s_from_env(),
+                acceleration_std_mps2=acceleration_std_mps2,
+                radar_xy_std_m=radar_xy_std_m,
+                radar_z_std_m=radar_z_std_m,
+                gate_probabilities_by_source=gate_probabilities_by_source,
+                gate_thresholds_by_source=gate_thresholds_by_source,
+                safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
+                robust_update_by_source=robust_update_by_source,
+                inflation_alpha_by_source=inflation_alpha_by_source,
+                max_residual_norms_by_source=max_residual_norms_by_source,
+                candidate_catprob_threshold=candidate_catprob_threshold,
             )
+        )
         return records, accepted
 
     return _base_radar_association_runner(
