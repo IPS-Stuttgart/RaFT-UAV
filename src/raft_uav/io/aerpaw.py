@@ -756,9 +756,19 @@ def _parse_env_vector(value: str, *, expected: int, name: str) -> np.ndarray:
 
 
 def _first_present(mapping: dict[str, Any], *keys: str) -> Any:
+    """Return the first non-missing value among alternate Fortem field names.
+
+    Fortem logs can contain multiple aliases for the same quantity.  A preferred
+    alias may be present but explicitly null/NaN, so continue to later aliases in
+    that case while still preserving valid falsy values such as ``0`` or ``False``.
+    """
+
     for key in keys:
-        if key in mapping:
-            return mapping[key]
+        if key not in mapping:
+            continue
+        value = mapping[key]
+        if not _is_missing_scalar(value):
+            return value
     return np.nan
 
 

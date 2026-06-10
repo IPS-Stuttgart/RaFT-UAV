@@ -228,4 +228,10 @@ def _feature_matrix(frame: pd.DataFrame, names: tuple[str, ...]) -> np.ndarray:
 
 def _sigmoid(value: np.ndarray) -> np.ndarray:
     value = np.asarray(value, dtype=float)
-    return np.where(value >= 0.0, 1.0 / (1.0 + np.exp(-value)), np.exp(value) / (1.0 + np.exp(value)))
+    probabilities = np.empty_like(value, dtype=float)
+    nonnegative = value >= 0.0
+
+    probabilities[nonnegative] = 1.0 / (1.0 + np.exp(-value[nonnegative]))
+    exp_value = np.exp(value[~nonnegative])
+    probabilities[~nonnegative] = exp_value / (1.0 + exp_value)
+    return probabilities
