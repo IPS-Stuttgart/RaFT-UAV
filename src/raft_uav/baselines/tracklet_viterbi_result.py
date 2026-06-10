@@ -250,6 +250,10 @@ def _replay_selected_tracklet_path_with_replay(
         _record,
         _robust_update_for_measurement,
     )
+    from raft_uav.baselines.radar_update_policy import (
+        apply_radar_update_policy,
+        policy_record_fields,
+    )
 
     selected_by_key = {_selected_row_event_key(row): row for row in selected_rows}
     tracker = AsyncConstantVelocityKalmanTracker(
@@ -298,31 +302,39 @@ def _replay_selected_tracklet_path_with_replay(
         if selected is None:
             continue
         measurement = _radar_row_to_measurement(selected, covariance)
-        diagnostics = tracker.update(
+        selected, measurement, policy_diagnostics = apply_radar_update_policy(
+            selected,
             measurement,
-            gate_threshold=_gate_threshold_for_measurement(
-                measurement,
-                gate_probabilities_by_source=gate_probabilities_by_source,
-                gate_thresholds_by_source=gate_thresholds_by_source,
-            ),
-            safety_gate_threshold=_gate_threshold_for_measurement(
-                measurement,
-                gate_probabilities_by_source=safety_gate_probabilities_by_source,
-                gate_thresholds_by_source=safety_gate_thresholds_by_source,
-            ),
-            max_residual_norm=_max_residual_norm_for_measurement(
-                measurement,
-                max_residual_norms_by_source=max_residual_norms_by_source,
-            ),
-            robust_update=_robust_update_for_measurement(
-                measurement,
-                robust_update_by_source=robust_update_by_source,
-            ),
-            inflation_alpha=_inflation_alpha_for_measurement(
-                measurement,
-                inflation_alpha_by_source=inflation_alpha_by_source,
-            ),
         )
+        if policy_diagnostics is None:
+            diagnostics = tracker.update(
+                measurement,
+                gate_threshold=_gate_threshold_for_measurement(
+                    measurement,
+                    gate_probabilities_by_source=gate_probabilities_by_source,
+                    gate_thresholds_by_source=gate_thresholds_by_source,
+                ),
+                safety_gate_threshold=_gate_threshold_for_measurement(
+                    measurement,
+                    gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                    gate_thresholds_by_source=safety_gate_thresholds_by_source,
+                ),
+                max_residual_norm=_max_residual_norm_for_measurement(
+                    measurement,
+                    max_residual_norms_by_source=max_residual_norms_by_source,
+                ),
+                robust_update=_robust_update_for_measurement(
+                    measurement,
+                    robust_update_by_source=robust_update_by_source,
+                ),
+                inflation_alpha=_inflation_alpha_for_measurement(
+                    measurement,
+                    inflation_alpha_by_source=inflation_alpha_by_source,
+                ),
+            )
+        else:
+            tracker.coast_to(measurement.time_s)
+            diagnostics = policy_diagnostics
         replayed = selected.copy()
         replayed["association_replay_accepted"] = bool(diagnostics.accepted)
         replayed["association_replay_update_action"] = diagnostics.update_action
@@ -342,9 +354,10 @@ def _replay_selected_tracklet_path_with_replay(
                 track_id=_optional_track_id(selected.get("track_id")),
                 association_nis=_optional_float(selected.get("association_nis")),
                 association_score=_optional_float(selected.get("association_score")),
-                association_mode="tracklet-viterbi",
+                association_mode=str(selected.get("association_mode", "tracklet-viterbi")),
             )
         )
+        records[-1].update(policy_record_fields(selected))
     return records, accepted_rows, replayed_rows
 
 
