@@ -283,7 +283,8 @@ METHOD_REGISTRY: dict[str, MethodSpec] = {
             "20",
         ),
         env={
-            "RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY": "posterior-error-nondegrading",
+            "RAFT_UAV_DO_NO_HARM_RADAR_UPDATES": "1",
+            "RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY": "1",
         },
         tags=("sota", "imm", "tracklet", "do-no-harm", "fixed-lag"),
         evidence_support=_single_association_path_support(
@@ -318,7 +319,8 @@ METHOD_REGISTRY: dict[str, MethodSpec] = {
         env={
             "RAFT_UAV_TRACKLET_SOFT_TOP_K_PATHS": "3",
             "RAFT_UAV_TRACKLET_SOFT_PATH_TEMPERATURE": "1.5",
-            "RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY": "posterior-error-nondegrading",
+            "RAFT_UAV_DO_NO_HARM_RADAR_UPDATES": "1",
+            "RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY": "1",
         },
         tags=(
             "sota",

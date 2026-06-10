@@ -52,6 +52,11 @@ def test_suite_uses_tracklet_cli_candidate_env_key() -> None:
     assert "RAFT_UAV_TRACKLET_MAX_CANDIDATES" not in DEFAULT_RUNTIME_ENV
 
 
+def test_suite_enables_do_no_harm_policy_gate_in_default_runtime_env() -> None:
+    assert DEFAULT_RUNTIME_ENV["RAFT_UAV_DO_NO_HARM_RADAR_UPDATES"] == "1"
+    assert DEFAULT_RUNTIME_ENV["RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY"] == "1"
+
+
 def test_sota_command_carries_fixed_runtime_env() -> None:
     config = ImprovementSuiteConfig(
         dataset_root=Path("data/raw/AADM2025Dryad"),
@@ -70,4 +75,5 @@ def test_sota_command_carries_fixed_runtime_env() -> None:
     assert len(commands) == 1
     assert commands[0].name == "leave_flight_out_sota"
     assert commands[0].env["RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"] == "12"
+    assert commands[0].env["RAFT_UAV_DO_NO_HARM_RADAR_UPDATES"] == "1"
     assert "RAFT_UAV_TRACKLET_MAX_CANDIDATES" not in commands[0].env
