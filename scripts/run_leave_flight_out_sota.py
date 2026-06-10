@@ -523,7 +523,11 @@ def truth_coverage(
     """Return fraction of truth timestamps covered by a nearby estimate."""
 
     truth_times = np.asarray(truth_times_s, dtype=float).reshape(-1)
-    estimate_times = np.asarray(estimate_times_s, dtype=float).reshape(-1)
+    # nearest_time_indices uses np.searchsorted on its reference series, so the
+    # estimate timeline must be sorted before it is used as that reference.
+    estimate_times = np.sort(
+        np.asarray(estimate_times_s, dtype=float).reshape(-1)
+    )
     if truth_times.size == 0:
         return {"truth_rows": 0, "covered_truth_rows": 0, "truth_coverage_rate": float("nan")}
     if estimate_times.size == 0:
