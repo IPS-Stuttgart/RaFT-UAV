@@ -23,6 +23,17 @@ def test_truth_coverage_counts_truth_timestamps_with_nearby_estimate() -> None:
     assert coverage["truth_coverage_rate"] == 0.5
 
 
+def test_truth_coverage_counts_timestamps_independently_of_estimate_order() -> None:
+    truth_times = np.array([0.0, 1.0, 2.0, 3.0])
+    estimate_times = np.array([10.0, 2.2, 0.1])
+
+    coverage = lfo.truth_coverage(truth_times, estimate_times, max_time_delta_s=0.25)
+
+    assert coverage["truth_rows"] == 4
+    assert coverage["covered_truth_rows"] == 2
+    assert coverage["truth_coverage_rate"] == 0.5
+
+
 def test_summarize_scalar_errors_includes_tail_metrics() -> None:
     summary = lfo.summarize_scalar_errors(np.array([1.0, 2.0, 3.0, 4.0]))
 

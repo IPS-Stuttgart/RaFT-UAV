@@ -10,10 +10,12 @@ into baseline metrics.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from raft_uav.runtime_cli_config import (
+    _RUNTIME_FLAG_ENV_NAMES,
     apply_runtime_environment,
     parse_runtime_config,
     runtime_environment_names_from_argv,
@@ -53,15 +55,33 @@ def _main_with_runtime_config(argv: list[str] | None = None) -> int:
 
     runtime_config, remaining = parse_runtime_config(original_argv)
     explicit_env_names = runtime_environment_names_from_argv(original_argv)
-    apply_runtime_environment(
-        runtime_config,
-        overwrite_existing_env_names=explicit_env_names,
-    )
-    _CURRENT_RUNTIME_CONFIG = runtime_config
+    previous_runtime_environment = _runtime_environment_snapshot()
     try:
+        apply_runtime_environment(
+            runtime_config,
+            overwrite_existing_env_names=explicit_env_names,
+        )
+        _CURRENT_RUNTIME_CONFIG = runtime_config
         return _ORIGINAL_MAIN(remaining if argv is not None else remaining)
     finally:
         _CURRENT_RUNTIME_CONFIG = None
+        _restore_runtime_environment(previous_runtime_environment)
+
+
+def _runtime_environment_snapshot() -> dict[str, str | None]:
+    return {
+        name: os.environ.get(name)
+        for names in _RUNTIME_FLAG_ENV_NAMES.values()
+        for name in names
+    }
+
+
+def _restore_runtime_environment(snapshot: dict[str, str | None]) -> None:
+    for name, value in snapshot.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
 
 
 def _baseline_metrics_with_runtime_config(*args: Any, **kwargs: Any) -> dict[str, Any]:
