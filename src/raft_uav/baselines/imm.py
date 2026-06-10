@@ -262,6 +262,14 @@ class AsyncInteractingMultipleModelTracker:
         self.current_time_s = float(time_s)
         self._sync_combined_state()
 
+    def coast_to(self, time_s: float) -> None:
+        """Predict to an event timestamp without applying a measurement update."""
+
+        # Mirror the CV tracker's replay contract so IMM-backed tracklet replay
+        # can safely bypass a radar update under conservative update policies.
+        self._initial_update_pending = False
+        self.predict_to(time_s)
+
     def _is_bootstrap_measurement(self, measurement: TrackingMeasurement) -> bool:
         """Return whether ``measurement`` is the sample used to initialize the IMM."""
 
