@@ -2749,8 +2749,9 @@ def _oracle_nearest_truth(
     )
     if truth_xyz is None:
         return None
-    candidate_xyz = candidates[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
-    errors = np.linalg.norm(candidate_xyz - truth_xyz, axis=1)
+    errors = _candidate_truth_errors(candidates, truth_xyz)
+    if not np.isfinite(errors).any():
+        return None
     best_position = int(np.argmin(errors))
     if float(errors[best_position]) > float(truth_gate_m):
         return None
@@ -2760,6 +2761,20 @@ def _oracle_nearest_truth(
     selected["association_mode"] = "oracle-nearest-truth"
     selected["association_candidate_rows"] = int(len(candidates))
     return selected
+
+
+def _candidate_truth_errors(candidates: pd.DataFrame, truth_xyz: np.ndarray) -> np.ndarray:
+    """Return 3-D truth errors, ignoring candidates with non-finite coordinates."""
+
+    candidate_xyz = candidates[["east_m", "north_m", "up_m"]].apply(
+        pd.to_numeric,
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    finite = np.isfinite(candidate_xyz).all(axis=1)
+    errors = np.full(len(candidates), np.inf, dtype=float)
+    if finite.any():
+        errors[finite] = np.linalg.norm(candidate_xyz[finite] - truth_xyz.reshape(1, 3), axis=1)
+    return errors
 
 
 def _catprob_candidate_pool(

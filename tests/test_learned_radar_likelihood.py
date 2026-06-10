@@ -7,6 +7,9 @@ from raft_uav.baselines.learned_radar_association import (
 )
 from raft_uav.baselines.learned_radar_likelihood import LearnedRadarAssociationModel
 from raft_uav.baselines.radar_association import _nis_scored_candidates
+from raft_uav.baselines.radar_likelihood_training import (
+    collect_radar_association_training_frame,
+)
 
 
 def test_learned_radar_association_prefers_higher_likelihood_candidate():
@@ -96,3 +99,43 @@ def test_model_probabilities_are_stable_for_extreme_logits():
         rtol=0.0,
         atol=0.0,
     )
+
+
+def test_radar_association_training_ignores_invalid_oracle_candidates():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": np.nan,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.99,
+            },
+            {
+                "frame_index": 0,
+                "track_id": 2,
+                "time_s": 0.0,
+                "east_m": 10.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.1,
+            },
+        ]
+    )
+    truth = pd.DataFrame({"time_s": [0.0], "east_m": [10.0], "north_m": [0.0], "up_m": [0.0]})
+
+    examples = collect_radar_association_training_frame(
+        rf_measurements=[],
+        radar=radar,
+        truth=truth,
+        candidate_catprob_threshold=None,
+        positive_gate_m=1.0,
+    )
+
+    labels = dict(zip(examples["track_id"], examples["label"], strict=True))
+    truth_errors = dict(zip(examples["track_id"], examples["truth_error_m"], strict=True))
+    assert labels == {1: 0, 2: 1}
+    assert np.isnan(truth_errors[1])
+    assert truth_errors[2] == 0.0

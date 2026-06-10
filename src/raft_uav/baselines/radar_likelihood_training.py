@@ -10,6 +10,7 @@ import pandas as pd
 from raft_uav.baselines.kalman import AsyncConstantVelocityKalmanTracker, TrackingMeasurement
 from raft_uav.baselines.learned_radar_likelihood import radar_association_feature_frame
 from raft_uav.baselines.radar_association import (
+    _candidate_truth_errors,
     _catprob_candidate_pool,
     _events,
     _initial_measurement,
@@ -103,8 +104,9 @@ def collect_radar_association_training_frame(
         )
         if truth_xyz is None:
             continue
-        candidate_xyz = scored[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
-        errors = np.linalg.norm(candidate_xyz - truth_xyz.reshape(1, 3), axis=1)
+        errors = _candidate_truth_errors(scored, truth_xyz)
+        if not np.isfinite(errors).any():
+            continue
         best_position = int(np.argmin(errors))
         labels = np.zeros(len(scored), dtype=int)
         if float(errors[best_position]) <= float(positive_gate_m):
@@ -120,7 +122,11 @@ def collect_radar_association_training_frame(
             row.update(
                 {
                     "label": int(labels[row_index]),
-                    "truth_error_m": float(errors[row_index]),
+                    "truth_error_m": (
+                        float(errors[row_index])
+                        if np.isfinite(errors[row_index])
+                        else float("nan")
+                    ),
                     "time_s": float(candidate["time_s"]),
                     "frame_index": _optional_int(candidate.get("frame_index")),
                     "track_id": _optional_int(candidate.get("track_id")),
