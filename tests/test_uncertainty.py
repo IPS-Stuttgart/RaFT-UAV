@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -6,9 +9,12 @@ from raft_uav.heteroscedastic_measurements import (
     rf_measurements_to_enu_with_uncertainty,
 )
 from raft_uav.uncertainty import (
+    HeteroscedasticUncertaintyModel,
+    VarianceHead,
     _aligned_residuals,
     covariance_from_row,
     fit_heteroscedastic_uncertainty_model,
+    load_uncertainty_model,
 )
 
 
@@ -48,6 +54,40 @@ def test_fit_model_adds_positive_rf_and_radar_covariance_columns():
     assert (rf_out[["cov_ee", "cov_nn"]] > 0.0).all().all()
     assert (radar_out[["cov_ee", "cov_nn", "cov_uu"]] > 0.0).all().all()
     assert "heteroscedastic" in rf_out["uncertainty_model"].iloc[0]
+
+
+def test_uncertainty_model_save_writes_json_safe_metadata(tmp_path: Path) -> None:
+    model = HeteroscedasticUncertaintyModel(
+        heads=(
+            VarianceHead(
+                source="rf",
+                dimension="east",
+                feature_names=("intercept",),
+                coefficients=(1.0,),
+                min_std_m=10.0,
+                max_std_m=500.0,
+                training_rows=3,
+            ),
+        ),
+        metadata={
+            "fold": np.int64(1),
+            "heldout_rmse_m": np.nan,
+            "source_path": tmp_path / "train.csv",
+        },
+    )
+
+    path = tmp_path / "uncertainty_model.json"
+    model.save(path)
+
+    payload_text = path.read_text(encoding="utf-8")
+    payload = json.loads(payload_text)
+    loaded = load_uncertainty_model(path)
+
+    assert "NaN" not in payload_text
+    assert payload["metadata"]["fold"] == 1
+    assert payload["metadata"]["heldout_rmse_m"] is None
+    assert payload["metadata"]["source_path"] == str(tmp_path / "train.csv")
+    assert loaded.metadata["heldout_rmse_m"] is None
 
 
 def test_aligned_residuals_handles_unsorted_truth_times():
