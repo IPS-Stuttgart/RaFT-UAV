@@ -108,6 +108,24 @@ def heteroscedastic_covariance_hooks(
             kwargs["radar"] = promote_covariance_columns_for_association(kwargs["radar"])
         return original_legacy_run_association(*args, **kwargs)
 
+    def nis_scored_candidates_hook(
+        candidates: pd.DataFrame,
+        tracker: object,
+        covariance: np.ndarray,
+        *,
+        covariance_config: object | None = None,
+    ) -> pd.DataFrame:
+        """Preserve the original scorer API while enabling learned row covariance."""
+
+        if isinstance(candidates, pd.DataFrame):
+            candidates = promote_covariance_columns_for_association(candidates)
+        return original_assoc_nis_scored_candidates(
+            candidates,
+            tracker,
+            covariance,
+            covariance_config=covariance_config,
+        )
+
     def baseline_metrics_hook(*args: object, **kwargs: object) -> dict[str, object]:
         metrics = original_legacy_baseline_metrics(*args, **kwargs)
         metrics["uncertainty_model"] = {
@@ -124,7 +142,7 @@ def heteroscedastic_covariance_hooks(
     legacy_cli.radar_measurements_to_enu = radar_measurements_to_enu_hook
     legacy_cli.run_async_cv_baseline_with_radar_association = run_association_hook
     legacy_cli._baseline_metrics = baseline_metrics_hook
-    radar_association._nis_scored_candidates = nis_scored_candidates_with_row_covariance
+    radar_association._nis_scored_candidates = nis_scored_candidates_hook
     try:
         yield model
     finally:
@@ -230,9 +248,12 @@ def nis_scored_candidates_with_row_covariance(
     candidates: pd.DataFrame,
     tracker: object,
     covariance: np.ndarray,
+    *,
+    covariance_config: object | None = None,
 ) -> pd.DataFrame:
     """Score radar candidates with per-row covariance when available."""
 
+    del covariance_config
     if candidates.empty:
         return candidates.iloc[0:0].copy()
     observation = measurement_matrix(3)

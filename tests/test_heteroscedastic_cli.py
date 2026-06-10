@@ -5,6 +5,7 @@ import pandas as pd
 
 from raft_uav.heteroscedastic_cli import (
     _extract_uncertainty_model_arg,
+    heteroscedastic_covariance_hooks,
     nis_scored_candidates_with_row_covariance,
     promote_covariance_columns_for_association,
     radar_measurements_to_enu_with_row_covariance,
@@ -107,7 +108,45 @@ def test_nis_scoring_uses_candidate_specific_covariance() -> None:
         }
     )
 
-    scored = nis_scored_candidates_with_row_covariance(candidates, _TrackerView(), np.eye(3))
+    scored = nis_scored_candidates_with_row_covariance(
+        candidates,
+        _TrackerView(),
+        np.eye(3),
+        covariance_config=None,
+    )
 
     assert float(scored.loc[0, "association_nis"]) == 100.0
     assert float(scored.loc[1, "association_nis"]) == 1.0
+
+
+def test_hooked_nis_scoring_accepts_original_covariance_config_keyword(tmp_path) -> None:
+    model_path = tmp_path / "uncertainty_model.json"
+    model_path.write_text(
+        '{"schema_version": 1, "metadata": {}, "heads": []}',
+        encoding="utf-8",
+    )
+    candidates = pd.DataFrame(
+        {
+            "east_m": [10.0],
+            "north_m": [0.0],
+            "up_m": [0.0],
+            "cov_ee": [100.0],
+            "cov_nn": [100.0],
+            "cov_uu": [100.0],
+            "cov_en": [0.0],
+            "cov_eu": [0.0],
+            "cov_nu": [0.0],
+        }
+    )
+
+    with heteroscedastic_covariance_hooks(model_path):
+        from raft_uav.baselines import radar_association
+
+        scored = radar_association._nis_scored_candidates(
+            candidates,
+            _TrackerView(),
+            np.eye(3),
+            covariance_config=None,
+        )
+
+    assert float(scored.loc[0, "association_nis"]) == 1.0

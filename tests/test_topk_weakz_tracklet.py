@@ -4,6 +4,10 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.baselines.kalman import TrackingMeasurement
+from raft_uav.calibration.nis_covariance import (
+    ENV_NIS_COVARIANCE_CALIBRATION_JSON,
+    write_nis_covariance_calibration,
+)
 from raft_uav.baselines.topk_weakz_tracklet import (
     TopKWeakZTrackletConfig,
     build_fortem_tracklets,
@@ -138,6 +142,52 @@ def test_rf_reliability_inflates_far_rf_measurement() -> None:
     assert len(weighted) == 1
     assert weighted[0].covariance[0, 0] > rf[0].covariance[0, 0]
     assert weighted[0].covariance[0, 0] <= rf[0].covariance[0, 0] * 10.0
+
+
+def test_rf_reliability_scaling_does_not_reapply_runtime_calibration(tmp_path, monkeypatch) -> None:
+    payload = {
+        "schema": "raft-uav-nis-covariance-calibration-v1",
+        "groups": {
+            "rf:2": {
+                "source": "rf",
+                "measurement_dim": 2,
+                "count": 10,
+                "method": "mean",
+                "statistic": 6.0,
+                "target": 2.0,
+                "raw_scale": 3.0,
+                "applied_scale": 3.0,
+                "enabled": True,
+                "accepted_only": True,
+                "quantile": None,
+            }
+        },
+    }
+    path = write_nis_covariance_calibration(payload, tmp_path / "calibration.json")
+    monkeypatch.setenv(ENV_NIS_COVARIANCE_CALIBRATION_JSON, str(path))
+    cfg = TopKWeakZTrackletConfig(
+        rf_soft_weight=True,
+        rf_radar_consistency_std_m=20.0,
+        rf_min_reliability=0.1,
+        rf_max_covariance_scale=10.0,
+    )
+    selected_radar = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0, 2.0],
+            "east_m": [0.0, 10.0, 20.0],
+            "north_m": [0.0, 0.0, 0.0],
+        }
+    )
+    measurement = TrackingMeasurement(
+        time_s=1.0,
+        vector=np.array([1000.0, 1000.0]),
+        covariance=np.diag([10.0**2, 10.0**2]),
+        source="rf",
+    )
+
+    weighted = rf_measurements_with_radar_reliability([measurement], selected_radar, cfg)
+
+    np.testing.assert_allclose(weighted[0].covariance, measurement.covariance * 10.0)
 
 
 def test_run_topk_tracklet_graph_weakz_smoother_returns_diagnostics() -> None:

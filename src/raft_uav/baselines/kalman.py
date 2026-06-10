@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import InitVar, asdict, dataclass
 from typing import Iterable, Mapping
 
 import numpy as np
@@ -50,8 +50,9 @@ class TrackingMeasurement:
     vector: np.ndarray
     covariance: np.ndarray
     source: str
+    _apply_runtime_calibration: InitVar[bool] = True
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, _apply_runtime_calibration: bool) -> None:
         vector = np.asarray(self.vector, dtype=float).reshape(-1)
         covariance = np.asarray(self.covariance, dtype=float)
         source = str(self.source)
@@ -63,7 +64,8 @@ class TrackingMeasurement:
             raise ValueError("measurement vector must be finite")
         if not np.isfinite(covariance).all():
             raise ValueError("measurement covariance must be finite")
-        covariance = scale_covariance_for_calibrated_source(source, vector.size, covariance)
+        if _apply_runtime_calibration:
+            covariance = scale_covariance_for_calibrated_source(source, vector.size, covariance)
         if covariance.shape != (vector.size, vector.size):
             raise ValueError("calibrated measurement covariance must match vector dimension")
         if not np.isfinite(covariance).all():
