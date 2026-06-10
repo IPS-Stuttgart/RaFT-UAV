@@ -18,6 +18,7 @@ from raft_uav.baselines.imm_radar_association import (
 )
 from raft_uav.baselines.kalman import run_async_cv_baseline
 from raft_uav.baselines.smoothing import SMOOTHER_MODES, smooth_tracking_records
+from raft_uav.cli import _format_optional_metric
 from raft_uav.evaluation.diagnostics import build_diagnostic_summary
 from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
 from raft_uav.io.aerpaw import (
@@ -348,8 +349,8 @@ def run_experiment(
     print(f"diagnostic_summary_json={diagnostic_summary_path}")
     print(f"estimates_csv={estimates_path}")
     print(f"diagnostics_csv={diagnostics_path}")
-    print(f"rmse_2d_m={metrics['position_error_2d']['rmse_m']:.3f}")
-    print(f"rmse_3d_m={metrics['position_error_3d']['rmse_m']:.3f}")
+    print(f"rmse_2d_m={_format_optional_metric(metrics['position_error_2d'].get('rmse_m'))}")
+    print(f"rmse_3d_m={_format_optional_metric(metrics['position_error_3d'].get('rmse_m'))}")
     return 0
 
 

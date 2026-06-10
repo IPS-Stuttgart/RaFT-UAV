@@ -18,6 +18,7 @@ from raft_uav.baselines.stateful_learned_radar_association import (
 )
 from raft_uav.cli import (
     _baseline_metrics,
+    _format_optional_metric,
     _hypotheses_to_frame,
     _inside_truth_window,
     _records_to_frame,
@@ -368,8 +369,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"diagnostic_summary_json={diagnostic_summary_path}")
     print(f"estimates_csv={estimates_path}")
     print(f"selected_radar_csv={selected_radar_path}")
-    print(f"rmse_2d_m={metrics['position_error_2d']['rmse_m']:.3f}")
-    print(f"rmse_3d_m={metrics['position_error_3d']['rmse_m']:.3f}")
+    print(f"rmse_2d_m={_format_optional_metric(metrics['position_error_2d'].get('rmse_m'))}")
+    print(f"rmse_3d_m={_format_optional_metric(metrics['position_error_3d'].get('rmse_m'))}")
     return 0
 
 
