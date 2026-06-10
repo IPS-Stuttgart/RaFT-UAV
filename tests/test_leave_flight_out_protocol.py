@@ -80,6 +80,40 @@ def test_aggregate_method_rows_pools_errors_and_ranks_methods() -> None:
     assert by_method["method_a"]["rank_rmse_3d"] == 2
 
 
+def test_aggregate_method_rows_ranks_unevaluable_methods_last() -> None:
+    methods = [
+        lfo.MethodSpec("no_valid_errors", "baseline", "no valid errors"),
+        lfo.MethodSpec("valid_errors", "baseline", "valid errors"),
+    ]
+    evaluations = {
+        "no_valid_errors": [
+            lfo.RunEvaluation(
+                row={"posterior_records": 0, "selected_radar_rows": 0},
+                errors_2d_m=np.array([], dtype=float),
+                errors_3d_m=np.array([], dtype=float),
+                covered_truth_rows=0,
+                truth_rows=0,
+            )
+        ],
+        "valid_errors": [
+            lfo.RunEvaluation(
+                row={"posterior_records": 1, "selected_radar_rows": 0},
+                errors_2d_m=np.array([1.0]),
+                errors_3d_m=np.array([1.0]),
+                covered_truth_rows=1,
+                truth_rows=1,
+            )
+        ],
+    }
+
+    rows = lfo._aggregate_method_rows(methods, evaluations)
+    by_method = {row["method"]: row for row in rows}
+
+    assert np.isnan(by_method["no_valid_errors"]["error_3d_rmse_m"])
+    assert by_method["valid_errors"]["rank_rmse_3d"] == 1
+    assert by_method["no_valid_errors"]["rank_rmse_3d"] == 2
+
+
 def test_sota_protocol_exposes_online_fixed_lag_and_rts_imm_rows() -> None:
     assert lfo.METHODS["imm_catprob"].runner == "imm"
     assert lfo.METHODS["imm_catprob_fixed_lag"].fixed_lag is True
