@@ -542,7 +542,10 @@ def main(argv: list[str] | None = None) -> int:
     csv_path = flight_output / "oracle_candidate_coverage.csv"
     summary_path = flight_output / "oracle_candidate_coverage_summary.json"
     report.to_csv(csv_path, index=False)
-    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    summary_path.write_text(
+        json.dumps(_json_ready(summary), indent=2, allow_nan=False),
+        encoding="utf-8",
+    )
 
     print(f"flight={flight.name}")
     print(f"radar_frames={summary['radar_frame_count']}")
@@ -552,6 +555,23 @@ def main(argv: list[str] | None = None) -> int:
     print(f"oracle_candidate_coverage_csv={csv_path}")
     print(f"oracle_candidate_coverage_summary_json={summary_path}")
     return 0
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, np.generic):
+        return _json_ready(value.item())
+    if isinstance(value, float):
+        return value if np.isfinite(value) else None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return value
 
 
 if __name__ == "__main__":

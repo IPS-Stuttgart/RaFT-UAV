@@ -1,8 +1,16 @@
+import json
+
 import numpy as np
 import pandas as pd
 
 from raft_uav.baselines.tracklet_viterbi import TrackletViterbiAssociationConfig
-from raft_uav.evaluation.oracle_coverage import build_oracle_candidate_coverage
+from raft_uav.evaluation.oracle_candidate_coverage import (
+    _json_ready,
+    summarize_oracle_candidate_coverage,
+)
+from raft_uav.evaluation.oracle_coverage import (
+    build_oracle_candidate_coverage,
+)
 
 
 def _truth() -> pd.DataFrame:
@@ -117,3 +125,12 @@ def test_oracle_candidate_coverage_separates_catprob_threshold_loss():
     assert not bool(frame["oracle_passed_catprob_threshold"])
     assert frame["oracle_drop_reason"] == "catprob_threshold"
     assert result.summary["catprob_threshold_drop_frames"] == 1
+
+
+def test_oracle_candidate_coverage_empty_summary_is_json_safe():
+    summary = summarize_oracle_candidate_coverage(pd.DataFrame())
+
+    ready = _json_ready(summary)
+
+    assert ready["base"]["coverage_rate"] is None
+    json.dumps(ready, allow_nan=False)
