@@ -378,8 +378,19 @@ def truth_positions_at_times(
     """Linearly interpolate truth ENU positions and return validity mask."""
 
     query = np.asarray(times_s, dtype=float).reshape(-1)
-    truth_times = truth["time_s"].to_numpy(dtype=float)
-    truth_positions = truth[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    truth_numeric = truth[["time_s", "east_m", "north_m", "up_m"]].apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
+    finite_truth = np.isfinite(truth_numeric.to_numpy(dtype=float)).all(axis=1)
+    truth_numeric = (
+        truth_numeric.loc[finite_truth]
+        .groupby("time_s", as_index=False)
+        .median()
+        .sort_values("time_s")
+    )
+    truth_times = truth_numeric["time_s"].to_numpy(dtype=float)
+    truth_positions = truth_numeric[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
     if truth_times.size == 0:
         return np.full((query.size, 3), np.nan), np.zeros(query.size, dtype=bool)
 

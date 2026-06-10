@@ -34,6 +34,26 @@ def test_truth_positions_at_times_interpolates_and_masks_outside_window():
     assert positions[0].tolist() == [50.0, 0.0, 5.0]
 
 
+def test_truth_positions_at_times_handles_unsorted_truth_times():
+    truth = pd.DataFrame(
+        {
+            "time_s": [10.0, 0.0],
+            "east_m": [100.0, 0.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [10.0, 0.0],
+        }
+    )
+
+    positions, mask = truth_positions_at_times(
+        truth,
+        np.array([5.0]),
+        max_delta_s=10.0,
+    )
+
+    assert mask.tolist() == [True]
+    assert positions[0].tolist() == [50.0, 0.0, 5.0]
+
+
 def test_position_offset_sweep_recovers_known_shift():
     truth = pd.DataFrame(
         {
