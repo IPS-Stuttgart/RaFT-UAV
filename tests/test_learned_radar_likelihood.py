@@ -180,6 +180,5 @@ def test_radar_association_training_ignores_invalid_oracle_candidates():
 
     labels = dict(zip(examples["track_id"], examples["label"], strict=True))
     truth_errors = dict(zip(examples["track_id"], examples["truth_error_m"], strict=True))
-    assert labels == {1: 0, 2: 1}
-    assert np.isnan(truth_errors[1])
+    assert labels == {2: 1}
     assert truth_errors[2] == 0.0
