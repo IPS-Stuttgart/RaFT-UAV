@@ -169,6 +169,39 @@ def test_radar_jsonl_reader_exposes_fortem_quality_fields(tmp_path):
     assert row["track_age"] == 8
 
 
+def test_radar_jsonl_reader_preserves_explicit_zero_confidence(tmp_path):
+    radar_path = tmp_path / "radar.json"
+    radar_path.write_text(
+        json.dumps(
+            {
+                "params": {"globalTime": 1759866140.0},
+                "trackData": [
+                    {
+                        "id": 4,
+                        "lla": [35.72749, -78.69621, 30.0],
+                        "globalTime": 1759866140.0,
+                        "confidence": 0.0,
+                        "confidenceScore": 0.9,
+                        "catProb": [0.8, 0.1],
+                    },
+                    {
+                        "id": 5,
+                        "lla": [35.72749, -78.69621, 31.0],
+                        "globalTime": 1759866140.0,
+                        "confidenceScore": 0.7,
+                        "catProb": [0.7, 0.2],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    radar = read_radar_tracks_json(radar_path)
+
+    assert radar["confidence"].tolist() == [0.0, 0.7]
+
+
 def test_discover_flights_can_select_original_or_rerun_variant(tmp_path):
     flight_dir = tmp_path / "RF Sensor and Radar" / "Opt1"
     flight_dir.mkdir(parents=True)

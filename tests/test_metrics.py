@@ -3,11 +3,22 @@ import json
 import numpy as np
 
 from raft_uav.evaluation.metrics import (
+    nearest_time_indices,
     position_errors_at_estimates_m,
     position_errors_m,
     sampled_position_errors_m,
     summarize_errors,
 )
+
+
+def test_nearest_time_indices_handles_unsorted_reference_times():
+    reference_times = np.array([2.0, 1.0, 0.0])
+    query_times = np.array([0.1, 0.9, 1.6])
+
+    indices = nearest_time_indices(reference_times, query_times)
+
+    np.testing.assert_array_equal(indices, np.array([2, 1, 0]))
+    np.testing.assert_allclose(reference_times[indices], np.array([0.0, 1.0, 2.0]))
 
 
 def test_metrics_return_finite_summaries_on_synthetic_trajectories():

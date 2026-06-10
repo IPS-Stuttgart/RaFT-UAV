@@ -344,9 +344,15 @@ def time_bias_grid_search(
         return pd.DataFrame()
     dimensions = 2 if dimensions == 2 or "up_m" not in frame.columns else 3
     coord_cols = ["east_m", "north_m"] if dimensions == 2 else ["east_m", "north_m", "up_m"]
+    if truth is None or truth.empty or "time_s" not in truth.columns:
+        return _zero_count_offset_rows(source, offsets_s)
+    if not all(column in truth.columns for column in coord_cols):
+        return _zero_count_offset_rows(source, offsets_s)
     sensor_times = pd.to_numeric(frame["time_s"], errors="coerce").to_numpy(dtype=float)
     sensor_positions = frame[coord_cols].to_numpy(dtype=float)
     truth_times = pd.to_numeric(truth["time_s"], errors="coerce").to_numpy(dtype=float)
+    if truth_times.size == 0 or not bool(np.isfinite(truth_times).any()):
+        return _zero_count_offset_rows(source, offsets_s)
     truth_positions = truth[coord_cols].to_numpy(dtype=float)
     rows: list[dict[str, object]] = []
     for offset in offsets_s:
@@ -523,6 +529,9 @@ def _nearest_truth_position(
     times = pd.to_numeric(truth["time_s"], errors="coerce").to_numpy(dtype=float)
     if times.size == 0:
         return None, None
+    finite_times = np.isfinite(times)
+    if not bool(finite_times.any()):
+        return None, None
     idx = int(_nearest_time_indices(times, np.array([float(time_s)]))[0])
     dt_s = float(abs(times[idx] - float(time_s)))
     if dt_s > float(max_delta_s):
@@ -533,13 +542,25 @@ def _nearest_truth_position(
 def _nearest_time_indices(reference_times_s: np.ndarray, query_times_s: np.ndarray) -> np.ndarray:
     reference = np.asarray(reference_times_s, dtype=float).reshape(-1)
     query = np.asarray(query_times_s, dtype=float).reshape(-1)
-    if reference.size == 0:
+    finite_reference = np.isfinite(reference)
+    if not bool(np.any(finite_reference)):
         return np.zeros(query.size, dtype=int)
-    insertion = np.searchsorted(reference, query)
-    right = np.clip(insertion, 0, reference.size - 1)
-    left = np.clip(insertion - 1, 0, reference.size - 1)
-    use_right = np.abs(reference[right] - query) < np.abs(reference[left] - query)
-    return np.where(use_right, right, left)
+    original_indices = np.flatnonzero(finite_reference)
+    finite_values = reference[finite_reference]
+    sort_order = np.argsort(finite_values, kind="mergesort")
+    sorted_reference = finite_values[sort_order]
+    sorted_original_indices = original_indices[sort_order]
+    insertion = np.searchsorted(sorted_reference, query)
+    right = np.clip(insertion, 0, sorted_reference.size - 1)
+    left = np.clip(insertion - 1, 0, sorted_reference.size - 1)
+    use_right = np.abs(sorted_reference[right] - query) < np.abs(sorted_reference[left] - query)
+    return sorted_original_indices[np.where(use_right, right, left)]
+
+
+def _zero_count_offset_rows(source: str, offsets_s: Sequence[float]) -> pd.DataFrame:
+    return pd.DataFrame(
+        {"source": source, "offset_s": float(offset), "count": 0} for offset in offsets_s
+    )
 
 
 def _selected_error_m(selected: pd.Series | None, truth_position: np.ndarray) -> float | None:
