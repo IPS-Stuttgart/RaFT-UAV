@@ -53,6 +53,47 @@ def test_association_regret_and_switch_metrics() -> None:
     assert metrics["unique_track_ids"] == 2
 
 
+def test_association_regret_ignores_invalid_candidate_positions() -> None:
+    radar = pd.DataFrame(
+        {
+            "frame_index": [0, 0],
+            "time_s": [0.0, 0.0],
+            "east_m": [np.nan, 0.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+            "track_id": [99, 7],
+        }
+    )
+    selected = radar.iloc[[1]].copy()
+
+    regret = association_regret(selected, radar, _truth())
+
+    assert regret["candidate_count"].iloc[0] == 2
+    assert np.isclose(regret["best_candidate_error_m"].iloc[0], 0.0)
+    assert regret["best_track_id"].iloc[0] == 7
+
+
+def test_association_regret_handles_all_invalid_candidates() -> None:
+    radar = pd.DataFrame(
+        {
+            "frame_index": [0, 0],
+            "time_s": [0.0, 0.0],
+            "east_m": [np.nan, np.inf],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+            "track_id": [99, 7],
+        }
+    )
+
+    regret = association_regret(radar.iloc[[0]].copy(), radar, _truth())
+
+    assert regret["candidate_count"].iloc[0] == 2
+    assert np.isnan(regret["selected_error_m"].iloc[0])
+    assert np.isnan(regret["best_candidate_error_m"].iloc[0])
+    assert np.isnan(regret["association_regret_m"].iloc[0])
+    assert regret["best_track_id"].iloc[0] is None
+
+
 def test_association_diagnostics_handle_unsorted_truth_times() -> None:
     truth = pd.DataFrame(
         {
