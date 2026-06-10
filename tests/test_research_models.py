@@ -3,9 +3,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from raft_uav.research.factor_graph import smooth_position_trajectory
+from raft_uav.research.factor_graph import (
+    coordinate_descent_association_and_smoothing,
+    smooth_position_trajectory,
+)
 from raft_uav.research.measurement_models import enu_covariance_from_range_az_el
 from raft_uav.research.optimizer import select_constrained_configs
+from raft_uav.research.runtime_modes import backward_repair_associations
 from raft_uav.research.tracklet_models import (
     StandardizedLogisticModel,
     fit_platt_scaler,
@@ -28,6 +32,68 @@ def test_factor_graph_smoother_returns_estimates() -> None:
     assert result.success
     assert len(result.estimates) == 3
     assert np.isfinite(result.estimates[["east_m", "north_m", "up_m"]].to_numpy()).all()
+
+
+def test_coordinate_descent_skips_all_invalid_candidate_frame() -> None:
+    radar = pd.DataFrame(
+        {
+            "frame_index": [0, 1],
+            "track_id": [1, 2],
+            "time_s": [0.0, 1.0],
+            "east_m": [0.0, np.nan],
+            "north_m": [0.0, np.nan],
+            "up_m": [0.0, np.nan],
+        }
+    )
+    rf = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0],
+            "east_m": [0.0, 1.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+
+    _, selected = coordinate_descent_association_and_smoothing(
+        radar,
+        rf,
+        iterations=1,
+        candidate_gate_m=10.0,
+    )
+
+    assert selected["frame_index"].tolist() == [0]
+
+
+def test_backward_repair_skips_all_invalid_candidate_frame() -> None:
+    selected = pd.DataFrame(
+        {
+            "frame_index": [0, 2],
+            "track_id": [1, 1],
+            "time_s": [0.0, 2.0],
+            "east_m": [0.0, 2.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+    candidates = pd.DataFrame(
+        {
+            "frame_index": [0, 1, 2],
+            "track_id": [1, 99, 1],
+            "time_s": [0.0, 1.0, 2.0],
+            "east_m": [0.0, np.nan, 2.0],
+            "north_m": [0.0, np.nan, 0.0],
+            "up_m": [0.0, np.nan, 0.0],
+        }
+    )
+
+    repaired = backward_repair_associations(
+        selected,
+        candidates,
+        max_gap_s=3.0,
+        max_repair_distance_m=10.0,
+    )
+
+    assert repaired["frame_index"].tolist() == [0, 2]
 
 
 def test_native_covariance_is_positive_semidefinite() -> None:

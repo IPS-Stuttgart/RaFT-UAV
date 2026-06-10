@@ -198,8 +198,19 @@ def _select_candidates_against_trajectory(
     for _, frame in _radar_frame_groups(radar):
         time_s = float(frame["time_s"].median())
         pred = np.array([np.interp(time_s, trajectory_times, trajectory_xyz[:, axis]) for axis in range(3)])
-        errors = np.linalg.norm(frame.loc[:, PositionColumns].to_numpy(dtype=float) - pred.reshape(1, 3), axis=1)
-        best_idx = int(np.nanargmin(errors))
+        if not np.isfinite(pred).all():
+            continue
+        positions = (
+            frame.loc[:, PositionColumns]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(dtype=float)
+        )
+        finite = np.isfinite(positions).all(axis=1)
+        if not finite.any():
+            continue
+        errors = np.full(len(frame), np.inf, dtype=float)
+        errors[finite] = np.linalg.norm(positions[finite] - pred.reshape(1, 3), axis=1)
+        best_idx = int(np.argmin(errors))
         if float(errors[best_idx]) <= float(candidate_gate_m):
             row = frame.iloc[best_idx].copy()
             row["association_mode"] = "coordinate-descent-smoothing"
