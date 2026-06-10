@@ -323,11 +323,15 @@ def add_truth_errors(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFra
     """Attach nearest/interpolated truth errors to estimate rows."""
 
     out = estimates.copy()
-    t = truth["time_s"].to_numpy(float)
-    truth_xyz = truth[["x_m", "y_m", "z_m"]].to_numpy(float)
-    estimate_times = out["time_s"].to_numpy(float)
-    interp = np.column_stack([np.interp(estimate_times, t, truth_xyz[:, idx]) for idx in range(3)])
-    est_xyz = out[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
+    truth_interp = _finite_truth_by_time(truth)
+    estimate_times = pd.to_numeric(out["time_s"], errors="coerce").to_numpy(float)
+    if truth_interp.empty:
+        interp = np.full((len(out), 3), np.nan, dtype=float)
+    else:
+        t = truth_interp["time_s"].to_numpy(float)
+        truth_xyz = truth_interp[["x_m", "y_m", "z_m"]].to_numpy(float)
+        interp = np.column_stack([np.interp(estimate_times, t, truth_xyz[:, idx]) for idx in range(3)])
+    est_xyz = out[["state_x_m", "state_y_m", "state_z_m"]].apply(pd.to_numeric, errors="coerce").to_numpy(float)
     err = est_xyz - interp
     out["truth_x_m"] = interp[:, 0]
     out["truth_y_m"] = interp[:, 1]
@@ -335,6 +339,15 @@ def add_truth_errors(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFra
     out["error_2d_m"] = np.linalg.norm(err[:, :2], axis=1)
     out["error_3d_m"] = np.linalg.norm(err, axis=1)
     return out
+
+
+def _finite_truth_by_time(truth: pd.DataFrame) -> pd.DataFrame:
+    columns = ["time_s", "x_m", "y_m", "z_m"]
+    work = truth.loc[:, columns].apply(pd.to_numeric, errors="coerce")
+    finite = np.isfinite(work.to_numpy(dtype=float)).all(axis=1)
+    if not finite.any():
+        return work.iloc[0:0].copy()
+    return work.loc[finite].groupby("time_s", as_index=False).median().sort_values("time_s")
 
 
 def compute_metrics(estimates: pd.DataFrame, truth: pd.DataFrame | None) -> dict[str, Any]:
