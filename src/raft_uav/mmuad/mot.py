@@ -16,6 +16,8 @@ from raft_uav.mmuad.schema import CandidateFrame, TruthFrame
 from raft_uav.mmuad.tracker import (
     TrackerOutput,
     _ConstantVelocityFilter,
+    _finite_position_mask,
+    _positive_float,
     add_truth_errors,
     compute_metrics,
 )
@@ -71,6 +73,9 @@ def _run_multi_sequence(
     *,
     config: MultiObjectTrackerConfig,
 ) -> pd.DataFrame:
+    candidates = candidates.loc[_finite_position_mask(candidates)].copy()
+    if candidates.empty:
+        return pd.DataFrame()
     next_track_id = 1
     active: dict[int, _ConstantVelocityFilter] = {}
     last_update: dict[int, float] = {}
@@ -102,8 +107,8 @@ def _run_multi_sequence(
                 )
                 action = "new_track"
             filt = active[output_track_id]
-            std_xy = float(detection.get("std_xy_m", 10.0))
-            std_z = float(detection.get("std_z_m", std_xy))
+            std_xy = _positive_float(detection.get("std_xy_m", 10.0), default=10.0)
+            std_z = _positive_float(detection.get("std_z_m", std_xy), default=std_xy)
             covariance = np.diag([std_xy**2, std_xy**2, std_z**2]) * config.covariance_scale
             filt.update(z, covariance)
             last_update[output_track_id] = time_s
@@ -139,6 +144,8 @@ def _nearest_track_id(
     unmatched_tracks: set[int],
     config: MultiObjectTrackerConfig,
 ) -> int | None:
+    if not np.isfinite(z).all():
+        return None
     best_track: int | None = None
     best_distance = float("inf")
     for track_id in unmatched_tracks:
@@ -215,11 +222,15 @@ def _greedy_truth_matches(
 ) -> list[tuple[int, int, float]]:
     if pred.empty or gt.empty:
         return []
-    pred_xyz = pred[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
-    gt_xyz = gt[["x_m", "y_m", "z_m"]].to_numpy(float)
+    pred_xyz = pred[["state_x_m", "state_y_m", "state_z_m"]].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+    gt_xyz = gt[["x_m", "y_m", "z_m"]].apply(pd.to_numeric, errors="coerce").to_numpy(float)
     pairs: list[tuple[float, int, int]] = []
     for pred_idx, p in enumerate(pred_xyz):
+        if not np.isfinite(p).all():
+            continue
         for gt_idx, g in enumerate(gt_xyz):
+            if not np.isfinite(g).all():
+                continue
             distance = float(np.linalg.norm(p - g))
             if distance <= max_distance_m:
                 pairs.append((distance, pred_idx, gt_idx))
