@@ -228,9 +228,28 @@ def covariance_from_row(
                 value = _finite(row.get(f"{prefix}_{suffix}"))
                 if value is not None:
                     cov[i, j] = cov[j, i] = value
-            if _is_positive_semidefinite(cov):
-                return cov
+            checked = _finite_positive_definite_covariance(cov)
+            if checked is not None:
+                return checked
     return fallback.copy()
+
+
+def _finite_positive_definite_covariance(covariance: np.ndarray) -> np.ndarray | None:
+    """Return a symmetric positive-definite covariance, or ``None`` if invalid."""
+
+    covariance = np.asarray(covariance, dtype=float)
+    if covariance.ndim != 2 or covariance.shape[0] != covariance.shape[1]:
+        return None
+    covariance = 0.5 * (covariance + covariance.T)
+    if not np.isfinite(covariance).all():
+        return None
+    try:
+        eigenvalues = np.linalg.eigvalsh(covariance)
+    except np.linalg.LinAlgError:
+        return None
+    if eigenvalues.size == 0 or float(np.min(eigenvalues)) <= 0.0:
+        return None
+    return covariance
 
 
 def _feature_frame(frame: pd.DataFrame, source: str) -> pd.DataFrame:
@@ -350,21 +369,6 @@ def _finite(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return out if np.isfinite(out) else None
-
-
-def _is_positive_semidefinite(covariance: np.ndarray, *, rtol: float = 1.0e-9) -> bool:
-    covariance = np.asarray(covariance, dtype=float)
-    if covariance.ndim != 2 or covariance.shape[0] != covariance.shape[1]:
-        return False
-    if not np.isfinite(covariance).all():
-        return False
-    symmetric = 0.5 * (covariance + covariance.T)
-    try:
-        eigenvalues = np.linalg.eigvalsh(symmetric)
-    except np.linalg.LinAlgError:
-        return False
-    scale = max(1.0, float(np.max(np.abs(np.diag(symmetric)))))
-    return bool(float(np.min(eigenvalues)) >= -float(rtol) * scale)
 
 
 def _jsonable(value: Any) -> Any:

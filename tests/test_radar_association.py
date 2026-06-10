@@ -608,6 +608,49 @@ def test_prediction_nis_uses_geometry_when_all_catprob_candidates_are_below_thre
     ]
 
 
+def test_stable_segments_hybrid_bootstraps_from_rf_after_low_catprob_radar_frame():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 0.0,
+                "east_m": 0.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 0.0,
+                "cat_prob_uav": 0.1,
+            },
+            {
+                "frame_index": 1,
+                "track_id": 1,
+                "time_s": 2.0,
+                "east_m": 2.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 2.0,
+                "cat_prob_uav": 0.9,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(1.0, 1.0)],
+        radar=radar,
+        association="stable-segments-hybrid",
+        candidate_catprob_threshold=0.5,
+        stable_segment_min_frames=2,
+        stable_segment_range_gate_m=800.0,
+    )
+
+    assert [record["source"] for record in records] == ["rf", "radar"]
+    assert records[0]["update_action"] == "initialized"
+    assert selected["frame_index"].tolist() == [1]
+    assert selected["association_action"].tolist() == [
+        "stable_segment_hybrid_prediction_nis"
+    ]
+
+
 def test_initial_radar_measurement_respects_catprob_threshold():
     radar = pd.DataFrame(
         [
