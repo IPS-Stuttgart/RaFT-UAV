@@ -556,7 +556,7 @@ def _inspect(
         )
         print(f"\nflight={summary['flight']}")
         for modality in ("truth", "rf", "radar"):
-        _print_modality_summary(modality, summary.get(modality))
+            _print_modality_summary(modality, summary.get(modality))
     return 0
 
 
