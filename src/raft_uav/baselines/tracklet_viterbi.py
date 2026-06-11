@@ -101,14 +101,19 @@ def _fallback_solve_top_k_viterbi_sequence_associations(
         ]
         sequence += 1
 
-    for frame in frames[1:]:
+    for frame_position, frame in enumerate(frames[1:], start=1):
         next_states: dict[tuple[int, int], list[_FallbackPathState]] = {}
         for current_index, current in enumerate(frame):
-            for previous_states in states.values():
+            for (previous_index, _miss_streak), previous_states in states.items():
                 for previous_state in previous_states:
                     previous = previous_state.nodes[-1]
-                    context = SequenceTransitionContext(
-                        previous_miss_streak=int(previous_state.miss_streak)
+                    context = _sequence_transition_context(
+                        frame_position=frame_position,
+                        previous=previous,
+                        current=current,
+                        previous_index=previous_index,
+                        current_index=current_index,
+                        previous_miss_streak=previous_state.miss_streak,
                     )
                     miss_streak = _next_miss_streak(current, previous_state.miss_streak)
                     candidate = _FallbackPathState(
@@ -136,6 +141,28 @@ def _fallback_solve_top_k_viterbi_sequence_associations(
 
 def _next_miss_streak(node: SequenceAssociationNode, previous_miss_streak: int) -> int:
     return int(previous_miss_streak) + 1 if bool(node.is_missed_detection) else 0
+
+
+def _sequence_transition_context(
+    *,
+    frame_position: int,
+    previous: SequenceAssociationNode,
+    current: SequenceAssociationNode,
+    previous_index: int,
+    current_index: int,
+    previous_miss_streak: int,
+) -> SequenceTransitionContext:
+    context_fields = getattr(SequenceTransitionContext, "__dataclass_fields__", {})
+    if "frame_index" in context_fields:
+        return SequenceTransitionContext(
+            frame_index=int(frame_position),
+            previous_frame_index=int(previous.frame_index),
+            current_frame_index=int(current.frame_index),
+            previous_node_index=int(previous_index),
+            current_node_index=int(current_index),
+            previous_miss_streak=int(previous_miss_streak),
+        )
+    return SequenceTransitionContext(previous_miss_streak=int(previous_miss_streak))
 
 
 def _best_path_states(
