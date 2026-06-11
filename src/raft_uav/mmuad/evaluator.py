@@ -115,7 +115,7 @@ def evaluate_mmaud_results(
                 }
             )
     errors = pd.DataFrame.from_records(error_records)
-    matched = errors.loc[errors["matched"] == True].copy() if not errors.empty else pd.DataFrame()
+    matched = errors.loc[errors["matched"]].copy() if not errors.empty else pd.DataFrame()
     summary = {
         "metric_protocol": "nearest_truth_with_time_gate",
         "max_time_delta_s": float(max_time_delta_s),

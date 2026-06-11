@@ -129,7 +129,7 @@ def metrics_from_matches(
 ) -> dict[str, Any]:
     """Compute pooled/per-sequence submission diagnostics from match rows."""
 
-    matched = matches.loc[matches.get("matched", False) == True].copy() if not matches.empty else matches
+    matched = matches.loc[matches.get("matched", False)].copy() if not matches.empty else matches
     pooled = _error_metrics(matched)
     truth_count = int(len(truth))
     prediction_count = int(len(submission))
@@ -148,7 +148,7 @@ def metrics_from_matches(
         for sequence_id, group in matches.groupby("sequence_id", sort=True):
             seq_truth = truth.loc[truth["sequence_id"].astype(str) == str(sequence_id)]
             seq_pred = submission.loc[submission["sequence_id"].astype(str) == str(sequence_id)]
-            seq_matched = group.loc[group["matched"] == True]
+            seq_matched = group.loc[group["matched"]]
             metrics = _error_metrics(seq_matched)
             metrics.update(
                 {
