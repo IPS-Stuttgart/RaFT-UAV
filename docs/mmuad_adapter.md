@@ -363,6 +363,58 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_topic_map_smoke
 ```
 
+## Leaderboard-Style Local Metrics And Completion
+
+The adapter can compute a closer UG2-style local sanity metric. It still is
+**not** the official Codabench evaluator, but it reports the two public
+leaderboard quantities that matter most for Track 5 style checks:
+
+- `pose_mse_loss_m2`: mean squared 3D position error.
+- `uav_type_accuracy`: sequence/type accuracy when truth rows or a class-map
+  file provide UAV type labels.
+
+Evaluate an exported `mmaud_results.csv` with optional class labels:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --evaluate-results-csv outputs/mmuad_val/mmaud_results.csv \
+  --evaluate-truth-csv data/mmuad_export/val_truth.csv \
+  --evaluation-class-map-csv data/mmuad_export/sequence_classes.csv \
+  --evaluation-json outputs/mmuad_val/local_eval.json \
+  --evaluation-rows-csv outputs/mmuad_val/local_eval_rows.csv \
+  --output-dir outputs/mmuad_val
+```
+
+The submission writer also accepts a sequence-to-class map so different
+sequences can use different UAV type labels:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --sequence-root data/mmuad_export \
+  --ug2-class-map-csv data/mmuad_export/sequence_classes.csv \
+  --ug2-results-csv outputs/mmuad_val/mmaud_results.csv \
+  --ug2-codabench-zip outputs/mmuad_val/ug2_submission.zip \
+  --output-dir outputs/mmuad_val
+```
+
+If the evaluator expects one prediction per ground-truth/template timestamp,
+resample a trajectory to those timestamps before packaging:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --sequence-root data/mmuad_export \
+  --complete-results-to-truth-csv data/mmuad_export/val_truth.csv \
+  --completed-results-csv outputs/mmuad_val/mmaud_results_completed.csv \
+  --completed-results-diagnostics-csv outputs/mmuad_val/completion_rows.csv \
+  --completed-ug2-codabench-zip outputs/mmuad_val/ug2_completed.zip \
+  --output-dir outputs/mmuad_val
+```
+
+Completion supports linear interpolation across short gaps and nearest-hold
+extrapolation. This is useful for validating row coverage, but it should be
+reported separately from raw tracker output because completion policy can affect
+leaderboard-style MSE.
+
 ## Native ROS And PointCloud2 Bridge
 
 The adapter also includes an optional native ROS extraction path. Normal imports

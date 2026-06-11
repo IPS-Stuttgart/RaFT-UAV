@@ -7,6 +7,10 @@ import json
 from pathlib import Path
 
 from raft_uav.mmuad.calibration import load_calibration_auto, transform_candidate_frame
+from raft_uav.mmuad.completion import (
+    complete_results_to_truth_timestamps,
+    completion_summary,
+)
 from raft_uav.mmuad.evaluate import evaluate_submission_csv
 from raft_uav.mmuad.evaluator import (
     evaluate_mmaud_results,
@@ -39,6 +43,7 @@ from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_expor
 from raft_uav.mmuad.splits import filter_sequences_by_split, load_split_manifest, split_manifest_summary
 from raft_uav.mmuad.submission import (
     compute_trajectory_metrics,
+    load_sequence_class_map,
     write_submission_csv,
     write_mmaud_results_csv,
     write_submission_json,
@@ -95,8 +100,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ug2-results-csv", type=Path)
     parser.add_argument("--ug2-codabench-zip", type=Path)
     parser.add_argument("--ug2-class-name", default="unknown")
+    parser.add_argument("--ug2-class-map-csv", type=Path)
+    parser.add_argument("--complete-results-to-truth-csv", type=Path)
+    parser.add_argument("--completed-results-csv", type=Path)
+    parser.add_argument("--completed-results-diagnostics-csv", type=Path)
+    parser.add_argument("--completed-ug2-codabench-zip", type=Path)
+    parser.add_argument("--completion-max-interpolation-gap-s", type=float, default=1.0)
+    parser.add_argument("--completion-extrapolation", choices=("hold", "nan"), default="hold")
     parser.add_argument("--evaluate-results-csv", type=Path)
     parser.add_argument("--evaluation-rows-csv", type=Path)
+    parser.add_argument("--evaluation-class-map-csv", type=Path)
     args = parser.parse_args(argv)
 
     if args.rosbag_path is not None:
@@ -138,6 +151,7 @@ def main(argv: list[str] | None = None) -> int:
             load_mmaud_results_csv(args.evaluate_results_csv),
             load_truth_csv(args.evaluate_truth_csv),
             max_time_delta_s=args.evaluation_max_time_delta_s,
+            class_map_csv=args.evaluation_class_map_csv,
         )
         paths = write_evaluation_artifacts(
             result,
@@ -172,6 +186,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         output = _run_explicit_files(args)
     paths = write_tracker_output(output, args.output_dir)
+    class_map = load_sequence_class_map(args.ug2_class_map_csv)
     if args.submission_csv is not None:
         paths["submission_csv"] = str(
             write_submission_csv(
@@ -202,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
                 output.estimates,
                 args.ug2_results_csv,
                 class_name=args.ug2_class_name,
+                class_map=class_map,
             )
         )
     if args.ug2_codabench_zip is not None:
@@ -210,8 +226,55 @@ def main(argv: list[str] | None = None) -> int:
                 output.estimates,
                 args.ug2_codabench_zip,
                 class_name=args.ug2_class_name,
+                class_map=class_map,
             )
         )
+    if args.complete_results_to_truth_csv is not None:
+        if args.completed_results_csv is None and args.completed_ug2_codabench_zip is None:
+            raise SystemExit(
+                "--complete-results-to-truth-csv requires --completed-results-csv "
+                "or --completed-ug2-codabench-zip"
+            )
+        template_truth = load_truth_csv(args.complete_results_to_truth_csv)
+        base_results = write_mmaud_results_csv(
+            output.estimates,
+            args.output_dir / "mmaud_results_for_completion.csv",
+            class_name=args.ug2_class_name,
+            class_map=class_map,
+        )
+        completion = complete_results_to_truth_timestamps(
+            load_mmaud_results_csv(base_results),
+            template_truth,
+            max_interpolation_gap_s=args.completion_max_interpolation_gap_s,
+            extrapolation=args.completion_extrapolation,
+        )
+        if args.completed_results_csv is not None:
+            args.completed_results_csv.parent.mkdir(parents=True, exist_ok=True)
+            completion.rows.to_csv(args.completed_results_csv, index=False)
+            paths["completed_results_csv"] = str(args.completed_results_csv)
+        if args.completed_results_diagnostics_csv is not None:
+            args.completed_results_diagnostics_csv.parent.mkdir(parents=True, exist_ok=True)
+            completion.diagnostics.to_csv(args.completed_results_diagnostics_csv, index=False)
+            paths["completed_results_diagnostics_csv"] = str(
+                args.completed_results_diagnostics_csv
+            )
+        if args.completed_ug2_codabench_zip is not None:
+            args.completed_ug2_codabench_zip.parent.mkdir(parents=True, exist_ok=True)
+            from zipfile import ZIP_DEFLATED, ZipFile
+
+            with ZipFile(
+                args.completed_ug2_codabench_zip, "w", compression=ZIP_DEFLATED
+            ) as archive:
+                archive.writestr("mmaud_results.csv", completion.rows.to_csv(index=False))
+            paths["completed_ug2_codabench_zip"] = str(
+                args.completed_ug2_codabench_zip
+            )
+        summary = completion_summary(
+            completion, requested_count=len(template_truth.rows)
+        )
+        summary_path = args.output_dir / "mmuad_completion_summary.json"
+        summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        paths["completion_summary_json"] = str(summary_path)
     if not output.estimates.empty:
         extra_metrics = compute_trajectory_metrics(output.estimates)
         metrics_extra_json = args.output_dir / "mmuad_trajectory_metrics.json"

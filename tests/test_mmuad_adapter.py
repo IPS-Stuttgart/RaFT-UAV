@@ -13,7 +13,9 @@ from raft_uav.mmuad.calibration import (
     load_calibration_json,
     transform_candidate_frame,
 )
+from raft_uav.mmuad.completion import complete_results_to_truth_timestamps
 from raft_uav.mmuad.evaluator import evaluate_mmaud_results, load_mmaud_results_csv
+from raft_uav.mmuad.evaluator import validate_mmaud_results_frame
 from raft_uav.mmuad.evaluate import evaluate_submission_csv
 from raft_uav.mmuad.inspect import inspect_sequence_root, write_layout_report
 from raft_uav.mmuad.io import (
@@ -40,8 +42,10 @@ from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_expor
 from raft_uav.mmuad.splits import filter_sequences_by_split, load_split_manifest
 from raft_uav.mmuad.submission import (
     compute_trajectory_metrics,
+    estimates_to_mmaud_results_frame,
     estimates_to_submission_frame,
     inspect_submission_zip,
+    load_sequence_class_map,
     write_mmaud_results_csv,
     write_submission_json,
     write_submission_zip,
@@ -790,6 +794,104 @@ def test_ug2_codabench_zip_contains_mmaud_results_csv(tmp_path: Path) -> None:
     summary = inspect_submission_zip(zip_path)
     assert summary["has_mmaud_results_csv"]
     assert summary["row_count"] == 2
+
+
+def test_local_evaluator_reports_pose_mse_and_type_accuracy(tmp_path: Path) -> None:
+    results = tmp_path / "mmaud_results.csv"
+    truth = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "timestamp": [0.0, 1.0],
+            "x": [0.0, 2.0],
+            "y": [0.0, 0.0],
+            "z": [10.0, 10.0],
+            "uav_type": ["Mavic3", "Mavic3"],
+            "score": [1.0, 1.0],
+        }
+    ).to_csv(results, index=False)
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+            "uav_type": ["Mavic3", "Mavic3"],
+        }
+    ).to_csv(truth, index=False)
+
+    evaluated = evaluate_mmaud_results(
+        load_mmaud_results_csv(results),
+        load_truth_csv(truth),
+    )
+
+    pooled = evaluated["summary"]["pooled"]
+    assert pooled["pose_mse_loss_m2"] == 0.5
+    assert pooled["uav_type_accuracy"] == 1.0
+
+
+def test_sequence_class_map_overrides_submission_type(tmp_path: Path) -> None:
+    class_map_csv = tmp_path / "classes.csv"
+    class_map_csv.write_text(
+        "sequence_id,uav_type\nseqA,Mavic3\nseqB,Phantom4\n",
+        encoding="utf-8",
+    )
+    mapping = load_sequence_class_map(class_map_csv)
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqB"],
+            "time_s": [0.0, 0.0],
+            "state_x_m": [1.0, 2.0],
+            "state_y_m": [3.0, 4.0],
+            "state_z_m": [5.0, 6.0],
+        }
+    )
+
+    frame = estimates_to_mmaud_results_frame(
+        estimates,
+        class_name="unknown",
+        class_map=mapping,
+    )
+
+    assert list(frame["uav_type"]) == ["Mavic3", "Phantom4"]
+
+
+def test_results_completion_resamples_to_truth_timestamps(tmp_path: Path) -> None:
+    results = validate_mmaud_results_frame(
+        pd.DataFrame(
+            {
+                "sequence_id": ["seq1", "seq1"],
+                "timestamp": [0.0, 2.0],
+                "x": [0.0, 2.0],
+                "y": [0.0, 0.0],
+                "z": [10.0, 10.0],
+                "uav_type": ["Mavic3", "Mavic3"],
+                "score": [1.0, 0.5],
+            }
+        )
+    )
+    truth_path = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1", "seq1"],
+            "time_s": [0.0, 1.0, 2.0],
+            "x_m": [0.0, 1.0, 2.0],
+            "y_m": [0.0, 0.0, 0.0],
+            "z_m": [10.0, 10.0, 10.0],
+        }
+    ).to_csv(truth_path, index=False)
+
+    completed = complete_results_to_truth_timestamps(
+        results,
+        load_truth_csv(truth_path),
+        max_interpolation_gap_s=3.0,
+    )
+
+    assert len(completed.rows) == 3
+    middle = completed.rows.loc[completed.rows["timestamp"] == 1.0].iloc[0]
+    assert middle["x"] == 1.0
+    assert set(completed.diagnostics["completion_method"]) == {"exact", "interpolated"}
 
 
 def test_layout_inspector_classifies_realistic_tree(tmp_path: Path) -> None:

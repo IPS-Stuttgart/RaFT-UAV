@@ -719,6 +719,22 @@ def _optional_int(value: object) -> int | None:
     return int(number)
 
 
+_POSTERIOR_FRAME_COLUMNS = [
+    "time_s",
+    "source",
+    "accepted",
+    "update_action",
+    "east_m",
+    "north_m",
+    "up_m",
+    "v_east_mps",
+    "v_north_mps",
+    "v_up_mps",
+    "nis",
+    "residual_norm_m",
+]
+
+
 def records_to_frame(records: Sequence[Mapping[str, object]]) -> pd.DataFrame:
     """Return a CSV-friendly posterior frame."""
 
@@ -741,4 +757,4 @@ def records_to_frame(records: Sequence[Mapping[str, object]]) -> pd.DataFrame:
                 "residual_norm_m": record.get("residual_norm_m"),
             }
         )
-    return pd.DataFrame.from_records(rows)
+    return pd.DataFrame.from_records(rows, columns=_POSTERIOR_FRAME_COLUMNS)

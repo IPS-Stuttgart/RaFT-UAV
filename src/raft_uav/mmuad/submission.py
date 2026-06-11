@@ -32,10 +32,49 @@ UG2_RESULT_COLUMNS = (
 )
 
 
+def load_sequence_class_map(path: Path | None) -> dict[str, str]:
+    """Load a sequence-to-UAV-type map from CSV or JSON."""
+
+    if path is None:
+        return {}
+    path = Path(path)
+    if path.suffix.lower() == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict) and "sequences" in payload:
+            payload = payload["sequences"]
+        if not isinstance(payload, dict):
+            raise ValueError(
+                "class-map JSON must be an object or contain a 'sequences' object"
+            )
+        return {str(key): str(value) for key, value in payload.items()}
+
+    frame = pd.read_csv(path)
+    lower = {str(col).lower(): col for col in frame.columns}
+    rename = {}
+    for alias in ("sequence_id", "sequence", "seq", "scene", "scene_id"):
+        if alias in lower:
+            rename[lower[alias]] = "sequence_id"
+            break
+    for alias in ("uav_type", "class_name", "class", "label", "category"):
+        if alias in lower:
+            rename[lower[alias]] = "uav_type"
+            break
+    frame = frame.rename(columns=rename)
+    missing = {"sequence_id", "uav_type"}.difference(frame.columns)
+    if missing:
+        raise ValueError(f"class-map CSV missing columns: {sorted(missing)}")
+    return {
+        str(row["sequence_id"]): str(row["uav_type"])
+        for _, row in frame.iterrows()
+        if pd.notna(row["sequence_id"]) and pd.notna(row["uav_type"])
+    }
+
+
 def estimates_to_mmaud_results_frame(
     estimates: pd.DataFrame,
     *,
     class_name: str = "unknown",
+    class_map: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     """Convert estimates into a Codabench-style ``mmaud_results.csv`` table.
 
@@ -48,13 +87,22 @@ def estimates_to_mmaud_results_frame(
 
     if estimates.empty:
         return pd.DataFrame(columns=UG2_RESULT_COLUMNS)
+    sequence_values = estimates.get("sequence_id", "default")
     if "class_name" in estimates.columns:
         class_values = estimates["class_name"].fillna(class_name).astype(str)
     else:
-        class_values = class_name
+        class_values = pd.Series([class_name] * len(estimates), index=estimates.index)
+    if class_map:
+        class_values = pd.Series(
+            [
+                class_map.get(str(seq), str(cls))
+                for seq, cls in zip(sequence_values, class_values, strict=False)
+            ],
+            index=estimates.index,
+        )
     frame = pd.DataFrame(
         {
-            "sequence_id": estimates.get("sequence_id", "default"),
+            "sequence_id": sequence_values,
             "timestamp": estimates["time_s"].astype(float),
             "x": estimates["state_x_m"].astype(float),
             "y": estimates["state_y_m"].astype(float),
@@ -73,12 +121,15 @@ def write_mmaud_results_csv(
     path: Path,
     *,
     class_name: str = "unknown",
+    class_map: dict[str, str] | None = None,
 ) -> Path:
     """Write a Codabench-style ``mmaud_results.csv`` trajectory table."""
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    estimates_to_mmaud_results_frame(estimates, class_name=class_name).to_csv(
+    estimates_to_mmaud_results_frame(
+        estimates, class_name=class_name, class_map=class_map
+    ).to_csv(
         path, index=False
     )
     return path
@@ -89,12 +140,15 @@ def write_ug2_codabench_zip(
     path: Path,
     *,
     class_name: str = "unknown",
+    class_map: dict[str, str] | None = None,
 ) -> Path:
     """Write a UG2+ Codabench-style ZIP with exactly ``mmaud_results.csv``."""
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    frame = estimates_to_mmaud_results_frame(estimates, class_name=class_name)
+    frame = estimates_to_mmaud_results_frame(
+        estimates, class_name=class_name, class_map=class_map
+    )
     with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
         archive.writestr("mmaud_results.csv", frame.to_csv(index=False))
     return path

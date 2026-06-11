@@ -162,6 +162,8 @@ def _radar_measurements_to_enu_with_candidate_covariance(
             clock_offset_s=clock_offset_s,
         )
 
+    frame = append_radar_covariance_columns(frame, RadarCovarianceConfig.from_environment())
+
     fallback_position_covariance = fixed_radar_covariance(default_xy_std_m, default_z_std_m)
     measurements: list[TrackingMeasurement] = []
     for _, row in frame.iterrows():
