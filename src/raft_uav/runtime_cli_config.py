@@ -373,7 +373,17 @@ def apply_runtime_environment(
         ],
     }
     for name, value in mapping.items():
-        if overwrite_all or name in overwrite_names or name not in os.environ:
+        is_tracklet_candidate_alias = name in _TRACKLET_MAX_CANDIDATE_ENV_NAMES
+        should_sync_tracklet_candidate_aliases = (
+            is_tracklet_candidate_alias
+            and not overwrite_names.intersection(_TRACKLET_MAX_CANDIDATE_ENV_NAMES)
+        )
+        if (
+            overwrite_all
+            or name in overwrite_names
+            or name not in os.environ
+            or should_sync_tracklet_candidate_aliases
+        ):
             os.environ[name] = str(value)
 
 

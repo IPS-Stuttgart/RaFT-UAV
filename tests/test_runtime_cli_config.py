@@ -220,6 +220,7 @@ def test_apply_runtime_environment_preserves_legacy_tracklet_candidate_alias(
     monkeypatch,
 ):
     monkeypatch.setenv("RAFT_UAV_TRACKLET_MAX_CANDIDATES", "12")
+    monkeypatch.setenv("RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME", "8")
     argv = ["run-baseline", "/data/aerpaw"]
     config, _ = parse_runtime_config(argv)
 
