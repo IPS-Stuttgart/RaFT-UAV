@@ -80,6 +80,33 @@ class CalibrationSet:
         return None
 
 
+def load_calibration_auto(path: Path) -> CalibrationSet:
+    """Load JSON/YAML/TXT calibration interchange files when possible.
+
+    YAML support uses PyYAML when installed.  Plain text support expects a single
+    4x4 matrix and assigns it to a default sensor.  This helper is intentionally
+    conservative; unknown official formats should first be inspected rather than
+    silently misread.
+    """
+
+    path = Path(path)
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return load_calibration_json(path)
+    if suffix in {".yaml", ".yml"}:
+        payload = _load_yaml_or_json(path)
+        return calibration_from_mapping(payload)
+    if suffix in {".txt", ".csv"}:
+        return _load_single_matrix_calibration(path)
+    raise ValueError(f"unsupported calibration extension: {path.suffix}")
+
+
+def load_calibration_file(path: Path) -> CalibrationSet:
+    """Backward-compatible alias for calibration interchange file loading."""
+
+    return load_calibration_auto(path)
+
+
 def load_calibration_json(path: Path) -> CalibrationSet:
     """Load a simple MMUAD calibration interchange JSON.
 
@@ -105,6 +132,12 @@ def load_calibration_json(path: Path) -> CalibrationSet:
     """
 
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return calibration_from_mapping(payload)
+
+
+def calibration_from_mapping(payload: dict[str, Any]) -> CalibrationSet:
+    """Build a calibration set from a mapping payload."""
+
     sensors_payload = payload.get("sensors", payload)
     if not isinstance(sensors_payload, dict):
         raise ValueError("calibration JSON must contain a sensors mapping")
@@ -174,6 +207,38 @@ def transform_truth_frame(
     return TruthFrame(normalize_truth_columns(rows))
 
 
+
+def _calibration_from_payload(payload: dict[str, Any]) -> CalibrationSet:
+    sensors_payload = payload.get("sensors", payload)
+    if not isinstance(sensors_payload, dict):
+        raise ValueError("calibration file must contain a sensors mapping")
+    sensors: dict[str, SensorCalibration] = {}
+    for source, entry in sensors_payload.items():
+        if source == "world_frame":
+            continue
+        if not isinstance(entry, dict):
+            raise ValueError(f"calibration entry for {source!r} must be an object")
+        transform = _transform_from_entry(entry)
+        sensors[str(source).lower()] = SensorCalibration(
+            source=str(source),
+            transform_sensor_to_world=transform,
+            time_offset_s=float(entry.get("time_offset_s", 0.0)),
+        )
+    return CalibrationSet(sensors=sensors, world_frame=str(payload.get("world_frame", "world")))
+
+
+def _load_yaml_or_json(path: Path) -> dict[str, Any]:
+    text = Path(path).read_text(encoding="utf-8")
+    try:
+        import yaml  # type: ignore[import-not-found]
+    except Exception:
+        return json.loads(text)
+    payload = yaml.safe_load(text)
+    if not isinstance(payload, dict):
+        raise ValueError(f"calibration YAML must contain a mapping: {path}")
+    return payload
+
+
 def _transform_from_entry(entry: dict[str, Any]) -> RigidTransform:
     translation = np.asarray(entry.get("translation_m", [0.0, 0.0, 0.0]), dtype=float)
     if "rotation_matrix" in entry:
@@ -212,3 +277,26 @@ def _rotation_from_rpy_deg(rpy_deg: np.ndarray) -> np.ndarray:
     ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]], dtype=float)
     rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]], dtype=float)
     return rz @ ry @ rx
+
+
+def _load_single_matrix_calibration(path: Path) -> CalibrationSet:
+    values = np.loadtxt(path, delimiter="," if path.suffix.lower() == ".csv" else None)
+    values = np.asarray(values, dtype=float)
+    if values.shape == (4, 4):
+        rotation = values[:3, :3]
+        translation = values[:3, 3]
+    elif values.size == 16:
+        matrix = values.reshape(4, 4)
+        rotation = matrix[:3, :3]
+        translation = matrix[:3, 3]
+    else:
+        raise ValueError("text calibration must contain one 4x4 matrix")
+    return CalibrationSet(
+        sensors={
+            "default": SensorCalibration(
+                source="default",
+                transform_sensor_to_world=RigidTransform(rotation=rotation, translation_m=translation),
+            )
+        },
+        world_frame="world",
+    )

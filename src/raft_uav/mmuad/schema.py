@@ -72,7 +72,11 @@ class TruthFrame:
             raise ValueError(f"truth rows missing required columns: {sorted(missing)}")
 
 
-def normalize_candidate_columns(frame: pd.DataFrame) -> pd.DataFrame:
+def normalize_candidate_columns(
+    frame: pd.DataFrame,
+    *,
+    default_sequence_id: str = "default",
+) -> pd.DataFrame:
     """Return a normalized candidate table with canonical column names.
 
     The official MMUAD archive layout may evolve.  This helper accepts a small
@@ -84,7 +88,7 @@ def normalize_candidate_columns(frame: pd.DataFrame) -> pd.DataFrame:
     if out.empty:
         return pd.DataFrame(columns=CANONICAL_CANDIDATE_COLUMNS)
     if "sequence_id" not in out.columns:
-        out["sequence_id"] = "default"
+        out["sequence_id"] = default_sequence_id
     if "source" not in out.columns:
         out["source"] = "candidate"
     if "track_id" not in out.columns:
@@ -111,12 +115,16 @@ def normalize_candidate_columns(frame: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values(["sequence_id", "time_s", "source"]).reset_index(drop=True)
 
 
-def normalize_truth_columns(frame: pd.DataFrame) -> pd.DataFrame:
+def normalize_truth_columns(
+    frame: pd.DataFrame,
+    *,
+    default_sequence_id: str = "default",
+) -> pd.DataFrame:
     """Return a normalized truth table with canonical column names."""
 
     out = _rename_aliases(frame.copy())
     if "sequence_id" not in out.columns:
-        out["sequence_id"] = "default"
+        out["sequence_id"] = default_sequence_id
     for col in ("time_s", "x_m", "y_m", "z_m"):
         if col not in out.columns:
             raise ValueError(f"truth table missing {col!r}; available={list(out.columns)}")
@@ -138,3 +146,23 @@ def _rename_aliases(frame: pd.DataFrame) -> pd.DataFrame:
                 rename[original] = canonical
                 break
     return frame.rename(columns=rename)
+
+
+
+def load_jsonable(value: Any) -> Any:
+    """Convert numpy/pandas scalar containers into JSON-serializable values."""
+
+    if isinstance(value, dict):
+        return {str(key): load_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [load_jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if hasattr(value, "item") and callable(value.item):
+        try:
+            return load_jsonable(value.item())
+        except (TypeError, ValueError):
+            pass
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value

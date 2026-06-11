@@ -3,9 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
-from raft_uav.mmuad.calibration import load_calibration_json, transform_candidate_frame
+from raft_uav.mmuad.calibration import load_calibration_auto, transform_candidate_frame
+from raft_uav.mmuad.evaluate import evaluate_submission_csv
+from raft_uav.mmuad.evaluator import (
+    evaluate_mmaud_results,
+    load_mmaud_results_csv,
+    write_evaluation_artifacts,
+)
+from raft_uav.mmuad.inspect import (
+    inspect_sequence_root,
+    write_layout_report as write_sequence_layout_report,
+)
 from raft_uav.mmuad.io import (
     load_candidate_csv,
     load_point_cloud_file_as_candidates,
@@ -14,13 +25,25 @@ from raft_uav.mmuad.io import (
     merge_candidate_frames,
 )
 from raft_uav.mmuad.mot import MultiObjectTrackerConfig, run_mmuad_multi_object_tracker
+from raft_uav.mmuad.native_ros import extract_native_rosbag_topic_map
+from raft_uav.mmuad.layout import (
+    inspect_mmuad_layout,
+    write_layout_report as write_mmuad_layout_report,
+)
+from raft_uav.mmuad.rosbag_bridge import (
+    inspect_rosbag,
+    load_topic_map_exports,
+    write_topic_map_template,
+)
 from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_export
 from raft_uav.mmuad.splits import filter_sequences_by_split, load_split_manifest, split_manifest_summary
 from raft_uav.mmuad.submission import (
     compute_trajectory_metrics,
     write_submission_csv,
+    write_mmaud_results_csv,
     write_submission_json,
     write_submission_zip,
+    write_ug2_codabench_zip,
 )
 from raft_uav.mmuad.tracker import TrackerConfig, run_mmuad_tracker, write_tracker_output
 
@@ -31,14 +54,29 @@ def main(argv: list[str] | None = None) -> int:
         description="experimental CVPR UG2+/MMUAD tracking-by-detection adapter",
     )
     parser.add_argument("--candidate-csv", action="append", type=Path, default=[])
+    parser.add_argument("--inspect-root", type=Path)
+    parser.add_argument("--layout-report-json", type=Path)
+    parser.add_argument("--layout-report-csv", type=Path)
+    parser.add_argument("--evaluate-submission-csv", type=Path)
+    parser.add_argument("--evaluate-truth-csv", type=Path)
+    parser.add_argument("--evaluation-json", type=Path)
+    parser.add_argument("--evaluation-max-time-delta-s", type=float, default=0.5)
     parser.add_argument("--point-cloud-csv", action="append", type=Path, default=[])
     parser.add_argument("--point-cloud-file", action="append", type=Path, default=[])
     parser.add_argument("--sequence-root", type=Path)
+    parser.add_argument("--inspect-layout-only", action="store_true")
+    parser.add_argument("--rosbag-path", type=Path)
+    parser.add_argument("--rosbag-report-json", type=Path)
+    parser.add_argument("--topic-map-template-json", type=Path)
+    parser.add_argument("--topic-map-json", type=Path)
+    parser.add_argument("--topic-map-base-dir", type=Path)
+    parser.add_argument("--native-ros-extract-output-dir", type=Path)
     parser.add_argument("--sequence-glob", default="*")
     parser.add_argument("--split-file", type=Path)
     parser.add_argument("--split-name")
     parser.add_argument("--truth-csv", type=Path)
     parser.add_argument("--calibration-json", type=Path)
+    parser.add_argument("--calibration-file", type=Path, help="JSON/YAML/TXT calibration interchange file")
     parser.add_argument("--no-apply-calibration", action="store_true")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--tracker-mode", choices=("single-uav", "multi-object"), default="single-uav")
@@ -54,7 +92,80 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--submission-json", type=Path)
     parser.add_argument("--submission-zip", type=Path)
     parser.add_argument("--submission-track-id", default="raft_uav_pp")
+    parser.add_argument("--ug2-results-csv", type=Path)
+    parser.add_argument("--ug2-codabench-zip", type=Path)
+    parser.add_argument("--ug2-class-name", default="unknown")
+    parser.add_argument("--evaluate-results-csv", type=Path)
+    parser.add_argument("--evaluation-rows-csv", type=Path)
     args = parser.parse_args(argv)
+
+    if args.rosbag_path is not None:
+        report = inspect_rosbag(args.rosbag_path)
+        if args.rosbag_report_json is not None:
+            args.rosbag_report_json.parent.mkdir(parents=True, exist_ok=True)
+            args.rosbag_report_json.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        if args.topic_map_template_json is not None:
+            write_topic_map_template(report, args.topic_map_template_json)
+        if args.native_ros_extract_output_dir is not None:
+            if args.topic_map_json is None:
+                raise SystemExit("--native-ros-extract-output-dir requires --topic-map-json")
+            extracted = extract_native_rosbag_topic_map(
+                bag_path=args.rosbag_path,
+                topic_map_json=args.topic_map_json,
+                output_dir=args.native_ros_extract_output_dir,
+                voxel_size_m=args.voxel_size_m,
+                min_points=args.min_cluster_points,
+            )
+            if extracted.candidates is not None:
+                output = _run_tracker_for_mode(args, extracted.candidates, extracted.truth)
+                paths = write_tracker_output(output, args.output_dir)
+                paths["native_ros_manifest_json"] = str(
+                    args.native_ros_extract_output_dir / "native_ros_extraction_manifest.json"
+                )
+                print("mmuad_track=ok")
+                for name, path in paths.items():
+                    print(f"{name}={path}")
+                return 0
+        if args.topic_map_json is None:
+            print("mmuad_rosbag_inspection=ok")
+            print(f"topic_count={len(report.get('topics', []))}")
+            return 0
+
+    if args.evaluate_results_csv is not None:
+        if args.evaluate_truth_csv is None:
+            raise SystemExit("--evaluate-results-csv requires --evaluate-truth-csv")
+        result = evaluate_mmaud_results(
+            load_mmaud_results_csv(args.evaluate_results_csv),
+            load_truth_csv(args.evaluate_truth_csv),
+            max_time_delta_s=args.evaluation_max_time_delta_s,
+        )
+        paths = write_evaluation_artifacts(
+            result,
+            summary_json=args.evaluation_json or (args.output_dir / "mmuad_local_evaluation.json"),
+            rows_csv=args.evaluation_rows_csv,
+        )
+        print("mmuad_local_evaluation=ok")
+        for name, path in paths.items():
+            print(f"{name}={path}")
+        pooled = result["summary"].get("pooled", {})
+        if "mean_3d_m" in pooled:
+            print(f"mean_3d_m={pooled['mean_3d_m']}")
+        return 0
+
+    if args.inspect_root is not None:
+        return _run_inspect(args)
+    if args.evaluate_submission_csv is not None:
+        return _run_submission_evaluation(args)
+    if args.inspect_layout_only:
+        if args.sequence_root is None:
+            raise SystemExit("--inspect-layout-only requires --sequence-root")
+        report_path = args.layout_report_json or (args.output_dir / "mmuad_layout_report.json")
+        summary = inspect_mmuad_layout(args.sequence_root)
+        written = write_mmuad_layout_report(summary, report_path)
+        print("mmuad_layout_inspection=ok")
+        print(f"layout_report_json={written}")
+        print(f"file_count={summary['file_count']}")
+        return 0
 
     if args.sequence_root is not None:
         output = _run_sequence_root(args)
@@ -85,17 +196,66 @@ def main(argv: list[str] | None = None) -> int:
                 track_id=args.submission_track_id,
             )
         )
+    if args.ug2_results_csv is not None:
+        paths["ug2_results_csv"] = str(
+            write_mmaud_results_csv(
+                output.estimates,
+                args.ug2_results_csv,
+                class_name=args.ug2_class_name,
+            )
+        )
+    if args.ug2_codabench_zip is not None:
+        paths["ug2_codabench_zip"] = str(
+            write_ug2_codabench_zip(
+                output.estimates,
+                args.ug2_codabench_zip,
+                class_name=args.ug2_class_name,
+            )
+        )
     if not output.estimates.empty:
         extra_metrics = compute_trajectory_metrics(output.estimates)
         metrics_extra_json = args.output_dir / "mmuad_trajectory_metrics.json"
-        import json
-
         metrics_extra_json.write_text(json.dumps(extra_metrics, indent=2), encoding="utf-8")
         paths["trajectory_metrics_json"] = str(metrics_extra_json)
     print("mmuad_track=ok")
     for name, path in paths.items():
         print(f"{name}={path}")
     pooled = output.metrics.get("pooled", {})
+    if "mean_3d_m" in pooled:
+        print(f"pooled_mean_3d_m={pooled['mean_3d_m']}")
+        print(f"pooled_p95_3d_m={pooled['p95_3d_m']}")
+        print(f"pooled_max_3d_m={pooled['max_3d_m']}")
+    return 0
+
+
+
+def _run_inspect(args: argparse.Namespace) -> int:
+    json_path = args.layout_report_json or (args.output_dir / "mmuad_layout_report.json")
+    csv_path = args.layout_report_csv or (args.output_dir / "mmuad_layout_report_files.csv")
+    report = inspect_sequence_root(args.inspect_root, sequence_glob=args.sequence_glob)
+    write_sequence_layout_report(report, json_path=json_path, csv_path=csv_path)
+    print("mmuad_inspect=ok")
+    print(f"layout_report_json={json_path}")
+    print(f"layout_report_csv={csv_path}")
+    print(f"sequence_count={report['sequence_count']}")
+    print(f"file_count={report['file_count']}")
+    return 0
+
+
+def _run_submission_evaluation(args: argparse.Namespace) -> int:
+    if args.evaluate_truth_csv is None:
+        raise SystemExit("--evaluate-truth-csv is required with --evaluate-submission-csv")
+    output_json = args.evaluation_json or (args.output_dir / "mmuad_submission_eval.json")
+    metrics = evaluate_submission_csv(
+        args.evaluate_submission_csv,
+        args.evaluate_truth_csv,
+        max_time_delta_s=args.evaluation_max_time_delta_s,
+    )
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    output_json.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    print("mmuad_evaluate=ok")
+    print(f"evaluation_json={output_json}")
+    pooled = metrics.get("pooled", {})
     if "mean_3d_m" in pooled:
         print(f"pooled_mean_3d_m={pooled['mean_3d_m']}")
         print(f"pooled_p95_3d_m={pooled['p95_3d_m']}")
@@ -123,15 +283,25 @@ def _run_explicit_files(args: argparse.Namespace):
         )
         for path in args.point_cloud_file
     )
+    topic_truth = None
+    if args.topic_map_json is not None:
+        bundle = load_topic_map_exports(
+            args.topic_map_json,
+            base_dir=args.topic_map_base_dir,
+        )
+        frames.append(bundle.candidates)
+        topic_truth = bundle.truth
     if not frames:
         raise SystemExit(
-            "provide --sequence-root or at least one --candidate-csv/--point-cloud-csv"
+            "provide --sequence-root, --topic-map-json, or at least one "
+            "--candidate-csv/--point-cloud-csv"
         )
     candidates = merge_candidate_frames(frames)
-    if args.calibration_json is not None and not args.no_apply_calibration:
-        calibration = load_calibration_json(args.calibration_json)
+    calibration_path = args.calibration_file or args.calibration_json
+    if calibration_path is not None and not args.no_apply_calibration:
+        calibration = load_calibration_auto(calibration_path)
         candidates = transform_candidate_frame(candidates, calibration)
-    truth = load_truth_csv(args.truth_csv) if args.truth_csv else None
+    truth = load_truth_csv(args.truth_csv) if args.truth_csv else topic_truth
     return _run_tracker_for_mode(args, candidates, truth)
 
 

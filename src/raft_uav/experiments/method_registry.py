@@ -342,16 +342,24 @@ METHOD_REGISTRY: dict[str, MethodSpec] = {
         ),
         command=(
             "raft-uav-heteroscedastic",
+            "run-baseline",
             "{dataset_root}",
             "--flight",
             "{flight}",
             "--output-dir",
             "{output_dir}",
+            "--uncertainty-model",
+            "{uncertainty_model}",
             "--radar-association",
             "prediction-nis",
-            "--fixed-lag-s",
+            "--smoother",
+            "fixed-lag",
+            "--smoother-lag-s",
             "20",
         ),
+        env={
+            "RAFT_UAV_NIS_COVARIANCE_CALIBRATION_JSON": "{nis_covariance_calibration_json}",
+        },
         tags=("heteroscedastic", "lofo", "nis", "fixed-lag"),
         evidence_support=_tracking_metric_support(
             "LOFO-calibrated heteroscedastic tracker reports tracking metrics rather than exact evidence"
@@ -369,6 +377,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dataset-root", default="{dataset_root}")
     parser.add_argument("--flight", default="{flight}")
     parser.add_argument("--output-dir", default="{output_dir}")
+    parser.add_argument("--uncertainty-model", default="{uncertainty_model}")
+    parser.add_argument(
+        "--nis-covariance-calibration-json",
+        default="{nis_covariance_calibration_json}",
+        help="NIS covariance calibration JSON used by LOFO-calibrated heteroscedastic rows",
+    )
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument(
         "--shell",
@@ -391,6 +405,8 @@ def main(argv: list[str] | None = None) -> int:
         dataset_root=args.dataset_root,
         flight=args.flight,
         output_dir=args.output_dir,
+        uncertainty_model=args.uncertainty_model,
+        nis_covariance_calibration_json=args.nis_covariance_calibration_json,
     )
     if args.output_json is not None:
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
@@ -444,6 +460,8 @@ def resolve_method_spec(
     dataset_root: Path | str,
     flight: str,
     output_dir: Path | str,
+    uncertainty_model: Path | str = "{uncertainty_model}",
+    nis_covariance_calibration_json: Path | str = "{nis_covariance_calibration_json}",
 ) -> dict[str, Any]:
     """Fill command placeholders for one method invocation."""
 
@@ -453,11 +471,17 @@ def resolve_method_spec(
         "dataset_root": str(dataset_root),
         "flight": str(flight),
         "output_dir": str(output_dir),
+        "uncertainty_model": str(uncertainty_model),
+        "nis_covariance_calibration_json": str(nis_covariance_calibration_json),
     }
     command = tuple(_replace_placeholders(part, replacements) for part in spec.command)
+    env = {
+        key: _replace_placeholders(value, replacements) for key, value in spec.env.items()
+    }
     resolved = spec.to_record()
     resolved["command"] = list(command)
-    resolved["shell_command"] = _shell_command(command, spec.env)
+    resolved["env"] = env
+    resolved["shell_command"] = _shell_command(command, env)
     return resolved
 
 

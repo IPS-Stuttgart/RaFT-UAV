@@ -26,6 +26,34 @@ def test_method_registry_resolves_softk_dnh_environment_and_command() -> None:
     assert "outputs/demo" in resolved["command"]
 
 
+def test_method_registry_resolves_heteroscedastic_lofo_nis_command_and_env() -> None:
+    resolved = resolve_method_spec(
+        "hetero_cv_lofo_nis_fixed_lag",
+        dataset_root="data/raw/AADM2025Dryad",
+        flight="Opt2",
+        output_dir="outputs/demo",
+        uncertainty_model="outputs/models/uncertainty.json",
+        nis_covariance_calibration_json="outputs/models/nis_covariance.json",
+    )
+
+    command = resolved["command"]
+    assert command[:3] == [
+        "raft-uav-heteroscedastic",
+        "run-baseline",
+        "data/raw/AADM2025Dryad",
+    ]
+    assert command[command.index("--uncertainty-model") + 1] == (
+        "outputs/models/uncertainty.json"
+    )
+    assert "--fixed-lag-s" not in command
+    assert command[command.index("--smoother") + 1] == "fixed-lag"
+    assert command[command.index("--smoother-lag-s") + 1] == "20"
+    assert resolved["env"]["RAFT_UAV_NIS_COVARIANCE_CALIBRATION_JSON"] == (
+        "outputs/models/nis_covariance.json"
+    )
+    assert "{nis_covariance_calibration_json}" not in resolved["shell_command"]
+
+
 def test_method_registry_dnh_rows_enable_radar_update_policy_gate() -> None:
     for method_id in (
         "imm_tracklet_viterbi_fixed_lag_dnh",

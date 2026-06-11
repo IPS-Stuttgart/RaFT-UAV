@@ -7,7 +7,7 @@ from pathlib import Path
 
 from raft_uav.mmuad.calibration import (
     CalibrationSet,
-    load_calibration_json,
+    load_calibration_auto,
     transform_candidate_frame,
 )
 from raft_uav.mmuad.io import (
@@ -28,7 +28,7 @@ class SequencePaths:
     candidate_csvs: tuple[Path, ...]
     point_cloud_files: tuple[Path, ...]
     truth_csv: Path | None
-    calibration_json: Path | None
+    calibration_file: Path | None
 
 
 def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[SequencePaths]:
@@ -61,11 +61,15 @@ def load_sequence_export(
 ) -> tuple[CandidateFrame, TruthFrame | None, CalibrationSet | None]:
     """Load candidates/truth for one discovered sequence export."""
 
-    candidate_frames = [load_candidate_csv(path) for path in paths.candidate_csvs]
+    candidate_frames = [
+        load_candidate_csv(path, default_sequence_id=paths.sequence_id)
+        for path in paths.candidate_csvs
+    ]
     candidate_frames.extend(
         load_point_cloud_file_as_candidates(
             path,
             source=path.stem.replace("_points", "-cluster"),
+            sequence_id=paths.sequence_id,
             voxel_size_m=voxel_size_m,
             min_points=min_cluster_points,
         )
@@ -74,10 +78,14 @@ def load_sequence_export(
     if not candidate_frames:
         raise ValueError(f"no candidate or point-cloud files discovered for {paths.root}")
     candidates = merge_candidate_frames(candidate_frames)
-    truth = load_truth_csv(paths.truth_csv) if paths.truth_csv is not None else None
+    truth = (
+        load_truth_csv(paths.truth_csv, default_sequence_id=paths.sequence_id)
+        if paths.truth_csv is not None
+        else None
+    )
     calibration = None
-    if paths.calibration_json is not None:
-        calibration = load_calibration_json(paths.calibration_json)
+    if paths.calibration_file is not None:
+        calibration = load_calibration_auto(paths.calibration_file)
         if apply_calibration:
             candidates = transform_candidate_frame(candidates, calibration)
     return candidates, truth, calibration
@@ -95,6 +103,14 @@ def _sequence_from_dir(path: Path) -> SequencePaths:
             path / "calibration.json",
             path / "calib.json",
             path / "extrinsics.json",
+            path / "calibration.yaml",
+            path / "calib.yaml",
+            path / "extrinsics.yaml",
+            path / "calibration.yml",
+            path / "calib.yml",
+            path / "extrinsics.yml",
+            path / "calibration.txt",
+            path / "extrinsics.txt",
         ]
     )
     return SequencePaths(
@@ -103,7 +119,7 @@ def _sequence_from_dir(path: Path) -> SequencePaths:
         candidate_csvs=tuple(_candidate_files(path)),
         point_cloud_files=tuple(_point_files(path)),
         truth_csv=_truth_file(path),
-        calibration_json=calibration,
+        calibration_file=calibration,
     )
 
 
@@ -121,6 +137,8 @@ def _point_files(path: Path) -> list[Path]:
     files.extend(sorted(path.glob("*_points.csv")))
     files.extend(sorted(path.glob("*.pcd")))
     files.extend(sorted(path.glob("*.ply")))
+    files.extend(sorted(path.glob("*.npy")))
+    files.extend(sorted(path.glob("*.npz")))
     return _unique_paths(files)
 
 
