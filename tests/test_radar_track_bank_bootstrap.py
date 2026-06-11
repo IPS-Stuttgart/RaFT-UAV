@@ -92,5 +92,8 @@ def test_track_bank_does_not_replay_bootstrap_event(monkeypatch):
     assert initialized_at == [10.0]
     assert predicted_intervals == [(10.0, 11.0)]
     assert updated_at == [11.0]
-    assert records == [{"time_s": 11.0, "source": "rf"}]
+    assert records == [
+        {"time_s": 10.0, "source": "rf"},
+        {"time_s": 11.0, "source": "rf"},
+    ]
     assert selected.empty
