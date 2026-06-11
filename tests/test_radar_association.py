@@ -77,6 +77,34 @@ def test_track_bank_does_not_reprocess_bootstrap_radar_frame():
     assert selected["frame_index"].tolist()[0] == 0
 
 
+def test_track_bank_records_rf_bootstrap_event_once():
+    radar = pd.DataFrame(
+        [
+            {
+                "frame_index": 0,
+                "track_id": 1,
+                "time_s": 1.0,
+                "east_m": 1.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "cat_prob_uav": 0.9,
+            },
+        ]
+    )
+
+    records, selected = run_async_cv_baseline_with_radar_association(
+        rf_measurements=[_rf_measurement(0.0, 0.0)],
+        radar=radar,
+        association="track-bank",
+        candidate_catprob_threshold=None,
+    )
+
+    assert [record["source"] for record in records] == ["rf", "radar"]
+    assert records[0]["update_action"] == "initialized"
+    assert records[0]["time_s"] == 0.0
+    assert selected["frame_index"].tolist() == [0]
+
+
 def test_oracle_nearest_truth_selects_closest_candidate_per_frame():
     radar = pd.DataFrame(
         [

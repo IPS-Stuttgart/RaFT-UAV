@@ -586,6 +586,37 @@ def test_multi_object_metrics_ignore_invalid_truth_and_estimates() -> None:
     assert metrics["recall"] == 1.0
 
 
+def test_multi_object_metrics_do_not_match_across_sequences() -> None:
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq_a", "seq_b"],
+            "time_s": [0.0, 0.0],
+            "output_track_id": ["mot_a", "mot_b"],
+            "state_x_m": [100.0, 0.0],
+            "state_y_m": [0.0, 0.0],
+            "state_z_m": [2.0, 2.0],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seq_a", "seq_b"],
+            "time_s": [0.0, 0.0],
+            "track_id": ["uav_a", "uav_b"],
+            "x_m": [0.0, 100.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [2.0, 2.0],
+        }
+    )
+
+    metrics = compute_multi_object_metrics(estimates, truth, match_distance_m=5.0)
+
+    assert metrics["matches"] == 0
+    assert metrics["false_positive"] == 2
+    assert metrics["false_negative"] == 2
+    assert metrics["precision"] == 0.0
+    assert metrics["recall"] == 0.0
+
+
 def test_multi_object_metrics_without_matches_are_strict_json_compatible() -> None:
     estimates = pd.DataFrame(
         {

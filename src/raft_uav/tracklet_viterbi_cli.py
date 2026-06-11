@@ -17,7 +17,7 @@ configuration shim so explicit CLI values are not replaced by defaults.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 import os
 import sys
@@ -540,6 +540,23 @@ def _maybe_add(updates: dict[str, str], key: str, value: object | None) -> None:
 
 
 @contextmanager
+def _temporary_base_cli_tracklet_dispatch() -> Iterator[None]:
+    """Expose tracklet association modes to the base CLI only for one invocation."""
+
+    previous_modes = _base_cli.RADAR_ASSOCIATION_MODES
+    previous_runner = _base_cli.run_async_cv_baseline_with_radar_association
+    _base_cli.RADAR_ASSOCIATION_MODES = enabled_radar_association_modes()
+    _base_cli.run_async_cv_baseline_with_radar_association = (
+        run_async_cv_baseline_with_radar_association
+    )
+    try:
+        yield
+    finally:
+        _base_cli.RADAR_ASSOCIATION_MODES = previous_modes
+        _base_cli.run_async_cv_baseline_with_radar_association = previous_runner
+
+
+@contextmanager
 def _temporary_environment(updates: Mapping[str, str]):
     previous = {key: os.environ.get(key) for key in updates}
     os.environ.update(updates)
@@ -620,13 +637,10 @@ def main(argv: list[str] | None = None) -> int:
     if _base_cli.main.__module__ != "raft_uav.runtime_cli_patch":
         filtered_argv, runtime_updates = _runtime_updates_for_test_dispatch(filtered_argv)
         env_updates = {**env_updates, **runtime_updates}
-    _base_cli.RADAR_ASSOCIATION_MODES = enabled_radar_association_modes()
-    _base_cli.run_async_cv_baseline_with_radar_association = (
-        run_async_cv_baseline_with_radar_association
-    )
-    with _temporary_environment(env_updates):
-        with _robust_cli.expose_heavy_tailed_robust_update_modes():
-            return _base_cli.main(filtered_argv)
+    with _temporary_base_cli_tracklet_dispatch():
+        with _temporary_environment(env_updates):
+            with _robust_cli.expose_heavy_tailed_robust_update_modes():
+                return _base_cli.main(filtered_argv)
 
 
 if __name__ == "__main__":

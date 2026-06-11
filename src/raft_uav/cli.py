@@ -902,6 +902,7 @@ def _run_baseline(
         method=smoother,
         acceleration_std_mps2=acceleration_std,
         lag_s=smoother_lag_s,
+        measurements=measurements,
     )
 
     estimate_frame = _records_to_frame(records)
@@ -1402,7 +1403,9 @@ def _baseline_metrics(
         },
         "smoother": {
             "method": smoother,
-            "lag_s": float(smoother_lag_s) if smoother == "fixed-lag" else None,
+            "lag_s": float(smoother_lag_s)
+            if smoother in ("fixed-lag", "fixed-lag-map")
+            else None,
         },
         "max_eval_time_delta_s": float(max_eval_time_delta_s),
         "gating": {

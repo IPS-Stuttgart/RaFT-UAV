@@ -1251,20 +1251,20 @@ def _run_mht_track_bank(
         initial_selected_row = initial_selected_row.copy()
         initial_selected_row["association_mode"] = "track-bank"
         selected_rows.append(initial_selected_row)
-    if initial_event["kind"] != "rf":
-        initial_record_kwargs = _selected_row_record_kwargs(initial_selected_row, "track-bank")
-        initial_record_kwargs.setdefault("association_mode", "track-bank")
-        records.append(
-            _mht_record(
-                measurement=initial_measurement,
-                tracker=tracker,
-                diagnostics=initial_diagnostics,
-                **initial_record_kwargs,
-            )
+    initial_record_kwargs = _selected_row_record_kwargs(initial_selected_row, "track-bank")
+    initial_record_kwargs.setdefault("association_mode", "track-bank")
+    records.append(
+        _mht_record(
+            measurement=initial_measurement,
+            tracker=tracker,
+            diagnostics=initial_diagnostics,
+            **initial_record_kwargs,
         )
+    )
 
-    # The first event was already assimilated into the MHT prior above.
-    # Replaying it here would double-count the bootstrap measurement.
+    # The first event was already assimilated into the MHT prior above and
+    # recorded as an initialized bootstrap event. Replaying it here would
+    # double-count the bootstrap measurement.
     for event in events[1:]:
         time_s = float(event["time_s"])
         _predict_mht_to(

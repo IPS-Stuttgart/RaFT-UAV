@@ -11,6 +11,7 @@ from raft_uav.io.aerpaw import (
     normalize_radar,
     normalize_rf,
     normalize_truth,
+    radar_measurements_to_enu,
     read_radar_tracks_json,
     read_rf_csv,
     read_truth,
@@ -381,6 +382,28 @@ def test_radar_jsonl_reader_and_catprob_selection(tmp_path):
     assert selected["track_id"].tolist() == [1]
     assert selected_all["track_id"].tolist() == [1, 3]
     assert len(truth) == 1
+
+
+def test_radar_measurement_converter_ignores_null_velocity_components():
+    radar = pd.DataFrame(
+        {
+            "time_s": [1.0],
+            "east_m": [10.0],
+            "north_m": [20.0],
+            "up_m": [30.0],
+            "velocity_east_mps": [None],
+            "velocity_north_mps": [None],
+            "velocity_down_mps": [None],
+        }
+    )
+
+    [measurement] = radar_measurements_to_enu(
+        radar,
+        include_velocity=True,
+    )
+
+    assert measurement.vector.shape == (3,)
+    np.testing.assert_allclose(measurement.vector, np.array([10.0, 20.0, 30.0]))
 
 
 def test_truth_gated_radar_selection_handles_unsorted_truth_times():
