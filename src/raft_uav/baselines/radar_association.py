@@ -1326,13 +1326,16 @@ def _run_mht_track_bank(
             covariance,
             covariance_config=covariance_config,
         )
-        measurements = candidates[["east_m", "north_m", "up_m"]].to_numpy(dtype=float).T
-        covariances = _candidate_covariance_tensor(pre_update_nis, covariance)
+        if pre_update_nis.empty:
+            continue
+        update_candidates = pre_update_nis
+        measurements = update_candidates[["east_m", "north_m", "up_m"]].to_numpy(dtype=float).T
+        covariances = _candidate_covariance_tensor(update_candidates, covariance)
         tracker.update_linear(measurements, measurement_matrix(3), covariances)
 
         selected = _selected_row_from_best_mht_assignment(
-            candidates,
-            pre_update_nis,
+            update_candidates,
+            update_candidates,
             tracker,
         )
         if selected is not None:
@@ -2501,8 +2504,13 @@ def _radar_event_key(event: dict[str, object]) -> object:
 
 
 def _radar_row_key(row: pd.Series) -> object:
-    if "frame_index" in row.index and np.isfinite(float(row["frame_index"])):
-        return ("frame_index", int(row["frame_index"]))
+    if "frame_index" in row.index:
+        try:
+            frame_index = float(row["frame_index"])
+        except (TypeError, ValueError):
+            frame_index = float("nan")
+        if np.isfinite(frame_index):
+            return ("frame_index", int(frame_index))
     return ("time_s", round(float(row["time_s"]), 9))
 
 

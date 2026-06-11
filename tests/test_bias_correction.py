@@ -9,6 +9,7 @@ from raft_uav.calibration.bias import (
     RF_TARGET_COLUMNS,
     apply_bias_correction_models,
     bias_correction_summary,
+    bias_training_rows,
     fit_sensor_bias_correction,
     load_bias_correction_models,
     save_bias_correction_models,
@@ -25,6 +26,17 @@ def _truth() -> pd.DataFrame:
             "up_m": 100.0 + time_s,
         }
     )
+
+
+def test_bias_training_rows_returns_empty_frame_for_empty_measurements() -> None:
+    rows = bias_training_rows(
+        pd.DataFrame(),
+        _truth(),
+        source="rf",
+        max_time_delta_s=0.5,
+    )
+
+    assert rows.empty
 
 
 def test_rf_bias_model_learns_and_applies_linear_residual() -> None:

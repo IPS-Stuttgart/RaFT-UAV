@@ -102,6 +102,33 @@ def test_parse_runtime_config_preserves_standard_cli_arguments():
     assert config["radar_covariance"]["mode"] == "fixed"
 
 
+def test_parse_runtime_config_passes_legacy_radar_range_std_through():
+    config, remaining = parse_runtime_config(
+        [
+            "run-baseline",
+            "/data/aerpaw",
+            "--flight",
+            "Opt1",
+            "--radar-covariance-model",
+            "geometry",
+            "--radar-range-std-m",
+            "8.5",
+        ]
+    )
+
+    assert remaining == [
+        "run-baseline",
+        "/data/aerpaw",
+        "--flight",
+        "Opt1",
+        "--radar-covariance-model",
+        "geometry",
+        "--radar-range-std-m",
+        "8.5",
+    ]
+    assert config["radar_covariance"]["range_std_m"] == 8.5
+
+
 def test_parse_runtime_config_accepts_zero_per_track_candidate_limit():
     config, remaining = parse_runtime_config(
         [

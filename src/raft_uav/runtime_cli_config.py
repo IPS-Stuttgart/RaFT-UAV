@@ -80,6 +80,11 @@ _RUNTIME_FLAG_ENV_NAMES: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Runtime options with the same spelling as options on the legacy run-baseline
+# parser must be parsed for the runtime environment without being hidden from
+# the underlying CLI.
+_RUNTIME_PASSTHROUGH_FLAGS = frozenset({"--radar-range-std-m"})
+
 
 def runtime_environment_names_from_argv(argv: Iterable[str]) -> set[str]:
     """Return runtime env vars explicitly controlled by *argv* flags."""
@@ -166,7 +171,34 @@ def parse_runtime_config(argv: list[str]) -> tuple[dict[str, Any], list[str]]:
     parser = argparse.ArgumentParser(add_help=False)
     add_runtime_configuration_arguments(parser)
     args, remaining = parser.parse_known_args(argv)
-    return runtime_config_from_args(args), remaining
+    return runtime_config_from_args(args), [*remaining, *_runtime_passthrough_arguments(argv)]
+
+
+def _runtime_passthrough_arguments(argv: Iterable[str]) -> list[str]:
+    """Return runtime flags that must also remain visible to the base CLI.
+
+    The installed ``raft-uav`` wrapper pre-parses runtime configuration before
+    dispatching to ``raft_uav.cli``.  ``--radar-range-std-m`` is intentionally
+    accepted by the runtime range-angle covariance layer and by the legacy
+    geometry radar-covariance parser.  ``argparse.parse_known_args`` would
+    otherwise consume it here, silently leaving the legacy parser at its default.
+    """
+
+    restored: list[str] = []
+    tokens = list(argv)
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            break
+        option, separator, _ = token.partition("=")
+        if option in _RUNTIME_PASSTHROUGH_FLAGS:
+            restored.append(token)
+            if not separator and index + 1 < len(tokens):
+                index += 1
+                restored.append(tokens[index])
+        index += 1
+    return restored
 
 
 def runtime_config_from_args(args: argparse.Namespace) -> dict[str, Any]:
