@@ -55,6 +55,8 @@ def _events_with_covariance(
 
 
 def _annotate_radar(radar: pd.DataFrame) -> pd.DataFrame:
+    if "range_m" not in radar.columns:
+        return radar
     return append_radar_covariance_columns(radar, RadarCovarianceConfig.from_environment())
 
 
@@ -162,7 +164,11 @@ def _radar_measurements_to_enu_with_candidate_covariance(
             clock_offset_s=clock_offset_s,
         )
 
-    frame = append_radar_covariance_columns(frame, RadarCovarianceConfig.from_environment())
+    if "range_m" in frame.columns:
+        frame = append_radar_covariance_columns(
+            frame,
+            RadarCovarianceConfig.from_environment(),
+        )
 
     fallback_position_covariance = fixed_radar_covariance(default_xy_std_m, default_z_std_m)
     measurements: list[TrackingMeasurement] = []
