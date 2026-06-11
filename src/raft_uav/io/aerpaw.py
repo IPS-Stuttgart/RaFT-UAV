@@ -364,6 +364,9 @@ def normalize_radar(
         "num_inliers",
         "track_age",
         "confidence",
+        "velocity_east_mps",
+        "velocity_north_mps",
+        "velocity_down_mps",
     ]:
         if column in out.columns:
             out[column] = pd.to_numeric(out[column], errors="coerce")
@@ -561,14 +564,17 @@ def _radar_velocity_vector_enu(row: pd.Series) -> np.ndarray | None:
     required = ("velocity_east_mps", "velocity_north_mps", "velocity_down_mps")
     if not all(column in row.index for column in required):
         return None
-    velocity = np.array(
-        [
-            float(row["velocity_east_mps"]),
-            float(row["velocity_north_mps"]),
-            -float(row["velocity_down_mps"]),
-        ],
-        dtype=float,
-    )
+    try:
+        velocity = np.array(
+            [
+                float(row["velocity_east_mps"]),
+                float(row["velocity_north_mps"]),
+                -float(row["velocity_down_mps"]),
+            ],
+            dtype=float,
+        )
+    except (TypeError, ValueError):
+        return None
     return velocity if np.isfinite(velocity).all() else None
 
 

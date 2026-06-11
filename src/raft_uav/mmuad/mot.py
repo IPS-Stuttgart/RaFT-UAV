@@ -6,6 +6,7 @@ experiments and ablations, not a replacement for the official UG2+ evaluator.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -184,9 +185,7 @@ def compute_multi_object_metrics(
     false_negative = 0
     id_switches = 0
     gt_last_match: dict[str, str] = {}
-    for time_s in sorted(set(estimates["time_s"]).union(set(truth["time_s"]))):
-        pred = estimates.loc[np.isclose(estimates["time_s"], time_s)].copy()
-        gt = truth.loc[np.isclose(truth["time_s"], time_s)].copy()
+    for pred, gt in _metric_frame_pairs(estimates, truth):
         matches = _greedy_truth_matches(pred, gt, max_distance_m=match_distance_m)
         matched_pred = {pred_idx for pred_idx, _, _ in matches}
         matched_gt = {gt_idx for _, gt_idx, _ in matches}
@@ -247,6 +246,50 @@ def _finite_mot_truth(truth: pd.DataFrame) -> pd.DataFrame:
     if "track_id" in truth.columns:
         finite &= truth["track_id"].notna().to_numpy(dtype=bool)
     return truth.loc[finite].copy()
+
+
+def _metric_frame_pairs(
+    estimates: pd.DataFrame,
+    truth: pd.DataFrame,
+) -> Iterator[tuple[pd.DataFrame, pd.DataFrame]]:
+    """Yield same-frame estimate/truth pairs without crossing sequence boundaries."""
+
+    estimates = estimates.copy()
+    truth = truth.copy()
+    estimates["time_s"] = pd.to_numeric(estimates["time_s"], errors="coerce")
+    truth["time_s"] = pd.to_numeric(truth["time_s"], errors="coerce")
+
+    if "sequence_id" in estimates.columns and "sequence_id" in truth.columns:
+        estimates["_metric_sequence_id"] = estimates["sequence_id"].astype(str)
+        truth["_metric_sequence_id"] = truth["sequence_id"].astype(str)
+        estimate_keys = {
+            (str(sequence_id), float(time_s))
+            for sequence_id, time_s in estimates[
+                ["_metric_sequence_id", "time_s"]
+            ].itertuples(index=False, name=None)
+        }
+        truth_keys = {
+            (str(sequence_id), float(time_s))
+            for sequence_id, time_s in truth[
+                ["_metric_sequence_id", "time_s"]
+            ].itertuples(index=False, name=None)
+        }
+        for sequence_id, time_s in sorted(estimate_keys | truth_keys):
+            pred = estimates.loc[
+                (estimates["_metric_sequence_id"] == sequence_id)
+                & np.isclose(estimates["time_s"], time_s)
+            ].copy()
+            gt = truth.loc[
+                (truth["_metric_sequence_id"] == sequence_id)
+                & np.isclose(truth["time_s"], time_s)
+            ].copy()
+            yield pred, gt
+        return
+
+    for time_s in sorted(set(estimates["time_s"]).union(set(truth["time_s"]))):
+        pred = estimates.loc[np.isclose(estimates["time_s"], time_s)].copy()
+        gt = truth.loc[np.isclose(truth["time_s"], time_s)].copy()
+        yield pred, gt
 
 
 def _greedy_truth_matches(

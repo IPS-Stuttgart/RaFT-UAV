@@ -237,3 +237,26 @@ def test_radar_converter_keeps_velocity_block_when_velocity_is_available():
     assert np.allclose(measurement.vector[3:], [1.0, 2.0, 3.0])
     assert np.allclose(np.diag(measurement.covariance)[:3], [16.0, 25.0, 36.0])
     assert np.allclose(np.diag(measurement.covariance)[3:], [49.0, 49.0, 49.0])
+
+
+def test_heteroscedastic_radar_converter_ignores_null_velocity_components():
+    radar = pd.DataFrame(
+        {
+            "time_s": [2.0],
+            "east_m": [10.0],
+            "north_m": [20.0],
+            "up_m": [30.0],
+            "velocity_east_mps": [None],
+            "velocity_north_mps": [None],
+            "velocity_down_mps": [None],
+            "cov_ee": [16.0],
+            "cov_nn": [25.0],
+            "cov_uu": [36.0],
+        }
+    )
+
+    [measurement] = radar_measurements_to_enu_with_uncertainty(radar)
+
+    assert measurement.vector.shape == (3,)
+    assert np.allclose(measurement.vector, [10.0, 20.0, 30.0])
+    assert np.allclose(np.diag(measurement.covariance), [16.0, 25.0, 36.0])
