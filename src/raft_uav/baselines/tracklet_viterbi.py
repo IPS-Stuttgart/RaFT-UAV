@@ -16,11 +16,6 @@ import os
 
 import numpy as np
 import pandas as pd
-from pyrecest.filters.sequence_association import (
-    SequenceAssociationNode,
-    SequenceTransitionContext,
-    solve_top_k_viterbi_sequence_associations,
-)
 
 from raft_uav.baselines.kalman import (
     AsyncConstantVelocityKalmanTracker,
@@ -32,6 +27,130 @@ from raft_uav.baselines.learned_radar_likelihood import (
 )
 from raft_uav.numeric import optional_float as _optional_float
 from raft_uav.numeric import optional_int as _optional_track_id
+
+try:
+    from pyrecest.filters.sequence_association import (
+        SequenceAssociationNode,
+        SequenceTransitionContext,
+        solve_top_k_viterbi_sequence_associations,
+    )
+except ImportError:
+    _USE_LOCAL_SEQUENCE_ASSOCIATION = True
+
+    @dataclass(frozen=True)
+    class SequenceAssociationNode:
+        """Minimal PyRecEst-compatible sequence-association candidate."""
+
+        frame_index: int
+        candidate_index: int | None
+        unary_cost: float
+        is_missed_detection: bool = False
+        payload: object | None = None
+
+    @dataclass(frozen=True)
+    class SequenceTransitionContext:
+        """Minimal PyRecEst-compatible transition context."""
+
+        previous_miss_streak: int = 0
+
+else:
+    _USE_LOCAL_SEQUENCE_ASSOCIATION = False
+
+
+@dataclass(frozen=True)
+class _SequenceAssociationPath:
+    total_cost: float
+    nodes: tuple[SequenceAssociationNode, ...]
+
+
+@dataclass(frozen=True)
+class _FallbackPathState:
+    total_cost: float
+    nodes: tuple[SequenceAssociationNode, ...]
+    miss_streak: int
+    sequence: int
+
+
+def _fallback_solve_top_k_viterbi_sequence_associations(
+    sequence_frames: Iterable[Iterable[SequenceAssociationNode]],
+    transition_cost: Callable[
+        [SequenceAssociationNode, SequenceAssociationNode, SequenceTransitionContext],
+        float,
+    ],
+    *,
+    top_k_terminal_paths: int = 1,
+) -> list[_SequenceAssociationPath]:
+    """Local top-k Viterbi solver used when PyRecEst lacks the generic helper."""
+
+    frames = [list(frame) for frame in sequence_frames]
+    if not frames or any(not frame for frame in frames):
+        return []
+    top_k = max(1, int(top_k_terminal_paths))
+
+    sequence = 0
+    states: dict[tuple[int, int], list[_FallbackPathState]] = {}
+    for node_index, node in enumerate(frames[0]):
+        miss_streak = _next_miss_streak(node, 0)
+        states[(node_index, miss_streak)] = [
+            _FallbackPathState(
+                total_cost=float(node.unary_cost),
+                nodes=(node,),
+                miss_streak=miss_streak,
+                sequence=sequence,
+            )
+        ]
+        sequence += 1
+
+    for frame in frames[1:]:
+        next_states: dict[tuple[int, int], list[_FallbackPathState]] = {}
+        for current_index, current in enumerate(frame):
+            for previous_states in states.values():
+                for previous_state in previous_states:
+                    previous = previous_state.nodes[-1]
+                    context = SequenceTransitionContext(
+                        previous_miss_streak=int(previous_state.miss_streak)
+                    )
+                    miss_streak = _next_miss_streak(current, previous_state.miss_streak)
+                    candidate = _FallbackPathState(
+                        total_cost=float(previous_state.total_cost)
+                        + float(transition_cost(previous, current, context))
+                        + float(current.unary_cost),
+                        nodes=(*previous_state.nodes, current),
+                        miss_streak=miss_streak,
+                        sequence=sequence,
+                    )
+                    sequence += 1
+                    key = (current_index, miss_streak)
+                    next_states.setdefault(key, []).append(candidate)
+        states = {
+            key: _best_path_states(candidates, top_k)
+            for key, candidates in next_states.items()
+        }
+
+    terminal_states = [state for candidates in states.values() for state in candidates]
+    return [
+        _SequenceAssociationPath(total_cost=state.total_cost, nodes=state.nodes)
+        for state in _best_path_states(terminal_states, top_k)
+    ]
+
+
+def _next_miss_streak(node: SequenceAssociationNode, previous_miss_streak: int) -> int:
+    return int(previous_miss_streak) + 1 if bool(node.is_missed_detection) else 0
+
+
+def _best_path_states(
+    states: Iterable[_FallbackPathState],
+    limit: int,
+) -> list[_FallbackPathState]:
+    return sorted(states, key=lambda state: (float(state.total_cost), int(state.sequence)))[
+        : max(1, int(limit))
+    ]
+
+
+if _USE_LOCAL_SEQUENCE_ASSOCIATION:
+    solve_top_k_viterbi_sequence_associations = (
+        _fallback_solve_top_k_viterbi_sequence_associations
+    )
 
 RadarCovarianceFn = Callable[[pd.Series, np.ndarray], np.ndarray]
 _DO_NO_HARM_RADAR_POLICY_ENV = "RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY"
