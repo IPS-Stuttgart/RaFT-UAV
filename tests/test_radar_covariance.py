@@ -8,8 +8,11 @@ from raft_uav.baselines.radar_covariance import (
     append_radar_covariance_columns,
     row_radar_covariance,
 )
-from raft_uav.baselines.tracklet_viterbi_range_covariance import _radar_row_covariance
 from raft_uav.baselines.radar_association import _nis_scored_candidates, _row_covariance
+from raft_uav.baselines.radar_covariance_runtime import (
+    _radar_measurements_to_enu_with_candidate_covariance,
+)
+from raft_uav.baselines.tracklet_viterbi_range_covariance import _radar_row_covariance
 from raft_uav.calibration.bias import BIAS_RESIDUAL_STD_COLUMN_PREFIX
 from raft_uav.calibration.empirical_covariance import aligned_residuals
 
@@ -39,6 +42,41 @@ def test_range_angle_radar_covariance_grows_with_range():
     assert far_covariance is not None
     assert far_covariance[1, 1] > near_covariance[1, 1] * 50.0
     assert annotated["association_covariance_mode"].tolist() == ["range-angle", "range-angle"]
+
+
+def test_runtime_radar_measurement_ingestion_uses_range_angle_covariance(monkeypatch):
+    monkeypatch.setenv("RAFT_UAV_RADAR_COVARIANCE_MODE", "range-angle")
+    monkeypatch.setenv("RAFT_UAV_RADAR_RANGE_STD_M", "1.0")
+    monkeypatch.setenv("RAFT_UAV_RADAR_AZIMUTH_STD_DEG", "2.0")
+    monkeypatch.setenv("RAFT_UAV_RADAR_ELEVATION_STD_DEG", "2.0")
+    monkeypatch.setenv("RAFT_UAV_RADAR_COVARIANCE_MIN_STD_M", "1.0")
+    radar = pd.DataFrame(
+        [
+            {
+                "time_s": 0.0,
+                "east_m": 100.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 100.0,
+            },
+            {
+                "time_s": 1.0,
+                "east_m": 1000.0,
+                "north_m": 0.0,
+                "up_m": 0.0,
+                "range_m": 1000.0,
+            },
+        ]
+    )
+
+    measurements = _radar_measurements_to_enu_with_candidate_covariance(radar)
+
+    assert len(measurements) == 2
+    near_covariance = measurements[0].covariance
+    far_covariance = measurements[1].covariance
+    assert near_covariance.shape == (3, 3)
+    assert far_covariance[1, 1] > near_covariance[1, 1] * 50.0
+    assert not np.allclose(np.diag(near_covariance), np.diag(far_covariance))
 
 
 def test_nis_scoring_uses_candidate_specific_covariance_columns():
