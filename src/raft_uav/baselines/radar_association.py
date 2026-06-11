@@ -671,6 +671,10 @@ def _run_paper_compatible_association(
             truth_time_gate_s=truth_time_gate_s,
         )
         rf_measurements = _with_shared_measurement_covariance(rf_measurements, rf_covariance)
+        # ``events`` owns the TrackingMeasurement objects it was built from.
+        # Rebuild it after replacing RF measurements so paper-compatible
+        # empirical RF covariance is used by bootstrap and RF-update events.
+        events = _events(rf_measurements, radar)
     paper_track_by_key = {_radar_row_key(row): row for _, row in paper_track.iterrows()}
     initial = _initial_paper_compatible_measurement_and_row(
         events,
