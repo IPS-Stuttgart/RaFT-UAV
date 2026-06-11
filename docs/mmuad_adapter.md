@@ -225,3 +225,172 @@ Still not implemented:
 - official UG2+ evaluator/submission reproduction;
 - detector or classifier training;
 - official leaderboard upload tooling.
+
+## Fourth incremental patch: inspection and evaluation bridge
+
+This patch adds more missing pieces that help move from toy exports toward a
+real MMUAD validation workflow without guessing private binary archive formats.
+
+### Layout inspection
+
+Before writing native parsers, inspect an unpacked/exported MMUAD root:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --inspect-root data/mmuad_export \
+  --output-dir outputs/mmuad_inspect \
+  --layout-report-json outputs/mmuad_inspect/layout.json \
+  --layout-report-csv outputs/mmuad_inspect/layout_files.csv
+```
+
+The report classifies files as images, point clouds, candidate CSVs, truth,
+calibration, ROS recordings, and metadata.  It also infers timestamps from
+filenames when possible and reports what each sequence is missing for a tracking
+smoke test.
+
+### Binary PCD and NumPy point clouds
+
+The point-cloud bridge now supports ASCII and binary PCD files, ASCII PLY files,
+and simple `.npy` / `.npz` point arrays with shape `(N, >=3)`.  This still is
+not a native Livox packet reader, but it covers common exported point-cloud
+formats used during dataset inspection.
+
+### Auto calibration loader
+
+In addition to JSON, the calibration loader can now read YAML/YML files when
+PyYAML is installed, and simple text/CSV files containing one 4x4 transform
+matrix.  Unknown official calibration formats should still be inspected first
+instead of silently guessed.
+
+### Submission evaluation bridge
+
+Stable RaFT-UAV MMUAD submission CSVs can be evaluated against normalized truth
+CSV files with repository-level trajectory diagnostics:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --evaluate-submission-csv outputs/mmuad_run/submission.csv \
+  --evaluate-truth-csv data/mmuad_export/seq001/truth.csv \
+  --output-dir outputs/mmuad_eval \
+  --evaluation-json outputs/mmuad_eval/eval.json
+```
+
+The evaluation reports mean/RMSE/p95/max 3D error, 2D error, ADE/FDE-style
+metrics, matched predictions, unmatched predictions, and truth coverage.  It is
+not the official UG2+ evaluator.
+
+## Codabench-style packaging and native layout inventory
+
+The layout inspector can also run against a raw or exported MMUAD/UG2+ tree:
+
+```bash
+PYTHONPATH=src python scripts/inspect_mmuad_layout.py \
+  data/mmuad_raw_or_export \
+  --output-json outputs/mmuad_layout_report.json
+```
+
+or through the main CLI:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --sequence-root data/mmuad_raw_or_export \
+  --inspect-layout-only \
+  --output-dir outputs/mmuad_layout \
+  --layout-report-json outputs/mmuad_layout/mmuad_layout_report.json
+```
+
+The report counts files by category, including candidate tables, point clouds,
+images, calibration files, truth/labels, and ROS bag/recording files. It also
+lists sequence-like folders and recommends the next adapter step.
+
+The public UG2+ Codabench instructions require a ZIP containing a single file
+named `mmaud_results.csv`. The exact evaluator schema is not bundled here, so
+the helper writes a compact trajectory table with columns
+`sequence_id,timestamp,x,y,z,uav_type,score` and packages it using the required
+filename:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --sequence-root data/mmuad_export \
+  --output-dir outputs/mmuad_val \
+  --ug2-class-name Mavic3 \
+  --ug2-results-csv outputs/mmuad_val/mmaud_results.csv \
+  --ug2-codabench-zip outputs/mmuad_val/ug2_codabench_submission.zip
+```
+
+This is closer to challenge packaging than the generic `submission.zip`, but it
+is still not a guarantee of official evaluator compatibility. Once the official
+README/evaluator is available, adapt `estimates_to_mmaud_results_frame` to the
+exact column names and class labels expected by the server.
+
+## ROS Bag Bridge And Local Evaluation
+
+The adapter can inspect ROS bag containers and create a topic-map template
+without requiring ROS Python packages at import time:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --rosbag-path data/mmuad_raw/2023-08-24-11-14-34.bag \
+  --rosbag-report-json outputs/mmuad_bag_report.json \
+  --topic-map-template-json outputs/mmuad_topic_map_template.json \
+  --output-dir outputs/mmuad_bag_inspect
+```
+
+Edit the generated topic-map JSON so each relevant topic points to a CSV export,
+then run the tracker:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --topic-map-json outputs/mmuad_topic_map.json \
+  --topic-map-base-dir data/mmuad_topic_exports \
+  --output-dir outputs/mmuad_topic_map_smoke \
+  --ug2-codabench-zip outputs/mmuad_topic_map_smoke/ug2_submission.zip
+```
+
+This bridge is intentionally conservative: it inventories bags and loads
+normalized CSV exports until the exact local MMUAD raw layout and topic message
+types are known.
+
+A local evaluator is available for sanity checking `mmaud_results.csv` against
+normalized truth. It is not the official Codabench evaluator:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --evaluate-results-csv outputs/mmuad_topic_map_smoke/mmaud_results.csv \
+  --evaluate-truth-csv data/mmuad_export/seq001/truth.csv \
+  --evaluation-json outputs/mmuad_topic_map_smoke/local_eval.json \
+  --evaluation-rows-csv outputs/mmuad_topic_map_smoke/local_eval_rows.csv \
+  --output-dir outputs/mmuad_topic_map_smoke
+```
+
+## Native ROS And PointCloud2 Bridge
+
+The adapter also includes an optional native ROS extraction path. Normal imports
+do not require ROS or `rosbags`; when `rosbags` is installed, supported topics
+can be extracted directly from a ROS2 bag directory or compatible bag path:
+
+```bash
+PYTHONPATH=src python scripts/extract_mmuad_rosbag_topics.py \
+  --bag-path data/mmuad_raw/seq001 \
+  --topic-map-json data/mmuad_raw/seq001/topic_map_native.json \
+  --output-dir outputs/mmuad_native_ros_seq001
+```
+
+The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
+`pointcloud2_candidate`, `geometry_msgs/msg/PoseStamped` as `pose_truth` or
+`pose_candidate`, and `nav_msgs/msg/Odometry` as `odometry_truth` or
+`odometry_candidate`.
+
+The CLI can run native extraction and tracking in one step:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --rosbag-path data/mmuad_raw/seq001 \
+  --topic-map-json data/mmuad_raw/seq001/topic_map_native.json \
+  --native-ros-extract-output-dir outputs/mmuad_native_ros_seq001/extracted \
+  --output-dir outputs/mmuad_native_ros_seq001/tracking
+```
+
+This is still not a complete official raw MMUAD parser. It is a first native
+message bridge for common ROS message types. Custom radar messages, camera
+image detectors, and the official evaluator still need dataset-specific work.

@@ -21,6 +21,109 @@ SUBMISSION_COLUMNS = (
     "score",
 )
 
+UG2_RESULT_COLUMNS = (
+    "sequence_id",
+    "timestamp",
+    "x",
+    "y",
+    "z",
+    "uav_type",
+    "score",
+)
+
+
+def estimates_to_mmaud_results_frame(
+    estimates: pd.DataFrame,
+    *,
+    class_name: str = "unknown",
+) -> pd.DataFrame:
+    """Convert estimates into a Codabench-style ``mmaud_results.csv`` table.
+
+    The public Codabench instructions require a ZIP containing a single file
+    named ``mmaud_results.csv``.  The exact competition evaluator schema is not
+    bundled with this repository, so this helper writes a compact, documented
+    trajectory table that can be adapted once the official README/evaluator is
+    available.
+    """
+
+    if estimates.empty:
+        return pd.DataFrame(columns=UG2_RESULT_COLUMNS)
+    if "class_name" in estimates.columns:
+        class_values = estimates["class_name"].fillna(class_name).astype(str)
+    else:
+        class_values = class_name
+    frame = pd.DataFrame(
+        {
+            "sequence_id": estimates.get("sequence_id", "default"),
+            "timestamp": estimates["time_s"].astype(float),
+            "x": estimates["state_x_m"].astype(float),
+            "y": estimates["state_y_m"].astype(float),
+            "z": estimates["state_z_m"].astype(float),
+            "uav_type": class_values,
+            "score": 1.0,
+        }
+    )
+    return frame[list(UG2_RESULT_COLUMNS)].sort_values(
+        ["sequence_id", "timestamp"]
+    ).reset_index(drop=True)
+
+
+def write_mmaud_results_csv(
+    estimates: pd.DataFrame,
+    path: Path,
+    *,
+    class_name: str = "unknown",
+) -> Path:
+    """Write a Codabench-style ``mmaud_results.csv`` trajectory table."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    estimates_to_mmaud_results_frame(estimates, class_name=class_name).to_csv(
+        path, index=False
+    )
+    return path
+
+
+def write_ug2_codabench_zip(
+    estimates: pd.DataFrame,
+    path: Path,
+    *,
+    class_name: str = "unknown",
+) -> Path:
+    """Write a UG2+ Codabench-style ZIP with exactly ``mmaud_results.csv``."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame = estimates_to_mmaud_results_frame(estimates, class_name=class_name)
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("mmaud_results.csv", frame.to_csv(index=False))
+    return path
+
+
+def inspect_submission_zip(path: Path) -> dict[str, Any]:
+    """Return a small structural summary for a submission ZIP."""
+
+    path = Path(path)
+    with ZipFile(path) as archive:
+        names = archive.namelist()
+        has_mmaud = "mmaud_results.csv" in names
+        row_count = None
+        columns: list[str] | None = None
+        if has_mmaud:
+            from io import BytesIO
+
+            with archive.open("mmaud_results.csv") as handle:
+                frame = pd.read_csv(BytesIO(handle.read()))
+            row_count = int(len(frame))
+            columns = list(frame.columns)
+    return {
+        "path": str(path),
+        "members": names,
+        "has_mmaud_results_csv": has_mmaud,
+        "row_count": row_count,
+        "columns": columns,
+    }
+
 
 def estimates_to_submission_frame(
     estimates: pd.DataFrame,

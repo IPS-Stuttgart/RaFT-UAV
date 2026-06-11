@@ -17,19 +17,25 @@ from raft_uav.mmuad.schema import (
 )
 
 
-def load_candidate_csv(path: Path) -> CandidateFrame:
+def load_candidate_csv(path: Path, *, default_sequence_id: str = "default") -> CandidateFrame:
     """Load a normalized or alias-compatible candidate CSV."""
 
-    rows = normalize_candidate_columns(pd.read_csv(path))
+    rows = normalize_candidate_columns(
+        pd.read_csv(path),
+        default_sequence_id=default_sequence_id,
+    )
     frame = CandidateFrame(rows)
     frame.validate()
     return frame
 
 
-def load_truth_csv(path: Path) -> TruthFrame:
+def load_truth_csv(path: Path, *, default_sequence_id: str = "default") -> TruthFrame:
     """Load a normalized or alias-compatible truth CSV."""
 
-    rows = normalize_truth_columns(pd.read_csv(path))
+    rows = normalize_truth_columns(
+        pd.read_csv(path),
+        default_sequence_id=default_sequence_id,
+    )
     frame = TruthFrame(rows)
     frame.validate()
     return frame
@@ -86,8 +92,10 @@ def load_point_cloud_file_as_candidates(
     source = source or path.stem.replace("_points", "-cluster")
     if suffix == ".csv":
         points = _read_point_cloud_csv(path)
+    elif suffix in {".npy", ".npz"}:
+        points = _read_numpy_point_cloud(path)
     elif suffix == ".pcd":
-        points = _read_ascii_pcd(path)
+        points = _read_pcd(path)
     elif suffix == ".ply":
         points = _read_ascii_ply(path)
     else:
@@ -150,6 +158,29 @@ def infer_time_s_from_filename(path: Path) -> float:
     return float(tokens[-1])
 
 
+def point_rows_to_candidates(
+    points: pd.DataFrame,
+    *,
+    source: str = "lidar-cluster",
+    voxel_size_m: float = 0.75,
+    min_points: int = 3,
+    min_confidence: float = 0.0,
+) -> CandidateFrame:
+    """Cluster normalized point rows into candidate centroids.
+
+    This public wrapper is shared by CSV/PCD/PLY and ROS PointCloud2 bridges.
+    """
+
+    normalized = normalize_truth_columns(points)
+    return _point_rows_to_candidates(
+        normalized,
+        source=source,
+        voxel_size_m=voxel_size_m,
+        min_points=min_points,
+        min_confidence=min_confidence,
+    )
+
+
 def merge_candidate_frames(frames: Iterable[CandidateFrame]) -> CandidateFrame:
     """Merge several candidate frames, preserving normalization."""
 
@@ -199,31 +230,112 @@ def _point_rows_to_candidates(
     return CandidateFrame(normalize_candidate_columns(pd.DataFrame.from_records(records)))
 
 
-def _read_ascii_pcd(path: Path) -> pd.DataFrame:
-    fields: list[str] = []
-    data_start = None
-    lines = Path(path).read_text(encoding="utf-8", errors="ignore").splitlines()
-    for idx, line in enumerate(lines):
+def _read_pcd(path: Path) -> pd.DataFrame:
+    """Read a minimal PCD point cloud with ASCII or binary DATA sections."""
+
+    raw = Path(path).read_bytes()
+    marker = b"DATA"
+    marker_index = raw.upper().find(marker)
+    if marker_index < 0:
+        raise ValueError(f"invalid PCD file without DATA header: {path}")
+    line_end = raw.find(b"\n", marker_index)
+    if line_end < 0:
+        raise ValueError(f"invalid PCD file without data payload: {path}")
+    header_text = raw[: line_end + 1].decode("utf-8", errors="ignore")
+    payload = raw[line_end + 1 :]
+    header = _parse_pcd_header(header_text)
+    fields = header.get("fields", [])
+    if not fields:
+        raise ValueError(f"invalid PCD file without FIELDS: {path}")
+    data_mode = str(header.get("data", "")).lower()
+    if data_mode == "ascii":
+        rows = []
+        for line in payload.decode("utf-8", errors="ignore").splitlines():
+            parts = line.split()
+            if len(parts) < len(fields):
+                continue
+            rows.append({field: value for field, value in zip(fields, parts, strict=False)})
+        return _normalize_point_frame(pd.DataFrame.from_records(rows), path=path)
+    if data_mode == "binary":
+        return _normalize_point_frame(_read_binary_pcd_payload(payload, header), path=path)
+    raise ValueError(f"unsupported PCD DATA mode {data_mode!r}; expected ascii or binary")
+
+
+def _parse_pcd_header(header_text: str) -> dict[str, object]:
+    header: dict[str, object] = {}
+    for line in header_text.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        upper = stripped.upper()
-        if upper.startswith("FIELDS"):
-            fields = stripped.split()[1:]
-        if upper.startswith("DATA"):
-            if "ascii" not in upper.lower():
-                raise ValueError("only ASCII PCD files are supported")
-            data_start = idx + 1
-            break
-    if data_start is None or not fields:
-        raise ValueError(f"invalid ASCII PCD file: {path}")
-    rows = []
-    for line in lines[data_start:]:
-        parts = line.split()
-        if len(parts) < len(fields):
-            continue
-        rows.append({field: value for field, value in zip(fields, parts, strict=False)})
-    return _normalize_point_frame(pd.DataFrame.from_records(rows), path=path)
+        parts = stripped.split()
+        key = parts[0].lower()
+        values = parts[1:]
+        if key == "fields":
+            header["fields"] = values
+        elif key in {"size", "count"}:
+            header[key] = [int(item) for item in values]
+        elif key == "type":
+            header[key] = values
+        elif key in {"points", "width"} and values:
+            header[key] = int(values[0])
+        elif key == "data" and values:
+            header[key] = values[0].lower()
+    return header
+
+
+def _read_binary_pcd_payload(payload: bytes, header: dict[str, object]) -> pd.DataFrame:
+    fields = list(header.get("fields", []))
+    sizes = list(header.get("size", [4] * len(fields)))
+    types = list(header.get("type", ["F"] * len(fields)))
+    counts = list(header.get("count", [1] * len(fields)))
+    if len(sizes) != len(fields) or len(types) != len(fields):
+        raise ValueError("PCD binary header has inconsistent FIELDS/SIZE/TYPE lengths")
+    if len(counts) != len(fields):
+        counts = [1] * len(fields)
+    dtype_fields = []
+    for field, size, type_code, count in zip(fields, sizes, types, counts, strict=False):
+        dtype = _pcd_numpy_dtype(size=int(size), type_code=str(type_code))
+        if int(count) == 1:
+            dtype_fields.append((field, dtype))
+        else:
+            dtype_fields.append((field, dtype, (int(count),)))
+    dtype = np.dtype(dtype_fields)
+    point_count = int(header.get("points", header.get("width", 0)) or 0)
+    if point_count <= 0:
+        point_count = len(payload) // dtype.itemsize
+    arr = np.frombuffer(payload[: point_count * dtype.itemsize], dtype=dtype, count=point_count)
+    data: dict[str, np.ndarray] = {}
+    for field in fields:
+        values = arr[field]
+        if getattr(values, "ndim", 1) > 1:
+            values = values[:, 0]
+        data[field] = values
+    return pd.DataFrame(data)
+
+
+def _pcd_numpy_dtype(*, size: int, type_code: str) -> str:
+    code = type_code.upper()
+    if code == "F":
+        return "<f4" if size == 4 else "<f8"
+    if code == "I":
+        return {1: "<i1", 2: "<i2", 4: "<i4", 8: "<i8"}.get(size, "<i4")
+    if code == "U":
+        return {1: "<u1", 2: "<u2", 4: "<u4", 8: "<u8"}.get(size, "<u4")
+    raise ValueError(f"unsupported PCD type code: {type_code!r}")
+
+
+def _read_numpy_point_cloud(path: Path) -> pd.DataFrame:
+    payload = np.load(path, allow_pickle=False)
+    if isinstance(payload, np.lib.npyio.NpzFile):
+        key = "points" if "points" in payload.files else payload.files[0]
+        arr = payload[key]
+    else:
+        arr = payload
+    arr = np.asarray(arr)
+    if arr.ndim != 2 or arr.shape[1] < 3:
+        raise ValueError(f"NumPy point cloud must be shape (N, >=3), got {arr.shape}")
+    frame = pd.DataFrame({"x_m": arr[:, 0], "y_m": arr[:, 1], "z_m": arr[:, 2]})
+    return _normalize_point_frame(frame, path=path)
 
 
 def _read_ascii_ply(path: Path) -> pd.DataFrame:

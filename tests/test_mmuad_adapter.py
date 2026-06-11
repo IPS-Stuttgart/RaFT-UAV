@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from zipfile import ZipFile
 
 import numpy as np
 import pandas as pd
 
-from raft_uav.mmuad.calibration import load_calibration_json, transform_candidate_frame
+from raft_uav.mmuad.calibration import (
+    load_calibration_file,
+    load_calibration_json,
+    transform_candidate_frame,
+)
+from raft_uav.mmuad.evaluator import evaluate_mmaud_results, load_mmaud_results_csv
+from raft_uav.mmuad.evaluate import evaluate_submission_csv
+from raft_uav.mmuad.inspect import inspect_sequence_root, write_layout_report
 from raft_uav.mmuad.io import (
     load_candidate_csv,
     load_point_cloud_csv_as_candidates,
@@ -15,10 +23,17 @@ from raft_uav.mmuad.io import (
     load_truth_csv,
     merge_candidate_frames,
 )
+from raft_uav.mmuad.layout import inspect_mmuad_layout
 from raft_uav.mmuad.mot import (
     MultiObjectTrackerConfig,
     compute_multi_object_metrics,
     run_mmuad_multi_object_tracker,
+)
+from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates, pointcloud2_to_dataframe
+from raft_uav.mmuad.rosbag_bridge import (
+    inspect_rosbag,
+    load_topic_map_exports,
+    write_topic_map_template,
 )
 from raft_uav.mmuad.schema import CandidateFrame, TruthFrame
 from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_export
@@ -26,8 +41,11 @@ from raft_uav.mmuad.splits import filter_sequences_by_split, load_split_manifest
 from raft_uav.mmuad.submission import (
     compute_trajectory_metrics,
     estimates_to_submission_frame,
+    inspect_submission_zip,
+    write_mmaud_results_csv,
     write_submission_json,
     write_submission_zip,
+    write_ug2_codabench_zip,
 )
 from raft_uav.mmuad.tracker import (
     TrackerConfig,
@@ -179,6 +197,42 @@ def test_tracker_ignores_invalid_manual_candidate_rows() -> None:
     assert np.isfinite(
         output.estimates[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(dtype=float)
     ).all()
+
+
+def test_tracker_accepts_minimal_valid_candidate_frame_without_optional_columns() -> None:
+    candidates = CandidateFrame(
+        pd.DataFrame(
+            {
+                "sequence_id": ["s1", "s1", "s1"],
+                "time_s": [0.0, 1.0, 2.0],
+                "source": ["radar", "radar", "radar"],
+                "x_m": [0.0, 1.0, 2.0],
+                "y_m": [0.0, 0.0, 0.0],
+                "z_m": [2.0, 2.0, 2.0],
+            }
+        )
+    )
+    truth = TruthFrame(
+        pd.DataFrame(
+            {
+                "sequence_id": ["s1", "s1", "s1"],
+                "time_s": [0.0, 1.0, 2.0],
+                "x_m": [0.0, 1.0, 2.0],
+                "y_m": [0.0, 0.0, 0.0],
+                "z_m": [2.0, 2.0, 2.0],
+            }
+        )
+    )
+
+    output = run_mmuad_tracker(candidates, truth, config=TrackerConfig())
+
+    assert output.selected_tracklets["time_s"].tolist() == [0.0, 1.0, 2.0]
+    assert output.estimates["update_action"].tolist() == [
+        "selected_update",
+        "selected_update",
+        "selected_update",
+    ]
+    assert "track_id" in output.selected_tracklets.columns
 
 
 def test_tracker_replays_only_selected_duplicate_rows_without_track_ids() -> None:
@@ -336,6 +390,45 @@ def test_sequence_root_discovery_and_loading(tmp_path: Path) -> None:
     assert len(candidates.rows) == 1
     assert truth is not None
     assert len(truth.rows) == 1
+
+
+def test_sequence_loading_fills_missing_sequence_ids_from_sequence_folder(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "seq_without_ids"
+    seq.mkdir()
+    pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "source": ["radar"],
+            "track_id": ["r1"],
+            "x_m": [0.0],
+            "y_m": [0.0],
+            "z_m": [1.0],
+        }
+    ).to_csv(seq / "candidates.csv", index=False)
+    pd.DataFrame(
+        {
+            "time_s": [1.0, 1.0, 1.0],
+            "x": [10.0, 10.1, 10.2],
+            "y": [0.0, 0.0, 0.1],
+            "z": [1.0, 1.1, 1.0],
+        }
+    ).to_csv(seq / "points.csv", index=False)
+    pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "x_m": [0.0],
+            "y_m": [0.0],
+            "z_m": [1.0],
+        }
+    ).to_csv(seq / "truth.csv", index=False)
+
+    candidates, truth, _ = load_sequence_export(discover_sequence_paths(tmp_path)[0])
+
+    assert set(candidates.rows["sequence_id"]) == {"seq_without_ids"}
+    assert truth is not None
+    assert truth.rows["sequence_id"].tolist() == ["seq_without_ids"]
 
 
 def test_submission_writers_use_estimate_state_columns(tmp_path: Path) -> None:
@@ -662,3 +755,337 @@ def test_submission_zip_preserves_multi_object_track_ids(tmp_path: Path) -> None
         csv_text = archive.read("submission.csv").decode("utf-8")
     assert "mot_1" in csv_text
     assert "mot_2" in csv_text
+
+
+def test_ug2_codabench_zip_contains_mmaud_results_csv(tmp_path: Path) -> None:
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["s1", "s1"],
+            "time_s": [0.0, 1.0],
+            "state_x_m": [1.0, 2.0],
+            "state_y_m": [3.0, 4.0],
+            "state_z_m": [5.0, 6.0],
+        }
+    )
+    csv_path = write_mmaud_results_csv(
+        estimates, tmp_path / "mmaud_results.csv", class_name="Mavic3"
+    )
+    frame = pd.read_csv(csv_path)
+    assert list(frame.columns) == [
+        "sequence_id",
+        "timestamp",
+        "x",
+        "y",
+        "z",
+        "uav_type",
+        "score",
+    ]
+    assert frame.loc[0, "uav_type"] == "Mavic3"
+
+    zip_path = write_ug2_codabench_zip(
+        estimates, tmp_path / "codabench.zip", class_name="Mavic3"
+    )
+    with ZipFile(zip_path) as archive:
+        assert archive.namelist() == ["mmaud_results.csv"]
+    summary = inspect_submission_zip(zip_path)
+    assert summary["has_mmaud_results_csv"]
+    assert summary["row_count"] == 2
+
+
+def test_layout_inspector_classifies_realistic_tree(tmp_path: Path) -> None:
+    seq = tmp_path / "seq001"
+    seq.mkdir()
+    (seq / "calibration.json").write_text("{}", encoding="utf-8")
+    (seq / "frame_0.0.pcd").write_text("DATA ascii\n0 0 1\n", encoding="utf-8")
+    (seq / "left_0001.png").write_bytes(b"not-an-image-but-counted")
+    (seq / "truth.csv").write_text("time_s,x_m,y_m,z_m\n0,0,0,1\n", encoding="utf-8")
+    (seq / "recording.bag").write_bytes(b"bag-placeholder")
+
+    summary = inspect_mmuad_layout(tmp_path)
+    assert summary["category_counts"]["point_cloud"] == 1
+    assert summary["category_counts"]["image"] == 1
+    assert summary["category_counts"]["truth_or_label"] == 1
+    assert summary["category_counts"]["rosbag_or_recording"] == 1
+    assert summary["sequence_candidates"][0]["has_calibration"] is True
+    assert any("ROS bag" in item for item in summary["recommendations"])
+
+
+def test_binary_pcd_point_cloud_is_clustered(tmp_path: Path) -> None:
+    import struct
+
+    pcd = tmp_path / "frame_2.5.pcd"
+    header = "\n".join(
+        [
+            "# .PCD v0.7",
+            "VERSION 0.7",
+            "FIELDS x y z",
+            "SIZE 4 4 4",
+            "TYPE F F F",
+            "COUNT 1 1 1",
+            "WIDTH 3",
+            "HEIGHT 1",
+            "POINTS 3",
+            "DATA binary",
+            "",
+        ]
+    ).encode("ascii")
+    payload = b"".join(
+        struct.pack("<fff", x, y, z)
+        for x, y, z in [(0.0, 0.0, 1.0), (0.1, 0.0, 1.1), (0.2, 0.1, 1.0)]
+    )
+    pcd.write_bytes(header + payload)
+    frame = load_point_cloud_file_as_candidates(pcd, voxel_size_m=0.5, min_points=3)
+    assert len(frame.rows) == 1
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 2.5) < 1e-9
+
+
+def test_numpy_point_cloud_file_is_clustered(tmp_path: Path) -> None:
+    points = np.array([[0.0, 0.0, 1.0], [0.1, 0.0, 1.1], [0.2, 0.1, 1.0]])
+    npy = tmp_path / "cloud_3.0.npy"
+    np.save(npy, points)
+    frame = load_point_cloud_file_as_candidates(npy, voxel_size_m=0.5, min_points=3)
+    assert len(frame.rows) == 1
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 3.0) < 1e-9
+
+
+def test_layout_inspector_reports_modalities_and_missing_fields(tmp_path: Path) -> None:
+    seq = tmp_path / "seq001"
+    seq.mkdir()
+    (seq / "calibration.json").write_text(json.dumps({"sensors": {}}), encoding="utf-8")
+    (seq / "camera_0001.png").write_bytes(b"not-a-real-image")
+    (seq / "radar_12.5.csv").write_text("x_m,y_m,z_m\n1,2,3\n", encoding="utf-8")
+    (seq / "lidar_12.5.pcd").write_text(
+        "\n".join(
+            [
+                "VERSION 0.7",
+                "FIELDS x y z",
+                "SIZE 4 4 4",
+                "TYPE F F F",
+                "COUNT 1 1 1",
+                "WIDTH 1",
+                "HEIGHT 1",
+                "POINTS 1",
+                "DATA ascii",
+                "0 0 0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    report = inspect_sequence_root(tmp_path)
+    assert report["sequence_count"] == 1
+    assert report["category_counts"]["image"] == 1
+    assert report["category_counts"]["point_cloud"] == 1
+    assert report["modality_counts"]["camera"] == 1
+    assert report["modality_counts"]["lidar"] >= 1
+    assert "truth" in report["sequences"][0]["missing_for_tracking_smoke"]
+    json_path = tmp_path / "layout.json"
+    csv_path = tmp_path / "layout.csv"
+    write_layout_report(report, json_path=json_path, csv_path=csv_path)
+    assert json_path.exists()
+    assert csv_path.exists()
+
+
+def test_submission_evaluator_matches_truth(tmp_path: Path) -> None:
+    submission = tmp_path / "submission.csv"
+    truth = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["s1", "s1"],
+            "time_s": [0.0, 1.0],
+            "track_id": ["uav", "uav"],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [2.0, 2.0],
+            "score": [1.0, 1.0],
+        }
+    ).to_csv(submission, index=False)
+    pd.DataFrame(
+        {
+            "sequence_id": ["s1", "s1"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [2.0, 2.0],
+        }
+    ).to_csv(truth, index=False)
+    metrics = evaluate_submission_csv(submission, truth)
+    assert metrics["official_ug2_metric"] is False
+    assert metrics["pooled"]["matched_count"] == 2
+    assert metrics["pooled"]["mean_3d_m"] == 0.0
+
+
+def test_mmaud_results_local_evaluator_matches_truth(tmp_path: Path) -> None:
+    results = tmp_path / "mmaud_results.csv"
+    truth = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "timestamp": [0.0, 1.0],
+            "x": [0.0, 1.0],
+            "y": [0.0, 0.0],
+            "z": [10.0, 10.0],
+            "uav_type": ["Mavic3", "Mavic3"],
+            "score": [1.0, 1.0],
+        }
+    ).to_csv(results, index=False)
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+        }
+    ).to_csv(truth, index=False)
+    evaluated = evaluate_mmaud_results(
+        load_mmaud_results_csv(results),
+        load_truth_csv(truth),
+    )
+    assert evaluated["summary"]["matched_count"] == 2
+    assert evaluated["summary"]["pooled"]["max_3d_m"] == 0.0
+
+
+def test_topic_map_exports_load_candidates_and_truth(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [5.0, 5.0],
+        }
+    ).to_csv(exports / "radar.csv", index=False)
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [5.0, 5.0],
+        }
+    ).to_csv(exports / "truth.csv", index=False)
+    topic_map = tmp_path / "topic_map.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_ros",
+                "exports": [
+                    {
+                        "kind": "candidate",
+                        "path": "radar.csv",
+                        "source": "radar",
+                        "column_aliases": {
+                            "stamp": "time_s",
+                            "px": "x_m",
+                            "py": "y_m",
+                            "pz": "z_m",
+                        },
+                    },
+                    {
+                        "kind": "truth",
+                        "path": "truth.csv",
+                        "column_aliases": {
+                            "stamp": "time_s",
+                            "px": "x_m",
+                            "py": "y_m",
+                            "pz": "z_m",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+    assert len(bundle.candidates.rows) == 2
+    assert bundle.truth is not None
+    assert len(bundle.truth.rows) == 2
+    assert bundle.candidates.rows.loc[0, "sequence_id"] == "seq_ros"
+
+
+def test_ros2_metadata_inspection_and_topic_map_template(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /radar/points",
+                "        type: sensor_msgs/msg/PointCloud2",
+                "      message_count: 3",
+                "    - topic_metadata:",
+                "        name: /ground_truth",
+                "        type: geometry_msgs/msg/PoseStamped",
+                "      message_count: 3",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    report = inspect_rosbag(bag)
+    assert report["kind"] == "ros2_bag_directory"
+    assert len(report["topics"]) == 2
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+    assert payload["schema"] == "raft-uav-mmuad-topic-map-v1"
+    assert len(payload["exports"]) == 2
+
+
+def test_pointcloud2_decoder_and_candidate_clustering() -> None:
+    fields = [
+        SimpleNamespace(name="x", offset=0, datatype=7, count=1),
+        SimpleNamespace(name="y", offset=4, datatype=7, count=1),
+        SimpleNamespace(name="z", offset=8, datatype=7, count=1),
+    ]
+    points = np.array(
+        [[0.0, 0.0, 1.0], [0.1, 0.0, 1.1], [0.2, 0.1, 1.0]],
+        dtype="<f4",
+    )
+    msg = SimpleNamespace(
+        fields=fields,
+        data=points.tobytes(),
+        width=3,
+        height=1,
+        point_step=12,
+        is_bigendian=False,
+        is_dense=True,
+    )
+
+    decoded = pointcloud2_to_dataframe(msg)
+    candidates = pointcloud2_to_candidates(
+        msg,
+        sequence_id="seq_pc2",
+        time_s=7.5,
+        source="livox",
+        voxel_size_m=0.5,
+        min_points=3,
+    )
+
+    assert decoded.shape == (3, 3)
+    assert len(candidates.rows) == 1
+    assert candidates.rows.loc[0, "sequence_id"] == "seq_pc2"
+    assert candidates.rows.loc[0, "source"] == "livox"
+
+
+def test_calibration_file_accepts_yaml_json_subset(tmp_path: Path) -> None:
+    path = tmp_path / "calibration.yaml"
+    path.write_text(
+        json.dumps(
+            {
+                "world_frame": "test",
+                "sensors": {
+                    "radar": {
+                        "translation_m": [1.0, 2.0, 3.0],
+                        "rpy_deg": [0.0, 0.0, 0.0],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    calibration = load_calibration_file(path)
+
+    assert calibration.world_frame == "test"
+    assert calibration.get("radar") is not None

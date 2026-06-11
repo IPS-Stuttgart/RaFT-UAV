@@ -51,6 +51,7 @@ def run_mmuad_tracker(
     config = config or TrackerConfig()
     rows = candidates.rows.copy()
     candidates.validate()
+    rows = _candidate_rows_with_optional_defaults(rows)
     if rows.empty:
         empty = pd.DataFrame()
         return TrackerOutput(empty, {"count": 0}, empty)
@@ -97,6 +98,29 @@ def run_mmuad_tracker(
     return TrackerOutput(estimates_all, metrics, selected_all)
 
 
+def _candidate_rows_with_optional_defaults(rows: pd.DataFrame) -> pd.DataFrame:
+    """Return candidate rows with optional tracker columns present.
+
+    ``CandidateFrame.validate`` intentionally requires only the columns needed
+    to define a candidate position. The tracker can also use optional metadata
+    such as stable track IDs, confidence scores, and per-row covariance hints.
+    Fill the same defaults used by the CSV normalization path so hand-built
+    ``CandidateFrame`` inputs with the minimal valid schema do not fail later
+    with ``KeyError`` during path selection or filtering.
+    """
+
+    out = rows.copy()
+    if "track_id" not in out.columns:
+        out["track_id"] = np.nan
+    if "confidence" not in out.columns:
+        out["confidence"] = 1.0
+    if "std_xy_m" not in out.columns:
+        out["std_xy_m"] = 10.0
+    if "std_z_m" not in out.columns:
+        out["std_z_m"] = out["std_xy_m"]
+    return out
+
+
 def select_tracklet_path(candidates: pd.DataFrame, *, config: TrackerConfig) -> pd.DataFrame:
     """Select a single globally plausible candidate tracklet path.
 
@@ -104,7 +128,7 @@ def select_tracklet_path(candidates: pd.DataFrame, *, config: TrackerConfig) -> 
     fall back to a greedy nearest-neighbor path over highest-confidence rows.
     """
 
-    frame = candidates.copy().sort_values("time_s")
+    frame = _candidate_rows_with_optional_defaults(candidates).sort_values("time_s")
     frame = frame.loc[_finite_position_mask(frame)].copy()
     if frame.empty:
         return candidates.iloc[0:0].copy()

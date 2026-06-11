@@ -57,6 +57,29 @@ def test_timestamp_normalization_is_monotonic_and_truth_relative(tmp_path):
     np.testing.assert_allclose(rf["time_s"].to_numpy(), np.array([1.0]), atol=1e-6)
 
 
+def test_truth_normalization_accepts_second_precision_timestamps(tmp_path):
+    truth_path = tmp_path / "vehicleOut.txt"
+    truth_path.write_text(
+        "\n".join(
+            [
+                '1,-78.696216,35.7274895,2.717,"(0,0,0)","(0,0,0)",49.6,2025-10-07 15:42:19,4,27',
+                '2,-78.6962159,35.7274895,2.727,"(0,0,0)","(0,0,0)",49.6,2025-10-07 15:42:20,4,27',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    truth, _projector, origin_time = normalize_truth(read_truth(truth_path))
+
+    assert truth["time_s"].tolist() == [0.0, 1.0]
+    assert origin_time == pd.Timestamp("2025-10-07 15:42:19")
+    np.testing.assert_allclose(
+        truth[["east_m", "north_m", "up_m"]].iloc[0].to_numpy(dtype=float),
+        np.zeros(3),
+        atol=1e-6,
+    )
+
+
 def test_rf_and_radar_clock_offsets_are_independent(tmp_path):
     truth_path = tmp_path / "vehicleOut.txt"
     truth_path.write_text(

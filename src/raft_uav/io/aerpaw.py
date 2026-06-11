@@ -38,6 +38,11 @@ TRUTH_COLUMNS = [
     "field10",
 ]
 
+_TRUTH_TIMESTAMP_FORMATS = (
+    "%Y-%m-%d %H:%M:%S.%f",
+    "%Y-%m-%d %H:%M:%S",
+)
+
 
 @dataclass(frozen=True)
 class FlightPaths:
@@ -247,9 +252,7 @@ def normalize_truth(
     """
 
     out = truth.copy()
-    out["timestamp"] = pd.to_datetime(
-        out["timestamp_raw"], format="%Y-%m-%d %H:%M:%S.%f", errors="coerce"
-    )
+    out["timestamp"] = _parse_truth_timestamps(out["timestamp_raw"])
     out = out.dropna(subset=["timestamp", "latitude", "longitude", "altitude_m"]).copy()
     out = out[np.isfinite(out[["latitude", "longitude", "altitude_m"]].to_numpy()).all(axis=1)]
     out = out.sort_values("timestamp").reset_index(drop=True)
@@ -273,6 +276,21 @@ def normalize_truth(
         projector = projector_from_truth(out)
     out["time_s"] = (out["timestamp"] - origin_time).dt.total_seconds()
     return truth_to_enu(out, projector), projector, origin_time
+
+
+def _parse_truth_timestamps(timestamp_raw: pd.Series) -> pd.Series:
+    """Parse AERPAW truth timestamps with or without fractional seconds."""
+
+    raw = timestamp_raw.astype(str).str.strip()
+    parsed = pd.Series(pd.NaT, index=raw.index, dtype="datetime64[ns]")
+    for timestamp_format in _TRUTH_TIMESTAMP_FORMATS:
+        missing = parsed.isna()
+        if not bool(missing.any()):
+            break
+        parsed.loc[missing] = pd.to_datetime(
+            raw.loc[missing], format=timestamp_format, errors="coerce"
+        )
+    return parsed
 
 
 def normalize_rf(
