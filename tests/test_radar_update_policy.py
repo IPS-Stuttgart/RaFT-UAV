@@ -7,9 +7,12 @@ import math
 import pandas as pd
 
 from raft_uav.baselines.radar_update_policy import (
+    ENV_DO_NO_HARM_RADAR_UPDATE_POLICY,
+    ENV_DO_NO_HARM_RADAR_UPDATES,
     RadarUpdatePolicy,
     classify_radar_update_row,
     policy_record_fields,
+    policy_from_environment,
 )
 
 
@@ -72,6 +75,17 @@ def test_policy_record_fields_include_ambiguity_diagnostics() -> None:
 
     assert fields["association_update_policy_entropy"] == 1.2
     assert fields["association_update_policy_effective_candidates"] == 3.3
+
+
+def test_policy_from_environment_accepts_compatibility_enable_alias(monkeypatch) -> None:
+    """Legacy SOTA manifests should still enable do-no-harm radar updates."""
+
+    monkeypatch.delenv(ENV_DO_NO_HARM_RADAR_UPDATES, raising=False)
+    monkeypatch.setenv(ENV_DO_NO_HARM_RADAR_UPDATE_POLICY, "1")
+
+    policy = policy_from_environment()
+
+    assert isinstance(policy, RadarUpdatePolicy)
 
 
 def pytest_approx(value: float):

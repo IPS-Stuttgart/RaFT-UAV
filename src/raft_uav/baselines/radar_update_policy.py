@@ -19,6 +19,7 @@ import pandas as pd
 from raft_uav.baselines.kalman import TrackingMeasurement, TrackingUpdateDiagnostics
 
 ENV_DO_NO_HARM_RADAR_UPDATES = "RAFT_UAV_DO_NO_HARM_RADAR_UPDATES"
+ENV_DO_NO_HARM_RADAR_UPDATE_POLICY = "RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY"
 ENV_DNH_SOFTEN_NIS = "RAFT_UAV_DNH_SOFTEN_NIS"
 ENV_DNH_SKIP_NIS = "RAFT_UAV_DNH_SKIP_NIS"
 ENV_DNH_ANCHOR_SOFTEN_NIS = "RAFT_UAV_DNH_ANCHOR_SOFTEN_NIS"
@@ -84,7 +85,10 @@ class RadarUpdatePlan:
 def policy_from_environment() -> RadarUpdatePolicy | None:
     """Return a policy when the environment flag is enabled."""
 
-    if not _env_flag(ENV_DO_NO_HARM_RADAR_UPDATES):
+    if not (
+        _env_flag(ENV_DO_NO_HARM_RADAR_UPDATES)
+        or _env_flag(ENV_DO_NO_HARM_RADAR_UPDATE_POLICY)
+    ):
         return None
     return RadarUpdatePolicy(
         soften_nis=_env_float(ENV_DNH_SOFTEN_NIS, 16.0),

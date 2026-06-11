@@ -372,6 +372,8 @@ def bias_training_rows(
         target_columns=targets,
         time_gate_s=max_time_delta_s,
     )
+    if rows.empty:
+        return rows
     if max_position_error_m is not None and not rows.empty:
         bias_columns = [_bias_column_name(column) for column in targets]
         distances = np.linalg.norm(rows[bias_columns].to_numpy(dtype=float), axis=1)

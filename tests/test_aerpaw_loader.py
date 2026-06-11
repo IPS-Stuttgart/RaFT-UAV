@@ -406,6 +406,29 @@ def test_radar_measurement_converter_ignores_null_velocity_components():
     np.testing.assert_allclose(measurement.vector, np.array([10.0, 20.0, 30.0]))
 
 
+def test_raw_radar_measurement_converter_accepts_rows_without_track_id():
+    projector = LocalENUProjector(35.7274895, -78.696216, 2.717)
+    origin_time = pd.Timestamp("2025-10-07 15:42:20")
+    radar = pd.DataFrame(
+        {
+            "global_time_raw_s": [1759851741.0],
+            "latitude": [35.72749],
+            "longitude": [-78.69621],
+            "altitude_m": [30.0],
+        }
+    )
+
+    [measurement] = radar_measurements_to_enu(
+        radar,
+        projector=projector,
+        truth_origin_time=origin_time,
+        clock_offset_s=0.0,
+    )
+
+    assert measurement.time_s == pytest.approx(1.0)
+    assert measurement.vector.shape == (3,)
+
+
 def test_truth_gated_radar_selection_handles_unsorted_truth_times():
     radar = pd.DataFrame(
         {

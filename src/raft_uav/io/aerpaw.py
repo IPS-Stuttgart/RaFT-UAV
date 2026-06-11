@@ -377,7 +377,10 @@ def normalize_radar(
         & np.isfinite(out["longitude"])
         & np.isfinite(out["altitude_m"])
     )
-    out = out.loc[valid].sort_values(["time_s", "track_id"]).reset_index(drop=True)
+    sort_columns = ["time_s"]
+    if "track_id" in out.columns:
+        sort_columns.append("track_id")
+    out = out.loc[valid].sort_values(sort_columns).reset_index(drop=True)
     if out.empty:
         out[["east_m", "north_m", "up_m"]] = np.empty((0, 3))
         return out
