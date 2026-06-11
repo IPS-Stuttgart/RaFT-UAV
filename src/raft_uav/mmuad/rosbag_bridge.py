@@ -20,7 +20,7 @@ import subprocess
 
 import pandas as pd
 
-from raft_uav.mmuad.io import load_truth_csv, merge_candidate_frames
+from raft_uav.mmuad.io import merge_candidate_frames
 from raft_uav.mmuad.schema import CandidateFrame, TruthFrame, normalize_candidate_columns, normalize_truth_columns
 
 

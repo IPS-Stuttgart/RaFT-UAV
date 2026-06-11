@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.io import load_truth_csv
-from raft_uav.mmuad.schema import normalize_candidate_columns, normalize_truth_columns
+from raft_uav.mmuad.schema import normalize_truth_columns
 
 
 def load_submission_csv(path: Path) -> pd.DataFrame:
