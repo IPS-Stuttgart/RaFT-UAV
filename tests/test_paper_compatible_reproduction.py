@@ -3,7 +3,12 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from raft_uav.baselines.radar_association import _select_paper_compatible_radar_track
+from raft_uav.baselines import radar_association as radar_association_module
+from raft_uav.baselines.kalman import TrackingMeasurement
+from raft_uav.baselines.radar_association import (
+    _run_paper_compatible_association,
+    _select_paper_compatible_radar_track,
+)
 from raft_uav.diagnostics.paper_table import select_radar_for_table
 from raft_uav.evaluation.metrics import summarize_errors
 from raft_uav.paper_selection import (
@@ -29,6 +34,93 @@ def test_summarize_errors_drops_nonfinite_values() -> None:
     assert summary["mean_m"] is None
     assert summary["std_m"] is None
     assert summary["max_m"] is None
+
+
+def test_paper_compatible_empirical_rf_covariance_rebuilds_events(monkeypatch) -> None:
+    original_covariance = np.diag([1.0, 1.0])
+    empirical_covariance = np.diag([49.0, 64.0])
+    rf_measurements = [
+        TrackingMeasurement(
+            time_s=0.0,
+            vector=np.array([10.0, 20.0]),
+            covariance=original_covariance,
+            source="rf",
+            _apply_runtime_calibration=False,
+        )
+    ]
+    radar = pd.DataFrame(columns=["time_s", "east_m", "north_m", "up_m"])
+    truth = pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "east_m": [10.0],
+            "north_m": [20.0],
+            "up_m": [0.0],
+        }
+    )
+    observed_covariances: list[np.ndarray] = []
+
+    def fake_events(rf_measurements_arg, _radar):
+        measurement = rf_measurements_arg[0]
+        observed_covariances.append(measurement.covariance.copy())
+        return [
+            {
+                "time_s": measurement.time_s,
+                "priority": 0,
+                "kind": "rf",
+                "measurement": measurement,
+            }
+        ]
+
+    def fake_empirical_rf_covariance(_measurements, **_kwargs):
+        return empirical_covariance
+
+    def fake_initial(events, **_kwargs):
+        np.testing.assert_allclose(
+            events[0]["measurement"].covariance,
+            empirical_covariance,
+        )
+        return None
+
+    monkeypatch.setattr(radar_association_module, "_events", fake_events)
+    monkeypatch.setattr(
+        radar_association_module,
+        "_empirical_rf_covariance_from_measurements",
+        fake_empirical_rf_covariance,
+    )
+    monkeypatch.setattr(
+        radar_association_module,
+        "_initial_paper_compatible_measurement_and_row",
+        fake_initial,
+    )
+
+    records, selected = _run_paper_compatible_association(
+        rf_measurements=rf_measurements,
+        radar=radar,
+        covariance=np.eye(3),
+        covariance_config=None,
+        acceleration_std_mps2=1.0,
+        gate_probabilities_by_source=None,
+        gate_thresholds_by_source=None,
+        safety_gate_probabilities_by_source=None,
+        safety_gate_thresholds_by_source=None,
+        robust_update_by_source=None,
+        inflation_alpha_by_source=None,
+        max_residual_norms_by_source=None,
+        candidate_catprob_threshold=None,
+        range_gate_m=None,
+        track_switch_penalty=0.0,
+        catprob_weight=0.0,
+        bootstrap_source="first-event",
+        truth=truth,
+        empirical_covariance=True,
+        truth_time_gate_s=1.0,
+    )
+
+    assert records == []
+    assert selected.empty
+    assert len(observed_covariances) == 2
+    np.testing.assert_allclose(observed_covariances[0], original_covariance)
+    np.testing.assert_allclose(observed_covariances[1], empirical_covariance)
 
 
 def test_paper_compatible_preselector_is_range_and_catprob_gated() -> None:
