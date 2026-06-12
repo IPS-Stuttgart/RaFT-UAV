@@ -27,9 +27,11 @@ from raft_uav.mmuad.inspect import (
     write_layout_report as write_sequence_layout_report,
 )
 from raft_uav.mmuad.io import (
+    load_candidate_file,
     load_candidate_csv,
     load_point_cloud_file_as_candidates,
     load_point_cloud_csv_as_candidates,
+    load_truth_file,
     load_truth_csv,
     merge_candidate_frames,
 )
@@ -65,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         description="experimental CVPR UG2+/MMUAD tracking-by-detection adapter",
     )
     parser.add_argument("--candidate-csv", action="append", type=Path, default=[])
+    parser.add_argument("--candidate-file", action="append", type=Path, default=[])
     parser.add_argument("--inspect-root", type=Path)
     parser.add_argument("--layout-report-json", type=Path)
     parser.add_argument("--layout-report-csv", type=Path)
@@ -107,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--split-file", type=Path)
     parser.add_argument("--split-name")
     parser.add_argument("--truth-csv", type=Path)
+    parser.add_argument("--truth-file", type=Path)
     parser.add_argument("--calibration-json", type=Path)
     parser.add_argument("--calibration-file", type=Path, help="JSON/YAML/TXT calibration interchange file")
     parser.add_argument("--no-apply-calibration", action="store_true")
@@ -365,6 +369,7 @@ def _run_submission_evaluation(args: argparse.Namespace) -> int:
 
 def _run_explicit_files(args: argparse.Namespace):
     frames = [load_candidate_csv(path) for path in args.candidate_csv]
+    frames.extend(load_candidate_file(path) for path in args.candidate_file)
     frames.extend(
         load_point_cloud_csv_as_candidates(
             path,
@@ -420,7 +425,7 @@ def _run_explicit_files(args: argparse.Namespace):
     if not frames:
         raise SystemExit(
             "provide --sequence-root, --topic-map-json, or at least one "
-            "--candidate-csv/--point-cloud-csv"
+            "--candidate-csv/--candidate-file/--point-cloud-csv"
         )
     candidates = merge_candidate_frames(frames)
     if args.infer_ug2_class_map_from_candidates:
@@ -433,8 +438,15 @@ def _run_explicit_files(args: argparse.Namespace):
     if calibration_path is not None and not args.no_apply_calibration:
         calibration = load_calibration_auto(calibration_path)
         candidates = transform_candidate_frame(candidates, calibration)
-    truth = load_truth_csv(args.truth_csv) if args.truth_csv else topic_truth
+    truth_path = _explicit_truth_path(args)
+    truth = load_truth_file(truth_path) if truth_path is not None else topic_truth
     return _run_tracker_for_mode(args, candidates, truth)
+
+
+def _explicit_truth_path(args: argparse.Namespace) -> Path | None:
+    if args.truth_csv is not None and args.truth_file is not None:
+        raise SystemExit("provide only one of --truth-csv or --truth-file")
+    return args.truth_file or args.truth_csv
 
 
 def _run_sequence_root(args: argparse.Namespace):

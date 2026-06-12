@@ -27,6 +27,16 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_smoke
 ```
 
+For non-CSV trajectory exports, use the format-aware explicit-file flags. Compact
+NumPy trajectories use `time_s,x_m,y_m,z_m` column order:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --candidate-file data/mmuad_export/trajectory.npy \
+  --truth-file data/mmuad_export/truth.npy \
+  --output-dir outputs/mmuad_numpy_smoke
+```
+
 Or build simple point-cloud cluster candidates from a CSV with `sequence_id`,
 `time_s`, `x_m`, `y_m`, `z_m`:
 
@@ -40,7 +50,7 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 Implemented in this first patch:
 
 - normalized candidate and truth schemas;
-- alias-tolerant CSV loading;
+- alias-tolerant CSV loading plus compact TXT/NumPy trajectory exports;
 - lightweight voxel connected-component clustering for point-cloud CSV rows;
 - a simple single-UAV constant-velocity tracker;
 - first-selected-candidate bootstrap;

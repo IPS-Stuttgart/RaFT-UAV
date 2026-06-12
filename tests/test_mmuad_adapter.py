@@ -13,6 +13,7 @@ from raft_uav.mmuad.calibration import (
     load_calibration_json,
     transform_candidate_frame,
 )
+from raft_uav.mmuad.cli import main as mmuad_cli_main
 from raft_uav.mmuad.completion import complete_results_to_truth_timestamps
 from raft_uav.mmuad.evaluator import (
     evaluate_mmaud_results,
@@ -1030,6 +1031,42 @@ def test_sequence_root_loads_compact_numpy_trajectory_and_truth_arrays(tmp_path:
     assert candidates.rows["time_s"].tolist() == [0.0, 1.0]
     assert truth is not None
     assert truth.rows["x_m"].tolist() == [0.0, 1.0]
+
+
+def test_cli_accepts_explicit_numpy_candidate_and_truth_files(tmp_path: Path) -> None:
+    candidates = tmp_path / "trajectory.npy"
+    truth = tmp_path / "truth.npy"
+    output = tmp_path / "out"
+    rows = np.array(
+        [
+            [0.0, 0.0, 0.0, 1.0],
+            [1.0, 1.0, 0.0, 1.0],
+            [2.0, 2.0, 0.0, 1.0],
+            [3.0, 3.0, 0.0, 1.0],
+        ]
+    )
+    np.save(candidates, rows)
+    np.save(truth, rows)
+
+    status = mmuad_cli_main(
+        [
+            "--candidate-file",
+            str(candidates),
+            "--truth-file",
+            str(truth),
+            "--output-dir",
+            str(output),
+            "--submission-csv",
+            str(output / "submission.csv"),
+        ]
+    )
+
+    assert status == 0
+    estimates = pd.read_csv(output / "mmuad_estimates.csv")
+    assert estimates["time_s"].tolist() == [0.0, 1.0, 2.0, 3.0]
+    metrics = json.loads((output / "mmuad_metrics.json").read_text(encoding="utf-8"))
+    assert metrics["pooled"]["mean_3d_m"] < 1.0
+    assert (output / "submission.csv").exists()
 
 
 def test_layout_inspector_reports_modalities_and_missing_fields(tmp_path: Path) -> None:
