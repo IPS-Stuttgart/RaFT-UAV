@@ -8,7 +8,8 @@ tracking logs:
 * ``sensor_msgs/msg/PointCloud2`` -> clustered candidate detections;
 * ``vision_msgs/msg/Detection3D`` / ``Detection3DArray`` -> bbox center rows;
 * ``visualization_msgs/msg/Marker`` / ``MarkerArray`` -> marker position rows;
-* ``geometry_msgs/msg/PoseStamped`` -> truth rows or candidate rows;
+* ``geometry_msgs/msg/Pose`` / ``PoseStamped`` /
+  ``PoseWithCovariance(Stamped)`` -> truth rows or candidate rows;
 * ``geometry_msgs/msg/PoseArray`` -> batched truth rows or candidate rows;
 * ``geometry_msgs/msg/PointStamped`` -> truth rows or candidate rows;
 * ``geometry_msgs/msg/TransformStamped`` -> truth rows or candidate rows;
@@ -65,7 +66,7 @@ def extract_native_rosbag_topic_map(
     ``marker_candidate`` / ``marker_array_candidate``
         Convert visualization marker poses into truth/candidate rows.
     ``pose_truth`` / ``odometry_truth``
-        Convert pose/odometry messages into truth rows.
+        Convert pose, pose-with-covariance, or odometry messages into truth rows.
     ``point_truth`` / ``transform_truth`` / ``tf_truth`` / ``path_truth`` /
     ``pose_array_truth``
         Convert position-only messages into truth rows.

@@ -683,7 +683,9 @@ The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
 `visualization_msgs/msg/Marker` as `marker_truth` or `marker_candidate`,
 `visualization_msgs/msg/MarkerArray` as `marker_array_truth` or
 `marker_array_candidate`,
-`geometry_msgs/msg/PoseStamped` as `pose_truth` or `pose_candidate`,
+`geometry_msgs/msg/Pose`, `geometry_msgs/msg/PoseStamped`, and
+`geometry_msgs/msg/PoseWithCovarianceStamped` as `pose_truth` or
+`pose_candidate`,
 `geometry_msgs/msg/PoseArray` as `pose_array_truth` or `pose_array_candidate`,
 `geometry_msgs/msg/PointStamped` as `point_truth` or `point_candidate`,
 `geometry_msgs/msg/TransformStamped` as `transform_truth` or

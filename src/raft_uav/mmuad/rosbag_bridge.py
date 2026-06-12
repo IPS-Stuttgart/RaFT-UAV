@@ -181,6 +181,13 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "path_truth" if truth_like else "path_candidate"
     if msg_type.endswith("posearray") or "pose_array" in msg_type:
         return "pose_array_truth" if truth_like else "pose_array_candidate"
+    if (
+        compact_type.endswith("posewithcovariancestamped")
+        or compact_type.endswith("posewithcovariance")
+        or compact_type.endswith("/pose")
+        or compact_type.endswith("msg/pose")
+    ):
+        return "pose_truth" if truth_like else "pose_candidate"
     if msg_type.endswith("posestamped") or "pose_stamped" in msg_type:
         return "pose_truth" if truth_like else "pose_candidate"
     if msg_type.endswith("pointstamped") or "point_stamped" in msg_type:

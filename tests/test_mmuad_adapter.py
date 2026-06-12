@@ -3149,6 +3149,39 @@ def test_ros2_topic_map_template_infers_pose_array_topics(tmp_path: Path) -> Non
     assert payload["exports"][1]["source"] is None
 
 
+def test_ros2_topic_map_template_infers_pose_covariance_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /detector/pose_cov",
+                "        type: geometry_msgs/msg/PoseWithCovarianceStamped",
+                "      message_count: 2",
+                "    - topic_metadata:",
+                "        name: /ground_truth/pose",
+                "        type: geometry_msgs/msg/Pose",
+                "      message_count: 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "pose_candidate",
+        "pose_truth",
+    ]
+    assert payload["exports"][0]["source"] == "detector_pose_cov"
+    assert payload["exports"][1]["source"] is None
+
+
 def test_ros2_topic_map_template_infers_detection3d_topics(tmp_path: Path) -> None:
     bag = tmp_path / "bagdir"
     bag.mkdir()
@@ -3227,6 +3260,15 @@ def test_native_ros_position_message_to_row_accepts_common_position_messages() -
             pose=SimpleNamespace(position=SimpleNamespace(x=7.0, y=8.0, z=9.0))
         )
     )
+    exact_pose_message = SimpleNamespace(
+        position=SimpleNamespace(x=10.0, y=11.0, z=12.0)
+    )
+    covariance_pose_message = SimpleNamespace(
+        pose=SimpleNamespace(
+            pose=SimpleNamespace(position=SimpleNamespace(x=13.0, y=14.0, z=15.0)),
+            covariance=[0.0] * 36,
+        )
+    )
 
     point_row = position_message_to_row(point_message, sequence_id="seq", time_s=1.25)
     transform_row = position_message_to_row(
@@ -3235,6 +3277,16 @@ def test_native_ros_position_message_to_row_accepts_common_position_messages() -
         time_s=2.5,
     )
     pose_row = position_message_to_row(pose_message, sequence_id="seq", time_s=3.75)
+    exact_pose_row = position_message_to_row(
+        exact_pose_message,
+        sequence_id="seq",
+        time_s=4.25,
+    )
+    covariance_pose_row = position_message_to_row(
+        covariance_pose_message,
+        sequence_id="seq",
+        time_s=5.5,
+    )
 
     assert point_row == {
         "sequence_id": "seq",
@@ -3246,6 +3298,9 @@ def test_native_ros_position_message_to_row_accepts_common_position_messages() -
     assert transform_row["x_m"] == 4.0
     assert transform_row["time_s"] == 2.5
     assert pose_row["z_m"] == 9.0
+    assert exact_pose_row["x_m"] == 10.0
+    assert exact_pose_row["time_s"] == 4.25
+    assert covariance_pose_row["z_m"] == 15.0
 
 
 def test_native_ros_position_message_to_rows_filters_tf_message_transforms() -> None:
