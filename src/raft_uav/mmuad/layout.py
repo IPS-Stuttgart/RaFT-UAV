@@ -136,7 +136,7 @@ def _classify_file(path: Path, root: Path) -> LayoutFile:
         token in name or token in parent_text for token in TRUTH_TOKENS
     ):
         category = "truth_or_label"
-    elif suffix in TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
+    elif suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
         token in name or token in parent_text for token in POINT_CLOUD_TOKENS
     ):
         category = "candidate_or_point_table"
@@ -237,7 +237,7 @@ def _layout_recommendations(
     if category_counts.get("topic_map_export", 0):
         recommendations.append(
             "Exported topic-map JSON files found: sequence-root mode can load "
-            "their referenced CSV/TSV/TXT or NumPy exports."
+            "their referenced CSV/TSV/TXT/JSON or NumPy exports."
         )
     if category_counts.get("topic_map_native", 0):
         recommendations.append(

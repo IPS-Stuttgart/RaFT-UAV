@@ -30,7 +30,17 @@ from raft_uav.mmuad.schema import CandidateFrame, TruthFrame, normalize_truth_co
 TABLE_SUFFIXES = (".csv", ".tsv", ".txt")
 JSON_TABLE_SUFFIXES = (".json",)
 TRAJECTORY_SUFFIXES = (".npy", ".npz")
-POINT_FILE_SUFFIXES = (".csv", ".tsv", ".txt", ".npy", ".npz", ".pcd", ".ply", ".bin")
+POINT_FILE_SUFFIXES = (
+    ".csv",
+    ".tsv",
+    ".txt",
+    ".json",
+    ".npy",
+    ".npz",
+    ".pcd",
+    ".ply",
+    ".bin",
+)
 CANDIDATE_DIR_TOKENS = (
     "candidate",
     "candidates",
@@ -115,8 +125,9 @@ def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[Seq
     ``*_candidates.csv``, delimited variants such as ``candidates.tsv`` or
     ``detections.txt``, JSON row tables such as ``candidates.json`` or
     ``truth.json``, compact NumPy trajectory tables such as ``candidates.npy``
-    or ``trajectory.npz``, ``points.csv`` / ``points.tsv``, ``*_points.csv``,
-    ``*.pcd``, ``*.ply``, simple float32 ``*.bin`` point-cloud exports,
+    or ``trajectory.npz``, ``points.csv`` / ``points.tsv`` /
+    ``points.json``, ``*_points.csv`` / ``*_points.json``, ``*.pcd``,
+    ``*.ply``, simple float32 ``*.bin`` point-cloud exports,
     exported ROS topic-map JSON files, ``truth.csv`` / ``truth.npy``, and
     ``calibration.json`` under each sequence folder.  If ``root`` itself holds
     such files, it is treated as a single sequence.
@@ -483,10 +494,10 @@ def _point_files(path: Path) -> list[Path]:
     names = [
         path / f"{stem}{suffix}"
         for stem in ("points", "point_cloud", "lidar_points")
-        for suffix in TABLE_SUFFIXES
+        for suffix in TABLE_SUFFIXES + JSON_TABLE_SUFFIXES
     ]
     files = [item for item in names if item.exists()]
-    for suffix in TABLE_SUFFIXES:
+    for suffix in TABLE_SUFFIXES + JSON_TABLE_SUFFIXES:
         files.extend(sorted(path.glob(f"*_points{suffix}")))
         files.extend(sorted(path.glob(f"*_point_cloud{suffix}")))
     files.extend(sorted(path.glob("*.pcd")))

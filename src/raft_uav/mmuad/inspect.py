@@ -182,10 +182,10 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
     if suffix in POINT_SUFFIXES:
         return "point_cloud", modality if modality != "unknown" else "lidar", inferred_time_s
     if suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES:
+        if "point" in stem or "cloud" in stem or modality == "lidar":
+            return "point_cloud_csv", "lidar", None
         if any(hint in stem or hint in parent for hint in CANDIDATE_HINTS):
             return "candidate", modality, None
-        if suffix != ".json" and ("point" in stem or "cloud" in stem or modality == "lidar"):
-            return "point_cloud_csv", "lidar", None
         if suffix != ".json" and modality == "radar":
             return "radar_csv", "radar", None
         return "csv" if suffix == ".csv" else "metadata", modality, None

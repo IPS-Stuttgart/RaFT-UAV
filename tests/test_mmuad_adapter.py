@@ -1210,6 +1210,33 @@ def test_tsv_point_cloud_file_is_clustered(tmp_path: Path) -> None:
     assert abs(float(frame.rows.loc[0, "time_s"]) - 4.5) < 1e-9
 
 
+def test_json_point_cloud_file_is_clustered(tmp_path: Path) -> None:
+    points = tmp_path / "livox_points_4.5.json"
+    points.write_text(
+        json.dumps(
+            {
+                "points": [
+                    {"x": 0.0, "y": 0.0, "z": 1.0},
+                    {"x": 0.1, "y": 0.0, "z": 1.1},
+                    {"x": 0.2, "y": 0.1, "z": 1.0},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    frame = load_point_cloud_file_as_candidates(
+        points,
+        sequence_id="seq_livox_json",
+        voxel_size_m=0.5,
+        min_points=3,
+    )
+
+    assert len(frame.rows) == 1
+    assert frame.rows.loc[0, "sequence_id"] == "seq_livox_json"
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 4.5) < 1e-9
+
+
 def test_split_manifest_filters_discovered_sequences(tmp_path: Path) -> None:
     for name in ("seq_train", "seq_val"):
         seq = tmp_path / name
@@ -1947,6 +1974,43 @@ def test_sequence_root_loads_binary_livox_point_cloud_export(tmp_path: Path) -> 
     assert truth is not None
 
 
+def test_sequence_root_loads_json_livox_point_cloud_export(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_livox_json"
+    livox = seq / "livox_avia"
+    truth_dir = seq / "ground_truth"
+    livox.mkdir(parents=True)
+    truth_dir.mkdir()
+    timestamp = "12.75"
+    (livox / f"{timestamp}.json").write_text(
+        json.dumps(
+            {
+                "points": [
+                    {"x": 3.0, "y": 4.0, "z": 5.0},
+                    {"x": 3.1, "y": 4.0, "z": 5.1},
+                    {"x": 3.0, "y": 4.1, "z": 5.0},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    np.save(truth_dir / f"{timestamp}.npy", np.array([3.0, 4.0, 5.0]))
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(
+        discovered[0],
+        voxel_size_m=0.5,
+        min_cluster_points=3,
+    )
+
+    assert [sequence.sequence_id for sequence in discovered] == ["seq_livox_json"]
+    assert discovered[0].point_cloud_files == (livox / f"{timestamp}.json",)
+    assert len(candidates.rows) == 1
+    row = candidates.rows.iloc[0]
+    assert row["source"] == "livox_avia"
+    assert abs(float(row["time_s"]) - 12.75) < 1e-9
+    assert truth is not None
+
+
 def test_sequence_root_loads_nested_tracking_results_as_candidates(tmp_path: Path) -> None:
     seq = tmp_path / "seq_result"
     results = seq / "tracking_results"
@@ -2151,6 +2215,10 @@ def test_layout_inspectors_classify_json_table_exports(tmp_path: Path) -> None:
         json.dumps({"truth": [{"time_s": 0.0, "x_m": 0.0, "y_m": 0.0, "z_m": 1.0}]}),
         encoding="utf-8",
     )
+    (seq / "lidar_points.json").write_text(
+        json.dumps({"points": [{"time_s": 0.0, "x_m": 0.0, "y_m": 0.0, "z_m": 1.0}]}),
+        encoding="utf-8",
+    )
     (seq / "classes.json").write_text(
         json.dumps({"seq_json_tables": "quadrotor"}),
         encoding="utf-8",
@@ -2160,11 +2228,12 @@ def test_layout_inspectors_classify_json_table_exports(tmp_path: Path) -> None:
     by_name = {row["relative_path"]: row for row in detailed["files"]}
     assert by_name["candidates.json"]["category"] == "candidate"
     assert by_name["truth.json"]["category"] == "truth"
+    assert by_name["lidar_points.json"]["category"] == "point_cloud_csv"
     assert by_name["classes.json"]["category"] == "class_label"
     assert detailed["sequences"][0]["missing_for_tracking_smoke"] == ["calibration"]
 
     inventory = inspect_mmuad_layout(tmp_path)
-    assert inventory["category_counts"]["candidate_or_point_table"] == 1
+    assert inventory["category_counts"]["candidate_or_point_table"] == 2
     assert inventory["category_counts"]["truth_or_label"] == 1
     assert inventory["category_counts"]["class_or_label"] == 1
     sequence = inventory["sequence_candidates"][0]

@@ -163,7 +163,7 @@ def load_point_cloud_file_as_candidates(
 ) -> CandidateFrame:
     """Load exported point-cloud files and cluster them into candidates.
 
-    CSV/TSV/TXT, NumPy, PCD, PLY, and simple float32 ``.bin`` files are
+    CSV/TSV/TXT/JSON, NumPy, PCD, PLY, and simple float32 ``.bin`` files are
     supported as pragmatic exported-data bridges.  This is **not** a native
     Livox packet reader.  Files without per-point timestamps are treated as one
     frame; ``time_s`` is inferred from the filename when it contains a numeric
@@ -175,6 +175,8 @@ def load_point_cloud_file_as_candidates(
     source = source or path.stem.replace("_points", "-cluster")
     if suffix in {".csv", ".tsv", ".txt"}:
         points = _read_point_cloud_csv(path)
+    elif suffix == ".json":
+        points = _read_point_cloud_json(path)
     elif suffix in {".npy", ".npz"}:
         points = _read_numpy_point_cloud(path)
     elif suffix == ".pcd":
@@ -202,6 +204,29 @@ def load_point_cloud_file_as_candidates(
 
 def _read_point_cloud_csv(path: Path) -> pd.DataFrame:
     frame = _read_delimited_table(path)
+    try:
+        return normalize_truth_columns(frame)
+    except ValueError as exc:
+        if "time_s" not in str(exc):
+            raise
+    return _normalize_point_frame(frame, path=path)
+
+
+def _read_point_cloud_json(path: Path) -> pd.DataFrame:
+    frame = read_json_table_export(
+        path,
+        preferred=(
+            "points",
+            "point_cloud",
+            "pointcloud",
+            "cloud",
+            "lidar_points",
+            "livox_points",
+            "detections",
+            "rows",
+            "data",
+        ),
+    )
     try:
         return normalize_truth_columns(frame)
     except ValueError as exc:
