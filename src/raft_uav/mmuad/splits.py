@@ -23,6 +23,7 @@ _SEQUENCE_ID_ALIASES = (
 )
 _SPLIT_ALIASES = ("split", "subset", "partition", "fold", "set")
 _SEQUENCE_LIST_KEYS = ("sequence_ids", "sequences", "ids", "items", "sequence_names")
+_SPLIT_VALUE_METADATA_KEYS = ("schema", "version", "description", "metadata", "meta")
 
 
 def load_split_manifest(path: Path) -> dict[str, tuple[str, ...]]:
@@ -134,7 +135,13 @@ def _split_values_to_sequence_ids(values: Any) -> tuple[str, ...]:
         for key in _SEQUENCE_LIST_KEYS:
             if key in values:
                 return _split_values_to_sequence_ids(values[key])
-        return ()
+        for key in values:
+            if str(key).lower() in _SPLIT_VALUE_METADATA_KEYS:
+                continue
+            sequence_id = _scalar_to_text(key)
+            if sequence_id is not None:
+                _append_unique_value(out, sequence_id)
+        return tuple(out)
     if isinstance(values, list | tuple | set):
         for item in values:
             if isinstance(item, dict):
@@ -253,4 +260,7 @@ def filter_sequences_by_split_folder(
 def split_manifest_summary(manifest: dict[str, tuple[str, ...]]) -> dict[str, Any]:
     """Return count summary for provenance files."""
 
-    return {split: {"count": len(values), "sequence_ids": list(values)} for split, values in manifest.items()}
+    return {
+        split: {"count": len(values), "sequence_ids": list(values)}
+        for split, values in manifest.items()
+    }
