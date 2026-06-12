@@ -118,6 +118,18 @@ def write_topic_map_template(report: dict[str, Any], path: Path) -> Path:
                     "score": "confidence",
                 }
             )
+        if _is_radar_polar_kind(kind):
+            entry["column_aliases"].update(
+                {
+                    "range": "range_m",
+                    "r": "range_m",
+                    "rho": "range_m",
+                    "bearing": "azimuth_deg",
+                    "az": "azimuth_deg",
+                    "azimuth": "azimuth_deg",
+                    "el": "elevation_deg",
+                }
+            )
         if _is_geodetic_kind(kind):
             entry["enu_origin_lla"] = "LAT,LON,ALT"
         exports.append(entry)
@@ -223,6 +235,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
     truth_like = any(token in name for token in ("truth", "ground", "gt", "label", "mocap"))
     if "pointcloud2" in msg_type:
         return "pointcloud2_candidate"
+    if _looks_like_polar_radar_topic(name, msg_type):
+        return "radar_polar_candidate"
     if compact_type.endswith("navsatfix"):
         return "navsatfix_truth" if truth_like else "navsatfix_candidate"
     if compact_type.endswith("geoposestamped") or compact_type.endswith("geopose"):
@@ -291,6 +305,22 @@ def _is_radar_polar_kind(kind: str) -> bool:
         "polar_radar",
         "polar_radar_candidate",
     }
+
+
+def _looks_like_polar_radar_topic(name: str, msg_type: str) -> bool:
+    text = f"{name} {msg_type}".lower().replace("_", "").replace("-", "")
+    radar_like = any(token in text for token in ("radar", "mmwave", "mmw"))
+    polar_like = any(
+        token in text
+        for token in (
+            "polar",
+            "rangeazimuth",
+            "rangebearing",
+            "rangeangle",
+            "spherical",
+        )
+    )
+    return radar_like and polar_like
 
 
 def _is_camera_detection_kind(kind: str) -> bool:

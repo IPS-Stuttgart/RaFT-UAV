@@ -477,6 +477,8 @@ are clustered from point rows using the same lightweight point-cloud bridge.
 Table exports marked as `radar_polar_candidate` or `polar_radar_candidate`
 are converted from range/azimuth rows using the same polar radar bridge as
 `--radar-polar-file`.
+The template generator maps clearly polar/range-azimuth radar topic names or
+message types to this export path.
 Table exports marked as `camera_detections_candidate`,
 `image_detections_candidate`, or `detection2d_array_candidate` are
 back-projected with the same camera detector bridge as

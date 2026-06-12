@@ -3343,6 +3343,35 @@ def test_ros2_metadata_inspection_and_topic_map_template(tmp_path: Path) -> None
     assert payload["exports"][1]["source"] is None
 
 
+def test_ros2_topic_map_template_infers_polar_radar_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /mmwave/range_azimuth",
+                "        type: custom_msgs/msg/RadarPolarArray",
+                "      message_count: 3",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    export = payload["exports"][0]
+    assert export["kind"] == "radar_polar_candidate"
+    assert export["source"] == "mmwave_range_azimuth"
+    assert export["column_aliases"]["range"] == "range_m"
+    assert export["column_aliases"]["bearing"] == "azimuth_deg"
+    assert export["column_aliases"]["el"] == "elevation_deg"
+
+
 def test_ros2_topic_map_template_infers_point_and_transform_topics(
     tmp_path: Path,
 ) -> None:
