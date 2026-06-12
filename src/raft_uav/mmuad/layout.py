@@ -14,10 +14,12 @@ from pathlib import Path
 from typing import Any
 
 from raft_uav.mmuad.io import DELIMITED_TABLE_SUFFIXES, JSON_TABLE_SUFFIXES, data_file_suffix
+from raft_uav.mmuad.rosbag_bridge import load_topic_map_payload
 
 
 POINT_CLOUD_SUFFIXES = {".pcd", ".ply", ".las", ".laz", ".bin"}
 NUMPY_SUFFIXES = {".npy", ".npz"}
+YAML_SUFFIXES = {".yaml", ".yml"}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 AUDIO_SUFFIXES = {".wav", ".flac", ".aac", ".mp3"}
 BAG_SUFFIXES = {".bag", ".db3", ".mcap"}
@@ -131,7 +133,7 @@ def _classify_file(path: Path, root: Path) -> LayoutFile:
     parent_text = " ".join(part.lower() for part in Path(rel).parts[:-1])
     if suffix in BAG_SUFFIXES:
         category = "rosbag_or_recording"
-    elif suffix == ".json" and "topic_map" in name:
+    elif suffix in {".json", ".yaml", ".yml"} and "topic_map" in name:
         category = _topic_map_category(path)
     elif suffix in POINT_CLOUD_SUFFIXES:
         category = "point_cloud"
@@ -141,9 +143,9 @@ def _classify_file(path: Path, root: Path) -> LayoutFile:
         category = "audio"
     elif name in CALIBRATION_NAMES or "calib" in name or "extrinsic" in name:
         category = "calibration"
-    elif suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
-        token in name or token in parent_text for token in CLASS_TOKENS
-    ):
+    elif suffix in (
+        TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES | YAML_SUFFIXES
+    ) and any(token in name or token in parent_text for token in CLASS_TOKENS):
         category = "class_or_label"
     elif suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
         token in name or token in parent_text for token in TRUTH_TOKENS
@@ -255,13 +257,14 @@ def _layout_recommendations(
         )
     if category_counts.get("topic_map_export", 0):
         recommendations.append(
-            "Exported topic-map JSON files found: sequence-root mode can load "
+            "Exported topic-map JSON/YAML files found: sequence-root mode can load "
             "their referenced CSV/TSV/TXT/JSON or NumPy exports."
         )
     if category_counts.get("topic_map_native", 0):
         recommendations.append(
-            "Native-only topic-map JSON files found: use them with "
-            "--rosbag-path and --topic-map-json for explicit native ROS extraction."
+            "Native-only topic-map JSON/YAML files found: use them with "
+            "--rosbag-path and --topic-map-file/--topic-map-json for explicit "
+            "native ROS extraction."
         )
     missing_calibration = [
         row["sequence_id"] for row in sequence_candidates
@@ -281,8 +284,8 @@ def _layout_recommendations(
 
 def _topic_map_category(path: Path) -> str:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = load_topic_map_payload(path)
+    except (OSError, json.JSONDecodeError, ValueError):
         return "json_metadata"
     exports = payload.get("exports", [])
     if not isinstance(exports, list):
@@ -296,8 +299,8 @@ def _topic_map_category(path: Path) -> str:
 
 def _topic_map_has_truth_export(path: Path) -> bool:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = load_topic_map_payload(path)
+    except (OSError, json.JSONDecodeError, ValueError):
         return False
     for export in payload.get("exports", []):
         if not isinstance(export, dict):

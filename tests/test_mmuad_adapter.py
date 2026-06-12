@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZipFile
@@ -132,6 +133,53 @@ def test_candidate_csv_loader_uses_default_source_hint(tmp_path: Path) -> None:
     assert frame.rows.loc[0, "source"] == "camera_front"
 
 
+def test_candidate_csv_loader_infers_flattened_ros_frame_source(tmp_path: Path) -> None:
+    path = tmp_path / "ros_pose_candidates.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1"],
+            "header.stamp.sec": [3],
+            "header.stamp.nanosec": [250_000_000],
+            "header.frame_id": ["detector_frame"],
+            "child_frame_id": ["uav_1"],
+            "pose.pose.position.x": [1.0],
+            "pose.pose.position.y": [2.0],
+            "pose.pose.position.z": [3.0],
+        }
+    ).to_csv(path, index=False)
+
+    frame = load_candidate_file(path)
+
+    row = frame.rows.iloc[0]
+    assert abs(float(row["time_s"]) - 3.25) < 1e-12
+    assert row["source"] == "detector_frame"
+    assert row["track_id"] == "uav_1"
+    assert row[["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+
+
+def test_candidate_csv_loader_explicit_source_overrides_ros_frame_source(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "ros_pose_candidates.csv"
+    pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "frame_id": ["world"],
+            "child_frame_id": ["uav_2"],
+            "position.x": [4.0],
+            "position.y": [5.0],
+            "position.z": [6.0],
+        }
+    ).to_csv(path, index=False)
+
+    frame = load_candidate_file(path, source="radar0")
+
+    row = frame.rows.iloc[0]
+    assert row["source"] == "radar0"
+    assert row["track_id"] == "uav_2"
+    assert row[["x_m", "y_m", "z_m"]].tolist() == [4.0, 5.0, 6.0]
+
+
 def test_candidate_json_loader_accepts_nested_rows(tmp_path: Path) -> None:
     path = tmp_path / "candidates.json"
     path.write_text(
@@ -192,6 +240,45 @@ def test_candidate_json_loader_flattens_ros_pose_rows(tmp_path: Path) -> None:
     assert row["source"] == "radar_frame"
     assert row["track_id"] == "uav_7"
     assert row[["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+
+
+def test_candidate_json_loader_flattens_detection3d_bbox_rows(tmp_path: Path) -> None:
+    path = tmp_path / "detection3d_candidates.json"
+    path.write_text(
+        json.dumps(
+            {
+                "detections": [
+                    {
+                        "header": {
+                            "stamp": {"sec": 4, "nanosec": 500_000_000},
+                            "frame_id": "detector_frame",
+                        },
+                        "id": "det-1",
+                        "bbox": {
+                            "center": {
+                                "position": {"x": 4.0, "y": 5.0, "z": 6.0}
+                            }
+                        },
+                        "results": [
+                            {"hypothesis": {"class_id": "uav", "score": 0.8}},
+                            {"hypothesis": {"class_id": "bird", "score": 0.2}},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    frame = load_candidate_file(path)
+
+    row = frame.rows.iloc[0]
+    assert abs(float(row["time_s"]) - 4.5) < 1e-12
+    assert row["source"] == "detector_frame"
+    assert row["track_id"] == "det-1"
+    assert row[["x_m", "y_m", "z_m"]].tolist() == [4.0, 5.0, 6.0]
+    assert float(row["confidence"]) == 0.8
+    assert row["class_name"] == "uav"
 
 
 def test_candidate_jsonl_loader_accepts_row_exports(tmp_path: Path) -> None:
@@ -930,6 +1017,52 @@ def test_sequence_root_loads_json_class_labels(tmp_path: Path) -> None:
     assert results["uav_type"].tolist() == ["quadrotor", "quadrotor"]
 
 
+def test_sequence_root_loads_yaml_class_labels(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_yaml_class"
+    seq.mkdir()
+    (seq / "candidates.json").write_text(
+        json.dumps(
+            {
+                "candidates": [
+                    {"time_s": 0.0, "x_m": 0.0, "y_m": 0.0, "z_m": 1.0},
+                    {"time_s": 1.0, "x_m": 1.0, "y_m": 0.0, "z_m": 1.0},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (seq / "truth.json").write_text(
+        json.dumps(
+            {
+                "truth": [
+                    {"time_s": 0.0, "x_m": 0.0, "y_m": 0.0, "z_m": 1.0},
+                    {"time_s": 1.0, "x_m": 1.0, "y_m": 0.0, "z_m": 1.0},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (seq / "classes.yaml").write_text(
+        "\n".join(
+            [
+                "class_map:",
+                "  seq_yaml_class:",
+                "    uav_type: quadrotor",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].class_files == (seq / "classes.yaml",)
+    assert candidates.rows["class_name"].tolist() == ["quadrotor", "quadrotor"]
+    output = run_mmuad_tracker(candidates, truth)
+    results = estimates_to_mmaud_results_frame(output.estimates, class_name="unknown")
+    assert results["uav_type"].tolist() == ["quadrotor", "quadrotor"]
+
+
 def test_sequence_root_discovers_delimited_point_tables(tmp_path: Path) -> None:
     seq = tmp_path / "seq_points_tsv"
     seq.mkdir()
@@ -1112,6 +1245,92 @@ def test_sequence_root_discovers_json_radar_modality_folder_tables(
     assert discovered[0].radar_polar_csvs == (radar / "detections.json",)
     assert set(candidates.rows["source"]) == {"radar0"}
     assert abs(float(candidates.rows.loc[0, "x_m"]) - 10.0) < 1.0e-9
+    assert truth is not None
+
+
+def test_sequence_root_discovers_cartesian_radar_modality_folder_tables(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "seq_radar_cartesian"
+    radar = seq / "radar0"
+    radar.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "timestamp_ms": [1250],
+            "x_m": [2.0],
+            "y_m": [3.0],
+            "z_m": [4.0],
+            "track_id": ["trk-1"],
+            "confidence": [0.9],
+        }
+    ).to_csv(radar / "detections.csv", index=False)
+    pd.DataFrame(
+        {
+            "time_s": [1.25],
+            "x_m": [2.0],
+            "y_m": [3.0],
+            "z_m": [4.0],
+        }
+    ).to_csv(seq / "truth.csv", index=False)
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0], apply_calibration=False)
+
+    assert [sequence.sequence_id for sequence in discovered] == ["seq_radar_cartesian"]
+    assert discovered[0].candidate_csvs == (radar / "detections.csv",)
+    assert discovered[0].radar_polar_csvs == ()
+    assert candidates.rows["source"].tolist() == ["radar0"]
+    assert abs(float(candidates.rows.loc[0, "time_s"]) - 1.25) < 1.0e-9
+    assert abs(float(candidates.rows.loc[0, "x_m"]) - 2.0) < 1.0e-9
+    assert truth is not None
+
+
+def test_sequence_root_discovers_json_cartesian_radar_modality_folder_tables(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "seq_radar_cartesian_json"
+    radar = seq / "mmwave"
+    radar.mkdir(parents=True)
+    (radar / "detections.json").write_text(
+        json.dumps(
+            {
+                "detections": [
+                    {
+                        "timestamp": 1.25,
+                        "x": 2.0,
+                        "y": 3.0,
+                        "z": 4.0,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (seq / "truth.json").write_text(
+        json.dumps(
+            [
+                {
+                    "time_s": 1.25,
+                    "x_m": 2.0,
+                    "y_m": 3.0,
+                    "z_m": 4.0,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0], apply_calibration=False)
+
+    assert [sequence.sequence_id for sequence in discovered] == [
+        "seq_radar_cartesian_json"
+    ]
+    assert discovered[0].candidate_csvs == (radar / "detections.json",)
+    assert discovered[0].radar_polar_csvs == ()
+    assert candidates.rows["source"].tolist() == ["mmwave"]
+    assert abs(float(candidates.rows.loc[0, "time_s"]) - 1.25) < 1.0e-9
+    assert abs(float(candidates.rows.loc[0, "y_m"]) - 3.0) < 1.0e-9
     assert truth is not None
 
 
@@ -1438,6 +1657,64 @@ def test_sequence_root_loads_exported_topic_map_sequence(tmp_path: Path) -> None
     assert discovered[0].topic_map_jsons == (topic_map,)
     assert candidates.rows["source"].tolist() == ["radar", "radar"]
     assert candidates.rows["sequence_id"].tolist() == ["seq_topic_map", "seq_topic_map"]
+    assert truth is not None
+    assert truth.rows["time_s"].tolist() == [0.0, 1.0]
+
+
+def test_sequence_root_loads_exported_yaml_topic_map_sequence(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_topic_map_yaml"
+    seq.mkdir()
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [4.0, 4.0],
+        }
+    ).to_csv(seq / "radar_export.csv", index=False)
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [4.0, 4.0],
+        }
+    ).to_csv(seq / "truth_export.csv", index=False)
+    topic_map = seq / "topic_map.yaml"
+    topic_map.write_text(
+        "\n".join(
+            [
+                "sequence_id: seq_topic_map_yaml",
+                "exports:",
+                "  - kind: candidate",
+                "    path: radar_export.csv",
+                "    source: radar",
+                "    column_aliases:",
+                "      stamp: time_s",
+                "      px: x_m",
+                "      py: y_m",
+                "      pz: z_m",
+                "  - kind: pose_truth",
+                "    path: truth_export.csv",
+                "    column_aliases:",
+                "      stamp: time_s",
+                "      px: x_m",
+                "      py: y_m",
+                "      pz: z_m",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].topic_map_jsons == (topic_map,)
+    assert candidates.rows["source"].tolist() == ["radar", "radar"]
+    assert candidates.rows["sequence_id"].tolist() == [
+        "seq_topic_map_yaml",
+        "seq_topic_map_yaml",
+    ]
     assert truth is not None
     assert truth.rows["time_s"].tolist() == [0.0, 1.0]
 
@@ -1795,6 +2072,42 @@ def test_split_manifest_filters_discovered_sequences(tmp_path: Path) -> None:
     assert [sequence.sequence_id for sequence in val_sequences] == ["seq_val"]
 
 
+def test_split_manifest_filters_relative_sequence_paths(tmp_path: Path) -> None:
+    for split, x_m in (("train", 100.0), ("val", 1.0)):
+        seq = tmp_path / split / "seq_same"
+        seq.mkdir(parents=True)
+        pd.DataFrame(
+            {
+                "sequence_id": ["seq_same"],
+                "time_s": [0.0],
+                "source": ["radar"],
+                "track_id": ["r1"],
+                "x_m": [x_m],
+                "y_m": [0.0],
+                "z_m": [1.0],
+            }
+        ).to_csv(seq / "candidates.csv", index=False)
+    split = tmp_path / "splits.json"
+    split.write_text(
+        json.dumps(
+            {
+                "train": ["train/seq_same"],
+                "val": ["val/seq_same"],
+                "val_windows": ["val\\seq_same"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = load_split_manifest(split)
+    discovered = discover_sequence_paths(tmp_path)
+
+    val_sequences = filter_sequences_by_split(discovered, manifest, "val")
+    val_windows_sequences = filter_sequences_by_split(discovered, manifest, "val_windows")
+
+    assert [sequence.root.parent.name for sequence in val_sequences] == ["val"]
+    assert [sequence.root.parent.name for sequence in val_windows_sequences] == ["val"]
+
+
 def test_split_manifest_accepts_nested_json_layouts(tmp_path: Path) -> None:
     split = tmp_path / "splits.json"
     split.write_text(
@@ -1818,6 +2131,30 @@ def test_split_manifest_accepts_nested_json_layouts(tmp_path: Path) -> None:
 
     assert manifest["train"] == ("seq_train", "seq_train_2")
     assert manifest["val"] == ("seq_val",)
+
+
+def test_split_manifest_accepts_yaml_layouts(tmp_path: Path) -> None:
+    split = tmp_path / "splits.yaml"
+    split.write_text(
+        "\n".join(
+            [
+                "splits:",
+                "  train:",
+                "    sequences:",
+                "      - sequence_id: train/seq_train",
+                "      - id: train/seq_train_2",
+                "  val:",
+                "    sequence_ids:",
+                "      - val/seq_val",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = load_split_manifest(split)
+
+    assert manifest["train"] == ("train/seq_train", "train/seq_train_2")
+    assert manifest["val"] == ("val/seq_val",)
 
 
 def test_split_manifest_accepts_sequence_rows_json(tmp_path: Path) -> None:
@@ -2228,6 +2565,26 @@ def test_sequence_class_map_accepts_nested_json_mapping(tmp_path: Path) -> None:
     assert mapping == {"seqA": "Mavic3", "seqB": "Phantom4"}
 
 
+def test_sequence_class_map_accepts_yaml_mapping(tmp_path: Path) -> None:
+    class_map_yaml = tmp_path / "classes.yaml"
+    class_map_yaml.write_text(
+        "\n".join(
+            [
+                "class_map:",
+                "  seqA:",
+                "    uav_type: Mavic3",
+                "  seqB:",
+                "    label: Phantom4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mapping = load_sequence_class_map(class_map_yaml)
+
+    assert mapping == {"seqA": "Mavic3", "seqB": "Phantom4"}
+
+
 def test_sequence_class_map_accepts_csv_alias_columns(tmp_path: Path) -> None:
     class_map_csv = tmp_path / "classes.csv"
     class_map_csv.write_text("id,type\nseqA,Mavic3\nseqB,Phantom4\n", encoding="utf-8")
@@ -2235,6 +2592,57 @@ def test_sequence_class_map_accepts_csv_alias_columns(tmp_path: Path) -> None:
     mapping = load_sequence_class_map(class_map_csv)
 
     assert mapping == {"seqA": "Mavic3", "seqB": "Phantom4"}
+
+
+def test_cli_writes_ug2_results_with_class_map_file_alias(tmp_path: Path) -> None:
+    candidates = tmp_path / "candidates.csv"
+    truth = tmp_path / "truth.csv"
+    class_map = tmp_path / "classes.yaml"
+    output = tmp_path / "out"
+    results = output / "mmaud_results.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "time_s": [0.0, 1.0],
+            "source": ["radar", "radar"],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+        }
+    ).to_csv(candidates, index=False)
+    pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+        }
+    ).to_csv(truth, index=False)
+    class_map.write_text(
+        "\n".join(["class_map:", "  seqA:", "    uav_type: Mavic3"]),
+        encoding="utf-8",
+    )
+
+    status = mmuad_cli_main(
+        [
+            "--candidate-csv",
+            str(candidates),
+            "--truth-csv",
+            str(truth),
+            "--ug2-class-map-file",
+            str(class_map),
+            "--ug2-results-csv",
+            str(results),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    rows = pd.read_csv(results)
+    assert rows["sequence_id"].tolist() == ["seqA", "seqA"]
+    assert rows["uav_type"].tolist() == ["Mavic3", "Mavic3"]
 
 
 def test_results_completion_resamples_to_truth_timestamps(tmp_path: Path) -> None:
@@ -2483,6 +2891,32 @@ def test_las_point_cloud_is_clustered(tmp_path: Path) -> None:
     assert abs(float(frame.rows.loc[0, "x_m"]) - 0.1) < 1e-6
 
 
+def test_laz_point_cloud_uses_optional_laspy_reader(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    laz = tmp_path / "frame_10.5.laz"
+    laz.write_bytes(b"not-real-laz-but-fake-laspy-reads-the-path")
+    calls: list[Path] = []
+
+    def fake_read(path: Path):
+        calls.append(Path(path))
+        return SimpleNamespace(
+            x=np.array([0.0, 0.1, 0.2], dtype=float),
+            y=np.array([0.0, 0.0, 0.1], dtype=float),
+            z=np.array([1.0, 1.1, 1.0], dtype=float),
+        )
+
+    monkeypatch.setitem(sys.modules, "laspy", SimpleNamespace(read=fake_read))
+
+    frame = load_point_cloud_file_as_candidates(laz, voxel_size_m=0.5, min_points=3)
+
+    assert calls == [laz]
+    assert len(frame.rows) == 1
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 10.5) < 1e-9
+    assert abs(float(frame.rows.loc[0, "x_m"]) - 0.1) < 1e-6
+
+
 def test_numpy_point_cloud_file_is_clustered(tmp_path: Path) -> None:
     points = np.array([[0.0, 0.0, 1.0], [0.1, 0.0, 1.1], [0.2, 0.1, 1.0]])
     npy = tmp_path / "cloud_3.0.npy"
@@ -2723,6 +3157,44 @@ def test_sequence_root_loads_gzipped_las_point_cloud_export(tmp_path: Path) -> N
     assert truth is not None
 
 
+def test_sequence_root_loads_laz_point_cloud_export(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    seq = tmp_path / "seq_laz"
+    livox = seq / "livox_avia"
+    livox.mkdir(parents=True)
+    laz = livox / "12.75.laz"
+    laz.write_bytes(b"not-real-laz-but-fake-laspy-reads-the-path")
+
+    def fake_read(path: Path):
+        assert Path(path) == laz
+        return SimpleNamespace(
+            x=np.array([3.0, 3.1, 3.0], dtype=float),
+            y=np.array([4.0, 4.0, 4.1], dtype=float),
+            z=np.array([5.0, 5.1, 5.0], dtype=float),
+        )
+
+    monkeypatch.setitem(sys.modules, "laspy", SimpleNamespace(read=fake_read))
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(
+        discovered[0],
+        voxel_size_m=0.5,
+        min_cluster_points=3,
+    )
+
+    assert [sequence.sequence_id for sequence in discovered] == ["seq_laz"]
+    assert discovered[0].point_cloud_files == (laz,)
+    assert truth is None
+    assert len(candidates.rows) == 1
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_laz"
+    assert row["source"] == "livox_avia"
+    assert abs(float(row["time_s"]) - 12.75) < 1.0e-9
+    assert abs(float(row["x_m"]) - (3.0 + 3.1 + 3.0) / 3.0) < 1.0e-9
+
+
 def test_sequence_root_loads_json_livox_point_cloud_export(tmp_path: Path) -> None:
     seq = tmp_path / "seq_livox_json"
     livox = seq / "livox_avia"
@@ -2929,6 +3401,25 @@ def test_layout_inspectors_classify_topic_maps(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (exported / "detections.csv").write_text("time_s,x_m,y_m,z_m\n0,0,0,1\n", encoding="utf-8")
+    exported_yaml = tmp_path / "seq_exported_yaml_topic_map"
+    exported_yaml.mkdir()
+    (exported_yaml / "topic_map.yaml").write_text(
+        "\n".join(
+            [
+                "sequence_id: seq_exported_yaml_topic_map",
+                "exports:",
+                "  - kind: candidate",
+                "    path: detections.csv",
+                "  - kind: pose_truth",
+                "    path: truth_export.csv",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (exported_yaml / "detections.csv").write_text(
+        "time_s,x_m,y_m,z_m\n0,0,0,1\n",
+        encoding="utf-8",
+    )
     native = tmp_path / "seq_native_topic_map"
     native.mkdir()
     (native / "topic_map_native.json").write_text(
@@ -2950,6 +3441,8 @@ def test_layout_inspectors_classify_topic_maps(tmp_path: Path) -> None:
     detailed_by_name = {row["relative_path"]: row for row in detailed["files"]}
     assert detailed_by_name["topic_map.json"]["category"] == "topic_map_export"
     assert detailed_by_name["topic_map.json"]["topic_map_has_truth_export"] is True
+    assert detailed_by_name["topic_map.yaml"]["category"] == "topic_map_export"
+    assert detailed_by_name["topic_map.yaml"]["topic_map_has_truth_export"] is True
     assert detailed["category_counts"]["topic_map_native"] == 1
     by_sequence = {
         row["sequence_id"]: row["missing_for_tracking_smoke"]
@@ -2957,10 +3450,11 @@ def test_layout_inspectors_classify_topic_maps(tmp_path: Path) -> None:
     }
     assert "truth" not in by_sequence["seq_exported_topic_map"]
     assert "candidate_or_point_cloud" not in by_sequence["seq_exported_topic_map"]
+    assert "truth" not in by_sequence["seq_exported_yaml_topic_map"]
     assert "candidate_or_point_cloud" in by_sequence["seq_native_topic_map"]
 
     inventory = inspect_mmuad_layout(tmp_path)
-    assert inventory["category_counts"]["topic_map_export"] == 1
+    assert inventory["category_counts"]["topic_map_export"] == 2
     assert inventory["category_counts"]["topic_map_native"] == 1
     exported_summary = next(
         row
@@ -2972,9 +3466,16 @@ def test_layout_inspectors_classify_topic_maps(tmp_path: Path) -> None:
         for row in inventory["sequence_candidates"]
         if row["sequence_id"] == "seq_native_topic_map"
     )
+    exported_yaml_summary = next(
+        row
+        for row in inventory["sequence_candidates"]
+        if row["sequence_id"] == "seq_exported_yaml_topic_map"
+    )
     assert exported_summary["has_topic_map_export"] is True
     assert exported_summary["has_candidates_or_points"] is True
     assert exported_summary["has_truth_or_labels"] is True
+    assert exported_yaml_summary["has_topic_map_export"] is True
+    assert exported_yaml_summary["has_truth_or_labels"] is True
     assert native_summary["has_native_topic_map"] is True
     assert native_summary["has_topic_map_export"] is False
     assert any("Exported topic-map" in item for item in inventory["recommendations"])
@@ -3039,6 +3540,29 @@ def test_layout_inspectors_classify_json_table_exports(tmp_path: Path) -> None:
     assert sequence["has_candidates_or_points"] is True
     assert sequence["has_truth_or_labels"] is True
     assert sequence["has_class_labels"] is True
+
+
+def test_layout_inspectors_classify_yaml_class_exports(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_yaml_classes"
+    seq.mkdir()
+    (seq / "classes.yaml").write_text(
+        "\n".join(
+            [
+                "class_map:",
+                "  seq_yaml_classes:",
+                "    uav_type: quadrotor",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    detailed = inspect_sequence_root(tmp_path)
+    by_name = {row["relative_path"]: row for row in detailed["files"]}
+    assert by_name["classes.yaml"]["category"] == "class_label"
+
+    inventory = inspect_mmuad_layout(tmp_path)
+    assert inventory["category_counts"]["class_or_label"] == 1
+    assert inventory["sequence_candidates"][0]["has_class_labels"] is True
 
 
 def test_layout_inspectors_classify_yaml_camera_intrinsics(tmp_path: Path) -> None:
@@ -3349,6 +3873,55 @@ def test_cli_evaluates_results_with_numpy_truth_file(tmp_path: Path) -> None:
     assert metrics["pooled"]["mean_3d_m"] == 0.0
 
 
+def test_cli_evaluates_results_with_class_map_file_alias(tmp_path: Path) -> None:
+    results = tmp_path / "mmaud_results.csv"
+    truth = tmp_path / "truth.csv"
+    class_map = tmp_path / "classes.yaml"
+    output = tmp_path / "out"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "timestamp": [0.0, 1.0],
+            "x": [0.0, 1.0],
+            "y": [0.0, 0.0],
+            "z": [10.0, 10.0],
+            "uav_type": ["Mavic3", "Mavic3"],
+            "score": [1.0, 1.0],
+        }
+    ).to_csv(results, index=False)
+    pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+        }
+    ).to_csv(truth, index=False)
+    class_map.write_text(
+        "\n".join(["class_map:", "  seqA:", "    uav_type: Mavic3"]),
+        encoding="utf-8",
+    )
+
+    status = mmuad_cli_main(
+        [
+            "--evaluate-results-csv",
+            str(results),
+            "--evaluate-truth-csv",
+            str(truth),
+            "--evaluation-class-map-file",
+            str(class_map),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    metrics = json.loads((output / "mmuad_local_evaluation.json").read_text(encoding="utf-8"))
+    assert metrics["matched_count"] == 2
+    assert metrics["pooled"]["uav_type_accuracy"] == 1.0
+
+
 def test_cli_evaluates_ug2_codabench_zip(tmp_path: Path) -> None:
     estimates = pd.DataFrame(
         {
@@ -3486,6 +4059,127 @@ def test_topic_map_exports_load_candidates_and_truth(tmp_path: Path) -> None:
     assert bundle.truth is not None
     assert len(bundle.truth.rows) == 2
     assert bundle.candidates.rows.loc[0, "sequence_id"] == "seq_ros"
+
+
+def test_topic_map_exports_load_yaml_candidates_and_truth(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [5.0, 5.0],
+        }
+    ).to_csv(exports / "radar.csv", index=False)
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [5.0, 5.0],
+        }
+    ).to_csv(exports / "truth.csv", index=False)
+    topic_map = tmp_path / "topic_map.yaml"
+    topic_map.write_text(
+        "\n".join(
+            [
+                "sequence_id: seq_ros_yaml",
+                "exports:",
+                "  - kind: candidate",
+                "    path: radar.csv",
+                "    source: radar",
+                "    column_aliases:",
+                "      stamp: time_s",
+                "      px: x_m",
+                "      py: y_m",
+                "      pz: z_m",
+                "  - kind: truth",
+                "    path: truth.csv",
+                "    column_aliases:",
+                "      stamp: time_s",
+                "      px: x_m",
+                "      py: y_m",
+                "      pz: z_m",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+
+    assert len(bundle.candidates.rows) == 2
+    assert bundle.truth is not None
+    assert len(bundle.truth.rows) == 2
+    assert bundle.candidates.rows["sequence_id"].tolist() == [
+        "seq_ros_yaml",
+        "seq_ros_yaml",
+    ]
+
+
+def test_cli_runs_yaml_topic_map_file_alias(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [5.0, 5.0],
+        }
+    ).to_csv(exports / "radar.csv", index=False)
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [5.0, 5.0],
+        }
+    ).to_csv(exports / "truth.csv", index=False)
+    topic_map = tmp_path / "topic_map.yaml"
+    topic_map.write_text(
+        "\n".join(
+            [
+                "sequence_id: seq_cli_yaml_topic_map",
+                "exports:",
+                "  - kind: candidate",
+                "    path: radar.csv",
+                "    source: radar",
+                "    column_aliases:",
+                "      stamp: time_s",
+                "      px: x_m",
+                "      py: y_m",
+                "      pz: z_m",
+                "  - kind: truth",
+                "    path: truth.csv",
+                "    column_aliases:",
+                "      stamp: time_s",
+                "      px: x_m",
+                "      py: y_m",
+                "      pz: z_m",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "out"
+
+    status = mmuad_cli_main(
+        [
+            "--topic-map-file",
+            str(topic_map),
+            "--topic-map-base-dir",
+            str(exports),
+            "--output-dir",
+            str(output),
+            "--submission-csv",
+            str(output / "submission.csv"),
+        ]
+    )
+
+    assert status == 0
+    estimates = pd.read_csv(output / "mmuad_estimates.csv")
+    assert estimates["sequence_id"].tolist() == ["seq_cli_yaml_topic_map"] * 2
+    assert (output / "submission.csv").exists()
 
 
 def test_topic_map_exports_load_json_candidates_and_truth(tmp_path: Path) -> None:
@@ -3787,6 +4481,53 @@ def test_topic_map_exports_convert_radar_polar_candidate_tables(tmp_path: Path) 
     assert abs(float(row["y_m"])) < 1.0e-9
     assert float(row["std_xy_m"]) == 3.0
     assert float(row["std_z_m"]) == 4.0
+    assert [entry["rows"] for entry in bundle.manifest["loaded_exports"]] == [1]
+
+
+def test_topic_map_exports_convert_detection3d_flattened_tables(
+    tmp_path: Path,
+) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    pd.DataFrame(
+        {
+            "header.stamp.sec": [5],
+            "header.stamp.nanosec": [750_000_000],
+            "id": ["det-7"],
+            "bbox.center.position.x": [1.0],
+            "bbox.center.position.y": [2.0],
+            "bbox.center.position.z": [3.0],
+            "results.0.hypothesis.class_id": ["Mavic3"],
+            "results.0.hypothesis.score": [0.7],
+        }
+    ).to_csv(exports / "detections3d.csv", index=False)
+    topic_map = tmp_path / "topic_map_detection3d.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_detection3d_topic",
+                "exports": [
+                    {
+                        "kind": "detection3d_array_candidate",
+                        "path": "detections3d.csv",
+                        "source": "detector3d",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+
+    assert bundle.candidates.rows["sequence_id"].tolist() == ["seq_detection3d_topic"]
+    row = bundle.candidates.rows.iloc[0]
+    assert row["source"] == "detector3d"
+    assert row["track_id"] == "det-7"
+    assert abs(float(row["time_s"]) - 5.75) < 1.0e-12
+    assert row[["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+    assert float(row["confidence"]) == 0.7
+    assert row["class_name"] == "Mavic3"
     assert [entry["rows"] for entry in bundle.manifest["loaded_exports"]] == [1]
 
 
@@ -5184,6 +5925,68 @@ def test_radar_polar_json_accepts_target_wrappers(tmp_path: Path) -> None:
     assert abs(float(row["x_m"]) - 12.0) < 1.0e-9
 
 
+def test_radar_polar_json_propagates_parent_sequence_and_time(tmp_path: Path) -> None:
+    from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
+
+    radar = tmp_path / "radar_parent_metadata.json"
+    radar.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_parent_radar",
+                "timestamp_s": 3.5,
+                "radar_polar": [
+                    {"range": 12.0, "bearing_deg": 90.0, "id": "target-7"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates = load_radar_polar_csv_as_candidates(
+        radar,
+        azimuth_convention="north-clockwise",
+    )
+
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_parent_radar"
+    assert row["track_id"] == "target-7"
+    assert abs(float(row["time_s"]) - 3.5) < 1.0e-12
+    assert abs(float(row["x_m"]) - 12.0) < 1.0e-9
+
+
+def test_radar_polar_json_keeps_row_metadata_over_parent_defaults(tmp_path: Path) -> None:
+    from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
+
+    radar = tmp_path / "radar_row_metadata.json"
+    radar.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_parent_radar",
+                "timestamp_s": 3.5,
+                "detections": [
+                    {
+                        "sequence": "seq_child_radar",
+                        "timestamp_s": 4.5,
+                        "range": 12.0,
+                        "bearing_deg": 90.0,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates = load_radar_polar_csv_as_candidates(
+        radar,
+        azimuth_convention="north-clockwise",
+    )
+
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_child_radar"
+    assert abs(float(row["time_s"]) - 4.5) < 1.0e-12
+    assert abs(float(row["x_m"]) - 12.0) < 1.0e-9
+
+
 def test_radar_polar_jsonl_converts_to_candidates(tmp_path: Path) -> None:
     from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
 
@@ -5859,6 +6662,55 @@ def test_cli_accepts_explicit_camera_source_for_source_less_detection_file(
 
     assert status == 0
     assert (output / "mmuad_estimates.csv").exists()
+
+
+def test_camera_detections_fill_blank_source_from_default_source(tmp_path: Path) -> None:
+    from raft_uav.mmuad.camera import (
+        load_camera_detections_csv_as_candidates,
+        load_camera_models,
+    )
+
+    calibration = tmp_path / "camera_calibration.json"
+    calibration.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    detections = tmp_path / "detections.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": [np.nan, ""],
+            "time_s": [0.0, 1.0],
+            "source": [np.nan, ""],
+            "u_px": [50.0, 50.0],
+            "v_px": [50.0, 50.0],
+            "depth_m": [5.0, 5.0],
+        }
+    ).to_csv(detections, index=False)
+
+    candidates = load_camera_detections_csv_as_candidates(
+        detections,
+        camera_models=load_camera_models(calibration),
+        default_source="cam0",
+        sequence_id="seq_camera",
+    )
+
+    assert candidates.rows["source"].tolist() == ["cam0", "cam0"]
+    assert candidates.rows["sequence_id"].tolist() == ["seq_camera", "seq_camera"]
+    assert candidates.rows[["x_m", "y_m", "z_m"]].values.tolist() == [
+        [0.0, 0.0, 5.0],
+        [0.0, 0.0, 5.0],
+    ]
 
 
 def test_cli_accepts_repeated_camera_calibration_files_with_folder_sources(

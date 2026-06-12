@@ -3,8 +3,8 @@
 The helpers avoid depending on ROS at import time.  They can inspect ROS2
 ``metadata.yaml`` directories, optionally call ``rosbag info --yaml`` for ROS1
 bags when the command exists, and load normalized topic exports via a topic-map
-JSON.  This is a bridge toward native support; it is not a binary message
-parser.
+JSON/YAML file.  This is a bridge toward native support; it is not a binary
+message parser.
 """
 
 from __future__ import annotations
@@ -72,7 +72,10 @@ def inspect_rosbag(path: Path) -> dict[str, Any]:
                 for item in sorted(path.rglob("*"))
                 if item.is_file()
             ][:200],
-            "recommendation": "No metadata.yaml found; export topics to CSV and use --topic-map-json.",
+            "recommendation": (
+                "No metadata.yaml found; export topics to CSV and use "
+                "--topic-map-file/--topic-map-json."
+            ),
         }
     if path.suffix.lower() == ".bag":
         return _inspect_ros1_bag(path)
@@ -151,11 +154,33 @@ def write_topic_map_template(report: dict[str, Any], path: Path) -> Path:
     return path
 
 
-def load_topic_map_exports(path: Path, *, base_dir: Path | None = None) -> TopicExportBundle:
-    """Load normalized candidates/truth from a topic-map JSON."""
+def load_topic_map_payload(path: Path) -> dict[str, Any]:
+    """Load a topic-map metadata file from JSON or YAML."""
 
     path = Path(path)
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() == ".json":
+        payload = json.loads(text)
+    else:
+        try:
+            import yaml  # type: ignore[import-not-found]
+        except Exception:
+            payload = json.loads(text)
+        else:
+            try:
+                payload = yaml.safe_load(text)
+            except Exception as exc:
+                raise ValueError(f"invalid topic map YAML: {path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"topic map {path} must contain a mapping")
+    return payload
+
+
+def load_topic_map_exports(path: Path, *, base_dir: Path | None = None) -> TopicExportBundle:
+    """Load normalized candidates/truth from a topic-map JSON/YAML file."""
+
+    path = Path(path)
+    payload = load_topic_map_payload(path)
     base = Path(base_dir) if base_dir is not None else path.parent
     default_sequence_id = str(payload.get("sequence_id", base.name))
     candidate_frames: list[CandidateFrame] = []
@@ -442,14 +467,24 @@ def _load_topic_candidate_export(
         for column in ("track_id", "std_xy_m", "std_z_m", "confidence", "class_name"):
             if column not in frame.columns and spec.get(column) is not None:
                 frame[column] = spec.get(column)
-        return CandidateFrame(normalize_candidate_columns(frame))
+        return CandidateFrame(
+            normalize_candidate_columns(
+                frame,
+                default_sequence_id=sequence_id,
+                default_source=source,
+            )
+        )
     frame = load_candidate_file(path, default_sequence_id=sequence_id, source=source)
     rows = frame.rows.copy()
     for column in ("track_id", "std_xy_m", "std_z_m", "confidence", "class_name"):
         if spec.get(column) is not None:
             rows[column] = spec.get(column)
     return CandidateFrame(
-        normalize_candidate_columns(rows, default_sequence_id=sequence_id)
+        normalize_candidate_columns(
+            rows,
+            default_sequence_id=sequence_id,
+            default_source=source,
+        )
     )
 
 
@@ -655,7 +690,11 @@ def _load_topic_geodetic_candidate_export(
         if column not in rows.columns and spec.get(column) is not None:
             rows[column] = spec.get(column)
     return CandidateFrame(
-        normalize_candidate_columns(rows, default_sequence_id=sequence_id)
+        normalize_candidate_columns(
+            rows,
+            default_sequence_id=sequence_id,
+            default_source=source,
+        )
     )
 
 
@@ -827,7 +866,10 @@ def _inspect_ros2_metadata(path: Path) -> dict[str, Any]:
         "topics": topics,
         "db3_files": db_files,
         "mcap_files": mcap_files,
-        "recommendation": "Export relevant topics to CSV, then run with --topic-map-json.",
+        "recommendation": (
+            "Export relevant topics to CSV, then run with "
+            "--topic-map-file/--topic-map-json."
+        ),
     }
 
 
@@ -838,7 +880,10 @@ def _inspect_ros1_bag(path: Path) -> dict[str, Any]:
             "kind": "ros1_bag",
             "rosbag_cli_available": False,
             "topics": [],
-            "recommendation": "Install ROS/rosbag or export topics to CSV and use --topic-map-json.",
+            "recommendation": (
+                "Install ROS/rosbag or export topics to CSV and use "
+                "--topic-map-file/--topic-map-json."
+            ),
         }
     completed = subprocess.run(
         ["rosbag", "info", "--yaml", str(path)],
@@ -862,5 +907,8 @@ def _inspect_ros1_bag(path: Path) -> dict[str, Any]:
         "returncode": completed.returncode,
         "topics": topics,
         "raw_yaml": completed.stdout if completed.returncode == 0 else completed.stderr,
-        "recommendation": "Export relevant topics to CSV, then run with --topic-map-json.",
+        "recommendation": (
+            "Export relevant topics to CSV, then run with "
+            "--topic-map-file/--topic-map-json."
+        ),
     }

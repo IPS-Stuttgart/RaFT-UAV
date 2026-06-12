@@ -22,11 +22,13 @@ from raft_uav.mmuad.io import (
     data_file_suffix,
     infer_time_s_from_filename,
 )
+from raft_uav.mmuad.rosbag_bridge import load_topic_map_payload
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 AUDIO_SUFFIXES = {".wav", ".flac", ".aac", ".mp3"}
 POINT_SUFFIXES = {".pcd", ".ply", ".las", ".laz", ".bin"}
 NUMPY_SUFFIXES = {".npy", ".npz"}
+YAML_SUFFIXES = {".yaml", ".yml"}
 TABLE_SUFFIXES = DELIMITED_TABLE_SUFFIXES
 CALIBRATION_NAMES = {
     f"{stem}{suffix}"
@@ -173,11 +175,11 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
         inferred_time_s = infer_time_s_from_filename(path)
     if name in CALIBRATION_NAMES:
         return "calibration", modality, None
-    if suffix == ".json" and "topic_map" in name:
+    if suffix in {".json", ".yaml", ".yml"} and "topic_map" in name:
         return _topic_map_category(path), "ros", None
-    if suffix in NUMPY_SUFFIXES | TABLE_SUFFIXES | JSON_TABLE_SUFFIXES and any(
-        hint in stem or hint in parent for hint in CLASS_HINTS
-    ):
+    if suffix in (
+        NUMPY_SUFFIXES | TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | YAML_SUFFIXES
+    ) and any(hint in stem or hint in parent for hint in CLASS_HINTS):
         return "class_label", modality, inferred_time_s
     if name in TRUTH_NAMES or any(hint in stem or hint in parent for hint in TRUTH_HINTS):
         return "truth", modality, None
@@ -201,7 +203,7 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
         if suffix != ".json" and modality == "radar":
             return "radar_csv", "radar", None
         return "csv" if suffix == ".csv" else "metadata", modality, None
-    if suffix in JSON_TABLE_SUFFIXES | {".yaml", ".yml", ".toml", ".txt"}:
+    if suffix in JSON_TABLE_SUFFIXES | YAML_SUFFIXES | {".toml", ".txt"}:
         return "metadata", modality, None
     if suffix in {".bag", ".db3", ".mcap"}:
         return "ros_recording", modality, None
@@ -345,8 +347,8 @@ def _infer_modality(stem: str) -> str:
 
 def _topic_map_category(path: Path) -> str:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = load_topic_map_payload(path)
+    except (OSError, json.JSONDecodeError, ValueError):
         return "metadata"
     exports = payload.get("exports", [])
     if not isinstance(exports, list):
@@ -360,8 +362,8 @@ def _topic_map_category(path: Path) -> str:
 
 def _topic_map_has_truth_export(path: Path) -> bool:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = load_topic_map_payload(path)
+    except (OSError, json.JSONDecodeError, ValueError):
         return False
     for export in payload.get("exports", []):
         if not isinstance(export, dict):

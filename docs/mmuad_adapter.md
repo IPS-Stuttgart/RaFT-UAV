@@ -33,6 +33,10 @@ JSON rows exported from common ROS position messages may keep nested
 `pose.pose.position`, `point`, `transform.translation`, or simple `[x,y,z]`
 coordinate arrays; the table reader flattens those fields into the normalized
 `time_s`, `source`, `track_id`, and `x_m,y_m,z_m` columns.
+Flattened table columns such as `header.frame_id`, `child_frame_id`, and
+`pose.pose.position.x` are accepted too. If no explicit `source` is provided,
+`frame_id` / `header.frame_id` is used as the candidate source; an explicit
+CLI, sequence-root, or topic-map source still overrides that frame hint.
 
 Run with exported detector/cluster candidates:
 
@@ -135,7 +139,7 @@ A normalized sequence export can be loaded from folders containing files named
 `radar_polar.tsv` or `radar_polar.json`, `camera_detections.txt`, or
 `camera_detections.json`,
 compact trajectory arrays such as `trajectory.npy` / `candidates.npz`,
-exported ROS topic maps such as `topic_map.json`,
+exported ROS topic maps such as `topic_map.json` or `topic_map.yaml`,
 `truth.csv`, compact truth arrays such as `truth.npy`, and optionally
 `calibration.json`, `calibration.yaml`, `camera_info.json`,
 `camera_info.yaml`, `intrinsics.json`, `intrinsics.yml`, or
@@ -147,7 +151,8 @@ one-level split folders and MMUAD-style modality subfolders such as
 `tracking_results/<timestamp>.npy`,
 `radar0/detections.csv` with exported polar range/azimuth columns,
 `cam0/detections.csv` with exported pixel/depth or bounding-box columns, and
-class-label JSON files such as `classes.json` or `class/<timestamp>.json`:
+class-label JSON/YAML files such as `classes.json`, `classes.yaml`, or
+`class/<timestamp>.json`:
 When a generic candidate CSV/TSV/JSON lacks a `source`/`sensor`/`modality`
 column, sequence-root loading uses the enclosing modality folder name such as
 `tracking_results`, `radar0`, or `cam0` as the source.
@@ -214,7 +219,8 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 When a sequence contains a loadable exported topic map, the files referenced by
 that map are loaded through their `column_aliases` and are not also loaded as
 generic candidate/truth files. Native-only topic maps without exported file
-paths remain for the explicit `--rosbag-path --topic-map-json` extraction path.
+paths remain for the explicit `--rosbag-path --topic-map-file` extraction path
+(`--topic-map-json` remains accepted for existing scripts).
 
 ### Submission/interchange output
 
@@ -287,11 +293,14 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_val
 ```
 
-A CSV manifest with columns `sequence_id,split` is also supported. Exported
-metadata files may also use JSON sequence-row layouts such as
+A CSV manifest with columns `sequence_id,split` is also supported. JSON and
+YAML metadata files may also use sequence-row layouts such as
 `{"sequences": [{"sequence_id": "seq001", "split": "val"}]}` or nested split
 objects such as `{"splits": {"val": {"sequence_ids": ["seq001"]}}}`. CSV alias
 columns including `id`, `name`, `subset`, and `partition` are accepted.
+Manifest sequence entries may be bare IDs such as `seq001` or split-relative
+paths such as `val/seq001`; path entries are useful when split folders reuse the
+same sequence leaf name.
 If the sequence root is already arranged as split folders such as
 `train/seq001` and `val/seq002`, omit `--split-file` and pass
 `--split-name val`; the CLI filters by the top-level folder name.
@@ -360,13 +369,13 @@ before tracking.
 
 The point-cloud bridge now supports CSV/TSV/TXT/JSON/JSONL tables, ASCII,
 binary, and `binary_compressed` PCD files, ASCII and binary PLY files,
-uncompressed LAS files, simple float32 `.bin` files with `x,y,z` or
-`x,y,z,intensity` rows, and simple `.npy` / `.npz` point arrays with shape
-`(N, >=3)`. Gzip-compressed exported files such as `.pcd.gz`, `.ply.gz`,
-`.las.gz`, and `.bin.gz` are accepted for those byte/text point-cloud formats.
-LAZ/LASzip remains inventory-only until a decompression dependency or converter
-is selected. This still is not a native Livox packet reader, but it covers
-common exported point-cloud formats used during dataset inspection.
+uncompressed LAS files, optional LASzip/LAZ files through the `pointcloud`
+extra, simple float32 `.bin` files with `x,y,z` or `x,y,z,intensity` rows, and
+simple `.npy` / `.npz` point arrays with shape `(N, >=3)`. Gzip-compressed
+exported files such as `.pcd.gz`, `.ply.gz`, `.las.gz`, and `.bin.gz` are
+accepted for those byte/text point-cloud formats. This still is not a native
+Livox packet reader, but it covers common exported point-cloud formats used
+during dataset inspection.
 
 For sequence-root discovery, JSON or NumPy files with point-cloud names such as
 `lidar_points.json`, `lidar_points.npy`, `point_cloud.npz`, or `cloud_12.5.npy`
@@ -438,18 +447,19 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ```
 
 The report counts files by category, including candidate tables, point clouds,
-images, calibration files, truth/labels, exported/native topic-map JSON files,
+images, calibration files, truth/labels, exported/native topic-map JSON/YAML files,
 and ROS bag/recording files. JSON table exports follow the same naming
 convention as sequence discovery: `candidates.json`, `detections.json`,
 `truth.json`, and `classes.json` are reported as usable candidate, truth, or
-class-label inputs. NumPy files follow the same convention: `truth.npy` counts
+class-label inputs; YAML class-label files such as `classes.yaml` are also
+classified as class metadata. NumPy files follow the same convention: `truth.npy` counts
 as truth, `trajectory.npz` or `candidates.npy` counts as candidate data, and
 `lidar_points.npy` or `cloud_12.5.npz` counts as point-cloud data. It also lists
 sequence-like folders and recommends the next adapter step. One-level split
 folders such as `train/`, `val/`, and `test/` are unwrapped so summaries keep
 the actual sequence IDs. Exported topic maps indicate sequence-root inputs,
 while native-only topic maps are kept for explicit ROS extraction with
-`--rosbag-path --topic-map-json`.
+`--rosbag-path --topic-map-file` (`--topic-map-json` remains accepted).
 
 The public UG2+ Codabench instructions require a ZIP containing a single file
 named `mmaud_results.csv`. The exact evaluator schema is not bundled here, so
@@ -485,7 +495,7 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ```
 
 Edit the generated topic-map JSON so each relevant topic points to a normalized
-export file, then run the tracker. CSV/TSV/TXT/JSON/JSONL table exports can use
+export file, or provide the same schema as YAML. CSV/TSV/TXT/JSON/JSONL table exports can use
 `column_aliases`, and table exports may be gzip-compressed; compact NumPy
 trajectory exports such as `radar_trajectory.npy` and `truth.npy` use the same
 `time_s,x_m,y_m,z_m` convention as the explicit-file CLI. JSON topic exports
@@ -495,10 +505,17 @@ streams, column maps, or objects containing `points`, `point_cloud`,
 `predictions`, `truth`, `fixes`, `gps`, `navsatfix`, `poses`, `rows`, or
 `data`. ROS-shaped JSON row exports can keep nested `header.stamp`,
 `pose.position`, `pose.pose.position`, `point`, or `transform.translation`
-fields; when a container such as a path export has the timestamp in the parent
-`header`, that timestamp is propagated to child pose rows. Explicit topic-map
-`source` values override any `header.frame_id` source hint from the row. The
-template infers native extraction kinds for common ROS message types
+fields. Detection3D-style exports can use nested `bbox.center.position` JSON
+objects or flattened table columns such as `bbox.center.position.x`; flattened
+pose columns such as `pose.pose.position.x` and ROS timestamp pairs such as
+`header.stamp.sec` / `header.stamp.nanosec` are also accepted.
+Detection result metadata can be nested as `results.hypothesis` or flattened as
+`results.0.hypothesis.class_id` / `results.0.hypothesis.score`; these populate
+`class_name` and `confidence`. When a container such as a path export has the
+timestamp in the parent `header`, that timestamp is propagated to child pose
+rows. Explicit topic-map `source` values override any `header.frame_id` source
+hint from the row. The template infers native extraction kinds for common ROS
+message types
 (`pointcloud2_candidate`, `pose_truth`, `odometry_candidate`, and related truth
 variants), while the exported-topic loader still accepts those kinds for CSV or
 JSON/JSONL table and NumPy exports. Table exports marked as `pointcloud2_candidate`
@@ -524,7 +541,7 @@ tracking or evaluation.
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
-  --topic-map-json outputs/mmuad_topic_map.json \
+  --topic-map-file outputs/mmuad_topic_map.yaml \
   --topic-map-base-dir data/mmuad_topic_exports \
   --output-dir outputs/mmuad_topic_map_smoke \
   --ug2-codabench-zip outputs/mmuad_topic_map_smoke/ug2_submission.zip
@@ -573,7 +590,7 @@ Evaluate an exported `mmaud_results.csv` with optional class labels:
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --evaluate-results-csv outputs/mmuad_val/mmaud_results.csv \
   --evaluate-truth-csv data/mmuad_export/val_truth.csv \
-  --evaluation-class-map-csv data/mmuad_export/sequence_classes.csv \
+  --evaluation-class-map-file data/mmuad_export/sequence_classes.yaml \
   --evaluation-json outputs/mmuad_val/local_eval.json \
   --evaluation-rows-csv outputs/mmuad_val/local_eval_rows.csv \
   --output-dir outputs/mmuad_val
@@ -588,11 +605,15 @@ sequences can use different UAV type labels:
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --sequence-root data/mmuad_export \
-  --ug2-class-map-csv data/mmuad_export/sequence_classes.csv \
+  --ug2-class-map-file data/mmuad_export/sequence_classes.yaml \
   --ug2-results-csv outputs/mmuad_val/mmaud_results.csv \
   --ug2-codabench-zip outputs/mmuad_val/ug2_submission.zip \
   --output-dir outputs/mmuad_val
 ```
+
+The older `--ug2-class-map-csv` and `--evaluation-class-map-csv` option names
+remain accepted for existing scripts; the `*-file` aliases are clearer because
+class maps may now be CSV, JSON, or YAML.
 
 If the evaluator expects one prediction per ground-truth/template timestamp,
 resample a trajectory to those timestamps before packaging:
@@ -646,8 +667,16 @@ Supported aliases include `range_m`, `azimuth_deg`, `elevation_deg`, `track_id`,
 `confidence`, and common variants. JSON/JSONL radar exports may be row lists, column
 maps, or objects containing `radar_polar`, `radar_detections`, `detections`,
 `targets`, `objects`, `measurements`, `returns`, `rows`, or `data`.
+Wrapper-level `sequence_id` and timestamp fields are propagated to nested
+detections when individual rows do not already provide them.
 Coordinates are in the radar/export frame unless a calibration file is applied
 later. This is not a native custom radar message parser.
+
+Sequence-root discovery also treats Cartesian radar tables inside radar sensor
+folders such as `radar0/detections.csv` or `mmwave/detections.json` as normal
+candidate detections when they expose a timestamp plus `x`/`y`/`z` position
+columns. Polar range/azimuth tables in the same folders continue through the
+polar radar bridge above.
 
 ### Camera Detector Table Exports
 
@@ -718,8 +747,8 @@ Explicit class maps still take precedence over inferred maps. This is a simple
 weighted-vote classifier, not a learned UAV type recognition model.
 
 Class maps may be simple CSV files with `sequence_id,uav_type`, alias CSV files
-such as `id,type`, plain JSON objects such as `{"seq001": "Mavic3"}`, or
-exported row-style JSON such as
+such as `id,type`, plain JSON/YAML objects such as `{"seq001": "Mavic3"}`, or
+exported row-style JSON/YAML such as
 `{"sequences": [{"id": "seq001", "type": "Mavic3"}]}`.
 
 ## Native ROS And PointCloud2 Bridge
@@ -731,7 +760,7 @@ can be extracted directly from a ROS2 bag directory or compatible bag path:
 ```bash
 PYTHONPATH=src python scripts/extract_mmuad_rosbag_topics.py \
   --bag-path data/mmuad_raw/seq001 \
-  --topic-map-json data/mmuad_raw/seq001/topic_map_native.json \
+  --topic-map-file data/mmuad_raw/seq001/topic_map_native.yaml \
   --output-dir outputs/mmuad_native_ros_seq001
 ```
 
@@ -774,7 +803,7 @@ The CLI can run native extraction and tracking in one step:
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --rosbag-path data/mmuad_raw/seq001 \
-  --topic-map-json data/mmuad_raw/seq001/topic_map_native.json \
+  --topic-map-file data/mmuad_raw/seq001/topic_map_native.yaml \
   --native-ros-extract-output-dir outputs/mmuad_native_ros_seq001/extracted \
   --output-dir outputs/mmuad_native_ros_seq001/tracking
 ```

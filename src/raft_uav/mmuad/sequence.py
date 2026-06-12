@@ -33,13 +33,14 @@ from raft_uav.mmuad.io import (
     read_text_export,
 )
 from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
-from raft_uav.mmuad.rosbag_bridge import load_topic_map_exports
+from raft_uav.mmuad.rosbag_bridge import load_topic_map_exports, load_topic_map_payload
 from raft_uav.mmuad.schema import CandidateFrame, TruthFrame, normalize_truth_columns
 
 
 TABLE_SUFFIXES = DISCOVERABLE_DELIMITED_TABLE_SUFFIXES
 JSON_TABLE_SUFFIXES = DISCOVERABLE_JSON_TABLE_SUFFIXES
 JSON_DATA_SUFFIXES = tuple(sorted(IO_JSON_TABLE_SUFFIXES))
+YAML_DATA_SUFFIXES = (".yaml", ".yml")
 CALIBRATION_SUFFIXES = (".json", ".yaml", ".yml")
 TRAJECTORY_SUFFIXES = (".npy", ".npz")
 POINT_CLOUD_EXPORT_SUFFIXES = (
@@ -49,6 +50,7 @@ POINT_CLOUD_EXPORT_SUFFIXES = (
     ".ply.gz",
     ".las",
     ".las.gz",
+    ".laz",
     ".bin",
     ".bin.gz",
 )
@@ -97,6 +99,9 @@ CLASS_JSON_LABEL_ALIASES = (
 )
 CLASS_JSON_SEQUENCE_ID_ALIASES = ("sequence_id", "sequence", "seq", "scene", "scene_id", "id", "name")
 CLASS_JSON_METADATA_KEYS = ("schema", "version", "description", "metadata", "meta")
+CLASS_FILE_SUFFIXES = (
+    TABLE_SUFFIXES + JSON_TABLE_SUFFIXES + YAML_DATA_SUFFIXES + TRAJECTORY_SUFFIXES
+)
 RADAR_DIR_TOKENS = ("radar", "mmwave", "mmw")
 CAMERA_DIR_TOKENS = ("camera", "cam", "image", "images")
 CAMERA_INTRINSICS_NAMES = {
@@ -123,6 +128,101 @@ MODALITY_DIR_TOKENS = (
 )
 RADAR_RANGE_ALIASES = ("range_m", "range", "r", "rho", "distance_m")
 RADAR_AZIMUTH_ALIASES = ("azimuth_deg", "azimuth", "az", "bearing", "bearing_deg")
+CANDIDATE_TIME_ALIASES = (
+    "time_s",
+    "timestamp_s",
+    "stamp_s",
+    "timestamp",
+    "stamp",
+    "time",
+    "t",
+    "sec",
+    "secs",
+    "seconds",
+    "stamp.sec",
+    "header.stamp.sec",
+    "timestamp_ns",
+    "time_ns",
+    "stamp_ns",
+    "nanoseconds",
+    "timestamp_us",
+    "time_us",
+    "stamp_us",
+    "timestamp_usec",
+    "time_usec",
+    "stamp_usec",
+    "microseconds",
+    "timestamp_ms",
+    "time_ms",
+    "stamp_ms",
+    "milliseconds",
+)
+CANDIDATE_X_ALIASES = (
+    "x_m",
+    "x",
+    "east_m",
+    "pos_x",
+    "position_x",
+    "center_x",
+    "bbox_center_x",
+    "cx",
+    "px",
+    "point.x",
+    "position.x",
+    "pose.position.x",
+    "pose.pose.position.x",
+    "translation.x",
+    "transform.translation.x",
+    "center.position.x",
+    "bbox.center.position.x",
+    "bbox.center.x",
+    "location.x",
+    "coordinates.x",
+)
+CANDIDATE_Y_ALIASES = (
+    "y_m",
+    "y",
+    "north_m",
+    "pos_y",
+    "position_y",
+    "center_y",
+    "bbox_center_y",
+    "cy",
+    "py",
+    "point.y",
+    "position.y",
+    "pose.position.y",
+    "pose.pose.position.y",
+    "translation.y",
+    "transform.translation.y",
+    "center.position.y",
+    "bbox.center.position.y",
+    "bbox.center.y",
+    "location.y",
+    "coordinates.y",
+)
+CANDIDATE_Z_ALIASES = (
+    "z_m",
+    "z",
+    "up_m",
+    "pos_z",
+    "position_z",
+    "center_z",
+    "bbox_center_z",
+    "cz",
+    "pz",
+    "point.z",
+    "position.z",
+    "pose.position.z",
+    "pose.pose.position.z",
+    "translation.z",
+    "transform.translation.z",
+    "center.position.z",
+    "bbox.center.position.z",
+    "bbox.center.z",
+    "location.z",
+    "coordinates.z",
+)
 CAMERA_U_ALIASES = ("u_px", "u", "pixel_x", "center_u", "cx_px")
 CAMERA_V_ALIASES = ("v_px", "v", "pixel_y", "center_v", "cy_px")
 CAMERA_BBOX_X_ALIASES = ("x1", "xmin", "bbox_x1", "left")
@@ -171,7 +271,7 @@ def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[Seq
     ``points.tsv`` / ``points.json``, ``points.jsonl``, ``*_points.csv`` /
     ``*_points.json``, ``*.pcd``,
     ``*.ply``, simple float32 ``*.bin`` point-cloud exports,
-    exported ROS topic-map JSON files, ``truth.csv`` / ``truth.npy``, and
+    exported ROS topic-map JSON/YAML files, ``truth.csv`` / ``truth.npy``, and
     ``calibration.json`` under each sequence folder.  If ``root`` itself holds
     such files, it is treated as a single sequence.
     """
@@ -449,6 +549,15 @@ def _candidate_files(path: Path) -> list[Path]:
             suffixes=TABLE_SUFFIXES + JSON_TABLE_SUFFIXES,
         )
     )
+    files.extend(
+        item
+        for item in _files_under_sensor_dirs(
+            path,
+            directory_tokens=RADAR_DIR_TOKENS,
+            suffixes=TABLE_SUFFIXES + JSON_TABLE_SUFFIXES,
+        )
+        if _looks_like_cartesian_candidate_file(item)
+    )
     return _unique_paths(
         [
             item
@@ -614,7 +723,7 @@ def _point_files(path: Path) -> list[Path]:
     for suffix in TABLE_SUFFIXES + JSON_TABLE_SUFFIXES:
         files.extend(sorted(path.glob(f"*_points{suffix}")))
         files.extend(sorted(path.glob(f"*_point_cloud{suffix}")))
-    for suffix in (".pcd", ".pcd.gz", ".ply", ".ply.gz", ".las", ".las.gz"):
+    for suffix in (".pcd", ".pcd.gz", ".ply", ".ply.gz", ".las", ".las.gz", ".laz"):
         files.extend(sorted(path.glob(f"*{suffix}")))
     for pattern in ("*points*", "*point_cloud*", "*cloud*", "*lidar*", "*livox*"):
         for suffix in (".bin", ".bin.gz"):
@@ -687,23 +796,25 @@ def _class_files(path: Path) -> list[Path]:
     exact = [
         path / f"{stem}{suffix}"
         for stem in ("class", "classes", "uav_type", "category")
-        for suffix in TABLE_SUFFIXES + JSON_TABLE_SUFFIXES + TRAJECTORY_SUFFIXES
+        for suffix in CLASS_FILE_SUFFIXES
     ]
     folder_files = _files_under_named_dirs(
         path,
         directory_tokens=CLASS_DIR_TOKENS,
-        suffixes=TABLE_SUFFIXES + JSON_TABLE_SUFFIXES + TRAJECTORY_SUFFIXES,
+        suffixes=CLASS_FILE_SUFFIXES,
     )
     return _unique_paths([item for item in exact if item.exists()] + folder_files)
 
 
 def _topic_map_files(path: Path) -> list[Path]:
     exact = [
-        path / "topic_map.json",
-        path / "topic_map_exports.json",
-        path / "mmuad_topic_map.json",
+        path / f"{stem}{suffix}"
+        for stem in ("topic_map", "topic_map_exports", "mmuad_topic_map")
+        for suffix in (".json", ".yaml", ".yml")
     ]
-    globbed = sorted(path.glob("*topic_map*.json"))
+    globbed = []
+    for suffix in (".json", ".yaml", ".yml"):
+        globbed.extend(sorted(path.glob(f"*topic_map*{suffix}")))
     candidates = _unique_paths(exact + globbed)
     return [
         item
@@ -716,8 +827,8 @@ def _topic_map_files(path: Path) -> list[Path]:
 
 def _is_export_topic_map(path: Path) -> bool:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = load_topic_map_payload(path)
+    except (OSError, json.JSONDecodeError, ValueError):
         return False
     exports = payload.get("exports", [])
     if not isinstance(exports, list):
@@ -729,8 +840,8 @@ def _topic_map_referenced_paths(topic_maps: list[Path]) -> set[Path]:
     referenced: set[Path] = set()
     for topic_map in topic_maps:
         try:
-            payload = json.loads(topic_map.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            payload = load_topic_map_payload(topic_map)
+        except (OSError, json.JSONDecodeError, ValueError):
             continue
         for export in payload.get("exports", []):
             if not isinstance(export, dict) or not export.get("path"):
@@ -854,6 +965,18 @@ def _looks_like_radar_polar_file(path: Path) -> bool:
     if any(token in name for token in ("radar_polar", "polar_radar", "polar")):
         return True
     return _table_has_column_groups(path, RADAR_RANGE_ALIASES, RADAR_AZIMUTH_ALIASES)
+
+
+def _looks_like_cartesian_candidate_file(path: Path) -> bool:
+    if _looks_like_radar_polar_file(path):
+        return False
+    return _table_has_column_groups(
+        path,
+        CANDIDATE_TIME_ALIASES,
+        CANDIDATE_X_ALIASES,
+        CANDIDATE_Y_ALIASES,
+        CANDIDATE_Z_ALIASES,
+    )
 
 
 def _looks_like_camera_detection_file(path: Path) -> bool:
@@ -1027,7 +1150,19 @@ def _class_labels_from_file(path: Path, *, sequence_id: str | None = None) -> li
     if suffix in JSON_DATA_SUFFIXES:
         payload = read_json_export_payload(path)
         return _class_labels_from_json_payload(payload, sequence_id=sequence_id)
+    if suffix in YAML_DATA_SUFFIXES:
+        payload = _read_yaml_export_payload(path)
+        return _class_labels_from_json_payload(payload, sequence_id=sequence_id)
     return []
+
+
+def _read_yaml_export_payload(path: Path) -> Any:
+    text = read_text_export(path)
+    try:
+        import yaml  # type: ignore[import-not-found]
+    except Exception:
+        return json.loads(text)
+    return yaml.safe_load(text)
 
 
 def _class_labels_from_json_payload(

@@ -34,15 +34,115 @@ CANONICAL_TRUTH_COLUMNS = (
 _COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "sequence_id": ("sequence", "seq", "scene", "scene_id", "clip", "clip_id"),
     "time_s": ("timestamp_s", "t", "time", "sec", "seconds"),
-    "source": ("sensor", "modality"),
-    "track_id": ("track", "id", "object_id", "cluster_id", "instance_id"),
-    "x_m": ("x", "east_m", "pos_x", "center_x", "cx"),
-    "y_m": ("y", "north_m", "pos_y", "center_y", "cy"),
-    "z_m": ("z", "up_m", "pos_z", "center_z", "cz"),
+    "source": ("sensor", "modality", "frame_id", "header.frame_id"),
+    "track_id": (
+        "track",
+        "id",
+        "object_id",
+        "cluster_id",
+        "instance_id",
+        "detection_id",
+        "child_frame_id",
+    ),
+    "x_m": (
+        "x",
+        "east_m",
+        "pos_x",
+        "position_x",
+        "center_x",
+        "bbox_center_x",
+        "cx",
+        "px",
+        "point.x",
+        "position.x",
+        "pose.position.x",
+        "pose.pose.position.x",
+        "translation.x",
+        "transform.translation.x",
+        "center.position.x",
+        "bbox.center.position.x",
+        "bbox.center.x",
+        "location.x",
+        "coordinates.x",
+    ),
+    "y_m": (
+        "y",
+        "north_m",
+        "pos_y",
+        "position_y",
+        "center_y",
+        "bbox_center_y",
+        "cy",
+        "py",
+        "point.y",
+        "position.y",
+        "pose.position.y",
+        "pose.pose.position.y",
+        "translation.y",
+        "transform.translation.y",
+        "center.position.y",
+        "bbox.center.position.y",
+        "bbox.center.y",
+        "location.y",
+        "coordinates.y",
+    ),
+    "z_m": (
+        "z",
+        "up_m",
+        "pos_z",
+        "position_z",
+        "center_z",
+        "bbox_center_z",
+        "cz",
+        "pz",
+        "point.z",
+        "position.z",
+        "pose.position.z",
+        "pose.pose.position.z",
+        "translation.z",
+        "transform.translation.z",
+        "center.position.z",
+        "bbox.center.position.z",
+        "bbox.center.z",
+        "location.z",
+        "coordinates.z",
+    ),
     "std_xy_m": ("xy_std_m", "std_m", "position_std_m", "sigma_xy_m"),
     "std_z_m": ("z_std_m", "sigma_z_m"),
-    "confidence": ("score", "probability", "cat_prob", "catprob"),
-    "class_name": ("class", "label", "category"),
+    "confidence": (
+        "score",
+        "probability",
+        "cat_prob",
+        "catprob",
+        "hypothesis.score",
+        "result.score",
+        "result.hypothesis.score",
+        "results.0.score",
+        "results.0.hypothesis.score",
+        "results[0].score",
+        "results[0].hypothesis.score",
+    ),
+    "class_name": (
+        "uav_type",
+        "class",
+        "label",
+        "category",
+        "class_id",
+        "hypothesis.class_id",
+        "hypothesis.id",
+        "result.class_id",
+        "result.id",
+        "result.hypothesis.class_id",
+        "result.hypothesis.id",
+        "results.0.class_id",
+        "results.0.id",
+        "results.0.hypothesis.class_id",
+        "results.0.hypothesis.id",
+        "results[0].class_id",
+        "results[0].id",
+        "results[0].hypothesis.class_id",
+        "results[0].hypothesis.id",
+    ),
 }
 
 _TIME_SECOND_ALIASES = (
@@ -56,6 +156,8 @@ _TIME_SECOND_ALIASES = (
     "sec",
     "secs",
     "seconds",
+    "stamp.sec",
+    "header.stamp.sec",
 )
 _TIME_UNIT_ALIASES = {
     "timestamp_ns": 1.0e-9,
@@ -80,6 +182,10 @@ _TIME_SECOND_NANOSECOND_PAIRS = (
     ("secs", "nsecs"),
     ("stamp_sec", "stamp_nanosec"),
     ("stamp_secs", "stamp_nsecs"),
+    ("stamp.sec", "stamp.nanosec"),
+    ("stamp.sec", "stamp.nsec"),
+    ("header.stamp.sec", "header.stamp.nanosec"),
+    ("header.stamp.sec", "header.stamp.nsec"),
     ("timestamp_sec", "timestamp_nanosec"),
     ("timestamp_secs", "timestamp_nsecs"),
 )
@@ -115,6 +221,7 @@ def normalize_candidate_columns(
     frame: pd.DataFrame,
     *,
     default_sequence_id: str = "default",
+    default_source: str = "candidate",
 ) -> pd.DataFrame:
     """Return a normalized candidate table with canonical column names.
 
@@ -130,7 +237,7 @@ def normalize_candidate_columns(
     if "sequence_id" not in out.columns:
         out["sequence_id"] = default_sequence_id
     if "source" not in out.columns:
-        out["source"] = "candidate"
+        out["source"] = default_source
     if "track_id" not in out.columns:
         out["track_id"] = np.nan
     if "std_xy_m" not in out.columns:
@@ -149,8 +256,16 @@ def normalize_candidate_columns(
         )
     for col in ("time_s", "x_m", "y_m", "z_m", "std_xy_m", "std_z_m", "confidence"):
         out[col] = pd.to_numeric(out[col], errors="coerce")
-    out["sequence_id"] = out["sequence_id"].astype(str)
-    out["source"] = out["source"].astype(str)
+    out["sequence_id"] = _normalize_sequence_id_values(
+        out["sequence_id"],
+        default_sequence_id=default_sequence_id,
+    )
+    out["source"] = _normalize_text_values(
+        out["source"],
+        default_text=default_source,
+    )
+    if "track_id" in out.columns:
+        out["track_id"] = _normalize_optional_id_values(out["track_id"])
     out = out.loc[np.isfinite(out[["time_s", "x_m", "y_m", "z_m"]]).all(axis=1)].copy()
     return out.sort_values(["sequence_id", "time_s", "source"]).reset_index(drop=True)
 
@@ -170,9 +285,45 @@ def normalize_truth_columns(
         if col not in out.columns:
             raise ValueError(f"truth table missing {col!r}; available={list(out.columns)}")
         out[col] = pd.to_numeric(out[col], errors="coerce")
-    out["sequence_id"] = out["sequence_id"].astype(str)
+    out["sequence_id"] = _normalize_sequence_id_values(
+        out["sequence_id"],
+        default_sequence_id=default_sequence_id,
+    )
     out = out.loc[np.isfinite(out[["time_s", "x_m", "y_m", "z_m"]]).all(axis=1)].copy()
     return out.sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+
+
+def _normalize_sequence_id_values(
+    values: pd.Series,
+    *,
+    default_sequence_id: str,
+) -> pd.Series:
+    """Return row-wise sequence ids, filling missing or blank entries."""
+
+    return _normalize_text_values(values, default_text=default_sequence_id)
+
+
+def _normalize_text_values(
+    values: pd.Series,
+    *,
+    default_text: str,
+) -> pd.Series:
+    """Return stripped text values, filling missing-like entries."""
+
+    default = str(default_text)
+    text = values.where(values.notna(), default).astype(str).str.strip()
+    missing = text.eq("") | text.str.lower().isin({"nan", "none", "<na>"})
+    return text.where(~missing, default)
+
+
+def _normalize_optional_id_values(values: pd.Series) -> pd.Series:
+    """Return optional ids, preserving values but making blanks null."""
+
+    out = values.copy()
+    text = values.where(values.notna(), "").astype(str).str.strip().str.lower()
+    missing = values.isna() | text.eq("") | text.isin({"nan", "none", "<na>"})
+    out.loc[missing] = np.nan
+    return out
 
 
 def _rename_aliases(frame: pd.DataFrame) -> pd.DataFrame:

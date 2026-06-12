@@ -61,14 +61,14 @@ _COORDINATE_COLUMN_SETS = (
 
 
 def load_sequence_class_map(path: Path | None) -> dict[str, str]:
-    """Load a sequence-to-UAV-type map from CSV or JSON."""
+    """Load a sequence-to-UAV-type map from CSV, JSON, or YAML."""
 
     if path is None:
         return {}
     path = Path(path)
-    if path.suffix.lower() == ".json":
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return _class_map_from_json_payload(payload)
+    if path.suffix.lower() in {".json", ".yaml", ".yml"}:
+        payload = _load_class_map_payload(path)
+        return _class_map_from_payload(payload)
 
     frame = pd.read_csv(path)
     lower = {str(col).lower(): col for col in frame.columns}
@@ -92,14 +92,25 @@ def load_sequence_class_map(path: Path | None) -> dict[str, str]:
     }
 
 
-def _class_map_from_json_payload(payload: Any) -> dict[str, str]:
+def _load_class_map_payload(path: Path) -> Any:
+    text = Path(path).read_text(encoding="utf-8")
+    if Path(path).suffix.lower() == ".json":
+        return json.loads(text)
+    try:
+        import yaml  # type: ignore[import-not-found]
+    except Exception:
+        return json.loads(text)
+    return yaml.safe_load(text)
+
+
+def _class_map_from_payload(payload: Any) -> dict[str, str]:
     if isinstance(payload, list):
         class_map = _class_map_from_rows(payload)
         if class_map:
             return class_map
-        raise ValueError("class-map JSON rows must contain sequence id and UAV type fields")
+        raise ValueError("class-map rows must contain sequence id and UAV type fields")
     if not isinstance(payload, dict):
-        raise ValueError("class-map JSON must be an object or a list of sequence rows")
+        raise ValueError("class-map must be an object or a list of sequence rows")
 
     for key in _CLASS_MAP_KEYS:
         nested = payload.get(key)
@@ -113,7 +124,7 @@ def _class_map_from_json_payload(payload: Any) -> dict[str, str]:
     class_map = _class_map_from_mapping(payload)
     if class_map:
         return class_map
-    raise ValueError("class-map JSON does not contain any sequence UAV types")
+    raise ValueError("class-map does not contain any sequence UAV types")
 
 
 def _class_map_from_nested(value: Any) -> dict[str, str]:

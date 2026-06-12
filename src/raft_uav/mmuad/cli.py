@@ -118,7 +118,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rosbag-path", type=Path)
     parser.add_argument("--rosbag-report-json", type=Path)
     parser.add_argument("--topic-map-template-json", type=Path)
-    parser.add_argument("--topic-map-json", type=Path)
+    parser.add_argument(
+        "--topic-map-file",
+        "--topic-map-json",
+        dest="topic_map_file",
+        type=Path,
+        help="topic-map metadata file in JSON or YAML form",
+    )
     parser.add_argument("--topic-map-base-dir", type=Path)
     parser.add_argument("--native-ros-extract-output-dir", type=Path)
     parser.add_argument("--sequence-glob", default="*")
@@ -146,7 +152,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ug2-results-csv", type=Path)
     parser.add_argument("--ug2-codabench-zip", type=Path)
     parser.add_argument("--ug2-class-name", default="unknown")
-    parser.add_argument("--ug2-class-map-csv", type=Path)
+    parser.add_argument(
+        "--ug2-class-map-file",
+        "--ug2-class-map-csv",
+        dest="ug2_class_map_file",
+        type=Path,
+        help="sequence-to-UAV-type class map in CSV, JSON, or YAML form",
+    )
     parser.add_argument("--infer-ug2-class-map-from-candidates", action="store_true")
     parser.add_argument("--inferred-class-map-csv", type=Path)
     parser.add_argument("--classification-min-confidence", type=float, default=0.0)
@@ -160,7 +172,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--evaluate-results-csv", type=Path)
     parser.add_argument("--evaluate-results-zip", type=Path)
     parser.add_argument("--evaluation-rows-csv", type=Path)
-    parser.add_argument("--evaluation-class-map-csv", type=Path)
+    parser.add_argument(
+        "--evaluation-class-map-file",
+        "--evaluation-class-map-csv",
+        dest="evaluation_class_map_file",
+        type=Path,
+        help="sequence-to-UAV-type truth class map in CSV, JSON, or YAML form",
+    )
     args = parser.parse_args(argv)
 
     if args.rosbag_path is not None:
@@ -171,11 +189,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.topic_map_template_json is not None:
             write_topic_map_template(report, args.topic_map_template_json)
         if args.native_ros_extract_output_dir is not None:
-            if args.topic_map_json is None:
-                raise SystemExit("--native-ros-extract-output-dir requires --topic-map-json")
+            if args.topic_map_file is None:
+                raise SystemExit(
+                    "--native-ros-extract-output-dir requires --topic-map-file/--topic-map-json"
+                )
             extracted = extract_native_rosbag_topic_map(
                 bag_path=args.rosbag_path,
-                topic_map_json=args.topic_map_json,
+                topic_map_json=args.topic_map_file,
                 output_dir=args.native_ros_extract_output_dir,
                 voxel_size_m=args.voxel_size_m,
                 min_points=args.min_cluster_points,
@@ -190,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
                 for name, path in paths.items():
                     print(f"{name}={path}")
                 return 0
-        if args.topic_map_json is None:
+        if args.topic_map_file is None:
             print("mmuad_rosbag_inspection=ok")
             print(f"topic_count={len(report.get('topics', []))}")
             return 0
@@ -207,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
             load_mmaud_results_file(evaluation_results),
             load_truth_file(evaluation_truth),
             max_time_delta_s=args.evaluation_max_time_delta_s,
-            class_map_csv=args.evaluation_class_map_csv,
+            class_map_path=args.evaluation_class_map_file,
         )
         paths = write_evaluation_artifacts(
             result,
@@ -242,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         output = _run_explicit_files(args)
     paths = write_tracker_output(output, args.output_dir)
-    explicit_class_map = load_sequence_class_map(args.ug2_class_map_csv)
+    explicit_class_map = load_sequence_class_map(args.ug2_class_map_file)
     inferred_class_map = getattr(args, "_inferred_class_map", {})
     # Prefer explicit class-map files when both are provided.
     class_map = {**inferred_class_map, **explicit_class_map}
@@ -451,16 +471,16 @@ def _run_explicit_files(args: argparse.Namespace):
             for path in camera_detection_files
         )
     topic_truth = None
-    if args.topic_map_json is not None:
+    if args.topic_map_file is not None:
         bundle = load_topic_map_exports(
-            args.topic_map_json,
+            args.topic_map_file,
             base_dir=args.topic_map_base_dir,
         )
         frames.append(bundle.candidates)
         topic_truth = bundle.truth
     if not frames:
         raise SystemExit(
-            "provide --sequence-root, --topic-map-json, or at least one "
+            "provide --sequence-root, --topic-map-file/--topic-map-json, or at least one "
             "--candidate-csv/--candidate-file/--point-cloud-csv"
         )
     candidates = merge_candidate_frames(frames)

@@ -82,11 +82,12 @@ def load_candidate_csv(
     """Load a normalized or alias-compatible candidate CSV."""
 
     raw = pd.read_csv(path)
-    if not _has_any_column(raw, ("source", "sensor", "modality")):
+    if _should_add_default_candidate_source(raw, source=source):
         raw["source"] = source
     rows = normalize_candidate_columns(
         raw,
         default_sequence_id=default_sequence_id,
+        default_source=source,
     )
     frame = CandidateFrame(rows)
     frame.validate()
@@ -129,12 +130,24 @@ def load_candidate_file(
         raw = _read_numpy_trajectory_table(path)
     else:
         raise ValueError(f"unsupported candidate table extension: {path.suffix}")
-    if not _has_any_column(raw, ("source", "sensor", "modality")):
+    if _should_add_default_candidate_source(raw, source=source):
         raw["source"] = source
-    rows = normalize_candidate_columns(raw, default_sequence_id=default_sequence_id)
+    rows = normalize_candidate_columns(
+        raw,
+        default_sequence_id=default_sequence_id,
+        default_source=source,
+    )
     frame = CandidateFrame(rows)
     frame.validate()
     return frame
+
+
+def _should_add_default_candidate_source(frame: pd.DataFrame, *, source: str) -> bool:
+    if _has_any_column(frame, ("source", "sensor", "modality")):
+        return False
+    if source != "candidate":
+        return True
+    return not _has_any_column(frame, ("frame_id", "header.frame_id"))
 
 
 def load_truth_csv(path: Path, *, default_sequence_id: str = "default") -> TruthFrame:
@@ -230,12 +243,12 @@ def load_point_cloud_file_as_candidates(
 ) -> CandidateFrame:
     """Load exported point-cloud files and cluster them into candidates.
 
-    CSV/TSV/TXT/JSON/JSONL, NumPy, PCD, PLY, uncompressed LAS, and simple
-    float32 ``.bin`` files are supported as pragmatic exported-data bridges,
-    including gzip-compressed variants.  This is **not** a native Livox packet
-    reader.  Files without per-point timestamps are treated as one frame;
-    ``time_s`` is inferred from the filename when it contains a numeric token,
-    otherwise it defaults to ``0.0``.
+    CSV/TSV/TXT/JSON/JSONL, NumPy, PCD, PLY, uncompressed LAS, optional
+    LASzip/LAZ via ``laspy``, and simple float32 ``.bin`` files are supported
+    as pragmatic exported-data bridges, including gzip-compressed variants.
+    This is **not** a native Livox packet reader.  Files without per-point
+    timestamps are treated as one frame; ``time_s`` is inferred from the
+    filename when it contains a numeric token, otherwise it defaults to ``0.0``.
     """
 
     path = Path(path)
@@ -253,6 +266,8 @@ def load_point_cloud_file_as_candidates(
         points = _read_ply(path)
     elif suffix == ".las":
         points = _read_las(path)
+    elif suffix == ".laz":
+        points = _read_las_with_laspy(path)
     elif suffix == ".bin":
         points = _read_binary_point_cloud(path)
     else:
@@ -781,7 +796,7 @@ def _read_las(path: Path) -> pd.DataFrame:
         raise ValueError(f"invalid LAS file: {path}")
     point_format_byte = raw[104]
     if point_format_byte & 0x80:
-        raise ValueError("compressed LAZ/LASzip point records are not supported")
+        return _read_las_with_laspy(path)
     point_format = point_format_byte & 0x3F
     if point_format > 10:
         raise ValueError(f"unsupported LAS point format: {point_format}")
@@ -807,6 +822,32 @@ def _read_las(path: Path) -> pd.DataFrame:
     xyz = raw_xyz.astype(float) * scale + offset
     return _normalize_point_frame(
         pd.DataFrame({"x_m": xyz[:, 0], "y_m": xyz[:, 1], "z_m": xyz[:, 2]}),
+        path=path,
+    )
+
+
+def _read_las_with_laspy(path: Path) -> pd.DataFrame:
+    """Read LAZ/LASzip point records through optional laspy support."""
+
+    try:
+        import laspy  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise ValueError(
+            "compressed LAZ/LASzip point clouds require the optional "
+            "'laspy[lazrs]' dependency"
+        ) from exc
+    try:
+        cloud = laspy.read(path)
+    except Exception as exc:  # pragma: no cover - backend-specific diagnostics
+        raise ValueError(f"failed to read LAZ/LASzip point cloud {path}: {exc}") from exc
+    return _normalize_point_frame(
+        pd.DataFrame(
+            {
+                "x_m": np.asarray(cloud.x, dtype=float),
+                "y_m": np.asarray(cloud.y, dtype=float),
+                "z_m": np.asarray(cloud.z, dtype=float),
+            }
+        ),
         path=path,
     )
 
@@ -1041,6 +1082,9 @@ _JSON_ROW_HINT_KEYS = {
     "point",
     "transform",
     "translation",
+    "bbox",
+    "results",
+    "hypothesis",
     "center",
     "location",
     "coordinates",
@@ -1119,7 +1163,52 @@ def _flatten_tracking_record(record: dict[Any, Any]) -> dict[Any, Any]:
             xyz[2],
             aliases=("z", "up_m", "pos_z", "center_z", "cz", "pz"),
         )
+    results = _lookup_case_insensitive(out, "results")
+    if isinstance(results, list):
+        _copy_detection_result_fields(out, results)
+    elif isinstance(results, dict):
+        _copy_detection_result_fields(out, [results])
+    hypothesis = _lookup_case_insensitive(out, "hypothesis")
+    if isinstance(hypothesis, dict):
+        _copy_detection_result_fields(out, [{"hypothesis": hypothesis}])
     return out
+
+
+def _copy_detection_result_fields(out: dict[Any, Any], results: list[Any]) -> None:
+    best_score: float | None = None
+    best_class: Any | None = None
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        hypothesis = _lookup_case_insensitive(result, "hypothesis")
+        if not isinstance(hypothesis, dict):
+            hypothesis = result
+        score = _float_or_none(
+            _first_mapping_value(hypothesis, ("score", "confidence", "probability"))
+        )
+        if score is None:
+            score = _float_or_none(
+                _first_mapping_value(result, ("score", "confidence", "probability"))
+            )
+        class_name = _first_mapping_value(
+            hypothesis,
+            ("class_id", "class_name", "uav_type", "class", "label", "category", "id"),
+        )
+        if class_name is None:
+            class_name = _first_mapping_value(
+                result,
+                ("class_id", "class_name", "uav_type", "class", "label", "category", "id"),
+            )
+        if best_score is None or (score is not None and score > best_score):
+            best_score = score
+            best_class = class_name
+    _set_if_missing(out, "confidence", best_score, aliases=("score", "probability"))
+    _set_if_missing(
+        out,
+        "class_name",
+        best_class,
+        aliases=("uav_type", "class", "label", "category"),
+    )
 
 
 def _copy_stamp_time(out: dict[Any, Any], stamp: Any) -> None:
@@ -1166,6 +1255,7 @@ def _xyz_from_nested_record(value: Any, *, depth: int = 0) -> tuple[float, float
             "position",
             "point",
             "translation",
+            "bbox",
             "center",
             "location",
             "coordinates",
@@ -1191,15 +1281,78 @@ def _xyz_from_nested_record(value: Any, *, depth: int = 0) -> tuple[float, float
 def _xyz_from_mapping(mapping: dict[Any, Any]) -> tuple[float, float, float] | None:
     x = _first_float_mapping_value(
         mapping,
-        ("x_m", "x", "east_m", "pos_x", "center_x", "cx", "px"),
+        (
+            "x_m",
+            "x",
+            "east_m",
+            "pos_x",
+            "position_x",
+            "center_x",
+            "bbox_center_x",
+            "cx",
+            "px",
+            "point.x",
+            "position.x",
+            "pose.position.x",
+            "pose.pose.position.x",
+            "translation.x",
+            "transform.translation.x",
+            "center.position.x",
+            "bbox.center.position.x",
+            "bbox.center.x",
+            "location.x",
+            "coordinates.x",
+        ),
     )
     y = _first_float_mapping_value(
         mapping,
-        ("y_m", "y", "north_m", "pos_y", "center_y", "cy", "py"),
+        (
+            "y_m",
+            "y",
+            "north_m",
+            "pos_y",
+            "position_y",
+            "center_y",
+            "bbox_center_y",
+            "cy",
+            "py",
+            "point.y",
+            "position.y",
+            "pose.position.y",
+            "pose.pose.position.y",
+            "translation.y",
+            "transform.translation.y",
+            "center.position.y",
+            "bbox.center.position.y",
+            "bbox.center.y",
+            "location.y",
+            "coordinates.y",
+        ),
     )
     z = _first_float_mapping_value(
         mapping,
-        ("z_m", "z", "up_m", "pos_z", "center_z", "cz", "pz"),
+        (
+            "z_m",
+            "z",
+            "up_m",
+            "pos_z",
+            "position_z",
+            "center_z",
+            "bbox_center_z",
+            "cz",
+            "pz",
+            "point.z",
+            "position.z",
+            "pose.position.z",
+            "pose.pose.position.z",
+            "translation.z",
+            "transform.translation.z",
+            "center.position.z",
+            "bbox.center.position.z",
+            "bbox.center.z",
+            "location.z",
+            "coordinates.z",
+        ),
     )
     if x is None or y is None or z is None:
         return None
