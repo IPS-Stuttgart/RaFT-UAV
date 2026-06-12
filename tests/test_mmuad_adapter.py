@@ -1335,6 +1335,55 @@ def test_topic_map_exports_load_candidates_and_truth(tmp_path: Path) -> None:
     assert bundle.candidates.rows.loc[0, "sequence_id"] == "seq_ros"
 
 
+def test_topic_map_exports_load_numpy_trajectory_files(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    trajectory = np.array(
+        [
+            [0.0, 0.0, 0.0, 5.0],
+            [1.0, 1.0, 0.0, 5.0],
+        ]
+    )
+    np.save(exports / "radar_trajectory.npy", trajectory)
+    np.save(exports / "truth.npy", trajectory)
+    topic_map = tmp_path / "topic_map_numpy.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_ros_numpy",
+                "exports": [
+                    {
+                        "kind": "candidate",
+                        "path": "radar_trajectory.npy",
+                        "source": "radar",
+                        "track_id": "radar-track",
+                        "class_name": "Mavic3",
+                    },
+                    {
+                        "kind": "truth",
+                        "path": "truth.npy",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+
+    assert bundle.candidates.rows["sequence_id"].tolist() == [
+        "seq_ros_numpy",
+        "seq_ros_numpy",
+    ]
+    assert bundle.candidates.rows["source"].tolist() == ["radar", "radar"]
+    assert bundle.candidates.rows["track_id"].tolist() == ["radar-track", "radar-track"]
+    assert bundle.candidates.rows["class_name"].tolist() == ["Mavic3", "Mavic3"]
+    assert bundle.truth is not None
+    assert bundle.truth.rows["time_s"].tolist() == [0.0, 1.0]
+    loaded = bundle.manifest["loaded_exports"]
+    assert [row["rows"] for row in loaded] == [2, 2]
+
+
 def test_ros2_metadata_inspection_and_topic_map_template(tmp_path: Path) -> None:
     bag = tmp_path / "bagdir"
     bag.mkdir()

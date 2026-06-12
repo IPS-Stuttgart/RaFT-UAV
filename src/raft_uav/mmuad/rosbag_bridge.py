@@ -2,7 +2,7 @@
 
 The helpers avoid depending on ROS at import time.  They can inspect ROS2
 ``metadata.yaml`` directories, optionally call ``rosbag info --yaml`` for ROS1
-bags when the command exists, and load normalized CSV exports via a topic-map
+bags when the command exists, and load normalized topic exports via a topic-map
 JSON.  This is a bridge toward native support; it is not a binary message
 parser.
 """
@@ -20,13 +20,18 @@ import subprocess
 
 import pandas as pd
 
-from raft_uav.mmuad.io import merge_candidate_frames
-from raft_uav.mmuad.schema import CandidateFrame, TruthFrame, normalize_candidate_columns, normalize_truth_columns
+from raft_uav.mmuad.io import load_candidate_file, load_truth_file, merge_candidate_frames
+from raft_uav.mmuad.schema import (
+    CandidateFrame,
+    TruthFrame,
+    normalize_candidate_columns,
+    normalize_truth_columns,
+)
 
 
 @dataclass(frozen=True)
 class TopicExportBundle:
-    """Normalized candidates/truth loaded from topic-map CSV exports."""
+    """Normalized candidates/truth loaded from topic-map exports."""
 
     candidates: CandidateFrame
     truth: TruthFrame | None
@@ -45,7 +50,11 @@ def inspect_rosbag(path: Path) -> dict[str, Any]:
             "path": str(path),
             "kind": "directory",
             "metadata_yaml": False,
-            "files": [str(item.relative_to(path)) for item in sorted(path.rglob("*")) if item.is_file()][:200],
+            "files": [
+                str(item.relative_to(path))
+                for item in sorted(path.rglob("*"))
+                if item.is_file()
+            ][:200],
             "recommendation": "No metadata.yaml found; export topics to CSV and use --topic-map-json.",
         }
     if path.suffix.lower() == ".bag":
@@ -66,14 +75,21 @@ def write_topic_map_template(report: dict[str, Any], path: Path) -> Path:
     for idx, topic in enumerate(topics):
         name = str(topic.get("name", topic.get("topic", f"topic_{idx}")))
         safe = re.sub(r"[^A-Za-z0-9_]+", "_", name.strip("/")).strip("_") or f"topic_{idx}"
-        kind = "truth" if any(token in name.lower() for token in ("truth", "gt", "ground")) else "candidate"
+        kind = (
+            "truth"
+            if any(token in name.lower() for token in ("truth", "gt", "ground"))
+            else "candidate"
+        )
         exports.append(
             {
                 "topic": name,
                 "kind": kind,
                 "path": f"exports/{safe}.csv",
                 "source": safe if kind == "candidate" else None,
-                "sequence_id": report.get("sequence_id", Path(str(report.get("path", "sequence"))).stem),
+                "sequence_id": report.get(
+                    "sequence_id",
+                    Path(str(report.get("path", "sequence"))).stem,
+                ),
                 "column_aliases": {
                     "stamp": "time_s",
                     "timestamp": "time_s",
@@ -85,7 +101,10 @@ def write_topic_map_template(report: dict[str, Any], path: Path) -> Path:
         )
     payload = {
         "schema": "raft-uav-mmuad-topic-map-v1",
-        "sequence_id": report.get("sequence_id", Path(str(report.get("path", "sequence"))).stem),
+        "sequence_id": report.get(
+            "sequence_id",
+            Path(str(report.get("path", "sequence"))).stem,
+        ),
         "description": "Edit paths and aliases to point at CSV exports of ROS topics.",
         "exports": exports,
     }
@@ -106,36 +125,28 @@ def load_topic_map_exports(path: Path, *, base_dir: Path | None = None) -> Topic
     truth_frames: list[TruthFrame] = []
     loaded: list[dict[str, Any]] = []
     for spec in payload.get("exports", []):
-        csv_path = base / str(spec["path"])
-        if not csv_path.exists():
-            loaded.append({"path": str(csv_path), "status": "missing"})
+        export_path = base / str(spec["path"])
+        if not export_path.exists():
+            loaded.append({"path": str(export_path), "status": "missing"})
             continue
         kind = str(spec.get("kind", "candidate"))
-        frame = pd.read_csv(csv_path)
-        aliases = spec.get("column_aliases", {}) or {}
-        frame = frame.rename(columns={str(k): str(v) for k, v in aliases.items()})
         sequence_id = str(spec.get("sequence_id", default_sequence_id))
-        if "sequence_id" not in frame.columns:
-            frame["sequence_id"] = sequence_id
         if kind == "truth":
-            normalized = normalize_truth_columns(frame)
-            truth_frames.append(TruthFrame(normalized))
+            truth_frame = _load_topic_truth_export(export_path, spec, sequence_id=sequence_id)
+            truth_frames.append(truth_frame)
+            row_count = len(truth_frame.rows)
         else:
-            if "source" not in frame.columns:
-                frame["source"] = spec.get("source") or spec.get("topic") or "candidate"
-            if "track_id" not in frame.columns and spec.get("track_id") is not None:
-                frame["track_id"] = spec.get("track_id")
-            if "std_xy_m" not in frame.columns and spec.get("std_xy_m") is not None:
-                frame["std_xy_m"] = spec.get("std_xy_m")
-            if "std_z_m" not in frame.columns and spec.get("std_z_m") is not None:
-                frame["std_z_m"] = spec.get("std_z_m")
-            if "confidence" not in frame.columns and spec.get("confidence") is not None:
-                frame["confidence"] = spec.get("confidence")
-            if "class_name" not in frame.columns and spec.get("class_name") is not None:
-                frame["class_name"] = spec.get("class_name")
-            normalized = normalize_candidate_columns(frame)
-            candidate_frames.append(CandidateFrame(normalized))
-        loaded.append({"path": str(csv_path), "kind": kind, "status": "loaded", "rows": int(len(frame))})
+            candidate_frame = _load_topic_candidate_export(export_path, spec, sequence_id=sequence_id)
+            candidate_frames.append(candidate_frame)
+            row_count = len(candidate_frame.rows)
+        loaded.append(
+            {
+                "path": str(export_path),
+                "kind": kind,
+                "status": "loaded",
+                "rows": int(row_count),
+            }
+        )
     if not candidate_frames:
         raise ValueError(f"topic map {path} did not load any candidate exports")
     candidates = merge_candidate_frames(candidate_frames)
@@ -144,6 +155,61 @@ def load_topic_map_exports(path: Path, *, base_dir: Path | None = None) -> Topic
         truth_rows = pd.concat([frame.rows for frame in truth_frames], ignore_index=True)
         truth = TruthFrame(normalize_truth_columns(truth_rows))
     return TopicExportBundle(candidates, truth, {"topic_map": str(path), "loaded_exports": loaded})
+
+
+def _load_topic_truth_export(path: Path, spec: dict[str, Any], *, sequence_id: str) -> TruthFrame:
+    if _is_table_export(path):
+        frame = _read_topic_table(path)
+        frame = _apply_aliases(frame, spec)
+        if "sequence_id" not in frame.columns:
+            frame["sequence_id"] = sequence_id
+        return TruthFrame(normalize_truth_columns(frame))
+    return load_truth_file(path, default_sequence_id=sequence_id)
+
+
+def _load_topic_candidate_export(
+    path: Path,
+    spec: dict[str, Any],
+    *,
+    sequence_id: str,
+) -> CandidateFrame:
+    source = str(spec.get("source") or spec.get("topic") or "candidate")
+    if _is_table_export(path):
+        frame = _read_topic_table(path)
+        frame = _apply_aliases(frame, spec)
+        if "sequence_id" not in frame.columns:
+            frame["sequence_id"] = sequence_id
+        if "source" not in frame.columns:
+            frame["source"] = source
+        for column in ("track_id", "std_xy_m", "std_z_m", "confidence", "class_name"):
+            if column not in frame.columns and spec.get(column) is not None:
+                frame[column] = spec.get(column)
+        return CandidateFrame(normalize_candidate_columns(frame))
+    frame = load_candidate_file(path, default_sequence_id=sequence_id, source=source)
+    rows = frame.rows.copy()
+    for column in ("track_id", "std_xy_m", "std_z_m", "confidence", "class_name"):
+        if spec.get(column) is not None:
+            rows[column] = spec.get(column)
+    return CandidateFrame(
+        normalize_candidate_columns(rows, default_sequence_id=sequence_id)
+    )
+
+
+def _read_topic_table(path: Path) -> pd.DataFrame:
+    if path.suffix.lower() == ".tsv":
+        return pd.read_csv(path, sep="\t")
+    if path.suffix.lower() == ".txt":
+        return pd.read_csv(path, sep=None, engine="python")
+    return pd.read_csv(path)
+
+
+def _apply_aliases(frame: pd.DataFrame, spec: dict[str, Any]) -> pd.DataFrame:
+    aliases = spec.get("column_aliases", {}) or {}
+    return frame.rename(columns={str(key): str(value) for key, value in aliases.items()})
+
+
+def _is_table_export(path: Path) -> bool:
+    return path.suffix.lower() in {".csv", ".tsv", ".txt"}
 
 
 def _inspect_ros2_metadata(path: Path) -> dict[str, Any]:

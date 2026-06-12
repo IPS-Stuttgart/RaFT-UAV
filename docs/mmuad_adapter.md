@@ -361,8 +361,10 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_bag_inspect
 ```
 
-Edit the generated topic-map JSON so each relevant topic points to a CSV export,
-then run the tracker:
+Edit the generated topic-map JSON so each relevant topic points to a normalized
+export file, then run the tracker. CSV/TSV/TXT exports can use `column_aliases`;
+compact NumPy trajectory exports such as `radar_trajectory.npy` and `truth.npy`
+use the same `time_s,x_m,y_m,z_m` convention as the explicit-file CLI:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
@@ -373,8 +375,8 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ```
 
 This bridge is intentionally conservative: it inventories bags and loads
-normalized CSV exports until the exact local MMUAD raw layout and topic message
-types are known.
+normalized table or compact trajectory exports until the exact local MMUAD raw
+layout and topic message types are known.
 
 A local evaluator is available for sanity checking `mmaud_results.csv` against
 normalized truth. It is not the official Codabench evaluator:
