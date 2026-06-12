@@ -2772,6 +2772,9 @@ def test_layout_inspectors_classify_mmuad_modality_folders(tmp_path: Path) -> No
     (seq / "tracking_results").mkdir()
     (seq / "class").mkdir()
     np.save(seq / "livox_avia" / "20.0.npy", np.zeros((3, 3)))
+    np.asarray([[0.0, 0.0, 1.0, 0.25]], dtype="<f4").tofile(
+        seq / "livox_avia" / "20.1.bin"
+    )
     np.save(seq / "ground_truth" / "20.0.npy", np.array([0.0, 0.0, 1.0]))
     np.save(seq / "tracking_results" / "20.0.npy", np.array([0.0, 0.0, 1.0]))
     np.save(seq / "class" / "20.0.npy", np.array(2))
@@ -2780,12 +2783,15 @@ def test_layout_inspectors_classify_mmuad_modality_folders(tmp_path: Path) -> No
     by_name = {row["relative_path"]: row for row in detailed["files"]}
 
     assert by_name["livox_avia/20.0.npy"]["category"] == "point_cloud"
+    assert by_name["livox_avia/20.1.bin"]["category"] == "point_cloud"
+    assert abs(float(by_name["livox_avia/20.1.bin"]["inferred_time_s"]) - 20.1) < 1e-12
     assert by_name["ground_truth/20.0.npy"]["category"] == "truth"
     assert by_name["tracking_results/20.0.npy"]["category"] == "candidate"
     assert by_name["class/20.0.npy"]["category"] == "class_label"
     assert detailed["sequences"][0]["missing_for_tracking_smoke"] == ["calibration"]
 
     inventory = inspect_mmuad_layout(tmp_path)
+    assert inventory["category_counts"]["point_cloud"] == 1
     assert inventory["category_counts"]["truth_or_label"] == 1
     assert inventory["category_counts"]["class_or_label"] == 1
     assert inventory["category_counts"]["candidate_or_point_table"] == 2

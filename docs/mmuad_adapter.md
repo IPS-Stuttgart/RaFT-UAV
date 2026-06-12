@@ -348,7 +348,8 @@ The report classifies files as images, point clouds, candidate tables, truth,
 class labels, calibration, ROS recordings, and metadata. Candidate/truth/class
 tables may be CSV/TSV/TXT, JSON, or compact NumPy exports. It also infers
 timestamps from filenames when possible and reports what each sequence is
-missing for a tracking smoke test.
+missing for a tracking smoke test. Point-cloud inventory includes common PCD,
+PLY, LAS/LAZ, and simple float32 `.bin` exports.
 
 ### Binary PCD, BIN, and NumPy point clouds
 

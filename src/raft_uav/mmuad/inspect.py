@@ -24,7 +24,7 @@ from raft_uav.mmuad.io import (
 )
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
-POINT_SUFFIXES = {".pcd", ".ply", ".las", ".laz"}
+POINT_SUFFIXES = {".pcd", ".ply", ".las", ".laz", ".bin"}
 NUMPY_SUFFIXES = {".npy", ".npz"}
 TABLE_SUFFIXES = DELIMITED_TABLE_SUFFIXES
 CALIBRATION_NAMES = {
