@@ -20,10 +20,12 @@ from raft_uav.mmuad.camera import (
     load_camera_models_from_files,
 )
 from raft_uav.mmuad.io import (
+    JSON_TABLE_SUFFIXES as IO_JSON_TABLE_SUFFIXES,
     load_candidate_file,
     load_point_cloud_file_as_candidates,
     load_truth_file,
     merge_candidate_frames,
+    read_json_export_payload,
 )
 from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
 from raft_uav.mmuad.rosbag_bridge import load_topic_map_exports
@@ -31,13 +33,13 @@ from raft_uav.mmuad.schema import CandidateFrame, TruthFrame, normalize_truth_co
 
 
 TABLE_SUFFIXES = (".csv", ".tsv", ".txt")
-JSON_TABLE_SUFFIXES = (".json",)
+JSON_TABLE_SUFFIXES = tuple(sorted(IO_JSON_TABLE_SUFFIXES))
 TRAJECTORY_SUFFIXES = (".npy", ".npz")
 POINT_FILE_SUFFIXES = (
     ".csv",
     ".tsv",
     ".txt",
-    ".json",
+    *JSON_TABLE_SUFFIXES,
     ".npy",
     ".npz",
     ".pcd",
@@ -150,10 +152,11 @@ def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[Seq
     The helper intentionally supports normalized/exported files rather than the
     official raw archive.  It looks for common names such as ``candidates.csv``,
     ``*_candidates.csv``, delimited variants such as ``candidates.tsv`` or
-    ``detections.txt``, JSON row tables such as ``candidates.json`` or
-    ``truth.json``, compact NumPy trajectory tables such as ``candidates.npy``
-    or ``trajectory.npz``, ``points.csv`` / ``points.tsv`` /
-    ``points.json``, ``*_points.csv`` / ``*_points.json``, ``*.pcd``,
+    ``detections.txt``, JSON/JSONL row tables such as ``candidates.json``,
+    ``candidates.jsonl``, or ``truth.ndjson``, compact NumPy trajectory tables
+    such as ``candidates.npy`` or ``trajectory.npz``, ``points.csv`` /
+    ``points.tsv`` / ``points.json``, ``points.jsonl``, ``*_points.csv`` /
+    ``*_points.json``, ``*.pcd``,
     ``*.ply``, simple float32 ``*.bin`` point-cloud exports,
     exported ROS topic-map JSON files, ``truth.csv`` / ``truth.npy``, and
     ``calibration.json`` under each sequence folder.  If ``root`` itself holds
@@ -894,7 +897,7 @@ def _table_columns(path: Path) -> list[str]:
 
 def _json_table_columns(path: Path) -> list[str]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = read_json_export_payload(path)
     except (OSError, json.JSONDecodeError):
         return []
     return _json_payload_columns(payload)
@@ -908,7 +911,21 @@ def _json_payload_columns(payload: Any) -> list[str]:
         return []
     if not isinstance(payload, Mapping):
         return []
-    for key in ("radar_polar", "radar_detections", "detections", "rows", "data"):
+    for key in (
+        "radar_polar",
+        "radar_detections",
+        "detections",
+        "objects",
+        "targets",
+        "measurements",
+        "returns",
+        "predictions",
+        "truth",
+        "points",
+        "point_cloud",
+        "rows",
+        "data",
+    ):
         nested = _mapping_get_case_insensitive(payload, key)
         if nested is not None:
             columns = _json_payload_columns(nested)
@@ -993,7 +1010,7 @@ def _class_labels_from_file(path: Path, *, sequence_id: str | None = None) -> li
         if not frame.empty:
             return [_format_class_label(value) for value in frame.iloc[:, 0].dropna().tolist()]
     if suffix in JSON_TABLE_SUFFIXES:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = read_json_export_payload(path)
         return _class_labels_from_json_payload(payload, sequence_id=sequence_id)
     return []
 

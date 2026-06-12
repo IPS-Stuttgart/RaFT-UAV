@@ -16,13 +16,12 @@ from typing import Any
 
 import pandas as pd
 
-from raft_uav.mmuad.io import infer_time_s_from_filename
+from raft_uav.mmuad.io import JSON_TABLE_SUFFIXES, infer_time_s_from_filename
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 POINT_SUFFIXES = {".pcd", ".ply", ".las", ".laz"}
 NUMPY_SUFFIXES = {".npy", ".npz"}
 TABLE_SUFFIXES = {".csv", ".tsv", ".txt"}
-JSON_TABLE_SUFFIXES = {".json"}
 CALIBRATION_NAMES = {
     "calibration.json",
     "calib.json",
@@ -189,7 +188,7 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
         if suffix != ".json" and modality == "radar":
             return "radar_csv", "radar", None
         return "csv" if suffix == ".csv" else "metadata", modality, None
-    if suffix in {".json", ".yaml", ".yml", ".toml", ".txt"}:
+    if suffix in JSON_TABLE_SUFFIXES | {".yaml", ".yml", ".toml", ".txt"}:
         return "metadata", modality, None
     if suffix in {".bag", ".db3", ".mcap"}:
         return "ros_recording", modality, None

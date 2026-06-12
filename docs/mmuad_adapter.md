@@ -23,9 +23,10 @@ Timestamp columns may be supplied in seconds via `time_s`, `timestamp_s`,
 or `timestamp_ms`; or as ROS-style second/nanosecond pairs such as
 `sec,nanosec`.
 
-Candidate and truth rows can also be supplied as JSON row lists, column maps, or
-objects containing common keys such as `candidates`, `detections`, `truth`,
-`ground_truth`, `rows`, `data`, or `sequences`.
+Candidate and truth rows can also be supplied as JSON row lists, JSONL/NDJSON
+row streams, column maps, or objects containing common keys such as
+`candidates`, `detections`, `truth`, `ground_truth`, `rows`, `data`, or
+`sequences`.
 
 Run with exported detector/cluster candidates:
 
@@ -38,7 +39,7 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 
 For non-CSV table or trajectory exports, use the format-aware explicit-file
 flags. Compact NumPy trajectories use `time_s,x_m,y_m,z_m` column order, while
-JSON tables use the same column names and aliases as CSV rows:
+JSON and JSONL tables use the same column names and aliases as CSV rows:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
@@ -118,13 +119,14 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ### Sequence-root discovery
 
 A normalized sequence export can be loaded from folders containing files named
-`candidates.csv`, `detections.csv`, `candidates.json`, `truth.json`,
-`*_candidates.csv`, delimited variants such as `candidates.tsv` or
-`detections.txt`, `points.csv`, `points.tsv`, `points.json`, `*_points.txt`,
-`*_points.json`, exported polar
-radar and camera detection tables such as `radar_polar.tsv` or `radar_polar.json`,
-`camera_detections.txt`, or `camera_detections.json`, compact trajectory arrays such as `trajectory.npy` /
-`candidates.npz`, exported ROS topic maps such as `topic_map.json`,
+`candidates.csv`, `detections.csv`, `candidates.json`, `candidates.jsonl`,
+`truth.json`, `*_candidates.csv`, delimited variants such as `candidates.tsv`
+or `detections.txt`, `points.csv`, `points.tsv`, `points.json`,
+`points.jsonl`, `*_points.txt`, `*_points.json`, `*_points.jsonl`, exported
+polar radar and camera detection tables such as `radar_polar.tsv` or
+`radar_polar.json`, `camera_detections.txt`, or `camera_detections.json`,
+compact trajectory arrays such as `trajectory.npy` / `candidates.npz`,
+exported ROS topic maps such as `topic_map.json`,
 `truth.csv`, compact truth arrays such as `truth.npy`, and optionally
 `calibration.json`, `camera_info.json`, `intrinsics.json`, or
 camera-folder intrinsics such as `cam0/camera_info.json`. It also recognizes one-level split folders and MMUAD-style
@@ -235,7 +237,7 @@ private binary archive internals.
 
 ### ASCII PCD/PLY and Point-Cloud Table Exports
 
-In addition to point-cloud CSV/TSV/TXT/JSON row tables, exported ASCII `.pcd`
+In addition to point-cloud CSV/TSV/TXT/JSON/JSONL row tables, exported ASCII `.pcd`
 and `.ply` files can be clustered into candidate centroids. JSON point-cloud
 exports may be row lists, column maps, or objects containing `points`,
 `point_cloud`, `pointcloud`, `cloud`, `lidar_points`, `livox_points`,
@@ -340,7 +342,7 @@ missing for a tracking smoke test.
 
 ### Binary PCD, BIN, and NumPy point clouds
 
-The point-cloud bridge now supports CSV/TSV/TXT/JSON tables, ASCII and binary PCD
+The point-cloud bridge now supports CSV/TSV/TXT/JSON/JSONL tables, ASCII and binary PCD
 files, ASCII PLY files, simple float32 `.bin` files with `x,y,z` or
 `x,y,z,intensity` rows, and simple `.npy` / `.npz` point arrays with shape
 `(N, >=3)`.  This still is not a native Livox packet reader, but it covers
@@ -463,17 +465,17 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ```
 
 Edit the generated topic-map JSON so each relevant topic points to a normalized
-export file, then run the tracker. CSV/TSV/TXT/JSON table exports can use
+export file, then run the tracker. CSV/TSV/TXT/JSON/JSONL table exports can use
 `column_aliases`; compact NumPy trajectory exports such as `radar_trajectory.npy`
 and `truth.npy` use the same `time_s,x_m,y_m,z_m` convention as the
-explicit-file CLI. JSON topic exports may use row lists, column maps, or objects
-containing `points`, `point_cloud`, `candidates`, `detections`, `objects`,
-`targets`, `measurements`, `returns`, `predictions`, `truth`, `fixes`, `gps`,
-`navsatfix`, `poses`, `rows`, or `data`. The template infers native extraction
-kinds for common ROS message types
+explicit-file CLI. JSON topic exports may use row lists, JSONL/NDJSON row
+streams, column maps, or objects containing `points`, `point_cloud`,
+`candidates`, `detections`, `objects`, `targets`, `measurements`, `returns`,
+`predictions`, `truth`, `fixes`, `gps`, `navsatfix`, `poses`, `rows`, or
+`data`. The template infers native extraction kinds for common ROS message types
 (`pointcloud2_candidate`, `pose_truth`, `odometry_candidate`, and related truth
 variants), while the exported-topic loader still accepts those kinds for CSV or
-JSON table and NumPy exports. Table exports marked as `pointcloud2_candidate`
+JSON/JSONL table and NumPy exports. Table exports marked as `pointcloud2_candidate`
 are clustered from point rows using the same lightweight point-cloud bridge.
 Table exports marked as `radar_polar_candidate` or `polar_radar_candidate`
 are converted from range/azimuth rows using the same polar radar bridge as
@@ -593,7 +595,7 @@ appear in anti-UAV datasets but are not yet parsed from native raw packets.
 ### Polar Radar Table Exports
 
 Use `--radar-polar-csv` for radar detections exported as CSV/TSV/TXT
-range/azimuth rows, or `--radar-polar-file` for JSON table exports:
+range/azimuth rows, or `--radar-polar-file` for JSON/JSONL table exports:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
@@ -614,7 +616,7 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ```
 
 Supported aliases include `range_m`, `azimuth_deg`, `elevation_deg`, `track_id`,
-`confidence`, and common variants. JSON radar exports may be row lists, column
+`confidence`, and common variants. JSON/JSONL radar exports may be row lists, column
 maps, or objects containing `radar_polar`, `radar_detections`, `detections`,
 `targets`, `objects`, `measurements`, `returns`, `rows`, or `data`.
 Coordinates are in the radar/export frame unless a calibration file is applied
@@ -656,7 +658,7 @@ live at the sequence root or beside detections in camera folders such as
 camera source and merged with any other discovered camera models. These can
 be used for back-projection even when they do not contain generic sensor
 extrinsics. Detections can provide `u_px`/`v_px` or
-`x1,y1,x2,y2` boxes. JSON exports may be row lists, column maps, or objects with
+`x1,y1,x2,y2` boxes. JSON/JSONL exports may be row lists, column maps, or objects with
 keys such as `camera_detections`, `detections`, `boxes`, `objects`,
 `predictions`, `results`, `instances`, `rows`, or `data`. Depth must come from
 `depth_m`/`range_m`, or from a fixed fallback via

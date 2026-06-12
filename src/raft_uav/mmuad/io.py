@@ -18,6 +18,9 @@ from raft_uav.mmuad.schema import (
 )
 
 
+JSON_TABLE_SUFFIXES = {".json", ".jsonl", ".ndjson"}
+
+
 def load_candidate_csv(
     path: Path,
     *,
@@ -44,7 +47,7 @@ def load_candidate_file(
     default_sequence_id: str = "default",
     source: str = "candidate",
 ) -> CandidateFrame:
-    """Load a normalized candidate table from CSV/TXT/JSON or NumPy trajectory rows."""
+    """Load a normalized candidate table from CSV/TXT/JSON/JSONL or NumPy trajectory rows."""
 
     path = Path(path)
     suffix = path.suffix.lower()
@@ -56,7 +59,7 @@ def load_candidate_file(
         )
     if suffix in {".tsv", ".txt"}:
         raw = _read_delimited_table(path)
-    elif suffix == ".json":
+    elif suffix in JSON_TABLE_SUFFIXES:
         raw = _read_json_table(
             path,
             preferred=(
@@ -95,7 +98,7 @@ def load_truth_csv(path: Path, *, default_sequence_id: str = "default") -> Truth
 
 
 def load_truth_file(path: Path, *, default_sequence_id: str = "default") -> TruthFrame:
-    """Load a normalized truth table from CSV/TXT/JSON or NumPy trajectory rows."""
+    """Load a normalized truth table from CSV/TXT/JSON/JSONL or NumPy trajectory rows."""
 
     path = Path(path)
     suffix = path.suffix.lower()
@@ -106,7 +109,7 @@ def load_truth_file(path: Path, *, default_sequence_id: str = "default") -> Trut
             _read_delimited_table(path),
             default_sequence_id=default_sequence_id,
         )
-    elif suffix == ".json":
+    elif suffix in JSON_TABLE_SUFFIXES:
         rows = normalize_truth_columns(
             _read_json_table(
                 path,
@@ -175,8 +178,8 @@ def load_point_cloud_file_as_candidates(
 ) -> CandidateFrame:
     """Load exported point-cloud files and cluster them into candidates.
 
-    CSV/TSV/TXT/JSON, NumPy, PCD, PLY, and simple float32 ``.bin`` files are
-    supported as pragmatic exported-data bridges.  This is **not** a native
+    CSV/TSV/TXT/JSON/JSONL, NumPy, PCD, PLY, and simple float32 ``.bin`` files
+    are supported as pragmatic exported-data bridges.  This is **not** a native
     Livox packet reader.  Files without per-point timestamps are treated as one
     frame; ``time_s`` is inferred from the filename when it contains a numeric
     token, otherwise it defaults to ``0.0``.
@@ -187,7 +190,7 @@ def load_point_cloud_file_as_candidates(
     source = source or path.stem.replace("_points", "-cluster")
     if suffix in {".csv", ".tsv", ".txt"}:
         points = _read_point_cloud_csv(path)
-    elif suffix == ".json":
+    elif suffix in JSON_TABLE_SUFFIXES:
         points = _read_point_cloud_json(path)
     elif suffix in {".npy", ".npz"}:
         points = _read_numpy_point_cloud(path)
@@ -553,9 +556,24 @@ def _read_delimited_table(path: Path) -> pd.DataFrame:
 
 
 def _read_json_table(path: Path, *, preferred: tuple[str, ...]) -> pd.DataFrame:
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    payload = read_json_export_payload(path)
     records = _json_records_from_payload(payload, preferred=preferred)
     return _json_records_to_frame(records, path=path)
+
+
+def read_json_export_payload(path: Path) -> Any:
+    """Read a JSON table export payload, including newline-delimited JSON rows."""
+
+    path = Path(path)
+    if path.suffix.lower() in {".jsonl", ".ndjson"}:
+        rows = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            rows.append(json.loads(stripped))
+        return rows
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _json_records_from_payload(payload: Any, *, preferred: tuple[str, ...]) -> Any:

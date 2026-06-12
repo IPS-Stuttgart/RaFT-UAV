@@ -13,13 +13,14 @@ import json
 from pathlib import Path
 from typing import Any
 
+from raft_uav.mmuad.io import JSON_TABLE_SUFFIXES
+
 
 POINT_CLOUD_SUFFIXES = {".pcd", ".ply", ".las", ".laz", ".bin"}
 NUMPY_SUFFIXES = {".npy", ".npz"}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 BAG_SUFFIXES = {".bag", ".db3", ".mcap"}
 TABLE_SUFFIXES = {".csv", ".txt", ".tsv"}
-JSON_TABLE_SUFFIXES = {".json"}
 CALIBRATION_NAMES = {
     "calibration.json",
     "calib.json",
@@ -144,7 +145,7 @@ def _classify_file(path: Path, root: Path) -> LayoutFile:
         token in name or token in parent_text for token in CANDIDATE_TOKENS
     ):
         category = "candidate_or_point_table"
-    elif suffix == ".json":
+    elif suffix in JSON_TABLE_SUFFIXES:
         category = "json_metadata"
     elif suffix in TABLE_SUFFIXES:
         category = "table_other"

@@ -7,13 +7,13 @@ with range, azimuth, optional elevation, and optional confidence/track columns.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.io import JSON_TABLE_SUFFIXES, read_json_export_payload
 from raft_uav.mmuad.schema import (
     CandidateFrame,
     normalize_candidate_columns,
@@ -216,13 +216,13 @@ def _read_delimited_table(path: Path) -> pd.DataFrame:
 
 def _read_radar_table(path: Path) -> pd.DataFrame:
     path = Path(path)
-    if path.suffix.lower() == ".json":
+    if path.suffix.lower() in JSON_TABLE_SUFFIXES:
         return _read_json_radar_table(path)
     return _read_delimited_table(path)
 
 
 def _read_json_radar_table(path: Path) -> pd.DataFrame:
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    payload = read_json_export_payload(path)
     records = _json_radar_records(payload)
     return _json_radar_records_to_frame(records, path=path)
 
