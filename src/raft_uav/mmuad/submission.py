@@ -245,6 +245,16 @@ def _estimate_coordinate_columns(estimates: pd.DataFrame) -> tuple[str, str, str
     raise KeyError(f"estimates must contain coordinate columns: {expected}")
 
 
+def _estimate_time_values(estimates: pd.DataFrame) -> pd.Series:
+    """Return numeric estimate timestamps from tracker or result-table columns."""
+
+    if "time_s" in estimates.columns:
+        return pd.to_numeric(estimates["time_s"], errors="coerce")
+    if "timestamp" in estimates.columns:
+        return pd.to_numeric(estimates["timestamp"], errors="coerce")
+    raise KeyError("estimates must contain a 'time_s' or 'timestamp' column")
+
+
 def estimates_to_mmaud_results_frame(
     estimates: pd.DataFrame,
     *,
@@ -263,9 +273,12 @@ def estimates_to_mmaud_results_frame(
     if estimates.empty:
         return pd.DataFrame(columns=UG2_RESULT_COLUMNS)
     x_column, y_column, z_column = _estimate_coordinate_columns(estimates)
+    time_values = _estimate_time_values(estimates)
     sequence_values = _estimate_sequence_values(estimates)
     if "class_name" in estimates.columns:
         class_values = estimates["class_name"].fillna(class_name).astype(str)
+    elif "uav_type" in estimates.columns:
+        class_values = estimates["uav_type"].fillna(class_name).astype(str)
     else:
         class_values = pd.Series([class_name] * len(estimates), index=estimates.index)
     if class_map:
@@ -279,7 +292,7 @@ def estimates_to_mmaud_results_frame(
     frame = pd.DataFrame(
         {
             "sequence_id": sequence_values,
-            "timestamp": estimates["time_s"].astype(float),
+            "timestamp": time_values.astype(float),
             "x": estimates[x_column].astype(float),
             "y": estimates[y_column].astype(float),
             "z": estimates[z_column].astype(float),
@@ -310,6 +323,7 @@ def estimates_to_official_mmaud_results_frame(
     if estimates.empty:
         return pd.DataFrame(columns=OFFICIAL_UG2_RESULT_COLUMNS)
     x_column, y_column, z_column = _estimate_coordinate_columns(estimates)
+    time_values = _estimate_time_values(estimates)
     sequence_values = _estimate_sequence_values(estimates)
     classification_values = _estimate_classification_values(
         estimates,
@@ -319,7 +333,7 @@ def estimates_to_official_mmaud_results_frame(
     )
     numeric = pd.DataFrame(
         {
-            "Timestamp": pd.to_numeric(estimates["time_s"], errors="coerce"),
+            "Timestamp": time_values,
             "x": pd.to_numeric(estimates[x_column], errors="coerce"),
             "y": pd.to_numeric(estimates[y_column], errors="coerce"),
             "z": pd.to_numeric(estimates[z_column], errors="coerce"),
@@ -364,6 +378,8 @@ def _estimate_classification_values(
         raw = estimates["class_id"]
     elif "class_name" in estimates.columns:
         raw = estimates["class_name"]
+    elif "uav_type" in estimates.columns:
+        raw = estimates["uav_type"]
     else:
         raw = pd.Series([default_classification] * len(estimates), index=estimates.index)
     values = pd.Series(raw, index=estimates.index).copy()
@@ -530,9 +546,10 @@ def estimates_to_submission_frame(
     if estimates.empty:
         return pd.DataFrame(columns=SUBMISSION_COLUMNS)
     x_column, y_column, z_column = _estimate_coordinate_columns(estimates)
+    time_values = _estimate_time_values(estimates)
     numeric = pd.DataFrame(
         {
-            "time_s": pd.to_numeric(estimates["time_s"], errors="coerce"),
+            "time_s": time_values,
             "x_m": pd.to_numeric(estimates[x_column], errors="coerce"),
             "y_m": pd.to_numeric(estimates[y_column], errors="coerce"),
             "z_m": pd.to_numeric(estimates[z_column], errors="coerce"),
