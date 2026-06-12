@@ -646,6 +646,8 @@ Supported aliases include `range_m`, `azimuth_deg`, `elevation_deg`, `track_id`,
 `confidence`, and common variants. JSON/JSONL radar exports may be row lists, column
 maps, or objects containing `radar_polar`, `radar_detections`, `detections`,
 `targets`, `objects`, `measurements`, `returns`, `rows`, or `data`.
+Wrapper-level `sequence_id` and timestamp fields are propagated to nested
+detections when individual rows do not already provide them.
 Coordinates are in the radar/export frame unless a calibration file is applied
 later. This is not a native custom radar message parser.
 

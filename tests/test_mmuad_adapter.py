@@ -5184,6 +5184,68 @@ def test_radar_polar_json_accepts_target_wrappers(tmp_path: Path) -> None:
     assert abs(float(row["x_m"]) - 12.0) < 1.0e-9
 
 
+def test_radar_polar_json_propagates_parent_sequence_and_time(tmp_path: Path) -> None:
+    from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
+
+    radar = tmp_path / "radar_parent_metadata.json"
+    radar.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_parent_radar",
+                "timestamp_s": 3.5,
+                "radar_polar": [
+                    {"range": 12.0, "bearing_deg": 90.0, "id": "target-7"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates = load_radar_polar_csv_as_candidates(
+        radar,
+        azimuth_convention="north-clockwise",
+    )
+
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_parent_radar"
+    assert row["track_id"] == "target-7"
+    assert abs(float(row["time_s"]) - 3.5) < 1.0e-12
+    assert abs(float(row["x_m"]) - 12.0) < 1.0e-9
+
+
+def test_radar_polar_json_keeps_row_metadata_over_parent_defaults(tmp_path: Path) -> None:
+    from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
+
+    radar = tmp_path / "radar_row_metadata.json"
+    radar.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_parent_radar",
+                "timestamp_s": 3.5,
+                "detections": [
+                    {
+                        "sequence": "seq_child_radar",
+                        "timestamp_s": 4.5,
+                        "range": 12.0,
+                        "bearing_deg": 90.0,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates = load_radar_polar_csv_as_candidates(
+        radar,
+        azimuth_convention="north-clockwise",
+    )
+
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_child_radar"
+    assert abs(float(row["time_s"]) - 4.5) < 1.0e-12
+    assert abs(float(row["x_m"]) - 12.0) < 1.0e-9
+
+
 def test_radar_polar_jsonl_converts_to_candidates(tmp_path: Path) -> None:
     from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
 

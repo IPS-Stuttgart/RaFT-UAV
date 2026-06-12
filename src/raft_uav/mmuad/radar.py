@@ -232,24 +232,58 @@ def _json_radar_records(payload: Any) -> Any:
         return payload
     if not isinstance(payload, dict):
         return []
-    for key in (
-        "radar_polar",
-        "radar_detections",
-        "detections",
-        "tracks",
-        "targets",
-        "objects",
-        "measurements",
-        "returns",
-        "rows",
-        "data",
-    ):
+    for key in _RADAR_NESTED_TABLE_KEYS:
         nested = _mapping_get_case_insensitive(payload, key)
         if nested is not None:
-            return _json_radar_records(nested)
+            return _json_radar_records_from_nested_container(payload, nested)
     if _looks_like_radar_column_map(payload) or _looks_like_radar_row(payload):
         return payload
     return []
+
+
+def _json_radar_records_from_nested_container(parent: dict[Any, Any], nested: Any) -> Any:
+    records = _json_radar_records(nested)
+    defaults = _json_radar_parent_defaults(parent)
+    if not defaults:
+        return records
+    if isinstance(records, list):
+        merged: list[Any] = []
+        for record in records:
+            if not isinstance(record, dict):
+                merged.append(record)
+                continue
+            merged.append(_merge_radar_parent_defaults(defaults, record))
+        return merged
+    if isinstance(records, dict) and (
+        _looks_like_radar_column_map(records) or _looks_like_radar_row(records)
+    ):
+        return _merge_radar_parent_defaults(defaults, records)
+    return records
+
+
+def _json_radar_parent_defaults(parent: dict[Any, Any]) -> dict[str, Any]:
+    defaults: dict[str, Any] = {}
+    for key in _RADAR_PARENT_DEFAULT_KEYS:
+        value = _mapping_get_case_insensitive(parent, key)
+        if value is not None:
+            defaults[key] = value
+    return defaults
+
+
+def _merge_radar_parent_defaults(defaults: dict[str, Any], record: dict[Any, Any]) -> dict[Any, Any]:
+    row: dict[Any, Any] = {}
+    record_has_time = _has_any_key(record, _RADAR_TIME_KEYS)
+    record_has_sequence = _has_any_key(record, _RADAR_SEQUENCE_KEYS)
+    for key, value in defaults.items():
+        if key in _RADAR_TIME_KEYS and record_has_time:
+            continue
+        if key in _RADAR_SEQUENCE_KEYS and record_has_sequence:
+            continue
+        if _has_any_key(record, (key,)):
+            continue
+        row[key] = value
+    row.update(record)
+    return row
 
 
 def _json_radar_records_to_frame(records: Any, *, path: Path | None = None) -> pd.DataFrame:
@@ -276,6 +310,37 @@ def _mapping_get_case_insensitive(mapping: dict[Any, Any], key: str) -> Any | No
     return None
 
 
+def _has_any_key(mapping: dict[Any, Any], keys: tuple[str, ...]) -> bool:
+    present = {str(key).lower() for key in mapping}
+    return any(key.lower() in present for key in keys)
+
+
+_RADAR_NESTED_TABLE_KEYS = (
+    "radar_polar",
+    "radar_detections",
+    "detections",
+    "tracks",
+    "targets",
+    "objects",
+    "measurements",
+    "returns",
+    "rows",
+    "data",
+)
+_RADAR_SEQUENCE_KEYS = ("sequence_id", "sequence", "seq", "scene", "scene_id")
+_RADAR_TIME_KEYS = (
+    "time_s",
+    "timestamp",
+    "timestamp_s",
+    "timestamp_ns",
+    "timestamp_ms",
+    "sec",
+    "secs",
+    "nanosec",
+    "nsec",
+    "nsecs",
+)
+_RADAR_PARENT_DEFAULT_KEYS = _RADAR_SEQUENCE_KEYS + _RADAR_TIME_KEYS
 _RADAR_HINT_KEYS = {
     "time_s",
     "timestamp",
