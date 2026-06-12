@@ -118,8 +118,9 @@ def load_camera_detections_csv_as_candidates(
     ``x1,y1,x2,y2``, COCO-style ``bbox=[x,y,width,height]``, or explicit
     ``bbox_xyxy=[x1,y1,x2,y2]``.  Depth must come from ``depth_m``/``range_m``
     unless a ``fixed_depth_m`` fallback is supplied. CSV/TSV/TXT and JSON
-    row/table exports are supported. This is a detector-output bridge, not a
-    camera detector.
+    row/table exports are supported. Detection2D-style JSON rows can also carry
+    metric depth on nested ``bbox.center.position.z``/``bbox.center.z`` fields.
+    This is a detector-output bridge, not a camera detector.
     """
 
     return camera_detection_frame_to_candidates(
@@ -563,6 +564,15 @@ def _copy_ros_bbox_fields(out: dict[Any, Any], bbox: dict[Any, Any]) -> None:
     if isinstance(center_mapping, dict):
         u_px = _first_mapping_value(center_mapping, ("x", "u", "cx", "center_x"))
         v_px = _first_mapping_value(center_mapping, ("y", "v", "cy", "center_y"))
+        depth_m = _first_mapping_value(
+            center_mapping,
+            ("z", "depth", "depth_m", "range", "range_m", "distance", "distance_m"),
+        )
+        if depth_m is None and center_mapping is not center and isinstance(center, dict):
+            depth_m = _first_mapping_value(
+                center,
+                ("z", "depth", "depth_m", "range", "range_m", "distance", "distance_m"),
+            )
         _set_if_missing(
             out,
             "u_px",
@@ -574,6 +584,12 @@ def _copy_ros_bbox_fields(out: dict[Any, Any], bbox: dict[Any, Any]) -> None:
             "v_px",
             v_px,
             ("v", "pixel_y", "center_y", "bbox_center_y"),
+        )
+        _set_if_missing(
+            out,
+            "depth_m",
+            depth_m,
+            ("depth", "range", "range_m", "distance", "distance_m", "z_depth_m"),
         )
         width = _first_mapping_value(bbox, ("size_x", "width", "w"))
         height = _first_mapping_value(bbox, ("size_y", "height", "h"))

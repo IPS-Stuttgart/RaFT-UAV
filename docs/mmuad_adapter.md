@@ -691,7 +691,9 @@ keys such as `camera_detections`, `detections`, `boxes`, `objects`,
 `bbox=[x,y,width,height]` / `bbox_xywh` and explicit `bbox_xyxy` are also
 accepted. JSON rows serialized from Detection2D-style messages may keep nested
 `header.stamp`, `header.frame_id`, `bbox.center`, and `results.hypothesis`
-fields; the loader flattens those common fields before back-projection. This
+fields; the loader flattens those common fields before back-projection.
+Metric depth may also be carried on `bbox.center.position.z` or `bbox.center.z`
+when an export preserves a depth/range estimate with the detection. This
 bridge does not run image object detection; it consumes detector exports.
 
 ### Sequence Class Inference

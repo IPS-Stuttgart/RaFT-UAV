@@ -5227,6 +5227,62 @@ def test_camera_detections_json_accepts_detection2d_style_rows(tmp_path: Path) -
     assert abs(float(row["confidence"]) - 0.8) < 1.0e-12
 
 
+def test_camera_detections_json_accepts_detection2d_center_depth(tmp_path: Path) -> None:
+    from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
+
+    calibration = tmp_path / "camera_calibration.json"
+    calibration.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    detections = tmp_path / "detection2d_export.json"
+    detections.write_text(
+        json.dumps(
+            {
+                "detections": [
+                    {
+                        "header": {
+                            "stamp": {"sec": 6, "nanosec": 500_000_000},
+                            "frame_id": "cam0",
+                        },
+                        "bbox": {
+                            "center": {"position": {"x": 50.0, "y": 50.0, "z": 7.0}},
+                            "size_x": 12.0,
+                            "size_y": 8.0,
+                        },
+                        "results": [{"hypothesis": {"class_id": "uav", "score": 0.75}}],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates = load_camera_detections_csv_as_candidates(
+        detections,
+        camera_models=load_camera_models(calibration),
+    )
+
+    row = candidates.rows.iloc[0]
+    assert row["source"] == "cam0"
+    assert abs(float(row["time_s"]) - 6.5) < 1.0e-12
+    assert abs(float(row["x_m"])) < 1.0e-9
+    assert abs(float(row["y_m"])) < 1.0e-9
+    assert abs(float(row["z_m"]) - 7.0) < 1.0e-9
+    assert abs(float(row["confidence"]) - 0.75) < 1.0e-12
+
+
 def test_camera_detections_jsonl_backproject_to_world_candidates(tmp_path: Path) -> None:
     from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
 
