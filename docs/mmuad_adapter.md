@@ -589,7 +589,7 @@ Evaluate an exported `mmaud_results.csv` with optional class labels:
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --evaluate-results-csv outputs/mmuad_val/mmaud_results.csv \
   --evaluate-truth-csv data/mmuad_export/val_truth.csv \
-  --evaluation-class-map-csv data/mmuad_export/sequence_classes.csv \
+  --evaluation-class-map-file data/mmuad_export/sequence_classes.yaml \
   --evaluation-json outputs/mmuad_val/local_eval.json \
   --evaluation-rows-csv outputs/mmuad_val/local_eval_rows.csv \
   --output-dir outputs/mmuad_val
@@ -604,11 +604,15 @@ sequences can use different UAV type labels:
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --sequence-root data/mmuad_export \
-  --ug2-class-map-csv data/mmuad_export/sequence_classes.csv \
+  --ug2-class-map-file data/mmuad_export/sequence_classes.yaml \
   --ug2-results-csv outputs/mmuad_val/mmaud_results.csv \
   --ug2-codabench-zip outputs/mmuad_val/ug2_submission.zip \
   --output-dir outputs/mmuad_val
 ```
+
+The older `--ug2-class-map-csv` and `--evaluation-class-map-csv` option names
+remain accepted for existing scripts; the `*-file` aliases are clearer because
+class maps may now be CSV, JSON, or YAML.
 
 If the evaluator expects one prediction per ground-truth/template timestamp,
 resample a trajectory to those timestamps before packaging:

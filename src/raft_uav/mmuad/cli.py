@@ -146,7 +146,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ug2-results-csv", type=Path)
     parser.add_argument("--ug2-codabench-zip", type=Path)
     parser.add_argument("--ug2-class-name", default="unknown")
-    parser.add_argument("--ug2-class-map-csv", type=Path)
+    parser.add_argument(
+        "--ug2-class-map-file",
+        "--ug2-class-map-csv",
+        dest="ug2_class_map_file",
+        type=Path,
+        help="sequence-to-UAV-type class map in CSV, JSON, or YAML form",
+    )
     parser.add_argument("--infer-ug2-class-map-from-candidates", action="store_true")
     parser.add_argument("--inferred-class-map-csv", type=Path)
     parser.add_argument("--classification-min-confidence", type=float, default=0.0)
@@ -160,7 +166,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--evaluate-results-csv", type=Path)
     parser.add_argument("--evaluate-results-zip", type=Path)
     parser.add_argument("--evaluation-rows-csv", type=Path)
-    parser.add_argument("--evaluation-class-map-csv", type=Path)
+    parser.add_argument(
+        "--evaluation-class-map-file",
+        "--evaluation-class-map-csv",
+        dest="evaluation_class_map_file",
+        type=Path,
+        help="sequence-to-UAV-type truth class map in CSV, JSON, or YAML form",
+    )
     args = parser.parse_args(argv)
 
     if args.rosbag_path is not None:
@@ -207,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
             load_mmaud_results_file(evaluation_results),
             load_truth_file(evaluation_truth),
             max_time_delta_s=args.evaluation_max_time_delta_s,
-            class_map_csv=args.evaluation_class_map_csv,
+            class_map_path=args.evaluation_class_map_file,
         )
         paths = write_evaluation_artifacts(
             result,
@@ -242,7 +254,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         output = _run_explicit_files(args)
     paths = write_tracker_output(output, args.output_dir)
-    explicit_class_map = load_sequence_class_map(args.ug2_class_map_csv)
+    explicit_class_map = load_sequence_class_map(args.ug2_class_map_file)
     inferred_class_map = getattr(args, "_inferred_class_map", {})
     # Prefer explicit class-map files when both are provided.
     class_map = {**inferred_class_map, **explicit_class_map}

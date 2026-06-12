@@ -2536,6 +2536,57 @@ def test_sequence_class_map_accepts_csv_alias_columns(tmp_path: Path) -> None:
     assert mapping == {"seqA": "Mavic3", "seqB": "Phantom4"}
 
 
+def test_cli_writes_ug2_results_with_class_map_file_alias(tmp_path: Path) -> None:
+    candidates = tmp_path / "candidates.csv"
+    truth = tmp_path / "truth.csv"
+    class_map = tmp_path / "classes.yaml"
+    output = tmp_path / "out"
+    results = output / "mmaud_results.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "time_s": [0.0, 1.0],
+            "source": ["radar", "radar"],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+        }
+    ).to_csv(candidates, index=False)
+    pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+        }
+    ).to_csv(truth, index=False)
+    class_map.write_text(
+        "\n".join(["class_map:", "  seqA:", "    uav_type: Mavic3"]),
+        encoding="utf-8",
+    )
+
+    status = mmuad_cli_main(
+        [
+            "--candidate-csv",
+            str(candidates),
+            "--truth-csv",
+            str(truth),
+            "--ug2-class-map-file",
+            str(class_map),
+            "--ug2-results-csv",
+            str(results),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    rows = pd.read_csv(results)
+    assert rows["sequence_id"].tolist() == ["seqA", "seqA"]
+    assert rows["uav_type"].tolist() == ["Mavic3", "Mavic3"]
+
+
 def test_results_completion_resamples_to_truth_timestamps(tmp_path: Path) -> None:
     results = validate_mmaud_results_frame(
         pd.DataFrame(
@@ -3733,6 +3784,55 @@ def test_cli_evaluates_results_with_numpy_truth_file(tmp_path: Path) -> None:
     metrics = json.loads((output / "mmuad_local_evaluation.json").read_text(encoding="utf-8"))
     assert metrics["matched_count"] == 2
     assert metrics["pooled"]["mean_3d_m"] == 0.0
+
+
+def test_cli_evaluates_results_with_class_map_file_alias(tmp_path: Path) -> None:
+    results = tmp_path / "mmaud_results.csv"
+    truth = tmp_path / "truth.csv"
+    class_map = tmp_path / "classes.yaml"
+    output = tmp_path / "out"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "timestamp": [0.0, 1.0],
+            "x": [0.0, 1.0],
+            "y": [0.0, 0.0],
+            "z": [10.0, 10.0],
+            "uav_type": ["Mavic3", "Mavic3"],
+            "score": [1.0, 1.0],
+        }
+    ).to_csv(results, index=False)
+    pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+        }
+    ).to_csv(truth, index=False)
+    class_map.write_text(
+        "\n".join(["class_map:", "  seqA:", "    uav_type: Mavic3"]),
+        encoding="utf-8",
+    )
+
+    status = mmuad_cli_main(
+        [
+            "--evaluate-results-csv",
+            str(results),
+            "--evaluate-truth-csv",
+            str(truth),
+            "--evaluation-class-map-file",
+            str(class_map),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    metrics = json.loads((output / "mmuad_local_evaluation.json").read_text(encoding="utf-8"))
+    assert metrics["matched_count"] == 2
+    assert metrics["pooled"]["uav_type_accuracy"] == 1.0
 
 
 def test_cli_evaluates_ug2_codabench_zip(tmp_path: Path) -> None:

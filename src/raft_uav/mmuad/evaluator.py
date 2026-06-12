@@ -109,6 +109,7 @@ def evaluate_mmaud_results(
     *,
     max_time_delta_s: float = 0.5,
     class_map_csv: Path | None = None,
+    class_map_path: Path | None = None,
 ) -> dict[str, Any]:
     """Evaluate result rows against normalized truth by nearest timestamp.
 
@@ -118,7 +119,8 @@ def evaluate_mmaud_results(
 
     result_rows = results.rows if isinstance(results, ResultsFrame) else validate_mmaud_results_frame(results)
     truth_rows = truth.rows if isinstance(truth, TruthFrame) else normalize_truth_columns(truth)
-    class_map = load_sequence_class_map(class_map_csv) if class_map_csv is not None else {}
+    class_map_file = class_map_path if class_map_path is not None else class_map_csv
+    class_map = load_sequence_class_map(class_map_file) if class_map_file is not None else {}
     if truth_rows.empty:
         return _empty_truth_evaluation(result_rows, max_time_delta_s=max_time_delta_s)
     truth_rows = truth_rows.copy()
