@@ -119,7 +119,8 @@ as `candidates.tsv` or `detections.txt`, `points.csv`, `points.tsv`,
 `topic_map.json`, `truth.csv`, compact truth arrays such as `truth.npy`, and
 optionally `calibration.json`. It also recognizes one-level split folders and
 MMUAD-style modality subfolders such as `livox_avia/<timestamp>.npy`,
-`ground_truth/<timestamp>.npy`, and `tracking_results/<timestamp>.npy`:
+`ground_truth/<timestamp>.npy`, `tracking_results/<timestamp>.npy`, and
+`class/<timestamp>.npy`:
 
 ```text
 data/mmuad_export/
@@ -153,6 +154,8 @@ data/mmuad_export/
       ground_truth/
         1706255054.386069.npy
       tracking_results/
+        1706255054.386069.npy
+      class/
         1706255054.386069.npy
 ```
 
@@ -312,8 +315,11 @@ Folder-style exports are also supported: files inside `livox_avia`, `lidar`,
 inside `tracking_results`, `tracks`, `trajectories`, `detections`, or
 `candidates` folders are loaded as candidate trajectories. Per-frame NumPy pose
 files may contain only `x_m,y_m,z_m`; their timestamp is inferred from the
-filename. This is still a normalized/exported-data bridge, not a parser for
-undocumented native packets.
+filename. Files inside `class`, `classes`, `uav_type`, or `category` folders are
+read as sequence class labels and attached to otherwise-unlabeled candidates;
+numeric labels are preserved as strings unless you provide an external class map
+for official names. This is still a normalized/exported-data bridge, not a
+parser for undocumented native packets.
 
 ### Auto calibration loader
 

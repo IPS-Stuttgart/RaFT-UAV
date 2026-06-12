@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.calibration import (
@@ -53,11 +54,13 @@ POINT_DIR_TOKENS = (
     "mid360",
 )
 TRUTH_DIR_TOKENS = ("truth", "ground_truth", "gt", "label", "labels", "leica")
+CLASS_DIR_TOKENS = ("class", "classes", "uav_type", "uav_types", "category", "categories")
 MODALITY_DIR_TOKENS = (
     CANDIDATE_DIR_TOKENS
     + POINT_DIR_TOKENS
     + TRUTH_DIR_TOKENS
-    + ("camera", "cam", "image", "images", "class", "classes", "radar")
+    + CLASS_DIR_TOKENS
+    + ("camera", "cam", "image", "images", "radar")
 )
 
 
@@ -75,6 +78,7 @@ class SequencePaths:
     topic_map_jsons: tuple[Path, ...]
     truth_file: Path | None
     truth_files: tuple[Path, ...]
+    class_files: tuple[Path, ...]
     calibration_file: Path | None
 
 
@@ -204,6 +208,17 @@ def load_sequence_export(
     if not candidate_frames:
         raise ValueError(f"no candidate or point-cloud files discovered for {paths.root}")
     candidates = merge_candidate_frames(candidate_frames)
+    class_label = _sequence_class_label(paths.class_files)
+    if class_label is not None:
+        rows = candidates.rows.copy()
+        if "class_name" not in rows.columns:
+            rows["class_name"] = class_label
+        else:
+            unknown = rows["class_name"].astype(str).str.strip().str.lower().isin(
+                {"", "unknown", "nan", "none", "uav", "drone"}
+            )
+            rows.loc[unknown, "class_name"] = class_label
+        candidates = CandidateFrame(rows)
     for path in paths.truth_files or (() if paths.truth_file is None else (paths.truth_file,)):
         truth_frames.append(
             load_truth_file(path, default_sequence_id=paths.sequence_id)
@@ -228,6 +243,7 @@ def _looks_like_sequence(path: Path) -> bool:
         or _point_files(path)
         or _topic_map_files(path)
         or _truth_files(path)
+        or _class_files(path)
     )
 
 
@@ -236,6 +252,7 @@ def _sequence_from_dir(path: Path) -> SequencePaths:
     topic_map_paths = _topic_map_referenced_paths(topic_maps)
     truth_files = _without_paths(_truth_files(path), topic_map_paths)
     truth_file = truth_files[0] if truth_files else None
+    class_files = _without_paths(_class_files(path), topic_map_paths)
     calibration = _first_existing(
         [
             path / "calibration.json",
@@ -266,6 +283,7 @@ def _sequence_from_dir(path: Path) -> SequencePaths:
         topic_map_jsons=tuple(topic_maps),
         truth_file=truth_file,
         truth_files=tuple(truth_files),
+        class_files=tuple(class_files),
         calibration_file=calibration,
     )
 
@@ -437,6 +455,20 @@ def _truth_files(path: Path) -> list[Path]:
     return _unique_paths([item for item in exact if item.exists()] + globbed + folder_files)
 
 
+def _class_files(path: Path) -> list[Path]:
+    exact = [
+        path / f"{stem}{suffix}"
+        for stem in ("class", "classes", "uav_type", "category")
+        for suffix in TABLE_SUFFIXES + TRAJECTORY_SUFFIXES
+    ]
+    folder_files = _files_under_named_dirs(
+        path,
+        directory_tokens=CLASS_DIR_TOKENS,
+        suffixes=TABLE_SUFFIXES + TRAJECTORY_SUFFIXES,
+    )
+    return _unique_paths([item for item in exact if item.exists()] + folder_files)
+
+
 def _topic_map_files(path: Path) -> list[Path]:
     exact = [
         path / "topic_map.json",
@@ -552,6 +584,75 @@ def _source_from_path(path: Path, *, sequence_root: Path, default: str) -> str:
     if len(relative.parts) <= 1:
         return default
     return str(relative.parts[-2]).replace(" ", "_").replace("-", "_")
+
+
+def _sequence_class_label(paths: tuple[Path, ...]) -> str | None:
+    labels: list[str] = []
+    for path in paths:
+        labels.extend(_class_labels_from_file(path))
+    labels = [label for label in labels if label]
+    if not labels:
+        return None
+    counts = pd.Series(labels, dtype="object").value_counts(sort=True)
+    return str(counts.index[0])
+
+
+def _class_labels_from_file(path: Path) -> list[str]:
+    suffix = path.suffix.lower()
+    if suffix in TRAJECTORY_SUFFIXES:
+        payload = np.load(path, allow_pickle=False)
+        if isinstance(payload, np.lib.npyio.NpzFile):
+            key = _first_npz_key(payload, preferred=("class", "classes", "uav_type", "label", "category"))
+            values = np.asarray(payload[key]).reshape(-1)
+        else:
+            values = np.asarray(payload).reshape(-1)
+        return [_format_class_label(value) for value in values]
+    if suffix in TABLE_SUFFIXES:
+        if suffix == ".txt":
+            raw_text = path.read_text(encoding="utf-8", errors="ignore").strip()
+            tokens = [token for token in raw_text.replace(",", " ").split() if token]
+            if len(tokens) == 1:
+                return [_format_class_label(tokens[0])]
+        frame = _read_table(path)
+        lower = {str(column).lower(): column for column in frame.columns}
+        for alias in ("uav_type", "class_name", "class", "label", "category"):
+            if alias in lower:
+                return [
+                    _format_class_label(value)
+                    for value in frame[lower[alias]].dropna().tolist()
+                ]
+        if not frame.empty:
+            return [_format_class_label(value) for value in frame.iloc[:, 0].dropna().tolist()]
+    return []
+
+
+def _read_table(path: Path) -> pd.DataFrame:
+    if path.suffix.lower() == ".tsv":
+        return pd.read_csv(path, sep="\t")
+    if path.suffix.lower() == ".txt":
+        return pd.read_csv(path, sep=None, engine="python")
+    return pd.read_csv(path)
+
+
+def _first_npz_key(payload: np.lib.npyio.NpzFile, *, preferred: tuple[str, ...]) -> str:
+    lower_to_key = {key.lower(): key for key in payload.files}
+    for key in preferred:
+        matched = lower_to_key.get(key.lower())
+        if matched is not None:
+            return matched
+    return payload.files[0]
+
+
+def _format_class_label(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="ignore")
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
 
 
 def _first_existing(paths: list[Path]) -> Path | None:

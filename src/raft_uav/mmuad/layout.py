@@ -27,6 +27,7 @@ CALIBRATION_NAMES = {
     "camera_info.json",
 }
 TRUTH_TOKENS = ("truth", "ground_truth", "gt", "leica", "label")
+CLASS_TOKENS = ("class", "uav_type", "category")
 CANDIDATE_TOKENS = (
     "candidate",
     "detection",
@@ -102,6 +103,10 @@ def _classify_file(path: Path, root: Path) -> LayoutFile:
     elif name in CALIBRATION_NAMES or "calib" in name or "extrinsic" in name:
         category = "calibration"
     elif suffix in TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
+        token in name or token in parent_text for token in CLASS_TOKENS
+    ):
+        category = "class_or_label"
+    elif suffix in TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
         token in name or token in parent_text for token in TRUTH_TOKENS
     ):
         category = "truth_or_label"
@@ -159,6 +164,7 @@ def _sequence_candidates(files: list[LayoutFile]) -> list[dict[str, Any]]:
                     or counts.get("topic_map_export", 0)
                 ),
                 "has_truth_or_labels": bool(counts.get("truth_or_label", 0) or has_topic_map_truth),
+                "has_class_labels": bool(counts.get("class_or_label", 0)),
                 "has_calibration": bool(counts.get("calibration", 0)),
             }
         )

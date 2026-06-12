@@ -120,6 +120,7 @@ def _run_multi_sequence(
                     "time_s": time_s,
                     "source": detection.get("source"),
                     "track_id": detection.get("track_id"),
+                    "class_name": detection.get("class_name"),
                     "output_track_id": f"mot_{output_track_id}",
                     "update_action": action,
                     "selected_path_update": True,

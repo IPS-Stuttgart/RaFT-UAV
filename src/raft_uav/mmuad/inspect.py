@@ -45,6 +45,7 @@ TRUTH_NAMES = {
     "labels.csv",
 }
 TRUTH_HINTS = ("truth", "ground_truth", "gt", "label")
+CLASS_HINTS = ("class", "uav_type", "category")
 CANDIDATE_HINTS = (
     "candidate",
     "detection",
@@ -134,6 +135,10 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
         return "calibration", modality, None
     if suffix == ".json" and "topic_map" in name:
         return _topic_map_category(path), "ros", None
+    if suffix in NUMPY_SUFFIXES | {".csv", ".tsv", ".txt"} and any(
+        hint in stem or hint in parent for hint in CLASS_HINTS
+    ):
+        return "class_label", modality, inferred_time_s
     if name in TRUTH_NAMES or any(hint in stem or hint in parent for hint in TRUTH_HINTS):
         return "truth", modality, None
     if suffix in NUMPY_SUFFIXES:

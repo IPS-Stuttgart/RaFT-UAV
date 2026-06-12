@@ -266,6 +266,7 @@ def _run_sequence_filter(
             "time_s": time_s,
             "source": row.get("source"),
             "track_id": row.get("track_id"),
+            "class_name": row.get("class_name"),
             "update_action": action,
             "selected_path_update": bool(is_selected),
             "state_x_m": state[0],
