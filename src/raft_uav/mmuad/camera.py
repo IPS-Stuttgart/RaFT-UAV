@@ -113,11 +113,12 @@ def load_camera_detections_csv_as_candidates(
 ) -> CandidateFrame:
     """Convert exported camera detections into 3D candidate points.
 
-    Detection rows may contain ``u_px``/``v_px`` or bounding-box aliases
-    ``x1,y1,x2,y2``.  Depth must come from ``depth_m``/``range_m`` unless a
-    ``fixed_depth_m`` fallback is supplied. CSV/TSV/TXT and JSON row/table
-    exports are supported. This is a detector-output bridge, not a camera
-    detector.
+    Detection rows may contain ``u_px``/``v_px``, bounding-box aliases
+    ``x1,y1,x2,y2``, COCO-style ``bbox=[x,y,width,height]``, or explicit
+    ``bbox_xyxy=[x1,y1,x2,y2]``.  Depth must come from ``depth_m``/``range_m``
+    unless a ``fixed_depth_m`` fallback is supplied. CSV/TSV/TXT and JSON
+    row/table exports are supported. This is a detector-output bridge, not a
+    camera detector.
     """
 
     frame = _normalize_camera_detection_columns(_read_detection_table(path))
@@ -206,7 +207,7 @@ def _normalize_camera_detection_columns(frame: pd.DataFrame) -> pd.DataFrame:
             if original is not None:
                 rename[original] = canonical
                 break
-    out = frame.rename(columns=rename).copy()
+    out = _expand_compact_bbox_columns(frame.rename(columns=rename).copy())
     if "u_px" not in out.columns or "v_px" not in out.columns:
         if {"x1", "y1", "x2", "y2"}.issubset(out.columns):
             out["u_px"] = (
@@ -218,13 +219,141 @@ def _normalize_camera_detection_columns(frame: pd.DataFrame) -> pd.DataFrame:
                 + pd.to_numeric(out["y2"], errors="coerce")
             ) / 2.0
         else:
-            raise ValueError("camera detection table needs u/v pixels or bbox x1/y1/x2/y2")
+            raise ValueError("camera detection table needs u/v pixels or bbox geometry")
     if "time_s" not in out.columns:
         raise ValueError("camera detection table requires time_s/timestamp_s/time column")
     for col in ("time_s", "u_px", "v_px", "depth_m", "confidence", "std_xy_m", "std_z_m"):
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
     return out.loc[np.isfinite(out[["time_s", "u_px", "v_px"]]).all(axis=1)].copy()
+
+
+_COMPACT_BBOX_XYWH_COLUMNS = ("bbox", "bbox_xywh", "xywh", "box_xywh")
+_COMPACT_BBOX_XYXY_COLUMNS = ("bbox_xyxy", "xyxy", "box_xyxy")
+_COMPACT_BBOX_COLUMNS = _COMPACT_BBOX_XYWH_COLUMNS + _COMPACT_BBOX_XYXY_COLUMNS
+
+
+def _expand_compact_bbox_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    if {"x1", "y1", "x2", "y2"}.issubset(frame.columns):
+        return frame
+    xyxy_col = _first_existing_column(frame, _COMPACT_BBOX_XYXY_COLUMNS)
+    layout = "xyxy"
+    compact_col = xyxy_col
+    if compact_col is None:
+        compact_col = _first_existing_column(frame, _COMPACT_BBOX_XYWH_COLUMNS)
+        layout = "xywh"
+    if compact_col is None:
+        return frame
+    out = frame.copy()
+    boxes = out[compact_col].map(lambda value: _compact_bbox_to_xyxy(value, layout=layout))
+    coords = pd.DataFrame(
+        boxes.tolist(),
+        columns=["x1", "y1", "x2", "y2"],
+        index=out.index,
+    )
+    for col in coords.columns:
+        if col not in out.columns:
+            out[col] = coords[col]
+    return out
+
+
+def _first_existing_column(frame: pd.DataFrame, candidates: Iterable[str]) -> object | None:
+    lower = {str(col).lower(): col for col in frame.columns}
+    for candidate in candidates:
+        original = lower.get(candidate.lower())
+        if original is not None:
+            return original
+    return None
+
+
+def _compact_bbox_to_xyxy(value: Any, *, layout: str) -> tuple[float, float, float, float]:
+    mapped = _compact_bbox_mapping_to_xyxy(value)
+    if mapped is not None:
+        return mapped
+    numbers = _numeric_sequence(value)
+    if len(numbers) < 4:
+        return (np.nan, np.nan, np.nan, np.nan)
+    a, b, c, d = numbers[:4]
+    if layout == "xyxy":
+        return (a, b, c, d)
+    return (a, b, a + c, b + d)
+
+
+def _compact_bbox_mapping_to_xyxy(value: Any) -> tuple[float, float, float, float] | None:
+    if not isinstance(value, dict):
+        return None
+    xyxy = _mapping_float_values(
+        value,
+        (
+            ("x1", "y1", "x2", "y2"),
+            ("xmin", "ymin", "xmax", "ymax"),
+            ("left", "top", "right", "bottom"),
+        ),
+    )
+    if xyxy is not None:
+        return xyxy
+    xywh = _mapping_float_values(
+        value,
+        (
+            ("x", "y", "width", "height"),
+            ("x", "y", "w", "h"),
+            ("left", "top", "width", "height"),
+            ("left", "top", "w", "h"),
+        ),
+    )
+    if xywh is None:
+        return None
+    x, y, width, height = xywh
+    return (x, y, x + width, y + height)
+
+
+def _mapping_float_values(
+    mapping: dict[Any, Any],
+    key_groups: Iterable[tuple[str, str, str, str]],
+) -> tuple[float, float, float, float] | None:
+    lower = {str(key).lower(): value for key, value in mapping.items()}
+    for key_group in key_groups:
+        if not all(key in lower for key in key_group):
+            continue
+        values: list[float] = []
+        try:
+            values = [float(lower[key]) for key in key_group]
+        except (TypeError, ValueError):
+            continue
+        return (values[0], values[1], values[2], values[3])
+    return None
+
+
+def _numeric_sequence(value: Any) -> list[float]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            return _numeric_sequence(json.loads(text))
+        except json.JSONDecodeError:
+            trimmed = text.strip("[]()")
+            delimiter = "," if "," in trimmed else None
+            parts = trimmed.split(delimiter)
+            return _numeric_sequence(parts)
+    if isinstance(value, dict):
+        return []
+    if isinstance(value, (list, tuple, np.ndarray, pd.Series)):
+        numbers: list[float] = []
+        for item in value:
+            try:
+                numbers.append(float(item))
+            except (TypeError, ValueError):
+                return []
+        return numbers
+    try:
+        if pd.isna(value):
+            return []
+    except (TypeError, ValueError):
+        return []
+    return []
 
 
 def _model_for_source(models: dict[str, CameraModel], source: str) -> CameraModel | None:
@@ -351,6 +480,13 @@ _DETECTION_HINT_KEYS = {
     "y2",
     "ymax",
     "bbox_y2",
+    "bbox",
+    "bbox_xywh",
+    "xywh",
+    "box_xywh",
+    "bbox_xyxy",
+    "xyxy",
+    "box_xyxy",
     "depth_m",
     "range_m",
 }
@@ -369,6 +505,7 @@ def _looks_like_detection_column_map(payload: dict[Any, Any]) -> bool:
         isinstance(value, (list, tuple))
         for key, value in payload.items()
         if str(key).lower() in _DETECTION_HINT_KEYS
+        and str(key).lower() not in _COMPACT_BBOX_COLUMNS
     )
 
 

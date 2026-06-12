@@ -4121,6 +4121,92 @@ def test_camera_detections_json_backproject_to_world_candidates(tmp_path: Path) 
     assert row["class_name"] == "Mavic3"
 
 
+def test_camera_detections_json_accepts_coco_bbox_xywh(tmp_path: Path) -> None:
+    from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
+
+    calibration = tmp_path / "camera_calibration.json"
+    calibration.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    detections = tmp_path / "camera_detections.json"
+    detections.write_text(
+        json.dumps(
+            {
+                "detections": [
+                    {
+                        "sequence_id": "seq1",
+                        "time_s": 1.25,
+                        "source": "cam0",
+                        "bbox": [40.0, 40.0, 20.0, 20.0],
+                        "depth_m": 10.0,
+                        "score": 0.8,
+                        "category": "Mavic3",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates = load_camera_detections_csv_as_candidates(
+        detections,
+        camera_models=load_camera_models(calibration),
+    )
+
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq1"
+    assert abs(float(row["time_s"]) - 1.25) < 1e-12
+    assert (row["x_m"], row["y_m"], row["z_m"]) == (0.0, 0.0, 10.0)
+    assert row["confidence"] == 0.8
+    assert row["class_name"] == "Mavic3"
+
+
+def test_camera_detections_csv_accepts_compact_bbox_xyxy_string(tmp_path: Path) -> None:
+    from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
+
+    calibration = tmp_path / "camera_calibration.json"
+    calibration.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    detections = tmp_path / "camera_detections.csv"
+    detections.write_text(
+        'sequence_id,time_s,source,bbox_xyxy,depth_m\nseq1,0.0,cam0,"[45, 45, 55, 55]",10.0\n',
+        encoding="utf-8",
+    )
+
+    candidates = load_camera_detections_csv_as_candidates(
+        detections,
+        camera_models=load_camera_models(calibration),
+    )
+
+    row = candidates.rows.iloc[0]
+    assert (row["x_m"], row["y_m"], row["z_m"]) == (0.0, 0.0, 10.0)
+
+
 def test_cli_accepts_explicit_camera_detection_json_file(tmp_path: Path) -> None:
     calibration = tmp_path / "camera_calibration.json"
     calibration.write_text(
