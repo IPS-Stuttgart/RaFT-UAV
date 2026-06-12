@@ -498,10 +498,14 @@ streams, column maps, or objects containing `points`, `point_cloud`,
 `predictions`, `truth`, `fixes`, `gps`, `navsatfix`, `poses`, `rows`, or
 `data`. ROS-shaped JSON row exports can keep nested `header.stamp`,
 `pose.position`, `pose.pose.position`, `point`, or `transform.translation`
-fields; when a container such as a path export has the timestamp in the parent
-`header`, that timestamp is propagated to child pose rows. Explicit topic-map
-`source` values override any `header.frame_id` source hint from the row. The
-template infers native extraction kinds for common ROS message types
+fields. Detection3D-style exports can use nested `bbox.center.position` JSON
+objects or flattened table columns such as `bbox.center.position.x`; flattened
+pose columns such as `pose.pose.position.x` and ROS timestamp pairs such as
+`header.stamp.sec` / `header.stamp.nanosec` are also accepted. When a container
+such as a path export has the timestamp in the parent `header`, that timestamp
+is propagated to child pose rows. Explicit topic-map `source` values override
+any `header.frame_id` source hint from the row. The template infers native
+extraction kinds for common ROS message types
 (`pointcloud2_candidate`, `pose_truth`, `odometry_candidate`, and related truth
 variants), while the exported-topic loader still accepts those kinds for CSV or
 JSON/JSONL table and NumPy exports. Table exports marked as `pointcloud2_candidate`

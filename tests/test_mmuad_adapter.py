@@ -195,6 +195,41 @@ def test_candidate_json_loader_flattens_ros_pose_rows(tmp_path: Path) -> None:
     assert row[["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
 
 
+def test_candidate_json_loader_flattens_detection3d_bbox_rows(tmp_path: Path) -> None:
+    path = tmp_path / "detection3d_candidates.json"
+    path.write_text(
+        json.dumps(
+            {
+                "detections": [
+                    {
+                        "header": {
+                            "stamp": {"sec": 4, "nanosec": 500_000_000},
+                            "frame_id": "detector_frame",
+                        },
+                        "id": "det-1",
+                        "bbox": {
+                            "center": {
+                                "position": {"x": 4.0, "y": 5.0, "z": 6.0}
+                            }
+                        },
+                        "score": 0.8,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    frame = load_candidate_file(path)
+
+    row = frame.rows.iloc[0]
+    assert abs(float(row["time_s"]) - 4.5) < 1e-12
+    assert row["source"] == "detector_frame"
+    assert row["track_id"] == "det-1"
+    assert row[["x_m", "y_m", "z_m"]].tolist() == [4.0, 5.0, 6.0]
+    assert float(row["confidence"]) == 0.8
+
+
 def test_candidate_jsonl_loader_accepts_row_exports(tmp_path: Path) -> None:
     path = tmp_path / "candidates.jsonl"
     rows = [
@@ -3974,6 +4009,51 @@ def test_topic_map_exports_convert_radar_polar_candidate_tables(tmp_path: Path) 
     assert abs(float(row["y_m"])) < 1.0e-9
     assert float(row["std_xy_m"]) == 3.0
     assert float(row["std_z_m"]) == 4.0
+    assert [entry["rows"] for entry in bundle.manifest["loaded_exports"]] == [1]
+
+
+def test_topic_map_exports_convert_detection3d_flattened_tables(
+    tmp_path: Path,
+) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    pd.DataFrame(
+        {
+            "header.stamp.sec": [5],
+            "header.stamp.nanosec": [750_000_000],
+            "id": ["det-7"],
+            "bbox.center.position.x": [1.0],
+            "bbox.center.position.y": [2.0],
+            "bbox.center.position.z": [3.0],
+            "score": [0.7],
+        }
+    ).to_csv(exports / "detections3d.csv", index=False)
+    topic_map = tmp_path / "topic_map_detection3d.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_detection3d_topic",
+                "exports": [
+                    {
+                        "kind": "detection3d_array_candidate",
+                        "path": "detections3d.csv",
+                        "source": "detector3d",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+
+    assert bundle.candidates.rows["sequence_id"].tolist() == ["seq_detection3d_topic"]
+    row = bundle.candidates.rows.iloc[0]
+    assert row["source"] == "detector3d"
+    assert row["track_id"] == "det-7"
+    assert abs(float(row["time_s"]) - 5.75) < 1.0e-12
+    assert row[["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+    assert float(row["confidence"]) == 0.7
     assert [entry["rows"] for entry in bundle.manifest["loaded_exports"]] == [1]
 
 
