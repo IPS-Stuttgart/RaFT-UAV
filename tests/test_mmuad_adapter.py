@@ -3111,6 +3111,39 @@ def test_ros2_topic_map_template_infers_path_topics(tmp_path: Path) -> None:
     assert payload["exports"][1]["source"] is None
 
 
+def test_ros2_topic_map_template_infers_pose_array_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /detector/poses",
+                "        type: geometry_msgs/msg/PoseArray",
+                "      message_count: 2",
+                "    - topic_metadata:",
+                "        name: /ground_truth/poses",
+                "        type: geometry_msgs/msg/PoseArray",
+                "      message_count: 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "pose_array_candidate",
+        "pose_array_truth",
+    ]
+    assert payload["exports"][0]["source"] == "detector_poses"
+    assert payload["exports"][1]["source"] is None
+
+
 def test_native_ros_position_message_to_row_accepts_common_position_messages() -> None:
     point_message = SimpleNamespace(point=SimpleNamespace(x=1.0, y=2.0, z=3.0))
     transform_message = SimpleNamespace(
@@ -3216,6 +3249,33 @@ def test_native_ros_position_message_to_rows_expands_path_poses() -> None:
     assert rows[0]["time_s"] == 20.0
     assert rows[0]["x_m"] == 1.0
     assert rows[0]["frame_id"] == "world"
+
+
+def test_native_ros_position_message_to_rows_expands_pose_array_parent_header() -> None:
+    pose_array = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=30, nanosec=125_000_000),
+            frame_id="world",
+        ),
+        poses=[
+            SimpleNamespace(position=SimpleNamespace(x=1.0, y=2.0, z=3.0)),
+            SimpleNamespace(position=SimpleNamespace(x=4.0, y=5.0, z=6.0)),
+        ],
+    )
+
+    rows = position_message_to_rows(
+        pose_array,
+        sequence_id="seq_pose_array",
+        time_s=1.0,
+        frame_id="world",
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["sequence_id"] == "seq_pose_array"
+    assert rows[0]["time_s"] == 30.125
+    assert rows[0]["x_m"] == 1.0
+    assert rows[0]["frame_id"] == "world"
+    assert rows[1]["z_m"] == 6.0
 
 
 def test_pointcloud2_decoder_and_candidate_clustering() -> None:

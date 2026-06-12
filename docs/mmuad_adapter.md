@@ -678,14 +678,16 @@ PYTHONPATH=src python scripts/extract_mmuad_rosbag_topics.py \
 
 The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
 `pointcloud2_candidate`, `geometry_msgs/msg/PoseStamped` as `pose_truth` or
-`pose_candidate`, `geometry_msgs/msg/PointStamped` as `point_truth` or
+`pose_candidate`, `geometry_msgs/msg/PoseArray` as `pose_array_truth` or
+`pose_array_candidate`, `geometry_msgs/msg/PointStamped` as `point_truth` or
 `point_candidate`, `geometry_msgs/msg/TransformStamped` as `transform_truth` or
 `transform_candidate`, `tf2_msgs/msg/TFMessage` as `tf_truth` or
 `tf_candidate`, `nav_msgs/msg/Path` as `path_truth` or `path_candidate`, and
 `nav_msgs/msg/Odometry` as `odometry_truth` or `odometry_candidate`. TFMessage
 topic-map entries can include `child_frame_id` or `frame_id` to select the UAV
-transform from a shared `/tf` stream; Path entries can use `frame_id` to select
-poses from one coordinate frame.
+transform from a shared `/tf` stream; Path and PoseArray entries can use
+`frame_id`, with PoseArray poses inheriting the parent message timestamp and
+frame.
 
 The CLI can run native extraction and tracking in one step:
 
