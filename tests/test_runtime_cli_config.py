@@ -264,6 +264,7 @@ def test_apply_runtime_environment_prefers_canonical_tracklet_candidate_alias(
 def test_apply_runtime_environment_uses_legacy_tracklet_candidate_alias_when_canonical_absent(
     monkeypatch,
 ):
+    monkeypatch.delenv("RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME", raising=False)
     monkeypatch.setenv("RAFT_UAV_TRACKLET_MAX_CANDIDATES", "12")
     argv = ["run-baseline", "/data/aerpaw"]
     config, _ = parse_runtime_config(argv)
