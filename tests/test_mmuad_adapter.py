@@ -956,6 +956,63 @@ def test_sequence_root_discovers_camera_info_intrinsics_file(tmp_path: Path) -> 
     candidates, truth, calibration = load_sequence_export(discovered[0])
 
     assert discovered[0].calibration_file == seq / "camera_info.json"
+    assert discovered[0].camera_calibration_files == (seq / "camera_info.json",)
+    assert discovered[0].camera_detection_csvs == (camera / "detections.csv",)
+    row = candidates.rows.iloc[0]
+    assert row["source"] == "cam0"
+    assert abs(float(row["x_m"])) < 1.0e-12
+    assert abs(float(row["y_m"])) < 1.0e-12
+    assert abs(float(row["z_m"]) - 5.0) < 1.0e-12
+    assert truth is not None
+    assert calibration is None
+
+
+def test_sequence_root_discovers_camera_folder_intrinsics_file(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_camera_folder_info"
+    camera = seq / "cam0"
+    camera.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "u_px": [50.0],
+            "v_px": [50.0],
+            "depth_m": [5.0],
+        }
+    ).to_csv(camera / "detections.csv", index=False)
+    (camera / "camera_info.json").write_text(
+        json.dumps(
+            {
+                "width": 100,
+                "height": 100,
+                "k": [
+                    100.0,
+                    0.0,
+                    50.0,
+                    0.0,
+                    100.0,
+                    50.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "x_m": [0.0],
+            "y_m": [0.0],
+            "z_m": [5.0],
+        }
+    ).to_csv(seq / "truth.csv", index=False)
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, calibration = load_sequence_export(discovered[0])
+
+    assert discovered[0].calibration_file is None
+    assert discovered[0].camera_calibration_files == (camera / "camera_info.json",)
     assert discovered[0].camera_detection_csvs == (camera / "detections.csv",)
     row = candidates.rows.iloc[0]
     assert row["source"] == "cam0"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -129,6 +129,7 @@ class SequencePaths:
     truth_files: tuple[Path, ...]
     class_files: tuple[Path, ...]
     calibration_file: Path | None
+    camera_calibration_files: tuple[Path, ...] = ()
 
 
 def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[SequencePaths]:
@@ -255,13 +256,19 @@ def load_sequence_export(
             truth_frames.append(bundle.truth)
     camera_models_loaded = False
     if paths.camera_detection_csvs:
-        if paths.calibration_file is None:
+        camera_calibration_files = paths.camera_calibration_files
+        if not camera_calibration_files and paths.calibration_file is not None:
+            camera_calibration_files = (paths.calibration_file,)
+        if not camera_calibration_files:
             raise ValueError(
                 f"camera detections discovered for {paths.root} but no "
                 "calibration/intrinsics file exists"
             )
-        camera_models = load_camera_models(paths.calibration_file)
-        camera_models_loaded = True
+        camera_models = _load_sequence_camera_models(
+            camera_calibration_files,
+            sequence_root=paths.root,
+        )
+        camera_models_loaded = bool(camera_models)
         candidate_frames.extend(
             load_camera_detections_csv_as_candidates(
                 path,
@@ -331,6 +338,7 @@ def _sequence_from_dir(path: Path) -> SequencePaths:
     truth_files = _without_paths(_truth_files(path), topic_map_paths)
     truth_file = truth_files[0] if truth_files else None
     class_files = _without_paths(_class_files(path), topic_map_paths)
+    camera_calibration_files = _without_paths(_camera_calibration_files(path), topic_map_paths)
     calibration = _first_existing(
         [
             path / "calibration.json",
@@ -375,6 +383,7 @@ def _sequence_from_dir(path: Path) -> SequencePaths:
         truth_files=tuple(truth_files),
         class_files=tuple(class_files),
         calibration_file=calibration,
+        camera_calibration_files=tuple(camera_calibration_files),
     )
 
 
@@ -522,6 +531,32 @@ def _camera_detection_files(path: Path) -> list[Path]:
         if _looks_like_camera_detection_file(item)
     ]
     return _unique_paths(files + sensor_files)
+
+
+def _camera_calibration_files(path: Path) -> list[Path]:
+    top_level_names = [
+        path / f"{stem}{suffix}"
+        for stem in (
+            "calibration",
+            "calib",
+            "extrinsics",
+            "intrinsics",
+            "camera_info",
+            "camera_calibration",
+            "camera_intrinsics",
+        )
+        for suffix in (".json", ".yaml", ".yml")
+    ]
+    sensor_files = [
+        item
+        for item in _files_under_sensor_dirs(
+            path,
+            directory_tokens=CAMERA_DIR_TOKENS,
+            suffixes=JSON_TABLE_SUFFIXES + (".yaml", ".yml"),
+        )
+        if _is_camera_intrinsics_file(item)
+    ]
+    return _unique_paths([item for item in top_level_names if item.exists()] + sensor_files)
 
 
 def _point_files(path: Path) -> list[Path]:
@@ -875,6 +910,43 @@ def _source_from_path(path: Path, *, sequence_root: Path, default: str) -> str:
     if len(relative.parts) <= 1:
         return default
     return str(relative.parts[-2]).replace(" ", "_").replace("-", "_")
+
+
+def _load_sequence_camera_models(
+    paths: tuple[Path, ...],
+    *,
+    sequence_root: Path,
+) -> dict[str, Any]:
+    models: dict[str, Any] = {}
+    errors: list[str] = []
+    for path in paths:
+        try:
+            loaded = load_camera_models(path)
+        except ValueError as exc:
+            errors.append(f"{path}: {exc}")
+            continue
+        source_hint = _camera_source_hint_from_path(path, sequence_root=sequence_root)
+        if source_hint is not None and len(loaded) == 1:
+            model = next(iter(loaded.values()))
+            loaded = {source_hint.lower(): replace(model, source=source_hint)}
+        models.update(loaded)
+    if not models:
+        detail = "; ".join(errors)
+        raise ValueError(f"no camera models found in camera calibration files: {detail}")
+    return models
+
+
+def _camera_source_hint_from_path(path: Path, *, sequence_root: Path) -> str | None:
+    try:
+        relative = Path(path).relative_to(sequence_root)
+    except ValueError:
+        return None
+    if len(relative.parts) <= 1:
+        return None
+    parent = str(relative.parts[-2]).replace(" ", "_").replace("-", "_")
+    if _sensor_directory_name_has_any(parent, CAMERA_DIR_TOKENS):
+        return parent
+    return None
 
 
 def _is_camera_intrinsics_file(path: Path) -> bool:

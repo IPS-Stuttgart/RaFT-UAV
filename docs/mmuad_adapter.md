@@ -126,7 +126,8 @@ radar and camera detection tables such as `radar_polar.tsv` or `radar_polar.json
 `camera_detections.txt`, or `camera_detections.json`, compact trajectory arrays such as `trajectory.npy` /
 `candidates.npz`, exported ROS topic maps such as `topic_map.json`,
 `truth.csv`, compact truth arrays such as `truth.npy`, and optionally
-`calibration.json`, `camera_info.json`, or `intrinsics.json`. It also recognizes one-level split folders and MMUAD-style
+`calibration.json`, `camera_info.json`, `intrinsics.json`, or
+camera-folder intrinsics such as `cam0/camera_info.json`. It also recognizes one-level split folders and MMUAD-style
 modality subfolders such as `livox_avia/<timestamp>.npy`,
 `livox_avia/<timestamp>.json`, `livox_avia/<timestamp>.bin` for exported float32 `x,y,z` or
 `x,y,z,intensity` point clouds, `ground_truth/<timestamp>.npy`,
@@ -181,7 +182,7 @@ data/mmuad_export/
         detections.json
       cam0/
         detections.csv
-      camera_info.json
+        camera_info.json
       class/
         1706255054.386069.npy
 ```
@@ -625,6 +626,9 @@ matrix fields such as `camera_matrix`, `K`/`k`, `P`/`p`, or
 `projection_matrix`, including OpenCV-style `{rows, cols, data}` blocks.
 Sequence-root mode discovers common camera-only files such as
 `camera_info.json`, `intrinsics.json`, and `camera_intrinsics.json`; these can
+live at the sequence root or beside detections in camera folders such as
+`cam0/camera_info.json`. Folder-scoped single-camera files are matched to that
+camera source and merged with any other discovered camera models. These can
 be used for back-projection even when they do not contain generic sensor
 extrinsics. Detections can provide `u_px`/`v_px` or
 `x1,y1,x2,y2` boxes. JSON exports may be row lists, column maps, or objects with
