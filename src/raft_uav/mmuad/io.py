@@ -1078,6 +1078,8 @@ _JSON_ROW_HINT_KEYS = {
     "transform",
     "translation",
     "bbox",
+    "results",
+    "hypothesis",
     "center",
     "location",
     "coordinates",
@@ -1156,7 +1158,52 @@ def _flatten_tracking_record(record: dict[Any, Any]) -> dict[Any, Any]:
             xyz[2],
             aliases=("z", "up_m", "pos_z", "center_z", "cz", "pz"),
         )
+    results = _lookup_case_insensitive(out, "results")
+    if isinstance(results, list):
+        _copy_detection_result_fields(out, results)
+    elif isinstance(results, dict):
+        _copy_detection_result_fields(out, [results])
+    hypothesis = _lookup_case_insensitive(out, "hypothesis")
+    if isinstance(hypothesis, dict):
+        _copy_detection_result_fields(out, [{"hypothesis": hypothesis}])
     return out
+
+
+def _copy_detection_result_fields(out: dict[Any, Any], results: list[Any]) -> None:
+    best_score: float | None = None
+    best_class: Any | None = None
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        hypothesis = _lookup_case_insensitive(result, "hypothesis")
+        if not isinstance(hypothesis, dict):
+            hypothesis = result
+        score = _float_or_none(
+            _first_mapping_value(hypothesis, ("score", "confidence", "probability"))
+        )
+        if score is None:
+            score = _float_or_none(
+                _first_mapping_value(result, ("score", "confidence", "probability"))
+            )
+        class_name = _first_mapping_value(
+            hypothesis,
+            ("class_id", "class_name", "uav_type", "class", "label", "category", "id"),
+        )
+        if class_name is None:
+            class_name = _first_mapping_value(
+                result,
+                ("class_id", "class_name", "uav_type", "class", "label", "category", "id"),
+            )
+        if best_score is None or (score is not None and score > best_score):
+            best_score = score
+            best_class = class_name
+    _set_if_missing(out, "confidence", best_score, aliases=("score", "probability"))
+    _set_if_missing(
+        out,
+        "class_name",
+        best_class,
+        aliases=("uav_type", "class", "label", "category"),
+    )
 
 
 def _copy_stamp_time(out: dict[Any, Any], stamp: Any) -> None:

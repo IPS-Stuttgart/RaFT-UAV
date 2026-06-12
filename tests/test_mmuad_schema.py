@@ -84,6 +84,27 @@ def test_candidate_normalizer_uses_flattened_ros_frame_as_source():
     assert rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
 
 
+def test_candidate_normalizer_accepts_flattened_detection_result_columns():
+    raw = pd.DataFrame(
+        {
+            "sequence_id": ["seqResult"],
+            "time_s": [2.0],
+            "source": ["detector"],
+            "bbox.center.position.x": [1.0],
+            "bbox.center.position.y": [2.0],
+            "bbox.center.position.z": [3.0],
+            "results.0.hypothesis.class_id": ["Mavic3"],
+            "results.0.hypothesis.score": [0.82],
+        }
+    )
+
+    rows = normalize_candidate_columns(raw)
+
+    assert rows.loc[0, "class_name"] == "Mavic3"
+    assert abs(float(rows.loc[0, "confidence"]) - 0.82) < 1.0e-12
+    assert rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+
+
 def test_truth_normalizer_accepts_flattened_detection3d_bbox_columns():
     raw = pd.DataFrame(
         {

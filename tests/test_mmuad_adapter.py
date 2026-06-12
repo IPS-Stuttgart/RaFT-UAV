@@ -259,7 +259,10 @@ def test_candidate_json_loader_flattens_detection3d_bbox_rows(tmp_path: Path) ->
                                 "position": {"x": 4.0, "y": 5.0, "z": 6.0}
                             }
                         },
-                        "score": 0.8,
+                        "results": [
+                            {"hypothesis": {"class_id": "uav", "score": 0.8}},
+                            {"hypothesis": {"class_id": "bird", "score": 0.2}},
+                        ],
                     }
                 ]
             }
@@ -275,6 +278,7 @@ def test_candidate_json_loader_flattens_detection3d_bbox_rows(tmp_path: Path) ->
     assert row["track_id"] == "det-1"
     assert row[["x_m", "y_m", "z_m"]].tolist() == [4.0, 5.0, 6.0]
     assert float(row["confidence"]) == 0.8
+    assert row["class_name"] == "uav"
 
 
 def test_candidate_jsonl_loader_accepts_row_exports(tmp_path: Path) -> None:
@@ -4072,7 +4076,8 @@ def test_topic_map_exports_convert_detection3d_flattened_tables(
             "bbox.center.position.x": [1.0],
             "bbox.center.position.y": [2.0],
             "bbox.center.position.z": [3.0],
-            "score": [0.7],
+            "results.0.hypothesis.class_id": ["Mavic3"],
+            "results.0.hypothesis.score": [0.7],
         }
     ).to_csv(exports / "detections3d.csv", index=False)
     topic_map = tmp_path / "topic_map_detection3d.json"
@@ -4101,6 +4106,7 @@ def test_topic_map_exports_convert_detection3d_flattened_tables(
     assert abs(float(row["time_s"]) - 5.75) < 1.0e-12
     assert row[["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
     assert float(row["confidence"]) == 0.7
+    assert row["class_name"] == "Mavic3"
     assert [entry["rows"] for entry in bundle.manifest["loaded_exports"]] == [1]
 
 
