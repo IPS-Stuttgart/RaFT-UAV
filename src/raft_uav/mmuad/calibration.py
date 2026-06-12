@@ -22,6 +22,8 @@ from raft_uav.mmuad.schema import (
     normalize_truth_columns,
 )
 
+_CALIBRATION_METADATA_KEYS = {"metadata", "schema", "version", "world_frame"}
+
 
 @dataclass(frozen=True)
 class RigidTransform:
@@ -141,8 +143,11 @@ def calibration_from_mapping(payload: dict[str, Any]) -> CalibrationSet:
     sensors_payload = payload.get("sensors", payload)
     if not isinstance(sensors_payload, dict):
         raise ValueError("calibration JSON must contain a sensors mapping")
+    sensors_are_nested = sensors_payload is not payload
     sensors: dict[str, SensorCalibration] = {}
     for source, entry in sensors_payload.items():
+        if not sensors_are_nested and str(source).lower() in _CALIBRATION_METADATA_KEYS:
+            continue
         if not isinstance(entry, dict):
             raise ValueError(f"calibration entry for {source!r} must be an object")
         transform = _transform_from_entry(entry)
@@ -151,6 +156,8 @@ def calibration_from_mapping(payload: dict[str, Any]) -> CalibrationSet:
             transform_sensor_to_world=transform,
             time_offset_s=float(entry.get("time_offset_s", 0.0)),
         )
+    if not sensors:
+        raise ValueError("calibration JSON must contain at least one sensor calibration entry")
     return CalibrationSet(sensors=sensors, world_frame=str(payload.get("world_frame", "world")))
 
 
@@ -207,24 +214,8 @@ def transform_truth_frame(
     return TruthFrame(normalize_truth_columns(rows))
 
 
-
 def _calibration_from_payload(payload: dict[str, Any]) -> CalibrationSet:
-    sensors_payload = payload.get("sensors", payload)
-    if not isinstance(sensors_payload, dict):
-        raise ValueError("calibration file must contain a sensors mapping")
-    sensors: dict[str, SensorCalibration] = {}
-    for source, entry in sensors_payload.items():
-        if source == "world_frame":
-            continue
-        if not isinstance(entry, dict):
-            raise ValueError(f"calibration entry for {source!r} must be an object")
-        transform = _transform_from_entry(entry)
-        sensors[str(source).lower()] = SensorCalibration(
-            source=str(source),
-            transform_sensor_to_world=transform,
-            time_offset_s=float(entry.get("time_offset_s", 0.0)),
-        )
-    return CalibrationSet(sensors=sensors, world_frame=str(payload.get("world_frame", "world")))
+    return calibration_from_mapping(payload)
 
 
 def _load_yaml_or_json(path: Path) -> dict[str, Any]:
