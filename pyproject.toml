@@ -22,6 +22,9 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.6",
 ]
+pointcloud = [
+    "laspy[lazrs]>=2.5",
+]
 
 [project.scripts]
 raft-uav = "raft_uav.tracklet_viterbi_cli:main"

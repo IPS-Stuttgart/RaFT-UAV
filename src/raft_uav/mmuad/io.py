@@ -230,12 +230,12 @@ def load_point_cloud_file_as_candidates(
 ) -> CandidateFrame:
     """Load exported point-cloud files and cluster them into candidates.
 
-    CSV/TSV/TXT/JSON/JSONL, NumPy, PCD, PLY, uncompressed LAS, and simple
-    float32 ``.bin`` files are supported as pragmatic exported-data bridges,
-    including gzip-compressed variants.  This is **not** a native Livox packet
-    reader.  Files without per-point timestamps are treated as one frame;
-    ``time_s`` is inferred from the filename when it contains a numeric token,
-    otherwise it defaults to ``0.0``.
+    CSV/TSV/TXT/JSON/JSONL, NumPy, PCD, PLY, uncompressed LAS, optional
+    LASzip/LAZ via ``laspy``, and simple float32 ``.bin`` files are supported
+    as pragmatic exported-data bridges, including gzip-compressed variants.
+    This is **not** a native Livox packet reader.  Files without per-point
+    timestamps are treated as one frame; ``time_s`` is inferred from the
+    filename when it contains a numeric token, otherwise it defaults to ``0.0``.
     """
 
     path = Path(path)
@@ -253,6 +253,8 @@ def load_point_cloud_file_as_candidates(
         points = _read_ply(path)
     elif suffix == ".las":
         points = _read_las(path)
+    elif suffix == ".laz":
+        points = _read_las_with_laspy(path)
     elif suffix == ".bin":
         points = _read_binary_point_cloud(path)
     else:
@@ -781,7 +783,7 @@ def _read_las(path: Path) -> pd.DataFrame:
         raise ValueError(f"invalid LAS file: {path}")
     point_format_byte = raw[104]
     if point_format_byte & 0x80:
-        raise ValueError("compressed LAZ/LASzip point records are not supported")
+        return _read_las_with_laspy(path)
     point_format = point_format_byte & 0x3F
     if point_format > 10:
         raise ValueError(f"unsupported LAS point format: {point_format}")
@@ -807,6 +809,32 @@ def _read_las(path: Path) -> pd.DataFrame:
     xyz = raw_xyz.astype(float) * scale + offset
     return _normalize_point_frame(
         pd.DataFrame({"x_m": xyz[:, 0], "y_m": xyz[:, 1], "z_m": xyz[:, 2]}),
+        path=path,
+    )
+
+
+def _read_las_with_laspy(path: Path) -> pd.DataFrame:
+    """Read LAZ/LASzip point records through optional laspy support."""
+
+    try:
+        import laspy  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise ValueError(
+            "compressed LAZ/LASzip point clouds require the optional "
+            "'laspy[lazrs]' dependency"
+        ) from exc
+    try:
+        cloud = laspy.read(path)
+    except Exception as exc:  # pragma: no cover - backend-specific diagnostics
+        raise ValueError(f"failed to read LAZ/LASzip point cloud {path}: {exc}") from exc
+    return _normalize_point_frame(
+        pd.DataFrame(
+            {
+                "x_m": np.asarray(cloud.x, dtype=float),
+                "y_m": np.asarray(cloud.y, dtype=float),
+                "z_m": np.asarray(cloud.z, dtype=float),
+            }
+        ),
         path=path,
     )
 

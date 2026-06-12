@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZipFile
@@ -2483,6 +2484,32 @@ def test_las_point_cloud_is_clustered(tmp_path: Path) -> None:
     assert abs(float(frame.rows.loc[0, "x_m"]) - 0.1) < 1e-6
 
 
+def test_laz_point_cloud_uses_optional_laspy_reader(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    laz = tmp_path / "frame_10.5.laz"
+    laz.write_bytes(b"not-real-laz-but-fake-laspy-reads-the-path")
+    calls: list[Path] = []
+
+    def fake_read(path: Path):
+        calls.append(Path(path))
+        return SimpleNamespace(
+            x=np.array([0.0, 0.1, 0.2], dtype=float),
+            y=np.array([0.0, 0.0, 0.1], dtype=float),
+            z=np.array([1.0, 1.1, 1.0], dtype=float),
+        )
+
+    monkeypatch.setitem(sys.modules, "laspy", SimpleNamespace(read=fake_read))
+
+    frame = load_point_cloud_file_as_candidates(laz, voxel_size_m=0.5, min_points=3)
+
+    assert calls == [laz]
+    assert len(frame.rows) == 1
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 10.5) < 1e-9
+    assert abs(float(frame.rows.loc[0, "x_m"]) - 0.1) < 1e-6
+
+
 def test_numpy_point_cloud_file_is_clustered(tmp_path: Path) -> None:
     points = np.array([[0.0, 0.0, 1.0], [0.1, 0.0, 1.1], [0.2, 0.1, 1.0]])
     npy = tmp_path / "cloud_3.0.npy"
@@ -2721,6 +2748,44 @@ def test_sequence_root_loads_gzipped_las_point_cloud_export(tmp_path: Path) -> N
     assert row["source"] == "livox_avia"
     assert abs(float(row["time_s"]) - 12.75) < 1e-9
     assert truth is not None
+
+
+def test_sequence_root_loads_laz_point_cloud_export(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    seq = tmp_path / "seq_laz"
+    livox = seq / "livox_avia"
+    livox.mkdir(parents=True)
+    laz = livox / "12.75.laz"
+    laz.write_bytes(b"not-real-laz-but-fake-laspy-reads-the-path")
+
+    def fake_read(path: Path):
+        assert Path(path) == laz
+        return SimpleNamespace(
+            x=np.array([3.0, 3.1, 3.0], dtype=float),
+            y=np.array([4.0, 4.0, 4.1], dtype=float),
+            z=np.array([5.0, 5.1, 5.0], dtype=float),
+        )
+
+    monkeypatch.setitem(sys.modules, "laspy", SimpleNamespace(read=fake_read))
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(
+        discovered[0],
+        voxel_size_m=0.5,
+        min_cluster_points=3,
+    )
+
+    assert [sequence.sequence_id for sequence in discovered] == ["seq_laz"]
+    assert discovered[0].point_cloud_files == (laz,)
+    assert truth is None
+    assert len(candidates.rows) == 1
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_laz"
+    assert row["source"] == "livox_avia"
+    assert abs(float(row["time_s"]) - 12.75) < 1.0e-9
+    assert abs(float(row["x_m"]) - (3.0 + 3.1 + 3.0) / 3.0) < 1.0e-9
 
 
 def test_sequence_root_loads_json_livox_point_cloud_export(tmp_path: Path) -> None:
