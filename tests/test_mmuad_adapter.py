@@ -2329,6 +2329,70 @@ def test_gzipped_ascii_ply_point_cloud_is_clustered(tmp_path: Path) -> None:
     assert abs(float(frame.rows.loc[0, "time_s"]) - 6.75) < 1e-9
 
 
+def test_binary_little_endian_ply_point_cloud_is_clustered(tmp_path: Path) -> None:
+    import struct
+
+    ply = tmp_path / "frame_8.5.ply"
+    header = "\n".join(
+        [
+            "ply",
+            "format binary_little_endian 1.0",
+            "element vertex 3",
+            "property float x",
+            "property float y",
+            "property float z",
+            "property uchar intensity",
+            "end_header",
+            "",
+        ]
+    ).encode("ascii")
+    payload = b"".join(
+        struct.pack("<fffB", x, y, z, intensity)
+        for x, y, z, intensity in [
+            (0.0, 0.0, 1.0, 10),
+            (0.1, 0.0, 1.1, 20),
+            (0.2, 0.1, 1.0, 30),
+        ]
+    )
+    ply.write_bytes(header + payload)
+
+    frame = load_point_cloud_file_as_candidates(ply, voxel_size_m=0.5, min_points=3)
+
+    assert len(frame.rows) == 1
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 8.5) < 1e-9
+    assert abs(float(frame.rows.loc[0, "x_m"]) - 0.1) < 1e-6
+
+
+def test_gzipped_binary_big_endian_ply_point_cloud_is_clustered(tmp_path: Path) -> None:
+    import struct
+
+    ply = tmp_path / "frame_9.25.ply.gz"
+    header = "\n".join(
+        [
+            "ply",
+            "format binary_big_endian 1.0",
+            "element vertex 3",
+            "property float x",
+            "property float y",
+            "property float z",
+            "end_header",
+            "",
+        ]
+    ).encode("ascii")
+    payload = b"".join(
+        struct.pack(">fff", x, y, z)
+        for x, y, z in [(0.0, 0.0, 1.0), (0.1, 0.0, 1.1), (0.2, 0.1, 1.0)]
+    )
+    with gzip.open(ply, "wb") as handle:
+        handle.write(header + payload)
+
+    frame = load_point_cloud_file_as_candidates(ply, voxel_size_m=0.5, min_points=3)
+
+    assert len(frame.rows) == 1
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 9.25) < 1e-9
+    assert abs(float(frame.rows.loc[0, "z_m"]) - (3.1 / 3.0)) < 1e-6
+
+
 def test_numpy_point_cloud_file_is_clustered(tmp_path: Path) -> None:
     points = np.array([[0.0, 0.0, 1.0], [0.1, 0.0, 1.1], [0.2, 0.1, 1.0]])
     npy = tmp_path / "cloud_3.0.npy"

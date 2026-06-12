@@ -246,10 +246,10 @@ Still not implemented:
 The next patch adds several missing-but-safe pieces that do not require guessing
 private binary archive internals.
 
-### ASCII PCD/PLY and Point-Cloud Table Exports
+### PCD/PLY and Point-Cloud Table Exports
 
 In addition to point-cloud CSV/TSV/TXT/JSON/JSONL row tables, including
-gzip-compressed variants, exported ASCII `.pcd`/`.pcd.gz` and
+gzip-compressed variants, exported ASCII/binary `.pcd`/`.pcd.gz` and
 `.ply`/`.ply.gz` files can be clustered into candidate centroids. JSON point-cloud
 exports may be row lists, column maps, or objects containing `points`,
 `point_cloud`, `pointcloud`, `cloud`, `lidar_points`, `livox_points`,
@@ -356,14 +356,14 @@ Audio inventory covers common WAV/FLAC/AAC/MP3 recordings for evidence
 gathering; acoustic detections still need to be exported as candidate tables
 before tracking.
 
-### Binary PCD, BIN, and NumPy point clouds
+### Binary PCD, PLY, BIN, and NumPy point clouds
 
 The point-cloud bridge now supports CSV/TSV/TXT/JSON/JSONL tables, ASCII and
-binary PCD files, ASCII PLY files, simple float32 `.bin` files with `x,y,z` or
-`x,y,z,intensity` rows, and simple `.npy` / `.npz` point arrays with shape
-`(N, >=3)`. Gzip-compressed exported files such as `.pcd.gz`, `.ply.gz`, and
-`.bin.gz` are accepted for those byte/text point-cloud formats. This still is
-not a native Livox packet reader, but it covers common exported point-cloud
+binary PCD files, ASCII and binary PLY files, simple float32 `.bin` files with
+`x,y,z` or `x,y,z,intensity` rows, and simple `.npy` / `.npz` point arrays with
+shape `(N, >=3)`. Gzip-compressed exported files such as `.pcd.gz`, `.ply.gz`,
+and `.bin.gz` are accepted for those byte/text point-cloud formats. This still
+is not a native Livox packet reader, but it covers common exported point-cloud
 formats used during dataset inspection.
 
 For sequence-root discovery, JSON or NumPy files with point-cloud names such as

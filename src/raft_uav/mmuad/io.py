@@ -250,7 +250,7 @@ def load_point_cloud_file_as_candidates(
     elif suffix == ".pcd":
         points = _read_pcd(path)
     elif suffix == ".ply":
-        points = _read_ascii_ply(path)
+        points = _read_ply(path)
     elif suffix == ".bin":
         points = _read_binary_point_cloud(path)
     else:
@@ -550,38 +550,138 @@ def _read_binary_point_cloud(path: Path) -> pd.DataFrame:
     return _normalize_point_frame(frame, path=path)
 
 
-def _read_ascii_ply(path: Path) -> pd.DataFrame:
-    lines = read_text_export(path, errors="ignore").splitlines()
-    if not lines or lines[0].strip() != "ply":
+def _read_ply(path: Path) -> pd.DataFrame:
+    header_lines, payload = _split_ply_header(read_binary_export(path), path=path)
+    if not header_lines or header_lines[0].strip() != "ply":
         raise ValueError(f"invalid PLY file: {path}")
+    data_format = "ascii"
     vertex_count = 0
-    properties: list[str] = []
-    data_start = None
+    properties: list[tuple[str, str]] = []
     in_vertex = False
-    for idx, line in enumerate(lines[1:], start=1):
+    for line in header_lines[1:]:
         stripped = line.strip()
-        if stripped.startswith("format") and "ascii" not in stripped:
-            raise ValueError("only ASCII PLY files are supported")
+        if stripped.startswith("format"):
+            parts = stripped.split()
+            if len(parts) >= 2:
+                data_format = parts[1].lower()
         if stripped.startswith("element vertex"):
             vertex_count = int(stripped.split()[-1])
             in_vertex = True
             continue
         if stripped.startswith("element") and not stripped.startswith("element vertex"):
             in_vertex = False
-        if in_vertex and stripped.startswith("property"):
-            properties.append(stripped.split()[-1])
-        if stripped == "end_header":
-            data_start = idx + 1
-            break
-    if data_start is None or vertex_count <= 0 or not properties:
-        raise ValueError(f"invalid ASCII PLY file: {path}")
+        if in_vertex and stripped.startswith("property "):
+            parts = stripped.split()
+            if len(parts) >= 2 and parts[1].lower() == "list":
+                raise ValueError("PLY vertex list properties are not supported")
+            if len(parts) >= 3:
+                properties.append((parts[2], parts[1].lower()))
+    if vertex_count <= 0 or not properties:
+        raise ValueError(f"invalid PLY file: {path}")
+    if data_format == "ascii":
+        return _read_ascii_ply_payload(
+            payload,
+            properties=properties,
+            vertex_count=vertex_count,
+            path=path,
+        )
+    if data_format == "binary_little_endian":
+        return _read_binary_ply_payload(
+            payload,
+            properties=properties,
+            vertex_count=vertex_count,
+            endian="<",
+            path=path,
+        )
+    if data_format == "binary_big_endian":
+        return _read_binary_ply_payload(
+            payload,
+            properties=properties,
+            vertex_count=vertex_count,
+            endian=">",
+            path=path,
+        )
+    raise ValueError(f"unsupported PLY format {data_format!r}; expected ascii or binary")
+
+
+def _split_ply_header(raw: bytes, *, path: Path) -> tuple[list[str], bytes]:
+    offset = 0
+    lines: list[str] = []
+    for line in raw.splitlines(keepends=True):
+        offset += len(line)
+        text = line.decode("ascii", errors="ignore").strip()
+        lines.append(text)
+        if text == "end_header":
+            return lines, raw[offset:]
+    raise ValueError(f"invalid PLY file without end_header: {path}")
+
+
+def _read_ascii_ply_payload(
+    payload: bytes,
+    *,
+    properties: list[tuple[str, str]],
+    vertex_count: int,
+    path: Path,
+) -> pd.DataFrame:
     rows = []
-    for line in lines[data_start : data_start + vertex_count]:
+    property_names = [name for name, _type_name in properties]
+    for line in payload.decode("utf-8", errors="ignore").splitlines()[:vertex_count]:
         parts = line.split()
-        if len(parts) < len(properties):
+        if len(parts) < len(property_names):
             continue
-        rows.append({field: value for field, value in zip(properties, parts, strict=False)})
+        rows.append({field: value for field, value in zip(property_names, parts, strict=False)})
     return _normalize_point_frame(pd.DataFrame.from_records(rows), path=path)
+
+
+def _read_binary_ply_payload(
+    payload: bytes,
+    *,
+    properties: list[tuple[str, str]],
+    vertex_count: int,
+    endian: str,
+    path: Path,
+) -> pd.DataFrame:
+    dtype_fields = [
+        (name, _ply_numpy_dtype(type_name=type_name, endian=endian))
+        for name, type_name in properties
+    ]
+    dtype = np.dtype(dtype_fields)
+    expected_bytes = int(vertex_count) * dtype.itemsize
+    if len(payload) < expected_bytes:
+        raise ValueError(f"binary PLY file has incomplete vertex payload: {path}")
+    arr = np.frombuffer(payload[:expected_bytes], dtype=dtype, count=int(vertex_count))
+    return _normalize_point_frame(
+        pd.DataFrame({name: arr[name] for name, _type_name in properties}),
+        path=path,
+    )
+
+
+def _ply_numpy_dtype(*, type_name: str, endian: str) -> str:
+    normalized = type_name.lower()
+    aliases = {
+        "char": "i1",
+        "int8": "i1",
+        "uchar": "u1",
+        "uint8": "u1",
+        "short": "i2",
+        "int16": "i2",
+        "ushort": "u2",
+        "uint16": "u2",
+        "int": "i4",
+        "int32": "i4",
+        "uint": "u4",
+        "uint32": "u4",
+        "float": "f4",
+        "float32": "f4",
+        "double": "f8",
+        "float64": "f8",
+    }
+    dtype = aliases.get(normalized)
+    if dtype is None:
+        raise ValueError(f"unsupported PLY property type: {type_name!r}")
+    if dtype.endswith("1"):
+        return dtype
+    return f"{endian}{dtype}"
 
 
 def _normalize_point_frame(frame: pd.DataFrame, *, path: Path) -> pd.DataFrame:

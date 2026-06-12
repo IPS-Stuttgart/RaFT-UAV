@@ -239,8 +239,9 @@ def _layout_recommendations(
         )
     if category_counts.get("point_cloud", 0):
         recommendations.append(
-            "Point-cloud files found: the current ASCII PCD/PLY path can be used for "
-            "smoke tests; binary/native formats still need explicit parsers."
+            "Point-cloud files found: exported CSV/JSON/NumPy/PCD/PLY/BIN files can "
+            "be clustered for smoke tests; native packet formats still need explicit "
+            "parsers."
         )
     if category_counts.get("image", 0):
         recommendations.append(
