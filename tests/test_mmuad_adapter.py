@@ -2283,6 +2283,66 @@ def test_camera_detections_backproject_to_world_candidates(tmp_path: Path) -> No
     assert row["class_name"] == "Mavic3"
 
 
+def test_sequence_export_applies_discovered_sensor_uncertainty_options(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "seq_sensor_uncertainty"
+    seq.mkdir()
+    (seq / "calibration.json").write_text(
+        json.dumps(
+            {
+                "sensors": {
+                    "radar_polar": {},
+                    "cam0": {},
+                },
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "range_m": [10.0],
+            "azimuth_deg": [0.0],
+        }
+    ).to_csv(seq / "radar_polar.csv", index=False)
+    pd.DataFrame(
+        {
+            "time_s": [1.0],
+            "source": ["cam0"],
+            "u_px": [50.0],
+            "v_px": [50.0],
+            "depth_m": [5.0],
+        }
+    ).to_csv(seq / "camera_detections.csv", index=False)
+
+    candidates, _truth, _calibration = load_sequence_export(
+        discover_sequence_paths(tmp_path)[0],
+        apply_calibration=False,
+        radar_polar_range_std_m=9.0,
+        radar_polar_angle_std_deg=2.0,
+        radar_polar_z_std_m=4.5,
+        camera_std_xy_m=11.0,
+        camera_std_z_m=22.0,
+    )
+
+    radar_row = candidates.rows.loc[candidates.rows["source"] == "radar_polar"].iloc[0]
+    camera_row = candidates.rows.loc[candidates.rows["source"] == "cam0"].iloc[0]
+
+    assert radar_row["std_xy_m"] == 9.0
+    assert radar_row["std_z_m"] == 4.5
+    assert camera_row["std_xy_m"] == 11.0
+    assert camera_row["std_z_m"] == 22.0
+
+
 def test_camera_detections_txt_backproject_to_world_candidates(tmp_path: Path) -> None:
     from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
 
