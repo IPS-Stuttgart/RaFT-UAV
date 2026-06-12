@@ -129,7 +129,7 @@ def load_point_cloud_file_as_candidates(
     min_points: int = 3,
     min_confidence: float = 0.0,
 ) -> CandidateFrame:
-    """Load CSV/PCD/PLY point-cloud files and cluster them into candidates.
+    """Load CSV/TSV/TXT/PCD/PLY point-cloud files and cluster them into candidates.
 
     ASCII PCD and PLY are supported as a pragmatic exported-data bridge.  This
     is **not** a native Livox packet reader.  Files without per-point timestamps
@@ -140,7 +140,7 @@ def load_point_cloud_file_as_candidates(
     path = Path(path)
     suffix = path.suffix.lower()
     source = source or path.stem.replace("_points", "-cluster")
-    if suffix == ".csv":
+    if suffix in {".csv", ".tsv", ".txt"}:
         points = _read_point_cloud_csv(path)
     elif suffix in {".npy", ".npz"}:
         points = _read_numpy_point_cloud(path)
@@ -166,7 +166,7 @@ def load_point_cloud_file_as_candidates(
 
 
 def _read_point_cloud_csv(path: Path) -> pd.DataFrame:
-    frame = pd.read_csv(path)
+    frame = _read_delimited_table(path)
     try:
         return normalize_truth_columns(frame)
     except ValueError as exc:

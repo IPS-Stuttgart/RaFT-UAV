@@ -473,6 +473,36 @@ def test_sequence_root_discovers_delimited_candidate_tables(tmp_path: Path) -> N
     assert truth.rows["time_s"].tolist() == [0.0, 1.0]
 
 
+def test_sequence_root_discovers_delimited_point_tables(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_points_tsv"
+    seq.mkdir()
+    pd.DataFrame(
+        {
+            "time_s": [3.0, 3.0, 3.0],
+            "x": [0.0, 0.1, 0.2],
+            "y": [0.0, 0.0, 0.1],
+            "z": [2.0, 2.1, 2.0],
+        }
+    ).to_csv(seq / "lidar_points.tsv", sep="\t", index=False)
+    pd.DataFrame(
+        {
+            "time_s": [3.0],
+            "x_m": [0.1],
+            "y_m": [0.0],
+            "z_m": [2.0],
+        }
+    ).to_csv(seq / "truth.csv", index=False)
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].point_cloud_files == (seq / "lidar_points.tsv",)
+    assert len(candidates.rows) == 1
+    assert candidates.rows["sequence_id"].tolist() == ["seq_points_tsv"]
+    assert abs(float(candidates.rows.loc[0, "time_s"]) - 3.0) < 1e-9
+    assert truth is not None
+
+
 def test_submission_writers_use_estimate_state_columns(tmp_path: Path) -> None:
     estimates = pd.DataFrame(
         {
@@ -597,6 +627,28 @@ def test_csv_point_cloud_file_infers_missing_metadata(tmp_path: Path) -> None:
     assert len(frame.rows) == 1
     assert frame.rows.loc[0, "sequence_id"] == "seq_csv"
     assert abs(float(frame.rows.loc[0, "time_s"]) - 12.5) < 1e-9
+
+
+def test_tsv_point_cloud_file_is_clustered(tmp_path: Path) -> None:
+    tsv = tmp_path / "livox_points_4.5.tsv"
+    pd.DataFrame(
+        {
+            "x": [0.0, 0.1, 0.2],
+            "y": [0.0, 0.0, 0.1],
+            "z": [1.0, 1.1, 1.0],
+        }
+    ).to_csv(tsv, sep="\t", index=False)
+
+    frame = load_point_cloud_file_as_candidates(
+        tsv,
+        sequence_id="seq_livox",
+        voxel_size_m=0.5,
+        min_points=3,
+    )
+
+    assert len(frame.rows) == 1
+    assert frame.rows.loc[0, "sequence_id"] == "seq_livox"
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 4.5) < 1e-9
 
 
 def test_split_manifest_filters_discovered_sequences(tmp_path: Path) -> None:

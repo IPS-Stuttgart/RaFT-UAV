@@ -43,10 +43,10 @@ def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[Seq
     official raw archive.  It looks for common names such as ``candidates.csv``,
     ``*_candidates.csv``, delimited variants such as ``candidates.tsv`` or
     ``detections.txt``, compact NumPy trajectory tables such as
-    ``candidates.npy`` or ``trajectory.npz``, ``points.csv``, ``*_points.csv``,
-    ASCII ``*.pcd``, ASCII ``*.ply``, ``truth.csv`` / ``truth.npy``, and
-    ``calibration.json`` under each sequence folder.  If ``root`` itself holds
-    such files, it is treated as a single sequence.
+    ``candidates.npy`` or ``trajectory.npz``, ``points.csv`` / ``points.tsv``,
+    ``*_points.csv``, ASCII ``*.pcd``, ASCII ``*.ply``, ``truth.csv`` /
+    ``truth.npy``, and ``calibration.json`` under each sequence folder.  If
+    ``root`` itself holds such files, it is treated as a single sequence.
     """
 
     root = Path(root)
@@ -261,9 +261,15 @@ def _camera_detection_files(path: Path) -> list[Path]:
 
 
 def _point_files(path: Path) -> list[Path]:
-    names = [path / "points.csv", path / "point_cloud.csv", path / "lidar_points.csv"]
+    names = [
+        path / f"{stem}{suffix}"
+        for stem in ("points", "point_cloud", "lidar_points")
+        for suffix in (".csv", ".tsv", ".txt")
+    ]
     files = [item for item in names if item.exists()]
-    files.extend(sorted(path.glob("*_points.csv")))
+    for suffix in (".csv", ".tsv", ".txt"):
+        files.extend(sorted(path.glob(f"*_points{suffix}")))
+        files.extend(sorted(path.glob(f"*_point_cloud{suffix}")))
     files.extend(sorted(path.glob("*.pcd")))
     files.extend(sorted(path.glob("*.ply")))
     files.extend(_point_numpy_files(path))

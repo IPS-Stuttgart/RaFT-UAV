@@ -37,8 +37,8 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_numpy_smoke
 ```
 
-Or build simple point-cloud cluster candidates from a CSV with `sequence_id`,
-`time_s`, `x_m`, `y_m`, `z_m`:
+Or build simple point-cloud cluster candidates from a CSV/TSV/TXT table with
+`sequence_id`, `time_s`, `x_m`, `y_m`, `z_m`:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
@@ -51,7 +51,7 @@ Implemented in this first patch:
 
 - normalized candidate and truth schemas;
 - alias-tolerant CSV loading plus compact TXT/NumPy trajectory exports;
-- lightweight voxel connected-component clustering for point-cloud CSV rows;
+- lightweight voxel connected-component clustering for exported point-cloud rows;
 - a simple single-UAV constant-velocity tracker;
 - first-selected-candidate bootstrap;
 - selected-tracklet updates plus bounded soft-anchor updates for secondary
@@ -112,9 +112,10 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 
 A normalized sequence export can be loaded from folders containing files named
 `candidates.csv`, `detections.csv`, `*_candidates.csv`, delimited variants such
-as `candidates.tsv` or `detections.txt`, `points.csv`, `*_points.csv`, compact
-trajectory arrays such as `trajectory.npy` / `candidates.npz`, `truth.csv`,
-compact truth arrays such as `truth.npy`, and optionally `calibration.json`:
+as `candidates.tsv` or `detections.txt`, `points.csv`, `points.tsv`,
+`*_points.txt`, compact trajectory arrays such as `trajectory.npy` /
+`candidates.npz`, `truth.csv`, compact truth arrays such as `truth.npy`, and
+optionally `calibration.json`:
 
 ```text
 data/mmuad_export/
@@ -128,6 +129,9 @@ data/mmuad_export/
     truth.npy
   seq003/
     candidates.tsv
+    truth.csv
+  seq004/
+    lidar_points.tsv
     truth.csv
 ```
 
@@ -169,12 +173,12 @@ Still not implemented:
 The next patch adds several missing-but-safe pieces that do not require guessing
 private binary archive internals.
 
-### ASCII PCD/PLY point-cloud exports
+### ASCII PCD/PLY and Delimited Point-Cloud Exports
 
-In addition to point-cloud CSV files, exported ASCII `.pcd` and `.ply` files can
-be clustered into candidate centroids.  If the file does not contain per-row
-sequence/time columns, the sequence is inferred from the parent folder and the
-last numeric token in the filename is used as the timestamp.
+In addition to point-cloud CSV/TSV/TXT files, exported ASCII `.pcd` and `.ply`
+files can be clustered into candidate centroids. If the file does not contain
+per-row sequence/time columns, the sequence is inferred from the parent folder
+and the last numeric token in the filename is used as the timestamp.
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
@@ -265,10 +269,10 @@ smoke test.
 
 ### Binary PCD and NumPy point clouds
 
-The point-cloud bridge now supports ASCII and binary PCD files, ASCII PLY files,
-and simple `.npy` / `.npz` point arrays with shape `(N, >=3)`.  This still is
-not a native Livox packet reader, but it covers common exported point-cloud
-formats used during dataset inspection.
+The point-cloud bridge now supports CSV/TSV/TXT tables, ASCII and binary PCD
+files, ASCII PLY files, and simple `.npy` / `.npz` point arrays with shape
+`(N, >=3)`.  This still is not a native Livox packet reader, but it covers
+common exported point-cloud formats used during dataset inspection.
 
 For sequence-root discovery, NumPy files with point-cloud names such as
 `lidar_points.npy`, `point_cloud.npz`, or `cloud_12.5.npy` are clustered as
