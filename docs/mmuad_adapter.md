@@ -239,7 +239,11 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_val
 ```
 
-A CSV manifest with columns `sequence_id,split` is also supported.
+A CSV manifest with columns `sequence_id,split` is also supported. Exported
+metadata files may also use JSON sequence-row layouts such as
+`{"sequences": [{"sequence_id": "seq001", "split": "val"}]}` or nested split
+objects such as `{"splits": {"val": {"sequence_ids": ["seq001"]}}}`. CSV alias
+columns including `id`, `name`, `subset`, and `partition` are accepted.
 If the sequence root is already arranged as split folders such as
 `train/seq001` and `val/seq002`, omit `--split-file` and pass
 `--split-name val`; the CLI filters by the top-level folder name.

@@ -879,6 +879,66 @@ def test_split_manifest_filters_discovered_sequences(tmp_path: Path) -> None:
     assert [sequence.sequence_id for sequence in val_sequences] == ["seq_val"]
 
 
+def test_split_manifest_accepts_nested_json_layouts(tmp_path: Path) -> None:
+    split = tmp_path / "splits.json"
+    split.write_text(
+        json.dumps(
+            {
+                "splits": {
+                    "train": {
+                        "sequences": [
+                            {"sequence_id": "seq_train"},
+                            {"id": "seq_train_2"},
+                        ]
+                    },
+                    "val": {"sequence_ids": ["seq_val"]},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = load_split_manifest(split)
+
+    assert manifest["train"] == ("seq_train", "seq_train_2")
+    assert manifest["val"] == ("seq_val",)
+
+
+def test_split_manifest_accepts_sequence_rows_json(tmp_path: Path) -> None:
+    split = tmp_path / "splits.json"
+    split.write_text(
+        json.dumps(
+            {
+                "sequences": [
+                    {"name": "seq_train", "subset": "train"},
+                    {"id": "seq_val", "partition": "val"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = load_split_manifest(split)
+
+    assert manifest["train"] == ("seq_train",)
+    assert manifest["val"] == ("seq_val",)
+
+
+def test_split_manifest_accepts_csv_alias_columns(tmp_path: Path) -> None:
+    split = tmp_path / "splits.csv"
+    pd.DataFrame(
+        {
+            "id": ["seq_train", "seq_val"],
+            "subset": ["train", "val"],
+        }
+    ).to_csv(split, index=False)
+
+    manifest = load_split_manifest(split)
+
+    assert manifest["train"] == ("seq_train",)
+    assert manifest["val"] == ("seq_val",)
+
+
 def test_cli_split_name_filters_top_level_split_folders_without_manifest(tmp_path: Path) -> None:
     for split, name, x_m in (("train", "seq_train", 100.0), ("val", "seq_val", 1.0)):
         seq = tmp_path / split / name

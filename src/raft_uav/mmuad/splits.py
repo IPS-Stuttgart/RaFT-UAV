@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 import json
 from pathlib import Path
 from typing import Any
@@ -11,38 +12,164 @@ import pandas as pd
 from raft_uav.mmuad.sequence import SequencePaths
 
 
+_SEQUENCE_ID_ALIASES = (
+    "sequence_id",
+    "sequence",
+    "seq",
+    "scene",
+    "scene_id",
+    "id",
+    "name",
+)
+_SPLIT_ALIASES = ("split", "subset", "partition", "fold", "set")
+_SEQUENCE_LIST_KEYS = ("sequence_ids", "sequences", "ids", "items", "sequence_names")
+
+
 def load_split_manifest(path: Path) -> dict[str, tuple[str, ...]]:
-    """Load a simple split manifest from JSON or CSV.
+    """Load a split manifest from JSON or CSV.
 
     Supported JSON layouts::
 
         {"train": ["seq001"], "val": ["seq002"]}
         {"splits": {"train": ["seq001"], "val": ["seq002"]}}
+        {"splits": {"train": {"sequences": [{"sequence_id": "seq001"}]}}}
+        {"sequences": [{"sequence_id": "seq001", "split": "train"}]}
 
     Supported CSV layout::
 
         sequence_id,split
         seq001,train
         seq002,val
+
+    CSV alias columns such as ``id,subset`` or ``name,partition`` are also
+    accepted for exported MMUAD metadata files.
     """
 
     path = Path(path)
     if path.suffix.lower() == ".json":
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if "splits" in payload and isinstance(payload["splits"], dict):
-            payload = payload["splits"]
-        return {
-            str(split): tuple(str(item) for item in values)
-            for split, values in payload.items()
-            if isinstance(values, list)
-        }
+        return _manifest_from_json_payload(payload)
     frame = pd.read_csv(path)
-    if "sequence_id" not in frame.columns or "split" not in frame.columns:
-        raise ValueError("CSV split manifest must contain sequence_id and split columns")
+    manifest = _manifest_from_rows(frame.to_dict("records"))
+    if not manifest:
+        raise ValueError(
+            "CSV split manifest must contain sequence id and split columns; "
+            "accepted aliases include sequence_id/id/name and split/subset/partition"
+        )
+    return manifest
+
+
+def _manifest_from_json_payload(payload: Any) -> dict[str, tuple[str, ...]]:
+    if isinstance(payload, list):
+        manifest = _manifest_from_rows(payload)
+        if manifest:
+            return manifest
+        raise ValueError("JSON split manifest list entries must include sequence id and split fields")
+    if not isinstance(payload, dict):
+        raise ValueError("JSON split manifest must be an object or a list of sequence rows")
+
+    splits = payload.get("splits")
+    if isinstance(splits, dict):
+        manifest = _manifest_from_mapping(splits)
+        if manifest:
+            return manifest
+
+    sequences = payload.get("sequences")
+    if isinstance(sequences, list):
+        manifest = _manifest_from_rows(sequences)
+        if manifest:
+            return manifest
+    if isinstance(sequences, dict):
+        manifest = _manifest_from_mapping(sequences)
+        if manifest:
+            return manifest
+
+    manifest = _manifest_from_mapping(payload)
+    if manifest:
+        return manifest
+    raise ValueError("JSON split manifest does not contain any split sequence ids")
+
+
+def _manifest_from_mapping(mapping: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
     out: dict[str, list[str]] = {}
-    for _, row in frame.iterrows():
-        out.setdefault(str(row["split"]), []).append(str(row["sequence_id"]))
+    for split, values in mapping.items():
+        ids = _split_values_to_sequence_ids(values)
+        if ids:
+            out[str(split)] = list(ids)
     return {split: tuple(values) for split, values in out.items()}
+
+
+def _manifest_from_rows(rows: Iterable[Any]) -> dict[str, tuple[str, ...]]:
+    out: dict[str, list[str]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        split = _entry_value(row, _SPLIT_ALIASES)
+        sequence_id = _entry_value(row, _SEQUENCE_ID_ALIASES)
+        if split is None or sequence_id is None:
+            continue
+        _append_unique(out, split, sequence_id)
+    return {split: tuple(values) for split, values in out.items()}
+
+
+def _split_values_to_sequence_ids(values: Any) -> tuple[str, ...]:
+    out: list[str] = []
+    if isinstance(values, dict):
+        sequence_id = _entry_value(values, _SEQUENCE_ID_ALIASES)
+        if sequence_id is not None:
+            return (sequence_id,)
+        for key in _SEQUENCE_LIST_KEYS:
+            if key in values:
+                return _split_values_to_sequence_ids(values[key])
+        return ()
+    if isinstance(values, list | tuple | set):
+        for item in values:
+            if isinstance(item, dict):
+                sequence_id = _entry_value(item, _SEQUENCE_ID_ALIASES)
+                if sequence_id is not None:
+                    _append_unique_value(out, sequence_id)
+                continue
+            sequence_id = _scalar_to_text(item)
+            if sequence_id is not None:
+                _append_unique_value(out, sequence_id)
+    return tuple(out)
+
+
+def _entry_value(entry: Mapping[str, Any], aliases: tuple[str, ...]) -> str | None:
+    lower_keys = {str(key).lower(): key for key in entry}
+    for alias in aliases:
+        key = alias if alias in entry else lower_keys.get(alias)
+        if key is None:
+            continue
+        value = _scalar_to_text(entry[key])
+        if value is not None:
+            return value
+    return None
+
+
+def _scalar_to_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        missing = pd.isna(value)
+    except TypeError:
+        missing = False
+    if isinstance(missing, bool) and missing:
+        return None
+    if not isinstance(value, str | int | float):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _append_unique(mapping: dict[str, list[str]], key: str, value: str) -> None:
+    bucket = mapping.setdefault(key, [])
+    _append_unique_value(bucket, value)
+
+
+def _append_unique_value(values: list[str], value: str) -> None:
+    if value not in values:
+        values.append(value)
 
 
 def filter_sequences_by_split(
