@@ -1,7 +1,7 @@
 """Camera detection bridges for MMUAD-style experiments.
 
 This module does not run image detection.  It converts exported camera detector
-CSV rows into 3D candidate points when per-detection depth or a fixed depth
+table rows into 3D candidate points when per-detection depth or a fixed depth
 proxy is available.
 """
 
@@ -88,11 +88,12 @@ def load_camera_detections_csv_as_candidates(
 
     Detection rows may contain ``u_px``/``v_px`` or bounding-box aliases
     ``x1,y1,x2,y2``.  Depth must come from ``depth_m``/``range_m`` unless a
-    ``fixed_depth_m`` fallback is supplied.  This is a detector-output bridge,
-    not a camera detector.
+    ``fixed_depth_m`` fallback is supplied. CSV/TSV/TXT and JSON row/table
+    exports are supported. This is a detector-output bridge, not a camera
+    detector.
     """
 
-    frame = _normalize_camera_detection_columns(_read_delimited_table(path))
+    frame = _normalize_camera_detection_columns(_read_detection_table(path))
     if source is not None:
         frame["source"] = str(source)
     elif "source" not in frame.columns:
@@ -190,9 +191,9 @@ def _normalize_camera_detection_columns(frame: pd.DataFrame) -> pd.DataFrame:
                 + pd.to_numeric(out["y2"], errors="coerce")
             ) / 2.0
         else:
-            raise ValueError("camera detection CSV needs u/v pixels or bbox x1/y1/x2/y2")
+            raise ValueError("camera detection table needs u/v pixels or bbox x1/y1/x2/y2")
     if "time_s" not in out.columns:
-        raise ValueError("camera detection CSV requires time_s/timestamp_s/time column")
+        raise ValueError("camera detection table requires time_s/timestamp_s/time column")
     for col in ("time_s", "u_px", "v_px", "depth_m", "confidence", "std_xy_m", "std_z_m"):
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
@@ -233,6 +234,115 @@ def _read_delimited_table(path: Path) -> pd.DataFrame:
     if path.suffix.lower() == ".txt":
         return pd.read_csv(path, sep=None, engine="python")
     return pd.read_csv(path)
+
+
+def _read_detection_table(path: Path) -> pd.DataFrame:
+    path = Path(path)
+    if path.suffix.lower() == ".json":
+        return _read_json_detection_table(path)
+    return _read_delimited_table(path)
+
+
+def _read_json_detection_table(path: Path) -> pd.DataFrame:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    records = _json_detection_records(payload)
+    return _json_detection_records_to_frame(records, path=path)
+
+
+def _json_detection_records(payload: Any) -> Any:
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    for key in (
+        "camera_detections",
+        "image_detections",
+        "detections",
+        "annotations",
+        "boxes",
+        "bboxes",
+        "rows",
+        "data",
+    ):
+        nested = _mapping_get_case_insensitive(payload, key)
+        if nested is not None:
+            return _json_detection_records(nested)
+    if _looks_like_detection_column_map(payload) or _looks_like_detection_row(payload):
+        return payload
+    return []
+
+
+def _json_detection_records_to_frame(records: Any, *, path: Path | None = None) -> pd.DataFrame:
+    if isinstance(records, pd.DataFrame):
+        return records
+    if isinstance(records, dict):
+        if _looks_like_detection_column_map(records):
+            return pd.DataFrame(records)
+        if _looks_like_detection_row(records):
+            return pd.DataFrame.from_records([records])
+    if isinstance(records, list):
+        if not records:
+            return pd.DataFrame()
+        if all(isinstance(item, dict) for item in records):
+            return pd.DataFrame.from_records(records)
+    label = str(path) if path is not None else "JSON payload"
+    raise ValueError(f"camera detection JSON table {label} does not contain row objects")
+
+
+def _mapping_get_case_insensitive(mapping: dict[Any, Any], key: str) -> Any | None:
+    for candidate, value in mapping.items():
+        if str(candidate).lower() == key.lower():
+            return value
+    return None
+
+
+_DETECTION_HINT_KEYS = {
+    "time_s",
+    "timestamp",
+    "timestamp_s",
+    "timestamp_ns",
+    "timestamp_ms",
+    "sec",
+    "nanosec",
+    "u_px",
+    "u",
+    "pixel_x",
+    "center_u",
+    "v_px",
+    "v",
+    "pixel_y",
+    "center_v",
+    "x1",
+    "xmin",
+    "bbox_x1",
+    "y1",
+    "ymin",
+    "bbox_y1",
+    "x2",
+    "xmax",
+    "bbox_x2",
+    "y2",
+    "ymax",
+    "bbox_y2",
+    "depth_m",
+    "range_m",
+}
+
+
+def _looks_like_detection_row(payload: dict[Any, Any]) -> bool:
+    keys = {str(key).lower() for key in payload}
+    return bool(keys.intersection(_DETECTION_HINT_KEYS))
+
+
+def _looks_like_detection_column_map(payload: dict[Any, Any]) -> bool:
+    keys = {str(key).lower() for key in payload}
+    if not keys.intersection(_DETECTION_HINT_KEYS):
+        return False
+    return any(
+        isinstance(value, (list, tuple))
+        for key, value in payload.items()
+        if str(key).lower() in _DETECTION_HINT_KEYS
+    )
 
 
 def _looks_like_single_camera(payload: dict[str, Any]) -> bool:

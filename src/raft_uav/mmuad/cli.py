@@ -100,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--radar-polar-angle-std-deg", type=float, default=2.0)
     parser.add_argument("--radar-polar-z-std-m", type=float, default=5.0)
     parser.add_argument("--camera-detections-csv", action="append", type=Path, default=[])
+    parser.add_argument("--camera-detections-file", action="append", type=Path, default=[])
     parser.add_argument("--camera-calibration-file", type=Path)
     parser.add_argument("--camera-fixed-depth-m", type=float)
     parser.add_argument("--camera-std-xy-m", type=float, default=5.0)
@@ -417,9 +418,13 @@ def _run_explicit_files(args: argparse.Namespace):
         )
         for path in args.radar_polar_csv
     )
-    if args.camera_detections_csv:
+    camera_detection_files = list(args.camera_detections_csv) + list(args.camera_detections_file)
+    if camera_detection_files:
         if args.camera_calibration_file is None:
-            raise SystemExit("--camera-detections-csv requires --camera-calibration-file")
+            raise SystemExit(
+                "--camera-detections-csv/--camera-detections-file "
+                "requires --camera-calibration-file"
+            )
         camera_models = load_camera_models(args.camera_calibration_file)
         frames.extend(
             load_camera_detections_csv_as_candidates(
@@ -429,7 +434,7 @@ def _run_explicit_files(args: argparse.Namespace):
                 std_xy_m=args.camera_std_xy_m,
                 std_z_m=args.camera_std_z_m,
             )
-            for path in args.camera_detections_csv
+            for path in camera_detection_files
         )
     topic_truth = None
     if args.topic_map_json is not None:

@@ -815,6 +815,57 @@ def test_sequence_root_discovers_radar_and_camera_modality_folder_tables(
     assert truth is not None
 
 
+def test_sequence_root_discovers_json_camera_detection_tables(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_camera_json"
+    camera = seq / "cam0"
+    camera.mkdir(parents=True)
+    (camera / "detections.json").write_text(
+        json.dumps(
+            {
+                "detections": [
+                    {
+                        "timestamp_ms": 1250,
+                        "u_px": 50.0,
+                        "v_px": 50.0,
+                        "depth_m": 5.0,
+                        "score": 0.8,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (seq / "calibration.json").write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (seq / "truth.json").write_text(
+        json.dumps({"truth": [{"time_s": 1.25, "x_m": 0.0, "y_m": 0.0, "z_m": 5.0}]}),
+        encoding="utf-8",
+    )
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].camera_detection_csvs == (camera / "detections.json",)
+    row = candidates.rows.iloc[0]
+    assert row["source"] == "cam0"
+    assert abs(float(row["time_s"]) - 1.25) < 1e-12
+    assert abs(float(row["z_m"]) - 5.0) < 1e-12
+    assert truth is not None
+
+
 def test_sequence_root_loads_exported_topic_map_sequence(tmp_path: Path) -> None:
     seq = tmp_path / "seq_topic_map"
     seq.mkdir()
@@ -2893,6 +2944,127 @@ def test_camera_detections_accept_sec_nanosec_timestamps(tmp_path: Path) -> None
     )
 
     assert abs(float(candidates.rows.loc[0, "time_s"]) - 3.5) < 1e-12
+
+
+def test_camera_detections_json_backproject_to_world_candidates(tmp_path: Path) -> None:
+    from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
+
+    calibration = tmp_path / "camera_calibration.json"
+    calibration.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                        "translation_m": [1.0, 2.0, 3.0],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    detections = tmp_path / "camera_detections.json"
+    detections.write_text(
+        json.dumps(
+            {
+                "camera_detections": [
+                    {
+                        "sequence_id": "seq1",
+                        "timestamp_ns": 2_000_000_000,
+                        "source": "cam0",
+                        "x1": 45.0,
+                        "y1": 45.0,
+                        "x2": 55.0,
+                        "y2": 55.0,
+                        "depth_m": 10.0,
+                        "class": "Mavic3",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates = load_camera_detections_csv_as_candidates(
+        detections,
+        camera_models=load_camera_models(calibration),
+    )
+
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq1"
+    assert abs(float(row["time_s"]) - 2.0) < 1e-12
+    assert (row["x_m"], row["y_m"], row["z_m"]) == (1.0, 2.0, 13.0)
+    assert row["class_name"] == "Mavic3"
+
+
+def test_cli_accepts_explicit_camera_detection_json_file(tmp_path: Path) -> None:
+    calibration = tmp_path / "camera_calibration.json"
+    calibration.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    detections = tmp_path / "camera_detections.json"
+    detections.write_text(
+        json.dumps(
+            {
+                "detections": [
+                    {
+                        "sequence_id": "default",
+                        "time_s": 0.0,
+                        "source": "cam0",
+                        "u_px": 50.0,
+                        "v_px": 50.0,
+                        "depth_m": 5.0,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    truth = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["default"],
+            "time_s": [0.0],
+            "x_m": [0.0],
+            "y_m": [0.0],
+            "z_m": [5.0],
+        }
+    ).to_csv(truth, index=False)
+    output = tmp_path / "out"
+
+    status = mmuad_cli_main(
+        [
+            "--camera-detections-file",
+            str(detections),
+            "--camera-calibration-file",
+            str(calibration),
+            "--truth-csv",
+            str(truth),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    estimates = pd.read_csv(output / "mmuad_estimates.csv")
+    assert estimates["sequence_id"].tolist() == ["default"]
+    metrics = json.loads((output / "mmuad_metrics.json").read_text(encoding="utf-8"))
+    assert metrics["pooled"]["mean_3d_m"] == 0.0
 
 
 def test_sequence_export_applies_discovered_sensor_uncertainty_options(

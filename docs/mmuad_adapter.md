@@ -124,8 +124,8 @@ A normalized sequence export can be loaded from folders containing files named
 `candidates.csv`, `detections.csv`, `candidates.json`, `truth.json`,
 `*_candidates.csv`, delimited variants such as `candidates.tsv` or
 `detections.txt`, `points.csv`, `points.tsv`, `*_points.txt`, exported polar
-radar and camera detection tables such as `radar_polar.tsv` or
-`camera_detections.txt`, compact trajectory arrays such as `trajectory.npy` /
+radar and camera detection tables such as `radar_polar.tsv`,
+`camera_detections.txt`, or `camera_detections.json`, compact trajectory arrays such as `trajectory.npy` /
 `candidates.npz`, exported ROS topic maps such as `topic_map.json`,
 `truth.csv`, compact truth arrays such as `truth.npy`, and optionally
 `calibration.json`. It also recognizes one-level split folders and MMUAD-style
@@ -163,7 +163,7 @@ data/mmuad_export/
     truth_export.csv
   seq006/
     radar_polar.tsv
-    camera_detections.txt
+    camera_detections.json
     calibration.json
     truth.csv
   val/
@@ -579,8 +579,9 @@ message parser.
 
 ### Camera Detector Table Exports
 
-Use `--camera-detections-csv` for detector CSV/TSV/TXT outputs with pixel
-centers or boxes and metric depth:
+Use `--camera-detections-csv` for detector CSV/TSV/TXT outputs, or
+`--camera-detections-file` for JSON/table exports, with pixel centers or boxes
+and metric depth:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
@@ -590,13 +591,23 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_camera_detections
 ```
 
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --camera-detections-file data/mmuad_export/seq001/camera_detections.json \
+  --camera-calibration-file data/mmuad_export/seq001/camera_calibration.json \
+  --truth-csv data/mmuad_export/seq001/truth.csv \
+  --output-dir outputs/mmuad_camera_detections_json
+```
+
 The camera calibration file contains intrinsics (`fx`, `fy`, `cx`, `cy`) and an
 optional camera-to-world rigid transform. Intrinsics can also come from common
 matrix fields such as `camera_matrix`, `K`, or `projection_matrix`, including
 OpenCV-style `{rows, cols, data}` blocks. Detections can provide `u_px`/`v_px` or
-`x1,y1,x2,y2` boxes. Depth must come from `depth_m`/`range_m`, or from a fixed
-fallback via `--camera-fixed-depth-m`. This bridge does not run image object
-detection; it consumes detector exports.
+`x1,y1,x2,y2` boxes. JSON exports may be row lists, column maps, or objects with
+keys such as `camera_detections`, `detections`, `boxes`, `rows`, or `data`.
+Depth must come from `depth_m`/`range_m`, or from a fixed fallback via
+`--camera-fixed-depth-m`. This bridge does not run image object detection; it
+consumes detector exports.
 
 ### Sequence Class Inference
 

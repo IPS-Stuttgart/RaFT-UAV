@@ -461,10 +461,10 @@ def _camera_detection_files(path: Path) -> list[Path]:
     names = [
         path / f"{stem}{suffix}"
         for stem in ("camera_detections", "image_detections")
-        for suffix in TABLE_SUFFIXES
+        for suffix in TABLE_SUFFIXES + JSON_TABLE_SUFFIXES
     ]
     files = [item for item in names if item.exists()]
-    for suffix in TABLE_SUFFIXES:
+    for suffix in TABLE_SUFFIXES + JSON_TABLE_SUFFIXES:
         files.extend(sorted(path.glob(f"*_camera_detections{suffix}")))
         files.extend(sorted(path.glob(f"*_image_detections{suffix}")))
     sensor_files = [
@@ -472,7 +472,7 @@ def _camera_detection_files(path: Path) -> list[Path]:
         for item in _files_under_sensor_dirs(
             path,
             directory_tokens=CAMERA_DIR_TOKENS,
-            suffixes=TABLE_SUFFIXES,
+            suffixes=TABLE_SUFFIXES + JSON_TABLE_SUFFIXES,
         )
         if _looks_like_camera_detection_file(item)
     ]
@@ -738,7 +738,10 @@ def _looks_like_radar_polar_file(path: Path) -> bool:
 
 def _looks_like_camera_detection_file(path: Path) -> bool:
     name = path.stem.lower()
-    if any(token in name for token in ("camera_detection", "image_detection", "bbox", "boxes")):
+    if any(
+        token in name
+        for token in ("camera_detection", "image_detection", "detection", "bbox", "boxes")
+    ):
         return True
     return _table_has_camera_detection_columns(path)
 
