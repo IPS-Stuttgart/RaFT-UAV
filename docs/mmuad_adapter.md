@@ -691,11 +691,18 @@ The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
 `geometry_msgs/msg/TransformStamped` as `transform_truth` or
 `transform_candidate`, `tf2_msgs/msg/TFMessage` as `tf_truth` or
 `tf_candidate`, `nav_msgs/msg/Path` as `path_truth` or `path_candidate`, and
-`nav_msgs/msg/Odometry` as `odometry_truth` or `odometry_candidate`. TFMessage
+`nav_msgs/msg/Odometry` as `odometry_truth` or `odometry_candidate`,
+`sensor_msgs/msg/MultiDOFJointState` as `multidof_joint_state_truth` or
+`multidof_joint_state_candidate`, and
+`trajectory_msgs/msg/MultiDOFJointTrajectory` as
+`multidof_joint_trajectory_truth` or `multidof_joint_trajectory_candidate`.
+TFMessage
 topic-map entries can include `child_frame_id` or `frame_id` to select the UAV
 transform from a shared `/tf` stream; Detection3D, Marker, Path, and PoseArray
 entries can use `frame_id`, with Detection3DArray, MarkerArray, and PoseArray
-rows inheriting the parent message timestamp and frame.
+rows inheriting the parent message timestamp and frame. MultiDOF rows inherit
+the parent frame and use `joint_names` as row provenance and default track IDs
+when available.
 
 The CLI can run native extraction and tracking in one step:
 

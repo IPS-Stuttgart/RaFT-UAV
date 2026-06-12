@@ -42,6 +42,7 @@ from raft_uav.mmuad.mot import (
 from raft_uav.mmuad.native_ros import (
     detection3d_message_to_rows,
     marker_message_to_rows,
+    multidof_message_to_rows,
     position_message_to_row,
     position_message_to_rows,
 )
@@ -3248,6 +3249,39 @@ def test_ros2_topic_map_template_infers_marker_topics(tmp_path: Path) -> None:
     assert payload["exports"][1]["source"] is None
 
 
+def test_ros2_topic_map_template_infers_multidof_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /detector/multidof_state",
+                "        type: sensor_msgs/msg/MultiDOFJointState",
+                "      message_count: 2",
+                "    - topic_metadata:",
+                "        name: /ground_truth/multidof_trajectory",
+                "        type: trajectory_msgs/msg/MultiDOFJointTrajectory",
+                "      message_count: 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "multidof_joint_state_candidate",
+        "multidof_joint_trajectory_truth",
+    ]
+    assert payload["exports"][0]["source"] == "detector_multidof_state"
+    assert payload["exports"][1]["source"] is None
+
+
 def test_native_ros_position_message_to_row_accepts_common_position_messages() -> None:
     point_message = SimpleNamespace(point=SimpleNamespace(x=1.0, y=2.0, z=3.0))
     transform_message = SimpleNamespace(
@@ -3531,6 +3565,80 @@ def test_native_ros_marker_message_to_rows_uses_point_centroid() -> None:
     assert rows[0]["y_m"] == 3.0
     assert rows[0]["z_m"] == 4.0
     assert rows[0]["marker_track_id"] == "points:3"
+
+
+def test_native_ros_multidof_message_to_rows_expands_joint_state() -> None:
+    message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=60, nanosec=125_000_000),
+            frame_id="world",
+        ),
+        joint_names=["uav", "payload"],
+        transforms=[
+            SimpleNamespace(translation=SimpleNamespace(x=1.0, y=2.0, z=3.0)),
+            SimpleNamespace(translation=SimpleNamespace(x=4.0, y=5.0, z=6.0)),
+        ],
+    )
+
+    rows = multidof_message_to_rows(
+        message,
+        sequence_id="seq_multidof",
+        time_s=1.0,
+        frame_id="world",
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["sequence_id"] == "seq_multidof"
+    assert rows[0]["time_s"] == 60.125
+    assert rows[0]["x_m"] == 1.0
+    assert rows[0]["frame_id"] == "world"
+    assert rows[0]["joint_name"] == "uav"
+    assert rows[0]["multidof_transform_index"] == 0
+    assert rows[1]["joint_name"] == "payload"
+    assert rows[1]["z_m"] == 6.0
+
+
+def test_native_ros_multidof_message_to_rows_expands_trajectory_points() -> None:
+    trajectory = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=70, nanosec=0),
+            frame_id="world",
+        ),
+        joint_names=["uav"],
+        points=[
+            SimpleNamespace(
+                time_from_start=SimpleNamespace(sec=1, nanosec=500_000_000),
+                transforms=[
+                    SimpleNamespace(
+                        translation=SimpleNamespace(x=1.0, y=2.0, z=3.0)
+                    )
+                ],
+            ),
+            SimpleNamespace(
+                time_from_start=SimpleNamespace(sec=3, nanosec=0),
+                transforms=[
+                    SimpleNamespace(
+                        translation=SimpleNamespace(x=4.0, y=5.0, z=6.0)
+                    )
+                ],
+            ),
+        ],
+    )
+
+    rows = multidof_message_to_rows(
+        trajectory,
+        sequence_id="seq_multidof_traj",
+        time_s=1.0,
+        frame_id="world",
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["time_s"] == 71.5
+    assert rows[0]["joint_name"] == "uav"
+    assert rows[0]["multidof_point_index"] == 0
+    assert rows[1]["time_s"] == 73.0
+    assert rows[1]["x_m"] == 4.0
+    assert rows[1]["multidof_point_index"] == 1
 
 
 def test_pointcloud2_decoder_and_candidate_clustering() -> None:

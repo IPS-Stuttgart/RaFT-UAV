@@ -175,6 +175,14 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "marker_array_truth" if truth_like else "marker_array_candidate"
     if compact_type.endswith("marker"):
         return "marker_truth" if truth_like else "marker_candidate"
+    if compact_type.endswith("multidofjointtrajectory"):
+        return (
+            "multidof_joint_trajectory_truth"
+            if truth_like
+            else "multidof_joint_trajectory_candidate"
+        )
+    if compact_type.endswith("multidofjointstate"):
+        return "multidof_joint_state_truth" if truth_like else "multidof_joint_state_candidate"
     if "tfmessage" in msg_type or msg_type.endswith("/tfmessage"):
         return "tf_truth" if truth_like else "tf_candidate"
     if msg_type.endswith("/path") or msg_type.endswith("msg/path"):

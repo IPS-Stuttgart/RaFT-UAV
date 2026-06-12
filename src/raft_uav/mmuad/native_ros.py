@@ -16,6 +16,8 @@ tracking logs:
 * ``tf2_msgs/msg/TFMessage`` -> transform truth rows or candidate rows;
 * ``nav_msgs/msg/Path`` -> trajectory truth rows or candidate rows;
 * ``nav_msgs/msg/Odometry`` -> truth rows or candidate rows.
+* ``sensor_msgs/msg/MultiDOFJointState`` /
+  ``trajectory_msgs/msg/MultiDOFJointTrajectory`` -> transform rows.
 
 Unknown topics are recorded in the extraction manifest and skipped.
 """
@@ -67,6 +69,9 @@ def extract_native_rosbag_topic_map(
         Convert visualization marker poses into truth/candidate rows.
     ``pose_truth`` / ``odometry_truth``
         Convert pose, pose-with-covariance, or odometry messages into truth rows.
+    ``multidof_joint_state_truth`` / ``multidof_joint_trajectory_truth`` /
+    ``multidof_joint_state_candidate`` / ``multidof_joint_trajectory_candidate``
+        Convert MultiDOF transforms into truth/candidate rows.
     ``point_truth`` / ``transform_truth`` / ``tf_truth`` / ``path_truth`` /
     ``pose_array_truth``
         Convert position-only messages into truth rows.
@@ -198,6 +203,52 @@ def extract_native_rosbag_topic_map(
                                     "class_name",
                                     row.get("class_name", "uav"),
                                 ),
+                            }
+                        )
+                        candidate_rows.append(row)
+                    if candidate_rows:
+                        candidate_frames.append(
+                            CandidateFrame(pd.DataFrame.from_records(candidate_rows))
+                        )
+                    rows = len(candidate_rows)
+                elif kind in {
+                    "multidof_joint_state_truth",
+                    "multidof_joint_trajectory_truth",
+                }:
+                    rows_for_message = multidof_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        frame_id=spec.get("frame_id"),
+                    )
+                    truth_rows.extend(rows_for_message)
+                    rows = len(rows_for_message)
+                elif kind in {
+                    "multidof_joint_state_candidate",
+                    "multidof_joint_trajectory_candidate",
+                }:
+                    rows_for_message = multidof_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        frame_id=spec.get("frame_id"),
+                    )
+                    candidate_rows = []
+                    for row in rows_for_message:
+                        row.update(
+                            {
+                                "source": source,
+                                "track_id": spec.get(
+                                    "track_id",
+                                    row.get(
+                                        "joint_name",
+                                        row.get("child_frame_id", source),
+                                    ),
+                                ),
+                                "std_xy_m": spec.get("std_xy_m", 2.0),
+                                "std_z_m": spec.get("std_z_m", 5.0),
+                                "confidence": spec.get("confidence", 1.0),
+                                "class_name": spec.get("class_name", "uav"),
                             }
                         )
                         candidate_rows.append(row)
@@ -440,6 +491,50 @@ def marker_message_to_rows(
     return rows
 
 
+def multidof_message_to_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    frame_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Convert MultiDOFJointState/Trajectory messages into rows."""
+
+    parent_time_s = _message_stamp_time_s(message)
+    parent_frame_id = _message_frame_id(message)
+    joint_names = _sequence_attr(message, "joint_names")
+    trajectory_points = getattr(message, "points", None)
+    if trajectory_points is not None:
+        rows: list[dict[str, Any]] = []
+        for point_index, point in enumerate(trajectory_points):
+            point_time_s = _multidof_point_time_s(
+                point,
+                parent_time_s=parent_time_s,
+                fallback_time_s=time_s,
+            )
+            rows.extend(
+                _multidof_transforms_to_rows(
+                    getattr(point, "transforms", None),
+                    sequence_id=sequence_id,
+                    time_s=point_time_s,
+                    frame_id=frame_id,
+                    fallback_frame_id=parent_frame_id,
+                    joint_names=joint_names,
+                    point_index=point_index,
+                )
+            )
+        return rows
+    return _multidof_transforms_to_rows(
+        getattr(message, "transforms", None),
+        sequence_id=sequence_id,
+        time_s=parent_time_s if parent_time_s is not None else time_s,
+        frame_id=frame_id,
+        fallback_frame_id=parent_frame_id,
+        joint_names=joint_names,
+        point_index=None,
+    )
+
+
 def position_message_to_rows(
     message: Any,
     *,
@@ -549,6 +644,93 @@ def _message_child_frame_id(message: Any) -> Any | None:
 def _message_frame_id(message: Any) -> Any | None:
     header = getattr(message, "header", None)
     return getattr(header, "frame_id", None)
+
+
+def _sequence_attr(message: Any, name: str) -> list[Any]:
+    value = getattr(message, name, None)
+    if value is None:
+        return []
+    try:
+        return list(value)
+    except TypeError:
+        return []
+
+
+def _multidof_transforms_to_rows(
+    transforms: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    frame_id: str | None,
+    fallback_frame_id: Any | None,
+    joint_names: list[Any],
+    point_index: int | None,
+) -> list[dict[str, Any]]:
+    if transforms is None:
+        return []
+    rows: list[dict[str, Any]] = []
+    for transform_index, transform in enumerate(transforms):
+        if not _frame_filter_matches(
+            transform,
+            child_frame_id=None,
+            frame_id=frame_id,
+            fallback_frame_id=fallback_frame_id,
+        ):
+            continue
+        row = position_message_to_row(
+            transform,
+            sequence_id=sequence_id,
+            time_s=time_s,
+        )
+        _add_frame_metadata(row, transform, fallback_frame_id=fallback_frame_id)
+        _add_multidof_metadata(
+            row,
+            transform_index=transform_index,
+            joint_names=joint_names,
+            point_index=point_index,
+        )
+        rows.append(row)
+    return rows
+
+
+def _add_multidof_metadata(
+    row: dict[str, Any],
+    *,
+    transform_index: int,
+    joint_names: list[Any],
+    point_index: int | None,
+) -> None:
+    row["multidof_transform_index"] = int(transform_index)
+    if point_index is not None:
+        row["multidof_point_index"] = int(point_index)
+    if transform_index < len(joint_names) and joint_names[transform_index] not in (None, ""):
+        row["joint_name"] = str(joint_names[transform_index])
+
+
+def _multidof_point_time_s(
+    point: Any,
+    *,
+    parent_time_s: float | None,
+    fallback_time_s: float,
+) -> float:
+    point_stamp = _message_stamp_time_s(point)
+    if point_stamp is not None:
+        return point_stamp
+    duration = _duration_time_s(getattr(point, "time_from_start", None))
+    base = parent_time_s if parent_time_s is not None else float(fallback_time_s)
+    if duration is None:
+        return base
+    return base + duration
+
+
+def _duration_time_s(duration: Any | None) -> float | None:
+    if duration is None:
+        return None
+    sec = getattr(duration, "sec", getattr(duration, "secs", None))
+    nanosec = getattr(duration, "nanosec", getattr(duration, "nsecs", 0))
+    if sec is None:
+        return None
+    return float(sec) + float(nanosec) * 1.0e-9
 
 
 def _position_from_message(message: Any) -> Any | None:
