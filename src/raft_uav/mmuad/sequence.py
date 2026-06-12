@@ -114,6 +114,15 @@ CAMERA_BBOX_X_ALIASES = ("x1", "xmin", "bbox_x1", "left")
 CAMERA_BBOX_Y_ALIASES = ("y1", "ymin", "bbox_y1", "top")
 CAMERA_BBOX_X2_ALIASES = ("x2", "xmax", "bbox_x2", "right")
 CAMERA_BBOX_Y2_ALIASES = ("y2", "ymax", "bbox_y2", "bottom")
+CAMERA_COMPACT_BBOX_ALIASES = (
+    "bbox",
+    "bbox_xywh",
+    "xywh",
+    "box_xywh",
+    "bbox_xyxy",
+    "xyxy",
+    "box_xyxy",
+)
 
 
 @dataclass(frozen=True)
@@ -846,7 +855,8 @@ def _table_has_camera_detection_columns(path: Path) -> bool:
         and _has_any_column(lower, CAMERA_BBOX_X2_ALIASES)
         and _has_any_column(lower, CAMERA_BBOX_Y2_ALIASES)
     )
-    return has_pixel_center or has_bbox
+    has_compact_bbox = _has_any_column(lower, CAMERA_COMPACT_BBOX_ALIASES)
+    return has_pixel_center or has_bbox or has_compact_bbox
 
 
 def _table_has_column_groups(path: Path, *alias_groups: tuple[str, ...]) -> bool:

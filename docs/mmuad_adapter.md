@@ -637,8 +637,10 @@ extrinsics. Detections can provide `u_px`/`v_px` or
 `x1,y1,x2,y2` boxes. JSON exports may be row lists, column maps, or objects with
 keys such as `camera_detections`, `detections`, `boxes`, `rows`, or `data`.
 Depth must come from `depth_m`/`range_m`, or from a fixed fallback via
-`--camera-fixed-depth-m`. This bridge does not run image object detection; it
-consumes detector exports.
+`--camera-fixed-depth-m`. Compact boxes such as COCO-style
+`bbox=[x,y,width,height]` / `bbox_xywh` and explicit `bbox_xyxy` are also
+accepted. This bridge does not run image object detection; it consumes detector
+exports.
 
 ### Sequence Class Inference
 

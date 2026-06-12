@@ -919,6 +919,51 @@ def test_sequence_root_discovers_json_camera_detection_tables(tmp_path: Path) ->
     assert truth is not None
 
 
+def test_sequence_root_discovers_camera_compact_bbox_columns(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_camera_bbox"
+    camera = seq / "cam0"
+    camera.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "bbox": ["[40, 40, 20, 20]"],
+            "depth_m": [5.0],
+        }
+    ).to_csv(camera / "export.csv", index=False)
+    (seq / "calibration.json").write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "x_m": [0.0],
+            "y_m": [0.0],
+            "z_m": [5.0],
+        }
+    ).to_csv(seq / "truth.csv", index=False)
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].camera_detection_csvs == (camera / "export.csv",)
+    row = candidates.rows.iloc[0]
+    assert row["source"] == "cam0"
+    assert (row["x_m"], row["y_m"], row["z_m"]) == (0.0, 0.0, 5.0)
+    assert truth is not None
+
+
 def test_sequence_root_discovers_camera_info_intrinsics_file(tmp_path: Path) -> None:
     seq = tmp_path / "seq_camera_info"
     camera = seq / "cam0"
