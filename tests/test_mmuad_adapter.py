@@ -1017,6 +1017,52 @@ def test_sequence_root_loads_json_class_labels(tmp_path: Path) -> None:
     assert results["uav_type"].tolist() == ["quadrotor", "quadrotor"]
 
 
+def test_sequence_root_loads_yaml_class_labels(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_yaml_class"
+    seq.mkdir()
+    (seq / "candidates.json").write_text(
+        json.dumps(
+            {
+                "candidates": [
+                    {"time_s": 0.0, "x_m": 0.0, "y_m": 0.0, "z_m": 1.0},
+                    {"time_s": 1.0, "x_m": 1.0, "y_m": 0.0, "z_m": 1.0},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (seq / "truth.json").write_text(
+        json.dumps(
+            {
+                "truth": [
+                    {"time_s": 0.0, "x_m": 0.0, "y_m": 0.0, "z_m": 1.0},
+                    {"time_s": 1.0, "x_m": 1.0, "y_m": 0.0, "z_m": 1.0},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (seq / "classes.yaml").write_text(
+        "\n".join(
+            [
+                "class_map:",
+                "  seq_yaml_class:",
+                "    uav_type: quadrotor",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].class_files == (seq / "classes.yaml",)
+    assert candidates.rows["class_name"].tolist() == ["quadrotor", "quadrotor"]
+    output = run_mmuad_tracker(candidates, truth)
+    results = estimates_to_mmaud_results_frame(output.estimates, class_name="unknown")
+    assert results["uav_type"].tolist() == ["quadrotor", "quadrotor"]
+
+
 def test_sequence_root_discovers_delimited_point_tables(tmp_path: Path) -> None:
     seq = tmp_path / "seq_points_tsv"
     seq.mkdir()
@@ -2461,6 +2507,26 @@ def test_sequence_class_map_accepts_nested_json_mapping(tmp_path: Path) -> None:
     assert mapping == {"seqA": "Mavic3", "seqB": "Phantom4"}
 
 
+def test_sequence_class_map_accepts_yaml_mapping(tmp_path: Path) -> None:
+    class_map_yaml = tmp_path / "classes.yaml"
+    class_map_yaml.write_text(
+        "\n".join(
+            [
+                "class_map:",
+                "  seqA:",
+                "    uav_type: Mavic3",
+                "  seqB:",
+                "    label: Phantom4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mapping = load_sequence_class_map(class_map_yaml)
+
+    assert mapping == {"seqA": "Mavic3", "seqB": "Phantom4"}
+
+
 def test_sequence_class_map_accepts_csv_alias_columns(tmp_path: Path) -> None:
     class_map_csv = tmp_path / "classes.csv"
     class_map_csv.write_text("id,type\nseqA,Mavic3\nseqB,Phantom4\n", encoding="utf-8")
@@ -3336,6 +3402,29 @@ def test_layout_inspectors_classify_json_table_exports(tmp_path: Path) -> None:
     assert sequence["has_candidates_or_points"] is True
     assert sequence["has_truth_or_labels"] is True
     assert sequence["has_class_labels"] is True
+
+
+def test_layout_inspectors_classify_yaml_class_exports(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_yaml_classes"
+    seq.mkdir()
+    (seq / "classes.yaml").write_text(
+        "\n".join(
+            [
+                "class_map:",
+                "  seq_yaml_classes:",
+                "    uav_type: quadrotor",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    detailed = inspect_sequence_root(tmp_path)
+    by_name = {row["relative_path"]: row for row in detailed["files"]}
+    assert by_name["classes.yaml"]["category"] == "class_label"
+
+    inventory = inspect_mmuad_layout(tmp_path)
+    assert inventory["category_counts"]["class_or_label"] == 1
+    assert inventory["sequence_candidates"][0]["has_class_labels"] is True
 
 
 def test_layout_inspectors_classify_yaml_camera_intrinsics(tmp_path: Path) -> None:

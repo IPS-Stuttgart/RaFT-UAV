@@ -40,6 +40,7 @@ from raft_uav.mmuad.schema import CandidateFrame, TruthFrame, normalize_truth_co
 TABLE_SUFFIXES = DISCOVERABLE_DELIMITED_TABLE_SUFFIXES
 JSON_TABLE_SUFFIXES = DISCOVERABLE_JSON_TABLE_SUFFIXES
 JSON_DATA_SUFFIXES = tuple(sorted(IO_JSON_TABLE_SUFFIXES))
+YAML_DATA_SUFFIXES = (".yaml", ".yml")
 CALIBRATION_SUFFIXES = (".json", ".yaml", ".yml")
 TRAJECTORY_SUFFIXES = (".npy", ".npz")
 POINT_CLOUD_EXPORT_SUFFIXES = (
@@ -98,6 +99,9 @@ CLASS_JSON_LABEL_ALIASES = (
 )
 CLASS_JSON_SEQUENCE_ID_ALIASES = ("sequence_id", "sequence", "seq", "scene", "scene_id", "id", "name")
 CLASS_JSON_METADATA_KEYS = ("schema", "version", "description", "metadata", "meta")
+CLASS_FILE_SUFFIXES = (
+    TABLE_SUFFIXES + JSON_TABLE_SUFFIXES + YAML_DATA_SUFFIXES + TRAJECTORY_SUFFIXES
+)
 RADAR_DIR_TOKENS = ("radar", "mmwave", "mmw")
 CAMERA_DIR_TOKENS = ("camera", "cam", "image", "images")
 CAMERA_INTRINSICS_NAMES = {
@@ -792,12 +796,12 @@ def _class_files(path: Path) -> list[Path]:
     exact = [
         path / f"{stem}{suffix}"
         for stem in ("class", "classes", "uav_type", "category")
-        for suffix in TABLE_SUFFIXES + JSON_TABLE_SUFFIXES + TRAJECTORY_SUFFIXES
+        for suffix in CLASS_FILE_SUFFIXES
     ]
     folder_files = _files_under_named_dirs(
         path,
         directory_tokens=CLASS_DIR_TOKENS,
-        suffixes=TABLE_SUFFIXES + JSON_TABLE_SUFFIXES + TRAJECTORY_SUFFIXES,
+        suffixes=CLASS_FILE_SUFFIXES,
     )
     return _unique_paths([item for item in exact if item.exists()] + folder_files)
 
@@ -1144,7 +1148,19 @@ def _class_labels_from_file(path: Path, *, sequence_id: str | None = None) -> li
     if suffix in JSON_DATA_SUFFIXES:
         payload = read_json_export_payload(path)
         return _class_labels_from_json_payload(payload, sequence_id=sequence_id)
+    if suffix in YAML_DATA_SUFFIXES:
+        payload = _read_yaml_export_payload(path)
+        return _class_labels_from_json_payload(payload, sequence_id=sequence_id)
     return []
+
+
+def _read_yaml_export_payload(path: Path) -> Any:
+    text = read_text_export(path)
+    try:
+        import yaml  # type: ignore[import-not-found]
+    except Exception:
+        return json.loads(text)
+    return yaml.safe_load(text)
 
 
 def _class_labels_from_json_payload(

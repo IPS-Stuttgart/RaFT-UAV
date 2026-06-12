@@ -18,6 +18,7 @@ from raft_uav.mmuad.io import DELIMITED_TABLE_SUFFIXES, JSON_TABLE_SUFFIXES, dat
 
 POINT_CLOUD_SUFFIXES = {".pcd", ".ply", ".las", ".laz", ".bin"}
 NUMPY_SUFFIXES = {".npy", ".npz"}
+YAML_SUFFIXES = {".yaml", ".yml"}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 AUDIO_SUFFIXES = {".wav", ".flac", ".aac", ".mp3"}
 BAG_SUFFIXES = {".bag", ".db3", ".mcap"}
@@ -141,9 +142,9 @@ def _classify_file(path: Path, root: Path) -> LayoutFile:
         category = "audio"
     elif name in CALIBRATION_NAMES or "calib" in name or "extrinsic" in name:
         category = "calibration"
-    elif suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
-        token in name or token in parent_text for token in CLASS_TOKENS
-    ):
+    elif suffix in (
+        TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES | YAML_SUFFIXES
+    ) and any(token in name or token in parent_text for token in CLASS_TOKENS):
         category = "class_or_label"
     elif suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
         token in name or token in parent_text for token in TRUTH_TOKENS

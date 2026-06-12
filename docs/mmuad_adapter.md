@@ -151,7 +151,8 @@ one-level split folders and MMUAD-style modality subfolders such as
 `tracking_results/<timestamp>.npy`,
 `radar0/detections.csv` with exported polar range/azimuth columns,
 `cam0/detections.csv` with exported pixel/depth or bounding-box columns, and
-class-label JSON files such as `classes.json` or `class/<timestamp>.json`:
+class-label JSON/YAML files such as `classes.json`, `classes.yaml`, or
+`class/<timestamp>.json`:
 When a generic candidate CSV/TSV/JSON lacks a `source`/`sensor`/`modality`
 column, sequence-root loading uses the enclosing modality folder name such as
 `tracking_results`, `radar0`, or `cam0` as the source.
@@ -449,7 +450,8 @@ images, calibration files, truth/labels, exported/native topic-map JSON files,
 and ROS bag/recording files. JSON table exports follow the same naming
 convention as sequence discovery: `candidates.json`, `detections.json`,
 `truth.json`, and `classes.json` are reported as usable candidate, truth, or
-class-label inputs. NumPy files follow the same convention: `truth.npy` counts
+class-label inputs; YAML class-label files such as `classes.yaml` are also
+classified as class metadata. NumPy files follow the same convention: `truth.npy` counts
 as truth, `trajectory.npz` or `candidates.npy` counts as candidate data, and
 `lidar_points.npy` or `cloud_12.5.npz` counts as point-cloud data. It also lists
 sequence-like folders and recommends the next adapter step. One-level split
@@ -740,8 +742,8 @@ Explicit class maps still take precedence over inferred maps. This is a simple
 weighted-vote classifier, not a learned UAV type recognition model.
 
 Class maps may be simple CSV files with `sequence_id,uav_type`, alias CSV files
-such as `id,type`, plain JSON objects such as `{"seq001": "Mavic3"}`, or
-exported row-style JSON such as
+such as `id,type`, plain JSON/YAML objects such as `{"seq001": "Mavic3"}`, or
+exported row-style JSON/YAML such as
 `{"sequences": [{"id": "seq001", "type": "Mavic3"}]}`.
 
 ## Native ROS And PointCloud2 Bridge
