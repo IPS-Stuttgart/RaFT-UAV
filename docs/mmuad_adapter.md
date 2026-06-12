@@ -680,8 +680,10 @@ The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
 `pointcloud2_candidate`, `geometry_msgs/msg/PoseStamped` as `pose_truth` or
 `pose_candidate`, `geometry_msgs/msg/PointStamped` as `point_truth` or
 `point_candidate`, `geometry_msgs/msg/TransformStamped` as `transform_truth` or
-`transform_candidate`, and `nav_msgs/msg/Odometry` as `odometry_truth` or
-`odometry_candidate`.
+`transform_candidate`, `tf2_msgs/msg/TFMessage` as `tf_truth` or
+`tf_candidate`, and `nav_msgs/msg/Odometry` as `odometry_truth` or
+`odometry_candidate`. TFMessage topic-map entries can include `child_frame_id`
+or `frame_id` to select the UAV transform from a shared `/tf` stream.
 
 The CLI can run native extraction and tracking in one step:
 

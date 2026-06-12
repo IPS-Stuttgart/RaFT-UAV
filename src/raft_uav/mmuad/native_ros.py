@@ -9,6 +9,7 @@ tracking logs:
 * ``geometry_msgs/msg/PoseStamped`` -> truth rows or candidate rows;
 * ``geometry_msgs/msg/PointStamped`` -> truth rows or candidate rows;
 * ``geometry_msgs/msg/TransformStamped`` -> truth rows or candidate rows;
+* ``tf2_msgs/msg/TFMessage`` -> transform truth rows or candidate rows;
 * ``nav_msgs/msg/Odometry`` -> truth rows or candidate rows.
 
 Unknown topics are recorded in the extraction manifest and skipped.
@@ -55,10 +56,10 @@ def extract_native_rosbag_topic_map(
         Decode ``sensor_msgs/msg/PointCloud2`` and cluster points.
     ``pose_truth`` / ``odometry_truth``
         Convert pose/odometry messages into truth rows.
-    ``point_truth`` / ``transform_truth``
+    ``point_truth`` / ``transform_truth`` / ``tf_truth``
         Convert position-only messages into truth rows.
     ``pose_candidate`` / ``odometry_candidate`` / ``point_candidate`` /
-    ``transform_candidate``
+    ``transform_candidate`` / ``tf_candidate``
         Convert pose/odometry messages into candidate detections.
     """
 
@@ -87,7 +88,7 @@ def extract_native_rosbag_topic_map(
         topic_connections = [connection for connection in reader.connections if connection.topic in by_topic]
         for connection, timestamp_ns, rawdata in reader.messages(connections=topic_connections):
             spec = by_topic[connection.topic]
-            kind = str(spec.get("kind", "candidate"))
+            kind = str(spec.get("kind", "candidate")).strip().lower()
             message = reader.deserialize(rawdata, connection.msgtype)
             time_s = _message_time_s(message, timestamp_ns)
             source = str(spec.get("source") or connection.topic.strip("/").replace("/", "_"))
@@ -103,38 +104,57 @@ def extract_native_rosbag_topic_map(
                     )
                     candidate_frames.append(frame)
                     rows = len(frame.rows)
-                elif kind in {"pose_truth", "odometry_truth", "point_truth", "transform_truth"}:
-                    truth_rows.append(
-                        _position_like_row(
-                            message,
-                            sequence_id=str(spec.get("sequence_id", sequence_id)),
-                            time_s=time_s,
-                        )
+                elif kind in {
+                    "pose_truth",
+                    "odometry_truth",
+                    "point_truth",
+                    "transform_truth",
+                    "tf_truth",
+                }:
+                    rows_for_message = position_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        child_frame_id=spec.get("child_frame_id"),
+                        frame_id=spec.get("frame_id"),
                     )
-                    rows = 1
+                    truth_rows.extend(rows_for_message)
+                    rows = len(rows_for_message)
                 elif kind in {
                     "pose_candidate",
                     "odometry_candidate",
                     "point_candidate",
                     "transform_candidate",
+                    "tf_candidate",
                 }:
-                    row = _position_like_row(
+                    rows_for_message = position_message_to_rows(
                         message,
                         sequence_id=str(spec.get("sequence_id", sequence_id)),
                         time_s=time_s,
+                        child_frame_id=spec.get("child_frame_id"),
+                        frame_id=spec.get("frame_id"),
                     )
-                    row.update(
-                        {
-                            "source": source,
-                            "track_id": spec.get("track_id", source),
-                            "std_xy_m": spec.get("std_xy_m", 2.0),
-                            "std_z_m": spec.get("std_z_m", 5.0),
-                            "confidence": spec.get("confidence", 1.0),
-                            "class_name": spec.get("class_name", "uav"),
-                        }
-                    )
-                    candidate_frames.append(CandidateFrame(pd.DataFrame.from_records([row])))
-                    rows = 1
+                    candidate_rows = []
+                    for row in rows_for_message:
+                        row.update(
+                            {
+                                "source": source,
+                                "track_id": spec.get(
+                                    "track_id",
+                                    row.get("child_frame_id", source),
+                                ),
+                                "std_xy_m": spec.get("std_xy_m", 2.0),
+                                "std_z_m": spec.get("std_z_m", 5.0),
+                                "confidence": spec.get("confidence", 1.0),
+                                "class_name": spec.get("class_name", "uav"),
+                            }
+                        )
+                        candidate_rows.append(row)
+                    if candidate_rows:
+                        candidate_frames.append(
+                            CandidateFrame(pd.DataFrame.from_records(candidate_rows))
+                        )
+                    rows = len(candidate_rows)
                 else:
                     extracted.append({"topic": connection.topic, "kind": kind, "status": "unsupported"})
                     continue
@@ -180,6 +200,13 @@ def extract_native_rosbag_topic_map(
 
 
 def _message_time_s(message: Any, fallback_timestamp_ns: int) -> float:
+    stamp_time_s = _message_stamp_time_s(message)
+    if stamp_time_s is not None:
+        return stamp_time_s
+    return float(fallback_timestamp_ns) * 1.0e-9
+
+
+def _message_stamp_time_s(message: Any) -> float | None:
     header = getattr(message, "header", None)
     stamp = getattr(header, "stamp", None)
     if stamp is not None:
@@ -187,7 +214,7 @@ def _message_time_s(message: Any, fallback_timestamp_ns: int) -> float:
         nanosec = getattr(stamp, "nanosec", getattr(stamp, "nsecs", 0))
         if sec is not None:
             return float(sec) + float(nanosec) * 1.0e-9
-    return float(fallback_timestamp_ns) * 1.0e-9
+    return None
 
 
 def position_message_to_row(message: Any, *, sequence_id: str, time_s: float) -> dict[str, Any]:
@@ -205,8 +232,77 @@ def position_message_to_row(message: Any, *, sequence_id: str, time_s: float) ->
     }
 
 
-def _position_like_row(message: Any, *, sequence_id: str, time_s: float) -> dict[str, Any]:
-    return position_message_to_row(message, sequence_id=sequence_id, time_s=time_s)
+def position_message_to_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    child_frame_id: str | None = None,
+    frame_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Convert a position-bearing message or TFMessage into normalized rows."""
+
+    transforms = getattr(message, "transforms", None)
+    if transforms is not None:
+        rows: list[dict[str, Any]] = []
+        for transform in transforms:
+            if not _frame_filter_matches(
+                transform,
+                child_frame_id=child_frame_id,
+                frame_id=frame_id,
+            ):
+                continue
+            transform_time_s = _message_stamp_time_s(transform)
+            row = position_message_to_row(
+                transform,
+                sequence_id=sequence_id,
+                time_s=transform_time_s if transform_time_s is not None else time_s,
+            )
+            _add_frame_metadata(row, transform)
+            rows.append(row)
+        return rows
+    if not _frame_filter_matches(
+        message,
+        child_frame_id=child_frame_id,
+        frame_id=frame_id,
+    ):
+        return []
+    row = position_message_to_row(message, sequence_id=sequence_id, time_s=time_s)
+    _add_frame_metadata(row, message)
+    return [row]
+
+
+def _frame_filter_matches(
+    message: Any,
+    *,
+    child_frame_id: str | None,
+    frame_id: str | None,
+) -> bool:
+    message_child = _message_child_frame_id(message)
+    message_frame = _message_frame_id(message)
+    if child_frame_id is not None and str(message_child) != str(child_frame_id):
+        return False
+    if frame_id is not None and str(message_frame) != str(frame_id):
+        return False
+    return True
+
+
+def _add_frame_metadata(row: dict[str, Any], message: Any) -> None:
+    child_frame = _message_child_frame_id(message)
+    frame = _message_frame_id(message)
+    if child_frame is not None:
+        row["child_frame_id"] = str(child_frame)
+    if frame is not None:
+        row["frame_id"] = str(frame)
+
+
+def _message_child_frame_id(message: Any) -> Any | None:
+    return getattr(message, "child_frame_id", None)
+
+
+def _message_frame_id(message: Any) -> Any | None:
+    header = getattr(message, "header", None)
+    return getattr(header, "frame_id", None)
 
 
 def _position_from_message(message: Any) -> Any | None:

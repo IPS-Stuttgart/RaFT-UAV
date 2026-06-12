@@ -39,7 +39,7 @@ from raft_uav.mmuad.mot import (
     compute_multi_object_metrics,
     run_mmuad_multi_object_tracker,
 )
-from raft_uav.mmuad.native_ros import position_message_to_row
+from raft_uav.mmuad.native_ros import position_message_to_row, position_message_to_rows
 from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates, pointcloud2_to_dataframe
 from raft_uav.mmuad.rosbag_bridge import (
     inspect_rosbag,
@@ -3045,6 +3045,39 @@ def test_ros2_topic_map_template_infers_point_and_transform_topics(
     assert payload["exports"][1]["source"] is None
 
 
+def test_ros2_topic_map_template_infers_tf_message_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /tf",
+                "        type: tf2_msgs/msg/TFMessage",
+                "      message_count: 4",
+                "    - topic_metadata:",
+                "        name: /ground_truth/tf",
+                "        type: tf2_msgs/msg/TFMessage",
+                "      message_count: 4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "tf_candidate",
+        "tf_truth",
+    ]
+    assert payload["exports"][0]["source"] == "tf"
+    assert payload["exports"][1]["source"] is None
+
+
 def test_native_ros_position_message_to_row_accepts_common_position_messages() -> None:
     point_message = SimpleNamespace(point=SimpleNamespace(x=1.0, y=2.0, z=3.0))
     transform_message = SimpleNamespace(
@@ -3076,6 +3109,42 @@ def test_native_ros_position_message_to_row_accepts_common_position_messages() -
     assert transform_row["x_m"] == 4.0
     assert transform_row["time_s"] == 2.5
     assert pose_row["z_m"] == 9.0
+
+
+def test_native_ros_position_message_to_rows_filters_tf_message_transforms() -> None:
+    stamp = SimpleNamespace(sec=10, nanosec=250_000_000)
+    tf_message = SimpleNamespace(
+        transforms=[
+            SimpleNamespace(
+                header=SimpleNamespace(stamp=stamp, frame_id="world"),
+                child_frame_id="uav",
+                transform=SimpleNamespace(
+                    translation=SimpleNamespace(x=1.0, y=2.0, z=3.0)
+                ),
+            ),
+            SimpleNamespace(
+                header=SimpleNamespace(frame_id="world"),
+                child_frame_id="camera",
+                transform=SimpleNamespace(
+                    translation=SimpleNamespace(x=4.0, y=5.0, z=6.0)
+                ),
+            ),
+        ]
+    )
+
+    rows = position_message_to_rows(
+        tf_message,
+        sequence_id="seq_tf",
+        time_s=1.0,
+        child_frame_id="uav",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["sequence_id"] == "seq_tf"
+    assert rows[0]["time_s"] == 10.25
+    assert rows[0]["x_m"] == 1.0
+    assert rows[0]["child_frame_id"] == "uav"
+    assert rows[0]["frame_id"] == "world"
 
 
 def test_pointcloud2_decoder_and_candidate_clustering() -> None:
