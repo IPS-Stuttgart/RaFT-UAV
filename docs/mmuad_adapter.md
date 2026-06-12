@@ -135,6 +135,9 @@ modality subfolders such as `livox_avia/<timestamp>.npy`,
 `radar0/detections.csv` with exported polar range/azimuth columns,
 `cam0/detections.csv` with exported pixel/depth or bounding-box columns, and
 class-label JSON files such as `classes.json` or `class/<timestamp>.json`:
+When a generic candidate CSV/TSV/JSON lacks a `source`/`sensor`/`modality`
+column, sequence-root loading uses the enclosing modality folder name such as
+`tracking_results`, `radar0`, or `cam0` as the source.
 
 ```text
 data/mmuad_export/

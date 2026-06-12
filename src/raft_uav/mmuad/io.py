@@ -18,11 +18,19 @@ from raft_uav.mmuad.schema import (
 )
 
 
-def load_candidate_csv(path: Path, *, default_sequence_id: str = "default") -> CandidateFrame:
+def load_candidate_csv(
+    path: Path,
+    *,
+    default_sequence_id: str = "default",
+    source: str = "candidate",
+) -> CandidateFrame:
     """Load a normalized or alias-compatible candidate CSV."""
 
+    raw = pd.read_csv(path)
+    if not _has_any_column(raw, ("source", "sensor", "modality")):
+        raw["source"] = source
     rows = normalize_candidate_columns(
-        pd.read_csv(path),
+        raw,
         default_sequence_id=default_sequence_id,
     )
     frame = CandidateFrame(rows)
@@ -41,7 +49,11 @@ def load_candidate_file(
     path = Path(path)
     suffix = path.suffix.lower()
     if suffix == ".csv":
-        return load_candidate_csv(path, default_sequence_id=default_sequence_id)
+        return load_candidate_csv(
+            path,
+            default_sequence_id=default_sequence_id,
+            source=source,
+        )
     if suffix in {".tsv", ".txt"}:
         raw = _read_delimited_table(path)
     elif suffix == ".json":

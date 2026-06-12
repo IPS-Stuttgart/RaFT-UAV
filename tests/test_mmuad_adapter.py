@@ -115,6 +115,22 @@ def test_candidate_loader_accepts_nanosecond_timestamps(tmp_path: Path) -> None:
     assert abs(float(frame.rows.loc[0, "time_s"]) - 1.5) < 1e-12
 
 
+def test_candidate_csv_loader_uses_default_source_hint(tmp_path: Path) -> None:
+    path = tmp_path / "detections.csv"
+    pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "x_m": [1.0],
+            "y_m": [2.0],
+            "z_m": [3.0],
+        }
+    ).to_csv(path, index=False)
+
+    frame = load_candidate_file(path, source="camera_front")
+
+    assert frame.rows.loc[0, "source"] == "camera_front"
+
+
 def test_candidate_json_loader_accepts_nested_rows(tmp_path: Path) -> None:
     path = tmp_path / "candidates.json"
     path.write_text(
@@ -2200,6 +2216,37 @@ def test_sequence_root_loads_nested_tracking_results_as_candidates(tmp_path: Pat
     assert candidates.rows["time_s"].tolist() == [20.0, 20.1]
     assert truth is not None
     assert truth.rows["time_s"].tolist() == [20.0, 20.1]
+
+
+def test_sequence_root_preserves_nested_candidate_csv_source_hint(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_csv_result"
+    results = seq / "tracking_results"
+    truth_dir = seq / "ground_truth"
+    results.mkdir(parents=True)
+    truth_dir.mkdir()
+    pd.DataFrame(
+        {
+            "time_s": [20.0],
+            "x_m": [1.0],
+            "y_m": [2.0],
+            "z_m": [3.0],
+        }
+    ).to_csv(results / "detections.csv", index=False)
+    pd.DataFrame(
+        {
+            "time_s": [20.0],
+            "x_m": [1.0],
+            "y_m": [2.0],
+            "z_m": [3.0],
+        }
+    ).to_csv(truth_dir / "truth.csv", index=False)
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].candidate_csvs == (results / "detections.csv",)
+    assert candidates.rows["source"].tolist() == ["tracking_results"]
+    assert truth is not None
 
 
 def test_cli_accepts_explicit_numpy_candidate_and_truth_files(tmp_path: Path) -> None:
