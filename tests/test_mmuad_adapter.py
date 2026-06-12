@@ -2930,6 +2930,57 @@ def test_topic_map_exports_treat_native_truth_kinds_as_truth(tmp_path: Path) -> 
     ]
 
 
+def test_topic_map_exports_convert_radar_polar_candidate_tables(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    pd.DataFrame(
+        {
+            "stamp": [1.25],
+            "rng": [10.0],
+            "bearing": [90.0],
+            "track": ["r1"],
+        }
+    ).to_csv(exports / "radar_polar.csv", index=False)
+    topic_map = tmp_path / "topic_map_radar_polar.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_radar_polar_topic",
+                "exports": [
+                    {
+                        "kind": "radar_polar_candidate",
+                        "path": "radar_polar.csv",
+                        "source": "radar0",
+                        "azimuth_convention": "north-clockwise",
+                        "angle_unit": "deg",
+                        "range_std_m": 3.0,
+                        "z_std_m": 4.0,
+                        "column_aliases": {
+                            "stamp": "time_s",
+                            "rng": "range_m",
+                            "bearing": "azimuth_deg",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+
+    assert bundle.candidates.rows["sequence_id"].tolist() == ["seq_radar_polar_topic"]
+    row = bundle.candidates.rows.iloc[0]
+    assert row["source"] == "radar0"
+    assert row["track_id"] == "r1"
+    assert abs(float(row["time_s"]) - 1.25) < 1.0e-12
+    assert abs(float(row["x_m"]) - 10.0) < 1.0e-9
+    assert abs(float(row["y_m"])) < 1.0e-9
+    assert float(row["std_xy_m"]) == 3.0
+    assert float(row["std_z_m"]) == 4.0
+    assert [entry["rows"] for entry in bundle.manifest["loaded_exports"]] == [1]
+
+
 def test_topic_map_exports_cluster_pointcloud2_candidate_tables(tmp_path: Path) -> None:
     exports = tmp_path / "exports"
     exports.mkdir()

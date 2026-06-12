@@ -470,7 +470,10 @@ common ROS message types
 (`pointcloud2_candidate`, `pose_truth`, `odometry_candidate`, and related truth
 variants), while the exported-topic loader still accepts those kinds for CSV or
 JSON table and NumPy exports. Table exports marked as `pointcloud2_candidate`
-are clustered from point rows using the same lightweight point-cloud bridge:
+are clustered from point rows using the same lightweight point-cloud bridge.
+Table exports marked as `radar_polar_candidate` or `polar_radar_candidate`
+are converted from range/azimuth rows using the same polar radar bridge as
+`--radar-polar-file`.
 Table exports marked as `navsatfix_candidate`, `geopoint_candidate`,
 `geopose_candidate`, or their `_truth` variants can provide
 `latitude`/`longitude`/`altitude` columns and `enu_origin_lla` in the topic map;

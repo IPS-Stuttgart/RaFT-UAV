@@ -29,6 +29,7 @@ from raft_uav.mmuad.io import (
     point_rows_to_candidates,
     read_json_table_export,
 )
+from raft_uav.mmuad.radar import radar_polar_frame_to_candidates
 from raft_uav.mmuad.schema import (
     CandidateFrame,
     TruthFrame,
@@ -137,7 +138,16 @@ def load_topic_map_exports(path: Path, *, base_dir: Path | None = None) -> Topic
             continue
         kind = str(spec.get("kind", "candidate"))
         sequence_id = str(spec.get("sequence_id", default_sequence_id))
-        if _is_geodetic_kind(kind):
+        if _is_radar_polar_kind(kind):
+            candidate_frame = _load_topic_radar_polar_export(
+                export_path,
+                spec,
+                sequence_id=sequence_id,
+                source=str(spec.get("source") or spec.get("topic") or "radar_polar"),
+            )
+            candidate_frames.append(candidate_frame)
+            row_count = len(candidate_frame.rows)
+        elif _is_geodetic_kind(kind):
             if _is_truth_kind(kind):
                 truth_frame = _load_topic_geodetic_truth_export(
                     export_path,
@@ -244,6 +254,16 @@ def _is_geodetic_kind(kind: str) -> bool:
     return normalized.startswith(("navsatfix_", "geopoint_", "geopose_"))
 
 
+def _is_radar_polar_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "radar_polar",
+        "radar_polar_candidate",
+        "polar_radar",
+        "polar_radar_candidate",
+    }
+
+
 _LATITUDE_ALIASES = ("latitude_deg", "latitude", "lat_deg", "lat")
 _LONGITUDE_ALIASES = (
     "longitude_deg",
@@ -347,6 +367,37 @@ def _load_topic_candidate_export(
             rows[column] = spec.get(column)
     return CandidateFrame(
         normalize_candidate_columns(rows, default_sequence_id=sequence_id)
+    )
+
+
+def _load_topic_radar_polar_export(
+    path: Path,
+    spec: dict[str, Any],
+    *,
+    sequence_id: str,
+    source: str,
+) -> CandidateFrame:
+    if not _is_table_export(path):
+        raise ValueError(f"radar polar topic exports must be table files: {path}")
+    frame = _apply_aliases(_read_topic_table(path), spec)
+    return radar_polar_frame_to_candidates(
+        frame,
+        source=source,
+        sequence_id=sequence_id,
+        azimuth_convention=str(
+            spec.get(
+                "azimuth_convention",
+                spec.get("radar_azimuth_convention", "north-clockwise"),
+            )
+        ),
+        angle_unit=str(spec.get("angle_unit", spec.get("radar_angle_unit", "deg"))),
+        range_std_m=float(
+            spec.get("range_std_m", spec.get("radar_polar_range_std_m", 2.0))
+        ),
+        angle_std_deg=float(
+            spec.get("angle_std_deg", spec.get("radar_polar_angle_std_deg", 2.0))
+        ),
+        z_std_m=float(spec.get("z_std_m", spec.get("radar_polar_z_std_m", 5.0))),
     )
 
 
