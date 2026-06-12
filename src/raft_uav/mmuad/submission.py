@@ -52,6 +52,12 @@ _UAV_TYPE_ALIASES = (
 )
 _CLASS_MAP_KEYS = ("sequences", "class_map", "classes", "mapping", "items")
 _CLASS_MAP_METADATA_KEYS = ("schema", "version", "description", "metadata")
+_COORDINATE_COLUMN_SETS = (
+    ("state_x_m", "state_y_m", "state_z_m"),
+    ("east_m", "north_m", "up_m"),
+    ("x_m", "y_m", "z_m"),
+    ("x", "y", "z"),
+)
 
 
 def load_sequence_class_map(path: Path | None) -> dict[str, str]:
@@ -190,6 +196,16 @@ def _estimate_sequence_values(
     return pd.Series([default_sequence_id] * len(estimates), index=estimates.index)
 
 
+def _estimate_coordinate_columns(estimates: pd.DataFrame) -> tuple[str, str, str]:
+    """Return x/y/z coordinate columns for supported estimate table schemas."""
+
+    for columns in _COORDINATE_COLUMN_SETS:
+        if all(column in estimates.columns for column in columns):
+            return columns
+    expected = " or ".join(", ".join(columns) for columns in _COORDINATE_COLUMN_SETS)
+    raise KeyError(f"estimates must contain coordinate columns: {expected}")
+
+
 def estimates_to_mmaud_results_frame(
     estimates: pd.DataFrame,
     *,
@@ -207,6 +223,7 @@ def estimates_to_mmaud_results_frame(
 
     if estimates.empty:
         return pd.DataFrame(columns=UG2_RESULT_COLUMNS)
+    x_column, y_column, z_column = _estimate_coordinate_columns(estimates)
     sequence_values = _estimate_sequence_values(estimates)
     if "class_name" in estimates.columns:
         class_values = estimates["class_name"].fillna(class_name).astype(str)
@@ -224,9 +241,9 @@ def estimates_to_mmaud_results_frame(
         {
             "sequence_id": sequence_values,
             "timestamp": estimates["time_s"].astype(float),
-            "x": estimates["state_x_m"].astype(float),
-            "y": estimates["state_y_m"].astype(float),
-            "z": estimates["state_z_m"].astype(float),
+            "x": estimates[x_column].astype(float),
+            "y": estimates[y_column].astype(float),
+            "z": estimates[z_column].astype(float),
             "uav_type": class_values,
             "score": 1.0,
         }
@@ -309,12 +326,13 @@ def estimates_to_submission_frame(
 
     if estimates.empty:
         return pd.DataFrame(columns=SUBMISSION_COLUMNS)
+    x_column, y_column, z_column = _estimate_coordinate_columns(estimates)
     numeric = pd.DataFrame(
         {
             "time_s": pd.to_numeric(estimates["time_s"], errors="coerce"),
-            "x_m": pd.to_numeric(estimates["state_x_m"], errors="coerce"),
-            "y_m": pd.to_numeric(estimates["state_y_m"], errors="coerce"),
-            "z_m": pd.to_numeric(estimates["state_z_m"], errors="coerce"),
+            "x_m": pd.to_numeric(estimates[x_column], errors="coerce"),
+            "y_m": pd.to_numeric(estimates[y_column], errors="coerce"),
+            "z_m": pd.to_numeric(estimates[z_column], errors="coerce"),
         },
         index=estimates.index,
     )
