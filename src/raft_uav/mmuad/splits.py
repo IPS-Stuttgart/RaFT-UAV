@@ -59,6 +59,32 @@ def filter_sequences_by_split(
     return [sequence for sequence in sequences if sequence.sequence_id in wanted]
 
 
+def filter_sequences_by_split_folder(
+    sequences: list[SequencePaths],
+    root: Path,
+    split_name: str,
+) -> list[SequencePaths]:
+    """Return sequences whose path is under a top-level split folder.
+
+    This supports MMUAD-style roots such as ``train/seq001`` and ``val/seq002``
+    when no explicit split manifest has been exported.
+    """
+
+    root = Path(root)
+    wanted = str(split_name)
+    out: list[SequencePaths] = []
+    for sequence in sequences:
+        try:
+            parts = sequence.root.relative_to(root).parts
+        except ValueError:
+            parts = sequence.root.parts
+        if parts and parts[0] == wanted:
+            out.append(sequence)
+        elif sequence.root.name == wanted:
+            out.append(sequence)
+    return out
+
+
 def split_manifest_summary(manifest: dict[str, tuple[str, ...]]) -> dict[str, Any]:
     """Return count summary for provenance files."""
 

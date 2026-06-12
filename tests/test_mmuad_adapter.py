@@ -879,6 +879,47 @@ def test_split_manifest_filters_discovered_sequences(tmp_path: Path) -> None:
     assert [sequence.sequence_id for sequence in val_sequences] == ["seq_val"]
 
 
+def test_cli_split_name_filters_top_level_split_folders_without_manifest(tmp_path: Path) -> None:
+    for split, name, x_m in (("train", "seq_train", 100.0), ("val", "seq_val", 1.0)):
+        seq = tmp_path / split / name
+        seq.mkdir(parents=True)
+        pd.DataFrame(
+            {
+                "time_s": [0.0, 1.0],
+                "source": ["radar", "radar"],
+                "track_id": ["r1", "r1"],
+                "x_m": [x_m, x_m + 1.0],
+                "y_m": [0.0, 0.0],
+                "z_m": [1.0, 1.0],
+            }
+        ).to_csv(seq / "candidates.csv", index=False)
+        pd.DataFrame(
+            {
+                "time_s": [0.0, 1.0],
+                "x_m": [x_m, x_m + 1.0],
+                "y_m": [0.0, 0.0],
+                "z_m": [1.0, 1.0],
+            }
+        ).to_csv(seq / "truth.csv", index=False)
+    output = tmp_path / "out"
+
+    status = mmuad_cli_main(
+        [
+            "--sequence-root",
+            str(tmp_path),
+            "--split-name",
+            "val",
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    estimates = pd.read_csv(output / "mmuad_estimates.csv")
+    assert set(estimates["sequence_id"]) == {"seq_val"}
+    assert estimates["state_x_m"].max() < 10.0
+
+
 def test_multi_object_tracker_outputs_tracks_and_mot_metrics(tmp_path: Path) -> None:
     cand_rows = []
     truth_rows = []

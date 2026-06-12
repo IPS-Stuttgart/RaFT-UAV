@@ -240,6 +240,9 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ```
 
 A CSV manifest with columns `sequence_id,split` is also supported.
+If the sequence root is already arranged as split folders such as
+`train/seq001` and `val/seq002`, omit `--split-file` and pass
+`--split-name val`; the CLI filters by the top-level folder name.
 
 ### Basic multi-object mode
 

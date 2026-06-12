@@ -47,7 +47,12 @@ from raft_uav.mmuad.rosbag_bridge import (
     write_topic_map_template,
 )
 from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_export
-from raft_uav.mmuad.splits import filter_sequences_by_split, load_split_manifest, split_manifest_summary
+from raft_uav.mmuad.splits import (
+    filter_sequences_by_split,
+    filter_sequences_by_split_folder,
+    load_split_manifest,
+    split_manifest_summary,
+)
 from raft_uav.mmuad.submission import (
     compute_trajectory_metrics,
     load_sequence_class_map,
@@ -485,6 +490,13 @@ def _run_sequence_root(args: argparse.Namespace):
         sequences = filter_sequences_by_split(sequences, manifest, args.split_name)
         split_summary = split_manifest_summary(manifest)
         print(f"split={args.split_name} sequences={split_summary[args.split_name]['count']}")
+    elif args.split_name:
+        sequences = filter_sequences_by_split_folder(
+            sequences,
+            args.sequence_root,
+            args.split_name,
+        )
+        print(f"split={args.split_name} sequences={len(sequences)}")
     if not sequences:
         raise SystemExit(f"no MMUAD sequence exports found under {args.sequence_root}")
     candidate_frames = []
