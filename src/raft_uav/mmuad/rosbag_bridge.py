@@ -26,6 +26,7 @@ from raft_uav.mmuad.io import (
     load_truth_file,
     merge_candidate_frames,
     point_rows_to_candidates,
+    read_json_table_export,
 )
 from raft_uav.mmuad.schema import (
     CandidateFrame,
@@ -254,6 +255,25 @@ def _load_topic_pointcloud_export(
 
 
 def _read_topic_table(path: Path) -> pd.DataFrame:
+    if path.suffix.lower() == ".json":
+        return read_json_table_export(
+            path,
+            preferred=(
+                "points",
+                "point_cloud",
+                "pointcloud",
+                "candidates",
+                "detections",
+                "truth",
+                "ground_truth",
+                "gt",
+                "poses",
+                "trajectory",
+                "trajectories",
+                "rows",
+                "data",
+            ),
+        )
     if path.suffix.lower() == ".tsv":
         return pd.read_csv(path, sep="\t")
     if path.suffix.lower() == ".txt":
@@ -267,7 +287,7 @@ def _apply_aliases(frame: pd.DataFrame, spec: dict[str, Any]) -> pd.DataFrame:
 
 
 def _is_table_export(path: Path) -> bool:
-    return path.suffix.lower() in {".csv", ".tsv", ".txt"}
+    return path.suffix.lower() in {".csv", ".tsv", ".txt", ".json"}
 
 
 def _inspect_ros2_metadata(path: Path) -> dict[str, Any]:

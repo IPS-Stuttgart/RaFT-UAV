@@ -275,6 +275,14 @@ def merge_candidate_frames(frames: Iterable[CandidateFrame]) -> CandidateFrame:
     return CandidateFrame(normalize_candidate_columns(pd.concat(rows, ignore_index=True)))
 
 
+def read_json_table_export(path: Path, *, preferred: tuple[str, ...]) -> pd.DataFrame:
+    """Read a flexible JSON row/column table export.
+
+    ``preferred`` lists container keys to search before falling back to
+    sequence mappings, row objects, or column maps.
+    """
+
+    return _read_json_table(path, preferred=preferred)
 
 
 def _point_rows_to_candidates(

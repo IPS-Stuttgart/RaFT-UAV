@@ -455,14 +455,17 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ```
 
 Edit the generated topic-map JSON so each relevant topic points to a normalized
-export file, then run the tracker. CSV/TSV/TXT exports can use `column_aliases`;
-compact NumPy trajectory exports such as `radar_trajectory.npy` and `truth.npy`
-use the same `time_s,x_m,y_m,z_m` convention as the explicit-file CLI. The
-template infers native extraction kinds for common ROS message types
+export file, then run the tracker. CSV/TSV/TXT/JSON table exports can use
+`column_aliases`; compact NumPy trajectory exports such as `radar_trajectory.npy`
+and `truth.npy` use the same `time_s,x_m,y_m,z_m` convention as the
+explicit-file CLI. JSON topic exports may use row lists, column maps, or objects
+containing `points`, `point_cloud`, `candidates`, `detections`, `truth`,
+`poses`, `rows`, or `data`. The template infers native extraction kinds for
+common ROS message types
 (`pointcloud2_candidate`, `pose_truth`, `odometry_candidate`, and related truth
 variants), while the exported-topic loader still accepts those kinds for CSV or
-NumPy exports. Table exports marked as `pointcloud2_candidate` are clustered
-from point rows using the same lightweight point-cloud bridge:
+JSON table and NumPy exports. Table exports marked as `pointcloud2_candidate`
+are clustered from point rows using the same lightweight point-cloud bridge:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \

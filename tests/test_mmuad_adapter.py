@@ -2510,6 +2510,76 @@ def test_topic_map_exports_load_candidates_and_truth(tmp_path: Path) -> None:
     assert bundle.candidates.rows.loc[0, "sequence_id"] == "seq_ros"
 
 
+def test_topic_map_exports_load_json_candidates_and_truth(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    (exports / "radar.json").write_text(
+        json.dumps(
+            {
+                "detections": [
+                    {"stamp": 0.0, "px": 0.0, "py": 0.0, "pz": 5.0},
+                    {"stamp": 1.0, "px": 1.0, "py": 0.0, "pz": 5.0},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (exports / "truth.json").write_text(
+        json.dumps(
+            {
+                "truth": [
+                    {"stamp": 0.0, "px": 0.0, "py": 0.0, "pz": 5.0},
+                    {"stamp": 1.0, "px": 1.0, "py": 0.0, "pz": 5.0},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    topic_map = tmp_path / "topic_map_json.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_ros_json",
+                "exports": [
+                    {
+                        "kind": "candidate",
+                        "path": "radar.json",
+                        "source": "radar",
+                        "column_aliases": {
+                            "stamp": "time_s",
+                            "px": "x_m",
+                            "py": "y_m",
+                            "pz": "z_m",
+                        },
+                    },
+                    {
+                        "kind": "truth",
+                        "path": "truth.json",
+                        "column_aliases": {
+                            "stamp": "time_s",
+                            "px": "x_m",
+                            "py": "y_m",
+                            "pz": "z_m",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+
+    assert bundle.candidates.rows["sequence_id"].tolist() == [
+        "seq_ros_json",
+        "seq_ros_json",
+    ]
+    assert bundle.candidates.rows["source"].tolist() == ["radar", "radar"]
+    assert bundle.truth is not None
+    assert bundle.truth.rows["time_s"].tolist() == [0.0, 1.0]
+    assert [row["rows"] for row in bundle.manifest["loaded_exports"]] == [2, 2]
+
+
 def test_topic_map_exports_load_numpy_trajectory_files(tmp_path: Path) -> None:
     exports = tmp_path / "exports"
     exports.mkdir()
@@ -2665,6 +2735,55 @@ def test_topic_map_exports_cluster_pointcloud2_candidate_tables(tmp_path: Path) 
     assert len(bundle.candidates.rows) == 1
     row = bundle.candidates.rows.iloc[0]
     assert row["sequence_id"] == "seq_pointcloud2_exports"
+    assert row["source"] == "lidar"
+    assert abs(float(row["time_s"]) - 7.5) < 1.0e-9
+
+
+def test_topic_map_exports_cluster_pointcloud2_json_point_rows(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    (exports / "lidar_points.json").write_text(
+        json.dumps(
+            {
+                "points": [
+                    {"stamp": 7.5, "x": 0.0, "y": 0.0, "z": 5.0},
+                    {"stamp": 7.5, "x": 0.1, "y": 0.0, "z": 5.1},
+                    {"stamp": 7.5, "x": 0.2, "y": 0.1, "z": 5.0},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    topic_map = tmp_path / "topic_map_pointcloud2_json.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_pointcloud2_json_exports",
+                "exports": [
+                    {
+                        "kind": "pointcloud2_candidate",
+                        "path": "lidar_points.json",
+                        "source": "lidar",
+                        "min_cluster_points": 3,
+                        "voxel_size_m": 0.5,
+                        "column_aliases": {
+                            "stamp": "time_s",
+                            "x": "x_m",
+                            "y": "y_m",
+                            "z": "z_m",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+
+    assert len(bundle.candidates.rows) == 1
+    row = bundle.candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_pointcloud2_json_exports"
     assert row["source"] == "lidar"
     assert abs(float(row["time_s"]) - 7.5) < 1.0e-9
 
