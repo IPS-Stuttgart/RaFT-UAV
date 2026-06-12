@@ -132,7 +132,12 @@ def load_sequence_export(
     min_cluster_points: int = 3,
     radar_azimuth_convention: str = "north-clockwise",
     radar_angle_unit: str = "deg",
+    radar_polar_range_std_m: float = 2.0,
+    radar_polar_angle_std_deg: float = 2.0,
+    radar_polar_z_std_m: float = 5.0,
     camera_fixed_depth_m: float | None = None,
+    camera_std_xy_m: float = 5.0,
+    camera_std_z_m: float = 10.0,
 ) -> tuple[CandidateFrame, TruthFrame | None, CalibrationSet | None]:
     """Load candidates/truth for one discovered sequence export."""
 
@@ -167,6 +172,9 @@ def load_sequence_export(
             sequence_id=paths.sequence_id,
             azimuth_convention=radar_azimuth_convention,
             angle_unit=radar_angle_unit,
+            range_std_m=radar_polar_range_std_m,
+            angle_std_deg=radar_polar_angle_std_deg,
+            z_std_m=radar_polar_z_std_m,
         )
         for path in paths.radar_polar_csvs
     )
@@ -202,6 +210,8 @@ def load_sequence_export(
                 path,
                 camera_models=camera_models,
                 fixed_depth_m=camera_fixed_depth_m,
+                std_xy_m=camera_std_xy_m,
+                std_z_m=camera_std_z_m,
             )
             for path in paths.camera_detection_csvs
         )

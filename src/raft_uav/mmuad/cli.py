@@ -497,7 +497,12 @@ def _run_sequence_root(args: argparse.Namespace):
             min_cluster_points=args.min_cluster_points,
             radar_azimuth_convention=args.radar_azimuth_convention,
             radar_angle_unit=args.radar_angle_unit,
+            radar_polar_range_std_m=args.radar_polar_range_std_m,
+            radar_polar_angle_std_deg=args.radar_polar_angle_std_deg,
+            radar_polar_z_std_m=args.radar_polar_z_std_m,
             camera_fixed_depth_m=args.camera_fixed_depth_m,
+            camera_std_xy_m=args.camera_std_xy_m,
+            camera_std_z_m=args.camera_std_z_m,
         )
         candidate_frames.append(candidates)
         if truth is not None:

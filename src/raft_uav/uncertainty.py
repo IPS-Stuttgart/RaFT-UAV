@@ -161,9 +161,14 @@ def fit_heteroscedastic_uncertainty_model(
         aligned = _aligned_residuals(frame, truth, max_time_delta_s=max_time_delta_s)
         if aligned.empty:
             continue
+        available_dims = tuple(
+            dim for dim in SOURCE_DIMS[source] if f"residual_{dim}_m" in aligned.columns
+        )
+        if not available_dims:
+            continue
         features = RF_FEATURES if source == "rf" else RADAR_FEATURES
         x = feature_matrix(aligned, source, features)
-        for dim in SOURCE_DIMS[source]:
+        for dim in available_dims:
             residual = aligned[f"residual_{dim}_m"].to_numpy(dtype=float)
             target = np.log(np.clip(residual**2, min_std[source][dim] ** 2, max_std[source][dim] ** 2))
             heads.append(

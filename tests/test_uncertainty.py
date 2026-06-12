@@ -56,6 +56,44 @@ def test_fit_model_adds_positive_rf_and_radar_covariance_columns():
     assert "heteroscedastic" in rf_out["uncertainty_model"].iloc[0]
 
 
+def test_fit_model_skips_dimensions_without_residual_columns():
+    truth = pd.DataFrame(
+        {
+            "time_s": np.arange(6, dtype=float),
+            "east_m": np.arange(6, dtype=float) * 10.0,
+            "north_m": np.arange(6, dtype=float) * -2.0,
+            "up_m": np.linspace(20.0, 25.0, 6),
+        }
+    )
+    radar = pd.DataFrame(
+        {
+            "time_s": truth["time_s"],
+            "east_m": truth["east_m"]
+            + np.array([1.0, 2.0, 4.0, 8.0, 16.0, 30.0]),
+            "north_m": truth["north_m"]
+            + np.array([1.0, 1.5, 3.0, 7.0, 15.0, 25.0]),
+            "range_m": [50.0, 100.0, 150.0, 300.0, 500.0, 700.0],
+            "cat_prob_uav": [0.9, 0.9, 0.8, 0.7, 0.6, 0.5],
+        }
+    )
+
+    model = fit_heteroscedastic_uncertainty_model(
+        rf=None,
+        radar=radar,
+        truth=truth,
+    )
+    radar_dims = [
+        head.dimension
+        for head in model.heads
+        if head.source == "radar"
+    ]
+    radar_out = model.apply_radar(radar)
+
+    assert radar_dims == ["east", "north"]
+    assert (radar_out[["cov_ee", "cov_nn"]] > 0.0).all().all()
+    assert "cov_uu" not in radar_out.columns
+
+
 def test_uncertainty_model_save_writes_json_safe_metadata(tmp_path: Path) -> None:
     model = HeteroscedasticUncertaintyModel(
         heads=(
