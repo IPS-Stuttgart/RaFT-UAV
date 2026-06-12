@@ -20,25 +20,30 @@ from raft_uav.mmuad.camera import (
     load_camera_models_from_files,
 )
 from raft_uav.mmuad.io import (
+    DISCOVERABLE_DELIMITED_TABLE_SUFFIXES,
+    DISCOVERABLE_JSON_TABLE_SUFFIXES,
     JSON_TABLE_SUFFIXES as IO_JSON_TABLE_SUFFIXES,
+    data_file_suffix,
     load_candidate_file,
     load_point_cloud_file_as_candidates,
     load_truth_file,
     merge_candidate_frames,
+    path_matches_suffix,
     read_json_export_payload,
+    read_text_export,
 )
 from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
 from raft_uav.mmuad.rosbag_bridge import load_topic_map_exports
 from raft_uav.mmuad.schema import CandidateFrame, TruthFrame, normalize_truth_columns
 
 
-TABLE_SUFFIXES = (".csv", ".tsv", ".txt")
-JSON_TABLE_SUFFIXES = tuple(sorted(IO_JSON_TABLE_SUFFIXES))
+TABLE_SUFFIXES = DISCOVERABLE_DELIMITED_TABLE_SUFFIXES
+JSON_TABLE_SUFFIXES = DISCOVERABLE_JSON_TABLE_SUFFIXES
+JSON_DATA_SUFFIXES = tuple(sorted(IO_JSON_TABLE_SUFFIXES))
+CALIBRATION_SUFFIXES = (".json", ".yaml", ".yml")
 TRAJECTORY_SUFFIXES = (".npy", ".npz")
 POINT_FILE_SUFFIXES = (
-    ".csv",
-    ".tsv",
-    ".txt",
+    *TABLE_SUFFIXES,
     *JSON_TABLE_SUFFIXES,
     ".npy",
     ".npz",
@@ -332,8 +337,11 @@ def load_sequence_export(
     if paths.calibration_file is not None:
         try:
             calibration = load_calibration_auto(paths.calibration_file)
-        except ValueError:
-            if camera_models_loaded and _is_camera_intrinsics_file(paths.calibration_file):
+        except ValueError as exc:
+            if camera_models_loaded and (
+                _is_camera_intrinsics_file(paths.calibration_file)
+                or _is_camera_only_calibration_error(exc)
+            ):
                 calibration = None
             else:
                 raise
@@ -355,6 +363,10 @@ def _looks_like_sequence(path: Path) -> bool:
         or _truth_files(path)
         or _class_files(path)
     )
+
+
+def _is_camera_only_calibration_error(exc: ValueError) -> bool:
+    return "at least one sensor calibration entry" in str(exc)
 
 
 def _sequence_from_dir(path: Path) -> SequencePaths:
@@ -570,14 +582,14 @@ def _camera_calibration_files(path: Path) -> list[Path]:
             "camera_calibration",
             "camera_intrinsics",
         )
-        for suffix in (".json", ".yaml", ".yml")
+        for suffix in CALIBRATION_SUFFIXES
     ]
     sensor_files = [
         item
         for item in _files_under_sensor_dirs(
             path,
             directory_tokens=CAMERA_DIR_TOKENS,
-            suffixes=JSON_TABLE_SUFFIXES + (".yaml", ".yml"),
+            suffixes=CALIBRATION_SUFFIXES,
         )
         if _is_camera_intrinsics_file(item)
     ]
@@ -775,7 +787,7 @@ def _files_under_named_dirs(
     files: list[Path] = []
     suffix_set = {suffix.lower() for suffix in suffixes}
     for item in sorted(path.rglob("*")):
-        if not item.is_file() or item.suffix.lower() not in suffix_set:
+        if not item.is_file() or not path_matches_suffix(item, suffix_set):
             continue
         try:
             parents = Path(item.relative_to(path)).parts[:-1]
@@ -795,7 +807,7 @@ def _files_under_sensor_dirs(
     files: list[Path] = []
     suffix_set = {suffix.lower() for suffix in suffixes}
     for item in sorted(path.rglob("*")):
-        if not item.is_file() or item.suffix.lower() not in suffix_set:
+        if not item.is_file() or not path_matches_suffix(item, suffix_set):
             continue
         try:
             parents = Path(item.relative_to(path)).parts[:-1]
@@ -880,9 +892,9 @@ def _has_any_column(columns: set[str], aliases: tuple[str, ...]) -> bool:
 
 
 def _table_columns(path: Path) -> list[str]:
-    suffix = path.suffix.lower()
+    suffix = data_file_suffix(path)
     try:
-        if suffix in JSON_TABLE_SUFFIXES:
+        if suffix in JSON_DATA_SUFFIXES:
             return _json_table_columns(path)
         if suffix == ".tsv":
             frame = pd.read_csv(path, sep="\t", nrows=0)
@@ -984,7 +996,7 @@ def _sequence_class_label(paths: tuple[Path, ...], *, sequence_id: str) -> str |
 
 
 def _class_labels_from_file(path: Path, *, sequence_id: str | None = None) -> list[str]:
-    suffix = path.suffix.lower()
+    suffix = data_file_suffix(path)
     if suffix in TRAJECTORY_SUFFIXES:
         payload = np.load(path, allow_pickle=False)
         if isinstance(payload, np.lib.npyio.NpzFile):
@@ -993,9 +1005,9 @@ def _class_labels_from_file(path: Path, *, sequence_id: str | None = None) -> li
         else:
             values = np.asarray(payload).reshape(-1)
         return [_format_class_label(value) for value in values]
-    if suffix in TABLE_SUFFIXES:
+    if suffix in {".csv", ".tsv", ".txt"}:
         if suffix == ".txt":
-            raw_text = path.read_text(encoding="utf-8", errors="ignore").strip()
+            raw_text = read_text_export(path, errors="ignore").strip()
             tokens = [token for token in raw_text.replace(",", " ").split() if token]
             if len(tokens) == 1:
                 return [_format_class_label(tokens[0])]
@@ -1009,7 +1021,7 @@ def _class_labels_from_file(path: Path, *, sequence_id: str | None = None) -> li
                 ]
         if not frame.empty:
             return [_format_class_label(value) for value in frame.iloc[:, 0].dropna().tolist()]
-    if suffix in JSON_TABLE_SUFFIXES:
+    if suffix in JSON_DATA_SUFFIXES:
         payload = read_json_export_payload(path)
         return _class_labels_from_json_payload(payload, sequence_id=sequence_id)
     return []
@@ -1114,9 +1126,9 @@ def _class_json_scalar_label(value: Any) -> str | None:
 
 
 def _read_table(path: Path) -> pd.DataFrame:
-    if path.suffix.lower() == ".tsv":
+    if data_file_suffix(path) == ".tsv":
         return pd.read_csv(path, sep="\t")
-    if path.suffix.lower() == ".txt":
+    if data_file_suffix(path) == ".txt":
         return pd.read_csv(path, sep=None, engine="python")
     return pd.read_csv(path)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 from collections import deque
 from pathlib import Path
@@ -17,8 +18,49 @@ from raft_uav.mmuad.schema import (
     normalize_truth_columns,
 )
 
-
+DELIMITED_TABLE_SUFFIXES = {".csv", ".tsv", ".txt"}
 JSON_TABLE_SUFFIXES = {".json", ".jsonl", ".ndjson"}
+COMPRESSED_TABLE_SUFFIX = ".gz"
+DISCOVERABLE_DELIMITED_TABLE_SUFFIXES = tuple(
+    sorted(
+        DELIMITED_TABLE_SUFFIXES
+        | {f"{suffix}{COMPRESSED_TABLE_SUFFIX}" for suffix in DELIMITED_TABLE_SUFFIXES}
+    )
+)
+DISCOVERABLE_JSON_TABLE_SUFFIXES = tuple(
+    sorted(
+        JSON_TABLE_SUFFIXES
+        | {f"{suffix}{COMPRESSED_TABLE_SUFFIX}" for suffix in JSON_TABLE_SUFFIXES}
+    )
+)
+
+
+def data_file_suffix(path: Path) -> str:
+    """Return the logical data suffix, treating ``*.gz`` as transparent compression."""
+
+    suffixes = [suffix.lower() for suffix in Path(path).suffixes]
+    if not suffixes:
+        return ""
+    if suffixes[-1] == COMPRESSED_TABLE_SUFFIX and len(suffixes) >= 2:
+        return suffixes[-2]
+    return suffixes[-1]
+
+
+def path_matches_suffix(path: Path, suffixes: Iterable[str]) -> bool:
+    """Return true when ``path`` ends in any literal suffix from ``suffixes``."""
+
+    name = Path(path).name.lower()
+    return any(name.endswith(suffix.lower()) for suffix in suffixes)
+
+
+def read_text_export(path: Path, *, errors: str | None = None) -> str:
+    """Read UTF-8 text from a plain or gzip-compressed export file."""
+
+    path = Path(path)
+    if path.suffix.lower() == COMPRESSED_TABLE_SUFFIX:
+        with gzip.open(path, "rt", encoding="utf-8", errors=errors) as handle:
+            return handle.read()
+    return path.read_text(encoding="utf-8", errors=errors)
 
 
 def load_candidate_csv(
@@ -50,14 +92,14 @@ def load_candidate_file(
     """Load a normalized candidate table from CSV/TXT/JSON/JSONL or NumPy trajectory rows."""
 
     path = Path(path)
-    suffix = path.suffix.lower()
+    suffix = data_file_suffix(path)
     if suffix == ".csv":
         return load_candidate_csv(
             path,
             default_sequence_id=default_sequence_id,
             source=source,
         )
-    if suffix in {".tsv", ".txt"}:
+    if suffix in DELIMITED_TABLE_SUFFIXES - {".csv"}:
         raw = _read_delimited_table(path)
     elif suffix in JSON_TABLE_SUFFIXES:
         raw = _read_json_table(
@@ -101,10 +143,10 @@ def load_truth_file(path: Path, *, default_sequence_id: str = "default") -> Trut
     """Load a normalized truth table from CSV/TXT/JSON/JSONL or NumPy trajectory rows."""
 
     path = Path(path)
-    suffix = path.suffix.lower()
+    suffix = data_file_suffix(path)
     if suffix == ".csv":
         return load_truth_csv(path, default_sequence_id=default_sequence_id)
-    if suffix in {".tsv", ".txt"}:
+    if suffix in DELIMITED_TABLE_SUFFIXES - {".csv"}:
         rows = normalize_truth_columns(
             _read_delimited_table(path),
             default_sequence_id=default_sequence_id,
@@ -186,9 +228,9 @@ def load_point_cloud_file_as_candidates(
     """
 
     path = Path(path)
-    suffix = path.suffix.lower()
+    suffix = data_file_suffix(path)
     source = source or path.stem.replace("_points", "-cluster")
-    if suffix in {".csv", ".tsv", ".txt"}:
+    if suffix in DELIMITED_TABLE_SUFFIXES:
         points = _read_point_cloud_csv(path)
     elif suffix in JSON_TABLE_SUFFIXES:
         points = _read_point_cloud_json(path)
@@ -550,7 +592,7 @@ def _normalize_point_frame(frame: pd.DataFrame, *, path: Path) -> pd.DataFrame:
 
 
 def _read_delimited_table(path: Path) -> pd.DataFrame:
-    if path.suffix.lower() == ".tsv":
+    if data_file_suffix(path) == ".tsv":
         return pd.read_csv(path, sep="\t")
     return pd.read_csv(path, sep=None, engine="python")
 
@@ -565,15 +607,15 @@ def read_json_export_payload(path: Path) -> Any:
     """Read a JSON table export payload, including newline-delimited JSON rows."""
 
     path = Path(path)
-    if path.suffix.lower() in {".jsonl", ".ndjson"}:
+    if data_file_suffix(path) in {".jsonl", ".ndjson"}:
         rows = []
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in read_text_export(path).splitlines():
             stripped = line.strip()
             if not stripped:
                 continue
             rows.append(json.loads(stripped))
         return rows
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(read_text_export(path))
 
 
 def _json_records_from_payload(payload: Any, *, preferred: tuple[str, ...]) -> Any:

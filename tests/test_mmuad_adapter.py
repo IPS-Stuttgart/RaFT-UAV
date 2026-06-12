@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -189,6 +190,26 @@ def test_candidate_jsonl_loader_accepts_row_exports(tmp_path: Path) -> None:
     assert frame.rows["time_s"].tolist() == [0.0, 1.0]
 
 
+def test_candidate_loader_accepts_gzipped_csv_exports(tmp_path: Path) -> None:
+    path = tmp_path / "candidates.csv.gz"
+    pd.DataFrame(
+        {
+            "sequence_id": ["s1"],
+            "timestamp_s": [2.0],
+            "sensor": ["radar"],
+            "x": [1.0],
+            "y": [2.0],
+            "z": [3.0],
+        }
+    ).to_csv(path, index=False, compression="gzip")
+
+    frame = load_candidate_file(path)
+
+    assert frame.rows.loc[0, "sequence_id"] == "s1"
+    assert frame.rows.loc[0, "source"] == "radar"
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 2.0) < 1.0e-12
+
+
 def test_candidate_json_loader_accepts_column_map(tmp_path: Path) -> None:
     path = tmp_path / "candidates.json"
     path.write_text(
@@ -262,6 +283,21 @@ def test_truth_ndjson_loader_accepts_row_exports(tmp_path: Path) -> None:
         {"sequence_id": "s1", "timestamp_s": 1.0, "x": 2.0, "y": 3.0, "z": 4.0},
     ]
     path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    frame = load_truth_file(path)
+
+    assert frame.rows["sequence_id"].tolist() == ["s1", "s1"]
+    assert frame.rows["time_s"].tolist() == [0.0, 1.0]
+
+
+def test_truth_loader_accepts_gzipped_jsonl_exports(tmp_path: Path) -> None:
+    path = tmp_path / "truth.jsonl.gz"
+    rows = [
+        {"sequence_id": "s1", "timestamp_s": 0.0, "x": 1.0, "y": 2.0, "z": 3.0},
+        {"sequence_id": "s1", "timestamp_s": 1.0, "x": 2.0, "y": 3.0, "z": 4.0},
+    ]
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        handle.write("\n".join(json.dumps(row) for row in rows))
 
     frame = load_truth_file(path)
 
@@ -750,6 +786,43 @@ def test_sequence_root_loads_jsonl_candidate_truth_and_class_exports(tmp_path: P
     assert discovered[0].class_files == (seq / "classes.jsonl",)
     assert candidates.rows["sequence_id"].tolist() == ["seq_jsonl", "seq_jsonl"]
     assert candidates.rows["source"].tolist() == ["radar", "radar"]
+    assert candidates.rows["class_name"].tolist() == ["quadrotor", "quadrotor"]
+    assert truth is not None
+    assert truth.rows["time_s"].tolist() == [0.0, 1.0]
+
+
+def test_sequence_root_loads_gzipped_table_exports(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_gzip"
+    seq.mkdir()
+    pd.DataFrame(
+        {
+            "timestamp_s": [0.0, 1.0],
+            "sensor": ["radar", "radar"],
+            "x_m": [10.0, 11.0],
+            "y_m": [1.0, 1.0],
+            "z_m": [2.0, 2.0],
+        }
+    ).to_csv(seq / "candidates.csv.gz", index=False, compression="gzip")
+    with gzip.open(seq / "truth.jsonl.gz", "wt", encoding="utf-8") as handle:
+        handle.write(
+            "\n".join(
+                json.dumps(row)
+                for row in [
+                    {"time_s": 0.0, "x_m": 10.0, "y_m": 1.0, "z_m": 2.0},
+                    {"time_s": 1.0, "x_m": 11.0, "y_m": 1.0, "z_m": 2.0},
+                ]
+            )
+        )
+    with gzip.open(seq / "classes.jsonl.gz", "wt", encoding="utf-8") as handle:
+        handle.write(json.dumps({"sequence_id": "seq_gzip", "uav_type": "quadrotor"}))
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].candidate_csvs == (seq / "candidates.csv.gz",)
+    assert discovered[0].truth_files == (seq / "truth.jsonl.gz",)
+    assert discovered[0].class_files == (seq / "classes.jsonl.gz",)
+    assert candidates.rows["sequence_id"].tolist() == ["seq_gzip", "seq_gzip"]
     assert candidates.rows["class_name"].tolist() == ["quadrotor", "quadrotor"]
     assert truth is not None
     assert truth.rows["time_s"].tolist() == [0.0, 1.0]
@@ -2597,6 +2670,32 @@ def test_layout_inspectors_classify_jsonl_table_exports(tmp_path: Path) -> None:
     assert by_name["truth.ndjson"]["category"] == "truth"
     assert by_name["lidar_points.jsonl"]["category"] == "point_cloud_csv"
     assert by_name["classes.ndjson"]["category"] == "class_label"
+
+    inventory = inspect_mmuad_layout(tmp_path)
+    assert inventory["category_counts"]["candidate_or_point_table"] == 2
+    assert inventory["category_counts"]["truth_or_label"] == 1
+    assert inventory["category_counts"]["class_or_label"] == 1
+
+
+def test_layout_inspectors_classify_gzipped_table_exports(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_gzip_tables"
+    seq.mkdir()
+    pd.DataFrame(
+        {"time_s": [0.0], "x_m": [0.0], "y_m": [0.0], "z_m": [1.0]}
+    ).to_csv(seq / "candidates.csv.gz", index=False, compression="gzip")
+    with gzip.open(seq / "truth.jsonl.gz", "wt", encoding="utf-8") as handle:
+        handle.write(json.dumps({"time_s": 0.0, "x_m": 0.0, "y_m": 0.0, "z_m": 1.0}))
+    with gzip.open(seq / "lidar_points.jsonl.gz", "wt", encoding="utf-8") as handle:
+        handle.write(json.dumps({"time_s": 0.0, "x_m": 0.0, "y_m": 0.0, "z_m": 1.0}))
+    with gzip.open(seq / "classes.jsonl.gz", "wt", encoding="utf-8") as handle:
+        handle.write(json.dumps({"sequence_id": "seq_gzip_tables", "uav_type": "quadrotor"}))
+
+    detailed = inspect_sequence_root(tmp_path)
+    by_name = {row["relative_path"]: row for row in detailed["files"]}
+    assert by_name["candidates.csv.gz"]["category"] == "candidate"
+    assert by_name["truth.jsonl.gz"]["category"] == "truth"
+    assert by_name["lidar_points.jsonl.gz"]["category"] == "point_cloud_csv"
+    assert by_name["classes.jsonl.gz"]["category"] == "class_label"
 
     inventory = inspect_mmuad_layout(tmp_path)
     assert inventory["category_counts"]["candidate_or_point_table"] == 2
@@ -4595,6 +4694,28 @@ def test_radar_polar_jsonl_converts_to_candidates(tmp_path: Path) -> None:
     assert abs(float(candidates.rows.iloc[1]["x_m"]) - 10.0) < 1.0e-9
 
 
+def test_radar_polar_gzipped_jsonl_converts_to_candidates(tmp_path: Path) -> None:
+    from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
+
+    radar = tmp_path / "radar_polar.jsonl.gz"
+    rows = [
+        {"timestamp_s": 0.0, "range_m": 10.0, "azimuth_deg": 90.0, "track": "r1"},
+    ]
+    with gzip.open(radar, "wt", encoding="utf-8") as handle:
+        handle.write("\n".join(json.dumps(row) for row in rows))
+
+    candidates = load_radar_polar_csv_as_candidates(
+        radar,
+        sequence_id="seq_jsonl_gz_radar",
+        azimuth_convention="north-clockwise",
+    )
+
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_jsonl_gz_radar"
+    assert row["track_id"] == "r1"
+    assert abs(float(row["x_m"]) - 10.0) < 1.0e-9
+
+
 def test_radar_polar_loader_accepts_millisecond_timestamps(tmp_path: Path) -> None:
     from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
 
@@ -4909,6 +5030,50 @@ def test_camera_detections_jsonl_backproject_to_world_candidates(tmp_path: Path)
     row = candidates.rows.iloc[0]
     assert abs(float(row["time_s"]) - 1.0) < 1.0e-12
     assert abs(float(row["x_m"]) - 1.0) < 1.0e-9
+    assert abs(float(row["z_m"]) - 10.0) < 1.0e-9
+
+
+def test_camera_detections_gzipped_jsonl_backproject_to_world_candidates(
+    tmp_path: Path,
+) -> None:
+    from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
+
+    calibration = tmp_path / "camera_calibration.json"
+    calibration.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    detections = tmp_path / "camera_detections.jsonl.gz"
+    with gzip.open(detections, "wt", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "timestamp_s": 1.0,
+                    "source": "cam0",
+                    "bbox": [45.0, 45.0, 10.0, 10.0],
+                    "depth_m": 10.0,
+                }
+            )
+        )
+
+    candidates = load_camera_detections_csv_as_candidates(
+        detections,
+        camera_models=load_camera_models(calibration),
+    )
+
+    row = candidates.rows.iloc[0]
+    assert abs(float(row["time_s"]) - 1.0) < 1.0e-12
     assert abs(float(row["z_m"]) - 10.0) < 1.0e-9
 
 

@@ -26,7 +26,8 @@ or `timestamp_ms`; or as ROS-style second/nanosecond pairs such as
 Candidate and truth rows can also be supplied as JSON row lists, JSONL/NDJSON
 row streams, column maps, or objects containing common keys such as
 `candidates`, `detections`, `truth`, `ground_truth`, `rows`, `data`, or
-`sequences`.
+`sequences`. CSV/TSV/TXT/JSON/JSONL table exports may also be gzip-compressed,
+for example `candidates.csv.gz` or `truth.jsonl.gz`.
 
 Run with exported detector/cluster candidates:
 
@@ -39,7 +40,8 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 
 For non-CSV table or trajectory exports, use the format-aware explicit-file
 flags. Compact NumPy trajectories use `time_s,x_m,y_m,z_m` column order, while
-JSON and JSONL tables use the same column names and aliases as CSV rows:
+JSON and JSONL tables use the same column names and aliases as CSV rows, and
+may use a `.gz` suffix when compressed:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
@@ -120,11 +122,13 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 
 A normalized sequence export can be loaded from folders containing files named
 `candidates.csv`, `detections.csv`, `candidates.json`, `candidates.jsonl`,
-`truth.json`, `*_candidates.csv`, delimited variants such as `candidates.tsv`
-or `detections.txt`, `points.csv`, `points.tsv`, `points.json`,
-`points.jsonl`, `*_points.txt`, `*_points.json`, `*_points.jsonl`, exported
-polar radar and camera detection tables such as `radar_polar.tsv` or
-`radar_polar.json`, `camera_detections.txt`, or `camera_detections.json`,
+`truth.json`, `truth.jsonl.gz`, `*_candidates.csv`, delimited variants such as
+`candidates.tsv` or `detections.txt`, compressed tables such as
+`candidates.csv.gz`, `points.csv`, `points.tsv`, `points.json`,
+`points.jsonl`, `points.jsonl.gz`, `*_points.txt`, `*_points.json`,
+`*_points.jsonl`, exported polar radar and camera detection tables such as
+`radar_polar.tsv` or `radar_polar.json`, `camera_detections.txt`, or
+`camera_detections.json`,
 compact trajectory arrays such as `trajectory.npy` / `candidates.npz`,
 exported ROS topic maps such as `topic_map.json`,
 `truth.csv`, compact truth arrays such as `truth.npy`, and optionally
@@ -237,8 +241,9 @@ private binary archive internals.
 
 ### ASCII PCD/PLY and Point-Cloud Table Exports
 
-In addition to point-cloud CSV/TSV/TXT/JSON/JSONL row tables, exported ASCII `.pcd`
-and `.ply` files can be clustered into candidate centroids. JSON point-cloud
+In addition to point-cloud CSV/TSV/TXT/JSON/JSONL row tables, including
+gzip-compressed variants, exported ASCII `.pcd` and `.ply` files can be
+clustered into candidate centroids. JSON point-cloud
 exports may be row lists, column maps, or objects containing `points`,
 `point_cloud`, `pointcloud`, `cloud`, `lidar_points`, `livox_points`,
 `detections`, `rows`, or `data`. If the file does not contain per-row
@@ -342,8 +347,9 @@ missing for a tracking smoke test.
 
 ### Binary PCD, BIN, and NumPy point clouds
 
-The point-cloud bridge now supports CSV/TSV/TXT/JSON/JSONL tables, ASCII and binary PCD
-files, ASCII PLY files, simple float32 `.bin` files with `x,y,z` or
+The point-cloud bridge now supports CSV/TSV/TXT/JSON/JSONL tables, including
+gzip-compressed variants, ASCII and binary PCD files, ASCII PLY files, simple
+float32 `.bin` files with `x,y,z` or
 `x,y,z,intensity` rows, and simple `.npy` / `.npz` point arrays with shape
 `(N, >=3)`.  This still is not a native Livox packet reader, but it covers
 common exported point-cloud formats used during dataset inspection.
@@ -466,9 +472,10 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 
 Edit the generated topic-map JSON so each relevant topic points to a normalized
 export file, then run the tracker. CSV/TSV/TXT/JSON/JSONL table exports can use
-`column_aliases`; compact NumPy trajectory exports such as `radar_trajectory.npy`
-and `truth.npy` use the same `time_s,x_m,y_m,z_m` convention as the
-explicit-file CLI. JSON topic exports may use row lists, JSONL/NDJSON row
+`column_aliases`, and table exports may be gzip-compressed; compact NumPy
+trajectory exports such as `radar_trajectory.npy` and `truth.npy` use the same
+`time_s,x_m,y_m,z_m` convention as the explicit-file CLI. JSON topic exports
+may use row lists, JSONL/NDJSON row
 streams, column maps, or objects containing `points`, `point_cloud`,
 `candidates`, `detections`, `objects`, `targets`, `measurements`, `returns`,
 `predictions`, `truth`, `fixes`, `gps`, `navsatfix`, `poses`, `rows`, or
@@ -595,7 +602,8 @@ appear in anti-UAV datasets but are not yet parsed from native raw packets.
 ### Polar Radar Table Exports
 
 Use `--radar-polar-csv` for radar detections exported as CSV/TSV/TXT
-range/azimuth rows, or `--radar-polar-file` for JSON/JSONL table exports:
+range/azimuth rows, or `--radar-polar-file` for JSON/JSONL table exports,
+including `.gz` compressed files:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
@@ -625,7 +633,7 @@ later. This is not a native custom radar message parser.
 ### Camera Detector Table Exports
 
 Use `--camera-detections-csv` for detector CSV/TSV/TXT outputs, or
-`--camera-detections-file` for JSON/table exports, with pixel centers or boxes
+`--camera-detections-file` for JSON/JSONL table exports, with pixel centers or boxes
 and metric depth:
 
 ```bash

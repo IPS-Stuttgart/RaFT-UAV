@@ -27,6 +27,8 @@ from raft_uav.mmuad.camera import (
 )
 from raft_uav.mmuad.io import (
     JSON_TABLE_SUFFIXES,
+    DELIMITED_TABLE_SUFFIXES,
+    data_file_suffix,
     load_candidate_file,
     load_point_cloud_file_as_candidates,
     load_truth_file,
@@ -730,7 +732,8 @@ def _load_topic_pointcloud_export(
 
 
 def _read_topic_table(path: Path) -> pd.DataFrame:
-    if path.suffix.lower() in JSON_TABLE_SUFFIXES:
+    suffix = data_file_suffix(path)
+    if suffix in JSON_TABLE_SUFFIXES:
         return read_json_table_export(
             path,
             preferred=(
@@ -761,9 +764,9 @@ def _read_topic_table(path: Path) -> pd.DataFrame:
                 "data",
             ),
         )
-    if path.suffix.lower() == ".tsv":
+    if suffix == ".tsv":
         return pd.read_csv(path, sep="\t")
-    if path.suffix.lower() == ".txt":
+    if suffix == ".txt":
         return pd.read_csv(path, sep=None, engine="python")
     return pd.read_csv(path)
 
@@ -774,7 +777,7 @@ def _apply_aliases(frame: pd.DataFrame, spec: dict[str, Any]) -> pd.DataFrame:
 
 
 def _is_table_export(path: Path) -> bool:
-    return path.suffix.lower() in {".csv", ".tsv", ".txt", *JSON_TABLE_SUFFIXES}
+    return data_file_suffix(path) in DELIMITED_TABLE_SUFFIXES | JSON_TABLE_SUFFIXES
 
 
 def _inspect_ros2_metadata(path: Path) -> dict[str, Any]:

@@ -13,14 +13,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from raft_uav.mmuad.io import JSON_TABLE_SUFFIXES
+from raft_uav.mmuad.io import DELIMITED_TABLE_SUFFIXES, JSON_TABLE_SUFFIXES, data_file_suffix
 
 
 POINT_CLOUD_SUFFIXES = {".pcd", ".ply", ".las", ".laz", ".bin"}
 NUMPY_SUFFIXES = {".npy", ".npz"}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 BAG_SUFFIXES = {".bag", ".db3", ".mcap"}
-TABLE_SUFFIXES = {".csv", ".txt", ".tsv"}
+TABLE_SUFFIXES = DELIMITED_TABLE_SUFFIXES
 CALIBRATION_NAMES = {
     "calibration.json",
     "calib.json",
@@ -115,7 +115,7 @@ def write_layout_report(summary: dict[str, Any], path: Path) -> Path:
 
 
 def _classify_file(path: Path, root: Path) -> LayoutFile:
-    suffix = path.suffix.lower()
+    suffix = data_file_suffix(path)
     name = path.name.lower()
     rel = path.relative_to(root).as_posix()
     parent_text = " ".join(part.lower() for part in Path(rel).parts[:-1])

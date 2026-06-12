@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.calibration import RigidTransform
-from raft_uav.mmuad.io import JSON_TABLE_SUFFIXES, read_json_export_payload
+from raft_uav.mmuad.io import JSON_TABLE_SUFFIXES, data_file_suffix, read_json_export_payload
 from raft_uav.mmuad.schema import (
     CandidateFrame,
     normalize_candidate_columns,
@@ -433,16 +433,16 @@ def _load_json_or_yaml(path: Path) -> dict[str, Any]:
 
 def _read_delimited_table(path: Path) -> pd.DataFrame:
     path = Path(path)
-    if path.suffix.lower() == ".tsv":
+    if data_file_suffix(path) == ".tsv":
         return pd.read_csv(path, sep="\t")
-    if path.suffix.lower() == ".txt":
+    if data_file_suffix(path) == ".txt":
         return pd.read_csv(path, sep=None, engine="python")
     return pd.read_csv(path)
 
 
 def _read_detection_table(path: Path) -> pd.DataFrame:
     path = Path(path)
-    if path.suffix.lower() in JSON_TABLE_SUFFIXES:
+    if data_file_suffix(path) in JSON_TABLE_SUFFIXES:
         return _read_json_detection_table(path)
     return _read_delimited_table(path)
 

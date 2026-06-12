@@ -16,12 +16,17 @@ from typing import Any
 
 import pandas as pd
 
-from raft_uav.mmuad.io import JSON_TABLE_SUFFIXES, infer_time_s_from_filename
+from raft_uav.mmuad.io import (
+    DELIMITED_TABLE_SUFFIXES,
+    JSON_TABLE_SUFFIXES,
+    data_file_suffix,
+    infer_time_s_from_filename,
+)
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 POINT_SUFFIXES = {".pcd", ".ply", ".las", ".laz"}
 NUMPY_SUFFIXES = {".npy", ".npz"}
-TABLE_SUFFIXES = {".csv", ".tsv", ".txt"}
+TABLE_SUFFIXES = DELIMITED_TABLE_SUFFIXES
 CALIBRATION_NAMES = {
     "calibration.json",
     "calib.json",
@@ -149,7 +154,7 @@ def write_layout_report(report: dict[str, Any], *, json_path: Path, csv_path: Pa
 def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
     """Return ``(category, modality, inferred_time_s)`` for a file path."""
 
-    suffix = path.suffix.lower()
+    suffix = data_file_suffix(path)
     name = path.name.lower()
     stem = path.stem.lower()
     parent = path.parent.name.lower()
