@@ -255,7 +255,10 @@ def normalize_candidate_columns(
         )
     for col in ("time_s", "x_m", "y_m", "z_m", "std_xy_m", "std_z_m", "confidence"):
         out[col] = pd.to_numeric(out[col], errors="coerce")
-    out["sequence_id"] = out["sequence_id"].astype(str)
+    out["sequence_id"] = _normalize_sequence_id_values(
+        out["sequence_id"],
+        default_sequence_id=default_sequence_id,
+    )
     out["source"] = out["source"].astype(str)
     out = out.loc[np.isfinite(out[["time_s", "x_m", "y_m", "z_m"]]).all(axis=1)].copy()
     return out.sort_values(["sequence_id", "time_s", "source"]).reset_index(drop=True)
@@ -276,9 +279,25 @@ def normalize_truth_columns(
         if col not in out.columns:
             raise ValueError(f"truth table missing {col!r}; available={list(out.columns)}")
         out[col] = pd.to_numeric(out[col], errors="coerce")
-    out["sequence_id"] = out["sequence_id"].astype(str)
+    out["sequence_id"] = _normalize_sequence_id_values(
+        out["sequence_id"],
+        default_sequence_id=default_sequence_id,
+    )
     out = out.loc[np.isfinite(out[["time_s", "x_m", "y_m", "z_m"]]).all(axis=1)].copy()
     return out.sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+
+
+def _normalize_sequence_id_values(
+    values: pd.Series,
+    *,
+    default_sequence_id: str,
+) -> pd.Series:
+    """Return row-wise sequence ids, filling missing or blank entries."""
+
+    default = str(default_sequence_id)
+    text = values.where(values.notna(), default).astype(str).str.strip()
+    missing = text.eq("") | text.str.lower().isin({"nan", "none", "<na>"})
+    return text.where(~missing, default)
 
 
 def _rename_aliases(frame: pd.DataFrame) -> pd.DataFrame:
