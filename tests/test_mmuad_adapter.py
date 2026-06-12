@@ -2981,6 +2981,67 @@ def test_topic_map_exports_convert_radar_polar_candidate_tables(tmp_path: Path) 
     assert [entry["rows"] for entry in bundle.manifest["loaded_exports"]] == [1]
 
 
+def test_topic_map_exports_convert_camera_detection_tables(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    camera = exports / "cam0"
+    camera.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "stamp": [2.5],
+            "bbox": ["[40, 40, 20, 20]"],
+            "depth_m": [5.0],
+            "score": [0.75],
+        }
+    ).to_csv(camera / "detections.csv", index=False)
+    (camera / "camera_info.json").write_text(
+        json.dumps(
+            {
+                "width": 100,
+                "height": 100,
+                "k": [
+                    100.0,
+                    0.0,
+                    50.0,
+                    0.0,
+                    100.0,
+                    50.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    topic_map = tmp_path / "topic_map_camera.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_camera_topic",
+                "exports": [
+                    {
+                        "kind": "camera_detections_candidate",
+                        "path": "cam0/detections.csv",
+                        "source": "cam0",
+                        "column_aliases": {"stamp": "time_s"},
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+
+    assert bundle.candidates.rows["sequence_id"].tolist() == ["seq_camera_topic"]
+    row = bundle.candidates.rows.iloc[0]
+    assert row["source"] == "cam0"
+    assert abs(float(row["time_s"]) - 2.5) < 1.0e-12
+    assert (row["x_m"], row["y_m"], row["z_m"]) == (0.0, 0.0, 5.0)
+    assert float(row["confidence"]) == 0.75
+    assert [entry["rows"] for entry in bundle.manifest["loaded_exports"]] == [1]
+
+
 def test_topic_map_exports_cluster_pointcloud2_candidate_tables(tmp_path: Path) -> None:
     exports = tmp_path / "exports"
     exports.mkdir()

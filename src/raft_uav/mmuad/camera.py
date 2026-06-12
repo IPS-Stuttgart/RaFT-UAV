@@ -121,7 +121,34 @@ def load_camera_detections_csv_as_candidates(
     camera detector.
     """
 
-    frame = _normalize_camera_detection_columns(_read_detection_table(path))
+    return camera_detection_frame_to_candidates(
+        _read_detection_table(path),
+        camera_models=camera_models,
+        source=source,
+        default_source=default_source,
+        sequence_id=sequence_id,
+        default_sequence_id=Path(path).parent.name,
+        fixed_depth_m=fixed_depth_m,
+        std_xy_m=std_xy_m,
+        std_z_m=std_z_m,
+    )
+
+
+def camera_detection_frame_to_candidates(
+    frame: pd.DataFrame,
+    *,
+    camera_models: dict[str, CameraModel],
+    source: str | None = None,
+    default_source: str | None = None,
+    sequence_id: str | None = None,
+    default_sequence_id: str = "default",
+    fixed_depth_m: float | None = None,
+    std_xy_m: float = 5.0,
+    std_z_m: float = 10.0,
+) -> CandidateFrame:
+    """Convert an exported camera-detection table frame into 3D candidates."""
+
+    frame = _normalize_camera_detection_columns(frame)
     if source is not None:
         frame["source"] = str(source)
     elif "source" not in frame.columns:
@@ -129,7 +156,7 @@ def load_camera_detections_csv_as_candidates(
     if sequence_id is not None:
         frame["sequence_id"] = str(sequence_id)
     elif "sequence_id" not in frame.columns:
-        frame["sequence_id"] = Path(path).parent.name
+        frame["sequence_id"] = str(default_sequence_id)
     if "depth_m" not in frame.columns:
         if fixed_depth_m is None:
             raise ValueError("camera detections need depth_m/range_m or --camera-fixed-depth-m")

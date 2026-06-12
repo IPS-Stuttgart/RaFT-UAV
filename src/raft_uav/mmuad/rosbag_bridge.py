@@ -21,6 +21,10 @@ import subprocess
 import pandas as pd
 
 from raft_uav.coordinates import LocalENUProjector
+from raft_uav.mmuad.camera import (
+    camera_detection_frame_to_candidates,
+    load_camera_models_from_files,
+)
 from raft_uav.mmuad.io import (
     load_candidate_file,
     load_point_cloud_file_as_candidates,
@@ -138,7 +142,17 @@ def load_topic_map_exports(path: Path, *, base_dir: Path | None = None) -> Topic
             continue
         kind = str(spec.get("kind", "candidate"))
         sequence_id = str(spec.get("sequence_id", default_sequence_id))
-        if _is_radar_polar_kind(kind):
+        if _is_camera_detection_kind(kind):
+            candidate_frame = _load_topic_camera_detection_export(
+                export_path,
+                spec,
+                sequence_id=sequence_id,
+                source=str(spec.get("source") or spec.get("topic") or "camera"),
+                base_dir=base,
+            )
+            candidate_frames.append(candidate_frame)
+            row_count = len(candidate_frame.rows)
+        elif _is_radar_polar_kind(kind):
             candidate_frame = _load_topic_radar_polar_export(
                 export_path,
                 spec,
@@ -261,6 +275,20 @@ def _is_radar_polar_kind(kind: str) -> bool:
         "radar_polar_candidate",
         "polar_radar",
         "polar_radar_candidate",
+    }
+
+
+def _is_camera_detection_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "camera_detection",
+        "camera_detection_candidate",
+        "camera_detections",
+        "camera_detections_candidate",
+        "image_detection",
+        "image_detection_candidate",
+        "image_detections",
+        "image_detections_candidate",
     }
 
 
@@ -399,6 +427,155 @@ def _load_topic_radar_polar_export(
         ),
         z_std_m=float(spec.get("z_std_m", spec.get("radar_polar_z_std_m", 5.0))),
     )
+
+
+def _load_topic_camera_detection_export(
+    path: Path,
+    spec: dict[str, Any],
+    *,
+    sequence_id: str,
+    source: str,
+    base_dir: Path,
+) -> CandidateFrame:
+    if not _is_table_export(path):
+        raise ValueError(f"camera detection topic exports must be table files: {path}")
+    calibration_files = _topic_camera_calibration_files(
+        spec,
+        export_path=path,
+        base_dir=base_dir,
+    )
+    if not calibration_files:
+        raise ValueError(
+            "camera detection topic exports require camera_calibration_file "
+            "or a nearby camera_info/intrinsics file"
+        )
+    camera_models = load_camera_models_from_files(
+        calibration_files,
+        source_hint_from_path=lambda _path: source,
+    )
+    frame = _apply_aliases(_read_topic_table(path), spec)
+    return camera_detection_frame_to_candidates(
+        frame,
+        camera_models=camera_models,
+        source=source,
+        sequence_id=sequence_id,
+        fixed_depth_m=_optional_float(
+            spec,
+            "camera_fixed_depth_m",
+            "fixed_depth_m",
+            "depth_m",
+        ),
+        std_xy_m=float(spec.get("camera_std_xy_m", spec.get("std_xy_m", 5.0))),
+        std_z_m=float(spec.get("camera_std_z_m", spec.get("std_z_m", 10.0))),
+    )
+
+
+def _topic_camera_calibration_files(
+    spec: dict[str, Any],
+    *,
+    export_path: Path,
+    base_dir: Path,
+) -> list[Path]:
+    explicit = _topic_path_values(
+        spec,
+        (
+            "camera_calibration_file",
+            "camera_calibration_path",
+            "camera_intrinsics_file",
+            "camera_intrinsics_path",
+            "camera_info_file",
+            "camera_info_path",
+            "calibration_file",
+            "calibration_path",
+        ),
+        (
+            "camera_calibration_files",
+            "camera_intrinsics_files",
+            "camera_info_files",
+            "calibration_files",
+        ),
+    )
+    candidates: list[Path] = []
+    for value in explicit:
+        candidates.append(
+            _resolve_topic_path(
+                str(value),
+                base_dir=base_dir,
+                sibling_dir=export_path.parent,
+            )
+        )
+    if not candidates:
+        for directory in (export_path.parent, base_dir):
+            for name in _CAMERA_CALIBRATION_FILENAMES:
+                candidates.append(directory / name)
+    return _unique_existing_paths(candidates)
+
+
+def _topic_path_values(
+    spec: dict[str, Any],
+    scalar_keys: tuple[str, ...],
+    list_keys: tuple[str, ...],
+) -> list[Any]:
+    values: list[Any] = []
+    for key in scalar_keys:
+        value = spec.get(key)
+        if value not in (None, ""):
+            values.append(value)
+    for key in list_keys:
+        value = spec.get(key)
+        if value in (None, ""):
+            continue
+        if isinstance(value, (list, tuple)):
+            values.extend(item for item in value if item not in (None, ""))
+        else:
+            values.append(value)
+    return values
+
+
+def _resolve_topic_path(value: str, *, base_dir: Path, sibling_dir: Path) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    sibling = sibling_dir / path
+    if sibling.exists():
+        return sibling
+    return base_dir / path
+
+
+def _unique_existing_paths(paths: list[Path]) -> list[Path]:
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        resolved = Path(path).resolve()
+        if resolved in seen or not Path(path).exists():
+            continue
+        seen.add(resolved)
+        unique.append(Path(path))
+    return unique
+
+
+def _optional_float(spec: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = spec.get(key)
+        if value not in (None, ""):
+            return float(value)
+    return None
+
+
+_CAMERA_CALIBRATION_FILENAMES = (
+    "camera_info.json",
+    "camera_info.yaml",
+    "camera_info.yml",
+    "camera_calibration.json",
+    "camera_calibration.yaml",
+    "camera_calibration.yml",
+    "camera_intrinsics.json",
+    "camera_intrinsics.yaml",
+    "camera_intrinsics.yml",
+    "intrinsics.json",
+    "intrinsics.yaml",
+    "intrinsics.yml",
+)
 
 
 def _load_topic_geodetic_truth_export(

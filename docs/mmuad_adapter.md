@@ -474,6 +474,11 @@ are clustered from point rows using the same lightweight point-cloud bridge.
 Table exports marked as `radar_polar_candidate` or `polar_radar_candidate`
 are converted from range/azimuth rows using the same polar radar bridge as
 `--radar-polar-file`.
+Table exports marked as `camera_detections_candidate` or
+`image_detections_candidate` are back-projected with the same camera detector
+bridge as `--camera-detections-file`; provide `camera_calibration_file` in the
+topic map or place `camera_info.json` / `intrinsics.json` beside the detection
+export.
 Table exports marked as `navsatfix_candidate`, `geopoint_candidate`,
 `geopose_candidate`, or their `_truth` variants can provide
 `latitude`/`longitude`/`altitude` columns and `enu_origin_lla` in the topic map;
