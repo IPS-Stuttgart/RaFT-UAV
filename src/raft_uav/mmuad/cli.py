@@ -7,7 +7,10 @@ import json
 from pathlib import Path
 
 from raft_uav.mmuad.calibration import load_calibration_auto, transform_candidate_frame
-from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
+from raft_uav.mmuad.camera import (
+    load_camera_detections_csv_as_candidates,
+    load_camera_models_from_files,
+)
 from raft_uav.mmuad.classification import (
     infer_sequence_class_map_from_candidates,
     write_sequence_class_map,
@@ -102,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--radar-polar-z-std-m", type=float, default=5.0)
     parser.add_argument("--camera-detections-csv", action="append", type=Path, default=[])
     parser.add_argument("--camera-detections-file", action="append", type=Path, default=[])
-    parser.add_argument("--camera-calibration-file", type=Path)
+    parser.add_argument("--camera-calibration-file", action="append", type=Path, default=[])
     parser.add_argument("--camera-fixed-depth-m", type=float)
     parser.add_argument("--camera-std-xy-m", type=float, default=5.0)
     parser.add_argument("--camera-std-z-m", type=float, default=10.0)
@@ -422,16 +425,20 @@ def _run_explicit_files(args: argparse.Namespace):
     )
     camera_detection_files = list(args.camera_detections_csv) + list(args.camera_detections_file)
     if camera_detection_files:
-        if args.camera_calibration_file is None:
+        if not args.camera_calibration_file:
             raise SystemExit(
                 "--camera-detections-csv/--camera-detections-file "
                 "requires --camera-calibration-file"
             )
-        camera_models = load_camera_models(args.camera_calibration_file)
+        camera_models = load_camera_models_from_files(
+            args.camera_calibration_file,
+            source_hint_from_path=_camera_source_hint_from_path,
+        )
         frames.extend(
             load_camera_detections_csv_as_candidates(
                 path,
                 camera_models=camera_models,
+                default_source=_camera_source_hint_from_path(path),
                 fixed_depth_m=args.camera_fixed_depth_m,
                 std_xy_m=args.camera_std_xy_m,
                 std_z_m=args.camera_std_z_m,
@@ -495,6 +502,27 @@ def _completion_truth_path(args: argparse.Namespace) -> Path | None:
             "or --complete-results-to-truth-file"
         )
     return args.complete_results_to_truth_file or args.complete_results_to_truth_csv
+
+
+def _camera_source_hint_from_path(path: Path) -> str | None:
+    parent = Path(path).parent.name.replace(" ", "_").replace("-", "_")
+    if _looks_like_camera_source_name(parent):
+        return parent
+    return None
+
+
+def _looks_like_camera_source_name(name: str) -> bool:
+    normalized = str(name).lower().replace("-", "_").replace(" ", "_")
+    tokens = ("camera", "cam", "image", "images")
+    for token in tokens:
+        if (
+            normalized == token
+            or normalized.startswith(f"{token}_")
+            or normalized.endswith(f"_{token}")
+            or (normalized.startswith(token) and normalized[len(token) :].isdigit())
+        ):
+            return True
+    return False
 
 
 def _run_sequence_root(args: argparse.Namespace):

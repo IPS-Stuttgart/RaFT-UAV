@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -15,7 +15,10 @@ from raft_uav.mmuad.calibration import (
     load_calibration_auto,
     transform_candidate_frame,
 )
-from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
+from raft_uav.mmuad.camera import (
+    load_camera_detections_csv_as_candidates,
+    load_camera_models_from_files,
+)
 from raft_uav.mmuad.io import (
     load_candidate_file,
     load_point_cloud_file_as_candidates,
@@ -264,9 +267,12 @@ def load_sequence_export(
                 f"camera detections discovered for {paths.root} but no "
                 "calibration/intrinsics file exists"
             )
-        camera_models = _load_sequence_camera_models(
+        camera_models = load_camera_models_from_files(
             camera_calibration_files,
-            sequence_root=paths.root,
+            source_hint_from_path=lambda path: _camera_source_hint_from_path(
+                path,
+                sequence_root=paths.root,
+            ),
         )
         camera_models_loaded = bool(camera_models)
         candidate_frames.extend(
@@ -910,30 +916,6 @@ def _source_from_path(path: Path, *, sequence_root: Path, default: str) -> str:
     if len(relative.parts) <= 1:
         return default
     return str(relative.parts[-2]).replace(" ", "_").replace("-", "_")
-
-
-def _load_sequence_camera_models(
-    paths: tuple[Path, ...],
-    *,
-    sequence_root: Path,
-) -> dict[str, Any]:
-    models: dict[str, Any] = {}
-    errors: list[str] = []
-    for path in paths:
-        try:
-            loaded = load_camera_models(path)
-        except ValueError as exc:
-            errors.append(f"{path}: {exc}")
-            continue
-        source_hint = _camera_source_hint_from_path(path, sequence_root=sequence_root)
-        if source_hint is not None and len(loaded) == 1:
-            model = next(iter(loaded.values()))
-            loaded = {source_hint.lower(): replace(model, source=source_hint)}
-        models.update(loaded)
-    if not models:
-        detail = "; ".join(errors)
-        raise ValueError(f"no camera models found in camera calibration files: {detail}")
-    return models
 
 
 def _camera_source_hint_from_path(path: Path, *, sequence_root: Path) -> str | None:

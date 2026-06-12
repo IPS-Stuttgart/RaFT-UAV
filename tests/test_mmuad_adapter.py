@@ -3445,6 +3445,93 @@ def test_cli_accepts_explicit_camera_detection_json_file(tmp_path: Path) -> None
     assert metrics["pooled"]["mean_3d_m"] == 0.0
 
 
+def test_cli_accepts_repeated_camera_calibration_files_with_folder_sources(
+    tmp_path: Path,
+) -> None:
+    cam0 = tmp_path / "cam0"
+    cam1 = tmp_path / "cam1"
+    cam0.mkdir()
+    cam1.mkdir()
+    camera_info = {
+        "width": 100,
+        "height": 100,
+        "k": [
+            100.0,
+            0.0,
+            50.0,
+            0.0,
+            100.0,
+            50.0,
+            0.0,
+            0.0,
+            1.0,
+        ],
+    }
+    (cam0 / "camera_info.json").write_text(json.dumps(camera_info), encoding="utf-8")
+    cam1_info = dict(camera_info)
+    cam1_info["translation_m"] = [10.0, 0.0, 0.0]
+    (cam1 / "camera_info.json").write_text(json.dumps(cam1_info), encoding="utf-8")
+    pd.DataFrame(
+        {
+            "sequence_id": ["default"],
+            "time_s": [0.0],
+            "u_px": [50.0],
+            "v_px": [50.0],
+            "depth_m": [5.0],
+        }
+    ).to_csv(cam0 / "detections.csv", index=False)
+    pd.DataFrame(
+        {
+            "sequence_id": ["default"],
+            "time_s": [1.0],
+            "u_px": [50.0],
+            "v_px": [50.0],
+            "depth_m": [5.0],
+        }
+    ).to_csv(cam1 / "detections.csv", index=False)
+    truth = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["default", "default"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 10.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [5.0, 5.0],
+        }
+    ).to_csv(truth, index=False)
+    output = tmp_path / "out"
+
+    status = mmuad_cli_main(
+        [
+            "--camera-detections-csv",
+            str(cam0 / "detections.csv"),
+            "--camera-detections-csv",
+            str(cam1 / "detections.csv"),
+            "--camera-calibration-file",
+            str(cam0 / "camera_info.json"),
+            "--camera-calibration-file",
+            str(cam1 / "camera_info.json"),
+            "--truth-csv",
+            str(truth),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    selected = pd.read_csv(output / "mmuad_selected_tracklets.csv")
+    assert selected["source"].tolist() == ["cam0", "cam1"]
+    assert selected["sequence_id"].tolist() == ["default", "default"]
+    assert abs(float(selected.loc[0, "x_m"])) < 1.0e-9
+    assert abs(float(selected.loc[1, "x_m"]) - 10.0) < 1.0e-9
+    estimates = pd.read_csv(output / "mmuad_estimates.csv")
+    assert estimates["source"].tolist() == ["cam0", "cam1"]
+    assert estimates["sequence_id"].tolist() == ["default", "default"]
+    assert abs(float(estimates.loc[0, "state_x_m"])) < 1.0e-9
+    metrics = json.loads((output / "mmuad_metrics.json").read_text(encoding="utf-8"))
+    assert float(metrics["pooled"]["mean_3d_m"]) < 1.0
+
+
 def test_cli_accepts_explicit_radar_polar_json_file(tmp_path: Path) -> None:
     radar = tmp_path / "radar_polar.json"
     radar.write_text(

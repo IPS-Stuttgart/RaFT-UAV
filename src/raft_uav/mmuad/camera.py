@@ -7,10 +7,10 @@ proxy is available.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterable
 
 import numpy as np
 import pandas as pd
@@ -70,6 +70,33 @@ def load_camera_models(path: Path) -> dict[str, CameraModel]:
         )
     if not models:
         raise ValueError(f"no camera models found in {path}")
+    return models
+
+
+def load_camera_models_from_files(
+    paths: Iterable[Path],
+    *,
+    source_hint_from_path: Callable[[Path], str | None] | None = None,
+) -> dict[str, CameraModel]:
+    """Load and merge camera models from one or more calibration/intrinsics files."""
+
+    models: dict[str, CameraModel] = {}
+    errors: list[str] = []
+    for path in paths:
+        try:
+            loaded = load_camera_models(path)
+        except ValueError as exc:
+            errors.append(f"{path}: {exc}")
+            continue
+        if source_hint_from_path is not None:
+            source_hint = source_hint_from_path(path)
+            if source_hint is not None and len(loaded) == 1:
+                model = next(iter(loaded.values()))
+                loaded = {source_hint.lower(): replace(model, source=source_hint)}
+        models.update(loaded)
+    if not models:
+        detail = "; ".join(errors)
+        raise ValueError(f"no camera models found in camera calibration files: {detail}")
     return models
 
 

@@ -620,7 +620,10 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_camera_detections_json
 ```
 
-The camera calibration file contains intrinsics (`fx`, `fy`, `cx`, `cy`) and an
+`--camera-calibration-file` can be repeated for multi-camera exports, for
+example when `cam0/camera_info.json` and `cam1/camera_info.json` live beside
+their detection files. The camera calibration file contains intrinsics
+(`fx`, `fy`, `cx`, `cy`) and an
 optional camera-to-world rigid transform. Intrinsics can also come from common
 matrix fields such as `camera_matrix`, `K`/`k`, `P`/`p`, or
 `projection_matrix`, including OpenCV-style `{rows, cols, data}` blocks.
