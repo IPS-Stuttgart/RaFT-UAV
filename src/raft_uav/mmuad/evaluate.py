@@ -15,26 +15,21 @@ import pandas as pd
 from raft_uav.mmuad.io import load_truth_file
 from raft_uav.mmuad.schema import normalize_time_column_aliases, normalize_truth_columns
 
+_SUBMISSION_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
+    "sequence_id": ("sequence", "seq", "scene", "scene_id", "clip", "clip_id"),
+    "track_id": ("track", "id", "object_id", "cluster_id", "instance_id"),
+    "x_m": ("x", "east_m", "pos_x", "center_x", "cx"),
+    "y_m": ("y", "north_m", "pos_y", "center_y", "cy"),
+    "z_m": ("z", "up_m", "pos_z", "center_z", "cz"),
+    "score": ("confidence", "probability"),
+}
+
 
 def load_submission_csv(path: Path) -> pd.DataFrame:
     """Load the stable RaFT-UAV MMUAD trajectory CSV export."""
 
     frame = normalize_time_column_aliases(pd.read_csv(path), target="time_s")
-    aliases = {
-        "timestamp_s": "time_s",
-        "track": "track_id",
-        "id": "track_id",
-        "x": "x_m",
-        "y": "y_m",
-        "z": "z_m",
-    }
-    frame = frame.rename(
-        columns={
-            key: value
-            for key, value in aliases.items()
-            if key in frame.columns and value not in frame.columns
-        }
-    )
+    frame = _rename_submission_aliases(frame)
     missing = {"sequence_id", "time_s", "x_m", "y_m", "z_m"}.difference(frame.columns)
     if missing:
         raise ValueError(f"submission missing required columns: {sorted(missing)}")
@@ -47,6 +42,26 @@ def load_submission_csv(path: Path) -> pd.DataFrame:
     frame["sequence_id"] = frame["sequence_id"].astype(str)
     frame["track_id"] = frame["track_id"].astype(str)
     return frame.loc[np.isfinite(frame[["time_s", "x_m", "y_m", "z_m"]]).all(axis=1)].copy()
+
+
+def _rename_submission_aliases(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize submission CSV columns using case-insensitive canonical names and aliases."""
+
+    lower_to_original = {str(col).lower(): col for col in frame.columns}
+    rename: dict[Any, str] = {}
+    for canonical, aliases in _SUBMISSION_COLUMN_ALIASES.items():
+        if canonical in frame.columns:
+            continue
+        original = lower_to_original.get(canonical.lower())
+        if original is not None:
+            rename[original] = canonical
+            continue
+        for alias in aliases:
+            original = lower_to_original.get(alias.lower())
+            if original is not None:
+                rename[original] = canonical
+                break
+    return frame.rename(columns=rename)
 
 
 def evaluate_submission_csv(
@@ -94,7 +109,9 @@ def match_submission_to_truth(
             continue
         for _, pred in pred_seq.iterrows():
             candidate_truth = truth_seq
-            if "track_id" in truth_seq.columns and str(pred.get("track_id", "")) in set(truth_seq["track_id"]):
+            if "track_id" in truth_seq.columns and str(pred.get("track_id", "")) in set(
+                truth_seq["track_id"]
+            ):
                 candidate_truth = truth_seq.loc[truth_seq["track_id"] == str(pred["track_id"])]
             idx = (candidate_truth["time_s"].astype(float) - float(pred["time_s"])).abs().idxmin()
             gt = candidate_truth.loc[idx]
