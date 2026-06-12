@@ -170,13 +170,20 @@ def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[Seq
 
 
 def _candidate_sequence_dirs(root: Path, *, sequence_glob: str) -> list[Path]:
+    if not root.is_dir():
+        return []
     children = [
+        path
+        for path in sorted(root.iterdir())
+        if path.is_dir() and not _is_modality_dir(path)
+    ]
+    direct_candidates = [
         path
         for path in sorted(root.glob(sequence_glob))
         if path.is_dir() and not _is_modality_dir(path)
     ]
     candidates: list[Path] = []
-    candidates.extend(path for path in children if _looks_like_sequence(path))
+    candidates.extend(path for path in direct_candidates if _looks_like_sequence(path))
     for child in children:
         candidates.extend(
             path

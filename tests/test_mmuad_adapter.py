@@ -2249,6 +2249,25 @@ def test_sequence_root_preserves_nested_candidate_csv_source_hint(tmp_path: Path
     assert truth is not None
 
 
+def test_sequence_glob_matches_sequences_inside_split_folders(tmp_path: Path) -> None:
+    keep = tmp_path / "val" / "seq_keep"
+    skip = tmp_path / "val" / "ignore_me"
+    for seq in (keep, skip):
+        seq.mkdir(parents=True)
+        pd.DataFrame(
+            {
+                "time_s": [0.0],
+                "x_m": [0.0],
+                "y_m": [0.0],
+                "z_m": [1.0],
+            }
+        ).to_csv(seq / "candidates.csv", index=False)
+
+    discovered = discover_sequence_paths(tmp_path, sequence_glob="seq_*")
+
+    assert [sequence.sequence_id for sequence in discovered] == ["seq_keep"]
+
+
 def test_cli_accepts_explicit_numpy_candidate_and_truth_files(tmp_path: Path) -> None:
     candidates = tmp_path / "trajectory.npy"
     truth = tmp_path / "truth.npy"
@@ -4787,6 +4806,66 @@ def test_cli_accepts_explicit_camera_detection_json_file(tmp_path: Path) -> None
     assert estimates["sequence_id"].tolist() == ["default"]
     metrics = json.loads((output / "mmuad_metrics.json").read_text(encoding="utf-8"))
     assert metrics["pooled"]["mean_3d_m"] == 0.0
+
+
+def test_cli_accepts_explicit_camera_source_for_source_less_detection_file(
+    tmp_path: Path,
+) -> None:
+    calibration = tmp_path / "camera_calibration.json"
+    calibration.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    detections = tmp_path / "detections.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["default"],
+            "time_s": [0.0],
+            "u_px": [50.0],
+            "v_px": [50.0],
+            "depth_m": [5.0],
+        }
+    ).to_csv(detections, index=False)
+    truth = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["default"],
+            "time_s": [0.0],
+            "x_m": [0.0],
+            "y_m": [0.0],
+            "z_m": [5.0],
+        }
+    ).to_csv(truth, index=False)
+    output = tmp_path / "out"
+
+    status = mmuad_cli_main(
+        [
+            "--camera-detections-file",
+            str(detections),
+            "--camera-calibration-file",
+            str(calibration),
+            "--camera-source",
+            "cam0",
+            "--truth-file",
+            str(truth),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    assert (output / "mmuad_estimates.csv").exists()
 
 
 def test_cli_accepts_repeated_camera_calibration_files_with_folder_sources(

@@ -587,10 +587,11 @@ def error_summary_from_estimates(
         **stats(paper_sample_errors_3d, "3d"),
         **stats(paper_sample_errors_2d, "2d"),
     }
+    truth_grid_eval_sample_count = int(len(truth))
     truth_grid_summary = {
         "matched_count": int(errors_3d.size),
-        "eval_sample_count": int(len(estimates)),
-        "coverage": safe_divide(float(errors_3d.size), float(len(estimates))),
+        "eval_sample_count": truth_grid_eval_sample_count,
+        "coverage": safe_divide(float(errors_3d.size), float(truth_grid_eval_sample_count)),
         **stats(errors_3d, "3d"),
         **stats(errors_2d, "2d"),
     }
