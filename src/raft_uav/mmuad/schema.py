@@ -181,6 +181,10 @@ def _rename_aliases(frame: pd.DataFrame) -> pd.DataFrame:
     for canonical, aliases in _COLUMN_ALIASES.items():
         if canonical in frame.columns:
             continue
+        original = lower_to_original.get(canonical.lower())
+        if original is not None:
+            rename[original] = canonical
+            continue
         for alias in aliases:
             original = lower_to_original.get(alias.lower())
             if original is not None:
