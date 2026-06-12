@@ -124,6 +124,36 @@ MODALITY_DIR_TOKENS = (
 )
 RADAR_RANGE_ALIASES = ("range_m", "range", "r", "rho", "distance_m")
 RADAR_AZIMUTH_ALIASES = ("azimuth_deg", "azimuth", "az", "bearing", "bearing_deg")
+CANDIDATE_TIME_ALIASES = (
+    "time_s",
+    "timestamp_s",
+    "stamp_s",
+    "timestamp",
+    "stamp",
+    "time",
+    "t",
+    "sec",
+    "secs",
+    "seconds",
+    "timestamp_ns",
+    "time_ns",
+    "stamp_ns",
+    "nanoseconds",
+    "timestamp_us",
+    "time_us",
+    "stamp_us",
+    "timestamp_usec",
+    "time_usec",
+    "stamp_usec",
+    "microseconds",
+    "timestamp_ms",
+    "time_ms",
+    "stamp_ms",
+    "milliseconds",
+)
+CANDIDATE_X_ALIASES = ("x_m", "x", "east_m", "pos_x", "center_x", "cx")
+CANDIDATE_Y_ALIASES = ("y_m", "y", "north_m", "pos_y", "center_y", "cy")
+CANDIDATE_Z_ALIASES = ("z_m", "z", "up_m", "pos_z", "center_z", "cz")
 CAMERA_U_ALIASES = ("u_px", "u", "pixel_x", "center_u", "cx_px")
 CAMERA_V_ALIASES = ("v_px", "v", "pixel_y", "center_v", "cy_px")
 CAMERA_BBOX_X_ALIASES = ("x1", "xmin", "bbox_x1", "left")
@@ -449,6 +479,15 @@ def _candidate_files(path: Path) -> list[Path]:
             directory_tokens=CANDIDATE_DIR_TOKENS,
             suffixes=TABLE_SUFFIXES + JSON_TABLE_SUFFIXES,
         )
+    )
+    files.extend(
+        item
+        for item in _files_under_sensor_dirs(
+            path,
+            directory_tokens=RADAR_DIR_TOKENS,
+            suffixes=TABLE_SUFFIXES + JSON_TABLE_SUFFIXES,
+        )
+        if _looks_like_cartesian_candidate_file(item)
     )
     return _unique_paths(
         [
@@ -855,6 +894,18 @@ def _looks_like_radar_polar_file(path: Path) -> bool:
     if any(token in name for token in ("radar_polar", "polar_radar", "polar")):
         return True
     return _table_has_column_groups(path, RADAR_RANGE_ALIASES, RADAR_AZIMUTH_ALIASES)
+
+
+def _looks_like_cartesian_candidate_file(path: Path) -> bool:
+    if _looks_like_radar_polar_file(path):
+        return False
+    return _table_has_column_groups(
+        path,
+        CANDIDATE_TIME_ALIASES,
+        CANDIDATE_X_ALIASES,
+        CANDIDATE_Y_ALIASES,
+        CANDIDATE_Z_ALIASES,
+    )
 
 
 def _looks_like_camera_detection_file(path: Path) -> bool:

@@ -651,6 +651,12 @@ detections when individual rows do not already provide them.
 Coordinates are in the radar/export frame unless a calibration file is applied
 later. This is not a native custom radar message parser.
 
+Sequence-root discovery also treats Cartesian radar tables inside radar sensor
+folders such as `radar0/detections.csv` or `mmwave/detections.json` as normal
+candidate detections when they expose a timestamp plus `x`/`y`/`z` position
+columns. Polar range/azimuth tables in the same folders continue through the
+polar radar bridge above.
+
 ### Camera Detector Table Exports
 
 Use `--camera-detections-csv` for detector CSV/TSV/TXT outputs, or

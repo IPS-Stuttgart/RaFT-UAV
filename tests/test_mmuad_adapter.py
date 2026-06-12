@@ -1116,6 +1116,92 @@ def test_sequence_root_discovers_json_radar_modality_folder_tables(
     assert truth is not None
 
 
+def test_sequence_root_discovers_cartesian_radar_modality_folder_tables(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "seq_radar_cartesian"
+    radar = seq / "radar0"
+    radar.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "timestamp_ms": [1250],
+            "x_m": [2.0],
+            "y_m": [3.0],
+            "z_m": [4.0],
+            "track_id": ["trk-1"],
+            "confidence": [0.9],
+        }
+    ).to_csv(radar / "detections.csv", index=False)
+    pd.DataFrame(
+        {
+            "time_s": [1.25],
+            "x_m": [2.0],
+            "y_m": [3.0],
+            "z_m": [4.0],
+        }
+    ).to_csv(seq / "truth.csv", index=False)
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0], apply_calibration=False)
+
+    assert [sequence.sequence_id for sequence in discovered] == ["seq_radar_cartesian"]
+    assert discovered[0].candidate_csvs == (radar / "detections.csv",)
+    assert discovered[0].radar_polar_csvs == ()
+    assert candidates.rows["source"].tolist() == ["radar0"]
+    assert abs(float(candidates.rows.loc[0, "time_s"]) - 1.25) < 1.0e-9
+    assert abs(float(candidates.rows.loc[0, "x_m"]) - 2.0) < 1.0e-9
+    assert truth is not None
+
+
+def test_sequence_root_discovers_json_cartesian_radar_modality_folder_tables(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "seq_radar_cartesian_json"
+    radar = seq / "mmwave"
+    radar.mkdir(parents=True)
+    (radar / "detections.json").write_text(
+        json.dumps(
+            {
+                "detections": [
+                    {
+                        "timestamp": 1.25,
+                        "x": 2.0,
+                        "y": 3.0,
+                        "z": 4.0,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (seq / "truth.json").write_text(
+        json.dumps(
+            [
+                {
+                    "time_s": 1.25,
+                    "x_m": 2.0,
+                    "y_m": 3.0,
+                    "z_m": 4.0,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0], apply_calibration=False)
+
+    assert [sequence.sequence_id for sequence in discovered] == [
+        "seq_radar_cartesian_json"
+    ]
+    assert discovered[0].candidate_csvs == (radar / "detections.json",)
+    assert discovered[0].radar_polar_csvs == ()
+    assert candidates.rows["source"].tolist() == ["mmwave"]
+    assert abs(float(candidates.rows.loc[0, "time_s"]) - 1.25) < 1.0e-9
+    assert abs(float(candidates.rows.loc[0, "y_m"]) - 3.0) < 1.0e-9
+    assert truth is not None
+
+
 def test_sequence_root_discovers_json_camera_detection_tables(tmp_path: Path) -> None:
     seq = tmp_path / "seq_camera_json"
     camera = seq / "cam0"
