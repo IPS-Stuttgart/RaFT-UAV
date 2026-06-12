@@ -471,6 +471,11 @@ common ROS message types
 variants), while the exported-topic loader still accepts those kinds for CSV or
 JSON table and NumPy exports. Table exports marked as `pointcloud2_candidate`
 are clustered from point rows using the same lightweight point-cloud bridge:
+Table exports marked as `navsatfix_candidate`, `geopoint_candidate`,
+`geopose_candidate`, or their `_truth` variants can provide
+`latitude`/`longitude`/`altitude` columns and `enu_origin_lla` in the topic map;
+the loader projects them into local ENU `x_m,y_m,z_m` coordinates before
+tracking or evaluation.
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \

@@ -20,6 +20,7 @@ import subprocess
 
 import pandas as pd
 
+from raft_uav.coordinates import LocalENUProjector
 from raft_uav.mmuad.io import (
     load_candidate_file,
     load_point_cloud_file_as_candidates,
@@ -32,6 +33,7 @@ from raft_uav.mmuad.schema import (
     CandidateFrame,
     TruthFrame,
     normalize_candidate_columns,
+    normalize_time_column_aliases,
     normalize_truth_columns,
 )
 
@@ -135,7 +137,25 @@ def load_topic_map_exports(path: Path, *, base_dir: Path | None = None) -> Topic
             continue
         kind = str(spec.get("kind", "candidate"))
         sequence_id = str(spec.get("sequence_id", default_sequence_id))
-        if _is_truth_kind(kind):
+        if _is_geodetic_kind(kind):
+            if _is_truth_kind(kind):
+                truth_frame = _load_topic_geodetic_truth_export(
+                    export_path,
+                    spec,
+                    sequence_id=sequence_id,
+                )
+                truth_frames.append(truth_frame)
+                row_count = len(truth_frame.rows)
+            else:
+                candidate_frame = _load_topic_geodetic_candidate_export(
+                    export_path,
+                    spec,
+                    sequence_id=sequence_id,
+                    source=str(spec.get("source") or spec.get("topic") or "geodetic"),
+                )
+                candidate_frames.append(candidate_frame)
+                row_count = len(candidate_frame.rows)
+        elif _is_truth_kind(kind):
             truth_frame = _load_topic_truth_export(export_path, spec, sequence_id=sequence_id)
             truth_frames.append(truth_frame)
             row_count = len(truth_frame.rows)
@@ -224,6 +244,66 @@ def _is_geodetic_kind(kind: str) -> bool:
     return normalized.startswith(("navsatfix_", "geopoint_", "geopose_"))
 
 
+_LATITUDE_ALIASES = ("latitude_deg", "latitude", "lat_deg", "lat")
+_LONGITUDE_ALIASES = (
+    "longitude_deg",
+    "longitude",
+    "lon_deg",
+    "long_deg",
+    "lon",
+    "lng",
+    "long",
+)
+_ALTITUDE_ALIASES = ("altitude_m", "altitude", "alt_m", "alt", "height_m", "height")
+
+
+def _first_column(frame: pd.DataFrame, aliases: tuple[str, ...]) -> object | None:
+    lower = {str(column).strip().lower(): column for column in frame.columns}
+    for alias in aliases:
+        original = lower.get(alias)
+        if original is not None:
+            return original
+    return None
+
+
+def _projector_from_spec(spec: dict[str, Any]) -> LocalENUProjector:
+    raw = spec.get("enu_origin_lla", spec.get("origin_lla"))
+    if raw is not None:
+        latitude, longitude, altitude = _parse_lla_values(raw)
+        return LocalENUProjector(latitude, longitude, altitude)
+    latitude = spec.get("origin_latitude_deg", spec.get("origin_latitude"))
+    longitude = spec.get("origin_longitude_deg", spec.get("origin_longitude"))
+    altitude = spec.get("origin_altitude_m", spec.get("origin_altitude"))
+    if latitude is None or longitude is None or altitude is None:
+        raise ValueError(
+            "geodetic topic exports require enu_origin_lla or "
+            "origin_latitude_deg/origin_longitude_deg/origin_altitude_m"
+        )
+    return LocalENUProjector(float(latitude), float(longitude), float(altitude))
+
+
+def _parse_lla_values(value: Any) -> tuple[float, float, float]:
+    if isinstance(value, str):
+        parts = [part.strip() for part in value.split(",")]
+    elif isinstance(value, dict):
+        return (
+            float(value.get("latitude_deg", value.get("latitude"))),
+            float(value.get("longitude_deg", value.get("longitude"))),
+            float(value.get("altitude_m", value.get("altitude"))),
+        )
+    else:
+        try:
+            parts = list(value)
+        except TypeError as exc:
+            raise ValueError("enu_origin_lla must be LAT,LON,ALT") from exc
+    if len(parts) != 3:
+        raise ValueError("enu_origin_lla must contain LAT,LON,ALT")
+    try:
+        return float(parts[0]), float(parts[1]), float(parts[2])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("enu_origin_lla must contain numeric LAT,LON,ALT") from exc
+
+
 def _load_topic_truth_export(path: Path, spec: dict[str, Any], *, sequence_id: str) -> TruthFrame:
     if _is_table_export(path):
         frame = _read_topic_table(path)
@@ -268,6 +348,77 @@ def _load_topic_candidate_export(
     return CandidateFrame(
         normalize_candidate_columns(rows, default_sequence_id=sequence_id)
     )
+
+
+def _load_topic_geodetic_truth_export(
+    path: Path,
+    spec: dict[str, Any],
+    *,
+    sequence_id: str,
+) -> TruthFrame:
+    rows = _load_topic_geodetic_rows(path, spec, sequence_id=sequence_id, source=None)
+    return TruthFrame(normalize_truth_columns(rows, default_sequence_id=sequence_id))
+
+
+def _load_topic_geodetic_candidate_export(
+    path: Path,
+    spec: dict[str, Any],
+    *,
+    sequence_id: str,
+    source: str,
+) -> CandidateFrame:
+    rows = _load_topic_geodetic_rows(path, spec, sequence_id=sequence_id, source=source)
+    for column in ("track_id", "std_xy_m", "std_z_m", "confidence", "class_name"):
+        if column not in rows.columns and spec.get(column) is not None:
+            rows[column] = spec.get(column)
+    return CandidateFrame(
+        normalize_candidate_columns(rows, default_sequence_id=sequence_id)
+    )
+
+
+def _load_topic_geodetic_rows(
+    path: Path,
+    spec: dict[str, Any],
+    *,
+    sequence_id: str,
+    source: str | None,
+) -> pd.DataFrame:
+    if not _is_table_export(path):
+        raise ValueError(f"geodetic topic exports must be table files: {path}")
+    frame = normalize_time_column_aliases(_apply_aliases(_read_topic_table(path), spec))
+    latitude_col = _first_column(frame, _LATITUDE_ALIASES)
+    longitude_col = _first_column(frame, _LONGITUDE_ALIASES)
+    altitude_col = _first_column(frame, _ALTITUDE_ALIASES)
+    if latitude_col is None or longitude_col is None:
+        raise ValueError("geodetic topic exports require latitude/longitude columns")
+    if altitude_col is None and spec.get("altitude_m") is None:
+        raise ValueError("geodetic topic exports require altitude_m or altitude")
+    if "time_s" not in frame.columns:
+        raise ValueError("geodetic topic exports require time_s/timestamp columns")
+    latitude = pd.to_numeric(frame[latitude_col], errors="coerce")
+    longitude = pd.to_numeric(frame[longitude_col], errors="coerce")
+    if altitude_col is not None:
+        altitude = pd.to_numeric(frame[altitude_col], errors="coerce")
+    else:
+        altitude = pd.Series(float(spec["altitude_m"]), index=frame.index)
+    projector = _projector_from_spec(spec)
+    enu = projector.transform_many(
+        latitude.to_numpy(dtype=float),
+        longitude.to_numpy(dtype=float),
+        altitude.to_numpy(dtype=float),
+    )
+    rows = frame.copy()
+    if "sequence_id" not in rows.columns:
+        rows["sequence_id"] = sequence_id
+    if source is not None and "source" not in rows.columns:
+        rows["source"] = source
+    rows["x_m"] = enu[:, 0]
+    rows["y_m"] = enu[:, 1]
+    rows["z_m"] = enu[:, 2]
+    rows["latitude_deg"] = latitude
+    rows["longitude_deg"] = longitude
+    rows["altitude_m"] = altitude
+    return rows
 
 
 def _load_topic_pointcloud_export(

@@ -3024,6 +3024,70 @@ def test_topic_map_exports_cluster_pointcloud2_json_point_rows(tmp_path: Path) -
     assert abs(float(row["time_s"]) - 7.5) < 1.0e-9
 
 
+def test_topic_map_exports_project_geodetic_candidate_and_truth_tables(
+    tmp_path: Path,
+) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    pd.DataFrame(
+        {
+            "timestamp_s": [2.5],
+            "latitude": [35.0],
+            "longitude": [-78.0],
+            "altitude": [105.0],
+        }
+    ).to_csv(exports / "gps_fix.csv", index=False)
+    (exports / "truth_geopose.json").write_text(
+        json.dumps(
+            {
+                "poses": [
+                    {
+                        "time_s": 2.5,
+                        "lat": 35.0,
+                        "lon": -78.0,
+                        "alt": 107.0,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    topic_map = tmp_path / "topic_map_geodetic.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_geodetic_exports",
+                "exports": [
+                    {
+                        "kind": "navsatfix_candidate",
+                        "path": "gps_fix.csv",
+                        "source": "gps",
+                        "enu_origin_lla": [35.0, -78.0, 100.0],
+                    },
+                    {
+                        "kind": "geopose_truth",
+                        "path": "truth_geopose.json",
+                        "enu_origin_lla": "35.0,-78.0,100.0",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+
+    candidate_row = bundle.candidates.rows.iloc[0]
+    assert candidate_row["sequence_id"] == "seq_geodetic_exports"
+    assert candidate_row["source"] == "gps"
+    assert abs(float(candidate_row["x_m"])) < 1.0e-9
+    assert abs(float(candidate_row["y_m"])) < 1.0e-9
+    assert abs(float(candidate_row["z_m"]) - 5.0) < 1.0e-9
+    assert bundle.truth is not None
+    truth_row = bundle.truth.rows.iloc[0]
+    assert abs(float(truth_row["z_m"]) - 7.0) < 1.0e-9
+
+
 def test_ros2_metadata_inspection_and_topic_map_template(tmp_path: Path) -> None:
     bag = tmp_path / "bagdir"
     bag.mkdir()
