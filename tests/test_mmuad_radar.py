@@ -30,5 +30,9 @@ def test_nested_radar_json_detections_inherit_parent_metadata(tmp_path: Path) ->
     assert frame.rows["sequence_id"].tolist() == ["seq_radar", "seq_radar"]
     assert frame.rows["time_s"].tolist() == [2.5, 2.5]
     xyz = frame.rows[["x_m", "y_m", "z_m"]].to_numpy(dtype=float)
-    assert np.any(np.all(np.isclose(xyz, [10.0, 0.0, 0.0], atol=1.0e-9), axis=1))
-    assert np.any(np.all(np.isclose(xyz, [0.0, 20.0, 0.0], atol=1.0e-9), axis=1))
+    assert np.any(
+        np.all(np.isclose(xyz, [10.0, 0.0, 0.0], atol=1.0e-9), axis=1)
+    )
+    assert np.any(
+        np.all(np.isclose(xyz, [0.0, 20.0, 0.0], atol=1.0e-9), axis=1)
+    )
