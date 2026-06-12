@@ -47,6 +47,8 @@ POINT_CLOUD_EXPORT_SUFFIXES = (
     ".pcd.gz",
     ".ply",
     ".ply.gz",
+    ".las",
+    ".las.gz",
     ".bin",
     ".bin.gz",
 )
@@ -612,7 +614,7 @@ def _point_files(path: Path) -> list[Path]:
     for suffix in TABLE_SUFFIXES + JSON_TABLE_SUFFIXES:
         files.extend(sorted(path.glob(f"*_points{suffix}")))
         files.extend(sorted(path.glob(f"*_point_cloud{suffix}")))
-    for suffix in (".pcd", ".pcd.gz", ".ply", ".ply.gz"):
+    for suffix in (".pcd", ".pcd.gz", ".ply", ".ply.gz", ".las", ".las.gz"):
         files.extend(sorted(path.glob(f"*{suffix}")))
     for pattern in ("*points*", "*point_cloud*", "*cloud*", "*lidar*", "*livox*"):
         for suffix in (".bin", ".bin.gz"):

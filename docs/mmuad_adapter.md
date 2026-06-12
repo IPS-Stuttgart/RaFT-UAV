@@ -356,15 +356,17 @@ Audio inventory covers common WAV/FLAC/AAC/MP3 recordings for evidence
 gathering; acoustic detections still need to be exported as candidate tables
 before tracking.
 
-### Binary PCD, PLY, BIN, and NumPy point clouds
+### Binary PCD, PLY, LAS, BIN, and NumPy point clouds
 
 The point-cloud bridge now supports CSV/TSV/TXT/JSON/JSONL tables, ASCII and
-binary PCD files, ASCII and binary PLY files, simple float32 `.bin` files with
-`x,y,z` or `x,y,z,intensity` rows, and simple `.npy` / `.npz` point arrays with
-shape `(N, >=3)`. Gzip-compressed exported files such as `.pcd.gz`, `.ply.gz`,
-and `.bin.gz` are accepted for those byte/text point-cloud formats. This still
-is not a native Livox packet reader, but it covers common exported point-cloud
-formats used during dataset inspection.
+binary PCD files, ASCII and binary PLY files, uncompressed LAS files, simple
+float32 `.bin` files with `x,y,z` or `x,y,z,intensity` rows, and simple
+`.npy` / `.npz` point arrays with shape `(N, >=3)`. Gzip-compressed exported
+files such as `.pcd.gz`, `.ply.gz`, `.las.gz`, and `.bin.gz` are accepted for
+those byte/text point-cloud formats. LAZ/LASzip remains inventory-only until a
+decompression dependency or converter is selected. This still is not a native
+Livox packet reader, but it covers common exported point-cloud formats used
+during dataset inspection.
 
 For sequence-root discovery, JSON or NumPy files with point-cloud names such as
 `lidar_points.json`, `lidar_points.npy`, `point_cloud.npz`, or `cloud_12.5.npy`

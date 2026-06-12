@@ -230,12 +230,12 @@ def load_point_cloud_file_as_candidates(
 ) -> CandidateFrame:
     """Load exported point-cloud files and cluster them into candidates.
 
-    CSV/TSV/TXT/JSON/JSONL, NumPy, PCD, PLY, and simple float32 ``.bin`` files
-    are supported as pragmatic exported-data bridges, including gzip-compressed
-    variants.  This is **not** a native Livox packet reader.  Files without
-    per-point timestamps are treated as one frame; ``time_s`` is inferred from
-    the filename when it contains a numeric token, otherwise it defaults to
-    ``0.0``.
+    CSV/TSV/TXT/JSON/JSONL, NumPy, PCD, PLY, uncompressed LAS, and simple
+    float32 ``.bin`` files are supported as pragmatic exported-data bridges,
+    including gzip-compressed variants.  This is **not** a native Livox packet
+    reader.  Files without per-point timestamps are treated as one frame;
+    ``time_s`` is inferred from the filename when it contains a numeric token,
+    otherwise it defaults to ``0.0``.
     """
 
     path = Path(path)
@@ -251,6 +251,8 @@ def load_point_cloud_file_as_candidates(
         points = _read_pcd(path)
     elif suffix == ".ply":
         points = _read_ply(path)
+    elif suffix == ".las":
+        points = _read_las(path)
     elif suffix == ".bin":
         points = _read_binary_point_cloud(path)
     else:
@@ -682,6 +684,67 @@ def _ply_numpy_dtype(*, type_name: str, endian: str) -> str:
     if dtype.endswith("1"):
         return dtype
     return f"{endian}{dtype}"
+
+
+def _read_las(path: Path) -> pd.DataFrame:
+    """Read uncompressed LAS point records as an exported point cloud."""
+
+    raw = read_binary_export(path)
+    if len(raw) < 227 or raw[:4] != b"LASF":
+        raise ValueError(f"invalid LAS file: {path}")
+    point_format_byte = raw[104]
+    if point_format_byte & 0x80:
+        raise ValueError("compressed LAZ/LASzip point records are not supported")
+    point_format = point_format_byte & 0x3F
+    if point_format > 10:
+        raise ValueError(f"unsupported LAS point format: {point_format}")
+    point_data_offset = _read_le_uint(raw, 96, 4, path=path)
+    point_record_length = _read_le_uint(raw, 105, 2, path=path)
+    point_count = _las_point_count(raw, path=path)
+    if point_record_length < 12:
+        raise ValueError(f"LAS point record length is too short: {point_record_length}")
+    expected_end = int(point_data_offset) + int(point_count) * int(point_record_length)
+    if expected_end > len(raw):
+        raise ValueError(f"LAS point data is truncated: {path}")
+    scale = np.array(_read_las_vector(raw, 131, path=path), dtype=float)
+    offset = np.array(_read_las_vector(raw, 155, path=path), dtype=float)
+    raw_xyz = np.empty((int(point_count), 3), dtype=np.int32)
+    for column, column_offset in enumerate((0, 4, 8)):
+        raw_xyz[:, column] = np.ndarray(
+            shape=(int(point_count),),
+            dtype="<i4",
+            buffer=raw,
+            offset=int(point_data_offset) + column_offset,
+            strides=(int(point_record_length),),
+        )
+    xyz = raw_xyz.astype(float) * scale + offset
+    return _normalize_point_frame(
+        pd.DataFrame({"x_m": xyz[:, 0], "y_m": xyz[:, 1], "z_m": xyz[:, 2]}),
+        path=path,
+    )
+
+
+def _las_point_count(raw: bytes, *, path: Path) -> int:
+    legacy_count = _read_le_uint(raw, 107, 4, path=path)
+    if legacy_count > 0:
+        return int(legacy_count)
+    if len(raw) >= 255:
+        return int(_read_le_uint(raw, 247, 8, path=path))
+    return 0
+
+
+def _read_las_vector(raw: bytes, offset: int, *, path: Path) -> tuple[float, float, float]:
+    import struct
+
+    if offset + 24 > len(raw):
+        raise ValueError(f"LAS header is truncated: {path}")
+    return struct.unpack_from("<ddd", raw, offset)
+
+
+def _read_le_uint(raw: bytes, offset: int, length: int, *, path: Path) -> int:
+    if offset + length > len(raw):
+        raise ValueError(f"LAS header is truncated: {path}")
+    return int.from_bytes(raw[offset : offset + length], byteorder="little", signed=False)
 
 
 def _normalize_point_frame(frame: pd.DataFrame, *, path: Path) -> pd.DataFrame:

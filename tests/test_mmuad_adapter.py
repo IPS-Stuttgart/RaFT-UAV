@@ -1612,6 +1612,34 @@ def test_trajectory_metrics_use_latest_time_for_fde() -> None:
     assert metrics["sequences"]["s1"]["fde_3d_m"] == 20.0
 
 
+def _minimal_las_bytes(points: list[tuple[float, float, float]]) -> bytes:
+    import struct
+
+    scale = (0.01, 0.01, 0.01)
+    offset = (0.0, 0.0, 0.0)
+    header_size = 227
+    point_record_length = 20
+    header = bytearray(header_size)
+    header[0:4] = b"LASF"
+    header[24] = 1
+    header[25] = 2
+    struct.pack_into("<H", header, 94, header_size)
+    struct.pack_into("<I", header, 96, header_size)
+    struct.pack_into("<B", header, 104, 0)
+    struct.pack_into("<H", header, 105, point_record_length)
+    struct.pack_into("<I", header, 107, len(points))
+    struct.pack_into("<ddd", header, 131, *scale)
+    struct.pack_into("<ddd", header, 155, *offset)
+    payload = bytearray()
+    for x_m, y_m, z_m in points:
+        x_raw = int(round((x_m - offset[0]) / scale[0]))
+        y_raw = int(round((y_m - offset[1]) / scale[1]))
+        z_raw = int(round((z_m - offset[2]) / scale[2]))
+        payload.extend(struct.pack("<iii", x_raw, y_raw, z_raw))
+        payload.extend(b"\x00" * (point_record_length - 12))
+    return bytes(header) + bytes(payload)
+
+
 def test_ascii_pcd_point_cloud_is_clustered(tmp_path: Path) -> None:
     pcd = tmp_path / "frame_12.5.pcd"
     pcd.write_text(
@@ -2393,6 +2421,25 @@ def test_gzipped_binary_big_endian_ply_point_cloud_is_clustered(tmp_path: Path) 
     assert abs(float(frame.rows.loc[0, "z_m"]) - (3.1 / 3.0)) < 1e-6
 
 
+def test_las_point_cloud_is_clustered(tmp_path: Path) -> None:
+    las = tmp_path / "frame_10.5.las"
+    las.write_bytes(
+        _minimal_las_bytes(
+            [
+                (0.0, 0.0, 1.0),
+                (0.1, 0.0, 1.1),
+                (0.2, 0.1, 1.0),
+            ]
+        )
+    )
+
+    frame = load_point_cloud_file_as_candidates(las, voxel_size_m=0.5, min_points=3)
+
+    assert len(frame.rows) == 1
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 10.5) < 1e-9
+    assert abs(float(frame.rows.loc[0, "x_m"]) - 0.1) < 1e-6
+
+
 def test_numpy_point_cloud_file_is_clustered(tmp_path: Path) -> None:
     points = np.array([[0.0, 0.0, 1.0], [0.1, 0.0, 1.1], [0.2, 0.1, 1.0]])
     npy = tmp_path / "cloud_3.0.npy"
@@ -2590,6 +2637,42 @@ def test_sequence_root_loads_gzipped_binary_livox_point_cloud_export(tmp_path: P
 
     assert [sequence.sequence_id for sequence in discovered] == ["seq_livox_bin_gz"]
     assert discovered[0].point_cloud_files == (bin_path,)
+    assert len(candidates.rows) == 1
+    row = candidates.rows.iloc[0]
+    assert row["source"] == "livox_avia"
+    assert abs(float(row["time_s"]) - 12.75) < 1e-9
+    assert truth is not None
+
+
+def test_sequence_root_loads_gzipped_las_point_cloud_export(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_livox_las_gz"
+    livox = seq / "livox_avia"
+    truth_dir = seq / "ground_truth"
+    livox.mkdir(parents=True)
+    truth_dir.mkdir()
+    timestamp = "12.75"
+    las_path = livox / f"{timestamp}.las.gz"
+    with gzip.open(las_path, "wb") as handle:
+        handle.write(
+            _minimal_las_bytes(
+                [
+                    (3.0, 4.0, 5.0),
+                    (3.1, 4.0, 5.1),
+                    (3.0, 4.1, 5.0),
+                ]
+            )
+        )
+    np.save(truth_dir / f"{timestamp}.npy", np.array([3.0, 4.0, 5.0]))
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(
+        discovered[0],
+        voxel_size_m=0.5,
+        min_cluster_points=3,
+    )
+
+    assert [sequence.sequence_id for sequence in discovered] == ["seq_livox_las_gz"]
+    assert discovered[0].point_cloud_files == (las_path,)
     assert len(candidates.rows) == 1
     row = candidates.rows.iloc[0]
     assert row["source"] == "livox_avia"
