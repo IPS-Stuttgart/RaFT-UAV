@@ -32,7 +32,6 @@ from raft_uav.mmuad.io import (
     load_point_cloud_file_as_candidates,
     load_point_cloud_csv_as_candidates,
     load_truth_file,
-    load_truth_csv,
     merge_candidate_frames,
 )
 from raft_uav.mmuad.mot import MultiObjectTrackerConfig, run_mmuad_multi_object_tracker
@@ -73,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--layout-report-csv", type=Path)
     parser.add_argument("--evaluate-submission-csv", type=Path)
     parser.add_argument("--evaluate-truth-csv", type=Path)
+    parser.add_argument("--evaluate-truth-file", type=Path)
     parser.add_argument("--evaluation-json", type=Path)
     parser.add_argument("--evaluation-max-time-delta-s", type=float, default=0.5)
     parser.add_argument("--point-cloud-csv", action="append", type=Path, default=[])
@@ -136,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--inferred-class-map-csv", type=Path)
     parser.add_argument("--classification-min-confidence", type=float, default=0.0)
     parser.add_argument("--complete-results-to-truth-csv", type=Path)
+    parser.add_argument("--complete-results-to-truth-file", type=Path)
     parser.add_argument("--completed-results-csv", type=Path)
     parser.add_argument("--completed-results-diagnostics-csv", type=Path)
     parser.add_argument("--completed-ug2-codabench-zip", type=Path)
@@ -179,11 +180,15 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
     if args.evaluate_results_csv is not None:
-        if args.evaluate_truth_csv is None:
-            raise SystemExit("--evaluate-results-csv requires --evaluate-truth-csv")
+        evaluation_truth = _evaluation_truth_path(args)
+        if evaluation_truth is None:
+            raise SystemExit(
+                "--evaluate-results-csv requires --evaluate-truth-csv "
+                "or --evaluate-truth-file"
+            )
         result = evaluate_mmaud_results(
             load_mmaud_results_csv(args.evaluate_results_csv),
-            load_truth_csv(args.evaluate_truth_csv),
+            load_truth_file(evaluation_truth),
             max_time_delta_s=args.evaluation_max_time_delta_s,
             class_map_csv=args.evaluation_class_map_csv,
         )
@@ -270,13 +275,14 @@ def main(argv: list[str] | None = None) -> int:
                 class_map=class_map,
             )
         )
-    if args.complete_results_to_truth_csv is not None:
+    completion_truth_path = _completion_truth_path(args)
+    if completion_truth_path is not None:
         if args.completed_results_csv is None and args.completed_ug2_codabench_zip is None:
             raise SystemExit(
-                "--complete-results-to-truth-csv requires --completed-results-csv "
-                "or --completed-ug2-codabench-zip"
+                "--complete-results-to-truth-csv/--complete-results-to-truth-file "
+                "requires --completed-results-csv or --completed-ug2-codabench-zip"
             )
-        template_truth = load_truth_csv(args.complete_results_to_truth_csv)
+        template_truth = load_truth_file(completion_truth_path)
         base_results = write_mmaud_results_csv(
             output.estimates,
             args.output_dir / "mmaud_results_for_completion.csv",
@@ -347,12 +353,15 @@ def _run_inspect(args: argparse.Namespace) -> int:
 
 
 def _run_submission_evaluation(args: argparse.Namespace) -> int:
-    if args.evaluate_truth_csv is None:
-        raise SystemExit("--evaluate-truth-csv is required with --evaluate-submission-csv")
+    evaluation_truth = _evaluation_truth_path(args)
+    if evaluation_truth is None:
+        raise SystemExit(
+            "--evaluate-truth-csv or --evaluate-truth-file is required with --evaluate-submission-csv"
+        )
     output_json = args.evaluation_json or (args.output_dir / "mmuad_submission_eval.json")
     metrics = evaluate_submission_csv(
         args.evaluate_submission_csv,
-        args.evaluate_truth_csv,
+        evaluation_truth,
         max_time_delta_s=args.evaluation_max_time_delta_s,
     )
     output_json.parent.mkdir(parents=True, exist_ok=True)
@@ -447,6 +456,24 @@ def _explicit_truth_path(args: argparse.Namespace) -> Path | None:
     if args.truth_csv is not None and args.truth_file is not None:
         raise SystemExit("provide only one of --truth-csv or --truth-file")
     return args.truth_file or args.truth_csv
+
+
+def _evaluation_truth_path(args: argparse.Namespace) -> Path | None:
+    if args.evaluate_truth_csv is not None and args.evaluate_truth_file is not None:
+        raise SystemExit("provide only one of --evaluate-truth-csv or --evaluate-truth-file")
+    return args.evaluate_truth_file or args.evaluate_truth_csv
+
+
+def _completion_truth_path(args: argparse.Namespace) -> Path | None:
+    if (
+        args.complete_results_to_truth_csv is not None
+        and args.complete_results_to_truth_file is not None
+    ):
+        raise SystemExit(
+            "provide only one of --complete-results-to-truth-csv "
+            "or --complete-results-to-truth-file"
+        )
+    return args.complete_results_to_truth_file or args.complete_results_to_truth_csv
 
 
 def _run_sequence_root(args: argparse.Namespace):

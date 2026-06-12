@@ -1157,6 +1157,28 @@ def test_submission_evaluator_matches_truth(tmp_path: Path) -> None:
     assert metrics["pooled"]["mean_3d_m"] == 0.0
 
 
+def test_submission_evaluator_accepts_numpy_truth_file(tmp_path: Path) -> None:
+    submission = tmp_path / "submission.csv"
+    truth = tmp_path / "truth.npy"
+    pd.DataFrame(
+        {
+            "sequence_id": ["default", "default"],
+            "time_s": [0.0, 1.0],
+            "track_id": ["uav", "uav"],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [2.0, 2.0],
+            "score": [1.0, 1.0],
+        }
+    ).to_csv(submission, index=False)
+    np.save(truth, np.array([[0.0, 0.0, 0.0, 2.0], [1.0, 1.0, 0.0, 2.0]]))
+
+    metrics = evaluate_submission_csv(submission, truth)
+
+    assert metrics["pooled"]["matched_count"] == 2
+    assert metrics["pooled"]["mean_3d_m"] == 0.0
+
+
 def test_mmaud_results_local_evaluator_matches_truth(tmp_path: Path) -> None:
     results = tmp_path / "mmaud_results.csv"
     truth = tmp_path / "truth.csv"
@@ -1186,6 +1208,73 @@ def test_mmaud_results_local_evaluator_matches_truth(tmp_path: Path) -> None:
     )
     assert evaluated["summary"]["matched_count"] == 2
     assert evaluated["summary"]["pooled"]["max_3d_m"] == 0.0
+
+
+def test_cli_evaluates_results_with_numpy_truth_file(tmp_path: Path) -> None:
+    results = tmp_path / "mmaud_results.csv"
+    truth = tmp_path / "truth.npy"
+    output = tmp_path / "out"
+    pd.DataFrame(
+        {
+            "sequence_id": ["default", "default"],
+            "timestamp": [0.0, 1.0],
+            "x": [0.0, 1.0],
+            "y": [0.0, 0.0],
+            "z": [10.0, 10.0],
+            "uav_type": ["Mavic3", "Mavic3"],
+            "score": [1.0, 1.0],
+        }
+    ).to_csv(results, index=False)
+    np.save(truth, np.array([[0.0, 0.0, 0.0, 10.0], [1.0, 1.0, 0.0, 10.0]]))
+
+    status = mmuad_cli_main(
+        [
+            "--evaluate-results-csv",
+            str(results),
+            "--evaluate-truth-file",
+            str(truth),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    metrics = json.loads((output / "mmuad_local_evaluation.json").read_text(encoding="utf-8"))
+    assert metrics["matched_count"] == 2
+    assert metrics["pooled"]["mean_3d_m"] == 0.0
+
+
+def test_cli_completes_results_to_numpy_truth_template(tmp_path: Path) -> None:
+    candidates = tmp_path / "trajectory.npy"
+    template = tmp_path / "template_truth.npy"
+    output = tmp_path / "out"
+    rows = np.array(
+        [
+            [0.0, 0.0, 0.0, 1.0],
+            [2.0, 2.0, 0.0, 1.0],
+        ]
+    )
+    np.save(candidates, rows)
+    np.save(template, np.array([[0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 0.0, 1.0]]))
+
+    status = mmuad_cli_main(
+        [
+            "--candidate-file",
+            str(candidates),
+            "--output-dir",
+            str(output),
+            "--complete-results-to-truth-file",
+            str(template),
+            "--completed-results-csv",
+            str(output / "completed.csv"),
+        ]
+    )
+
+    assert status == 0
+    completed = pd.read_csv(output / "completed.csv")
+    assert completed["timestamp"].tolist() == [0.0, 1.0]
+    summary = json.loads((output / "mmuad_completion_summary.json").read_text(encoding="utf-8"))
+    assert summary["requested_count"] == 2
 
 
 def test_topic_map_exports_load_candidates_and_truth(tmp_path: Path) -> None:

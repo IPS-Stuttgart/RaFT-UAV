@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from raft_uav.mmuad.io import load_truth_csv
+from raft_uav.mmuad.io import load_truth_file
 from raft_uav.mmuad.schema import normalize_truth_columns
 
 
@@ -45,14 +45,14 @@ def load_submission_csv(path: Path) -> pd.DataFrame:
 
 def evaluate_submission_csv(
     submission_csv: Path,
-    truth_csv: Path,
+    truth_file: Path,
     *,
     max_time_delta_s: float = 0.5,
 ) -> dict[str, Any]:
-    """Evaluate a stable trajectory CSV against normalized truth CSV."""
+    """Evaluate a stable trajectory CSV against normalized truth rows."""
 
     submission = load_submission_csv(submission_csv)
-    truth = load_truth_csv(truth_csv).rows
+    truth = load_truth_file(truth_file).rows
     matched = match_submission_to_truth(
         submission,
         truth,

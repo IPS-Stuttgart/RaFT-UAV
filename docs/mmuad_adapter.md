@@ -294,6 +294,9 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --evaluation-json outputs/mmuad_eval/eval.json
 ```
 
+Use `--evaluate-truth-file` instead of `--evaluate-truth-csv` for compact
+truth exports such as `truth.npy`, `truth.npz`, or delimited text files.
+
 The evaluation reports mean/RMSE/p95/max 3D error, 2D error, ADE/FDE-style
 metrics, matched predictions, unmatched predictions, and truth coverage.  It is
 not the official UG2+ evaluator.
@@ -425,7 +428,7 @@ resample a trajectory to those timestamps before packaging:
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --sequence-root data/mmuad_export \
-  --complete-results-to-truth-csv data/mmuad_export/val_truth.csv \
+  --complete-results-to-truth-file data/mmuad_export/val_truth.npy \
   --completed-results-csv outputs/mmuad_val/mmaud_results_completed.csv \
   --completed-results-diagnostics-csv outputs/mmuad_val/completion_rows.csv \
   --completed-ug2-codabench-zip outputs/mmuad_val/ug2_completed.zip \
@@ -433,9 +436,10 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ```
 
 Completion supports linear interpolation across short gaps and nearest-hold
-extrapolation. This is useful for validating row coverage, but it should be
-reported separately from raw tracker output because completion policy can affect
-leaderboard-style MSE.
+extrapolation. The legacy `--complete-results-to-truth-csv` flag remains
+available for normalized CSV templates. This is useful for validating row
+coverage, but it should be reported separately from raw tracker output because
+completion policy can affect leaderboard-style MSE.
 
 ## Radar, Camera, And Classification Bridges
 
