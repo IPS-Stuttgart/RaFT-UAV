@@ -486,6 +486,17 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_topic_map_smoke
 ```
 
+Codabench-style ZIP archives written by this adapter can be sanity-checked
+directly; the loader reads the contained `mmaud_results.csv`:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --evaluate-results-zip outputs/mmuad_val/ug2_submission.zip \
+  --evaluate-truth-csv data/mmuad_export/val_truth.csv \
+  --evaluation-json outputs/mmuad_val/local_eval.json \
+  --output-dir outputs/mmuad_val
+```
+
 ## Leaderboard-Style Local Metrics And Completion
 
 The adapter can compute a closer UG2-style local sanity metric. It still is
@@ -507,6 +518,9 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --evaluation-rows-csv outputs/mmuad_val/local_eval_rows.csv \
   --output-dir outputs/mmuad_val
 ```
+
+Use `--evaluate-results-zip` instead when the result is still packaged as a
+Codabench-style archive.
 
 The submission writer also accepts a sequence-to-class map so different
 sequences can use different UAV type labels:

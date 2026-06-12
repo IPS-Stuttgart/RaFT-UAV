@@ -18,6 +18,7 @@ from raft_uav.mmuad.completion import complete_results_to_truth_timestamps
 from raft_uav.mmuad.evaluator import (
     evaluate_mmaud_results,
     load_mmaud_results_csv,
+    load_mmaud_results_file,
     write_evaluation_artifacts,
 )
 from raft_uav.mmuad.evaluator import validate_mmaud_results_frame
@@ -1448,6 +1449,8 @@ def test_ug2_codabench_zip_contains_mmaud_results_csv(tmp_path: Path) -> None:
     summary = inspect_submission_zip(zip_path)
     assert summary["has_mmaud_results_csv"]
     assert summary["row_count"] == 2
+    loaded = load_mmaud_results_file(zip_path)
+    assert loaded.rows["uav_type"].tolist() == ["Mavic3", "Mavic3"]
 
 
 def test_mmaud_results_accept_nanosecond_timestamps() -> None:
@@ -2271,6 +2274,54 @@ def test_cli_evaluates_results_with_numpy_truth_file(tmp_path: Path) -> None:
     metrics = json.loads((output / "mmuad_local_evaluation.json").read_text(encoding="utf-8"))
     assert metrics["matched_count"] == 2
     assert metrics["pooled"]["mean_3d_m"] == 0.0
+
+
+def test_cli_evaluates_ug2_codabench_zip(tmp_path: Path) -> None:
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, 1.0],
+            "state_x_m": [0.0, 1.0],
+            "state_y_m": [0.0, 0.0],
+            "state_z_m": [10.0, 10.0],
+        }
+    )
+    zip_path = write_ug2_codabench_zip(
+        estimates,
+        tmp_path / "ug2_submission.zip",
+        class_name="Mavic3",
+    )
+    truth = tmp_path / "truth.csv"
+    output = tmp_path / "out"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+            "uav_type": ["Mavic3", "Mavic3"],
+        }
+    ).to_csv(truth, index=False)
+
+    status = mmuad_cli_main(
+        [
+            "--evaluate-results-zip",
+            str(zip_path),
+            "--evaluate-truth-csv",
+            str(truth),
+            "--output-dir",
+            str(output),
+            "--evaluation-json",
+            str(output / "eval.json"),
+        ]
+    )
+
+    assert status == 0
+    metrics = json.loads((output / "eval.json").read_text(encoding="utf-8"))
+    assert metrics["matched_count"] == 2
+    assert metrics["pooled"]["pose_mse_loss_m2"] == 0.0
+    assert metrics["pooled"]["uav_type_accuracy"] == 1.0
 
 
 def test_cli_completes_results_to_numpy_truth_template(tmp_path: Path) -> None:

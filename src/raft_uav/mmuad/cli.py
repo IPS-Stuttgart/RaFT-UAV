@@ -20,6 +20,7 @@ from raft_uav.mmuad.evaluate import evaluate_submission_csv
 from raft_uav.mmuad.evaluator import (
     evaluate_mmaud_results,
     load_mmaud_results_csv,
+    load_mmaud_results_file,
     write_evaluation_artifacts,
 )
 from raft_uav.mmuad.inspect import (
@@ -148,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--completion-max-interpolation-gap-s", type=float, default=1.0)
     parser.add_argument("--completion-extrapolation", choices=("hold", "nan"), default="hold")
     parser.add_argument("--evaluate-results-csv", type=Path)
+    parser.add_argument("--evaluate-results-zip", type=Path)
     parser.add_argument("--evaluation-rows-csv", type=Path)
     parser.add_argument("--evaluation-class-map-csv", type=Path)
     args = parser.parse_args(argv)
@@ -184,15 +186,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"topic_count={len(report.get('topics', []))}")
             return 0
 
-    if args.evaluate_results_csv is not None:
+    evaluation_results = _evaluation_results_path(args)
+    if evaluation_results is not None:
         evaluation_truth = _evaluation_truth_path(args)
         if evaluation_truth is None:
             raise SystemExit(
-                "--evaluate-results-csv requires --evaluate-truth-csv "
-                "or --evaluate-truth-file"
+                "--evaluate-results-csv/--evaluate-results-zip requires "
+                "--evaluate-truth-csv or --evaluate-truth-file"
             )
         result = evaluate_mmaud_results(
-            load_mmaud_results_csv(args.evaluate_results_csv),
+            load_mmaud_results_file(evaluation_results),
             load_truth_file(evaluation_truth),
             max_time_delta_s=args.evaluation_max_time_delta_s,
             class_map_csv=args.evaluation_class_map_csv,
@@ -467,6 +470,12 @@ def _evaluation_truth_path(args: argparse.Namespace) -> Path | None:
     if args.evaluate_truth_csv is not None and args.evaluate_truth_file is not None:
         raise SystemExit("provide only one of --evaluate-truth-csv or --evaluate-truth-file")
     return args.evaluate_truth_file or args.evaluate_truth_csv
+
+
+def _evaluation_results_path(args: argparse.Namespace) -> Path | None:
+    if args.evaluate_results_csv is not None and args.evaluate_results_zip is not None:
+        raise SystemExit("provide only one of --evaluate-results-csv or --evaluate-results-zip")
+    return args.evaluate_results_zip or args.evaluate_results_csv
 
 
 def _completion_truth_path(args: argparse.Namespace) -> Path | None:

@@ -9,8 +9,10 @@ outputs can be sanity-checked before official submission packaging.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Any
+from zipfile import ZipFile
 
 import json
 import numpy as np
@@ -36,6 +38,32 @@ def load_mmaud_results_csv(path: Path) -> ResultsFrame:
     """Load and validate a ``mmaud_results.csv``-style file."""
 
     frame = pd.read_csv(path)
+    return ResultsFrame(validate_mmaud_results_frame(frame))
+
+
+def load_mmaud_results_file(path: Path) -> ResultsFrame:
+    """Load result rows from a CSV file or a Codabench-style ZIP archive."""
+
+    path = Path(path)
+    if path.suffix.lower() == ".zip":
+        return load_mmaud_results_zip(path)
+    return load_mmaud_results_csv(path)
+
+
+def load_mmaud_results_zip(
+    path: Path,
+    *,
+    member_name: str = "mmaud_results.csv",
+) -> ResultsFrame:
+    """Load and validate ``mmaud_results.csv`` from a ZIP archive."""
+
+    path = Path(path)
+    with ZipFile(path) as archive:
+        names = archive.namelist()
+        if member_name not in names:
+            raise ValueError(f"{path} does not contain {member_name!r}; members={names}")
+        with archive.open(member_name) as handle:
+            frame = pd.read_csv(BytesIO(handle.read()))
     return ResultsFrame(validate_mmaud_results_frame(frame))
 
 
