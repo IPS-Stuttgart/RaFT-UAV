@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
 from typing import Any
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,27 @@ UG2_RESULT_COLUMNS = (
     "score",
 )
 
+_SEQUENCE_ID_ALIASES = (
+    "sequence_id",
+    "sequence",
+    "seq",
+    "scene",
+    "scene_id",
+    "id",
+    "name",
+)
+_UAV_TYPE_ALIASES = (
+    "uav_type",
+    "class_name",
+    "class",
+    "label",
+    "category",
+    "type",
+    "uav_class",
+)
+_CLASS_MAP_KEYS = ("sequences", "class_map", "classes", "mapping", "items")
+_CLASS_MAP_METADATA_KEYS = ("schema", "version", "description", "metadata")
+
 
 def load_sequence_class_map(path: Path | None) -> dict[str, str]:
     """Load a sequence-to-UAV-type map from CSV or JSON."""
@@ -40,22 +62,16 @@ def load_sequence_class_map(path: Path | None) -> dict[str, str]:
     path = Path(path)
     if path.suffix.lower() == ".json":
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(payload, dict) and "sequences" in payload:
-            payload = payload["sequences"]
-        if not isinstance(payload, dict):
-            raise ValueError(
-                "class-map JSON must be an object or contain a 'sequences' object"
-            )
-        return {str(key): str(value) for key, value in payload.items()}
+        return _class_map_from_json_payload(payload)
 
     frame = pd.read_csv(path)
     lower = {str(col).lower(): col for col in frame.columns}
     rename = {}
-    for alias in ("sequence_id", "sequence", "seq", "scene", "scene_id"):
+    for alias in _SEQUENCE_ID_ALIASES:
         if alias in lower:
             rename[lower[alias]] = "sequence_id"
             break
-    for alias in ("uav_type", "class_name", "class", "label", "category"):
+    for alias in _UAV_TYPE_ALIASES:
         if alias in lower:
             rename[lower[alias]] = "uav_type"
             break
@@ -68,6 +84,97 @@ def load_sequence_class_map(path: Path | None) -> dict[str, str]:
         for _, row in frame.iterrows()
         if pd.notna(row["sequence_id"]) and pd.notna(row["uav_type"])
     }
+
+
+def _class_map_from_json_payload(payload: Any) -> dict[str, str]:
+    if isinstance(payload, list):
+        class_map = _class_map_from_rows(payload)
+        if class_map:
+            return class_map
+        raise ValueError("class-map JSON rows must contain sequence id and UAV type fields")
+    if not isinstance(payload, dict):
+        raise ValueError("class-map JSON must be an object or a list of sequence rows")
+
+    for key in _CLASS_MAP_KEYS:
+        nested = payload.get(key)
+        class_map = _class_map_from_nested(nested)
+        if class_map:
+            return class_map
+
+    class_map = _class_map_from_rows([payload])
+    if class_map:
+        return class_map
+    class_map = _class_map_from_mapping(payload)
+    if class_map:
+        return class_map
+    raise ValueError("class-map JSON does not contain any sequence UAV types")
+
+
+def _class_map_from_nested(value: Any) -> dict[str, str]:
+    if isinstance(value, list):
+        return _class_map_from_rows(value)
+    if isinstance(value, dict):
+        return _class_map_from_mapping(value)
+    return {}
+
+
+def _class_map_from_rows(rows: list[Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sequence_id = _entry_value(row, _SEQUENCE_ID_ALIASES)
+        uav_type = _entry_value(row, _UAV_TYPE_ALIASES)
+        if sequence_id is not None and uav_type is not None:
+            out[sequence_id] = uav_type
+    return out
+
+
+def _class_map_from_mapping(mapping: Mapping[str, Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for key, value in mapping.items():
+        if str(key).lower() in _CLASS_MAP_KEYS + _CLASS_MAP_METADATA_KEYS:
+            continue
+        sequence_id = _scalar_to_text(key)
+        if sequence_id is None:
+            continue
+        if isinstance(value, dict):
+            mapped_sequence_id = _entry_value(value, _SEQUENCE_ID_ALIASES)
+            uav_type = _entry_value(value, _UAV_TYPE_ALIASES)
+            if mapped_sequence_id is not None:
+                sequence_id = mapped_sequence_id
+        else:
+            uav_type = _scalar_to_text(value)
+        if uav_type is not None:
+            out[sequence_id] = uav_type
+    return out
+
+
+def _entry_value(entry: Mapping[str, Any], aliases: tuple[str, ...]) -> str | None:
+    lower_keys = {str(key).lower(): key for key in entry}
+    for alias in aliases:
+        key = alias if alias in entry else lower_keys.get(alias)
+        if key is None:
+            continue
+        value = _scalar_to_text(entry[key])
+        if value is not None:
+            return value
+    return None
+
+
+def _scalar_to_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        missing = pd.isna(value)
+    except TypeError:
+        missing = False
+    if isinstance(missing, bool) and missing:
+        return None
+    if not isinstance(value, str | int | float):
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def estimates_to_mmaud_results_frame(

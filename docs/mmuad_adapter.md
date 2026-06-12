@@ -582,6 +582,11 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 Explicit class maps still take precedence over inferred maps. This is a simple
 weighted-vote classifier, not a learned UAV type recognition model.
 
+Class maps may be simple CSV files with `sequence_id,uav_type`, alias CSV files
+such as `id,type`, plain JSON objects such as `{"seq001": "Mavic3"}`, or
+exported row-style JSON such as
+`{"sequences": [{"id": "seq001", "type": "Mavic3"}]}`.
+
 ## Native ROS And PointCloud2 Bridge
 
 The adapter also includes an optional native ROS extraction path. Normal imports

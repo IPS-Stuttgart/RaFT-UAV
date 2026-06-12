@@ -1311,6 +1311,54 @@ def test_sequence_class_map_overrides_submission_type(tmp_path: Path) -> None:
     assert list(frame["uav_type"]) == ["Mavic3", "Phantom4"]
 
 
+def test_sequence_class_map_accepts_json_row_layouts(tmp_path: Path) -> None:
+    class_map_json = tmp_path / "classes.json"
+    class_map_json.write_text(
+        json.dumps(
+            {
+                "schema": "exported-class-map-v1",
+                "sequences": [
+                    {"id": "seqA", "type": "Mavic3"},
+                    {"name": "seqB", "category": "Phantom4"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    mapping = load_sequence_class_map(class_map_json)
+
+    assert mapping == {"seqA": "Mavic3", "seqB": "Phantom4"}
+
+
+def test_sequence_class_map_accepts_nested_json_mapping(tmp_path: Path) -> None:
+    class_map_json = tmp_path / "classes.json"
+    class_map_json.write_text(
+        json.dumps(
+            {
+                "class_map": {
+                    "seqA": {"uav_type": "Mavic3"},
+                    "seqB": {"label": "Phantom4"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    mapping = load_sequence_class_map(class_map_json)
+
+    assert mapping == {"seqA": "Mavic3", "seqB": "Phantom4"}
+
+
+def test_sequence_class_map_accepts_csv_alias_columns(tmp_path: Path) -> None:
+    class_map_csv = tmp_path / "classes.csv"
+    class_map_csv.write_text("id,type\nseqA,Mavic3\nseqB,Phantom4\n", encoding="utf-8")
+
+    mapping = load_sequence_class_map(class_map_csv)
+
+    assert mapping == {"seqA": "Mavic3", "seqB": "Phantom4"}
+
+
 def test_results_completion_resamples_to_truth_timestamps(tmp_path: Path) -> None:
     results = validate_mmaud_results_frame(
         pd.DataFrame(
