@@ -39,6 +39,7 @@ from raft_uav.mmuad.mot import (
     compute_multi_object_metrics,
     run_mmuad_multi_object_tracker,
 )
+from raft_uav.mmuad.native_ros import position_message_to_row
 from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates, pointcloud2_to_dataframe
 from raft_uav.mmuad.rosbag_bridge import (
     inspect_rosbag,
@@ -3007,6 +3008,74 @@ def test_ros2_metadata_inspection_and_topic_map_template(tmp_path: Path) -> None
     ]
     assert payload["exports"][0]["source"] == "radar_points"
     assert payload["exports"][1]["source"] is None
+
+
+def test_ros2_topic_map_template_infers_point_and_transform_topics(
+    tmp_path: Path,
+) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /detector/point",
+                "        type: geometry_msgs/msg/PointStamped",
+                "      message_count: 2",
+                "    - topic_metadata:",
+                "        name: /ground_truth/transform",
+                "        type: geometry_msgs/msg/TransformStamped",
+                "      message_count: 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "point_candidate",
+        "transform_truth",
+    ]
+    assert payload["exports"][0]["source"] == "detector_point"
+    assert payload["exports"][1]["source"] is None
+
+
+def test_native_ros_position_message_to_row_accepts_common_position_messages() -> None:
+    point_message = SimpleNamespace(point=SimpleNamespace(x=1.0, y=2.0, z=3.0))
+    transform_message = SimpleNamespace(
+        transform=SimpleNamespace(
+            translation=SimpleNamespace(x=4.0, y=5.0, z=6.0)
+        )
+    )
+    pose_message = SimpleNamespace(
+        pose=SimpleNamespace(
+            pose=SimpleNamespace(position=SimpleNamespace(x=7.0, y=8.0, z=9.0))
+        )
+    )
+
+    point_row = position_message_to_row(point_message, sequence_id="seq", time_s=1.25)
+    transform_row = position_message_to_row(
+        transform_message,
+        sequence_id="seq",
+        time_s=2.5,
+    )
+    pose_row = position_message_to_row(pose_message, sequence_id="seq", time_s=3.75)
+
+    assert point_row == {
+        "sequence_id": "seq",
+        "time_s": 1.25,
+        "x_m": 1.0,
+        "y_m": 2.0,
+        "z_m": 3.0,
+    }
+    assert transform_row["x_m"] == 4.0
+    assert transform_row["time_s"] == 2.5
+    assert pose_row["z_m"] == 9.0
 
 
 def test_pointcloud2_decoder_and_candidate_clustering() -> None:

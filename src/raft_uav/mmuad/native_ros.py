@@ -7,6 +7,8 @@ tracking logs:
 
 * ``sensor_msgs/msg/PointCloud2`` -> clustered candidate detections;
 * ``geometry_msgs/msg/PoseStamped`` -> truth rows or candidate rows;
+* ``geometry_msgs/msg/PointStamped`` -> truth rows or candidate rows;
+* ``geometry_msgs/msg/TransformStamped`` -> truth rows or candidate rows;
 * ``nav_msgs/msg/Odometry`` -> truth rows or candidate rows.
 
 Unknown topics are recorded in the extraction manifest and skipped.
@@ -53,7 +55,10 @@ def extract_native_rosbag_topic_map(
         Decode ``sensor_msgs/msg/PointCloud2`` and cluster points.
     ``pose_truth`` / ``odometry_truth``
         Convert pose/odometry messages into truth rows.
-    ``pose_candidate`` / ``odometry_candidate``
+    ``point_truth`` / ``transform_truth``
+        Convert position-only messages into truth rows.
+    ``pose_candidate`` / ``odometry_candidate`` / ``point_candidate`` /
+    ``transform_candidate``
         Convert pose/odometry messages into candidate detections.
     """
 
@@ -98,11 +103,26 @@ def extract_native_rosbag_topic_map(
                     )
                     candidate_frames.append(frame)
                     rows = len(frame.rows)
-                elif kind in {"pose_truth", "odometry_truth"}:
-                    truth_rows.append(_pose_like_row(message, sequence_id=str(spec.get("sequence_id", sequence_id)), time_s=time_s))
+                elif kind in {"pose_truth", "odometry_truth", "point_truth", "transform_truth"}:
+                    truth_rows.append(
+                        _position_like_row(
+                            message,
+                            sequence_id=str(spec.get("sequence_id", sequence_id)),
+                            time_s=time_s,
+                        )
+                    )
                     rows = 1
-                elif kind in {"pose_candidate", "odometry_candidate"}:
-                    row = _pose_like_row(message, sequence_id=str(spec.get("sequence_id", sequence_id)), time_s=time_s)
+                elif kind in {
+                    "pose_candidate",
+                    "odometry_candidate",
+                    "point_candidate",
+                    "transform_candidate",
+                }:
+                    row = _position_like_row(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                    )
                     row.update(
                         {
                             "source": source,
@@ -170,13 +190,12 @@ def _message_time_s(message: Any, fallback_timestamp_ns: int) -> float:
     return float(fallback_timestamp_ns) * 1.0e-9
 
 
-def _pose_like_row(message: Any, *, sequence_id: str, time_s: float) -> dict[str, Any]:
-    pose = getattr(message, "pose", message)
-    if hasattr(pose, "pose"):
-        pose = pose.pose
-    position = getattr(pose, "position", None)
+def position_message_to_row(message: Any, *, sequence_id: str, time_s: float) -> dict[str, Any]:
+    """Convert common position-bearing ROS messages into a normalized row."""
+
+    position = _position_from_message(message)
     if position is None:
-        raise ValueError("pose-like message has no position")
+        raise ValueError("position-like message has no position/point/translation")
     return {
         "sequence_id": sequence_id,
         "time_s": float(time_s),
@@ -184,3 +203,25 @@ def _pose_like_row(message: Any, *, sequence_id: str, time_s: float) -> dict[str
         "y_m": float(getattr(position, "y")),
         "z_m": float(getattr(position, "z")),
     }
+
+
+def _position_like_row(message: Any, *, sequence_id: str, time_s: float) -> dict[str, Any]:
+    return position_message_to_row(message, sequence_id=sequence_id, time_s=time_s)
+
+
+def _position_from_message(message: Any) -> Any | None:
+    point = getattr(message, "point", None)
+    if point is not None:
+        return point
+    transform = getattr(message, "transform", None)
+    if transform is not None:
+        translation = getattr(transform, "translation", None)
+        if translation is not None:
+            return translation
+    translation = getattr(message, "translation", None)
+    if translation is not None:
+        return translation
+    pose = getattr(message, "pose", message)
+    if hasattr(pose, "pose"):
+        pose = pose.pose
+    return getattr(pose, "position", None)
