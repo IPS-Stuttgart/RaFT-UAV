@@ -32,6 +32,13 @@ UG2_RESULT_COLUMNS = (
     "score",
 )
 
+OFFICIAL_UG2_RESULT_COLUMNS = (
+    "Sequence",
+    "Timestamp",
+    "Position",
+    "Classification",
+)
+
 _SEQUENCE_ID_ALIASES = (
     "sequence_id",
     "sequence",
@@ -264,6 +271,130 @@ def estimates_to_mmaud_results_frame(
     ).reset_index(drop=True)
 
 
+def estimates_to_official_mmaud_results_frame(
+    estimates: pd.DataFrame,
+    *,
+    classification: int | str = 0,
+    class_map: dict[str, str] | None = None,
+) -> pd.DataFrame:
+    """Convert estimates into the public Track 5 ``mmaud_results.csv`` schema.
+
+    The CVPR 2024 UG2+ Track 5 README specifies columns named ``Sequence``,
+    ``Timestamp``, ``Position``, and ``Classification``.  ``Position`` is written
+    as a compact ``(x,y,z)`` string because CSV has no native NumPy-array type.
+    ``Classification`` must be an integer; pass a sequence class map with
+    numeric values when per-sequence labels are known.
+    """
+
+    if estimates.empty:
+        return pd.DataFrame(columns=OFFICIAL_UG2_RESULT_COLUMNS)
+    x_column, y_column, z_column = _estimate_coordinate_columns(estimates)
+    sequence_values = _estimate_sequence_values(estimates)
+    classification_values = _estimate_classification_values(
+        estimates,
+        sequence_values=sequence_values,
+        default_classification=classification,
+        class_map=class_map,
+    )
+    numeric = pd.DataFrame(
+        {
+            "Timestamp": pd.to_numeric(estimates["time_s"], errors="coerce"),
+            "x": pd.to_numeric(estimates[x_column], errors="coerce"),
+            "y": pd.to_numeric(estimates[y_column], errors="coerce"),
+            "z": pd.to_numeric(estimates[z_column], errors="coerce"),
+            "Classification": classification_values,
+        },
+        index=estimates.index,
+    )
+    finite = np.isfinite(numeric[["Timestamp", "x", "y", "z"]].to_numpy(dtype=float)).all(axis=1)
+    work_sequences = sequence_values.loc[finite]
+    numeric = numeric.loc[finite]
+    rows = pd.DataFrame(
+        {
+            "Sequence": work_sequences.astype(str),
+            "Timestamp": numeric["Timestamp"].astype(float),
+            "Position": [
+                _format_official_position(x, y, z)
+                for x, y, z in zip(
+                    numeric["x"],
+                    numeric["y"],
+                    numeric["z"],
+                    strict=False,
+                )
+            ],
+            "Classification": numeric["Classification"].astype(int),
+        }
+    )
+    return rows[list(OFFICIAL_UG2_RESULT_COLUMNS)].sort_values(
+        ["Sequence", "Timestamp"]
+    ).reset_index(drop=True)
+
+
+def _estimate_classification_values(
+    estimates: pd.DataFrame,
+    *,
+    sequence_values: pd.Series,
+    default_classification: int | str,
+    class_map: dict[str, str] | None,
+) -> pd.Series:
+    if "classification" in estimates.columns:
+        raw = estimates["classification"]
+    elif "class_id" in estimates.columns:
+        raw = estimates["class_id"]
+    elif "class_name" in estimates.columns:
+        raw = estimates["class_name"]
+    else:
+        raw = pd.Series([default_classification] * len(estimates), index=estimates.index)
+    values = pd.Series(raw, index=estimates.index).copy()
+    if class_map:
+        mapped = [
+            class_map.get(str(sequence_id), value)
+            for sequence_id, value in zip(sequence_values, values, strict=False)
+        ]
+        values = pd.Series(mapped, index=estimates.index)
+    return values.map(_classification_to_int)
+
+
+def _classification_to_int(value: Any) -> int:
+    if value is None:
+        raise ValueError("official MMUAD Classification values must be integers")
+    if isinstance(value, np.generic):
+        value = value.item()
+    try:
+        missing = pd.isna(value)
+    except TypeError:
+        missing = False
+    if isinstance(missing, bool) and missing:
+        raise ValueError("official MMUAD Classification values must be integers")
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            raise ValueError("official MMUAD Classification values must be integers")
+        try:
+            number = float(text)
+        except ValueError as exc:
+            raise ValueError(
+                "official MMUAD Classification values must be integer ids; "
+                f"got {value!r}"
+            ) from exc
+    else:
+        number = float(value)
+    if not np.isfinite(number) or not number.is_integer():
+        raise ValueError(
+            "official MMUAD Classification values must be integer ids; "
+            f"got {value!r}"
+        )
+    return int(number)
+
+
+def _format_official_position(x: Any, y: Any, z: Any) -> str:
+    return f"({_format_float(x)},{_format_float(y)},{_format_float(z)})"
+
+
+def _format_float(value: Any) -> str:
+    return f"{float(value):.12g}"
+
+
 def write_mmaud_results_csv(
     estimates: pd.DataFrame,
     path: Path,
@@ -283,6 +414,25 @@ def write_mmaud_results_csv(
     return path
 
 
+def write_official_mmaud_results_csv(
+    estimates: pd.DataFrame,
+    path: Path,
+    *,
+    classification: int | str = 0,
+    class_map: dict[str, str] | None = None,
+) -> Path:
+    """Write the public CVPR 2024 UG2+ Track 5 ``mmaud_results.csv`` schema."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    estimates_to_official_mmaud_results_frame(
+        estimates,
+        classification=classification,
+        class_map=class_map,
+    ).to_csv(path, index=False)
+    return path
+
+
 def write_ug2_codabench_zip(
     estimates: pd.DataFrame,
     path: Path,
@@ -296,6 +446,27 @@ def write_ug2_codabench_zip(
     path.parent.mkdir(parents=True, exist_ok=True)
     frame = estimates_to_mmaud_results_frame(
         estimates, class_name=class_name, class_map=class_map
+    )
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("mmaud_results.csv", frame.to_csv(index=False))
+    return path
+
+
+def write_official_ug2_codabench_zip(
+    estimates: pd.DataFrame,
+    path: Path,
+    *,
+    classification: int | str = 0,
+    class_map: dict[str, str] | None = None,
+) -> Path:
+    """Write a Track 5 upload ZIP containing only ``mmaud_results.csv``."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame = estimates_to_official_mmaud_results_frame(
+        estimates,
+        classification=classification,
+        class_map=class_map,
     )
     with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
         archive.writestr("mmaud_results.csv", frame.to_csv(index=False))
