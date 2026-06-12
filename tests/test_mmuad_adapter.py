@@ -633,6 +633,46 @@ def test_sequence_root_loads_json_candidate_and_truth_exports(tmp_path: Path) ->
     assert truth.rows["time_s"].tolist() == [0.5]
 
 
+def test_sequence_root_loads_json_class_labels(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_json_class"
+    seq.mkdir()
+    (seq / "candidates.json").write_text(
+        json.dumps(
+            {
+                "candidates": [
+                    {"time_s": 0.0, "x_m": 0.0, "y_m": 0.0, "z_m": 1.0},
+                    {"time_s": 1.0, "x_m": 1.0, "y_m": 0.0, "z_m": 1.0},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (seq / "truth.json").write_text(
+        json.dumps(
+            {
+                "truth": [
+                    {"time_s": 0.0, "x_m": 0.0, "y_m": 0.0, "z_m": 1.0},
+                    {"time_s": 1.0, "x_m": 1.0, "y_m": 0.0, "z_m": 1.0},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (seq / "classes.json").write_text(
+        json.dumps({"class_map": {"seq_json_class": {"uav_type": "quadrotor"}}}),
+        encoding="utf-8",
+    )
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].class_files == (seq / "classes.json",)
+    assert candidates.rows["class_name"].tolist() == ["quadrotor", "quadrotor"]
+    output = run_mmuad_tracker(candidates, truth)
+    results = estimates_to_mmaud_results_frame(output.estimates, class_name="unknown")
+    assert results["uav_type"].tolist() == ["quadrotor", "quadrotor"]
+
+
 def test_sequence_root_discovers_delimited_point_tables(tmp_path: Path) -> None:
     seq = tmp_path / "seq_points_tsv"
     seq.mkdir()

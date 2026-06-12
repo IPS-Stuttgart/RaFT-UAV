@@ -135,7 +135,7 @@ modality subfolders such as `livox_avia/<timestamp>.npy`,
 `tracking_results/<timestamp>.npy`,
 `radar0/detections.csv` with exported polar range/azimuth columns,
 `cam0/detections.csv` with exported pixel/depth or bounding-box columns, and
-`class/<timestamp>.npy`:
+class-label JSON files such as `classes.json` or `class/<timestamp>.json`:
 
 ```text
 data/mmuad_export/
@@ -153,6 +153,7 @@ data/mmuad_export/
   seq003_json/
     candidates.json
     truth.json
+    classes.json
   seq004/
     lidar_points.tsv
     truth.csv
@@ -347,11 +348,13 @@ Folder-style exports are also supported: files inside `livox_avia`, `lidar`,
 inside `tracking_results`, `tracks`, `trajectories`, `detections`, or
 `candidates` folders are loaded as candidate trajectories. Per-frame NumPy pose
 files may contain only `x_m,y_m,z_m`; their timestamp is inferred from the
-filename. Files inside `class`, `classes`, `uav_type`, or `category` folders are
-read as sequence class labels and attached to otherwise-unlabeled candidates;
-numeric labels are preserved as strings unless you provide an external class map
-for official names. This is still a normalized/exported-data bridge, not a
-parser for undocumented native packets.
+filename. Files named `class`, `classes`, `uav_type`, or `category`, and files
+inside matching folders, are read as sequence class labels when they are
+CSV/TSV/TXT, JSON, or compact NumPy exports. JSON class files may be direct
+labels, row lists, or sequence-to-type maps. Loaded class labels are attached to
+otherwise-unlabeled candidates; numeric labels are preserved as strings unless
+you provide an external class map for official names. This is still a
+normalized/exported-data bridge, not a parser for undocumented native packets.
 
 ### Auto calibration loader
 

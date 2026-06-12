@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
@@ -56,6 +57,18 @@ POINT_DIR_TOKENS = (
 )
 TRUTH_DIR_TOKENS = ("truth", "ground_truth", "gt", "label", "labels", "leica")
 CLASS_DIR_TOKENS = ("class", "classes", "uav_type", "uav_types", "category", "categories")
+CLASS_JSON_CONTAINER_KEYS = ("sequences", "class_map", "classes", "mapping", "items", "labels")
+CLASS_JSON_LABEL_ALIASES = (
+    "uav_type",
+    "class_name",
+    "class",
+    "label",
+    "category",
+    "type",
+    "uav_class",
+)
+CLASS_JSON_SEQUENCE_ID_ALIASES = ("sequence_id", "sequence", "seq", "scene", "scene_id", "id", "name")
+CLASS_JSON_METADATA_KEYS = ("schema", "version", "description", "metadata", "meta")
 RADAR_DIR_TOKENS = ("radar", "mmwave", "mmw")
 CAMERA_DIR_TOKENS = ("camera", "cam", "image", "images")
 MODALITY_DIR_TOKENS = (
@@ -240,7 +253,7 @@ def load_sequence_export(
     if not candidate_frames:
         raise ValueError(f"no candidate or point-cloud files discovered for {paths.root}")
     candidates = merge_candidate_frames(candidate_frames)
-    class_label = _sequence_class_label(paths.class_files)
+    class_label = _sequence_class_label(paths.class_files, sequence_id=paths.sequence_id)
     if class_label is not None:
         rows = candidates.rows.copy()
         if "class_name" not in rows.columns:
@@ -343,9 +356,10 @@ def _candidate_files(path: Path) -> list[Path]:
             for item in files
             if not ("radar" in item.stem.lower() and "polar" in item.stem.lower())
             and "camera" not in item.stem.lower()
-            and not _name_has_any(
+            and not _relative_path_has_any(
                 item,
-                (
+                root=path,
+                tokens=(
                     "topic_map",
                     "calibration",
                     "calib",
@@ -429,8 +443,16 @@ def _candidate_trajectory_files(path: Path) -> list[Path]:
         [
             item
             for item in files
-            if not _name_has_any(item, ("truth", "ground_truth", "gt", "label"))
-            and not _name_has_any(item, ("point", "points", "cloud", "lidar", "livox"))
+            if not _relative_path_has_any(
+                item,
+                root=path,
+                tokens=("truth", "ground_truth", "gt", "label"),
+            )
+            and not _relative_path_has_any(
+                item,
+                root=path,
+                tokens=("point", "points", "cloud", "lidar", "livox"),
+            )
         ]
     )
 
@@ -532,9 +554,10 @@ def _truth_files(path: Path) -> list[Path]:
         [
             item
             for item in [item for item in exact if item.exists()] + globbed + folder_files
-            if not _name_has_any(
+            if not _relative_path_has_any(
                 item,
-                ("topic_map", "calibration", "calib", "extrinsic", "class", "category"),
+                root=path,
+                tokens=("topic_map", "calibration", "calib", "extrinsic", "class", "category"),
             )
         ]
     )
@@ -544,12 +567,12 @@ def _class_files(path: Path) -> list[Path]:
     exact = [
         path / f"{stem}{suffix}"
         for stem in ("class", "classes", "uav_type", "category")
-        for suffix in TABLE_SUFFIXES + TRAJECTORY_SUFFIXES
+        for suffix in TABLE_SUFFIXES + JSON_TABLE_SUFFIXES + TRAJECTORY_SUFFIXES
     ]
     folder_files = _files_under_named_dirs(
         path,
         directory_tokens=CLASS_DIR_TOKENS,
-        suffixes=TABLE_SUFFIXES + TRAJECTORY_SUFFIXES,
+        suffixes=TABLE_SUFFIXES + JSON_TABLE_SUFFIXES + TRAJECTORY_SUFFIXES,
     )
     return _unique_paths([item for item in exact if item.exists()] + folder_files)
 
@@ -616,13 +639,25 @@ def _point_numpy_files(path: Path) -> list[Path]:
     return [
         item
         for item in files
-        if not _name_has_any(item, ("candidate", "detection", "track", "trajectory", "result"))
-        and not _name_has_any(item, ("truth", "ground_truth", "gt", "label"))
+        if not _relative_path_has_any(
+            item,
+            root=path,
+            tokens=("candidate", "detection", "track", "trajectory", "result"),
+        )
+        and not _relative_path_has_any(
+            item,
+            root=path,
+            tokens=("truth", "ground_truth", "gt", "label"),
+        )
     ]
 
 
-def _name_has_any(path: Path, tokens: tuple[str, ...]) -> bool:
-    text = " ".join(part.lower() for part in path.parts[-2:])
+def _relative_path_has_any(path: Path, *, root: Path, tokens: tuple[str, ...]) -> bool:
+    try:
+        parts = Path(path).relative_to(root).parts
+    except ValueError:
+        parts = (Path(path).name,)
+    text = " ".join(part.lower() for part in parts)
     return any(token in text for token in tokens)
 
 
@@ -759,10 +794,10 @@ def _source_from_path(path: Path, *, sequence_root: Path, default: str) -> str:
     return str(relative.parts[-2]).replace(" ", "_").replace("-", "_")
 
 
-def _sequence_class_label(paths: tuple[Path, ...]) -> str | None:
+def _sequence_class_label(paths: tuple[Path, ...], *, sequence_id: str) -> str | None:
     labels: list[str] = []
     for path in paths:
-        labels.extend(_class_labels_from_file(path))
+        labels.extend(_class_labels_from_file(path, sequence_id=sequence_id))
     labels = [label for label in labels if label]
     if not labels:
         return None
@@ -770,7 +805,7 @@ def _sequence_class_label(paths: tuple[Path, ...]) -> str | None:
     return str(counts.index[0])
 
 
-def _class_labels_from_file(path: Path) -> list[str]:
+def _class_labels_from_file(path: Path, *, sequence_id: str | None = None) -> list[str]:
     suffix = path.suffix.lower()
     if suffix in TRAJECTORY_SUFFIXES:
         payload = np.load(path, allow_pickle=False)
@@ -796,7 +831,108 @@ def _class_labels_from_file(path: Path) -> list[str]:
                 ]
         if not frame.empty:
             return [_format_class_label(value) for value in frame.iloc[:, 0].dropna().tolist()]
+    if suffix in JSON_TABLE_SUFFIXES:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return _class_labels_from_json_payload(payload, sequence_id=sequence_id)
     return []
+
+
+def _class_labels_from_json_payload(
+    payload: Any,
+    *,
+    sequence_id: str | None,
+) -> list[str]:
+    scalar = _class_json_scalar_label(payload)
+    if scalar is not None:
+        return [scalar]
+    if isinstance(payload, list):
+        labels: list[str] = []
+        for item in payload:
+            labels.extend(_class_labels_from_json_payload(item, sequence_id=sequence_id))
+        return labels
+    if not isinstance(payload, dict):
+        return []
+
+    row_label = _class_json_row_label(payload, sequence_id=sequence_id)
+    if row_label:
+        return [row_label]
+
+    labels: list[str] = []
+    for key in CLASS_JSON_CONTAINER_KEYS:
+        nested = _mapping_get_case_insensitive(payload, key)
+        if nested is not None:
+            labels.extend(_class_labels_from_json_payload(nested, sequence_id=sequence_id))
+    if labels:
+        return labels
+
+    if sequence_id is not None:
+        sequence_value = _mapping_get_case_insensitive(payload, sequence_id)
+        if sequence_value is not None:
+            return _class_labels_from_json_payload(sequence_value, sequence_id=None)
+        if _looks_like_sequence_class_mapping(payload):
+            return []
+
+    return _class_labels_from_json_mapping(payload)
+
+
+def _class_json_row_label(
+    entry: Mapping[Any, Any],
+    *,
+    sequence_id: str | None,
+) -> str | None:
+    entry_sequence = _mapping_text_value(entry, CLASS_JSON_SEQUENCE_ID_ALIASES)
+    if entry_sequence is not None and sequence_id is not None:
+        if entry_sequence.lower() != str(sequence_id).lower():
+            return None
+    return _mapping_text_value(entry, CLASS_JSON_LABEL_ALIASES)
+
+
+def _class_labels_from_json_mapping(payload: Mapping[Any, Any]) -> list[str]:
+    labels: list[str] = []
+    for key, value in payload.items():
+        if str(key).lower() in CLASS_JSON_METADATA_KEYS:
+            continue
+        if str(key).lower() in CLASS_JSON_LABEL_ALIASES:
+            label = _class_json_scalar_label(value)
+            if label is not None:
+                labels.append(label)
+            continue
+        labels.extend(_class_labels_from_json_payload(value, sequence_id=None))
+    return labels
+
+
+def _looks_like_sequence_class_mapping(payload: Mapping[Any, Any]) -> bool:
+    useful_keys = [
+        str(key).lower()
+        for key in payload
+        if str(key).lower() not in CLASS_JSON_METADATA_KEYS
+    ]
+    return bool(useful_keys) and not any(key in CLASS_JSON_LABEL_ALIASES for key in useful_keys)
+
+
+def _mapping_get_case_insensitive(mapping: Mapping[Any, Any], key: str) -> Any | None:
+    for candidate, value in mapping.items():
+        if str(candidate).lower() == key.lower():
+            return value
+    return None
+
+
+def _mapping_text_value(mapping: Mapping[Any, Any], aliases: tuple[str, ...]) -> str | None:
+    for alias in aliases:
+        value = _mapping_get_case_insensitive(mapping, alias)
+        label = _class_json_scalar_label(value)
+        if label is not None:
+            return label
+    return None
+
+
+def _class_json_scalar_label(value: Any) -> str | None:
+    if isinstance(value, np.generic):
+        value = value.item()
+    if not isinstance(value, str | int | float):
+        return None
+    label = _format_class_label(value)
+    return label or None
 
 
 def _read_table(path: Path) -> pd.DataFrame:
