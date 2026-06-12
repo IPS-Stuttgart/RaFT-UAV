@@ -47,9 +47,14 @@ def run_mmuad_multi_object_tracker(
     config = config or MultiObjectTrackerConfig()
     candidates.validate()
     rows = _candidate_rows_with_optional_defaults(candidates.rows)
-    if rows.empty:
-        return TrackerOutput(pd.DataFrame(), {"count": 0}, pd.DataFrame())
     truth_rows = truth.rows if truth is not None else None
+    if rows.empty:
+        empty = pd.DataFrame()
+        metrics = {
+            "sequences": _truth_only_sequence_metrics(truth_rows),
+            "pooled": compute_multi_object_metrics(empty, truth_rows),
+        }
+        return TrackerOutput(empty, metrics, empty)
     estimate_frames: list[pd.DataFrame] = []
     metrics_by_sequence: dict[str, Any] = {}
     for sequence_id, sequence_candidates in rows.groupby("sequence_id", sort=True):
@@ -60,6 +65,8 @@ def run_mmuad_multi_object_tracker(
         estimates["sequence_id"] = sequence_id
         estimate_frames.append(estimates)
         metrics_by_sequence[str(sequence_id)] = compute_multi_object_metrics(estimates, sequence_truth)
+    for sequence_id, metrics in _truth_only_sequence_metrics(truth_rows).items():
+        metrics_by_sequence.setdefault(sequence_id, metrics)
     estimates_all = pd.concat(estimate_frames, ignore_index=True) if estimate_frames else pd.DataFrame()
     metrics = {
         "sequences": metrics_by_sequence,
@@ -67,6 +74,16 @@ def run_mmuad_multi_object_tracker(
     }
     selected = _selected_frame_from_estimates(estimates_all)
     return TrackerOutput(estimates_all, metrics, selected)
+
+
+def _truth_only_sequence_metrics(truth_rows: pd.DataFrame | None) -> dict[str, Any]:
+    metrics_by_sequence: dict[str, Any] = {}
+    if truth_rows is None or truth_rows.empty or "sequence_id" not in truth_rows.columns:
+        return metrics_by_sequence
+    empty = pd.DataFrame()
+    for sequence_id, sequence_truth in truth_rows.groupby("sequence_id", sort=True):
+        metrics_by_sequence[str(sequence_id)] = compute_multi_object_metrics(empty, sequence_truth)
+    return metrics_by_sequence
 
 
 def _run_multi_sequence(
@@ -321,7 +338,9 @@ def _greedy_truth_matches(
 ) -> list[tuple[int, int, float]]:
     if pred.empty or gt.empty:
         return []
-    pred_xyz = pred[["state_x_m", "state_y_m", "state_z_m"]].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+    pred_xyz = pred[["state_x_m", "state_y_m", "state_z_m"]].apply(
+        pd.to_numeric, errors="coerce"
+    ).to_numpy(float)
     gt_xyz = gt[["x_m", "y_m", "z_m"]].apply(pd.to_numeric, errors="coerce").to_numpy(float)
     pairs: list[tuple[float, int, int]] = []
     for pred_idx, p in enumerate(pred_xyz):
