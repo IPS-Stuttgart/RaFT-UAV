@@ -133,6 +133,7 @@ def match_submission_to_truth(
                     "time_s": float(pred["time_s"]),
                     "track_id": str(pred.get("track_id", "uav0")),
                     "truth_time_s": float(gt["time_s"]),
+                    "truth_track_id": _truth_track_id(gt),
                     "time_delta_s": dt,
                     "matched": True,
                     "unmatched_reason": "",
@@ -157,13 +158,17 @@ def metrics_from_matches(
     truth_count = int(len(truth))
     prediction_count = int(len(submission))
     matched_count = int(len(matched))
+    covered_truth_count = _covered_truth_count(matched, truth)
     pooled.update(
         {
             "truth_count": truth_count,
             "prediction_count": prediction_count,
             "matched_count": matched_count,
             "unmatched_prediction_count": int(prediction_count - matched_count),
-            "truth_coverage_fraction": float(matched_count / truth_count) if truth_count else 0.0,
+            "covered_truth_count": covered_truth_count,
+            "truth_coverage_fraction": (
+                float(covered_truth_count / truth_count) if truth_count else 0.0
+            ),
         }
     )
     by_sequence: dict[str, Any] = {}
@@ -172,12 +177,19 @@ def metrics_from_matches(
             seq_truth = truth.loc[truth["sequence_id"].astype(str) == str(sequence_id)]
             seq_pred = submission.loc[submission["sequence_id"].astype(str) == str(sequence_id)]
             seq_matched = group.loc[group["matched"]]
+            seq_covered_truth_count = _covered_truth_count(seq_matched, seq_truth)
             metrics = _error_metrics(seq_matched)
             metrics.update(
                 {
                     "truth_count": int(len(seq_truth)),
                     "prediction_count": int(len(seq_pred)),
                     "matched_count": int(len(seq_matched)),
+                    "covered_truth_count": seq_covered_truth_count,
+                    "truth_coverage_fraction": (
+                        float(seq_covered_truth_count / len(seq_truth))
+                        if len(seq_truth)
+                        else 0.0
+                    ),
                 }
             )
             by_sequence[str(sequence_id)] = metrics
@@ -187,6 +199,24 @@ def metrics_from_matches(
         "pooled": pooled,
         "sequences": by_sequence,
     }
+
+
+def _covered_truth_count(matched: pd.DataFrame, truth: pd.DataFrame) -> int:
+    """Count unique truth samples covered by at least one matched prediction."""
+
+    if matched.empty:
+        return 0
+    key_columns = ["sequence_id", "truth_time_s"]
+    if "track_id" in truth.columns and "truth_track_id" in matched.columns:
+        truth_track_ids = set(truth["track_id"].dropna().astype(str))
+        if truth_track_ids and matched["truth_track_id"].astype(str).isin(truth_track_ids).any():
+            key_columns.append("truth_track_id")
+    if any(column not in matched.columns for column in key_columns):
+        return int(len(matched))
+    covered = matched[key_columns].copy()
+    truth_times = pd.to_numeric(covered["truth_time_s"], errors="coerce")
+    covered = covered.loc[truth_times.notna()]
+    return int(covered.drop_duplicates().shape[0])
 
 
 def _error_metrics(frame: pd.DataFrame) -> dict[str, Any]:
@@ -209,12 +239,19 @@ def _error_metrics(frame: pd.DataFrame) -> dict[str, Any]:
     return out
 
 
+def _truth_track_id(row: pd.Series) -> str:
+    if "track_id" not in row.index or pd.isna(row["track_id"]):
+        return ""
+    return str(row["track_id"])
+
+
 def _unmatched_prediction_row(pred: pd.Series, *, reason: str) -> dict[str, Any]:
     return {
         "sequence_id": str(pred.get("sequence_id", "default")),
         "time_s": float(pred.get("time_s", np.nan)),
         "track_id": str(pred.get("track_id", "uav0")),
         "truth_time_s": np.nan,
+        "truth_track_id": "",
         "time_delta_s": np.nan,
         "matched": False,
         "unmatched_reason": reason,
