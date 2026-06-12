@@ -291,8 +291,8 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_val
 ```
 
-A CSV manifest with columns `sequence_id,split` is also supported. Exported
-metadata files may also use JSON sequence-row layouts such as
+A CSV manifest with columns `sequence_id,split` is also supported. JSON and
+YAML metadata files may also use sequence-row layouts such as
 `{"sequences": [{"sequence_id": "seq001", "split": "val"}]}` or nested split
 objects such as `{"splits": {"val": {"sequence_ids": ["seq001"]}}}`. CSV alias
 columns including `id`, `name`, `subset`, and `partition` are accepted.

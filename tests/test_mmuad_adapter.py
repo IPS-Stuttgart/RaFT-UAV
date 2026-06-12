@@ -2029,6 +2029,30 @@ def test_split_manifest_accepts_nested_json_layouts(tmp_path: Path) -> None:
     assert manifest["val"] == ("seq_val",)
 
 
+def test_split_manifest_accepts_yaml_layouts(tmp_path: Path) -> None:
+    split = tmp_path / "splits.yaml"
+    split.write_text(
+        "\n".join(
+            [
+                "splits:",
+                "  train:",
+                "    sequences:",
+                "      - sequence_id: train/seq_train",
+                "      - id: train/seq_train_2",
+                "  val:",
+                "    sequence_ids:",
+                "      - val/seq_val",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = load_split_manifest(split)
+
+    assert manifest["train"] == ("train/seq_train", "train/seq_train_2")
+    assert manifest["val"] == ("val/seq_val",)
+
+
 def test_split_manifest_accepts_sequence_rows_json(tmp_path: Path) -> None:
     split = tmp_path / "splits.json"
     split.write_text(

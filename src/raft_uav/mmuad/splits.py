@@ -26,7 +26,7 @@ _SEQUENCE_LIST_KEYS = ("sequence_ids", "sequences", "ids", "items", "sequence_na
 
 
 def load_split_manifest(path: Path) -> dict[str, tuple[str, ...]]:
-    """Load a split manifest from JSON or CSV.
+    """Load a split manifest from JSON, YAML, or CSV.
 
     Supported JSON layouts::
 
@@ -46,9 +46,9 @@ def load_split_manifest(path: Path) -> dict[str, tuple[str, ...]]:
     """
 
     path = Path(path)
-    if path.suffix.lower() == ".json":
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return _manifest_from_json_payload(payload)
+    if path.suffix.lower() in {".json", ".yaml", ".yml"}:
+        payload = _load_manifest_payload(path)
+        return _manifest_from_payload(payload)
     frame = pd.read_csv(path)
     manifest = _manifest_from_rows(frame.to_dict("records"))
     if not manifest:
@@ -59,14 +59,27 @@ def load_split_manifest(path: Path) -> dict[str, tuple[str, ...]]:
     return manifest
 
 
-def _manifest_from_json_payload(payload: Any) -> dict[str, tuple[str, ...]]:
+def _load_manifest_payload(path: Path) -> Any:
+    text = Path(path).read_text(encoding="utf-8")
+    if Path(path).suffix.lower() == ".json":
+        return json.loads(text)
+    try:
+        import yaml  # type: ignore[import-not-found]
+    except Exception:
+        return json.loads(text)
+    return yaml.safe_load(text)
+
+
+def _manifest_from_payload(payload: Any) -> dict[str, tuple[str, ...]]:
     if isinstance(payload, list):
         manifest = _manifest_from_rows(payload)
         if manifest:
             return manifest
-        raise ValueError("JSON split manifest list entries must include sequence id and split fields")
+        raise ValueError(
+            "split manifest list entries must include sequence id and split fields"
+        )
     if not isinstance(payload, dict):
-        raise ValueError("JSON split manifest must be an object or a list of sequence rows")
+        raise ValueError("split manifest must be an object or a list of sequence rows")
 
     splits = payload.get("splits")
     if isinstance(splits, dict):
@@ -87,7 +100,7 @@ def _manifest_from_json_payload(payload: Any) -> dict[str, tuple[str, ...]]:
     manifest = _manifest_from_mapping(payload)
     if manifest:
         return manifest
-    raise ValueError("JSON split manifest does not contain any split sequence ids")
+    raise ValueError("split manifest does not contain any split sequence ids")
 
 
 def _manifest_from_mapping(mapping: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
