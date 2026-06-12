@@ -130,6 +130,8 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
         inferred_time_s = infer_time_s_from_filename(path)
     if name in CALIBRATION_NAMES:
         return "calibration", modality, None
+    if suffix == ".json" and "topic_map" in name:
+        return _topic_map_category(path), "ros", None
     if name in TRUTH_NAMES or any(hint in stem for hint in TRUTH_HINTS):
         return "truth", modality, None
     if suffix in NUMPY_SUFFIXES:
@@ -215,7 +217,16 @@ def _summarize_by_sequence(file_rows: list[dict[str, Any]]) -> list[dict[str, An
             missing.append("truth")
         if categories.get("calibration", 0) == 0:
             missing.append("calibration")
-        if not any(categories.get(name, 0) for name in ("candidate", "point_cloud", "point_cloud_csv", "radar_csv")):
+        if not any(
+            categories.get(name, 0)
+            for name in (
+                "candidate",
+                "point_cloud",
+                "point_cloud_csv",
+                "radar_csv",
+                "topic_map_export",
+            )
+        ):
             missing.append("candidate_or_point_cloud")
         summaries.append(
             {
@@ -242,3 +253,18 @@ def _infer_modality(stem: str) -> str:
     if any(hint in stem for hint in AUDIO_HINTS):
         return "audio"
     return "unknown"
+
+
+def _topic_map_category(path: Path) -> str:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "metadata"
+    exports = payload.get("exports", [])
+    if not isinstance(exports, list):
+        return "metadata"
+    if any(isinstance(item, dict) and item.get("path") for item in exports):
+        return "topic_map_export"
+    if exports:
+        return "topic_map_native"
+    return "metadata"

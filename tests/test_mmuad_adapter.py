@@ -1341,6 +1341,78 @@ def test_layout_inspector_reports_modalities_and_missing_fields(tmp_path: Path) 
     assert csv_path.exists()
 
 
+def test_layout_inspectors_classify_topic_maps(tmp_path: Path) -> None:
+    exported = tmp_path / "seq_exported_topic_map"
+    exported.mkdir()
+    (exported / "topic_map.json").write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_exported_topic_map",
+                "exports": [
+                    {
+                        "kind": "candidate",
+                        "path": "detections.csv",
+                    },
+                    {
+                        "kind": "pose_truth",
+                        "path": "truth_export.csv",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (exported / "detections.csv").write_text("time_s,x_m,y_m,z_m\n0,0,0,1\n", encoding="utf-8")
+    native = tmp_path / "seq_native_topic_map"
+    native.mkdir()
+    (native / "topic_map_native.json").write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_native_topic_map",
+                "exports": [
+                    {
+                        "topic": "/radar/points",
+                        "kind": "pointcloud2_candidate",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    detailed = inspect_sequence_root(tmp_path)
+    detailed_by_name = {row["relative_path"]: row for row in detailed["files"]}
+    assert detailed_by_name["topic_map.json"]["category"] == "topic_map_export"
+    assert detailed["category_counts"]["topic_map_native"] == 1
+    by_sequence = {
+        row["sequence_id"]: row["missing_for_tracking_smoke"]
+        for row in detailed["sequences"]
+    }
+    assert "candidate_or_point_cloud" not in by_sequence["seq_exported_topic_map"]
+    assert "candidate_or_point_cloud" in by_sequence["seq_native_topic_map"]
+
+    inventory = inspect_mmuad_layout(tmp_path)
+    assert inventory["category_counts"]["topic_map_export"] == 1
+    assert inventory["category_counts"]["topic_map_native"] == 1
+    exported_summary = next(
+        row
+        for row in inventory["sequence_candidates"]
+        if row["sequence_id"] == "seq_exported_topic_map"
+    )
+    native_summary = next(
+        row
+        for row in inventory["sequence_candidates"]
+        if row["sequence_id"] == "seq_native_topic_map"
+    )
+    assert exported_summary["has_topic_map_export"] is True
+    assert exported_summary["has_candidates_or_points"] is True
+    assert exported_summary["has_truth_or_labels"] is True
+    assert native_summary["has_native_topic_map"] is True
+    assert native_summary["has_topic_map_export"] is False
+    assert any("Exported topic-map" in item for item in inventory["recommendations"])
+    assert any("Native-only topic-map" in item for item in inventory["recommendations"])
+
+
 def test_layout_inspectors_classify_numpy_trajectory_exports(tmp_path: Path) -> None:
     seq = tmp_path / "seq_numpy"
     seq.mkdir()
