@@ -1383,11 +1383,13 @@ def test_layout_inspectors_classify_topic_maps(tmp_path: Path) -> None:
     detailed = inspect_sequence_root(tmp_path)
     detailed_by_name = {row["relative_path"]: row for row in detailed["files"]}
     assert detailed_by_name["topic_map.json"]["category"] == "topic_map_export"
+    assert detailed_by_name["topic_map.json"]["topic_map_has_truth_export"] is True
     assert detailed["category_counts"]["topic_map_native"] == 1
     by_sequence = {
         row["sequence_id"]: row["missing_for_tracking_smoke"]
         for row in detailed["sequences"]
     }
+    assert "truth" not in by_sequence["seq_exported_topic_map"]
     assert "candidate_or_point_cloud" not in by_sequence["seq_exported_topic_map"]
     assert "candidate_or_point_cloud" in by_sequence["seq_native_topic_map"]
 

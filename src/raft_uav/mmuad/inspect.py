@@ -72,6 +72,7 @@ class InspectedFile:
     modality: str
     inferred_time_s: float | None
     size_bytes: int
+    topic_map_has_truth_export: bool = False
 
 
 def inspect_sequence_root(
@@ -198,6 +199,10 @@ def _inspect_sequence(sequence_dir: Path, *, recursive: bool) -> list[InspectedF
                 modality=modality,
                 inferred_time_s=time_s,
                 size_bytes=path.stat().st_size,
+                topic_map_has_truth_export=(
+                    category == "topic_map_export"
+                    and _topic_map_has_truth_export(path)
+                ),
             )
         )
     return records
@@ -212,8 +217,13 @@ def _summarize_by_sequence(file_rows: list[dict[str, Any]]) -> list[dict[str, An
         categories = Counter(row["category"] for row in rows)
         modalities = Counter(row["modality"] for row in rows)
         time_values = [row["inferred_time_s"] for row in rows if row.get("inferred_time_s") is not None]
+        topic_map_truth = any(
+            row["category"] == "topic_map_export"
+            and bool(row.get("topic_map_has_truth_export"))
+            for row in rows
+        )
         missing: list[str] = []
-        if categories.get("truth", 0) == 0:
+        if categories.get("truth", 0) == 0 and not topic_map_truth:
             missing.append("truth")
         if categories.get("calibration", 0) == 0:
             missing.append("calibration")
@@ -268,3 +278,20 @@ def _topic_map_category(path: Path) -> str:
     if exports:
         return "topic_map_native"
     return "metadata"
+
+
+def _topic_map_has_truth_export(path: Path) -> bool:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    for export in payload.get("exports", []):
+        if not isinstance(export, dict):
+            continue
+        kind = str(export.get("kind", "")).lower()
+        export_path = str(export.get("path", "")).lower()
+        if kind == "truth" or kind.endswith("_truth") or any(
+            token in export_path for token in TRUTH_HINTS
+        ):
+            return True
+    return False
