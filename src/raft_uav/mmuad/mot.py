@@ -173,15 +173,17 @@ def compute_multi_object_metrics(
     used by the MMUAD smoke tracker.
     """
 
-    if estimates.empty:
-        return {"count": 0}
     if truth is None or truth.empty:
         estimates = _finite_mot_estimates(estimates)
         return {"count": int(len(estimates)), "track_count": _track_count(estimates)}
     if "track_id" not in truth.columns:
+        if estimates.empty:
+            return compute_metrics(estimates.copy(), truth)
         return compute_metrics(add_truth_errors(estimates.copy(), truth), truth)
     estimates = _finite_mot_estimates(estimates)
     truth = _finite_mot_truth(truth)
+    if estimates.empty:
+        return _empty_mot_prediction_metrics(truth)
     matched_distances: list[float] = []
     false_positive = 0
     false_negative = 0
@@ -215,6 +217,23 @@ def compute_multi_object_metrics(
         "motp_3d_m": float(np.mean(matched_distances)) if matched_distances else None,
         "recall": float(match_count / max(1, gt_count)),
         "precision": float(match_count / max(1, len(estimates))),
+    }
+
+
+def _empty_mot_prediction_metrics(truth: pd.DataFrame) -> dict[str, Any]:
+    gt_count = int(len(truth))
+    return {
+        "count": 0,
+        "gt_count": gt_count,
+        "track_count": 0,
+        "matches": 0,
+        "false_positive": 0,
+        "false_negative": gt_count,
+        "id_switches": 0,
+        "mota_like": float(1.0 - gt_count / max(1, gt_count)),
+        "motp_3d_m": None,
+        "recall": 0.0,
+        "precision": 0.0,
     }
 
 
