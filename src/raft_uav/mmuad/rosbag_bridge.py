@@ -83,25 +83,26 @@ def write_topic_map_template(report: dict[str, Any], path: Path) -> Path:
         name = str(topic.get("name", topic.get("topic", f"topic_{idx}")))
         safe = re.sub(r"[^A-Za-z0-9_]+", "_", name.strip("/")).strip("_") or f"topic_{idx}"
         kind = _infer_topic_map_kind(topic)
-        exports.append(
-            {
-                "topic": name,
-                "kind": kind,
-                "path": f"exports/{safe}.csv",
-                "source": safe if not _is_truth_kind(kind) else None,
-                "sequence_id": report.get(
-                    "sequence_id",
-                    Path(str(report.get("path", "sequence"))).stem,
-                ),
-                "column_aliases": {
-                    "stamp": "time_s",
-                    "timestamp": "time_s",
-                    "x": "x_m",
-                    "y": "y_m",
-                    "z": "z_m",
-                },
-            }
-        )
+        entry = {
+            "topic": name,
+            "kind": kind,
+            "path": f"exports/{safe}.csv",
+            "source": safe if not _is_truth_kind(kind) else None,
+            "sequence_id": report.get(
+                "sequence_id",
+                Path(str(report.get("path", "sequence"))).stem,
+            ),
+            "column_aliases": {
+                "stamp": "time_s",
+                "timestamp": "time_s",
+                "x": "x_m",
+                "y": "y_m",
+                "z": "z_m",
+            },
+        }
+        if _is_geodetic_kind(kind):
+            entry["enu_origin_lla"] = "LAT,LON,ALT"
+        exports.append(entry)
     payload = {
         "schema": "raft-uav-mmuad-topic-map-v1",
         "sequence_id": report.get(
@@ -167,6 +168,12 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
     truth_like = any(token in name for token in ("truth", "ground", "gt", "label", "mocap"))
     if "pointcloud2" in msg_type:
         return "pointcloud2_candidate"
+    if compact_type.endswith("navsatfix"):
+        return "navsatfix_truth" if truth_like else "navsatfix_candidate"
+    if compact_type.endswith("geoposestamped") or compact_type.endswith("geopose"):
+        return "geopose_truth" if truth_like else "geopose_candidate"
+    if compact_type.endswith("geopointstamped") or compact_type.endswith("geopoint"):
+        return "geopoint_truth" if truth_like else "geopoint_candidate"
     if "detection3darray" in compact_type:
         return "detection3d_array_truth" if truth_like else "detection3d_array_candidate"
     if "detection3d" in compact_type:
@@ -210,6 +217,11 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
 def _is_truth_kind(kind: str) -> bool:
     normalized = str(kind).strip().lower()
     return normalized == "truth" or normalized.endswith("_truth")
+
+
+def _is_geodetic_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized.startswith(("navsatfix_", "geopoint_", "geopose_"))
 
 
 def _load_topic_truth_export(path: Path, spec: dict[str, Any], *, sequence_id: str) -> TruthFrame:

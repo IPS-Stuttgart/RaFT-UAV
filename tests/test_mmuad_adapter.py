@@ -8,6 +8,7 @@ from zipfile import ZipFile
 import numpy as np
 import pandas as pd
 
+from raft_uav.coordinates import LocalENUProjector
 from raft_uav.mmuad.calibration import (
     load_calibration_file,
     load_calibration_json,
@@ -41,6 +42,7 @@ from raft_uav.mmuad.mot import (
 )
 from raft_uav.mmuad.native_ros import (
     detection3d_message_to_rows,
+    geodetic_message_to_rows,
     marker_message_to_rows,
     multidof_message_to_rows,
     position_message_to_row,
@@ -3183,6 +3185,41 @@ def test_ros2_topic_map_template_infers_pose_covariance_topics(tmp_path: Path) -
     assert payload["exports"][1]["source"] is None
 
 
+def test_ros2_topic_map_template_infers_geodetic_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /gps/fix",
+                "        type: sensor_msgs/msg/NavSatFix",
+                "      message_count: 2",
+                "    - topic_metadata:",
+                "        name: /ground_truth/geopose",
+                "        type: geographic_msgs/msg/GeoPoseStamped",
+                "      message_count: 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "navsatfix_candidate",
+        "geopose_truth",
+    ]
+    assert payload["exports"][0]["source"] == "gps_fix"
+    assert payload["exports"][1]["source"] is None
+    assert payload["exports"][0]["enu_origin_lla"] == "LAT,LON,ALT"
+    assert payload["exports"][1]["enu_origin_lla"] == "LAT,LON,ALT"
+
+
 def test_ros2_topic_map_template_infers_detection3d_topics(tmp_path: Path) -> None:
     bag = tmp_path / "bagdir"
     bag.mkdir()
@@ -3436,6 +3473,80 @@ def test_native_ros_position_message_to_rows_expands_pose_array_parent_header() 
     assert rows[0]["x_m"] == 1.0
     assert rows[0]["frame_id"] == "world"
     assert rows[1]["z_m"] == 6.0
+
+
+def test_native_ros_geodetic_message_to_rows_projects_navsatfix() -> None:
+    projector = LocalENUProjector(35.0, -78.0, 100.0)
+    message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=35, nanosec=500_000_000),
+            frame_id="gps",
+        ),
+        latitude=35.0,
+        longitude=-78.0,
+        altitude=112.0,
+        position_covariance=[
+            4.0,
+            0.0,
+            0.0,
+            0.0,
+            9.0,
+            0.0,
+            0.0,
+            0.0,
+            16.0,
+        ],
+        position_covariance_type=2,
+    )
+
+    rows = geodetic_message_to_rows(
+        message,
+        sequence_id="seq_gps",
+        time_s=1.0,
+        projector=projector,
+        frame_id="gps",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["sequence_id"] == "seq_gps"
+    assert rows[0]["time_s"] == 35.5
+    np.testing.assert_allclose(
+        [rows[0]["x_m"], rows[0]["y_m"], rows[0]["z_m"]],
+        [0.0, 0.0, 12.0],
+        atol=1.0e-6,
+    )
+    assert rows[0]["latitude_deg"] == 35.0
+    assert rows[0]["longitude_deg"] == -78.0
+    assert rows[0]["altitude_m"] == 112.0
+    assert rows[0]["std_xy_m"] == 3.0
+    assert rows[0]["std_z_m"] == 4.0
+    assert rows[0]["navsat_covariance_type"] == "2"
+
+
+def test_native_ros_geodetic_message_to_rows_accepts_geopose() -> None:
+    projector = LocalENUProjector(35.0, -78.0, 100.0)
+    message = SimpleNamespace(
+        header=SimpleNamespace(frame_id="world"),
+        pose=SimpleNamespace(
+            position=SimpleNamespace(latitude=35.0, longitude=-78.0, altitude=105.0)
+        ),
+    )
+
+    rows = geodetic_message_to_rows(
+        message,
+        sequence_id="seq_geo",
+        time_s=2.0,
+        projector=projector,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["time_s"] == 2.0
+    assert rows[0]["frame_id"] == "world"
+    np.testing.assert_allclose(
+        [rows[0]["x_m"], rows[0]["y_m"], rows[0]["z_m"]],
+        [0.0, 0.0, 5.0],
+        atol=1.0e-6,
+    )
 
 
 def test_native_ros_detection3d_message_to_rows_extracts_bbox_centers() -> None:

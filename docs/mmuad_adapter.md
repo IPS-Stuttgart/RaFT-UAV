@@ -677,7 +677,11 @@ PYTHONPATH=src python scripts/extract_mmuad_rosbag_topics.py \
 ```
 
 The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
-`pointcloud2_candidate`, `vision_msgs/msg/Detection3D` as `detection3d_truth` or
+`pointcloud2_candidate`, `sensor_msgs/msg/NavSatFix` as `navsatfix_truth` or
+`navsatfix_candidate`, `geographic_msgs/msg/GeoPointStamped` as
+`geopoint_truth` or `geopoint_candidate`,
+`geographic_msgs/msg/GeoPoseStamped` as `geopose_truth` or
+`geopose_candidate`, `vision_msgs/msg/Detection3D` as `detection3d_truth` or
 `detection3d_candidate`, `vision_msgs/msg/Detection3DArray` as
 `detection3d_array_truth` or `detection3d_array_candidate`,
 `visualization_msgs/msg/Marker` as `marker_truth` or `marker_candidate`,
@@ -702,7 +706,9 @@ transform from a shared `/tf` stream; Detection3D, Marker, Path, and PoseArray
 entries can use `frame_id`, with Detection3DArray, MarkerArray, and PoseArray
 rows inheriting the parent message timestamp and frame. MultiDOF rows inherit
 the parent frame and use `joint_names` as row provenance and default track IDs
-when available.
+when available. Geodetic topics must include `enu_origin_lla` as `LAT,LON,ALT`
+or separate `origin_latitude_deg`, `origin_longitude_deg`, and
+`origin_altitude_m` fields so the rows can be projected into local ENU meters.
 
 The CLI can run native extraction and tracking in one step:
 

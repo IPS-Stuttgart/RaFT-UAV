@@ -6,6 +6,8 @@ The extractor currently supports common message families that appear in UAV
 tracking logs:
 
 * ``sensor_msgs/msg/PointCloud2`` -> clustered candidate detections;
+* ``sensor_msgs/msg/NavSatFix`` -> geodetic rows projected into local ENU;
+* ``geographic_msgs/msg/GeoPointStamped`` / ``GeoPoseStamped`` -> local ENU rows;
 * ``vision_msgs/msg/Detection3D`` / ``Detection3DArray`` -> bbox center rows;
 * ``visualization_msgs/msg/Marker`` / ``MarkerArray`` -> marker position rows;
 * ``geometry_msgs/msg/Pose`` / ``PoseStamped`` /
@@ -32,6 +34,7 @@ import json
 
 import pandas as pd
 
+from raft_uav.coordinates import LocalENUProjector
 from raft_uav.mmuad.io import merge_candidate_frames
 from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates
 from raft_uav.mmuad.schema import CandidateFrame, TruthFrame, normalize_truth_columns
@@ -61,6 +64,11 @@ def extract_native_rosbag_topic_map(
 
     ``pointcloud2_candidate``
         Decode ``sensor_msgs/msg/PointCloud2`` and cluster points.
+    ``navsatfix_truth`` / ``geopoint_truth`` / ``geopose_truth`` /
+    ``navsatfix_candidate`` / ``geopoint_candidate`` / ``geopose_candidate``
+        Project geodetic GPS/geographic positions into local ENU rows. These
+        entries require ``enu_origin_lla`` or separate origin latitude,
+        longitude, and altitude fields in the topic map.
     ``detection3d_truth`` / ``detection3d_array_truth`` /
     ``detection3d_candidate`` / ``detection3d_array_candidate``
         Convert vision_msgs 3D detection bbox centers into truth/candidate rows.
@@ -122,6 +130,55 @@ def extract_native_rosbag_topic_map(
                     )
                     candidate_frames.append(frame)
                     rows = len(frame.rows)
+                elif kind in {"navsatfix_truth", "geopoint_truth", "geopose_truth"}:
+                    rows_for_message = geodetic_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        projector=_projector_from_spec(spec),
+                        frame_id=spec.get("frame_id"),
+                    )
+                    truth_rows.extend(rows_for_message)
+                    rows = len(rows_for_message)
+                elif kind in {
+                    "navsatfix_candidate",
+                    "geopoint_candidate",
+                    "geopose_candidate",
+                }:
+                    rows_for_message = geodetic_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        projector=_projector_from_spec(spec),
+                        frame_id=spec.get("frame_id"),
+                    )
+                    candidate_rows = []
+                    for row in rows_for_message:
+                        row.update(
+                            {
+                                "source": source,
+                                "track_id": spec.get(
+                                    "track_id",
+                                    row.get("child_frame_id", row.get("frame_id", source)),
+                                ),
+                                "std_xy_m": spec.get(
+                                    "std_xy_m",
+                                    row.get("std_xy_m", 5.0),
+                                ),
+                                "std_z_m": spec.get(
+                                    "std_z_m",
+                                    row.get("std_z_m", 10.0),
+                                ),
+                                "confidence": spec.get("confidence", 1.0),
+                                "class_name": spec.get("class_name", "uav"),
+                            }
+                        )
+                        candidate_rows.append(row)
+                    if candidate_rows:
+                        candidate_frames.append(
+                            CandidateFrame(pd.DataFrame.from_records(candidate_rows))
+                        )
+                    rows = len(candidate_rows)
                 elif kind in {"detection3d_truth", "detection3d_array_truth"}:
                     rows_for_message = detection3d_message_to_rows(
                         message,
@@ -389,6 +446,50 @@ def position_message_to_row(message: Any, *, sequence_id: str, time_s: float) ->
     }
 
 
+def geodetic_message_to_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    projector: LocalENUProjector,
+    frame_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Convert NavSatFix/GeoPoint/GeoPose messages into local ENU rows."""
+
+    if not _frame_filter_matches(
+        message,
+        child_frame_id=None,
+        frame_id=frame_id,
+    ):
+        return []
+    point = _geodetic_point_from_message(message)
+    if point is None:
+        return []
+    try:
+        latitude = float(getattr(point, "latitude"))
+        longitude = float(getattr(point, "longitude"))
+        altitude = float(getattr(point, "altitude"))
+    except (TypeError, ValueError, AttributeError):
+        return []
+    if not all(pd.notna(value) for value in (latitude, longitude, altitude)):
+        return []
+    enu = projector.transform(latitude, longitude, altitude)
+    stamp_time_s = _message_stamp_time_s(message)
+    row = {
+        "sequence_id": sequence_id,
+        "time_s": stamp_time_s if stamp_time_s is not None else float(time_s),
+        "x_m": float(enu[0]),
+        "y_m": float(enu[1]),
+        "z_m": float(enu[2]),
+        "latitude_deg": latitude,
+        "longitude_deg": longitude,
+        "altitude_m": altitude,
+    }
+    _add_frame_metadata(row, message)
+    _add_navsat_covariance_metadata(row, message)
+    return [row]
+
+
 def detection3d_message_to_rows(
     message: Any,
     *,
@@ -646,6 +747,44 @@ def _message_frame_id(message: Any) -> Any | None:
     return getattr(header, "frame_id", None)
 
 
+def _projector_from_spec(spec: dict[str, Any]) -> LocalENUProjector:
+    raw = spec.get("enu_origin_lla", spec.get("origin_lla"))
+    if raw is not None:
+        latitude, longitude, altitude = _parse_lla_values(raw)
+        return LocalENUProjector(latitude, longitude, altitude)
+    latitude = spec.get("origin_latitude_deg", spec.get("origin_latitude"))
+    longitude = spec.get("origin_longitude_deg", spec.get("origin_longitude"))
+    altitude = spec.get("origin_altitude_m", spec.get("origin_altitude"))
+    if latitude is None or longitude is None or altitude is None:
+        raise ValueError(
+            "geodetic native ROS topics require enu_origin_lla or "
+            "origin_latitude_deg/origin_longitude_deg/origin_altitude_m"
+        )
+    return LocalENUProjector(float(latitude), float(longitude), float(altitude))
+
+
+def _parse_lla_values(value: Any) -> tuple[float, float, float]:
+    if isinstance(value, str):
+        parts = [part.strip() for part in value.split(",")]
+    elif isinstance(value, dict):
+        return (
+            float(value.get("latitude_deg", value.get("latitude"))),
+            float(value.get("longitude_deg", value.get("longitude"))),
+            float(value.get("altitude_m", value.get("altitude"))),
+        )
+    else:
+        try:
+            parts = list(value)
+        except TypeError as exc:
+            raise ValueError("enu_origin_lla must be LAT,LON,ALT") from exc
+    if len(parts) != 3:
+        raise ValueError("enu_origin_lla must contain LAT,LON,ALT")
+    try:
+        return float(parts[0]), float(parts[1]), float(parts[2])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("enu_origin_lla must contain numeric LAT,LON,ALT") from exc
+
+
 def _sequence_attr(message: Any, name: str) -> list[Any]:
     value = getattr(message, name, None)
     if value is None:
@@ -731,6 +870,41 @@ def _duration_time_s(duration: Any | None) -> float | None:
     if sec is None:
         return None
     return float(sec) + float(nanosec) * 1.0e-9
+
+
+def _geodetic_point_from_message(message: Any) -> Any | None:
+    if hasattr(message, "latitude") and hasattr(message, "longitude"):
+        return message
+    position = getattr(message, "position", None)
+    if position is not None:
+        point = _geodetic_point_from_message(position)
+        if point is not None:
+            return point
+    pose = getattr(message, "pose", None)
+    if pose is not None:
+        return _geodetic_point_from_message(pose)
+    return None
+
+
+def _add_navsat_covariance_metadata(row: dict[str, Any], message: Any) -> None:
+    covariance = getattr(message, "position_covariance", None)
+    if covariance is None:
+        return
+    try:
+        values = [float(value) for value in covariance]
+    except (TypeError, ValueError):
+        return
+    if len(values) < 9:
+        return
+    xy_variance = max(values[0], values[4])
+    z_variance = values[8]
+    if xy_variance >= 0.0:
+        row["std_xy_m"] = float(xy_variance) ** 0.5
+    if z_variance >= 0.0:
+        row["std_z_m"] = float(z_variance) ** 0.5
+    covariance_type = getattr(message, "position_covariance_type", None)
+    if covariance_type not in (None, ""):
+        row["navsat_covariance_type"] = str(covariance_type)
 
 
 def _position_from_message(message: Any) -> Any | None:
