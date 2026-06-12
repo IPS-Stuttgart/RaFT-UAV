@@ -321,10 +321,11 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --layout-report-csv outputs/mmuad_inspect/layout_files.csv
 ```
 
-The report classifies files as images, point clouds, candidate CSVs, truth,
-calibration, ROS recordings, and metadata.  It also infers timestamps from
-filenames when possible and reports what each sequence is missing for a tracking
-smoke test.
+The report classifies files as images, point clouds, candidate tables, truth,
+class labels, calibration, ROS recordings, and metadata. Candidate/truth/class
+tables may be CSV/TSV/TXT, JSON, or compact NumPy exports. It also infers
+timestamps from filenames when possible and reports what each sequence is
+missing for a tracking smoke test.
 
 ### Binary PCD, BIN, and NumPy point clouds
 
@@ -403,13 +404,15 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 
 The report counts files by category, including candidate tables, point clouds,
 images, calibration files, truth/labels, exported/native topic-map JSON files,
-and ROS bag/recording files. NumPy
-files follow the same naming convention as sequence discovery: `truth.npy`
-counts as truth, `trajectory.npz` or `candidates.npy` counts as candidate data,
-and `lidar_points.npy` or `cloud_12.5.npz` counts as point-cloud data. It also
-lists sequence-like folders and recommends the next adapter step. One-level
-split folders such as `train/`, `val/`, and `test/` are unwrapped so summaries
-keep the actual sequence IDs. Exported topic maps indicate sequence-root inputs,
+and ROS bag/recording files. JSON table exports follow the same naming
+convention as sequence discovery: `candidates.json`, `detections.json`,
+`truth.json`, and `classes.json` are reported as usable candidate, truth, or
+class-label inputs. NumPy files follow the same convention: `truth.npy` counts
+as truth, `trajectory.npz` or `candidates.npy` counts as candidate data, and
+`lidar_points.npy` or `cloud_12.5.npz` counts as point-cloud data. It also lists
+sequence-like folders and recommends the next adapter step. One-level split
+folders such as `train/`, `val/`, and `test/` are unwrapped so summaries keep
+the actual sequence IDs. Exported topic maps indicate sequence-root inputs,
 while native-only topic maps are kept for explicit ROS extraction with
 `--rosbag-path --topic-map-json`.
 

@@ -19,6 +19,7 @@ NUMPY_SUFFIXES = {".npy", ".npz"}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 BAG_SUFFIXES = {".bag", ".db3", ".mcap"}
 TABLE_SUFFIXES = {".csv", ".txt", ".tsv"}
+JSON_TABLE_SUFFIXES = {".json"}
 CALIBRATION_NAMES = {
     "calibration.json",
     "calib.json",
@@ -127,11 +128,11 @@ def _classify_file(path: Path, root: Path) -> LayoutFile:
         category = "image"
     elif name in CALIBRATION_NAMES or "calib" in name or "extrinsic" in name:
         category = "calibration"
-    elif suffix in TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
+    elif suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
         token in name or token in parent_text for token in CLASS_TOKENS
     ):
         category = "class_or_label"
-    elif suffix in TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
+    elif suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
         token in name or token in parent_text for token in TRUTH_TOKENS
     ):
         category = "truth_or_label"
@@ -139,7 +140,7 @@ def _classify_file(path: Path, root: Path) -> LayoutFile:
         token in name or token in parent_text for token in POINT_CLOUD_TOKENS
     ):
         category = "candidate_or_point_table"
-    elif suffix in TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
+    elif suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
         token in name or token in parent_text for token in CANDIDATE_TOKENS
     ):
         category = "candidate_or_point_table"

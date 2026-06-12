@@ -2002,6 +2002,39 @@ def test_layout_inspectors_classify_numpy_trajectory_exports(tmp_path: Path) -> 
     assert sequence["has_candidates_or_points"] is True
 
 
+def test_layout_inspectors_classify_json_table_exports(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_json_tables"
+    seq.mkdir()
+    (seq / "candidates.json").write_text(
+        json.dumps({"candidates": [{"time_s": 0.0, "x_m": 0.0, "y_m": 0.0, "z_m": 1.0}]}),
+        encoding="utf-8",
+    )
+    (seq / "truth.json").write_text(
+        json.dumps({"truth": [{"time_s": 0.0, "x_m": 0.0, "y_m": 0.0, "z_m": 1.0}]}),
+        encoding="utf-8",
+    )
+    (seq / "classes.json").write_text(
+        json.dumps({"seq_json_tables": "quadrotor"}),
+        encoding="utf-8",
+    )
+
+    detailed = inspect_sequence_root(tmp_path)
+    by_name = {row["relative_path"]: row for row in detailed["files"]}
+    assert by_name["candidates.json"]["category"] == "candidate"
+    assert by_name["truth.json"]["category"] == "truth"
+    assert by_name["classes.json"]["category"] == "class_label"
+    assert detailed["sequences"][0]["missing_for_tracking_smoke"] == ["calibration"]
+
+    inventory = inspect_mmuad_layout(tmp_path)
+    assert inventory["category_counts"]["candidate_or_point_table"] == 1
+    assert inventory["category_counts"]["truth_or_label"] == 1
+    assert inventory["category_counts"]["class_or_label"] == 1
+    sequence = inventory["sequence_candidates"][0]
+    assert sequence["has_candidates_or_points"] is True
+    assert sequence["has_truth_or_labels"] is True
+    assert sequence["has_class_labels"] is True
+
+
 def test_layout_inspectors_classify_mmuad_modality_folders(tmp_path: Path) -> None:
     seq = tmp_path / "seq_foldered"
     (seq / "livox_avia").mkdir(parents=True)

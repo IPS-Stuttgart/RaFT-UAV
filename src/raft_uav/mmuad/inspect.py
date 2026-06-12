@@ -21,6 +21,8 @@ from raft_uav.mmuad.io import infer_time_s_from_filename
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 POINT_SUFFIXES = {".pcd", ".ply", ".las", ".laz"}
 NUMPY_SUFFIXES = {".npy", ".npz"}
+TABLE_SUFFIXES = {".csv", ".tsv", ".txt"}
+JSON_TABLE_SUFFIXES = {".json"}
 CALIBRATION_NAMES = {
     "calibration.json",
     "calib.json",
@@ -39,10 +41,14 @@ TRUTH_NAMES = {
     "ground_truth.csv",
     "ground_truth.npy",
     "ground_truth.npz",
+    "ground_truth.json",
     "gt.csv",
     "gt.npy",
     "gt.npz",
+    "gt.json",
     "labels.csv",
+    "labels.json",
+    "truth.json",
 }
 TRUTH_HINTS = ("truth", "ground_truth", "gt", "label")
 CLASS_HINTS = ("class", "uav_type", "category")
@@ -159,7 +165,7 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
         return "calibration", modality, None
     if suffix == ".json" and "topic_map" in name:
         return _topic_map_category(path), "ros", None
-    if suffix in NUMPY_SUFFIXES | {".csv", ".tsv", ".txt"} and any(
+    if suffix in NUMPY_SUFFIXES | TABLE_SUFFIXES | JSON_TABLE_SUFFIXES and any(
         hint in stem or hint in parent for hint in CLASS_HINTS
     ):
         return "class_label", modality, inferred_time_s
@@ -175,14 +181,14 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
         return "image", "camera", inferred_time_s
     if suffix in POINT_SUFFIXES:
         return "point_cloud", modality if modality != "unknown" else "lidar", inferred_time_s
-    if suffix == ".csv":
+    if suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES:
         if any(hint in stem or hint in parent for hint in CANDIDATE_HINTS):
             return "candidate", modality, None
-        if "point" in stem or "cloud" in stem or modality == "lidar":
+        if suffix != ".json" and ("point" in stem or "cloud" in stem or modality == "lidar"):
             return "point_cloud_csv", "lidar", None
-        if modality == "radar":
+        if suffix != ".json" and modality == "radar":
             return "radar_csv", "radar", None
-        return "csv", modality, None
+        return "csv" if suffix == ".csv" else "metadata", modality, None
     if suffix in {".json", ".yaml", ".yml", ".toml", ".txt"}:
         return "metadata", modality, None
     if suffix in {".bag", ".db3", ".mcap"}:
