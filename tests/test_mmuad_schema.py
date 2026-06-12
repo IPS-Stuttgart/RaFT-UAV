@@ -64,6 +64,26 @@ def test_candidate_normalizer_accepts_flattened_ros_pose_columns():
     assert rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [4.0, 5.0, 6.0]
 
 
+def test_candidate_normalizer_uses_flattened_ros_frame_as_source():
+    raw = pd.DataFrame(
+        {
+            "sequence_id": ["seqFrame"],
+            "time_s": [1.0],
+            "header.frame_id": ["detector_frame"],
+            "child_frame_id": ["uav_2"],
+            "position.x": [1.0],
+            "position.y": [2.0],
+            "position.z": [3.0],
+        }
+    )
+
+    rows = normalize_candidate_columns(raw)
+
+    assert rows.loc[0, "source"] == "detector_frame"
+    assert rows.loc[0, "track_id"] == "uav_2"
+    assert rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+
+
 def test_truth_normalizer_accepts_flattened_detection3d_bbox_columns():
     raw = pd.DataFrame(
         {

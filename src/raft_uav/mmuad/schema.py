@@ -34,7 +34,7 @@ CANONICAL_TRUTH_COLUMNS = (
 _COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "sequence_id": ("sequence", "seq", "scene", "scene_id", "clip", "clip_id"),
     "time_s": ("timestamp_s", "t", "time", "sec", "seconds"),
-    "source": ("sensor", "modality"),
+    "source": ("sensor", "modality", "frame_id", "header.frame_id"),
     "track_id": (
         "track",
         "id",

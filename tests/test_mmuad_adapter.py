@@ -133,6 +133,53 @@ def test_candidate_csv_loader_uses_default_source_hint(tmp_path: Path) -> None:
     assert frame.rows.loc[0, "source"] == "camera_front"
 
 
+def test_candidate_csv_loader_infers_flattened_ros_frame_source(tmp_path: Path) -> None:
+    path = tmp_path / "ros_pose_candidates.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1"],
+            "header.stamp.sec": [3],
+            "header.stamp.nanosec": [250_000_000],
+            "header.frame_id": ["detector_frame"],
+            "child_frame_id": ["uav_1"],
+            "pose.pose.position.x": [1.0],
+            "pose.pose.position.y": [2.0],
+            "pose.pose.position.z": [3.0],
+        }
+    ).to_csv(path, index=False)
+
+    frame = load_candidate_file(path)
+
+    row = frame.rows.iloc[0]
+    assert abs(float(row["time_s"]) - 3.25) < 1e-12
+    assert row["source"] == "detector_frame"
+    assert row["track_id"] == "uav_1"
+    assert row[["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+
+
+def test_candidate_csv_loader_explicit_source_overrides_ros_frame_source(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "ros_pose_candidates.csv"
+    pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "frame_id": ["world"],
+            "child_frame_id": ["uav_2"],
+            "position.x": [4.0],
+            "position.y": [5.0],
+            "position.z": [6.0],
+        }
+    ).to_csv(path, index=False)
+
+    frame = load_candidate_file(path, source="radar0")
+
+    row = frame.rows.iloc[0]
+    assert row["source"] == "radar0"
+    assert row["track_id"] == "uav_2"
+    assert row[["x_m", "y_m", "z_m"]].tolist() == [4.0, 5.0, 6.0]
+
+
 def test_candidate_json_loader_accepts_nested_rows(tmp_path: Path) -> None:
     path = tmp_path / "candidates.json"
     path.write_text(

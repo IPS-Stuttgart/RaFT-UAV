@@ -33,6 +33,10 @@ JSON rows exported from common ROS position messages may keep nested
 `pose.pose.position`, `point`, `transform.translation`, or simple `[x,y,z]`
 coordinate arrays; the table reader flattens those fields into the normalized
 `time_s`, `source`, `track_id`, and `x_m,y_m,z_m` columns.
+Flattened table columns such as `header.frame_id`, `child_frame_id`, and
+`pose.pose.position.x` are accepted too. If no explicit `source` is provided,
+`frame_id` / `header.frame_id` is used as the candidate source; an explicit
+CLI, sequence-root, or topic-map source still overrides that frame hint.
 
 Run with exported detector/cluster candidates:
 

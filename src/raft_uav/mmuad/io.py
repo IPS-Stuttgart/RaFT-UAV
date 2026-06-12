@@ -82,7 +82,7 @@ def load_candidate_csv(
     """Load a normalized or alias-compatible candidate CSV."""
 
     raw = pd.read_csv(path)
-    if not _has_any_column(raw, ("source", "sensor", "modality")):
+    if _should_add_default_candidate_source(raw, source=source):
         raw["source"] = source
     rows = normalize_candidate_columns(
         raw,
@@ -129,12 +129,20 @@ def load_candidate_file(
         raw = _read_numpy_trajectory_table(path)
     else:
         raise ValueError(f"unsupported candidate table extension: {path.suffix}")
-    if not _has_any_column(raw, ("source", "sensor", "modality")):
+    if _should_add_default_candidate_source(raw, source=source):
         raw["source"] = source
     rows = normalize_candidate_columns(raw, default_sequence_id=default_sequence_id)
     frame = CandidateFrame(rows)
     frame.validate()
     return frame
+
+
+def _should_add_default_candidate_source(frame: pd.DataFrame, *, source: str) -> bool:
+    if _has_any_column(frame, ("source", "sensor", "modality")):
+        return False
+    if source != "candidate":
+        return True
+    return not _has_any_column(frame, ("frame_id", "header.frame_id"))
 
 
 def load_truth_csv(path: Path, *, default_sequence_id: str = "default") -> TruthFrame:
