@@ -429,11 +429,15 @@ def _tracklet_max_candidates_env_value(
     overwrite_all: bool,
     overwrite_names: set[str],
 ) -> object:
-    """Return the resolved max-candidate value while honoring env aliases."""
+    """Return the resolved max-candidate value while honoring env aliases.
+
+    The ``*_PER_FRAME`` name is canonical and must win when both the
+    canonical key and the deprecated alias are present.
+    """
 
     if overwrite_all or overwrite_names.intersection(_TRACKLET_MAX_CANDIDATE_ENV_NAMES):
         return default
-    for name in (_TRACKLET_MAX_CANDIDATES_LEGACY_ENV, _TRACKLET_MAX_CANDIDATES_PER_FRAME_ENV):
+    for name in (_TRACKLET_MAX_CANDIDATES_PER_FRAME_ENV, _TRACKLET_MAX_CANDIDATES_LEGACY_ENV):
         value = os.environ.get(name)
         if value is not None and value != "":
             return value

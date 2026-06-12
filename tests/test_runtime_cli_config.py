@@ -243,11 +243,28 @@ def test_apply_runtime_environment_overwrites_explicit_tracklet_candidate_alias(
     assert os.environ["RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"] == "13"
 
 
-def test_apply_runtime_environment_preserves_legacy_tracklet_candidate_alias(
+def test_apply_runtime_environment_prefers_canonical_tracklet_candidate_alias(
     monkeypatch,
 ):
     monkeypatch.setenv("RAFT_UAV_TRACKLET_MAX_CANDIDATES", "12")
     monkeypatch.setenv("RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME", "8")
+    argv = ["run-baseline", "/data/aerpaw"]
+    config, _ = parse_runtime_config(argv)
+
+    apply_runtime_environment(
+        config,
+        overwrite_existing_env_names=runtime_environment_names_from_argv(argv),
+    )
+
+    assert os.environ["RAFT_UAV_TRACKLET_MAX_CANDIDATES"] == "8"
+    assert os.environ["RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME"] == "8"
+    assert _config_from_environment().max_candidates_per_frame == 8
+
+
+def test_apply_runtime_environment_uses_legacy_tracklet_candidate_alias_when_canonical_absent(
+    monkeypatch,
+):
+    monkeypatch.setenv("RAFT_UAV_TRACKLET_MAX_CANDIDATES", "12")
     argv = ["run-baseline", "/data/aerpaw"]
     config, _ = parse_runtime_config(argv)
 

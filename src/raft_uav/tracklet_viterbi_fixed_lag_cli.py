@@ -8,7 +8,8 @@ CLI surface.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 import os
 
 import pandas as pd
@@ -190,12 +191,28 @@ def run_async_cv_baseline_with_radar_association(
 def main(argv: list[str] | None = None) -> int:
     """Run the standard CLI with fixed-lag tracklet Viterbi enabled."""
 
-    modes = tuple(dict.fromkeys((*_BASE_RADAR_ASSOCIATION_MODES, _TRACKLET_FIXED_LAG_MODE)))
+    with _temporary_base_cli_fixed_lag_dispatch():
+        return _base_cli.main(argv)
+
+
+@contextmanager
+def _temporary_base_cli_fixed_lag_dispatch() -> Iterator[None]:
+    """Expose fixed-lag tracklet association mode for one CLI invocation."""
+
+    previous_modes = _base_cli.RADAR_ASSOCIATION_MODES
+    previous_runner = _base_cli.run_async_cv_baseline_with_radar_association
+    modes = tuple(
+        dict.fromkeys((*_BASE_RADAR_ASSOCIATION_MODES, _TRACKLET_FIXED_LAG_MODE))
+    )
     _base_cli.RADAR_ASSOCIATION_MODES = modes
     _base_cli.run_async_cv_baseline_with_radar_association = (
         run_async_cv_baseline_with_radar_association
     )
-    return _base_cli.main(argv)
+    try:
+        yield
+    finally:
+        _base_cli.RADAR_ASSOCIATION_MODES = previous_modes
+        _base_cli.run_async_cv_baseline_with_radar_association = previous_runner
 
 
 def _fixed_lag_s_from_env() -> float:
