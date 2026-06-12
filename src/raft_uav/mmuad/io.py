@@ -63,6 +63,16 @@ def read_text_export(path: Path, *, errors: str | None = None) -> str:
     return path.read_text(encoding="utf-8", errors=errors)
 
 
+def read_binary_export(path: Path) -> bytes:
+    """Read bytes from a plain or gzip-compressed export file."""
+
+    path = Path(path)
+    if path.suffix.lower() == COMPRESSED_TABLE_SUFFIX:
+        with gzip.open(path, "rb") as handle:
+            return handle.read()
+    return path.read_bytes()
+
+
 def load_candidate_csv(
     path: Path,
     *,
@@ -221,10 +231,11 @@ def load_point_cloud_file_as_candidates(
     """Load exported point-cloud files and cluster them into candidates.
 
     CSV/TSV/TXT/JSON/JSONL, NumPy, PCD, PLY, and simple float32 ``.bin`` files
-    are supported as pragmatic exported-data bridges.  This is **not** a native
-    Livox packet reader.  Files without per-point timestamps are treated as one
-    frame; ``time_s`` is inferred from the filename when it contains a numeric
-    token, otherwise it defaults to ``0.0``.
+    are supported as pragmatic exported-data bridges, including gzip-compressed
+    variants.  This is **not** a native Livox packet reader.  Files without
+    per-point timestamps are treated as one frame; ``time_s`` is inferred from
+    the filename when it contains a numeric token, otherwise it defaults to
+    ``0.0``.
     """
 
     path = Path(path)
@@ -408,7 +419,7 @@ def _point_rows_to_candidates(
 def _read_pcd(path: Path) -> pd.DataFrame:
     """Read a minimal PCD point cloud with ASCII or binary DATA sections."""
 
-    raw = Path(path).read_bytes()
+    raw = read_binary_export(path)
     marker = b"DATA"
     marker_index = raw.upper().find(marker)
     if marker_index < 0:
@@ -524,7 +535,7 @@ def _read_binary_point_cloud(path: Path) -> pd.DataFrame:
     explicit ``time_s`` is supplied by the caller.
     """
 
-    raw = np.fromfile(path, dtype="<f4")
+    raw = np.frombuffer(read_binary_export(path), dtype="<f4")
     if raw.size < 3:
         raise ValueError(f"binary point cloud {path} contains fewer than 3 float32 values")
     if raw.size % 4 == 0:
@@ -540,7 +551,7 @@ def _read_binary_point_cloud(path: Path) -> pd.DataFrame:
 
 
 def _read_ascii_ply(path: Path) -> pd.DataFrame:
-    lines = Path(path).read_text(encoding="utf-8", errors="ignore").splitlines()
+    lines = read_text_export(path, errors="ignore").splitlines()
     if not lines or lines[0].strip() != "ply":
         raise ValueError(f"invalid PLY file: {path}")
     vertex_count = 0

@@ -42,14 +42,20 @@ JSON_TABLE_SUFFIXES = DISCOVERABLE_JSON_TABLE_SUFFIXES
 JSON_DATA_SUFFIXES = tuple(sorted(IO_JSON_TABLE_SUFFIXES))
 CALIBRATION_SUFFIXES = (".json", ".yaml", ".yml")
 TRAJECTORY_SUFFIXES = (".npy", ".npz")
+POINT_CLOUD_EXPORT_SUFFIXES = (
+    ".pcd",
+    ".pcd.gz",
+    ".ply",
+    ".ply.gz",
+    ".bin",
+    ".bin.gz",
+)
 POINT_FILE_SUFFIXES = (
     *TABLE_SUFFIXES,
     *JSON_TABLE_SUFFIXES,
     ".npy",
     ".npz",
-    ".pcd",
-    ".ply",
-    ".bin",
+    *POINT_CLOUD_EXPORT_SUFFIXES,
 )
 CANDIDATE_DIR_TOKENS = (
     "candidate",
@@ -606,16 +612,11 @@ def _point_files(path: Path) -> list[Path]:
     for suffix in TABLE_SUFFIXES + JSON_TABLE_SUFFIXES:
         files.extend(sorted(path.glob(f"*_points{suffix}")))
         files.extend(sorted(path.glob(f"*_point_cloud{suffix}")))
-    files.extend(sorted(path.glob("*.pcd")))
-    files.extend(sorted(path.glob("*.ply")))
-    for pattern in (
-        "*points*.bin",
-        "*point_cloud*.bin",
-        "*cloud*.bin",
-        "*lidar*.bin",
-        "*livox*.bin",
-    ):
-        files.extend(sorted(path.glob(pattern)))
+    for suffix in (".pcd", ".pcd.gz", ".ply", ".ply.gz"):
+        files.extend(sorted(path.glob(f"*{suffix}")))
+    for pattern in ("*points*", "*point_cloud*", "*cloud*", "*lidar*", "*livox*"):
+        for suffix in (".bin", ".bin.gz"):
+            files.extend(sorted(path.glob(f"{pattern}{suffix}")))
     files.extend(_point_numpy_files(path))
     files.extend(
         _files_under_named_dirs(

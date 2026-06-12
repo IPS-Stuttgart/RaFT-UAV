@@ -1639,6 +1639,34 @@ def test_ascii_pcd_point_cloud_is_clustered(tmp_path: Path) -> None:
     assert abs(float(frame.rows.loc[0, "time_s"]) - 12.5) < 1e-9
 
 
+def test_gzipped_ascii_pcd_point_cloud_is_clustered(tmp_path: Path) -> None:
+    pcd = tmp_path / "frame_12.5.pcd.gz"
+    text = "\n".join(
+        [
+            "# .PCD v0.7",
+            "VERSION 0.7",
+            "FIELDS x y z",
+            "SIZE 4 4 4",
+            "TYPE F F F",
+            "COUNT 1 1 1",
+            "WIDTH 3",
+            "HEIGHT 1",
+            "POINTS 3",
+            "DATA ascii",
+            "0 0 1",
+            "0.1 0 1.1",
+            "0.2 0.1 1.0",
+        ]
+    )
+    with gzip.open(pcd, "wt", encoding="utf-8") as handle:
+        handle.write(text)
+
+    frame = load_point_cloud_file_as_candidates(pcd, voxel_size_m=0.5, min_points=3)
+
+    assert len(frame.rows) == 1
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 12.5) < 1e-9
+
+
 def test_csv_point_cloud_file_infers_missing_metadata(tmp_path: Path) -> None:
     csv = tmp_path / "frame_12.5.csv"
     pd.DataFrame(
@@ -2276,6 +2304,31 @@ def test_binary_bin_point_cloud_is_clustered(tmp_path: Path) -> None:
     assert abs(float(row["x_m"]) - 0.1) < 1e-6
 
 
+def test_gzipped_ascii_ply_point_cloud_is_clustered(tmp_path: Path) -> None:
+    ply = tmp_path / "frame_6.75.ply.gz"
+    text = "\n".join(
+        [
+            "ply",
+            "format ascii 1.0",
+            "element vertex 3",
+            "property float x",
+            "property float y",
+            "property float z",
+            "end_header",
+            "0 0 1",
+            "0.1 0 1.1",
+            "0.2 0.1 1.0",
+        ]
+    )
+    with gzip.open(ply, "wt", encoding="utf-8") as handle:
+        handle.write(text)
+
+    frame = load_point_cloud_file_as_candidates(ply, voxel_size_m=0.5, min_points=3)
+
+    assert len(frame.rows) == 1
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 6.75) < 1e-9
+
+
 def test_numpy_point_cloud_file_is_clustered(tmp_path: Path) -> None:
     points = np.array([[0.0, 0.0, 1.0], [0.1, 0.0, 1.1], [0.2, 0.1, 1.0]])
     npy = tmp_path / "cloud_3.0.npy"
@@ -2437,6 +2490,42 @@ def test_sequence_root_loads_binary_livox_point_cloud_export(tmp_path: Path) -> 
 
     assert [sequence.sequence_id for sequence in discovered] == ["seq_livox_bin"]
     assert discovered[0].point_cloud_files == (livox / f"{timestamp}.bin",)
+    assert len(candidates.rows) == 1
+    row = candidates.rows.iloc[0]
+    assert row["source"] == "livox_avia"
+    assert abs(float(row["time_s"]) - 12.75) < 1e-9
+    assert truth is not None
+
+
+def test_sequence_root_loads_gzipped_binary_livox_point_cloud_export(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_livox_bin_gz"
+    livox = seq / "livox_avia"
+    truth_dir = seq / "ground_truth"
+    livox.mkdir(parents=True)
+    truth_dir.mkdir()
+    timestamp = "12.75"
+    points = np.array(
+        [
+            [3.0, 4.0, 5.0, 0.5],
+            [3.1, 4.0, 5.1, 0.6],
+            [3.0, 4.1, 5.0, 0.7],
+        ],
+        dtype="<f4",
+    )
+    bin_path = livox / f"{timestamp}.bin.gz"
+    with gzip.open(bin_path, "wb") as handle:
+        handle.write(points.tobytes())
+    np.save(truth_dir / f"{timestamp}.npy", np.array([3.0, 4.0, 5.0]))
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(
+        discovered[0],
+        voxel_size_m=0.5,
+        min_cluster_points=3,
+    )
+
+    assert [sequence.sequence_id for sequence in discovered] == ["seq_livox_bin_gz"]
+    assert discovered[0].point_cloud_files == (bin_path,)
     assert len(candidates.rows) == 1
     row = candidates.rows.iloc[0]
     assert row["source"] == "livox_avia"
