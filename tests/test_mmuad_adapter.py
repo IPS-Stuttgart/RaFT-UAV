@@ -1882,6 +1882,42 @@ def test_split_manifest_filters_discovered_sequences(tmp_path: Path) -> None:
     assert [sequence.sequence_id for sequence in val_sequences] == ["seq_val"]
 
 
+def test_split_manifest_filters_relative_sequence_paths(tmp_path: Path) -> None:
+    for split, x_m in (("train", 100.0), ("val", 1.0)):
+        seq = tmp_path / split / "seq_same"
+        seq.mkdir(parents=True)
+        pd.DataFrame(
+            {
+                "sequence_id": ["seq_same"],
+                "time_s": [0.0],
+                "source": ["radar"],
+                "track_id": ["r1"],
+                "x_m": [x_m],
+                "y_m": [0.0],
+                "z_m": [1.0],
+            }
+        ).to_csv(seq / "candidates.csv", index=False)
+    split = tmp_path / "splits.json"
+    split.write_text(
+        json.dumps(
+            {
+                "train": ["train/seq_same"],
+                "val": ["val/seq_same"],
+                "val_windows": ["val\\seq_same"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = load_split_manifest(split)
+    discovered = discover_sequence_paths(tmp_path)
+
+    val_sequences = filter_sequences_by_split(discovered, manifest, "val")
+    val_windows_sequences = filter_sequences_by_split(discovered, manifest, "val_windows")
+
+    assert [sequence.root.parent.name for sequence in val_sequences] == ["val"]
+    assert [sequence.root.parent.name for sequence in val_windows_sequences] == ["val"]
+
+
 def test_split_manifest_accepts_nested_json_layouts(tmp_path: Path) -> None:
     split = tmp_path / "splits.json"
     split.write_text(

@@ -292,6 +292,9 @@ metadata files may also use JSON sequence-row layouts such as
 `{"sequences": [{"sequence_id": "seq001", "split": "val"}]}` or nested split
 objects such as `{"splits": {"val": {"sequence_ids": ["seq001"]}}}`. CSV alias
 columns including `id`, `name`, `subset`, and `partition` are accepted.
+Manifest sequence entries may be bare IDs such as `seq001` or split-relative
+paths such as `val/seq001`; path entries are useful when split folders reuse the
+same sequence leaf name.
 If the sequence root is already arranged as split folders such as
 `train/seq001` and `val/seq002`, omit `--split-file` and pass
 `--split-name val`; the CLI filters by the top-level folder name.

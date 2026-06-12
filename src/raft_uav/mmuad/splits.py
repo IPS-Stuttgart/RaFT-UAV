@@ -182,8 +182,33 @@ def filter_sequences_by_split(
     if split_name not in manifest:
         available = ", ".join(sorted(manifest))
         raise ValueError(f"split {split_name!r} not found; available splits: {available}")
-    wanted = set(manifest[split_name])
-    return [sequence for sequence in sequences if sequence.sequence_id in wanted]
+    wanted = manifest[split_name]
+    return [
+        sequence
+        for sequence in sequences
+        if any(_sequence_matches_manifest_reference(sequence, reference) for reference in wanted)
+    ]
+
+
+def _sequence_matches_manifest_reference(sequence: SequencePaths, reference: str) -> bool:
+    normalized = _normalize_sequence_reference(reference)
+    if not normalized:
+        return False
+    sequence_id = _normalize_sequence_reference(sequence.sequence_id)
+    root_name = _normalize_sequence_reference(sequence.root.name)
+    if normalized in {sequence_id, root_name}:
+        return True
+    root_path = _normalize_sequence_reference(sequence.root.as_posix())
+    return root_path == normalized or root_path.endswith(f"/{normalized}")
+
+
+def _normalize_sequence_reference(value: str) -> str:
+    text = str(value).strip().replace("\\", "/").strip("/")
+    while text.startswith("./"):
+        text = text[2:]
+    while "//" in text:
+        text = text.replace("//", "/")
+    return text
 
 
 def filter_sequences_by_split_folder(
