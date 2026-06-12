@@ -10,6 +10,7 @@ tracking logs:
 * ``geometry_msgs/msg/PointStamped`` -> truth rows or candidate rows;
 * ``geometry_msgs/msg/TransformStamped`` -> truth rows or candidate rows;
 * ``tf2_msgs/msg/TFMessage`` -> transform truth rows or candidate rows;
+* ``nav_msgs/msg/Path`` -> trajectory truth rows or candidate rows;
 * ``nav_msgs/msg/Odometry`` -> truth rows or candidate rows.
 
 Unknown topics are recorded in the extraction manifest and skipped.
@@ -56,10 +57,10 @@ def extract_native_rosbag_topic_map(
         Decode ``sensor_msgs/msg/PointCloud2`` and cluster points.
     ``pose_truth`` / ``odometry_truth``
         Convert pose/odometry messages into truth rows.
-    ``point_truth`` / ``transform_truth`` / ``tf_truth``
+    ``point_truth`` / ``transform_truth`` / ``tf_truth`` / ``path_truth``
         Convert position-only messages into truth rows.
     ``pose_candidate`` / ``odometry_candidate`` / ``point_candidate`` /
-    ``transform_candidate`` / ``tf_candidate``
+    ``transform_candidate`` / ``tf_candidate`` / ``path_candidate``
         Convert pose/odometry messages into candidate detections.
     """
 
@@ -110,6 +111,7 @@ def extract_native_rosbag_topic_map(
                     "point_truth",
                     "transform_truth",
                     "tf_truth",
+                    "path_truth",
                 }:
                     rows_for_message = position_message_to_rows(
                         message,
@@ -126,6 +128,7 @@ def extract_native_rosbag_topic_map(
                     "point_candidate",
                     "transform_candidate",
                     "tf_candidate",
+                    "path_candidate",
                 }:
                     rows_for_message = position_message_to_rows(
                         message,
@@ -259,6 +262,25 @@ def position_message_to_rows(
                 time_s=transform_time_s if transform_time_s is not None else time_s,
             )
             _add_frame_metadata(row, transform)
+            rows.append(row)
+        return rows
+    poses = getattr(message, "poses", None)
+    if poses is not None:
+        rows = []
+        for pose in poses:
+            if not _frame_filter_matches(
+                pose,
+                child_frame_id=child_frame_id,
+                frame_id=frame_id,
+            ):
+                continue
+            pose_time_s = _message_stamp_time_s(pose)
+            row = position_message_to_row(
+                pose,
+                sequence_id=sequence_id,
+                time_s=pose_time_s if pose_time_s is not None else time_s,
+            )
+            _add_frame_metadata(row, pose)
             rows.append(row)
         return rows
     if not _frame_filter_matches(

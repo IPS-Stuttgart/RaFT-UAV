@@ -168,6 +168,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "pointcloud2_candidate"
     if "tfmessage" in msg_type or msg_type.endswith("/tfmessage"):
         return "tf_truth" if truth_like else "tf_candidate"
+    if msg_type.endswith("/path") or msg_type.endswith("msg/path"):
+        return "path_truth" if truth_like else "path_candidate"
     if msg_type.endswith("posestamped") or "pose_stamped" in msg_type:
         return "pose_truth" if truth_like else "pose_candidate"
     if msg_type.endswith("pointstamped") or "point_stamped" in msg_type:

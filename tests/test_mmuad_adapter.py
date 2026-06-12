@@ -3078,6 +3078,39 @@ def test_ros2_topic_map_template_infers_tf_message_topics(tmp_path: Path) -> Non
     assert payload["exports"][1]["source"] is None
 
 
+def test_ros2_topic_map_template_infers_path_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /detector/path",
+                "        type: nav_msgs/msg/Path",
+                "      message_count: 2",
+                "    - topic_metadata:",
+                "        name: /ground_truth/path",
+                "        type: nav_msgs/msg/Path",
+                "      message_count: 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "path_candidate",
+        "path_truth",
+    ]
+    assert payload["exports"][0]["source"] == "detector_path"
+    assert payload["exports"][1]["source"] is None
+
+
 def test_native_ros_position_message_to_row_accepts_common_position_messages() -> None:
     point_message = SimpleNamespace(point=SimpleNamespace(x=1.0, y=2.0, z=3.0))
     transform_message = SimpleNamespace(
@@ -3144,6 +3177,44 @@ def test_native_ros_position_message_to_rows_filters_tf_message_transforms() -> 
     assert rows[0]["time_s"] == 10.25
     assert rows[0]["x_m"] == 1.0
     assert rows[0]["child_frame_id"] == "uav"
+    assert rows[0]["frame_id"] == "world"
+
+
+def test_native_ros_position_message_to_rows_expands_path_poses() -> None:
+    path_message = SimpleNamespace(
+        poses=[
+            SimpleNamespace(
+                header=SimpleNamespace(
+                    stamp=SimpleNamespace(sec=20, nanosec=0),
+                    frame_id="world",
+                ),
+                pose=SimpleNamespace(
+                    position=SimpleNamespace(x=1.0, y=2.0, z=3.0)
+                ),
+            ),
+            SimpleNamespace(
+                header=SimpleNamespace(
+                    stamp=SimpleNamespace(sec=21, nanosec=500_000_000),
+                    frame_id="camera",
+                ),
+                pose=SimpleNamespace(
+                    position=SimpleNamespace(x=4.0, y=5.0, z=6.0)
+                ),
+            ),
+        ]
+    )
+
+    rows = position_message_to_rows(
+        path_message,
+        sequence_id="seq_path",
+        time_s=1.0,
+        frame_id="world",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["sequence_id"] == "seq_path"
+    assert rows[0]["time_s"] == 20.0
+    assert rows[0]["x_m"] == 1.0
     assert rows[0]["frame_id"] == "world"
 
 
