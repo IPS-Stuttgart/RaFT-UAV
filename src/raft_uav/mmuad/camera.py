@@ -16,7 +16,11 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.calibration import RigidTransform
-from raft_uav.mmuad.schema import CandidateFrame, normalize_candidate_columns
+from raft_uav.mmuad.schema import (
+    CandidateFrame,
+    normalize_candidate_columns,
+    normalize_time_column_aliases,
+)
 
 
 @dataclass(frozen=True)
@@ -146,6 +150,7 @@ def backproject_pixel_to_camera_xyz(
 
 
 def _normalize_camera_detection_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    frame = normalize_time_column_aliases(frame, target="time_s")
     lower = {str(col).lower(): col for col in frame.columns}
     rename: dict[object, str] = {}
     aliases = {

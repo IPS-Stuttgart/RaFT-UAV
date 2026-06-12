@@ -12,7 +12,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from raft_uav.mmuad.schema import CandidateFrame, normalize_candidate_columns
+from raft_uav.mmuad.schema import (
+    CandidateFrame,
+    normalize_candidate_columns,
+    normalize_time_column_aliases,
+)
 
 
 RADAR_AZIMUTH_CONVENTIONS = (
@@ -43,7 +47,7 @@ def load_radar_polar_csv_as_candidates(
     calibration transform is applied.
     """
 
-    frame = _read_delimited_table(path)
+    frame = normalize_time_column_aliases(_read_delimited_table(path), target="time_s")
     normalized = _normalize_radar_columns(frame)
     if sequence_id is not None:
         normalized["sequence_id"] = str(sequence_id)

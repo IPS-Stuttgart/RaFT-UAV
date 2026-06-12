@@ -18,6 +18,11 @@ sequence_id,time_s,x_m,y_m,z_m
 seq001,0.00,1.0,2.0,3.0
 ```
 
+Timestamp columns may be supplied in seconds via `time_s`, `timestamp_s`,
+`time`, or `sec`; in larger exported units via `timestamp_ns`, `timestamp_us`,
+or `timestamp_ms`; or as ROS-style second/nanosecond pairs such as
+`sec,nanosec`.
+
 Run with exported detector/cluster candidates:
 
 ```bash

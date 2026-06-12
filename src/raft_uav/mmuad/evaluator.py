@@ -16,7 +16,12 @@ import json
 import numpy as np
 import pandas as pd
 
-from raft_uav.mmuad.schema import TruthFrame, load_jsonable, normalize_truth_columns
+from raft_uav.mmuad.schema import (
+    TruthFrame,
+    load_jsonable,
+    normalize_time_column_aliases,
+    normalize_truth_columns,
+)
 from raft_uav.mmuad.submission import UG2_RESULT_COLUMNS, load_sequence_class_map
 
 
@@ -47,7 +52,14 @@ def validate_mmaud_results_frame(frame: pd.DataFrame) -> pd.DataFrame:
         "label": "uav_type",
         "confidence": "score",
     }
-    rows = frame.rename(columns={k: v for k, v in rename.items() if k in frame.columns}).copy()
+    rows = normalize_time_column_aliases(frame, target="timestamp")
+    rows = rows.rename(
+        columns={
+            key: value
+            for key, value in rename.items()
+            if key in rows.columns and value not in rows.columns
+        }
+    ).copy()
     missing = set(UG2_RESULT_COLUMNS).difference(rows.columns)
     if missing:
         raise ValueError(f"mmaud_results rows missing columns: {sorted(missing)}")

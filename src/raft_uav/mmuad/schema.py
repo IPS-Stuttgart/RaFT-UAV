@@ -45,6 +45,45 @@ _COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "class_name": ("class", "label", "category"),
 }
 
+_TIME_SECOND_ALIASES = (
+    "time_s",
+    "timestamp_s",
+    "stamp_s",
+    "t",
+    "time",
+    "timestamp",
+    "stamp",
+    "sec",
+    "secs",
+    "seconds",
+)
+_TIME_UNIT_ALIASES = {
+    "timestamp_ns": 1.0e-9,
+    "time_ns": 1.0e-9,
+    "stamp_ns": 1.0e-9,
+    "nanoseconds": 1.0e-9,
+    "timestamp_us": 1.0e-6,
+    "time_us": 1.0e-6,
+    "stamp_us": 1.0e-6,
+    "timestamp_usec": 1.0e-6,
+    "time_usec": 1.0e-6,
+    "stamp_usec": 1.0e-6,
+    "microseconds": 1.0e-6,
+    "timestamp_ms": 1.0e-3,
+    "time_ms": 1.0e-3,
+    "stamp_ms": 1.0e-3,
+    "milliseconds": 1.0e-3,
+}
+_TIME_SECOND_NANOSECOND_PAIRS = (
+    ("sec", "nanosec"),
+    ("sec", "nsec"),
+    ("secs", "nsecs"),
+    ("stamp_sec", "stamp_nanosec"),
+    ("stamp_secs", "stamp_nsecs"),
+    ("timestamp_sec", "timestamp_nanosec"),
+    ("timestamp_secs", "timestamp_nsecs"),
+)
+
 
 @dataclass(frozen=True)
 class CandidateFrame:
@@ -84,7 +123,8 @@ def normalize_candidate_columns(
     without rewriting the tracker.
     """
 
-    out = _rename_aliases(frame.copy())
+    out = normalize_time_column_aliases(frame.copy(), target="time_s")
+    out = _rename_aliases(out)
     if out.empty:
         return pd.DataFrame(columns=CANONICAL_CANDIDATE_COLUMNS)
     if "sequence_id" not in out.columns:
@@ -122,7 +162,8 @@ def normalize_truth_columns(
 ) -> pd.DataFrame:
     """Return a normalized truth table with canonical column names."""
 
-    out = _rename_aliases(frame.copy())
+    out = normalize_time_column_aliases(frame.copy(), target="time_s")
+    out = _rename_aliases(out)
     if "sequence_id" not in out.columns:
         out["sequence_id"] = default_sequence_id
     for col in ("time_s", "x_m", "y_m", "z_m"):
@@ -147,6 +188,38 @@ def _rename_aliases(frame: pd.DataFrame) -> pd.DataFrame:
                 break
     return frame.rename(columns=rename)
 
+
+def normalize_time_column_aliases(
+    frame: pd.DataFrame,
+    *,
+    target: str = "time_s",
+) -> pd.DataFrame:
+    """Populate ``target`` from common exported timestamp-unit columns."""
+
+    out = frame.copy()
+    if target in out.columns:
+        return out
+    lower_to_original = {str(col).lower(): col for col in out.columns}
+    for seconds_alias, nanoseconds_alias in _TIME_SECOND_NANOSECOND_PAIRS:
+        seconds_col = lower_to_original.get(seconds_alias)
+        nanoseconds_col = lower_to_original.get(nanoseconds_alias)
+        if seconds_col is None or nanoseconds_col is None:
+            continue
+        out[target] = pd.to_numeric(out[seconds_col], errors="coerce") + (
+            pd.to_numeric(out[nanoseconds_col], errors="coerce") * 1.0e-9
+        )
+        return out
+    for alias, scale in _TIME_UNIT_ALIASES.items():
+        original = lower_to_original.get(alias)
+        if original is not None:
+            out[target] = pd.to_numeric(out[original], errors="coerce") * scale
+            return out
+    for alias in _TIME_SECOND_ALIASES:
+        original = lower_to_original.get(alias)
+        if original is not None:
+            out[target] = pd.to_numeric(out[original], errors="coerce")
+            return out
+    return out
 
 
 def load_jsonable(value: Any) -> Any:

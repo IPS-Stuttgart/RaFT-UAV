@@ -87,6 +87,42 @@ def test_candidate_loader_accepts_aliases(tmp_path: Path) -> None:
     assert frame.rows.loc[0, "track_id"] == 7
 
 
+def test_candidate_loader_accepts_nanosecond_timestamps(tmp_path: Path) -> None:
+    path = tmp_path / "candidates.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["s1"],
+            "timestamp_ns": [1_500_000_000],
+            "source": ["radar"],
+            "x_m": [1.0],
+            "y_m": [2.0],
+            "z_m": [3.0],
+        }
+    ).to_csv(path, index=False)
+
+    frame = load_candidate_csv(path)
+
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 1.5) < 1e-12
+
+
+def test_truth_loader_accepts_sec_nanosec_timestamps(tmp_path: Path) -> None:
+    path = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["s1"],
+            "sec": [2],
+            "nanosec": [250_000_000],
+            "x_m": [1.0],
+            "y_m": [2.0],
+            "z_m": [3.0],
+        }
+    ).to_csv(path, index=False)
+
+    frame = load_truth_csv(path)
+
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 2.25) < 1e-12
+
+
 def test_point_cloud_csv_clusters_points(tmp_path: Path) -> None:
     path = tmp_path / "points.csv"
     pd.DataFrame(
@@ -1250,6 +1286,24 @@ def test_ug2_codabench_zip_contains_mmaud_results_csv(tmp_path: Path) -> None:
     assert summary["row_count"] == 2
 
 
+def test_mmaud_results_accept_nanosecond_timestamps() -> None:
+    frame = validate_mmaud_results_frame(
+        pd.DataFrame(
+            {
+                "sequence_id": ["seq1"],
+                "timestamp_ns": [2_250_000_000],
+                "x": [1.0],
+                "y": [2.0],
+                "z": [3.0],
+                "uav_type": ["Mavic3"],
+                "score": [1.0],
+            }
+        )
+    )
+
+    assert abs(float(frame.loc[0, "timestamp"]) - 2.25) < 1e-12
+
+
 def test_local_evaluator_reports_pose_mse_and_type_accuracy(tmp_path: Path) -> None:
     results = tmp_path / "mmaud_results.csv"
     truth = tmp_path / "truth.csv"
@@ -1905,6 +1959,36 @@ def test_submission_evaluator_matches_truth(tmp_path: Path) -> None:
     assert metrics["pooled"]["mean_3d_m"] == 0.0
 
 
+def test_submission_evaluator_accepts_nanosecond_timestamps(tmp_path: Path) -> None:
+    submission = tmp_path / "submission.csv"
+    truth = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["s1"],
+            "timestamp_ns": [1_000_000_000],
+            "track_id": ["uav"],
+            "x_m": [1.0],
+            "y_m": [0.0],
+            "z_m": [2.0],
+            "score": [1.0],
+        }
+    ).to_csv(submission, index=False)
+    pd.DataFrame(
+        {
+            "sequence_id": ["s1"],
+            "time_s": [1.0],
+            "x_m": [1.0],
+            "y_m": [0.0],
+            "z_m": [2.0],
+        }
+    ).to_csv(truth, index=False)
+
+    metrics = evaluate_submission_csv(submission, truth)
+
+    assert metrics["pooled"]["matched_count"] == 1
+    assert metrics["pooled"]["mean_3d_m"] == 0.0
+
+
 def test_submission_evaluator_accepts_numpy_truth_file(tmp_path: Path) -> None:
     submission = tmp_path / "submission.csv"
     truth = tmp_path / "truth.npy"
@@ -2453,6 +2537,27 @@ def test_radar_polar_tsv_converts_to_candidates(tmp_path: Path) -> None:
     assert abs(float(row["x_m"]) - 10.0) < 1.0e-9
 
 
+def test_radar_polar_loader_accepts_millisecond_timestamps(tmp_path: Path) -> None:
+    from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
+
+    radar = tmp_path / "radar_polar.csv"
+    pd.DataFrame(
+        {
+            "timestamp_ms": [1250],
+            "range_m": [10.0],
+            "azimuth_deg": [90.0],
+        }
+    ).to_csv(radar, index=False)
+
+    candidates = load_radar_polar_csv_as_candidates(
+        radar,
+        sequence_id="seq_ms_radar",
+        azimuth_convention="north-clockwise",
+    )
+
+    assert abs(float(candidates.rows.loc[0, "time_s"]) - 1.25) < 1e-12
+
+
 def test_camera_detections_backproject_to_world_candidates(tmp_path: Path) -> None:
     from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
 
@@ -2500,6 +2605,46 @@ def test_camera_detections_backproject_to_world_candidates(tmp_path: Path) -> No
     assert abs(row["y_m"]) < 1.0e-9
     assert abs(row["z_m"] - 10.0) < 1.0e-9
     assert row["class_name"] == "Mavic3"
+
+
+def test_camera_detections_accept_sec_nanosec_timestamps(tmp_path: Path) -> None:
+    from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
+
+    calibration = tmp_path / "camera_calibration.json"
+    calibration.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    detections = tmp_path / "camera_detections.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1"],
+            "sec": [3],
+            "nanosec": [500_000_000],
+            "source": ["cam0"],
+            "u_px": [50.0],
+            "v_px": [50.0],
+            "depth_m": [10.0],
+        }
+    ).to_csv(detections, index=False)
+
+    candidates = load_camera_detections_csv_as_candidates(
+        detections,
+        camera_models=load_camera_models(calibration),
+    )
+
+    assert abs(float(candidates.rows.loc[0, "time_s"]) - 3.5) < 1e-12
 
 
 def test_sequence_export_applies_discovered_sensor_uncertainty_options(

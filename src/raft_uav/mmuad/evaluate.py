@@ -13,13 +13,13 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.io import load_truth_file
-from raft_uav.mmuad.schema import normalize_truth_columns
+from raft_uav.mmuad.schema import normalize_time_column_aliases, normalize_truth_columns
 
 
 def load_submission_csv(path: Path) -> pd.DataFrame:
     """Load the stable RaFT-UAV MMUAD trajectory CSV export."""
 
-    frame = pd.read_csv(path)
+    frame = normalize_time_column_aliases(pd.read_csv(path), target="time_s")
     aliases = {
         "timestamp_s": "time_s",
         "track": "track_id",
@@ -28,7 +28,13 @@ def load_submission_csv(path: Path) -> pd.DataFrame:
         "y": "y_m",
         "z": "z_m",
     }
-    frame = frame.rename(columns={key: value for key, value in aliases.items() if key in frame.columns})
+    frame = frame.rename(
+        columns={
+            key: value
+            for key, value in aliases.items()
+            if key in frame.columns and value not in frame.columns
+        }
+    )
     missing = {"sequence_id", "time_s", "x_m", "y_m", "z_m"}.difference(frame.columns)
     if missing:
         raise ValueError(f"submission missing required columns: {sorted(missing)}")
