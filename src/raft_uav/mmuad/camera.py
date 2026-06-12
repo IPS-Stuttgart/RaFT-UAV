@@ -357,7 +357,9 @@ def _looks_like_single_camera(payload: dict[str, Any]) -> bool:
                 "intrinsic_matrix",
                 "projection_matrix",
                 "K",
+                "k",
                 "P",
+                "p",
             )
         )
     )
@@ -404,7 +406,9 @@ def _intrinsic_matrix_from_entry(entry: dict[str, Any]) -> np.ndarray | None:
         "intrinsic_matrix",
         "projection_matrix",
         "K",
+        "k",
         "P",
+        "p",
     ):
         if key in entry:
             return _matrix_from_value(entry[key])

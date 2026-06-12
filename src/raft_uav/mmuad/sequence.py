@@ -81,6 +81,20 @@ CLASS_JSON_SEQUENCE_ID_ALIASES = ("sequence_id", "sequence", "seq", "scene", "sc
 CLASS_JSON_METADATA_KEYS = ("schema", "version", "description", "metadata", "meta")
 RADAR_DIR_TOKENS = ("radar", "mmwave", "mmw")
 CAMERA_DIR_TOKENS = ("camera", "cam", "image", "images")
+CAMERA_INTRINSICS_NAMES = {
+    "camera_info.json",
+    "camera_info.yaml",
+    "camera_info.yml",
+    "camera_calibration.json",
+    "camera_calibration.yaml",
+    "camera_calibration.yml",
+    "camera_intrinsics.json",
+    "camera_intrinsics.yaml",
+    "camera_intrinsics.yml",
+    "intrinsics.json",
+    "intrinsics.yaml",
+    "intrinsics.yml",
+}
 MODALITY_DIR_TOKENS = (
     CANDIDATE_DIR_TOKENS
     + POINT_DIR_TOKENS
@@ -239,6 +253,7 @@ def load_sequence_export(
         candidate_frames.append(bundle.candidates)
         if bundle.truth is not None:
             truth_frames.append(bundle.truth)
+    camera_models_loaded = False
     if paths.camera_detection_csvs:
         if paths.calibration_file is None:
             raise ValueError(
@@ -246,6 +261,7 @@ def load_sequence_export(
                 "calibration/intrinsics file exists"
             )
         camera_models = load_camera_models(paths.calibration_file)
+        camera_models_loaded = True
         candidate_frames.extend(
             load_camera_detections_csv_as_candidates(
                 path,
@@ -282,8 +298,14 @@ def load_sequence_export(
     truth = _merge_truth_frames(truth_frames)
     calibration = None
     if paths.calibration_file is not None:
-        calibration = load_calibration_auto(paths.calibration_file)
-        if apply_calibration:
+        try:
+            calibration = load_calibration_auto(paths.calibration_file)
+        except ValueError:
+            if camera_models_loaded and _is_camera_intrinsics_file(paths.calibration_file):
+                calibration = None
+            else:
+                raise
+        if calibration is not None and apply_calibration:
             candidates = transform_candidate_frame(candidates, calibration)
     return candidates, truth, calibration
 
@@ -314,12 +336,24 @@ def _sequence_from_dir(path: Path) -> SequencePaths:
             path / "calibration.json",
             path / "calib.json",
             path / "extrinsics.json",
+            path / "intrinsics.json",
+            path / "camera_info.json",
+            path / "camera_calibration.json",
+            path / "camera_intrinsics.json",
             path / "calibration.yaml",
             path / "calib.yaml",
             path / "extrinsics.yaml",
+            path / "intrinsics.yaml",
+            path / "camera_info.yaml",
+            path / "camera_calibration.yaml",
+            path / "camera_intrinsics.yaml",
             path / "calibration.yml",
             path / "calib.yml",
             path / "extrinsics.yml",
+            path / "intrinsics.yml",
+            path / "camera_info.yml",
+            path / "camera_calibration.yml",
+            path / "camera_intrinsics.yml",
             path / "calibration.txt",
             path / "extrinsics.txt",
         ]
@@ -841,6 +875,13 @@ def _source_from_path(path: Path, *, sequence_root: Path, default: str) -> str:
     if len(relative.parts) <= 1:
         return default
     return str(relative.parts[-2]).replace(" ", "_").replace("-", "_")
+
+
+def _is_camera_intrinsics_file(path: Path) -> bool:
+    name = Path(path).name.lower()
+    return name in CAMERA_INTRINSICS_NAMES or (
+        "camera" in name and ("intrinsic" in name or "info" in name)
+    )
 
 
 def _sequence_class_label(paths: tuple[Path, ...], *, sequence_id: str) -> str | None:

@@ -70,15 +70,12 @@ Implemented in this first patch:
 - CSV/JSON output for estimates, selected tracklets, and metrics;
 - unit tests with synthetic candidate/truth data.
 
-Not implemented yet:
+Still outside this experimental adapter's supported scope:
 
 - official MMUAD raw archive parsing;
-- camera, radar, and LiDAR calibration/extrinsic handling;
 - image detector, point-cloud detector, or UAV classifier training;
-- official CVPR UG2+ submission file generation;
 - official challenge metric reproduction;
-- multi-object tracking;
-- use of challenge validation/test splits or leaderboard upload tooling.
+- leaderboard upload tooling.
 
 ## Incremental features after the first scaffold
 
@@ -129,7 +126,7 @@ radar and camera detection tables such as `radar_polar.tsv` or `radar_polar.json
 `camera_detections.txt`, or `camera_detections.json`, compact trajectory arrays such as `trajectory.npy` /
 `candidates.npz`, exported ROS topic maps such as `topic_map.json`,
 `truth.csv`, compact truth arrays such as `truth.npy`, and optionally
-`calibration.json`. It also recognizes one-level split folders and MMUAD-style
+`calibration.json`, `camera_info.json`, or `intrinsics.json`. It also recognizes one-level split folders and MMUAD-style
 modality subfolders such as `livox_avia/<timestamp>.npy`,
 `livox_avia/<timestamp>.json`, `livox_avia/<timestamp>.bin` for exported float32 `x,y,z` or
 `x,y,z,intensity` point clouds, `ground_truth/<timestamp>.npy`,
@@ -184,6 +181,7 @@ data/mmuad_export/
         detections.json
       cam0/
         detections.csv
+      camera_info.json
       class/
         1706255054.386069.npy
 ```
@@ -623,8 +621,12 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 
 The camera calibration file contains intrinsics (`fx`, `fy`, `cx`, `cy`) and an
 optional camera-to-world rigid transform. Intrinsics can also come from common
-matrix fields such as `camera_matrix`, `K`, or `projection_matrix`, including
-OpenCV-style `{rows, cols, data}` blocks. Detections can provide `u_px`/`v_px` or
+matrix fields such as `camera_matrix`, `K`/`k`, `P`/`p`, or
+`projection_matrix`, including OpenCV-style `{rows, cols, data}` blocks.
+Sequence-root mode discovers common camera-only files such as
+`camera_info.json`, `intrinsics.json`, and `camera_intrinsics.json`; these can
+be used for back-projection even when they do not contain generic sensor
+extrinsics. Detections can provide `u_px`/`v_px` or
 `x1,y1,x2,y2` boxes. JSON exports may be row lists, column maps, or objects with
 keys such as `camera_detections`, `detections`, `boxes`, `rows`, or `data`.
 Depth must come from `depth_m`/`range_m`, or from a fixed fallback via
