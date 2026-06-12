@@ -23,6 +23,10 @@ Timestamp columns may be supplied in seconds via `time_s`, `timestamp_s`,
 or `timestamp_ms`; or as ROS-style second/nanosecond pairs such as
 `sec,nanosec`.
 
+Candidate and truth rows can also be supplied as JSON row lists, column maps, or
+objects containing common keys such as `candidates`, `detections`, `truth`,
+`ground_truth`, `rows`, `data`, or `sequences`.
+
 Run with exported detector/cluster candidates:
 
 ```bash
@@ -32,8 +36,9 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_smoke
 ```
 
-For non-CSV trajectory exports, use the format-aware explicit-file flags. Compact
-NumPy trajectories use `time_s,x_m,y_m,z_m` column order:
+For non-CSV table or trajectory exports, use the format-aware explicit-file
+flags. Compact NumPy trajectories use `time_s,x_m,y_m,z_m` column order, while
+JSON tables use the same column names and aliases as CSV rows:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
@@ -116,14 +121,15 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ### Sequence-root discovery
 
 A normalized sequence export can be loaded from folders containing files named
-`candidates.csv`, `detections.csv`, `*_candidates.csv`, delimited variants such
-as `candidates.tsv` or `detections.txt`, `points.csv`, `points.tsv`,
-`*_points.txt`, exported polar radar and camera detection tables such as
-`radar_polar.tsv` or `camera_detections.txt`, compact trajectory arrays such as
-`trajectory.npy` / `candidates.npz`, exported ROS topic maps such as
-`topic_map.json`, `truth.csv`, compact truth arrays such as `truth.npy`, and
-optionally `calibration.json`. It also recognizes one-level split folders and
-MMUAD-style modality subfolders such as `livox_avia/<timestamp>.npy`,
+`candidates.csv`, `detections.csv`, `candidates.json`, `truth.json`,
+`*_candidates.csv`, delimited variants such as `candidates.tsv` or
+`detections.txt`, `points.csv`, `points.tsv`, `*_points.txt`, exported polar
+radar and camera detection tables such as `radar_polar.tsv` or
+`camera_detections.txt`, compact trajectory arrays such as `trajectory.npy` /
+`candidates.npz`, exported ROS topic maps such as `topic_map.json`,
+`truth.csv`, compact truth arrays such as `truth.npy`, and optionally
+`calibration.json`. It also recognizes one-level split folders and MMUAD-style
+modality subfolders such as `livox_avia/<timestamp>.npy`,
 `livox_avia/<timestamp>.bin` for exported float32 `x,y,z` or
 `x,y,z,intensity` point clouds, `ground_truth/<timestamp>.npy`,
 `tracking_results/<timestamp>.npy`,
@@ -144,6 +150,9 @@ data/mmuad_export/
   seq003/
     candidates.tsv
     truth.csv
+  seq003_json/
+    candidates.json
+    truth.json
   seq004/
     lidar_points.tsv
     truth.csv

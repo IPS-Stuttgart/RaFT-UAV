@@ -105,6 +105,56 @@ def test_candidate_loader_accepts_nanosecond_timestamps(tmp_path: Path) -> None:
     assert abs(float(frame.rows.loc[0, "time_s"]) - 1.5) < 1e-12
 
 
+def test_candidate_json_loader_accepts_nested_rows(tmp_path: Path) -> None:
+    path = tmp_path / "candidates.json"
+    path.write_text(
+        json.dumps(
+            {
+                "detections": [
+                    {
+                        "sequence_id": "s1",
+                        "timestamp_ms": 1500,
+                        "sensor": "radar",
+                        "id": "track7",
+                        "x": 1.0,
+                        "y": 2.0,
+                        "z": 3.0,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    frame = load_candidate_file(path)
+
+    assert frame.rows.loc[0, "sequence_id"] == "s1"
+    assert frame.rows.loc[0, "source"] == "radar"
+    assert frame.rows.loc[0, "track_id"] == "track7"
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 1.5) < 1e-12
+
+
+def test_candidate_json_loader_accepts_column_map(tmp_path: Path) -> None:
+    path = tmp_path / "candidates.json"
+    path.write_text(
+        json.dumps(
+            {
+                "time_s": [0.0, 1.0],
+                "source": "radar",
+                "x_m": [1.0, 2.0],
+                "y_m": [3.0, 4.0],
+                "z_m": [5.0, 6.0],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    frame = load_candidate_file(path)
+
+    assert frame.rows["time_s"].tolist() == [0.0, 1.0]
+    assert frame.rows["source"].tolist() == ["radar", "radar"]
+
+
 def test_truth_loader_accepts_sec_nanosec_timestamps(tmp_path: Path) -> None:
     path = tmp_path / "truth.csv"
     pd.DataFrame(
@@ -120,6 +170,33 @@ def test_truth_loader_accepts_sec_nanosec_timestamps(tmp_path: Path) -> None:
 
     frame = load_truth_csv(path)
 
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 2.25) < 1e-12
+
+
+def test_truth_json_loader_accepts_sequence_mapping(tmp_path: Path) -> None:
+    path = tmp_path / "truth.json"
+    path.write_text(
+        json.dumps(
+            {
+                "sequences": {
+                    "seq_json": [
+                        {
+                            "sec": 2,
+                            "nanosec": 250_000_000,
+                            "x": 1.0,
+                            "y": 2.0,
+                            "z": 3.0,
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    frame = load_truth_file(path)
+
+    assert frame.rows.loc[0, "sequence_id"] == "seq_json"
     assert abs(float(frame.rows.loc[0, "time_s"]) - 2.25) < 1e-12
 
 
@@ -507,6 +584,53 @@ def test_sequence_root_discovers_delimited_candidate_tables(tmp_path: Path) -> N
     assert candidates.rows["source"].tolist() == ["radar", "radar"]
     assert truth is not None
     assert truth.rows["time_s"].tolist() == [0.0, 1.0]
+
+
+def test_sequence_root_loads_json_candidate_and_truth_exports(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_json"
+    seq.mkdir()
+    (seq / "candidates.json").write_text(
+        json.dumps(
+            {
+                "candidates": [
+                    {
+                        "timestamp_ns": 500_000_000,
+                        "sensor": "radar",
+                        "x_m": 10.0,
+                        "y_m": 1.0,
+                        "z_m": 2.0,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (seq / "truth.json").write_text(
+        json.dumps(
+            {
+                "truth": [
+                    {
+                        "time_s": 0.5,
+                        "x_m": 10.0,
+                        "y_m": 1.0,
+                        "z_m": 2.0,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].candidate_csvs == (seq / "candidates.json",)
+    assert discovered[0].truth_files == (seq / "truth.json",)
+    assert candidates.rows["sequence_id"].tolist() == ["seq_json"]
+    assert candidates.rows["source"].tolist() == ["radar"]
+    assert candidates.rows["time_s"].tolist() == [0.5]
+    assert truth is not None
+    assert truth.rows["time_s"].tolist() == [0.5]
 
 
 def test_sequence_root_discovers_delimited_point_tables(tmp_path: Path) -> None:

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from collections import deque
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
@@ -35,7 +36,7 @@ def load_candidate_file(
     default_sequence_id: str = "default",
     source: str = "candidate",
 ) -> CandidateFrame:
-    """Load a normalized candidate table from CSV/TXT or NumPy trajectory rows."""
+    """Load a normalized candidate table from CSV/TXT/JSON or NumPy trajectory rows."""
 
     path = Path(path)
     suffix = path.suffix.lower()
@@ -43,6 +44,20 @@ def load_candidate_file(
         return load_candidate_csv(path, default_sequence_id=default_sequence_id)
     if suffix in {".tsv", ".txt"}:
         raw = _read_delimited_table(path)
+    elif suffix == ".json":
+        raw = _read_json_table(
+            path,
+            preferred=(
+                "candidates",
+                "detections",
+                "tracks",
+                "trajectory",
+                "trajectories",
+                "poses",
+                "rows",
+                "data",
+            ),
+        )
     elif suffix in {".npy", ".npz"}:
         raw = _read_numpy_trajectory_table(path)
     else:
@@ -68,7 +83,7 @@ def load_truth_csv(path: Path, *, default_sequence_id: str = "default") -> Truth
 
 
 def load_truth_file(path: Path, *, default_sequence_id: str = "default") -> TruthFrame:
-    """Load a normalized truth table from CSV/TXT or NumPy trajectory rows."""
+    """Load a normalized truth table from CSV/TXT/JSON or NumPy trajectory rows."""
 
     path = Path(path)
     suffix = path.suffix.lower()
@@ -77,6 +92,23 @@ def load_truth_file(path: Path, *, default_sequence_id: str = "default") -> Trut
     if suffix in {".tsv", ".txt"}:
         rows = normalize_truth_columns(
             _read_delimited_table(path),
+            default_sequence_id=default_sequence_id,
+        )
+    elif suffix == ".json":
+        rows = normalize_truth_columns(
+            _read_json_table(
+                path,
+                preferred=(
+                    "truth",
+                    "ground_truth",
+                    "gt",
+                    "poses",
+                    "trajectory",
+                    "trajectories",
+                    "rows",
+                    "data",
+                ),
+            ),
             default_sequence_id=default_sequence_id,
         )
     elif suffix in {".npy", ".npz"}:
@@ -473,6 +505,136 @@ def _read_delimited_table(path: Path) -> pd.DataFrame:
     if path.suffix.lower() == ".tsv":
         return pd.read_csv(path, sep="\t")
     return pd.read_csv(path, sep=None, engine="python")
+
+
+def _read_json_table(path: Path, *, preferred: tuple[str, ...]) -> pd.DataFrame:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    records = _json_records_from_payload(payload, preferred=preferred)
+    return _json_records_to_frame(records, path=path)
+
+
+def _json_records_from_payload(payload: Any, *, preferred: tuple[str, ...]) -> Any:
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+
+    for key in preferred:
+        nested = _lookup_case_insensitive(payload, key)
+        if nested is not None:
+            return _json_records_from_payload(nested, preferred=preferred)
+
+    sequences = _lookup_case_insensitive(payload, "sequences")
+    if sequences is not None:
+        rows = _json_records_from_sequence_mapping(sequences, preferred=preferred)
+        if rows:
+            return rows
+
+    if _looks_like_column_mapping(payload) or _looks_like_row(payload):
+        return payload
+
+    rows = _json_records_from_sequence_mapping(payload, preferred=preferred)
+    return rows if rows else []
+
+
+def _json_records_from_sequence_mapping(
+    mapping: Any,
+    *,
+    preferred: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    if isinstance(mapping, list):
+        return _json_records_to_frame(mapping).to_dict("records")
+    if not isinstance(mapping, dict):
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for sequence_id, value in mapping.items():
+        if str(sequence_id).lower() in _JSON_METADATA_KEYS:
+            continue
+        records = _json_records_from_payload(value, preferred=preferred)
+        try:
+            frame = _json_records_to_frame(records)
+        except ValueError:
+            continue
+        if frame.empty:
+            continue
+        if "sequence_id" not in frame.columns:
+            frame["sequence_id"] = str(sequence_id)
+        rows.extend(frame.to_dict("records"))
+    return rows
+
+
+def _json_records_to_frame(records: Any, *, path: Path | None = None) -> pd.DataFrame:
+    if isinstance(records, pd.DataFrame):
+        return records
+    if isinstance(records, dict):
+        if _looks_like_column_mapping(records):
+            return pd.DataFrame(records)
+        if _looks_like_row(records):
+            return pd.DataFrame.from_records([records])
+    if isinstance(records, list):
+        if not records:
+            return pd.DataFrame()
+        if all(isinstance(item, dict) for item in records):
+            return pd.DataFrame.from_records(records)
+    label = str(path) if path is not None else "JSON payload"
+    raise ValueError(f"JSON table {label} does not contain row objects")
+
+
+def _lookup_case_insensitive(mapping: dict[Any, Any], key: str) -> Any | None:
+    for candidate, value in mapping.items():
+        if str(candidate).lower() == key.lower():
+            return value
+    return None
+
+
+_JSON_ROW_HINT_KEYS = {
+    "time_s",
+    "timestamp",
+    "timestamp_s",
+    "timestamp_ns",
+    "timestamp_us",
+    "timestamp_ms",
+    "stamp",
+    "sec",
+    "secs",
+    "nanosec",
+    "x_m",
+    "x",
+    "y_m",
+    "y",
+    "z_m",
+    "z",
+}
+_JSON_METADATA_KEYS = {
+    "schema",
+    "version",
+    "metadata",
+    "meta",
+    "description",
+    "exports",
+    "calibration",
+    "sensors",
+    "classes",
+    "class_map",
+}
+
+
+def _looks_like_row(payload: dict[Any, Any]) -> bool:
+    keys = {str(key).lower() for key in payload}
+    return bool(keys.intersection(_JSON_ROW_HINT_KEYS))
+
+
+def _looks_like_column_mapping(payload: dict[Any, Any]) -> bool:
+    keys = {str(key).lower() for key in payload}
+    if not keys.intersection(_JSON_ROW_HINT_KEYS):
+        return False
+    column_values = [
+        value
+        for key, value in payload.items()
+        if str(key).lower() in _JSON_ROW_HINT_KEYS and isinstance(value, (list, tuple))
+    ]
+    return bool(column_values)
 
 
 def _read_numpy_trajectory_table(path: Path) -> pd.DataFrame:
