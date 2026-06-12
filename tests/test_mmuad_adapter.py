@@ -4655,6 +4655,67 @@ def test_camera_detections_json_accepts_prediction_wrappers(tmp_path: Path) -> N
     assert abs(float(row["confidence"]) - 0.9) < 1.0e-12
 
 
+def test_camera_detections_json_accepts_detection2d_style_rows(tmp_path: Path) -> None:
+    from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
+
+    calibration = tmp_path / "camera_calibration.json"
+    calibration.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    detections = tmp_path / "detection2d_export.json"
+    detections.write_text(
+        json.dumps(
+            {
+                "detections": [
+                    {
+                        "header": {
+                            "stamp": {"sec": 5, "nanosec": 250_000_000},
+                            "frame_id": "cam0",
+                        },
+                        "bbox": {
+                            "center": {"position": {"x": 60.0, "y": 55.0}},
+                            "size_x": 20.0,
+                            "size_y": 10.0,
+                        },
+                        "depth_m": 10.0,
+                        "results": [
+                            {"hypothesis": {"class_id": "uav", "score": 0.8}},
+                            {"hypothesis": {"class_id": "bird", "score": 0.2}},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates = load_camera_detections_csv_as_candidates(
+        detections,
+        camera_models=load_camera_models(calibration),
+    )
+
+    row = candidates.rows.iloc[0]
+    assert row["source"] == "cam0"
+    assert row["class_name"] == "uav"
+    assert abs(float(row["time_s"]) - 5.25) < 1.0e-12
+    assert abs(float(row["x_m"]) - 1.0) < 1.0e-9
+    assert abs(float(row["y_m"]) - 0.5) < 1.0e-9
+    assert abs(float(row["z_m"]) - 10.0) < 1.0e-9
+    assert abs(float(row["confidence"]) - 0.8) < 1.0e-12
+
+
 def test_camera_detections_json_accepts_coco_bbox_xywh(tmp_path: Path) -> None:
     from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
 

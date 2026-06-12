@@ -457,6 +457,8 @@ def _json_detection_records(payload: Any) -> Any:
         return payload
     if not isinstance(payload, dict):
         return []
+    if _looks_like_detection_column_map(payload) or _looks_like_detection_row(payload):
+        return payload
     for key in (
         "camera_detections",
         "image_detections",
@@ -474,8 +476,6 @@ def _json_detection_records(payload: Any) -> Any:
         nested = _mapping_get_case_insensitive(payload, key)
         if nested is not None:
             return _json_detection_records(nested)
-    if _looks_like_detection_column_map(payload) or _looks_like_detection_row(payload):
-        return payload
     return []
 
 
@@ -486,14 +486,189 @@ def _json_detection_records_to_frame(records: Any, *, path: Path | None = None) 
         if _looks_like_detection_column_map(records):
             return pd.DataFrame(records)
         if _looks_like_detection_row(records):
-            return pd.DataFrame.from_records([records])
+            return pd.DataFrame.from_records([_flatten_detection_record(records)])
     if isinstance(records, list):
         if not records:
             return pd.DataFrame()
         if all(isinstance(item, dict) for item in records):
-            return pd.DataFrame.from_records(records)
+            return pd.DataFrame.from_records(
+                [_flatten_detection_record(item) for item in records]
+            )
     label = str(path) if path is not None else "JSON payload"
     raise ValueError(f"camera detection JSON table {label} does not contain row objects")
+
+
+def _flatten_detection_record(record: dict[Any, Any]) -> dict[Any, Any]:
+    out = dict(record)
+    header = _mapping_get_case_insensitive(out, "header")
+    if isinstance(header, dict):
+        _copy_stamp_time(out, _mapping_get_case_insensitive(header, "stamp"))
+        frame_id = _mapping_get_case_insensitive(header, "frame_id")
+        if frame_id is not None and not _has_any_key(
+            out,
+            ("source", "camera", "camera_id", "sensor"),
+        ):
+            out["source"] = frame_id
+    if not _has_time_key(out):
+        _copy_stamp_time(out, _mapping_get_case_insensitive(out, "stamp"))
+    bbox = _mapping_get_case_insensitive(out, "bbox")
+    if isinstance(bbox, dict):
+        _copy_ros_bbox_fields(out, bbox)
+    results = _mapping_get_case_insensitive(out, "results")
+    if isinstance(results, list):
+        _copy_detection_result_fields(out, results)
+    return out
+
+
+def _copy_stamp_time(out: dict[Any, Any], stamp: Any) -> None:
+    if _has_time_key(out):
+        return
+    time_s = _stamp_to_seconds(stamp)
+    if time_s is not None:
+        out["time_s"] = time_s
+
+
+def _stamp_to_seconds(stamp: Any) -> float | None:
+    if isinstance(stamp, dict):
+        nested = _mapping_get_case_insensitive(stamp, "stamp")
+        if nested is not None:
+            nested_time = _stamp_to_seconds(nested)
+            if nested_time is not None:
+                return nested_time
+        seconds = _first_mapping_value(stamp, ("sec", "secs", "seconds"))
+        nanoseconds = _first_mapping_value(
+            stamp,
+            ("nanosec", "nsec", "nsecs", "nanoseconds"),
+        )
+        if seconds is not None:
+            try:
+                return float(seconds) + (float(nanoseconds or 0.0) * 1.0e-9)
+            except (TypeError, ValueError):
+                return None
+        numeric = _first_mapping_value(
+            stamp,
+            ("time_s", "timestamp_s", "timestamp", "stamp", "time"),
+        )
+        return _float_or_none(numeric)
+    return _float_or_none(stamp)
+
+
+def _copy_ros_bbox_fields(out: dict[Any, Any], bbox: dict[Any, Any]) -> None:
+    center = _mapping_get_case_insensitive(bbox, "center")
+    position = None
+    if isinstance(center, dict):
+        position = _mapping_get_case_insensitive(center, "position")
+    center_mapping = position if isinstance(position, dict) else center
+    if isinstance(center_mapping, dict):
+        u_px = _first_mapping_value(center_mapping, ("x", "u", "cx", "center_x"))
+        v_px = _first_mapping_value(center_mapping, ("y", "v", "cy", "center_y"))
+        _set_if_missing(
+            out,
+            "u_px",
+            u_px,
+            ("u", "pixel_x", "center_x", "bbox_center_x"),
+        )
+        _set_if_missing(
+            out,
+            "v_px",
+            v_px,
+            ("v", "pixel_y", "center_y", "bbox_center_y"),
+        )
+        width = _first_mapping_value(bbox, ("size_x", "width", "w"))
+        height = _first_mapping_value(bbox, ("size_y", "height", "h"))
+        try:
+            u = float(u_px)
+            v = float(v_px)
+            half_width = float(width) / 2.0
+            half_height = float(height) / 2.0
+        except (TypeError, ValueError):
+            return
+        _set_if_missing(out, "x1", u - half_width, ("xmin", "bbox_x1", "left"))
+        _set_if_missing(out, "y1", v - half_height, ("ymin", "bbox_y1", "top"))
+        _set_if_missing(out, "x2", u + half_width, ("xmax", "bbox_x2", "right"))
+        _set_if_missing(out, "y2", v + half_height, ("ymax", "bbox_y2", "bottom"))
+
+
+def _copy_detection_result_fields(out: dict[Any, Any], results: list[Any]) -> None:
+    best_score: float | None = None
+    best_class: Any | None = None
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        hypothesis = _mapping_get_case_insensitive(result, "hypothesis")
+        if not isinstance(hypothesis, dict):
+            hypothesis = result
+        score = _float_or_none(
+            _first_mapping_value(hypothesis, ("score", "confidence", "probability"))
+        )
+        if score is None:
+            score = _float_or_none(
+                _first_mapping_value(result, ("score", "confidence", "probability"))
+            )
+        class_name = _first_mapping_value(
+            hypothesis,
+            ("class_id", "class_name", "class", "label", "category", "id"),
+        )
+        if class_name is None:
+            class_name = _first_mapping_value(
+                result,
+                ("class_id", "class_name", "class", "label", "category"),
+            )
+        if best_score is None or (score is not None and score > best_score):
+            best_score = score
+            best_class = class_name
+    _set_if_missing(out, "confidence", best_score, ("score", "probability"))
+    _set_if_missing(out, "class_name", best_class, ("class", "label", "category"))
+
+
+def _first_mapping_value(mapping: dict[Any, Any], keys: Iterable[str]) -> Any | None:
+    for key in keys:
+        value = _mapping_get_case_insensitive(mapping, key)
+        if value is not None:
+            return value
+    return None
+
+
+def _set_if_missing(
+    mapping: dict[Any, Any],
+    key: str,
+    value: Any,
+    aliases: Iterable[str] = (),
+) -> None:
+    if value is None:
+        return
+    if not _has_any_key(mapping, (key, *tuple(aliases))):
+        mapping[key] = value
+
+
+def _has_time_key(mapping: dict[Any, Any]) -> bool:
+    return _has_any_key(
+        mapping,
+        (
+            "time_s",
+            "timestamp",
+            "timestamp_s",
+            "timestamp_ns",
+            "timestamp_ms",
+            "sec",
+            "secs",
+            "nanosec",
+        ),
+    )
+
+
+def _has_any_key(mapping: dict[Any, Any], keys: Iterable[str]) -> bool:
+    present = {str(key).lower() for key in mapping}
+    return any(key.lower() in present for key in keys)
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _mapping_get_case_insensitive(mapping: dict[Any, Any], key: str) -> Any | None:

@@ -662,8 +662,10 @@ keys such as `camera_detections`, `detections`, `boxes`, `objects`,
 `depth_m`/`range_m`, or from a fixed fallback via
 `--camera-fixed-depth-m`. Compact boxes such as COCO-style
 `bbox=[x,y,width,height]` / `bbox_xywh` and explicit `bbox_xyxy` are also
-accepted. This bridge does not run image object detection; it consumes detector
-exports.
+accepted. JSON rows serialized from Detection2D-style messages may keep nested
+`header.stamp`, `header.frame_id`, `bbox.center`, and `results.hypothesis`
+fields; the loader flattens those common fields before back-projection. This
+bridge does not run image object detection; it consumes detector exports.
 
 ### Sequence Class Inference
 
