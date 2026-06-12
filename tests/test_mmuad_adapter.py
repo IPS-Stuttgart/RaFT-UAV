@@ -3042,6 +3042,63 @@ def test_topic_map_exports_convert_camera_detection_tables(tmp_path: Path) -> No
     assert [entry["rows"] for entry in bundle.manifest["loaded_exports"]] == [1]
 
 
+def test_topic_map_exports_convert_detection2d_candidate_tables(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    camera = exports / "camera_front"
+    camera.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "stamp": [3.5],
+            "center_x": [50.0],
+            "center_y": [50.0],
+            "depth": [6.0],
+            "score": [0.6],
+        }
+    ).to_csv(camera / "detections2d.csv", index=False)
+    (exports / "camera_info.json").write_text(
+        json.dumps(
+            {
+                "source": "camera_front",
+                "fx": 100.0,
+                "fy": 100.0,
+                "cx": 50.0,
+                "cy": 50.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    topic_map = tmp_path / "topic_map_detection2d.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_detection2d_topic",
+                "exports": [
+                    {
+                        "kind": "detection2d_array_candidate",
+                        "path": "camera_front/detections2d.csv",
+                        "source": "camera_front",
+                        "camera_calibration_file": "camera_info.json",
+                        "column_aliases": {
+                            "stamp": "time_s",
+                            "score": "confidence",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+
+    assert bundle.candidates.rows["sequence_id"].tolist() == ["seq_detection2d_topic"]
+    row = bundle.candidates.rows.iloc[0]
+    assert row["source"] == "camera_front"
+    assert abs(float(row["time_s"]) - 3.5) < 1.0e-12
+    assert (row["x_m"], row["y_m"], row["z_m"]) == (0.0, 0.0, 6.0)
+    assert float(row["confidence"]) == 0.6
+
+
 def test_topic_map_exports_cluster_pointcloud2_candidate_tables(tmp_path: Path) -> None:
     exports = tmp_path / "exports"
     exports.mkdir()
@@ -3472,6 +3529,35 @@ def test_ros2_topic_map_template_infers_detection3d_topics(tmp_path: Path) -> No
     ]
     assert payload["exports"][0]["source"] == "detector_detections"
     assert payload["exports"][1]["source"] is None
+
+
+def test_ros2_topic_map_template_infers_detection2d_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /camera/detections2d",
+                "        type: vision_msgs/msg/Detection2DArray",
+                "      message_count: 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    export = payload["exports"][0]
+    assert export["kind"] == "camera_detections_candidate"
+    assert export["source"] == "camera_detections2d"
+    assert export["camera_calibration_file"] == "PATH/TO/camera_info.json"
+    assert export["column_aliases"]["center_x"] == "u_px"
+    assert export["column_aliases"]["center_y"] == "v_px"
 
 
 def test_ros2_topic_map_template_infers_marker_topics(tmp_path: Path) -> None:

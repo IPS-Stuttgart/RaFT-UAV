@@ -107,6 +107,17 @@ def write_topic_map_template(report: dict[str, Any], path: Path) -> Path:
                 "z": "z_m",
             },
         }
+        if _is_camera_detection_kind(kind):
+            entry["camera_calibration_file"] = "PATH/TO/camera_info.json"
+            entry["column_aliases"].update(
+                {
+                    "center_x": "u_px",
+                    "center_y": "v_px",
+                    "bbox_center_x": "u_px",
+                    "bbox_center_y": "v_px",
+                    "score": "confidence",
+                }
+            )
         if _is_geodetic_kind(kind):
             entry["enu_origin_lla"] = "LAT,LON,ALT"
         exports.append(entry)
@@ -218,6 +229,10 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "geopose_truth" if truth_like else "geopose_candidate"
     if compact_type.endswith("geopointstamped") or compact_type.endswith("geopoint"):
         return "geopoint_truth" if truth_like else "geopoint_candidate"
+    if "detection2darray" in compact_type:
+        return "camera_detections_candidate"
+    if "detection2d" in compact_type:
+        return "camera_detection_candidate"
     if "detection3darray" in compact_type:
         return "detection3d_array_truth" if truth_like else "detection3d_array_candidate"
     if "detection3d" in compact_type:
@@ -289,6 +304,10 @@ def _is_camera_detection_kind(kind: str) -> bool:
         "image_detection_candidate",
         "image_detections",
         "image_detections_candidate",
+        "detection2d",
+        "detection2d_candidate",
+        "detection2d_array",
+        "detection2d_array_candidate",
     }
 
 
