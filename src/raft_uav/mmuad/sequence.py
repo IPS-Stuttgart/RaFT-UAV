@@ -25,6 +25,42 @@ from raft_uav.mmuad.rosbag_bridge import load_topic_map_exports
 from raft_uav.mmuad.schema import CandidateFrame, TruthFrame, normalize_truth_columns
 
 
+TABLE_SUFFIXES = (".csv", ".tsv", ".txt")
+TRAJECTORY_SUFFIXES = (".npy", ".npz")
+POINT_FILE_SUFFIXES = (".csv", ".tsv", ".txt", ".npy", ".npz", ".pcd", ".ply")
+CANDIDATE_DIR_TOKENS = (
+    "candidate",
+    "candidates",
+    "detection",
+    "detections",
+    "track",
+    "tracks",
+    "trajectory",
+    "trajectories",
+    "tracking",
+    "tracking_results",
+    "result",
+    "results",
+)
+POINT_DIR_TOKENS = (
+    "point",
+    "points",
+    "point_cloud",
+    "cloud",
+    "lidar",
+    "livox",
+    "livox_avia",
+    "mid360",
+)
+TRUTH_DIR_TOKENS = ("truth", "ground_truth", "gt", "label", "labels", "leica")
+MODALITY_DIR_TOKENS = (
+    CANDIDATE_DIR_TOKENS
+    + POINT_DIR_TOKENS
+    + TRUTH_DIR_TOKENS
+    + ("camera", "cam", "image", "images", "class", "classes", "radar")
+)
+
+
 @dataclass(frozen=True)
 class SequencePaths:
     """Paths discovered for one exported sequence."""
@@ -38,6 +74,7 @@ class SequencePaths:
     point_cloud_files: tuple[Path, ...]
     topic_map_jsons: tuple[Path, ...]
     truth_file: Path | None
+    truth_files: tuple[Path, ...]
     calibration_file: Path | None
 
 
@@ -56,14 +93,31 @@ def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[Seq
     """
 
     root = Path(root)
+    sequence_dirs = _candidate_sequence_dirs(root, sequence_glob=sequence_glob)
+    if sequence_dirs:
+        return [_sequence_from_dir(path) for path in sequence_dirs]
     if _looks_like_sequence(root):
         return [_sequence_from_dir(root)]
-    sequences = [
-        _sequence_from_dir(path)
+    return []
+
+
+def _candidate_sequence_dirs(root: Path, *, sequence_glob: str) -> list[Path]:
+    children = [
+        path
         for path in sorted(root.glob(sequence_glob))
-        if path.is_dir() and _looks_like_sequence(path)
+        if path.is_dir() and not _is_modality_dir(path)
     ]
-    return sequences
+    candidates: list[Path] = []
+    candidates.extend(path for path in children if _looks_like_sequence(path))
+    for child in children:
+        candidates.extend(
+            path
+            for path in sorted(child.glob(sequence_glob))
+            if path.is_dir()
+            and not _is_modality_dir(path)
+            and _looks_like_sequence(path)
+        )
+    return _unique_paths(candidates)
 
 
 def load_sequence_export(
@@ -82,7 +136,11 @@ def load_sequence_export(
         load_candidate_file(
             path,
             default_sequence_id=paths.sequence_id,
-            source=path.stem.replace("_candidates", "-candidates"),
+            source=_source_from_path(
+                path,
+                sequence_root=paths.root,
+                default=path.stem.replace("_candidates", "-candidates"),
+            ),
         )
         for path in paths.candidate_csvs
     ]
@@ -90,7 +148,11 @@ def load_sequence_export(
         load_candidate_file(
             path,
             default_sequence_id=paths.sequence_id,
-            source=path.stem.replace("_trajectory", "-trajectory"),
+            source=_source_from_path(
+                path,
+                sequence_root=paths.root,
+                default=path.stem.replace("_trajectory", "-trajectory"),
+            ),
         )
         for path in paths.candidate_trajectory_files
     )
@@ -107,7 +169,11 @@ def load_sequence_export(
     candidate_frames.extend(
         load_point_cloud_file_as_candidates(
             path,
-            source=path.stem.replace("_points", "-cluster"),
+            source=_source_from_path(
+                path,
+                sequence_root=paths.root,
+                default=path.stem.replace("_points", "-cluster"),
+            ),
             sequence_id=paths.sequence_id,
             voxel_size_m=voxel_size_m,
             min_points=min_cluster_points,
@@ -138,9 +204,9 @@ def load_sequence_export(
     if not candidate_frames:
         raise ValueError(f"no candidate or point-cloud files discovered for {paths.root}")
     candidates = merge_candidate_frames(candidate_frames)
-    if paths.truth_file is not None:
+    for path in paths.truth_files or (() if paths.truth_file is None else (paths.truth_file,)):
         truth_frames.append(
-            load_truth_file(paths.truth_file, default_sequence_id=paths.sequence_id)
+            load_truth_file(path, default_sequence_id=paths.sequence_id)
         )
     truth = _merge_truth_frames(truth_frames)
     calibration = None
@@ -161,16 +227,15 @@ def _looks_like_sequence(path: Path) -> bool:
         or _camera_detection_files(path)
         or _point_files(path)
         or _topic_map_files(path)
-        or _truth_file(path)
+        or _truth_files(path)
     )
 
 
 def _sequence_from_dir(path: Path) -> SequencePaths:
     topic_maps = _topic_map_files(path)
     topic_map_paths = _topic_map_referenced_paths(topic_maps)
-    truth_file = _truth_file(path)
-    if truth_file is not None and truth_file.resolve() in topic_map_paths:
-        truth_file = None
+    truth_files = _without_paths(_truth_files(path), topic_map_paths)
+    truth_file = truth_files[0] if truth_files else None
     calibration = _first_existing(
         [
             path / "calibration.json",
@@ -200,6 +265,7 @@ def _sequence_from_dir(path: Path) -> SequencePaths:
         point_cloud_files=tuple(_without_paths(_point_files(path), topic_map_paths)),
         topic_map_jsons=tuple(topic_maps),
         truth_file=truth_file,
+        truth_files=tuple(truth_files),
         calibration_file=calibration,
     )
 
@@ -208,12 +274,19 @@ def _candidate_files(path: Path) -> list[Path]:
     names = [
         path / f"{stem}{suffix}"
         for stem in ("candidates", "detections")
-        for suffix in (".csv", ".tsv", ".txt")
+        for suffix in TABLE_SUFFIXES
     ]
     files = [item for item in names if item.exists()]
-    for suffix in (".csv", ".tsv", ".txt"):
+    for suffix in TABLE_SUFFIXES:
         files.extend(sorted(path.glob(f"*_candidates{suffix}")))
         files.extend(sorted(path.glob(f"*_detections{suffix}")))
+    files.extend(
+        _files_under_named_dirs(
+            path,
+            directory_tokens=CANDIDATE_DIR_TOKENS,
+            suffixes=TABLE_SUFFIXES,
+        )
+    )
     return _unique_paths(
         [
             item
@@ -228,10 +301,10 @@ def _radar_polar_files(path: Path) -> list[Path]:
     names = [
         path / f"{stem}{suffix}"
         for stem in ("radar_polar", "radar_detections_polar")
-        for suffix in (".csv", ".tsv", ".txt")
+        for suffix in TABLE_SUFFIXES
     ]
     files = [item for item in names if item.exists()]
-    for suffix in (".csv", ".tsv", ".txt"):
+    for suffix in TABLE_SUFFIXES:
         files.extend(sorted(path.glob(f"*_radar_polar{suffix}")))
         files.extend(sorted(path.glob(f"*_polar_radar{suffix}")))
         files.extend(sorted(path.glob(f"*_radar_detections_polar{suffix}")))
@@ -240,7 +313,7 @@ def _radar_polar_files(path: Path) -> list[Path]:
 
 def _candidate_trajectory_files(path: Path) -> list[Path]:
     files: list[Path] = []
-    for suffix in (".npy", ".npz"):
+    for suffix in TRAJECTORY_SUFFIXES:
         files.extend(
             item
             for item in [
@@ -271,6 +344,13 @@ def _candidate_trajectory_files(path: Path) -> list[Path]:
             f"*_results{suffix}",
         ):
             files.extend(sorted(path.glob(pattern)))
+    files.extend(
+        _files_under_named_dirs(
+            path,
+            directory_tokens=CANDIDATE_DIR_TOKENS,
+            suffixes=TRAJECTORY_SUFFIXES,
+        )
+    )
     return _unique_paths(
         [
             item
@@ -285,10 +365,10 @@ def _camera_detection_files(path: Path) -> list[Path]:
     names = [
         path / f"{stem}{suffix}"
         for stem in ("camera_detections", "image_detections")
-        for suffix in (".csv", ".tsv", ".txt")
+        for suffix in TABLE_SUFFIXES
     ]
     files = [item for item in names if item.exists()]
-    for suffix in (".csv", ".tsv", ".txt"):
+    for suffix in TABLE_SUFFIXES:
         files.extend(sorted(path.glob(f"*_camera_detections{suffix}")))
         files.extend(sorted(path.glob(f"*_image_detections{suffix}")))
     return _unique_paths(files)
@@ -298,19 +378,31 @@ def _point_files(path: Path) -> list[Path]:
     names = [
         path / f"{stem}{suffix}"
         for stem in ("points", "point_cloud", "lidar_points")
-        for suffix in (".csv", ".tsv", ".txt")
+        for suffix in TABLE_SUFFIXES
     ]
     files = [item for item in names if item.exists()]
-    for suffix in (".csv", ".tsv", ".txt"):
+    for suffix in TABLE_SUFFIXES:
         files.extend(sorted(path.glob(f"*_points{suffix}")))
         files.extend(sorted(path.glob(f"*_point_cloud{suffix}")))
     files.extend(sorted(path.glob("*.pcd")))
     files.extend(sorted(path.glob("*.ply")))
     files.extend(_point_numpy_files(path))
+    files.extend(
+        _files_under_named_dirs(
+            path,
+            directory_tokens=POINT_DIR_TOKENS,
+            suffixes=POINT_FILE_SUFFIXES,
+        )
+    )
     return _unique_paths(files)
 
 
 def _truth_file(path: Path) -> Path | None:
+    files = _truth_files(path)
+    return files[0] if files else None
+
+
+def _truth_files(path: Path) -> list[Path]:
     exact = [
         path / "truth.csv",
         path / "ground_truth.csv",
@@ -329,7 +421,7 @@ def _truth_file(path: Path) -> Path | None:
         path / "gt.npz",
     ]
     globbed: list[Path] = []
-    for suffix in (".csv", ".tsv", ".txt", ".npy", ".npz"):
+    for suffix in TABLE_SUFFIXES + TRAJECTORY_SUFFIXES:
         for pattern in (
             f"*truth*{suffix}",
             f"*ground_truth*{suffix}",
@@ -337,7 +429,12 @@ def _truth_file(path: Path) -> Path | None:
             f"gt*{suffix}",
         ):
             globbed.extend(sorted(path.glob(pattern)))
-    return _first_existing(_unique_paths(exact + globbed))
+    folder_files = _files_under_named_dirs(
+        path,
+        directory_tokens=TRUTH_DIR_TOKENS,
+        suffixes=TABLE_SUFFIXES + TRAJECTORY_SUFFIXES,
+    )
+    return _unique_paths([item for item in exact if item.exists()] + globbed + folder_files)
 
 
 def _topic_map_files(path: Path) -> list[Path]:
@@ -410,6 +507,51 @@ def _point_numpy_files(path: Path) -> list[Path]:
 def _name_has_any(path: Path, tokens: tuple[str, ...]) -> bool:
     text = " ".join(part.lower() for part in path.parts[-2:])
     return any(token in text for token in tokens)
+
+
+def _files_under_named_dirs(
+    path: Path,
+    *,
+    directory_tokens: tuple[str, ...],
+    suffixes: tuple[str, ...],
+) -> list[Path]:
+    files: list[Path] = []
+    suffix_set = {suffix.lower() for suffix in suffixes}
+    for item in sorted(path.rglob("*")):
+        if not item.is_file() or item.suffix.lower() not in suffix_set:
+            continue
+        try:
+            parents = Path(item.relative_to(path)).parts[:-1]
+        except ValueError:
+            continue
+        if parents and _directory_name_has_any(parents[0], directory_tokens):
+            files.append(item)
+    return files
+
+
+def _is_modality_dir(path: Path) -> bool:
+    normalized = str(path.name).lower().replace("-", "_").replace(" ", "_")
+    return normalized in set(MODALITY_DIR_TOKENS)
+
+
+def _directory_name_has_any(name: str, tokens: tuple[str, ...]) -> bool:
+    normalized = str(name).lower().replace("-", "_").replace(" ", "_")
+    return any(
+        normalized == token
+        or normalized.startswith(f"{token}_")
+        or normalized.endswith(f"_{token}")
+        for token in tokens
+    )
+
+
+def _source_from_path(path: Path, *, sequence_root: Path, default: str) -> str:
+    try:
+        relative = path.relative_to(sequence_root)
+    except ValueError:
+        return default
+    if len(relative.parts) <= 1:
+        return default
+    return str(relative.parts[-2]).replace(" ", "_").replace("-", "_")
 
 
 def _first_existing(paths: list[Path]) -> Path | None:

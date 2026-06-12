@@ -1321,6 +1321,71 @@ def test_sequence_root_loads_compact_numpy_trajectory_and_truth_arrays(tmp_path:
     assert truth.rows["x_m"].tolist() == [0.0, 1.0]
 
 
+def test_sequence_root_loads_mmuad_modality_folder_layout(tmp_path: Path) -> None:
+    seq = tmp_path / "val" / "seq0001"
+    livox = seq / "livox_avia"
+    truth_dir = seq / "ground_truth"
+    livox.mkdir(parents=True)
+    truth_dir.mkdir()
+    timestamp = "1706255054.386069"
+    np.save(
+        livox / f"{timestamp}.npy",
+        np.array(
+            [
+                [5.2, 17.4, 8.9],
+                [5.3, 17.5, 9.0],
+                [5.2, 17.5, 8.9],
+            ]
+        ),
+    )
+    np.save(truth_dir / f"{timestamp}.npy", np.array([5.25, 17.45, 8.95]))
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(
+        discovered[0],
+        voxel_size_m=0.5,
+        min_cluster_points=3,
+    )
+
+    assert [sequence.sequence_id for sequence in discovered] == ["seq0001"]
+    assert discovered[0].point_cloud_files == (livox / f"{timestamp}.npy",)
+    assert discovered[0].truth_file == truth_dir / f"{timestamp}.npy"
+    assert discovered[0].truth_files == (truth_dir / f"{timestamp}.npy",)
+    assert len(candidates.rows) == 1
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq0001"
+    assert row["source"] == "livox_avia"
+    assert abs(float(row["time_s"]) - float(timestamp)) < 1.0e-9
+    assert truth is not None
+    truth_row = truth.rows.iloc[0]
+    assert abs(float(truth_row["time_s"]) - float(timestamp)) < 1.0e-9
+    assert abs(float(truth_row["x_m"]) - 5.25) < 1.0e-9
+
+
+def test_sequence_root_loads_nested_tracking_results_as_candidates(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_result"
+    results = seq / "tracking_results"
+    truth_dir = seq / "ground_truth"
+    results.mkdir(parents=True)
+    truth_dir.mkdir()
+    np.save(results / "20.0.npy", np.array([1.0, 2.0, 3.0]))
+    np.save(results / "20.1.npy", np.array([1.1, 2.1, 3.1]))
+    np.save(truth_dir / "20.0.npy", np.array([1.0, 2.0, 3.0]))
+    np.save(truth_dir / "20.1.npy", np.array([1.1, 2.1, 3.1]))
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].candidate_trajectory_files == (
+        results / "20.0.npy",
+        results / "20.1.npy",
+    )
+    assert candidates.rows["source"].tolist() == ["tracking_results", "tracking_results"]
+    assert candidates.rows["time_s"].tolist() == [20.0, 20.1]
+    assert truth is not None
+    assert truth.rows["time_s"].tolist() == [20.0, 20.1]
+
+
 def test_cli_accepts_explicit_numpy_candidate_and_truth_files(tmp_path: Path) -> None:
     candidates = tmp_path / "trajectory.npy"
     truth = tmp_path / "truth.npy"
@@ -1480,6 +1545,31 @@ def test_layout_inspectors_classify_numpy_trajectory_exports(tmp_path: Path) -> 
     assert by_name["truth.npy"]["category"] == "truth"
     assert by_name["trajectory.npz"]["category"] == "candidate"
     assert by_name["lidar_points.npy"]["category"] == "point_cloud"
+    assert detailed["sequences"][0]["missing_for_tracking_smoke"] == ["calibration"]
+
+    inventory = inspect_mmuad_layout(tmp_path)
+    assert inventory["category_counts"]["truth_or_label"] == 1
+    assert inventory["category_counts"]["candidate_or_point_table"] == 2
+    sequence = inventory["sequence_candidates"][0]
+    assert sequence["has_truth_or_labels"] is True
+    assert sequence["has_candidates_or_points"] is True
+
+
+def test_layout_inspectors_classify_mmuad_modality_folders(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_foldered"
+    (seq / "livox_avia").mkdir(parents=True)
+    (seq / "ground_truth").mkdir()
+    (seq / "tracking_results").mkdir()
+    np.save(seq / "livox_avia" / "20.0.npy", np.zeros((3, 3)))
+    np.save(seq / "ground_truth" / "20.0.npy", np.array([0.0, 0.0, 1.0]))
+    np.save(seq / "tracking_results" / "20.0.npy", np.array([0.0, 0.0, 1.0]))
+
+    detailed = inspect_sequence_root(tmp_path)
+    by_name = {row["relative_path"]: row for row in detailed["files"]}
+
+    assert by_name["livox_avia/20.0.npy"]["category"] == "point_cloud"
+    assert by_name["ground_truth/20.0.npy"]["category"] == "truth"
+    assert by_name["tracking_results/20.0.npy"]["category"] == "candidate"
     assert detailed["sequences"][0]["missing_for_tracking_smoke"] == ["calibration"]
 
     inventory = inspect_mmuad_layout(tmp_path)

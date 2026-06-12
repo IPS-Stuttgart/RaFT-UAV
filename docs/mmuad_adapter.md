@@ -117,7 +117,9 @@ as `candidates.tsv` or `detections.txt`, `points.csv`, `points.tsv`,
 `radar_polar.tsv` or `camera_detections.txt`, compact trajectory arrays such as
 `trajectory.npy` / `candidates.npz`, exported ROS topic maps such as
 `topic_map.json`, `truth.csv`, compact truth arrays such as `truth.npy`, and
-optionally `calibration.json`:
+optionally `calibration.json`. It also recognizes one-level split folders and
+MMUAD-style modality subfolders such as `livox_avia/<timestamp>.npy`,
+`ground_truth/<timestamp>.npy`, and `tracking_results/<timestamp>.npy`:
 
 ```text
 data/mmuad_export/
@@ -144,6 +146,14 @@ data/mmuad_export/
     camera_detections.txt
     calibration.json
     truth.csv
+  val/
+    seq007/
+      livox_avia/
+        1706255054.386069.npy
+      ground_truth/
+        1706255054.386069.npy
+      tracking_results/
+        1706255054.386069.npy
 ```
 
 Run all discovered sequences with:
@@ -296,6 +306,14 @@ point clouds. NumPy files with trajectory names such as `trajectory.npy`,
 `candidates.npz`, or `truth.npy` are loaded as compact trajectory tables with
 columns `time_s,x_m,y_m,z_m` in that order. This avoids accidentally clustering
 already-tracked trajectory exports into a single point-cloud centroid.
+Folder-style exports are also supported: files inside `livox_avia`, `lidar`,
+`points`, or `point_cloud` folders are clustered as point clouds; files inside
+`ground_truth`, `truth`, `gt`, or `labels` folders are loaded as truth; files
+inside `tracking_results`, `tracks`, `trajectories`, `detections`, or
+`candidates` folders are loaded as candidate trajectories. Per-frame NumPy pose
+files may contain only `x_m,y_m,z_m`; their timestamp is inferred from the
+filename. This is still a normalized/exported-data bridge, not a parser for
+undocumented native packets.
 
 ### Auto calibration loader
 

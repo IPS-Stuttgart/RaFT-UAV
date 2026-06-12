@@ -122,7 +122,8 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
     suffix = path.suffix.lower()
     name = path.name.lower()
     stem = path.stem.lower()
-    modality = _infer_modality(stem)
+    parent = path.parent.name.lower()
+    modality = _infer_modality(" ".join((stem, parent)))
     inferred_time_s = None
     if (
         suffix in IMAGE_SUFFIXES | POINT_SUFFIXES | NUMPY_SUFFIXES
@@ -133,12 +134,12 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
         return "calibration", modality, None
     if suffix == ".json" and "topic_map" in name:
         return _topic_map_category(path), "ros", None
-    if name in TRUTH_NAMES or any(hint in stem for hint in TRUTH_HINTS):
+    if name in TRUTH_NAMES or any(hint in stem or hint in parent for hint in TRUTH_HINTS):
         return "truth", modality, None
     if suffix in NUMPY_SUFFIXES:
-        if any(hint in stem for hint in LIDAR_HINTS):
+        if any(hint in stem or hint in parent for hint in LIDAR_HINTS):
             return "point_cloud", modality if modality != "unknown" else "lidar", inferred_time_s
-        if any(hint in stem for hint in CANDIDATE_HINTS):
+        if any(hint in stem or hint in parent for hint in CANDIDATE_HINTS):
             return "candidate", modality, inferred_time_s
         return "numpy", modality, inferred_time_s
     if suffix in IMAGE_SUFFIXES:
@@ -146,7 +147,7 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
     if suffix in POINT_SUFFIXES:
         return "point_cloud", modality if modality != "unknown" else "lidar", inferred_time_s
     if suffix == ".csv":
-        if any(hint in stem for hint in CANDIDATE_HINTS):
+        if any(hint in stem or hint in parent for hint in CANDIDATE_HINTS):
             return "candidate", modality, None
         if "point" in stem or "cloud" in stem or modality == "lidar":
             return "point_cloud_csv", "lidar", None
@@ -193,7 +194,7 @@ def _inspect_sequence(sequence_dir: Path, *, recursive: bool) -> list[InspectedF
         records.append(
             InspectedFile(
                 sequence_id=sequence_dir.name,
-                relative_path=str(path.relative_to(sequence_dir)),
+                relative_path=path.relative_to(sequence_dir).as_posix(),
                 suffix=path.suffix.lower(),
                 category=category,
                 modality=modality,

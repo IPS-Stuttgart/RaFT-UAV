@@ -461,6 +461,13 @@ def _read_numpy_trajectory_table(path: Path) -> pd.DataFrame:
     arr = np.asarray(arr)
     if arr.dtype.names:
         return pd.DataFrame.from_records(arr)
+    if arr.ndim == 1 and arr.shape[0] >= 3:
+        columns = ["x_m", "y_m", "z_m"]
+        frame = pd.DataFrame([arr[:3]], columns=columns)
+        frame.insert(0, "time_s", infer_time_s_from_filename(path))
+        if arr.shape[0] >= 4:
+            frame["confidence"] = arr[3]
+        return frame
     if arr.ndim != 2 or arr.shape[1] < 4:
         raise ValueError(f"NumPy trajectory table must be shape (N, >=4), got {arr.shape}")
     columns = ["time_s", "x_m", "y_m", "z_m"]

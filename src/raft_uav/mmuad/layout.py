@@ -90,6 +90,7 @@ def _classify_file(path: Path, root: Path) -> LayoutFile:
     suffix = path.suffix.lower()
     name = path.name.lower()
     rel = path.relative_to(root).as_posix()
+    parent_text = " ".join(part.lower() for part in Path(rel).parts[:-1])
     if suffix in BAG_SUFFIXES:
         category = "rosbag_or_recording"
     elif suffix == ".json" and "topic_map" in name:
@@ -100,13 +101,17 @@ def _classify_file(path: Path, root: Path) -> LayoutFile:
         category = "image"
     elif name in CALIBRATION_NAMES or "calib" in name or "extrinsic" in name:
         category = "calibration"
-    elif suffix in TABLE_SUFFIXES | NUMPY_SUFFIXES and any(token in name for token in TRUTH_TOKENS):
+    elif suffix in TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
+        token in name or token in parent_text for token in TRUTH_TOKENS
+    ):
         category = "truth_or_label"
     elif suffix in TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
-        token in name for token in POINT_CLOUD_TOKENS
+        token in name or token in parent_text for token in POINT_CLOUD_TOKENS
     ):
         category = "candidate_or_point_table"
-    elif suffix in TABLE_SUFFIXES | NUMPY_SUFFIXES and any(token in name for token in CANDIDATE_TOKENS):
+    elif suffix in TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
+        token in name or token in parent_text for token in CANDIDATE_TOKENS
+    ):
         category = "candidate_or_point_table"
     elif suffix == ".json":
         category = "json_metadata"
