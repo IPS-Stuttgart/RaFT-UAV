@@ -74,3 +74,32 @@ def test_fixed_lag_wrapper_forwards_current_base_cli_kwargs(monkeypatch):
     assert captured["paper_compatible_catprob_threshold"] == 0.3
     assert captured["paper_compatible_bootstrap_source"] == "first-event"
     assert captured["paper_compatible_empirical_covariance"] is False
+
+
+def test_fixed_lag_main_restores_base_cli_dispatch(monkeypatch):
+    previous_modes = ("catprob", "prediction-nis")
+
+    def previous_runner(**kwargs: object):  # pragma: no cover - sentinel only
+        raise AssertionError(f"unexpected dispatch through previous runner: {kwargs!r}")
+
+    seen: dict[str, object] = {}
+
+    def fake_main(argv: list[str] | None = None) -> int:
+        seen["argv"] = list(argv or [])
+        seen["modes"] = fixed_lag_cli._base_cli.RADAR_ASSOCIATION_MODES
+        seen["runner"] = fixed_lag_cli._base_cli.run_async_cv_baseline_with_radar_association
+        return 0
+
+    monkeypatch.setattr(fixed_lag_cli._base_cli, "RADAR_ASSOCIATION_MODES", previous_modes)
+    monkeypatch.setattr(
+        fixed_lag_cli._base_cli,
+        "run_async_cv_baseline_with_radar_association",
+        previous_runner,
+    )
+    monkeypatch.setattr(fixed_lag_cli._base_cli, "main", fake_main)
+
+    assert fixed_lag_cli.main(["run-baseline", "/data/aerpaw"]) == 0
+    assert "tracklet-viterbi-fixed-lag" in seen["modes"]
+    assert seen["runner"] is fixed_lag_cli.run_async_cv_baseline_with_radar_association
+    assert fixed_lag_cli._base_cli.RADAR_ASSOCIATION_MODES is previous_modes
+    assert fixed_lag_cli._base_cli.run_async_cv_baseline_with_radar_association is previous_runner
