@@ -3,6 +3,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pandas as pd
+
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_sota_readiness_report.py"
 
@@ -39,6 +41,33 @@ def test_paper_error_columns_preserve_counts_and_paper_metrics():
     assert columns["std_3d_error_m"] == 2.346
     assert columns["max_3d_error_m"] == 23.457
     assert columns["rmse_3d_error_m"] == 12.346
+
+
+def test_truth_grid_coverage_uses_truth_sample_denominator():
+    report = _load_report_module()
+    estimates = pd.DataFrame(
+        {
+            "time_s": [0.0, 10.0],
+            "east_m": [0.0, 10.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "time_s": [0.0, 2.0, 4.0, 6.0, 8.0, 10.0],
+            "east_m": [0.0, 2.0, 4.0, 6.0, 8.0, 10.0],
+            "north_m": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "up_m": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        }
+    )
+
+    columns = report.error_summary_from_estimates(estimates, truth, max_time_delta_s=20.0)
+
+    assert columns["paper_sample_eval_sample_count"] == 2
+    assert columns["truth_grid_matched_count"] == 6
+    assert columns["truth_grid_eval_sample_count"] == 6
+    assert columns["truth_grid_coverage"] == 1.0
 
 
 def test_leaderboard_ranks_by_mean_3d_error_with_rmse_secondary_only():

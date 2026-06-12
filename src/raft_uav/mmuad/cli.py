@@ -106,6 +106,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--camera-detections-csv", action="append", type=Path, default=[])
     parser.add_argument("--camera-detections-file", action="append", type=Path, default=[])
     parser.add_argument("--camera-calibration-file", action="append", type=Path, default=[])
+    parser.add_argument(
+        "--camera-source",
+        help="camera model/source id for explicit camera detection files without a source column",
+    )
     parser.add_argument("--camera-fixed-depth-m", type=float)
     parser.add_argument("--camera-std-xy-m", type=float, default=5.0)
     parser.add_argument("--camera-std-z-m", type=float, default=10.0)
@@ -438,6 +442,7 @@ def _run_explicit_files(args: argparse.Namespace):
             load_camera_detections_csv_as_candidates(
                 path,
                 camera_models=camera_models,
+                source=args.camera_source,
                 default_source=_camera_source_hint_from_path(path),
                 fixed_depth_m=args.camera_fixed_depth_m,
                 std_xy_m=args.camera_std_xy_m,
