@@ -177,6 +177,19 @@ def _scalar_to_text(value: Any) -> str | None:
     return text or None
 
 
+def _estimate_sequence_values(
+    estimates: pd.DataFrame,
+    *,
+    default_sequence_id: str = "default",
+) -> pd.Series:
+    """Return one non-empty string sequence id per estimate row."""
+
+    if "sequence_id" in estimates.columns:
+        values = estimates["sequence_id"].fillna(default_sequence_id).astype(str).str.strip()
+        return values.where(values != "", default_sequence_id)
+    return pd.Series([default_sequence_id] * len(estimates), index=estimates.index)
+
+
 def estimates_to_mmaud_results_frame(
     estimates: pd.DataFrame,
     *,
@@ -194,10 +207,7 @@ def estimates_to_mmaud_results_frame(
 
     if estimates.empty:
         return pd.DataFrame(columns=UG2_RESULT_COLUMNS)
-    if "sequence_id" in estimates.columns:
-        sequence_values = estimates["sequence_id"].fillna("default").astype(str)
-    else:
-        sequence_values = pd.Series(["default"] * len(estimates), index=estimates.index)
+    sequence_values = _estimate_sequence_values(estimates)
     if "class_name" in estimates.columns:
         class_values = estimates["class_name"].fillna(class_name).astype(str)
     else:
@@ -316,10 +326,14 @@ def estimates_to_submission_frame(
 
     track_values = pd.Series(str(track_id), index=work.index)
     if use_estimate_track_ids and "output_track_id" in estimates.columns:
-        track_values = work["output_track_id"].where(work["output_track_id"].notna(), str(track_id)).astype(str)
+        track_values = (
+            work["output_track_id"]
+            .where(work["output_track_id"].notna(), str(track_id))
+            .astype(str)
+        )
     rows = pd.DataFrame(
         {
-            "sequence_id": work.get("sequence_id", "default"),
+            "sequence_id": _estimate_sequence_values(work),
             "time_s": numeric["time_s"],
             "track_id": track_values,
             "x_m": numeric["x_m"],
@@ -376,8 +390,6 @@ def write_submission_json(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return path
-
-
 
 
 def write_submission_zip(
