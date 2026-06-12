@@ -60,6 +60,30 @@ RADAR_HINTS = ("radar", "mmwave", "mmw", "ti_")
 LIDAR_HINTS = ("lidar", "livox", "mid360", "avia", "point", "cloud", "pcd", "ply")
 CAMERA_HINTS = ("camera", "cam", "fisheye", "image", "rgb", "left", "right")
 AUDIO_HINTS = ("audio", "mic", "microphone", "wav")
+MODALITY_DIR_HINTS = (
+    "camera",
+    "cam",
+    "class",
+    "classes",
+    "detections",
+    "ground_truth",
+    "gt",
+    "image",
+    "images",
+    "label",
+    "labels",
+    "lidar",
+    "livox",
+    "livox_avia",
+    "point_cloud",
+    "points",
+    "radar",
+    "tracking_results",
+    "tracks",
+    "trajectory",
+    "truth",
+    "uav_type",
+)
 
 
 @dataclass(frozen=True)
@@ -173,20 +197,50 @@ def _discover_sequence_dirs(root: Path, *, sequence_glob: str) -> list[Path]:
     children = [path for path in sorted(root.glob(sequence_glob)) if path.is_dir()]
     if not children:
         return [root]
-    if any(_directory_has_data_files(child) for child in children):
-        return [child for child in children if _directory_has_data_files(child)]
-    if _directory_has_data_files(root):
+    direct_sequences = [
+        child
+        for child in children
+        if not _is_modality_dir(child) and _directory_has_sequence_data(child)
+    ]
+    if direct_sequences:
+        return direct_sequences
+    nested_sequences: list[Path] = []
+    for child in children:
+        if _is_modality_dir(child):
+            continue
+        nested_sequences.extend(
+            grandchild
+            for grandchild in sorted(child.glob(sequence_glob))
+            if grandchild.is_dir()
+            and not _is_modality_dir(grandchild)
+            and _directory_has_sequence_data(grandchild)
+        )
+    if nested_sequences:
+        return nested_sequences
+    if _directory_has_sequence_data(root):
         return [root]
     return children
 
 
-def _directory_has_data_files(path: Path) -> bool:
+def _directory_has_sequence_data(path: Path) -> bool:
     for item in path.iterdir():
         if item.is_file():
             category, _modality, _time = classify_mmuad_file(item)
             if category != "other":
                 return True
+        elif item.is_dir() and _is_modality_dir(item):
+            for nested in item.rglob("*"):
+                if not nested.is_file():
+                    continue
+                category, _modality, _time = classify_mmuad_file(nested)
+                if category != "other":
+                    return True
     return False
+
+
+def _is_modality_dir(path: Path) -> bool:
+    normalized = path.name.lower().replace("-", "_").replace(" ", "_")
+    return normalized in MODALITY_DIR_HINTS
 
 
 def _inspect_sequence(sequence_dir: Path, *, recursive: bool) -> list[InspectedFile]:

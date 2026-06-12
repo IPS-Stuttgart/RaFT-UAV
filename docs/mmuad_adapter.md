@@ -376,9 +376,11 @@ and ROS bag/recording files. NumPy
 files follow the same naming convention as sequence discovery: `truth.npy`
 counts as truth, `trajectory.npz` or `candidates.npy` counts as candidate data,
 and `lidar_points.npy` or `cloud_12.5.npz` counts as point-cloud data. It also
-lists sequence-like folders and recommends the next adapter step. Exported
-topic maps indicate sequence-root inputs, while native-only topic maps are kept
-for explicit ROS extraction with `--rosbag-path --topic-map-json`.
+lists sequence-like folders and recommends the next adapter step. One-level
+split folders such as `train/`, `val/`, and `test/` are unwrapped so summaries
+keep the actual sequence IDs. Exported topic maps indicate sequence-root inputs,
+while native-only topic maps are kept for explicit ROS extraction with
+`--rosbag-path --topic-map-json`.
 
 The public UG2+ Codabench instructions require a ZIP containing a single file
 named `mmaud_results.csv`. The exact evaluator schema is not bundled here, so

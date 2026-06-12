@@ -38,6 +38,31 @@ CANDIDATE_TOKENS = (
     "result",
 )
 POINT_CLOUD_TOKENS = ("points", "point_cloud", "cloud", "lidar", "livox")
+MODALITY_DIR_TOKENS = (
+    "camera",
+    "cam",
+    "class",
+    "classes",
+    "detections",
+    "ground_truth",
+    "gt",
+    "image",
+    "images",
+    "label",
+    "labels",
+    "lidar",
+    "livox",
+    "livox_avia",
+    "point_cloud",
+    "points",
+    "radar",
+    "tracking_results",
+    "tracks",
+    "trajectory",
+    "truth",
+    "uav_type",
+)
+SPLIT_DIR_TOKENS = ("dev", "test", "train", "training", "val", "valid", "validation")
 
 
 @dataclass(frozen=True)
@@ -138,8 +163,7 @@ def _classify_file(path: Path, root: Path) -> LayoutFile:
 def _sequence_candidates(files: list[LayoutFile]) -> list[dict[str, Any]]:
     grouped: dict[str, list[LayoutFile]] = defaultdict(list)
     for item in files:
-        parts = Path(item.relative_path).parts
-        key = parts[0] if len(parts) > 1 else "."
+        key = _sequence_key(item.relative_path)
         grouped[key].append(item)
     rows: list[dict[str, Any]] = []
     for sequence_id, members in sorted(grouped.items()):
@@ -169,6 +193,24 @@ def _sequence_candidates(files: list[LayoutFile]) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def _sequence_key(relative_path: str) -> str:
+    parts = Path(relative_path).parts
+    if len(parts) <= 1:
+        return "."
+    first = _normalized_dir_name(parts[0])
+    if first in MODALITY_DIR_TOKENS:
+        return "."
+    if first in SPLIT_DIR_TOKENS and len(parts) > 2:
+        second = _normalized_dir_name(parts[1])
+        if second not in MODALITY_DIR_TOKENS:
+            return parts[1]
+    return parts[0]
+
+
+def _normalized_dir_name(name: str) -> str:
+    return str(name).lower().replace("-", "_").replace(" ", "_")
 
 
 def _layout_recommendations(

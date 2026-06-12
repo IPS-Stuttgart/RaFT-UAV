@@ -1594,6 +1594,28 @@ def test_layout_inspectors_classify_mmuad_modality_folders(tmp_path: Path) -> No
     assert sequence["has_class_labels"] is True
 
 
+def test_layout_inspectors_preserve_sequence_ids_under_split_folders(tmp_path: Path) -> None:
+    seq = tmp_path / "val" / "seq0001"
+    (seq / "livox_avia").mkdir(parents=True)
+    (seq / "ground_truth").mkdir()
+    (seq / "class").mkdir()
+    np.save(seq / "livox_avia" / "20.0.npy", np.zeros((3, 3)))
+    np.save(seq / "ground_truth" / "20.0.npy", np.array([0.0, 0.0, 1.0]))
+    np.save(seq / "class" / "20.0.npy", np.array(2))
+
+    detailed = inspect_sequence_root(tmp_path)
+    assert [row["sequence_id"] for row in detailed["sequences"]] == ["seq0001"]
+    by_name = {row["relative_path"]: row for row in detailed["files"]}
+    assert by_name["livox_avia/20.0.npy"]["sequence_id"] == "seq0001"
+
+    inventory = inspect_mmuad_layout(tmp_path)
+    assert [row["sequence_id"] for row in inventory["sequence_candidates"]] == ["seq0001"]
+    sequence = inventory["sequence_candidates"][0]
+    assert sequence["has_candidates_or_points"] is True
+    assert sequence["has_truth_or_labels"] is True
+    assert sequence["has_class_labels"] is True
+
+
 def test_submission_evaluator_matches_truth(tmp_path: Path) -> None:
     submission = tmp_path / "submission.csv"
     truth = tmp_path / "truth.csv"
