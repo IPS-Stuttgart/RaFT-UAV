@@ -1467,6 +1467,116 @@ def test_topic_map_exports_load_numpy_trajectory_files(tmp_path: Path) -> None:
     assert [row["rows"] for row in loaded] == [2, 2]
 
 
+def test_topic_map_exports_treat_native_truth_kinds_as_truth(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "x": [0.0, 1.0],
+            "y": [0.0, 0.0],
+            "z": [5.0, 5.0],
+        }
+    ).to_csv(exports / "truth_pose.csv", index=False)
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "x": [0.0, 1.0],
+            "y": [0.0, 0.0],
+            "z": [5.0, 5.0],
+        }
+    ).to_csv(exports / "detections.csv", index=False)
+    topic_map = tmp_path / "topic_map_native_kinds.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_native_kind_exports",
+                "exports": [
+                    {
+                        "kind": "pose_truth",
+                        "path": "truth_pose.csv",
+                        "column_aliases": {
+                            "stamp": "time_s",
+                            "x": "x_m",
+                            "y": "y_m",
+                            "z": "z_m",
+                        },
+                    },
+                    {
+                        "kind": "odometry_candidate",
+                        "path": "detections.csv",
+                        "source": "odom_detector",
+                        "column_aliases": {
+                            "stamp": "time_s",
+                            "x": "x_m",
+                            "y": "y_m",
+                            "z": "z_m",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+
+    assert bundle.truth is not None
+    assert bundle.truth.rows["sequence_id"].tolist() == [
+        "seq_native_kind_exports",
+        "seq_native_kind_exports",
+    ]
+    assert bundle.candidates.rows["source"].tolist() == [
+        "odom_detector",
+        "odom_detector",
+    ]
+
+
+def test_topic_map_exports_cluster_pointcloud2_candidate_tables(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    pd.DataFrame(
+        {
+            "stamp": [7.5, 7.5, 7.5],
+            "x": [0.0, 0.1, 0.2],
+            "y": [0.0, 0.0, 0.1],
+            "z": [5.0, 5.1, 5.0],
+        }
+    ).to_csv(exports / "lidar_points.csv", index=False)
+    topic_map = tmp_path / "topic_map_pointcloud2.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_pointcloud2_exports",
+                "exports": [
+                    {
+                        "kind": "pointcloud2_candidate",
+                        "path": "lidar_points.csv",
+                        "source": "lidar",
+                        "min_cluster_points": 3,
+                        "voxel_size_m": 0.5,
+                        "column_aliases": {
+                            "stamp": "time_s",
+                            "x": "x_m",
+                            "y": "y_m",
+                            "z": "z_m",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+
+    assert len(bundle.candidates.rows) == 1
+    row = bundle.candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_pointcloud2_exports"
+    assert row["source"] == "lidar"
+    assert abs(float(row["time_s"]) - 7.5) < 1.0e-9
+
+
 def test_ros2_metadata_inspection_and_topic_map_template(tmp_path: Path) -> None:
     bag = tmp_path / "bagdir"
     bag.mkdir()
@@ -1483,17 +1593,27 @@ def test_ros2_metadata_inspection_and_topic_map_template(tmp_path: Path) -> None
                 "        name: /ground_truth",
                 "        type: geometry_msgs/msg/PoseStamped",
                 "      message_count: 3",
+                "    - topic_metadata:",
+                "        name: /detector/odom",
+                "        type: nav_msgs/msg/Odometry",
+                "      message_count: 3",
             ]
         ),
         encoding="utf-8",
     )
     report = inspect_rosbag(bag)
     assert report["kind"] == "ros2_bag_directory"
-    assert len(report["topics"]) == 2
+    assert len(report["topics"]) == 3
     template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
     payload = json.loads(template.read_text(encoding="utf-8"))
     assert payload["schema"] == "raft-uav-mmuad-topic-map-v1"
-    assert len(payload["exports"]) == 2
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "pointcloud2_candidate",
+        "pose_truth",
+        "odometry_candidate",
+    ]
+    assert payload["exports"][0]["source"] == "radar_points"
+    assert payload["exports"][1]["source"] is None
 
 
 def test_pointcloud2_decoder_and_candidate_clustering() -> None:

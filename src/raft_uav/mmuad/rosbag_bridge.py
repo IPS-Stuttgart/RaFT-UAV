@@ -20,7 +20,13 @@ import subprocess
 
 import pandas as pd
 
-from raft_uav.mmuad.io import load_candidate_file, load_truth_file, merge_candidate_frames
+from raft_uav.mmuad.io import (
+    load_candidate_file,
+    load_point_cloud_file_as_candidates,
+    load_truth_file,
+    merge_candidate_frames,
+    point_rows_to_candidates,
+)
 from raft_uav.mmuad.schema import (
     CandidateFrame,
     TruthFrame,
@@ -75,17 +81,13 @@ def write_topic_map_template(report: dict[str, Any], path: Path) -> Path:
     for idx, topic in enumerate(topics):
         name = str(topic.get("name", topic.get("topic", f"topic_{idx}")))
         safe = re.sub(r"[^A-Za-z0-9_]+", "_", name.strip("/")).strip("_") or f"topic_{idx}"
-        kind = (
-            "truth"
-            if any(token in name.lower() for token in ("truth", "gt", "ground"))
-            else "candidate"
-        )
+        kind = _infer_topic_map_kind(topic)
         exports.append(
             {
                 "topic": name,
                 "kind": kind,
                 "path": f"exports/{safe}.csv",
-                "source": safe if kind == "candidate" else None,
+                "source": safe if not _is_truth_kind(kind) else None,
                 "sequence_id": report.get(
                     "sequence_id",
                     Path(str(report.get("path", "sequence"))).stem,
@@ -131,7 +133,7 @@ def load_topic_map_exports(path: Path, *, base_dir: Path | None = None) -> Topic
             continue
         kind = str(spec.get("kind", "candidate"))
         sequence_id = str(spec.get("sequence_id", default_sequence_id))
-        if kind == "truth":
+        if _is_truth_kind(kind):
             truth_frame = _load_topic_truth_export(export_path, spec, sequence_id=sequence_id)
             truth_frames.append(truth_frame)
             row_count = len(truth_frame.rows)
@@ -157,6 +159,24 @@ def load_topic_map_exports(path: Path, *, base_dir: Path | None = None) -> Topic
     return TopicExportBundle(candidates, truth, {"topic_map": str(path), "loaded_exports": loaded})
 
 
+def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
+    name = str(topic.get("name", topic.get("topic", ""))).lower()
+    msg_type = str(topic.get("type", topic.get("msgtype", ""))).lower()
+    truth_like = any(token in name for token in ("truth", "ground", "gt", "label", "mocap"))
+    if "pointcloud2" in msg_type:
+        return "pointcloud2_candidate"
+    if msg_type.endswith("posestamped") or "pose_stamped" in msg_type:
+        return "pose_truth" if truth_like else "pose_candidate"
+    if msg_type.endswith("odometry"):
+        return "odometry_truth" if truth_like else "odometry_candidate"
+    return "truth" if truth_like else "candidate"
+
+
+def _is_truth_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized == "truth" or normalized.endswith("_truth")
+
+
 def _load_topic_truth_export(path: Path, spec: dict[str, Any], *, sequence_id: str) -> TruthFrame:
     if _is_table_export(path):
         frame = _read_topic_table(path)
@@ -174,6 +194,14 @@ def _load_topic_candidate_export(
     sequence_id: str,
 ) -> CandidateFrame:
     source = str(spec.get("source") or spec.get("topic") or "candidate")
+    kind = str(spec.get("kind", "candidate")).strip().lower()
+    if kind == "pointcloud2_candidate":
+        return _load_topic_pointcloud_export(
+            path,
+            spec,
+            sequence_id=sequence_id,
+            source=source,
+        )
     if _is_table_export(path):
         frame = _read_topic_table(path)
         frame = _apply_aliases(frame, spec)
@@ -192,6 +220,36 @@ def _load_topic_candidate_export(
             rows[column] = spec.get(column)
     return CandidateFrame(
         normalize_candidate_columns(rows, default_sequence_id=sequence_id)
+    )
+
+
+def _load_topic_pointcloud_export(
+    path: Path,
+    spec: dict[str, Any],
+    *,
+    sequence_id: str,
+    source: str,
+) -> CandidateFrame:
+    voxel_size_m = float(spec.get("voxel_size_m", spec.get("voxel_size", 0.75)))
+    min_points = int(spec.get("min_cluster_points", spec.get("min_points", 3)))
+    if _is_table_export(path):
+        frame = _apply_aliases(_read_topic_table(path), spec)
+        if "sequence_id" not in frame.columns:
+            frame["sequence_id"] = sequence_id
+        if "time_s" not in frame.columns and spec.get("time_s") is not None:
+            frame["time_s"] = spec["time_s"]
+        return point_rows_to_candidates(
+            frame,
+            source=source,
+            voxel_size_m=voxel_size_m,
+            min_points=min_points,
+        )
+    return load_point_cloud_file_as_candidates(
+        path,
+        source=source,
+        sequence_id=sequence_id,
+        voxel_size_m=voxel_size_m,
+        min_points=min_points,
     )
 
 
