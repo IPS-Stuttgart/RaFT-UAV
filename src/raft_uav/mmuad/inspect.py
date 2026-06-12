@@ -19,7 +19,8 @@ import pandas as pd
 from raft_uav.mmuad.io import infer_time_s_from_filename
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
-POINT_SUFFIXES = {".pcd", ".ply", ".las", ".laz", ".npy", ".npz"}
+POINT_SUFFIXES = {".pcd", ".ply", ".las", ".laz"}
+NUMPY_SUFFIXES = {".npy", ".npz"}
 CALIBRATION_NAMES = {
     "calibration.json",
     "calib.json",
@@ -31,8 +32,29 @@ CALIBRATION_NAMES = {
     "calib.yml",
     "extrinsics.yml",
 }
-TRUTH_NAMES = {"truth.csv", "ground_truth.csv", "gt.csv", "labels.csv"}
-CANDIDATE_HINTS = ("candidate", "detection", "tracklet", "cluster")
+TRUTH_NAMES = {
+    "truth.csv",
+    "truth.npy",
+    "truth.npz",
+    "ground_truth.csv",
+    "ground_truth.npy",
+    "ground_truth.npz",
+    "gt.csv",
+    "gt.npy",
+    "gt.npz",
+    "labels.csv",
+}
+TRUTH_HINTS = ("truth", "ground_truth", "gt", "label")
+CANDIDATE_HINTS = (
+    "candidate",
+    "detection",
+    "tracklet",
+    "cluster",
+    "trajectory",
+    "trajectories",
+    "tracking",
+    "result",
+)
 RADAR_HINTS = ("radar", "mmwave", "mmw", "ti_")
 LIDAR_HINTS = ("lidar", "livox", "mid360", "avia", "point", "cloud", "pcd", "ply")
 CAMERA_HINTS = ("camera", "cam", "fisheye", "image", "rgb", "left", "right")
@@ -101,12 +123,21 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
     stem = path.stem.lower()
     modality = _infer_modality(stem)
     inferred_time_s = None
-    if suffix in IMAGE_SUFFIXES | POINT_SUFFIXES or modality in {"radar", "lidar", "camera"}:
+    if (
+        suffix in IMAGE_SUFFIXES | POINT_SUFFIXES | NUMPY_SUFFIXES
+        or modality in {"radar", "lidar", "camera"}
+    ):
         inferred_time_s = infer_time_s_from_filename(path)
     if name in CALIBRATION_NAMES:
         return "calibration", modality, None
-    if name in TRUTH_NAMES or "ground_truth" in stem:
+    if name in TRUTH_NAMES or any(hint in stem for hint in TRUTH_HINTS):
         return "truth", modality, None
+    if suffix in NUMPY_SUFFIXES:
+        if any(hint in stem for hint in LIDAR_HINTS):
+            return "point_cloud", modality if modality != "unknown" else "lidar", inferred_time_s
+        if any(hint in stem for hint in CANDIDATE_HINTS):
+            return "candidate", modality, inferred_time_s
+        return "numpy", modality, inferred_time_s
     if suffix in IMAGE_SUFFIXES:
         return "image", "camera", inferred_time_s
     if suffix in POINT_SUFFIXES:

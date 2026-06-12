@@ -1069,6 +1069,28 @@ def test_layout_inspector_reports_modalities_and_missing_fields(tmp_path: Path) 
     assert csv_path.exists()
 
 
+def test_layout_inspectors_classify_numpy_trajectory_exports(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_numpy"
+    seq.mkdir()
+    np.save(seq / "truth.npy", np.array([[0.0, 0.0, 0.0, 1.0]]))
+    np.savez(seq / "trajectory.npz", trajectory=np.array([[0.0, 0.0, 0.0, 1.0]]))
+    np.save(seq / "lidar_points.npy", np.array([[0.0, 0.0, 1.0, 0.0]]))
+
+    detailed = inspect_sequence_root(tmp_path)
+    by_name = {row["relative_path"]: row for row in detailed["files"]}
+    assert by_name["truth.npy"]["category"] == "truth"
+    assert by_name["trajectory.npz"]["category"] == "candidate"
+    assert by_name["lidar_points.npy"]["category"] == "point_cloud"
+    assert detailed["sequences"][0]["missing_for_tracking_smoke"] == ["calibration"]
+
+    inventory = inspect_mmuad_layout(tmp_path)
+    assert inventory["category_counts"]["truth_or_label"] == 1
+    assert inventory["category_counts"]["candidate_or_point_table"] == 2
+    sequence = inventory["sequence_candidates"][0]
+    assert sequence["has_truth_or_labels"] is True
+    assert sequence["has_candidates_or_points"] is True
+
+
 def test_submission_evaluator_matches_truth(tmp_path: Path) -> None:
     submission = tmp_path / "submission.csv"
     truth = tmp_path / "truth.csv"
