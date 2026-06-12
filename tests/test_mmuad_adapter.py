@@ -3275,6 +3275,56 @@ def test_cli_completes_official_results_to_sequence_timestamps(tmp_path: Path) -
     assert zipped["Timestamp"].tolist() == [0.0, 1.0]
 
 
+def test_cli_validates_official_zip_against_sequence_timestamps(tmp_path: Path) -> None:
+    root = tmp_path / "data"
+    seq = root / "val" / "seq1"
+    image = seq / "Image"
+    image.mkdir(parents=True)
+    for timestamp in ("0.0", "1.0"):
+        (image / f"{timestamp}.png").write_bytes(b"not-a-real-image")
+    zip_path = tmp_path / "official_submission.zip"
+    official = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,10)", "(1,0,10)"],
+            "Classification": [2, 2],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", official.to_csv(index=False))
+    output = tmp_path / "out"
+
+    status = mmuad_cli_main(
+        [
+            "--validate-ug2-official-codabench-zip",
+            str(zip_path),
+            "--sequence-root",
+            str(root),
+            "--split-name",
+            "val",
+            "--ug2-official-timestamp-source",
+            "image",
+            "--official-validation-json",
+            str(output / "validation.json"),
+            "--official-validation-rows-csv",
+            str(output / "validation_rows.csv"),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    summary = json.loads((output / "validation.json").read_text(encoding="utf-8"))
+    rows = pd.read_csv(output / "validation_rows.csv")
+    assert summary["valid"] is True
+    assert summary["template_checked"] is True
+    assert summary["template_timestamp_count"] == 2
+    assert summary["missing_template_timestamp_count"] == 0
+    assert summary["extra_prediction_count"] == 0
+    assert set(rows["status"]) == {"ok", "covered_template_timestamp"}
+
+
 def test_sequence_root_loads_binary_livox_point_cloud_export(tmp_path: Path) -> None:
     seq = tmp_path / "seq_livox_bin"
     livox = seq / "livox_avia"

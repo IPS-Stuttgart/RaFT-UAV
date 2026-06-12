@@ -545,6 +545,7 @@ def _looks_like_sequence(path: Path) -> bool:
         or _topic_map_files(path)
         or _truth_files(path)
         or _class_files(path)
+        or _timestamps_from_official_dirs(path, _all_official_timestamp_dirs())
     )
 
 

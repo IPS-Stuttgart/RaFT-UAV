@@ -509,6 +509,27 @@ Use `image`, `lidar-360`, `livox-avia`, `radar-enhance-pcl`, or
 `mmuad_official_timestamp_completion_summary.json` so interpolation and
 nearest-hold choices remain auditable.
 
+Before manual upload, validate the official ZIP structure and timestamp
+coverage:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --validate-ug2-official-codabench-zip outputs/mmuad_val/ug2_codabench_submission.zip \
+  --sequence-root data/mmuad_export \
+  --split-name val \
+  --ug2-official-timestamp-source ground-truth-or-all \
+  --official-validation-json outputs/mmuad_val/official_submission_validation.json \
+  --official-validation-rows-csv outputs/mmuad_val/official_submission_validation_rows.csv \
+  --output-dir outputs/mmuad_val
+```
+
+This preflight check enforces a ZIP containing only `mmaud_results.csv`, exact
+`Sequence,Timestamp,Position,Classification` columns, finite `(x,y,z)` position
+tuples, integer class IDs, duplicate prediction detection, and optional
+timestamp coverage against a truth/template file or Track 5 sequence-root
+folders. It exits nonzero when the package is invalid, which makes it suitable
+for local CI before a manual Codabench upload.
+
 The older local diagnostic result table with
 `sequence_id,timestamp,x,y,z,uav_type,score` remains available for repository
 evaluation and completion tools:
