@@ -13,6 +13,7 @@ dependencies = [
     "matplotlib>=3.8",
     "numpy>=1.26",
     "pandas>=2.2",
+    "PyYAML>=6.0.1",
     "pyrecest @ git+https://github.com/FlorianPfaff/PyRecEst.git@main",
     "scipy>=1.12",
 ]
