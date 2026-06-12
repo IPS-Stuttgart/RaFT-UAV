@@ -294,8 +294,10 @@ already-tracked trajectory exports into a single point-cloud centroid.
 
 In addition to JSON, the calibration loader can now read YAML/YML files when
 PyYAML is installed, and simple text/CSV files containing one 4x4 transform
-matrix.  Unknown official calibration formats should still be inspected first
-instead of silently guessed.
+matrix. JSON/YAML sensor entries may also provide common matrix aliases such as
+`T_sensor_to_world`, `T_camera_to_world`, `extrinsic_matrix`, `transform_matrix`,
+or OpenCV-style `{rows, cols, data}` matrices. Unknown official calibration
+formats should still be inspected first instead of silently guessed.
 
 ### Submission evaluation bridge
 
@@ -504,10 +506,12 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ```
 
 The camera calibration file contains intrinsics (`fx`, `fy`, `cx`, `cy`) and an
-optional camera-to-world rigid transform. Detections can provide `u_px`/`v_px`
-or `x1,y1,x2,y2` boxes. Depth must come from `depth_m`/`range_m`, or from a
-fixed fallback via `--camera-fixed-depth-m`. This bridge does not run image
-object detection; it consumes detector exports.
+optional camera-to-world rigid transform. Intrinsics can also come from common
+matrix fields such as `camera_matrix`, `K`, or `projection_matrix`, including
+OpenCV-style `{rows, cols, data}` blocks. Detections can provide `u_px`/`v_px` or
+`x1,y1,x2,y2` boxes. Depth must come from `depth_m`/`range_m`, or from a fixed
+fallback via `--camera-fixed-depth-m`. This bridge does not run image object
+detection; it consumes detector exports.
 
 ### Sequence Class Inference
 

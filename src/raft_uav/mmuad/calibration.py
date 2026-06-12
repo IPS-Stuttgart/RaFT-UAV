@@ -240,9 +240,16 @@ def _load_yaml_or_json(path: Path) -> dict[str, Any]:
 
 
 def _transform_from_entry(entry: dict[str, Any]) -> RigidTransform:
-    translation = np.asarray(entry.get("translation_m", [0.0, 0.0, 0.0]), dtype=float)
+    transform = _transform_matrix_from_entry(entry)
+    if transform is not None:
+        return _transform_from_matrix(transform)
+    translation = _translation_from_entry(entry)
     if "rotation_matrix" in entry:
-        rotation = np.asarray(entry["rotation_matrix"], dtype=float)
+        rotation = _matrix_from_value(entry["rotation_matrix"])
+    elif "rotation" in entry:
+        rotation = _matrix_from_value(entry["rotation"])
+    elif "R" in entry:
+        rotation = _matrix_from_value(entry["R"])
     elif "quaternion_wxyz" in entry:
         rotation = _rotation_from_quaternion_wxyz(np.asarray(entry["quaternion_wxyz"], dtype=float))
     elif "rpy_deg" in entry:
@@ -300,3 +307,70 @@ def _load_single_matrix_calibration(path: Path) -> CalibrationSet:
         },
         world_frame="world",
     )
+
+
+def _transform_matrix_from_entry(entry: dict[str, Any]) -> np.ndarray | None:
+    for key in (
+        "transform_matrix",
+        "extrinsic_matrix",
+        "T_sensor_to_world",
+        "T_camera_to_world",
+        "T_cam_world",
+        "T",
+        "matrix",
+        "transform",
+    ):
+        if key not in entry:
+            continue
+        matrix = _matrix_from_value(entry[key])
+        if matrix.shape in {(3, 4), (4, 4)}:
+            return matrix
+    return None
+
+
+def _transform_from_matrix(matrix: np.ndarray) -> RigidTransform:
+    values = np.asarray(matrix, dtype=float)
+    if values.shape == (4, 4):
+        return RigidTransform(rotation=values[:3, :3], translation_m=values[:3, 3])
+    if values.shape == (3, 4):
+        return RigidTransform(rotation=values[:, :3], translation_m=values[:, 3])
+    raise ValueError(f"transform matrix must be 3x4 or 4x4, got {values.shape}")
+
+
+def _translation_from_entry(entry: dict[str, Any]) -> np.ndarray:
+    for key in ("translation_m", "translation", "translation_vector", "tvec", "t", "T"):
+        if key not in entry:
+            continue
+        value = _matrix_from_value(entry[key])
+        flat = np.asarray(value, dtype=float).reshape(-1)
+        if flat.size == 3:
+            return flat
+    return np.zeros(3)
+
+
+def _matrix_from_value(value: Any) -> np.ndarray:
+    if isinstance(value, dict):
+        data = value.get("data", value.get("values", value.get("value")))
+        if data is None:
+            raise ValueError("matrix mapping must contain data/values")
+        arr = np.asarray(data, dtype=float)
+        rows = int(value.get("rows", 0) or 0)
+        cols = int(value.get("cols", value.get("columns", 0)) or 0)
+        if rows > 0 and cols > 0:
+            return arr.reshape(rows, cols)
+        return _reshape_flat_matrix(arr)
+    arr = np.asarray(value, dtype=float)
+    return _reshape_flat_matrix(arr)
+
+
+def _reshape_flat_matrix(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values, dtype=float)
+    if arr.ndim >= 2:
+        return arr
+    if arr.size == 16:
+        return arr.reshape(4, 4)
+    if arr.size == 12:
+        return arr.reshape(3, 4)
+    if arr.size == 9:
+        return arr.reshape(3, 3)
+    return arr

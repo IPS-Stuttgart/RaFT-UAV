@@ -56,13 +56,7 @@ def load_camera_models(path: Path) -> dict[str, CameraModel]:
     for source, entry in cameras.items():
         if not isinstance(entry, dict):
             continue
-        intrinsics_payload = entry.get("intrinsics", entry)
-        intrinsics = CameraIntrinsics(
-            fx=float(intrinsics_payload["fx"]),
-            fy=float(intrinsics_payload["fy"]),
-            cx=float(intrinsics_payload["cx"]),
-            cy=float(intrinsics_payload["cy"]),
-        )
+        intrinsics = _intrinsics_from_camera_entry(entry)
         transform = _transform_from_camera_entry(entry)
         models[str(source).lower()] = CameraModel(
             source=str(source),
@@ -227,19 +221,72 @@ def _load_json_or_yaml(path: Path) -> dict[str, Any]:
 
 
 def _looks_like_single_camera(payload: dict[str, Any]) -> bool:
-    return "fx" in payload or "intrinsics" in payload
+    return (
+        "fx" in payload
+        or "intrinsics" in payload
+        or any(
+            key in payload
+            for key in (
+                "camera_matrix",
+                "cameraMatrix",
+                "intrinsic_matrix",
+                "projection_matrix",
+                "K",
+                "P",
+            )
+        )
+    )
+
+
+def _intrinsics_from_camera_entry(entry: dict[str, Any]) -> CameraIntrinsics:
+    intrinsics_payload = entry.get("intrinsics", entry)
+    if all(key in intrinsics_payload for key in ("fx", "fy", "cx", "cy")):
+        return CameraIntrinsics(
+            fx=float(intrinsics_payload["fx"]),
+            fy=float(intrinsics_payload["fy"]),
+            cx=float(intrinsics_payload["cx"]),
+            cy=float(intrinsics_payload["cy"]),
+        )
+    matrix = _intrinsic_matrix_from_entry(intrinsics_payload)
+    if matrix is None and intrinsics_payload is not entry:
+        matrix = _intrinsic_matrix_from_entry(entry)
+    if matrix is None:
+        raise ValueError("camera calibration entry needs fx/fy/cx/cy or a camera matrix")
+    values = np.asarray(matrix, dtype=float)
+    if values.shape == (3, 3):
+        return CameraIntrinsics(
+            fx=float(values[0, 0]),
+            fy=float(values[1, 1]),
+            cx=float(values[0, 2]),
+            cy=float(values[1, 2]),
+        )
+    if values.shape == (3, 4):
+        return CameraIntrinsics(
+            fx=float(values[0, 0]),
+            fy=float(values[1, 1]),
+            cx=float(values[0, 2]),
+            cy=float(values[1, 2]),
+        )
+    raise ValueError(f"camera intrinsics matrix must be 3x3 or 3x4, got {values.shape}")
+
+
+def _intrinsic_matrix_from_entry(entry: dict[str, Any]) -> np.ndarray | None:
+    from raft_uav.mmuad.calibration import _matrix_from_value
+
+    for key in (
+        "camera_matrix",
+        "cameraMatrix",
+        "intrinsic_matrix",
+        "projection_matrix",
+        "K",
+        "P",
+    ):
+        if key in entry:
+            return _matrix_from_value(entry[key])
+    return None
 
 
 def _transform_from_camera_entry(entry: dict[str, Any]) -> RigidTransform:
-    from raft_uav.mmuad.calibration import _rotation_from_quaternion_wxyz, _rotation_from_rpy_deg
+    from raft_uav.mmuad.calibration import _transform_from_entry
 
-    translation = np.asarray(entry.get("translation_m", [0.0, 0.0, 0.0]), dtype=float)
-    if "rotation_matrix" in entry:
-        rotation = np.asarray(entry["rotation_matrix"], dtype=float)
-    elif "quaternion_wxyz" in entry:
-        rotation = _rotation_from_quaternion_wxyz(np.asarray(entry["quaternion_wxyz"], dtype=float))
-    elif "rpy_deg" in entry:
-        rotation = _rotation_from_rpy_deg(np.asarray(entry["rpy_deg"], dtype=float))
-    else:
-        rotation = np.eye(3)
-    return RigidTransform(rotation=rotation, translation_m=translation)
+    return _transform_from_entry(entry)

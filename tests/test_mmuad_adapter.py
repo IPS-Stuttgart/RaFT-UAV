@@ -1901,6 +1901,65 @@ def test_calibration_file_accepts_yaml_json_subset(tmp_path: Path) -> None:
     assert calibration.get("radar") is not None
 
 
+def test_calibration_file_accepts_transform_matrix_alias(tmp_path: Path) -> None:
+    path = tmp_path / "calibration.json"
+    path.write_text(
+        json.dumps(
+            {
+                "world_frame": "test",
+                "sensors": {
+                    "radar": {
+                        "T_sensor_to_world": {
+                            "rows": 4,
+                            "cols": 4,
+                            "data": [
+                                1.0,
+                                0.0,
+                                0.0,
+                                10.0,
+                                0.0,
+                                1.0,
+                                0.0,
+                                20.0,
+                                0.0,
+                                0.0,
+                                1.0,
+                                30.0,
+                                0.0,
+                                0.0,
+                                0.0,
+                                1.0,
+                            ],
+                        },
+                        "time_offset_s": 0.25,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    calibration = load_calibration_file(path)
+    transformed = transform_candidate_frame(
+        CandidateFrame(
+            pd.DataFrame(
+                {
+                    "sequence_id": ["seq"],
+                    "time_s": [1.0],
+                    "source": ["radar"],
+                    "x_m": [1.0],
+                    "y_m": [2.0],
+                    "z_m": [3.0],
+                }
+            )
+        ),
+        calibration,
+    )
+    row = transformed.rows.iloc[0]
+    assert (row["x_m"], row["y_m"], row["z_m"]) == (11.0, 22.0, 33.0)
+    assert abs(float(row["time_s"]) - 1.25) < 1.0e-9
+
+
 def test_radar_polar_csv_converts_to_candidates(tmp_path: Path) -> None:
     from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
 
@@ -1977,6 +2036,75 @@ def test_camera_detections_backproject_to_world_candidates(tmp_path: Path) -> No
     assert abs(row["y_m"]) < 1.0e-9
     assert abs(row["z_m"] - 10.0) < 1.0e-9
     assert row["class_name"] == "Mavic3"
+
+
+def test_camera_models_accept_opencv_matrix_intrinsics(tmp_path: Path) -> None:
+    from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
+
+    calibration = tmp_path / "camera_calibration.json"
+    calibration.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "camera_matrix": {
+                            "rows": 3,
+                            "cols": 3,
+                            "data": [
+                                100.0,
+                                0.0,
+                                50.0,
+                                0.0,
+                                100.0,
+                                50.0,
+                                0.0,
+                                0.0,
+                                1.0,
+                            ],
+                        },
+                        "T_camera_to_world": [
+                            1.0,
+                            0.0,
+                            0.0,
+                            1.0,
+                            0.0,
+                            1.0,
+                            0.0,
+                            2.0,
+                            0.0,
+                            0.0,
+                            1.0,
+                            3.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            1.0,
+                        ],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    detections = tmp_path / "camera_detections.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1"],
+            "time_s": [0.0],
+            "source": ["cam0"],
+            "u_px": [50.0],
+            "v_px": [50.0],
+            "depth_m": [10.0],
+        }
+    ).to_csv(detections, index=False)
+
+    candidates = load_camera_detections_csv_as_candidates(
+        detections,
+        camera_models=load_camera_models(calibration),
+    )
+
+    row = candidates.rows.iloc[0]
+    assert (row["x_m"], row["y_m"], row["z_m"]) == (1.0, 2.0, 13.0)
 
 
 def test_infer_sequence_class_map_from_candidate_votes() -> None:
