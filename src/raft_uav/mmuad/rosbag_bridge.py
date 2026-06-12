@@ -420,6 +420,7 @@ def _load_topic_candidate_export(
     *,
     sequence_id: str,
 ) -> CandidateFrame:
+    explicit_source = spec.get("source")
     source = str(spec.get("source") or spec.get("topic") or "candidate")
     kind = str(spec.get("kind", "candidate")).strip().lower()
     if kind == "pointcloud2_candidate":
@@ -434,7 +435,9 @@ def _load_topic_candidate_export(
         frame = _apply_aliases(frame, spec)
         if "sequence_id" not in frame.columns:
             frame["sequence_id"] = sequence_id
-        if "source" not in frame.columns:
+        if explicit_source is not None:
+            frame["source"] = source
+        elif "source" not in frame.columns:
             frame["source"] = source
         for column in ("track_id", "std_xy_m", "std_z_m", "confidence", "class_name"):
             if column not in frame.columns and spec.get(column) is not None:
@@ -773,7 +776,19 @@ def _read_topic_table(path: Path) -> pd.DataFrame:
 
 def _apply_aliases(frame: pd.DataFrame, spec: dict[str, Any]) -> pd.DataFrame:
     aliases = spec.get("column_aliases", {}) or {}
-    return frame.rename(columns={str(key): str(value) for key, value in aliases.items()})
+    out = frame.copy()
+    rename: dict[Any, str] = {}
+    for key, value in aliases.items():
+        source = str(key)
+        target = str(value)
+        if source not in out.columns or source == target:
+            continue
+        if target in out.columns:
+            out[target] = out[target].where(out[target].notna(), out[source])
+            out = out.drop(columns=[source])
+            continue
+        rename[source] = target
+    return out.rename(columns=rename)
 
 
 def _is_table_export(path: Path) -> bool:

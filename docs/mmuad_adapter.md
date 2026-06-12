@@ -28,6 +28,11 @@ row streams, column maps, or objects containing common keys such as
 `candidates`, `detections`, `truth`, `ground_truth`, `rows`, `data`, or
 `sequences`. CSV/TSV/TXT/JSON/JSONL table exports may also be gzip-compressed,
 for example `candidates.csv.gz` or `truth.jsonl.gz`.
+JSON rows exported from common ROS position messages may keep nested
+`header.stamp`, `header.frame_id`, `child_frame_id`, `pose.position`,
+`pose.pose.position`, `point`, `transform.translation`, or simple `[x,y,z]`
+coordinate arrays; the table reader flattens those fields into the normalized
+`time_s`, `source`, `track_id`, and `x_m,y_m,z_m` columns.
 
 Run with exported detector/cluster candidates:
 
@@ -479,7 +484,12 @@ may use row lists, JSONL/NDJSON row
 streams, column maps, or objects containing `points`, `point_cloud`,
 `candidates`, `detections`, `objects`, `targets`, `measurements`, `returns`,
 `predictions`, `truth`, `fixes`, `gps`, `navsatfix`, `poses`, `rows`, or
-`data`. The template infers native extraction kinds for common ROS message types
+`data`. ROS-shaped JSON row exports can keep nested `header.stamp`,
+`pose.position`, `pose.pose.position`, `point`, or `transform.translation`
+fields; when a container such as a path export has the timestamp in the parent
+`header`, that timestamp is propagated to child pose rows. Explicit topic-map
+`source` values override any `header.frame_id` source hint from the row. The
+template infers native extraction kinds for common ROS message types
 (`pointcloud2_candidate`, `pose_truth`, `odometry_candidate`, and related truth
 variants), while the exported-topic loader still accepts those kinds for CSV or
 JSON/JSONL table and NumPy exports. Table exports marked as `pointcloud2_candidate`

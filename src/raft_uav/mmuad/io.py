@@ -627,7 +627,11 @@ def _json_records_from_payload(payload: Any, *, preferred: tuple[str, ...]) -> A
     for key in preferred:
         nested = _lookup_case_insensitive(payload, key)
         if nested is not None:
-            return _json_records_from_payload(nested, preferred=preferred)
+            return _json_records_from_nested_container(
+                payload,
+                nested,
+                preferred=preferred,
+            )
 
     sequences = _lookup_case_insensitive(payload, "sequences")
     if sequences is not None:
@@ -669,6 +673,60 @@ def _json_records_from_sequence_mapping(
     return rows
 
 
+def _json_records_from_nested_container(
+    parent: dict[Any, Any],
+    nested: Any,
+    *,
+    preferred: tuple[str, ...],
+) -> Any:
+    records = _json_records_from_payload(nested, preferred=preferred)
+    defaults = _json_parent_row_defaults(parent)
+    if not defaults or not isinstance(records, list):
+        return records
+    merged: list[Any] = []
+    for record in records:
+        if not isinstance(record, dict):
+            merged.append(record)
+            continue
+        row = dict(defaults)
+        row.update(record)
+        merged.append(row)
+    return merged
+
+
+def _json_parent_row_defaults(parent: dict[Any, Any]) -> dict[Any, Any]:
+    defaults: dict[Any, Any] = {}
+    for key in (
+        "sequence_id",
+        "sequence",
+        "seq",
+        "scene",
+        "scene_id",
+        "source",
+        "sensor",
+        "modality",
+        "header",
+        "stamp",
+        "time_s",
+        "timestamp",
+        "timestamp_s",
+        "timestamp_ns",
+        "timestamp_us",
+        "timestamp_ms",
+        "sec",
+        "secs",
+        "nanosec",
+        "nsec",
+        "nsecs",
+        "frame_id",
+        "child_frame_id",
+    ):
+        value = _lookup_case_insensitive(parent, key)
+        if value is not None:
+            defaults[key] = value
+    return defaults
+
+
 def _json_records_to_frame(records: Any, *, path: Path | None = None) -> pd.DataFrame:
     if isinstance(records, pd.DataFrame):
         return records
@@ -676,12 +734,14 @@ def _json_records_to_frame(records: Any, *, path: Path | None = None) -> pd.Data
         if _looks_like_column_mapping(records):
             return pd.DataFrame(records)
         if _looks_like_row(records):
-            return pd.DataFrame.from_records([records])
+            return pd.DataFrame.from_records([_flatten_tracking_record(records)])
     if isinstance(records, list):
         if not records:
             return pd.DataFrame()
         if all(isinstance(item, dict) for item in records):
-            return pd.DataFrame.from_records(records)
+            return pd.DataFrame.from_records(
+                [_flatten_tracking_record(item) for item in records]
+            )
     label = str(path) if path is not None else "JSON payload"
     raise ValueError(f"JSON table {label} does not contain row objects")
 
@@ -704,12 +764,26 @@ _JSON_ROW_HINT_KEYS = {
     "sec",
     "secs",
     "nanosec",
+    "nsec",
+    "nsecs",
     "x_m",
     "x",
     "y_m",
     "y",
     "z_m",
     "z",
+    "header",
+    "frame_id",
+    "child_frame_id",
+    "pose",
+    "position",
+    "point",
+    "transform",
+    "translation",
+    "center",
+    "location",
+    "coordinates",
+    "xyz",
 }
 _JSON_METADATA_KEYS = {
     "schema",
@@ -740,6 +814,224 @@ def _looks_like_column_mapping(payload: dict[Any, Any]) -> bool:
         if str(key).lower() in _JSON_ROW_HINT_KEYS and isinstance(value, (list, tuple))
     ]
     return bool(column_values)
+
+
+def _flatten_tracking_record(record: dict[Any, Any]) -> dict[Any, Any]:
+    """Flatten common ROS-shaped JSON position rows into table columns."""
+
+    out = dict(record)
+    header = _lookup_case_insensitive(out, "header")
+    if isinstance(header, dict):
+        _copy_stamp_time(out, _lookup_case_insensitive(header, "stamp"))
+        frame_id = _lookup_case_insensitive(header, "frame_id")
+        _set_if_missing(out, "frame_id", frame_id)
+        _set_if_missing(out, "source", frame_id, aliases=("sensor", "modality"))
+    if not _has_time_key(out):
+        _copy_stamp_time(out, _lookup_case_insensitive(out, "stamp"))
+    frame_id = _lookup_case_insensitive(out, "frame_id")
+    if frame_id is not None:
+        _set_if_missing(out, "source", frame_id, aliases=("sensor", "modality"))
+    child_frame_id = _lookup_case_insensitive(out, "child_frame_id")
+    _set_if_missing(
+        out,
+        "track_id",
+        child_frame_id,
+        aliases=("track", "id", "object_id", "cluster_id", "instance_id"),
+    )
+    xyz = _xyz_from_nested_record(out)
+    if xyz is not None:
+        _set_if_missing(
+            out,
+            "x_m",
+            xyz[0],
+            aliases=("x", "east_m", "pos_x", "center_x", "cx", "px"),
+        )
+        _set_if_missing(
+            out,
+            "y_m",
+            xyz[1],
+            aliases=("y", "north_m", "pos_y", "center_y", "cy", "py"),
+        )
+        _set_if_missing(
+            out,
+            "z_m",
+            xyz[2],
+            aliases=("z", "up_m", "pos_z", "center_z", "cz", "pz"),
+        )
+    return out
+
+
+def _copy_stamp_time(out: dict[Any, Any], stamp: Any) -> None:
+    if _has_time_key(out):
+        return
+    time_s = _stamp_to_seconds(stamp)
+    if time_s is not None:
+        out["time_s"] = time_s
+
+
+def _stamp_to_seconds(stamp: Any) -> float | None:
+    if isinstance(stamp, dict):
+        nested = _lookup_case_insensitive(stamp, "stamp")
+        if nested is not None:
+            nested_time = _stamp_to_seconds(nested)
+            if nested_time is not None:
+                return nested_time
+        seconds = _first_mapping_value(stamp, ("sec", "secs", "seconds"))
+        nanoseconds = _first_mapping_value(
+            stamp,
+            ("nanosec", "nsec", "nsecs", "nanoseconds"),
+        )
+        if seconds is not None:
+            try:
+                return float(seconds) + (float(nanoseconds or 0.0) * 1.0e-9)
+            except (TypeError, ValueError):
+                return None
+        numeric = _first_mapping_value(
+            stamp,
+            ("time_s", "timestamp_s", "timestamp", "stamp", "time"),
+        )
+        return _float_or_none(numeric)
+    return _float_or_none(stamp)
+
+
+def _xyz_from_nested_record(value: Any, *, depth: int = 0) -> tuple[float, float, float] | None:
+    if depth > 8:
+        return None
+    if isinstance(value, dict):
+        xyz = _xyz_from_mapping(value)
+        if xyz is not None:
+            return xyz
+        for key in (
+            "position",
+            "point",
+            "translation",
+            "center",
+            "location",
+            "coordinates",
+            "xyz",
+            "pose",
+            "transform",
+            "state",
+            "measurement",
+        ):
+            nested = _lookup_case_insensitive(value, key)
+            if nested is None:
+                continue
+            xyz = _xyz_from_nested_record(nested, depth=depth + 1)
+            if xyz is not None:
+                return xyz
+    if isinstance(value, (list, tuple, np.ndarray, pd.Series)):
+        numbers = _numeric_sequence(value)
+        if len(numbers) >= 3:
+            return (numbers[0], numbers[1], numbers[2])
+    return None
+
+
+def _xyz_from_mapping(mapping: dict[Any, Any]) -> tuple[float, float, float] | None:
+    x = _first_float_mapping_value(
+        mapping,
+        ("x_m", "x", "east_m", "pos_x", "center_x", "cx", "px"),
+    )
+    y = _first_float_mapping_value(
+        mapping,
+        ("y_m", "y", "north_m", "pos_y", "center_y", "cy", "py"),
+    )
+    z = _first_float_mapping_value(
+        mapping,
+        ("z_m", "z", "up_m", "pos_z", "center_z", "cz", "pz"),
+    )
+    if x is None or y is None or z is None:
+        return None
+    return (x, y, z)
+
+
+def _first_float_mapping_value(mapping: dict[Any, Any], keys: Iterable[str]) -> float | None:
+    return _float_or_none(_first_mapping_value(mapping, keys))
+
+
+def _first_mapping_value(mapping: dict[Any, Any], keys: Iterable[str]) -> Any | None:
+    for key in keys:
+        value = _lookup_case_insensitive(mapping, key)
+        if value is not None:
+            return value
+    return None
+
+
+def _set_if_missing(
+    mapping: dict[Any, Any],
+    key: str,
+    value: Any,
+    *,
+    aliases: Iterable[str] = (),
+) -> None:
+    if value is None:
+        return
+    if not _has_any_key(mapping, (key, *tuple(aliases))):
+        mapping[key] = value
+
+
+def _has_time_key(mapping: dict[Any, Any]) -> bool:
+    return _has_any_key(
+        mapping,
+        (
+            "time_s",
+            "timestamp",
+            "timestamp_s",
+            "timestamp_ns",
+            "timestamp_us",
+            "timestamp_ms",
+            "sec",
+            "secs",
+            "nanosec",
+            "nsec",
+            "nsecs",
+        ),
+    )
+
+
+def _has_any_key(mapping: dict[Any, Any], keys: Iterable[str]) -> bool:
+    present = {str(key).lower() for key in mapping}
+    return any(key.lower() in present for key in keys)
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _numeric_sequence(value: Any) -> list[float]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            return _numeric_sequence(json.loads(text))
+        except json.JSONDecodeError:
+            trimmed = text.strip("[]()")
+            delimiter = "," if "," in trimmed else None
+            return _numeric_sequence(trimmed.split(delimiter))
+    if isinstance(value, dict):
+        return []
+    if isinstance(value, (list, tuple, np.ndarray, pd.Series)):
+        numbers: list[float] = []
+        for item in value:
+            try:
+                numbers.append(float(item))
+            except (TypeError, ValueError):
+                return []
+        return numbers
+    try:
+        if pd.isna(value):
+            return []
+    except (TypeError, ValueError):
+        return []
+    return []
 
 
 def _read_numpy_trajectory_table(path: Path) -> pd.DataFrame:

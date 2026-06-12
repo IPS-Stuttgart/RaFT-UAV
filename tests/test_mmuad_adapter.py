@@ -161,6 +161,39 @@ def test_candidate_json_loader_accepts_nested_rows(tmp_path: Path) -> None:
     assert abs(float(frame.rows.loc[0, "time_s"]) - 1.5) < 1e-12
 
 
+def test_candidate_json_loader_flattens_ros_pose_rows(tmp_path: Path) -> None:
+    path = tmp_path / "pose_candidates.json"
+    path.write_text(
+        json.dumps(
+            {
+                "detections": [
+                    {
+                        "header": {
+                            "stamp": {"sec": 2, "nanosec": 250_000_000},
+                            "frame_id": "radar_frame",
+                        },
+                        "child_frame_id": "uav_7",
+                        "pose": {
+                            "pose": {
+                                "position": {"x": 1.0, "y": 2.0, "z": 3.0}
+                            }
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    frame = load_candidate_file(path)
+
+    row = frame.rows.iloc[0]
+    assert abs(float(row["time_s"]) - 2.25) < 1e-12
+    assert row["source"] == "radar_frame"
+    assert row["track_id"] == "uav_7"
+    assert row[["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+
+
 def test_candidate_jsonl_loader_accepts_row_exports(tmp_path: Path) -> None:
     path = tmp_path / "candidates.jsonl"
     rows = [
@@ -274,6 +307,35 @@ def test_truth_json_loader_accepts_sequence_mapping(tmp_path: Path) -> None:
 
     assert frame.rows.loc[0, "sequence_id"] == "seq_json"
     assert abs(float(frame.rows.loc[0, "time_s"]) - 2.25) < 1e-12
+
+
+def test_truth_json_loader_flattens_parent_header_pose_rows(tmp_path: Path) -> None:
+    path = tmp_path / "truth_path.json"
+    path.write_text(
+        json.dumps(
+            {
+                "header": {
+                    "stamp": {"sec": 3, "nanosec": 500_000_000},
+                    "frame_id": "world",
+                },
+                "poses": [
+                    {
+                        "pose": {
+                            "position": {"x": 4.0, "y": 5.0, "z": 6.0}
+                        }
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    frame = load_truth_file(path, default_sequence_id="seq_path")
+
+    row = frame.rows.iloc[0]
+    assert row["sequence_id"] == "seq_path"
+    assert abs(float(row["time_s"]) - 3.5) < 1e-12
+    assert row[["x_m", "y_m", "z_m"]].tolist() == [4.0, 5.0, 6.0]
 
 
 def test_truth_ndjson_loader_accepts_row_exports(tmp_path: Path) -> None:
@@ -3108,6 +3170,73 @@ def test_topic_map_exports_load_json_candidates_and_truth(tmp_path: Path) -> Non
     assert bundle.truth is not None
     assert bundle.truth.rows["time_s"].tolist() == [0.0, 1.0]
     assert [row["rows"] for row in bundle.manifest["loaded_exports"]] == [2, 2]
+
+
+def test_topic_map_exports_load_ros_shaped_json_pose_rows(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    (exports / "radar_pose.json").write_text(
+        json.dumps(
+            {
+                "poses": [
+                    {
+                        "header": {
+                            "stamp": {"sec": 4, "nanosec": 125_000_000},
+                            "frame_id": "radar_frame",
+                        },
+                        "child_frame_id": "track_a",
+                        "pose": {
+                            "position": {"x": 1.0, "y": 2.0, "z": 7.0}
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (exports / "truth_pose.json").write_text(
+        json.dumps(
+            {
+                "header": {"stamp": {"sec": 4, "nanosec": 125_000_000}},
+                "poses": [
+                    {
+                        "pose": {
+                            "position": {"x": 1.0, "y": 2.0, "z": 7.0}
+                        }
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    topic_map = tmp_path / "topic_map_pose_json.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_ros_pose_json",
+                "exports": [
+                    {
+                        "kind": "pose_candidate",
+                        "path": "radar_pose.json",
+                        "source": "radar_pose",
+                    },
+                    {"kind": "pose_truth", "path": "truth_pose.json"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+
+    row = bundle.candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_ros_pose_json"
+    assert abs(float(row["time_s"]) - 4.125) < 1e-12
+    assert row["source"] == "radar_pose"
+    assert row["track_id"] == "track_a"
+    assert row[["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 7.0]
+    assert bundle.truth is not None
+    assert bundle.truth.rows["time_s"].tolist() == [4.125]
 
 
 def test_topic_map_exports_load_numpy_trajectory_files(tmp_path: Path) -> None:
