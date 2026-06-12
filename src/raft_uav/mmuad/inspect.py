@@ -22,6 +22,7 @@ from raft_uav.mmuad.io import (
     data_file_suffix,
     infer_time_s_from_filename,
 )
+from raft_uav.mmuad.rosbag_bridge import load_topic_map_payload
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 AUDIO_SUFFIXES = {".wav", ".flac", ".aac", ".mp3"}
@@ -174,7 +175,7 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
         inferred_time_s = infer_time_s_from_filename(path)
     if name in CALIBRATION_NAMES:
         return "calibration", modality, None
-    if suffix == ".json" and "topic_map" in name:
+    if suffix in {".json", ".yaml", ".yml"} and "topic_map" in name:
         return _topic_map_category(path), "ros", None
     if suffix in (
         NUMPY_SUFFIXES | TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | YAML_SUFFIXES
@@ -346,8 +347,8 @@ def _infer_modality(stem: str) -> str:
 
 def _topic_map_category(path: Path) -> str:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = load_topic_map_payload(path)
+    except (OSError, json.JSONDecodeError, ValueError):
         return "metadata"
     exports = payload.get("exports", [])
     if not isinstance(exports, list):
@@ -361,8 +362,8 @@ def _topic_map_category(path: Path) -> str:
 
 def _topic_map_has_truth_export(path: Path) -> bool:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = load_topic_map_payload(path)
+    except (OSError, json.JSONDecodeError, ValueError):
         return False
     for export in payload.get("exports", []):
         if not isinstance(export, dict):

@@ -37,6 +37,7 @@ import pandas as pd
 from raft_uav.coordinates import LocalENUProjector
 from raft_uav.mmuad.io import merge_candidate_frames
 from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates
+from raft_uav.mmuad.rosbag_bridge import load_topic_map_payload
 from raft_uav.mmuad.schema import CandidateFrame, TruthFrame, normalize_truth_columns
 
 
@@ -57,7 +58,7 @@ def extract_native_rosbag_topic_map(
     voxel_size_m: float = 0.75,
     min_points: int = 3,
 ) -> NativeRosExtraction:
-    """Extract supported ROS topics according to a topic-map JSON.
+    """Extract supported ROS topics according to a topic-map JSON/YAML file.
 
     The topic map follows the same high-level structure as the CSV export bridge
     but may use native kinds:
@@ -89,7 +90,7 @@ def extract_native_rosbag_topic_map(
         Convert pose/odometry messages into candidate detections.
     """
 
-    payload = json.loads(Path(topic_map_json).read_text(encoding="utf-8"))
+    payload = load_topic_map_payload(topic_map_json)
     specs = list(payload.get("exports", []))
     if not specs:
         raise ValueError(f"topic map {topic_map_json} has no exports")
@@ -98,7 +99,7 @@ def extract_native_rosbag_topic_map(
     except Exception as exc:  # pragma: no cover - exercised only without dependency
         raise RuntimeError(
             "native ROS extraction requires the optional 'rosbags' package; "
-            "install it or export topics to CSV and use --topic-map-json"
+            "install it or export topics to CSV and use --topic-map-file/--topic-map-json"
         ) from exc
 
     by_topic = {str(spec["topic"]): spec for spec in specs if "topic" in spec}

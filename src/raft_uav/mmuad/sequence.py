@@ -33,7 +33,7 @@ from raft_uav.mmuad.io import (
     read_text_export,
 )
 from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
-from raft_uav.mmuad.rosbag_bridge import load_topic_map_exports
+from raft_uav.mmuad.rosbag_bridge import load_topic_map_exports, load_topic_map_payload
 from raft_uav.mmuad.schema import CandidateFrame, TruthFrame, normalize_truth_columns
 
 
@@ -271,7 +271,7 @@ def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[Seq
     ``points.tsv`` / ``points.json``, ``points.jsonl``, ``*_points.csv`` /
     ``*_points.json``, ``*.pcd``,
     ``*.ply``, simple float32 ``*.bin`` point-cloud exports,
-    exported ROS topic-map JSON files, ``truth.csv`` / ``truth.npy``, and
+    exported ROS topic-map JSON/YAML files, ``truth.csv`` / ``truth.npy``, and
     ``calibration.json`` under each sequence folder.  If ``root`` itself holds
     such files, it is treated as a single sequence.
     """
@@ -808,11 +808,13 @@ def _class_files(path: Path) -> list[Path]:
 
 def _topic_map_files(path: Path) -> list[Path]:
     exact = [
-        path / "topic_map.json",
-        path / "topic_map_exports.json",
-        path / "mmuad_topic_map.json",
+        path / f"{stem}{suffix}"
+        for stem in ("topic_map", "topic_map_exports", "mmuad_topic_map")
+        for suffix in (".json", ".yaml", ".yml")
     ]
-    globbed = sorted(path.glob("*topic_map*.json"))
+    globbed = []
+    for suffix in (".json", ".yaml", ".yml"):
+        globbed.extend(sorted(path.glob(f"*topic_map*{suffix}")))
     candidates = _unique_paths(exact + globbed)
     return [
         item
@@ -825,8 +827,8 @@ def _topic_map_files(path: Path) -> list[Path]:
 
 def _is_export_topic_map(path: Path) -> bool:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = load_topic_map_payload(path)
+    except (OSError, json.JSONDecodeError, ValueError):
         return False
     exports = payload.get("exports", [])
     if not isinstance(exports, list):
@@ -838,8 +840,8 @@ def _topic_map_referenced_paths(topic_maps: list[Path]) -> set[Path]:
     referenced: set[Path] = set()
     for topic_map in topic_maps:
         try:
-            payload = json.loads(topic_map.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            payload = load_topic_map_payload(topic_map)
+        except (OSError, json.JSONDecodeError, ValueError):
             continue
         for export in payload.get("exports", []):
             if not isinstance(export, dict) or not export.get("path"):

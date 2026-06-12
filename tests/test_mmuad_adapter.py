@@ -1661,6 +1661,64 @@ def test_sequence_root_loads_exported_topic_map_sequence(tmp_path: Path) -> None
     assert truth.rows["time_s"].tolist() == [0.0, 1.0]
 
 
+def test_sequence_root_loads_exported_yaml_topic_map_sequence(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_topic_map_yaml"
+    seq.mkdir()
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [4.0, 4.0],
+        }
+    ).to_csv(seq / "radar_export.csv", index=False)
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [4.0, 4.0],
+        }
+    ).to_csv(seq / "truth_export.csv", index=False)
+    topic_map = seq / "topic_map.yaml"
+    topic_map.write_text(
+        "\n".join(
+            [
+                "sequence_id: seq_topic_map_yaml",
+                "exports:",
+                "  - kind: candidate",
+                "    path: radar_export.csv",
+                "    source: radar",
+                "    column_aliases:",
+                "      stamp: time_s",
+                "      px: x_m",
+                "      py: y_m",
+                "      pz: z_m",
+                "  - kind: pose_truth",
+                "    path: truth_export.csv",
+                "    column_aliases:",
+                "      stamp: time_s",
+                "      px: x_m",
+                "      py: y_m",
+                "      pz: z_m",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].topic_map_jsons == (topic_map,)
+    assert candidates.rows["source"].tolist() == ["radar", "radar"]
+    assert candidates.rows["sequence_id"].tolist() == [
+        "seq_topic_map_yaml",
+        "seq_topic_map_yaml",
+    ]
+    assert truth is not None
+    assert truth.rows["time_s"].tolist() == [0.0, 1.0]
+
+
 def test_sequence_root_skips_native_only_topic_map_template(tmp_path: Path) -> None:
     seq = tmp_path / "seq_native_only"
     seq.mkdir()
@@ -3343,6 +3401,25 @@ def test_layout_inspectors_classify_topic_maps(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (exported / "detections.csv").write_text("time_s,x_m,y_m,z_m\n0,0,0,1\n", encoding="utf-8")
+    exported_yaml = tmp_path / "seq_exported_yaml_topic_map"
+    exported_yaml.mkdir()
+    (exported_yaml / "topic_map.yaml").write_text(
+        "\n".join(
+            [
+                "sequence_id: seq_exported_yaml_topic_map",
+                "exports:",
+                "  - kind: candidate",
+                "    path: detections.csv",
+                "  - kind: pose_truth",
+                "    path: truth_export.csv",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (exported_yaml / "detections.csv").write_text(
+        "time_s,x_m,y_m,z_m\n0,0,0,1\n",
+        encoding="utf-8",
+    )
     native = tmp_path / "seq_native_topic_map"
     native.mkdir()
     (native / "topic_map_native.json").write_text(
@@ -3364,6 +3441,8 @@ def test_layout_inspectors_classify_topic_maps(tmp_path: Path) -> None:
     detailed_by_name = {row["relative_path"]: row for row in detailed["files"]}
     assert detailed_by_name["topic_map.json"]["category"] == "topic_map_export"
     assert detailed_by_name["topic_map.json"]["topic_map_has_truth_export"] is True
+    assert detailed_by_name["topic_map.yaml"]["category"] == "topic_map_export"
+    assert detailed_by_name["topic_map.yaml"]["topic_map_has_truth_export"] is True
     assert detailed["category_counts"]["topic_map_native"] == 1
     by_sequence = {
         row["sequence_id"]: row["missing_for_tracking_smoke"]
@@ -3371,10 +3450,11 @@ def test_layout_inspectors_classify_topic_maps(tmp_path: Path) -> None:
     }
     assert "truth" not in by_sequence["seq_exported_topic_map"]
     assert "candidate_or_point_cloud" not in by_sequence["seq_exported_topic_map"]
+    assert "truth" not in by_sequence["seq_exported_yaml_topic_map"]
     assert "candidate_or_point_cloud" in by_sequence["seq_native_topic_map"]
 
     inventory = inspect_mmuad_layout(tmp_path)
-    assert inventory["category_counts"]["topic_map_export"] == 1
+    assert inventory["category_counts"]["topic_map_export"] == 2
     assert inventory["category_counts"]["topic_map_native"] == 1
     exported_summary = next(
         row
@@ -3386,9 +3466,16 @@ def test_layout_inspectors_classify_topic_maps(tmp_path: Path) -> None:
         for row in inventory["sequence_candidates"]
         if row["sequence_id"] == "seq_native_topic_map"
     )
+    exported_yaml_summary = next(
+        row
+        for row in inventory["sequence_candidates"]
+        if row["sequence_id"] == "seq_exported_yaml_topic_map"
+    )
     assert exported_summary["has_topic_map_export"] is True
     assert exported_summary["has_candidates_or_points"] is True
     assert exported_summary["has_truth_or_labels"] is True
+    assert exported_yaml_summary["has_topic_map_export"] is True
+    assert exported_yaml_summary["has_truth_or_labels"] is True
     assert native_summary["has_native_topic_map"] is True
     assert native_summary["has_topic_map_export"] is False
     assert any("Exported topic-map" in item for item in inventory["recommendations"])
@@ -3972,6 +4059,127 @@ def test_topic_map_exports_load_candidates_and_truth(tmp_path: Path) -> None:
     assert bundle.truth is not None
     assert len(bundle.truth.rows) == 2
     assert bundle.candidates.rows.loc[0, "sequence_id"] == "seq_ros"
+
+
+def test_topic_map_exports_load_yaml_candidates_and_truth(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [5.0, 5.0],
+        }
+    ).to_csv(exports / "radar.csv", index=False)
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [5.0, 5.0],
+        }
+    ).to_csv(exports / "truth.csv", index=False)
+    topic_map = tmp_path / "topic_map.yaml"
+    topic_map.write_text(
+        "\n".join(
+            [
+                "sequence_id: seq_ros_yaml",
+                "exports:",
+                "  - kind: candidate",
+                "    path: radar.csv",
+                "    source: radar",
+                "    column_aliases:",
+                "      stamp: time_s",
+                "      px: x_m",
+                "      py: y_m",
+                "      pz: z_m",
+                "  - kind: truth",
+                "    path: truth.csv",
+                "    column_aliases:",
+                "      stamp: time_s",
+                "      px: x_m",
+                "      py: y_m",
+                "      pz: z_m",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+
+    assert len(bundle.candidates.rows) == 2
+    assert bundle.truth is not None
+    assert len(bundle.truth.rows) == 2
+    assert bundle.candidates.rows["sequence_id"].tolist() == [
+        "seq_ros_yaml",
+        "seq_ros_yaml",
+    ]
+
+
+def test_cli_runs_yaml_topic_map_file_alias(tmp_path: Path) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [5.0, 5.0],
+        }
+    ).to_csv(exports / "radar.csv", index=False)
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [5.0, 5.0],
+        }
+    ).to_csv(exports / "truth.csv", index=False)
+    topic_map = tmp_path / "topic_map.yaml"
+    topic_map.write_text(
+        "\n".join(
+            [
+                "sequence_id: seq_cli_yaml_topic_map",
+                "exports:",
+                "  - kind: candidate",
+                "    path: radar.csv",
+                "    source: radar",
+                "    column_aliases:",
+                "      stamp: time_s",
+                "      px: x_m",
+                "      py: y_m",
+                "      pz: z_m",
+                "  - kind: truth",
+                "    path: truth.csv",
+                "    column_aliases:",
+                "      stamp: time_s",
+                "      px: x_m",
+                "      py: y_m",
+                "      pz: z_m",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "out"
+
+    status = mmuad_cli_main(
+        [
+            "--topic-map-file",
+            str(topic_map),
+            "--topic-map-base-dir",
+            str(exports),
+            "--output-dir",
+            str(output),
+            "--submission-csv",
+            str(output / "submission.csv"),
+        ]
+    )
+
+    assert status == 0
+    estimates = pd.read_csv(output / "mmuad_estimates.csv")
+    assert estimates["sequence_id"].tolist() == ["seq_cli_yaml_topic_map"] * 2
+    assert (output / "submission.csv").exists()
 
 
 def test_topic_map_exports_load_json_candidates_and_truth(tmp_path: Path) -> None:

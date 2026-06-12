@@ -139,7 +139,7 @@ A normalized sequence export can be loaded from folders containing files named
 `radar_polar.tsv` or `radar_polar.json`, `camera_detections.txt`, or
 `camera_detections.json`,
 compact trajectory arrays such as `trajectory.npy` / `candidates.npz`,
-exported ROS topic maps such as `topic_map.json`,
+exported ROS topic maps such as `topic_map.json` or `topic_map.yaml`,
 `truth.csv`, compact truth arrays such as `truth.npy`, and optionally
 `calibration.json`, `calibration.yaml`, `camera_info.json`,
 `camera_info.yaml`, `intrinsics.json`, `intrinsics.yml`, or
@@ -219,7 +219,8 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 When a sequence contains a loadable exported topic map, the files referenced by
 that map are loaded through their `column_aliases` and are not also loaded as
 generic candidate/truth files. Native-only topic maps without exported file
-paths remain for the explicit `--rosbag-path --topic-map-json` extraction path.
+paths remain for the explicit `--rosbag-path --topic-map-file` extraction path
+(`--topic-map-json` remains accepted for existing scripts).
 
 ### Submission/interchange output
 
@@ -446,7 +447,7 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ```
 
 The report counts files by category, including candidate tables, point clouds,
-images, calibration files, truth/labels, exported/native topic-map JSON files,
+images, calibration files, truth/labels, exported/native topic-map JSON/YAML files,
 and ROS bag/recording files. JSON table exports follow the same naming
 convention as sequence discovery: `candidates.json`, `detections.json`,
 `truth.json`, and `classes.json` are reported as usable candidate, truth, or
@@ -458,7 +459,7 @@ sequence-like folders and recommends the next adapter step. One-level split
 folders such as `train/`, `val/`, and `test/` are unwrapped so summaries keep
 the actual sequence IDs. Exported topic maps indicate sequence-root inputs,
 while native-only topic maps are kept for explicit ROS extraction with
-`--rosbag-path --topic-map-json`.
+`--rosbag-path --topic-map-file` (`--topic-map-json` remains accepted).
 
 The public UG2+ Codabench instructions require a ZIP containing a single file
 named `mmaud_results.csv`. The exact evaluator schema is not bundled here, so
@@ -494,7 +495,7 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ```
 
 Edit the generated topic-map JSON so each relevant topic points to a normalized
-export file, then run the tracker. CSV/TSV/TXT/JSON/JSONL table exports can use
+export file, or provide the same schema as YAML. CSV/TSV/TXT/JSON/JSONL table exports can use
 `column_aliases`, and table exports may be gzip-compressed; compact NumPy
 trajectory exports such as `radar_trajectory.npy` and `truth.npy` use the same
 `time_s,x_m,y_m,z_m` convention as the explicit-file CLI. JSON topic exports
@@ -540,7 +541,7 @@ tracking or evaluation.
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
-  --topic-map-json outputs/mmuad_topic_map.json \
+  --topic-map-file outputs/mmuad_topic_map.yaml \
   --topic-map-base-dir data/mmuad_topic_exports \
   --output-dir outputs/mmuad_topic_map_smoke \
   --ug2-codabench-zip outputs/mmuad_topic_map_smoke/ug2_submission.zip
@@ -759,7 +760,7 @@ can be extracted directly from a ROS2 bag directory or compatible bag path:
 ```bash
 PYTHONPATH=src python scripts/extract_mmuad_rosbag_topics.py \
   --bag-path data/mmuad_raw/seq001 \
-  --topic-map-json data/mmuad_raw/seq001/topic_map_native.json \
+  --topic-map-file data/mmuad_raw/seq001/topic_map_native.yaml \
   --output-dir outputs/mmuad_native_ros_seq001
 ```
 
@@ -802,7 +803,7 @@ The CLI can run native extraction and tracking in one step:
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --rosbag-path data/mmuad_raw/seq001 \
-  --topic-map-json data/mmuad_raw/seq001/topic_map_native.json \
+  --topic-map-file data/mmuad_raw/seq001/topic_map_native.yaml \
   --native-ros-extract-output-dir outputs/mmuad_native_ros_seq001/extracted \
   --output-dir outputs/mmuad_native_ros_seq001/tracking
 ```
