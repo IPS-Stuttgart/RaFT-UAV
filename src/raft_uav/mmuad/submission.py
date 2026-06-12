@@ -194,7 +194,10 @@ def estimates_to_mmaud_results_frame(
 
     if estimates.empty:
         return pd.DataFrame(columns=UG2_RESULT_COLUMNS)
-    sequence_values = estimates.get("sequence_id", "default")
+    if "sequence_id" in estimates.columns:
+        sequence_values = estimates["sequence_id"].fillna("default").astype(str)
+    else:
+        sequence_values = pd.Series(["default"] * len(estimates), index=estimates.index)
     if "class_name" in estimates.columns:
         class_values = estimates["class_name"].fillna(class_name).astype(str)
     else:
