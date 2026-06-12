@@ -446,7 +446,14 @@ def _read_pcd(path: Path) -> pd.DataFrame:
         return _normalize_point_frame(pd.DataFrame.from_records(rows), path=path)
     if data_mode == "binary":
         return _normalize_point_frame(_read_binary_pcd_payload(payload, header), path=path)
-    raise ValueError(f"unsupported PCD DATA mode {data_mode!r}; expected ascii or binary")
+    if data_mode == "binary_compressed":
+        return _normalize_point_frame(
+            _read_binary_compressed_pcd_payload(payload, header),
+            path=path,
+        )
+    raise ValueError(
+        f"unsupported PCD DATA mode {data_mode!r}; expected ascii, binary, or binary_compressed"
+    )
 
 
 def _parse_pcd_header(header_text: str) -> dict[str, object]:
@@ -499,6 +506,86 @@ def _read_binary_pcd_payload(payload: bytes, header: dict[str, object]) -> pd.Da
             values = values[:, 0]
         data[field] = values
     return pd.DataFrame(data)
+
+
+def _read_binary_compressed_pcd_payload(payload: bytes, header: dict[str, object]) -> pd.DataFrame:
+    import struct
+
+    if len(payload) < 8:
+        raise ValueError("PCD binary_compressed payload is missing size headers")
+    compressed_size, uncompressed_size = struct.unpack_from("<II", payload, 0)
+    compressed_start = 8
+    compressed_end = compressed_start + int(compressed_size)
+    if compressed_end > len(payload):
+        raise ValueError("PCD binary_compressed payload is truncated")
+    decompressed = _lzf_decompress(
+        payload[compressed_start:compressed_end],
+        expected_size=int(uncompressed_size),
+    )
+    fields = list(header.get("fields", []))
+    sizes = list(header.get("size", [4] * len(fields)))
+    types = list(header.get("type", ["F"] * len(fields)))
+    counts = list(header.get("count", [1] * len(fields)))
+    if len(sizes) != len(fields) or len(types) != len(fields):
+        raise ValueError("PCD binary_compressed header has inconsistent FIELDS/SIZE/TYPE lengths")
+    if len(counts) != len(fields):
+        counts = [1] * len(fields)
+    point_count = int(header.get("points", header.get("width", 0)) or 0)
+    if point_count <= 0:
+        raise ValueError("PCD binary_compressed header must include POINTS or WIDTH")
+    data: dict[str, np.ndarray] = {}
+    cursor = 0
+    for field, size, type_code, count in zip(fields, sizes, types, counts, strict=False):
+        dtype = np.dtype(_pcd_numpy_dtype(size=int(size), type_code=str(type_code)))
+        component_count = int(count)
+        byte_count = point_count * component_count * dtype.itemsize
+        segment = decompressed[cursor : cursor + byte_count]
+        if len(segment) != byte_count:
+            raise ValueError("PCD binary_compressed decompressed payload is incomplete")
+        values = np.frombuffer(segment, dtype=dtype, count=point_count * component_count)
+        if component_count > 1:
+            values = values.reshape(point_count, component_count)[:, 0]
+        data[str(field)] = values
+        cursor += byte_count
+    return pd.DataFrame(data)
+
+
+def _lzf_decompress(payload: bytes, *, expected_size: int) -> bytes:
+    out = bytearray()
+    idx = 0
+    while idx < len(payload):
+        ctrl = payload[idx]
+        idx += 1
+        if ctrl < 32:
+            length = ctrl + 1
+            chunk = payload[idx : idx + length]
+            if len(chunk) != length:
+                raise ValueError("truncated LZF literal run in PCD payload")
+            out.extend(chunk)
+            idx += length
+            continue
+        length = ctrl >> 5
+        reference_offset = (ctrl & 0x1F) << 8
+        if length == 7:
+            if idx >= len(payload):
+                raise ValueError("truncated LZF back-reference length in PCD payload")
+            length += payload[idx]
+            idx += 1
+        if idx >= len(payload):
+            raise ValueError("truncated LZF back-reference offset in PCD payload")
+        reference_offset += payload[idx]
+        idx += 1
+        reference_index = len(out) - reference_offset - 1
+        if reference_index < 0:
+            raise ValueError("invalid LZF back-reference in PCD payload")
+        for _ in range(length + 2):
+            out.append(out[reference_index])
+            reference_index += 1
+    if len(out) != expected_size:
+        raise ValueError(
+            f"PCD binary_compressed payload expanded to {len(out)} bytes, expected {expected_size}"
+        )
+    return bytes(out)
 
 
 def _pcd_numpy_dtype(*, size: int, type_code: str) -> str:

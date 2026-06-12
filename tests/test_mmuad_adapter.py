@@ -1640,6 +1640,15 @@ def _minimal_las_bytes(points: list[tuple[float, float, float]]) -> bytes:
     return bytes(header) + bytes(payload)
 
 
+def _lzf_literal_payload(payload: bytes) -> bytes:
+    encoded = bytearray()
+    for start in range(0, len(payload), 32):
+        chunk = payload[start : start + 32]
+        encoded.append(len(chunk) - 1)
+        encoded.extend(chunk)
+    return bytes(encoded)
+
+
 def test_ascii_pcd_point_cloud_is_clustered(tmp_path: Path) -> None:
     pcd = tmp_path / "frame_12.5.pcd"
     pcd.write_text(
@@ -2310,6 +2319,40 @@ def test_binary_pcd_point_cloud_is_clustered(tmp_path: Path) -> None:
     frame = load_point_cloud_file_as_candidates(pcd, voxel_size_m=0.5, min_points=3)
     assert len(frame.rows) == 1
     assert abs(float(frame.rows.loc[0, "time_s"]) - 2.5) < 1e-9
+
+
+def test_binary_compressed_pcd_point_cloud_is_clustered(tmp_path: Path) -> None:
+    import struct
+
+    pcd = tmp_path / "frame_3.5.pcd"
+    header = "\n".join(
+        [
+            "# .PCD v0.7",
+            "VERSION 0.7",
+            "FIELDS x y z",
+            "SIZE 4 4 4",
+            "TYPE F F F",
+            "COUNT 1 1 1",
+            "WIDTH 3",
+            "HEIGHT 1",
+            "POINTS 3",
+            "DATA binary_compressed",
+            "",
+        ]
+    ).encode("ascii")
+    points = np.array(
+        [(0.0, 0.0, 1.0), (0.1, 0.0, 1.1), (0.2, 0.1, 1.0)],
+        dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4")],
+    )
+    uncompressed = points["x"].tobytes() + points["y"].tobytes() + points["z"].tobytes()
+    compressed = _lzf_literal_payload(uncompressed)
+    pcd.write_bytes(header + struct.pack("<II", len(compressed), len(uncompressed)) + compressed)
+
+    frame = load_point_cloud_file_as_candidates(pcd, voxel_size_m=0.5, min_points=3)
+
+    assert len(frame.rows) == 1
+    assert abs(float(frame.rows.loc[0, "time_s"]) - 3.5) < 1e-9
+    assert abs(float(frame.rows.loc[0, "x_m"]) - 0.1) < 1e-6
 
 
 def test_binary_bin_point_cloud_is_clustered(tmp_path: Path) -> None:
