@@ -17,6 +17,7 @@ from raft_uav.mmuad.schema import CandidateFrame, TruthFrame
 from raft_uav.mmuad.tracker import (
     TrackerOutput,
     _ConstantVelocityFilter,
+    _candidate_rows_with_optional_defaults,
     _finite_position_mask,
     _positive_float,
     add_truth_errors,
@@ -45,7 +46,7 @@ def run_mmuad_multi_object_tracker(
 
     config = config or MultiObjectTrackerConfig()
     candidates.validate()
-    rows = candidates.rows.copy()
+    rows = _candidate_rows_with_optional_defaults(candidates.rows)
     if rows.empty:
         return TrackerOutput(pd.DataFrame(), {"count": 0}, pd.DataFrame())
     truth_rows = truth.rows if truth is not None else None
