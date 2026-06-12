@@ -7,6 +7,7 @@ tracking logs:
 
 * ``sensor_msgs/msg/PointCloud2`` -> clustered candidate detections;
 * ``vision_msgs/msg/Detection3D`` / ``Detection3DArray`` -> bbox center rows;
+* ``visualization_msgs/msg/Marker`` / ``MarkerArray`` -> marker position rows;
 * ``geometry_msgs/msg/PoseStamped`` -> truth rows or candidate rows;
 * ``geometry_msgs/msg/PoseArray`` -> batched truth rows or candidate rows;
 * ``geometry_msgs/msg/PointStamped`` -> truth rows or candidate rows;
@@ -60,6 +61,9 @@ def extract_native_rosbag_topic_map(
     ``detection3d_truth`` / ``detection3d_array_truth`` /
     ``detection3d_candidate`` / ``detection3d_array_candidate``
         Convert vision_msgs 3D detection bbox centers into truth/candidate rows.
+    ``marker_truth`` / ``marker_array_truth`` /
+    ``marker_candidate`` / ``marker_array_candidate``
+        Convert visualization marker poses into truth/candidate rows.
     ``pose_truth`` / ``odometry_truth``
         Convert pose/odometry messages into truth rows.
     ``point_truth`` / ``transform_truth`` / ``tf_truth`` / ``path_truth`` /
@@ -136,6 +140,52 @@ def extract_native_rosbag_topic_map(
                                 "track_id": spec.get(
                                     "track_id",
                                     row.get("detection_id", source),
+                                ),
+                                "std_xy_m": spec.get("std_xy_m", 2.0),
+                                "std_z_m": spec.get("std_z_m", 5.0),
+                                "confidence": spec.get(
+                                    "confidence",
+                                    row.get("confidence", 1.0),
+                                ),
+                                "class_name": spec.get(
+                                    "class_name",
+                                    row.get("class_name", "uav"),
+                                ),
+                            }
+                        )
+                        candidate_rows.append(row)
+                    if candidate_rows:
+                        candidate_frames.append(
+                            CandidateFrame(pd.DataFrame.from_records(candidate_rows))
+                        )
+                    rows = len(candidate_rows)
+                elif kind in {"marker_truth", "marker_array_truth"}:
+                    rows_for_message = marker_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        frame_id=spec.get("frame_id"),
+                    )
+                    truth_rows.extend(rows_for_message)
+                    rows = len(rows_for_message)
+                elif kind in {"marker_candidate", "marker_array_candidate"}:
+                    rows_for_message = marker_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        frame_id=spec.get("frame_id"),
+                    )
+                    candidate_rows = []
+                    for row in rows_for_message:
+                        row.update(
+                            {
+                                "source": source,
+                                "track_id": spec.get(
+                                    "track_id",
+                                    row.get(
+                                        "marker_track_id",
+                                        row.get("marker_id", source),
+                                    ),
                                 ),
                                 "std_xy_m": spec.get("std_xy_m", 2.0),
                                 "std_z_m": spec.get("std_z_m", 5.0),
@@ -275,15 +325,15 @@ def _message_stamp_time_s(message: Any) -> float | None:
 def position_message_to_row(message: Any, *, sequence_id: str, time_s: float) -> dict[str, Any]:
     """Convert common position-bearing ROS messages into a normalized row."""
 
-    position = _position_from_message(message)
-    if position is None:
+    xyz = _message_position_xyz(message)
+    if xyz is None:
         raise ValueError("position-like message has no position/point/translation")
     return {
         "sequence_id": sequence_id,
         "time_s": float(time_s),
-        "x_m": float(getattr(position, "x")),
-        "y_m": float(getattr(position, "y")),
-        "z_m": float(getattr(position, "z")),
+        "x_m": xyz[0],
+        "y_m": xyz[1],
+        "z_m": xyz[2],
     }
 
 
@@ -337,6 +387,54 @@ def detection3d_message_to_rows(
         class_name = _detection3d_class_name(detection)
         if class_name is not None:
             row["class_name"] = class_name
+        rows.append(row)
+    return rows
+
+
+def marker_message_to_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    frame_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Convert visualization_msgs Marker/MarkerArray messages into rows."""
+
+    markers = getattr(message, "markers", None)
+    if markers is None:
+        markers = [message]
+    parent_time_s = _message_stamp_time_s(message)
+    parent_frame_id = _message_frame_id(message)
+    rows: list[dict[str, Any]] = []
+    for marker in markers:
+        if _marker_action_is_delete(marker):
+            continue
+        if not _frame_filter_matches(
+            marker,
+            child_frame_id=None,
+            frame_id=frame_id,
+            fallback_frame_id=parent_frame_id,
+        ):
+            continue
+        xyz = _marker_position_xyz(marker)
+        if xyz is None:
+            continue
+        marker_time_s = _message_stamp_time_s(marker)
+        row = {
+            "sequence_id": sequence_id,
+            "time_s": (
+                marker_time_s
+                if marker_time_s is not None
+                else parent_time_s
+                if parent_time_s is not None
+                else float(time_s)
+            ),
+            "x_m": xyz[0],
+            "y_m": xyz[1],
+            "z_m": xyz[2],
+        }
+        _add_frame_metadata(row, marker, fallback_frame_id=parent_frame_id)
+        _add_marker_metadata(row, marker)
         rows.append(row)
     return rows
 
@@ -470,12 +568,94 @@ def _position_from_message(message: Any) -> Any | None:
     return getattr(pose, "position", None)
 
 
+def _message_position_xyz(message: Any) -> tuple[float, float, float] | None:
+    position = _position_from_message(message)
+    return _xyz_from_position(position)
+
+
+def _xyz_from_position(position: Any | None) -> tuple[float, float, float] | None:
+    if position is None:
+        return None
+    try:
+        return (
+            float(getattr(position, "x")),
+            float(getattr(position, "y")),
+            float(getattr(position, "z")),
+        )
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
 def _detection3d_position(detection: Any) -> Any | None:
     bbox = getattr(detection, "bbox", None)
     center = getattr(bbox, "center", None)
     if center is None:
         return None
     return _position_from_message(center)
+
+
+def _marker_position_xyz(marker: Any) -> tuple[float, float, float] | None:
+    xyz = _message_position_xyz(marker)
+    if xyz is not None:
+        return xyz
+    points = getattr(marker, "points", None)
+    if not points:
+        return None
+    point_rows = [_xyz_from_position(point) for point in points]
+    valid = [point for point in point_rows if point is not None]
+    if not valid:
+        return None
+    count = float(len(valid))
+    return (
+        sum(point[0] for point in valid) / count,
+        sum(point[1] for point in valid) / count,
+        sum(point[2] for point in valid) / count,
+    )
+
+
+def _marker_action_is_delete(marker: Any) -> bool:
+    action = getattr(marker, "action", None)
+    if action is None:
+        return False
+    if isinstance(action, str):
+        return action.strip().lower() in {"delete", "deleteall", "delete_all"}
+    try:
+        return int(action) in {2, 3}
+    except (TypeError, ValueError):
+        return False
+
+
+def _add_marker_metadata(row: dict[str, Any], marker: Any) -> None:
+    marker_id = getattr(marker, "id", None)
+    namespace = getattr(marker, "ns", None)
+    if marker_id not in (None, ""):
+        row["marker_id"] = str(marker_id)
+    if namespace not in (None, ""):
+        row["marker_namespace"] = str(namespace)
+    track_id = _marker_track_id(marker_id=marker_id, namespace=namespace)
+    if track_id is not None:
+        row["marker_track_id"] = track_id
+    marker_type = getattr(marker, "type", None)
+    if marker_type not in (None, ""):
+        row["marker_type"] = str(marker_type)
+    action = getattr(marker, "action", None)
+    if action not in (None, ""):
+        row["marker_action"] = str(action)
+    text = getattr(marker, "text", None)
+    if text not in (None, ""):
+        row["class_name"] = str(text)
+
+
+def _marker_track_id(*, marker_id: Any | None, namespace: Any | None) -> str | None:
+    has_marker_id = marker_id not in (None, "")
+    has_namespace = namespace not in (None, "")
+    if has_marker_id and has_namespace:
+        return f"{namespace}:{marker_id}"
+    if has_marker_id:
+        return str(marker_id)
+    if has_namespace:
+        return str(namespace)
+    return None
 
 
 def _detection3d_confidence(detection: Any) -> float | None:

@@ -680,6 +680,9 @@ The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
 `pointcloud2_candidate`, `vision_msgs/msg/Detection3D` as `detection3d_truth` or
 `detection3d_candidate`, `vision_msgs/msg/Detection3DArray` as
 `detection3d_array_truth` or `detection3d_array_candidate`,
+`visualization_msgs/msg/Marker` as `marker_truth` or `marker_candidate`,
+`visualization_msgs/msg/MarkerArray` as `marker_array_truth` or
+`marker_array_candidate`,
 `geometry_msgs/msg/PoseStamped` as `pose_truth` or `pose_candidate`,
 `geometry_msgs/msg/PoseArray` as `pose_array_truth` or `pose_array_candidate`,
 `geometry_msgs/msg/PointStamped` as `point_truth` or `point_candidate`,
@@ -688,9 +691,9 @@ The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
 `tf_candidate`, `nav_msgs/msg/Path` as `path_truth` or `path_candidate`, and
 `nav_msgs/msg/Odometry` as `odometry_truth` or `odometry_candidate`. TFMessage
 topic-map entries can include `child_frame_id` or `frame_id` to select the UAV
-transform from a shared `/tf` stream; Detection3D, Path, and PoseArray entries
-can use `frame_id`, with Detection3DArray and PoseArray rows inheriting the
-parent message timestamp and frame.
+transform from a shared `/tf` stream; Detection3D, Marker, Path, and PoseArray
+entries can use `frame_id`, with Detection3DArray, MarkerArray, and PoseArray
+rows inheriting the parent message timestamp and frame.
 
 The CLI can run native extraction and tracking in one step:
 

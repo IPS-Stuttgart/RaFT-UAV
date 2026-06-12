@@ -41,6 +41,7 @@ from raft_uav.mmuad.mot import (
 )
 from raft_uav.mmuad.native_ros import (
     detection3d_message_to_rows,
+    marker_message_to_rows,
     position_message_to_row,
     position_message_to_rows,
 )
@@ -3181,6 +3182,39 @@ def test_ros2_topic_map_template_infers_detection3d_topics(tmp_path: Path) -> No
     assert payload["exports"][1]["source"] is None
 
 
+def test_ros2_topic_map_template_infers_marker_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /detector/markers",
+                "        type: visualization_msgs/msg/MarkerArray",
+                "      message_count: 2",
+                "    - topic_metadata:",
+                "        name: /ground_truth/marker",
+                "        type: visualization_msgs/msg/Marker",
+                "      message_count: 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "marker_array_candidate",
+        "marker_truth",
+    ]
+    assert payload["exports"][0]["source"] == "detector_markers"
+    assert payload["exports"][1]["source"] is None
+
+
 def test_native_ros_position_message_to_row_accepts_common_position_messages() -> None:
     point_message = SimpleNamespace(point=SimpleNamespace(x=1.0, y=2.0, z=3.0))
     transform_message = SimpleNamespace(
@@ -3365,6 +3399,83 @@ def test_native_ros_detection3d_message_to_rows_extracts_bbox_centers() -> None:
     assert rows[0]["detection_id"] == "det-1"
     assert rows[0]["confidence"] == 0.8
     assert rows[0]["class_name"] == "uav"
+
+
+def test_native_ros_marker_message_to_rows_extracts_marker_positions() -> None:
+    marker_array = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=50, nanosec=250_000_000),
+            frame_id="world",
+        ),
+        markers=[
+            SimpleNamespace(
+                ns="uav",
+                id=7,
+                type=2,
+                action=0,
+                text="quadrotor",
+                pose=SimpleNamespace(
+                    position=SimpleNamespace(x=1.0, y=2.0, z=3.0)
+                ),
+            ),
+            SimpleNamespace(
+                header=SimpleNamespace(frame_id="camera"),
+                ns="uav",
+                id=8,
+                action=0,
+                pose=SimpleNamespace(
+                    position=SimpleNamespace(x=4.0, y=5.0, z=6.0)
+                ),
+            ),
+            SimpleNamespace(
+                ns="old",
+                id=9,
+                action=2,
+                pose=SimpleNamespace(
+                    position=SimpleNamespace(x=7.0, y=8.0, z=9.0)
+                ),
+            ),
+        ],
+    )
+
+    rows = marker_message_to_rows(
+        marker_array,
+        sequence_id="seq_marker",
+        time_s=1.0,
+        frame_id="world",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["sequence_id"] == "seq_marker"
+    assert rows[0]["time_s"] == 50.25
+    assert rows[0]["x_m"] == 1.0
+    assert rows[0]["frame_id"] == "world"
+    assert rows[0]["marker_namespace"] == "uav"
+    assert rows[0]["marker_id"] == "7"
+    assert rows[0]["marker_track_id"] == "uav:7"
+    assert rows[0]["marker_type"] == "2"
+    assert rows[0]["class_name"] == "quadrotor"
+
+
+def test_native_ros_marker_message_to_rows_uses_point_centroid() -> None:
+    marker = SimpleNamespace(
+        header=SimpleNamespace(frame_id="world"),
+        ns="points",
+        id=3,
+        points=[
+            SimpleNamespace(x=1.0, y=2.0, z=3.0),
+            SimpleNamespace(x=3.0, y=4.0, z=5.0),
+        ],
+    )
+
+    rows = marker_message_to_rows(marker, sequence_id="seq_marker", time_s=6.0)
+
+    assert len(rows) == 1
+    assert rows[0]["time_s"] == 6.0
+    assert rows[0]["x_m"] == 2.0
+    assert rows[0]["y_m"] == 3.0
+    assert rows[0]["z_m"] == 4.0
+    assert rows[0]["marker_track_id"] == "points:3"
 
 
 def test_pointcloud2_decoder_and_candidate_clustering() -> None:

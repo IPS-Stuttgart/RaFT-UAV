@@ -171,6 +171,10 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "detection3d_array_truth" if truth_like else "detection3d_array_candidate"
     if "detection3d" in compact_type:
         return "detection3d_truth" if truth_like else "detection3d_candidate"
+    if compact_type.endswith("markerarray"):
+        return "marker_array_truth" if truth_like else "marker_array_candidate"
+    if compact_type.endswith("marker"):
+        return "marker_truth" if truth_like else "marker_candidate"
     if "tfmessage" in msg_type or msg_type.endswith("/tfmessage"):
         return "tf_truth" if truth_like else "tf_candidate"
     if msg_type.endswith("/path") or msg_type.endswith("msg/path"):
