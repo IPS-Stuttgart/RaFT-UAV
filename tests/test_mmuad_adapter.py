@@ -556,6 +556,64 @@ def test_sequence_root_discovers_delimited_radar_and_camera_tables(tmp_path: Pat
     assert truth is not None
 
 
+def test_sequence_root_discovers_radar_and_camera_modality_folder_tables(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "seq_sensor_folders"
+    radar = seq / "radar0"
+    camera = seq / "cam0"
+    radar.mkdir(parents=True)
+    camera.mkdir()
+    pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "range_m": [10.0],
+            "azimuth_deg": [90.0],
+        }
+    ).to_csv(radar / "detections.csv", index=False)
+    pd.DataFrame(
+        {
+            "time_s": [1.0],
+            "u_px": [50.0],
+            "v_px": [50.0],
+            "depth_m": [5.0],
+        }
+    ).to_csv(camera / "detections.csv", index=False)
+    (seq / "calibration.json").write_text(
+        json.dumps(
+            {
+                "sensors": {"radar": {}},
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0],
+            "x_m": [10.0, 0.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [0.0, 5.0],
+        }
+    ).to_csv(seq / "truth.csv", index=False)
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0], apply_calibration=False)
+
+    assert [sequence.sequence_id for sequence in discovered] == ["seq_sensor_folders"]
+    assert discovered[0].radar_polar_csvs == (radar / "detections.csv",)
+    assert discovered[0].camera_detection_csvs == (camera / "detections.csv",)
+    assert set(candidates.rows["source"]) == {"cam0", "radar0"}
+    assert truth is not None
+
+
 def test_sequence_root_loads_exported_topic_map_sequence(tmp_path: Path) -> None:
     seq = tmp_path / "seq_topic_map"
     seq.mkdir()

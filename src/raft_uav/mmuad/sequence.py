@@ -55,13 +55,24 @@ POINT_DIR_TOKENS = (
 )
 TRUTH_DIR_TOKENS = ("truth", "ground_truth", "gt", "label", "labels", "leica")
 CLASS_DIR_TOKENS = ("class", "classes", "uav_type", "uav_types", "category", "categories")
+RADAR_DIR_TOKENS = ("radar", "mmwave", "mmw")
+CAMERA_DIR_TOKENS = ("camera", "cam", "image", "images")
 MODALITY_DIR_TOKENS = (
     CANDIDATE_DIR_TOKENS
     + POINT_DIR_TOKENS
     + TRUTH_DIR_TOKENS
     + CLASS_DIR_TOKENS
-    + ("camera", "cam", "image", "images", "radar")
+    + CAMERA_DIR_TOKENS
+    + RADAR_DIR_TOKENS
 )
+RADAR_RANGE_ALIASES = ("range_m", "range", "r", "rho", "distance_m")
+RADAR_AZIMUTH_ALIASES = ("azimuth_deg", "azimuth", "az", "bearing", "bearing_deg")
+CAMERA_U_ALIASES = ("u_px", "u", "pixel_x", "center_u", "cx_px")
+CAMERA_V_ALIASES = ("v_px", "v", "pixel_y", "center_v", "cy_px")
+CAMERA_BBOX_X_ALIASES = ("x1", "xmin", "bbox_x1", "left")
+CAMERA_BBOX_Y_ALIASES = ("y1", "ymin", "bbox_y1", "top")
+CAMERA_BBOX_X2_ALIASES = ("x2", "xmax", "bbox_x2", "right")
+CAMERA_BBOX_Y2_ALIASES = ("y2", "ymax", "bbox_y2", "bottom")
 
 
 @dataclass(frozen=True)
@@ -168,7 +179,11 @@ def load_sequence_export(
     candidate_frames.extend(
         load_radar_polar_csv_as_candidates(
             path,
-            source=path.stem.replace("_radar_polar", "-radar"),
+            source=_source_from_path(
+                path,
+                sequence_root=paths.root,
+                default=path.stem.replace("_radar_polar", "-radar"),
+            ),
             sequence_id=paths.sequence_id,
             azimuth_convention=radar_azimuth_convention,
             angle_unit=radar_angle_unit,
@@ -209,6 +224,11 @@ def load_sequence_export(
             load_camera_detections_csv_as_candidates(
                 path,
                 camera_models=camera_models,
+                default_source=_source_from_path(
+                    path,
+                    sequence_root=paths.root,
+                    default="camera",
+                ),
                 fixed_depth_m=camera_fixed_depth_m,
                 std_xy_m=camera_std_xy_m,
                 std_z_m=camera_std_z_m,
@@ -336,7 +356,16 @@ def _radar_polar_files(path: Path) -> list[Path]:
         files.extend(sorted(path.glob(f"*_radar_polar{suffix}")))
         files.extend(sorted(path.glob(f"*_polar_radar{suffix}")))
         files.extend(sorted(path.glob(f"*_radar_detections_polar{suffix}")))
-    return _unique_paths(files)
+    sensor_files = [
+        item
+        for item in _files_under_sensor_dirs(
+            path,
+            directory_tokens=RADAR_DIR_TOKENS,
+            suffixes=TABLE_SUFFIXES,
+        )
+        if _looks_like_radar_polar_file(item)
+    ]
+    return _unique_paths(files + sensor_files)
 
 
 def _candidate_trajectory_files(path: Path) -> list[Path]:
@@ -399,7 +428,16 @@ def _camera_detection_files(path: Path) -> list[Path]:
     for suffix in TABLE_SUFFIXES:
         files.extend(sorted(path.glob(f"*_camera_detections{suffix}")))
         files.extend(sorted(path.glob(f"*_image_detections{suffix}")))
-    return _unique_paths(files)
+    sensor_files = [
+        item
+        for item in _files_under_sensor_dirs(
+            path,
+            directory_tokens=CAMERA_DIR_TOKENS,
+            suffixes=TABLE_SUFFIXES,
+        )
+        if _looks_like_camera_detection_file(item)
+    ]
+    return _unique_paths(files + sensor_files)
 
 
 def _point_files(path: Path) -> list[Path]:
@@ -571,9 +609,32 @@ def _files_under_named_dirs(
     return files
 
 
+def _files_under_sensor_dirs(
+    path: Path,
+    *,
+    directory_tokens: tuple[str, ...],
+    suffixes: tuple[str, ...],
+) -> list[Path]:
+    files: list[Path] = []
+    suffix_set = {suffix.lower() for suffix in suffixes}
+    for item in sorted(path.rglob("*")):
+        if not item.is_file() or item.suffix.lower() not in suffix_set:
+            continue
+        try:
+            parents = Path(item.relative_to(path)).parts[:-1]
+        except ValueError:
+            continue
+        if any(_sensor_directory_name_has_any(parent, directory_tokens) for parent in parents):
+            files.append(item)
+    return files
+
+
 def _is_modality_dir(path: Path) -> bool:
     normalized = str(path.name).lower().replace("-", "_").replace(" ", "_")
-    return normalized in set(MODALITY_DIR_TOKENS)
+    return normalized in set(MODALITY_DIR_TOKENS) or _sensor_directory_name_has_any(
+        normalized,
+        CAMERA_DIR_TOKENS + RADAR_DIR_TOKENS,
+    )
 
 
 def _directory_name_has_any(name: str, tokens: tuple[str, ...]) -> bool:
@@ -584,6 +645,71 @@ def _directory_name_has_any(name: str, tokens: tuple[str, ...]) -> bool:
         or normalized.endswith(f"_{token}")
         for token in tokens
     )
+
+
+def _sensor_directory_name_has_any(name: str, tokens: tuple[str, ...]) -> bool:
+    normalized = str(name).lower().replace("-", "_").replace(" ", "_")
+    if _directory_name_has_any(normalized, tokens):
+        return True
+    for token in tokens:
+        if normalized.startswith(token) and normalized[len(token) :].isdigit():
+            return True
+    return False
+
+
+def _looks_like_radar_polar_file(path: Path) -> bool:
+    name = path.stem.lower()
+    if any(token in name for token in ("radar_polar", "polar_radar", "polar")):
+        return True
+    return _table_has_column_groups(path, RADAR_RANGE_ALIASES, RADAR_AZIMUTH_ALIASES)
+
+
+def _looks_like_camera_detection_file(path: Path) -> bool:
+    name = path.stem.lower()
+    if any(token in name for token in ("camera_detection", "image_detection", "bbox", "boxes")):
+        return True
+    return _table_has_camera_detection_columns(path)
+
+
+def _table_has_camera_detection_columns(path: Path) -> bool:
+    columns = _table_columns(path)
+    lower = {str(column).strip().lower() for column in columns}
+    if not lower:
+        return False
+    has_pixel_center = _has_any_column(lower, CAMERA_U_ALIASES) and _has_any_column(
+        lower, CAMERA_V_ALIASES
+    )
+    has_bbox = (
+        _has_any_column(lower, CAMERA_BBOX_X_ALIASES)
+        and _has_any_column(lower, CAMERA_BBOX_Y_ALIASES)
+        and _has_any_column(lower, CAMERA_BBOX_X2_ALIASES)
+        and _has_any_column(lower, CAMERA_BBOX_Y2_ALIASES)
+    )
+    return has_pixel_center or has_bbox
+
+
+def _table_has_column_groups(path: Path, *alias_groups: tuple[str, ...]) -> bool:
+    columns = _table_columns(path)
+    lower = {str(column).strip().lower() for column in columns}
+    return bool(lower) and all(_has_any_column(lower, group) for group in alias_groups)
+
+
+def _has_any_column(columns: set[str], aliases: tuple[str, ...]) -> bool:
+    return any(alias in columns for alias in aliases)
+
+
+def _table_columns(path: Path) -> list[str]:
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".tsv":
+            frame = pd.read_csv(path, sep="\t", nrows=0)
+        elif suffix == ".txt":
+            frame = pd.read_csv(path, sep=None, engine="python", nrows=0)
+        else:
+            frame = pd.read_csv(path, nrows=0)
+    except Exception:
+        return []
+    return [str(column) for column in frame.columns]
 
 
 def _source_from_path(path: Path, *, sequence_root: Path, default: str) -> str:

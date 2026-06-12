@@ -74,6 +74,7 @@ def load_camera_detections_csv_as_candidates(
     *,
     camera_models: dict[str, CameraModel],
     source: str | None = None,
+    default_source: str | None = None,
     sequence_id: str | None = None,
     fixed_depth_m: float | None = None,
     std_xy_m: float = 5.0,
@@ -91,7 +92,7 @@ def load_camera_detections_csv_as_candidates(
     if source is not None:
         frame["source"] = str(source)
     elif "source" not in frame.columns:
-        frame["source"] = "camera"
+        frame["source"] = str(default_source or "camera")
     if sequence_id is not None:
         frame["sequence_id"] = str(sequence_id)
     elif "sequence_id" not in frame.columns:

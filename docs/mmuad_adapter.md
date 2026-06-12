@@ -119,7 +119,9 @@ as `candidates.tsv` or `detections.txt`, `points.csv`, `points.tsv`,
 `topic_map.json`, `truth.csv`, compact truth arrays such as `truth.npy`, and
 optionally `calibration.json`. It also recognizes one-level split folders and
 MMUAD-style modality subfolders such as `livox_avia/<timestamp>.npy`,
-`ground_truth/<timestamp>.npy`, `tracking_results/<timestamp>.npy`, and
+`ground_truth/<timestamp>.npy`, `tracking_results/<timestamp>.npy`,
+`radar0/detections.csv` with exported polar range/azimuth columns,
+`cam0/detections.csv` with exported pixel/depth or bounding-box columns, and
 `class/<timestamp>.npy`:
 
 ```text
@@ -155,6 +157,10 @@ data/mmuad_export/
         1706255054.386069.npy
       tracking_results/
         1706255054.386069.npy
+      radar0/
+        detections.csv
+      cam0/
+        detections.csv
       class/
         1706255054.386069.npy
 ```
