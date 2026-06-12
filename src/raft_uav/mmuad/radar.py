@@ -43,14 +43,14 @@ def load_radar_polar_csv_as_candidates(
     calibration transform is applied.
     """
 
-    frame = pd.read_csv(path)
+    frame = _read_delimited_table(path)
     normalized = _normalize_radar_columns(frame)
     if sequence_id is not None:
         normalized["sequence_id"] = str(sequence_id)
     elif "sequence_id" not in normalized.columns:
         normalized["sequence_id"] = Path(path).parent.name
     if "time_s" not in normalized.columns:
-        raise ValueError("radar polar CSV requires time_s/timestamp_s/time column")
+        raise ValueError("radar polar table requires time_s/timestamp_s/time column")
     azimuth = _angle_to_rad(normalized["azimuth"].to_numpy(float), angle_unit=angle_unit)
     elevation = _angle_to_rad(normalized.get("elevation", 0.0), angle_unit=angle_unit)
     range_m = pd.to_numeric(normalized["range_m"], errors="coerce").to_numpy(float)
@@ -146,7 +146,7 @@ def _normalize_radar_columns(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.rename(columns=rename).copy()
     missing = {"range_m", "azimuth"}.difference(out.columns)
     if missing:
-        raise ValueError(f"radar polar CSV missing columns: {sorted(missing)}")
+        raise ValueError(f"radar polar table missing columns: {sorted(missing)}")
     if "elevation" not in out.columns:
         out["elevation"] = 0.0
     return out
@@ -169,3 +169,12 @@ def _radar_horizontal_std(
 ) -> np.ndarray:
     angular = np.abs(np.asarray(range_m, dtype=float)) * np.deg2rad(float(angle_std_deg))
     return np.maximum(float(range_std_m), angular)
+
+
+def _read_delimited_table(path: Path) -> pd.DataFrame:
+    path = Path(path)
+    if path.suffix.lower() == ".tsv":
+        return pd.read_csv(path, sep="\t")
+    if path.suffix.lower() == ".txt":
+        return pd.read_csv(path, sep=None, engine="python")
+    return pd.read_csv(path)

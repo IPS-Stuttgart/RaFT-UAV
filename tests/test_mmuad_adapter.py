@@ -503,6 +503,59 @@ def test_sequence_root_discovers_delimited_point_tables(tmp_path: Path) -> None:
     assert truth is not None
 
 
+def test_sequence_root_discovers_delimited_radar_and_camera_tables(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_modalities_delimited"
+    seq.mkdir()
+    pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "range_m": [10.0],
+            "azimuth_deg": [90.0],
+        }
+    ).to_csv(seq / "radar_polar.tsv", sep="\t", index=False)
+    pd.DataFrame(
+        {
+            "time_s": [1.0],
+            "source": ["cam0"],
+            "u_px": [50.0],
+            "v_px": [50.0],
+            "depth_m": [5.0],
+        }
+    ).to_csv(seq / "camera_detections.tsv", sep="\t", index=False)
+    (seq / "calibration.json").write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                },
+                "sensors": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0],
+            "x_m": [10.0, 0.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [0.0, 5.0],
+        }
+    ).to_csv(seq / "truth.csv", index=False)
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].radar_polar_csvs == (seq / "radar_polar.tsv",)
+    assert discovered[0].camera_detection_csvs == (seq / "camera_detections.tsv",)
+    assert set(candidates.rows["source"]) == {"cam0", "radar_polar"}
+    assert truth is not None
+
+
 def test_sequence_root_loads_exported_topic_map_sequence(tmp_path: Path) -> None:
     seq = tmp_path / "seq_topic_map"
     seq.mkdir()
@@ -1989,6 +2042,31 @@ def test_radar_polar_csv_converts_to_candidates(tmp_path: Path) -> None:
     assert abs(second["x_m"] - 10.0) < 1.0e-9
 
 
+def test_radar_polar_tsv_converts_to_candidates(tmp_path: Path) -> None:
+    from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
+
+    radar = tmp_path / "radar_polar.tsv"
+    pd.DataFrame(
+        {
+            "timestamp": [0.0],
+            "range": [10.0],
+            "bearing_deg": [90.0],
+            "track": ["r1"],
+        }
+    ).to_csv(radar, sep="\t", index=False)
+
+    candidates = load_radar_polar_csv_as_candidates(
+        radar,
+        sequence_id="seq_tsv_radar",
+        azimuth_convention="north-clockwise",
+    )
+
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_tsv_radar"
+    assert row["track_id"] == "r1"
+    assert abs(float(row["x_m"]) - 10.0) < 1.0e-9
+
+
 def test_camera_detections_backproject_to_world_candidates(tmp_path: Path) -> None:
     from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
 
@@ -2036,6 +2114,41 @@ def test_camera_detections_backproject_to_world_candidates(tmp_path: Path) -> No
     assert abs(row["y_m"]) < 1.0e-9
     assert abs(row["z_m"] - 10.0) < 1.0e-9
     assert row["class_name"] == "Mavic3"
+
+
+def test_camera_detections_txt_backproject_to_world_candidates(tmp_path: Path) -> None:
+    from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
+
+    calibration = tmp_path / "camera_calibration.json"
+    calibration.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    detections = tmp_path / "camera_detections.txt"
+    detections.write_text(
+        "time source u_px v_px depth_m\n0 cam0 50 50 10\n",
+        encoding="utf-8",
+    )
+
+    candidates = load_camera_detections_csv_as_candidates(
+        detections,
+        camera_models=load_camera_models(calibration),
+    )
+
+    row = candidates.rows.iloc[0]
+    assert row["source"] == "cam0"
+    assert (row["x_m"], row["y_m"], row["z_m"]) == (0.0, 0.0, 10.0)
 
 
 def test_camera_models_accept_opencv_matrix_intrinsics(tmp_path: Path) -> None:

@@ -113,9 +113,11 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 A normalized sequence export can be loaded from folders containing files named
 `candidates.csv`, `detections.csv`, `*_candidates.csv`, delimited variants such
 as `candidates.tsv` or `detections.txt`, `points.csv`, `points.tsv`,
-`*_points.txt`, compact trajectory arrays such as `trajectory.npy` /
-`candidates.npz`, exported ROS topic maps such as `topic_map.json`, `truth.csv`,
-compact truth arrays such as `truth.npy`, and optionally `calibration.json`:
+`*_points.txt`, exported polar radar and camera detection tables such as
+`radar_polar.tsv` or `camera_detections.txt`, compact trajectory arrays such as
+`trajectory.npy` / `candidates.npz`, exported ROS topic maps such as
+`topic_map.json`, `truth.csv`, compact truth arrays such as `truth.npy`, and
+optionally `calibration.json`:
 
 ```text
 data/mmuad_export/
@@ -137,6 +139,11 @@ data/mmuad_export/
     topic_map.json
     radar_export.csv
     truth_export.csv
+  seq006/
+    radar_polar.tsv
+    camera_detections.txt
+    calibration.json
+    truth.csv
 ```
 
 Run all discovered sequences with:
@@ -474,9 +481,10 @@ completion policy can affect leaderboard-style MSE.
 The adapter includes lightweight bridges for two common exported modalities that
 appear in anti-UAV datasets but are not yet parsed from native raw packets.
 
-### Polar Radar CSV Exports
+### Polar Radar Table Exports
 
-Use `--radar-polar-csv` for radar detections exported as range/azimuth rows:
+Use `--radar-polar-csv` for radar detections exported as CSV/TSV/TXT
+range/azimuth rows:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
@@ -492,10 +500,10 @@ Supported aliases include `range_m`, `azimuth_deg`, `elevation_deg`, `track_id`,
 unless a calibration file is applied later. This is not a native custom radar
 message parser.
 
-### Camera Detector CSV Exports
+### Camera Detector Table Exports
 
-Use `--camera-detections-csv` for detector outputs with pixel centers or boxes
-and metric depth:
+Use `--camera-detections-csv` for detector CSV/TSV/TXT outputs with pixel
+centers or boxes and metric depth:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \

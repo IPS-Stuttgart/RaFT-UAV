@@ -87,7 +87,7 @@ def load_camera_detections_csv_as_candidates(
     not a camera detector.
     """
 
-    frame = _normalize_camera_detection_columns(pd.read_csv(path))
+    frame = _normalize_camera_detection_columns(_read_delimited_table(path))
     if source is not None:
         frame["source"] = str(source)
     elif "source" not in frame.columns:
@@ -218,6 +218,15 @@ def _load_json_or_yaml(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"camera calibration must be a mapping: {path}")
     return payload
+
+
+def _read_delimited_table(path: Path) -> pd.DataFrame:
+    path = Path(path)
+    if path.suffix.lower() == ".tsv":
+        return pd.read_csv(path, sep="\t")
+    if path.suffix.lower() == ".txt":
+        return pd.read_csv(path, sep=None, engine="python")
+    return pd.read_csv(path)
 
 
 def _looks_like_single_camera(payload: dict[str, Any]) -> bool:

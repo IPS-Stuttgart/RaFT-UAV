@@ -218,17 +218,23 @@ def _candidate_files(path: Path) -> list[Path]:
         [
             item
             for item in files
-            if "radar_polar" not in item.stem.lower()
+            if not ("radar" in item.stem.lower() and "polar" in item.stem.lower())
             and "camera" not in item.stem.lower()
         ]
     )
 
 
 def _radar_polar_files(path: Path) -> list[Path]:
-    names = [path / "radar_polar.csv", path / "radar_detections_polar.csv"]
+    names = [
+        path / f"{stem}{suffix}"
+        for stem in ("radar_polar", "radar_detections_polar")
+        for suffix in (".csv", ".tsv", ".txt")
+    ]
     files = [item for item in names if item.exists()]
-    files.extend(sorted(path.glob("*_radar_polar.csv")))
-    files.extend(sorted(path.glob("*_polar_radar.csv")))
+    for suffix in (".csv", ".tsv", ".txt"):
+        files.extend(sorted(path.glob(f"*_radar_polar{suffix}")))
+        files.extend(sorted(path.glob(f"*_polar_radar{suffix}")))
+        files.extend(sorted(path.glob(f"*_radar_detections_polar{suffix}")))
     return _unique_paths(files)
 
 
@@ -276,10 +282,15 @@ def _candidate_trajectory_files(path: Path) -> list[Path]:
 
 
 def _camera_detection_files(path: Path) -> list[Path]:
-    names = [path / "camera_detections.csv", path / "image_detections.csv"]
+    names = [
+        path / f"{stem}{suffix}"
+        for stem in ("camera_detections", "image_detections")
+        for suffix in (".csv", ".tsv", ".txt")
+    ]
     files = [item for item in names if item.exists()]
-    files.extend(sorted(path.glob("*_camera_detections.csv")))
-    files.extend(sorted(path.glob("*_image_detections.csv")))
+    for suffix in (".csv", ".tsv", ".txt"):
+        files.extend(sorted(path.glob(f"*_camera_detections{suffix}")))
+        files.extend(sorted(path.glob(f"*_image_detections{suffix}")))
     return _unique_paths(files)
 
 
