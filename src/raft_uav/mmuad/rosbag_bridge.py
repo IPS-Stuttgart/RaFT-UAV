@@ -467,14 +467,24 @@ def _load_topic_candidate_export(
         for column in ("track_id", "std_xy_m", "std_z_m", "confidence", "class_name"):
             if column not in frame.columns and spec.get(column) is not None:
                 frame[column] = spec.get(column)
-        return CandidateFrame(normalize_candidate_columns(frame))
+        return CandidateFrame(
+            normalize_candidate_columns(
+                frame,
+                default_sequence_id=sequence_id,
+                default_source=source,
+            )
+        )
     frame = load_candidate_file(path, default_sequence_id=sequence_id, source=source)
     rows = frame.rows.copy()
     for column in ("track_id", "std_xy_m", "std_z_m", "confidence", "class_name"):
         if spec.get(column) is not None:
             rows[column] = spec.get(column)
     return CandidateFrame(
-        normalize_candidate_columns(rows, default_sequence_id=sequence_id)
+        normalize_candidate_columns(
+            rows,
+            default_sequence_id=sequence_id,
+            default_source=source,
+        )
     )
 
 
@@ -680,7 +690,11 @@ def _load_topic_geodetic_candidate_export(
         if column not in rows.columns and spec.get(column) is not None:
             rows[column] = spec.get(column)
     return CandidateFrame(
-        normalize_candidate_columns(rows, default_sequence_id=sequence_id)
+        normalize_candidate_columns(
+            rows,
+            default_sequence_id=sequence_id,
+            default_source=source,
+        )
     )
 
 

@@ -155,10 +155,20 @@ def camera_detection_frame_to_candidates(
         frame["source"] = str(source)
     elif "source" not in frame.columns:
         frame["source"] = str(default_source or "camera")
+    else:
+        frame["source"] = _fill_missing_text(
+            frame["source"],
+            default_text=str(default_source or "camera"),
+        )
     if sequence_id is not None:
         frame["sequence_id"] = str(sequence_id)
     elif "sequence_id" not in frame.columns:
         frame["sequence_id"] = str(default_sequence_id)
+    else:
+        frame["sequence_id"] = _fill_missing_text(
+            frame["sequence_id"],
+            default_text=str(default_sequence_id),
+        )
     if "depth_m" not in frame.columns:
         if fixed_depth_m is None:
             raise ValueError("camera detections need depth_m/range_m or --camera-fixed-depth-m")
@@ -190,7 +200,19 @@ def camera_detection_frame_to_candidates(
                 "class_name": str(row.get("class_name", "uav")),
             }
         )
-    return CandidateFrame(normalize_candidate_columns(pd.DataFrame.from_records(records)))
+    return CandidateFrame(
+        normalize_candidate_columns(
+            pd.DataFrame.from_records(records),
+            default_sequence_id=default_sequence_id,
+            default_source=str(source or default_source or "camera"),
+        )
+    )
+
+
+def _fill_missing_text(values: pd.Series, *, default_text: str) -> pd.Series:
+    text = values.where(values.notna(), default_text).astype(str).str.strip()
+    missing = text.eq("") | text.str.lower().isin({"nan", "none", "<na>"})
+    return text.where(~missing, str(default_text))
 
 
 def backproject_pixel_to_camera_xyz(

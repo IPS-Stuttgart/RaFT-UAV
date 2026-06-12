@@ -221,6 +221,7 @@ def normalize_candidate_columns(
     frame: pd.DataFrame,
     *,
     default_sequence_id: str = "default",
+    default_source: str = "candidate",
 ) -> pd.DataFrame:
     """Return a normalized candidate table with canonical column names.
 
@@ -236,7 +237,7 @@ def normalize_candidate_columns(
     if "sequence_id" not in out.columns:
         out["sequence_id"] = default_sequence_id
     if "source" not in out.columns:
-        out["source"] = "candidate"
+        out["source"] = default_source
     if "track_id" not in out.columns:
         out["track_id"] = np.nan
     if "std_xy_m" not in out.columns:
@@ -259,7 +260,12 @@ def normalize_candidate_columns(
         out["sequence_id"],
         default_sequence_id=default_sequence_id,
     )
-    out["source"] = out["source"].astype(str)
+    out["source"] = _normalize_text_values(
+        out["source"],
+        default_text=default_source,
+    )
+    if "track_id" in out.columns:
+        out["track_id"] = _normalize_optional_id_values(out["track_id"])
     out = out.loc[np.isfinite(out[["time_s", "x_m", "y_m", "z_m"]]).all(axis=1)].copy()
     return out.sort_values(["sequence_id", "time_s", "source"]).reset_index(drop=True)
 
@@ -294,10 +300,30 @@ def _normalize_sequence_id_values(
 ) -> pd.Series:
     """Return row-wise sequence ids, filling missing or blank entries."""
 
-    default = str(default_sequence_id)
+    return _normalize_text_values(values, default_text=default_sequence_id)
+
+
+def _normalize_text_values(
+    values: pd.Series,
+    *,
+    default_text: str,
+) -> pd.Series:
+    """Return stripped text values, filling missing-like entries."""
+
+    default = str(default_text)
     text = values.where(values.notna(), default).astype(str).str.strip()
     missing = text.eq("") | text.str.lower().isin({"nan", "none", "<na>"})
     return text.where(~missing, default)
+
+
+def _normalize_optional_id_values(values: pd.Series) -> pd.Series:
+    """Return optional ids, preserving values but making blanks null."""
+
+    out = values.copy()
+    text = values.where(values.notna(), "").astype(str).str.strip().str.lower()
+    missing = values.isna() | text.eq("") | text.isin({"nan", "none", "<na>"})
+    out.loc[missing] = np.nan
+    return out
 
 
 def _rename_aliases(frame: pd.DataFrame) -> pd.DataFrame:

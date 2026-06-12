@@ -87,6 +87,7 @@ def load_candidate_csv(
     rows = normalize_candidate_columns(
         raw,
         default_sequence_id=default_sequence_id,
+        default_source=source,
     )
     frame = CandidateFrame(rows)
     frame.validate()
@@ -131,7 +132,11 @@ def load_candidate_file(
         raise ValueError(f"unsupported candidate table extension: {path.suffix}")
     if _should_add_default_candidate_source(raw, source=source):
         raw["source"] = source
-    rows = normalize_candidate_columns(raw, default_sequence_id=default_sequence_id)
+    rows = normalize_candidate_columns(
+        raw,
+        default_sequence_id=default_sequence_id,
+        default_source=source,
+    )
     frame = CandidateFrame(rows)
     frame.validate()
     return frame

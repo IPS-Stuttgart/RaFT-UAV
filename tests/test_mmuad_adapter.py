@@ -6664,6 +6664,55 @@ def test_cli_accepts_explicit_camera_source_for_source_less_detection_file(
     assert (output / "mmuad_estimates.csv").exists()
 
 
+def test_camera_detections_fill_blank_source_from_default_source(tmp_path: Path) -> None:
+    from raft_uav.mmuad.camera import (
+        load_camera_detections_csv_as_candidates,
+        load_camera_models,
+    )
+
+    calibration = tmp_path / "camera_calibration.json"
+    calibration.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    detections = tmp_path / "detections.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": [np.nan, ""],
+            "time_s": [0.0, 1.0],
+            "source": [np.nan, ""],
+            "u_px": [50.0, 50.0],
+            "v_px": [50.0, 50.0],
+            "depth_m": [5.0, 5.0],
+        }
+    ).to_csv(detections, index=False)
+
+    candidates = load_camera_detections_csv_as_candidates(
+        detections,
+        camera_models=load_camera_models(calibration),
+        default_source="cam0",
+        sequence_id="seq_camera",
+    )
+
+    assert candidates.rows["source"].tolist() == ["cam0", "cam0"]
+    assert candidates.rows["sequence_id"].tolist() == ["seq_camera", "seq_camera"]
+    assert candidates.rows[["x_m", "y_m", "z_m"]].values.tolist() == [
+        [0.0, 0.0, 5.0],
+        [0.0, 0.0, 5.0],
+    ]
+
+
 def test_cli_accepts_repeated_camera_calibration_files_with_folder_sources(
     tmp_path: Path,
 ) -> None:
