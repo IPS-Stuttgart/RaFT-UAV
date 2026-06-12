@@ -158,6 +158,7 @@ def aggregate_radar_time_offset_sweep(
         for radar, truth in training_pairs:
             if radar.empty or truth.empty:
                 continue
+            frame_count += _radar_frame_count(radar)
             sweep = time_offset_sweep(
                 radar,
                 truth,
@@ -167,10 +168,22 @@ def aggregate_radar_time_offset_sweep(
             if sweep.empty:
                 continue
             row = sweep.iloc[0].to_dict()
-            frame_count += int(row.get("count", 0) / max(float(row.get("coverage", 1.0)), 1e-12))
-            selected.append(_radar_selected_errors_from_summary(row))
+            row_count = _optional_float(row.get("count"))
+            if row_count is not None and row_count > 0.0:
+                selected.append(_radar_selected_errors_from_summary(row))
         rows.append(_aggregate_error_frames(offset, selected, frame_count))
     return pd.DataFrame.from_records(rows, columns=["time_offset_s", *PAPER_METRIC_COLUMNS])
+
+
+def _radar_frame_count(radar: pd.DataFrame) -> int:
+    """Return the coverage denominator used by the radar oracle sweep."""
+
+    if radar.empty:
+        return 0
+    group_column = "frame_index" if "frame_index" in radar.columns else "time_s"
+    if group_column not in radar.columns:
+        return 0
+    return int(radar[group_column].dropna().nunique())
 
 
 def aggregate_measurement_time_offset_sweep(
