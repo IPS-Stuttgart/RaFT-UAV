@@ -92,6 +92,30 @@ def test_submission_frame_accepts_baseline_estimate_coordinate_columns():
     assert list(frame["z_m"]) == [60.0, 50.0]
 
 
+def test_submission_frame_fills_blank_and_stringified_missing_output_track_ids():
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq0"] * 6,
+            "time_s": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+            "state_x_m": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
+            "state_y_m": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "state_z_m": [5.0, 5.0, 5.0, 5.0, 5.0, 5.0],
+            "output_track_id": ["track-a", "", "   ", "nan", "None", "<NA>"],
+        }
+    )
+
+    frame = estimates_to_submission_frame(estimates, track_id="fallback")
+
+    assert list(frame["track_id"]) == [
+        "track-a",
+        "fallback",
+        "fallback",
+        "fallback",
+        "fallback",
+        "fallback",
+    ]
+
+
 def test_submission_json_and_zip_keep_default_sequence_rows(tmp_path):
     estimates = pd.DataFrame(
         {
