@@ -32,6 +32,26 @@ def test_results_frame_applies_default_sequence_mapping_without_sequence_column(
     assert list(results["timestamp"]) == [0.5, 1.0]
 
 
+def test_results_frame_accepts_baseline_estimate_coordinate_columns():
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq0"],
+            "time_s": [1.0],
+            "east_m": [10.0],
+            "north_m": [20.0],
+            "up_m": [30.0],
+        }
+    )
+
+    results = estimates_to_mmaud_results_frame(estimates, class_name="Mavic3")
+
+    assert list(results["sequence_id"]) == ["seq0"]
+    assert list(results["x"]) == [10.0]
+    assert list(results["y"]) == [20.0]
+    assert list(results["z"]) == [30.0]
+    assert list(results["uav_type"]) == ["Mavic3"]
+
+
 def test_submission_frame_fills_missing_and_blank_sequence_ids():
     estimates = pd.DataFrame(
         {
@@ -48,6 +68,28 @@ def test_submission_frame_fills_missing_and_blank_sequence_ids():
     assert list(frame["sequence_id"]) == ["default", "default"]
     assert list(frame["time_s"]) == [0.5, 1.0]
     assert list(frame["track_id"]) == ["track0", "track0"]
+
+
+def test_submission_frame_accepts_baseline_estimate_coordinate_columns():
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq0", "seq0"],
+            "time_s": [1.0, 0.5],
+            "east_m": [10.0, 20.0],
+            "north_m": [30.0, 40.0],
+            "up_m": [50.0, 60.0],
+            "output_track_id": ["track-a", None],
+        }
+    )
+
+    frame = estimates_to_submission_frame(estimates, track_id="fallback")
+
+    assert list(frame["sequence_id"]) == ["seq0", "seq0"]
+    assert list(frame["time_s"]) == [0.5, 1.0]
+    assert list(frame["track_id"]) == ["fallback", "track-a"]
+    assert list(frame["x_m"]) == [20.0, 10.0]
+    assert list(frame["y_m"]) == [40.0, 30.0]
+    assert list(frame["z_m"]) == [60.0, 50.0]
 
 
 def test_submission_json_and_zip_keep_default_sequence_rows(tmp_path):
