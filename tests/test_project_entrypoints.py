@@ -11,6 +11,15 @@ def _project_scripts() -> dict[str, str]:
     return dict(pyproject["project"]["scripts"])
 
 
+def _assert_entrypoint_target_imports(script_name: str) -> None:
+    module_name, function_name = _project_scripts()[script_name].split(":", 1)
+
+    __import__(module_name)
+    module = sys.modules[module_name]
+
+    assert callable(getattr(module, function_name))
+
+
 def test_documented_nested_lofo_tuning_entrypoint_is_exposed() -> None:
     scripts = _project_scripts()
 
@@ -21,12 +30,15 @@ def test_documented_nested_lofo_tuning_entrypoint_is_exposed() -> None:
 
 
 def test_nested_lofo_tuning_entrypoint_target_imports() -> None:
-    module_name, function_name = _project_scripts()["raft-uav-nested-lofo-tuning"].split(":", 1)
+    _assert_entrypoint_target_imports("raft-uav-nested-lofo-tuning")
 
-    __import__(module_name)
-    module = sys.modules[module_name]
 
-    assert callable(getattr(module, function_name))
+def test_mmuad_tracking_entrypoint_is_exposed() -> None:
+    assert _project_scripts()["raft-uav-mmuad-track"] == "raft_uav.mmuad.cli:main"
+
+
+def test_mmuad_tracking_entrypoint_target_imports() -> None:
+    _assert_entrypoint_target_imports("raft-uav-mmuad-track")
 
 
 def test_playbook_runnable_commands_are_installed_entrypoints() -> None:
