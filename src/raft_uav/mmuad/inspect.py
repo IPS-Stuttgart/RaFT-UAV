@@ -73,6 +73,7 @@ CANDIDATE_HINTS = (
 )
 RADAR_HINTS = ("radar", "mmwave", "mmw", "ti_")
 LIDAR_HINTS = ("lidar", "livox", "mid360", "avia", "point", "cloud", "pcd", "ply")
+POINT_CLOUD_HINTS = ("point", "cloud", "pcd", "ply", "pcl", "radar_enhance_pcl")
 CAMERA_HINTS = ("camera", "cam", "fisheye", "image", "rgb", "left", "right")
 AUDIO_HINTS = ("audio", "mic", "microphone", "wav")
 MODALITY_DIR_HINTS = (
@@ -184,7 +185,7 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
     if name in TRUTH_NAMES or any(hint in stem or hint in parent for hint in TRUTH_HINTS):
         return "truth", modality, None
     if suffix in NUMPY_SUFFIXES:
-        if any(hint in stem or hint in parent for hint in LIDAR_HINTS):
+        if any(hint in stem or hint in parent for hint in LIDAR_HINTS + POINT_CLOUD_HINTS):
             return "point_cloud", modality if modality != "unknown" else "lidar", inferred_time_s
         if any(hint in stem or hint in parent for hint in CANDIDATE_HINTS):
             return "candidate", modality, inferred_time_s

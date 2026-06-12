@@ -25,6 +25,7 @@ from raft_uav.mmuad.io import (
     JSON_TABLE_SUFFIXES as IO_JSON_TABLE_SUFFIXES,
     data_file_suffix,
     load_candidate_file,
+    infer_time_s_from_filename,
     load_point_cloud_file_as_candidates,
     load_truth_file,
     merge_candidate_frames,
@@ -80,10 +81,13 @@ POINT_DIR_TOKENS = (
     "points",
     "point_cloud",
     "cloud",
+    "pcl",
     "lidar",
     "livox",
     "livox_avia",
     "mid360",
+    "radar_enhance_pcl",
+    "enhance_pcl",
 )
 TRUTH_DIR_TOKENS = ("truth", "ground_truth", "gt", "label", "labels", "leica")
 CLASS_DIR_TOKENS = ("class", "classes", "uav_type", "uav_types", "category", "categories")
@@ -378,6 +382,7 @@ def load_sequence_export(
                 default=path.stem.replace("_points", "-cluster"),
             ),
             sequence_id=paths.sequence_id,
+            time_s=_official_point_cloud_frame_time_s(path, sequence_root=paths.root),
             voxel_size_m=voxel_size_m,
             min_points=min_cluster_points,
         )
@@ -881,6 +886,18 @@ def _point_numpy_files(path: Path) -> list[Path]:
             tokens=("truth", "ground_truth", "gt", "label"),
         )
     ]
+
+
+def _official_point_cloud_frame_time_s(path: Path, *, sequence_root: Path) -> float | None:
+    if data_file_suffix(path) not in {".npy", ".npz"}:
+        return None
+    if not _relative_path_has_any(
+        path,
+        root=sequence_root,
+        tokens=("lidar_360", "livox_avia", "radar_enhance_pcl"),
+    ):
+        return None
+    return infer_time_s_from_filename(path)
 
 
 def _relative_path_has_any(path: Path, *, root: Path, tokens: tuple[str, ...]) -> bool:

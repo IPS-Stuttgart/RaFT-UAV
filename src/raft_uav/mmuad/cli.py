@@ -60,6 +60,8 @@ from raft_uav.mmuad.splits import (
 from raft_uav.mmuad.submission import (
     compute_trajectory_metrics,
     load_sequence_class_map,
+    write_official_mmaud_results_csv,
+    write_official_ug2_codabench_zip,
     write_submission_csv,
     write_mmaud_results_csv,
     write_submission_json,
@@ -151,7 +153,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--submission-track-id", default="raft_uav_pp")
     parser.add_argument("--ug2-results-csv", type=Path)
     parser.add_argument("--ug2-codabench-zip", type=Path)
+    parser.add_argument("--ug2-official-results-csv", type=Path)
+    parser.add_argument("--ug2-official-codabench-zip", type=Path)
     parser.add_argument("--ug2-class-name", default="unknown")
+    parser.add_argument(
+        "--ug2-official-classification",
+        default="0",
+        help=(
+            "default integer Classification id for official Track 5 result rows; "
+            "numeric --ug2-class-map-file values override this per sequence"
+        ),
+    )
     parser.add_argument(
         "--ug2-class-map-file",
         "--ug2-class-map-csv",
@@ -309,6 +321,24 @@ def main(argv: list[str] | None = None) -> int:
                 output.estimates,
                 args.ug2_codabench_zip,
                 class_name=args.ug2_class_name,
+                class_map=class_map,
+            )
+        )
+    if args.ug2_official_results_csv is not None:
+        paths["ug2_official_results_csv"] = str(
+            write_official_mmaud_results_csv(
+                output.estimates,
+                args.ug2_official_results_csv,
+                classification=args.ug2_official_classification,
+                class_map=class_map,
+            )
+        )
+    if args.ug2_official_codabench_zip is not None:
+        paths["ug2_official_codabench_zip"] = str(
+            write_official_ug2_codabench_zip(
+                output.estimates,
+                args.ug2_official_codabench_zip,
+                classification=args.ug2_official_classification,
                 class_map=class_map,
             )
         )

@@ -2645,6 +2645,69 @@ def test_cli_writes_ug2_results_with_class_map_file_alias(tmp_path: Path) -> Non
     assert rows["uav_type"].tolist() == ["Mavic3", "Mavic3"]
 
 
+def test_cli_writes_official_track5_results_and_zip(tmp_path: Path) -> None:
+    candidates = tmp_path / "candidates.csv"
+    truth = tmp_path / "truth.csv"
+    class_map = tmp_path / "classes.yaml"
+    output = tmp_path / "out"
+    results = output / "official_mmaud_results.csv"
+    zip_path = output / "official_submission.zip"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "time_s": [0.0, 1.0],
+            "source": ["radar", "radar"],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+        }
+    ).to_csv(candidates, index=False)
+    pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+        }
+    ).to_csv(truth, index=False)
+    class_map.write_text(
+        "\n".join(["class_map:", "  seqA:", "    uav_type: 2"]),
+        encoding="utf-8",
+    )
+
+    status = mmuad_cli_main(
+        [
+            "--candidate-csv",
+            str(candidates),
+            "--truth-csv",
+            str(truth),
+            "--ug2-class-map-file",
+            str(class_map),
+            "--ug2-official-results-csv",
+            str(results),
+            "--ug2-official-codabench-zip",
+            str(zip_path),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    rows = pd.read_csv(results)
+    assert rows.columns.tolist() == [
+        "Sequence",
+        "Timestamp",
+        "Position",
+        "Classification",
+    ]
+    assert rows["Classification"].tolist() == [2, 2]
+    with ZipFile(zip_path) as archive:
+        assert archive.namelist() == ["mmaud_results.csv"]
+    loaded = load_mmaud_results_file(zip_path)
+    assert loaded.rows["uav_type"].tolist() == ["2", "2"]
+
+
 def test_results_completion_resamples_to_truth_timestamps(tmp_path: Path) -> None:
     results = validate_mmaud_results_frame(
         pd.DataFrame(
@@ -3050,6 +3113,56 @@ def test_sequence_root_loads_mmuad_modality_folder_layout(tmp_path: Path) -> Non
     assert output.estimates["class_name"].tolist() == ["2"]
     results = estimates_to_mmaud_results_frame(output.estimates, class_name="unknown")
     assert results["uav_type"].tolist() == ["2"]
+
+
+def test_sequence_root_loads_official_track5_point_cloud_folders(tmp_path: Path) -> None:
+    seq = tmp_path / "train" / "seq1"
+    timestamp = "1706255054.386069"
+    for folder, offset in (
+        ("lidar_360", 0.0),
+        ("livox_avia", 10.0),
+        ("radar_enhance_pcl", 20.0),
+    ):
+        directory = seq / folder
+        directory.mkdir(parents=True, exist_ok=True)
+        np.save(
+            directory / f"{timestamp}.npy",
+            np.array(
+                [
+                    [1.0 + offset, 2.0, 3.0, 0.1],
+                    [1.1 + offset, 2.0, 3.0, 0.2],
+                    [1.0 + offset, 2.1, 3.0, 0.3],
+                ]
+            ),
+        )
+    truth_dir = seq / "ground_truth"
+    truth_dir.mkdir()
+    np.save(truth_dir / f"{timestamp}.npy", np.array([1.0, 2.0, 3.0]))
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(
+        discovered[0],
+        voxel_size_m=0.5,
+        min_cluster_points=3,
+    )
+
+    assert [sequence.sequence_id for sequence in discovered] == ["seq1"]
+    assert {
+        path.relative_to(seq).as_posix()
+        for path in discovered[0].point_cloud_files
+    } == {
+        f"lidar_360/{timestamp}.npy",
+        f"livox_avia/{timestamp}.npy",
+        f"radar_enhance_pcl/{timestamp}.npy",
+    }
+    assert candidates.rows["source"].tolist() == [
+        "lidar_360",
+        "livox_avia",
+        "radar_enhance_pcl",
+    ]
+    assert candidates.rows["time_s"].tolist() == [float(timestamp)] * 3
+    assert truth is not None
+    assert truth.rows["time_s"].tolist() == [float(timestamp)]
 
 
 def test_sequence_root_loads_binary_livox_point_cloud_export(tmp_path: Path) -> None:

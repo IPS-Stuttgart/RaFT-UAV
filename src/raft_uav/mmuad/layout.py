@@ -48,7 +48,15 @@ CANDIDATE_TOKENS = (
     "tracking",
     "result",
 )
-POINT_CLOUD_TOKENS = ("points", "point_cloud", "cloud", "lidar", "livox")
+POINT_CLOUD_TOKENS = (
+    "points",
+    "point_cloud",
+    "cloud",
+    "pcl",
+    "lidar",
+    "livox",
+    "radar_enhance_pcl",
+)
 MODALITY_DIR_TOKENS = (
     "camera",
     "cam",

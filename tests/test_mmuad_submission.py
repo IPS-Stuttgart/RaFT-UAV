@@ -2,10 +2,20 @@ import json
 from zipfile import ZipFile
 
 import pandas as pd
+import pytest
 
+from raft_uav.mmuad.evaluator import (
+    evaluate_mmaud_results,
+    load_mmaud_results_file,
+    validate_mmaud_results_frame,
+)
 from raft_uav.mmuad.submission import (
+    OFFICIAL_UG2_RESULT_COLUMNS,
+    estimates_to_official_mmaud_results_frame,
     estimates_to_mmaud_results_frame,
     estimates_to_submission_frame,
+    write_official_mmaud_results_csv,
+    write_official_ug2_codabench_zip,
     write_submission_json,
     write_submission_zip,
 )
@@ -139,3 +149,134 @@ def test_submission_json_and_zip_keep_default_sequence_rows(tmp_path):
 
     assert set(zip_payload["sequences"]) == {"default"}
     assert len(zip_payload["sequences"]["default"]) == 2
+
+
+def test_official_results_frame_uses_track5_columns_and_position_tuple():
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq2", "seq1"],
+            "time_s": [2.0, 1.0],
+            "state_x_m": [10.0, 1.0],
+            "state_y_m": [20.0, 2.0],
+            "state_z_m": [30.0, 3.0],
+            "class_name": ["1", "0"],
+        }
+    )
+
+    results = estimates_to_official_mmaud_results_frame(estimates)
+
+    assert list(results.columns) == list(OFFICIAL_UG2_RESULT_COLUMNS)
+    assert results.to_dict("records") == [
+        {
+            "Sequence": "seq1",
+            "Timestamp": 1.0,
+            "Position": "(1,2,3)",
+            "Classification": 0,
+        },
+        {
+            "Sequence": "seq2",
+            "Timestamp": 2.0,
+            "Position": "(10,20,30)",
+            "Classification": 1,
+        },
+    ]
+
+
+def test_official_results_frame_requires_integer_classification():
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq1"],
+            "time_s": [1.0],
+            "state_x_m": [1.0],
+            "state_y_m": [2.0],
+            "state_z_m": [3.0],
+            "class_name": ["Mavic3"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="Classification values must be integer ids"):
+        estimates_to_official_mmaud_results_frame(estimates)
+
+
+def test_official_results_csv_and_zip_are_readable_by_local_loader(tmp_path):
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "time_s": [0.0, 1.0],
+            "state_x_m": [1.0, 2.0],
+            "state_y_m": [3.0, 4.0],
+            "state_z_m": [5.0, 6.0],
+        }
+    )
+
+    csv_path = write_official_mmaud_results_csv(
+        estimates,
+        tmp_path / "mmaud_results.csv",
+        class_map={"seqA": "2"},
+    )
+    zip_path = write_official_ug2_codabench_zip(
+        estimates,
+        tmp_path / "official_submission.zip",
+        class_map={"seqA": "2"},
+    )
+
+    csv_frame = pd.read_csv(csv_path)
+    assert list(csv_frame.columns) == list(OFFICIAL_UG2_RESULT_COLUMNS)
+    with ZipFile(zip_path) as archive:
+        assert archive.namelist() == ["mmaud_results.csv"]
+        zipped_frame = pd.read_csv(archive.open("mmaud_results.csv"))
+    assert list(zipped_frame.columns) == list(OFFICIAL_UG2_RESULT_COLUMNS)
+
+    loaded = load_mmaud_results_file(zip_path)
+    assert loaded.rows["sequence_id"].tolist() == ["seqA", "seqA"]
+    assert loaded.rows["uav_type"].tolist() == ["2", "2"]
+    assert loaded.rows[["x", "y", "z"]].values.tolist() == [
+        [1.0, 3.0, 5.0],
+        [2.0, 4.0, 6.0],
+    ]
+
+
+def test_official_track5_results_loader_accepts_position_strings():
+    frame = validate_mmaud_results_frame(
+        pd.DataFrame(
+            {
+                "Sequence": ["seq1"],
+                "Timestamp": [1706255054.386069],
+                "Position": ["(1.5,2.5,3.5)"],
+                "Classification": [3],
+            }
+        )
+    )
+
+    assert frame.loc[0, "sequence_id"] == "seq1"
+    assert frame.loc[0, ["x", "y", "z"]].tolist() == [1.5, 2.5, 3.5]
+    assert frame.loc[0, "uav_type"] == "3"
+
+
+def test_official_track5_results_evaluator_reports_public_metric_aliases():
+    results = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,0)", "(2,0,0)"],
+            "Classification": [1, 0],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [0.0, 0.0],
+            "uav_type": ["1", "1"],
+        }
+    )
+
+    evaluated = evaluate_mmaud_results(results, truth)
+
+    pooled = evaluated["summary"]["pooled"]
+    assert pooled["pose_mse_loss_m2"] == 0.5
+    assert pooled["mean_square_loss_m2"] == 0.5
+    assert pooled["uav_type_accuracy"] == 0.5
+    assert pooled["classification_accuracy"] == 0.5

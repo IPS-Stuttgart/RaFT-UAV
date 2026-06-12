@@ -8,6 +8,7 @@ outputs can be sanity-checked before official submission packaging.
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -24,7 +25,11 @@ from raft_uav.mmuad.schema import (
     normalize_time_column_aliases,
     normalize_truth_columns,
 )
-from raft_uav.mmuad.submission import UG2_RESULT_COLUMNS, load_sequence_class_map
+from raft_uav.mmuad.submission import (
+    OFFICIAL_UG2_RESULT_COLUMNS,
+    UG2_RESULT_COLUMNS,
+    load_sequence_class_map,
+)
 
 
 @dataclass(frozen=True)
@@ -70,6 +75,9 @@ def load_mmaud_results_zip(
 def validate_mmaud_results_frame(frame: pd.DataFrame) -> pd.DataFrame:
     """Return a normalized result frame or raise with actionable errors."""
 
+    if _has_official_track5_columns(frame):
+        frame = _official_track5_results_to_local_frame(frame)
+
     rename = {
         "time_s": "timestamp",
         "t": "timestamp",
@@ -101,6 +109,56 @@ def validate_mmaud_results_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if rows.empty:
         raise ValueError("mmaud_results contains no finite trajectory rows")
     return rows.sort_values(["sequence_id", "timestamp"]).reset_index(drop=True)
+
+
+def _has_official_track5_columns(frame: pd.DataFrame) -> bool:
+    lower = {str(column).lower() for column in frame.columns}
+    return {column.lower() for column in OFFICIAL_UG2_RESULT_COLUMNS}.issubset(lower)
+
+
+def _official_track5_results_to_local_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    lower_to_original = {str(column).lower(): column for column in frame.columns}
+    sequence_col = lower_to_original["sequence"]
+    timestamp_col = lower_to_original["timestamp"]
+    position_col = lower_to_original["position"]
+    classification_col = lower_to_original["classification"]
+    positions = [_parse_position_cell(value) for value in frame[position_col]]
+    xyz = pd.DataFrame(positions, columns=["x", "y", "z"], index=frame.index)
+    return pd.DataFrame(
+        {
+            "sequence_id": frame[sequence_col],
+            "timestamp": frame[timestamp_col],
+            "x": xyz["x"],
+            "y": xyz["y"],
+            "z": xyz["z"],
+            "uav_type": frame[classification_col].astype(str),
+            "score": 1.0,
+        }
+    )
+
+
+def _parse_position_cell(value: Any) -> tuple[float, float, float]:
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            parsed = ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            parsed = [
+                part
+                for part in text.strip("[]()").replace(";", ",").split(",")
+                if part.strip()
+            ]
+    else:
+        parsed = value
+    if isinstance(parsed, np.ndarray):
+        values = parsed.reshape(-1).tolist()
+    elif isinstance(parsed, list | tuple):
+        values = list(parsed)
+    else:
+        raise ValueError(f"invalid Track 5 Position value: {value!r}")
+    if len(values) != 3:
+        raise ValueError(f"Track 5 Position must contain exactly 3 values: {value!r}")
+    return (float(values[0]), float(values[1]), float(values[2]))
 
 
 def evaluate_mmaud_results(
@@ -259,6 +317,7 @@ def _error_summary(frame: pd.DataFrame) -> dict[str, Any]:
         "mean_3d_m": float(np.nanmean(err3)),
         "rmse_3d_m": float(np.sqrt(np.nanmean(err3**2))),
         "pose_mse_loss_m2": float(np.nanmean(err3**2)),
+        "mean_square_loss_m2": float(np.nanmean(err3**2)),
         "p50_3d_m": float(np.nanpercentile(err3, 50.0)),
         "p95_3d_m": float(np.nanpercentile(err3, 95.0)),
         "max_3d_m": float(np.nanmax(err3)),
@@ -273,6 +332,7 @@ def _error_summary(frame: pd.DataFrame) -> dict[str, Any]:
             correct = typed["uav_type_correct"].astype(bool).to_numpy()
             out["uav_type_count"] = int(len(correct))
             out["uav_type_accuracy"] = float(np.mean(correct))
+            out["classification_accuracy"] = float(np.mean(correct))
     return out
 
 
