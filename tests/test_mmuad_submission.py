@@ -280,3 +280,51 @@ def test_official_track5_results_evaluator_reports_public_metric_aliases():
     assert pooled["mean_square_loss_m2"] == 0.5
     assert pooled["uav_type_accuracy"] == 0.5
     assert pooled["classification_accuracy"] == 0.5
+
+
+def test_public_track5_metric_protocol_uses_truth_timestamp_denominator():
+    results = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1", "seq1", "seq1"],
+            "Timestamp": [0.0, 1.0, 1.0, 9.0],
+            "Position": ["(0,0,0)", "(2,0,0)", "(3,0,0)", "(9,0,0)"],
+            "Classification": [1, 0, 1, 1],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1", "seq1"],
+            "time_s": [0.0, 1.0, 2.0],
+            "x_m": [0.0, 1.0, 2.0],
+            "y_m": [0.0, 0.0, 0.0],
+            "z_m": [0.0, 0.0, 0.0],
+            "uav_type": ["1", "1", "1"],
+        }
+    )
+
+    evaluated = evaluate_mmaud_results(
+        results,
+        truth,
+        metric_protocol="public-track5",
+        timestamp_tolerance_s=0.0,
+    )
+
+    summary = evaluated["summary"]
+    pooled = summary["pooled"]
+    assert summary["metric_protocol"] == "public_track5_timestamp_aligned"
+    assert summary["public_track5_metric"] is True
+    assert summary["closed_codabench_evaluator"] is False
+    assert summary["truth_count"] == 3
+    assert summary["prediction_count"] == 4
+    assert summary["matched_count"] == 2
+    assert summary["missing_prediction_count"] == 1
+    assert summary["duplicate_prediction_count"] == 1
+    assert summary["extra_prediction_count"] == 1
+    assert summary["all_truth_timestamps_matched"] is False
+    assert summary["truth_coverage_fraction"] == 2 / 3
+    assert pooled["mean_square_loss_m2"] == 0.5
+    assert pooled["classification_accuracy"] == 0.5
+    reasons = evaluated["rows"]["unmatched_reason"].fillna("").tolist()
+    assert "missing_prediction" in reasons
+    assert "duplicate_prediction" in reasons
+    assert "extra_prediction" in reasons
