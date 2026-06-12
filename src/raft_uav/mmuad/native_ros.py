@@ -6,6 +6,7 @@ The extractor currently supports common message families that appear in UAV
 tracking logs:
 
 * ``sensor_msgs/msg/PointCloud2`` -> clustered candidate detections;
+* ``vision_msgs/msg/Detection3D`` / ``Detection3DArray`` -> bbox center rows;
 * ``geometry_msgs/msg/PoseStamped`` -> truth rows or candidate rows;
 * ``geometry_msgs/msg/PoseArray`` -> batched truth rows or candidate rows;
 * ``geometry_msgs/msg/PointStamped`` -> truth rows or candidate rows;
@@ -56,6 +57,9 @@ def extract_native_rosbag_topic_map(
 
     ``pointcloud2_candidate``
         Decode ``sensor_msgs/msg/PointCloud2`` and cluster points.
+    ``detection3d_truth`` / ``detection3d_array_truth`` /
+    ``detection3d_candidate`` / ``detection3d_array_candidate``
+        Convert vision_msgs 3D detection bbox centers into truth/candidate rows.
     ``pose_truth`` / ``odometry_truth``
         Convert pose/odometry messages into truth rows.
     ``point_truth`` / ``transform_truth`` / ``tf_truth`` / ``path_truth`` /
@@ -108,6 +112,49 @@ def extract_native_rosbag_topic_map(
                     )
                     candidate_frames.append(frame)
                     rows = len(frame.rows)
+                elif kind in {"detection3d_truth", "detection3d_array_truth"}:
+                    rows_for_message = detection3d_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        frame_id=spec.get("frame_id"),
+                    )
+                    truth_rows.extend(rows_for_message)
+                    rows = len(rows_for_message)
+                elif kind in {"detection3d_candidate", "detection3d_array_candidate"}:
+                    rows_for_message = detection3d_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        frame_id=spec.get("frame_id"),
+                    )
+                    candidate_rows = []
+                    for row in rows_for_message:
+                        row.update(
+                            {
+                                "source": source,
+                                "track_id": spec.get(
+                                    "track_id",
+                                    row.get("detection_id", source),
+                                ),
+                                "std_xy_m": spec.get("std_xy_m", 2.0),
+                                "std_z_m": spec.get("std_z_m", 5.0),
+                                "confidence": spec.get(
+                                    "confidence",
+                                    row.get("confidence", 1.0),
+                                ),
+                                "class_name": spec.get(
+                                    "class_name",
+                                    row.get("class_name", "uav"),
+                                ),
+                            }
+                        )
+                        candidate_rows.append(row)
+                    if candidate_rows:
+                        candidate_frames.append(
+                            CandidateFrame(pd.DataFrame.from_records(candidate_rows))
+                        )
+                    rows = len(candidate_rows)
                 elif kind in {
                     "pose_truth",
                     "odometry_truth",
@@ -240,6 +287,60 @@ def position_message_to_row(message: Any, *, sequence_id: str, time_s: float) ->
     }
 
 
+def detection3d_message_to_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    frame_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Convert vision_msgs Detection3D/Detection3DArray messages into rows."""
+
+    detections = getattr(message, "detections", None)
+    if detections is None:
+        detections = [message]
+    parent_time_s = _message_stamp_time_s(message)
+    parent_frame_id = _message_frame_id(message)
+    rows: list[dict[str, Any]] = []
+    for detection in detections:
+        if not _frame_filter_matches(
+            detection,
+            child_frame_id=None,
+            frame_id=frame_id,
+            fallback_frame_id=parent_frame_id,
+        ):
+            continue
+        position = _detection3d_position(detection)
+        if position is None:
+            continue
+        detection_time_s = _message_stamp_time_s(detection)
+        row = {
+            "sequence_id": sequence_id,
+            "time_s": (
+                detection_time_s
+                if detection_time_s is not None
+                else parent_time_s
+                if parent_time_s is not None
+                else float(time_s)
+            ),
+            "x_m": float(getattr(position, "x")),
+            "y_m": float(getattr(position, "y")),
+            "z_m": float(getattr(position, "z")),
+        }
+        _add_frame_metadata(row, detection, fallback_frame_id=parent_frame_id)
+        detection_id = getattr(detection, "id", None)
+        if detection_id not in (None, ""):
+            row["detection_id"] = str(detection_id)
+        confidence = _detection3d_confidence(detection)
+        if confidence is not None:
+            row["confidence"] = float(confidence)
+        class_name = _detection3d_class_name(detection)
+        if class_name is not None:
+            row["class_name"] = class_name
+        rows.append(row)
+    return rows
+
+
 def position_message_to_rows(
     message: Any,
     *,
@@ -367,3 +468,49 @@ def _position_from_message(message: Any) -> Any | None:
     if hasattr(pose, "pose"):
         pose = pose.pose
     return getattr(pose, "position", None)
+
+
+def _detection3d_position(detection: Any) -> Any | None:
+    bbox = getattr(detection, "bbox", None)
+    center = getattr(bbox, "center", None)
+    if center is None:
+        return None
+    return _position_from_message(center)
+
+
+def _detection3d_confidence(detection: Any) -> float | None:
+    result = _first_detection_result(detection)
+    if result is None:
+        return None
+    score = getattr(result, "score", None)
+    if score is not None:
+        return float(score)
+    hypothesis = getattr(result, "hypothesis", None)
+    if hypothesis is not None and getattr(hypothesis, "score", None) is not None:
+        return float(hypothesis.score)
+    return None
+
+
+def _detection3d_class_name(detection: Any) -> str | None:
+    result = _first_detection_result(detection)
+    if result is None:
+        return None
+    class_id = getattr(result, "class_id", None)
+    if class_id not in (None, ""):
+        return str(class_id)
+    hypothesis = getattr(result, "hypothesis", None)
+    if hypothesis is not None:
+        hypothesis_id = getattr(hypothesis, "class_id", getattr(hypothesis, "id", None))
+        if hypothesis_id not in (None, ""):
+            return str(hypothesis_id)
+    result_id = getattr(result, "id", None)
+    if result_id not in (None, ""):
+        return str(result_id)
+    return None
+
+
+def _first_detection_result(detection: Any) -> Any | None:
+    results = getattr(detection, "results", None)
+    if not results:
+        return None
+    return results[0]

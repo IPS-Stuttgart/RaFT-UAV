@@ -39,7 +39,11 @@ from raft_uav.mmuad.mot import (
     compute_multi_object_metrics,
     run_mmuad_multi_object_tracker,
 )
-from raft_uav.mmuad.native_ros import position_message_to_row, position_message_to_rows
+from raft_uav.mmuad.native_ros import (
+    detection3d_message_to_rows,
+    position_message_to_row,
+    position_message_to_rows,
+)
 from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates, pointcloud2_to_dataframe
 from raft_uav.mmuad.rosbag_bridge import (
     inspect_rosbag,
@@ -3144,6 +3148,39 @@ def test_ros2_topic_map_template_infers_pose_array_topics(tmp_path: Path) -> Non
     assert payload["exports"][1]["source"] is None
 
 
+def test_ros2_topic_map_template_infers_detection3d_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /detector/detections",
+                "        type: vision_msgs/msg/Detection3DArray",
+                "      message_count: 2",
+                "    - topic_metadata:",
+                "        name: /ground_truth/detection",
+                "        type: vision_msgs/msg/Detection3D",
+                "      message_count: 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "detection3d_array_candidate",
+        "detection3d_truth",
+    ]
+    assert payload["exports"][0]["source"] == "detector_detections"
+    assert payload["exports"][1]["source"] is None
+
+
 def test_native_ros_position_message_to_row_accepts_common_position_messages() -> None:
     point_message = SimpleNamespace(point=SimpleNamespace(x=1.0, y=2.0, z=3.0))
     transform_message = SimpleNamespace(
@@ -3276,6 +3313,58 @@ def test_native_ros_position_message_to_rows_expands_pose_array_parent_header() 
     assert rows[0]["x_m"] == 1.0
     assert rows[0]["frame_id"] == "world"
     assert rows[1]["z_m"] == 6.0
+
+
+def test_native_ros_detection3d_message_to_rows_extracts_bbox_centers() -> None:
+    detections = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=40, nanosec=500_000_000),
+            frame_id="world",
+        ),
+        detections=[
+            SimpleNamespace(
+                id="det-1",
+                bbox=SimpleNamespace(
+                    center=SimpleNamespace(
+                        position=SimpleNamespace(x=1.0, y=2.0, z=3.0)
+                    )
+                ),
+                results=[
+                    SimpleNamespace(
+                        hypothesis=SimpleNamespace(class_id="uav", score=0.8)
+                    )
+                ],
+            ),
+            SimpleNamespace(
+                header=SimpleNamespace(frame_id="camera"),
+                id="det-2",
+                bbox=SimpleNamespace(
+                    center=SimpleNamespace(
+                        position=SimpleNamespace(x=4.0, y=5.0, z=6.0)
+                    )
+                ),
+                results=[SimpleNamespace(class_id="bird", score=0.2)],
+            ),
+        ],
+    )
+
+    rows = detection3d_message_to_rows(
+        detections,
+        sequence_id="seq_detection",
+        time_s=1.0,
+        frame_id="world",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["sequence_id"] == "seq_detection"
+    assert rows[0]["time_s"] == 40.5
+    assert rows[0]["x_m"] == 1.0
+    assert rows[0]["y_m"] == 2.0
+    assert rows[0]["z_m"] == 3.0
+    assert rows[0]["frame_id"] == "world"
+    assert rows[0]["detection_id"] == "det-1"
+    assert rows[0]["confidence"] == 0.8
+    assert rows[0]["class_name"] == "uav"
 
 
 def test_pointcloud2_decoder_and_candidate_clustering() -> None:

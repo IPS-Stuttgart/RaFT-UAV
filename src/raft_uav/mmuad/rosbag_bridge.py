@@ -163,9 +163,14 @@ def load_topic_map_exports(path: Path, *, base_dir: Path | None = None) -> Topic
 def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
     name = str(topic.get("name", topic.get("topic", ""))).lower()
     msg_type = str(topic.get("type", topic.get("msgtype", ""))).lower()
+    compact_type = msg_type.replace("_", "")
     truth_like = any(token in name for token in ("truth", "ground", "gt", "label", "mocap"))
     if "pointcloud2" in msg_type:
         return "pointcloud2_candidate"
+    if "detection3darray" in compact_type:
+        return "detection3d_array_truth" if truth_like else "detection3d_array_candidate"
+    if "detection3d" in compact_type:
+        return "detection3d_truth" if truth_like else "detection3d_candidate"
     if "tfmessage" in msg_type or msg_type.endswith("/tfmessage"):
         return "tf_truth" if truth_like else "tf_candidate"
     if msg_type.endswith("/path") or msg_type.endswith("msg/path"):
