@@ -415,6 +415,66 @@ extrapolation. This is useful for validating row coverage, but it should be
 reported separately from raw tracker output because completion policy can affect
 leaderboard-style MSE.
 
+## Radar, Camera, And Classification Bridges
+
+The adapter includes lightweight bridges for two common exported modalities that
+appear in anti-UAV datasets but are not yet parsed from native raw packets.
+
+### Polar Radar CSV Exports
+
+Use `--radar-polar-csv` for radar detections exported as range/azimuth rows:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --radar-polar-csv data/mmuad_export/seq001/radar_polar.csv \
+  --radar-azimuth-convention north-clockwise \
+  --radar-angle-unit deg \
+  --truth-csv data/mmuad_export/seq001/truth.csv \
+  --output-dir outputs/mmuad_radar_polar
+```
+
+Supported aliases include `range_m`, `azimuth_deg`, `elevation_deg`, `track_id`,
+`confidence`, and common variants. Coordinates are in the radar/export frame
+unless a calibration file is applied later. This is not a native custom radar
+message parser.
+
+### Camera Detector CSV Exports
+
+Use `--camera-detections-csv` for detector outputs with pixel centers or boxes
+and metric depth:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --camera-detections-csv data/mmuad_export/seq001/camera_detections.csv \
+  --camera-calibration-file data/mmuad_export/seq001/camera_calibration.json \
+  --truth-csv data/mmuad_export/seq001/truth.csv \
+  --output-dir outputs/mmuad_camera_detections
+```
+
+The camera calibration file contains intrinsics (`fx`, `fy`, `cx`, `cy`) and an
+optional camera-to-world rigid transform. Detections can provide `u_px`/`v_px`
+or `x1,y1,x2,y2` boxes. Depth must come from `depth_m`/`range_m`, or from a
+fixed fallback via `--camera-fixed-depth-m`. This bridge does not run image
+object detection; it consumes detector exports.
+
+### Sequence Class Inference
+
+If detector/candidate rows include useful `class_name` values, the CLI can infer
+one UAV type per sequence and use it in `mmaud_results.csv`:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --sequence-root data/mmuad_export \
+  --infer-ug2-class-map-from-candidates \
+  --inferred-class-map-csv outputs/mmuad_val/inferred_classes.csv \
+  --ug2-results-csv outputs/mmuad_val/mmaud_results.csv \
+  --ug2-codabench-zip outputs/mmuad_val/ug2_submission.zip \
+  --output-dir outputs/mmuad_val
+```
+
+Explicit class maps still take precedence over inferred maps. This is a simple
+weighted-vote classifier, not a learned UAV type recognition model.
+
 ## Native ROS And PointCloud2 Bridge
 
 The adapter also includes an optional native ROS extraction path. Normal imports

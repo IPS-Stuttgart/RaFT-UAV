@@ -14,7 +14,11 @@ from raft_uav.mmuad.calibration import (
     transform_candidate_frame,
 )
 from raft_uav.mmuad.completion import complete_results_to_truth_timestamps
-from raft_uav.mmuad.evaluator import evaluate_mmaud_results, load_mmaud_results_csv
+from raft_uav.mmuad.evaluator import (
+    evaluate_mmaud_results,
+    load_mmaud_results_csv,
+    write_evaluation_artifacts,
+)
 from raft_uav.mmuad.evaluator import validate_mmaud_results_frame
 from raft_uav.mmuad.evaluate import evaluate_submission_csv
 from raft_uav.mmuad.inspect import inspect_sequence_root, write_layout_report
@@ -1191,3 +1195,141 @@ def test_calibration_file_accepts_yaml_json_subset(tmp_path: Path) -> None:
 
     assert calibration.world_frame == "test"
     assert calibration.get("radar") is not None
+
+
+def test_radar_polar_csv_converts_to_candidates(tmp_path: Path) -> None:
+    from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
+
+    radar = tmp_path / "radar_polar.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, 1.0],
+            "range_m": [10.0, 10.0],
+            "azimuth_deg": [0.0, 90.0],
+            "elevation_deg": [0.0, 0.0],
+            "track_id": ["r1", "r1"],
+            "confidence": [0.8, 0.9],
+        }
+    ).to_csv(radar, index=False)
+
+    candidates = load_radar_polar_csv_as_candidates(
+        radar,
+        azimuth_convention="north-clockwise",
+    )
+
+    assert len(candidates.rows) == 2
+    first = candidates.rows.iloc[0]
+    second = candidates.rows.iloc[1]
+    assert abs(first["x_m"]) < 1.0e-9
+    assert abs(first["y_m"] - 10.0) < 1.0e-9
+    assert abs(second["x_m"] - 10.0) < 1.0e-9
+
+
+def test_camera_detections_backproject_to_world_candidates(tmp_path: Path) -> None:
+    from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
+
+    calibration = tmp_path / "camera_calibration.json"
+    calibration.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                        "translation_m": [1.0, 0.0, 0.0],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    detections = tmp_path / "camera_detections.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1"],
+            "time_s": [0.0],
+            "source": ["cam0"],
+            "x1": [45.0],
+            "y1": [45.0],
+            "x2": [55.0],
+            "y2": [55.0],
+            "depth_m": [10.0],
+            "confidence": [0.7],
+            "class_name": ["Mavic3"],
+        }
+    ).to_csv(detections, index=False)
+
+    candidates = load_camera_detections_csv_as_candidates(
+        detections,
+        camera_models=load_camera_models(calibration),
+    )
+
+    assert len(candidates.rows) == 1
+    row = candidates.rows.iloc[0]
+    assert abs(row["x_m"] - 1.0) < 1.0e-9
+    assert abs(row["y_m"]) < 1.0e-9
+    assert abs(row["z_m"] - 10.0) < 1.0e-9
+    assert row["class_name"] == "Mavic3"
+
+
+def test_infer_sequence_class_map_from_candidate_votes() -> None:
+    from raft_uav.mmuad.classification import infer_sequence_class_map_from_candidates
+    from raft_uav.mmuad.schema import CandidateFrame, normalize_candidate_columns
+
+    candidates = CandidateFrame(
+        normalize_candidate_columns(
+            pd.DataFrame(
+                {
+                    "sequence_id": ["seq1", "seq1", "seq2"],
+                    "time_s": [0.0, 1.0, 0.0],
+                    "source": ["camera", "camera", "radar"],
+                    "x_m": [0.0, 1.0, 0.0],
+                    "y_m": [0.0, 1.0, 0.0],
+                    "z_m": [5.0, 5.0, 6.0],
+                    "confidence": [0.4, 0.9, 0.8],
+                    "class_name": ["Phantom4", "Mavic3", "uav"],
+                }
+            )
+        )
+    )
+
+    mapping = infer_sequence_class_map_from_candidates(candidates, default_class="unknown")
+
+    assert mapping["seq1"] == "Mavic3"
+    assert mapping["seq2"] == "unknown"
+
+
+def test_mmaud_results_empty_truth_still_writes_artifacts(tmp_path: Path) -> None:
+    results = pd.DataFrame(
+        {
+            "sequence_id": ["seq1"],
+            "timestamp": [0.0],
+            "x": [0.0],
+            "y": [0.0],
+            "z": [10.0],
+            "uav_type": ["Mavic3"],
+            "score": [1.0],
+        }
+    )
+    truth = pd.DataFrame(columns=["sequence_id", "time_s", "x_m", "y_m", "z_m"])
+
+    evaluated = evaluate_mmaud_results(results, truth)
+
+    assert evaluated["summary"]["count"] == 1
+    assert evaluated["summary"]["matched_count"] == 0
+    assert evaluated["summary"]["unmatched_count"] == 1
+    assert evaluated["summary"]["pooled"]["count"] == 0
+    assert evaluated["rows"].loc[0, "unmatched_reason"] == "empty_truth"
+
+    paths = write_evaluation_artifacts(
+        evaluated,
+        summary_json=tmp_path / "eval.json",
+        rows_csv=tmp_path / "eval_rows.csv",
+    )
+
+    assert Path(paths["evaluation_json"]).exists()
+    assert Path(paths["evaluation_rows_csv"]).exists()
+    json.loads(Path(paths["evaluation_json"]).read_text(encoding="utf-8"))

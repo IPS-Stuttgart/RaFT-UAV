@@ -7,6 +7,11 @@ import json
 from pathlib import Path
 
 from raft_uav.mmuad.calibration import load_calibration_auto, transform_candidate_frame
+from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
+from raft_uav.mmuad.classification import (
+    infer_sequence_class_map_from_candidates,
+    write_sequence_class_map,
+)
 from raft_uav.mmuad.completion import (
     complete_results_to_truth_timestamps,
     completion_summary,
@@ -34,6 +39,7 @@ from raft_uav.mmuad.layout import (
     inspect_mmuad_layout,
     write_layout_report as write_mmuad_layout_report,
 )
+from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
 from raft_uav.mmuad.rosbag_bridge import (
     inspect_rosbag,
     load_topic_map_exports,
@@ -68,6 +74,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--evaluation-max-time-delta-s", type=float, default=0.5)
     parser.add_argument("--point-cloud-csv", action="append", type=Path, default=[])
     parser.add_argument("--point-cloud-file", action="append", type=Path, default=[])
+    parser.add_argument("--radar-polar-csv", action="append", type=Path, default=[])
+    parser.add_argument("--radar-polar-source", default="radar-polar")
+    parser.add_argument(
+        "--radar-azimuth-convention",
+        choices=(
+            "north-clockwise",
+            "east-counterclockwise",
+            "east-clockwise",
+            "x-forward-left-positive",
+        ),
+        default="north-clockwise",
+    )
+    parser.add_argument("--radar-angle-unit", choices=("deg", "rad"), default="deg")
+    parser.add_argument("--radar-polar-range-std-m", type=float, default=2.0)
+    parser.add_argument("--radar-polar-angle-std-deg", type=float, default=2.0)
+    parser.add_argument("--radar-polar-z-std-m", type=float, default=5.0)
+    parser.add_argument("--camera-detections-csv", action="append", type=Path, default=[])
+    parser.add_argument("--camera-calibration-file", type=Path)
+    parser.add_argument("--camera-fixed-depth-m", type=float)
+    parser.add_argument("--camera-std-xy-m", type=float, default=5.0)
+    parser.add_argument("--camera-std-z-m", type=float, default=10.0)
     parser.add_argument("--sequence-root", type=Path)
     parser.add_argument("--inspect-layout-only", action="store_true")
     parser.add_argument("--rosbag-path", type=Path)
@@ -101,6 +128,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ug2-codabench-zip", type=Path)
     parser.add_argument("--ug2-class-name", default="unknown")
     parser.add_argument("--ug2-class-map-csv", type=Path)
+    parser.add_argument("--infer-ug2-class-map-from-candidates", action="store_true")
+    parser.add_argument("--inferred-class-map-csv", type=Path)
+    parser.add_argument("--classification-min-confidence", type=float, default=0.0)
     parser.add_argument("--complete-results-to-truth-csv", type=Path)
     parser.add_argument("--completed-results-csv", type=Path)
     parser.add_argument("--completed-results-diagnostics-csv", type=Path)
@@ -186,7 +216,14 @@ def main(argv: list[str] | None = None) -> int:
     else:
         output = _run_explicit_files(args)
     paths = write_tracker_output(output, args.output_dir)
-    class_map = load_sequence_class_map(args.ug2_class_map_csv)
+    explicit_class_map = load_sequence_class_map(args.ug2_class_map_csv)
+    inferred_class_map = getattr(args, "_inferred_class_map", {})
+    # Prefer explicit class-map files when both are provided.
+    class_map = {**inferred_class_map, **explicit_class_map}
+    if args.inferred_class_map_csv is not None and inferred_class_map:
+        paths["inferred_class_map_csv"] = str(
+            write_sequence_class_map(inferred_class_map, args.inferred_class_map_csv)
+        )
     if args.submission_csv is not None:
         paths["submission_csv"] = str(
             write_submission_csv(
@@ -346,6 +383,32 @@ def _run_explicit_files(args: argparse.Namespace):
         )
         for path in args.point_cloud_file
     )
+    frames.extend(
+        load_radar_polar_csv_as_candidates(
+            path,
+            source=args.radar_polar_source,
+            azimuth_convention=args.radar_azimuth_convention,
+            angle_unit=args.radar_angle_unit,
+            range_std_m=args.radar_polar_range_std_m,
+            angle_std_deg=args.radar_polar_angle_std_deg,
+            z_std_m=args.radar_polar_z_std_m,
+        )
+        for path in args.radar_polar_csv
+    )
+    if args.camera_detections_csv:
+        if args.camera_calibration_file is None:
+            raise SystemExit("--camera-detections-csv requires --camera-calibration-file")
+        camera_models = load_camera_models(args.camera_calibration_file)
+        frames.extend(
+            load_camera_detections_csv_as_candidates(
+                path,
+                camera_models=camera_models,
+                fixed_depth_m=args.camera_fixed_depth_m,
+                std_xy_m=args.camera_std_xy_m,
+                std_z_m=args.camera_std_z_m,
+            )
+            for path in args.camera_detections_csv
+        )
     topic_truth = None
     if args.topic_map_json is not None:
         bundle = load_topic_map_exports(
@@ -360,6 +423,12 @@ def _run_explicit_files(args: argparse.Namespace):
             "--candidate-csv/--point-cloud-csv"
         )
     candidates = merge_candidate_frames(frames)
+    if args.infer_ug2_class_map_from_candidates:
+        args._inferred_class_map = infer_sequence_class_map_from_candidates(
+            candidates,
+            min_confidence=args.classification_min_confidence,
+            default_class=args.ug2_class_name,
+        )
     calibration_path = args.calibration_file or args.calibration_json
     if calibration_path is not None and not args.no_apply_calibration:
         calibration = load_calibration_auto(calibration_path)
@@ -387,11 +456,20 @@ def _run_sequence_root(args: argparse.Namespace):
             apply_calibration=not args.no_apply_calibration,
             voxel_size_m=args.voxel_size_m,
             min_cluster_points=args.min_cluster_points,
+            radar_azimuth_convention=args.radar_azimuth_convention,
+            radar_angle_unit=args.radar_angle_unit,
+            camera_fixed_depth_m=args.camera_fixed_depth_m,
         )
         candidate_frames.append(candidates)
         if truth is not None:
             truth_frames.append(truth)
     candidates = merge_candidate_frames(candidate_frames)
+    if args.infer_ug2_class_map_from_candidates:
+        args._inferred_class_map = infer_sequence_class_map_from_candidates(
+            candidates,
+            min_confidence=args.classification_min_confidence,
+            default_class=args.ug2_class_name,
+        )
     truth = merge_truth_frames(truth_frames) if truth_frames else None
     return _run_tracker_for_mode(args, candidates, truth)
 

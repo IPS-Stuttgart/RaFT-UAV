@@ -10,12 +10,14 @@ from raft_uav.mmuad.calibration import (
     load_calibration_auto,
     transform_candidate_frame,
 )
+from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
 from raft_uav.mmuad.io import (
     load_candidate_csv,
     load_point_cloud_file_as_candidates,
     load_truth_csv,
     merge_candidate_frames,
 )
+from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
 from raft_uav.mmuad.schema import CandidateFrame, TruthFrame
 
 
@@ -26,6 +28,8 @@ class SequencePaths:
     sequence_id: str
     root: Path
     candidate_csvs: tuple[Path, ...]
+    radar_polar_csvs: tuple[Path, ...]
+    camera_detection_csvs: tuple[Path, ...]
     point_cloud_files: tuple[Path, ...]
     truth_csv: Path | None
     calibration_file: Path | None
@@ -58,6 +62,9 @@ def load_sequence_export(
     apply_calibration: bool = True,
     voxel_size_m: float = 0.75,
     min_cluster_points: int = 3,
+    radar_azimuth_convention: str = "north-clockwise",
+    radar_angle_unit: str = "deg",
+    camera_fixed_depth_m: float | None = None,
 ) -> tuple[CandidateFrame, TruthFrame | None, CalibrationSet | None]:
     """Load candidates/truth for one discovered sequence export."""
 
@@ -65,6 +72,16 @@ def load_sequence_export(
         load_candidate_csv(path, default_sequence_id=paths.sequence_id)
         for path in paths.candidate_csvs
     ]
+    candidate_frames.extend(
+        load_radar_polar_csv_as_candidates(
+            path,
+            source=path.stem.replace("_radar_polar", "-radar"),
+            sequence_id=paths.sequence_id,
+            azimuth_convention=radar_azimuth_convention,
+            angle_unit=radar_angle_unit,
+        )
+        for path in paths.radar_polar_csvs
+    )
     candidate_frames.extend(
         load_point_cloud_file_as_candidates(
             path,
@@ -75,6 +92,21 @@ def load_sequence_export(
         )
         for path in paths.point_cloud_files
     )
+    if paths.camera_detection_csvs:
+        if paths.calibration_file is None:
+            raise ValueError(
+                f"camera detections discovered for {paths.root} but no "
+                "calibration/intrinsics file exists"
+            )
+        camera_models = load_camera_models(paths.calibration_file)
+        candidate_frames.extend(
+            load_camera_detections_csv_as_candidates(
+                path,
+                camera_models=camera_models,
+                fixed_depth_m=camera_fixed_depth_m,
+            )
+            for path in paths.camera_detection_csvs
+        )
     if not candidate_frames:
         raise ValueError(f"no candidate or point-cloud files discovered for {paths.root}")
     candidates = merge_candidate_frames(candidate_frames)
@@ -94,7 +126,13 @@ def load_sequence_export(
 def _looks_like_sequence(path: Path) -> bool:
     if not path.is_dir():
         return False
-    return bool(_candidate_files(path) or _point_files(path) or _truth_file(path))
+    return bool(
+        _candidate_files(path)
+        or _radar_polar_files(path)
+        or _camera_detection_files(path)
+        or _point_files(path)
+        or _truth_file(path)
+    )
 
 
 def _sequence_from_dir(path: Path) -> SequencePaths:
@@ -117,6 +155,8 @@ def _sequence_from_dir(path: Path) -> SequencePaths:
         sequence_id=path.name,
         root=path,
         candidate_csvs=tuple(_candidate_files(path)),
+        radar_polar_csvs=tuple(_radar_polar_files(path)),
+        camera_detection_csvs=tuple(_camera_detection_files(path)),
         point_cloud_files=tuple(_point_files(path)),
         truth_csv=_truth_file(path),
         calibration_file=calibration,
@@ -128,6 +168,29 @@ def _candidate_files(path: Path) -> list[Path]:
     files = [item for item in names if item.exists()]
     files.extend(sorted(path.glob("*_candidates.csv")))
     files.extend(sorted(path.glob("*_detections.csv")))
+    return _unique_paths(
+        [
+            item
+            for item in files
+            if "radar_polar" not in item.stem.lower()
+            and "camera" not in item.stem.lower()
+        ]
+    )
+
+
+def _radar_polar_files(path: Path) -> list[Path]:
+    names = [path / "radar_polar.csv", path / "radar_detections_polar.csv"]
+    files = [item for item in names if item.exists()]
+    files.extend(sorted(path.glob("*_radar_polar.csv")))
+    files.extend(sorted(path.glob("*_polar_radar.csv")))
+    return _unique_paths(files)
+
+
+def _camera_detection_files(path: Path) -> list[Path]:
+    names = [path / "camera_detections.csv", path / "image_detections.csv"]
+    files = [item for item in names if item.exists()]
+    files.extend(sorted(path.glob("*_camera_detections.csv")))
+    files.extend(sorted(path.glob("*_image_detections.csv")))
     return _unique_paths(files)
 
 

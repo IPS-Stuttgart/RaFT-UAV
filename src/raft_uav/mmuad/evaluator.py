@@ -80,7 +80,7 @@ def evaluate_mmaud_results(
     truth_rows = truth.rows if isinstance(truth, TruthFrame) else normalize_truth_columns(truth)
     class_map = load_sequence_class_map(class_map_csv) if class_map_csv is not None else {}
     if truth_rows.empty:
-        return {"count": 0, "matched_count": 0, "unmatched_count": int(len(result_rows))}
+        return _empty_truth_evaluation(result_rows, max_time_delta_s=max_time_delta_s)
     truth_rows = truth_rows.copy()
     truth_rows["sequence_id"] = truth_rows["sequence_id"].astype(str)
     error_records: list[dict[str, Any]] = []
@@ -161,6 +161,31 @@ def write_evaluation_artifacts(
         result["rows"].to_csv(rows_csv, index=False)
         paths["evaluation_rows_csv"] = str(rows_csv)
     return paths
+
+
+def _empty_truth_evaluation(
+    result_rows: pd.DataFrame,
+    *,
+    max_time_delta_s: float,
+) -> dict[str, Any]:
+    """Return the standard evaluator payload when no truth rows are available."""
+
+    errors = pd.DataFrame.from_records(
+        [
+            _unmatched_result_row(row, reason="empty_truth")
+            for _, row in result_rows.iterrows()
+        ]
+    )
+    summary = {
+        "metric_protocol": "nearest_truth_with_time_gate",
+        "max_time_delta_s": float(max_time_delta_s),
+        "count": int(len(errors)),
+        "matched_count": 0,
+        "unmatched_count": int(len(errors)),
+        "pooled": _error_summary(pd.DataFrame()),
+        "sequences": {},
+    }
+    return {"summary": summary, "rows": errors}
 
 
 def _unmatched_result_row(row: pd.Series, *, reason: str, dt_s: float | None = None) -> dict[str, Any]:
