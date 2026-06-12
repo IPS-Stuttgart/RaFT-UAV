@@ -464,6 +464,10 @@ def _json_detection_records(payload: Any) -> Any:
         "annotations",
         "boxes",
         "bboxes",
+        "objects",
+        "predictions",
+        "results",
+        "instances",
         "rows",
         "data",
     ):

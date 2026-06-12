@@ -2799,7 +2799,7 @@ def test_topic_map_exports_load_json_candidates_and_truth(tmp_path: Path) -> Non
     (exports / "radar.json").write_text(
         json.dumps(
             {
-                "detections": [
+                "objects": [
                     {"stamp": 0.0, "px": 0.0, "py": 0.0, "pz": 5.0},
                     {"stamp": 1.0, "px": 1.0, "py": 0.0, "pz": 5.0},
                 ]
@@ -4389,6 +4389,39 @@ def test_radar_polar_json_converts_to_candidates(tmp_path: Path) -> None:
     assert abs(float(row["x_m"]) - 10.0) < 1.0e-9
 
 
+def test_radar_polar_json_accepts_target_wrappers(tmp_path: Path) -> None:
+    from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
+
+    radar = tmp_path / "radar_targets.json"
+    radar.write_text(
+        json.dumps(
+            {
+                "targets": [
+                    {
+                        "timestamp_s": 2.0,
+                        "range": 12.0,
+                        "bearing_deg": 90.0,
+                        "id": "target-7",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates = load_radar_polar_csv_as_candidates(
+        radar,
+        sequence_id="seq_json_targets",
+        azimuth_convention="north-clockwise",
+    )
+
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_json_targets"
+    assert row["track_id"] == "target-7"
+    assert abs(float(row["time_s"]) - 2.0) < 1.0e-12
+    assert abs(float(row["x_m"]) - 12.0) < 1.0e-9
+
+
 def test_radar_polar_loader_accepts_millisecond_timestamps(tmp_path: Path) -> None:
     from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
 
@@ -4551,6 +4584,56 @@ def test_camera_detections_json_backproject_to_world_candidates(tmp_path: Path) 
     assert abs(float(row["time_s"]) - 2.0) < 1e-12
     assert (row["x_m"], row["y_m"], row["z_m"]) == (1.0, 2.0, 13.0)
     assert row["class_name"] == "Mavic3"
+
+
+def test_camera_detections_json_accepts_prediction_wrappers(tmp_path: Path) -> None:
+    from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
+
+    calibration = tmp_path / "camera_calibration.json"
+    calibration.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 50.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    detections = tmp_path / "camera_predictions.json"
+    detections.write_text(
+        json.dumps(
+            {
+                "predictions": [
+                    {
+                        "timestamp_s": 4.0,
+                        "source": "cam0",
+                        "bbox": [45.0, 45.0, 10.0, 10.0],
+                        "depth": 8.0,
+                        "score": 0.9,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates = load_camera_detections_csv_as_candidates(
+        detections,
+        camera_models=load_camera_models(calibration),
+    )
+
+    row = candidates.rows.iloc[0]
+    assert abs(float(row["time_s"]) - 4.0) < 1.0e-12
+    assert abs(float(row["x_m"])) < 1.0e-9
+    assert abs(float(row["y_m"])) < 1.0e-9
+    assert abs(float(row["z_m"]) - 8.0) < 1.0e-9
+    assert abs(float(row["confidence"]) - 0.9) < 1.0e-12
 
 
 def test_camera_detections_json_accepts_coco_bbox_xywh(tmp_path: Path) -> None:

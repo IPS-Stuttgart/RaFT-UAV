@@ -467,9 +467,10 @@ export file, then run the tracker. CSV/TSV/TXT/JSON table exports can use
 `column_aliases`; compact NumPy trajectory exports such as `radar_trajectory.npy`
 and `truth.npy` use the same `time_s,x_m,y_m,z_m` convention as the
 explicit-file CLI. JSON topic exports may use row lists, column maps, or objects
-containing `points`, `point_cloud`, `candidates`, `detections`, `truth`,
-`fixes`, `gps`, `navsatfix`, `poses`, `rows`, or `data`. The template infers
-native extraction kinds for common ROS message types
+containing `points`, `point_cloud`, `candidates`, `detections`, `objects`,
+`targets`, `measurements`, `returns`, `predictions`, `truth`, `fixes`, `gps`,
+`navsatfix`, `poses`, `rows`, or `data`. The template infers native extraction
+kinds for common ROS message types
 (`pointcloud2_candidate`, `pose_truth`, `odometry_candidate`, and related truth
 variants), while the exported-topic loader still accepts those kinds for CSV or
 JSON table and NumPy exports. Table exports marked as `pointcloud2_candidate`
@@ -615,9 +616,9 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 Supported aliases include `range_m`, `azimuth_deg`, `elevation_deg`, `track_id`,
 `confidence`, and common variants. JSON radar exports may be row lists, column
 maps, or objects containing `radar_polar`, `radar_detections`, `detections`,
-`rows`, or `data`. Coordinates are in the radar/export frame unless a
-calibration file is applied later. This is not a native custom radar message
-parser.
+`targets`, `objects`, `measurements`, `returns`, `rows`, or `data`.
+Coordinates are in the radar/export frame unless a calibration file is applied
+later. This is not a native custom radar message parser.
 
 ### Camera Detector Table Exports
 
@@ -656,8 +657,9 @@ camera source and merged with any other discovered camera models. These can
 be used for back-projection even when they do not contain generic sensor
 extrinsics. Detections can provide `u_px`/`v_px` or
 `x1,y1,x2,y2` boxes. JSON exports may be row lists, column maps, or objects with
-keys such as `camera_detections`, `detections`, `boxes`, `rows`, or `data`.
-Depth must come from `depth_m`/`range_m`, or from a fixed fallback via
+keys such as `camera_detections`, `detections`, `boxes`, `objects`,
+`predictions`, `results`, `instances`, `rows`, or `data`. Depth must come from
+`depth_m`/`range_m`, or from a fixed fallback via
 `--camera-fixed-depth-m`. Compact boxes such as COCO-style
 `bbox=[x,y,width,height]` / `bbox_xywh` and explicit `bbox_xyxy` are also
 accepted. This bridge does not run image object detection; it consumes detector

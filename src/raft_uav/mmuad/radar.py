@@ -237,6 +237,10 @@ def _json_radar_records(payload: Any) -> Any:
         "radar_detections",
         "detections",
         "tracks",
+        "targets",
+        "objects",
+        "measurements",
+        "returns",
         "rows",
         "data",
     ):
