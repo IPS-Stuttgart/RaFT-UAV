@@ -2801,6 +2801,33 @@ def test_layout_inspectors_classify_mmuad_modality_folders(tmp_path: Path) -> No
     assert sequence["has_class_labels"] is True
 
 
+def test_layout_inspectors_classify_audio_streams_without_candidate_readiness(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "seq_audio"
+    audio = seq / "microphone"
+    audio.mkdir(parents=True)
+    (audio / "mic_12.5.wav").write_bytes(b"RIFF-not-real-audio-but-counted")
+
+    detailed = inspect_sequence_root(tmp_path)
+    by_name = {row["relative_path"]: row for row in detailed["files"]}
+
+    assert by_name["microphone/mic_12.5.wav"]["category"] == "audio"
+    assert by_name["microphone/mic_12.5.wav"]["modality"] == "audio"
+    assert abs(float(by_name["microphone/mic_12.5.wav"]["inferred_time_s"]) - 12.5) < 1e-12
+    assert detailed["sequences"][0]["missing_for_tracking_smoke"] == [
+        "truth",
+        "calibration",
+        "candidate_or_point_cloud",
+    ]
+
+    inventory = inspect_mmuad_layout(tmp_path)
+    assert inventory["category_counts"]["audio"] == 1
+    sequence = inventory["sequence_candidates"][0]
+    assert sequence["has_candidates_or_points"] is False
+    assert any("Audio files" in item for item in inventory["recommendations"])
+
+
 def test_layout_inspectors_preserve_sequence_ids_under_split_folders(tmp_path: Path) -> None:
     seq = tmp_path / "val" / "seq0001"
     (seq / "livox_avia").mkdir(parents=True)

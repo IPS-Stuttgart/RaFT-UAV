@@ -24,6 +24,7 @@ from raft_uav.mmuad.io import (
 )
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+AUDIO_SUFFIXES = {".wav", ".flac", ".aac", ".mp3"}
 POINT_SUFFIXES = {".pcd", ".ply", ".las", ".laz", ".bin"}
 NUMPY_SUFFIXES = {".npy", ".npz"}
 TABLE_SUFFIXES = DELIMITED_TABLE_SUFFIXES
@@ -73,6 +74,7 @@ AUDIO_HINTS = ("audio", "mic", "microphone", "wav")
 MODALITY_DIR_HINTS = (
     "camera",
     "cam",
+    "audio",
     "class",
     "classes",
     "detections",
@@ -85,6 +87,8 @@ MODALITY_DIR_HINTS = (
     "lidar",
     "livox",
     "livox_avia",
+    "mic",
+    "microphone",
     "point_cloud",
     "points",
     "radar",
@@ -161,8 +165,8 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
     modality = _infer_modality(" ".join((stem, parent)))
     inferred_time_s = None
     if (
-        suffix in IMAGE_SUFFIXES | POINT_SUFFIXES | NUMPY_SUFFIXES
-        or modality in {"radar", "lidar", "camera"}
+        suffix in IMAGE_SUFFIXES | AUDIO_SUFFIXES | POINT_SUFFIXES | NUMPY_SUFFIXES
+        or modality in {"radar", "lidar", "camera", "audio"}
     ):
         inferred_time_s = infer_time_s_from_filename(path)
     if name in CALIBRATION_NAMES:
@@ -183,6 +187,8 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
         return "numpy", modality, inferred_time_s
     if suffix in IMAGE_SUFFIXES:
         return "image", "camera", inferred_time_s
+    if suffix in AUDIO_SUFFIXES:
+        return "audio", "audio", inferred_time_s
     if suffix in POINT_SUFFIXES:
         return "point_cloud", modality if modality != "unknown" else "lidar", inferred_time_s
     if suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES:

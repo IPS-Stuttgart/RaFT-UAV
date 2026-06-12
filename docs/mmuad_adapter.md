@@ -344,12 +344,15 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --layout-report-csv outputs/mmuad_inspect/layout_files.csv
 ```
 
-The report classifies files as images, point clouds, candidate tables, truth,
-class labels, calibration, ROS recordings, and metadata. Candidate/truth/class
-tables may be CSV/TSV/TXT, JSON, or compact NumPy exports. It also infers
-timestamps from filenames when possible and reports what each sequence is
-missing for a tracking smoke test. Point-cloud inventory includes common PCD,
-PLY, LAS/LAZ, and simple float32 `.bin` exports.
+The report classifies files as images, audio recordings, point clouds,
+candidate tables, truth, class labels, calibration, ROS recordings, and
+metadata. Candidate/truth/class tables may be CSV/TSV/TXT, JSON, or compact
+NumPy exports. It also infers timestamps from filenames when possible and
+reports what each sequence is missing for a tracking smoke test. Point-cloud
+inventory includes common PCD, PLY, LAS/LAZ, and simple float32 `.bin` exports.
+Audio inventory covers common WAV/FLAC/AAC/MP3 recordings for evidence
+gathering; acoustic detections still need to be exported as candidate tables
+before tracking.
 
 ### Binary PCD, BIN, and NumPy point clouds
 
