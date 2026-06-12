@@ -64,6 +64,7 @@ from raft_uav.mmuad.submission import (
     compute_trajectory_metrics,
     estimates_to_mmaud_results_frame,
     load_sequence_class_map,
+    validate_official_track5_submission,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
     write_submission_csv,
@@ -86,6 +87,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--layout-report-json", type=Path)
     parser.add_argument("--layout-report-csv", type=Path)
     parser.add_argument("--evaluate-submission-csv", type=Path)
+    parser.add_argument("--validate-ug2-official-codabench-zip", type=Path)
+    parser.add_argument("--official-validation-json", type=Path)
+    parser.add_argument("--official-validation-rows-csv", type=Path)
+    parser.add_argument("--official-validation-template-csv", type=Path)
+    parser.add_argument("--official-validation-template-file", type=Path)
+    parser.add_argument("--official-validation-timestamp-tolerance-s", type=float, default=1.0e-6)
     parser.add_argument("--evaluate-truth-csv", type=Path)
     parser.add_argument("--evaluate-truth-file", type=Path)
     parser.add_argument("--evaluation-json", type=Path)
@@ -236,6 +243,9 @@ def main(argv: list[str] | None = None) -> int:
         help="sequence-to-UAV-type truth class map in CSV, JSON, or YAML form",
     )
     args = parser.parse_args(argv)
+
+    if args.validate_ug2_official_codabench_zip is not None:
+        return _run_official_submission_validation(args)
 
     if args.rosbag_path is not None:
         report = inspect_rosbag(args.rosbag_path)
@@ -504,6 +514,74 @@ def _run_submission_evaluation(args: argparse.Namespace) -> int:
         print(f"pooled_p95_3d_m={pooled['p95_3d_m']}")
         print(f"pooled_max_3d_m={pooled['max_3d_m']}")
     return 0
+
+
+def _run_official_submission_validation(args: argparse.Namespace) -> int:
+    template = _official_submission_validation_template(args)
+    validation = validate_official_track5_submission(
+        args.validate_ug2_official_codabench_zip,
+        template=template,
+        timestamp_tolerance_s=args.official_validation_timestamp_tolerance_s,
+        require_zip=True,
+    )
+    json_path = args.official_validation_json or (
+        args.output_dir / "mmuad_official_submission_validation.json"
+    )
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(validation.summary, indent=2), encoding="utf-8")
+    paths = {"official_validation_json": str(json_path)}
+    if args.official_validation_rows_csv is not None:
+        args.official_validation_rows_csv.parent.mkdir(parents=True, exist_ok=True)
+        validation.rows.to_csv(args.official_validation_rows_csv, index=False)
+        paths["official_validation_rows_csv"] = str(args.official_validation_rows_csv)
+    print("mmuad_official_submission_validation=ok")
+    print(f"valid={validation.summary['valid']}")
+    for name, path in paths.items():
+        print(f"{name}={path}")
+    return 0 if validation.summary["valid"] else 1
+
+
+def _official_submission_validation_template(args: argparse.Namespace) -> pd.DataFrame | None:
+    explicit_template = _official_validation_template_path(args)
+    if explicit_template is not None:
+        return load_truth_file(explicit_template).rows
+    if args.sequence_root is None:
+        return None
+    sequences = discover_sequence_paths(args.sequence_root, sequence_glob=args.sequence_glob)
+    if args.split_file is not None:
+        if not args.split_name:
+            raise SystemExit("--split-name is required when --split-file is provided")
+        manifest = load_split_manifest(args.split_file)
+        sequences = filter_sequences_by_split(sequences, manifest, args.split_name)
+    elif args.split_name:
+        sequences = filter_sequences_by_split_folder(
+            sequences,
+            args.sequence_root,
+            args.split_name,
+        )
+    frames = [
+        official_track5_timestamp_template(
+            paths,
+            timestamp_source=args.ug2_official_timestamp_source,
+        ).rows
+        for paths in sequences
+    ]
+    rows = [frame for frame in frames if not frame.empty]
+    if not rows:
+        return None
+    return pd.concat(rows, ignore_index=True)
+
+
+def _official_validation_template_path(args: argparse.Namespace) -> Path | None:
+    if (
+        args.official_validation_template_csv is not None
+        and args.official_validation_template_file is not None
+    ):
+        raise SystemExit(
+            "provide only one of --official-validation-template-csv "
+            "or --official-validation-template-file"
+        )
+    return args.official_validation_template_file or args.official_validation_template_csv
 
 
 def _run_explicit_files(args: argparse.Namespace):

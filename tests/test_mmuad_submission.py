@@ -14,6 +14,7 @@ from raft_uav.mmuad.submission import (
     estimates_to_official_mmaud_results_frame,
     estimates_to_mmaud_results_frame,
     estimates_to_submission_frame,
+    validate_official_track5_submission,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
     write_submission_json,
@@ -328,3 +329,83 @@ def test_public_track5_metric_protocol_uses_truth_timestamp_denominator():
     assert "missing_prediction" in reasons
     assert "duplicate_prediction" in reasons
     assert "extra_prediction" in reasons
+
+
+def test_official_track5_submission_validator_accepts_exact_zip_and_template(tmp_path):
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, 1.0],
+            "state_x_m": [0.0, 1.0],
+            "state_y_m": [0.0, 0.0],
+            "state_z_m": [10.0, 10.0],
+            "class_id": [2, 2],
+        }
+    )
+    zip_path = write_official_ug2_codabench_zip(
+        estimates,
+        tmp_path / "official.zip",
+    )
+    template = pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 0.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [0.0, 0.0],
+        }
+    )
+
+    validation = validate_official_track5_submission(zip_path, template=template)
+
+    assert validation.summary["valid"] is True
+    assert validation.summary["contains_only_mmaud_results_csv"] is True
+    assert validation.summary["row_count"] == 2
+    assert validation.summary["template_checked"] is True
+    assert validation.summary["missing_template_timestamp_count"] == 0
+    assert validation.summary["extra_prediction_count"] == 0
+    assert validation.summary["duplicate_prediction_count"] == 0
+    assert validation.rows.loc[validation.rows["row_type"] == "prediction", "status"].tolist() == [
+        "ok",
+        "ok",
+    ]
+
+
+def test_official_track5_submission_validator_rejects_bad_leaderboard_package(tmp_path):
+    zip_path = tmp_path / "bad_official.zip"
+    frame = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1", "seq1", "seq1", "seq2"],
+            "Timestamp": [0.0, 1.0, 1.0, 9.0, 0.0],
+            "Position": ["(0,0,0)", "(1,0,0)", "(1,0,0)", "(9,0,0)", "(0,0,0)"],
+            "Classification": [2, 2, 2, 2, "not-an-int"],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", frame.to_csv(index=False))
+        archive.writestr("README.txt", "extra files are not allowed")
+    template = pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1", "seq1"],
+            "time_s": [0.0, 1.0, 2.0],
+        }
+    )
+
+    validation = validate_official_track5_submission(
+        zip_path,
+        template=template,
+        timestamp_tolerance_s=0.0,
+    )
+
+    assert validation.summary["valid"] is False
+    assert validation.summary["contains_only_mmaud_results_csv"] is False
+    assert "official Track 5 ZIP must contain only mmaud_results.csv" in validation.summary["errors"]
+    assert validation.summary["invalid_classification_count"] == 1
+    assert validation.summary["duplicate_prediction_count"] == 1
+    assert validation.summary["missing_template_timestamp_count"] == 1
+    assert validation.summary["extra_prediction_count"] == 1
+    statuses = set(validation.rows["status"])
+    assert "invalid_classification" in statuses
+    assert "duplicate_prediction" in statuses
+    assert "missing_template_timestamp" in statuses
+    assert "extra_prediction" in statuses
