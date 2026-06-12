@@ -13,7 +13,6 @@ from raft_uav.mmuad.calibration import (
 from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
 from raft_uav.mmuad.io import (
     load_candidate_file,
-    load_candidate_csv,
     load_point_cloud_file_as_candidates,
     load_truth_file,
     merge_candidate_frames,
@@ -42,7 +41,8 @@ def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[Seq
 
     The helper intentionally supports normalized/exported files rather than the
     official raw archive.  It looks for common names such as ``candidates.csv``,
-    ``*_candidates.csv``, compact NumPy trajectory tables such as
+    ``*_candidates.csv``, delimited variants such as ``candidates.tsv`` or
+    ``detections.txt``, compact NumPy trajectory tables such as
     ``candidates.npy`` or ``trajectory.npz``, ``points.csv``, ``*_points.csv``,
     ASCII ``*.pcd``, ASCII ``*.ply``, ``truth.csv`` / ``truth.npy``, and
     ``calibration.json`` under each sequence folder.  If ``root`` itself holds
@@ -73,7 +73,11 @@ def load_sequence_export(
     """Load candidates/truth for one discovered sequence export."""
 
     candidate_frames = [
-        load_candidate_csv(path, default_sequence_id=paths.sequence_id)
+        load_candidate_file(
+            path,
+            default_sequence_id=paths.sequence_id,
+            source=path.stem.replace("_candidates", "-candidates"),
+        )
         for path in paths.candidate_csvs
     ]
     candidate_frames.extend(
@@ -178,10 +182,15 @@ def _sequence_from_dir(path: Path) -> SequencePaths:
 
 
 def _candidate_files(path: Path) -> list[Path]:
-    names = [path / "candidates.csv", path / "detections.csv"]
+    names = [
+        path / f"{stem}{suffix}"
+        for stem in ("candidates", "detections")
+        for suffix in (".csv", ".tsv", ".txt")
+    ]
     files = [item for item in names if item.exists()]
-    files.extend(sorted(path.glob("*_candidates.csv")))
-    files.extend(sorted(path.glob("*_detections.csv")))
+    for suffix in (".csv", ".tsv", ".txt"):
+        files.extend(sorted(path.glob(f"*_candidates{suffix}")))
+        files.extend(sorted(path.glob(f"*_detections{suffix}")))
     return _unique_paths(
         [
             item

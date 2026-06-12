@@ -111,10 +111,10 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ### Sequence-root discovery
 
 A normalized sequence export can be loaded from folders containing files named
-`candidates.csv`, `detections.csv`, `*_candidates.csv`, `points.csv`,
-`*_points.csv`, compact trajectory arrays such as `trajectory.npy` /
-`candidates.npz`, `truth.csv`, compact truth arrays such as `truth.npy`, and
-optionally `calibration.json`:
+`candidates.csv`, `detections.csv`, `*_candidates.csv`, delimited variants such
+as `candidates.tsv` or `detections.txt`, `points.csv`, `*_points.csv`, compact
+trajectory arrays such as `trajectory.npy` / `candidates.npz`, `truth.csv`,
+compact truth arrays such as `truth.npy`, and optionally `calibration.json`:
 
 ```text
 data/mmuad_export/
@@ -126,6 +126,9 @@ data/mmuad_export/
   seq002/
     trajectory.npy
     truth.npy
+  seq003/
+    candidates.tsv
+    truth.csv
 ```
 
 Run all discovered sequences with:

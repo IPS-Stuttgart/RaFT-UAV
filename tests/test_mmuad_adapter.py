@@ -442,6 +442,37 @@ def test_sequence_loading_fills_missing_sequence_ids_from_sequence_folder(
     assert truth.rows["sequence_id"].tolist() == ["seq_without_ids"]
 
 
+def test_sequence_root_discovers_delimited_candidate_tables(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_tsv"
+    seq.mkdir()
+    pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0],
+            "sensor": ["radar", "radar"],
+            "x": [0.0, 1.0],
+            "y": [0.0, 0.0],
+            "z": [2.0, 2.0],
+        }
+    ).to_csv(seq / "candidates.tsv", sep="\t", index=False)
+    pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [2.0, 2.0],
+        }
+    ).to_csv(seq / "truth.csv", index=False)
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].candidate_csvs == (seq / "candidates.tsv",)
+    assert candidates.rows["sequence_id"].tolist() == ["seq_tsv", "seq_tsv"]
+    assert candidates.rows["source"].tolist() == ["radar", "radar"]
+    assert truth is not None
+    assert truth.rows["time_s"].tolist() == [0.0, 1.0]
+
+
 def test_submission_writers_use_estimate_state_columns(tmp_path: Path) -> None:
     estimates = pd.DataFrame(
         {
