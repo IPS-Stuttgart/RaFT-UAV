@@ -33,6 +33,33 @@ def test_candidate_loader_fills_blank_and_missing_sequence_ids(
     assert "" not in set(frame.rows["sequence_id"])
 
 
+def test_candidate_loader_fills_blank_sources_and_nulls_blank_track_ids(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "candidates.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA", "seqA"],
+            "time_s": [0.0, 1.0, 2.0],
+            "source": ["radar", np.nan, ""],
+            "track_id": ["track-a", np.nan, ""],
+            "x_m": [0.0, 1.0, 2.0],
+            "y_m": [0.0, 0.0, 0.0],
+            "z_m": [1.0, 1.0, 1.0],
+        }
+    ).to_csv(path, index=False)
+
+    frame = load_candidate_csv(path, source="radar_default")
+
+    by_time = frame.rows.set_index("time_s")
+    assert by_time.loc[0.0, "source"] == "radar"
+    assert by_time.loc[1.0, "source"] == "radar_default"
+    assert by_time.loc[2.0, "source"] == "radar_default"
+    assert by_time.loc[0.0, "track_id"] == "track-a"
+    assert pd.isna(by_time.loc[1.0, "track_id"])
+    assert pd.isna(by_time.loc[2.0, "track_id"])
+
+
 def test_truth_loader_fills_blank_and_missing_sequence_ids(
     tmp_path: Path,
 ) -> None:
