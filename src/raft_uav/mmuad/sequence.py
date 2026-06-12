@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -129,6 +130,18 @@ MODALITY_DIR_TOKENS = (
     + CLASS_DIR_TOKENS
     + CAMERA_DIR_TOKENS
     + RADAR_DIR_TOKENS
+)
+OFFICIAL_TRACK5_TIMESTAMP_SOURCE_DIRS = {
+    "ground-truth": ("ground_truth",),
+    "image": ("image",),
+    "lidar-360": ("lidar_360",),
+    "livox-avia": ("livox_avia",),
+    "radar-enhance-pcl": ("radar_enhance_pcl",),
+}
+OFFICIAL_TRACK5_TIMESTAMP_SOURCES = (
+    "ground-truth-or-all",
+    "all-modalities",
+    *OFFICIAL_TRACK5_TIMESTAMP_SOURCE_DIRS,
 )
 RADAR_RANGE_ALIASES = ("range_m", "range", "r", "rho", "distance_m")
 RADAR_AZIMUTH_ALIASES = ("azimuth_deg", "azimuth", "az", "bearing", "bearing_deg")
@@ -266,15 +279,12 @@ class SequencePaths:
 def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[SequencePaths]:
     """Discover sequence folders in an exported MMUAD-style directory.
 
-    The helper intentionally supports normalized/exported files rather than the
-    official raw archive.  It looks for common names such as ``candidates.csv``,
-    ``*_candidates.csv``, delimited variants such as ``candidates.tsv`` or
-    ``detections.txt``, JSON/JSONL row tables such as ``candidates.json``,
-    ``candidates.jsonl``, or ``truth.ndjson``, compact NumPy trajectory tables
-    such as ``candidates.npy`` or ``trajectory.npz``, ``points.csv`` /
-    ``points.tsv`` / ``points.json``, ``points.jsonl``, ``*_points.csv`` /
-    ``*_points.json``, ``*.pcd``,
-    ``*.ply``, simple float32 ``*.bin`` point-cloud exports,
+    The helper supports normalized/exported files and the public UG2+ Track 5
+    sequence folders with ``ground_truth``, ``Image``, ``lidar_360``,
+    ``livox_avia``, and ``radar_enhance_pcl`` subdirectories.  It also looks
+    for common names such as ``candidates.csv``, ``*_candidates.csv``,
+    delimited variants such as ``candidates.tsv`` or ``detections.txt``,
+    JSON/JSONL row tables, compact NumPy trajectory tables, point-cloud files,
     exported ROS topic-map JSON/YAML files, ``truth.csv`` / ``truth.npy``, and
     ``calibration.json`` under each sequence folder.  If ``root`` itself holds
     such files, it is treated as a single sequence.
@@ -461,6 +471,66 @@ def load_sequence_export(
         if calibration is not None and apply_calibration:
             candidates = transform_candidate_frame(candidates, calibration)
     return candidates, truth, calibration
+
+
+def official_track5_timestamp_template(
+    paths: SequencePaths,
+    *,
+    timestamp_source: str = "ground-truth-or-all",
+) -> TruthFrame:
+    """Return a timestamp-only template from public Track 5 sequence folders.
+
+    Public UG2+ Track 5 submissions require one row per requested sequence
+    timestamp.  Training sequences expose those timestamps through
+    ``ground_truth/<ros_timestamp>.npy``; validation/test-style folders may only
+    expose sensor frames such as ``Image/<ros_timestamp>.png`` or point clouds.
+    The returned zero-valued truth frame is a template for resampling results,
+    not a substitute for hidden leaderboard labels.
+    """
+
+    timestamps = official_track5_sequence_timestamps(
+        paths,
+        timestamp_source=timestamp_source,
+    )
+    rows = pd.DataFrame(
+        {
+            "sequence_id": [paths.sequence_id] * len(timestamps),
+            "time_s": timestamps,
+            "x_m": [0.0] * len(timestamps),
+            "y_m": [0.0] * len(timestamps),
+            "z_m": [0.0] * len(timestamps),
+        }
+    )
+    return TruthFrame(normalize_truth_columns(rows, default_sequence_id=paths.sequence_id))
+
+
+def official_track5_sequence_timestamps(
+    paths: SequencePaths,
+    *,
+    timestamp_source: str = "ground-truth-or-all",
+) -> list[float]:
+    """Return sorted unique timestamps from official Track 5 modality folders."""
+
+    if timestamp_source not in OFFICIAL_TRACK5_TIMESTAMP_SOURCES:
+        allowed = ", ".join(OFFICIAL_TRACK5_TIMESTAMP_SOURCES)
+        raise ValueError(f"unsupported Track 5 timestamp source {timestamp_source!r}; allowed={allowed}")
+    if timestamp_source == "ground-truth-or-all":
+        timestamps = _timestamps_from_official_dirs(
+            paths.root,
+            OFFICIAL_TRACK5_TIMESTAMP_SOURCE_DIRS["ground-truth"],
+        )
+        if timestamps:
+            return timestamps
+        return _timestamps_from_official_dirs(
+            paths.root,
+            _all_official_timestamp_dirs(),
+        )
+    if timestamp_source == "all-modalities":
+        return _timestamps_from_official_dirs(paths.root, _all_official_timestamp_dirs())
+    return _timestamps_from_official_dirs(
+        paths.root,
+        OFFICIAL_TRACK5_TIMESTAMP_SOURCE_DIRS[timestamp_source],
+    )
 
 
 def _looks_like_sequence(path: Path) -> bool:
@@ -898,6 +968,49 @@ def _official_point_cloud_frame_time_s(path: Path, *, sequence_root: Path) -> fl
     ):
         return None
     return infer_time_s_from_filename(path)
+
+
+def _all_official_timestamp_dirs() -> tuple[str, ...]:
+    dirs: list[str] = []
+    for values in OFFICIAL_TRACK5_TIMESTAMP_SOURCE_DIRS.values():
+        dirs.extend(values)
+    return tuple(dirs)
+
+
+def _timestamps_from_official_dirs(root: Path, directory_names: tuple[str, ...]) -> list[float]:
+    wanted = {_normalize_official_dir_name(name) for name in directory_names}
+    timestamps: set[float] = set()
+    for directory in _official_timestamp_dirs(root, wanted):
+        for item in sorted(directory.iterdir()):
+            if not item.is_file():
+                continue
+            timestamp = _timestamp_from_filename_or_none(item)
+            if timestamp is not None:
+                timestamps.add(timestamp)
+    return sorted(timestamps)
+
+
+def _official_timestamp_dirs(root: Path, wanted: set[str]) -> list[Path]:
+    if not Path(root).is_dir():
+        return []
+    return [
+        item
+        for item in sorted(Path(root).iterdir())
+        if item.is_dir() and _normalize_official_dir_name(item.name) in wanted
+    ]
+
+
+def _normalize_official_dir_name(name: str) -> str:
+    return str(name).lower().replace("-", "_").replace(" ", "_")
+
+
+def _timestamp_from_filename_or_none(path: Path) -> float | None:
+    if not re.search(r"[-+]?\d*\.?\d+", Path(path).stem):
+        return None
+    timestamp = infer_time_s_from_filename(path)
+    if not np.isfinite(timestamp):
+        return None
+    return float(timestamp)
 
 
 def _relative_path_has_any(path: Path, *, root: Path, tokens: tuple[str, ...]) -> bool:

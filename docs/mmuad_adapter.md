@@ -1,8 +1,9 @@
 # Experimental MMUAD / CVPR UG2+ adapter
 
 This is a first RaFT-UAV++ portability scaffold for the CVPR UG2+ / MMUAD UAV
-tracking and pose-estimation setting.  It is not an official challenge
-submission implementation.
+tracking and pose-estimation setting.  It supports the public Track 5 folder
+layout and upload CSV/ZIP shape, but it is not a direct authenticated
+Codabench uploader or a clone of the closed challenge evaluator.
 
 The adapter consumes normalized candidate detections:
 
@@ -481,6 +482,32 @@ The class-map file used for official output should map each sequence to the
 integer challenge class id, for example `sequence_id,uav_type` with values such
 as `seq1,0`. If no per-sequence numeric class map is provided, the CLI uses
 `--ug2-official-classification` as the default id.
+
+For leaderboard-style packaging, the public README asks for positions at the
+given sequence timestamps. With `--sequence-root`, the CLI can resample the
+official output to timestamps discovered from Track 5 sequence folders before
+writing the official CSV/ZIP:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --sequence-root data/mmuad_export \
+  --split-name val \
+  --output-dir outputs/mmuad_val \
+  --ug2-official-complete-to-sequence-timestamps \
+  --ug2-official-timestamp-source ground-truth-or-all \
+  --completion-max-interpolation-gap-s 1.0 \
+  --ug2-class-map-file data/mmuad_export/sequence_class_ids.csv \
+  --ug2-official-results-csv outputs/mmuad_val/mmaud_results.csv \
+  --ug2-official-codabench-zip outputs/mmuad_val/ug2_codabench_submission.zip
+```
+
+`ground-truth-or-all` uses `ground_truth/<timestamp>.npy` when labels are
+present and falls back to the union of public sensor-frame timestamps otherwise.
+Use `image`, `lidar-360`, `livox-avia`, `radar-enhance-pcl`, or
+`all-modalities` when a specific timestamp source is required. The CLI writes
+`mmuad_official_timestamp_completion_rows.csv` and
+`mmuad_official_timestamp_completion_summary.json` so interpolation and
+nearest-hold choices remain auditable.
 
 The older local diagnostic result table with
 `sequence_id,timestamp,x,y,z,uav_type,score` remains available for repository

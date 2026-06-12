@@ -57,7 +57,11 @@ from raft_uav.mmuad.rosbag_bridge import (
     write_topic_map_template,
 )
 from raft_uav.mmuad.schema import CandidateFrame, TruthFrame
-from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_export
+from raft_uav.mmuad.sequence import (
+    discover_sequence_paths,
+    load_sequence_export,
+    official_track5_timestamp_template,
+)
 from raft_uav.mmuad.splits import filter_sequences_by_split, load_split_manifest
 from raft_uav.mmuad.submission import (
     compute_trajectory_metrics,
@@ -3163,6 +3167,112 @@ def test_sequence_root_loads_official_track5_point_cloud_folders(tmp_path: Path)
     assert candidates.rows["time_s"].tolist() == [float(timestamp)] * 3
     assert truth is not None
     assert truth.rows["time_s"].tolist() == [float(timestamp)]
+
+
+def test_official_track5_timestamp_template_prefers_truth_then_sensor_frames(
+    tmp_path: Path,
+) -> None:
+    train_seq = tmp_path / "train" / "seq1"
+    (train_seq / "ground_truth").mkdir(parents=True)
+    (train_seq / "Image").mkdir()
+    (train_seq / "livox_avia").mkdir()
+    np.save(train_seq / "ground_truth" / "10.0.npy", np.array([0.0, 0.0, 0.0]))
+    (train_seq / "Image" / "11.0.png").write_bytes(b"not-a-real-image")
+    np.save(train_seq / "livox_avia" / "12.0.npy", np.zeros((3, 3)))
+
+    val_seq = tmp_path / "val" / "seq2"
+    (val_seq / "Image").mkdir(parents=True)
+    (val_seq / "livox_avia").mkdir()
+    (val_seq / "Image" / "20.0.png").write_bytes(b"not-a-real-image")
+    np.save(val_seq / "livox_avia" / "21.0.npy", np.zeros((3, 3)))
+
+    discovered = {
+        paths.sequence_id: paths for paths in discover_sequence_paths(tmp_path)
+    }
+
+    train_template = official_track5_timestamp_template(discovered["seq1"])
+    val_template = official_track5_timestamp_template(discovered["seq2"])
+    val_image_template = official_track5_timestamp_template(
+        discovered["seq2"],
+        timestamp_source="image",
+    )
+
+    assert train_template.rows["time_s"].tolist() == [10.0]
+    assert val_template.rows["time_s"].tolist() == [20.0, 21.0]
+    assert val_image_template.rows["time_s"].tolist() == [20.0]
+
+
+def test_cli_completes_official_results_to_sequence_timestamps(tmp_path: Path) -> None:
+    root = tmp_path / "data"
+    seq = root / "val" / "seq1"
+    image = seq / "Image"
+    livox = seq / "livox_avia"
+    image.mkdir(parents=True)
+    livox.mkdir()
+    for timestamp in ("0.0", "1.0"):
+        (image / f"{timestamp}.png").write_bytes(b"not-a-real-image")
+    for timestamp, x in (("0.0", 0.0), ("2.0", 2.0)):
+        np.save(
+            livox / f"{timestamp}.npy",
+            np.array(
+                [
+                    [x, 0.0, 10.0],
+                    [x + 0.1, 0.0, 10.0],
+                    [x, 0.1, 10.0],
+                ]
+            ),
+        )
+    output = tmp_path / "out"
+    results = output / "mmaud_results.csv"
+    zip_path = output / "submission.zip"
+
+    status = mmuad_cli_main(
+        [
+            "--sequence-root",
+            str(root),
+            "--split-name",
+            "val",
+            "--voxel-size-m",
+            "0.5",
+            "--min-cluster-points",
+            "3",
+            "--completion-max-interpolation-gap-s",
+            "3.0",
+            "--ug2-official-complete-to-sequence-timestamps",
+            "--ug2-official-timestamp-source",
+            "image",
+            "--ug2-official-results-csv",
+            str(results),
+            "--ug2-official-codabench-zip",
+            str(zip_path),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    rows = pd.read_csv(results)
+    assert rows.columns.tolist() == [
+        "Sequence",
+        "Timestamp",
+        "Position",
+        "Classification",
+    ]
+    assert rows["Sequence"].tolist() == ["seq1", "seq1"]
+    assert rows["Timestamp"].tolist() == [0.0, 1.0]
+    assert (output / "mmuad_official_timestamp_completion_rows.csv").exists()
+    summary = json.loads(
+        (output / "mmuad_official_timestamp_completion_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert summary["requested_count"] == 2
+    assert summary["completed_count"] == 2
+    assert summary["timestamp_source"] == "image"
+    with ZipFile(zip_path) as archive:
+        assert archive.namelist() == ["mmaud_results.csv"]
+        zipped = pd.read_csv(archive.open("mmaud_results.csv"))
+    assert zipped["Timestamp"].tolist() == [0.0, 1.0]
 
 
 def test_sequence_root_loads_binary_livox_point_cloud_export(tmp_path: Path) -> None:
