@@ -1395,6 +1395,26 @@ def test_binary_pcd_point_cloud_is_clustered(tmp_path: Path) -> None:
     assert abs(float(frame.rows.loc[0, "time_s"]) - 2.5) < 1e-9
 
 
+def test_binary_bin_point_cloud_is_clustered(tmp_path: Path) -> None:
+    points = np.array(
+        [
+            [0.0, 0.0, 1.0, 0.5],
+            [0.1, 0.0, 1.1, 0.6],
+            [0.2, 0.1, 1.0, 0.7],
+        ],
+        dtype="<f4",
+    )
+    bin_path = tmp_path / "livox_points_4.25.bin"
+    points.tofile(bin_path)
+
+    frame = load_point_cloud_file_as_candidates(bin_path, voxel_size_m=0.5, min_points=3)
+
+    assert len(frame.rows) == 1
+    row = frame.rows.iloc[0]
+    assert abs(float(row["time_s"]) - 4.25) < 1e-9
+    assert abs(float(row["x_m"]) - 0.1) < 1e-6
+
+
 def test_numpy_point_cloud_file_is_clustered(tmp_path: Path) -> None:
     points = np.array([[0.0, 0.0, 1.0], [0.1, 0.0, 1.1], [0.2, 0.1, 1.0]])
     npy = tmp_path / "cloud_3.0.npy"
@@ -1528,6 +1548,39 @@ def test_sequence_root_loads_mmuad_modality_folder_layout(tmp_path: Path) -> Non
     assert output.estimates["class_name"].tolist() == ["2"]
     results = estimates_to_mmaud_results_frame(output.estimates, class_name="unknown")
     assert results["uav_type"].tolist() == ["2"]
+
+
+def test_sequence_root_loads_binary_livox_point_cloud_export(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_livox_bin"
+    livox = seq / "livox_avia"
+    truth_dir = seq / "ground_truth"
+    livox.mkdir(parents=True)
+    truth_dir.mkdir()
+    timestamp = "12.75"
+    np.array(
+        [
+            [3.0, 4.0, 5.0, 0.5],
+            [3.1, 4.0, 5.1, 0.6],
+            [3.0, 4.1, 5.0, 0.7],
+        ],
+        dtype="<f4",
+    ).tofile(livox / f"{timestamp}.bin")
+    np.save(truth_dir / f"{timestamp}.npy", np.array([3.0, 4.0, 5.0]))
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(
+        discovered[0],
+        voxel_size_m=0.5,
+        min_cluster_points=3,
+    )
+
+    assert [sequence.sequence_id for sequence in discovered] == ["seq_livox_bin"]
+    assert discovered[0].point_cloud_files == (livox / f"{timestamp}.bin",)
+    assert len(candidates.rows) == 1
+    row = candidates.rows.iloc[0]
+    assert row["source"] == "livox_avia"
+    assert abs(float(row["time_s"]) - 12.75) < 1e-9
+    assert truth is not None
 
 
 def test_sequence_root_loads_nested_tracking_results_as_candidates(tmp_path: Path) -> None:

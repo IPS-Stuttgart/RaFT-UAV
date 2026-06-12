@@ -129,12 +129,13 @@ def load_point_cloud_file_as_candidates(
     min_points: int = 3,
     min_confidence: float = 0.0,
 ) -> CandidateFrame:
-    """Load CSV/TSV/TXT/PCD/PLY point-cloud files and cluster them into candidates.
+    """Load exported point-cloud files and cluster them into candidates.
 
-    ASCII PCD and PLY are supported as a pragmatic exported-data bridge.  This
-    is **not** a native Livox packet reader.  Files without per-point timestamps
-    are treated as one frame; ``time_s`` is inferred from the filename when it
-    contains a numeric token, otherwise it defaults to ``0.0``.
+    CSV/TSV/TXT, NumPy, PCD, PLY, and simple float32 ``.bin`` files are
+    supported as pragmatic exported-data bridges.  This is **not** a native
+    Livox packet reader.  Files without per-point timestamps are treated as one
+    frame; ``time_s`` is inferred from the filename when it contains a numeric
+    token, otherwise it defaults to ``0.0``.
     """
 
     path = Path(path)
@@ -148,6 +149,8 @@ def load_point_cloud_file_as_candidates(
         points = _read_pcd(path)
     elif suffix == ".ply":
         points = _read_ascii_ply(path)
+    elif suffix == ".bin":
+        points = _read_binary_point_cloud(path)
     else:
         raise ValueError(f"unsupported point-cloud extension: {path.suffix}")
     points = _add_point_cloud_metadata(
@@ -387,6 +390,30 @@ def _read_numpy_point_cloud(path: Path) -> pd.DataFrame:
     frame = pd.DataFrame({"x_m": arr[:, 0], "y_m": arr[:, 1], "z_m": arr[:, 2]})
     if arr.shape[1] >= 4:
         frame["time_s"] = arr[:, 3]
+    return _normalize_point_frame(frame, path=path)
+
+
+def _read_binary_point_cloud(path: Path) -> pd.DataFrame:
+    """Read a simple little-endian float32 point cloud.
+
+    Common exported LiDAR ``.bin`` files store rows as ``x,y,z`` or
+    ``x,y,z,intensity``.  The fourth channel is ignored here because sequence
+    timestamps are frame-level metadata inferred from the filename unless an
+    explicit ``time_s`` is supplied by the caller.
+    """
+
+    raw = np.fromfile(path, dtype="<f4")
+    if raw.size < 3:
+        raise ValueError(f"binary point cloud {path} contains fewer than 3 float32 values")
+    if raw.size % 4 == 0:
+        arr = raw.reshape(-1, 4)
+    elif raw.size % 3 == 0:
+        arr = raw.reshape(-1, 3)
+    else:
+        raise ValueError(
+            f"binary point cloud {path} must contain float32 x,y,z or x,y,z,intensity rows"
+        )
+    frame = pd.DataFrame({"x_m": arr[:, 0], "y_m": arr[:, 1], "z_m": arr[:, 2]})
     return _normalize_point_frame(frame, path=path)
 
 

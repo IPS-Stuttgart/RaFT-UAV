@@ -119,7 +119,9 @@ as `candidates.tsv` or `detections.txt`, `points.csv`, `points.tsv`,
 `topic_map.json`, `truth.csv`, compact truth arrays such as `truth.npy`, and
 optionally `calibration.json`. It also recognizes one-level split folders and
 MMUAD-style modality subfolders such as `livox_avia/<timestamp>.npy`,
-`ground_truth/<timestamp>.npy`, `tracking_results/<timestamp>.npy`,
+`livox_avia/<timestamp>.bin` for exported float32 `x,y,z` or
+`x,y,z,intensity` point clouds, `ground_truth/<timestamp>.npy`,
+`tracking_results/<timestamp>.npy`,
 `radar0/detections.csv` with exported polar range/azimuth columns,
 `cam0/detections.csv` with exported pixel/depth or bounding-box columns, and
 `class/<timestamp>.npy`:
@@ -153,6 +155,7 @@ data/mmuad_export/
     seq007/
       livox_avia/
         1706255054.386069.npy
+        1706255054.386070.bin
       ground_truth/
         1706255054.386069.npy
       tracking_results/
@@ -309,10 +312,11 @@ calibration, ROS recordings, and metadata.  It also infers timestamps from
 filenames when possible and reports what each sequence is missing for a tracking
 smoke test.
 
-### Binary PCD and NumPy point clouds
+### Binary PCD, BIN, and NumPy point clouds
 
 The point-cloud bridge now supports CSV/TSV/TXT tables, ASCII and binary PCD
-files, ASCII PLY files, and simple `.npy` / `.npz` point arrays with shape
+files, ASCII PLY files, simple float32 `.bin` files with `x,y,z` or
+`x,y,z,intensity` rows, and simple `.npy` / `.npz` point arrays with shape
 `(N, >=3)`.  This still is not a native Livox packet reader, but it covers
 common exported point-cloud formats used during dataset inspection.
 

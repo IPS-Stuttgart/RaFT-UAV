@@ -28,7 +28,7 @@ from raft_uav.mmuad.schema import CandidateFrame, TruthFrame, normalize_truth_co
 
 TABLE_SUFFIXES = (".csv", ".tsv", ".txt")
 TRAJECTORY_SUFFIXES = (".npy", ".npz")
-POINT_FILE_SUFFIXES = (".csv", ".tsv", ".txt", ".npy", ".npz", ".pcd", ".ply")
+POINT_FILE_SUFFIXES = (".csv", ".tsv", ".txt", ".npy", ".npz", ".pcd", ".ply", ".bin")
 CANDIDATE_DIR_TOKENS = (
     "candidate",
     "candidates",
@@ -101,10 +101,10 @@ def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[Seq
     ``*_candidates.csv``, delimited variants such as ``candidates.tsv`` or
     ``detections.txt``, compact NumPy trajectory tables such as
     ``candidates.npy`` or ``trajectory.npz``, ``points.csv`` / ``points.tsv``,
-    ``*_points.csv``, ASCII ``*.pcd``, ASCII ``*.ply``, exported ROS topic-map
-    JSON files, ``truth.csv`` / ``truth.npy``, and ``calibration.json`` under
-    each sequence folder.  If ``root`` itself holds such files, it is treated as
-    a single sequence.
+    ``*_points.csv``, ``*.pcd``, ``*.ply``, simple float32 ``*.bin`` point-cloud
+    exports, exported ROS topic-map JSON files, ``truth.csv`` / ``truth.npy``,
+    and ``calibration.json`` under each sequence folder.  If ``root`` itself
+    holds such files, it is treated as a single sequence.
     """
 
     root = Path(root)
@@ -452,6 +452,14 @@ def _point_files(path: Path) -> list[Path]:
         files.extend(sorted(path.glob(f"*_point_cloud{suffix}")))
     files.extend(sorted(path.glob("*.pcd")))
     files.extend(sorted(path.glob("*.ply")))
+    for pattern in (
+        "*points*.bin",
+        "*point_cloud*.bin",
+        "*cloud*.bin",
+        "*lidar*.bin",
+        "*livox*.bin",
+    ):
+        files.extend(sorted(path.glob(pattern)))
     files.extend(_point_numpy_files(path))
     files.extend(
         _files_under_named_dirs(
