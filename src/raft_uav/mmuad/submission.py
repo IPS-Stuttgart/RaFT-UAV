@@ -207,6 +207,27 @@ def _estimate_sequence_values(
     return pd.Series([default_sequence_id] * len(estimates), index=estimates.index)
 
 
+def _estimate_track_id_values(
+    estimates: pd.DataFrame,
+    *,
+    track_id: str,
+    use_estimate_track_ids: bool,
+) -> pd.Series:
+    """Return one non-empty track id per estimate row."""
+
+    default_track_id = str(track_id)
+    if use_estimate_track_ids and "output_track_id" in estimates.columns:
+        values = (
+            estimates["output_track_id"]
+            .where(estimates["output_track_id"].notna(), default_track_id)
+            .astype(str)
+            .str.strip()
+        )
+        missing = values.eq("") | values.str.lower().isin({"nan", "none", "<na>"})
+        return values.where(~missing, default_track_id)
+    return pd.Series([default_track_id] * len(estimates), index=estimates.index)
+
+
 def _estimate_coordinate_columns(estimates: pd.DataFrame) -> tuple[str, str, str]:
     """Return x/y/z coordinate columns for supported estimate table schemas."""
 
@@ -353,13 +374,11 @@ def estimates_to_submission_frame(
     if work.empty:
         return pd.DataFrame(columns=SUBMISSION_COLUMNS)
 
-    track_values = pd.Series(str(track_id), index=work.index)
-    if use_estimate_track_ids and "output_track_id" in estimates.columns:
-        track_values = (
-            work["output_track_id"]
-            .where(work["output_track_id"].notna(), str(track_id))
-            .astype(str)
-        )
+    track_values = _estimate_track_id_values(
+        work,
+        track_id=track_id,
+        use_estimate_track_ids=use_estimate_track_ids,
+    )
     rows = pd.DataFrame(
         {
             "sequence_id": _estimate_sequence_values(work),
