@@ -124,7 +124,7 @@ A normalized sequence export can be loaded from folders containing files named
 `candidates.csv`, `detections.csv`, `candidates.json`, `truth.json`,
 `*_candidates.csv`, delimited variants such as `candidates.tsv` or
 `detections.txt`, `points.csv`, `points.tsv`, `*_points.txt`, exported polar
-radar and camera detection tables such as `radar_polar.tsv`,
+radar and camera detection tables such as `radar_polar.tsv` or `radar_polar.json`,
 `camera_detections.txt`, or `camera_detections.json`, compact trajectory arrays such as `trajectory.npy` /
 `candidates.npz`, exported ROS topic maps such as `topic_map.json`,
 `truth.csv`, compact truth arrays such as `truth.npy`, and optionally
@@ -163,6 +163,7 @@ data/mmuad_export/
     truth_export.csv
   seq006/
     radar_polar.tsv
+    radar_polar.json
     camera_detections.json
     calibration.json
     truth.csv
@@ -177,6 +178,7 @@ data/mmuad_export/
         1706255054.386069.npy
       radar0/
         detections.csv
+        detections.json
       cam0/
         detections.csv
       class/
@@ -561,7 +563,7 @@ appear in anti-UAV datasets but are not yet parsed from native raw packets.
 ### Polar Radar Table Exports
 
 Use `--radar-polar-csv` for radar detections exported as CSV/TSV/TXT
-range/azimuth rows:
+range/azimuth rows, or `--radar-polar-file` for JSON table exports:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
@@ -572,10 +574,21 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_radar_polar
 ```
 
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --radar-polar-file data/mmuad_export/seq001/radar_polar.json \
+  --radar-azimuth-convention north-clockwise \
+  --radar-angle-unit deg \
+  --truth-csv data/mmuad_export/seq001/truth.csv \
+  --output-dir outputs/mmuad_radar_polar_json
+```
+
 Supported aliases include `range_m`, `azimuth_deg`, `elevation_deg`, `track_id`,
-`confidence`, and common variants. Coordinates are in the radar/export frame
-unless a calibration file is applied later. This is not a native custom radar
-message parser.
+`confidence`, and common variants. JSON radar exports may be row lists, column
+maps, or objects containing `radar_polar`, `radar_detections`, `detections`,
+`rows`, or `data`. Coordinates are in the radar/export frame unless a
+calibration file is applied later. This is not a native custom radar message
+parser.
 
 ### Camera Detector Table Exports
 

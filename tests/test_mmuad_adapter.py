@@ -815,6 +815,50 @@ def test_sequence_root_discovers_radar_and_camera_modality_folder_tables(
     assert truth is not None
 
 
+def test_sequence_root_discovers_json_radar_modality_folder_tables(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "seq_radar_json"
+    radar = seq / "radar0"
+    radar.mkdir(parents=True)
+    (radar / "detections.json").write_text(
+        json.dumps(
+            {
+                "detections": [
+                    {
+                        "time_s": 0.0,
+                        "range_m": 10.0,
+                        "azimuth_deg": 90.0,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (seq / "truth.json").write_text(
+        json.dumps(
+            [
+                {
+                    "time_s": 0.0,
+                    "x_m": 10.0,
+                    "y_m": 0.0,
+                    "z_m": 0.0,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0], apply_calibration=False)
+
+    assert [sequence.sequence_id for sequence in discovered] == ["seq_radar_json"]
+    assert discovered[0].radar_polar_csvs == (radar / "detections.json",)
+    assert set(candidates.rows["source"]) == {"radar0"}
+    assert abs(float(candidates.rows.loc[0, "x_m"]) - 10.0) < 1.0e-9
+    assert truth is not None
+
+
 def test_sequence_root_discovers_json_camera_detection_tables(tmp_path: Path) -> None:
     seq = tmp_path / "seq_camera_json"
     camera = seq / "cam0"
@@ -2836,6 +2880,39 @@ def test_radar_polar_tsv_converts_to_candidates(tmp_path: Path) -> None:
     assert abs(float(row["x_m"]) - 10.0) < 1.0e-9
 
 
+def test_radar_polar_json_converts_to_candidates(tmp_path: Path) -> None:
+    from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
+
+    radar = tmp_path / "radar_polar.json"
+    radar.write_text(
+        json.dumps(
+            {
+                "radar_detections": [
+                    {
+                        "timestamp_ms": 1250,
+                        "range_m": 10.0,
+                        "azimuth_deg": 90.0,
+                        "track": "r1",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates = load_radar_polar_csv_as_candidates(
+        radar,
+        sequence_id="seq_json_radar",
+        azimuth_convention="north-clockwise",
+    )
+
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_json_radar"
+    assert row["track_id"] == "r1"
+    assert abs(float(row["time_s"]) - 1.25) < 1.0e-12
+    assert abs(float(row["x_m"]) - 10.0) < 1.0e-9
+
+
 def test_radar_polar_loader_accepts_millisecond_timestamps(tmp_path: Path) -> None:
     from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
 
@@ -3065,6 +3142,55 @@ def test_cli_accepts_explicit_camera_detection_json_file(tmp_path: Path) -> None
     assert estimates["sequence_id"].tolist() == ["default"]
     metrics = json.loads((output / "mmuad_metrics.json").read_text(encoding="utf-8"))
     assert metrics["pooled"]["mean_3d_m"] == 0.0
+
+
+def test_cli_accepts_explicit_radar_polar_json_file(tmp_path: Path) -> None:
+    radar = tmp_path / "radar_polar.json"
+    radar.write_text(
+        json.dumps(
+            {
+                "radar_polar": [
+                    {
+                        "sequence_id": "default",
+                        "time_s": 0.0,
+                        "range_m": 10.0,
+                        "azimuth_deg": 90.0,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    truth = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["default"],
+            "time_s": [0.0],
+            "x_m": [10.0],
+            "y_m": [0.0],
+            "z_m": [0.0],
+        }
+    ).to_csv(truth, index=False)
+    output = tmp_path / "out"
+
+    status = mmuad_cli_main(
+        [
+            "--radar-polar-file",
+            str(radar),
+            "--radar-azimuth-convention",
+            "north-clockwise",
+            "--truth-csv",
+            str(truth),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    estimates = pd.read_csv(output / "mmuad_estimates.csv")
+    assert abs(float(estimates.loc[0, "state_x_m"]) - 10.0) < 1.0e-9
+    metrics = json.loads((output / "mmuad_metrics.json").read_text(encoding="utf-8"))
+    assert abs(float(metrics["pooled"]["mean_3d_m"])) < 1.0e-9
 
 
 def test_sequence_export_applies_discovered_sensor_uncertainty_options(

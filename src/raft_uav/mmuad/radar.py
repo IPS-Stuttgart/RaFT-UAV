@@ -7,7 +7,9 @@ with range, azimuth, optional elevation, and optional confidence/track columns.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -44,10 +46,11 @@ def load_radar_polar_csv_as_candidates(
     ``azimuth_deg``/``azimuth``/``az``, and
     ``elevation_deg``/``elevation``/``el``.  Missing elevation defaults to
     zero.  The output coordinates are in the radar/export frame unless a later
-    calibration transform is applied.
+    calibration transform is applied. CSV/TSV/TXT and JSON row/table exports
+    are supported.
     """
 
-    frame = normalize_time_column_aliases(_read_delimited_table(path), target="time_s")
+    frame = normalize_time_column_aliases(_read_radar_table(path), target="time_s")
     normalized = _normalize_radar_columns(frame)
     if sequence_id is not None:
         normalized["sequence_id"] = str(sequence_id)
@@ -182,3 +185,101 @@ def _read_delimited_table(path: Path) -> pd.DataFrame:
     if path.suffix.lower() == ".txt":
         return pd.read_csv(path, sep=None, engine="python")
     return pd.read_csv(path)
+
+
+def _read_radar_table(path: Path) -> pd.DataFrame:
+    path = Path(path)
+    if path.suffix.lower() == ".json":
+        return _read_json_radar_table(path)
+    return _read_delimited_table(path)
+
+
+def _read_json_radar_table(path: Path) -> pd.DataFrame:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    records = _json_radar_records(payload)
+    return _json_radar_records_to_frame(records, path=path)
+
+
+def _json_radar_records(payload: Any) -> Any:
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    for key in (
+        "radar_polar",
+        "radar_detections",
+        "detections",
+        "tracks",
+        "rows",
+        "data",
+    ):
+        nested = _mapping_get_case_insensitive(payload, key)
+        if nested is not None:
+            return _json_radar_records(nested)
+    if _looks_like_radar_column_map(payload) or _looks_like_radar_row(payload):
+        return payload
+    return []
+
+
+def _json_radar_records_to_frame(records: Any, *, path: Path | None = None) -> pd.DataFrame:
+    if isinstance(records, pd.DataFrame):
+        return records
+    if isinstance(records, dict):
+        if _looks_like_radar_column_map(records):
+            return pd.DataFrame(records)
+        if _looks_like_radar_row(records):
+            return pd.DataFrame.from_records([records])
+    if isinstance(records, list):
+        if not records:
+            return pd.DataFrame()
+        if all(isinstance(item, dict) for item in records):
+            return pd.DataFrame.from_records(records)
+    label = str(path) if path is not None else "JSON payload"
+    raise ValueError(f"radar polar JSON table {label} does not contain row objects")
+
+
+def _mapping_get_case_insensitive(mapping: dict[Any, Any], key: str) -> Any | None:
+    for candidate, value in mapping.items():
+        if str(candidate).lower() == key.lower():
+            return value
+    return None
+
+
+_RADAR_HINT_KEYS = {
+    "time_s",
+    "timestamp",
+    "timestamp_s",
+    "timestamp_ns",
+    "timestamp_ms",
+    "sec",
+    "nanosec",
+    "range_m",
+    "range",
+    "r",
+    "rho",
+    "distance_m",
+    "azimuth_deg",
+    "azimuth",
+    "az",
+    "bearing",
+    "bearing_deg",
+    "elevation_deg",
+    "elevation",
+    "el",
+}
+
+
+def _looks_like_radar_row(payload: dict[Any, Any]) -> bool:
+    keys = {str(key).lower() for key in payload}
+    return bool(keys.intersection(_RADAR_HINT_KEYS))
+
+
+def _looks_like_radar_column_map(payload: dict[Any, Any]) -> bool:
+    keys = {str(key).lower() for key in payload}
+    if not keys.intersection(_RADAR_HINT_KEYS):
+        return False
+    return any(
+        isinstance(value, (list, tuple))
+        for key, value in payload.items()
+        if str(key).lower() in _RADAR_HINT_KEYS
+    )

@@ -84,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--point-cloud-csv", action="append", type=Path, default=[])
     parser.add_argument("--point-cloud-file", action="append", type=Path, default=[])
     parser.add_argument("--radar-polar-csv", action="append", type=Path, default=[])
+    parser.add_argument("--radar-polar-file", action="append", type=Path, default=[])
     parser.add_argument("--radar-polar-source", default="radar-polar")
     parser.add_argument(
         "--radar-azimuth-convention",
@@ -406,6 +407,7 @@ def _run_explicit_files(args: argparse.Namespace):
         )
         for path in args.point_cloud_file
     )
+    radar_polar_files = list(args.radar_polar_csv) + list(args.radar_polar_file)
     frames.extend(
         load_radar_polar_csv_as_candidates(
             path,
@@ -416,7 +418,7 @@ def _run_explicit_files(args: argparse.Namespace):
             angle_std_deg=args.radar_polar_angle_std_deg,
             z_std_m=args.radar_polar_z_std_m,
         )
-        for path in args.radar_polar_csv
+        for path in radar_polar_files
     )
     camera_detection_files = list(args.camera_detections_csv) + list(args.camera_detections_file)
     if camera_detection_files:

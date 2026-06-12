@@ -380,10 +380,10 @@ def _radar_polar_files(path: Path) -> list[Path]:
     names = [
         path / f"{stem}{suffix}"
         for stem in ("radar_polar", "radar_detections_polar")
-        for suffix in TABLE_SUFFIXES
+        for suffix in TABLE_SUFFIXES + JSON_TABLE_SUFFIXES
     ]
     files = [item for item in names if item.exists()]
-    for suffix in TABLE_SUFFIXES:
+    for suffix in TABLE_SUFFIXES + JSON_TABLE_SUFFIXES:
         files.extend(sorted(path.glob(f"*_radar_polar{suffix}")))
         files.extend(sorted(path.glob(f"*_polar_radar{suffix}")))
         files.extend(sorted(path.glob(f"*_radar_detections_polar{suffix}")))
@@ -392,7 +392,7 @@ def _radar_polar_files(path: Path) -> list[Path]:
         for item in _files_under_sensor_dirs(
             path,
             directory_tokens=RADAR_DIR_TOKENS,
-            suffixes=TABLE_SUFFIXES,
+            suffixes=TABLE_SUFFIXES + JSON_TABLE_SUFFIXES,
         )
         if _looks_like_radar_polar_file(item)
     ]
@@ -776,6 +776,8 @@ def _has_any_column(columns: set[str], aliases: tuple[str, ...]) -> bool:
 def _table_columns(path: Path) -> list[str]:
     suffix = path.suffix.lower()
     try:
+        if suffix in JSON_TABLE_SUFFIXES:
+            return _json_table_columns(path)
         if suffix == ".tsv":
             frame = pd.read_csv(path, sep="\t", nrows=0)
         elif suffix == ".txt":
@@ -785,6 +787,39 @@ def _table_columns(path: Path) -> list[str]:
     except Exception:
         return []
     return [str(column) for column in frame.columns]
+
+
+def _json_table_columns(path: Path) -> list[str]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return _json_payload_columns(payload)
+
+
+def _json_payload_columns(payload: Any) -> list[str]:
+    if isinstance(payload, list):
+        for item in payload:
+            if isinstance(item, Mapping):
+                return [str(key) for key in item]
+        return []
+    if not isinstance(payload, Mapping):
+        return []
+    for key in ("radar_polar", "radar_detections", "detections", "rows", "data"):
+        nested = _mapping_get_case_insensitive(payload, key)
+        if nested is not None:
+            columns = _json_payload_columns(nested)
+            if columns:
+                return columns
+    if _looks_like_json_column_map(payload):
+        return [str(key) for key in payload]
+    if all(not isinstance(value, (list, tuple, Mapping)) for value in payload.values()):
+        return [str(key) for key in payload]
+    return []
+
+
+def _looks_like_json_column_map(payload: Mapping[Any, Any]) -> bool:
+    return any(isinstance(value, (list, tuple)) for value in payload.values())
 
 
 def _source_from_path(path: Path, *, sequence_root: Path, default: str) -> str:
