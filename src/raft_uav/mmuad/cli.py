@@ -90,6 +90,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--evaluate-truth-file", type=Path)
     parser.add_argument("--evaluation-json", type=Path)
     parser.add_argument("--evaluation-max-time-delta-s", type=float, default=0.5)
+    parser.add_argument(
+        "--evaluation-protocol",
+        choices=("nearest-time", "public-track5"),
+        default="nearest-time",
+        help=(
+            "local result metric protocol: nearest-time diagnostic or public "
+            "Track 5 timestamp-aligned MSE/classification metrics"
+        ),
+    )
+    parser.add_argument(
+        "--evaluation-timestamp-tolerance-s",
+        type=float,
+        default=1.0e-6,
+        help="timestamp tolerance for --evaluation-protocol public-track5",
+    )
     parser.add_argument("--point-cloud-csv", action="append", type=Path, default=[])
     parser.add_argument("--point-cloud-file", action="append", type=Path, default=[])
     parser.add_argument("--radar-polar-csv", action="append", type=Path, default=[])
@@ -268,6 +283,8 @@ def main(argv: list[str] | None = None) -> int:
             load_mmaud_results_file(evaluation_results),
             load_truth_file(evaluation_truth),
             max_time_delta_s=args.evaluation_max_time_delta_s,
+            metric_protocol=args.evaluation_protocol,
+            timestamp_tolerance_s=args.evaluation_timestamp_tolerance_s,
             class_map_path=args.evaluation_class_map_file,
         )
         paths = write_evaluation_artifacts(

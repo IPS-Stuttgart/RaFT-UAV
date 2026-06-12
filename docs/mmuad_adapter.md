@@ -597,7 +597,8 @@ normalized table or compact trajectory exports until the exact local MMUAD raw
 layout and topic message types are known.
 
 A local evaluator is available for sanity checking `mmaud_results.csv` against
-normalized truth. It is not the official Codabench evaluator:
+normalized truth. By default it uses a nearest-time development diagnostic; it
+is not the official Codabench runtime:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
@@ -621,12 +622,15 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 
 ## Leaderboard-Style Local Metrics And Completion
 
-The adapter can compute a closer UG2-style local sanity metric. It still is
-**not** the official Codabench evaluator, but it reports the two public
-leaderboard quantities that matter most for Track 5 style checks:
+The adapter can compute a closer UG2-style local sanity metric with
+`--evaluation-protocol public-track5`. It still is **not** the closed
+Codabench evaluator runtime, but it follows the public Track 5 rule shape:
+predictions are aligned to the truth/template timestamps, missing/extra/duplicate
+predictions are reported, and the matched rows expose the two public leaderboard
+quantities:
 
-- `pose_mse_loss_m2`: mean squared 3D position error.
-- `uav_type_accuracy`: sequence/type accuracy when truth rows or a class-map
+- `mean_square_loss_m2` / `pose_mse_loss_m2`: mean squared 3D position error.
+- `classification_accuracy` / `uav_type_accuracy`: sequence/type accuracy when truth rows or a class-map
   file provide UAV type labels.
 
 Evaluate an exported `mmaud_results.csv` with optional class labels:
@@ -635,6 +639,8 @@ Evaluate an exported `mmaud_results.csv` with optional class labels:
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --evaluate-results-csv outputs/mmuad_val/mmaud_results.csv \
   --evaluate-truth-csv data/mmuad_export/val_truth.csv \
+  --evaluation-protocol public-track5 \
+  --evaluation-timestamp-tolerance-s 1e-6 \
   --evaluation-class-map-file data/mmuad_export/sequence_classes.yaml \
   --evaluation-json outputs/mmuad_val/local_eval.json \
   --evaluation-rows-csv outputs/mmuad_val/local_eval_rows.csv \
@@ -642,7 +648,11 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ```
 
 Use `--evaluate-results-zip` instead when the result is still packaged as a
-Codabench-style archive.
+Codabench-style archive. The summary includes `truth_count`, `prediction_count`,
+`missing_prediction_count`, `extra_prediction_count`,
+`duplicate_prediction_count`, `truth_coverage_fraction`, and
+`all_truth_timestamps_matched` so a leaderboard-style package can be checked for
+timestamp coverage before upload.
 
 The submission writer also accepts a sequence-to-class map so different
 sequences can use different UAV type labels:
