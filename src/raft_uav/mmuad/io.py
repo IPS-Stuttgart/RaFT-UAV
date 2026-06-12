@@ -29,6 +29,32 @@ def load_candidate_csv(path: Path, *, default_sequence_id: str = "default") -> C
     return frame
 
 
+def load_candidate_file(
+    path: Path,
+    *,
+    default_sequence_id: str = "default",
+    source: str = "candidate",
+) -> CandidateFrame:
+    """Load a normalized candidate table from CSV/TXT or NumPy trajectory rows."""
+
+    path = Path(path)
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        return load_candidate_csv(path, default_sequence_id=default_sequence_id)
+    if suffix in {".tsv", ".txt"}:
+        raw = _read_delimited_table(path)
+    elif suffix in {".npy", ".npz"}:
+        raw = _read_numpy_trajectory_table(path)
+    else:
+        raise ValueError(f"unsupported candidate table extension: {path.suffix}")
+    if not _has_any_column(raw, ("source", "sensor", "modality")):
+        raw["source"] = source
+    rows = normalize_candidate_columns(raw, default_sequence_id=default_sequence_id)
+    frame = CandidateFrame(rows)
+    frame.validate()
+    return frame
+
+
 def load_truth_csv(path: Path, *, default_sequence_id: str = "default") -> TruthFrame:
     """Load a normalized or alias-compatible truth CSV."""
 
@@ -36,6 +62,30 @@ def load_truth_csv(path: Path, *, default_sequence_id: str = "default") -> Truth
         pd.read_csv(path),
         default_sequence_id=default_sequence_id,
     )
+    frame = TruthFrame(rows)
+    frame.validate()
+    return frame
+
+
+def load_truth_file(path: Path, *, default_sequence_id: str = "default") -> TruthFrame:
+    """Load a normalized truth table from CSV/TXT or NumPy trajectory rows."""
+
+    path = Path(path)
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        return load_truth_csv(path, default_sequence_id=default_sequence_id)
+    if suffix in {".tsv", ".txt"}:
+        rows = normalize_truth_columns(
+            _read_delimited_table(path),
+            default_sequence_id=default_sequence_id,
+        )
+    elif suffix in {".npy", ".npz"}:
+        rows = normalize_truth_columns(
+            _read_numpy_trajectory_table(path),
+            default_sequence_id=default_sequence_id,
+        )
+    else:
+        raise ValueError(f"unsupported truth table extension: {path.suffix}")
     frame = TruthFrame(rows)
     frame.validate()
     return frame
@@ -335,6 +385,8 @@ def _read_numpy_point_cloud(path: Path) -> pd.DataFrame:
     if arr.ndim != 2 or arr.shape[1] < 3:
         raise ValueError(f"NumPy point cloud must be shape (N, >=3), got {arr.shape}")
     frame = pd.DataFrame({"x_m": arr[:, 0], "y_m": arr[:, 1], "z_m": arr[:, 2]})
+    if arr.shape[1] >= 4:
+        frame["time_s"] = arr[:, 3]
     return _normalize_point_frame(frame, path=path)
 
 
@@ -388,6 +440,48 @@ def _normalize_point_frame(frame: pd.DataFrame, *, path: Path) -> pd.DataFrame:
     for col in ("x_m", "y_m", "z_m"):
         out[col] = pd.to_numeric(out[col], errors="coerce")
     return out.loc[np.isfinite(out[["x_m", "y_m", "z_m"]]).all(axis=1)].copy()
+
+
+def _read_delimited_table(path: Path) -> pd.DataFrame:
+    if path.suffix.lower() == ".tsv":
+        return pd.read_csv(path, sep="\t")
+    return pd.read_csv(path, sep=None, engine="python")
+
+
+def _read_numpy_trajectory_table(path: Path) -> pd.DataFrame:
+    payload = np.load(path, allow_pickle=False)
+    if isinstance(payload, np.lib.npyio.NpzFile):
+        key = _first_npz_key(
+            payload,
+            preferred=("trajectory", "trajectories", "truth", "candidates", "detections", "poses", "data"),
+        )
+        arr = payload[key]
+    else:
+        arr = payload
+    arr = np.asarray(arr)
+    if arr.dtype.names:
+        return pd.DataFrame.from_records(arr)
+    if arr.ndim != 2 or arr.shape[1] < 4:
+        raise ValueError(f"NumPy trajectory table must be shape (N, >=4), got {arr.shape}")
+    columns = ["time_s", "x_m", "y_m", "z_m"]
+    if arr.shape[1] >= 5:
+        columns.append("confidence")
+    frame = pd.DataFrame(arr[:, : len(columns)], columns=columns)
+    return frame
+
+
+def _first_npz_key(payload: np.lib.npyio.NpzFile, *, preferred: tuple[str, ...]) -> str:
+    lower_to_key = {key.lower(): key for key in payload.files}
+    for key in preferred:
+        matched = lower_to_key.get(key.lower())
+        if matched is not None:
+            return matched
+    return payload.files[0]
+
+
+def _has_any_column(frame: pd.DataFrame, names: tuple[str, ...]) -> bool:
+    lower = {str(column).lower() for column in frame.columns}
+    return any(name.lower() in lower for name in names)
 
 
 def _voxel_connected_components(

@@ -102,7 +102,9 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 
 A normalized sequence export can be loaded from folders containing files named
 `candidates.csv`, `detections.csv`, `*_candidates.csv`, `points.csv`,
-`*_points.csv`, `truth.csv`, and optionally `calibration.json`:
+`*_points.csv`, compact trajectory arrays such as `trajectory.npy` /
+`candidates.npz`, `truth.csv`, compact truth arrays such as `truth.npy`, and
+optionally `calibration.json`:
 
 ```text
 data/mmuad_export/
@@ -112,8 +114,8 @@ data/mmuad_export/
     lidar_points.csv
     truth.csv
   seq002/
-    candidates.csv
-    truth.csv
+    trajectory.npy
+    truth.npy
 ```
 
 Run all discovered sequences with:
@@ -254,6 +256,13 @@ The point-cloud bridge now supports ASCII and binary PCD files, ASCII PLY files,
 and simple `.npy` / `.npz` point arrays with shape `(N, >=3)`.  This still is
 not a native Livox packet reader, but it covers common exported point-cloud
 formats used during dataset inspection.
+
+For sequence-root discovery, NumPy files with point-cloud names such as
+`lidar_points.npy`, `point_cloud.npz`, or `cloud_12.5.npy` are clustered as
+point clouds. NumPy files with trajectory names such as `trajectory.npy`,
+`candidates.npz`, or `truth.npy` are loaded as compact trajectory tables with
+columns `time_s,x_m,y_m,z_m` in that order. This avoids accidentally clustering
+already-tracked trajectory exports into a single point-cloud centroid.
 
 ### Auto calibration loader
 

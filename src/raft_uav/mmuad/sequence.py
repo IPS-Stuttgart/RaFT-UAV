@@ -12,9 +12,10 @@ from raft_uav.mmuad.calibration import (
 )
 from raft_uav.mmuad.camera import load_camera_detections_csv_as_candidates, load_camera_models
 from raft_uav.mmuad.io import (
+    load_candidate_file,
     load_candidate_csv,
     load_point_cloud_file_as_candidates,
-    load_truth_csv,
+    load_truth_file,
     merge_candidate_frames,
 )
 from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
@@ -28,10 +29,11 @@ class SequencePaths:
     sequence_id: str
     root: Path
     candidate_csvs: tuple[Path, ...]
+    candidate_trajectory_files: tuple[Path, ...]
     radar_polar_csvs: tuple[Path, ...]
     camera_detection_csvs: tuple[Path, ...]
     point_cloud_files: tuple[Path, ...]
-    truth_csv: Path | None
+    truth_file: Path | None
     calibration_file: Path | None
 
 
@@ -40,7 +42,9 @@ def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[Seq
 
     The helper intentionally supports normalized/exported files rather than the
     official raw archive.  It looks for common names such as ``candidates.csv``,
-    ``*_candidates.csv``, ``points.csv``, ``*_points.csv``, ASCII ``*.pcd``, ASCII ``*.ply``, ``truth.csv``, and
+    ``*_candidates.csv``, compact NumPy trajectory tables such as
+    ``candidates.npy`` or ``trajectory.npz``, ``points.csv``, ``*_points.csv``,
+    ASCII ``*.pcd``, ASCII ``*.ply``, ``truth.csv`` / ``truth.npy``, and
     ``calibration.json`` under each sequence folder.  If ``root`` itself holds
     such files, it is treated as a single sequence.
     """
@@ -72,6 +76,14 @@ def load_sequence_export(
         load_candidate_csv(path, default_sequence_id=paths.sequence_id)
         for path in paths.candidate_csvs
     ]
+    candidate_frames.extend(
+        load_candidate_file(
+            path,
+            default_sequence_id=paths.sequence_id,
+            source=path.stem.replace("_trajectory", "-trajectory"),
+        )
+        for path in paths.candidate_trajectory_files
+    )
     candidate_frames.extend(
         load_radar_polar_csv_as_candidates(
             path,
@@ -111,8 +123,8 @@ def load_sequence_export(
         raise ValueError(f"no candidate or point-cloud files discovered for {paths.root}")
     candidates = merge_candidate_frames(candidate_frames)
     truth = (
-        load_truth_csv(paths.truth_csv, default_sequence_id=paths.sequence_id)
-        if paths.truth_csv is not None
+        load_truth_file(paths.truth_file, default_sequence_id=paths.sequence_id)
+        if paths.truth_file is not None
         else None
     )
     calibration = None
@@ -128,6 +140,7 @@ def _looks_like_sequence(path: Path) -> bool:
         return False
     return bool(
         _candidate_files(path)
+        or _candidate_trajectory_files(path)
         or _radar_polar_files(path)
         or _camera_detection_files(path)
         or _point_files(path)
@@ -155,10 +168,11 @@ def _sequence_from_dir(path: Path) -> SequencePaths:
         sequence_id=path.name,
         root=path,
         candidate_csvs=tuple(_candidate_files(path)),
+        candidate_trajectory_files=tuple(_candidate_trajectory_files(path)),
         radar_polar_csvs=tuple(_radar_polar_files(path)),
         camera_detection_csvs=tuple(_camera_detection_files(path)),
         point_cloud_files=tuple(_point_files(path)),
-        truth_csv=_truth_file(path),
+        truth_file=_truth_file(path),
         calibration_file=calibration,
     )
 
@@ -186,6 +200,49 @@ def _radar_polar_files(path: Path) -> list[Path]:
     return _unique_paths(files)
 
 
+def _candidate_trajectory_files(path: Path) -> list[Path]:
+    files: list[Path] = []
+    for suffix in (".npy", ".npz"):
+        files.extend(
+            item
+            for item in [
+                path / f"candidates{suffix}",
+                path / f"detections{suffix}",
+                path / f"tracks{suffix}",
+                path / f"trajectory{suffix}",
+                path / f"trajectories{suffix}",
+                path / f"tracking{suffix}",
+                path / f"results{suffix}",
+            ]
+            if item.exists()
+        )
+        for pattern in (
+            f"*candidates*{suffix}",
+            f"*detections*{suffix}",
+            f"*tracks*{suffix}",
+            f"*trajectory*{suffix}",
+            f"*trajectories*{suffix}",
+            f"*tracking*{suffix}",
+            f"*results*{suffix}",
+            f"*_candidates{suffix}",
+            f"*_detections{suffix}",
+            f"*_tracks{suffix}",
+            f"*_trajectory{suffix}",
+            f"*_trajectories{suffix}",
+            f"*_tracking{suffix}",
+            f"*_results{suffix}",
+        ):
+            files.extend(sorted(path.glob(pattern)))
+    return _unique_paths(
+        [
+            item
+            for item in files
+            if not _name_has_any(item, ("truth", "ground_truth", "gt", "label"))
+            and not _name_has_any(item, ("point", "points", "cloud", "lidar", "livox"))
+        ]
+    )
+
+
 def _camera_detection_files(path: Path) -> list[Path]:
     names = [path / "camera_detections.csv", path / "image_detections.csv"]
     files = [item for item in names if item.exists()]
@@ -200,19 +257,62 @@ def _point_files(path: Path) -> list[Path]:
     files.extend(sorted(path.glob("*_points.csv")))
     files.extend(sorted(path.glob("*.pcd")))
     files.extend(sorted(path.glob("*.ply")))
-    files.extend(sorted(path.glob("*.npy")))
-    files.extend(sorted(path.glob("*.npz")))
+    files.extend(_point_numpy_files(path))
     return _unique_paths(files)
 
 
 def _truth_file(path: Path) -> Path | None:
-    return _first_existing(
-        [
-            path / "truth.csv",
-            path / "ground_truth.csv",
-            path / "gt.csv",
-        ]
-    )
+    exact = [
+        path / "truth.csv",
+        path / "ground_truth.csv",
+        path / "gt.csv",
+        path / "truth.tsv",
+        path / "ground_truth.tsv",
+        path / "gt.tsv",
+        path / "truth.txt",
+        path / "ground_truth.txt",
+        path / "gt.txt",
+        path / "truth.npy",
+        path / "ground_truth.npy",
+        path / "gt.npy",
+        path / "truth.npz",
+        path / "ground_truth.npz",
+        path / "gt.npz",
+    ]
+    globbed: list[Path] = []
+    for suffix in (".csv", ".tsv", ".txt", ".npy", ".npz"):
+        for pattern in (
+            f"*truth*{suffix}",
+            f"*ground_truth*{suffix}",
+            f"*label*{suffix}",
+            f"gt*{suffix}",
+        ):
+            globbed.extend(sorted(path.glob(pattern)))
+    return _first_existing(_unique_paths(exact + globbed))
+
+
+def _point_numpy_files(path: Path) -> list[Path]:
+    files: list[Path] = []
+    for suffix in (".npy", ".npz"):
+        for pattern in (
+            f"*points*{suffix}",
+            f"*point_cloud*{suffix}",
+            f"*cloud*{suffix}",
+            f"*lidar*{suffix}",
+            f"*livox*{suffix}",
+        ):
+            files.extend(sorted(path.glob(pattern)))
+    return [
+        item
+        for item in files
+        if not _name_has_any(item, ("candidate", "detection", "track", "trajectory", "result"))
+        and not _name_has_any(item, ("truth", "ground_truth", "gt", "label"))
+    ]
+
+
+def _name_has_any(path: Path, tokens: tuple[str, ...]) -> bool:
+    text = " ".join(part.lower() for part in path.parts[-2:])
+    return any(token in text for token in tokens)
 
 
 def _first_existing(paths: list[Path]) -> Path | None:

@@ -23,9 +23,11 @@ from raft_uav.mmuad.evaluator import validate_mmaud_results_frame
 from raft_uav.mmuad.evaluate import evaluate_submission_csv
 from raft_uav.mmuad.inspect import inspect_sequence_root, write_layout_report
 from raft_uav.mmuad.io import (
+    load_candidate_file,
     load_candidate_csv,
     load_point_cloud_csv_as_candidates,
     load_point_cloud_file_as_candidates,
+    load_truth_file,
     load_truth_csv,
     merge_candidate_frames,
 )
@@ -952,6 +954,82 @@ def test_numpy_point_cloud_file_is_clustered(tmp_path: Path) -> None:
     frame = load_point_cloud_file_as_candidates(npy, voxel_size_m=0.5, min_points=3)
     assert len(frame.rows) == 1
     assert abs(float(frame.rows.loc[0, "time_s"]) - 3.0) < 1e-9
+
+
+def test_numpy_point_cloud_keeps_xyzt_column_order(tmp_path: Path) -> None:
+    points = np.array(
+        [
+            [0.0, 0.0, 1.0, 10.0],
+            [0.1, 0.0, 1.1, 10.0],
+            [0.2, 0.1, 1.0, 10.0],
+        ]
+    )
+    npy = tmp_path / "livox_points.npy"
+    np.save(npy, points)
+
+    frame = load_point_cloud_file_as_candidates(npy, voxel_size_m=0.5, min_points=3)
+
+    assert len(frame.rows) == 1
+    row = frame.rows.iloc[0]
+    assert abs(float(row["time_s"]) - 10.0) < 1e-9
+    assert abs(float(row["x_m"]) - 0.1) < 1e-9
+
+
+def test_numpy_trajectory_files_use_time_xyz_column_order(tmp_path: Path) -> None:
+    truth_path = tmp_path / "truth.npy"
+    candidates_path = tmp_path / "trajectory.npz"
+    trajectory = np.array(
+        [
+            [5.0, 100.0, 200.0, 30.0],
+            [6.0, 101.0, 201.0, 31.0],
+        ]
+    )
+    np.save(truth_path, trajectory)
+    np.savez(candidates_path, trajectory=trajectory)
+
+    truth = load_truth_file(truth_path, default_sequence_id="seq_numpy")
+    candidates = load_candidate_file(
+        candidates_path,
+        default_sequence_id="seq_numpy",
+        source="numpy-trajectory",
+    )
+
+    assert truth.rows["time_s"].tolist() == [5.0, 6.0]
+    assert truth.rows["x_m"].tolist() == [100.0, 101.0]
+    assert candidates.rows["source"].tolist() == ["numpy-trajectory", "numpy-trajectory"]
+    assert candidates.rows["z_m"].tolist() == [30.0, 31.0]
+
+
+def test_sequence_root_loads_compact_numpy_trajectory_and_truth_arrays(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_numpy"
+    seq.mkdir()
+    np.save(
+        seq / "trajectory.npy",
+        np.array(
+            [
+                [0.0, 0.0, 0.0, 1.0],
+                [1.0, 1.0, 0.0, 1.0],
+            ]
+        ),
+    )
+    np.save(
+        seq / "truth.npy",
+        np.array(
+            [
+                [0.0, 0.0, 0.0, 1.0],
+                [1.0, 1.0, 0.0, 1.0],
+            ]
+        ),
+    )
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].candidate_trajectory_files == (seq / "trajectory.npy",)
+    assert not discovered[0].point_cloud_files
+    assert candidates.rows["time_s"].tolist() == [0.0, 1.0]
+    assert truth is not None
+    assert truth.rows["x_m"].tolist() == [0.0, 1.0]
 
 
 def test_layout_inspector_reports_modalities_and_missing_fields(tmp_path: Path) -> None:
