@@ -29,15 +29,17 @@ POINT_SUFFIXES = {".pcd", ".ply", ".las", ".laz", ".bin"}
 NUMPY_SUFFIXES = {".npy", ".npz"}
 TABLE_SUFFIXES = DELIMITED_TABLE_SUFFIXES
 CALIBRATION_NAMES = {
-    "calibration.json",
-    "calib.json",
-    "extrinsics.json",
-    "calibration.yaml",
-    "calib.yaml",
-    "extrinsics.yaml",
-    "calibration.yml",
-    "calib.yml",
-    "extrinsics.yml",
+    f"{stem}{suffix}"
+    for stem in (
+        "calibration",
+        "calib",
+        "extrinsics",
+        "intrinsics",
+        "camera_info",
+        "camera_calibration",
+        "camera_intrinsics",
+    )
+    for suffix in (".json", ".yaml", ".yml")
 }
 TRUTH_NAMES = {
     "truth.csv",

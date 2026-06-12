@@ -23,11 +23,17 @@ AUDIO_SUFFIXES = {".wav", ".flac", ".aac", ".mp3"}
 BAG_SUFFIXES = {".bag", ".db3", ".mcap"}
 TABLE_SUFFIXES = DELIMITED_TABLE_SUFFIXES
 CALIBRATION_NAMES = {
-    "calibration.json",
-    "calib.json",
-    "extrinsics.json",
-    "intrinsics.json",
-    "camera_info.json",
+    f"{stem}{suffix}"
+    for stem in (
+        "calibration",
+        "calib",
+        "extrinsics",
+        "intrinsics",
+        "camera_info",
+        "camera_calibration",
+        "camera_intrinsics",
+    )
+    for suffix in (".json", ".yaml", ".yml")
 }
 TRUTH_TOKENS = ("truth", "ground_truth", "gt", "leica", "label")
 CLASS_TOKENS = ("class", "uav_type", "category")

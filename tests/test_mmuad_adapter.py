@@ -1324,6 +1324,62 @@ def test_sequence_root_discovers_camera_folder_intrinsics_file(tmp_path: Path) -
     assert calibration is None
 
 
+def test_sequence_root_discovers_camera_folder_yaml_intrinsics_file(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_camera_folder_yaml_info"
+    camera = seq / "cam0"
+    camera.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "u_px": [50.0],
+            "v_px": [50.0],
+            "depth_m": [5.0],
+        }
+    ).to_csv(camera / "detections.csv", index=False)
+    (camera / "camera_info.yaml").write_text(
+        json.dumps(
+            {
+                "width": 100,
+                "height": 100,
+                "k": [
+                    100.0,
+                    0.0,
+                    50.0,
+                    0.0,
+                    100.0,
+                    50.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "x_m": [0.0],
+            "y_m": [0.0],
+            "z_m": [5.0],
+        }
+    ).to_csv(seq / "truth.csv", index=False)
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, calibration = load_sequence_export(discovered[0])
+
+    assert discovered[0].calibration_file is None
+    assert discovered[0].camera_calibration_files == (camera / "camera_info.yaml",)
+    assert discovered[0].camera_detection_csvs == (camera / "detections.csv",)
+    row = candidates.rows.iloc[0]
+    assert row["source"] == "cam0"
+    assert abs(float(row["x_m"])) < 1.0e-12
+    assert abs(float(row["y_m"])) < 1.0e-12
+    assert abs(float(row["z_m"]) - 5.0) < 1.0e-12
+    assert truth is not None
+    assert calibration is None
+
+
 def test_sequence_root_loads_exported_topic_map_sequence(tmp_path: Path) -> None:
     seq = tmp_path / "seq_topic_map"
     seq.mkdir()
@@ -2704,6 +2760,24 @@ def test_layout_inspectors_classify_json_table_exports(tmp_path: Path) -> None:
     assert sequence["has_candidates_or_points"] is True
     assert sequence["has_truth_or_labels"] is True
     assert sequence["has_class_labels"] is True
+
+
+def test_layout_inspectors_classify_yaml_camera_intrinsics(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_camera_yaml"
+    camera = seq / "cam0"
+    camera.mkdir(parents=True)
+    (camera / "camera_info.yaml").write_text("{}", encoding="utf-8")
+    (seq / "intrinsics.yml").write_text("{}", encoding="utf-8")
+
+    detailed = inspect_sequence_root(tmp_path)
+    by_name = {row["relative_path"]: row for row in detailed["files"]}
+    assert by_name["cam0/camera_info.yaml"]["category"] == "calibration"
+    assert by_name["intrinsics.yml"]["category"] == "calibration"
+    assert "calibration" not in detailed["sequences"][0]["missing_for_tracking_smoke"]
+
+    inventory = inspect_mmuad_layout(tmp_path)
+    assert inventory["category_counts"]["calibration"] == 2
+    assert inventory["sequence_candidates"][0]["has_calibration"] is True
 
 
 def test_layout_inspectors_classify_jsonl_table_exports(tmp_path: Path) -> None:
