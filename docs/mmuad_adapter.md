@@ -114,8 +114,8 @@ A normalized sequence export can be loaded from folders containing files named
 `candidates.csv`, `detections.csv`, `*_candidates.csv`, delimited variants such
 as `candidates.tsv` or `detections.txt`, `points.csv`, `points.tsv`,
 `*_points.txt`, compact trajectory arrays such as `trajectory.npy` /
-`candidates.npz`, `truth.csv`, compact truth arrays such as `truth.npy`, and
-optionally `calibration.json`:
+`candidates.npz`, exported ROS topic maps such as `topic_map.json`, `truth.csv`,
+compact truth arrays such as `truth.npy`, and optionally `calibration.json`:
 
 ```text
 data/mmuad_export/
@@ -133,6 +133,10 @@ data/mmuad_export/
   seq004/
     lidar_points.tsv
     truth.csv
+  seq005/
+    topic_map.json
+    radar_export.csv
+    truth_export.csv
 ```
 
 Run all discovered sequences with:
@@ -142,6 +146,11 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --sequence-root data/mmuad_export \
   --output-dir outputs/mmuad_sequences
 ```
+
+When a sequence contains a loadable exported topic map, the files referenced by
+that map are loaded through their `column_aliases` and are not also loaded as
+generic candidate/truth files. Native-only topic maps without exported file
+paths remain for the explicit `--rosbag-path --topic-map-json` extraction path.
 
 ### Submission/interchange output
 

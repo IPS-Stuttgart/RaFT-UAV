@@ -503,6 +503,158 @@ def test_sequence_root_discovers_delimited_point_tables(tmp_path: Path) -> None:
     assert truth is not None
 
 
+def test_sequence_root_loads_exported_topic_map_sequence(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_topic_map"
+    seq.mkdir()
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [4.0, 4.0],
+        }
+    ).to_csv(seq / "radar_export.csv", index=False)
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0],
+            "px": [0.0, 1.0],
+            "py": [0.0, 0.0],
+            "pz": [4.0, 4.0],
+        }
+    ).to_csv(seq / "truth_export.csv", index=False)
+    topic_map = seq / "topic_map.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_topic_map",
+                "exports": [
+                    {
+                        "kind": "candidate",
+                        "path": "radar_export.csv",
+                        "source": "radar",
+                        "column_aliases": {
+                            "stamp": "time_s",
+                            "px": "x_m",
+                            "py": "y_m",
+                            "pz": "z_m",
+                        },
+                    },
+                    {
+                        "kind": "pose_truth",
+                        "path": "truth_export.csv",
+                        "column_aliases": {
+                            "stamp": "time_s",
+                            "px": "x_m",
+                            "py": "y_m",
+                            "pz": "z_m",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].topic_map_jsons == (topic_map,)
+    assert candidates.rows["source"].tolist() == ["radar", "radar"]
+    assert candidates.rows["sequence_id"].tolist() == ["seq_topic_map", "seq_topic_map"]
+    assert truth is not None
+    assert truth.rows["time_s"].tolist() == [0.0, 1.0]
+
+
+def test_sequence_root_skips_native_only_topic_map_template(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_native_only"
+    seq.mkdir()
+    (seq / "topic_map_native.json").write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_native_only",
+                "exports": [
+                    {
+                        "topic": "/radar/points",
+                        "kind": "pointcloud2_candidate",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert discover_sequence_paths(tmp_path) == []
+
+
+def test_cli_sequence_root_runs_topic_map_only_sequence(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_topic_map_cli"
+    seq.mkdir()
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0, 2.0],
+            "x": [0.0, 1.0, 2.0],
+            "y": [0.0, 0.0, 0.0],
+            "z": [4.0, 4.0, 4.0],
+        }
+    ).to_csv(seq / "detections.csv", index=False)
+    pd.DataFrame(
+        {
+            "stamp": [0.0, 1.0, 2.0],
+            "x": [0.0, 1.0, 2.0],
+            "y": [0.0, 0.0, 0.0],
+            "z": [4.0, 4.0, 4.0],
+        }
+    ).to_csv(seq / "truth_export.csv", index=False)
+    (seq / "topic_map.json").write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_topic_map_cli",
+                "exports": [
+                    {
+                        "kind": "odometry_candidate",
+                        "path": "detections.csv",
+                        "source": "odom",
+                        "column_aliases": {
+                            "stamp": "time_s",
+                            "x": "x_m",
+                            "y": "y_m",
+                            "z": "z_m",
+                        },
+                    },
+                    {
+                        "kind": "odometry_truth",
+                        "path": "truth_export.csv",
+                        "column_aliases": {
+                            "stamp": "time_s",
+                            "x": "x_m",
+                            "y": "y_m",
+                            "z": "z_m",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "out"
+
+    status = mmuad_cli_main(
+        [
+            "--sequence-root",
+            str(tmp_path),
+            "--output-dir",
+            str(output),
+            "--submission-csv",
+            str(output / "submission.csv"),
+        ]
+    )
+
+    assert status == 0
+    estimates = pd.read_csv(output / "mmuad_estimates.csv")
+    assert estimates["sequence_id"].tolist() == ["seq_topic_map_cli"] * 3
+    assert (output / "submission.csv").exists()
+
+
 def test_submission_writers_use_estimate_state_columns(tmp_path: Path) -> None:
     estimates = pd.DataFrame(
         {

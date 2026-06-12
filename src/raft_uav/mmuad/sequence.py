@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
+
+import pandas as pd
 
 from raft_uav.mmuad.calibration import (
     CalibrationSet,
@@ -18,7 +21,8 @@ from raft_uav.mmuad.io import (
     merge_candidate_frames,
 )
 from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
-from raft_uav.mmuad.schema import CandidateFrame, TruthFrame
+from raft_uav.mmuad.rosbag_bridge import load_topic_map_exports
+from raft_uav.mmuad.schema import CandidateFrame, TruthFrame, normalize_truth_columns
 
 
 @dataclass(frozen=True)
@@ -32,6 +36,7 @@ class SequencePaths:
     radar_polar_csvs: tuple[Path, ...]
     camera_detection_csvs: tuple[Path, ...]
     point_cloud_files: tuple[Path, ...]
+    topic_map_jsons: tuple[Path, ...]
     truth_file: Path | None
     calibration_file: Path | None
 
@@ -44,9 +49,10 @@ def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[Seq
     ``*_candidates.csv``, delimited variants such as ``candidates.tsv`` or
     ``detections.txt``, compact NumPy trajectory tables such as
     ``candidates.npy`` or ``trajectory.npz``, ``points.csv`` / ``points.tsv``,
-    ``*_points.csv``, ASCII ``*.pcd``, ASCII ``*.ply``, ``truth.csv`` /
-    ``truth.npy``, and ``calibration.json`` under each sequence folder.  If
-    ``root`` itself holds such files, it is treated as a single sequence.
+    ``*_points.csv``, ASCII ``*.pcd``, ASCII ``*.ply``, exported ROS topic-map
+    JSON files, ``truth.csv`` / ``truth.npy``, and ``calibration.json`` under
+    each sequence folder.  If ``root`` itself holds such files, it is treated as
+    a single sequence.
     """
 
     root = Path(root)
@@ -108,6 +114,12 @@ def load_sequence_export(
         )
         for path in paths.point_cloud_files
     )
+    truth_frames: list[TruthFrame] = []
+    for path in paths.topic_map_jsons:
+        bundle = load_topic_map_exports(path, base_dir=path.parent)
+        candidate_frames.append(bundle.candidates)
+        if bundle.truth is not None:
+            truth_frames.append(bundle.truth)
     if paths.camera_detection_csvs:
         if paths.calibration_file is None:
             raise ValueError(
@@ -126,11 +138,11 @@ def load_sequence_export(
     if not candidate_frames:
         raise ValueError(f"no candidate or point-cloud files discovered for {paths.root}")
     candidates = merge_candidate_frames(candidate_frames)
-    truth = (
-        load_truth_file(paths.truth_file, default_sequence_id=paths.sequence_id)
-        if paths.truth_file is not None
-        else None
-    )
+    if paths.truth_file is not None:
+        truth_frames.append(
+            load_truth_file(paths.truth_file, default_sequence_id=paths.sequence_id)
+        )
+    truth = _merge_truth_frames(truth_frames)
     calibration = None
     if paths.calibration_file is not None:
         calibration = load_calibration_auto(paths.calibration_file)
@@ -148,11 +160,17 @@ def _looks_like_sequence(path: Path) -> bool:
         or _radar_polar_files(path)
         or _camera_detection_files(path)
         or _point_files(path)
+        or _topic_map_files(path)
         or _truth_file(path)
     )
 
 
 def _sequence_from_dir(path: Path) -> SequencePaths:
+    topic_maps = _topic_map_files(path)
+    topic_map_paths = _topic_map_referenced_paths(topic_maps)
+    truth_file = _truth_file(path)
+    if truth_file is not None and truth_file.resolve() in topic_map_paths:
+        truth_file = None
     calibration = _first_existing(
         [
             path / "calibration.json",
@@ -171,12 +189,17 @@ def _sequence_from_dir(path: Path) -> SequencePaths:
     return SequencePaths(
         sequence_id=path.name,
         root=path,
-        candidate_csvs=tuple(_candidate_files(path)),
-        candidate_trajectory_files=tuple(_candidate_trajectory_files(path)),
-        radar_polar_csvs=tuple(_radar_polar_files(path)),
-        camera_detection_csvs=tuple(_camera_detection_files(path)),
-        point_cloud_files=tuple(_point_files(path)),
-        truth_file=_truth_file(path),
+        candidate_csvs=tuple(_without_paths(_candidate_files(path), topic_map_paths)),
+        candidate_trajectory_files=tuple(
+            _without_paths(_candidate_trajectory_files(path), topic_map_paths)
+        ),
+        radar_polar_csvs=tuple(_without_paths(_radar_polar_files(path), topic_map_paths)),
+        camera_detection_csvs=tuple(
+            _without_paths(_camera_detection_files(path), topic_map_paths)
+        ),
+        point_cloud_files=tuple(_without_paths(_point_files(path), topic_map_paths)),
+        topic_map_jsons=tuple(topic_maps),
+        truth_file=truth_file,
         calibration_file=calibration,
     )
 
@@ -306,6 +329,54 @@ def _truth_file(path: Path) -> Path | None:
     return _first_existing(_unique_paths(exact + globbed))
 
 
+def _topic_map_files(path: Path) -> list[Path]:
+    exact = [
+        path / "topic_map.json",
+        path / "topic_map_exports.json",
+        path / "mmuad_topic_map.json",
+    ]
+    globbed = sorted(path.glob("*topic_map*.json"))
+    candidates = _unique_paths(exact + globbed)
+    return [
+        item
+        for item in candidates
+        if "template" not in item.stem.lower()
+        and "native" not in item.stem.lower()
+        and _is_export_topic_map(item)
+    ]
+
+
+def _is_export_topic_map(path: Path) -> bool:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    exports = payload.get("exports", [])
+    if not isinstance(exports, list):
+        return False
+    return any(isinstance(item, dict) and item.get("path") for item in exports)
+
+
+def _topic_map_referenced_paths(topic_maps: list[Path]) -> set[Path]:
+    referenced: set[Path] = set()
+    for topic_map in topic_maps:
+        try:
+            payload = json.loads(topic_map.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for export in payload.get("exports", []):
+            if not isinstance(export, dict) or not export.get("path"):
+                continue
+            referenced.add((topic_map.parent / str(export["path"])).resolve())
+    return referenced
+
+
+def _without_paths(paths: list[Path], excluded: set[Path]) -> list[Path]:
+    if not excluded:
+        return paths
+    return [path for path in paths if path.resolve() not in excluded]
+
+
 def _point_numpy_files(path: Path) -> list[Path]:
     files: list[Path] = []
     for suffix in (".npy", ".npz"):
@@ -347,3 +418,10 @@ def _unique_paths(paths: list[Path]) -> list[Path]:
         seen.add(resolved)
         unique.append(path)
     return unique
+
+
+def _merge_truth_frames(frames: list[TruthFrame]) -> TruthFrame | None:
+    rows = [frame.rows for frame in frames if not frame.rows.empty]
+    if not rows:
+        return None
+    return TruthFrame(normalize_truth_columns(pd.concat(rows, ignore_index=True)))
