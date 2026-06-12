@@ -468,8 +468,8 @@ export file, then run the tracker. CSV/TSV/TXT/JSON table exports can use
 and `truth.npy` use the same `time_s,x_m,y_m,z_m` convention as the
 explicit-file CLI. JSON topic exports may use row lists, column maps, or objects
 containing `points`, `point_cloud`, `candidates`, `detections`, `truth`,
-`poses`, `rows`, or `data`. The template infers native extraction kinds for
-common ROS message types
+`fixes`, `gps`, `navsatfix`, `poses`, `rows`, or `data`. The template infers
+native extraction kinds for common ROS message types
 (`pointcloud2_candidate`, `pose_truth`, `odometry_candidate`, and related truth
 variants), while the exported-topic loader still accepts those kinds for CSV or
 JSON table and NumPy exports. Table exports marked as `pointcloud2_candidate`

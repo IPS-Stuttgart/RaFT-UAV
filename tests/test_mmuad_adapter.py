@@ -3304,6 +3304,55 @@ def test_topic_map_exports_project_geodetic_candidate_and_truth_tables(
     assert abs(float(truth_row["z_m"]) - 7.0) < 1.0e-9
 
 
+def test_topic_map_exports_project_geodetic_json_fix_wrappers(
+    tmp_path: Path,
+) -> None:
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    (exports / "gps_fixes.json").write_text(
+        json.dumps(
+            {
+                "fixes": [
+                    {
+                        "timestamp_s": 3.0,
+                        "latitude": 35.0,
+                        "longitude": -78.0,
+                        "altitude": 101.5,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    topic_map = tmp_path / "topic_map_geodetic_fixes.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_geodetic_fixes",
+                "exports": [
+                    {
+                        "kind": "navsatfix_candidate",
+                        "path": "gps_fixes.json",
+                        "source": "gps",
+                        "enu_origin_lla": [35.0, -78.0, 100.0],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_topic_map_exports(topic_map, base_dir=exports)
+
+    row = bundle.candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_geodetic_fixes"
+    assert row["source"] == "gps"
+    assert abs(float(row["time_s"]) - 3.0) < 1.0e-9
+    assert abs(float(row["x_m"])) < 1.0e-9
+    assert abs(float(row["y_m"])) < 1.0e-9
+    assert abs(float(row["z_m"]) - 1.5) < 1.0e-9
+
+
 def test_ros2_metadata_inspection_and_topic_map_template(tmp_path: Path) -> None:
     bag = tmp_path / "bagdir"
     bag.mkdir()
