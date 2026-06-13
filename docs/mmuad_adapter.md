@@ -626,6 +626,12 @@ Table exports marked as `navsatfix_candidate`, `geopoint_candidate`,
 the loader projects them into local ENU `x_m,y_m,z_m` coordinates before
 tracking or evaluation.
 
+For ROS2 bag directories, the inspection report includes the metadata fields
+needed to inventory an unpacked raw sequence before writing parser-specific
+topic maps: storage identifier, serialization format, listed relative bag
+files, discovered `.db3`/`.mcap` files, total message count, duration, and
+starting time when those fields are present in `metadata.yaml`.
+
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --topic-map-file outputs/mmuad_topic_map.yaml \
