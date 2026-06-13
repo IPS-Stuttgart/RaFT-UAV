@@ -315,6 +315,48 @@ def test_official_track5_results_loader_accepts_position_strings():
     assert frame.loc[0, "uav_type"] == "3"
 
 
+def test_official_track5_results_loader_rejects_blank_sequence():
+    with pytest.raises(ValueError, match="Sequence values must be nonblank"):
+        validate_mmaud_results_frame(
+            pd.DataFrame(
+                {
+                    "Sequence": ["   "],
+                    "Timestamp": [0.0],
+                    "Position": ["(1.5,2.5,3.5)"],
+                    "Classification": [3],
+                }
+            )
+        )
+
+
+def test_official_track5_results_loader_rejects_nonfinite_timestamp():
+    with pytest.raises(ValueError, match="Timestamp values must be finite numbers"):
+        validate_mmaud_results_frame(
+            pd.DataFrame(
+                {
+                    "Sequence": ["seq1"],
+                    "Timestamp": [float("nan")],
+                    "Position": ["(1.5,2.5,3.5)"],
+                    "Classification": [3],
+                }
+            )
+        )
+
+
+def test_official_track5_results_loader_rejects_noninteger_classification():
+    with pytest.raises(ValueError, match="Classification values must be integer ids"):
+        validate_mmaud_results_frame(
+            pd.DataFrame(
+                {
+                    "Sequence": ["seq1"],
+                    "Timestamp": [0.0],
+                    "Position": ["(1.5,2.5,3.5)"],
+                    "Classification": ["Mavic3"],
+                }
+            )
+        )
+
+
 def test_official_position_parser_accepts_numpy_style_space_separated_strings():
     assert parse_official_position_cell("[1.5 2.5 3.5]") == (1.5, 2.5, 3.5)
     assert parse_official_position_cell("(1.5 2.5 3.5)") == (1.5, 2.5, 3.5)
