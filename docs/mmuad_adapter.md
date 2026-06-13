@@ -930,6 +930,8 @@ The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
 `multidof_joint_state_candidate`, and
 `trajectory_msgs/msg/MultiDOFJointTrajectory` as
 `multidof_joint_trajectory_truth` or `multidof_joint_trajectory_candidate`.
+PointCloud2 decoding handles both compact and organized clouds, including
+`row_step` padding between rows.
 TFMessage
 topic-map entries can include `child_frame_id` or `frame_id` to select the UAV
 transform from a shared `/tf` stream; Detection3D, Marker, Path, and PoseArray
