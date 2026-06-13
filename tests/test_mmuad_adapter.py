@@ -3347,6 +3347,79 @@ def test_cli_completes_official_results_to_sequence_timestamps(tmp_path: Path) -
     assert zipped["Timestamp"].tolist() == [0.0, 1.0]
 
 
+def test_cli_completes_official_results_to_template_file_without_sequence_root(
+    tmp_path: Path,
+) -> None:
+    candidates = tmp_path / "candidates.csv"
+    template = tmp_path / "official_template.csv"
+    output = tmp_path / "out"
+    results = output / "official_mmaud_results.csv"
+    zip_path = output / "official_submission.zip"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq_template", "seq_template"],
+            "time_s": [0.0, 2.0],
+            "source": ["radar", "radar"],
+            "x_m": [0.0, 2.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+        }
+    ).to_csv(candidates, index=False)
+    pd.DataFrame(
+        {
+            "Sequence": ["seq_template", "seq_template"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,0)", "(0,0,0)"],
+            "Classification": [2, 2],
+        }
+    ).to_csv(template, index=False)
+
+    status = mmuad_cli_main(
+        [
+            "--candidate-csv",
+            str(candidates),
+            "--completion-max-interpolation-gap-s",
+            "3.0",
+            "--official-validation-template-file",
+            str(template),
+            "--ug2-official-complete-to-sequence-timestamps",
+            "--ug2-official-results-csv",
+            str(results),
+            "--ug2-official-codabench-zip",
+            str(zip_path),
+            "--ug2-official-classification",
+            "2",
+            "--ug2-official-validate-on-write",
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    rows = pd.read_csv(results)
+    assert rows["Sequence"].tolist() == ["seq_template", "seq_template"]
+    assert rows["Timestamp"].tolist() == [0.0, 1.0]
+    assert rows["Classification"].tolist() == [2, 2]
+    summary = json.loads(
+        (output / "mmuad_official_timestamp_completion_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert summary["requested_count"] == 2
+    assert summary["completed_count"] == 2
+    validation = json.loads(
+        (output / "mmuad_official_submission_validation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert validation["valid"] is True
+    assert validation["template_checked"] is True
+    with ZipFile(zip_path) as archive:
+        assert archive.namelist() == ["mmaud_results.csv"]
+        zipped = pd.read_csv(archive.open("mmaud_results.csv"))
+    assert zipped["Timestamp"].tolist() == [0.0, 1.0]
+
+
 def test_cli_validate_on_write_rejects_incomplete_official_zip(tmp_path: Path) -> None:
     root = tmp_path / "data"
     seq = root / "val" / "seq1"

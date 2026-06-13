@@ -890,25 +890,7 @@ def _complete_to_official_sequence_timestamps(
     *,
     class_map: dict[str, str],
 ):
-    sequences = getattr(args, "_sequence_paths", None)
-    if not sequences:
-        raise SystemExit(
-            "--ug2-official-complete-to-sequence-timestamps requires --sequence-root"
-        )
-    template_frames = [
-        official_track5_timestamp_template(
-            paths,
-            timestamp_source=args.ug2_official_timestamp_source,
-        )
-        for paths in sequences
-    ]
-    rows = [frame.rows for frame in template_frames if not frame.rows.empty]
-    if not rows:
-        raise SystemExit(
-            "no official Track 5 timestamps found in --sequence-root for "
-            f"source {args.ug2_official_timestamp_source!r}"
-        )
-    template = pd.concat(rows, ignore_index=True)
+    template = _official_completion_template(args)
     base_results = estimates_to_mmaud_results_frame(
         estimates,
         class_name=args.ug2_class_name,
@@ -930,6 +912,38 @@ def _complete_to_official_sequence_timestamps(
             "relax --completion-extrapolation or provide candidate coverage"
         )
     return completion, template
+
+
+def _official_completion_template(args: argparse.Namespace) -> pd.DataFrame:
+    explicit_template = _official_validation_template_path(args)
+    if explicit_template is not None:
+        template = _load_official_validation_template_file(explicit_template)
+        if template.empty:
+            raise SystemExit(
+                "official Track 5 completion template contains no usable timestamps"
+            )
+        return template
+
+    sequences = getattr(args, "_sequence_paths", None)
+    if not sequences:
+        raise SystemExit(
+            "--ug2-official-complete-to-sequence-timestamps requires "
+            "--sequence-root or --official-validation-template-file"
+        )
+    template_frames = [
+        official_track5_timestamp_template(
+            paths,
+            timestamp_source=args.ug2_official_timestamp_source,
+        )
+        for paths in sequences
+    ]
+    rows = [frame.rows for frame in template_frames if not frame.rows.empty]
+    if not rows:
+        raise SystemExit(
+            "no official Track 5 timestamps found in --sequence-root for "
+            f"source {args.ug2_official_timestamp_source!r}"
+        )
+    return pd.concat(rows, ignore_index=True)
 
 
 def _camera_source_hint_from_path(path: Path) -> str | None:

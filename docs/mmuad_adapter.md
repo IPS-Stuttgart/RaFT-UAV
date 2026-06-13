@@ -525,6 +525,10 @@ nearest-hold choices remain auditable. With
 `mmuad_official_submission_validation.json` and
 `mmuad_official_submission_validation_rows.csv`, then exits nonzero if the
 fresh ZIP fails the local Track 5 preflight checks.
+For explicit-file, topic-map, or native ROS runs that do not have a
+`--sequence-root`, `--ug2-official-complete-to-sequence-timestamps` can instead
+use `--official-validation-template-file` or
+`--official-validation-template-csv` as the requested timestamp template.
 
 Before manual upload, validate the official ZIP structure and timestamp
 coverage:
