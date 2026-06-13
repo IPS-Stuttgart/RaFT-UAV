@@ -6,6 +6,7 @@ The extractor currently supports common message families that appear in UAV
 tracking logs:
 
 * ``sensor_msgs/msg/PointCloud2`` -> clustered candidate detections;
+* ``sensor_msgs/msg/CameraInfo`` -> camera intrinsics for native Detection2D;
 * ``sensor_msgs/msg/NavSatFix`` -> geodetic rows projected into local ENU;
 * ``geographic_msgs/msg/GeoPointStamped`` / ``GeoPoseStamped`` -> local ENU rows;
 * ``vision_msgs/msg/Detection2D`` / ``Detection2DArray`` -> calibrated camera
@@ -37,7 +38,10 @@ import json
 import pandas as pd
 
 from raft_uav.coordinates import LocalENUProjector
+from raft_uav.mmuad.calibration import _transform_from_entry
 from raft_uav.mmuad.camera import (
+    CameraIntrinsics,
+    CameraModel,
     camera_detection_frame_to_candidates,
     load_camera_models_from_files,
 )
@@ -71,6 +75,10 @@ def extract_native_rosbag_topic_map(
 
     ``pointcloud2_candidate``
         Decode ``sensor_msgs/msg/PointCloud2`` and cluster points.
+    ``camera_info`` / ``camera_info_calibration``
+        Decode ``sensor_msgs/msg/CameraInfo`` intrinsics for native
+        Detection2D back-projection.  Detection2D topics with the same source
+        can then omit ``camera_calibration_file`` sidecars.
     ``navsatfix_truth`` / ``geopoint_truth`` / ``geopose_truth`` /
     ``navsatfix_candidate`` / ``geopoint_candidate`` / ``geopose_candidate``
         Project geodetic GPS/geographic positions into local ENU rows. These
@@ -124,7 +132,18 @@ def extract_native_rosbag_topic_map(
 
     with AnyReader([Path(bag_path)]) as reader:
         topic_connections = [connection for connection in reader.connections if connection.topic in by_topic]
-        for connection, timestamp_ns, rawdata in reader.messages(connections=topic_connections):
+        native_camera_models, camera_info_messages = _camera_models_from_camera_info_topics(
+            reader,
+            topic_connections=topic_connections,
+            by_topic=by_topic,
+        )
+        extracted.extend(camera_info_messages)
+        replay_connections = [
+            connection
+            for connection in topic_connections
+            if not _is_camera_info_kind(by_topic[connection.topic])
+        ]
+        for connection, timestamp_ns, rawdata in reader.messages(connections=replay_connections):
             spec = by_topic[connection.topic]
             kind = str(spec.get("kind", "candidate")).strip().lower()
             message = reader.deserialize(rawdata, connection.msgtype)
@@ -251,6 +270,7 @@ def extract_native_rosbag_topic_map(
                             bag_path=bag_path,
                             topic_map_json=topic_map_json,
                             source=source,
+                            native_camera_models=native_camera_models,
                         )
                         frame = camera_detection_frame_to_candidates(
                             pd.DataFrame.from_records(rows_for_message),
@@ -470,6 +490,137 @@ def _message_time_s(message: Any, fallback_timestamp_ns: int) -> float:
     if stamp_time_s is not None:
         return stamp_time_s
     return float(fallback_timestamp_ns) * 1.0e-9
+
+
+def camera_info_message_to_model(
+    message: Any,
+    *,
+    source: str,
+    spec: dict[str, Any] | None = None,
+) -> CameraModel:
+    """Convert a ROS ``sensor_msgs/msg/CameraInfo`` message into a camera model."""
+
+    entry = dict(spec or {})
+    intrinsics = _camera_info_intrinsics(message)
+    return CameraModel(
+        source=str(source),
+        intrinsics=intrinsics,
+        transform_camera_to_world=_transform_from_entry(entry),
+        time_offset_s=float(entry.get("time_offset_s", 0.0)),
+    )
+
+
+def _camera_models_from_camera_info_topics(
+    reader: Any,
+    *,
+    topic_connections: list[Any],
+    by_topic: dict[str, dict[str, Any]],
+) -> tuple[dict[str, CameraModel], list[dict[str, Any]]]:
+    connections = [
+        connection
+        for connection in topic_connections
+        if _is_camera_info_kind(by_topic[connection.topic])
+    ]
+    if not connections:
+        return {}, []
+    models: dict[str, CameraModel] = {}
+    extracted: list[dict[str, Any]] = []
+    for connection, timestamp_ns, rawdata in reader.messages(connections=connections):
+        spec = by_topic[connection.topic]
+        kind = str(spec.get("kind", "camera_info")).strip().lower()
+        message = reader.deserialize(rawdata, connection.msgtype)
+        time_s = _message_time_s(message, timestamp_ns)
+        source = _camera_info_source(spec, connection=connection, message=message)
+        key = source.lower()
+        if key in models:
+            continue
+        try:
+            model = camera_info_message_to_model(message, source=source, spec=spec)
+        except Exception as exc:  # pragma: no cover - data-dependent failure details
+            extracted.append(
+                {
+                    "topic": connection.topic,
+                    "kind": kind,
+                    "status": "error",
+                    "error": str(exc),
+                }
+            )
+            continue
+        models[key] = model
+        extracted.append(
+            {
+                "topic": connection.topic,
+                "kind": kind,
+                "status": "extracted",
+                "time_s": time_s,
+                "rows": 1,
+                "source": source,
+            }
+        )
+    return models, extracted
+
+
+def _camera_info_source(
+    spec: dict[str, Any],
+    *,
+    connection: Any,
+    message: Any,
+) -> str:
+    source = (
+        spec.get("source")
+        or spec.get("camera")
+        or spec.get("camera_id")
+        or _message_frame_id(message)
+        or connection.topic.strip("/").replace("/", "_")
+    )
+    return str(source)
+
+
+def _is_camera_info_kind(spec: dict[str, Any]) -> bool:
+    return str(spec.get("kind", "")).strip().lower() in {
+        "camera_info",
+        "camera_info_calibration",
+        "camera_intrinsics",
+        "camera_intrinsics_calibration",
+    }
+
+
+def _camera_info_intrinsics(message: Any) -> CameraIntrinsics:
+    matrix = _camera_info_matrix(message, "k", "K", "camera_matrix")
+    if matrix is None:
+        matrix = _camera_info_matrix(message, "p", "P", "projection_matrix")
+    if matrix is None:
+        raise ValueError("CameraInfo message needs K/k or P/p intrinsics")
+    if len(matrix) >= 12:
+        fx = matrix[0]
+        fy = matrix[5]
+        cx = matrix[2]
+        cy = matrix[6]
+    elif len(matrix) >= 9:
+        fx = matrix[0]
+        fy = matrix[4]
+        cx = matrix[2]
+        cy = matrix[5]
+    else:
+        raise ValueError("CameraInfo K/P intrinsics must contain at least 9 values")
+    if fx == 0.0 or fy == 0.0:
+        raise ValueError("CameraInfo intrinsics must have nonzero fx/fy")
+    return CameraIntrinsics(fx=float(fx), fy=float(fy), cx=float(cx), cy=float(cy))
+
+
+def _camera_info_matrix(message: Any, *names: str) -> list[float] | None:
+    for name in names:
+        value = getattr(message, name, None)
+        if value is None:
+            continue
+        data = getattr(value, "data", value)
+        try:
+            values = [float(item) for item in data]
+        except (TypeError, ValueError):
+            continue
+        if values:
+            return values
+    return None
 
 
 def _message_stamp_time_s(message: Any) -> float | None:
@@ -880,21 +1031,29 @@ def _camera_models_from_spec(
     bag_path: Path,
     topic_map_json: Path,
     source: str,
+    native_camera_models: dict[str, CameraModel] | None = None,
 ):
+    models: dict[str, CameraModel] = {}
+    if native_camera_models:
+        models.update(native_camera_models)
     calibration_files = _camera_calibration_files_from_spec(
         spec,
         bag_path=bag_path,
         topic_map_json=topic_map_json,
     )
-    if not calibration_files:
+    if calibration_files:
+        models.update(
+            load_camera_models_from_files(
+                calibration_files,
+                source_hint_from_path=lambda _path: source,
+            )
+        )
+    if not models:
         raise ValueError(
             "native Detection2D topics require camera_calibration_file "
-            "or a nearby camera_info/intrinsics file"
+            "or a nearby camera_info/intrinsics file or camera_info topic"
         )
-    return load_camera_models_from_files(
-        calibration_files,
-        source_hint_from_path=lambda _path: source,
-    )
+    return models
 
 
 def _camera_calibration_files_from_spec(

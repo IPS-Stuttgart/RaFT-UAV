@@ -633,10 +633,14 @@ Table exports marked as `camera_detections_candidate`,
 `image_detections_candidate`, or `detection2d_array_candidate` are
 back-projected with the same camera detector bridge as
 `--camera-detections-file`; provide `camera_calibration_file` in the topic map
-or place `camera_info.json` / `intrinsics.json` beside the detection export.
+or place `camera_info.json` / `intrinsics.json` beside the detection export. For
+native ROS extraction, a `sensor_msgs/msg/CameraInfo` topic can instead be
+listed as `camera_info_calibration` with the same `source` as the Detection2D
+topic, and the extractor will use its `K`/`P` intrinsics for back-projection.
 The template generator maps `vision_msgs/msg/Detection2D(Array)` topics to this
-export path, but image object detection itself remains an external preprocessing
-step.
+export path and `sensor_msgs/msg/CameraInfo` topics to
+`camera_info_calibration`, but image object detection itself remains an external
+preprocessing step.
 Table exports marked as `navsatfix_candidate`, `geopoint_candidate`,
 `geopose_candidate`, or their `_truth` variants can provide
 `latitude`/`longitude`/`altitude` columns and `enu_origin_lla` in the topic map;
@@ -907,13 +911,17 @@ PYTHONPATH=src python scripts/extract_mmuad_rosbag_topics.py \
 ```
 
 The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
-`pointcloud2_candidate`, `sensor_msgs/msg/NavSatFix` as `navsatfix_truth` or
+`pointcloud2_candidate`, `sensor_msgs/msg/CameraInfo` as
+`camera_info_calibration` intrinsics for Detection2D back-projection,
+`sensor_msgs/msg/NavSatFix` as `navsatfix_truth` or
 `navsatfix_candidate`, `geographic_msgs/msg/GeoPointStamped` as
 `geopoint_truth` or `geopoint_candidate`,
 `geographic_msgs/msg/GeoPoseStamped` as `geopose_truth` or
 `geopose_candidate`, `vision_msgs/msg/Detection2D` or
 `vision_msgs/msg/Detection2DArray` as `camera_detections_candidate` when camera
-calibration and depth/fixed-depth metadata are provided,
+calibration and depth/fixed-depth metadata are provided. Camera calibration can
+come from a sidecar calibration/intrinsics file, a nearby `camera_info` file, or
+a topic-map `camera_info_calibration` export from a native CameraInfo topic,
 `vision_msgs/msg/Detection3D` as `detection3d_truth` or
 `detection3d_candidate`, `vision_msgs/msg/Detection3DArray` as
 `detection3d_array_truth` or `detection3d_array_candidate`,
