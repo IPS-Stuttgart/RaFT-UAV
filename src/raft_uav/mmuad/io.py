@@ -111,7 +111,7 @@ def load_candidate_file(
             source=source,
         )
     if suffix in DELIMITED_TABLE_SUFFIXES - {".csv"}:
-        raw = _read_delimited_table(path)
+        raw = _read_delimited_table(path, compact_trajectory=True)
     elif suffix in JSON_TABLE_SUFFIXES:
         raw = _read_json_table(
             path,
@@ -171,7 +171,7 @@ def load_truth_file(path: Path, *, default_sequence_id: str = "default") -> Trut
         return load_truth_csv(path, default_sequence_id=default_sequence_id)
     if suffix in DELIMITED_TABLE_SUFFIXES - {".csv"}:
         rows = normalize_truth_columns(
-            _read_delimited_table(path),
+            _read_delimited_table(path, compact_trajectory=True),
             default_sequence_id=default_sequence_id,
         )
     elif suffix in JSON_TABLE_SUFFIXES:
@@ -893,10 +893,67 @@ def _normalize_point_frame(frame: pd.DataFrame, *, path: Path) -> pd.DataFrame:
     return out.loc[np.isfinite(out[["x_m", "y_m", "z_m"]]).all(axis=1)].copy()
 
 
-def _read_delimited_table(path: Path) -> pd.DataFrame:
+def _read_delimited_table(path: Path, *, compact_trajectory: bool = False) -> pd.DataFrame:
     if data_file_suffix(path) == ".tsv":
-        return pd.read_csv(path, sep="\t")
-    return pd.read_csv(path, sep=None, engine="python")
+        frame = pd.read_csv(path, sep="\t")
+    else:
+        frame = pd.read_csv(path, sep=None, engine="python")
+    if compact_trajectory and not _has_tracking_columns(frame):
+        compact = _read_compact_delimited_trajectory_table(path)
+        if not compact.empty:
+            return compact
+    return frame
+
+
+def _has_tracking_columns(frame: pd.DataFrame) -> bool:
+    return _has_any_column(
+        frame,
+        (
+            "time_s",
+            "timestamp",
+            "timestamp_s",
+            "t",
+            "x_m",
+            "x",
+            "y_m",
+            "y",
+            "z_m",
+            "z",
+        ),
+    )
+
+
+def _read_compact_delimited_trajectory_table(path: Path) -> pd.DataFrame:
+    rows: list[list[float]] = []
+    for line in read_text_export(path, errors="ignore").splitlines():
+        stripped = line.split("#", 1)[0].strip()
+        if not stripped:
+            continue
+        tokens = [
+            token
+            for token in stripped.replace(",", " ").replace(";", " ").split()
+            if token
+        ]
+        try:
+            values = [float(token) for token in tokens]
+        except ValueError:
+            return pd.DataFrame()
+        if len(values) < 3:
+            return pd.DataFrame()
+        rows.append(values)
+    if not rows:
+        return pd.DataFrame()
+    width = min(len(row) for row in rows)
+    if width < 3:
+        return pd.DataFrame()
+    if width == 3:
+        frame = pd.DataFrame([row[:3] for row in rows], columns=["x_m", "y_m", "z_m"])
+        frame.insert(0, "time_s", infer_time_s_from_filename(path))
+        return frame
+    columns = ["time_s", "x_m", "y_m", "z_m"]
+    if width >= 5:
+        columns.append("confidence")
+    return pd.DataFrame([row[: len(columns)] for row in rows], columns=columns)
 
 
 def _read_json_table(path: Path, *, preferred: tuple[str, ...]) -> pd.DataFrame:
