@@ -461,6 +461,58 @@ def test_official_track5_submission_validator_accepts_exact_zip_and_template(tmp
     ]
 
 
+def test_official_track5_submission_validator_rejects_missing_like_sequences(tmp_path):
+    zip_path = tmp_path / "invalid_sequences.zip"
+    frame = pd.DataFrame(
+        {
+            "Sequence": [float("nan"), "None", "<NA>", "seq1"],
+            "Timestamp": [0.0, 1.0, 2.0, 3.0],
+            "Position": ["(0,0,0)", "(1,0,0)", "(2,0,0)", "(3,0,0)"],
+            "Classification": [2, 2, 2, 2],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", frame.to_csv(index=False))
+
+    validation = validate_official_track5_submission(zip_path)
+
+    assert validation.summary["valid"] is False
+    assert validation.summary["invalid_sequence_count"] == 3
+    assert validation.rows["status"].tolist() == [
+        "invalid_sequence",
+        "invalid_sequence",
+        "invalid_sequence",
+        "ok",
+    ]
+
+
+def test_official_track5_submission_template_ignores_missing_like_sequences(tmp_path):
+    zip_path = tmp_path / "official.zip"
+    frame = pd.DataFrame(
+        {
+            "Sequence": ["seq1"],
+            "Timestamp": [0.0],
+            "Position": ["(0,0,0)"],
+            "Classification": [2],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", frame.to_csv(index=False))
+    template = pd.DataFrame(
+        {
+            "sequence_id": [float("nan"), "None", "<NA>", "seq1"],
+            "time_s": [1.0, 2.0, 3.0, 0.0],
+        }
+    )
+
+    validation = validate_official_track5_submission(zip_path, template=template)
+
+    assert validation.summary["valid"] is True
+    assert validation.summary["template_timestamp_count"] == 1
+    assert validation.summary["missing_template_timestamp_count"] == 0
+    assert validation.summary["extra_prediction_count"] == 0
+
+
 def test_official_track5_submission_validator_accepts_numpy_style_position_strings(
     tmp_path,
 ):

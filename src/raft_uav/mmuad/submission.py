@@ -722,15 +722,16 @@ def _official_track5_row_diagnostics(
     rows: list[dict[str, Any]] = []
     normalized_rows: list[dict[str, Any]] = []
     for row_index, row in frame.iterrows():
-        sequence = str(row.get("Sequence", "")).strip()
+        sequence = _official_sequence_text(row.get("Sequence"))
         timestamp = pd.to_numeric(row.get("Timestamp", np.nan), errors="coerce")
         status = "ok"
         reason = ""
         xyz: tuple[float, float, float] | None = None
         classification: int | None = None
-        if not sequence:
+        if sequence is None:
+            sequence = ""
             status = "invalid_sequence"
-            reason = "blank Sequence"
+            reason = "blank or missing Sequence"
         if status == "ok" and not np.isfinite(float(timestamp)):
             status = "invalid_timestamp"
             reason = "Timestamp is not finite"
@@ -796,6 +797,13 @@ def parse_official_position_cell(value: Any) -> tuple[float, float, float]:
     if not np.isfinite(np.asarray(xyz, dtype=float)).all():
         raise ValueError(f"Track 5 Position must contain finite values: {value!r}")
     return xyz
+
+
+def _official_sequence_text(value: Any) -> str | None:
+    text = _scalar_to_text(value)
+    if text is None or text.lower() in {"nan", "none", "<na>"}:
+        return None
+    return text
 
 
 def _split_official_position_text(text: str) -> list[str]:
@@ -879,9 +887,9 @@ def _normalize_track5_template(template: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"official Track 5 template missing columns: {sorted(missing)}")
     rows = rows[["sequence_id", "time_s"]].copy()
-    rows["sequence_id"] = rows["sequence_id"].astype(str).str.strip()
+    rows["sequence_id"] = rows["sequence_id"].map(_official_sequence_text)
     rows["time_s"] = pd.to_numeric(rows["time_s"], errors="coerce")
-    finite = rows["sequence_id"].ne("") & np.isfinite(rows["time_s"].to_numpy(float))
+    finite = rows["sequence_id"].notna() & np.isfinite(rows["time_s"].to_numpy(float))
     rows = rows.loc[finite].drop_duplicates().sort_values(
         ["sequence_id", "time_s"]
     ).reset_index(drop=True)
