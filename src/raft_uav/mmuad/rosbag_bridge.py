@@ -836,30 +836,20 @@ def _is_table_export(path: Path) -> bool:
 
 def _inspect_ros2_metadata(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8", errors="ignore")
-    topics: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("topic_metadata:") or stripped.startswith("- topic_metadata:"):
-            if current:
-                topics.append(current)
-            current = {}
-            continue
-        if current is not None and stripped.startswith("name:"):
-            current["name"] = stripped.split(":", 1)[1].strip().strip("'\"")
-        elif current is not None and stripped.startswith("type:"):
-            current["type"] = stripped.split(":", 1)[1].strip().strip("'\"")
-        elif current is not None and stripped.startswith("message_count:"):
-            try:
-                current["message_count"] = int(stripped.split(":", 1)[1].strip())
-            except ValueError:
-                current["message_count"] = stripped.split(":", 1)[1].strip()
-    if current:
-        topics.append(current)
+    metadata = _load_yaml_mapping(text)
+    info = _ros2_bagfile_information(metadata)
+    topics = _ros2_topics_from_metadata(info) if info is not None else []
+    if not topics:
+        topics = _ros2_topics_from_metadata_text(text)
+    metadata_fields = (
+        _ros2_metadata_fields_from_mapping(info)
+        if info is not None
+        else _ros2_metadata_fields_from_text(text)
+    )
     root = path.parent
     db_files = sorted(str(item.relative_to(root)) for item in root.rglob("*.db3"))
     mcap_files = sorted(str(item.relative_to(root)) for item in root.rglob("*.mcap"))
-    return {
+    report = {
         "path": str(root),
         "kind": "ros2_bag_directory",
         "metadata_yaml": str(path),
@@ -871,6 +861,247 @@ def _inspect_ros2_metadata(path: Path) -> dict[str, Any]:
             "--topic-map-file/--topic-map-json."
         ),
     }
+    report.update(metadata_fields)
+    return report
+
+
+def _load_yaml_mapping(text: str) -> dict[str, Any] | None:
+    try:
+        import yaml  # type: ignore[import-not-found]
+    except Exception:
+        return None
+    try:
+        payload = yaml.safe_load(text)
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _ros2_bagfile_information(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+    if metadata is None:
+        return None
+    info = metadata.get("rosbag2_bagfile_information", metadata)
+    return info if isinstance(info, dict) else None
+
+
+def _ros2_topics_from_metadata(info: dict[str, Any]) -> list[dict[str, Any]]:
+    topics: list[dict[str, Any]] = []
+    items = info.get("topics_with_message_count", [])
+    if not isinstance(items, list):
+        return topics
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        topic_metadata = item.get("topic_metadata", {})
+        if not isinstance(topic_metadata, dict):
+            topic_metadata = {}
+        topic: dict[str, Any] = {}
+        for source, target in (
+            ("name", "name"),
+            ("type", "type"),
+            ("serialization_format", "serialization_format"),
+        ):
+            value = topic_metadata.get(source)
+            if value is not None:
+                topic[target] = str(value)
+        if "message_count" in item:
+            topic["message_count"] = _maybe_int(item["message_count"])
+        if topic:
+            topics.append(topic)
+    return topics
+
+
+def _ros2_metadata_fields_from_mapping(info: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for key in (
+        "storage_identifier",
+        "serialization_format",
+        "compression_format",
+        "compression_mode",
+    ):
+        value = info.get(key)
+        if value not in (None, ""):
+            fields[key] = str(value)
+    if "message_count" in info:
+        fields["total_message_count"] = _maybe_int(info["message_count"])
+    relative_files = _string_list(info.get("relative_file_paths"))
+    if relative_files:
+        fields["relative_file_paths"] = relative_files
+    duration_s = _duration_seconds(info.get("duration"))
+    if duration_s is not None:
+        fields["duration_s"] = duration_s
+    starting_time_s = _starting_time_seconds(info.get("starting_time"))
+    if starting_time_s is not None:
+        fields["starting_time_s"] = starting_time_s
+    return fields
+
+
+def _ros2_topics_from_metadata_text(text: str) -> list[dict[str, Any]]:
+    topics: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    topic_indent = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        if stripped.startswith("topic_metadata:") or stripped.startswith("- topic_metadata:"):
+            if current:
+                topics.append(current)
+            current = {}
+            topic_indent = indent
+            continue
+        if current is not None and indent <= topic_indent and stripped:
+            topics.append(current)
+            current = None
+        if current is not None and stripped.startswith("name:"):
+            current["name"] = _yaml_scalar(stripped.split(":", 1)[1])
+        elif current is not None and stripped.startswith("type:"):
+            current["type"] = _yaml_scalar(stripped.split(":", 1)[1])
+        elif current is not None and stripped.startswith("serialization_format:"):
+            current["serialization_format"] = _yaml_scalar(stripped.split(":", 1)[1])
+        elif current is not None and stripped.startswith("message_count:"):
+            current["message_count"] = _maybe_int(_yaml_scalar(stripped.split(":", 1)[1]))
+    if current:
+        topics.append(current)
+    return topics
+
+
+def _ros2_metadata_fields_from_text(text: str) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for key in (
+        "storage_identifier",
+        "serialization_format",
+        "compression_format",
+        "compression_mode",
+    ):
+        value = _yaml_lowest_indent_scalar(text, key)
+        if value not in (None, ""):
+            fields[key] = str(value)
+    message_count = _yaml_lowest_indent_scalar(text, "message_count")
+    if message_count is not None:
+        fields["total_message_count"] = _maybe_int(message_count)
+    relative_files = _yaml_sequence(text, "relative_file_paths")
+    if relative_files:
+        fields["relative_file_paths"] = relative_files
+    duration_ns = _yaml_nested_int(text, "duration", ("nanoseconds", "nanoseconds_since_epoch"))
+    if duration_ns is not None:
+        fields["duration_s"] = duration_ns / 1.0e9
+    starting_ns = _yaml_nested_int(text, "starting_time", ("nanoseconds_since_epoch", "nanoseconds"))
+    if starting_ns is not None:
+        fields["starting_time_s"] = starting_ns / 1.0e9
+    return fields
+
+
+def _duration_seconds(value: Any) -> float | None:
+    if isinstance(value, dict):
+        nanos = value.get("nanoseconds")
+        if nanos is not None:
+            return float(nanos) / 1.0e9
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _starting_time_seconds(value: Any) -> float | None:
+    if isinstance(value, dict):
+        nanos = value.get("nanoseconds_since_epoch", value.get("nanoseconds"))
+        if nanos is not None:
+            return float(nanos) / 1.0e9
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if item not in (None, "")]
+
+
+def _maybe_int(value: Any) -> int | Any:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _yaml_scalar(value: str) -> str:
+    value = value.strip().strip("'\"")
+    if value.startswith("[") and value.endswith("]"):
+        return value
+    return value
+
+
+def _yaml_lowest_indent_scalar(text: str, key: str) -> str | None:
+    matches: list[tuple[int, str]] = []
+    prefix = f"{key}:"
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(prefix):
+            continue
+        value = _yaml_scalar(stripped.split(":", 1)[1])
+        if value == "":
+            continue
+        indent = len(line) - len(line.lstrip())
+        matches.append((indent, value))
+    if not matches:
+        return None
+    return sorted(matches, key=lambda item: item[0])[0][1]
+
+
+def _yaml_sequence(text: str, key: str) -> list[str]:
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith(f"{key}:"):
+            continue
+        inline_value = _yaml_scalar(stripped.split(":", 1)[1])
+        if inline_value.startswith("[") and inline_value.endswith("]"):
+            return [
+                item.strip().strip("'\"")
+                for item in inline_value.strip("[]").split(",")
+                if item.strip()
+            ]
+        section_indent = len(line) - len(line.lstrip())
+        values: list[str] = []
+        for child in lines[index + 1 :]:
+            child_stripped = child.strip()
+            if not child_stripped:
+                continue
+            child_indent = len(child) - len(child.lstrip())
+            if child_indent <= section_indent:
+                break
+            if child_stripped.startswith("-"):
+                values.append(_yaml_scalar(child_stripped[1:]))
+        return values
+    return []
+
+
+def _yaml_nested_int(text: str, parent: str, child_keys: tuple[str, ...]) -> int | None:
+    lines = text.splitlines()
+    matches: list[tuple[int, int]] = []
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith(f"{parent}:"):
+            continue
+        parent_indent = len(line) - len(line.lstrip())
+        for child in lines[index + 1 :]:
+            child_stripped = child.strip()
+            if not child_stripped:
+                continue
+            child_indent = len(child) - len(child.lstrip())
+            if child_indent <= parent_indent:
+                break
+            for child_key in child_keys:
+                if not child_stripped.startswith(f"{child_key}:"):
+                    continue
+                value = _maybe_int(_yaml_scalar(child_stripped.split(":", 1)[1]))
+                if isinstance(value, int):
+                    matches.append((parent_indent, value))
+        if matches:
+            break
+    if not matches:
+        return None
+    return sorted(matches, key=lambda item: item[0])[0][1]
 
 
 def _inspect_ros1_bag(path: Path) -> dict[str, Any]:

@@ -5467,26 +5467,47 @@ def test_ros2_metadata_inspection_and_topic_map_template(tmp_path: Path) -> None
         "\n".join(
             [
                 "rosbag2_bagfile_information:",
+                "  storage_identifier: sqlite3",
+                "  serialization_format: cdr",
+                "  duration:",
+                "    nanoseconds: 2500000000",
+                "  starting_time:",
+                "    nanoseconds_since_epoch: 1700000000123456789",
+                "  message_count: 9",
+                "  relative_file_paths:",
+                "    - bag_0.db3",
                 "  topics_with_message_count:",
                 "    - topic_metadata:",
                 "        name: /radar/points",
                 "        type: sensor_msgs/msg/PointCloud2",
+                "        serialization_format: cdr",
                 "      message_count: 3",
                 "    - topic_metadata:",
                 "        name: /ground_truth",
                 "        type: geometry_msgs/msg/PoseStamped",
+                "        serialization_format: cdr",
                 "      message_count: 3",
                 "    - topic_metadata:",
                 "        name: /detector/odom",
                 "        type: nav_msgs/msg/Odometry",
+                "        serialization_format: cdr",
                 "      message_count: 3",
             ]
         ),
         encoding="utf-8",
     )
+    (bag / "bag_0.db3").write_bytes(b"")
     report = inspect_rosbag(bag)
     assert report["kind"] == "ros2_bag_directory"
+    assert report["storage_identifier"] == "sqlite3"
+    assert report["serialization_format"] == "cdr"
+    assert report["relative_file_paths"] == ["bag_0.db3"]
+    assert report["db3_files"] == ["bag_0.db3"]
+    assert report["total_message_count"] == 9
+    assert report["duration_s"] == 2.5
+    assert abs(report["starting_time_s"] - 1700000000.1234567) < 1.0e-6
     assert len(report["topics"]) == 3
+    assert report["topics"][0]["serialization_format"] == "cdr"
     template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
     payload = json.loads(template.read_text(encoding="utf-8"))
     assert payload["schema"] == "raft-uav-mmuad-topic-map-v1"
