@@ -8,7 +8,6 @@ timestamp-aligned MSE/classification quantities.
 
 from __future__ import annotations
 
-import ast
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -29,6 +28,7 @@ from raft_uav.mmuad.submission import (
     OFFICIAL_UG2_RESULT_COLUMNS,
     UG2_RESULT_COLUMNS,
     load_sequence_class_map,
+    parse_official_position_cell,
 )
 
 
@@ -122,7 +122,7 @@ def _official_track5_results_to_local_frame(frame: pd.DataFrame) -> pd.DataFrame
     timestamp_col = lower_to_original["timestamp"]
     position_col = lower_to_original["position"]
     classification_col = lower_to_original["classification"]
-    positions = [_parse_position_cell(value) for value in frame[position_col]]
+    positions = [parse_official_position_cell(value) for value in frame[position_col]]
     xyz = pd.DataFrame(positions, columns=["x", "y", "z"], index=frame.index)
     return pd.DataFrame(
         {
@@ -135,31 +135,6 @@ def _official_track5_results_to_local_frame(frame: pd.DataFrame) -> pd.DataFrame
             "score": 1.0,
         }
     )
-
-
-def _parse_position_cell(value: Any) -> tuple[float, float, float]:
-    if isinstance(value, str):
-        text = value.strip()
-        try:
-            parsed = ast.literal_eval(text)
-        except (SyntaxError, ValueError):
-            parsed = [
-                part
-                for part in text.strip("[]()").replace(";", ",").split(",")
-                if part.strip()
-            ]
-    else:
-        parsed = value
-    if isinstance(parsed, np.ndarray):
-        values = parsed.reshape(-1).tolist()
-    elif isinstance(parsed, list | tuple):
-        values = list(parsed)
-    else:
-        raise ValueError(f"invalid Track 5 Position value: {value!r}")
-    if len(values) != 3:
-        raise ValueError(f"Track 5 Position must contain exactly 3 values: {value!r}")
-    return (float(values[0]), float(values[1]), float(values[2]))
-
 
 def evaluate_mmaud_results(
     results: ResultsFrame | pd.DataFrame,

@@ -775,11 +775,7 @@ def parse_official_position_cell(value: Any) -> tuple[float, float, float]:
         try:
             parsed = ast.literal_eval(text)
         except (SyntaxError, ValueError):
-            parsed = [
-                part
-                for part in text.strip("[]()").replace(";", ",").split(",")
-                if part.strip()
-            ]
+            parsed = _split_official_position_text(text)
     else:
         parsed = value
     if isinstance(parsed, np.ndarray):
@@ -794,6 +790,16 @@ def parse_official_position_cell(value: Any) -> tuple[float, float, float]:
     if not np.isfinite(np.asarray(xyz, dtype=float)).all():
         raise ValueError(f"Track 5 Position must contain finite values: {value!r}")
     return xyz
+
+
+def _split_official_position_text(text: str) -> list[str]:
+    stripped = text.strip("[]()")
+    separator = "," if "," in stripped else None
+    if ";" in stripped:
+        stripped = stripped.replace(";", "," if separator == "," else " ")
+    if separator == ",":
+        return [part for part in stripped.split(",") if part.strip()]
+    return [part for part in stripped.split() if part.strip()]
 
 
 def _duplicate_prediction_indices(
