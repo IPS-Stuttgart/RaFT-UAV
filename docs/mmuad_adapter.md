@@ -939,8 +939,20 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --rosbag-path data/mmuad_raw/seq001 \
   --topic-map-file data/mmuad_raw/seq001/topic_map_native.yaml \
   --native-ros-extract-output-dir outputs/mmuad_native_ros_seq001/extracted \
-  --output-dir outputs/mmuad_native_ros_seq001/tracking
+  --output-dir outputs/mmuad_native_ros_seq001/tracking \
+  --submission-csv outputs/mmuad_native_ros_seq001/tracking/submission.csv \
+  --ug2-results-csv outputs/mmuad_native_ros_seq001/tracking/mmaud_results.csv \
+  --ug2-official-results-csv \
+  outputs/mmuad_native_ros_seq001/tracking/official_mmaud_results.csv \
+  --ug2-official-codabench-zip \
+  outputs/mmuad_native_ros_seq001/tracking/official_submission.zip \
+  --ug2-official-validate-on-write
 ```
+
+Native extraction uses the same tracker artifact writer as exported CSV/sequence
+roots, so `submission.csv/json/zip`, UG2 result CSV/ZIP, official Track 5
+CSV/ZIP, validation JSON/rows, and trajectory metrics can be requested from the
+same run.
 
 This is still not a complete native ROS parser for every possible MMUAD bag. It
 is a first native message bridge for common ROS message types. Custom radar

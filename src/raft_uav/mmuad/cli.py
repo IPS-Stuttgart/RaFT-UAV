@@ -293,15 +293,23 @@ def main(argv: list[str] | None = None) -> int:
                 min_points=args.min_cluster_points,
             )
             if extracted.candidates is not None:
+                if args.infer_ug2_class_map_from_candidates:
+                    args._inferred_class_map = infer_sequence_class_map_from_candidates(
+                        extracted.candidates,
+                        min_confidence=args.classification_min_confidence,
+                        default_class=args.ug2_class_name,
+                    )
                 output = _run_tracker_for_mode(args, extracted.candidates, extracted.truth)
-                paths = write_tracker_output(output, args.output_dir)
-                paths["native_ros_manifest_json"] = str(
-                    args.native_ros_extract_output_dir / "native_ros_extraction_manifest.json"
+                return _write_tracking_artifacts(
+                    args,
+                    output,
+                    extra_paths={
+                        "native_ros_manifest_json": str(
+                            args.native_ros_extract_output_dir
+                            / "native_ros_extraction_manifest.json"
+                        )
+                    },
                 )
-                print("mmuad_track=ok")
-                for name, path in paths.items():
-                    print(f"{name}={path}")
-                return 0
         if args.topic_map_file is None:
             print("mmuad_rosbag_inspection=ok")
             print(f"topic_count={len(report.get('topics', []))}")
@@ -365,7 +373,18 @@ def main(argv: list[str] | None = None) -> int:
         output = _run_sequence_root(args)
     else:
         output = _run_explicit_files(args)
+    return _write_tracking_artifacts(args, output)
+
+
+def _write_tracking_artifacts(
+    args: argparse.Namespace,
+    output,
+    *,
+    extra_paths: dict[str, str] | None = None,
+) -> int:
     paths = write_tracker_output(output, args.output_dir)
+    if extra_paths:
+        paths.update(extra_paths)
     explicit_class_map = load_sequence_class_map(args.ug2_class_map_file)
     inferred_class_map = getattr(args, "_inferred_class_map", {})
     # Prefer explicit class-map files when both are provided.

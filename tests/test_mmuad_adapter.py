@@ -4962,6 +4962,141 @@ def test_cli_runs_yaml_topic_map_file_alias(tmp_path: Path) -> None:
     assert (output / "submission.csv").exists()
 
 
+def test_cli_native_ros_extraction_writes_submission_artifacts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    bag = tmp_path / "seq_native.mcap"
+    bag.write_bytes(b"fake native bag")
+    topic_map = tmp_path / "topic_map_native.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_native",
+                "exports": [{"topic": "/radar", "kind": "pose_candidate"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "out"
+    extracted_dir = output / "extracted"
+
+    def fake_extract_native_rosbag_topic_map(
+        *,
+        bag_path,
+        topic_map_json,
+        output_dir,
+        voxel_size_m,
+        min_points,
+    ):
+        assert bag_path == bag
+        assert topic_map_json == topic_map
+        assert voxel_size_m == 0.75
+        assert min_points == 3
+        output_dir.mkdir(parents=True)
+        (output_dir / "native_ros_extraction_manifest.json").write_text(
+            json.dumps({"schema": "fake-native-extraction"}),
+            encoding="utf-8",
+        )
+        candidates = CandidateFrame(
+            pd.DataFrame(
+                {
+                    "sequence_id": ["seq_native", "seq_native"],
+                    "time_s": [0.0, 1.0],
+                    "source": ["radar", "radar"],
+                    "track_id": ["uav", "uav"],
+                    "x_m": [0.0, 1.0],
+                    "y_m": [0.0, 0.0],
+                    "z_m": [10.0, 10.0],
+                    "std_xy_m": [1.0, 1.0],
+                    "std_z_m": [1.0, 1.0],
+                    "confidence": [1.0, 1.0],
+                    "class_name": ["2", "2"],
+                }
+            )
+        )
+        truth = TruthFrame(
+            pd.DataFrame(
+                {
+                    "sequence_id": ["seq_native", "seq_native"],
+                    "time_s": [0.0, 1.0],
+                    "x_m": [0.0, 1.0],
+                    "y_m": [0.0, 0.0],
+                    "z_m": [10.0, 10.0],
+                }
+            )
+        )
+        return SimpleNamespace(candidates=candidates, truth=truth, manifest={})
+
+    monkeypatch.setattr(
+        "raft_uav.mmuad.cli.extract_native_rosbag_topic_map",
+        fake_extract_native_rosbag_topic_map,
+    )
+
+    status = mmuad_cli_main(
+        [
+            "--rosbag-path",
+            str(bag),
+            "--topic-map-file",
+            str(topic_map),
+            "--native-ros-extract-output-dir",
+            str(extracted_dir),
+            "--output-dir",
+            str(output),
+            "--submission-csv",
+            str(output / "submission.csv"),
+            "--submission-json",
+            str(output / "submission.json"),
+            "--submission-zip",
+            str(output / "submission.zip"),
+            "--ug2-results-csv",
+            str(output / "mmaud_results.csv"),
+            "--ug2-codabench-zip",
+            str(output / "ug2_submission.zip"),
+            "--ug2-official-results-csv",
+            str(output / "official_mmaud_results.csv"),
+            "--ug2-official-codabench-zip",
+            str(output / "official_submission.zip"),
+            "--ug2-official-classification",
+            "2",
+            "--ug2-official-validate-on-write",
+        ]
+    )
+
+    assert status == 0
+    expected = [
+        "mmuad_estimates.csv",
+        "mmuad_metrics.json",
+        "mmuad_trajectory_metrics.json",
+        "submission.csv",
+        "submission.json",
+        "submission.zip",
+        "mmaud_results.csv",
+        "ug2_submission.zip",
+        "official_mmaud_results.csv",
+        "official_submission.zip",
+        "mmuad_official_submission_validation.json",
+        "mmuad_official_submission_validation_rows.csv",
+    ]
+    for name in expected:
+        assert (output / name).exists(), name
+    assert (extracted_dir / "native_ros_extraction_manifest.json").exists()
+    official = pd.read_csv(output / "official_mmaud_results.csv")
+    assert official.columns.tolist() == [
+        "Sequence",
+        "Timestamp",
+        "Position",
+        "Classification",
+    ]
+    assert official["Classification"].tolist() == [2, 2]
+    validation = json.loads(
+        (output / "mmuad_official_submission_validation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert validation["valid"] is True
+
+
 def test_topic_map_exports_load_json_candidates_and_truth(tmp_path: Path) -> None:
     exports = tmp_path / "exports"
     exports.mkdir()
