@@ -223,14 +223,16 @@ def _sequence_key(relative_path: str) -> str:
     parts = Path(relative_path).parts
     if len(parts) <= 1:
         return "."
-    first = _normalized_dir_name(parts[0])
-    if first in MODALITY_DIR_TOKENS:
+
+    parent_parts = parts[:-1]
+    candidate_indices = [
+        index
+        for index, part in enumerate(parent_parts)
+        if _normalized_dir_name(part) not in MODALITY_DIR_TOKENS + SPLIT_DIR_TOKENS
+    ]
+    if not candidate_indices:
         return "."
-    if first in SPLIT_DIR_TOKENS and len(parts) > 2:
-        second = _normalized_dir_name(parts[1])
-        if second not in MODALITY_DIR_TOKENS:
-            return parts[1]
-    return parts[0]
+    return parent_parts[candidate_indices[-1]]
 
 
 def _normalized_dir_name(name: str) -> str:
@@ -275,7 +277,8 @@ def _layout_recommendations(
             "native ROS extraction."
         )
     missing_calibration = [
-        row["sequence_id"] for row in sequence_candidates
+        row["sequence_id"]
+        for row in sequence_candidates
         if row["has_candidates_or_points"] and not row["has_calibration"]
     ]
     if missing_calibration:
