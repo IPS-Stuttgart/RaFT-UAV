@@ -644,6 +644,12 @@ needed to inventory an unpacked raw sequence before writing parser-specific
 topic maps: storage identifier, serialization format, listed relative bag
 files, discovered `.db3`/`.mcap` files, total message count, duration, and
 starting time when those fields are present in `metadata.yaml`.
+Standalone `.db3` and `.mcap` files are also recognized. If the optional
+`rosbags` package is installed, inspection lists native topics and the topic-map
+template can be generated directly from the recording. Without `rosbags`, the
+report remains dependency-safe and records that a native reader is unavailable,
+so the next step is still clear: install `rosbags` or export the topics to CSV
+and use the topic-map bridge.
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
