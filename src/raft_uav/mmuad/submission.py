@@ -608,6 +608,8 @@ def validate_official_track5_submission(
     }
     summary["valid"] = bool(
         not errors
+        and int(summary.get("invalid_sequence_count", 0)) == 0
+        and int(summary.get("invalid_timestamp_count", 0)) == 0
         and int(summary.get("invalid_position_count", 0)) == 0
         and int(summary.get("invalid_classification_count", 0)) == 0
         and int(summary.get("duplicate_prediction_count", 0)) == 0
@@ -647,6 +649,8 @@ def _validate_official_track5_frame(
             f"{list(OFFICIAL_UG2_RESULT_COLUMNS)}"
         )
     diagnostics, normalized = _official_track5_row_diagnostics(frame)
+    invalid_sequence_count = int((diagnostics["status"] == "invalid_sequence").sum())
+    invalid_timestamp_count = int((diagnostics["status"] == "invalid_timestamp").sum())
     invalid_position_count = int((diagnostics["status"] == "invalid_position").sum())
     invalid_classification_count = int(
         (diagnostics["status"] == "invalid_classification").sum()
@@ -700,6 +704,8 @@ def _validate_official_track5_frame(
         "columns": columns,
         "row_count": int(len(frame)),
         "valid_row_count": valid_row_count,
+        "invalid_sequence_count": invalid_sequence_count,
+        "invalid_timestamp_count": invalid_timestamp_count,
         "invalid_position_count": invalid_position_count,
         "invalid_classification_count": invalid_classification_count,
         "duplicate_prediction_count": int(duplicate_count),
