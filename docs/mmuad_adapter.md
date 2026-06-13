@@ -540,6 +540,10 @@ IDs, duplicate prediction detection, and optional timestamp coverage against a
 truth/template file or Track 5 sequence-root folders. It exits nonzero when the
 package is invalid, which makes it suitable for local CI before a manual
 Codabench upload.
+Official Track 5 CSV/ZIP writers also fail before writing when tracker output
+contains non-finite timestamps or positions, preventing a seemingly valid ZIP
+from silently dropping rows. For local diagnostics only, pass
+`--ug2-official-invalid-row-policy drop` to keep the older filtering behavior.
 `--official-validation-template-file` may point to either a normalized
 truth/template file or an official Track 5 CSV/ZIP; for official files, only
 `Sequence` and `Timestamp` are used as the requested prediction grid.
