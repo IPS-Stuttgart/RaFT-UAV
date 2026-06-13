@@ -3828,6 +3828,47 @@ def test_sequence_root_recurses_through_nested_grouping_folders(
     ]
 
 
+def test_sequence_root_loads_wrapped_modality_folders(tmp_path: Path) -> None:
+    seq = tmp_path / "val" / "fog" / "seq_wrapped"
+    livox = seq / "sensors" / "livox_avia" / "stream0"
+    results = seq / "outputs" / "tracking_results" / "fused"
+    truth_dir = seq / "labels" / "ground_truth" / "leica"
+    livox.mkdir(parents=True)
+    results.mkdir(parents=True)
+    truth_dir.mkdir(parents=True)
+    timestamp = "20.0"
+    np.save(
+        livox / f"{timestamp}.npy",
+        np.array(
+            [
+                [1.0, 2.0, 3.0],
+                [1.1, 2.0, 3.0],
+                [1.0, 2.1, 3.0],
+            ]
+        ),
+    )
+    np.save(results / f"{timestamp}.npy", np.array([1.05, 2.05, 3.0]))
+    np.save(truth_dir / f"{timestamp}.npy", np.array([1.0, 2.0, 3.0]))
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(
+        discovered[0],
+        voxel_size_m=0.5,
+        min_cluster_points=3,
+    )
+
+    assert [sequence.root.relative_to(tmp_path).as_posix() for sequence in discovered] == [
+        "val/fog/seq_wrapped",
+    ]
+    assert discovered[0].candidate_trajectory_files == (results / f"{timestamp}.npy",)
+    assert discovered[0].point_cloud_files == (livox / f"{timestamp}.npy",)
+    assert discovered[0].truth_file == truth_dir / f"{timestamp}.npy"
+    assert candidates.rows["source"].tolist() == ["livox_avia", "tracking_results"]
+    assert candidates.rows["time_s"].tolist() == [20.0, 20.0]
+    assert truth is not None
+    assert truth.rows["time_s"].tolist() == [20.0]
+
+
 def test_cli_accepts_explicit_numpy_candidate_and_truth_files(tmp_path: Path) -> None:
     candidates = tmp_path / "trajectory.npy"
     truth = tmp_path / "truth.npy"
