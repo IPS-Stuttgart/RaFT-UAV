@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
-from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
+from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates, radar_polar_frame_to_candidates
 
 
 def test_nested_radar_json_detections_inherit_parent_metadata(tmp_path: Path) -> None:
@@ -36,3 +37,24 @@ def test_nested_radar_json_detections_inherit_parent_metadata(tmp_path: Path) ->
     assert np.any(
         np.all(np.isclose(xyz, [0.0, 20.0, 0.0], atol=1.0e-9), axis=1)
     )
+
+
+def test_radar_polar_frame_fills_missing_sequence_ids_from_call_default() -> None:
+    frame = pd.DataFrame(
+        {
+            "sequence_id": [None, ""],
+            "time_s": [0.0, 1.0],
+            "range_m": [10.0, 20.0],
+            "azimuth_deg": [0.0, 90.0],
+        }
+    )
+
+    candidates = radar_polar_frame_to_candidates(
+        frame,
+        default_sequence_id="seq-from-folder",
+    )
+
+    assert candidates.rows["sequence_id"].tolist() == [
+        "seq-from-folder",
+        "seq-from-folder",
+    ]
