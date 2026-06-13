@@ -261,6 +261,22 @@ def test_official_position_parser_accepts_numpy_style_space_separated_strings():
     assert parse_official_position_cell("1.5 2.5 3.5") == (1.5, 2.5, 3.5)
 
 
+def test_official_position_parser_accepts_numpy_array_repr_strings():
+    assert parse_official_position_cell("array([1.5, 2.5, 3.5])") == (
+        1.5,
+        2.5,
+        3.5,
+    )
+    assert parse_official_position_cell("np.array([1.5 2.5 3.5])") == (
+        1.5,
+        2.5,
+        3.5,
+    )
+    assert parse_official_position_cell(
+        "numpy.array([1.5, 2.5, 3.5], dtype=float32)"
+    ) == (1.5, 2.5, 3.5)
+
+
 def test_official_track5_results_loader_accepts_numpy_style_position_strings():
     frame = validate_mmaud_results_frame(
         pd.DataFrame(
@@ -268,6 +284,23 @@ def test_official_track5_results_loader_accepts_numpy_style_position_strings():
                 "Sequence": ["seq1"],
                 "Timestamp": [1706255054.386069],
                 "Position": ["[1.5 2.5 3.5]"],
+                "Classification": [3],
+            }
+        )
+    )
+
+    assert frame.loc[0, "sequence_id"] == "seq1"
+    assert frame.loc[0, ["x", "y", "z"]].tolist() == [1.5, 2.5, 3.5]
+    assert frame.loc[0, "uav_type"] == "3"
+
+
+def test_official_track5_results_loader_accepts_numpy_array_position_repr():
+    frame = validate_mmaud_results_frame(
+        pd.DataFrame(
+            {
+                "Sequence": ["seq1"],
+                "Timestamp": [1706255054.386069],
+                "Position": ["array([1.5, 2.5, 3.5])"],
                 "Classification": [3],
             }
         )
@@ -437,6 +470,30 @@ def test_official_track5_submission_validator_accepts_numpy_style_position_strin
             "Sequence": ["seq1"],
             "Timestamp": [0.0],
             "Position": ["[1.5 2.5 3.5]"],
+            "Classification": [2],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", frame.to_csv(index=False))
+
+    validation = validate_official_track5_submission(zip_path)
+
+    assert validation.summary["valid"] is True
+    assert validation.summary["invalid_position_count"] == 0
+    row = validation.rows.iloc[0]
+    assert row["status"] == "ok"
+    assert row[["x", "y", "z"]].tolist() == [1.5, 2.5, 3.5]
+
+
+def test_official_track5_submission_validator_accepts_numpy_array_position_repr(
+    tmp_path,
+):
+    zip_path = tmp_path / "official.zip"
+    frame = pd.DataFrame(
+        {
+            "Sequence": ["seq1"],
+            "Timestamp": [0.0],
+            "Position": ["array([1.5, 2.5, 3.5], dtype=float64)"],
             "Classification": [2],
         }
     )

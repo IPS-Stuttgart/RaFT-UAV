@@ -536,7 +536,9 @@ file or Track 5 sequence-root folders. It exits nonzero when the package is
 invalid, which makes it suitable for local CI before a manual Codabench upload.
 For compatibility with array-like exports from other Track 5 pipelines, the
 local validator/evaluator also accepts `Position` cells formatted as `[x y z]`
-or `x y z` in addition to comma/semicolon-separated tuple/list strings.
+or `x y z`, plus NumPy-style wrappers such as `array([x, y, z])` or
+`np.array([x y z])`, in addition to comma/semicolon-separated tuple/list
+strings.
 
 The older local diagnostic result table with
 `sequence_id,timestamp,x,y,z,uav_type,score` remains available for repository
