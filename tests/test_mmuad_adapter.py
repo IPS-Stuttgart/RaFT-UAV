@@ -3799,6 +3799,35 @@ def test_sequence_glob_matches_sequences_inside_split_folders(tmp_path: Path) ->
     assert [sequence.sequence_id for sequence in discovered] == ["seq_keep"]
 
 
+def test_sequence_root_recurses_through_nested_grouping_folders(
+    tmp_path: Path,
+) -> None:
+    keep = tmp_path / "val" / "fog" / "seq_keep"
+    train = tmp_path / "train" / "clear" / "seq_train"
+    skip = tmp_path / "val" / "fog" / "ignore_me"
+    for seq in (keep, train, skip):
+        seq.mkdir(parents=True)
+        pd.DataFrame(
+            {
+                "time_s": [0.0],
+                "x_m": [1.0],
+                "y_m": [2.0],
+                "z_m": [3.0],
+            }
+        ).to_csv(seq / "candidates.csv", index=False)
+
+    discovered = discover_sequence_paths(tmp_path, sequence_glob="seq_*")
+    val_discovered = discover_sequence_paths(tmp_path, sequence_glob="val/*/seq_*")
+
+    assert [sequence.root.relative_to(tmp_path).as_posix() for sequence in discovered] == [
+        "train/clear/seq_train",
+        "val/fog/seq_keep",
+    ]
+    assert [sequence.root.relative_to(tmp_path).as_posix() for sequence in val_discovered] == [
+        "val/fog/seq_keep",
+    ]
+
+
 def test_cli_accepts_explicit_numpy_candidate_and_truth_files(tmp_path: Path) -> None:
     candidates = tmp_path / "trajectory.npy"
     truth = tmp_path / "truth.npy"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -302,27 +303,54 @@ def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[Seq
 def _candidate_sequence_dirs(root: Path, *, sequence_glob: str) -> list[Path]:
     if not root.is_dir():
         return []
-    children = [
-        path
-        for path in sorted(root.iterdir())
-        if path.is_dir() and not _is_modality_dir(path)
-    ]
-    direct_candidates = [
-        path
-        for path in sorted(root.glob(sequence_glob))
-        if path.is_dir() and not _is_modality_dir(path)
-    ]
     candidates: list[Path] = []
-    candidates.extend(path for path in direct_candidates if _looks_like_sequence(path))
-    for child in children:
-        candidates.extend(
-            path
-            for path in sorted(child.glob(sequence_glob))
-            if path.is_dir()
-            and not _is_modality_dir(path)
-            and _looks_like_sequence(path)
+    for child in _non_modality_child_dirs(root):
+        _collect_sequence_dirs(
+            child,
+            root=root,
+            sequence_glob=sequence_glob,
+            candidates=candidates,
         )
     return _unique_paths(candidates)
+
+
+def _collect_sequence_dirs(
+    path: Path,
+    *,
+    root: Path,
+    sequence_glob: str,
+    candidates: list[Path],
+) -> None:
+    if _is_modality_dir(path):
+        return
+    if _sequence_dir_matches(path, root=root, sequence_glob=sequence_glob) and _looks_like_sequence(path):
+        candidates.append(path)
+        return
+    for child in _non_modality_child_dirs(path):
+        _collect_sequence_dirs(
+            child,
+            root=root,
+            sequence_glob=sequence_glob,
+            candidates=candidates,
+        )
+
+
+def _non_modality_child_dirs(path: Path) -> list[Path]:
+    return [
+        child
+        for child in sorted(path.iterdir())
+        if child.is_dir() and not _is_modality_dir(child)
+    ]
+
+
+def _sequence_dir_matches(path: Path, *, root: Path, sequence_glob: str) -> bool:
+    if fnmatch(path.name, sequence_glob):
+        return True
+    try:
+        relative = path.relative_to(root).as_posix()
+    except ValueError:
+        relative = path.as_posix()
+    return fnmatch(relative, sequence_glob)
 
 
 def load_sequence_export(
