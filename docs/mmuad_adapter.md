@@ -503,7 +503,8 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --completion-max-interpolation-gap-s 1.0 \
   --ug2-class-map-file data/mmuad_export/sequence_class_ids.csv \
   --ug2-official-results-csv outputs/mmuad_val/mmaud_results.csv \
-  --ug2-official-codabench-zip outputs/mmuad_val/ug2_codabench_submission.zip
+  --ug2-official-codabench-zip outputs/mmuad_val/ug2_codabench_submission.zip \
+  --ug2-official-validate-on-write
 ```
 
 `ground-truth-or-all` uses `ground_truth/<timestamp>.npy` when labels are
@@ -512,7 +513,11 @@ Use `image`, `lidar-360`, `livox-avia`, `radar-enhance-pcl`, or
 `all-modalities` when a specific timestamp source is required. The CLI writes
 `mmuad_official_timestamp_completion_rows.csv` and
 `mmuad_official_timestamp_completion_summary.json` so interpolation and
-nearest-hold choices remain auditable.
+nearest-hold choices remain auditable. With
+`--ug2-official-validate-on-write`, the run also writes
+`mmuad_official_submission_validation.json` and
+`mmuad_official_submission_validation_rows.csv`, then exits nonzero if the
+fresh ZIP fails the local Track 5 preflight checks.
 
 Before manual upload, validate the official ZIP structure and timestamp
 coverage:
