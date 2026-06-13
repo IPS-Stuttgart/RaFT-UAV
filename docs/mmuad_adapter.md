@@ -684,6 +684,7 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --evaluate-truth-csv data/mmuad_export/val_truth.csv \
   --evaluation-protocol public-track5 \
   --evaluation-timestamp-tolerance-s 1e-6 \
+  --evaluation-require-complete-track5 \
   --evaluation-class-map-file data/mmuad_export/sequence_classes.yaml \
   --evaluation-json outputs/mmuad_val/local_eval.json \
   --evaluation-rows-csv outputs/mmuad_val/local_eval_rows.csv \
@@ -695,7 +696,12 @@ Codabench-style archive. The summary includes `truth_count`, `prediction_count`,
 `missing_prediction_count`, `extra_prediction_count`,
 `duplicate_prediction_count`, `truth_coverage_fraction`, and
 `all_truth_timestamps_matched` so a leaderboard-style package can be checked for
-timestamp coverage before upload.
+timestamp coverage before upload. It also reports `leaderboard_ready`,
+`score_valid_for_leaderboard`, and `leaderboard_blocking_reasons`; these stay
+false/nonempty until every requested truth/template timestamp has exactly one
+prediction and there are no extras or duplicates. With
+`--evaluation-require-complete-track5`, the CLI writes the JSON/row artifacts
+and exits nonzero when those strict public Track 5 readiness checks fail.
 
 The submission writer also accepts a sequence-to-class map so different
 sequences can use different UAV type labels:

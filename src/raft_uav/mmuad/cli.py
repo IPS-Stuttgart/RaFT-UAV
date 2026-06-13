@@ -112,6 +112,14 @@ def main(argv: list[str] | None = None) -> int:
         default=1.0e-6,
         help="timestamp tolerance for --evaluation-protocol public-track5",
     )
+    parser.add_argument(
+        "--evaluation-require-complete-track5",
+        action="store_true",
+        help=(
+            "with --evaluation-protocol public-track5, exit nonzero when the "
+            "package is not leaderboard-ready"
+        ),
+    )
     parser.add_argument("--point-cloud-csv", action="append", type=Path, default=[])
     parser.add_argument("--point-cloud-file", action="append", type=Path, default=[])
     parser.add_argument("--radar-polar-csv", action="append", type=Path, default=[])
@@ -310,6 +318,8 @@ def main(argv: list[str] | None = None) -> int:
             summary_json=args.evaluation_json or (args.output_dir / "mmuad_local_evaluation.json"),
             rows_csv=args.evaluation_rows_csv,
         )
+        if args.evaluation_require_complete_track5:
+            _require_complete_track5_evaluation(args, result["summary"])
         print("mmuad_local_evaluation=ok")
         for name, path in paths.items():
             print(f"{name}={path}")
@@ -494,6 +504,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"pooled_max_3d_m={pooled['max_3d_m']}")
     return 0
 
+
+
+def _require_complete_track5_evaluation(
+    args: argparse.Namespace,
+    summary: dict,
+) -> None:
+    if args.evaluation_protocol != "public-track5":
+        raise SystemExit(
+            "--evaluation-require-complete-track5 requires "
+            "--evaluation-protocol public-track5"
+        )
+    if summary.get("leaderboard_ready") is True:
+        return
+    reasons = summary.get("leaderboard_blocking_reasons") or ["unknown"]
+    raise SystemExit(
+        "public Track 5 evaluation is not leaderboard-ready: "
+        + ", ".join(str(reason) for reason in reasons)
+    )
 
 
 def _run_inspect(args: argparse.Namespace) -> int:
