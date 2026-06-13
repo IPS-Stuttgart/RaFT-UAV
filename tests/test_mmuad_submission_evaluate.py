@@ -60,3 +60,32 @@ def test_truth_coverage_counts_unique_truth_rows_not_duplicate_predictions() -> 
     assert metrics["pooled"]["truth_count"] == 2
     assert metrics["pooled"]["covered_truth_count"] == 2
     assert metrics["pooled"]["truth_coverage_fraction"] == 1.0
+
+
+def test_metrics_include_truth_only_sequences_when_no_predictions() -> None:
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [2.0, 2.0],
+        }
+    )
+    submission = pd.DataFrame(
+        columns=["sequence_id", "time_s", "track_id", "x_m", "y_m", "z_m"]
+    )
+
+    matches = match_submission_to_truth(submission, truth, max_time_delta_s=0.1)
+    metrics = metrics_from_matches(matches, submission=submission, truth=truth)
+
+    assert metrics["pooled"]["truth_count"] == 2
+    assert metrics["pooled"]["prediction_count"] == 0
+    assert metrics["pooled"]["covered_truth_count"] == 0
+    assert metrics["pooled"]["truth_coverage_fraction"] == 0.0
+    assert set(metrics["sequences"]) == {"seqA"}
+    assert metrics["sequences"]["seqA"]["truth_count"] == 2
+    assert metrics["sequences"]["seqA"]["prediction_count"] == 0
+    assert metrics["sequences"]["seqA"]["matched_count"] == 0
+    assert metrics["sequences"]["seqA"]["covered_truth_count"] == 0
+    assert metrics["sequences"]["seqA"]["truth_coverage_fraction"] == 0.0

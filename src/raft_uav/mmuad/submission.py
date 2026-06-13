@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Mapping
+from dataclasses import dataclass
+from io import BytesIO
 import json
 from pathlib import Path
 from typing import Any
@@ -10,6 +13,8 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import numpy as np
 import pandas as pd
+
+from raft_uav.mmuad.schema import normalize_time_column_aliases
 
 
 SUBMISSION_COLUMNS = (
@@ -30,6 +35,13 @@ UG2_RESULT_COLUMNS = (
     "z",
     "uav_type",
     "score",
+)
+
+OFFICIAL_UG2_RESULT_COLUMNS = (
+    "Sequence",
+    "Timestamp",
+    "Position",
+    "Classification",
 )
 
 _SEQUENCE_ID_ALIASES = (
@@ -58,6 +70,14 @@ _COORDINATE_COLUMN_SETS = (
     ("x_m", "y_m", "z_m"),
     ("x", "y", "z"),
 )
+
+
+@dataclass(frozen=True)
+class OfficialTrack5Validation:
+    """Structural and timestamp-coverage validation for a Track 5 upload."""
+
+    summary: dict[str, Any]
+    rows: pd.DataFrame
 
 
 def load_sequence_class_map(path: Path | None) -> dict[str, str]:
@@ -207,6 +227,27 @@ def _estimate_sequence_values(
     return pd.Series([default_sequence_id] * len(estimates), index=estimates.index)
 
 
+def _estimate_track_id_values(
+    estimates: pd.DataFrame,
+    *,
+    track_id: str,
+    use_estimate_track_ids: bool,
+) -> pd.Series:
+    """Return one non-empty track id per estimate row."""
+
+    default_track_id = str(track_id)
+    if use_estimate_track_ids and "output_track_id" in estimates.columns:
+        values = (
+            estimates["output_track_id"]
+            .where(estimates["output_track_id"].notna(), default_track_id)
+            .astype(str)
+            .str.strip()
+        )
+        missing = values.eq("") | values.str.lower().isin({"nan", "none", "<na>"})
+        return values.where(~missing, default_track_id)
+    return pd.Series([default_track_id] * len(estimates), index=estimates.index)
+
+
 def _estimate_coordinate_columns(estimates: pd.DataFrame) -> tuple[str, str, str]:
     """Return x/y/z coordinate columns for supported estimate table schemas."""
 
@@ -215,6 +256,16 @@ def _estimate_coordinate_columns(estimates: pd.DataFrame) -> tuple[str, str, str
             return columns
     expected = " or ".join(", ".join(columns) for columns in _COORDINATE_COLUMN_SETS)
     raise KeyError(f"estimates must contain coordinate columns: {expected}")
+
+
+def _estimate_time_values(estimates: pd.DataFrame) -> pd.Series:
+    """Return numeric estimate timestamps from tracker or result-table columns."""
+
+    if "time_s" in estimates.columns:
+        return pd.to_numeric(estimates["time_s"], errors="coerce")
+    if "timestamp" in estimates.columns:
+        return pd.to_numeric(estimates["timestamp"], errors="coerce")
+    raise KeyError("estimates must contain a 'time_s' or 'timestamp' column")
 
 
 def estimates_to_mmaud_results_frame(
@@ -235,9 +286,12 @@ def estimates_to_mmaud_results_frame(
     if estimates.empty:
         return pd.DataFrame(columns=UG2_RESULT_COLUMNS)
     x_column, y_column, z_column = _estimate_coordinate_columns(estimates)
+    time_values = _estimate_time_values(estimates)
     sequence_values = _estimate_sequence_values(estimates)
     if "class_name" in estimates.columns:
         class_values = estimates["class_name"].fillna(class_name).astype(str)
+    elif "uav_type" in estimates.columns:
+        class_values = estimates["uav_type"].fillna(class_name).astype(str)
     else:
         class_values = pd.Series([class_name] * len(estimates), index=estimates.index)
     if class_map:
@@ -251,7 +305,7 @@ def estimates_to_mmaud_results_frame(
     frame = pd.DataFrame(
         {
             "sequence_id": sequence_values,
-            "timestamp": estimates["time_s"].astype(float),
+            "timestamp": time_values.astype(float),
             "x": estimates[x_column].astype(float),
             "y": estimates[y_column].astype(float),
             "z": estimates[z_column].astype(float),
@@ -262,6 +316,133 @@ def estimates_to_mmaud_results_frame(
     return frame[list(UG2_RESULT_COLUMNS)].sort_values(
         ["sequence_id", "timestamp"]
     ).reset_index(drop=True)
+
+
+def estimates_to_official_mmaud_results_frame(
+    estimates: pd.DataFrame,
+    *,
+    classification: int | str = 0,
+    class_map: dict[str, str] | None = None,
+) -> pd.DataFrame:
+    """Convert estimates into the public Track 5 ``mmaud_results.csv`` schema.
+
+    The CVPR 2024 UG2+ Track 5 README specifies columns named ``Sequence``,
+    ``Timestamp``, ``Position``, and ``Classification``.  ``Position`` is written
+    as a compact ``(x,y,z)`` string because CSV has no native NumPy-array type.
+    ``Classification`` must be an integer; pass a sequence class map with
+    numeric values when per-sequence labels are known.
+    """
+
+    if estimates.empty:
+        return pd.DataFrame(columns=OFFICIAL_UG2_RESULT_COLUMNS)
+    x_column, y_column, z_column = _estimate_coordinate_columns(estimates)
+    time_values = _estimate_time_values(estimates)
+    sequence_values = _estimate_sequence_values(estimates)
+    classification_values = _estimate_classification_values(
+        estimates,
+        sequence_values=sequence_values,
+        default_classification=classification,
+        class_map=class_map,
+    )
+    numeric = pd.DataFrame(
+        {
+            "Timestamp": time_values,
+            "x": pd.to_numeric(estimates[x_column], errors="coerce"),
+            "y": pd.to_numeric(estimates[y_column], errors="coerce"),
+            "z": pd.to_numeric(estimates[z_column], errors="coerce"),
+            "Classification": classification_values,
+        },
+        index=estimates.index,
+    )
+    finite = np.isfinite(numeric[["Timestamp", "x", "y", "z"]].to_numpy(dtype=float)).all(axis=1)
+    work_sequences = sequence_values.loc[finite]
+    numeric = numeric.loc[finite]
+    rows = pd.DataFrame(
+        {
+            "Sequence": work_sequences.astype(str),
+            "Timestamp": numeric["Timestamp"].astype(float),
+            "Position": [
+                _format_official_position(x, y, z)
+                for x, y, z in zip(
+                    numeric["x"],
+                    numeric["y"],
+                    numeric["z"],
+                    strict=False,
+                )
+            ],
+            "Classification": numeric["Classification"].astype(int),
+        }
+    )
+    return rows[list(OFFICIAL_UG2_RESULT_COLUMNS)].sort_values(
+        ["Sequence", "Timestamp"]
+    ).reset_index(drop=True)
+
+
+def _estimate_classification_values(
+    estimates: pd.DataFrame,
+    *,
+    sequence_values: pd.Series,
+    default_classification: int | str,
+    class_map: dict[str, str] | None,
+) -> pd.Series:
+    if "classification" in estimates.columns:
+        raw = estimates["classification"]
+    elif "class_id" in estimates.columns:
+        raw = estimates["class_id"]
+    elif "class_name" in estimates.columns:
+        raw = estimates["class_name"]
+    elif "uav_type" in estimates.columns:
+        raw = estimates["uav_type"]
+    else:
+        raw = pd.Series([default_classification] * len(estimates), index=estimates.index)
+    values = pd.Series(raw, index=estimates.index).copy()
+    if class_map:
+        mapped = [
+            class_map.get(str(sequence_id), value)
+            for sequence_id, value in zip(sequence_values, values, strict=False)
+        ]
+        values = pd.Series(mapped, index=estimates.index)
+    return values.map(_classification_to_int)
+
+
+def _classification_to_int(value: Any) -> int:
+    if value is None:
+        raise ValueError("official MMUAD Classification values must be integers")
+    if isinstance(value, np.generic):
+        value = value.item()
+    try:
+        missing = pd.isna(value)
+    except TypeError:
+        missing = False
+    if isinstance(missing, bool) and missing:
+        raise ValueError("official MMUAD Classification values must be integers")
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            raise ValueError("official MMUAD Classification values must be integers")
+        try:
+            number = float(text)
+        except ValueError as exc:
+            raise ValueError(
+                "official MMUAD Classification values must be integer ids; "
+                f"got {value!r}"
+            ) from exc
+    else:
+        number = float(value)
+    if not np.isfinite(number) or not number.is_integer():
+        raise ValueError(
+            "official MMUAD Classification values must be integer ids; "
+            f"got {value!r}"
+        )
+    return int(number)
+
+
+def _format_official_position(x: Any, y: Any, z: Any) -> str:
+    return f"({_format_float(x)},{_format_float(y)},{_format_float(z)})"
+
+
+def _format_float(value: Any) -> str:
+    return f"{float(value):.12g}"
 
 
 def write_mmaud_results_csv(
@@ -283,6 +464,25 @@ def write_mmaud_results_csv(
     return path
 
 
+def write_official_mmaud_results_csv(
+    estimates: pd.DataFrame,
+    path: Path,
+    *,
+    classification: int | str = 0,
+    class_map: dict[str, str] | None = None,
+) -> Path:
+    """Write the public CVPR 2024 UG2+ Track 5 ``mmaud_results.csv`` schema."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    estimates_to_official_mmaud_results_frame(
+        estimates,
+        classification=classification,
+        class_map=class_map,
+    ).to_csv(path, index=False)
+    return path
+
+
 def write_ug2_codabench_zip(
     estimates: pd.DataFrame,
     path: Path,
@@ -296,6 +496,27 @@ def write_ug2_codabench_zip(
     path.parent.mkdir(parents=True, exist_ok=True)
     frame = estimates_to_mmaud_results_frame(
         estimates, class_name=class_name, class_map=class_map
+    )
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("mmaud_results.csv", frame.to_csv(index=False))
+    return path
+
+
+def write_official_ug2_codabench_zip(
+    estimates: pd.DataFrame,
+    path: Path,
+    *,
+    classification: int | str = 0,
+    class_map: dict[str, str] | None = None,
+) -> Path:
+    """Write a Track 5 upload ZIP containing only ``mmaud_results.csv``."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame = estimates_to_official_mmaud_results_frame(
+        estimates,
+        classification=classification,
+        class_map=class_map,
     )
     with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
         archive.writestr("mmaud_results.csv", frame.to_csv(index=False))
@@ -327,6 +548,354 @@ def inspect_submission_zip(path: Path) -> dict[str, Any]:
     }
 
 
+def validate_official_track5_submission(
+    path: Path,
+    *,
+    template: pd.DataFrame | None = None,
+    timestamp_tolerance_s: float = 1.0e-6,
+    require_zip: bool = True,
+) -> OfficialTrack5Validation:
+    """Validate the public UG2+ Track 5 upload structure.
+
+    This is a local preflight check for leaderboard packaging.  It enforces the
+    public ZIP/CSV schema and, when a timestamp template is supplied, checks
+    whether each requested sequence timestamp has exactly one prediction.
+    """
+
+    if timestamp_tolerance_s < 0.0:
+        raise ValueError("timestamp_tolerance_s must be non-negative")
+    path = Path(path)
+    errors: list[str] = []
+    warnings: list[str] = []
+    members: list[str] = []
+    frame: pd.DataFrame | None = None
+    is_zip = path.suffix.lower() == ".zip"
+    if require_zip and not is_zip:
+        errors.append("official Track 5 Codabench upload must be a .zip file")
+    try:
+        if is_zip:
+            frame, members = _read_official_track5_zip_for_validation(path, errors)
+        else:
+            frame = pd.read_csv(path)
+    except Exception as exc:
+        errors.append(f"could not read official Track 5 submission: {exc}")
+
+    row_diagnostics = pd.DataFrame()
+    schema_summary: dict[str, Any] = {}
+    if frame is not None:
+        schema_summary, row_diagnostics = _validate_official_track5_frame(
+            frame,
+            template=template,
+            timestamp_tolerance_s=timestamp_tolerance_s,
+            errors=errors,
+            warnings=warnings,
+        )
+    template_checked = template is not None
+    summary: dict[str, Any] = {
+        "schema": "raft-uav-mmuad-official-track5-validation-v1",
+        "path": str(path),
+        "is_zip": bool(is_zip),
+        "require_zip": bool(require_zip),
+        "members": members,
+        "has_mmaud_results_csv": "mmaud_results.csv" in members if is_zip else path.exists(),
+        "contains_only_mmaud_results_csv": members == ["mmaud_results.csv"] if is_zip else False,
+        "expected_columns": list(OFFICIAL_UG2_RESULT_COLUMNS),
+        "timestamp_tolerance_s": float(timestamp_tolerance_s),
+        "template_checked": bool(template_checked),
+        "errors": errors,
+        "warnings": warnings,
+        **schema_summary,
+    }
+    summary["valid"] = bool(
+        not errors
+        and int(summary.get("invalid_position_count", 0)) == 0
+        and int(summary.get("invalid_classification_count", 0)) == 0
+        and int(summary.get("duplicate_prediction_count", 0)) == 0
+        and (not template_checked or int(summary.get("missing_template_timestamp_count", 0)) == 0)
+        and (not template_checked or int(summary.get("extra_prediction_count", 0)) == 0)
+    )
+    return OfficialTrack5Validation(summary=summary, rows=row_diagnostics)
+
+
+def _read_official_track5_zip_for_validation(
+    path: Path,
+    errors: list[str],
+) -> tuple[pd.DataFrame | None, list[str]]:
+    with ZipFile(path) as archive:
+        members = archive.namelist()
+        if members != ["mmaud_results.csv"]:
+            errors.append("official Track 5 ZIP must contain only mmaud_results.csv")
+        if "mmaud_results.csv" not in members:
+            return None, members
+        with archive.open("mmaud_results.csv") as handle:
+            frame = pd.read_csv(BytesIO(handle.read()))
+    return frame, members
+
+
+def _validate_official_track5_frame(
+    frame: pd.DataFrame,
+    *,
+    template: pd.DataFrame | None,
+    timestamp_tolerance_s: float,
+    errors: list[str],
+    warnings: list[str],
+) -> tuple[dict[str, Any], pd.DataFrame]:
+    columns = list(frame.columns)
+    if columns != list(OFFICIAL_UG2_RESULT_COLUMNS):
+        errors.append(
+            "mmaud_results.csv columns must exactly equal "
+            f"{list(OFFICIAL_UG2_RESULT_COLUMNS)}"
+        )
+    diagnostics, normalized = _official_track5_row_diagnostics(frame)
+    invalid_position_count = int((diagnostics["status"] == "invalid_position").sum())
+    invalid_classification_count = int(
+        (diagnostics["status"] == "invalid_classification").sum()
+    )
+    duplicate_count = 0
+    extra_count = 0
+    missing_count = 0
+    template_count = None
+    if not normalized.empty:
+        duplicate_indices = _duplicate_prediction_indices(
+            normalized,
+            timestamp_tolerance_s=timestamp_tolerance_s,
+        )
+        duplicate_count = len(duplicate_indices)
+        if duplicate_indices:
+            diagnostics.loc[
+                diagnostics["row_index"].isin(duplicate_indices)
+                & diagnostics["status"].eq("ok"),
+                "status",
+            ] = "duplicate_prediction"
+    if template is not None:
+        try:
+            template_rows = _normalize_track5_template(template)
+        except ValueError as exc:
+            errors.append(str(exc))
+            template_rows = pd.DataFrame(columns=["sequence_id", "time_s"])
+        template_count = int(len(template_rows))
+        if not template_rows.empty:
+            coverage = _track5_template_coverage_rows(
+                normalized,
+                template_rows,
+                timestamp_tolerance_s=timestamp_tolerance_s,
+            )
+            missing_count = int((coverage["status"] == "missing_template_timestamp").sum())
+            extra_indices = set(
+                coverage.loc[coverage["status"] == "extra_prediction", "row_index"]
+                .dropna()
+                .astype(int)
+                .tolist()
+            )
+            extra_count = len(extra_indices)
+            if extra_indices:
+                diagnostics.loc[
+                    diagnostics["row_index"].isin(extra_indices)
+                    & diagnostics["status"].eq("ok"),
+                    "status",
+                ] = "extra_prediction"
+            diagnostics = pd.concat([diagnostics, coverage], ignore_index=True, sort=False)
+    valid_row_count = int((diagnostics["status"] == "ok").sum())
+    summary = {
+        "columns": columns,
+        "row_count": int(len(frame)),
+        "valid_row_count": valid_row_count,
+        "invalid_position_count": invalid_position_count,
+        "invalid_classification_count": invalid_classification_count,
+        "duplicate_prediction_count": int(duplicate_count),
+        "template_timestamp_count": template_count,
+        "missing_template_timestamp_count": int(missing_count),
+        "extra_prediction_count": int(extra_count),
+    }
+    return summary, diagnostics
+
+
+def _official_track5_row_diagnostics(
+    frame: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    rows: list[dict[str, Any]] = []
+    normalized_rows: list[dict[str, Any]] = []
+    for row_index, row in frame.iterrows():
+        sequence = str(row.get("Sequence", "")).strip()
+        timestamp = pd.to_numeric(row.get("Timestamp", np.nan), errors="coerce")
+        status = "ok"
+        reason = ""
+        xyz: tuple[float, float, float] | None = None
+        classification: int | None = None
+        if not sequence:
+            status = "invalid_sequence"
+            reason = "blank Sequence"
+        if status == "ok" and not np.isfinite(float(timestamp)):
+            status = "invalid_timestamp"
+            reason = "Timestamp is not finite"
+        if status == "ok":
+            try:
+                xyz = parse_official_position_cell(row.get("Position"))
+            except ValueError as exc:
+                status = "invalid_position"
+                reason = str(exc)
+        if status == "ok":
+            try:
+                classification = _classification_to_int(row.get("Classification"))
+            except ValueError as exc:
+                status = "invalid_classification"
+                reason = str(exc)
+        record = {
+            "row_type": "prediction",
+            "row_index": int(row_index),
+            "sequence_id": sequence,
+            "timestamp": float(timestamp) if np.isfinite(float(timestamp)) else np.nan,
+            "status": status,
+            "reason": reason,
+            "classification": classification,
+        }
+        if xyz is not None:
+            record.update({"x": xyz[0], "y": xyz[1], "z": xyz[2]})
+        rows.append(record)
+        if status == "ok" and xyz is not None and classification is not None:
+            normalized_rows.append(
+                {
+                    "row_index": int(row_index),
+                    "sequence_id": sequence,
+                    "timestamp": float(timestamp),
+                    "x": xyz[0],
+                    "y": xyz[1],
+                    "z": xyz[2],
+                    "classification": classification,
+                }
+            )
+    return pd.DataFrame.from_records(rows), pd.DataFrame.from_records(normalized_rows)
+
+
+def parse_official_position_cell(value: Any) -> tuple[float, float, float]:
+    """Parse a public Track 5 ``Position`` cell into finite ``x,y,z`` floats."""
+
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            parsed = ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            parsed = [
+                part
+                for part in text.strip("[]()").replace(";", ",").split(",")
+                if part.strip()
+            ]
+    else:
+        parsed = value
+    if isinstance(parsed, np.ndarray):
+        values = parsed.reshape(-1).tolist()
+    elif isinstance(parsed, list | tuple):
+        values = list(parsed)
+    else:
+        raise ValueError(f"invalid Track 5 Position value: {value!r}")
+    if len(values) != 3:
+        raise ValueError(f"Track 5 Position must contain exactly 3 values: {value!r}")
+    xyz = (float(values[0]), float(values[1]), float(values[2]))
+    if not np.isfinite(np.asarray(xyz, dtype=float)).all():
+        raise ValueError(f"Track 5 Position must contain finite values: {value!r}")
+    return xyz
+
+
+def _duplicate_prediction_indices(
+    rows: pd.DataFrame,
+    *,
+    timestamp_tolerance_s: float,
+) -> set[int]:
+    duplicates: set[int] = set()
+    for _sequence_id, group in rows.groupby("sequence_id", sort=True):
+        group = group.sort_values(["timestamp", "row_index"])
+        last_time: float | None = None
+        for _, row in group.iterrows():
+            timestamp = float(row["timestamp"])
+            if last_time is not None and abs(timestamp - last_time) <= timestamp_tolerance_s:
+                duplicates.add(int(row["row_index"]))
+            else:
+                last_time = timestamp
+    return duplicates
+
+
+def _normalize_track5_template(template: pd.DataFrame) -> pd.DataFrame:
+    rows = normalize_time_column_aliases(pd.DataFrame(template).copy(), target="time_s")
+    lower_to_original = {str(column).lower(): column for column in rows.columns}
+    rename = {}
+    for alias in _SEQUENCE_ID_ALIASES:
+        if alias in lower_to_original:
+            rename[lower_to_original[alias]] = "sequence_id"
+            break
+    if "sequence" in lower_to_original and "sequence_id" not in rename.values():
+        rename[lower_to_original["sequence"]] = "sequence_id"
+    if "timestamp" in lower_to_original and "time_s" not in rows.columns:
+        rename[lower_to_original["timestamp"]] = "time_s"
+    rows = rows.rename(columns=rename)
+    missing = {"sequence_id", "time_s"}.difference(rows.columns)
+    if missing:
+        raise ValueError(f"official Track 5 template missing columns: {sorted(missing)}")
+    rows = rows[["sequence_id", "time_s"]].copy()
+    rows["sequence_id"] = rows["sequence_id"].astype(str).str.strip()
+    rows["time_s"] = pd.to_numeric(rows["time_s"], errors="coerce")
+    finite = rows["sequence_id"].ne("") & np.isfinite(rows["time_s"].to_numpy(float))
+    rows = rows.loc[finite].drop_duplicates().sort_values(
+        ["sequence_id", "time_s"]
+    ).reset_index(drop=True)
+    return rows
+
+
+def _track5_template_coverage_rows(
+    predictions: pd.DataFrame,
+    template: pd.DataFrame,
+    *,
+    timestamp_tolerance_s: float,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    matched_prediction_indices: set[int] = set()
+    for sequence_id, group in template.groupby("sequence_id", sort=True):
+        seq_predictions = predictions.loc[predictions["sequence_id"] == str(sequence_id)]
+        prediction_times = seq_predictions["timestamp"].to_numpy(float)
+        for _, template_row in group.iterrows():
+            timestamp = float(template_row["time_s"])
+            matched_rows = seq_predictions.loc[
+                np.abs(prediction_times - timestamp) <= timestamp_tolerance_s
+            ]
+            if matched_rows.empty:
+                rows.append(
+                    {
+                        "row_type": "template",
+                        "row_index": np.nan,
+                        "sequence_id": str(sequence_id),
+                        "timestamp": timestamp,
+                        "status": "missing_template_timestamp",
+                        "reason": "no prediction at requested timestamp",
+                    }
+                )
+                continue
+            matched_prediction_indices.update(matched_rows["row_index"].astype(int).tolist())
+            rows.append(
+                {
+                    "row_type": "template",
+                    "row_index": int(matched_rows.iloc[0]["row_index"]),
+                    "sequence_id": str(sequence_id),
+                    "timestamp": timestamp,
+                    "status": "covered_template_timestamp",
+                    "reason": "",
+                }
+            )
+    for _, prediction in predictions.iterrows():
+        row_index = int(prediction["row_index"])
+        if row_index in matched_prediction_indices:
+            continue
+        rows.append(
+            {
+                "row_type": "prediction",
+                "row_index": row_index,
+                "sequence_id": str(prediction["sequence_id"]),
+                "timestamp": float(prediction["timestamp"]),
+                "status": "extra_prediction",
+                "reason": "prediction does not match a requested template timestamp",
+            }
+        )
+    return pd.DataFrame.from_records(rows)
+
+
 def estimates_to_submission_frame(
     estimates: pd.DataFrame,
     *,
@@ -338,9 +907,10 @@ def estimates_to_submission_frame(
     if estimates.empty:
         return pd.DataFrame(columns=SUBMISSION_COLUMNS)
     x_column, y_column, z_column = _estimate_coordinate_columns(estimates)
+    time_values = _estimate_time_values(estimates)
     numeric = pd.DataFrame(
         {
-            "time_s": pd.to_numeric(estimates["time_s"], errors="coerce"),
+            "time_s": time_values,
             "x_m": pd.to_numeric(estimates[x_column], errors="coerce"),
             "y_m": pd.to_numeric(estimates[y_column], errors="coerce"),
             "z_m": pd.to_numeric(estimates[z_column], errors="coerce"),
@@ -353,13 +923,11 @@ def estimates_to_submission_frame(
     if work.empty:
         return pd.DataFrame(columns=SUBMISSION_COLUMNS)
 
-    track_values = pd.Series(str(track_id), index=work.index)
-    if use_estimate_track_ids and "output_track_id" in estimates.columns:
-        track_values = (
-            work["output_track_id"]
-            .where(work["output_track_id"].notna(), str(track_id))
-            .astype(str)
-        )
+    track_values = _estimate_track_id_values(
+        work,
+        track_id=track_id,
+        use_estimate_track_ids=use_estimate_track_ids,
+    )
     rows = pd.DataFrame(
         {
             "sequence_id": _estimate_sequence_values(work),

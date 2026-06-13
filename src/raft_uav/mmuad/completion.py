@@ -40,11 +40,7 @@ def complete_results_to_truth_timestamps(
 
     if extrapolation not in {"hold", "nan"}:
         raise ValueError("extrapolation must be 'hold' or 'nan'")
-    result_rows = (
-        results.rows
-        if isinstance(results, ResultsFrame)
-        else validate_mmaud_results_frame(results)
-    )
+    result_rows = _completion_result_rows(results)
     if isinstance(truth_or_template, TruthFrame):
         template = truth_or_template.rows.copy()
     else:
@@ -129,6 +125,20 @@ def complete_results_to_truth_timestamps(
     if not completed_rows.empty:
         completed_rows = validate_mmaud_results_frame(completed_rows)
     return CompletionResult(rows=completed_rows, diagnostics=diagnostics)
+
+
+def _completion_result_rows(results: ResultsFrame | pd.DataFrame) -> pd.DataFrame:
+    """Return validated result rows while preserving the no-prediction case."""
+
+    raw_rows = results.rows if isinstance(results, ResultsFrame) else results
+    if raw_rows.empty:
+        return pd.DataFrame(columns=UG2_RESULT_COLUMNS)
+    try:
+        return validate_mmaud_results_frame(raw_rows)
+    except ValueError as exc:
+        if "contains no finite trajectory rows" not in str(exc):
+            raise
+    return pd.DataFrame(columns=UG2_RESULT_COLUMNS)
 
 
 def completion_summary(

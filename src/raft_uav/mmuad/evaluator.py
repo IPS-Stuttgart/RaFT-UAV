@@ -1,13 +1,14 @@
 """Local evaluator helpers for UG2+/MMUAD-style trajectory exports.
 
-This module intentionally implements a transparent local metric, not the
-closed Codabench evaluator.  It validates ``mmaud_results.csv``-style files and
-compares them to normalized truth with nearest-time association so that tracker
-outputs can be sanity-checked before official submission packaging.
+This module intentionally implements transparent local metrics, not the closed
+Codabench runtime.  It validates ``mmaud_results.csv``-style files and can
+evaluate either a nearest-time development diagnostic or the public Track 5
+timestamp-aligned MSE/classification quantities.
 """
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -24,7 +25,11 @@ from raft_uav.mmuad.schema import (
     normalize_time_column_aliases,
     normalize_truth_columns,
 )
-from raft_uav.mmuad.submission import UG2_RESULT_COLUMNS, load_sequence_class_map
+from raft_uav.mmuad.submission import (
+    OFFICIAL_UG2_RESULT_COLUMNS,
+    UG2_RESULT_COLUMNS,
+    load_sequence_class_map,
+)
 
 
 @dataclass(frozen=True)
@@ -70,6 +75,9 @@ def load_mmaud_results_zip(
 def validate_mmaud_results_frame(frame: pd.DataFrame) -> pd.DataFrame:
     """Return a normalized result frame or raise with actionable errors."""
 
+    if _has_official_track5_columns(frame):
+        frame = _official_track5_results_to_local_frame(frame)
+
     rename = {
         "time_s": "timestamp",
         "t": "timestamp",
@@ -103,26 +111,127 @@ def validate_mmaud_results_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return rows.sort_values(["sequence_id", "timestamp"]).reset_index(drop=True)
 
 
+def _has_official_track5_columns(frame: pd.DataFrame) -> bool:
+    lower = {str(column).lower() for column in frame.columns}
+    return {column.lower() for column in OFFICIAL_UG2_RESULT_COLUMNS}.issubset(lower)
+
+
+def _official_track5_results_to_local_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    lower_to_original = {str(column).lower(): column for column in frame.columns}
+    sequence_col = lower_to_original["sequence"]
+    timestamp_col = lower_to_original["timestamp"]
+    position_col = lower_to_original["position"]
+    classification_col = lower_to_original["classification"]
+    positions = [_parse_position_cell(value) for value in frame[position_col]]
+    xyz = pd.DataFrame(positions, columns=["x", "y", "z"], index=frame.index)
+    return pd.DataFrame(
+        {
+            "sequence_id": frame[sequence_col],
+            "timestamp": frame[timestamp_col],
+            "x": xyz["x"],
+            "y": xyz["y"],
+            "z": xyz["z"],
+            "uav_type": frame[classification_col].astype(str),
+            "score": 1.0,
+        }
+    )
+
+
+def _parse_position_cell(value: Any) -> tuple[float, float, float]:
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            parsed = ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            parsed = [
+                part
+                for part in text.strip("[]()").replace(";", ",").split(",")
+                if part.strip()
+            ]
+    else:
+        parsed = value
+    if isinstance(parsed, np.ndarray):
+        values = parsed.reshape(-1).tolist()
+    elif isinstance(parsed, list | tuple):
+        values = list(parsed)
+    else:
+        raise ValueError(f"invalid Track 5 Position value: {value!r}")
+    if len(values) != 3:
+        raise ValueError(f"Track 5 Position must contain exactly 3 values: {value!r}")
+    return (float(values[0]), float(values[1]), float(values[2]))
+
+
 def evaluate_mmaud_results(
     results: ResultsFrame | pd.DataFrame,
     truth: TruthFrame | pd.DataFrame,
     *,
     max_time_delta_s: float = 0.5,
+    metric_protocol: str = "nearest-time",
+    timestamp_tolerance_s: float = 1.0e-6,
     class_map_csv: Path | None = None,
     class_map_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Evaluate result rows against normalized truth by nearest timestamp.
+    """Evaluate result rows against normalized truth.
 
-    The returned values are ADE/FDE-style diagnostics for local development.
-    They are not a claim of official UG2+ evaluator equivalence.
+    ``nearest-time`` is an ADE/FDE-style development diagnostic.  ``public-track5``
+    aligns predictions to the truth/template timestamps required by the public
+    UG2+ Track 5 submission instructions and reports the public MSE and
+    classification-accuracy quantities.  Neither mode claims closed Codabench
+    runtime equivalence.
     """
 
-    result_rows = results.rows if isinstance(results, ResultsFrame) else validate_mmaud_results_frame(results)
+    result_rows = (
+        results.rows if isinstance(results, ResultsFrame) else validate_mmaud_results_frame(results)
+    )
     truth_rows = truth.rows if isinstance(truth, TruthFrame) else normalize_truth_columns(truth)
     class_map_file = class_map_path if class_map_path is not None else class_map_csv
     class_map = load_sequence_class_map(class_map_file) if class_map_file is not None else {}
+    protocol = _normalize_metric_protocol(metric_protocol)
+    if protocol == "public_track5_timestamp_aligned":
+        return _evaluate_public_track5_timestamp_aligned(
+            result_rows,
+            truth_rows,
+            class_map=class_map,
+            timestamp_tolerance_s=timestamp_tolerance_s,
+        )
+    return _evaluate_nearest_time_results(
+        result_rows,
+        truth_rows,
+        class_map=class_map,
+        max_time_delta_s=max_time_delta_s,
+    )
+
+
+def _normalize_metric_protocol(value: str) -> str:
+    text = str(value).strip().lower().replace("_", "-")
+    if text in {"nearest-time", "nearest", "nearest-truth"}:
+        return "nearest_truth_with_time_gate"
+    if text in {
+        "public-track5",
+        "track5-public",
+        "official-track5",
+        "public-track5-timestamp-aligned",
+    }:
+        return "public_track5_timestamp_aligned"
+    raise ValueError(
+        "metric_protocol must be 'nearest-time' or 'public-track5'; "
+        f"got {value!r}"
+    )
+
+
+def _evaluate_nearest_time_results(
+    result_rows: pd.DataFrame,
+    truth_rows: pd.DataFrame,
+    *,
+    class_map: dict[str, str],
+    max_time_delta_s: float,
+) -> dict[str, Any]:
     if truth_rows.empty:
-        return _empty_truth_evaluation(result_rows, max_time_delta_s=max_time_delta_s)
+        return _empty_truth_evaluation(
+            result_rows,
+            metric_protocol="nearest_truth_with_time_gate",
+            max_time_delta_s=max_time_delta_s,
+        )
     truth_rows = truth_rows.copy()
     truth_rows["sequence_id"] = truth_rows["sequence_id"].astype(str)
     error_records: list[dict[str, Any]] = []
@@ -182,6 +291,115 @@ def evaluate_mmaud_results(
     return {"summary": summary, "rows": errors}
 
 
+def _evaluate_public_track5_timestamp_aligned(
+    result_rows: pd.DataFrame,
+    truth_rows: pd.DataFrame,
+    *,
+    class_map: dict[str, str],
+    timestamp_tolerance_s: float,
+) -> dict[str, Any]:
+    if timestamp_tolerance_s < 0.0:
+        raise ValueError("timestamp_tolerance_s must be non-negative")
+    if truth_rows.empty:
+        return _empty_truth_evaluation(
+            result_rows,
+            metric_protocol="public_track5_timestamp_aligned",
+            timestamp_tolerance_s=timestamp_tolerance_s,
+        )
+
+    result_rows = result_rows.copy()
+    truth_rows = truth_rows.copy()
+    result_rows["sequence_id"] = result_rows["sequence_id"].astype(str)
+    truth_rows["sequence_id"] = truth_rows["sequence_id"].astype(str)
+    used_result_indices: set[int] = set()
+    error_records: list[dict[str, Any]] = []
+
+    for sequence_id, seq_truth in truth_rows.groupby("sequence_id", sort=True):
+        seq_truth = seq_truth.sort_values("time_s")
+        seq_results = result_rows.loc[
+            result_rows["sequence_id"] == str(sequence_id)
+        ].sort_values("timestamp")
+        result_times = seq_results["timestamp"].to_numpy(float)
+        for _, truth_row in seq_truth.iterrows():
+            truth_time = float(truth_row["time_s"])
+            if seq_results.empty:
+                error_records.append(_missing_track5_prediction_row(truth_row))
+                continue
+            candidates = np.flatnonzero(np.abs(result_times - truth_time) <= timestamp_tolerance_s)
+            if len(candidates) == 0:
+                error_records.append(_missing_track5_prediction_row(truth_row))
+                continue
+            nearest_pos = int(candidates[np.argmin(np.abs(result_times[candidates] - truth_time))])
+            pred_index = int(seq_results.index[nearest_pos])
+            used_result_indices.add(pred_index)
+            pred_row = seq_results.loc[pred_index]
+            error_records.append(
+                _matched_track5_row(
+                    pred_row,
+                    truth_row,
+                    class_map=class_map,
+                )
+            )
+
+    error_records.extend(
+        _unused_track5_prediction_rows(
+            result_rows,
+            truth_rows,
+            used_result_indices=used_result_indices,
+            timestamp_tolerance_s=timestamp_tolerance_s,
+        )
+    )
+    errors = pd.DataFrame.from_records(error_records)
+    matched = errors.loc[errors["matched"]].copy() if not errors.empty else pd.DataFrame()
+    truth_count = int(len(truth_rows))
+    prediction_count = int(len(result_rows))
+    missing_count = _reason_count(errors, "missing_prediction")
+    extra_count = _reason_count(errors, "extra_prediction")
+    duplicate_count = _reason_count(errors, "duplicate_prediction")
+    summary = {
+        "metric_protocol": "public_track5_timestamp_aligned",
+        "public_track5_metric": True,
+        "closed_codabench_evaluator": False,
+        "timestamp_tolerance_s": float(timestamp_tolerance_s),
+        "count": int(len(errors)),
+        "truth_count": truth_count,
+        "prediction_count": prediction_count,
+        "matched_count": int(len(matched)),
+        "missing_prediction_count": missing_count,
+        "extra_prediction_count": extra_count,
+        "duplicate_prediction_count": duplicate_count,
+        "unmatched_count": int(len(errors) - len(matched)),
+        "truth_coverage_fraction": float(len(matched) / truth_count) if truth_count else 0.0,
+        "all_truth_timestamps_matched": int(len(matched)) == truth_count,
+        "pooled": _error_summary(matched),
+        "sequences": {},
+    }
+    for sequence_id, seq_truth in truth_rows.groupby("sequence_id", sort=True):
+        group = errors.loc[errors["sequence_id"].astype(str) == str(sequence_id)]
+        seq_matched = group.loc[group["matched"]].copy() if not group.empty else pd.DataFrame()
+        seq_truth_count = int(len(seq_truth))
+        seq_prediction_count = int(
+            (result_rows["sequence_id"].astype(str) == str(sequence_id)).sum()
+        )
+        seq_summary = _error_summary(seq_matched)
+        seq_summary.update(
+            {
+                "truth_count": seq_truth_count,
+                "prediction_count": seq_prediction_count,
+                "matched_count": int(len(seq_matched)),
+                "missing_prediction_count": _reason_count(group, "missing_prediction"),
+                "extra_prediction_count": _reason_count(group, "extra_prediction"),
+                "duplicate_prediction_count": _reason_count(group, "duplicate_prediction"),
+                "truth_coverage_fraction": (
+                    float(len(seq_matched) / seq_truth_count) if seq_truth_count else 0.0
+                ),
+                "all_truth_timestamps_matched": int(len(seq_matched)) == seq_truth_count,
+            }
+        )
+        summary["sequences"][str(sequence_id)] = seq_summary
+    return {"summary": summary, "rows": errors}
+
+
 def write_evaluation_artifacts(
     result: dict[str, Any],
     *,
@@ -205,10 +423,138 @@ def write_evaluation_artifacts(
     return paths
 
 
+def _matched_track5_row(
+    pred_row: pd.Series,
+    truth_row: pd.Series,
+    *,
+    class_map: dict[str, str],
+) -> dict[str, Any]:
+    pred = pred_row[["x", "y", "z"]].to_numpy(float)
+    truth_xyz = truth_row[["x_m", "y_m", "z_m"]].to_numpy(float)
+    err = pred - truth_xyz
+    sequence_id = str(truth_row["sequence_id"])
+    predicted_type = str(pred_row.get("uav_type", ""))
+    truth_type = _truth_type_for_row(truth_row, sequence_id, class_map)
+    type_correct = (predicted_type == truth_type) if truth_type is not None else None
+    return {
+        "sequence_id": sequence_id,
+        "timestamp": float(pred_row["timestamp"]),
+        "truth_timestamp": float(truth_row["time_s"]),
+        "matched": True,
+        "unmatched_reason": "",
+        "time_delta_s": float(pred_row["timestamp"] - truth_row["time_s"]),
+        "error_2d_m": float(np.linalg.norm(err[:2])),
+        "error_3d_m": float(np.linalg.norm(err)),
+        "squared_error_3d_m2": float(np.dot(err, err)),
+        "x": float(pred_row["x"]),
+        "y": float(pred_row["y"]),
+        "z": float(pred_row["z"]),
+        "truth_x_m": float(truth_xyz[0]),
+        "truth_y_m": float(truth_xyz[1]),
+        "truth_z_m": float(truth_xyz[2]),
+        "predicted_uav_type": predicted_type,
+        "truth_uav_type": truth_type,
+        "uav_type_correct": type_correct,
+    }
+
+
+def _missing_track5_prediction_row(truth_row: pd.Series) -> dict[str, Any]:
+    return {
+        "sequence_id": str(truth_row.get("sequence_id", "")),
+        "timestamp": np.nan,
+        "truth_timestamp": float(truth_row.get("time_s", np.nan)),
+        "matched": False,
+        "unmatched_reason": "missing_prediction",
+        "time_delta_s": np.nan,
+        "error_2d_m": np.nan,
+        "error_3d_m": np.nan,
+        "squared_error_3d_m2": np.nan,
+        "x": np.nan,
+        "y": np.nan,
+        "z": np.nan,
+        "truth_x_m": float(truth_row.get("x_m", np.nan)),
+        "truth_y_m": float(truth_row.get("y_m", np.nan)),
+        "truth_z_m": float(truth_row.get("z_m", np.nan)),
+        "predicted_uav_type": "",
+        "truth_uav_type": None,
+        "uav_type_correct": None,
+    }
+
+
+def _unused_track5_prediction_rows(
+    result_rows: pd.DataFrame,
+    truth_rows: pd.DataFrame,
+    *,
+    used_result_indices: set[int],
+    timestamp_tolerance_s: float,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    truth_by_sequence = {
+        str(sequence_id): group["time_s"].to_numpy(float)
+        for sequence_id, group in truth_rows.groupby("sequence_id", sort=True)
+    }
+    for index, pred_row in result_rows.iterrows():
+        if int(index) in used_result_indices:
+            continue
+        sequence_id = str(pred_row.get("sequence_id", ""))
+        truth_times = truth_by_sequence.get(sequence_id, np.asarray([], dtype=float))
+        if truth_times.size:
+            nearest_delta = float(
+                np.min(np.abs(truth_times - float(pred_row["timestamp"])))
+            )
+            reason = (
+                "duplicate_prediction"
+                if nearest_delta <= float(timestamp_tolerance_s)
+                else "extra_prediction"
+            )
+            truth_timestamp = float(
+                truth_times[int(np.argmin(np.abs(truth_times - float(pred_row["timestamp"]))))]
+            )
+        else:
+            nearest_delta = np.nan
+            reason = "extra_prediction"
+            truth_timestamp = np.nan
+        rows.append(
+            {
+                "sequence_id": sequence_id,
+                "timestamp": float(pred_row.get("timestamp", np.nan)),
+                "truth_timestamp": truth_timestamp,
+                "matched": False,
+                "unmatched_reason": reason,
+                "time_delta_s": (
+                    float(pred_row["timestamp"] - truth_timestamp)
+                    if np.isfinite(truth_timestamp)
+                    else nearest_delta
+                ),
+                "error_2d_m": np.nan,
+                "error_3d_m": np.nan,
+                "squared_error_3d_m2": np.nan,
+                "x": float(pred_row.get("x", np.nan)),
+                "y": float(pred_row.get("y", np.nan)),
+                "z": float(pred_row.get("z", np.nan)),
+                "truth_x_m": np.nan,
+                "truth_y_m": np.nan,
+                "truth_z_m": np.nan,
+                "predicted_uav_type": str(pred_row.get("uav_type", "")),
+                "truth_uav_type": None,
+                "uav_type_correct": None,
+            }
+        )
+    return rows
+
+
+def _reason_count(frame: pd.DataFrame, reason: str) -> int:
+    if frame.empty or "unmatched_reason" not in frame.columns:
+        return 0
+    return int((frame["unmatched_reason"].astype(str) == reason).sum())
+
+
 def _empty_truth_evaluation(
     result_rows: pd.DataFrame,
     *,
-    max_time_delta_s: float,
+    metric_protocol: str,
+    max_time_delta_s: float | None = None,
+    timestamp_tolerance_s: float | None = None,
 ) -> dict[str, Any]:
     """Return the standard evaluator payload when no truth rows are available."""
 
@@ -219,14 +565,19 @@ def _empty_truth_evaluation(
         ]
     )
     summary = {
-        "metric_protocol": "nearest_truth_with_time_gate",
-        "max_time_delta_s": float(max_time_delta_s),
+        "metric_protocol": metric_protocol,
         "count": int(len(errors)),
+        "truth_count": 0,
+        "prediction_count": int(len(result_rows)),
         "matched_count": 0,
         "unmatched_count": int(len(errors)),
         "pooled": _error_summary(pd.DataFrame()),
         "sequences": {},
     }
+    if max_time_delta_s is not None:
+        summary["max_time_delta_s"] = float(max_time_delta_s)
+    if timestamp_tolerance_s is not None:
+        summary["timestamp_tolerance_s"] = float(timestamp_tolerance_s)
     return {"summary": summary, "rows": errors}
 
 
@@ -259,6 +610,7 @@ def _error_summary(frame: pd.DataFrame) -> dict[str, Any]:
         "mean_3d_m": float(np.nanmean(err3)),
         "rmse_3d_m": float(np.sqrt(np.nanmean(err3**2))),
         "pose_mse_loss_m2": float(np.nanmean(err3**2)),
+        "mean_square_loss_m2": float(np.nanmean(err3**2)),
         "p50_3d_m": float(np.nanpercentile(err3, 50.0)),
         "p95_3d_m": float(np.nanpercentile(err3, 95.0)),
         "max_3d_m": float(np.nanmax(err3)),
@@ -273,6 +625,7 @@ def _error_summary(frame: pd.DataFrame) -> dict[str, Any]:
             correct = typed["uav_type_correct"].astype(bool).to_numpy()
             out["uav_type_count"] = int(len(correct))
             out["uav_type_accuracy"] = float(np.mean(correct))
+            out["classification_accuracy"] = float(np.mean(correct))
     return out
 
 

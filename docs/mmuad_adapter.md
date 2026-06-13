@@ -1,8 +1,9 @@
 # Experimental MMUAD / CVPR UG2+ adapter
 
 This is a first RaFT-UAV++ portability scaffold for the CVPR UG2+ / MMUAD UAV
-tracking and pose-estimation setting.  It is not an official challenge
-submission implementation.
+tracking and pose-estimation setting.  It supports the public Track 5 folder
+layout and upload CSV/ZIP shape, but it is not a direct authenticated
+Codabench uploader or a clone of the closed challenge evaluator.
 
 The adapter consumes normalized candidate detections:
 
@@ -84,10 +85,10 @@ Implemented in this first patch:
 
 Still outside this experimental adapter's supported scope:
 
-- official MMUAD raw archive parsing;
 - image detector, point-cloud detector, or UAV classifier training;
-- official challenge metric reproduction;
-- leaderboard upload tooling.
+- closed-server evaluator equivalence beyond the public Track 5 MSE and
+  classification-accuracy metrics;
+- direct authenticated leaderboard upload tooling.
 
 ## Incremental features after the first scaffold
 
@@ -234,18 +235,18 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --submission-json outputs/mmuad_sequences/submission.json
 ```
 
-This is **not** claimed to be the official CVPR UG2+ upload schema.  It is a
-stable intermediate format for conversion once the official evaluator/submission
-format is available.
+This is **not** the official CVPR UG2+ upload schema.  It remains a stable
+intermediate interchange format; use `--ug2-official-results-csv` and
+`--ug2-official-codabench-zip` for the public Track 5 upload columns.
 
 Still not implemented:
 
-- official raw MMUAD archive parser;
 - native camera/radar/Livox packet readers;
 - image detector, point-cloud detector, or UAV classifier training;
-- official challenge metric/submission reproduction;
+- closed-server evaluator equivalence beyond the public Track 5 MSE and
+  classification-accuracy quantities;
 - multi-object tracking or ID metrics;
-- leaderboard upload tooling.
+- direct authenticated leaderboard upload tooling.
 
 ## Third incremental patch: portability features
 
@@ -327,16 +328,16 @@ repository diagnostics, not official UG2+ challenge metrics.
 ### ZIP submission bundle
 
 The submission helper can now package the stable CSV/JSON trajectory outputs in
-one ZIP file.  The ZIP is an interchange bundle, not an official leaderboard
-upload format.
+one ZIP file.  The ZIP is an interchange bundle; use the official Track 5 flags
+described below for `mmaud_results.csv` upload packaging.
 
 Still not implemented:
 
-- official raw MMUAD archive parser;
 - native camera/radar/Livox packet readers;
-- official UG2+ evaluator/submission reproduction;
+- closed-server evaluator equivalence beyond the public Track 5 MSE and
+  classification-accuracy quantities;
 - detector or classifier training;
-- official leaderboard upload tooling.
+- direct authenticated leaderboard upload tooling.
 
 ## Fourth incremental patch: inspection and evaluation bridge
 
@@ -424,7 +425,7 @@ truth exports such as `truth.npy`, `truth.npz`, or delimited text files.
 
 The evaluation reports mean/RMSE/p95/max 3D error, 2D error, ADE/FDE-style
 metrics, matched predictions, unmatched predictions, and truth coverage.  It is
-not the official UG2+ evaluator.
+a local evaluator, not a copy of Codabench's closed execution environment.
 
 ## Codabench-style packaging and native layout inventory
 
@@ -461,11 +462,77 @@ the actual sequence IDs. Exported topic maps indicate sequence-root inputs,
 while native-only topic maps are kept for explicit ROS extraction with
 `--rosbag-path --topic-map-file` (`--topic-map-json` remains accepted).
 
-The public UG2+ Codabench instructions require a ZIP containing a single file
-named `mmaud_results.csv`. The exact evaluator schema is not bundled here, so
-the helper writes a compact trajectory table with columns
-`sequence_id,timestamp,x,y,z,uav_type,score` and packages it using the required
-filename:
+The public UG2+ Track 5 README requires a ZIP containing only
+`mmaud_results.csv`. The official public CSV columns are
+`Sequence,Timestamp,Position,Classification`, where `Position` is written as a
+compact `(x,y,z)` tuple string and `Classification` must be an integer UAV type
+id. Use `--ug2-official-results-csv` and `--ug2-official-codabench-zip` for
+this upload shape:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --sequence-root data/mmuad_export \
+  --output-dir outputs/mmuad_val \
+  --ug2-class-map-file data/mmuad_export/sequence_class_ids.csv \
+  --ug2-official-results-csv outputs/mmuad_val/mmaud_results.csv \
+  --ug2-official-codabench-zip outputs/mmuad_val/ug2_codabench_submission.zip
+```
+
+The class-map file used for official output should map each sequence to the
+integer challenge class id, for example `sequence_id,uav_type` with values such
+as `seq1,0`. If no per-sequence numeric class map is provided, the CLI uses
+`--ug2-official-classification` as the default id.
+
+For leaderboard-style packaging, the public README asks for positions at the
+given sequence timestamps. With `--sequence-root`, the CLI can resample the
+official output to timestamps discovered from Track 5 sequence folders before
+writing the official CSV/ZIP:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --sequence-root data/mmuad_export \
+  --split-name val \
+  --output-dir outputs/mmuad_val \
+  --ug2-official-complete-to-sequence-timestamps \
+  --ug2-official-timestamp-source ground-truth-or-all \
+  --completion-max-interpolation-gap-s 1.0 \
+  --ug2-class-map-file data/mmuad_export/sequence_class_ids.csv \
+  --ug2-official-results-csv outputs/mmuad_val/mmaud_results.csv \
+  --ug2-official-codabench-zip outputs/mmuad_val/ug2_codabench_submission.zip
+```
+
+`ground-truth-or-all` uses `ground_truth/<timestamp>.npy` when labels are
+present and falls back to the union of public sensor-frame timestamps otherwise.
+Use `image`, `lidar-360`, `livox-avia`, `radar-enhance-pcl`, or
+`all-modalities` when a specific timestamp source is required. The CLI writes
+`mmuad_official_timestamp_completion_rows.csv` and
+`mmuad_official_timestamp_completion_summary.json` so interpolation and
+nearest-hold choices remain auditable.
+
+Before manual upload, validate the official ZIP structure and timestamp
+coverage:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --validate-ug2-official-codabench-zip outputs/mmuad_val/ug2_codabench_submission.zip \
+  --sequence-root data/mmuad_export \
+  --split-name val \
+  --ug2-official-timestamp-source ground-truth-or-all \
+  --official-validation-json outputs/mmuad_val/official_submission_validation.json \
+  --official-validation-rows-csv outputs/mmuad_val/official_submission_validation_rows.csv \
+  --output-dir outputs/mmuad_val
+```
+
+This preflight check enforces a ZIP containing only `mmaud_results.csv`, exact
+`Sequence,Timestamp,Position,Classification` columns, finite `(x,y,z)` position
+tuples, integer class IDs, duplicate prediction detection, and optional
+timestamp coverage against a truth/template file or Track 5 sequence-root
+folders. It exits nonzero when the package is invalid, which makes it suitable
+for local CI before a manual Codabench upload.
+
+The older local diagnostic result table with
+`sequence_id,timestamp,x,y,z,uav_type,score` remains available for repository
+evaluation and completion tools:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
@@ -476,10 +543,9 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --ug2-codabench-zip outputs/mmuad_val/ug2_codabench_submission.zip
 ```
 
-This is closer to challenge packaging than the generic `submission.zip`, but it
-is still not a guarantee of official evaluator compatibility. Once the official
-README/evaluator is available, adapt `estimates_to_mmaud_results_frame` to the
-exact column names and class labels expected by the server.
+The local evaluator accepts either shape, but it is still a transparent local
+implementation of the public MSE/classification-accuracy quantities rather than
+a copy of Codabench's closed evaluator environment.
 
 ## ROS Bag Bridge And Local Evaluation
 
@@ -552,7 +618,8 @@ normalized table or compact trajectory exports until the exact local MMUAD raw
 layout and topic message types are known.
 
 A local evaluator is available for sanity checking `mmaud_results.csv` against
-normalized truth. It is not the official Codabench evaluator:
+normalized truth. By default it uses a nearest-time development diagnostic; it
+is not the official Codabench runtime:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
@@ -576,12 +643,15 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 
 ## Leaderboard-Style Local Metrics And Completion
 
-The adapter can compute a closer UG2-style local sanity metric. It still is
-**not** the official Codabench evaluator, but it reports the two public
-leaderboard quantities that matter most for Track 5 style checks:
+The adapter can compute a closer UG2-style local sanity metric with
+`--evaluation-protocol public-track5`. It still is **not** the closed
+Codabench evaluator runtime, but it follows the public Track 5 rule shape:
+predictions are aligned to the truth/template timestamps, missing/extra/duplicate
+predictions are reported, and the matched rows expose the two public leaderboard
+quantities:
 
-- `pose_mse_loss_m2`: mean squared 3D position error.
-- `uav_type_accuracy`: sequence/type accuracy when truth rows or a class-map
+- `mean_square_loss_m2` / `pose_mse_loss_m2`: mean squared 3D position error.
+- `classification_accuracy` / `uav_type_accuracy`: sequence/type accuracy when truth rows or a class-map
   file provide UAV type labels.
 
 Evaluate an exported `mmaud_results.csv` with optional class labels:
@@ -590,6 +660,8 @@ Evaluate an exported `mmaud_results.csv` with optional class labels:
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --evaluate-results-csv outputs/mmuad_val/mmaud_results.csv \
   --evaluate-truth-csv data/mmuad_export/val_truth.csv \
+  --evaluation-protocol public-track5 \
+  --evaluation-timestamp-tolerance-s 1e-6 \
   --evaluation-class-map-file data/mmuad_export/sequence_classes.yaml \
   --evaluation-json outputs/mmuad_val/local_eval.json \
   --evaluation-rows-csv outputs/mmuad_val/local_eval_rows.csv \
@@ -597,7 +669,11 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ```
 
 Use `--evaluate-results-zip` instead when the result is still packaged as a
-Codabench-style archive.
+Codabench-style archive. The summary includes `truth_count`, `prediction_count`,
+`missing_prediction_count`, `extra_prediction_count`,
+`duplicate_prediction_count`, `truth_coverage_fraction`, and
+`all_truth_timestamps_matched` so a leaderboard-style package can be checked for
+timestamp coverage before upload.
 
 The submission writer also accepts a sequence-to-class map so different
 sequences can use different UAV type labels:
@@ -808,6 +884,6 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_native_ros_seq001/tracking
 ```
 
-This is still not a complete official raw MMUAD parser. It is a first native
-message bridge for common ROS message types. Custom radar messages, camera
-image detectors, and the official evaluator still need dataset-specific work.
+This is still not a complete native ROS parser for every possible MMUAD bag. It
+is a first native message bridge for common ROS message types. Custom radar
+messages and camera image detectors still need dataset-specific work.

@@ -57,7 +57,11 @@ from raft_uav.mmuad.rosbag_bridge import (
     write_topic_map_template,
 )
 from raft_uav.mmuad.schema import CandidateFrame, TruthFrame
-from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_export
+from raft_uav.mmuad.sequence import (
+    discover_sequence_paths,
+    load_sequence_export,
+    official_track5_timestamp_template,
+)
 from raft_uav.mmuad.splits import filter_sequences_by_split, load_split_manifest
 from raft_uav.mmuad.submission import (
     compute_trajectory_metrics,
@@ -2645,6 +2649,69 @@ def test_cli_writes_ug2_results_with_class_map_file_alias(tmp_path: Path) -> Non
     assert rows["uav_type"].tolist() == ["Mavic3", "Mavic3"]
 
 
+def test_cli_writes_official_track5_results_and_zip(tmp_path: Path) -> None:
+    candidates = tmp_path / "candidates.csv"
+    truth = tmp_path / "truth.csv"
+    class_map = tmp_path / "classes.yaml"
+    output = tmp_path / "out"
+    results = output / "official_mmaud_results.csv"
+    zip_path = output / "official_submission.zip"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "time_s": [0.0, 1.0],
+            "source": ["radar", "radar"],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+        }
+    ).to_csv(candidates, index=False)
+    pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+        }
+    ).to_csv(truth, index=False)
+    class_map.write_text(
+        "\n".join(["class_map:", "  seqA:", "    uav_type: 2"]),
+        encoding="utf-8",
+    )
+
+    status = mmuad_cli_main(
+        [
+            "--candidate-csv",
+            str(candidates),
+            "--truth-csv",
+            str(truth),
+            "--ug2-class-map-file",
+            str(class_map),
+            "--ug2-official-results-csv",
+            str(results),
+            "--ug2-official-codabench-zip",
+            str(zip_path),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    rows = pd.read_csv(results)
+    assert rows.columns.tolist() == [
+        "Sequence",
+        "Timestamp",
+        "Position",
+        "Classification",
+    ]
+    assert rows["Classification"].tolist() == [2, 2]
+    with ZipFile(zip_path) as archive:
+        assert archive.namelist() == ["mmaud_results.csv"]
+    loaded = load_mmaud_results_file(zip_path)
+    assert loaded.rows["uav_type"].tolist() == ["2", "2"]
+
+
 def test_results_completion_resamples_to_truth_timestamps(tmp_path: Path) -> None:
     results = validate_mmaud_results_frame(
         pd.DataFrame(
@@ -3050,6 +3117,212 @@ def test_sequence_root_loads_mmuad_modality_folder_layout(tmp_path: Path) -> Non
     assert output.estimates["class_name"].tolist() == ["2"]
     results = estimates_to_mmaud_results_frame(output.estimates, class_name="unknown")
     assert results["uav_type"].tolist() == ["2"]
+
+
+def test_sequence_root_loads_official_track5_point_cloud_folders(tmp_path: Path) -> None:
+    seq = tmp_path / "train" / "seq1"
+    timestamp = "1706255054.386069"
+    for folder, offset in (
+        ("lidar_360", 0.0),
+        ("livox_avia", 10.0),
+        ("radar_enhance_pcl", 20.0),
+    ):
+        directory = seq / folder
+        directory.mkdir(parents=True, exist_ok=True)
+        np.save(
+            directory / f"{timestamp}.npy",
+            np.array(
+                [
+                    [1.0 + offset, 2.0, 3.0, 0.1],
+                    [1.1 + offset, 2.0, 3.0, 0.2],
+                    [1.0 + offset, 2.1, 3.0, 0.3],
+                ]
+            ),
+        )
+    truth_dir = seq / "ground_truth"
+    truth_dir.mkdir()
+    np.save(truth_dir / f"{timestamp}.npy", np.array([1.0, 2.0, 3.0]))
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(
+        discovered[0],
+        voxel_size_m=0.5,
+        min_cluster_points=3,
+    )
+
+    assert [sequence.sequence_id for sequence in discovered] == ["seq1"]
+    assert {
+        path.relative_to(seq).as_posix()
+        for path in discovered[0].point_cloud_files
+    } == {
+        f"lidar_360/{timestamp}.npy",
+        f"livox_avia/{timestamp}.npy",
+        f"radar_enhance_pcl/{timestamp}.npy",
+    }
+    assert candidates.rows["source"].tolist() == [
+        "lidar_360",
+        "livox_avia",
+        "radar_enhance_pcl",
+    ]
+    assert candidates.rows["time_s"].tolist() == [float(timestamp)] * 3
+    assert truth is not None
+    assert truth.rows["time_s"].tolist() == [float(timestamp)]
+
+
+def test_official_track5_timestamp_template_prefers_truth_then_sensor_frames(
+    tmp_path: Path,
+) -> None:
+    train_seq = tmp_path / "train" / "seq1"
+    (train_seq / "ground_truth").mkdir(parents=True)
+    (train_seq / "Image").mkdir()
+    (train_seq / "livox_avia").mkdir()
+    np.save(train_seq / "ground_truth" / "10.0.npy", np.array([0.0, 0.0, 0.0]))
+    (train_seq / "Image" / "11.0.png").write_bytes(b"not-a-real-image")
+    np.save(train_seq / "livox_avia" / "12.0.npy", np.zeros((3, 3)))
+
+    val_seq = tmp_path / "val" / "seq2"
+    (val_seq / "Image").mkdir(parents=True)
+    (val_seq / "livox_avia").mkdir()
+    (val_seq / "Image" / "20.0.png").write_bytes(b"not-a-real-image")
+    np.save(val_seq / "livox_avia" / "21.0.npy", np.zeros((3, 3)))
+
+    discovered = {
+        paths.sequence_id: paths for paths in discover_sequence_paths(tmp_path)
+    }
+
+    train_template = official_track5_timestamp_template(discovered["seq1"])
+    val_template = official_track5_timestamp_template(discovered["seq2"])
+    val_image_template = official_track5_timestamp_template(
+        discovered["seq2"],
+        timestamp_source="image",
+    )
+
+    assert train_template.rows["time_s"].tolist() == [10.0]
+    assert val_template.rows["time_s"].tolist() == [20.0, 21.0]
+    assert val_image_template.rows["time_s"].tolist() == [20.0]
+
+
+def test_cli_completes_official_results_to_sequence_timestamps(tmp_path: Path) -> None:
+    root = tmp_path / "data"
+    seq = root / "val" / "seq1"
+    image = seq / "Image"
+    livox = seq / "livox_avia"
+    image.mkdir(parents=True)
+    livox.mkdir()
+    for timestamp in ("0.0", "1.0"):
+        (image / f"{timestamp}.png").write_bytes(b"not-a-real-image")
+    for timestamp, x in (("0.0", 0.0), ("2.0", 2.0)):
+        np.save(
+            livox / f"{timestamp}.npy",
+            np.array(
+                [
+                    [x, 0.0, 10.0],
+                    [x + 0.1, 0.0, 10.0],
+                    [x, 0.1, 10.0],
+                ]
+            ),
+        )
+    output = tmp_path / "out"
+    results = output / "mmaud_results.csv"
+    zip_path = output / "submission.zip"
+
+    status = mmuad_cli_main(
+        [
+            "--sequence-root",
+            str(root),
+            "--split-name",
+            "val",
+            "--voxel-size-m",
+            "0.5",
+            "--min-cluster-points",
+            "3",
+            "--completion-max-interpolation-gap-s",
+            "3.0",
+            "--ug2-official-complete-to-sequence-timestamps",
+            "--ug2-official-timestamp-source",
+            "image",
+            "--ug2-official-results-csv",
+            str(results),
+            "--ug2-official-codabench-zip",
+            str(zip_path),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    rows = pd.read_csv(results)
+    assert rows.columns.tolist() == [
+        "Sequence",
+        "Timestamp",
+        "Position",
+        "Classification",
+    ]
+    assert rows["Sequence"].tolist() == ["seq1", "seq1"]
+    assert rows["Timestamp"].tolist() == [0.0, 1.0]
+    assert (output / "mmuad_official_timestamp_completion_rows.csv").exists()
+    summary = json.loads(
+        (output / "mmuad_official_timestamp_completion_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert summary["requested_count"] == 2
+    assert summary["completed_count"] == 2
+    assert summary["timestamp_source"] == "image"
+    with ZipFile(zip_path) as archive:
+        assert archive.namelist() == ["mmaud_results.csv"]
+        zipped = pd.read_csv(archive.open("mmaud_results.csv"))
+    assert zipped["Timestamp"].tolist() == [0.0, 1.0]
+
+
+def test_cli_validates_official_zip_against_sequence_timestamps(tmp_path: Path) -> None:
+    root = tmp_path / "data"
+    seq = root / "val" / "seq1"
+    image = seq / "Image"
+    image.mkdir(parents=True)
+    for timestamp in ("0.0", "1.0"):
+        (image / f"{timestamp}.png").write_bytes(b"not-a-real-image")
+    zip_path = tmp_path / "official_submission.zip"
+    official = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,10)", "(1,0,10)"],
+            "Classification": [2, 2],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", official.to_csv(index=False))
+    output = tmp_path / "out"
+
+    status = mmuad_cli_main(
+        [
+            "--validate-ug2-official-codabench-zip",
+            str(zip_path),
+            "--sequence-root",
+            str(root),
+            "--split-name",
+            "val",
+            "--ug2-official-timestamp-source",
+            "image",
+            "--official-validation-json",
+            str(output / "validation.json"),
+            "--official-validation-rows-csv",
+            str(output / "validation_rows.csv"),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    summary = json.loads((output / "validation.json").read_text(encoding="utf-8"))
+    rows = pd.read_csv(output / "validation_rows.csv")
+    assert summary["valid"] is True
+    assert summary["template_checked"] is True
+    assert summary["template_timestamp_count"] == 2
+    assert summary["missing_template_timestamp_count"] == 0
+    assert summary["extra_prediction_count"] == 0
+    assert set(rows["status"]) == {"ok", "covered_template_timestamp"}
 
 
 def test_sequence_root_loads_binary_livox_point_cloud_export(tmp_path: Path) -> None:
@@ -3968,6 +4241,61 @@ def test_cli_evaluates_ug2_codabench_zip(tmp_path: Path) -> None:
     assert metrics["matched_count"] == 2
     assert metrics["pooled"]["pose_mse_loss_m2"] == 0.0
     assert metrics["pooled"]["uav_type_accuracy"] == 1.0
+
+
+def test_cli_evaluates_official_zip_with_public_track5_protocol(tmp_path: Path) -> None:
+    zip_path = tmp_path / "official_submission.zip"
+    official = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,10)", "(2,0,10)"],
+            "Classification": [2, 2],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", official.to_csv(index=False))
+    truth = tmp_path / "truth.csv"
+    output = tmp_path / "out"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+            "uav_type": ["2", "1"],
+        }
+    ).to_csv(truth, index=False)
+
+    status = mmuad_cli_main(
+        [
+            "--evaluate-results-zip",
+            str(zip_path),
+            "--evaluate-truth-csv",
+            str(truth),
+            "--evaluation-protocol",
+            "public-track5",
+            "--evaluation-timestamp-tolerance-s",
+            "0",
+            "--evaluation-json",
+            str(output / "public_track5_eval.json"),
+            "--evaluation-rows-csv",
+            str(output / "public_track5_eval_rows.csv"),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    metrics = json.loads((output / "public_track5_eval.json").read_text(encoding="utf-8"))
+    rows = pd.read_csv(output / "public_track5_eval_rows.csv")
+    assert metrics["metric_protocol"] == "public_track5_timestamp_aligned"
+    assert metrics["truth_count"] == 2
+    assert metrics["matched_count"] == 2
+    assert metrics["pooled"]["mean_square_loss_m2"] == 0.5
+    assert metrics["pooled"]["classification_accuracy"] == 0.5
+    assert rows["matched"].tolist() == [True, True]
 
 
 def test_cli_completes_results_to_numpy_truth_template(tmp_path: Path) -> None:

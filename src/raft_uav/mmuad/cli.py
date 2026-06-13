@@ -6,6 +6,8 @@ import argparse
 import json
 from pathlib import Path
 
+import pandas as pd
+
 from raft_uav.mmuad.calibration import load_calibration_auto, transform_candidate_frame
 from raft_uav.mmuad.camera import (
     load_camera_detections_csv_as_candidates,
@@ -51,6 +53,7 @@ from raft_uav.mmuad.rosbag_bridge import (
     write_topic_map_template,
 )
 from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_export
+from raft_uav.mmuad.sequence import official_track5_timestamp_template
 from raft_uav.mmuad.splits import (
     filter_sequences_by_split,
     filter_sequences_by_split_folder,
@@ -59,7 +62,11 @@ from raft_uav.mmuad.splits import (
 )
 from raft_uav.mmuad.submission import (
     compute_trajectory_metrics,
+    estimates_to_mmaud_results_frame,
     load_sequence_class_map,
+    validate_official_track5_submission,
+    write_official_mmaud_results_csv,
+    write_official_ug2_codabench_zip,
     write_submission_csv,
     write_mmaud_results_csv,
     write_submission_json,
@@ -80,10 +87,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--layout-report-json", type=Path)
     parser.add_argument("--layout-report-csv", type=Path)
     parser.add_argument("--evaluate-submission-csv", type=Path)
+    parser.add_argument("--validate-ug2-official-codabench-zip", type=Path)
+    parser.add_argument("--official-validation-json", type=Path)
+    parser.add_argument("--official-validation-rows-csv", type=Path)
+    parser.add_argument("--official-validation-template-csv", type=Path)
+    parser.add_argument("--official-validation-template-file", type=Path)
+    parser.add_argument("--official-validation-timestamp-tolerance-s", type=float, default=1.0e-6)
     parser.add_argument("--evaluate-truth-csv", type=Path)
     parser.add_argument("--evaluate-truth-file", type=Path)
     parser.add_argument("--evaluation-json", type=Path)
     parser.add_argument("--evaluation-max-time-delta-s", type=float, default=0.5)
+    parser.add_argument(
+        "--evaluation-protocol",
+        choices=("nearest-time", "public-track5"),
+        default="nearest-time",
+        help=(
+            "local result metric protocol: nearest-time diagnostic or public "
+            "Track 5 timestamp-aligned MSE/classification metrics"
+        ),
+    )
+    parser.add_argument(
+        "--evaluation-timestamp-tolerance-s",
+        type=float,
+        default=1.0e-6,
+        help="timestamp tolerance for --evaluation-protocol public-track5",
+    )
     parser.add_argument("--point-cloud-csv", action="append", type=Path, default=[])
     parser.add_argument("--point-cloud-file", action="append", type=Path, default=[])
     parser.add_argument("--radar-polar-csv", action="append", type=Path, default=[])
@@ -151,7 +179,42 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--submission-track-id", default="raft_uav_pp")
     parser.add_argument("--ug2-results-csv", type=Path)
     parser.add_argument("--ug2-codabench-zip", type=Path)
+    parser.add_argument("--ug2-official-results-csv", type=Path)
+    parser.add_argument("--ug2-official-codabench-zip", type=Path)
     parser.add_argument("--ug2-class-name", default="unknown")
+    parser.add_argument(
+        "--ug2-official-classification",
+        default="0",
+        help=(
+            "default integer Classification id for official Track 5 result rows; "
+            "numeric --ug2-class-map-file values override this per sequence"
+        ),
+    )
+    parser.add_argument(
+        "--ug2-official-complete-to-sequence-timestamps",
+        action="store_true",
+        help=(
+            "resample official Track 5 output rows to timestamps discovered in "
+            "--sequence-root modality folders before writing official CSV/ZIP"
+        ),
+    )
+    parser.add_argument(
+        "--ug2-official-timestamp-source",
+        choices=(
+            "ground-truth-or-all",
+            "all-modalities",
+            "ground-truth",
+            "image",
+            "lidar-360",
+            "livox-avia",
+            "radar-enhance-pcl",
+        ),
+        default="ground-truth-or-all",
+        help=(
+            "which public Track 5 folder timestamps to use with "
+            "--ug2-official-complete-to-sequence-timestamps"
+        ),
+    )
     parser.add_argument(
         "--ug2-class-map-file",
         "--ug2-class-map-csv",
@@ -180,6 +243,9 @@ def main(argv: list[str] | None = None) -> int:
         help="sequence-to-UAV-type truth class map in CSV, JSON, or YAML form",
     )
     args = parser.parse_args(argv)
+
+    if args.validate_ug2_official_codabench_zip is not None:
+        return _run_official_submission_validation(args)
 
     if args.rosbag_path is not None:
         report = inspect_rosbag(args.rosbag_path)
@@ -227,6 +293,8 @@ def main(argv: list[str] | None = None) -> int:
             load_mmaud_results_file(evaluation_results),
             load_truth_file(evaluation_truth),
             max_time_delta_s=args.evaluation_max_time_delta_s,
+            metric_protocol=args.evaluation_protocol,
+            timestamp_tolerance_s=args.evaluation_timestamp_tolerance_s,
             class_map_path=args.evaluation_class_map_file,
         )
         paths = write_evaluation_artifacts(
@@ -270,6 +338,23 @@ def main(argv: list[str] | None = None) -> int:
         paths["inferred_class_map_csv"] = str(
             write_sequence_class_map(inferred_class_map, args.inferred_class_map_csv)
         )
+    official_output_estimates = output.estimates
+    if args.ug2_official_complete_to_sequence_timestamps:
+        completion, template = _complete_to_official_sequence_timestamps(
+            args,
+            output.estimates,
+            class_map=class_map,
+        )
+        official_output_estimates = completion.rows
+        diagnostics_path = args.output_dir / "mmuad_official_timestamp_completion_rows.csv"
+        diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
+        completion.diagnostics.to_csv(diagnostics_path, index=False)
+        summary = completion_summary(completion, requested_count=len(template))
+        summary["timestamp_source"] = args.ug2_official_timestamp_source
+        summary_path = args.output_dir / "mmuad_official_timestamp_completion_summary.json"
+        summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        paths["official_timestamp_completion_rows_csv"] = str(diagnostics_path)
+        paths["official_timestamp_completion_summary_json"] = str(summary_path)
     if args.submission_csv is not None:
         paths["submission_csv"] = str(
             write_submission_csv(
@@ -309,6 +394,24 @@ def main(argv: list[str] | None = None) -> int:
                 output.estimates,
                 args.ug2_codabench_zip,
                 class_name=args.ug2_class_name,
+                class_map=class_map,
+            )
+        )
+    if args.ug2_official_results_csv is not None:
+        paths["ug2_official_results_csv"] = str(
+            write_official_mmaud_results_csv(
+                official_output_estimates,
+                args.ug2_official_results_csv,
+                classification=args.ug2_official_classification,
+                class_map=class_map,
+            )
+        )
+    if args.ug2_official_codabench_zip is not None:
+        paths["ug2_official_codabench_zip"] = str(
+            write_official_ug2_codabench_zip(
+                official_output_estimates,
+                args.ug2_official_codabench_zip,
+                classification=args.ug2_official_classification,
                 class_map=class_map,
             )
         )
@@ -411,6 +514,74 @@ def _run_submission_evaluation(args: argparse.Namespace) -> int:
         print(f"pooled_p95_3d_m={pooled['p95_3d_m']}")
         print(f"pooled_max_3d_m={pooled['max_3d_m']}")
     return 0
+
+
+def _run_official_submission_validation(args: argparse.Namespace) -> int:
+    template = _official_submission_validation_template(args)
+    validation = validate_official_track5_submission(
+        args.validate_ug2_official_codabench_zip,
+        template=template,
+        timestamp_tolerance_s=args.official_validation_timestamp_tolerance_s,
+        require_zip=True,
+    )
+    json_path = args.official_validation_json or (
+        args.output_dir / "mmuad_official_submission_validation.json"
+    )
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(validation.summary, indent=2), encoding="utf-8")
+    paths = {"official_validation_json": str(json_path)}
+    if args.official_validation_rows_csv is not None:
+        args.official_validation_rows_csv.parent.mkdir(parents=True, exist_ok=True)
+        validation.rows.to_csv(args.official_validation_rows_csv, index=False)
+        paths["official_validation_rows_csv"] = str(args.official_validation_rows_csv)
+    print("mmuad_official_submission_validation=ok")
+    print(f"valid={validation.summary['valid']}")
+    for name, path in paths.items():
+        print(f"{name}={path}")
+    return 0 if validation.summary["valid"] else 1
+
+
+def _official_submission_validation_template(args: argparse.Namespace) -> pd.DataFrame | None:
+    explicit_template = _official_validation_template_path(args)
+    if explicit_template is not None:
+        return load_truth_file(explicit_template).rows
+    if args.sequence_root is None:
+        return None
+    sequences = discover_sequence_paths(args.sequence_root, sequence_glob=args.sequence_glob)
+    if args.split_file is not None:
+        if not args.split_name:
+            raise SystemExit("--split-name is required when --split-file is provided")
+        manifest = load_split_manifest(args.split_file)
+        sequences = filter_sequences_by_split(sequences, manifest, args.split_name)
+    elif args.split_name:
+        sequences = filter_sequences_by_split_folder(
+            sequences,
+            args.sequence_root,
+            args.split_name,
+        )
+    frames = [
+        official_track5_timestamp_template(
+            paths,
+            timestamp_source=args.ug2_official_timestamp_source,
+        ).rows
+        for paths in sequences
+    ]
+    rows = [frame for frame in frames if not frame.empty]
+    if not rows:
+        return None
+    return pd.concat(rows, ignore_index=True)
+
+
+def _official_validation_template_path(args: argparse.Namespace) -> Path | None:
+    if (
+        args.official_validation_template_csv is not None
+        and args.official_validation_template_file is not None
+    ):
+        raise SystemExit(
+            "provide only one of --official-validation-template-csv "
+            "or --official-validation-template-file"
+        )
+    return args.official_validation_template_file or args.official_validation_template_csv
 
 
 def _run_explicit_files(args: argparse.Namespace):
@@ -529,6 +700,54 @@ def _completion_truth_path(args: argparse.Namespace) -> Path | None:
     return args.complete_results_to_truth_file or args.complete_results_to_truth_csv
 
 
+def _complete_to_official_sequence_timestamps(
+    args: argparse.Namespace,
+    estimates,
+    *,
+    class_map: dict[str, str],
+):
+    sequences = getattr(args, "_sequence_paths", None)
+    if not sequences:
+        raise SystemExit(
+            "--ug2-official-complete-to-sequence-timestamps requires --sequence-root"
+        )
+    template_frames = [
+        official_track5_timestamp_template(
+            paths,
+            timestamp_source=args.ug2_official_timestamp_source,
+        )
+        for paths in sequences
+    ]
+    rows = [frame.rows for frame in template_frames if not frame.rows.empty]
+    if not rows:
+        raise SystemExit(
+            "no official Track 5 timestamps found in --sequence-root for "
+            f"source {args.ug2_official_timestamp_source!r}"
+        )
+    template = pd.concat(rows, ignore_index=True)
+    base_results = estimates_to_mmaud_results_frame(
+        estimates,
+        class_name=args.ug2_class_name,
+        class_map=class_map,
+    )
+    base_results["uav_type"] = [
+        class_map.get(str(sequence_id), str(args.ug2_official_classification))
+        for sequence_id in base_results["sequence_id"]
+    ]
+    completion = complete_results_to_truth_timestamps(
+        base_results,
+        template,
+        max_interpolation_gap_s=args.completion_max_interpolation_gap_s,
+        extrapolation=args.completion_extrapolation,
+    )
+    if completion.rows.empty:
+        raise SystemExit(
+            "official Track 5 timestamp completion produced no rows; "
+            "relax --completion-extrapolation or provide candidate coverage"
+        )
+    return completion, template
+
+
 def _camera_source_hint_from_path(path: Path) -> str | None:
     parent = Path(path).parent.name.replace(" ", "_").replace("-", "_")
     if _looks_like_camera_source_name(parent):
@@ -568,6 +787,7 @@ def _run_sequence_root(args: argparse.Namespace):
         print(f"split={args.split_name} sequences={len(sequences)}")
     if not sequences:
         raise SystemExit(f"no MMUAD sequence exports found under {args.sequence_root}")
+    args._sequence_paths = sequences
     candidate_frames = []
     truth_frames = []
     for paths in sequences:

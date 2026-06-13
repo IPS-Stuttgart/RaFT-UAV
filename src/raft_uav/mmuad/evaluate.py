@@ -172,33 +172,59 @@ def metrics_from_matches(
         }
     )
     by_sequence: dict[str, Any] = {}
-    if not matches.empty:
-        for sequence_id, group in matches.groupby("sequence_id", sort=True):
-            seq_truth = truth.loc[truth["sequence_id"].astype(str) == str(sequence_id)]
-            seq_pred = submission.loc[submission["sequence_id"].astype(str) == str(sequence_id)]
-            seq_matched = group.loc[group["matched"]]
-            seq_covered_truth_count = _covered_truth_count(seq_matched, seq_truth)
-            metrics = _error_metrics(seq_matched)
-            metrics.update(
-                {
-                    "truth_count": int(len(seq_truth)),
-                    "prediction_count": int(len(seq_pred)),
-                    "matched_count": int(len(seq_matched)),
-                    "covered_truth_count": seq_covered_truth_count,
-                    "truth_coverage_fraction": (
-                        float(seq_covered_truth_count / len(seq_truth))
-                        if len(seq_truth)
-                        else 0.0
-                    ),
-                }
-            )
-            by_sequence[str(sequence_id)] = metrics
+    for sequence_id in _metric_sequence_ids(matches, submission=submission, truth=truth):
+        seq_truth = _rows_for_sequence(truth, sequence_id)
+        seq_pred = _rows_for_sequence(submission, sequence_id)
+        group = _rows_for_sequence(matches, sequence_id)
+        seq_matched = (
+            group.loc[group["matched"].astype(bool)]
+            if not group.empty and "matched" in group.columns
+            else group.iloc[0:0].copy()
+        )
+        seq_covered_truth_count = _covered_truth_count(seq_matched, seq_truth)
+        metrics = _error_metrics(seq_matched)
+        metrics.update(
+            {
+                "truth_count": int(len(seq_truth)),
+                "prediction_count": int(len(seq_pred)),
+                "matched_count": int(len(seq_matched)),
+                "covered_truth_count": seq_covered_truth_count,
+                "truth_coverage_fraction": (
+                    float(seq_covered_truth_count / len(seq_truth))
+                    if len(seq_truth)
+                    else 0.0
+                ),
+            }
+        )
+        by_sequence[str(sequence_id)] = metrics
     return {
         "schema": "raft-uav-mmuad-submission-eval-v1",
         "official_ug2_metric": False,
         "pooled": pooled,
         "sequences": by_sequence,
     }
+
+
+def _metric_sequence_ids(
+    matches: pd.DataFrame,
+    *,
+    submission: pd.DataFrame,
+    truth: pd.DataFrame,
+) -> list[str]:
+    """Return all sequence ids with truth, predictions, or match diagnostics."""
+
+    sequence_ids: set[str] = set()
+    for frame in (truth, submission, matches):
+        if frame.empty or "sequence_id" not in frame.columns:
+            continue
+        sequence_ids.update(frame["sequence_id"].dropna().astype(str))
+    return sorted(sequence_ids)
+
+
+def _rows_for_sequence(frame: pd.DataFrame, sequence_id: str) -> pd.DataFrame:
+    if frame.empty or "sequence_id" not in frame.columns:
+        return frame.iloc[0:0].copy()
+    return frame.loc[frame["sequence_id"].astype(str) == str(sequence_id)].copy()
 
 
 def _covered_truth_count(matched: pd.DataFrame, truth: pd.DataFrame) -> int:
