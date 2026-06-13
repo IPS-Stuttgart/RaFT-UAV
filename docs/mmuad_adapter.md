@@ -507,8 +507,11 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --ug2-official-validate-on-write
 ```
 
-`ground-truth-or-all` uses `ground_truth/<timestamp>.npy` when labels are
+`ground-truth-or-all` uses `ground_truth/**/<timestamp>.*` when labels are
 present and falls back to the union of public sensor-frame timestamps otherwise.
+Official timestamp discovery recurses below the selected modality folders, so
+layouts such as `Image/front_camera/<timestamp>.png` or
+`livox_avia/stream0/<timestamp>.npy` are included.
 Use `image`, `lidar-360`, `livox-avia`, `radar-enhance-pcl`, or
 `all-modalities` when a specific timestamp source is required. The CLI writes
 `mmuad_official_timestamp_completion_rows.csv` and
