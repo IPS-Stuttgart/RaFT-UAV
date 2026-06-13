@@ -140,6 +140,8 @@ A normalized sequence export can be loaded from folders containing files named
 `radar_polar.tsv` or `radar_polar.json`, `camera_detections.txt`, or
 `camera_detections.json`,
 compact trajectory arrays such as `trajectory.npy` / `candidates.npz`,
+including per-frame `x,y,z` arrays saved as flat vectors or singleton-dimension
+column/row vectors,
 headerless compact text trajectory frames such as
 `ground_truth/<timestamp>.txt` or `tracking_results/<timestamp>.txt` containing
 either `x y z` or `time x y z` numeric rows,
