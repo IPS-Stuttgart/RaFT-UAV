@@ -21,11 +21,14 @@ def infer_sequence_class_map_from_candidates(
     """Infer one UAV type per sequence from weighted candidate class votes."""
 
     rows = candidates.rows.copy()
-    if rows.empty or "class_name" not in rows.columns:
+    if rows.empty or "sequence_id" not in rows.columns:
         return {}
+    sequence_ids = sorted(str(sequence_id) for sequence_id in rows["sequence_id"].dropna().unique())
+    if "class_name" not in rows.columns:
+        return {sequence_id: str(default_class) for sequence_id in sequence_ids}
     rows["confidence"] = pd.to_numeric(rows.get("confidence", 1.0), errors="coerce").fillna(1.0)
     rows = rows.loc[rows["confidence"] >= float(min_confidence)].copy()
-    result: dict[str, str] = {}
+    result: dict[str, str] = {sequence_id: str(default_class) for sequence_id in sequence_ids}
     for sequence_id, group in rows.groupby("sequence_id", sort=True):
         votes: dict[str, float] = {}
         for _, row in group.iterrows():
@@ -38,8 +41,6 @@ def infer_sequence_class_map_from_candidates(
                 votes.items(),
                 key=lambda item: (-item[1], item[0]),
             )[0][0]
-        else:
-            result[str(sequence_id)] = default_class
     return result
 
 
