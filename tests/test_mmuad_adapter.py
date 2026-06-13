@@ -5696,6 +5696,91 @@ def test_ros2_metadata_inspection_and_topic_map_template(tmp_path: Path) -> None
     assert payload["exports"][1]["source"] is None
 
 
+def test_standalone_mcap_inspection_reports_missing_native_reader(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq001.mcap"
+    mcap.write_bytes(b"not-a-real-mcap")
+    monkeypatch.setitem(sys.modules, "rosbags.highlevel", None)
+
+    report = inspect_rosbag(mcap)
+
+    assert report["kind"] == "ros2_recording_file"
+    assert report["suffix"] == ".mcap"
+    assert report["storage_identifier"] == "mcap"
+    assert report["rosbags_available"] is False
+    assert report["topics"] == []
+    assert "rosbags" in report["recommendation"]
+
+
+def test_standalone_mcap_inspection_uses_rosbags_topics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq001.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [
+                SimpleNamespace(
+                    topic="/livox/points",
+                    msgtype="sensor_msgs/msg/PointCloud2",
+                    msgcount=4,
+                    ext=SimpleNamespace(serialization_format="cdr"),
+                ),
+                SimpleNamespace(
+                    topic="/ground_truth/pose",
+                    msgtype="geometry_msgs/msg/PoseStamped",
+                    msgcount=4,
+                    ext=SimpleNamespace(serialization_format="cdr"),
+                ),
+            ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    report = inspect_rosbag(mcap)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert report["kind"] == "ros2_recording_file"
+    assert report["rosbags_available"] is True
+    assert report["total_message_count"] == 8
+    assert report["topics"] == [
+        {
+            "name": "/livox/points",
+            "type": "sensor_msgs/msg/PointCloud2",
+            "message_count": 4,
+            "serialization_format": "cdr",
+        },
+        {
+            "name": "/ground_truth/pose",
+            "type": "geometry_msgs/msg/PoseStamped",
+            "message_count": 4,
+            "serialization_format": "cdr",
+        },
+    ]
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "pointcloud2_candidate",
+        "pose_truth",
+    ]
+    assert payload["exports"][0]["source"] == "livox_points"
+    assert payload["exports"][1]["source"] is None
+
+
 def test_ros2_topic_map_template_infers_polar_radar_topics(tmp_path: Path) -> None:
     bag = tmp_path / "bagdir"
     bag.mkdir()

@@ -45,6 +45,8 @@ from raft_uav.mmuad.schema import (
     normalize_truth_columns,
 )
 
+ROS2_RECORDING_FILE_SUFFIXES = {".db3", ".mcap"}
+
 
 @dataclass(frozen=True)
 class TopicExportBundle:
@@ -79,6 +81,8 @@ def inspect_rosbag(path: Path) -> dict[str, Any]:
         }
     if path.suffix.lower() == ".bag":
         return _inspect_ros1_bag(path)
+    if path.suffix.lower() in ROS2_RECORDING_FILE_SUFFIXES:
+        return _inspect_native_ros_recording_file(path)
     return {
         "path": str(path),
         "kind": "unknown",
@@ -1143,3 +1147,103 @@ def _inspect_ros1_bag(path: Path) -> dict[str, Any]:
             "--topic-map-file/--topic-map-json."
         ),
     }
+
+
+def _inspect_native_ros_recording_file(path: Path) -> dict[str, Any]:
+    suffix = path.suffix.lower()
+    storage_identifier = suffix.lstrip(".")
+    try:
+        from rosbags.highlevel import AnyReader  # type: ignore[import-not-found]
+    except Exception as exc:
+        return {
+            "path": str(path),
+            "kind": "ros2_recording_file",
+            "suffix": suffix,
+            "storage_identifier": storage_identifier,
+            "rosbags_available": False,
+            "topics": [],
+            "recommendation": (
+                "Install the optional 'rosbags' package to inspect native "
+                ".db3/.mcap topics, or export topics to CSV and use "
+                "--topic-map-file/--topic-map-json."
+            ),
+            "native_reader_error": str(exc),
+        }
+    try:
+        with AnyReader([path]) as reader:
+            topics = [_topic_from_native_connection(connection) for connection in reader.connections]
+    except Exception as exc:
+        return {
+            "path": str(path),
+            "kind": "ros2_recording_file",
+            "suffix": suffix,
+            "storage_identifier": storage_identifier,
+            "rosbags_available": True,
+            "topics": [],
+            "recommendation": (
+                "Native reader could not inspect this recording. Export topics "
+                "to CSV or inspect the bag with ROS tooling."
+            ),
+            "native_reader_error": str(exc),
+        }
+    total_count = _total_topic_message_count(topics)
+    report: dict[str, Any] = {
+        "path": str(path),
+        "kind": "ros2_recording_file",
+        "suffix": suffix,
+        "storage_identifier": storage_identifier,
+        "rosbags_available": True,
+        "topics": topics,
+        "recommendation": (
+            "Use --topic-map-template-json to create a native topic-map "
+            "template, then run --native-ros-extract-output-dir with the "
+            "edited topic map."
+        ),
+    }
+    if total_count is not None:
+        report["total_message_count"] = total_count
+    return report
+
+
+def _topic_from_native_connection(connection: Any) -> dict[str, Any]:
+    topic: dict[str, Any] = {
+        "name": str(getattr(connection, "topic", "")),
+        "type": str(getattr(connection, "msgtype", "")),
+    }
+    message_count = _native_connection_message_count(connection)
+    if message_count is not None:
+        topic["message_count"] = message_count
+    serialization_format = _native_connection_serialization_format(connection)
+    if serialization_format:
+        topic["serialization_format"] = serialization_format
+    return topic
+
+
+def _native_connection_message_count(connection: Any) -> int | None:
+    for attr in ("msgcount", "message_count", "count"):
+        value = getattr(connection, attr, None)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _native_connection_serialization_format(connection: Any) -> str | None:
+    value = getattr(connection, "serialization_format", None)
+    if value not in (None, ""):
+        return str(value)
+    ext = getattr(connection, "ext", None)
+    value = getattr(ext, "serialization_format", None)
+    if value not in (None, ""):
+        return str(value)
+    return None
+
+
+def _total_topic_message_count(topics: list[dict[str, Any]]) -> int | None:
+    counts = [topic.get("message_count") for topic in topics]
+    if not counts or any(not isinstance(count, int) for count in counts):
+        return None
+    return int(sum(counts))
