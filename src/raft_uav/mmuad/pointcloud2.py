@@ -72,7 +72,10 @@ def pointcloud2_to_dataframe(message: Any) -> pd.DataFrame:
             fmt, width = _POINT_FIELD_FORMATS.get(int(field.datatype), ("", 0))
             if not fmt:
                 continue
-            offset = base + int(field.offset)
+            relative_offset = int(field.offset)
+            if relative_offset < 0 or relative_offset + width > point_step:
+                continue
+            offset = base + relative_offset
             if offset + width > len(data):
                 continue
             try:
