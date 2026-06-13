@@ -540,13 +540,15 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_val
 ```
 
-This preflight check enforces a ZIP containing only `mmaud_results.csv`, exact
+This preflight check enforces a ZIP containing only a root-level
+`mmaud_results.csv` file, exact
 `Sequence,Timestamp,Position,Classification` columns, nonblank/non-missing
 sequence IDs, finite timestamps and `(x,y,z)` position tuples, integer class
 IDs, duplicate prediction detection, and optional timestamp coverage against a
 truth/template file or Track 5 sequence-root folders. It exits nonzero when the
 package is invalid, which makes it suitable for local CI before a manual
-Codabench upload.
+Codabench upload. A ZIP such as `submission/mmaud_results.csv` is rejected
+because the result file is not at the archive root.
 Official Track 5 CSV/ZIP writers also fail before writing when tracker output
 contains non-finite timestamps or positions, preventing a seemingly valid ZIP
 from silently dropping rows. For local diagnostics only, pass

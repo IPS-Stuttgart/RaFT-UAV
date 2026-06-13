@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from io import BytesIO
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -614,13 +614,17 @@ def validate_official_track5_submission(
     errors: list[str] = []
     warnings: list[str] = []
     members: list[str] = []
+    zip_summary: dict[str, Any] = {}
     frame: pd.DataFrame | None = None
     is_zip = path.suffix.lower() == ".zip"
     if require_zip and not is_zip:
         errors.append("official Track 5 Codabench upload must be a .zip file")
     try:
         if is_zip:
-            frame, members = _read_official_track5_zip_for_validation(path, errors)
+            frame, members, zip_summary = _read_official_track5_zip_for_validation(
+                path,
+                errors,
+            )
         else:
             frame = pd.read_csv(path)
     except Exception as exc:
@@ -643,13 +647,18 @@ def validate_official_track5_submission(
         "is_zip": bool(is_zip),
         "require_zip": bool(require_zip),
         "members": members,
-        "has_mmaud_results_csv": "mmaud_results.csv" in members if is_zip else path.exists(),
-        "contains_only_mmaud_results_csv": members == ["mmaud_results.csv"] if is_zip else False,
+        "has_mmaud_results_csv": (
+            bool(zip_summary.get("has_root_mmaud_results_csv")) if is_zip else path.exists()
+        ),
+        "contains_only_mmaud_results_csv": (
+            bool(zip_summary.get("contains_only_mmaud_results_csv")) if is_zip else False
+        ),
         "expected_columns": list(OFFICIAL_UG2_RESULT_COLUMNS),
         "timestamp_tolerance_s": float(timestamp_tolerance_s),
         "template_checked": bool(template_checked),
         "errors": errors,
         "warnings": warnings,
+        **zip_summary,
         **schema_summary,
     }
     summary["valid"] = bool(
@@ -690,16 +699,63 @@ def load_official_track5_template_file(path: Path) -> pd.DataFrame:
 def _read_official_track5_zip_for_validation(
     path: Path,
     errors: list[str],
-) -> tuple[pd.DataFrame | None, list[str]]:
+) -> tuple[pd.DataFrame | None, list[str], dict[str, Any]]:
     with ZipFile(path) as archive:
-        members = archive.namelist()
-        if members != ["mmaud_results.csv"]:
+        infos = archive.infolist()
+        members = [info.filename for info in infos]
+        file_members = [
+            _normalized_zip_member_name(info.filename)
+            for info in infos
+            if not info.is_dir()
+        ]
+        directory_members = [
+            _normalized_zip_member_name(info.filename)
+            for info in infos
+            if info.is_dir()
+        ]
+        nested_results = [
+            member
+            for member in file_members
+            if PurePosixPath(member).name == "mmaud_results.csv"
+            and member != "mmaud_results.csv"
+        ]
+        root_results_count = sum(member == "mmaud_results.csv" for member in file_members)
+        summary = {
+            "file_members": file_members,
+            "directory_members": directory_members,
+            "root_file_members": _root_zip_file_members(file_members),
+            "has_root_mmaud_results_csv": root_results_count > 0,
+            "root_mmaud_results_csv_count": int(root_results_count),
+            "nested_mmaud_results_csv_members": nested_results,
+            "contains_only_mmaud_results_csv": (
+                file_members == ["mmaud_results.csv"] and not directory_members
+            ),
+        }
+        if not summary["contains_only_mmaud_results_csv"]:
             errors.append("official Track 5 ZIP must contain only mmaud_results.csv")
-        if "mmaud_results.csv" not in members:
-            return None, members
+        if nested_results and root_results_count == 0:
+            errors.append(
+                "official Track 5 ZIP must place mmaud_results.csv at the archive root"
+            )
+        if root_results_count == 0:
+            return None, members, summary
+        if root_results_count > 1:
+            errors.append("official Track 5 ZIP contains duplicate mmaud_results.csv members")
         with archive.open("mmaud_results.csv") as handle:
             frame = pd.read_csv(BytesIO(handle.read()))
-    return frame, members
+    return frame, members, summary
+
+
+def _normalized_zip_member_name(name: str) -> str:
+    return str(name).replace("\\", "/")
+
+
+def _root_zip_file_members(members: list[str]) -> list[str]:
+    return [
+        member
+        for member in members
+        if PurePosixPath(member).parent == PurePosixPath(".")
+    ]
 
 
 def _validate_official_track5_frame(
