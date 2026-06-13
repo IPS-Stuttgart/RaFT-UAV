@@ -799,13 +799,49 @@ def parse_official_position_cell(value: Any) -> tuple[float, float, float]:
 
 
 def _split_official_position_text(text: str) -> list[str]:
-    stripped = text.strip("[]()")
+    stripped = _strip_official_position_array_wrapper(text).strip("[]()")
     separator = "," if "," in stripped else None
     if ";" in stripped:
         stripped = stripped.replace(";", "," if separator == "," else " ")
     if separator == ",":
         return [part for part in stripped.split(",") if part.strip()]
     return [part for part in stripped.split() if part.strip()]
+
+
+def _strip_official_position_array_wrapper(text: str) -> str:
+    stripped = text.strip()
+    lower = stripped.lower()
+    for prefix in ("array(", "np.array(", "numpy.array("):
+        if not lower.startswith(prefix):
+            continue
+        inner = stripped[len(prefix) :].strip()
+        if inner.endswith(")"):
+            inner = inner[:-1].strip()
+        bracketed = _leading_balanced_group(inner, opener="[", closer="]")
+        if bracketed is not None:
+            return bracketed
+        parenthesized = _leading_balanced_group(inner, opener="(", closer=")")
+        if parenthesized is not None:
+            return parenthesized
+        dtype_start = inner.lower().find(", dtype=")
+        if dtype_start >= 0:
+            return inner[:dtype_start].strip()
+        return inner
+    return stripped
+
+
+def _leading_balanced_group(text: str, *, opener: str, closer: str) -> str | None:
+    if not text.startswith(opener):
+        return None
+    depth = 0
+    for index, char in enumerate(text):
+        if char == opener:
+            depth += 1
+        elif char == closer:
+            depth -= 1
+            if depth == 0:
+                return text[: index + 1]
+    return None
 
 
 def _duplicate_prediction_indices(
