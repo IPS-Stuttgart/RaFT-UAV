@@ -257,12 +257,30 @@ def _error_metrics(frame: pd.DataFrame) -> dict[str, Any]:
         "p95_3d_m": _nanpercentile(err3, 95.0),
         "max_3d_m": _nanmax(err3),
         "ade_3d_m": _nanmean(err3),
-        "fde_3d_m": float(err3[np.isfinite(err3)][-1]) if np.isfinite(err3).any() else None,
+        "fde_3d_m": _final_error(frame, "error_3d_m"),
         "mean_2d_m": _nanmean(err2),
         "p95_2d_m": _nanpercentile(err2, 95.0),
         "max_2d_m": _nanmax(err2),
+        "fde_2d_m": _final_error(frame, "error_2d_m"),
     }
     return out
+
+
+def _final_error(frame: pd.DataFrame, column: str) -> float | None:
+    values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+    finite = np.isfinite(values)
+    if not finite.any():
+        return None
+    if "time_s" not in frame.columns:
+        return float(values[np.flatnonzero(finite)[-1]])
+    times = pd.to_numeric(frame["time_s"], errors="coerce").to_numpy(dtype=float)
+    timed = finite & np.isfinite(times)
+    if not timed.any():
+        return float(values[np.flatnonzero(finite)[-1]])
+    timed_indices = np.flatnonzero(timed)
+    latest_time = float(np.max(times[timed_indices]))
+    latest_indices = timed_indices[times[timed_indices] == latest_time]
+    return float(values[latest_indices[-1]])
 
 
 def _truth_track_id(row: pd.Series) -> str:
