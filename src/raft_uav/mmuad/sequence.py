@@ -323,9 +323,7 @@ def _collect_sequence_dirs(
 ) -> None:
     if _is_modality_dir(path):
         return
-    if _sequence_dir_matches(path, root=root, sequence_glob=sequence_glob) and _looks_like_sequence(path):
-        candidates.append(path)
-        return
+    prior_count = len(candidates)
     for child in _non_modality_child_dirs(path):
         _collect_sequence_dirs(
             child,
@@ -333,6 +331,12 @@ def _collect_sequence_dirs(
             sequence_glob=sequence_glob,
             candidates=candidates,
         )
+    if len(candidates) > prior_count:
+        return
+    if _is_sequence_wrapper_dir(path):
+        return
+    if _sequence_dir_matches(path, root=root, sequence_glob=sequence_glob) and _looks_like_sequence(path):
+        candidates.append(path)
 
 
 def _non_modality_child_dirs(path: Path) -> list[Path]:
@@ -351,6 +355,11 @@ def _sequence_dir_matches(path: Path, *, root: Path, sequence_glob: str) -> bool
     except ValueError:
         relative = path.as_posix()
     return fnmatch(relative, sequence_glob)
+
+
+def _is_sequence_wrapper_dir(path: Path) -> bool:
+    normalized = str(path.name).lower().replace("-", "_").replace(" ", "_")
+    return normalized in {"output", "outputs", "sensor", "sensors"}
 
 
 def load_sequence_export(
@@ -1066,7 +1075,7 @@ def _files_under_named_dirs(
             parents = Path(item.relative_to(path)).parts[:-1]
         except ValueError:
             continue
-        if parents and _directory_name_has_any(parents[0], directory_tokens):
+        if any(_directory_name_has_any(parent, directory_tokens) for parent in parents):
             files.append(item)
     return files
 
@@ -1092,7 +1101,11 @@ def _files_under_sensor_dirs(
 
 
 def _is_modality_dir(path: Path) -> bool:
-    normalized = str(path.name).lower().replace("-", "_").replace(" ", "_")
+    return _is_modality_name(path.name)
+
+
+def _is_modality_name(name: str) -> bool:
+    normalized = str(name).lower().replace("-", "_").replace(" ", "_")
     return normalized in set(MODALITY_DIR_TOKENS) or _sensor_directory_name_has_any(
         normalized,
         CAMERA_DIR_TOKENS + RADAR_DIR_TOKENS,
@@ -1246,6 +1259,9 @@ def _source_from_path(path: Path, *, sequence_root: Path, default: str) -> str:
         return default
     if len(relative.parts) <= 1:
         return default
+    for parent in reversed(relative.parts[:-1]):
+        if _is_modality_name(parent):
+            return str(parent).replace(" ", "_").replace("-", "_")
     return str(relative.parts[-2]).replace(" ", "_").replace("-", "_")
 
 

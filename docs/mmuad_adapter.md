@@ -155,13 +155,16 @@ split/scenario grouping folders and MMUAD-style modality subfolders such as
 `livox_avia/<timestamp>.json`, `livox_avia/<timestamp>.bin` for exported float32 `x,y,z` or
 `x,y,z,intensity` point clouds, `ground_truth/<timestamp>.npy`,
 `tracking_results/<timestamp>.npy`,
+wrapped layouts such as `sensors/livox_avia/stream0/<timestamp>.npy`,
+`labels/ground_truth/leica/<timestamp>.npy`, and
+`outputs/tracking_results/fused/<timestamp>.npy`,
 `radar0/detections.csv` with exported polar range/azimuth columns,
 `cam0/detections.csv` with exported pixel/depth or bounding-box columns, and
 class-label JSON/YAML files such as `classes.json`, `classes.yaml`, or
 `class/<timestamp>.json`:
 When a generic candidate CSV/TSV/JSON lacks a `source`/`sensor`/`modality`
 column, sequence-root loading uses the enclosing modality folder name such as
-`tracking_results`, `radar0`, or `cam0` as the source.
+`tracking_results`, `livox_avia`, `radar0`, or `cam0` as the source.
 
 ```text
 data/mmuad_export/
