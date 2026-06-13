@@ -181,6 +181,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ug2-codabench-zip", type=Path)
     parser.add_argument("--ug2-official-results-csv", type=Path)
     parser.add_argument("--ug2-official-codabench-zip", type=Path)
+    parser.add_argument(
+        "--ug2-official-validate-on-write",
+        action="store_true",
+        help=(
+            "validate the freshly written official Track 5 ZIP and write "
+            "preflight diagnostics before returning"
+        ),
+    )
     parser.add_argument("--ug2-class-name", default="unknown")
     parser.add_argument(
         "--ug2-official-classification",
@@ -355,6 +363,7 @@ def main(argv: list[str] | None = None) -> int:
         summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
         paths["official_timestamp_completion_rows_csv"] = str(diagnostics_path)
         paths["official_timestamp_completion_summary_json"] = str(summary_path)
+        args._official_validation_template = template
     if args.submission_csv is not None:
         paths["submission_csv"] = str(
             write_submission_csv(
@@ -415,6 +424,14 @@ def main(argv: list[str] | None = None) -> int:
                 class_map=class_map,
             )
         )
+    if args.ug2_official_validate_on_write:
+        if args.ug2_official_codabench_zip is None:
+            raise SystemExit(
+                "--ug2-official-validate-on-write requires "
+                "--ug2-official-codabench-zip"
+            )
+        validation_paths = _validate_written_official_zip(args)
+        paths.update(validation_paths)
     completion_truth_path = _completion_truth_path(args)
     if completion_truth_path is not None:
         if args.completed_results_csv is None and args.completed_ug2_codabench_zip is None:
@@ -539,6 +556,37 @@ def _run_official_submission_validation(args: argparse.Namespace) -> int:
     for name, path in paths.items():
         print(f"{name}={path}")
     return 0 if validation.summary["valid"] else 1
+
+
+def _validate_written_official_zip(args: argparse.Namespace) -> dict[str, str]:
+    template = getattr(args, "_official_validation_template", None)
+    if template is None:
+        template = _official_submission_validation_template(args)
+    validation = validate_official_track5_submission(
+        args.ug2_official_codabench_zip,
+        template=template,
+        timestamp_tolerance_s=args.official_validation_timestamp_tolerance_s,
+        require_zip=True,
+    )
+    json_path = args.official_validation_json or (
+        args.output_dir / "mmuad_official_submission_validation.json"
+    )
+    rows_path = args.official_validation_rows_csv or (
+        args.output_dir / "mmuad_official_submission_validation_rows.csv"
+    )
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    rows_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(validation.summary, indent=2), encoding="utf-8")
+    validation.rows.to_csv(rows_path, index=False)
+    paths = {
+        "official_validation_json": str(json_path),
+        "official_validation_rows_csv": str(rows_path),
+    }
+    if not validation.summary["valid"]:
+        errors = "; ".join(str(item) for item in validation.summary.get("errors", []))
+        detail = f": {errors}" if errors else ""
+        raise SystemExit(f"written official Track 5 ZIP failed validation{detail}")
+    return paths
 
 
 def _official_submission_validation_template(args: argparse.Namespace) -> pd.DataFrame | None:

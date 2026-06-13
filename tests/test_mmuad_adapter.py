@@ -9,6 +9,7 @@ from zipfile import ZipFile
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.coordinates import LocalENUProjector
 from raft_uav.mmuad.calibration import (
@@ -2692,6 +2693,7 @@ def test_cli_writes_official_track5_results_and_zip(tmp_path: Path) -> None:
             str(results),
             "--ug2-official-codabench-zip",
             str(zip_path),
+            "--ug2-official-validate-on-write",
             "--output-dir",
             str(output),
         ]
@@ -3302,6 +3304,7 @@ def test_cli_completes_official_results_to_sequence_timestamps(tmp_path: Path) -
             str(results),
             "--ug2-official-codabench-zip",
             str(zip_path),
+            "--ug2-official-validate-on-write",
             "--output-dir",
             str(output),
         ]
@@ -3326,10 +3329,73 @@ def test_cli_completes_official_results_to_sequence_timestamps(tmp_path: Path) -
     assert summary["requested_count"] == 2
     assert summary["completed_count"] == 2
     assert summary["timestamp_source"] == "image"
+    validation = json.loads(
+        (output / "mmuad_official_submission_validation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    validation_rows = pd.read_csv(output / "mmuad_official_submission_validation_rows.csv")
+    assert validation["valid"] is True
+    assert validation["template_checked"] is True
+    assert validation["template_timestamp_count"] == 2
+    assert validation["missing_template_timestamp_count"] == 0
+    assert set(validation_rows["status"]) == {"ok", "covered_template_timestamp"}
     with ZipFile(zip_path) as archive:
         assert archive.namelist() == ["mmaud_results.csv"]
         zipped = pd.read_csv(archive.open("mmaud_results.csv"))
     assert zipped["Timestamp"].tolist() == [0.0, 1.0]
+
+
+def test_cli_validate_on_write_rejects_incomplete_official_zip(tmp_path: Path) -> None:
+    root = tmp_path / "data"
+    seq = root / "val" / "seq1"
+    image = seq / "Image"
+    image.mkdir(parents=True)
+    for timestamp in ("0.0", "1.0"):
+        (image / f"{timestamp}.png").write_bytes(b"not-a-real-image")
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1"],
+            "time_s": [0.0],
+            "source": ["radar"],
+            "x_m": [0.0],
+            "y_m": [0.0],
+            "z_m": [10.0],
+        }
+    ).to_csv(seq / "candidates.csv", index=False)
+    class_map = tmp_path / "class_map.csv"
+    class_map.write_text("sequence_id,uav_type\nseq1,2\n", encoding="utf-8")
+    output = tmp_path / "out"
+
+    with pytest.raises(SystemExit, match="failed validation"):
+        mmuad_cli_main(
+            [
+                "--sequence-root",
+                str(root),
+                "--split-name",
+                "val",
+                "--ug2-official-timestamp-source",
+                "image",
+                "--ug2-class-map-file",
+                str(class_map),
+                "--ug2-official-codabench-zip",
+                str(output / "submission.zip"),
+                "--ug2-official-validate-on-write",
+                "--output-dir",
+                str(output),
+            ]
+        )
+
+    summary = json.loads(
+        (output / "mmuad_official_submission_validation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    rows = pd.read_csv(output / "mmuad_official_submission_validation_rows.csv")
+    assert summary["valid"] is False
+    assert summary["template_checked"] is True
+    assert summary["missing_template_timestamp_count"] == 1
+    assert "missing_template_timestamp" in rows["status"].tolist()
 
 
 def test_cli_validates_official_zip_against_sequence_timestamps(tmp_path: Path) -> None:
