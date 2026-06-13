@@ -70,6 +70,7 @@ from raft_uav.mmuad.submission import (
     estimates_to_submission_frame,
     inspect_submission_zip,
     load_sequence_class_map,
+    validate_official_track5_submission,
     write_mmaud_results_csv,
     write_submission_json,
     write_submission_zip,
@@ -3446,6 +3447,36 @@ def test_cli_validates_official_zip_against_sequence_timestamps(tmp_path: Path) 
     assert summary["missing_template_timestamp_count"] == 0
     assert summary["extra_prediction_count"] == 0
     assert set(rows["status"]) == {"ok", "covered_template_timestamp"}
+
+
+def test_official_track5_validation_rejects_nested_results_member(
+    tmp_path: Path,
+) -> None:
+    zip_path = tmp_path / "nested_official_submission.zip"
+    official = pd.DataFrame(
+        {
+            "Sequence": ["seq1"],
+            "Timestamp": [0.0],
+            "Position": ["(0,0,10)"],
+            "Classification": [2],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("submission/mmaud_results.csv", official.to_csv(index=False))
+
+    validation = validate_official_track5_submission(zip_path)
+    summary = validation.summary
+
+    assert summary["valid"] is False
+    assert summary["has_mmaud_results_csv"] is False
+    assert summary["has_root_mmaud_results_csv"] is False
+    assert summary["contains_only_mmaud_results_csv"] is False
+    assert summary["nested_mmaud_results_csv_members"] == [
+        "submission/mmaud_results.csv"
+    ]
+    assert "submission/mmaud_results.csv" in summary["file_members"]
+    assert any("archive root" in error for error in summary["errors"])
+    assert validation.rows.empty
 
 
 def test_cli_validates_official_zip_against_official_template_zip(tmp_path: Path) -> None:
