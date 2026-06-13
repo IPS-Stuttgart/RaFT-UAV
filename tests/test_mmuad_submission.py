@@ -217,6 +217,49 @@ def test_official_results_frame_rejects_boolean_classification():
         estimates_to_official_mmaud_results_frame(estimates)
 
 
+def test_official_results_frame_rejects_nonfinite_rows_by_default():
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, float("nan")],
+            "state_x_m": [1.0, 2.0],
+            "state_y_m": [3.0, 4.0],
+            "state_z_m": [5.0, 6.0],
+            "class_id": [1, 1],
+        }
+    )
+
+    with pytest.raises(ValueError, match="non-finite Timestamp/Position"):
+        estimates_to_official_mmaud_results_frame(estimates)
+
+
+def test_official_results_frame_can_drop_nonfinite_rows_for_diagnostic_exports():
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, float("nan")],
+            "state_x_m": [1.0, 2.0],
+            "state_y_m": [3.0, 4.0],
+            "state_z_m": [5.0, 6.0],
+            "class_id": [1, 1],
+        }
+    )
+
+    results = estimates_to_official_mmaud_results_frame(
+        estimates,
+        invalid_row_policy="drop",
+    )
+
+    assert results.to_dict("records") == [
+        {
+            "Sequence": "seq1",
+            "Timestamp": 0.0,
+            "Position": "(1,3,5)",
+            "Classification": 1,
+        }
+    ]
+
+
 def test_official_results_csv_and_zip_are_readable_by_local_loader(tmp_path):
     estimates = pd.DataFrame(
         {

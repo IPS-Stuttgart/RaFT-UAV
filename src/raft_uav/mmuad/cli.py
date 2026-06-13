@@ -208,6 +208,15 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--ug2-official-invalid-row-policy",
+        choices=("raise", "drop"),
+        default="raise",
+        help=(
+            "how official Track 5 writers handle non-finite timestamps or "
+            "positions; use drop only for diagnostic exports"
+        ),
+    )
+    parser.add_argument(
         "--ug2-official-complete-to-sequence-timestamps",
         action="store_true",
         help=(
@@ -424,6 +433,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.ug2_official_results_csv,
                 classification=args.ug2_official_classification,
                 class_map=class_map,
+                invalid_row_policy=args.ug2_official_invalid_row_policy,
             )
         )
     if args.ug2_official_codabench_zip is not None:
@@ -433,6 +443,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.ug2_official_codabench_zip,
                 classification=args.ug2_official_classification,
                 class_map=class_map,
+                invalid_row_policy=args.ug2_official_invalid_row_policy,
             )
         )
     if args.ug2_official_validate_on_write:

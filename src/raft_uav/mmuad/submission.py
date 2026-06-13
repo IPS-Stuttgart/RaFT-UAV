@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from io import BytesIO
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import numpy as np
@@ -323,6 +323,7 @@ def estimates_to_official_mmaud_results_frame(
     *,
     classification: int | str = 0,
     class_map: dict[str, str] | None = None,
+    invalid_row_policy: Literal["raise", "drop"] = "raise",
 ) -> pd.DataFrame:
     """Convert estimates into the public Track 5 ``mmaud_results.csv`` schema.
 
@@ -333,6 +334,7 @@ def estimates_to_official_mmaud_results_frame(
     numeric values when per-sequence labels are known.
     """
 
+    policy = _normalize_official_invalid_row_policy(invalid_row_policy)
     if estimates.empty:
         return pd.DataFrame(columns=OFFICIAL_UG2_RESULT_COLUMNS)
     x_column, y_column, z_column = _estimate_coordinate_columns(estimates)
@@ -355,6 +357,8 @@ def estimates_to_official_mmaud_results_frame(
         index=estimates.index,
     )
     finite = np.isfinite(numeric[["Timestamp", "x", "y", "z"]].to_numpy(dtype=float)).all(axis=1)
+    if not finite.all() and policy == "raise":
+        _raise_nonfinite_official_estimate_rows(numeric, finite)
     work_sequences = sequence_values.loc[finite]
     numeric = numeric.loc[finite]
     rows = pd.DataFrame(
@@ -376,6 +380,36 @@ def estimates_to_official_mmaud_results_frame(
     return rows[list(OFFICIAL_UG2_RESULT_COLUMNS)].sort_values(
         ["Sequence", "Timestamp"]
     ).reset_index(drop=True)
+
+
+def _normalize_official_invalid_row_policy(value: str) -> Literal["raise", "drop"]:
+    policy = str(value).strip().lower()
+    if policy not in {"raise", "drop"}:
+        raise ValueError("invalid_row_policy must be 'raise' or 'drop'")
+    return policy  # type: ignore[return-value]
+
+
+def _raise_nonfinite_official_estimate_rows(
+    numeric: pd.DataFrame,
+    finite: np.ndarray,
+) -> None:
+    columns = ("Timestamp", "x", "y", "z")
+    examples: list[str] = []
+    invalid = numeric.loc[~finite, list(columns)].head(5)
+    for row_index, row in invalid.iterrows():
+        bad_columns = [
+            column
+            for column in columns
+            if not np.isfinite(float(row[column]))
+        ]
+        examples.append(f"{row_index}:{','.join(bad_columns)}")
+    remaining = int((~finite).sum()) - len(examples)
+    suffix = f"; {remaining} more" if remaining > 0 else ""
+    raise ValueError(
+        "official Track 5 output contains non-finite Timestamp/Position "
+        "estimate rows; fix the tracker output or pass invalid_row_policy='drop' "
+        f"for a diagnostic export only. invalid_rows={examples}{suffix}"
+    )
 
 
 def _estimate_classification_values(
@@ -472,6 +506,7 @@ def write_official_mmaud_results_csv(
     *,
     classification: int | str = 0,
     class_map: dict[str, str] | None = None,
+    invalid_row_policy: Literal["raise", "drop"] = "raise",
 ) -> Path:
     """Write the public CVPR 2024 UG2+ Track 5 ``mmaud_results.csv`` schema."""
 
@@ -481,6 +516,7 @@ def write_official_mmaud_results_csv(
         estimates,
         classification=classification,
         class_map=class_map,
+        invalid_row_policy=invalid_row_policy,
     ).to_csv(path, index=False)
     return path
 
@@ -510,6 +546,7 @@ def write_official_ug2_codabench_zip(
     *,
     classification: int | str = 0,
     class_map: dict[str, str] | None = None,
+    invalid_row_policy: Literal["raise", "drop"] = "raise",
 ) -> Path:
     """Write a Track 5 upload ZIP containing only ``mmaud_results.csv``."""
 
@@ -519,6 +556,7 @@ def write_official_ug2_codabench_zip(
         estimates,
         classification=classification,
         class_map=class_map,
+        invalid_row_policy=invalid_row_policy,
     )
     with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
         archive.writestr("mmaud_results.csv", frame.to_csv(index=False))
