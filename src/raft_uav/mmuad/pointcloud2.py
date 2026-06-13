@@ -47,7 +47,8 @@ def pointcloud2_to_dataframe(message: Any) -> pd.DataFrame:
 
     ``message`` may be a real ROS message, a ``rosbags`` deserialized object, or
     a small test double with attributes ``fields``, ``data``, ``width``,
-    ``height``, ``point_step``, and optional ``is_bigendian`` / ``is_dense``.
+    ``height``, ``point_step``, and optional ``row_step`` / ``is_bigendian`` /
+    ``is_dense``. Organized clouds are decoded with row padding respected.
     The returned frame contains finite ``x_m``, ``y_m`` and ``z_m`` columns plus
     any decodable extra scalar fields.
     """
@@ -61,13 +62,9 @@ def pointcloud2_to_dataframe(message: Any) -> pd.DataFrame:
     data = bytes(getattr(message, "data"))
     if point_step <= 0:
         raise ValueError("PointCloud2 point_step must be positive")
-    declared_count = int(getattr(message, "width", 0)) * max(1, int(getattr(message, "height", 1)))
-    available_count = len(data) // point_step
-    count = min(declared_count, available_count) if declared_count > 0 else available_count
     endian = ">" if bool(getattr(message, "is_bigendian", False)) else "<"
     records: list[dict[str, float]] = []
-    for point_index in range(count):
-        base = point_index * point_step
+    for base in _point_offsets(message, point_step=point_step, data_length=len(data)):
         record: dict[str, float] = {}
         for field in fields:
             if field.count != 1:
@@ -90,6 +87,32 @@ def pointcloud2_to_dataframe(message: Any) -> pd.DataFrame:
         return pd.DataFrame(columns=["x_m", "y_m", "z_m"])
     frame = frame.rename(columns={"x": "x_m", "y": "y_m", "z": "z_m"})
     return frame.loc[np.isfinite(frame[["x_m", "y_m", "z_m"]]).all(axis=1)].reset_index(drop=True)
+
+
+def _point_offsets(message: Any, *, point_step: int, data_length: int) -> list[int]:
+    width = int(getattr(message, "width", 0))
+    height = max(1, int(getattr(message, "height", 1)))
+    if width <= 0:
+        return [index * point_step for index in range(data_length // point_step)]
+
+    row_step = getattr(message, "row_step", None)
+    row_step = int(row_step) if row_step is not None else point_step * width
+    if row_step <= 0:
+        raise ValueError("PointCloud2 row_step must be positive")
+    if row_step < point_step * width:
+        raise ValueError("PointCloud2 row_step is smaller than width * point_step")
+
+    offsets: list[int] = []
+    for row in range(height):
+        row_base = row * row_step
+        if row_base >= data_length:
+            break
+        for column in range(width):
+            base = row_base + column * point_step
+            if base + point_step > data_length:
+                break
+            offsets.append(base)
+    return offsets
 
 
 def pointcloud2_to_candidates(

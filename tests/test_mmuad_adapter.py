@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import struct
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -6874,6 +6875,46 @@ def test_pointcloud2_decoder_and_candidate_clustering() -> None:
     assert len(candidates.rows) == 1
     assert candidates.rows.loc[0, "sequence_id"] == "seq_pc2"
     assert candidates.rows.loc[0, "source"] == "livox"
+
+
+def test_pointcloud2_decoder_respects_organized_cloud_row_step_padding() -> None:
+    fields = [
+        SimpleNamespace(name="x", offset=0, datatype=7, count=1),
+        SimpleNamespace(name="y", offset=4, datatype=7, count=1),
+        SimpleNamespace(name="z", offset=8, datatype=7, count=1),
+        SimpleNamespace(name="intensity", offset=12, datatype=7, count=1),
+    ]
+    point_step = 16
+    row_step = 40
+    data = bytearray(row_step * 2)
+    points = [
+        (0, 0, (0.0, 0.0, 1.0, 10.0)),
+        (0, 1, (1.0, 0.0, 1.0, 20.0)),
+        (1, 0, (0.0, 1.0, 2.0, 30.0)),
+        (1, 1, (1.0, 1.0, 2.0, 40.0)),
+    ]
+    for row, column, values in points:
+        struct.pack_into("<ffff", data, row * row_step + column * point_step, *values)
+    msg = SimpleNamespace(
+        fields=fields,
+        data=bytes(data),
+        width=2,
+        height=2,
+        point_step=point_step,
+        row_step=row_step,
+        is_bigendian=False,
+        is_dense=True,
+    )
+
+    decoded = pointcloud2_to_dataframe(msg)
+
+    assert decoded[["x_m", "y_m", "z_m"]].values.tolist() == [
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [0.0, 1.0, 2.0],
+        [1.0, 1.0, 2.0],
+    ]
+    assert decoded["intensity"].tolist() == [10.0, 20.0, 30.0, 40.0]
 
 
 def test_calibration_file_accepts_yaml_json_subset(tmp_path: Path) -> None:
