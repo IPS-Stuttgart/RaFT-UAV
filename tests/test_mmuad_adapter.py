@@ -6172,6 +6172,130 @@ def test_native_ros_extraction_supports_detection2d_camera_candidates(
     assert (output / "native_ros_candidates.csv").exists()
 
 
+def test_native_ros_extraction_uses_camera_info_for_detection2d_intrinsics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_camera_info.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_camera_info",
+                "exports": [
+                    {
+                        "topic": "/camera/camera_info",
+                        "kind": "camera_info_calibration",
+                        "source": "cam0",
+                        "translation_m": [1.0, 2.0, 3.0],
+                    },
+                    {
+                        "topic": "/camera/detections",
+                        "kind": "camera_detections_candidate",
+                        "source": "cam0",
+                        "camera_fixed_depth_m": 10.0,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    camera_info_connection = SimpleNamespace(
+        topic="/camera/camera_info",
+        msgtype="sensor_msgs/msg/CameraInfo",
+    )
+    detection_connection = SimpleNamespace(
+        topic="/camera/detections",
+        msgtype="vision_msgs/msg/Detection2DArray",
+    )
+    camera_info_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=1, nanosec=0),
+            frame_id="cam0",
+        ),
+        k=[100.0, 0.0, 50.0, 0.0, 100.0, 40.0, 0.0, 0.0, 1.0],
+    )
+    detection_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=2, nanosec=0),
+            frame_id="cam0",
+        ),
+        detections=[
+            SimpleNamespace(
+                id="det-from-camera-info",
+                bbox=SimpleNamespace(
+                    center=SimpleNamespace(x=60.0, y=50.0),
+                    size_x=8.0,
+                    size_y=4.0,
+                ),
+                results=[
+                    SimpleNamespace(
+                        hypothesis=SimpleNamespace(class_id="quad", score=0.8)
+                    )
+                ],
+            )
+        ],
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [detection_connection, camera_info_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            if connections == [camera_info_connection]:
+                return [(camera_info_connection, 1_000_000_000, b"camera-info")]
+            if connections == [detection_connection]:
+                return [(detection_connection, 2_000_000_000, b"detections")]
+            raise AssertionError(f"unexpected native ROS connections: {connections!r}")
+
+        def deserialize(self, rawdata, msgtype):
+            if rawdata == b"camera-info":
+                assert msgtype == "sensor_msgs/msg/CameraInfo"
+                return camera_info_message
+            if rawdata == b"detections":
+                assert msgtype == "vision_msgs/msg/Detection2DArray"
+                return detection_message
+            raise AssertionError(f"unexpected rawdata: {rawdata!r}")
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is not None
+    rows = extracted.candidates.rows
+    assert len(rows) == 1
+    assert rows.loc[0, "sequence_id"] == "seq_camera_info"
+    assert rows.loc[0, "source"] == "cam0"
+    assert rows.loc[0, "track_id"] == "det-from-camera-info"
+    assert rows.loc[0, "x_m"] == 2.0
+    assert rows.loc[0, "y_m"] == 3.0
+    assert rows.loc[0, "z_m"] == 13.0
+    assert rows.loc[0, "confidence"] == 0.8
+    assert extracted.manifest["extracted_messages"][0]["kind"] == "camera_info_calibration"
+    assert extracted.manifest["extracted_messages"][0]["source"] == "cam0"
+    assert extracted.manifest["extracted_messages"][1]["kind"] == "camera_detections_candidate"
+    assert (output / "native_ros_candidates.csv").exists()
+
+
 def test_ros2_topic_map_template_infers_polar_radar_topics(tmp_path: Path) -> None:
     bag = tmp_path / "bagdir"
     bag.mkdir()
@@ -6448,6 +6572,10 @@ def test_ros2_topic_map_template_infers_detection2d_topics(tmp_path: Path) -> No
                 "        name: /camera/detections2d",
                 "        type: vision_msgs/msg/Detection2DArray",
                 "      message_count: 2",
+                "    - topic_metadata:",
+                "        name: /camera/camera_info",
+                "        type: sensor_msgs/msg/CameraInfo",
+                "      message_count: 2",
             ]
         ),
         encoding="utf-8",
@@ -6457,12 +6585,17 @@ def test_ros2_topic_map_template_infers_detection2d_topics(tmp_path: Path) -> No
     template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
     payload = json.loads(template.read_text(encoding="utf-8"))
 
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "camera_detections_candidate",
+        "camera_info_calibration",
+    ]
     export = payload["exports"][0]
     assert export["kind"] == "camera_detections_candidate"
     assert export["source"] == "camera_detections2d"
     assert export["camera_calibration_file"] == "PATH/TO/camera_info.json"
     assert export["column_aliases"]["center_x"] == "u_px"
     assert export["column_aliases"]["center_y"] == "v_px"
+    assert payload["exports"][1]["source"] == "camera_camera_info"
 
 
 def test_ros2_topic_map_template_infers_marker_topics(tmp_path: Path) -> None:

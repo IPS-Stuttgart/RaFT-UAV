@@ -275,6 +275,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "geopose_truth" if truth_like else "geopose_candidate"
     if compact_type.endswith("geopointstamped") or compact_type.endswith("geopoint"):
         return "geopoint_truth" if truth_like else "geopoint_candidate"
+    if compact_type.endswith("camerainfo"):
+        return "camera_info_calibration"
     if "detection2darray" in compact_type:
         return "camera_detections_candidate"
     if "detection2d" in compact_type:
