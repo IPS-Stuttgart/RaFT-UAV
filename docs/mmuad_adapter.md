@@ -150,7 +150,7 @@ exported ROS topic maps such as `topic_map.json` or `topic_map.yaml`,
 `calibration.json`, `calibration.yaml`, `camera_info.json`,
 `camera_info.yaml`, `intrinsics.json`, `intrinsics.yml`, or
 camera-folder intrinsics such as `cam0/camera_info.yaml`. It also recognizes
-one-level split folders and MMUAD-style modality subfolders such as
+split/scenario grouping folders and MMUAD-style modality subfolders such as
 `livox_avia/<timestamp>.npy`,
 `livox_avia/<timestamp>.json`, `livox_avia/<timestamp>.bin` for exported float32 `x,y,z` or
 `x,y,z,intensity` point clouds, `ground_truth/<timestamp>.npy`,
@@ -308,8 +308,9 @@ Manifest sequence entries may be bare IDs such as `seq001` or split-relative
 paths such as `val/seq001`; path entries are useful when split folders reuse the
 same sequence leaf name.
 If the sequence root is already arranged as split folders such as
-`train/seq001` and `val/seq002`, omit `--split-file` and pass
-`--split-name val`; the CLI filters by the top-level folder name.
+`train/seq001`, `val/seq002`, or nested groupings like
+`val/fog/seq003`, omit `--split-file` and pass `--split-name val`; the CLI
+filters by the top-level folder name.
 
 ### Basic multi-object mode
 
