@@ -410,6 +410,8 @@ def _classification_to_int(value: Any) -> int:
         raise ValueError("official MMUAD Classification values must be integers")
     if isinstance(value, np.generic):
         value = value.item()
+    if isinstance(value, bool):
+        raise ValueError("official MMUAD Classification values must be integer ids, not booleans")
     try:
         missing = pd.isna(value)
     except TypeError:

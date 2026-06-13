@@ -200,6 +200,22 @@ def test_official_results_frame_requires_integer_classification():
         estimates_to_official_mmaud_results_frame(estimates)
 
 
+def test_official_results_frame_rejects_boolean_classification():
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq1"],
+            "time_s": [1.0],
+            "state_x_m": [1.0],
+            "state_y_m": [2.0],
+            "state_z_m": [3.0],
+            "class_id": [True],
+        }
+    )
+
+    with pytest.raises(ValueError, match="not booleans"):
+        estimates_to_official_mmaud_results_frame(estimates)
+
+
 def test_official_results_csv_and_zip_are_readable_by_local_loader(tmp_path):
     estimates = pd.DataFrame(
         {
@@ -599,3 +615,24 @@ def test_official_track5_submission_validator_rejects_bad_leaderboard_package(tm
     assert "duplicate_prediction" in statuses
     assert "missing_template_timestamp" in statuses
     assert "extra_prediction" in statuses
+
+
+def test_official_track5_submission_validator_rejects_boolean_classification(tmp_path):
+    zip_path = tmp_path / "bad_bool_classification.zip"
+    frame = pd.DataFrame(
+        {
+            "Sequence": ["seq1"],
+            "Timestamp": [0.0],
+            "Position": ["(0,0,0)"],
+            "Classification": [True],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", frame.to_csv(index=False))
+
+    validation = validate_official_track5_submission(zip_path)
+
+    assert validation.summary["valid"] is False
+    assert validation.summary["invalid_classification_count"] == 1
+    assert validation.rows.loc[0, "status"] == "invalid_classification"
+    assert "not booleans" in validation.rows.loc[0, "reason"]
