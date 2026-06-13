@@ -315,14 +315,22 @@ def main(argv: list[str] | None = None) -> int:
                 "--evaluate-results-csv/--evaluate-results-zip requires "
                 "--evaluate-truth-csv or --evaluate-truth-file"
             )
+        truth_frame = load_truth_file(evaluation_truth)
         result = evaluate_mmaud_results(
             load_mmaud_results_file(evaluation_results),
-            load_truth_file(evaluation_truth),
+            truth_frame,
             max_time_delta_s=args.evaluation_max_time_delta_s,
             metric_protocol=args.evaluation_protocol,
             timestamp_tolerance_s=args.evaluation_timestamp_tolerance_s,
             class_map_path=args.evaluation_class_map_file,
         )
+        if args.evaluation_protocol == "public-track5":
+            _attach_public_track5_submission_validation(
+                args,
+                result,
+                evaluation_results=evaluation_results,
+                truth_frame=truth_frame,
+            )
         paths = write_evaluation_artifacts(
             result,
             summary_json=args.evaluation_json or (args.output_dir / "mmuad_local_evaluation.json"),
@@ -534,6 +542,62 @@ def _require_complete_track5_evaluation(
         "public Track 5 evaluation is not leaderboard-ready: "
         + ", ".join(str(reason) for reason in reasons)
     )
+
+
+def _attach_public_track5_submission_validation(
+    args: argparse.Namespace,
+    result: dict,
+    *,
+    evaluation_results: Path,
+    truth_frame,
+) -> None:
+    """Fold official Track 5 package preflight into public-metric readiness."""
+
+    validation = validate_official_track5_submission(
+        evaluation_results,
+        template=truth_frame.rows,
+        timestamp_tolerance_s=args.evaluation_timestamp_tolerance_s,
+        require_zip=Path(evaluation_results).suffix.lower() == ".zip",
+    )
+    summary = result["summary"]
+    validation_summary = validation.summary
+    summary["official_submission_validation"] = validation_summary
+    summary["official_submission_valid"] = bool(validation_summary.get("valid"))
+    if validation_summary.get("valid") is True:
+        return
+
+    summary["leaderboard_ready"] = False
+    summary["score_valid_for_leaderboard"] = False
+    existing = list(summary.get("leaderboard_blocking_reasons", []))
+    for reason in _official_submission_validation_blocking_reasons(validation_summary):
+        if reason not in existing:
+            existing.append(reason)
+    summary["leaderboard_blocking_reasons"] = existing
+
+
+def _official_submission_validation_blocking_reasons(summary: dict) -> list[str]:
+    reasons = ["official_submission_validation_failed"]
+    if summary.get("is_zip") and not summary.get("contains_only_mmaud_results_csv", False):
+        reasons.append("official_zip_members_invalid")
+    if list(summary.get("columns", [])) != list(summary.get("expected_columns", [])):
+        reasons.append("official_columns_invalid")
+    invalid_counts = (
+        int(summary.get("invalid_sequence_count", 0)),
+        int(summary.get("invalid_timestamp_count", 0)),
+        int(summary.get("invalid_position_count", 0)),
+        int(summary.get("invalid_classification_count", 0)),
+    )
+    if any(count > 0 for count in invalid_counts):
+        reasons.append("official_invalid_rows")
+    if int(summary.get("duplicate_prediction_count", 0)) > 0:
+        reasons.append("official_duplicate_predictions")
+    if int(summary.get("missing_template_timestamp_count", 0)) > 0:
+        reasons.append("official_missing_template_timestamps")
+    if int(summary.get("extra_prediction_count", 0)) > 0:
+        reasons.append("official_extra_predictions")
+    if summary.get("errors"):
+        reasons.append("official_validation_errors")
+    return reasons
 
 
 def _run_inspect(args: argparse.Namespace) -> int:

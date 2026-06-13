@@ -4520,6 +4520,81 @@ def test_cli_evaluates_official_zip_with_public_track5_protocol(tmp_path: Path) 
     assert rows["matched"].tolist() == [True, True]
 
 
+def test_cli_public_track5_evaluation_rejects_zip_with_extra_members(
+    tmp_path: Path,
+) -> None:
+    zip_path = tmp_path / "official_submission_extra.zip"
+    official = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,10)", "(1,0,10)"],
+            "Classification": [2, 2],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", official.to_csv(index=False))
+        archive.writestr("README.txt", "extra members are not public Track 5 upload shape")
+    truth = tmp_path / "truth.csv"
+    output = tmp_path / "out"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+            "uav_type": ["2", "2"],
+        }
+    ).to_csv(truth, index=False)
+
+    status = mmuad_cli_main(
+        [
+            "--evaluate-results-zip",
+            str(zip_path),
+            "--evaluate-truth-csv",
+            str(truth),
+            "--evaluation-protocol",
+            "public-track5",
+            "--evaluation-timestamp-tolerance-s",
+            "0",
+            "--evaluation-json",
+            str(output / "public_track5_eval.json"),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    metrics = json.loads((output / "public_track5_eval.json").read_text(encoding="utf-8"))
+    assert metrics["matched_count"] == 2
+    assert metrics["pooled"]["mean_square_loss_m2"] == 0.0
+    assert metrics["official_submission_valid"] is False
+    assert metrics["official_submission_validation"]["contains_only_mmaud_results_csv"] is False
+    assert metrics["leaderboard_ready"] is False
+    assert metrics["score_valid_for_leaderboard"] is False
+    assert "official_zip_members_invalid" in metrics["leaderboard_blocking_reasons"]
+
+    with pytest.raises(SystemExit, match="official_zip_members_invalid"):
+        mmuad_cli_main(
+            [
+                "--evaluate-results-zip",
+                str(zip_path),
+                "--evaluate-truth-csv",
+                str(truth),
+                "--evaluation-protocol",
+                "public-track5",
+                "--evaluation-timestamp-tolerance-s",
+                "0",
+                "--evaluation-require-complete-track5",
+                "--evaluation-json",
+                str(output / "public_track5_eval_require.json"),
+                "--output-dir",
+                str(output),
+            ]
+        )
+
+
 def test_cli_requires_complete_public_track5_evaluation(tmp_path: Path) -> None:
     zip_path = tmp_path / "official_submission.zip"
     official = pd.DataFrame(
