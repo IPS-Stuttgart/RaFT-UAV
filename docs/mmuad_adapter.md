@@ -911,7 +911,10 @@ The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
 `navsatfix_candidate`, `geographic_msgs/msg/GeoPointStamped` as
 `geopoint_truth` or `geopoint_candidate`,
 `geographic_msgs/msg/GeoPoseStamped` as `geopose_truth` or
-`geopose_candidate`, `vision_msgs/msg/Detection3D` as `detection3d_truth` or
+`geopose_candidate`, `vision_msgs/msg/Detection2D` or
+`vision_msgs/msg/Detection2DArray` as `camera_detections_candidate` when camera
+calibration and depth/fixed-depth metadata are provided,
+`vision_msgs/msg/Detection3D` as `detection3d_truth` or
 `detection3d_candidate`, `vision_msgs/msg/Detection3DArray` as
 `detection3d_array_truth` or `detection3d_array_candidate`,
 `visualization_msgs/msg/Marker` as `marker_truth` or `marker_candidate`,

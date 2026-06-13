@@ -45,7 +45,9 @@ from raft_uav.mmuad.mot import (
     run_mmuad_multi_object_tracker,
 )
 from raft_uav.mmuad.native_ros import (
+    detection2d_message_to_rows,
     detection3d_message_to_rows,
+    extract_native_rosbag_topic_map,
     geodetic_message_to_rows,
     marker_message_to_rows,
     multidof_message_to_rows,
@@ -6049,6 +6051,127 @@ def test_standalone_mcap_inspection_uses_rosbags_topics(
     assert payload["exports"][1]["source"] is None
 
 
+def test_native_ros_extraction_supports_detection2d_camera_candidates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_camera.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map.json"
+    camera_info = tmp_path / "camera_info.json"
+    output = tmp_path / "native_out"
+    camera_info.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 40.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_camera",
+                "exports": [
+                    {
+                        "topic": "/camera/detections",
+                        "kind": "camera_detections_candidate",
+                        "source": "cam0",
+                        "camera_calibration_file": "camera_info.json",
+                        "camera_fixed_depth_m": 10.0,
+                        "std_xy_m": 1.5,
+                        "std_z_m": 3.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    connection = SimpleNamespace(
+        topic="/camera/detections",
+        msgtype="vision_msgs/msg/Detection2DArray",
+    )
+    message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=2, nanosec=0),
+            frame_id="cam0",
+        ),
+        detections=[
+            SimpleNamespace(
+                id="det-a",
+                bbox=SimpleNamespace(
+                    center=SimpleNamespace(x=60.0, y=50.0),
+                    size_x=8.0,
+                    size_y=4.0,
+                ),
+                results=[
+                    SimpleNamespace(
+                        hypothesis=SimpleNamespace(class_id="quad", score=0.75)
+                    )
+                ],
+            )
+        ],
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [connection]
+            return [(connection, 2_000_000_000, b"raw")]
+
+        def deserialize(self, rawdata, msgtype):
+            assert rawdata == b"raw"
+            assert msgtype == "vision_msgs/msg/Detection2DArray"
+            return message
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is not None
+    rows = extracted.candidates.rows
+    assert len(rows) == 1
+    assert rows.loc[0, "sequence_id"] == "seq_camera"
+    assert rows.loc[0, "source"] == "cam0"
+    assert rows.loc[0, "track_id"] == "det-a"
+    assert rows.loc[0, "x_m"] == 1.0
+    assert rows.loc[0, "y_m"] == 1.0
+    assert rows.loc[0, "z_m"] == 10.0
+    assert rows.loc[0, "std_xy_m"] == 1.5
+    assert rows.loc[0, "std_z_m"] == 3.0
+    assert rows.loc[0, "confidence"] == 0.75
+    assert rows.loc[0, "class_name"] == "quad"
+    assert extracted.manifest["candidate_rows"] == 1
+    assert extracted.manifest["extracted_messages"][0]["status"] == "extracted"
+    assert (output / "native_ros_candidates.csv").exists()
+
+
 def test_ros2_topic_map_template_infers_polar_radar_topics(tmp_path: Path) -> None:
     bag = tmp_path / "bagdir"
     bag.mkdir()
@@ -6636,6 +6759,60 @@ def test_native_ros_geodetic_message_to_rows_accepts_geopose() -> None:
         [0.0, 0.0, 5.0],
         atol=1.0e-6,
     )
+
+
+def test_native_ros_detection2d_message_to_rows_extracts_bbox_centers() -> None:
+    message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=20, nanosec=500_000_000),
+            frame_id="cam0",
+        ),
+        detections=[
+            SimpleNamespace(
+                header=SimpleNamespace(
+                    stamp=SimpleNamespace(sec=21, nanosec=250_000_000),
+                    frame_id="cam0",
+                ),
+                id="det-7",
+                bbox=SimpleNamespace(
+                    center=SimpleNamespace(x=60.0, y=50.0),
+                    size_x=8.0,
+                    size_y=4.0,
+                ),
+                results=[
+                    SimpleNamespace(
+                        hypothesis=SimpleNamespace(class_id="drone", score=0.85)
+                    )
+                ],
+            ),
+            SimpleNamespace(
+                header=SimpleNamespace(frame_id="other_camera"),
+                bbox=SimpleNamespace(center=SimpleNamespace(x=10.0, y=10.0)),
+            ),
+        ],
+    )
+
+    rows = detection2d_message_to_rows(
+        message,
+        sequence_id="seq_det2d",
+        time_s=1.0,
+        frame_id="cam0",
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["sequence_id"] == "seq_det2d"
+    assert row["time_s"] == 21.25
+    assert row["u_px"] == 60.0
+    assert row["v_px"] == 50.0
+    assert row["x1"] == 56.0
+    assert row["y1"] == 48.0
+    assert row["x2"] == 64.0
+    assert row["y2"] == 52.0
+    assert row["track_id"] == "det-7"
+    assert row["confidence"] == 0.85
+    assert row["class_name"] == "drone"
+    assert row["frame_id"] == "cam0"
 
 
 def test_native_ros_detection3d_message_to_rows_extracts_bbox_centers() -> None:

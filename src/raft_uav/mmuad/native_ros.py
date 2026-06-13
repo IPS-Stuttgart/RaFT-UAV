@@ -8,6 +8,8 @@ tracking logs:
 * ``sensor_msgs/msg/PointCloud2`` -> clustered candidate detections;
 * ``sensor_msgs/msg/NavSatFix`` -> geodetic rows projected into local ENU;
 * ``geographic_msgs/msg/GeoPointStamped`` / ``GeoPoseStamped`` -> local ENU rows;
+* ``vision_msgs/msg/Detection2D`` / ``Detection2DArray`` -> calibrated camera
+  detection candidates;
 * ``vision_msgs/msg/Detection3D`` / ``Detection3DArray`` -> bbox center rows;
 * ``visualization_msgs/msg/Marker`` / ``MarkerArray`` -> marker position rows;
 * ``geometry_msgs/msg/Pose`` / ``PoseStamped`` /
@@ -35,6 +37,10 @@ import json
 import pandas as pd
 
 from raft_uav.coordinates import LocalENUProjector
+from raft_uav.mmuad.camera import (
+    camera_detection_frame_to_candidates,
+    load_camera_models_from_files,
+)
 from raft_uav.mmuad.io import merge_candidate_frames
 from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates
 from raft_uav.mmuad.rosbag_bridge import load_topic_map_payload
@@ -73,6 +79,11 @@ def extract_native_rosbag_topic_map(
     ``detection3d_truth`` / ``detection3d_array_truth`` /
     ``detection3d_candidate`` / ``detection3d_array_candidate``
         Convert vision_msgs 3D detection bbox centers into truth/candidate rows.
+    ``camera_detections_candidate`` / ``detection2d_candidate`` /
+    ``detection2d_array_candidate``
+        Convert vision_msgs 2D detections into calibrated camera candidates.
+        These entries require camera calibration and either per-detection depth
+        or ``camera_fixed_depth_m`` / ``fixed_depth_m`` in the topic map.
     ``marker_truth`` / ``marker_array_truth`` /
     ``marker_candidate`` / ``marker_array_candidate``
         Convert visualization marker poses into truth/candidate rows.
@@ -223,6 +234,46 @@ def extract_native_rosbag_topic_map(
                             CandidateFrame(pd.DataFrame.from_records(candidate_rows))
                         )
                     rows = len(candidate_rows)
+                elif kind in {
+                    "camera_detections_candidate",
+                    "detection2d_candidate",
+                    "detection2d_array_candidate",
+                }:
+                    rows_for_message = detection2d_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        frame_id=spec.get("frame_id"),
+                    )
+                    if rows_for_message:
+                        camera_models = _camera_models_from_spec(
+                            spec,
+                            bag_path=bag_path,
+                            topic_map_json=topic_map_json,
+                            source=source,
+                        )
+                        frame = camera_detection_frame_to_candidates(
+                            pd.DataFrame.from_records(rows_for_message),
+                            camera_models=camera_models,
+                            source=source,
+                            sequence_id=str(spec.get("sequence_id", sequence_id)),
+                            fixed_depth_m=_optional_float(
+                                spec,
+                                "camera_fixed_depth_m",
+                                "fixed_depth_m",
+                                "depth_m",
+                            ),
+                            std_xy_m=float(
+                                spec.get("camera_std_xy_m", spec.get("std_xy_m", 5.0))
+                            ),
+                            std_z_m=float(
+                                spec.get("camera_std_z_m", spec.get("std_z_m", 10.0))
+                            ),
+                        )
+                        candidate_frames.append(frame)
+                        rows = len(frame.rows)
+                    else:
+                        rows = 0
                 elif kind in {"marker_truth", "marker_array_truth"}:
                     rows_for_message = marker_message_to_rows(
                         message,
@@ -545,6 +596,65 @@ def detection3d_message_to_rows(
     return rows
 
 
+def detection2d_message_to_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    frame_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Convert vision_msgs Detection2D/Detection2DArray messages into rows."""
+
+    detections = getattr(message, "detections", None)
+    if detections is None:
+        detections = [message]
+    parent_time_s = _message_stamp_time_s(message)
+    parent_frame_id = _message_frame_id(message)
+    rows: list[dict[str, Any]] = []
+    for detection in detections:
+        if not _frame_filter_matches(
+            detection,
+            child_frame_id=None,
+            frame_id=frame_id,
+            fallback_frame_id=parent_frame_id,
+        ):
+            continue
+        bbox = getattr(detection, "bbox", None)
+        center = _detection2d_center(bbox)
+        if center is None:
+            continue
+        detection_time_s = _message_stamp_time_s(detection)
+        row = {
+            "sequence_id": sequence_id,
+            "time_s": (
+                detection_time_s
+                if detection_time_s is not None
+                else parent_time_s
+                if parent_time_s is not None
+                else float(time_s)
+            ),
+            "u_px": center[0],
+            "v_px": center[1],
+        }
+        _add_frame_metadata(row, detection, fallback_frame_id=parent_frame_id)
+        _add_detection2d_bbox_geometry(row, bbox, center=center)
+        depth_m = _detection2d_depth_m(bbox)
+        if depth_m is not None:
+            row["depth_m"] = depth_m
+        detection_id = getattr(detection, "id", None)
+        if detection_id not in (None, ""):
+            row["track_id"] = str(detection_id)
+            row["detection_id"] = str(detection_id)
+        confidence = _detection3d_confidence(detection)
+        if confidence is not None:
+            row["confidence"] = float(confidence)
+        class_name = _detection3d_class_name(detection)
+        if class_name is not None:
+            row["class_name"] = class_name
+        rows.append(row)
+    return rows
+
+
 def marker_message_to_rows(
     message: Any,
     *,
@@ -764,6 +874,135 @@ def _projector_from_spec(spec: dict[str, Any]) -> LocalENUProjector:
     return LocalENUProjector(float(latitude), float(longitude), float(altitude))
 
 
+def _camera_models_from_spec(
+    spec: dict[str, Any],
+    *,
+    bag_path: Path,
+    topic_map_json: Path,
+    source: str,
+):
+    calibration_files = _camera_calibration_files_from_spec(
+        spec,
+        bag_path=bag_path,
+        topic_map_json=topic_map_json,
+    )
+    if not calibration_files:
+        raise ValueError(
+            "native Detection2D topics require camera_calibration_file "
+            "or a nearby camera_info/intrinsics file"
+        )
+    return load_camera_models_from_files(
+        calibration_files,
+        source_hint_from_path=lambda _path: source,
+    )
+
+
+def _camera_calibration_files_from_spec(
+    spec: dict[str, Any],
+    *,
+    bag_path: Path,
+    topic_map_json: Path,
+) -> list[Path]:
+    values = _spec_path_values(
+        spec,
+        scalar_keys=(
+            "camera_calibration_file",
+            "camera_calibration_path",
+            "camera_intrinsics_file",
+            "camera_intrinsics_path",
+            "camera_info_file",
+            "camera_info_path",
+            "calibration_file",
+            "calibration_path",
+        ),
+        list_keys=(
+            "camera_calibration_files",
+            "camera_intrinsics_files",
+            "camera_info_files",
+            "calibration_files",
+        ),
+    )
+    topic_map_dir = Path(topic_map_json).parent
+    bag_dir = Path(bag_path) if Path(bag_path).is_dir() else Path(bag_path).parent
+    candidates = [
+        _resolve_spec_path(str(value), topic_map_dir=topic_map_dir, bag_dir=bag_dir)
+        for value in values
+    ]
+    if not candidates:
+        for directory in (topic_map_dir, bag_dir):
+            for name in _CAMERA_CALIBRATION_FILENAMES:
+                candidates.append(directory / name)
+    return _unique_existing_paths(candidates)
+
+
+def _spec_path_values(
+    spec: dict[str, Any],
+    *,
+    scalar_keys: tuple[str, ...],
+    list_keys: tuple[str, ...],
+) -> list[Any]:
+    values: list[Any] = []
+    for key in scalar_keys:
+        value = spec.get(key)
+        if value not in (None, ""):
+            values.append(value)
+    for key in list_keys:
+        value = spec.get(key)
+        if value in (None, ""):
+            continue
+        if isinstance(value, (list, tuple)):
+            values.extend(item for item in value if item not in (None, ""))
+        else:
+            values.append(value)
+    return values
+
+
+def _resolve_spec_path(value: str, *, topic_map_dir: Path, bag_dir: Path) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    topic_map_sibling = topic_map_dir / path
+    if topic_map_sibling.exists():
+        return topic_map_sibling
+    return bag_dir / path
+
+
+def _unique_existing_paths(paths: list[Path]) -> list[Path]:
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        resolved = Path(path).resolve()
+        if resolved in seen or not Path(path).exists():
+            continue
+        seen.add(resolved)
+        unique.append(Path(path))
+    return unique
+
+
+def _optional_float(spec: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = spec.get(key)
+        if value not in (None, ""):
+            return float(value)
+    return None
+
+
+_CAMERA_CALIBRATION_FILENAMES = (
+    "camera_info.json",
+    "camera_info.yaml",
+    "camera_info.yml",
+    "camera_calibration.json",
+    "camera_calibration.yaml",
+    "camera_calibration.yml",
+    "camera_intrinsics.json",
+    "camera_intrinsics.yaml",
+    "camera_intrinsics.yml",
+    "intrinsics.json",
+    "intrinsics.yaml",
+    "intrinsics.yml",
+)
+
+
 def _parse_lla_values(value: Any) -> tuple[float, float, float]:
     if isinstance(value, str):
         parts = [part.strip() for part in value.split(",")]
@@ -950,6 +1189,88 @@ def _detection3d_position(detection: Any) -> Any | None:
     if center is None:
         return None
     return _position_from_message(center)
+
+
+def _detection2d_center(bbox: Any | None) -> tuple[float, float] | None:
+    if bbox is None:
+        return None
+    center = getattr(bbox, "center", None)
+    if center is None:
+        return None
+    position = getattr(center, "position", None)
+    source = position if position is not None else center
+    try:
+        return (float(getattr(source, "x")), float(getattr(source, "y")))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _add_detection2d_bbox_geometry(
+    row: dict[str, Any],
+    bbox: Any | None,
+    *,
+    center: tuple[float, float],
+) -> None:
+    size = _detection2d_size(bbox)
+    if size is None:
+        return
+    width, height = size
+    row["x1"] = center[0] - width / 2.0
+    row["y1"] = center[1] - height / 2.0
+    row["x2"] = center[0] + width / 2.0
+    row["y2"] = center[1] + height / 2.0
+
+
+def _detection2d_size(bbox: Any | None) -> tuple[float, float] | None:
+    if bbox is None:
+        return None
+    width = _optional_attr_float(bbox, "size_x", "width", "w")
+    height = _optional_attr_float(bbox, "size_y", "height", "h")
+    size = getattr(bbox, "size", None)
+    if width is None and size is not None:
+        width = _optional_attr_float(size, "x", "width")
+    if height is None and size is not None:
+        height = _optional_attr_float(size, "y", "height")
+    if width is None or height is None:
+        return None
+    return (width, height)
+
+
+def _detection2d_depth_m(bbox: Any | None) -> float | None:
+    if bbox is None:
+        return None
+    center = getattr(bbox, "center", None)
+    if center is None:
+        return None
+    position = getattr(center, "position", None)
+    for source in (position, center):
+        if source is None:
+            continue
+        depth = _optional_attr_float(
+            source,
+            "z",
+            "depth",
+            "depth_m",
+            "range",
+            "range_m",
+            "distance",
+            "distance_m",
+        )
+        if depth is not None:
+            return depth
+    return None
+
+
+def _optional_attr_float(value: Any, *names: str) -> float | None:
+    for name in names:
+        raw = getattr(value, name, None)
+        if raw in (None, ""):
+            continue
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _marker_position_xyz(marker: Any) -> tuple[float, float, float] | None:
