@@ -621,6 +621,28 @@ def validate_official_track5_submission(
     return OfficialTrack5Validation(summary=summary, rows=row_diagnostics)
 
 
+def load_official_track5_template_file(path: Path) -> pd.DataFrame:
+    """Load requested Track 5 ``Sequence``/``Timestamp`` rows from CSV or ZIP.
+
+    The public upload schema and sample/template files may already use
+    ``Sequence,Timestamp,Position,Classification``.  Validation only needs the
+    requested sequence timestamps, so this helper accepts official result-like
+    files and returns the normalized template columns used by the preflight
+    checker.
+    """
+
+    path = Path(path)
+    if path.suffix.lower() == ".zip":
+        with ZipFile(path) as archive:
+            if "mmaud_results.csv" not in archive.namelist():
+                raise ValueError(f"{path} does not contain 'mmaud_results.csv'")
+            with archive.open("mmaud_results.csv") as handle:
+                frame = pd.read_csv(BytesIO(handle.read()))
+    else:
+        frame = pd.read_csv(path)
+    return _normalize_track5_template(frame)
+
+
 def _read_official_track5_zip_for_validation(
     path: Path,
     errors: list[str],
