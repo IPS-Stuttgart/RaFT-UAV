@@ -6,6 +6,7 @@ import pytest
 
 from raft_uav.mmuad.evaluator import (
     evaluate_mmaud_results,
+    load_evaluation_truth_file,
     load_mmaud_results_file,
     validate_mmaud_results_frame,
 )
@@ -440,6 +441,60 @@ def test_official_track5_results_evaluator_reports_public_metric_aliases():
     assert pooled["mean_square_loss_m2"] == 0.5
     assert pooled["uav_type_accuracy"] == 0.5
     assert pooled["classification_accuracy"] == 0.5
+
+
+def test_public_track5_metric_accepts_official_truth_frame():
+    results = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,0)", "(2,0,0)"],
+            "Classification": [2, 1],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,0)", "(1,0,0)"],
+            "Classification": [2, 2],
+        }
+    )
+
+    evaluated = evaluate_mmaud_results(
+        results,
+        truth,
+        metric_protocol="public-track5",
+        timestamp_tolerance_s=0.0,
+    )
+
+    rows = evaluated["rows"]
+    pooled = evaluated["summary"]["pooled"]
+    assert rows["truth_x_m"].tolist() == [0.0, 1.0]
+    assert rows["truth_uav_type"].tolist() == ["2", "2"]
+    assert pooled["mean_square_loss_m2"] == 0.5
+    assert pooled["classification_accuracy"] == 0.5
+    assert evaluated["summary"]["leaderboard_ready"] is True
+
+
+def test_evaluation_truth_file_loader_accepts_official_truth_zip(tmp_path):
+    zip_path = tmp_path / "official_truth.zip"
+    truth = pd.DataFrame(
+        {
+            "Sequence": ["seq1"],
+            "Timestamp": [1.0],
+            "Position": ["array([1.0, 2.0, 3.0])"],
+            "Classification": [4],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", truth.to_csv(index=False))
+
+    loaded = load_evaluation_truth_file(zip_path)
+
+    assert loaded.rows.loc[0, "sequence_id"] == "seq1"
+    assert loaded.rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+    assert loaded.rows.loc[0, "class_name"] == "4"
 
 
 def test_public_track5_metric_protocol_uses_truth_timestamp_denominator():

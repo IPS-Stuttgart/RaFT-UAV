@@ -24,6 +24,7 @@ from raft_uav.mmuad.completion import (
 from raft_uav.mmuad.evaluate import evaluate_submission_csv
 from raft_uav.mmuad.evaluator import (
     evaluate_mmaud_results,
+    load_evaluation_truth_file,
     load_mmaud_results_csv,
     load_mmaud_results_file,
     write_evaluation_artifacts,
@@ -323,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--evaluate-results-csv/--evaluate-results-zip requires "
                 "--evaluate-truth-csv or --evaluate-truth-file"
             )
-        truth_frame = load_truth_file(evaluation_truth)
+        truth_frame = load_evaluation_truth_file(evaluation_truth)
         result = evaluate_mmaud_results(
             load_mmaud_results_file(evaluation_results),
             truth_frame,

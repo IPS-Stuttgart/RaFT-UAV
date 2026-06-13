@@ -70,6 +70,27 @@ def load_mmaud_results_file(path: Path) -> ResultsFrame:
     return load_mmaud_results_csv(path)
 
 
+def load_evaluation_truth_file(path: Path) -> TruthFrame:
+    """Load normalized or official Track 5 truth rows for local evaluation."""
+
+    from raft_uav.mmuad.io import load_truth_file
+
+    try:
+        return load_truth_file(path)
+    except ValueError:
+        try:
+            rows = _load_official_track5_truth_file(path)
+        except Exception as official_error:
+            raise ValueError(
+                "evaluation truth file must be a normalized truth table or "
+                "an official Track 5 CSV/ZIP with Sequence, Timestamp, "
+                "Position, and Classification"
+            ) from official_error
+    frame = TruthFrame(rows)
+    frame.validate()
+    return frame
+
+
 def load_mmaud_results_zip(
     path: Path,
     *,
@@ -158,6 +179,33 @@ def _official_track5_results_to_local_frame(frame: pd.DataFrame) -> pd.DataFrame
     )
 
 
+def _load_official_track5_truth_file(path: Path) -> pd.DataFrame:
+    path = Path(path)
+    if path.suffix.lower() == ".zip":
+        with ZipFile(path) as archive:
+            if "mmaud_results.csv" not in archive.namelist():
+                raise ValueError(f"{path} does not contain 'mmaud_results.csv'")
+            with archive.open("mmaud_results.csv") as handle:
+                frame = pd.read_csv(BytesIO(handle.read()))
+    else:
+        frame = pd.read_csv(path)
+    return _official_track5_truth_to_rows(frame)
+
+
+def _official_track5_truth_to_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    local = _official_track5_results_to_local_frame(frame)
+    rows = local.rename(
+        columns={
+            "timestamp": "time_s",
+            "x": "x_m",
+            "y": "y_m",
+            "z": "z_m",
+            "uav_type": "class_name",
+        }
+    )
+    return normalize_truth_columns(rows)
+
+
 def evaluate_mmaud_results(
     results: ResultsFrame | pd.DataFrame,
     truth: TruthFrame | pd.DataFrame,
@@ -180,7 +228,7 @@ def evaluate_mmaud_results(
     result_rows = (
         results.rows if isinstance(results, ResultsFrame) else validate_mmaud_results_frame(results)
     )
-    truth_rows = truth.rows if isinstance(truth, TruthFrame) else normalize_truth_columns(truth)
+    truth_rows = _evaluation_truth_rows(truth)
     class_map_file = class_map_path if class_map_path is not None else class_map_csv
     class_map = load_sequence_class_map(class_map_file) if class_map_file is not None else {}
     protocol = _normalize_metric_protocol(metric_protocol)
@@ -197,6 +245,25 @@ def evaluate_mmaud_results(
         class_map=class_map,
         max_time_delta_s=max_time_delta_s,
     )
+
+
+def _evaluation_truth_rows(truth: TruthFrame | pd.DataFrame) -> pd.DataFrame:
+    if isinstance(truth, TruthFrame):
+        return truth.rows.copy()
+    try:
+        return normalize_truth_columns(truth)
+    except ValueError:
+        frame = pd.DataFrame(truth)
+        if not _has_official_track5_columns(frame):
+            raise
+        try:
+            return _official_track5_truth_to_rows(frame)
+        except Exception as official_error:
+            raise ValueError(
+                "evaluation truth frame must be a normalized truth table or "
+                "an official Track 5 frame with Sequence, Timestamp, Position, "
+                "and Classification"
+            ) from official_error
 
 
 def _normalize_metric_protocol(value: str) -> str:

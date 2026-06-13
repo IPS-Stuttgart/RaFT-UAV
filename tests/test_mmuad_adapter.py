@@ -4694,6 +4694,65 @@ def test_cli_evaluates_official_zip_with_public_track5_protocol(tmp_path: Path) 
     assert rows["matched"].tolist() == [True, True]
 
 
+def test_cli_evaluates_official_zip_against_official_truth_zip(
+    tmp_path: Path,
+) -> None:
+    predictions_zip = tmp_path / "official_submission.zip"
+    truth_zip = tmp_path / "official_truth.zip"
+    output = tmp_path / "out"
+    predictions = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,10)", "(2,0,10)"],
+            "Classification": [2, 1],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,10)", "(1,0,10)"],
+            "Classification": [2, 2],
+        }
+    )
+    with ZipFile(predictions_zip, "w") as archive:
+        archive.writestr("mmaud_results.csv", predictions.to_csv(index=False))
+    with ZipFile(truth_zip, "w") as archive:
+        archive.writestr("mmaud_results.csv", truth.to_csv(index=False))
+
+    status = mmuad_cli_main(
+        [
+            "--evaluate-results-zip",
+            str(predictions_zip),
+            "--evaluate-truth-file",
+            str(truth_zip),
+            "--evaluation-protocol",
+            "public-track5",
+            "--evaluation-timestamp-tolerance-s",
+            "0",
+            "--evaluation-json",
+            str(output / "official_truth_eval.json"),
+            "--evaluation-rows-csv",
+            str(output / "official_truth_eval_rows.csv"),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    metrics = json.loads(
+        (output / "official_truth_eval.json").read_text(encoding="utf-8")
+    )
+    rows = pd.read_csv(output / "official_truth_eval_rows.csv")
+    assert metrics["leaderboard_ready"] is True
+    assert metrics["score_valid_for_leaderboard"] is True
+    assert metrics["pooled"]["mean_square_loss_m2"] == 0.5
+    assert metrics["pooled"]["classification_accuracy"] == 0.5
+    assert rows["truth_x_m"].tolist() == [0.0, 1.0]
+    assert rows["truth_uav_type"].tolist() == [2, 2]
+
+
 def test_cli_public_track5_evaluation_rejects_zip_with_extra_members(
     tmp_path: Path,
 ) -> None:
