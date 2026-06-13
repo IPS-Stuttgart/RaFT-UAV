@@ -982,7 +982,7 @@ def _timestamps_from_official_dirs(root: Path, directory_names: tuple[str, ...])
     wanted = {_normalize_official_dir_name(name) for name in directory_names}
     timestamps: set[float] = set()
     for directory in _official_timestamp_dirs(root, wanted):
-        for item in sorted(directory.iterdir()):
+        for item in sorted(directory.rglob("*")):
             if not item.is_file():
                 continue
             timestamp = _timestamp_from_filename_or_none(item)

@@ -3232,18 +3232,18 @@ def test_official_track5_timestamp_template_prefers_truth_then_sensor_frames(
     tmp_path: Path,
 ) -> None:
     train_seq = tmp_path / "train" / "seq1"
-    (train_seq / "ground_truth").mkdir(parents=True)
+    (train_seq / "ground_truth" / "leica").mkdir(parents=True)
     (train_seq / "Image").mkdir()
     (train_seq / "livox_avia").mkdir()
-    np.save(train_seq / "ground_truth" / "10.0.npy", np.array([0.0, 0.0, 0.0]))
+    np.save(train_seq / "ground_truth" / "leica" / "10.0.npy", np.array([0.0, 0.0, 0.0]))
     (train_seq / "Image" / "11.0.png").write_bytes(b"not-a-real-image")
     np.save(train_seq / "livox_avia" / "12.0.npy", np.zeros((3, 3)))
 
     val_seq = tmp_path / "val" / "seq2"
-    (val_seq / "Image").mkdir(parents=True)
-    (val_seq / "livox_avia").mkdir()
-    (val_seq / "Image" / "20.0.png").write_bytes(b"not-a-real-image")
-    np.save(val_seq / "livox_avia" / "21.0.npy", np.zeros((3, 3)))
+    (val_seq / "Image" / "front_camera").mkdir(parents=True)
+    (val_seq / "livox_avia" / "stream0").mkdir(parents=True)
+    (val_seq / "Image" / "front_camera" / "20.0.png").write_bytes(b"not-a-real-image")
+    np.save(val_seq / "livox_avia" / "stream0" / "21.0.npy", np.zeros((3, 3)))
 
     discovered = {
         paths.sequence_id: paths for paths in discover_sequence_paths(tmp_path)
