@@ -3037,6 +3037,43 @@ def test_numpy_trajectory_files_use_time_xyz_column_order(tmp_path: Path) -> Non
     assert candidates.rows["z_m"].tolist() == [30.0, 31.0]
 
 
+def test_compact_text_trajectory_files_infer_timestamp_from_filename(
+    tmp_path: Path,
+) -> None:
+    truth_path = tmp_path / "12.5.txt"
+    candidate_path = tmp_path / "track_13.5.txt"
+    truth_path.write_text("1.0 2.0 3.0\n", encoding="utf-8")
+    candidate_path.write_text("4.0,5.0,6.0\n", encoding="utf-8")
+
+    truth = load_truth_file(truth_path, default_sequence_id="seq_text")
+    candidates = load_candidate_file(
+        candidate_path,
+        default_sequence_id="seq_text",
+        source="text-trajectory",
+    )
+
+    assert truth.rows["time_s"].tolist() == [12.5]
+    assert truth.rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+    assert candidates.rows["time_s"].tolist() == [13.5]
+    assert candidates.rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [4.0, 5.0, 6.0]
+    assert candidates.rows["source"].tolist() == ["text-trajectory"]
+
+
+def test_compact_text_trajectory_files_accept_time_xyz_rows(tmp_path: Path) -> None:
+    path = tmp_path / "trajectory.txt"
+    path.write_text("0.0 1.0 2.0 3.0\n1.0 2.0 3.0 4.0\n", encoding="utf-8")
+
+    candidates = load_candidate_file(
+        path,
+        default_sequence_id="seq_text_rows",
+        source="text-trajectory",
+    )
+
+    assert candidates.rows["time_s"].tolist() == [0.0, 1.0]
+    assert candidates.rows["x_m"].tolist() == [1.0, 2.0]
+    assert candidates.rows["z_m"].tolist() == [3.0, 4.0]
+
+
 def test_sequence_root_loads_compact_numpy_trajectory_and_truth_arrays(tmp_path: Path) -> None:
     seq = tmp_path / "seq_numpy"
     seq.mkdir()
@@ -3527,6 +3564,30 @@ def test_sequence_root_loads_nested_tracking_results_as_candidates(tmp_path: Pat
     assert candidates.rows["time_s"].tolist() == [20.0, 20.1]
     assert truth is not None
     assert truth.rows["time_s"].tolist() == [20.0, 20.1]
+
+
+def test_sequence_root_loads_compact_text_frames_from_official_folders(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "seq_text_frames"
+    results = seq / "tracking_results"
+    truth_dir = seq / "ground_truth"
+    results.mkdir(parents=True)
+    truth_dir.mkdir()
+    (results / "20.5.txt").write_text("1.0 2.0 3.0\n", encoding="utf-8")
+    (truth_dir / "20.5.txt").write_text("1.1 2.1 3.1\n", encoding="utf-8")
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].candidate_csvs == (results / "20.5.txt",)
+    assert discovered[0].truth_file == truth_dir / "20.5.txt"
+    assert candidates.rows["source"].tolist() == ["tracking_results"]
+    assert candidates.rows["time_s"].tolist() == [20.5]
+    assert candidates.rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+    assert truth is not None
+    assert truth.rows["time_s"].tolist() == [20.5]
+    assert truth.rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [1.1, 2.1, 3.1]
 
 
 def test_sequence_root_preserves_nested_candidate_csv_source_hint(tmp_path: Path) -> None:

@@ -140,6 +140,9 @@ A normalized sequence export can be loaded from folders containing files named
 `radar_polar.tsv` or `radar_polar.json`, `camera_detections.txt`, or
 `camera_detections.json`,
 compact trajectory arrays such as `trajectory.npy` / `candidates.npz`,
+headerless compact text trajectory frames such as
+`ground_truth/<timestamp>.txt` or `tracking_results/<timestamp>.txt` containing
+either `x y z` or `time x y z` numeric rows,
 exported ROS topic maps such as `topic_map.json` or `topic_map.yaml`,
 `truth.csv`, compact truth arrays such as `truth.npy`, and optionally
 `calibration.json`, `calibration.yaml`, `camera_info.json`,
