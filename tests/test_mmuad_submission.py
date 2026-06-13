@@ -396,6 +396,15 @@ def test_public_track5_metric_protocol_uses_truth_timestamp_denominator():
     assert summary["extra_prediction_count"] == 1
     assert summary["all_truth_timestamps_matched"] is False
     assert summary["truth_coverage_fraction"] == 2 / 3
+    assert summary["leaderboard_ready"] is False
+    assert summary["score_valid_for_leaderboard"] is False
+    assert set(summary["leaderboard_blocking_reasons"]) == {
+        "not_all_truth_timestamps_matched",
+        "missing_predictions",
+        "extra_predictions",
+        "duplicate_predictions",
+    }
+    assert summary["sequences"]["seq1"]["leaderboard_ready"] is False
     assert pooled["mean_square_loss_m2"] == 0.5
     assert pooled["classification_accuracy"] == 0.5
     reasons = evaluated["rows"]["unmatched_reason"].fillna("").tolist()
@@ -434,6 +443,9 @@ def test_public_track5_metric_normalizes_integer_like_class_labels():
     rows = evaluated["rows"]
     assert rows["predicted_uav_type"].tolist() == ["2", "1"]
     assert rows["truth_uav_type"].tolist() == ["2", "1"]
+    assert evaluated["summary"]["leaderboard_ready"] is True
+    assert evaluated["summary"]["score_valid_for_leaderboard"] is True
+    assert evaluated["summary"]["leaderboard_blocking_reasons"] == []
     assert evaluated["summary"]["pooled"]["classification_accuracy"] == 1.0
 
 

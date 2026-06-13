@@ -343,6 +343,13 @@ def _evaluate_public_track5_timestamp_aligned(
     missing_count = _reason_count(errors, "missing_prediction")
     extra_count = _reason_count(errors, "extra_prediction")
     duplicate_count = _reason_count(errors, "duplicate_prediction")
+    blocking_reasons = _track5_leaderboard_blocking_reasons(
+        truth_count=truth_count,
+        matched_count=int(len(matched)),
+        missing_count=missing_count,
+        extra_count=extra_count,
+        duplicate_count=duplicate_count,
+    )
     summary = {
         "metric_protocol": "public_track5_timestamp_aligned",
         "public_track5_metric": True,
@@ -358,6 +365,9 @@ def _evaluate_public_track5_timestamp_aligned(
         "unmatched_count": int(len(errors) - len(matched)),
         "truth_coverage_fraction": float(len(matched) / truth_count) if truth_count else 0.0,
         "all_truth_timestamps_matched": int(len(matched)) == truth_count,
+        "leaderboard_ready": not blocking_reasons,
+        "score_valid_for_leaderboard": not blocking_reasons,
+        "leaderboard_blocking_reasons": blocking_reasons,
         "pooled": _error_summary(matched),
         "sequences": {},
     }
@@ -369,22 +379,57 @@ def _evaluate_public_track5_timestamp_aligned(
             (result_rows["sequence_id"].astype(str) == str(sequence_id)).sum()
         )
         seq_summary = _error_summary(seq_matched)
+        seq_missing_count = _reason_count(group, "missing_prediction")
+        seq_extra_count = _reason_count(group, "extra_prediction")
+        seq_duplicate_count = _reason_count(group, "duplicate_prediction")
+        seq_blocking_reasons = _track5_leaderboard_blocking_reasons(
+            truth_count=seq_truth_count,
+            matched_count=int(len(seq_matched)),
+            missing_count=seq_missing_count,
+            extra_count=seq_extra_count,
+            duplicate_count=seq_duplicate_count,
+        )
         seq_summary.update(
             {
                 "truth_count": seq_truth_count,
                 "prediction_count": seq_prediction_count,
                 "matched_count": int(len(seq_matched)),
-                "missing_prediction_count": _reason_count(group, "missing_prediction"),
-                "extra_prediction_count": _reason_count(group, "extra_prediction"),
-                "duplicate_prediction_count": _reason_count(group, "duplicate_prediction"),
+                "missing_prediction_count": seq_missing_count,
+                "extra_prediction_count": seq_extra_count,
+                "duplicate_prediction_count": seq_duplicate_count,
                 "truth_coverage_fraction": (
                     float(len(seq_matched) / seq_truth_count) if seq_truth_count else 0.0
                 ),
                 "all_truth_timestamps_matched": int(len(seq_matched)) == seq_truth_count,
+                "leaderboard_ready": not seq_blocking_reasons,
+                "score_valid_for_leaderboard": not seq_blocking_reasons,
+                "leaderboard_blocking_reasons": seq_blocking_reasons,
             }
         )
         summary["sequences"][str(sequence_id)] = seq_summary
     return {"summary": summary, "rows": errors}
+
+
+def _track5_leaderboard_blocking_reasons(
+    *,
+    truth_count: int,
+    matched_count: int,
+    missing_count: int,
+    extra_count: int,
+    duplicate_count: int,
+) -> list[str]:
+    reasons: list[str] = []
+    if truth_count == 0:
+        reasons.append("no_truth_timestamps")
+    if matched_count != truth_count:
+        reasons.append("not_all_truth_timestamps_matched")
+    if missing_count:
+        reasons.append("missing_predictions")
+    if extra_count:
+        reasons.append("extra_predictions")
+    if duplicate_count:
+        reasons.append("duplicate_predictions")
+    return reasons
 
 
 def write_evaluation_artifacts(
