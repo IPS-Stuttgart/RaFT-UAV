@@ -114,7 +114,9 @@ def radar_polar_frame_to_candidates(
             "class_name": normalized.get("class_name", "uav"),
         }
     )
-    return CandidateFrame(normalize_candidate_columns(records))
+    return CandidateFrame(
+        normalize_candidate_columns(records, default_sequence_id=str(default_sequence_id))
+    )
 
 
 def polar_to_cartesian(
