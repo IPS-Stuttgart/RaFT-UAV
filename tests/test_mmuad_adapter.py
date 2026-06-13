@@ -3037,6 +3037,26 @@ def test_numpy_trajectory_files_use_time_xyz_column_order(tmp_path: Path) -> Non
     assert candidates.rows["z_m"].tolist() == [30.0, 31.0]
 
 
+def test_compact_numpy_trajectory_accepts_column_vector_frames(tmp_path: Path) -> None:
+    truth_path = tmp_path / "12.5.npy"
+    candidate_path = tmp_path / "track_13.5.npy"
+    np.save(truth_path, np.array([[1.0], [2.0], [3.0]]))
+    np.save(candidate_path, np.array([[4.0], [5.0], [6.0], [0.8]]))
+
+    truth = load_truth_file(truth_path, default_sequence_id="seq_column")
+    candidates = load_candidate_file(
+        candidate_path,
+        default_sequence_id="seq_column",
+        source="column-vector-trajectory",
+    )
+
+    assert truth.rows["time_s"].tolist() == [12.5]
+    assert truth.rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+    assert candidates.rows["time_s"].tolist() == [13.5]
+    assert candidates.rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [4.0, 5.0, 6.0]
+    assert candidates.rows["confidence"].tolist() == [0.8]
+
+
 def test_compact_text_trajectory_files_infer_timestamp_from_filename(
     tmp_path: Path,
 ) -> None:
@@ -3564,6 +3584,30 @@ def test_sequence_root_loads_nested_tracking_results_as_candidates(tmp_path: Pat
     assert candidates.rows["time_s"].tolist() == [20.0, 20.1]
     assert truth is not None
     assert truth.rows["time_s"].tolist() == [20.0, 20.1]
+
+
+def test_sequence_root_loads_column_vector_numpy_frames_from_official_folders(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "seq_column_vector"
+    results = seq / "tracking_results"
+    truth_dir = seq / "ground_truth"
+    results.mkdir(parents=True)
+    truth_dir.mkdir()
+    np.save(results / "20.5.npy", np.array([[1.0], [2.0], [3.0]]))
+    np.save(truth_dir / "20.5.npy", np.array([[1.1], [2.1], [3.1]]))
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(discovered[0])
+
+    assert discovered[0].candidate_trajectory_files == (results / "20.5.npy",)
+    assert discovered[0].truth_file == truth_dir / "20.5.npy"
+    assert candidates.rows["source"].tolist() == ["tracking_results"]
+    assert candidates.rows["time_s"].tolist() == [20.5]
+    assert candidates.rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+    assert truth is not None
+    assert truth.rows["time_s"].tolist() == [20.5]
+    assert truth.rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [1.1, 2.1, 3.1]
 
 
 def test_sequence_root_loads_compact_text_frames_from_official_folders(

@@ -1518,19 +1518,32 @@ def _read_numpy_trajectory_table(path: Path) -> pd.DataFrame:
     arr = np.asarray(arr)
     if arr.dtype.names:
         return pd.DataFrame.from_records(arr)
-    if arr.ndim == 1 and arr.shape[0] >= 3:
-        columns = ["x_m", "y_m", "z_m"]
-        frame = pd.DataFrame([arr[:3]], columns=columns)
-        frame.insert(0, "time_s", infer_time_s_from_filename(path))
-        if arr.shape[0] >= 4:
-            frame["confidence"] = arr[3]
-        return frame
+    compact_vector = _compact_numpy_coordinate_vector(arr)
+    if compact_vector is not None:
+        return _compact_vector_trajectory_frame(compact_vector, path=path)
     if arr.ndim != 2 or arr.shape[1] < 4:
         raise ValueError(f"NumPy trajectory table must be shape (N, >=4), got {arr.shape}")
     columns = ["time_s", "x_m", "y_m", "z_m"]
     if arr.shape[1] >= 5:
         columns.append("confidence")
     frame = pd.DataFrame(arr[:, : len(columns)], columns=columns)
+    return frame
+
+
+def _compact_numpy_coordinate_vector(arr: np.ndarray) -> np.ndarray | None:
+    if arr.ndim == 1 and arr.shape[0] >= 3:
+        return arr
+    if arr.ndim >= 2 and arr.size >= 3 and 1 in arr.shape:
+        return arr.reshape(-1)
+    return None
+
+
+def _compact_vector_trajectory_frame(arr: np.ndarray, *, path: Path) -> pd.DataFrame:
+    columns = ["x_m", "y_m", "z_m"]
+    frame = pd.DataFrame([arr[:3]], columns=columns)
+    frame.insert(0, "time_s", infer_time_s_from_filename(path))
+    if arr.shape[0] >= 4:
+        frame["confidence"] = arr[3]
     return frame
 
 
