@@ -28,7 +28,10 @@ from raft_uav.mmuad.submission import (
     OFFICIAL_UG2_RESULT_COLUMNS,
     UG2_RESULT_COLUMNS,
     load_sequence_class_map,
+    parse_official_classification_cell,
     parse_official_position_cell,
+    parse_official_sequence_cell,
+    parse_official_timestamp_cell,
 )
 
 _TRUTH_TYPE_COLUMNS = (
@@ -134,19 +137,26 @@ def _official_track5_results_to_local_frame(frame: pd.DataFrame) -> pd.DataFrame
     timestamp_col = lower_to_original["timestamp"]
     position_col = lower_to_original["position"]
     classification_col = lower_to_original["classification"]
+    sequences = [parse_official_sequence_cell(value) for value in frame[sequence_col]]
+    timestamps = [parse_official_timestamp_cell(value) for value in frame[timestamp_col]]
     positions = [parse_official_position_cell(value) for value in frame[position_col]]
+    classifications = [
+        parse_official_classification_cell(value)
+        for value in frame[classification_col]
+    ]
     xyz = pd.DataFrame(positions, columns=["x", "y", "z"], index=frame.index)
     return pd.DataFrame(
         {
-            "sequence_id": frame[sequence_col],
-            "timestamp": frame[timestamp_col],
+            "sequence_id": sequences,
+            "timestamp": timestamps,
             "x": xyz["x"],
             "y": xyz["y"],
             "z": xyz["z"],
-            "uav_type": frame[classification_col].astype(str),
+            "uav_type": [str(value) for value in classifications],
             "score": 1.0,
         }
     )
+
 
 def evaluate_mmaud_results(
     results: ResultsFrame | pd.DataFrame,

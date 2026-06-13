@@ -439,7 +439,9 @@ def _estimate_classification_values(
     return values.map(_classification_to_int)
 
 
-def _classification_to_int(value: Any) -> int:
+def parse_official_classification_cell(value: Any) -> int:
+    """Parse a public Track 5 ``Classification`` cell into an integer id."""
+
     if value is None:
         raise ValueError("official MMUAD Classification values must be integers")
     if isinstance(value, np.generic):
@@ -471,6 +473,10 @@ def _classification_to_int(value: Any) -> int:
             f"got {value!r}"
         )
     return int(number)
+
+
+def _classification_to_int(value: Any) -> int:
+    return parse_official_classification_cell(value)
 
 
 def _format_official_position(x: Any, y: Any, z: Any) -> str:
@@ -785,7 +791,7 @@ def _official_track5_row_diagnostics(
     normalized_rows: list[dict[str, Any]] = []
     for row_index, row in frame.iterrows():
         sequence = _official_sequence_text(row.get("Sequence"))
-        timestamp = pd.to_numeric(row.get("Timestamp", np.nan), errors="coerce")
+        timestamp = np.nan
         status = "ok"
         reason = ""
         xyz: tuple[float, float, float] | None = None
@@ -794,9 +800,12 @@ def _official_track5_row_diagnostics(
             sequence = ""
             status = "invalid_sequence"
             reason = "blank or missing Sequence"
-        if status == "ok" and not np.isfinite(float(timestamp)):
-            status = "invalid_timestamp"
-            reason = "Timestamp is not finite"
+        if status == "ok":
+            try:
+                timestamp = parse_official_timestamp_cell(row.get("Timestamp"))
+            except ValueError as exc:
+                status = "invalid_timestamp"
+                reason = str(exc)
         if status == "ok":
             try:
                 xyz = parse_official_position_cell(row.get("Position"))
@@ -805,7 +814,7 @@ def _official_track5_row_diagnostics(
                 reason = str(exc)
         if status == "ok":
             try:
-                classification = _classification_to_int(row.get("Classification"))
+                classification = parse_official_classification_cell(row.get("Classification"))
             except ValueError as exc:
                 status = "invalid_classification"
                 reason = str(exc)
@@ -861,11 +870,50 @@ def parse_official_position_cell(value: Any) -> tuple[float, float, float]:
     return xyz
 
 
-def _official_sequence_text(value: Any) -> str | None:
+def parse_official_sequence_cell(value: Any) -> str:
+    """Parse a public Track 5 ``Sequence`` cell into a non-missing id."""
+
     text = _scalar_to_text(value)
     if text is None or text.lower() in {"nan", "none", "<na>"}:
-        return None
+        raise ValueError("official MMUAD Sequence values must be nonblank")
     return text
+
+
+def parse_official_timestamp_cell(value: Any) -> float:
+    """Parse a public Track 5 ``Timestamp`` cell into a finite float."""
+
+    if value is None:
+        raise ValueError("official MMUAD Timestamp values must be finite numbers")
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, bool):
+        raise ValueError("official MMUAD Timestamp values must be finite numbers, not booleans")
+    try:
+        missing = pd.isna(value)
+    except TypeError:
+        missing = False
+    if isinstance(missing, bool) and missing:
+        raise ValueError("official MMUAD Timestamp values must be finite numbers")
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "official MMUAD Timestamp values must be finite numbers; "
+            f"got {value!r}"
+        ) from exc
+    if not np.isfinite(timestamp):
+        raise ValueError(
+            "official MMUAD Timestamp values must be finite numbers; "
+            f"got {value!r}"
+        )
+    return timestamp
+
+
+def _official_sequence_text(value: Any) -> str | None:
+    try:
+        return parse_official_sequence_cell(value)
+    except ValueError:
+        return None
 
 
 def _split_official_position_text(text: str) -> list[str]:
