@@ -97,6 +97,13 @@ def match_submission_to_truth(
 
     if truth.empty or submission.empty:
         return pd.DataFrame()
+    submission = submission.copy()
+    if "sequence_id" not in submission.columns:
+        submission["sequence_id"] = "default"
+    else:
+        submission["sequence_id"] = submission["sequence_id"].astype(str)
+    if "track_id" in submission.columns:
+        submission["track_id"] = submission["track_id"].astype(str)
     truth = normalize_truth_columns(truth)
     if "track_id" in truth.columns:
         truth["track_id"] = truth["track_id"].astype(str)
