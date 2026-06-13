@@ -16,7 +16,11 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.evaluator import ResultsFrame, validate_mmaud_results_frame
-from raft_uav.mmuad.schema import TruthFrame, normalize_truth_columns
+from raft_uav.mmuad.schema import (
+    TruthFrame,
+    normalize_time_column_aliases,
+    normalize_truth_columns,
+)
 from raft_uav.mmuad.submission import UG2_RESULT_COLUMNS
 
 
@@ -41,10 +45,7 @@ def complete_results_to_truth_timestamps(
     if extrapolation not in {"hold", "nan"}:
         raise ValueError("extrapolation must be 'hold' or 'nan'")
     result_rows = _completion_result_rows(results)
-    if isinstance(truth_or_template, TruthFrame):
-        template = truth_or_template.rows.copy()
-    else:
-        template = normalize_truth_columns(truth_or_template)
+    template = _completion_template_rows(truth_or_template)
     if template.empty:
         return CompletionResult(
             rows=pd.DataFrame(columns=UG2_RESULT_COLUMNS),
@@ -139,6 +140,61 @@ def _completion_result_rows(results: ResultsFrame | pd.DataFrame) -> pd.DataFram
         if "contains no finite trajectory rows" not in str(exc):
             raise
     return pd.DataFrame(columns=UG2_RESULT_COLUMNS)
+
+
+def _completion_template_rows(truth_or_template: TruthFrame | pd.DataFrame) -> pd.DataFrame:
+    """Return required sequence/timestamp rows for completion.
+
+    Truth inputs remain fully validated when coordinates are present, while
+    official Track 5 templates may provide only sequence IDs and timestamps.
+    """
+
+    if isinstance(truth_or_template, TruthFrame):
+        template = truth_or_template.rows.copy()
+    else:
+        try:
+            template = normalize_truth_columns(truth_or_template)
+        except ValueError as exc:
+            template = _timestamp_only_template_rows(truth_or_template, cause=exc)
+    if template.empty:
+        return pd.DataFrame(columns=["sequence_id", "time_s"])
+    rows = template[["sequence_id", "time_s"]].copy()
+    rows["sequence_id"] = rows["sequence_id"].fillna("default").astype(str).str.strip()
+    rows["sequence_id"] = rows["sequence_id"].where(rows["sequence_id"].ne(""), "default")
+    rows["time_s"] = pd.to_numeric(rows["time_s"], errors="coerce")
+    finite = np.isfinite(rows["time_s"].to_numpy(float))
+    return (
+        rows.loc[finite]
+        .drop_duplicates()
+        .sort_values(["sequence_id", "time_s"])
+        .reset_index(drop=True)
+    )
+
+
+def _timestamp_only_template_rows(
+    truth_or_template: pd.DataFrame,
+    *,
+    cause: ValueError,
+) -> pd.DataFrame:
+    frame = pd.DataFrame(truth_or_template).copy()
+    rows = normalize_time_column_aliases(frame, target="time_s")
+    lower_to_original = {str(column).lower(): column for column in rows.columns}
+    rename: dict[Any, str] = {}
+    for alias in ("sequence_id", "sequence", "seq", "scene", "scene_id", "id", "name"):
+        original = lower_to_original.get(alias)
+        if original is not None:
+            rename[original] = "sequence_id"
+            break
+    timestamp = lower_to_original.get("timestamp")
+    if timestamp is not None and "time_s" not in rows.columns:
+        rename[timestamp] = "time_s"
+    rows = rows.rename(columns=rename)
+    missing = {"sequence_id", "time_s"}.difference(rows.columns)
+    if missing:
+        raise ValueError(
+            f"completion template missing columns: {sorted(missing)}"
+        ) from cause
+    return rows[["sequence_id", "time_s"]].copy()
 
 
 def completion_summary(
