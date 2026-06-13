@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.calibration.empirical_covariance import (
+    aligned_residuals,
     apply_empirical_covariance,
     estimate_empirical_measurement_covariances,
 )
@@ -56,6 +57,35 @@ def test_empirical_covariance_estimates_and_writes_cov_columns():
     assert radar_cov.shape == (3, 3)
     assert np.all(np.diag(rf_cov) > 0.0)
     assert np.all(np.diag(radar_cov) > 0.0)
+
+
+def test_empirical_covariance_residuals_respect_sequence_ids():
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seq_a", "seq_b"],
+            "time_s": [0.0, 0.0],
+            "east_m": [0.0, 100.0],
+            "north_m": [0.0, 100.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+    rf = pd.DataFrame(
+        {
+            "sequence_id": ["seq_b"],
+            "time_s": [0.0],
+            "east_m": [101.0],
+            "north_m": [99.0],
+        }
+    )
+
+    residuals = aligned_residuals(
+        rf,
+        truth,
+        source="rf",
+        max_time_delta_s=0.25,
+    )
+
+    assert residuals.tolist() == [[1.0, -1.0]]
 
 
 def test_empirical_covariance_respects_time_gate():

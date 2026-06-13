@@ -95,6 +95,13 @@ def aligned_residuals(
         return np.empty((0, len(_SOURCE_COORDS[source])), dtype=float)
     if truth.empty or not all(column in truth.columns for column in required):
         return np.empty((0, len(_SOURCE_COORDS[source])), dtype=float)
+    if "sequence_id" in frame.columns and "sequence_id" in truth.columns:
+        return _aligned_residuals_by_sequence(
+            frame,
+            truth,
+            source=source,
+            max_time_delta_s=max_time_delta_s,
+        )
 
     truth_times = truth["time_s"].to_numpy(dtype=float)
     query_times = frame["time_s"].to_numpy(dtype=float)
@@ -112,6 +119,32 @@ def aligned_residuals(
     residuals = measured - reference
     residuals = residuals[np.isfinite(residuals).all(axis=1)]
     return residuals.reshape((-1, len(coords)))
+
+
+def _aligned_residuals_by_sequence(
+    frame: pd.DataFrame,
+    truth: pd.DataFrame,
+    *,
+    source: str,
+    max_time_delta_s: float,
+) -> np.ndarray:
+    residual_blocks: list[np.ndarray] = []
+    truth_sequence_ids = truth["sequence_id"].astype(str)
+    for sequence_id, sequence_frame in frame.groupby(frame["sequence_id"].astype(str), sort=False):
+        sequence_truth = truth.loc[truth_sequence_ids == str(sequence_id)]
+        if sequence_truth.empty:
+            continue
+        block = aligned_residuals(
+            sequence_frame.drop(columns=["sequence_id"], errors="ignore"),
+            sequence_truth.drop(columns=["sequence_id"], errors="ignore"),
+            source=source,
+            max_time_delta_s=max_time_delta_s,
+        )
+        if block.size:
+            residual_blocks.append(block)
+    if residual_blocks:
+        return np.vstack(residual_blocks)
+    return np.empty((0, len(_SOURCE_COORDS[source])), dtype=float)
 
 
 def empirical_covariance_matrix(
