@@ -63,6 +63,7 @@ from raft_uav.mmuad.splits import (
 from raft_uav.mmuad.submission import (
     compute_trajectory_metrics,
     estimates_to_mmaud_results_frame,
+    load_official_track5_template_file,
     load_sequence_class_map,
     validate_official_track5_submission,
     write_official_mmaud_results_csv,
@@ -620,7 +621,7 @@ def _validate_written_official_zip(args: argparse.Namespace) -> dict[str, str]:
 def _official_submission_validation_template(args: argparse.Namespace) -> pd.DataFrame | None:
     explicit_template = _official_validation_template_path(args)
     if explicit_template is not None:
-        return load_truth_file(explicit_template).rows
+        return _load_official_validation_template_file(explicit_template)
     if args.sequence_root is None:
         return None
     sequences = discover_sequence_paths(args.sequence_root, sequence_glob=args.sequence_glob)
@@ -646,6 +647,19 @@ def _official_submission_validation_template(args: argparse.Namespace) -> pd.Dat
     if not rows:
         return None
     return pd.concat(rows, ignore_index=True)
+
+
+def _load_official_validation_template_file(path: Path) -> pd.DataFrame:
+    try:
+        return load_truth_file(path).rows
+    except ValueError:
+        try:
+            return load_official_track5_template_file(path)
+        except Exception as template_error:
+            raise ValueError(
+                "official validation template must be a normalized truth/template "
+                "file or an official Track 5 CSV/ZIP with Sequence and Timestamp"
+            ) from template_error
 
 
 def _official_validation_template_path(args: argparse.Namespace) -> Path | None:

@@ -14,6 +14,7 @@ from raft_uav.mmuad.submission import (
     estimates_to_official_mmaud_results_frame,
     estimates_to_mmaud_results_frame,
     estimates_to_submission_frame,
+    load_official_track5_template_file,
     parse_official_position_cell,
     validate_official_track5_submission,
     write_official_mmaud_results_csv,
@@ -487,6 +488,31 @@ def test_official_track5_submission_validator_accepts_exact_zip_and_template(tmp
         "ok",
         "ok",
     ]
+
+
+def test_official_track5_template_loader_accepts_csv_and_zip(tmp_path):
+    template_frame = pd.DataFrame(
+        {
+            "Sequence": ["seq2", "seq1", "seq1"],
+            "Timestamp": [2.0, 1.0, 1.0],
+            "Position": ["(0,0,0)", "(1,0,0)", "(1,0,0)"],
+            "Classification": [2, 1, 1],
+        }
+    )
+    csv_path = tmp_path / "official_template.csv"
+    zip_path = tmp_path / "official_template.zip"
+    template_frame.to_csv(csv_path, index=False)
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", template_frame.to_csv(index=False))
+
+    csv_template = load_official_track5_template_file(csv_path)
+    zip_template = load_official_track5_template_file(zip_path)
+
+    assert csv_template.to_dict("records") == [
+        {"sequence_id": "seq1", "time_s": 1.0},
+        {"sequence_id": "seq2", "time_s": 2.0},
+    ]
+    assert zip_template.to_dict("records") == csv_template.to_dict("records")
 
 
 def test_official_track5_submission_validator_rejects_missing_like_sequences(tmp_path):

@@ -540,6 +540,9 @@ IDs, duplicate prediction detection, and optional timestamp coverage against a
 truth/template file or Track 5 sequence-root folders. It exits nonzero when the
 package is invalid, which makes it suitable for local CI before a manual
 Codabench upload.
+`--official-validation-template-file` may point to either a normalized
+truth/template file or an official Track 5 CSV/ZIP; for official files, only
+`Sequence` and `Timestamp` are used as the requested prediction grid.
 Boolean `Classification` values are rejected rather than silently converted to
 `0` or `1`.
 For compatibility with array-like exports from other Track 5 pipelines, the
