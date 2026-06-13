@@ -726,7 +726,11 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 ```
 
 Use `--evaluate-results-zip` instead when the result is still packaged as a
-Codabench-style archive. The summary includes `truth_count`, `prediction_count`,
+Codabench-style archive. The truth side may be a normalized truth file or an
+official Track 5 CSV/ZIP with `Sequence`, `Timestamp`, `Position`, and
+`Classification` columns; official truth rows are parsed into local normalized
+coordinates for the public Track 5 sanity metric. The summary includes `truth_count`,
+`prediction_count`,
 `missing_prediction_count`, `extra_prediction_count`,
 `duplicate_prediction_count`, `truth_coverage_fraction`, and
 `all_truth_timestamps_matched` so a leaderboard-style package can be checked for
