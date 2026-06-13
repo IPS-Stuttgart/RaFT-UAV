@@ -531,10 +531,12 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 This preflight check enforces a ZIP containing only `mmaud_results.csv`, exact
 `Sequence,Timestamp,Position,Classification` columns, nonblank/non-missing
 sequence IDs, finite timestamps and `(x,y,z)` position tuples, integer class
-IDs, duplicate
-prediction detection, and optional timestamp coverage against a truth/template
-file or Track 5 sequence-root folders. It exits nonzero when the package is
-invalid, which makes it suitable for local CI before a manual Codabench upload.
+IDs, duplicate prediction detection, and optional timestamp coverage against a
+truth/template file or Track 5 sequence-root folders. It exits nonzero when the
+package is invalid, which makes it suitable for local CI before a manual
+Codabench upload.
+Boolean `Classification` values are rejected rather than silently converted to
+`0` or `1`.
 For compatibility with array-like exports from other Track 5 pipelines, the
 local validator/evaluator also accepts `Position` cells formatted as `[x y z]`
 or `x y z`, plus NumPy-style wrappers such as `array([x, y, z])` or
