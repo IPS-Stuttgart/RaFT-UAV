@@ -6,7 +6,7 @@ from raft_uav.mmuad.schema import CandidateFrame, TruthFrame
 from raft_uav.mmuad.evaluate import evaluate_submission_csv
 from raft_uav.mmuad.inspect import inspect_sequence_root
 from raft_uav.mmuad.submission import estimates_to_submission_frame
-from raft_uav.mmuad import _submission_validation_guard as _submission_validation_guard
+from raft_uav.mmuad import _submission_validation_guard as _submission_validation_guard  # noqa: F401
 from raft_uav.mmuad.submission import validate_official_track5_submission
 from raft_uav.mmuad.tracker import TrackerConfig, TrackerOutput, run_mmuad_tracker
 
