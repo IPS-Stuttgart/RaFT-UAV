@@ -662,6 +662,10 @@ quantities:
 - `classification_accuracy` / `uav_type_accuracy`: sequence/type accuracy when truth rows or a class-map
   file provide UAV type labels.
 
+Integer-like class labels are normalized before comparison, so `2`, `2.0`, and
+NumPy/pandas numeric scalars score as the same class ID. Non-numeric names such
+as `Mavic3` are compared as stripped strings.
+
 Evaluate an exported `mmaud_results.csv` with optional class labels:
 
 ```bash

@@ -355,6 +355,39 @@ def test_public_track5_metric_protocol_uses_truth_timestamp_denominator():
     assert "extra_prediction" in reasons
 
 
+def test_public_track5_metric_normalizes_integer_like_class_labels():
+    results = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,0)", "(1,0,0)"],
+            "Classification": ["2.0", 1],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [0.0, 0.0],
+            "class_id": [2.0, 1.0],
+        }
+    )
+
+    evaluated = evaluate_mmaud_results(
+        results,
+        truth,
+        metric_protocol="public-track5",
+        timestamp_tolerance_s=0.0,
+    )
+
+    rows = evaluated["rows"]
+    assert rows["predicted_uav_type"].tolist() == ["2", "1"]
+    assert rows["truth_uav_type"].tolist() == ["2", "1"]
+    assert evaluated["summary"]["pooled"]["classification_accuracy"] == 1.0
+
+
 def test_official_track5_submission_validator_accepts_exact_zip_and_template(tmp_path):
     estimates = pd.DataFrame(
         {

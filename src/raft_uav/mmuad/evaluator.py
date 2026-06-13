@@ -31,6 +31,18 @@ from raft_uav.mmuad.submission import (
     parse_official_position_cell,
 )
 
+_TRUTH_TYPE_COLUMNS = (
+    "uav_type",
+    "class_name",
+    "class",
+    "label",
+    "category",
+    "classification",
+    "class_id",
+    "uav_type_id",
+    "type_id",
+)
+
 
 @dataclass(frozen=True)
 class ResultsFrame:
@@ -226,7 +238,7 @@ def _evaluate_nearest_time_results(
                 continue
             pred = row[["x", "y", "z"]].to_numpy(float)
             err = pred - truth_xyz[idx]
-            predicted_type = str(row.get("uav_type", ""))
+            predicted_type = _canonical_type_label(row.get("uav_type", "")) or ""
             truth_type = _truth_type_for_row(seq_truth.iloc[idx], sequence_id, class_map)
             type_correct = (predicted_type == truth_type) if truth_type is not None else None
             error_records.append(
@@ -408,7 +420,7 @@ def _matched_track5_row(
     truth_xyz = truth_row[["x_m", "y_m", "z_m"]].to_numpy(float)
     err = pred - truth_xyz
     sequence_id = str(truth_row["sequence_id"])
-    predicted_type = str(pred_row.get("uav_type", ""))
+    predicted_type = _canonical_type_label(pred_row.get("uav_type", "")) or ""
     truth_type = _truth_type_for_row(truth_row, sequence_id, class_map)
     type_correct = (predicted_type == truth_type) if truth_type is not None else None
     return {
@@ -472,6 +484,7 @@ def _unused_track5_prediction_rows(
         if int(index) in used_result_indices:
             continue
         sequence_id = str(pred_row.get("sequence_id", ""))
+        predicted_type = _canonical_type_label(pred_row.get("uav_type", "")) or ""
         truth_times = truth_by_sequence.get(sequence_id, np.asarray([], dtype=float))
         if truth_times.size:
             nearest_delta = float(
@@ -510,7 +523,7 @@ def _unused_track5_prediction_rows(
                 "truth_x_m": np.nan,
                 "truth_y_m": np.nan,
                 "truth_z_m": np.nan,
-                "predicted_uav_type": str(pred_row.get("uav_type", "")),
+                "predicted_uav_type": predicted_type,
                 "truth_uav_type": None,
                 "uav_type_correct": None,
             }
@@ -557,6 +570,7 @@ def _empty_truth_evaluation(
 
 
 def _unmatched_result_row(row: pd.Series, *, reason: str, dt_s: float | None = None) -> dict[str, Any]:
+    predicted_type = _canonical_type_label(row.get("uav_type", "")) or ""
     return {
         "sequence_id": str(row.get("sequence_id", "")),
         "timestamp": float(row.get("timestamp", np.nan)),
@@ -569,7 +583,7 @@ def _unmatched_result_row(row: pd.Series, *, reason: str, dt_s: float | None = N
         "x": float(row.get("x", np.nan)),
         "y": float(row.get("y", np.nan)),
         "z": float(row.get("z", np.nan)),
-        "predicted_uav_type": str(row.get("uav_type", "")),
+        "predicted_uav_type": predicted_type,
         "truth_uav_type": None,
         "uav_type_correct": None,
     }
@@ -607,7 +621,30 @@ def _error_summary(frame: pd.DataFrame) -> dict[str, Any]:
 def _truth_type_for_row(
     truth_row: pd.Series, sequence_id: str, class_map: dict[str, str]
 ) -> str | None:
-    for column in ("uav_type", "class_name", "class", "label", "category"):
+    for column in _TRUTH_TYPE_COLUMNS:
         if column in truth_row.index and pd.notna(truth_row[column]):
-            return str(truth_row[column])
-    return class_map.get(str(sequence_id))
+            return _canonical_type_label(truth_row[column])
+    return _canonical_type_label(class_map.get(str(sequence_id)))
+
+
+def _canonical_type_label(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, np.generic):
+        value = value.item()
+    try:
+        missing = pd.isna(value)
+    except TypeError:
+        missing = False
+    if isinstance(missing, bool) and missing:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "<na>"}:
+        return None
+    try:
+        numeric = float(text)
+    except ValueError:
+        return text
+    if np.isfinite(numeric) and numeric.is_integer():
+        return str(int(numeric))
+    return text
