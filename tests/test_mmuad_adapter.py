@@ -5611,6 +5611,86 @@ def test_cli_native_ros_extraction_writes_submission_artifacts(
     assert validation["codabench_upload_ready"] is True
 
 
+def test_cli_native_ros_extraction_requires_candidate_rows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    bag = tmp_path / "seq_native_truth_only.mcap"
+    bag.write_bytes(b"fake native bag")
+    topic_map = tmp_path / "topic_map_native.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_native_truth_only",
+                "exports": [{"topic": "/truth", "kind": "pose_truth"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "out"
+    extracted_dir = output / "extracted"
+
+    def fake_extract_native_rosbag_topic_map(
+        *,
+        bag_path,
+        topic_map_json,
+        output_dir,
+        voxel_size_m,
+        min_points,
+    ):
+        assert bag_path == bag
+        assert topic_map_json == topic_map
+        assert voxel_size_m == 0.75
+        assert min_points == 3
+        output_dir.mkdir(parents=True)
+        (output_dir / "native_ros_extraction_manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema": "fake-native-extraction",
+                    "candidate_rows": 0,
+                    "truth_rows": 1,
+                }
+            ),
+            encoding="utf-8",
+        )
+        truth = TruthFrame(
+            pd.DataFrame(
+                {
+                    "sequence_id": ["seq_native_truth_only"],
+                    "time_s": [0.0],
+                    "x_m": [0.0],
+                    "y_m": [0.0],
+                    "z_m": [10.0],
+                }
+            )
+        )
+        return SimpleNamespace(candidates=None, truth=truth, manifest={})
+
+    monkeypatch.setattr(
+        "raft_uav.mmuad.cli.extract_native_rosbag_topic_map",
+        fake_extract_native_rosbag_topic_map,
+    )
+
+    with pytest.raises(SystemExit, match="no candidate rows"):
+        mmuad_cli_main(
+            [
+                "--rosbag-path",
+                str(bag),
+                "--topic-map-file",
+                str(topic_map),
+                "--native-ros-extract-output-dir",
+                str(extracted_dir),
+                "--output-dir",
+                str(output),
+                "--submission-csv",
+                str(output / "submission.csv"),
+            ]
+        )
+
+    assert (extracted_dir / "native_ros_extraction_manifest.json").exists()
+    assert not (output / "mmuad_estimates.csv").exists()
+
+
 def test_topic_map_exports_load_json_candidates_and_truth(tmp_path: Path) -> None:
     exports = tmp_path / "exports"
     exports.mkdir()

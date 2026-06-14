@@ -293,25 +293,34 @@ def main(argv: list[str] | None = None) -> int:
                 voxel_size_m=args.voxel_size_m,
                 min_points=args.min_cluster_points,
             )
-            if extracted.candidates is not None:
-                _maybe_set_official_validation_template_from_truth(args, extracted.truth)
-                if args.infer_ug2_class_map_from_candidates:
-                    args._inferred_class_map = infer_sequence_class_map_from_candidates(
-                        extracted.candidates,
-                        min_confidence=args.classification_min_confidence,
-                        default_class=args.ug2_class_name,
-                    )
-                output = _run_tracker_for_mode(args, extracted.candidates, extracted.truth)
-                return _write_tracking_artifacts(
-                    args,
-                    output,
-                    extra_paths={
-                        "native_ros_manifest_json": str(
-                            args.native_ros_extract_output_dir
-                            / "native_ros_extraction_manifest.json"
-                        )
-                    },
+            if extracted.candidates is None or extracted.candidates.rows.empty:
+                manifest_path = (
+                    args.native_ros_extract_output_dir
+                    / "native_ros_extraction_manifest.json"
                 )
+                raise SystemExit(
+                    "native ROS extraction produced no candidate rows; inspect "
+                    f"{manifest_path} and update the topic map to include "
+                    "candidate-bearing topics"
+                )
+            _maybe_set_official_validation_template_from_truth(args, extracted.truth)
+            if args.infer_ug2_class_map_from_candidates:
+                args._inferred_class_map = infer_sequence_class_map_from_candidates(
+                    extracted.candidates,
+                    min_confidence=args.classification_min_confidence,
+                    default_class=args.ug2_class_name,
+                )
+            output = _run_tracker_for_mode(args, extracted.candidates, extracted.truth)
+            return _write_tracking_artifacts(
+                args,
+                output,
+                extra_paths={
+                    "native_ros_manifest_json": str(
+                        args.native_ros_extract_output_dir
+                        / "native_ros_extraction_manifest.json"
+                    )
+                },
+            )
         if args.topic_map_file is None:
             print("mmuad_rosbag_inspection=ok")
             print(f"topic_count={len(report.get('topics', []))}")
