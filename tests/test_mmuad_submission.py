@@ -554,6 +554,51 @@ def test_public_track5_metric_protocol_uses_truth_timestamp_denominator():
     assert "extra_prediction" in reasons
 
 
+def test_public_track5_metric_reports_extra_only_sequence_summary():
+    results = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq_extra"],
+            "Timestamp": [0.0, 0.0],
+            "Position": ["(0,0,0)", "(9,0,0)"],
+            "Classification": [1, 1],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seq1"],
+            "time_s": [0.0],
+            "x_m": [0.0],
+            "y_m": [0.0],
+            "z_m": [0.0],
+            "uav_type": ["1"],
+        }
+    )
+
+    evaluated = evaluate_mmaud_results(
+        results,
+        truth,
+        metric_protocol="public-track5",
+        timestamp_tolerance_s=0.0,
+    )
+
+    summary = evaluated["summary"]
+    assert summary["matched_count"] == 1
+    assert summary["extra_prediction_count"] == 1
+    assert summary["leaderboard_ready"] is False
+    assert set(summary["sequences"]) == {"seq1", "seq_extra"}
+    assert summary["sequences"]["seq1"]["leaderboard_ready"] is True
+    extra_summary = summary["sequences"]["seq_extra"]
+    assert extra_summary["truth_count"] == 0
+    assert extra_summary["prediction_count"] == 1
+    assert extra_summary["matched_count"] == 0
+    assert extra_summary["extra_prediction_count"] == 1
+    assert extra_summary["leaderboard_ready"] is False
+    assert extra_summary["leaderboard_blocking_reasons"] == [
+        "no_truth_timestamps",
+        "extra_predictions",
+    ]
+
+
 def test_public_track5_metric_rejects_empty_truth_template():
     results = pd.DataFrame(
         {
@@ -587,6 +632,10 @@ def test_public_track5_metric_rejects_empty_truth_template():
     assert summary["leaderboard_ready"] is False
     assert summary["score_valid_for_leaderboard"] is False
     assert summary["leaderboard_blocking_reasons"] == [
+        "no_truth_timestamps",
+        "extra_predictions",
+    ]
+    assert summary["sequences"]["seq1"]["leaderboard_blocking_reasons"] == [
         "no_truth_timestamps",
         "extra_predictions",
     ]
