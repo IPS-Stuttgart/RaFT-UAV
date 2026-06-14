@@ -62,6 +62,7 @@ POINT_CLOUD_EXPORT_SUFFIXES = (
     ".bin",
     ".bin.gz",
 )
+ROS_RECORDING_SUFFIXES = (".bag", ".db3", ".mcap")
 POINT_FILE_SUFFIXES = (
     *TABLE_SUFFIXES,
     *JSON_TABLE_SUFFIXES,
@@ -323,6 +324,8 @@ class SequencePaths:
     class_files: tuple[Path, ...]
     calibration_file: Path | None
     camera_calibration_files: tuple[Path, ...] = ()
+    native_topic_map_jsons: tuple[Path, ...] = ()
+    rosbag_paths: tuple[Path, ...] = ()
 
 
 def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[SequencePaths]:
@@ -628,6 +631,7 @@ def _looks_like_sequence(path: Path) -> bool:
         or _camera_detection_files(path)
         or _point_files(path)
         or _topic_map_files(path)
+        or (_native_topic_map_files(path) and _rosbag_paths(path))
         or _truth_files(path)
         or _class_files(path)
         or _timestamps_from_official_dirs(path, _all_official_timestamp_dirs())
@@ -690,6 +694,8 @@ def _sequence_from_dir(path: Path) -> SequencePaths:
         class_files=tuple(class_files),
         calibration_file=calibration,
         camera_calibration_files=tuple(camera_calibration_files),
+        native_topic_map_jsons=tuple(_native_topic_map_files(path)),
+        rosbag_paths=tuple(_rosbag_paths(path)),
     )
 
 
@@ -986,6 +992,31 @@ def _topic_map_files(path: Path) -> list[Path]:
     ]
 
 
+def _native_topic_map_files(path: Path) -> list[Path]:
+    candidates = []
+    for suffix in (".json", ".yaml", ".yml"):
+        candidates.extend(sorted(path.glob(f"*topic_map*{suffix}")))
+    return [
+        item
+        for item in _unique_paths(candidates)
+        if "template" not in item.stem.lower() and _is_native_topic_map(item)
+    ]
+
+
+def _is_native_topic_map(path: Path) -> bool:
+    try:
+        payload = load_topic_map_payload(path)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return False
+    exports = payload.get("exports", [])
+    if not isinstance(exports, list):
+        return False
+    return any(
+        isinstance(item, dict) and item.get("topic") and not item.get("path")
+        for item in exports
+    )
+
+
 def _is_export_topic_map(path: Path) -> bool:
     try:
         payload = load_topic_map_payload(path)
@@ -995,6 +1026,28 @@ def _is_export_topic_map(path: Path) -> bool:
     if not isinstance(exports, list):
         return False
     return any(isinstance(item, dict) and item.get("path") for item in exports)
+
+
+def _rosbag_paths(path: Path) -> list[Path]:
+    ros2_dirs: list[Path] = []
+    if (path / "metadata.yaml").exists():
+        ros2_dirs.append(path)
+    ros2_dirs.extend(
+        item.parent
+        for item in sorted(path.rglob("metadata.yaml"))
+        if item.is_file() and item.parent != path
+    )
+    files = [
+        item
+        for item in sorted(path.rglob("*"))
+        if item.is_file() and data_file_suffix(item) in ROS_RECORDING_SUFFIXES
+    ]
+    files = [
+        item
+        for item in files
+        if not any(parent in item.parents for parent in ros2_dirs)
+    ]
+    return _unique_paths(ros2_dirs + files)
 
 
 def _topic_map_referenced_paths(topic_maps: list[Path]) -> set[Path]:

@@ -227,9 +227,13 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 
 When a sequence contains a loadable exported topic map, the files referenced by
 that map are loaded through their `column_aliases` and are not also loaded as
-generic candidate/truth files. Native-only topic maps without exported file
-paths remain for the explicit `--rosbag-path --topic-map-file` extraction path
-(`--topic-map-json` remains accepted for existing scripts).
+generic candidate/truth files. Native topic maps without exported file paths are
+also discovered when the same sequence folder contains exactly one ROS bag or
+recording file, and sequence-root mode runs the native extraction bridge before
+tracking. Native topic-map templates without a recording are still inspection
+artifacts; use explicit `--rosbag-path --topic-map-file` when a folder contains
+multiple recordings or multiple native maps (`--topic-map-json` remains accepted
+for existing scripts).
 
 ### Submission/interchange output
 
@@ -470,8 +474,10 @@ as truth, `trajectory.npz` or `candidates.npy` counts as candidate data, and
 sequence-like folders and recommends the next adapter step. One-level split
 folders such as `train/`, `val/`, and `test/` are unwrapped so summaries keep
 the actual sequence IDs. Exported topic maps indicate sequence-root inputs,
-while native-only topic maps are kept for explicit ROS extraction with
-`--rosbag-path --topic-map-file` (`--topic-map-json` remains accepted).
+while native topic maps paired with exactly one ROS recording can be run from
+sequence-root mode through the native extraction bridge. Ambiguous native
+folders with multiple maps or recordings should still use explicit
+`--rosbag-path` and `--topic-map-file/--topic-map-json`.
 
 The public UG2+ Track 5 README requires a ZIP containing only
 `mmaud_results.csv`. The official public CSV columns are
@@ -1036,6 +1042,12 @@ Native extraction uses the same tracker artifact writer as exported CSV/sequence
 roots, so `submission.csv/json/zip`, UG2 result CSV/ZIP, official Track 5
 CSV/ZIP, validation JSON/rows, and trajectory metrics can be requested from the
 same run.
+Sequence-root mode can also run native extraction automatically when each
+sequence folder contains one native `topic_map*.json/yaml` file and one ROS bag
+or recording file. Per-sequence native manifests are written below
+`native_ros_extracted/<sequence_id>/` by default and summarized in
+`native_ros_sequence_manifests.json`; pass `--native-ros-extract-output-dir` to
+choose a different extraction base directory.
 If native extraction writes a manifest but yields no candidate rows, the CLI
 exits before tracking and points to `native_ros_extraction_manifest.json`; update
 the topic map to include candidate-bearing topics or export candidate detections

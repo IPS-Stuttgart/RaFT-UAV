@@ -396,6 +396,9 @@ def _write_tracking_artifacts(
     paths = write_tracker_output(output, args.output_dir)
     if extra_paths:
         paths.update(extra_paths)
+    native_sequence_manifests = getattr(args, "_native_ros_sequence_manifests_json", None)
+    if native_sequence_manifests is not None:
+        paths["native_ros_sequence_manifests_json"] = str(native_sequence_manifests)
     explicit_class_map = load_sequence_class_map(args.ug2_class_map_file)
     inferred_class_map = getattr(args, "_inferred_class_map", {})
     # Prefer explicit class-map files when both are provided.
@@ -1028,24 +1031,41 @@ def _run_sequence_root(args: argparse.Namespace):
     args._sequence_paths = sequences
     candidate_frames = []
     truth_frames = []
+    native_manifests = []
     for paths in sequences:
-        candidates, truth, _calibration = load_sequence_export(
-            paths,
-            apply_calibration=not args.no_apply_calibration,
-            voxel_size_m=args.voxel_size_m,
-            min_cluster_points=args.min_cluster_points,
-            radar_azimuth_convention=args.radar_azimuth_convention,
-            radar_angle_unit=args.radar_angle_unit,
-            radar_polar_range_std_m=args.radar_polar_range_std_m,
-            radar_polar_angle_std_deg=args.radar_polar_angle_std_deg,
-            radar_polar_z_std_m=args.radar_polar_z_std_m,
-            camera_fixed_depth_m=args.camera_fixed_depth_m,
-            camera_std_xy_m=args.camera_std_xy_m,
-            camera_std_z_m=args.camera_std_z_m,
-        )
-        candidate_frames.append(candidates)
-        if truth is not None:
-            truth_frames.append(truth)
+        if paths.native_topic_map_jsons:
+            candidates, truth, manifest_path = _load_native_sequence_export(args, paths)
+            native_manifests.append(
+                {
+                    "sequence_id": paths.sequence_id,
+                    "bag_path": str(paths.rosbag_paths[0]),
+                    "topic_map_file": str(paths.native_topic_map_jsons[0]),
+                    "manifest_json": str(manifest_path),
+                }
+            )
+            candidate_frames.append(candidates)
+            if truth is not None:
+                truth_frames.append(truth)
+        if _has_exported_sequence_inputs(paths):
+            candidates, truth, _calibration = load_sequence_export(
+                paths,
+                apply_calibration=not args.no_apply_calibration,
+                voxel_size_m=args.voxel_size_m,
+                min_cluster_points=args.min_cluster_points,
+                radar_azimuth_convention=args.radar_azimuth_convention,
+                radar_angle_unit=args.radar_angle_unit,
+                radar_polar_range_std_m=args.radar_polar_range_std_m,
+                radar_polar_angle_std_deg=args.radar_polar_angle_std_deg,
+                radar_polar_z_std_m=args.radar_polar_z_std_m,
+                camera_fixed_depth_m=args.camera_fixed_depth_m,
+                camera_std_xy_m=args.camera_std_xy_m,
+                camera_std_z_m=args.camera_std_z_m,
+            )
+            candidate_frames.append(candidates)
+            if truth is not None:
+                truth_frames.append(truth)
+    if not candidate_frames:
+        raise SystemExit(f"no MMUAD sequence exports found under {args.sequence_root}")
     candidates = merge_candidate_frames(candidate_frames)
     if args.infer_ug2_class_map_from_candidates:
         args._inferred_class_map = infer_sequence_class_map_from_candidates(
@@ -1054,7 +1074,68 @@ def _run_sequence_root(args: argparse.Namespace):
             default_class=args.ug2_class_name,
         )
     truth = merge_truth_frames(truth_frames) if truth_frames else None
+    if native_manifests:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        manifest_summary_path = args.output_dir / "native_ros_sequence_manifests.json"
+        manifest_summary_path.write_text(json.dumps(native_manifests, indent=2), encoding="utf-8")
+        args._native_ros_sequence_manifests_json = manifest_summary_path
+        _maybe_set_official_validation_template_from_truth(args, truth)
     return _run_tracker_for_mode(args, candidates, truth)
+
+
+def _has_exported_sequence_inputs(paths) -> bool:
+    return any(
+        (
+            paths.candidate_csvs,
+            paths.candidate_trajectory_files,
+            paths.radar_polar_csvs,
+            paths.camera_detection_csvs,
+            paths.point_cloud_files,
+            paths.topic_map_jsons,
+        )
+    )
+
+
+def _load_native_sequence_export(args: argparse.Namespace, paths):
+    if len(paths.native_topic_map_jsons) != 1:
+        raise SystemExit(
+            f"sequence {paths.sequence_id!r} has {len(paths.native_topic_map_jsons)} "
+            "native topic maps; use explicit --rosbag-path and --topic-map-file"
+        )
+    if len(paths.rosbag_paths) != 1:
+        raise SystemExit(
+            f"sequence {paths.sequence_id!r} has {len(paths.rosbag_paths)} ROS recordings; "
+            "use explicit --rosbag-path and --topic-map-file"
+        )
+    output_dir = _native_sequence_extract_output_dir(args, paths.sequence_id)
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=paths.rosbag_paths[0],
+        topic_map_json=paths.native_topic_map_jsons[0],
+        output_dir=output_dir,
+        voxel_size_m=args.voxel_size_m,
+        min_points=args.min_cluster_points,
+    )
+    if extracted.candidates is None or extracted.candidates.rows.empty:
+        manifest_path = output_dir / "native_ros_extraction_manifest.json"
+        raise SystemExit(
+            "native ROS extraction produced no candidate rows for "
+            f"sequence {paths.sequence_id!r}; inspect {manifest_path} and update "
+            "the topic map to include candidate-bearing topics"
+        )
+    return extracted.candidates, extracted.truth, output_dir / "native_ros_extraction_manifest.json"
+
+
+def _native_sequence_extract_output_dir(args: argparse.Namespace, sequence_id: str) -> Path:
+    base = args.native_ros_extract_output_dir or (args.output_dir / "native_ros_extracted")
+    return base / _safe_path_component(sequence_id)
+
+
+def _safe_path_component(value: str) -> str:
+    safe = "".join(
+        char if char.isalnum() or char in {"-", "_", "."} else "_"
+        for char in str(value)
+    )
+    return safe or "sequence"
 
 
 
