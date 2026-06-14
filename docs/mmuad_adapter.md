@@ -532,11 +532,14 @@ nearest-hold choices remain auditable. With
 `--ug2-official-validate-on-write`, the run also writes
 `mmuad_official_submission_validation.json` and
 `mmuad_official_submission_validation_rows.csv`, then exits nonzero if the
-fresh ZIP fails the local Track 5 preflight checks.
+fresh ZIP is not upload-ready under the local Track 5 preflight checks.
 For explicit-file, topic-map, or native ROS runs that do not have a
 `--sequence-root`, `--ug2-official-complete-to-sequence-timestamps` can instead
 use `--official-validation-template-file` or
 `--official-validation-template-csv` as the requested timestamp template.
+When normalized truth is loaded through `--truth-csv`, `--truth-file`, a
+topic-map truth export, or native ROS extraction, validate-on-write uses those
+truth timestamps as the requested official grid.
 
 Before manual upload, validate the official ZIP structure and timestamp
 coverage:
@@ -558,9 +561,9 @@ This preflight check enforces a ZIP containing only a root-level
 sequence IDs, finite timestamps and `(x,y,z)` position tuples, integer class
 IDs, duplicate prediction detection, and optional timestamp coverage against a
 truth/template file or Track 5 sequence-root folders. It exits nonzero when the
-package is invalid, which makes it suitable for local CI before a manual
-Codabench upload. A ZIP such as `submission/mmaud_results.csv` is rejected
-because the result file is not at the archive root.
+package is not upload-ready, which makes it suitable for local CI before a
+manual Codabench upload. A ZIP such as `submission/mmaud_results.csv` is
+rejected because the result file is not at the archive root.
 The validation JSON separates structural validity from leaderboard readiness:
 `valid` may be true for a well-formed ZIP even when no timestamp template was
 available, while `score_valid_for_leaderboard`, `leaderboard_ready`, and

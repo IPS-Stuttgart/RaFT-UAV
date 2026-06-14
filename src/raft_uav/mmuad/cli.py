@@ -294,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
                 min_points=args.min_cluster_points,
             )
             if extracted.candidates is not None:
+                _maybe_set_official_validation_template_from_truth(args, extracted.truth)
                 if args.infer_ug2_class_map_from_candidates:
                     args._inferred_class_map = infer_sequence_class_map_from_candidates(
                         extracted.candidates,
@@ -677,9 +678,11 @@ def _run_official_submission_validation(args: argparse.Namespace) -> int:
         paths["official_validation_rows_csv"] = str(args.official_validation_rows_csv)
     print("mmuad_official_submission_validation=ok")
     print(f"valid={validation.summary['valid']}")
+    print(f"leaderboard_ready={validation.summary['leaderboard_ready']}")
+    print(f"codabench_upload_ready={validation.summary['codabench_upload_ready']}")
     for name, path in paths.items():
         print(f"{name}={path}")
-    return 0 if validation.summary["valid"] else 1
+    return 0 if validation.summary["codabench_upload_ready"] else 1
 
 
 def _validate_written_official_zip(args: argparse.Namespace) -> dict[str, str]:
@@ -706,9 +709,14 @@ def _validate_written_official_zip(args: argparse.Namespace) -> dict[str, str]:
         "official_validation_json": str(json_path),
         "official_validation_rows_csv": str(rows_path),
     }
-    if not validation.summary["valid"]:
+    if not validation.summary["codabench_upload_ready"]:
         errors = "; ".join(str(item) for item in validation.summary.get("errors", []))
-        detail = f": {errors}" if errors else ""
+        reasons = ", ".join(
+            str(item)
+            for item in validation.summary.get("leaderboard_blocking_reasons", [])
+        )
+        detail_items = [item for item in (errors, reasons) if item]
+        detail = f": {'; '.join(detail_items)}" if detail_items else ""
         raise SystemExit(f"written official Track 5 ZIP failed validation{detail}")
     return paths
 
@@ -767,6 +775,19 @@ def _official_validation_template_path(args: argparse.Namespace) -> Path | None:
             "or --official-validation-template-file"
         )
     return args.official_validation_template_file or args.official_validation_template_csv
+
+
+def _maybe_set_official_validation_template_from_truth(
+    args: argparse.Namespace,
+    truth,
+) -> None:
+    if truth is None or getattr(args, "_official_validation_template", None) is not None:
+        return
+    if _official_validation_template_path(args) is not None:
+        return
+    if getattr(truth, "rows", pd.DataFrame()).empty:
+        return
+    args._official_validation_template = truth.rows
 
 
 def _run_explicit_files(args: argparse.Namespace):
@@ -852,6 +873,7 @@ def _run_explicit_files(args: argparse.Namespace):
         candidates = transform_candidate_frame(candidates, calibration)
     truth_path = _explicit_truth_path(args)
     truth = load_truth_file(truth_path) if truth_path is not None else topic_truth
+    _maybe_set_official_validation_template_from_truth(args, truth)
     return _run_tracker_for_mode(args, candidates, truth)
 
 
