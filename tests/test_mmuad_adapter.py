@@ -53,6 +53,7 @@ from raft_uav.mmuad.native_ros import (
     multidof_message_to_rows,
     position_message_to_row,
     position_message_to_rows,
+    radar_polar_message_to_rows,
 )
 from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates, pointcloud2_to_dataframe
 from raft_uav.mmuad.rosbag_bridge import (
@@ -6293,6 +6294,132 @@ def test_native_ros_extraction_uses_camera_info_for_detection2d_intrinsics(
     assert extracted.manifest["extracted_messages"][0]["kind"] == "camera_info_calibration"
     assert extracted.manifest["extracted_messages"][0]["source"] == "cam0"
     assert extracted.manifest["extracted_messages"][1]["kind"] == "camera_detections_candidate"
+    assert (output / "native_ros_candidates.csv").exists()
+
+
+def test_native_ros_radar_polar_message_to_rows_accepts_parallel_arrays() -> None:
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=3, nanosec=250_000_000)),
+        ranges=[10.0, 20.0],
+        azimuths_deg=[90.0, 0.0],
+        elevations_deg=[0.0, 30.0],
+        scores=[0.75, 0.5],
+        track_ids=["east", "up"],
+    )
+
+    rows = radar_polar_message_to_rows(
+        message,
+        sequence_id="seq_radar_arrays",
+        time_s=9.0,
+        angle_unit="rad",
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["sequence_id"] == "seq_radar_arrays"
+    assert rows[0]["time_s"] == 3.25
+    assert rows[0]["range_m"] == 10.0
+    assert abs(rows[0]["azimuth"] - np.pi / 2.0) < 1.0e-12
+    assert rows[0]["confidence"] == 0.75
+    assert rows[0]["track_id"] == "east"
+    assert rows[1]["range_m"] == 20.0
+    assert abs(rows[1]["elevation"] - np.pi / 6.0) < 1.0e-12
+
+
+def test_native_ros_extraction_supports_radar_polar_candidates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_radar_native.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_radar_native",
+                "exports": [
+                    {
+                        "topic": "/mmwave/range_azimuth",
+                        "kind": "radar_polar_candidate",
+                        "source": "mmwave",
+                        "angle_unit": "rad",
+                        "range_std_m": 3.0,
+                        "angle_std_deg": 1.0,
+                        "z_std_m": 4.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    connection = SimpleNamespace(
+        topic="/mmwave/range_azimuth",
+        msgtype="custom_msgs/msg/RadarPolarArray",
+    )
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=4, nanosec=0)),
+        detections=[
+            SimpleNamespace(
+                range=10.0,
+                azimuth=np.pi / 2.0,
+                elevation=0.0,
+                score=0.6,
+                id="radar-a",
+                label="uav",
+            )
+        ],
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [connection]
+            return [(connection, 4_000_000_000, b"radar")]
+
+        def deserialize(self, rawdata, msgtype):
+            assert rawdata == b"radar"
+            assert msgtype == "custom_msgs/msg/RadarPolarArray"
+            return message
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is not None
+    rows = extracted.candidates.rows
+    assert len(rows) == 1
+    assert rows.loc[0, "sequence_id"] == "seq_radar_native"
+    assert rows.loc[0, "source"] == "mmwave"
+    assert rows.loc[0, "track_id"] == "radar-a"
+    assert abs(float(rows.loc[0, "x_m"]) - 10.0) < 1.0e-9
+    assert abs(float(rows.loc[0, "y_m"])) < 1.0e-9
+    assert abs(float(rows.loc[0, "z_m"])) < 1.0e-9
+    assert rows.loc[0, "std_xy_m"] == 3.0
+    assert rows.loc[0, "std_z_m"] == 4.0
+    assert rows.loc[0, "confidence"] == 0.6
+    assert rows.loc[0, "class_name"] == "uav"
+    assert extracted.manifest["candidate_rows"] == 1
+    assert extracted.manifest["extracted_messages"][0]["status"] == "extracted"
+    assert extracted.manifest["extracted_messages"][0]["kind"] == "radar_polar_candidate"
     assert (output / "native_ros_candidates.csv").exists()
 
 
