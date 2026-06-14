@@ -43,6 +43,7 @@ OFFICIAL_UG2_RESULT_COLUMNS = (
     "Position",
     "Classification",
 )
+OFFICIAL_TRACK5_INVALID_SEQUENCE_BUCKET = "__invalid_sequence__"
 
 _SEQUENCE_ID_ALIASES = (
     "sequence_id",
@@ -898,18 +899,30 @@ def _official_track5_validation_sequence_summaries(
         set(template_rows["sequence_id"].astype(str)) if template_rows is not None else set()
     )
     prediction_sequence_ids = _nonempty_sequence_ids(prediction_rows)
+    invalid_sequence_rows = _invalid_sequence_prediction_rows(prediction_rows)
     sequence_ids = sorted(template_sequence_ids.union(prediction_sequence_ids))
+    if not invalid_sequence_rows.empty:
+        sequence_ids.append(OFFICIAL_TRACK5_INVALID_SEQUENCE_BUCKET)
     summaries: dict[str, dict[str, Any]] = {}
     for sequence_id in sequence_ids:
-        seq_predictions = prediction_rows.loc[
-            prediction_rows["sequence_id"].astype(str) == sequence_id
-        ]
-        seq_template_count = (
-            None
-            if not template_checked
-            else _template_sequence_count(template_rows, sequence_id)
+        is_invalid_sequence_bucket = sequence_id == OFFICIAL_TRACK5_INVALID_SEQUENCE_BUCKET
+        if is_invalid_sequence_bucket:
+            seq_predictions = invalid_sequence_rows
+        else:
+            seq_predictions = prediction_rows.loc[
+                prediction_rows["sequence_id"].astype(str) == sequence_id
+            ]
+        if not template_checked:
+            seq_template_count = None
+        elif is_invalid_sequence_bucket:
+            seq_template_count = 0
+        else:
+            seq_template_count = _template_sequence_count(template_rows, sequence_id)
+        seq_template_rows = (
+            pd.DataFrame()
+            if is_invalid_sequence_bucket
+            else _official_template_diagnostic_rows(diagnostics, sequence_id)
         )
-        seq_template_rows = _official_template_diagnostic_rows(diagnostics, sequence_id)
         covered_count = _status_row_count(seq_template_rows, "covered_template_timestamp")
         missing_count = _status_row_count(seq_template_rows, "missing_template_timestamp")
         duplicate_count = _unique_prediction_status_count(
@@ -998,6 +1011,12 @@ def _nonempty_sequence_ids(rows: pd.DataFrame) -> set[str]:
         return set()
     sequence_ids = rows["sequence_id"].dropna().astype(str).str.strip()
     return {sequence_id for sequence_id in sequence_ids if sequence_id}
+
+
+def _invalid_sequence_prediction_rows(rows: pd.DataFrame) -> pd.DataFrame:
+    if rows.empty or "status" not in rows.columns:
+        return pd.DataFrame()
+    return rows.loc[rows["status"].astype(str) == "invalid_sequence"].copy()
 
 
 def _template_sequence_count(
