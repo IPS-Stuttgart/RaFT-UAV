@@ -316,6 +316,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "pose_truth" if truth_like else "pose_candidate"
     if msg_type.endswith("pointstamped") or "point_stamped" in msg_type:
         return "point_truth" if truth_like else "point_candidate"
+    if msg_type.endswith("/point") or compact_type.endswith("msg/point"):
+        return "point_truth" if truth_like else "point_candidate"
     if msg_type.endswith("transformstamped") or "transform_stamped" in msg_type:
         return "transform_truth" if truth_like else "transform_candidate"
     if msg_type.endswith("odometry"):
