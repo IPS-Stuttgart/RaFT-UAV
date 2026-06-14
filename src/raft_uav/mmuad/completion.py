@@ -228,8 +228,11 @@ def _complete_one(
     extrapolation: str,
 ) -> tuple[np.ndarray, float, str, float, float] | None:
     if len(times) == 1:
+        single_time = float(times[0])
+        if abs(single_time - timestamp) < 1e-9:
+            return xyz[0], scores[0], "exact", single_time, single_time
         if extrapolation == "hold":
-            return xyz[0], scores[0], "hold_single", float(times[0]), float(times[0])
+            return xyz[0], scores[0], "hold_single", single_time, single_time
         return None
 
     idx_right = int(np.searchsorted(times, timestamp, side="left"))
