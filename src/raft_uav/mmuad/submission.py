@@ -823,6 +823,7 @@ def _validate_official_track5_frame(
     extra_count = 0
     missing_count = 0
     template_count = None
+    template_rows: pd.DataFrame | None = None
     if not normalized.empty:
         duplicate_indices = _duplicate_prediction_indices(
             normalized,
@@ -876,8 +877,178 @@ def _validate_official_track5_frame(
         "template_timestamp_count": template_count,
         "missing_template_timestamp_count": int(missing_count),
         "extra_prediction_count": int(extra_count),
+        "sequences": _official_track5_validation_sequence_summaries(
+            diagnostics,
+            template_checked=template is not None,
+            template_rows=template_rows,
+        ),
     }
     return summary, diagnostics
+
+
+def _official_track5_validation_sequence_summaries(
+    diagnostics: pd.DataFrame,
+    *,
+    template_checked: bool,
+    template_rows: pd.DataFrame | None,
+) -> dict[str, dict[str, Any]]:
+    prediction_rows = _official_prediction_diagnostic_rows(diagnostics)
+    template_sequence_ids = (
+        set(template_rows["sequence_id"].astype(str)) if template_rows is not None else set()
+    )
+    prediction_sequence_ids = _nonempty_sequence_ids(prediction_rows)
+    sequence_ids = sorted(template_sequence_ids.union(prediction_sequence_ids))
+    summaries: dict[str, dict[str, Any]] = {}
+    for sequence_id in sequence_ids:
+        seq_predictions = prediction_rows.loc[
+            prediction_rows["sequence_id"].astype(str) == sequence_id
+        ]
+        seq_template_count = (
+            None
+            if not template_checked
+            else _template_sequence_count(template_rows, sequence_id)
+        )
+        seq_template_rows = _official_template_diagnostic_rows(diagnostics, sequence_id)
+        covered_count = _status_row_count(seq_template_rows, "covered_template_timestamp")
+        missing_count = _status_row_count(seq_template_rows, "missing_template_timestamp")
+        duplicate_count = _unique_prediction_status_count(
+            seq_predictions,
+            "duplicate_prediction",
+        )
+        extra_count = _unique_prediction_status_count(seq_predictions, "extra_prediction")
+        invalid_counts = {
+            "invalid_sequence_count": _unique_prediction_status_count(
+                seq_predictions,
+                "invalid_sequence",
+            ),
+            "invalid_timestamp_count": _unique_prediction_status_count(
+                seq_predictions,
+                "invalid_timestamp",
+            ),
+            "invalid_position_count": _unique_prediction_status_count(
+                seq_predictions,
+                "invalid_position",
+            ),
+            "invalid_classification_count": _unique_prediction_status_count(
+                seq_predictions,
+                "invalid_classification",
+            ),
+        }
+        blocking_reasons = _official_track5_sequence_blocking_reasons(
+            template_checked=template_checked,
+            template_timestamp_count=seq_template_count,
+            missing_count=missing_count,
+            extra_count=extra_count,
+            duplicate_count=duplicate_count,
+            invalid_count=sum(invalid_counts.values()),
+        )
+        summaries[sequence_id] = {
+            "template_checked": bool(template_checked),
+            "template_timestamp_count": seq_template_count,
+            "prediction_count": _unique_prediction_count(seq_predictions),
+            "valid_prediction_count": _unique_prediction_status_count(
+                seq_predictions,
+                "ok",
+            ),
+            "covered_template_timestamp_count": covered_count,
+            "missing_template_timestamp_count": missing_count,
+            "extra_prediction_count": extra_count,
+            "duplicate_prediction_count": duplicate_count,
+            **invalid_counts,
+            "template_coverage_fraction": (
+                float(covered_count / seq_template_count)
+                if seq_template_count
+                else 0.0
+            ),
+            "all_template_timestamps_covered": (
+                bool(seq_template_count) and covered_count == seq_template_count
+            ),
+            "leaderboard_ready": not blocking_reasons,
+            "score_valid_for_leaderboard": not blocking_reasons,
+            "leaderboard_blocking_reasons": blocking_reasons,
+        }
+    return summaries
+
+
+def _official_prediction_diagnostic_rows(diagnostics: pd.DataFrame) -> pd.DataFrame:
+    if diagnostics.empty or "row_type" not in diagnostics.columns:
+        return pd.DataFrame()
+    rows = diagnostics.loc[diagnostics["row_type"].astype(str) == "prediction"].copy()
+    if rows.empty or "row_index" not in rows.columns:
+        return rows
+    return rows.drop_duplicates(subset=["row_index"], keep="last")
+
+
+def _official_template_diagnostic_rows(
+    diagnostics: pd.DataFrame,
+    sequence_id: str,
+) -> pd.DataFrame:
+    if diagnostics.empty or "row_type" not in diagnostics.columns:
+        return pd.DataFrame()
+    rows = diagnostics.loc[
+        (diagnostics["row_type"].astype(str) == "template")
+        & (diagnostics["sequence_id"].astype(str) == sequence_id)
+    ]
+    return rows.copy()
+
+
+def _nonempty_sequence_ids(rows: pd.DataFrame) -> set[str]:
+    if rows.empty or "sequence_id" not in rows.columns:
+        return set()
+    sequence_ids = rows["sequence_id"].dropna().astype(str).str.strip()
+    return {sequence_id for sequence_id in sequence_ids if sequence_id}
+
+
+def _template_sequence_count(
+    template_rows: pd.DataFrame | None,
+    sequence_id: str,
+) -> int:
+    if template_rows is None or template_rows.empty:
+        return 0
+    return int((template_rows["sequence_id"].astype(str) == sequence_id).sum())
+
+
+def _status_row_count(rows: pd.DataFrame, status: str) -> int:
+    if rows.empty or "status" not in rows.columns:
+        return 0
+    return int((rows["status"].astype(str) == status).sum())
+
+
+def _unique_prediction_count(rows: pd.DataFrame) -> int:
+    if rows.empty or "row_index" not in rows.columns:
+        return 0
+    return int(rows["row_index"].dropna().astype(int).nunique())
+
+
+def _unique_prediction_status_count(rows: pd.DataFrame, status: str) -> int:
+    if rows.empty or "status" not in rows.columns:
+        return 0
+    return _unique_prediction_count(rows.loc[rows["status"].astype(str) == status])
+
+
+def _official_track5_sequence_blocking_reasons(
+    *,
+    template_checked: bool,
+    template_timestamp_count: int | None,
+    missing_count: int,
+    extra_count: int,
+    duplicate_count: int,
+    invalid_count: int,
+) -> list[str]:
+    reasons: list[str] = []
+    if not template_checked:
+        reasons.append("timestamp_template_not_checked")
+    elif int(template_timestamp_count or 0) == 0:
+        reasons.append("no_template_timestamps")
+    if invalid_count:
+        reasons.append("official_invalid_rows")
+    if duplicate_count:
+        reasons.append("official_duplicate_predictions")
+    if missing_count:
+        reasons.append("official_missing_template_timestamps")
+    if extra_count:
+        reasons.append("official_extra_predictions")
+    return reasons
 
 
 def _official_track5_row_diagnostics(

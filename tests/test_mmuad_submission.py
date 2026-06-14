@@ -859,6 +859,57 @@ def test_official_track5_submission_validator_requires_one_prediction_per_templa
     assert statuses == ["covered_template_timestamp", "missing_template_timestamp"]
 
 
+def test_official_track5_submission_validator_reports_sequence_readiness(
+    tmp_path,
+):
+    zip_path = tmp_path / "sequence_readiness.zip"
+    frame = pd.DataFrame(
+        {
+            "Sequence": ["seq_ok", "seq_extra"],
+            "Timestamp": [0.0, 0.0],
+            "Position": ["(0,0,0)", "(9,0,0)"],
+            "Classification": [1, 1],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", frame.to_csv(index=False))
+    template = pd.DataFrame(
+        {
+            "sequence_id": ["seq_ok", "seq_missing"],
+            "time_s": [0.0, 0.0],
+        }
+    )
+
+    validation = validate_official_track5_submission(
+        zip_path,
+        template=template,
+        timestamp_tolerance_s=0.0,
+    )
+
+    summary = validation.summary
+    assert summary["valid"] is False
+    assert summary["missing_template_timestamp_count"] == 1
+    assert summary["extra_prediction_count"] == 1
+    assert set(summary["sequences"]) == {"seq_ok", "seq_missing", "seq_extra"}
+    assert summary["sequences"]["seq_ok"]["leaderboard_ready"] is True
+    assert summary["sequences"]["seq_ok"]["template_coverage_fraction"] == 1.0
+    missing_summary = summary["sequences"]["seq_missing"]
+    assert missing_summary["template_timestamp_count"] == 1
+    assert missing_summary["prediction_count"] == 0
+    assert missing_summary["missing_template_timestamp_count"] == 1
+    assert missing_summary["leaderboard_blocking_reasons"] == [
+        "official_missing_template_timestamps"
+    ]
+    extra_summary = summary["sequences"]["seq_extra"]
+    assert extra_summary["template_timestamp_count"] == 0
+    assert extra_summary["prediction_count"] == 1
+    assert extra_summary["extra_prediction_count"] == 1
+    assert extra_summary["leaderboard_blocking_reasons"] == [
+        "no_template_timestamps",
+        "official_extra_predictions",
+    ]
+
+
 def test_official_track5_template_loader_accepts_csv_and_zip(tmp_path):
     template_frame = pd.DataFrame(
         {
