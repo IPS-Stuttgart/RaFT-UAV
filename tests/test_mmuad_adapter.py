@@ -49,6 +49,7 @@ from raft_uav.mmuad.native_ros import (
     detection3d_message_to_rows,
     extract_native_rosbag_topic_map,
     geodetic_message_to_rows,
+    livox_custom_message_to_points,
     marker_message_to_rows,
     multidof_message_to_rows,
     position_message_to_row,
@@ -6052,6 +6053,32 @@ def test_standalone_mcap_inspection_uses_rosbags_topics(
     assert payload["exports"][1]["source"] is None
 
 
+def test_ros2_topic_map_template_infers_livox_custom_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /livox/lidar",
+                "        type: livox_ros_driver2/msg/CustomMsg",
+                "      message_count: 4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    export = payload["exports"][0]
+    assert export["kind"] == "livox_custommsg_candidate"
+    assert export["source"] == "livox_lidar"
+
+
 def test_native_ros_extraction_supports_detection2d_camera_candidates(
     tmp_path: Path,
     monkeypatch,
@@ -6294,6 +6321,128 @@ def test_native_ros_extraction_uses_camera_info_for_detection2d_intrinsics(
     assert extracted.manifest["extracted_messages"][0]["kind"] == "camera_info_calibration"
     assert extracted.manifest["extracted_messages"][0]["source"] == "cam0"
     assert extracted.manifest["extracted_messages"][1]["kind"] == "camera_detections_candidate"
+    assert (output / "native_ros_candidates.csv").exists()
+
+
+def test_native_ros_livox_custom_message_to_points_accepts_custom_points() -> None:
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=5, nanosec=100_000_000)),
+        points=[
+            SimpleNamespace(
+                x=1.0,
+                y=2.0,
+                z=3.0,
+                reflectivity=42,
+                offset_time=10_000,
+                tag=7,
+                line=2,
+            )
+        ],
+    )
+
+    rows = livox_custom_message_to_points(
+        message,
+        sequence_id="seq_livox",
+        time_s=9.0,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["sequence_id"] == "seq_livox"
+    assert abs(rows[0]["time_s"] - 5.10001) < 1.0e-12
+    assert rows[0]["x_m"] == 1.0
+    assert rows[0]["y_m"] == 2.0
+    assert rows[0]["z_m"] == 3.0
+    assert rows[0]["livox_point_index"] == 0
+    assert rows[0]["intensity"] == 42
+    assert rows[0]["livox_offset_time"] == 10_000
+    assert rows[0]["livox_tag"] == 7
+    assert rows[0]["livox_line"] == 2
+
+
+def test_native_ros_extraction_supports_livox_custom_candidates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_livox_native.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_livox_native",
+                "exports": [
+                    {
+                        "topic": "/livox/lidar",
+                        "kind": "livox_custommsg_candidate",
+                        "source": "livox",
+                        "voxel_size_m": 1.0,
+                        "min_points": 3,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    connection = SimpleNamespace(
+        topic="/livox/lidar",
+        msgtype="livox_ros_driver2/msg/CustomMsg",
+    )
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=8, nanosec=0)),
+        points=[
+            SimpleNamespace(x=1.0, y=2.0, z=3.0, reflectivity=20),
+            SimpleNamespace(x=1.2, y=2.0, z=3.0, reflectivity=25),
+            SimpleNamespace(x=1.1, y=2.1, z=3.0, reflectivity=30),
+        ],
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [connection]
+            return [(connection, 8_000_000_000, b"livox")]
+
+        def deserialize(self, rawdata, msgtype):
+            assert rawdata == b"livox"
+            assert msgtype == "livox_ros_driver2/msg/CustomMsg"
+            return message
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is not None
+    rows = extracted.candidates.rows
+    assert len(rows) == 1
+    assert rows.loc[0, "sequence_id"] == "seq_livox_native"
+    assert rows.loc[0, "source"] == "livox"
+    assert abs(float(rows.loc[0, "x_m"]) - 1.1) < 1.0e-9
+    assert abs(float(rows.loc[0, "y_m"]) - 2.033333333333333) < 1.0e-9
+    assert abs(float(rows.loc[0, "z_m"]) - 3.0) < 1.0e-9
+    assert rows.loc[0, "confidence"] == 3.0
+    assert extracted.manifest["candidate_rows"] == 1
+    assert extracted.manifest["extracted_messages"][0]["status"] == "extracted"
+    assert extracted.manifest["extracted_messages"][0]["kind"] == "livox_custommsg_candidate"
     assert (output / "native_ros_candidates.csv").exists()
 
 

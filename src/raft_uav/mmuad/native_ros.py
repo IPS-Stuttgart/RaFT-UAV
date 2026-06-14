@@ -6,6 +6,7 @@ The extractor currently supports common message families that appear in UAV
 tracking logs:
 
 * ``sensor_msgs/msg/PointCloud2`` -> clustered candidate detections;
+* ``livox_ros_driver(2)/msg/CustomMsg`` -> clustered candidate detections;
 * ``sensor_msgs/msg/CameraInfo`` -> camera intrinsics for native Detection2D;
 * common polar/range-azimuth radar messages -> polar radar candidates;
 * ``sensor_msgs/msg/NavSatFix`` -> geodetic rows projected into local ENU;
@@ -47,7 +48,7 @@ from raft_uav.mmuad.camera import (
     camera_detection_frame_to_candidates,
     load_camera_models_from_files,
 )
-from raft_uav.mmuad.io import merge_candidate_frames
+from raft_uav.mmuad.io import merge_candidate_frames, point_rows_to_candidates
 from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates
 from raft_uav.mmuad.radar import radar_polar_frame_to_candidates
 from raft_uav.mmuad.rosbag_bridge import load_topic_map_payload
@@ -78,6 +79,9 @@ def extract_native_rosbag_topic_map(
 
     ``pointcloud2_candidate``
         Decode ``sensor_msgs/msg/PointCloud2`` and cluster points.
+    ``livox_custom_candidate`` / ``livox_custommsg_candidate``
+        Decode common Livox CustomMsg point arrays and cluster them through the
+        same point-row bridge as exported point-cloud files.
     ``radar_polar_candidate`` / ``polar_radar_candidate``
         Decode common range/azimuth message shapes and convert them through
         the same polar radar bridge as exported table rows.  Native ROS angles
@@ -168,6 +172,38 @@ def extract_native_rosbag_topic_map(
                     )
                     candidate_frames.append(frame)
                     rows = len(frame.rows)
+                elif kind in {
+                    "livox_custom_candidate",
+                    "livox_custommsg_candidate",
+                    "livox_custom_pointcloud_candidate",
+                    "livox_pointcloud_candidate",
+                }:
+                    point_rows = livox_custom_message_to_points(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                    )
+                    if point_rows:
+                        frame = point_rows_to_candidates(
+                            pd.DataFrame.from_records(point_rows),
+                            source=source,
+                            voxel_size_m=float(
+                                spec.get("voxel_size_m", spec.get("voxel_size", voxel_size_m))
+                            ),
+                            min_points=int(
+                                spec.get(
+                                    "min_cluster_points",
+                                    spec.get("min_points", min_points),
+                                )
+                            ),
+                            min_confidence=float(
+                                spec.get("min_confidence", 0.0)
+                            ),
+                        )
+                        candidate_frames.append(frame)
+                        rows = len(frame.rows)
+                    else:
+                        rows = 0
                 elif kind in {
                     "radar_polar",
                     "radar_polar_candidate",
@@ -684,6 +720,64 @@ def _camera_info_matrix(message: Any, *names: str) -> list[float] | None:
         if values:
             return values
     return None
+
+
+def livox_custom_message_to_points(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+) -> list[dict[str, Any]]:
+    """Convert common Livox CustomMsg point arrays into normalized point rows."""
+
+    parent_time_s = _message_stamp_time_s(message)
+    base_time_s = parent_time_s if parent_time_s is not None else float(time_s)
+    points = _field_sequence(
+        message,
+        ("points", "point", "cloud", "pointcloud", "livox_points"),
+    )
+    if not points:
+        return []
+    rows: list[dict[str, Any]] = []
+    for index, point in enumerate(points):
+        xyz = _xyz_from_position(point)
+        if xyz is None:
+            continue
+        row: dict[str, Any] = {
+            "sequence_id": str(sequence_id),
+            "time_s": _livox_point_time_s(point, base_time_s=base_time_s),
+            "x_m": xyz[0],
+            "y_m": xyz[1],
+            "z_m": xyz[2],
+            "livox_point_index": int(index),
+        }
+        for key, names in {
+            "intensity": ("intensity", "reflectivity", "reflectance"),
+            "livox_offset_time": ("offset_time", "offset_time_ns", "time_offset_ns"),
+            "livox_tag": ("tag",),
+            "livox_line": ("line", "laser_id", "channel"),
+        }.items():
+            value = _field_value(point, *names)
+            if value not in (None, ""):
+                row[key] = value
+        rows.append(row)
+    return rows
+
+
+def _livox_point_time_s(point: Any, *, base_time_s: float) -> float:
+    offset = _field_float(point, "offset_time_s", "time_offset_s")
+    if offset is not None:
+        return float(base_time_s) + offset
+    offset_ns = _field_float(point, "offset_time", "offset_time_ns", "time_offset_ns")
+    if offset_ns is not None:
+        return float(base_time_s) + offset_ns * 1.0e-9
+    offset_us = _field_float(point, "offset_time_us", "time_offset_us")
+    if offset_us is not None:
+        return float(base_time_s) + offset_us * 1.0e-6
+    offset_ms = _field_float(point, "offset_time_ms", "time_offset_ms")
+    if offset_ms is not None:
+        return float(base_time_s) + offset_ms * 1.0e-3
+    return float(base_time_s)
 
 
 def radar_polar_message_to_rows(
