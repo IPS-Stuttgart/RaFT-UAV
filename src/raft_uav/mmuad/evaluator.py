@@ -453,42 +453,11 @@ def _evaluate_public_track5_timestamp_aligned(
         "pooled": _error_summary(matched),
         "sequences": {},
     }
-    for sequence_id, seq_truth in truth_rows.groupby("sequence_id", sort=True):
-        group = errors.loc[errors["sequence_id"].astype(str) == str(sequence_id)]
-        seq_matched = group.loc[group["matched"]].copy() if not group.empty else pd.DataFrame()
-        seq_truth_count = int(len(seq_truth))
-        seq_prediction_count = int(
-            (result_rows["sequence_id"].astype(str) == str(sequence_id)).sum()
-        )
-        seq_summary = _error_summary(seq_matched)
-        seq_missing_count = _reason_count(group, "missing_prediction")
-        seq_extra_count = _reason_count(group, "extra_prediction")
-        seq_duplicate_count = _reason_count(group, "duplicate_prediction")
-        seq_blocking_reasons = _track5_leaderboard_blocking_reasons(
-            truth_count=seq_truth_count,
-            matched_count=int(len(seq_matched)),
-            missing_count=seq_missing_count,
-            extra_count=seq_extra_count,
-            duplicate_count=seq_duplicate_count,
-        )
-        seq_summary.update(
-            {
-                "truth_count": seq_truth_count,
-                "prediction_count": seq_prediction_count,
-                "matched_count": int(len(seq_matched)),
-                "missing_prediction_count": seq_missing_count,
-                "extra_prediction_count": seq_extra_count,
-                "duplicate_prediction_count": seq_duplicate_count,
-                "truth_coverage_fraction": (
-                    float(len(seq_matched) / seq_truth_count) if seq_truth_count else 0.0
-                ),
-                "all_truth_timestamps_matched": int(len(seq_matched)) == seq_truth_count,
-                "leaderboard_ready": not seq_blocking_reasons,
-                "score_valid_for_leaderboard": not seq_blocking_reasons,
-                "leaderboard_blocking_reasons": seq_blocking_reasons,
-            }
-        )
-        summary["sequences"][str(sequence_id)] = seq_summary
+    summary["sequences"] = _public_track5_sequence_summaries(
+        errors,
+        result_rows,
+        truth_rows,
+    )
     return {"summary": summary, "rows": errors}
 
 
@@ -512,6 +481,69 @@ def _track5_leaderboard_blocking_reasons(
     if duplicate_count:
         reasons.append("duplicate_predictions")
     return reasons
+
+
+def _public_track5_sequence_summaries(
+    errors: pd.DataFrame,
+    result_rows: pd.DataFrame,
+    truth_rows: pd.DataFrame,
+) -> dict[str, dict[str, Any]]:
+    """Return per-sequence readiness for both requested and extra sequences."""
+
+    truth_counts = _counts_by_sequence(truth_rows, time_column="time_s")
+    prediction_counts = _counts_by_sequence(result_rows, time_column="timestamp")
+    sequence_ids = sorted(set(truth_counts).union(prediction_counts))
+    summaries: dict[str, dict[str, Any]] = {}
+    for sequence_id in sequence_ids:
+        if errors.empty or "sequence_id" not in errors.columns:
+            group = pd.DataFrame()
+        else:
+            group = errors.loc[errors["sequence_id"].astype(str) == sequence_id]
+        seq_matched = group.loc[group["matched"]].copy() if not group.empty else pd.DataFrame()
+        seq_truth_count = truth_counts.get(sequence_id, 0)
+        seq_prediction_count = prediction_counts.get(sequence_id, 0)
+        seq_missing_count = _reason_count(group, "missing_prediction")
+        seq_extra_count = _reason_count(group, "extra_prediction")
+        seq_duplicate_count = _reason_count(group, "duplicate_prediction")
+        seq_blocking_reasons = _track5_leaderboard_blocking_reasons(
+            truth_count=seq_truth_count,
+            matched_count=int(len(seq_matched)),
+            missing_count=seq_missing_count,
+            extra_count=seq_extra_count,
+            duplicate_count=seq_duplicate_count,
+        )
+        seq_summary = _error_summary(seq_matched)
+        seq_summary.update(
+            {
+                "truth_count": seq_truth_count,
+                "prediction_count": seq_prediction_count,
+                "matched_count": int(len(seq_matched)),
+                "missing_prediction_count": seq_missing_count,
+                "extra_prediction_count": seq_extra_count,
+                "duplicate_prediction_count": seq_duplicate_count,
+                "truth_coverage_fraction": (
+                    float(len(seq_matched) / seq_truth_count) if seq_truth_count else 0.0
+                ),
+                "all_truth_timestamps_matched": (
+                    bool(seq_truth_count) and int(len(seq_matched)) == seq_truth_count
+                ),
+                "leaderboard_ready": not seq_blocking_reasons,
+                "score_valid_for_leaderboard": not seq_blocking_reasons,
+                "leaderboard_blocking_reasons": seq_blocking_reasons,
+            }
+        )
+        summaries[sequence_id] = seq_summary
+    return summaries
+
+
+def _counts_by_sequence(frame: pd.DataFrame, *, time_column: str) -> dict[str, int]:
+    if frame.empty or "sequence_id" not in frame.columns or time_column not in frame.columns:
+        return {}
+    work = frame.loc[frame[time_column].notna()].copy()
+    if work.empty:
+        return {}
+    grouped = work.groupby(work["sequence_id"].astype(str), sort=True).size()
+    return {str(sequence_id): int(count) for sequence_id, count in grouped.items()}
 
 
 def write_evaluation_artifacts(
@@ -693,6 +725,7 @@ def _empty_truth_evaluation(
             extra_count=extra_count,
             duplicate_count=0,
         )
+        empty_truth_rows = pd.DataFrame(columns=["sequence_id", "time_s"])
         summary = {
             "metric_protocol": "public_track5_timestamp_aligned",
             "public_track5_metric": True,
@@ -711,7 +744,11 @@ def _empty_truth_evaluation(
             "score_valid_for_leaderboard": False,
             "leaderboard_blocking_reasons": blocking_reasons,
             "pooled": _error_summary(pd.DataFrame()),
-            "sequences": {},
+            "sequences": _public_track5_sequence_summaries(
+                errors,
+                result_rows,
+                empty_truth_rows,
+            ),
         }
         if timestamp_tolerance_s is not None:
             summary["timestamp_tolerance_s"] = float(timestamp_tolerance_s)

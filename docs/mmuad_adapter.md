@@ -772,7 +772,9 @@ false/nonempty until every requested truth/template timestamp has exactly one
 prediction and there are no extras or duplicates. Timestamp matching is
 one-to-one: even when a nonzero tolerance is used, one prediction cannot cover
 multiple requested timestamps. Empty truth/template files report
-`no_truth_timestamps` and are never treated as leaderboard-ready. With
+`no_truth_timestamps` and are never treated as leaderboard-ready. Per-sequence
+summaries include both requested sequences and prediction-only extra sequences,
+so an unexpected sequence ID is visible without inspecting every row. With
 `--evaluation-require-complete-track5`, the CLI writes the JSON/row artifacts
 and exits nonzero when those strict public Track 5 readiness checks fail.
 
