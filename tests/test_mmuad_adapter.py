@@ -3267,6 +3267,65 @@ def test_official_track5_timestamp_template_prefers_truth_then_sensor_frames(
     assert val_image_template.rows["time_s"].tolist() == [20.0]
 
 
+def test_official_track5_timestamp_template_reads_timestamp_sidecars(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "val" / "seq_sidecar"
+    image = seq / "Image" / "front_camera"
+    livox = seq / "livox_avia"
+    image.mkdir(parents=True)
+    livox.mkdir()
+    (image / "front_a.png").write_bytes(b"not-a-real-image")
+    (image / "front_b.png").write_bytes(b"not-a-real-image")
+    pd.DataFrame(
+        {
+            "frame": ["front_a.png", "front_b.png"],
+            "timestamp_ns": [1_000_000_000, 2_250_000_000],
+        }
+    ).to_csv(image / "timestamps.csv", index=False)
+    (livox / "timestamps.json").write_text(
+        json.dumps({"timestamps": [3.0, 4.5]}),
+        encoding="utf-8",
+    )
+
+    discovered = {
+        paths.sequence_id: paths for paths in discover_sequence_paths(tmp_path)
+    }
+
+    image_template = official_track5_timestamp_template(
+        discovered["seq_sidecar"],
+        timestamp_source="image",
+    )
+    all_template = official_track5_timestamp_template(discovered["seq_sidecar"])
+
+    assert image_template.rows["time_s"].tolist() == [1.0, 2.25]
+    assert all_template.rows["time_s"].tolist() == [1.0, 2.25, 3.0, 4.5]
+
+
+def test_official_track5_timestamp_template_reads_text_frame_lists(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "val" / "seq_text_frames"
+    image = seq / "Image"
+    image.mkdir(parents=True)
+    (image / "front_a.png").write_bytes(b"not-a-real-image")
+    (image / "front_b.png").write_bytes(b"not-a-real-image")
+    (image / "frame_times.txt").write_text(
+        "front_a.png 5.0\nfront_b.png 6.5\n",
+        encoding="utf-8",
+    )
+
+    discovered = {
+        paths.sequence_id: paths for paths in discover_sequence_paths(tmp_path)
+    }
+    image_template = official_track5_timestamp_template(
+        discovered["seq_text_frames"],
+        timestamp_source="image",
+    )
+
+    assert image_template.rows["time_s"].tolist() == [5.0, 6.5]
+
+
 def test_cli_completes_official_results_to_sequence_timestamps(tmp_path: Path) -> None:
     root = tmp_path / "data"
     seq = root / "val" / "seq1"
