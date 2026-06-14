@@ -689,6 +689,8 @@ def _official_track5_validation_leaderboard_blocking_reasons(
     reasons: list[str] = []
     if not summary.get("template_checked", False):
         reasons.append("timestamp_template_not_checked")
+    elif int(summary.get("template_timestamp_count", 0)) == 0:
+        reasons.append("no_template_timestamps")
     if summary.get("is_zip") and not summary.get("contains_only_mmaud_results_csv", False):
         reasons.append("official_zip_members_invalid")
     if list(summary.get("columns", [])) != list(summary.get("expected_columns", [])):

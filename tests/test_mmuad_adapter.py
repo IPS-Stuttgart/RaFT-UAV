@@ -3684,6 +3684,51 @@ def test_cli_official_zip_validation_requires_template_for_upload_ready(
     assert rows["status"].tolist() == ["ok"]
 
 
+def test_cli_official_zip_validation_rejects_empty_template_for_upload_ready(
+    tmp_path: Path,
+) -> None:
+    zip_path = tmp_path / "official_submission.zip"
+    template = tmp_path / "empty_template.csv"
+    official = pd.DataFrame(
+        {
+            "Sequence": ["seq1"],
+            "Timestamp": [0.0],
+            "Position": ["(0,0,10)"],
+            "Classification": [2],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", official.to_csv(index=False))
+    pd.DataFrame(columns=["sequence_id", "time_s"]).to_csv(template, index=False)
+    output = tmp_path / "out"
+
+    status = mmuad_cli_main(
+        [
+            "--validate-ug2-official-codabench-zip",
+            str(zip_path),
+            "--official-validation-template-file",
+            str(template),
+            "--official-validation-json",
+            str(output / "validation.json"),
+            "--official-validation-rows-csv",
+            str(output / "validation_rows.csv"),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 1
+    summary = json.loads((output / "validation.json").read_text(encoding="utf-8"))
+    rows = pd.read_csv(output / "validation_rows.csv")
+    assert summary["valid"] is True
+    assert summary["template_checked"] is True
+    assert summary["template_timestamp_count"] == 0
+    assert summary["leaderboard_ready"] is False
+    assert summary["codabench_upload_ready"] is False
+    assert summary["leaderboard_blocking_reasons"] == ["no_template_timestamps"]
+    assert rows["status"].tolist() == ["ok"]
+
+
 def test_official_track5_validation_rejects_nested_results_member(
     tmp_path: Path,
 ) -> None:

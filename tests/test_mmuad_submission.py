@@ -704,6 +704,38 @@ def test_official_track5_submission_validator_requires_template_for_leaderboard_
     ]
 
 
+def test_official_track5_submission_validator_rejects_empty_template_for_leaderboard_ready(
+    tmp_path,
+):
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq1"],
+            "time_s": [0.0],
+            "state_x_m": [0.0],
+            "state_y_m": [0.0],
+            "state_z_m": [10.0],
+            "class_id": [2],
+        }
+    )
+    zip_path = write_official_ug2_codabench_zip(
+        estimates,
+        tmp_path / "official.zip",
+    )
+    template = pd.DataFrame(columns=["sequence_id", "time_s"])
+
+    validation = validate_official_track5_submission(zip_path, template=template)
+
+    assert validation.summary["valid"] is True
+    assert validation.summary["template_checked"] is True
+    assert validation.summary["template_timestamp_count"] == 0
+    assert validation.summary["score_valid_for_leaderboard"] is False
+    assert validation.summary["leaderboard_ready"] is False
+    assert validation.summary["codabench_upload_ready"] is False
+    assert validation.summary["leaderboard_blocking_reasons"] == [
+        "no_template_timestamps"
+    ]
+
+
 def test_official_track5_submission_validator_requires_one_prediction_per_template_timestamp(
     tmp_path,
 ):

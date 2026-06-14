@@ -570,7 +570,9 @@ available, while `score_valid_for_leaderboard`, `leaderboard_ready`, and
 `codabench_upload_ready` only become true after timestamp coverage has been
 checked and no invalid, duplicate, missing, or extra prediction rows remain.
 When readiness is false, `leaderboard_blocking_reasons` records the concrete
-preflight gaps, including `timestamp_template_not_checked`.
+preflight gaps, including `timestamp_template_not_checked` when no template was
+provided and `no_template_timestamps` when the template has no usable requested
+timestamps.
 Official Track 5 CSV/ZIP writers also fail before writing when tracker output
 contains non-finite timestamps or positions, preventing a seemingly valid ZIP
 from silently dropping rows. For local diagnostics only, pass
