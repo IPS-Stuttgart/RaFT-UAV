@@ -215,7 +215,48 @@ def completion_summary(
         "completion_method_counts": {
             str(key): int(value) for key, value in method_counts.items()
         },
+        "sequences": _completion_sequence_summaries(result),
     }
+
+
+def _completion_sequence_summaries(result: CompletionResult) -> dict[str, dict[str, Any]]:
+    diagnostics = result.diagnostics
+    rows = result.rows
+    sequence_ids: set[str] = set()
+    if not diagnostics.empty and "sequence_id" in diagnostics.columns:
+        sequence_ids.update(diagnostics["sequence_id"].dropna().astype(str))
+    if not rows.empty and "sequence_id" in rows.columns:
+        sequence_ids.update(rows["sequence_id"].dropna().astype(str))
+
+    summaries: dict[str, dict[str, Any]] = {}
+    for sequence_id in sorted(sequence_ids):
+        seq_diag = _rows_for_sequence(diagnostics, sequence_id)
+        seq_completed = _rows_for_sequence(rows, sequence_id)
+        method_counts = {}
+        if not seq_diag.empty and "completion_method" in seq_diag.columns:
+            method_counts = seq_diag["completion_method"].value_counts().to_dict()
+        requested = int(len(seq_diag))
+        completed = int(len(seq_completed))
+        summaries[sequence_id] = {
+            "requested_count": requested,
+            "completed_count": completed,
+            "dropped_count": int(max(0, requested - completed)),
+            "completion_method_counts": {
+                str(key): int(value) for key, value in method_counts.items()
+            },
+            "completion_coverage_fraction": (
+                float(completed / requested) if requested else 0.0
+            ),
+            "all_requested_timestamps_completed": bool(requested)
+            and completed == requested,
+        }
+    return summaries
+
+
+def _rows_for_sequence(frame: pd.DataFrame, sequence_id: str) -> pd.DataFrame:
+    if frame.empty or "sequence_id" not in frame.columns:
+        return pd.DataFrame()
+    return frame.loc[frame["sequence_id"].astype(str) == sequence_id].copy()
 
 
 def _complete_one(

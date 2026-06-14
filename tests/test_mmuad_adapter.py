@@ -3475,6 +3475,8 @@ def test_cli_completes_official_results_to_sequence_timestamps(tmp_path: Path) -
     assert summary["requested_count"] == 2
     assert summary["completed_count"] == 2
     assert summary["timestamp_source"] == "image"
+    assert summary["sequences"]["seq1"]["completed_count"] == 2
+    assert summary["sequences"]["seq1"]["all_requested_timestamps_completed"] is True
     validation = json.loads(
         (output / "mmuad_official_submission_validation.json").read_text(
             encoding="utf-8"
@@ -3552,6 +3554,8 @@ def test_cli_completes_official_results_to_template_file_without_sequence_root(
     )
     assert summary["requested_count"] == 2
     assert summary["completed_count"] == 2
+    assert summary["sequences"]["seq_template"]["completed_count"] == 2
+    assert summary["sequences"]["seq_template"]["completion_coverage_fraction"] == 1.0
     validation = json.loads(
         (output / "mmuad_official_submission_validation.json").read_text(
             encoding="utf-8"
