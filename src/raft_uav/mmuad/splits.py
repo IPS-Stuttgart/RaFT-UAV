@@ -71,6 +71,14 @@ def _load_manifest_payload(path: Path) -> Any:
     return yaml.safe_load(text)
 
 
+def _mapping_value_case_insensitive(mapping: Mapping[Any, Any], key: str) -> Any | None:
+    lower_key = key.lower()
+    for candidate, value in mapping.items():
+        if str(candidate).lower() == lower_key:
+            return value
+    return None
+
+
 def _manifest_from_payload(payload: Any) -> dict[str, tuple[str, ...]]:
     if isinstance(payload, list):
         manifest = _manifest_from_rows(payload)
@@ -82,13 +90,13 @@ def _manifest_from_payload(payload: Any) -> dict[str, tuple[str, ...]]:
     if not isinstance(payload, dict):
         raise ValueError("split manifest must be an object or a list of sequence rows")
 
-    splits = payload.get("splits")
+    splits = _mapping_value_case_insensitive(payload, "splits")
     if isinstance(splits, dict):
         manifest = _manifest_from_mapping(splits)
         if manifest:
             return manifest
 
-    sequences = payload.get("sequences")
+    sequences = _mapping_value_case_insensitive(payload, "sequences")
     if isinstance(sequences, list):
         manifest = _manifest_from_rows(sequences)
         if manifest:
@@ -135,8 +143,9 @@ def _split_values_to_sequence_ids(values: Any) -> tuple[str, ...]:
         if sequence_id is not None:
             return (sequence_id,)
         for key in _SEQUENCE_LIST_KEYS:
-            if key in values:
-                return _split_values_to_sequence_ids(values[key])
+            nested = _mapping_value_case_insensitive(values, key)
+            if nested is not None:
+                return _split_values_to_sequence_ids(nested)
         for key in values:
             if str(key).lower() in _SPLIT_VALUE_METADATA_KEYS:
                 continue
