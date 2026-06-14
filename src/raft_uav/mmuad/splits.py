@@ -26,6 +26,14 @@ _SEQUENCE_LIST_KEYS = ("sequence_ids", "sequences", "ids", "items", "sequence_na
 _SPLIT_VALUE_METADATA_KEYS = ("schema", "version", "description", "metadata", "meta")
 
 
+class _CaseInsensitiveSplitSummary(dict[str, Any]):
+    def __getitem__(self, key: str) -> Any:
+        if isinstance(key, str):
+            resolved = resolve_split_name(self, key)
+            return super().__getitem__(resolved)
+        return super().__getitem__(key)
+
+
 def load_split_manifest(path: Path) -> dict[str, tuple[str, ...]]:
     """Load a split manifest from JSON, YAML, or CSV.
 
@@ -77,6 +85,30 @@ def _mapping_value_case_insensitive(mapping: Mapping[Any, Any], key: str) -> Any
         if str(candidate).lower() == lower_key:
             return value
     return None
+
+
+def resolve_split_name(manifest: Mapping[str, Any], split_name: str) -> str:
+    """Return the manifest key matching ``split_name``.
+
+    Exact keys are preferred, but case-only differences are accepted.  This keeps
+    CLI options such as ``--split-name train`` usable with exported manifests
+    whose split labels are capitalized as ``Train``/``Val``.
+    """
+
+    if split_name in manifest:
+        return split_name
+    lowered = str(split_name).lower()
+    matches = [str(candidate) for candidate in manifest if str(candidate).lower() == lowered]
+    available = ", ".join(sorted(str(split) for split in manifest))
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        joined = ", ".join(sorted(matches))
+        raise ValueError(
+            f"split {split_name!r} is ambiguous; case-insensitive matches: {joined}; "
+            f"available splits: {available}"
+        )
+    raise ValueError(f"split {split_name!r} not found; available splits: {available}")
 
 
 def _manifest_from_payload(payload: Any) -> dict[str, tuple[str, ...]]:
@@ -210,10 +242,8 @@ def filter_sequences_by_split(
 ) -> list[SequencePaths]:
     """Return only sequences listed in ``split_name`` of ``manifest``."""
 
-    if split_name not in manifest:
-        available = ", ".join(sorted(manifest))
-        raise ValueError(f"split {split_name!r} not found; available splits: {available}")
-    wanted = manifest[split_name]
+    resolved_split_name = resolve_split_name(manifest, split_name)
+    wanted = manifest[resolved_split_name]
     return [
         sequence
         for sequence in sequences
@@ -255,15 +285,16 @@ def filter_sequences_by_split_folder(
 
     root = Path(root)
     wanted = str(split_name)
+    wanted_casefold = wanted.casefold()
     out: list[SequencePaths] = []
     for sequence in sequences:
         try:
             parts = sequence.root.relative_to(root).parts
         except ValueError:
             parts = sequence.root.parts
-        if parts and parts[0] == wanted:
+        if parts and str(parts[0]).casefold() == wanted_casefold:
             out.append(sequence)
-        elif sequence.root.name == wanted:
+        elif sequence.root.name.casefold() == wanted_casefold:
             out.append(sequence)
     return out
 
@@ -271,7 +302,9 @@ def filter_sequences_by_split_folder(
 def split_manifest_summary(manifest: dict[str, tuple[str, ...]]) -> dict[str, Any]:
     """Return count summary for provenance files."""
 
-    return {
-        split: {"count": len(values), "sequence_ids": list(values)}
-        for split, values in manifest.items()
-    }
+    return _CaseInsensitiveSplitSummary(
+        {
+            split: {"count": len(values), "sequence_ids": list(values)}
+            for split, values in manifest.items()
+        }
+    )
