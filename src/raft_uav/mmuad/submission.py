@@ -848,6 +848,7 @@ def _validate_official_track5_frame(
                 normalized,
                 template_rows,
                 timestamp_tolerance_s=timestamp_tolerance_s,
+                ignored_prediction_indices=duplicate_indices,
             )
             missing_count = int((coverage["status"] == "missing_template_timestamp").sum())
             extra_indices = set(
@@ -1278,9 +1279,10 @@ def _track5_template_coverage_rows(
     template: pd.DataFrame,
     *,
     timestamp_tolerance_s: float,
+    ignored_prediction_indices: set[int] | None = None,
 ) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
-    matched_prediction_indices: set[int] = set()
+    matched_prediction_indices: set[int] = set(ignored_prediction_indices or set())
     for sequence_id, group in template.groupby("sequence_id", sort=True):
         seq_predictions = predictions.loc[predictions["sequence_id"] == str(sequence_id)]
         prediction_times = seq_predictions["timestamp"].to_numpy(float)
@@ -1311,7 +1313,7 @@ def _track5_template_coverage_rows(
                 .index[0]
             )
             matched_row = matched_rows.loc[nearest_index]
-            matched_prediction_indices.update(matched_rows["row_index"].astype(int).tolist())
+            matched_prediction_indices.add(int(matched_row["row_index"]))
             rows.append(
                 {
                     "row_type": "template",

@@ -859,6 +859,49 @@ def test_official_track5_submission_validator_requires_one_prediction_per_templa
     assert statuses == ["covered_template_timestamp", "missing_template_timestamp"]
 
 
+def test_official_track5_submission_validator_rejects_multiple_near_template_predictions(
+    tmp_path,
+):
+    zip_path = tmp_path / "two_predictions_one_template.zip"
+    frame = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [-0.04, 0.04],
+            "Position": ["(0,0,0)", "(1,0,0)"],
+            "Classification": [1, 1],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", frame.to_csv(index=False))
+    template = pd.DataFrame(
+        {
+            "sequence_id": ["seq1"],
+            "time_s": [0.0],
+        }
+    )
+
+    validation = validate_official_track5_submission(
+        zip_path,
+        template=template,
+        timestamp_tolerance_s=0.05,
+    )
+
+    assert validation.summary["valid"] is False
+    assert validation.summary["template_timestamp_count"] == 1
+    assert validation.summary["missing_template_timestamp_count"] == 0
+    assert validation.summary["duplicate_prediction_count"] == 0
+    assert validation.summary["extra_prediction_count"] == 1
+    assert "official_extra_predictions" in validation.summary["leaderboard_blocking_reasons"]
+    seq_summary = validation.summary["sequences"]["seq1"]
+    assert seq_summary["covered_template_timestamp_count"] == 1
+    assert seq_summary["extra_prediction_count"] == 1
+    assert seq_summary["leaderboard_ready"] is False
+    statuses = validation.rows["status"].tolist()
+    assert statuses.count("covered_template_timestamp") == 1
+    extra_rows = validation.rows.loc[validation.rows["status"] == "extra_prediction"]
+    assert extra_rows["row_index"].dropna().astype(int).nunique() == 1
+
+
 def test_official_track5_submission_validator_reports_sequence_readiness(
     tmp_path,
 ):

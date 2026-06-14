@@ -574,7 +574,10 @@ preflight gaps, including `timestamp_template_not_checked` when no template was
 provided and `no_template_timestamps` when the template has no usable requested
 timestamps. The validation summary also includes per-sequence readiness under
 `sequences`, so missing template timestamps and prediction-only extra sequence
-IDs can be diagnosed without scanning every validation row.
+IDs can be diagnosed without scanning every validation row. With a nonzero
+timestamp tolerance, only the nearest unused prediction covers a requested
+template timestamp; other non-duplicate predictions in the same tolerance
+window remain extras.
 Official Track 5 CSV/ZIP writers also fail before writing when tracker output
 contains non-finite timestamps or positions, preventing a seemingly valid ZIP
 from silently dropping rows. For local diagnostics only, pass
