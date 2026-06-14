@@ -561,6 +561,13 @@ truth/template file or Track 5 sequence-root folders. It exits nonzero when the
 package is invalid, which makes it suitable for local CI before a manual
 Codabench upload. A ZIP such as `submission/mmaud_results.csv` is rejected
 because the result file is not at the archive root.
+The validation JSON separates structural validity from leaderboard readiness:
+`valid` may be true for a well-formed ZIP even when no timestamp template was
+available, while `score_valid_for_leaderboard`, `leaderboard_ready`, and
+`codabench_upload_ready` only become true after timestamp coverage has been
+checked and no invalid, duplicate, missing, or extra prediction rows remain.
+When readiness is false, `leaderboard_blocking_reasons` records the concrete
+preflight gaps, including `timestamp_template_not_checked`.
 Official Track 5 CSV/ZIP writers also fail before writing when tracker output
 contains non-finite timestamps or positions, preventing a seemingly valid ZIP
 from silently dropping rows. For local diagnostics only, pass
