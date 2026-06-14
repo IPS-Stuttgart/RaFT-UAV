@@ -390,6 +390,11 @@ def _evaluate_public_track5_timestamp_aligned(
                 error_records.append(_missing_track5_prediction_row(truth_row))
                 continue
             candidates = np.flatnonzero(np.abs(result_times - truth_time) <= timestamp_tolerance_s)
+            candidates = [
+                int(candidate)
+                for candidate in candidates
+                if int(seq_results.index[int(candidate)]) not in used_result_indices
+            ]
             if len(candidates) == 0:
                 error_records.append(_missing_track5_prediction_row(truth_row))
                 continue

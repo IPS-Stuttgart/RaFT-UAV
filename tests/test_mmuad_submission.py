@@ -590,6 +590,46 @@ def test_public_track5_metric_normalizes_integer_like_class_labels():
     assert evaluated["summary"]["pooled"]["classification_accuracy"] == 1.0
 
 
+def test_public_track5_metric_requires_one_prediction_per_truth_timestamp():
+    results = pd.DataFrame(
+        {
+            "Sequence": ["seq1"],
+            "Timestamp": [0.02],
+            "Position": ["(0,0,0)"],
+            "Classification": [1],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, 0.04],
+            "x_m": [0.0, 0.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [0.0, 0.0],
+            "uav_type": ["1", "1"],
+        }
+    )
+
+    evaluated = evaluate_mmaud_results(
+        results,
+        truth,
+        metric_protocol="public-track5",
+        timestamp_tolerance_s=0.05,
+    )
+
+    summary = evaluated["summary"]
+    reasons = evaluated["rows"]["unmatched_reason"].fillna("").tolist()
+    assert summary["truth_count"] == 2
+    assert summary["prediction_count"] == 1
+    assert summary["matched_count"] == 1
+    assert summary["missing_prediction_count"] == 1
+    assert summary["truth_coverage_fraction"] == 0.5
+    assert summary["leaderboard_ready"] is False
+    assert summary["score_valid_for_leaderboard"] is False
+    assert "missing_predictions" in summary["leaderboard_blocking_reasons"]
+    assert "missing_prediction" in reasons
+
+
 def test_official_track5_submission_validator_accepts_exact_zip_and_template(tmp_path):
     estimates = pd.DataFrame(
         {
@@ -628,6 +668,41 @@ def test_official_track5_submission_validator_accepts_exact_zip_and_template(tmp
         "ok",
         "ok",
     ]
+
+
+def test_official_track5_submission_validator_requires_one_prediction_per_template_timestamp(
+    tmp_path,
+):
+    zip_path = tmp_path / "one_prediction_two_template_times.zip"
+    frame = pd.DataFrame(
+        {
+            "Sequence": ["seq1"],
+            "Timestamp": [0.02],
+            "Position": ["(0,0,0)"],
+            "Classification": [1],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", frame.to_csv(index=False))
+    template = pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, 0.04],
+        }
+    )
+
+    validation = validate_official_track5_submission(
+        zip_path,
+        template=template,
+        timestamp_tolerance_s=0.05,
+    )
+
+    assert validation.summary["valid"] is False
+    assert validation.summary["template_timestamp_count"] == 2
+    assert validation.summary["missing_template_timestamp_count"] == 1
+    assert validation.summary["extra_prediction_count"] == 0
+    statuses = validation.rows.loc[validation.rows["row_type"] == "template", "status"].tolist()
+    assert statuses == ["covered_template_timestamp", "missing_template_timestamp"]
 
 
 def test_official_track5_template_loader_accepts_csv_and_zip(tmp_path):
