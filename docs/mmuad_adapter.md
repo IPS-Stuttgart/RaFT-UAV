@@ -1036,6 +1036,10 @@ Native extraction uses the same tracker artifact writer as exported CSV/sequence
 roots, so `submission.csv/json/zip`, UG2 result CSV/ZIP, official Track 5
 CSV/ZIP, validation JSON/rows, and trajectory metrics can be requested from the
 same run.
+If native extraction writes a manifest but yields no candidate rows, the CLI
+exits before tracking and points to `native_ros_extraction_manifest.json`; update
+the topic map to include candidate-bearing topics or export candidate detections
+first.
 
 This is still not a complete native ROS parser for every possible MMUAD bag. It
 is a first native message bridge for common ROS message types. Undocumented
