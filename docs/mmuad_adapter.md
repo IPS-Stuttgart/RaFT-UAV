@@ -779,6 +779,28 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_val
 ```
 
+For a one-stop local preflight report, use the Track 5 scorecard command. It
+combines official-style ZIP validation, timestamp-aligned public metrics, and
+nearest-time diagnostics into one JSON summary and optional row-level CSVs:
+
+```bash
+raft-uav-mmuad-track5-scorecard \
+  --results outputs/mmuad_val/ug2_official_submission.zip \
+  --truth data/mmuad_export/val_truth.csv \
+  --class-map data/mmuad_export/sequence_classes.yaml \
+  --output-json outputs/mmuad_val/track5_scorecard.json \
+  --summary-csv outputs/mmuad_val/track5_scorecard.csv \
+  --validation-rows-csv outputs/mmuad_val/track5_validation_rows.csv \
+  --public-evaluation-rows-csv outputs/mmuad_val/track5_public_rows.csv \
+  --nearest-time-rows-csv outputs/mmuad_val/track5_nearest_rows.csv \
+  --require-leaderboard-ready
+```
+
+The scorecard reports `scorecard_leaderboard_ready`,
+`codabench_upload_ready`, public Track 5 pose/classification metrics, nearest
+time diagnostics, and blocking reasons. It remains a local sanity check and
+does not replace the closed Codabench runtime.
+
 Use `--evaluate-results-csv` for local metric checks of an unpacked
 `mmaud_results.csv`; a complete CSV can set `score_valid_for_leaderboard=true`,
 but it is not Codabench upload-ready until packaged as an official ZIP. The
