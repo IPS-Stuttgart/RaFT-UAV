@@ -517,7 +517,13 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
 present and falls back to the union of public sensor-frame timestamps otherwise.
 Official timestamp discovery recurses below the selected modality folders, so
 layouts such as `Image/front_camera/<timestamp>.png` or
-`livox_avia/stream0/<timestamp>.npy` are included.
+`livox_avia/stream0/<timestamp>.npy` are included. If frame filenames are not
+timestamps, discovery also reads conservative timestamp sidecars such as
+`timestamps.csv`, `timestamps.json`, `frame_times.txt`, or `frames.csv/json`
+inside the same official modality folders. Table sidecars may use common
+timestamp columns such as `time_s`, `timestamp`, `timestamp_ns`,
+`timestamp_us`, or `timestamp_ms`; simple text frame lists use the last numeric
+token on each non-comment line as seconds.
 Use `image`, `lidar-360`, `livox-avia`, `radar-enhance-pcl`, or
 `all-modalities` when a specific timestamp source is required. The CLI writes
 `mmuad_official_timestamp_completion_rows.csv` and

@@ -37,7 +37,12 @@ from raft_uav.mmuad.io import (
 )
 from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates
 from raft_uav.mmuad.rosbag_bridge import load_topic_map_exports, load_topic_map_payload
-from raft_uav.mmuad.schema import CandidateFrame, TruthFrame, normalize_truth_columns
+from raft_uav.mmuad.schema import (
+    CandidateFrame,
+    TruthFrame,
+    normalize_time_column_aliases,
+    normalize_truth_columns,
+)
 
 
 TABLE_SUFFIXES = DISCOVERABLE_DELIMITED_TABLE_SUFFIXES
@@ -143,6 +148,40 @@ OFFICIAL_TRACK5_TIMESTAMP_SOURCES = (
     "ground-truth-or-all",
     "all-modalities",
     *OFFICIAL_TRACK5_TIMESTAMP_SOURCE_DIRS,
+)
+TIMESTAMP_SIDECAR_SUFFIXES = {".csv", ".tsv", ".txt", ".json", ".jsonl", ".ndjson"}
+TIMESTAMP_SIDECAR_EXACT_STEMS = {
+    "time",
+    "times",
+    "timestamp",
+    "timestamps",
+    "frame_time",
+    "frame_times",
+    "frame_timestamp",
+    "frame_timestamps",
+    "frame_list",
+    "frames",
+    "image_times",
+    "image_timestamps",
+    "lidar_times",
+    "lidar_timestamps",
+    "livox_times",
+    "livox_timestamps",
+    "radar_times",
+    "radar_timestamps",
+}
+TIMESTAMP_SIDECAR_NAME_TOKENS = ("timestamp", "timestamps", "frame_times", "frame_timestamps")
+TIMESTAMP_JSON_CONTAINER_KEYS = (
+    "timestamps",
+    "times",
+    "frame_times",
+    "frame_timestamps",
+    "frames",
+    "images",
+    "image_frames",
+    "rows",
+    "data",
+    "samples",
 )
 RADAR_RANGE_ALIASES = ("range_m", "range", "r", "rho", "distance_m")
 RADAR_AZIMUTH_ALIASES = ("azimuth_deg", "azimuth", "az", "bearing", "bearing_deg")
@@ -1022,6 +1061,9 @@ def _timestamps_from_official_dirs(root: Path, directory_names: tuple[str, ...])
         for item in sorted(directory.rglob("*")):
             if not item.is_file():
                 continue
+            if _looks_like_timestamp_sidecar(item):
+                timestamps.update(_timestamps_from_timestamp_sidecar(item))
+                continue
             timestamp = _timestamp_from_filename_or_none(item)
             if timestamp is not None:
                 timestamps.add(timestamp)
@@ -1049,6 +1091,122 @@ def _timestamp_from_filename_or_none(path: Path) -> float | None:
     if not np.isfinite(timestamp):
         return None
     return float(timestamp)
+
+
+def _looks_like_timestamp_sidecar(path: Path) -> bool:
+    if data_file_suffix(path) not in TIMESTAMP_SIDECAR_SUFFIXES:
+        return False
+    stem = _normalized_data_stem(path)
+    return stem in TIMESTAMP_SIDECAR_EXACT_STEMS or any(
+        token in stem for token in TIMESTAMP_SIDECAR_NAME_TOKENS
+    )
+
+
+def _normalized_data_stem(path: Path) -> str:
+    name = Path(path).name.lower()
+    for suffix in sorted((*TABLE_SUFFIXES, *JSON_TABLE_SUFFIXES), key=len, reverse=True):
+        if name.endswith(suffix.lower()):
+            name = name[: -len(suffix)]
+            break
+    return re.sub(r"[^a-z0-9]+", "_", name).strip("_")
+
+
+def _timestamps_from_timestamp_sidecar(path: Path) -> set[float]:
+    try:
+        suffix = data_file_suffix(path)
+        if suffix in {".csv", ".tsv", ".txt"}:
+            values = _timestamps_from_delimited_sidecar(path)
+        elif suffix in {".json", ".jsonl", ".ndjson"}:
+            values = _timestamps_from_json_sidecar_payload(read_json_export_payload(path))
+        else:
+            values = []
+    except (OSError, ValueError, json.JSONDecodeError, pd.errors.ParserError):
+        values = []
+    return _finite_timestamp_set(values)
+
+
+def _timestamps_from_delimited_sidecar(path: Path) -> list[float]:
+    values: list[float] = []
+    try:
+        frame = pd.read_csv(path, sep=None, engine="python")
+    except Exception:
+        frame = pd.DataFrame()
+    values.extend(_timestamps_from_table_frame(frame))
+    if values:
+        return values
+    return _timestamps_from_text_sidecar(path)
+
+
+def _timestamps_from_text_sidecar(path: Path) -> list[float]:
+    values: list[float] = []
+    for line in read_text_export(path, errors="ignore").splitlines():
+        stripped = line.split("#", 1)[0].strip()
+        if not stripped:
+            continue
+        matches = re.findall(
+            r"[-+]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[eE][-+]?\d+)?",
+            stripped,
+        )
+        if matches:
+            values.append(float(matches[-1]))
+    return values
+
+
+def _timestamps_from_table_frame(frame: pd.DataFrame) -> list[float]:
+    if frame.empty:
+        return []
+    normalized = normalize_time_column_aliases(frame)
+    if "time_s" not in normalized.columns:
+        return []
+    return pd.to_numeric(normalized["time_s"], errors="coerce").tolist()
+
+
+def _timestamps_from_json_sidecar_payload(payload: Any) -> list[float]:
+    if isinstance(payload, (int, float, str, np.number)):
+        return [_coerce_timestamp_value(payload)]
+    if isinstance(payload, list):
+        if all(not isinstance(item, (Mapping, list, tuple)) for item in payload):
+            return [_coerce_timestamp_value(item) for item in payload]
+        rows = [item for item in payload if isinstance(item, Mapping)]
+        values = _timestamps_from_table_frame(pd.DataFrame(rows)) if rows else []
+        if values:
+            return values
+        values = []
+        for item in payload:
+            values.extend(_timestamps_from_json_sidecar_payload(item))
+        return values
+    if not isinstance(payload, Mapping):
+        return []
+
+    for key in TIMESTAMP_JSON_CONTAINER_KEYS:
+        nested = _mapping_get_case_insensitive(payload, key)
+        if nested is not None:
+            values = _timestamps_from_json_sidecar_payload(nested)
+            if values:
+                return values
+    frame = _json_mapping_to_timestamp_frame(payload)
+    return _timestamps_from_table_frame(frame)
+
+
+def _json_mapping_to_timestamp_frame(payload: Mapping[Any, Any]) -> pd.DataFrame:
+    if any(isinstance(value, (list, tuple)) for value in payload.values()):
+        try:
+            return pd.DataFrame(payload)
+        except ValueError:
+            return pd.DataFrame()
+    return pd.DataFrame([payload])
+
+
+def _coerce_timestamp_value(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _finite_timestamp_set(values: list[float]) -> set[float]:
+    numeric = pd.to_numeric(pd.Series(values, dtype="object"), errors="coerce")
+    return {float(value) for value in numeric.to_numpy(dtype=float) if np.isfinite(value)}
 
 
 def _relative_path_has_any(path: Path, *, root: Path, tokens: tuple[str, ...]) -> bool:
