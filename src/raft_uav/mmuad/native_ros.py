@@ -2034,13 +2034,7 @@ def _detection3d_confidence(detection: Any) -> float | None:
     result = _first_detection_result(detection)
     if result is None:
         return None
-    score = getattr(result, "score", None)
-    if score is not None:
-        return float(score)
-    hypothesis = getattr(result, "hypothesis", None)
-    if hypothesis is not None and getattr(hypothesis, "score", None) is not None:
-        return float(hypothesis.score)
-    return None
+    return _detection_result_score(result)
 
 
 def _detection3d_class_name(detection: Any) -> str | None:
@@ -2065,4 +2059,27 @@ def _first_detection_result(detection: Any) -> Any | None:
     results = getattr(detection, "results", None)
     if not results:
         return None
-    return results[0]
+    best = results[0]
+    best_score = _detection_result_score(best)
+    for result in results[1:]:
+        score = _detection_result_score(result)
+        if score is None:
+            continue
+        if best_score is None or score > best_score:
+            best = result
+            best_score = score
+    return best
+
+
+def _detection_result_score(result: Any) -> float | None:
+    score = getattr(result, "score", None)
+    if score in (None, ""):
+        hypothesis = getattr(result, "hypothesis", None)
+        if hypothesis is not None:
+            score = getattr(hypothesis, "score", None)
+    if score in (None, ""):
+        return None
+    try:
+        return float(score)
+    except (TypeError, ValueError):
+        return None
