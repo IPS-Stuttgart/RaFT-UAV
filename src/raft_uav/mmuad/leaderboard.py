@@ -269,12 +269,54 @@ def _leaderboard_markdown(frame: pd.DataFrame) -> str:
     lines = [
         "# MMUAD local leaderboard",
         "",
-        "This is a repository-local leaderboard built with RaFT-UAV's transparent evaluator; it is not the closed Codabench runtime.",
+        (
+            "This is a repository-local leaderboard built with RaFT-UAV's "
+            "transparent evaluator; it is not the closed Codabench runtime."
+        ),
         "",
-        frame[columns].to_markdown(index=False),
+        _markdown_table(frame[columns]),
         "",
     ]
     return "\n".join(lines)
+
+
+def _markdown_table(frame: pd.DataFrame) -> str:
+    """Return a simple dependency-free Markdown table."""
+
+    if frame.empty:
+        return ""
+    columns = [str(column) for column in frame.columns]
+    rows = [
+        [str(_format_markdown_cell(row[column])) for column in frame.columns]
+        for _, row in frame.iterrows()
+    ]
+    widths = [
+        max(len(column), *(len(row[idx]) for row in rows))
+        for idx, column in enumerate(columns)
+    ]
+    header = "| " + " | ".join(
+        column.ljust(widths[idx]) for idx, column in enumerate(columns)
+    ) + " |"
+    separator = "| " + " | ".join("-" * widths[idx] for idx in range(len(columns))) + " |"
+    body = [
+        "| " + " | ".join(row[idx].ljust(widths[idx]) for idx in range(len(columns))) + " |"
+        for row in rows
+    ]
+    return "\n".join([header, separator, *body])
+
+
+def _format_markdown_cell(value: Any) -> str:
+    try:
+        missing = pd.isna(value)
+    except TypeError:
+        missing = False
+    if isinstance(missing, bool) and missing:
+        return ""
+    if isinstance(value, float | np.floating):
+        if not np.isfinite(float(value)):
+            return ""
+        return f"{float(value):.6g}"
+    return str(value)
 
 
 def _fallback_rank_metric(frame: pd.DataFrame) -> str:
