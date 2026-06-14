@@ -2718,6 +2718,62 @@ def test_cli_writes_official_track5_results_and_zip(tmp_path: Path) -> None:
         assert archive.namelist() == ["mmaud_results.csv"]
     loaded = load_mmaud_results_file(zip_path)
     assert loaded.rows["uav_type"].tolist() == ["2", "2"]
+    validation = json.loads(
+        (output / "mmuad_official_submission_validation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert validation["valid"] is True
+    assert validation["template_checked"] is True
+    assert validation["template_timestamp_count"] == 2
+    assert validation["leaderboard_ready"] is True
+    assert validation["codabench_upload_ready"] is True
+
+
+def test_cli_validate_on_write_requires_truth_or_template_for_official_readiness(
+    tmp_path: Path,
+) -> None:
+    candidates = tmp_path / "candidates.csv"
+    output = tmp_path / "out"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seqA"],
+            "time_s": [0.0],
+            "source": ["radar"],
+            "x_m": [0.0],
+            "y_m": [0.0],
+            "z_m": [10.0],
+            "class_name": [2],
+        }
+    ).to_csv(candidates, index=False)
+
+    with pytest.raises(SystemExit, match="timestamp_template_not_checked"):
+        mmuad_cli_main(
+            [
+                "--candidate-csv",
+                str(candidates),
+                "--ug2-official-codabench-zip",
+                str(output / "official_submission.zip"),
+                "--ug2-official-classification",
+                "2",
+                "--ug2-official-validate-on-write",
+                "--output-dir",
+                str(output),
+            ]
+        )
+
+    validation = json.loads(
+        (output / "mmuad_official_submission_validation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert validation["valid"] is True
+    assert validation["template_checked"] is False
+    assert validation["leaderboard_ready"] is False
+    assert validation["codabench_upload_ready"] is False
+    assert validation["leaderboard_blocking_reasons"] == [
+        "timestamp_template_not_checked"
+    ]
 
 
 def test_results_completion_resamples_to_truth_timestamps(tmp_path: Path) -> None:
@@ -3584,6 +3640,48 @@ def test_cli_validates_official_zip_against_sequence_timestamps(tmp_path: Path) 
     assert summary["missing_template_timestamp_count"] == 0
     assert summary["extra_prediction_count"] == 0
     assert set(rows["status"]) == {"ok", "covered_template_timestamp"}
+
+
+def test_cli_official_zip_validation_requires_template_for_upload_ready(
+    tmp_path: Path,
+) -> None:
+    zip_path = tmp_path / "official_submission.zip"
+    official = pd.DataFrame(
+        {
+            "Sequence": ["seq1"],
+            "Timestamp": [0.0],
+            "Position": ["(0,0,10)"],
+            "Classification": [2],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", official.to_csv(index=False))
+    output = tmp_path / "out"
+
+    status = mmuad_cli_main(
+        [
+            "--validate-ug2-official-codabench-zip",
+            str(zip_path),
+            "--official-validation-json",
+            str(output / "validation.json"),
+            "--official-validation-rows-csv",
+            str(output / "validation_rows.csv"),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 1
+    summary = json.loads((output / "validation.json").read_text(encoding="utf-8"))
+    rows = pd.read_csv(output / "validation_rows.csv")
+    assert summary["valid"] is True
+    assert summary["template_checked"] is False
+    assert summary["leaderboard_ready"] is False
+    assert summary["codabench_upload_ready"] is False
+    assert summary["leaderboard_blocking_reasons"] == [
+        "timestamp_template_not_checked"
+    ]
+    assert rows["status"].tolist() == ["ok"]
 
 
 def test_official_track5_validation_rejects_nested_results_member(
@@ -5291,6 +5389,10 @@ def test_cli_native_ros_extraction_writes_submission_artifacts(
         )
     )
     assert validation["valid"] is True
+    assert validation["template_checked"] is True
+    assert validation["template_timestamp_count"] == 2
+    assert validation["leaderboard_ready"] is True
+    assert validation["codabench_upload_ready"] is True
 
 
 def test_topic_map_exports_load_json_candidates_and_truth(tmp_path: Path) -> None:
