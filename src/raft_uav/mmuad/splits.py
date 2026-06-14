@@ -107,6 +107,8 @@ def _manifest_from_payload(payload: Any) -> dict[str, tuple[str, ...]]:
 def _manifest_from_mapping(mapping: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
     out: dict[str, list[str]] = {}
     for split, values in mapping.items():
+        if str(split).lower() in _SPLIT_VALUE_METADATA_KEYS:
+            continue
         ids = _split_values_to_sequence_ids(values)
         if ids:
             out[str(split)] = list(ids)
