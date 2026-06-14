@@ -114,12 +114,17 @@ def match_submission_to_truth(
             for _, pred in pred_seq.iterrows():
                 rows.append(_unmatched_prediction_row(pred, reason="missing_sequence_truth"))
             continue
+        truth_track_ids = _track_ids(truth_seq) if "track_id" in truth_seq.columns else set()
+        submitted_track_ids = _track_ids(pred_seq) if "track_id" in pred_seq.columns else set()
+        restrict_to_track_id = bool(truth_track_ids and truth_track_ids.intersection(submitted_track_ids))
         for _, pred in pred_seq.iterrows():
             candidate_truth = truth_seq
-            if "track_id" in truth_seq.columns and str(pred.get("track_id", "")) in set(
-                truth_seq["track_id"]
-            ):
-                candidate_truth = truth_seq.loc[truth_seq["track_id"] == str(pred["track_id"])]
+            if restrict_to_track_id:
+                pred_track_id = str(pred.get("track_id", ""))
+                if pred_track_id not in truth_track_ids:
+                    rows.append(_unmatched_prediction_row(pred, reason="track_id_mismatch"))
+                    continue
+                candidate_truth = truth_seq.loc[truth_seq["track_id"] == pred_track_id]
             idx = (candidate_truth["time_s"].astype(float) - float(pred["time_s"])).abs().idxmin()
             gt = candidate_truth.loc[idx]
             dt = abs(float(gt["time_s"]) - float(pred["time_s"]))
@@ -210,6 +215,10 @@ def metrics_from_matches(
         "pooled": pooled,
         "sequences": by_sequence,
     }
+
+
+def _track_ids(frame: pd.DataFrame) -> set[str]:
+    return set(frame["track_id"].dropna().astype(str))
 
 
 def _metric_sequence_ids(
