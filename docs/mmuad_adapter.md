@@ -530,7 +530,8 @@ Use `image`, `lidar-360`, `livox-avia`, `radar-enhance-pcl`, or
 `all-modalities` when a specific timestamp source is required. The CLI writes
 `mmuad_official_timestamp_completion_rows.csv` and
 `mmuad_official_timestamp_completion_summary.json` so interpolation and
-nearest-hold choices remain auditable. With
+nearest-hold choices remain auditable, including per-sequence requested,
+completed, and dropped timestamp counts. With
 `--ug2-official-validate-on-write`, the run also writes
 `mmuad_official_submission_validation.json` and
 `mmuad_official_submission_validation_rows.csv`, then exits nonzero if the
