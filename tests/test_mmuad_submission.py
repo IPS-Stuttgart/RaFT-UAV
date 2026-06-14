@@ -12,6 +12,7 @@ from raft_uav.mmuad.evaluator import (
 )
 from raft_uav.mmuad.submission import (
     OFFICIAL_UG2_RESULT_COLUMNS,
+    OFFICIAL_TRACK5_INVALID_SEQUENCE_BUCKET,
     estimates_to_official_mmaud_results_frame,
     estimates_to_mmaud_results_frame,
     estimates_to_submission_frame,
@@ -995,6 +996,15 @@ def test_official_track5_submission_validator_rejects_missing_like_sequences(tmp
 
     assert validation.summary["valid"] is False
     assert validation.summary["invalid_sequence_count"] == 3
+    invalid_summary = validation.summary["sequences"][OFFICIAL_TRACK5_INVALID_SEQUENCE_BUCKET]
+    assert invalid_summary["prediction_count"] == 3
+    assert invalid_summary["valid_prediction_count"] == 0
+    assert invalid_summary["invalid_sequence_count"] == 3
+    assert invalid_summary["leaderboard_ready"] is False
+    assert invalid_summary["leaderboard_blocking_reasons"] == [
+        "timestamp_template_not_checked",
+        "official_invalid_rows",
+    ]
     assert validation.rows["status"].tolist() == [
         "invalid_sequence",
         "invalid_sequence",
