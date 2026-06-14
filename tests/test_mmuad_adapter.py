@@ -1751,6 +1751,70 @@ def test_sequence_root_skips_native_only_topic_map_template(tmp_path: Path) -> N
     assert discover_sequence_paths(tmp_path) == []
 
 
+def test_sequence_root_discovers_native_topic_map_with_recording(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_native_recording"
+    seq.mkdir()
+    bag = seq / "recording.mcap"
+    bag.write_bytes(b"fake native bag")
+    topic_map = seq / "topic_map_native.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_native_recording",
+                "exports": [
+                    {
+                        "topic": "/radar/points",
+                        "kind": "pointcloud2_candidate",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    discovered = discover_sequence_paths(tmp_path)
+
+    assert len(discovered) == 1
+    assert discovered[0].sequence_id == "seq_native_recording"
+    assert discovered[0].native_topic_map_jsons == (topic_map,)
+    assert discovered[0].rosbag_paths == (bag,)
+    assert discovered[0].topic_map_jsons == ()
+
+
+def test_sequence_root_discovers_native_ros2_bag_directory(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_native_ros2"
+    seq.mkdir()
+    (seq / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  relative_file_paths:",
+                "    - data_0.db3",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (seq / "data_0.db3").write_bytes(b"fake sqlite bag")
+    topic_map = seq / "topic_map_native.yaml"
+    topic_map.write_text(
+        "\n".join(
+            [
+                "sequence_id: seq_native_ros2",
+                "exports:",
+                "  - topic: /radar/points",
+                "    kind: pointcloud2_candidate",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    discovered = discover_sequence_paths(tmp_path)
+
+    assert len(discovered) == 1
+    assert discovered[0].native_topic_map_jsons == (topic_map,)
+    assert discovered[0].rosbag_paths == (seq,)
+
+
 def test_cli_sequence_root_runs_topic_map_only_sequence(tmp_path: Path) -> None:
     seq = tmp_path / "seq_topic_map_cli"
     seq.mkdir()
@@ -5607,6 +5671,130 @@ def test_cli_native_ros_extraction_writes_submission_artifacts(
     assert validation["valid"] is True
     assert validation["template_checked"] is True
     assert validation["template_timestamp_count"] == 2
+    assert validation["leaderboard_ready"] is True
+    assert validation["codabench_upload_ready"] is True
+
+
+def test_cli_sequence_root_runs_native_ros_recording(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    seq = tmp_path / "seq_native_root"
+    seq.mkdir()
+    bag = seq / "recording.mcap"
+    bag.write_bytes(b"fake native bag")
+    topic_map = seq / "topic_map_native.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_native_root",
+                "exports": [{"topic": "/radar", "kind": "pose_candidate"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "out"
+    expected_extract_dir = output / "native_ros_extracted" / "seq_native_root"
+
+    def fake_extract_native_rosbag_topic_map(
+        *,
+        bag_path,
+        topic_map_json,
+        output_dir,
+        voxel_size_m,
+        min_points,
+    ):
+        assert bag_path == bag
+        assert topic_map_json == topic_map
+        assert output_dir == expected_extract_dir
+        assert voxel_size_m == 0.75
+        assert min_points == 3
+        output_dir.mkdir(parents=True)
+        (output_dir / "native_ros_extraction_manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema": "fake-native-extraction",
+                    "candidate_rows": 2,
+                    "truth_rows": 2,
+                }
+            ),
+            encoding="utf-8",
+        )
+        candidates = CandidateFrame(
+            pd.DataFrame(
+                {
+                    "sequence_id": ["seq_native_root", "seq_native_root"],
+                    "time_s": [0.0, 1.0],
+                    "source": ["radar", "radar"],
+                    "track_id": ["uav", "uav"],
+                    "x_m": [0.0, 1.0],
+                    "y_m": [0.0, 0.0],
+                    "z_m": [10.0, 10.0],
+                    "std_xy_m": [1.0, 1.0],
+                    "std_z_m": [1.0, 1.0],
+                    "confidence": [1.0, 1.0],
+                    "class_name": ["2", "2"],
+                }
+            )
+        )
+        truth = TruthFrame(
+            pd.DataFrame(
+                {
+                    "sequence_id": ["seq_native_root", "seq_native_root"],
+                    "time_s": [0.0, 1.0],
+                    "x_m": [0.0, 1.0],
+                    "y_m": [0.0, 0.0],
+                    "z_m": [10.0, 10.0],
+                }
+            )
+        )
+        return SimpleNamespace(candidates=candidates, truth=truth, manifest={})
+
+    monkeypatch.setattr(
+        "raft_uav.mmuad.cli.extract_native_rosbag_topic_map",
+        fake_extract_native_rosbag_topic_map,
+    )
+
+    status = mmuad_cli_main(
+        [
+            "--sequence-root",
+            str(tmp_path),
+            "--output-dir",
+            str(output),
+            "--submission-csv",
+            str(output / "submission.csv"),
+            "--ug2-official-results-csv",
+            str(output / "official_mmaud_results.csv"),
+            "--ug2-official-codabench-zip",
+            str(output / "official_submission.zip"),
+            "--ug2-official-classification",
+            "2",
+            "--ug2-official-validate-on-write",
+        ]
+    )
+
+    assert status == 0
+    assert (output / "mmuad_estimates.csv").exists()
+    assert (expected_extract_dir / "native_ros_extraction_manifest.json").exists()
+    manifest_summary = json.loads(
+        (output / "native_ros_sequence_manifests.json").read_text(encoding="utf-8")
+    )
+    assert manifest_summary == [
+        {
+            "sequence_id": "seq_native_root",
+            "bag_path": str(bag),
+            "topic_map_file": str(topic_map),
+            "manifest_json": str(
+                expected_extract_dir / "native_ros_extraction_manifest.json"
+            ),
+        }
+    ]
+    validation = json.loads(
+        (output / "mmuad_official_submission_validation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert validation["template_checked"] is True
     assert validation["leaderboard_ready"] is True
     assert validation["codabench_upload_ready"] is True
 
