@@ -645,7 +645,8 @@ set `angle_unit: deg` in the topic map for degree-valued custom messages. The
 template generator maps clearly polar/range-azimuth radar topic names or
 message types to this export path.
 Table exports marked as `camera_detections_candidate`,
-`image_detections_candidate`, or `detection2d_array_candidate` are
+`camera_detection_candidate`, `image_detections_candidate`, `detection2d_candidate`,
+or `detection2d_array_candidate` are
 back-projected with the same camera detector bridge as
 `--camera-detections-file`; provide `camera_calibration_file` in the topic map
 or place `camera_info.json` / `intrinsics.json` beside the detection export. For
@@ -945,8 +946,10 @@ common custom polar/range-azimuth radar message shapes as
 `geopoint_truth` or `geopoint_candidate`,
 `geographic_msgs/msg/GeoPoseStamped` as `geopose_truth` or
 `geopose_candidate`, `vision_msgs/msg/Detection2D` or
-`vision_msgs/msg/Detection2DArray` as `camera_detections_candidate` when camera
-calibration and depth/fixed-depth metadata are provided. Camera calibration can
+`vision_msgs/msg/Detection2DArray` as `camera_detections_candidate`; legacy
+singular aliases such as `camera_detection_candidate` and `detection2d_candidate`
+are also accepted when camera calibration and depth/fixed-depth metadata are provided.
+Camera calibration can
 come from a sidecar calibration/intrinsics file, a nearby `camera_info` file, or
 a topic-map `camera_info_calibration` export from a native CameraInfo topic,
 `vision_msgs/msg/Detection3D` as `detection3d_truth` or

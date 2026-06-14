@@ -353,9 +353,18 @@ def extract_native_rosbag_topic_map(
                         )
                     rows = len(candidate_rows)
                 elif kind in {
+                    "camera_detection",
+                    "camera_detection_candidate",
+                    "camera_detections",
                     "camera_detections_candidate",
+                    "detection2d",
                     "detection2d_candidate",
+                    "detection2d_array",
                     "detection2d_array_candidate",
+                    "image_detection",
+                    "image_detection_candidate",
+                    "image_detections",
+                    "image_detections_candidate",
                 }:
                     rows_for_message = detection2d_message_to_rows(
                         message,
