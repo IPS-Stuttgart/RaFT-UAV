@@ -92,7 +92,9 @@ def match_submission_to_truth(
 
     When truth has a ``track_id`` column and the submitted track IDs overlap, the
     match is restricted to the same track ID.  Otherwise a single-UAV style
-    sequence-level nearest-time match is used.
+    sequence-level nearest-time match is used.  Each truth row can be consumed at
+    most once so duplicate predictions are counted as unmatched predictions
+    instead of inflating the matched trajectory count.
     """
 
     if truth.empty or submission.empty:
@@ -119,6 +121,7 @@ def match_submission_to_truth(
         restrict_to_track_id = bool(
             truth_track_ids and truth_track_ids.intersection(submitted_track_ids)
         )
+        used_truth_indices: set[Any] = set()
         for _, pred in pred_seq.iterrows():
             candidate_truth = truth_seq
             if restrict_to_track_id:
@@ -127,11 +130,42 @@ def match_submission_to_truth(
                     rows.append(_unmatched_prediction_row(pred, reason="track_id_mismatch"))
                     continue
                 candidate_truth = truth_seq.loc[truth_seq["track_id"] == pred_track_id]
-            idx = (candidate_truth["time_s"].astype(float) - float(pred["time_s"])).abs().idxmin()
-            gt = candidate_truth.loc[idx]
-            dt = abs(float(gt["time_s"]) - float(pred["time_s"]))
+            if candidate_truth.empty:
+                rows.append(_unmatched_prediction_row(pred, reason="missing_track_truth"))
+                continue
+
+            time_delta_all = (
+                candidate_truth["time_s"].astype(float) - float(pred["time_s"])
+            ).abs()
+            nearest_idx = time_delta_all.idxmin()
+            nearest_dt = float(time_delta_all.loc[nearest_idx])
+
+            available_truth = candidate_truth.loc[
+                ~candidate_truth.index.isin(used_truth_indices)
+            ]
+            if available_truth.empty:
+                reason = (
+                    "duplicate_truth_match"
+                    if nearest_dt <= float(max_time_delta_s)
+                    else "time_gate"
+                )
+                rows.append(_unmatched_prediction_row(pred, reason=reason))
+                continue
+
+            time_delta_available = (
+                available_truth["time_s"].astype(float) - float(pred["time_s"])
+            ).abs()
+            idx = time_delta_available.idxmin()
+            gt = available_truth.loc[idx]
+            dt = float(time_delta_available.loc[idx])
             if dt > float(max_time_delta_s):
-                rows.append(_unmatched_prediction_row(pred, reason="time_gate"))
+                reason = (
+                    "duplicate_truth_match"
+                    if nearest_idx in used_truth_indices
+                    and nearest_dt <= float(max_time_delta_s)
+                    else "time_gate"
+                )
+                rows.append(_unmatched_prediction_row(pred, reason=reason))
                 continue
             error = np.array(
                 [
@@ -141,6 +175,7 @@ def match_submission_to_truth(
                 ],
                 dtype=float,
             )
+            used_truth_indices.add(idx)
             rows.append(
                 {
                     "sequence_id": sequence_id,
