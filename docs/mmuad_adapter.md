@@ -249,7 +249,7 @@ intermediate interchange format; use `--ug2-official-results-csv` and
 
 Still not implemented:
 
-- native camera/radar/Livox packet readers;
+- arbitrary undocumented native camera/radar/Livox binary packet readers;
 - image detector, point-cloud detector, or UAV classifier training;
 - closed-server evaluator equivalence beyond the public Track 5 MSE and
   classification-accuracy quantities;
@@ -279,7 +279,9 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_pcd_smoke
 ```
 
-This is still an exported-file bridge, not a native Livox packet reader.
+This is still an exported-file bridge for point-cloud files. Native ROS Livox
+CustomMsg topics are handled by the native extraction path described below;
+undocumented raw Livox binary packets still need dataset-specific decoding.
 
 ### Split manifests
 
@@ -342,7 +344,7 @@ described below for `mmaud_results.csv` upload packaging.
 
 Still not implemented:
 
-- native camera/radar/Livox packet readers;
+- arbitrary undocumented native camera/radar/Livox binary packet readers;
 - closed-server evaluator equivalence beyond the public Track 5 MSE and
   classification-accuracy quantities;
 - detector or classifier training;
@@ -383,9 +385,9 @@ uncompressed LAS files, optional LASzip/LAZ files through the `pointcloud`
 extra, simple float32 `.bin` files with `x,y,z` or `x,y,z,intensity` rows, and
 simple `.npy` / `.npz` point arrays with shape `(N, >=3)`. Gzip-compressed
 exported files such as `.pcd.gz`, `.ply.gz`, `.las.gz`, and `.bin.gz` are
-accepted for those byte/text point-cloud formats. This still is not a native
-Livox packet reader, but it covers common exported point-cloud formats used
-during dataset inspection.
+accepted for those byte/text point-cloud formats. Native ROS Livox CustomMsg
+topics are handled by explicit native extraction; undocumented raw Livox binary
+packets still need dataset-specific decoding.
 
 For sequence-root discovery, JSON or NumPy files with point-cloud names such as
 `lidar_points.json`, `lidar_points.npy`, `point_cloud.npz`, or `cloud_12.5.npy`
@@ -624,6 +626,9 @@ message types
 variants), while the exported-topic loader still accepts those kinds for CSV or
 JSON/JSONL table and NumPy exports. Table exports marked as `pointcloud2_candidate`
 are clustered from point rows using the same lightweight point-cloud bridge.
+Topic-map entries marked as `livox_custommsg_candidate` also use that point-row
+bridge for exported tables and, during native ROS extraction, decode common
+Livox CustomMsg `points` arrays before clustering.
 Table exports marked as `radar_polar_candidate` or `polar_radar_candidate`
 are converted from range/azimuth rows using the same polar radar bridge as
 `--radar-polar-file`.
@@ -923,7 +928,9 @@ PYTHONPATH=src python scripts/extract_mmuad_rosbag_topics.py \
 ```
 
 The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
-`pointcloud2_candidate`, `sensor_msgs/msg/CameraInfo` as
+`pointcloud2_candidate`, `livox_ros_driver/msg/CustomMsg` and
+`livox_ros_driver2/msg/CustomMsg` as `livox_custommsg_candidate`,
+`sensor_msgs/msg/CameraInfo` as
 `camera_info_calibration` intrinsics for Detection2D back-projection,
 common custom polar/range-azimuth radar message shapes as
 `radar_polar_candidate` or `polar_radar_candidate`,
@@ -990,5 +997,6 @@ CSV/ZIP, validation JSON/rows, and trajectory metrics can be requested from the
 same run.
 
 This is still not a complete native ROS parser for every possible MMUAD bag. It
-is a first native message bridge for common ROS message types. Custom radar
-messages and camera image detectors still need dataset-specific work.
+is a first native message bridge for common ROS message types. Undocumented
+binary radar/Livox payloads and camera image detectors still need
+dataset-specific work.

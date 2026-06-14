@@ -265,6 +265,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
     msg_type = str(topic.get("type", topic.get("msgtype", ""))).lower()
     compact_type = msg_type.replace("_", "")
     truth_like = any(token in name for token in ("truth", "ground", "gt", "label", "mocap"))
+    if _looks_like_livox_custom_topic(name, msg_type):
+        return "livox_custommsg_candidate"
     if "pointcloud2" in msg_type:
         return "pointcloud2_candidate"
     if _looks_like_polar_radar_topic(name, msg_type):
@@ -339,6 +341,24 @@ def _is_radar_polar_kind(kind: str) -> bool:
         "polar_radar",
         "polar_radar_candidate",
     }
+
+
+def _is_pointcloud_topic_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "pointcloud2_candidate",
+        "livox_custom_candidate",
+        "livox_custommsg_candidate",
+        "livox_custom_pointcloud_candidate",
+        "livox_pointcloud_candidate",
+    }
+
+
+def _looks_like_livox_custom_topic(name: str, msg_type: str) -> bool:
+    text = f"{name} {msg_type}".lower().replace("_", "").replace("-", "")
+    return "livox" in text and (
+        "custommsg" in text or "custompoint" in text or "custom" in text
+    )
 
 
 def _looks_like_polar_radar_topic(name: str, msg_type: str) -> bool:
@@ -454,7 +474,7 @@ def _load_topic_candidate_export(
     explicit_source = spec.get("source")
     source = str(spec.get("source") or spec.get("topic") or "candidate")
     kind = str(spec.get("kind", "candidate")).strip().lower()
-    if kind == "pointcloud2_candidate":
+    if _is_pointcloud_topic_kind(kind):
         return _load_topic_pointcloud_export(
             path,
             spec,
