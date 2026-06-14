@@ -282,7 +282,7 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
     if "detection2darray" in compact_type:
         return "camera_detections_candidate"
     if "detection2d" in compact_type:
-        return "camera_detection_candidate"
+        return "camera_detections_candidate"
     if "detection3darray" in compact_type:
         return "detection3d_array_truth" if truth_like else "detection3d_array_candidate"
     if "detection3d" in compact_type:

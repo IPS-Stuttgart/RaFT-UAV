@@ -6259,6 +6259,115 @@ def test_native_ros_extraction_supports_detection2d_camera_candidates(
     assert (output / "native_ros_candidates.csv").exists()
 
 
+def test_native_ros_extraction_accepts_singular_detection2d_template_kind(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_camera_singular.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map.json"
+    camera_info = tmp_path / "camera_info.json"
+    camera_info.write_text(
+        json.dumps(
+            {
+                "cameras": {
+                    "cam0": {
+                        "fx": 100.0,
+                        "fy": 100.0,
+                        "cx": 50.0,
+                        "cy": 40.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_camera_singular",
+                "exports": [
+                    {
+                        "topic": "/camera/best_detection",
+                        "kind": "camera_detection_candidate",
+                        "source": "cam0",
+                        "camera_calibration_file": "camera_info.json",
+                        "camera_fixed_depth_m": 10.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    connection = SimpleNamespace(
+        topic="/camera/best_detection",
+        msgtype="vision_msgs/msg/Detection2D",
+    )
+    message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=3, nanosec=0),
+            frame_id="cam0",
+        ),
+        id="det-b",
+        bbox=SimpleNamespace(
+            center=SimpleNamespace(x=70.0, y=40.0),
+            size_x=8.0,
+            size_y=4.0,
+        ),
+        results=[
+            SimpleNamespace(hypothesis=SimpleNamespace(class_id="fixed-wing", score=0.8))
+        ],
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [connection]
+            return [(connection, 3_000_000_000, b"raw")]
+
+        def deserialize(self, rawdata, msgtype):
+            assert rawdata == b"raw"
+            assert msgtype == "vision_msgs/msg/Detection2D"
+            return message
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+    )
+
+    assert extracted.candidates is not None
+    rows = extracted.candidates.rows
+    assert len(rows) == 1
+    assert rows.loc[0, "sequence_id"] == "seq_camera_singular"
+    assert rows.loc[0, "source"] == "cam0"
+    assert rows.loc[0, "track_id"] == "det-b"
+    assert rows.loc[0, "x_m"] == 2.0
+    assert rows.loc[0, "y_m"] == 0.0
+    assert rows.loc[0, "z_m"] == 10.0
+    assert rows.loc[0, "confidence"] == 0.8
+    assert rows.loc[0, "class_name"] == "fixed-wing"
+    assert extracted.manifest["candidate_rows"] == 1
+    assert extracted.manifest["extracted_messages"][0]["kind"] == "camera_detection_candidate"
+    assert extracted.manifest["extracted_messages"][0]["status"] == "extracted"
+
+
 def test_native_ros_extraction_uses_camera_info_for_detection2d_intrinsics(
     tmp_path: Path,
     monkeypatch,
@@ -6908,6 +7017,10 @@ def test_ros2_topic_map_template_infers_detection2d_topics(tmp_path: Path) -> No
                 "        type: vision_msgs/msg/Detection2DArray",
                 "      message_count: 2",
                 "    - topic_metadata:",
+                "        name: /camera/best_detection",
+                "        type: vision_msgs/msg/Detection2D",
+                "      message_count: 2",
+                "    - topic_metadata:",
                 "        name: /camera/camera_info",
                 "        type: sensor_msgs/msg/CameraInfo",
                 "      message_count: 2",
@@ -6922,6 +7035,7 @@ def test_ros2_topic_map_template_infers_detection2d_topics(tmp_path: Path) -> No
 
     assert [entry["kind"] for entry in payload["exports"]] == [
         "camera_detections_candidate",
+        "camera_detections_candidate",
         "camera_info_calibration",
     ]
     export = payload["exports"][0]
@@ -6930,7 +7044,11 @@ def test_ros2_topic_map_template_infers_detection2d_topics(tmp_path: Path) -> No
     assert export["camera_calibration_file"] == "PATH/TO/camera_info.json"
     assert export["column_aliases"]["center_x"] == "u_px"
     assert export["column_aliases"]["center_y"] == "v_px"
-    assert payload["exports"][1]["source"] == "camera_camera_info"
+    singular_export = payload["exports"][1]
+    assert singular_export["kind"] == "camera_detections_candidate"
+    assert singular_export["source"] == "camera_best_detection"
+    assert singular_export["camera_calibration_file"] == "PATH/TO/camera_info.json"
+    assert payload["exports"][2]["source"] == "camera_camera_info"
 
 
 def test_ros2_topic_map_template_infers_marker_topics(tmp_path: Path) -> None:
