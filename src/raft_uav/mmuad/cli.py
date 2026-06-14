@@ -92,6 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--validate-ug2-official-codabench-zip", type=Path)
     parser.add_argument("--official-validation-json", type=Path)
     parser.add_argument("--official-validation-rows-csv", type=Path)
+    parser.add_argument("--official-upload-manifest-json", type=Path)
     parser.add_argument("--official-validation-template-csv", type=Path)
     parser.add_argument("--official-validation-template-file", type=Path)
     parser.add_argument("--official-validation-timestamp-tolerance-s", type=float, default=1.0e-6)
@@ -696,6 +697,14 @@ def _run_official_submission_validation(args: argparse.Namespace) -> int:
         args.official_validation_rows_csv.parent.mkdir(parents=True, exist_ok=True)
         validation.rows.to_csv(args.official_validation_rows_csv, index=False)
         paths["official_validation_rows_csv"] = str(args.official_validation_rows_csv)
+    manifest_path = _write_official_upload_manifest(
+        args,
+        validation.summary,
+        artifact_path=args.validate_ug2_official_codabench_zip,
+        validation_json_path=json_path,
+        validation_rows_path=args.official_validation_rows_csv,
+    )
+    paths["official_upload_manifest_json"] = str(manifest_path)
     print("mmuad_official_submission_validation=ok")
     print(f"valid={validation.summary['valid']}")
     print(f"leaderboard_ready={validation.summary['leaderboard_ready']}")
@@ -725,9 +734,17 @@ def _validate_written_official_zip(args: argparse.Namespace) -> dict[str, str]:
     rows_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(validation.summary, indent=2), encoding="utf-8")
     validation.rows.to_csv(rows_path, index=False)
+    manifest_path = _write_official_upload_manifest(
+        args,
+        validation.summary,
+        artifact_path=args.ug2_official_codabench_zip,
+        validation_json_path=json_path,
+        validation_rows_path=rows_path,
+    )
     paths = {
         "official_validation_json": str(json_path),
         "official_validation_rows_csv": str(rows_path),
+        "official_upload_manifest_json": str(manifest_path),
     }
     if not validation.summary["codabench_upload_ready"]:
         errors = "; ".join(str(item) for item in validation.summary.get("errors", []))
@@ -739,6 +756,121 @@ def _validate_written_official_zip(args: argparse.Namespace) -> dict[str, str]:
         detail = f": {'; '.join(detail_items)}" if detail_items else ""
         raise SystemExit(f"written official Track 5 ZIP failed validation{detail}")
     return paths
+
+
+def _write_official_upload_manifest(
+    args: argparse.Namespace,
+    summary: dict,
+    *,
+    artifact_path: Path,
+    validation_json_path: Path,
+    validation_rows_path: Path | None,
+) -> Path:
+    manifest_path = args.official_upload_manifest_json or (
+        args.output_dir / "mmuad_official_upload_manifest.json"
+    )
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest = _official_upload_manifest_payload(
+        summary,
+        artifact_path=artifact_path,
+        validation_json_path=validation_json_path,
+        validation_rows_path=validation_rows_path,
+    )
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return manifest_path
+
+
+def _official_upload_manifest_payload(
+    summary: dict,
+    *,
+    artifact_path: Path,
+    validation_json_path: Path,
+    validation_rows_path: Path | None,
+) -> dict:
+    sequence_summaries = {
+        str(sequence_id): _official_upload_sequence_manifest(row)
+        for sequence_id, row in dict(summary.get("sequences", {})).items()
+    }
+    blocking_sequences = [
+        sequence_id
+        for sequence_id, row in sequence_summaries.items()
+        if not row.get("leaderboard_ready", False)
+    ]
+    return {
+        "schema": "raft-uav-mmuad-official-upload-manifest-v1",
+        "artifact_path": str(artifact_path),
+        "validation_json": str(validation_json_path),
+        "validation_rows_csv": (
+            str(validation_rows_path) if validation_rows_path is not None else None
+        ),
+        "is_zip": bool(summary.get("is_zip", False)),
+        "codabench_upload_ready": bool(summary.get("codabench_upload_ready", False)),
+        "leaderboard_ready": bool(summary.get("leaderboard_ready", False)),
+        "score_valid_for_leaderboard": bool(
+            summary.get("score_valid_for_leaderboard", False)
+        ),
+        "valid": bool(summary.get("valid", False)),
+        "leaderboard_blocking_reasons": list(
+            summary.get("leaderboard_blocking_reasons", [])
+        ),
+        "row_count": int(summary.get("row_count", 0) or 0),
+        "valid_row_count": int(summary.get("valid_row_count", 0) or 0),
+        "template_checked": bool(summary.get("template_checked", False)),
+        "template_timestamp_count": _optional_int(
+            summary.get("template_timestamp_count")
+        ),
+        "timestamp_tolerance_s": float(summary.get("timestamp_tolerance_s", 0.0)),
+        "members": list(summary.get("members", [])),
+        "columns": list(summary.get("columns", [])),
+        "expected_columns": list(summary.get("expected_columns", [])),
+        "sequence_count": len(sequence_summaries),
+        "ready_sequence_count": int(
+            sum(1 for row in sequence_summaries.values() if row.get("leaderboard_ready"))
+        ),
+        "blocking_sequence_count": len(blocking_sequences),
+        "blocking_sequences": blocking_sequences,
+        "sequences": sequence_summaries,
+    }
+
+
+def _official_upload_sequence_manifest(row: dict) -> dict:
+    return {
+        "leaderboard_ready": bool(row.get("leaderboard_ready", False)),
+        "score_valid_for_leaderboard": bool(
+            row.get("score_valid_for_leaderboard", False)
+        ),
+        "leaderboard_blocking_reasons": list(
+            row.get("leaderboard_blocking_reasons", [])
+        ),
+        "template_checked": bool(row.get("template_checked", False)),
+        "template_timestamp_count": _optional_int(row.get("template_timestamp_count")),
+        "prediction_count": int(row.get("prediction_count", 0) or 0),
+        "valid_prediction_count": int(row.get("valid_prediction_count", 0) or 0),
+        "covered_template_timestamp_count": int(
+            row.get("covered_template_timestamp_count", 0) or 0
+        ),
+        "missing_template_timestamp_count": int(
+            row.get("missing_template_timestamp_count", 0) or 0
+        ),
+        "extra_prediction_count": int(row.get("extra_prediction_count", 0) or 0),
+        "duplicate_prediction_count": int(
+            row.get("duplicate_prediction_count", 0) or 0
+        ),
+        "invalid_sequence_count": int(row.get("invalid_sequence_count", 0) or 0),
+        "invalid_timestamp_count": int(row.get("invalid_timestamp_count", 0) or 0),
+        "invalid_position_count": int(row.get("invalid_position_count", 0) or 0),
+        "invalid_classification_count": int(
+            row.get("invalid_classification_count", 0) or 0
+        ),
+    }
+
+
+def _optional_int(value) -> int | None:
+    if value is None:
+        return None
+    if pd.isna(value):
+        return None
+    return int(value)
 
 
 def _official_submission_validation_template(args: argparse.Namespace) -> pd.DataFrame | None:

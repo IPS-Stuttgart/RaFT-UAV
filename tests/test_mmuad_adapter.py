@@ -2792,6 +2792,29 @@ def test_cli_writes_official_track5_results_and_zip(tmp_path: Path) -> None:
     assert validation["template_timestamp_count"] == 2
     assert validation["leaderboard_ready"] is True
     assert validation["codabench_upload_ready"] is True
+    manifest = json.loads(
+        (output / "mmuad_official_upload_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["schema"] == "raft-uav-mmuad-official-upload-manifest-v1"
+    assert manifest["artifact_path"] == str(zip_path)
+    assert manifest["validation_json"] == str(
+        output / "mmuad_official_submission_validation.json"
+    )
+    assert manifest["validation_rows_csv"] == str(
+        output / "mmuad_official_submission_validation_rows.csv"
+    )
+    assert manifest["codabench_upload_ready"] is True
+    assert manifest["leaderboard_ready"] is True
+    assert manifest["score_valid_for_leaderboard"] is True
+    assert manifest["valid"] is True
+    assert manifest["sequence_count"] == 1
+    assert manifest["ready_sequence_count"] == 1
+    assert manifest["blocking_sequence_count"] == 0
+    assert manifest["blocking_sequences"] == []
+    assert manifest["sequences"]["seqA"]["leaderboard_ready"] is True
+    assert manifest["sequences"]["seqA"]["template_timestamp_count"] == 2
 
 
 def test_cli_validate_on_write_requires_truth_or_template_for_official_readiness(
@@ -2838,6 +2861,14 @@ def test_cli_validate_on_write_requires_truth_or_template_for_official_readiness
     assert validation["leaderboard_blocking_reasons"] == [
         "timestamp_template_not_checked"
     ]
+    manifest = json.loads(
+        (output / "mmuad_official_upload_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["codabench_upload_ready"] is False
+    assert manifest["leaderboard_ready"] is False
+    assert manifest["blocking_sequences"] == ["seqA"]
 
 
 def test_results_completion_resamples_to_truth_timestamps(tmp_path: Path) -> None:
@@ -3683,6 +3714,16 @@ def test_cli_validate_on_write_rejects_incomplete_official_zip(tmp_path: Path) -
     assert summary["template_checked"] is True
     assert summary["missing_template_timestamp_count"] == 1
     assert "missing_template_timestamp" in rows["status"].tolist()
+    manifest = json.loads(
+        (output / "mmuad_official_upload_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["valid"] is False
+    assert manifest["codabench_upload_ready"] is False
+    assert manifest["leaderboard_ready"] is False
+    assert manifest["blocking_sequences"] == ["seq1"]
+    assert manifest["sequences"]["seq1"]["missing_template_timestamp_count"] == 1
 
 
 def test_cli_validates_official_zip_against_sequence_timestamps(tmp_path: Path) -> None:
@@ -3693,6 +3734,7 @@ def test_cli_validates_official_zip_against_sequence_timestamps(tmp_path: Path) 
     for timestamp in ("0.0", "1.0"):
         (image / f"{timestamp}.png").write_bytes(b"not-a-real-image")
     zip_path = tmp_path / "official_submission.zip"
+    manifest_path = tmp_path / "official_upload_manifest.json"
     official = pd.DataFrame(
         {
             "Sequence": ["seq1", "seq1"],
@@ -3719,6 +3761,8 @@ def test_cli_validates_official_zip_against_sequence_timestamps(tmp_path: Path) 
             str(output / "validation.json"),
             "--official-validation-rows-csv",
             str(output / "validation_rows.csv"),
+            "--official-upload-manifest-json",
+            str(manifest_path),
             "--output-dir",
             str(output),
         ]
@@ -3733,6 +3777,15 @@ def test_cli_validates_official_zip_against_sequence_timestamps(tmp_path: Path) 
     assert summary["missing_template_timestamp_count"] == 0
     assert summary["extra_prediction_count"] == 0
     assert set(rows["status"]) == {"ok", "covered_template_timestamp"}
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["artifact_path"] == str(zip_path)
+    assert manifest["validation_json"] == str(output / "validation.json")
+    assert manifest["validation_rows_csv"] == str(output / "validation_rows.csv")
+    assert manifest["codabench_upload_ready"] is True
+    assert manifest["leaderboard_ready"] is True
+    assert manifest["sequence_count"] == 1
+    assert manifest["ready_sequence_count"] == 1
+    assert manifest["sequences"]["seq1"]["covered_template_timestamp_count"] == 2
 
 
 def test_cli_official_zip_validation_requires_template_for_upload_ready(
@@ -5651,6 +5704,7 @@ def test_cli_native_ros_extraction_writes_submission_artifacts(
         "official_submission.zip",
         "mmuad_official_submission_validation.json",
         "mmuad_official_submission_validation_rows.csv",
+        "mmuad_official_upload_manifest.json",
     ]
     for name in expected:
         assert (output / name).exists(), name
@@ -5673,6 +5727,13 @@ def test_cli_native_ros_extraction_writes_submission_artifacts(
     assert validation["template_timestamp_count"] == 2
     assert validation["leaderboard_ready"] is True
     assert validation["codabench_upload_ready"] is True
+    manifest = json.loads(
+        (output / "mmuad_official_upload_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["codabench_upload_ready"] is True
+    assert manifest["leaderboard_ready"] is True
 
 
 def test_cli_sequence_root_runs_native_ros_recording(

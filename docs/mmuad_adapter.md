@@ -540,8 +540,9 @@ nearest-hold choices remain auditable, including per-sequence requested,
 completed, and dropped timestamp counts. With
 `--ug2-official-validate-on-write`, the run also writes
 `mmuad_official_submission_validation.json` and
-`mmuad_official_submission_validation_rows.csv`, then exits nonzero if the
-fresh ZIP is not upload-ready under the local Track 5 preflight checks.
+`mmuad_official_submission_validation_rows.csv`, plus
+`mmuad_official_upload_manifest.json`, then exits nonzero if the fresh ZIP is
+not upload-ready under the local Track 5 preflight checks.
 For explicit-file, topic-map, or native ROS runs that do not have a
 `--sequence-root`, `--ug2-official-complete-to-sequence-timestamps` can instead
 use `--official-validation-template-file` or
@@ -561,6 +562,7 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --ug2-official-timestamp-source ground-truth-or-all \
   --official-validation-json outputs/mmuad_val/official_submission_validation.json \
   --official-validation-rows-csv outputs/mmuad_val/official_submission_validation_rows.csv \
+  --official-upload-manifest-json outputs/mmuad_val/official_upload_manifest.json \
   --output-dir outputs/mmuad_val
 ```
 
@@ -588,6 +590,11 @@ missing, or missing-like official `Sequence` values are grouped under the
 reserved `__invalid_sequence__` summary key. With a nonzero timestamp tolerance,
 only the nearest unused prediction covers a requested template timestamp; other
 non-duplicate predictions in the same tolerance window remain extras.
+`mmuad_official_upload_manifest.json` is a compact, machine-readable readiness
+index for release scripts and CI. It records the checked artifact path,
+validation JSON/row paths, ZIP members and columns, global readiness flags,
+blocking reasons, sequence counts, and per-sequence prediction/template
+coverage. It does not upload results or replace the closed Codabench evaluator.
 Official Track 5 CSV/ZIP writers also fail before writing when tracker output
 contains non-finite timestamps or positions, preventing a seemingly valid ZIP
 from silently dropping rows. For local diagnostics only, pass
