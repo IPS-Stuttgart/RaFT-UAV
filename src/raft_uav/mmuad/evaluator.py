@@ -673,6 +673,50 @@ def _empty_truth_evaluation(
 ) -> dict[str, Any]:
     """Return the standard evaluator payload when no truth rows are available."""
 
+    if metric_protocol == "public_track5_timestamp_aligned":
+        errors = pd.DataFrame.from_records(
+            _unused_track5_prediction_rows(
+                result_rows,
+                pd.DataFrame(columns=["sequence_id", "time_s"]),
+                used_result_indices=set(),
+                timestamp_tolerance_s=(
+                    0.0 if timestamp_tolerance_s is None else float(timestamp_tolerance_s)
+                ),
+            )
+        )
+        prediction_count = int(len(result_rows))
+        extra_count = _reason_count(errors, "extra_prediction")
+        blocking_reasons = _track5_leaderboard_blocking_reasons(
+            truth_count=0,
+            matched_count=0,
+            missing_count=0,
+            extra_count=extra_count,
+            duplicate_count=0,
+        )
+        summary = {
+            "metric_protocol": "public_track5_timestamp_aligned",
+            "public_track5_metric": True,
+            "closed_codabench_evaluator": False,
+            "count": int(len(errors)),
+            "truth_count": 0,
+            "prediction_count": prediction_count,
+            "matched_count": 0,
+            "missing_prediction_count": 0,
+            "extra_prediction_count": extra_count,
+            "duplicate_prediction_count": 0,
+            "unmatched_count": int(len(errors)),
+            "truth_coverage_fraction": 0.0,
+            "all_truth_timestamps_matched": False,
+            "leaderboard_ready": False,
+            "score_valid_for_leaderboard": False,
+            "leaderboard_blocking_reasons": blocking_reasons,
+            "pooled": _error_summary(pd.DataFrame()),
+            "sequences": {},
+        }
+        if timestamp_tolerance_s is not None:
+            summary["timestamp_tolerance_s"] = float(timestamp_tolerance_s)
+        return {"summary": summary, "rows": errors}
+
     errors = pd.DataFrame.from_records(
         [
             _unmatched_result_row(row, reason="empty_truth")

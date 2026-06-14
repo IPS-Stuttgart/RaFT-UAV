@@ -771,7 +771,8 @@ timestamp coverage before upload. It also reports `leaderboard_ready`,
 false/nonempty until every requested truth/template timestamp has exactly one
 prediction and there are no extras or duplicates. Timestamp matching is
 one-to-one: even when a nonzero tolerance is used, one prediction cannot cover
-multiple requested timestamps. With
+multiple requested timestamps. Empty truth/template files report
+`no_truth_timestamps` and are never treated as leaderboard-ready. With
 `--evaluation-require-complete-track5`, the CLI writes the JSON/row artifacts
 and exits nonzero when those strict public Track 5 readiness checks fail.
 
