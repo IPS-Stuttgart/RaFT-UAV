@@ -6368,6 +6368,103 @@ def test_native_ros_extraction_accepts_singular_detection2d_template_kind(
     assert extracted.manifest["extracted_messages"][0]["status"] == "extracted"
 
 
+def test_native_ros_extraction_supports_plain_point_topics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_point.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_point",
+                "exports": [
+                    {
+                        "topic": "/detector/point",
+                        "kind": "point_candidate",
+                        "source": "detector_point",
+                        "std_xy_m": 1.0,
+                        "std_z_m": 2.0,
+                        "confidence": 0.7,
+                    },
+                    {
+                        "topic": "/ground_truth/point",
+                        "kind": "point_truth",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate_connection = SimpleNamespace(
+        topic="/detector/point",
+        msgtype="geometry_msgs/msg/Point",
+    )
+    truth_connection = SimpleNamespace(
+        topic="/ground_truth/point",
+        msgtype="geometry_msgs/msg/Point",
+    )
+    messages = {
+        candidate_connection.topic: SimpleNamespace(x=1.0, y=2.0, z=3.0),
+        truth_connection.topic: SimpleNamespace(x=1.5, y=2.5, z=3.5),
+    }
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [candidate_connection, truth_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [candidate_connection, truth_connection]
+            return [
+                (candidate_connection, 4_000_000_000, b"candidate"),
+                (truth_connection, 4_000_000_000, b"truth"),
+            ]
+
+        def deserialize(self, rawdata, msgtype):
+            if rawdata == b"candidate":
+                assert msgtype == "geometry_msgs/msg/Point"
+                return messages[candidate_connection.topic]
+            if rawdata == b"truth":
+                assert msgtype == "geometry_msgs/msg/Point"
+                return messages[truth_connection.topic]
+            raise AssertionError(f"unexpected rawdata: {rawdata!r}")
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+    )
+
+    assert extracted.candidates is not None
+    assert extracted.truth is not None
+    candidate = extracted.candidates.rows.iloc[0]
+    truth = extracted.truth.rows.iloc[0]
+    assert candidate["sequence_id"] == "seq_point"
+    assert candidate["source"] == "detector_point"
+    assert candidate[["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+    assert candidate["std_xy_m"] == 1.0
+    assert candidate["std_z_m"] == 2.0
+    assert candidate["confidence"] == 0.7
+    assert truth[["x_m", "y_m", "z_m"]].tolist() == [1.5, 2.5, 3.5]
+    assert extracted.manifest["candidate_rows"] == 1
+    assert extracted.manifest["truth_rows"] == 1
+
+
 def test_native_ros_extraction_uses_camera_info_for_detection2d_intrinsics(
     tmp_path: Path,
     monkeypatch,
@@ -6969,6 +7066,39 @@ def test_ros2_topic_map_template_infers_geodetic_topics(tmp_path: Path) -> None:
     assert payload["exports"][1]["source"] is None
     assert payload["exports"][0]["enu_origin_lla"] == "LAT,LON,ALT"
     assert payload["exports"][1]["enu_origin_lla"] == "LAT,LON,ALT"
+
+
+def test_ros2_topic_map_template_infers_plain_point_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /detector/point",
+                "        type: geometry_msgs/msg/Point",
+                "      message_count: 2",
+                "    - topic_metadata:",
+                "        name: /ground_truth/point",
+                "        type: geometry_msgs/msg/Point",
+                "      message_count: 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "point_candidate",
+        "point_truth",
+    ]
+    assert payload["exports"][0]["source"] == "detector_point"
+    assert payload["exports"][1]["source"] is None
 
 
 def test_ros2_topic_map_template_infers_detection3d_topics(tmp_path: Path) -> None:

@@ -1839,6 +1839,8 @@ def _add_navsat_covariance_metadata(row: dict[str, Any], message: Any) -> None:
 
 
 def _position_from_message(message: Any) -> Any | None:
+    if all(hasattr(message, attr) for attr in ("x", "y", "z")):
+        return message
     point = getattr(message, "point", None)
     if point is not None:
         return point

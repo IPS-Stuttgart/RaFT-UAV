@@ -962,7 +962,8 @@ a topic-map `camera_info_calibration` export from a native CameraInfo topic,
 `geometry_msgs/msg/PoseWithCovarianceStamped` as `pose_truth` or
 `pose_candidate`,
 `geometry_msgs/msg/PoseArray` as `pose_array_truth` or `pose_array_candidate`,
-`geometry_msgs/msg/PointStamped` as `point_truth` or `point_candidate`,
+`geometry_msgs/msg/Point` and `geometry_msgs/msg/PointStamped` as
+`point_truth` or `point_candidate`,
 `geometry_msgs/msg/TransformStamped` as `transform_truth` or
 `transform_candidate`, `tf2_msgs/msg/TFMessage` as `tf_truth` or
 `tf_candidate`, `nav_msgs/msg/Path` as `path_truth` or `path_candidate`, and
