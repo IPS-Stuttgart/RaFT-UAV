@@ -751,11 +751,11 @@ comparison, so `2`, `2.0`, and NumPy/pandas numeric scalars score as the same
 class ID. The older local diagnostic `uav_type` table still compares
 non-numeric names such as `Mavic3` as stripped strings.
 
-Evaluate an exported `mmaud_results.csv` with optional class labels:
+Evaluate a packaged official ZIP with optional class labels:
 
 ```bash
 PYTHONPATH=src python -m raft_uav.mmuad.cli \
-  --evaluate-results-csv outputs/mmuad_val/mmaud_results.csv \
+  --evaluate-results-zip outputs/mmuad_val/ug2_official_submission.zip \
   --evaluate-truth-csv data/mmuad_export/val_truth.csv \
   --evaluation-protocol public-track5 \
   --evaluation-timestamp-tolerance-s 1e-6 \
@@ -766,8 +766,10 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_val
 ```
 
-Use `--evaluate-results-zip` instead when the result is still packaged as a
-Codabench-style archive. The truth side may be a normalized truth file or an
+Use `--evaluate-results-csv` for local metric checks of an unpacked
+`mmaud_results.csv`; a complete CSV can set `score_valid_for_leaderboard=true`,
+but it is not Codabench upload-ready until packaged as an official ZIP. The
+truth side may be a normalized truth file or an
 official Track 5 CSV/ZIP with `Sequence`, `Timestamp`, `Position`, and
 `Classification` columns; official truth rows are parsed into local normalized
 coordinates for the public Track 5 sanity metric. The summary includes `truth_count`,
@@ -776,9 +778,12 @@ coordinates for the public Track 5 sanity metric. The summary includes `truth_co
 `duplicate_prediction_count`, `truth_coverage_fraction`, and
 `all_truth_timestamps_matched` so a leaderboard-style package can be checked for
 timestamp coverage before upload. It also reports `leaderboard_ready`,
-`score_valid_for_leaderboard`, and `leaderboard_blocking_reasons`; these stay
-false/nonempty until every requested truth/template timestamp has exactly one
-prediction and there are no extras or duplicates. Timestamp matching is
+`score_valid_for_leaderboard`, `codabench_upload_ready`, and
+`leaderboard_blocking_reasons`; `score_valid_for_leaderboard` covers the public
+timestamp/classification metric grid, while `leaderboard_ready` also requires an
+official upload-ready ZIP. These stay false/nonempty until every requested
+truth/template timestamp has exactly one prediction, there are no extras or
+duplicates, and the checked artifact is upload-shaped. Timestamp matching is
 one-to-one: even when a nonzero tolerance is used, one prediction cannot cover
 multiple requested timestamps. Empty truth/template files report
 `no_truth_timestamps` and are never treated as leaderboard-ready. Per-sequence
