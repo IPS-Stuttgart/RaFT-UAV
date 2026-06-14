@@ -1078,6 +1078,9 @@ def _track5_template_coverage_rows(
             matched_rows = seq_predictions.loc[
                 np.abs(prediction_times - timestamp) <= timestamp_tolerance_s
             ]
+            matched_rows = matched_rows.loc[
+                ~matched_rows["row_index"].astype(int).isin(matched_prediction_indices)
+            ]
             if matched_rows.empty:
                 rows.append(
                     {
@@ -1090,11 +1093,18 @@ def _track5_template_coverage_rows(
                     }
                 )
                 continue
+            nearest_index = (
+                (matched_rows["timestamp"].astype(float) - timestamp)
+                .abs()
+                .sort_values()
+                .index[0]
+            )
+            matched_row = matched_rows.loc[nearest_index]
             matched_prediction_indices.update(matched_rows["row_index"].astype(int).tolist())
             rows.append(
                 {
                     "row_type": "template",
-                    "row_index": int(matched_rows.iloc[0]["row_index"]),
+                    "row_index": int(matched_row["row_index"]),
                     "sequence_id": str(sequence_id),
                     "timestamp": timestamp,
                     "status": "covered_template_timestamp",

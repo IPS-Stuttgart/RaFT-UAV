@@ -757,7 +757,9 @@ coordinates for the public Track 5 sanity metric. The summary includes `truth_co
 timestamp coverage before upload. It also reports `leaderboard_ready`,
 `score_valid_for_leaderboard`, and `leaderboard_blocking_reasons`; these stay
 false/nonempty until every requested truth/template timestamp has exactly one
-prediction and there are no extras or duplicates. With
+prediction and there are no extras or duplicates. Timestamp matching is
+one-to-one: even when a nonzero tolerance is used, one prediction cannot cover
+multiple requested timestamps. With
 `--evaluation-require-complete-track5`, the CLI writes the JSON/row artifacts
 and exits nonzero when those strict public Track 5 readiness checks fail.
 
