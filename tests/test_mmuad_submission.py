@@ -554,6 +554,45 @@ def test_public_track5_metric_protocol_uses_truth_timestamp_denominator():
     assert "extra_prediction" in reasons
 
 
+def test_public_track5_metric_rejects_empty_truth_template():
+    results = pd.DataFrame(
+        {
+            "Sequence": ["seq1"],
+            "Timestamp": [0.0],
+            "Position": ["(0,0,0)"],
+            "Classification": [1],
+        }
+    )
+    truth = pd.DataFrame(columns=["sequence_id", "time_s", "x_m", "y_m", "z_m"])
+
+    evaluated = evaluate_mmaud_results(
+        results,
+        truth,
+        metric_protocol="public-track5",
+        timestamp_tolerance_s=0.0,
+    )
+
+    summary = evaluated["summary"]
+    assert summary["metric_protocol"] == "public_track5_timestamp_aligned"
+    assert summary["public_track5_metric"] is True
+    assert summary["closed_codabench_evaluator"] is False
+    assert summary["truth_count"] == 0
+    assert summary["prediction_count"] == 1
+    assert summary["matched_count"] == 0
+    assert summary["missing_prediction_count"] == 0
+    assert summary["extra_prediction_count"] == 1
+    assert summary["duplicate_prediction_count"] == 0
+    assert summary["truth_coverage_fraction"] == 0.0
+    assert summary["all_truth_timestamps_matched"] is False
+    assert summary["leaderboard_ready"] is False
+    assert summary["score_valid_for_leaderboard"] is False
+    assert summary["leaderboard_blocking_reasons"] == [
+        "no_truth_timestamps",
+        "extra_predictions",
+    ]
+    assert evaluated["rows"].loc[0, "unmatched_reason"] == "extra_prediction"
+
+
 def test_public_track5_metric_normalizes_integer_like_class_labels():
     results = pd.DataFrame(
         {

@@ -5089,6 +5089,66 @@ def test_cli_requires_complete_public_track5_evaluation(tmp_path: Path) -> None:
     assert "missing_prediction" in rows["unmatched_reason"].fillna("").tolist()
 
 
+def test_cli_public_track5_evaluation_rejects_empty_truth_template(
+    tmp_path: Path,
+) -> None:
+    zip_path = tmp_path / "official_submission.zip"
+    official = pd.DataFrame(
+        {
+            "Sequence": ["seq1"],
+            "Timestamp": [0.0],
+            "Position": ["(0,0,10)"],
+            "Classification": [2],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", official.to_csv(index=False))
+    truth = tmp_path / "empty_truth.csv"
+    output = tmp_path / "out"
+    pd.DataFrame(columns=["sequence_id", "time_s", "x_m", "y_m", "z_m"]).to_csv(
+        truth,
+        index=False,
+    )
+
+    with pytest.raises(SystemExit, match="no_truth_timestamps"):
+        mmuad_cli_main(
+            [
+                "--evaluate-results-zip",
+                str(zip_path),
+                "--evaluate-truth-csv",
+                str(truth),
+                "--evaluation-protocol",
+                "public-track5",
+                "--evaluation-timestamp-tolerance-s",
+                "0",
+                "--evaluation-require-complete-track5",
+                "--evaluation-json",
+                str(output / "public_track5_empty_eval.json"),
+                "--evaluation-rows-csv",
+                str(output / "public_track5_empty_eval_rows.csv"),
+                "--output-dir",
+                str(output),
+            ]
+        )
+
+    metrics = json.loads(
+        (output / "public_track5_empty_eval.json").read_text(encoding="utf-8")
+    )
+    rows = pd.read_csv(output / "public_track5_empty_eval_rows.csv")
+    assert metrics["truth_count"] == 0
+    assert metrics["prediction_count"] == 1
+    assert metrics["extra_prediction_count"] == 1
+    assert metrics["truth_coverage_fraction"] == 0.0
+    assert metrics["all_truth_timestamps_matched"] is False
+    assert metrics["leaderboard_ready"] is False
+    assert metrics["score_valid_for_leaderboard"] is False
+    assert metrics["leaderboard_blocking_reasons"] == [
+        "no_truth_timestamps",
+        "extra_predictions",
+    ]
+    assert rows["unmatched_reason"].tolist() == ["extra_prediction"]
+
+
 def test_cli_completes_results_to_numpy_truth_template(tmp_path: Path) -> None:
     candidates = tmp_path / "trajectory.npy"
     template = tmp_path / "template_truth.npy"
