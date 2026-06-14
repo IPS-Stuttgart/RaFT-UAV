@@ -8178,6 +8178,28 @@ def test_native_ros_detection2d_message_to_rows_extracts_bbox_centers() -> None:
     assert row["frame_id"] == "cam0"
 
 
+def test_native_ros_detection2d_message_to_rows_uses_highest_score_result() -> None:
+    message = SimpleNamespace(
+        header=SimpleNamespace(frame_id="cam0"),
+        bbox=SimpleNamespace(center=SimpleNamespace(x=60.0, y=50.0)),
+        results=[
+            SimpleNamespace(hypothesis=SimpleNamespace(class_id="bird", score=0.2)),
+            SimpleNamespace(hypothesis=SimpleNamespace(class_id="uav", score=0.9)),
+        ],
+    )
+
+    rows = detection2d_message_to_rows(
+        message,
+        sequence_id="seq_det2d_best",
+        time_s=1.0,
+        frame_id="cam0",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["confidence"] == 0.9
+    assert rows[0]["class_name"] == "uav"
+
+
 def test_native_ros_detection3d_message_to_rows_extracts_bbox_centers() -> None:
     detections = SimpleNamespace(
         header=SimpleNamespace(
@@ -8227,6 +8249,30 @@ def test_native_ros_detection3d_message_to_rows_extracts_bbox_centers() -> None:
     assert rows[0]["frame_id"] == "world"
     assert rows[0]["detection_id"] == "det-1"
     assert rows[0]["confidence"] == 0.8
+    assert rows[0]["class_name"] == "uav"
+
+
+def test_native_ros_detection3d_message_to_rows_uses_highest_score_result() -> None:
+    message = SimpleNamespace(
+        header=SimpleNamespace(frame_id="world"),
+        bbox=SimpleNamespace(
+            center=SimpleNamespace(position=SimpleNamespace(x=1.0, y=2.0, z=3.0))
+        ),
+        results=[
+            SimpleNamespace(hypothesis=SimpleNamespace(class_id="bird", score=0.25)),
+            SimpleNamespace(hypothesis=SimpleNamespace(class_id="uav", score=0.85)),
+        ],
+    )
+
+    rows = detection3d_message_to_rows(
+        message,
+        sequence_id="seq_det3d_best",
+        time_s=1.0,
+        frame_id="world",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["confidence"] == 0.85
     assert rows[0]["class_name"] == "uav"
 
 

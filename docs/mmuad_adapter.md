@@ -1038,6 +1038,9 @@ a topic-map `camera_info_calibration` export from a native CameraInfo topic,
 `multidof_joint_state_candidate`, and
 `trajectory_msgs/msg/MultiDOFJointTrajectory` as
 `multidof_joint_trajectory_truth` or `multidof_joint_trajectory_candidate`.
+When Detection2D or Detection3D messages include multiple classification
+hypotheses, the native bridge uses the highest-score result for confidence and
+class labels.
 PointCloud2 decoding handles both compact and organized clouds, including
 `row_step` padding between rows.
 TFMessage
