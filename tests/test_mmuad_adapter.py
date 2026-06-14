@@ -4925,9 +4925,87 @@ def test_cli_evaluates_official_zip_with_public_track5_protocol(tmp_path: Path) 
     assert metrics["matched_count"] == 2
     assert metrics["leaderboard_ready"] is True
     assert metrics["score_valid_for_leaderboard"] is True
+    assert metrics["codabench_upload_ready"] is True
     assert metrics["pooled"]["mean_square_loss_m2"] == 0.5
     assert metrics["pooled"]["classification_accuracy"] == 0.5
     assert rows["matched"].tolist() == [True, True]
+
+
+def test_cli_public_track5_evaluation_reports_csv_not_upload_ready(
+    tmp_path: Path,
+) -> None:
+    results_csv = tmp_path / "mmaud_results.csv"
+    official = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,10)", "(1,0,10)"],
+            "Classification": [2, 2],
+        }
+    )
+    official.to_csv(results_csv, index=False)
+    truth = tmp_path / "truth.csv"
+    output = tmp_path / "out"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+            "uav_type": ["2", "2"],
+        }
+    ).to_csv(truth, index=False)
+
+    status = mmuad_cli_main(
+        [
+            "--evaluate-results-csv",
+            str(results_csv),
+            "--evaluate-truth-csv",
+            str(truth),
+            "--evaluation-protocol",
+            "public-track5",
+            "--evaluation-timestamp-tolerance-s",
+            "0",
+            "--evaluation-json",
+            str(output / "public_track5_eval_csv.json"),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    metrics = json.loads(
+        (output / "public_track5_eval_csv.json").read_text(encoding="utf-8")
+    )
+    assert metrics["matched_count"] == 2
+    assert metrics["score_valid_for_leaderboard"] is True
+    assert metrics["official_submission_valid"] is True
+    assert metrics["codabench_upload_ready"] is False
+    assert metrics["leaderboard_ready"] is False
+    assert metrics["leaderboard_blocking_reasons"] == [
+        "official_upload_package_not_ready"
+    ]
+    assert metrics["official_submission_validation"]["is_zip"] is False
+
+    with pytest.raises(SystemExit, match="official_upload_package_not_ready"):
+        mmuad_cli_main(
+            [
+                "--evaluate-results-csv",
+                str(results_csv),
+                "--evaluate-truth-csv",
+                str(truth),
+                "--evaluation-protocol",
+                "public-track5",
+                "--evaluation-timestamp-tolerance-s",
+                "0",
+                "--evaluation-require-complete-track5",
+                "--evaluation-json",
+                str(output / "public_track5_eval_csv_require.json"),
+                "--output-dir",
+                str(output),
+            ]
+        )
 
 
 def test_cli_evaluates_official_zip_against_official_truth_zip(
@@ -4983,6 +5061,7 @@ def test_cli_evaluates_official_zip_against_official_truth_zip(
     rows = pd.read_csv(output / "official_truth_eval_rows.csv")
     assert metrics["leaderboard_ready"] is True
     assert metrics["score_valid_for_leaderboard"] is True
+    assert metrics["codabench_upload_ready"] is True
     assert metrics["pooled"]["mean_square_loss_m2"] == 0.5
     assert metrics["pooled"]["classification_accuracy"] == 0.5
     assert rows["truth_x_m"].tolist() == [0.0, 1.0]
@@ -5042,6 +5121,8 @@ def test_cli_public_track5_evaluation_rejects_zip_with_extra_members(
     assert metrics["official_submission_validation"]["contains_only_mmaud_results_csv"] is False
     assert metrics["leaderboard_ready"] is False
     assert metrics["score_valid_for_leaderboard"] is False
+    assert metrics["codabench_upload_ready"] is False
+    assert "official_upload_package_not_ready" in metrics["leaderboard_blocking_reasons"]
     assert "official_zip_members_invalid" in metrics["leaderboard_blocking_reasons"]
 
     with pytest.raises(SystemExit, match="official_zip_members_invalid"):
@@ -5174,6 +5255,7 @@ def test_cli_public_track5_evaluation_rejects_empty_truth_template(
     assert metrics["leaderboard_blocking_reasons"] == [
         "no_truth_timestamps",
         "extra_predictions",
+        "official_upload_package_not_ready",
     ]
     assert rows["unmatched_reason"].tolist() == ["extra_prediction"]
 

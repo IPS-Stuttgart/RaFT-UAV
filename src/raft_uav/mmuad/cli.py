@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=(
             "with --evaluation-protocol public-track5, exit nonzero when the "
-            "package is not leaderboard-ready"
+            "metric grid or official upload package is not leaderboard-ready"
         ),
     )
     parser.add_argument("--point-cloud-csv", action="append", type=Path, default=[])
@@ -584,11 +584,15 @@ def _attach_public_track5_submission_validation(
     validation_summary = validation.summary
     summary["official_submission_validation"] = validation_summary
     summary["official_submission_valid"] = bool(validation_summary.get("valid"))
-    if validation_summary.get("valid") is True:
+    summary["codabench_upload_ready"] = bool(
+        validation_summary.get("codabench_upload_ready")
+    )
+    if validation_summary.get("codabench_upload_ready") is True:
         return
 
     summary["leaderboard_ready"] = False
-    summary["score_valid_for_leaderboard"] = False
+    if validation_summary.get("valid") is not True:
+        summary["score_valid_for_leaderboard"] = False
     existing = list(summary.get("leaderboard_blocking_reasons", []))
     for reason in _official_submission_validation_blocking_reasons(validation_summary):
         if reason not in existing:
@@ -597,7 +601,11 @@ def _attach_public_track5_submission_validation(
 
 
 def _official_submission_validation_blocking_reasons(summary: dict) -> list[str]:
-    reasons = ["official_submission_validation_failed"]
+    reasons = []
+    if summary.get("valid") is not True:
+        reasons.append("official_submission_validation_failed")
+    if not summary.get("codabench_upload_ready", False):
+        reasons.append("official_upload_package_not_ready")
     if summary.get("is_zip") and not summary.get("contains_only_mmaud_results_csv", False):
         reasons.append("official_zip_members_invalid")
     if list(summary.get("columns", [])) != list(summary.get("expected_columns", [])):
