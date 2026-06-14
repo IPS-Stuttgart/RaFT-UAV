@@ -149,7 +149,16 @@ OFFICIAL_TRACK5_TIMESTAMP_SOURCES = (
     "all-modalities",
     *OFFICIAL_TRACK5_TIMESTAMP_SOURCE_DIRS,
 )
-TIMESTAMP_SIDECAR_SUFFIXES = {".csv", ".tsv", ".txt", ".json", ".jsonl", ".ndjson"}
+TIMESTAMP_SIDECAR_SUFFIXES = {
+    ".csv",
+    ".tsv",
+    ".txt",
+    ".json",
+    ".jsonl",
+    ".ndjson",
+    ".npy",
+    ".npz",
+}
 TIMESTAMP_SIDECAR_EXACT_STEMS = {
     "time",
     "times",
@@ -1104,7 +1113,11 @@ def _looks_like_timestamp_sidecar(path: Path) -> bool:
 
 def _normalized_data_stem(path: Path) -> str:
     name = Path(path).name.lower()
-    for suffix in sorted((*TABLE_SUFFIXES, *JSON_TABLE_SUFFIXES), key=len, reverse=True):
+    for suffix in sorted(
+        (*TABLE_SUFFIXES, *JSON_TABLE_SUFFIXES, *TRAJECTORY_SUFFIXES),
+        key=len,
+        reverse=True,
+    ):
         if name.endswith(suffix.lower()):
             name = name[: -len(suffix)]
             break
@@ -1118,11 +1131,52 @@ def _timestamps_from_timestamp_sidecar(path: Path) -> set[float]:
             values = _timestamps_from_delimited_sidecar(path)
         elif suffix in {".json", ".jsonl", ".ndjson"}:
             values = _timestamps_from_json_sidecar_payload(read_json_export_payload(path))
+        elif suffix in {".npy", ".npz"}:
+            values = _timestamps_from_numpy_sidecar(path)
         else:
             values = []
     except (OSError, ValueError, json.JSONDecodeError, pd.errors.ParserError):
         values = []
     return _finite_timestamp_set(values)
+
+
+def _timestamps_from_numpy_sidecar(path: Path) -> list[float]:
+    payload = np.load(path, allow_pickle=True)
+    try:
+        if isinstance(payload, np.lib.npyio.NpzFile):
+            key = _first_npz_key(
+                payload,
+                preferred=(
+                    "time_s",
+                    "timestamp_s",
+                    "timestamp",
+                    "timestamps",
+                    "times",
+                    "frame_times",
+                    "frame_timestamps",
+                ),
+            )
+            return _timestamps_from_numpy_array(payload[key])
+        return _timestamps_from_numpy_array(payload)
+    finally:
+        if isinstance(payload, np.lib.npyio.NpzFile):
+            payload.close()
+
+
+def _timestamps_from_numpy_array(values: Any) -> list[float]:
+    array = np.asarray(values)
+    if array.dtype.names:
+        frame = pd.DataFrame({name: array[name] for name in array.dtype.names})
+        return _timestamps_from_table_frame(frame)
+    if array.ndim == 0:
+        return [_coerce_timestamp_value(array.item())]
+    if array.ndim == 1:
+        return [_coerce_timestamp_value(value) for value in array.tolist()]
+    if array.ndim == 2:
+        if array.shape[1] == 0:
+            return []
+        return [_coerce_timestamp_value(value) for value in array[:, -1].tolist()]
+    return [_coerce_timestamp_value(value) for value in array.reshape(-1).tolist()]
 
 
 def _timestamps_from_delimited_sidecar(path: Path) -> list[float]:

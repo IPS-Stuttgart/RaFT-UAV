@@ -3358,6 +3358,31 @@ def test_official_track5_timestamp_template_reads_timestamp_sidecars(
     assert all_template.rows["time_s"].tolist() == [1.0, 2.25, 3.0, 4.5]
 
 
+def test_official_track5_timestamp_template_reads_numpy_timestamp_sidecars(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "val" / "seq_numpy_sidecar"
+    image = seq / "Image"
+    livox = seq / "livox_avia"
+    image.mkdir(parents=True)
+    livox.mkdir()
+    np.save(image / "timestamps.npy", np.array([7.0, 8.25]))
+    np.savez(livox / "frame_times.npz", frame_times=np.array([[0.0, 9.0], [1.0, 10.5]]))
+
+    discovered = {
+        paths.sequence_id: paths for paths in discover_sequence_paths(tmp_path)
+    }
+
+    image_template = official_track5_timestamp_template(
+        discovered["seq_numpy_sidecar"],
+        timestamp_source="image",
+    )
+    all_template = official_track5_timestamp_template(discovered["seq_numpy_sidecar"])
+
+    assert image_template.rows["time_s"].tolist() == [7.0, 8.25]
+    assert all_template.rows["time_s"].tolist() == [7.0, 8.25, 9.0, 10.5]
+
+
 def test_official_track5_timestamp_template_reads_text_frame_lists(
     tmp_path: Path,
 ) -> None:
