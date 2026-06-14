@@ -664,9 +664,43 @@ def test_official_track5_submission_validator_accepts_exact_zip_and_template(tmp
     assert validation.summary["missing_template_timestamp_count"] == 0
     assert validation.summary["extra_prediction_count"] == 0
     assert validation.summary["duplicate_prediction_count"] == 0
+    assert validation.summary["score_valid_for_leaderboard"] is True
+    assert validation.summary["leaderboard_ready"] is True
+    assert validation.summary["codabench_upload_ready"] is True
+    assert validation.summary["leaderboard_blocking_reasons"] == []
     assert validation.rows.loc[validation.rows["row_type"] == "prediction", "status"].tolist() == [
         "ok",
         "ok",
+    ]
+
+
+def test_official_track5_submission_validator_requires_template_for_leaderboard_ready(
+    tmp_path,
+):
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq1"],
+            "time_s": [0.0],
+            "state_x_m": [0.0],
+            "state_y_m": [0.0],
+            "state_z_m": [10.0],
+            "class_id": [2],
+        }
+    )
+    zip_path = write_official_ug2_codabench_zip(
+        estimates,
+        tmp_path / "official.zip",
+    )
+
+    validation = validate_official_track5_submission(zip_path)
+
+    assert validation.summary["valid"] is True
+    assert validation.summary["template_checked"] is False
+    assert validation.summary["score_valid_for_leaderboard"] is False
+    assert validation.summary["leaderboard_ready"] is False
+    assert validation.summary["codabench_upload_ready"] is False
+    assert validation.summary["leaderboard_blocking_reasons"] == [
+        "timestamp_template_not_checked"
     ]
 
 

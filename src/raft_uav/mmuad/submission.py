@@ -671,7 +671,45 @@ def validate_official_track5_submission(
         and (not template_checked or int(summary.get("missing_template_timestamp_count", 0)) == 0)
         and (not template_checked or int(summary.get("extra_prediction_count", 0)) == 0)
     )
+    blocking_reasons = _official_track5_validation_leaderboard_blocking_reasons(summary)
+    summary["score_valid_for_leaderboard"] = bool(not blocking_reasons)
+    summary["leaderboard_ready"] = bool(not blocking_reasons)
+    summary["codabench_upload_ready"] = bool(
+        summary["leaderboard_ready"]
+        and summary["is_zip"]
+        and summary["contains_only_mmaud_results_csv"]
+    )
+    summary["leaderboard_blocking_reasons"] = blocking_reasons
     return OfficialTrack5Validation(summary=summary, rows=row_diagnostics)
+
+
+def _official_track5_validation_leaderboard_blocking_reasons(
+    summary: Mapping[str, Any],
+) -> list[str]:
+    reasons: list[str] = []
+    if not summary.get("template_checked", False):
+        reasons.append("timestamp_template_not_checked")
+    if summary.get("is_zip") and not summary.get("contains_only_mmaud_results_csv", False):
+        reasons.append("official_zip_members_invalid")
+    if list(summary.get("columns", [])) != list(summary.get("expected_columns", [])):
+        reasons.append("official_columns_invalid")
+    invalid_counts = (
+        int(summary.get("invalid_sequence_count", 0)),
+        int(summary.get("invalid_timestamp_count", 0)),
+        int(summary.get("invalid_position_count", 0)),
+        int(summary.get("invalid_classification_count", 0)),
+    )
+    if any(count > 0 for count in invalid_counts):
+        reasons.append("official_invalid_rows")
+    if int(summary.get("duplicate_prediction_count", 0)) > 0:
+        reasons.append("official_duplicate_predictions")
+    if int(summary.get("missing_template_timestamp_count", 0)) > 0:
+        reasons.append("official_missing_template_timestamps")
+    if int(summary.get("extra_prediction_count", 0)) > 0:
+        reasons.append("official_extra_predictions")
+    if summary.get("errors"):
+        reasons.append("official_validation_errors")
+    return reasons
 
 
 def load_official_track5_template_file(path: Path) -> pd.DataFrame:
