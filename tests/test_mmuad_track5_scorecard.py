@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
+import pytest
 
+from raft_uav.mmuad.track5_scorecard_cli import main as track5_scorecard_cli_main
 from raft_uav.mmuad.track5_scorecard import (
     build_track5_scorecard,
     scorecard_summary_frame,
@@ -96,3 +99,109 @@ def test_track5_scorecard_writes_all_requested_artifacts(tmp_path: Path) -> None
     }
     for path in paths.values():
         assert Path(path).exists()
+
+
+def test_track5_scorecard_cli_writes_ready_artifacts(tmp_path: Path, capsys) -> None:
+    results_zip = _write_official_zip(
+        tmp_path / "submission.zip",
+        pd.DataFrame(
+            {
+                "Sequence": ["seq001", "seq001"],
+                "Timestamp": [0.0, 1.0],
+                "Position": ["(0,0,10)", "(1,0,10)"],
+                "Classification": [2, 2],
+            }
+        ),
+    )
+    truth_csv = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq001", "seq001"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+            "class_name": [2, 2],
+        }
+    ).to_csv(truth_csv, index=False)
+    output = tmp_path / "scorecard"
+
+    status = track5_scorecard_cli_main(
+        [
+            "--results",
+            str(results_zip),
+            "--truth",
+            str(truth_csv),
+            "--output-json",
+            str(output / "scorecard.json"),
+            "--summary-csv",
+            str(output / "scorecard.csv"),
+            "--validation-rows-csv",
+            str(output / "validation_rows.csv"),
+            "--public-evaluation-rows-csv",
+            str(output / "public_rows.csv"),
+            "--nearest-time-rows-csv",
+            str(output / "nearest_rows.csv"),
+            "--require-leaderboard-ready",
+        ]
+    )
+
+    assert status == 0
+    stdout = capsys.readouterr().out
+    assert "track5_scorecard=ok" in stdout
+    assert "leaderboard_ready=True" in stdout
+    summary = json.loads((output / "scorecard.json").read_text(encoding="utf-8"))
+    assert summary["schema"] == "raft-uav-mmuad-track5-scorecard-v1"
+    assert summary["scorecard_leaderboard_ready"] is True
+    assert summary["codabench_upload_ready"] is True
+    assert summary["public_track5"]["pooled"]["pose_mse_loss_m2"] == 0.0
+    assert (output / "scorecard.csv").exists()
+    assert (output / "validation_rows.csv").exists()
+    assert (output / "public_rows.csv").exists()
+    assert (output / "nearest_rows.csv").exists()
+
+
+def test_track5_scorecard_cli_requires_truth_for_leaderboard_ready(
+    tmp_path: Path,
+) -> None:
+    results_zip = _write_official_zip(
+        tmp_path / "submission.zip",
+        pd.DataFrame(
+            {
+                "Sequence": ["seq001"],
+                "Timestamp": [0.0],
+                "Position": ["(0,0,10)"],
+                "Classification": [2],
+            }
+        ),
+    )
+    template_csv = tmp_path / "template.csv"
+    pd.DataFrame(
+        {
+            "Sequence": ["seq001"],
+            "Timestamp": [0.0],
+            "Position": ["(0,0,0)"],
+            "Classification": [2],
+        }
+    ).to_csv(template_csv, index=False)
+    output_json = tmp_path / "scorecard.json"
+
+    with pytest.raises(SystemExit, match="public_track5_evaluation_not_run"):
+        track5_scorecard_cli_main(
+            [
+                "--results",
+                str(results_zip),
+                "--template",
+                str(template_csv),
+                "--output-json",
+                str(output_json),
+                "--require-leaderboard-ready",
+            ]
+        )
+
+    summary = json.loads(output_json.read_text(encoding="utf-8"))
+    assert summary["validation"]["codabench_upload_ready"] is True
+    assert summary["scorecard_leaderboard_ready"] is False
+    assert summary["leaderboard_blocking_reasons"] == [
+        "public_track5_evaluation_not_run"
+    ]
