@@ -56,7 +56,10 @@ def test_truth_coverage_counts_unique_truth_rows_not_duplicate_predictions() -> 
     matches = match_submission_to_truth(submission, truth, max_time_delta_s=0.1)
     metrics = metrics_from_matches(matches, submission=submission, truth=truth)
 
-    assert metrics["pooled"]["matched_count"] == 3
+    assert matches["matched"].tolist() == [True, False, True]
+    assert matches["unmatched_reason"].tolist() == ["", "duplicate_truth_match", ""]
+    assert metrics["pooled"]["matched_count"] == 2
+    assert metrics["pooled"]["unmatched_prediction_count"] == 1
     assert metrics["pooled"]["truth_count"] == 2
     assert metrics["pooled"]["covered_truth_count"] == 2
     assert metrics["pooled"]["truth_coverage_fraction"] == 1.0
