@@ -627,7 +627,11 @@ are clustered from point rows using the same lightweight point-cloud bridge.
 Table exports marked as `radar_polar_candidate` or `polar_radar_candidate`
 are converted from range/azimuth rows using the same polar radar bridge as
 `--radar-polar-file`.
-The template generator maps clearly polar/range-azimuth radar topic names or
+For native ROS extraction, the same kinds also accept common custom
+range/azimuth message shapes such as `detections`, `targets`, `returns`, or
+parallel `ranges`/`azimuths` arrays. Native radar angles default to radians;
+set `angle_unit: deg` in the topic map for degree-valued custom messages. The
+template generator maps clearly polar/range-azimuth radar topic names or
 message types to this export path.
 Table exports marked as `camera_detections_candidate`,
 `image_detections_candidate`, or `detection2d_array_candidate` are
@@ -782,8 +786,11 @@ completion policy can affect leaderboard-style MSE.
 
 ## Radar, Camera, And Classification Bridges
 
-The adapter includes lightweight bridges for two common exported modalities that
-appear in anti-UAV datasets but are not yet parsed from native raw packets.
+The adapter includes lightweight bridges for two common anti-UAV modalities.
+Polar radar can be loaded from exported tables or from common native ROS
+range/azimuth message shapes. Camera detections still require exported detector
+outputs or native Detection2D messages; raw image object detection remains
+external.
 
 ### Polar Radar Table Exports
 
@@ -816,7 +823,12 @@ maps, or objects containing `radar_polar`, `radar_detections`, `detections`,
 Wrapper-level `sequence_id` and timestamp fields are propagated to nested
 detections when individual rows do not already provide them.
 Coordinates are in the radar/export frame unless a calibration file is applied
-later. This is not a native custom radar message parser.
+later. Native ROS extraction also accepts topic-map entries marked
+`radar_polar_candidate` or `polar_radar_candidate` when messages expose
+range/azimuth detections in object arrays such as `detections`, `targets`,
+`measurements`, or `returns`, or in parallel arrays such as `ranges` and
+`azimuths`. This handles common custom ROS radar shapes, but undocumented binary
+payloads still need dataset-specific decoding.
 
 Sequence-root discovery also treats Cartesian radar tables inside radar sensor
 folders such as `radar0/detections.csv` or `mmwave/detections.json` as normal
@@ -913,6 +925,8 @@ PYTHONPATH=src python scripts/extract_mmuad_rosbag_topics.py \
 The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
 `pointcloud2_candidate`, `sensor_msgs/msg/CameraInfo` as
 `camera_info_calibration` intrinsics for Detection2D back-projection,
+common custom polar/range-azimuth radar message shapes as
+`radar_polar_candidate` or `polar_radar_candidate`,
 `sensor_msgs/msg/NavSatFix` as `navsatfix_truth` or
 `navsatfix_candidate`, `geographic_msgs/msg/GeoPointStamped` as
 `geopoint_truth` or `geopoint_candidate`,

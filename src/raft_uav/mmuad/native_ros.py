@@ -7,6 +7,7 @@ tracking logs:
 
 * ``sensor_msgs/msg/PointCloud2`` -> clustered candidate detections;
 * ``sensor_msgs/msg/CameraInfo`` -> camera intrinsics for native Detection2D;
+* common polar/range-azimuth radar messages -> polar radar candidates;
 * ``sensor_msgs/msg/NavSatFix`` -> geodetic rows projected into local ENU;
 * ``geographic_msgs/msg/GeoPointStamped`` / ``GeoPoseStamped`` -> local ENU rows;
 * ``vision_msgs/msg/Detection2D`` / ``Detection2DArray`` -> calibrated camera
@@ -30,6 +31,7 @@ Unknown topics are recorded in the extraction manifest and skipped.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +49,7 @@ from raft_uav.mmuad.camera import (
 )
 from raft_uav.mmuad.io import merge_candidate_frames
 from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates
+from raft_uav.mmuad.radar import radar_polar_frame_to_candidates
 from raft_uav.mmuad.rosbag_bridge import load_topic_map_payload
 from raft_uav.mmuad.schema import CandidateFrame, TruthFrame, normalize_truth_columns
 
@@ -75,6 +78,10 @@ def extract_native_rosbag_topic_map(
 
     ``pointcloud2_candidate``
         Decode ``sensor_msgs/msg/PointCloud2`` and cluster points.
+    ``radar_polar_candidate`` / ``polar_radar_candidate``
+        Decode common range/azimuth message shapes and convert them through
+        the same polar radar bridge as exported table rows.  Native ROS angles
+        default to radians unless ``angle_unit`` is set in the topic map.
     ``camera_info`` / ``camera_info_calibration``
         Decode ``sensor_msgs/msg/CameraInfo`` intrinsics for native
         Detection2D back-projection.  Detection2D topics with the same source
@@ -161,6 +168,62 @@ def extract_native_rosbag_topic_map(
                     )
                     candidate_frames.append(frame)
                     rows = len(frame.rows)
+                elif kind in {
+                    "radar_polar",
+                    "radar_polar_candidate",
+                    "polar_radar",
+                    "polar_radar_candidate",
+                }:
+                    angle_unit = str(
+                        spec.get(
+                            "angle_unit",
+                            spec.get("radar_polar_angle_unit", "rad"),
+                        )
+                    )
+                    rows_for_message = radar_polar_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        angle_unit=angle_unit,
+                    )
+                    if rows_for_message:
+                        frame = radar_polar_frame_to_candidates(
+                            pd.DataFrame.from_records(rows_for_message),
+                            source=source,
+                            sequence_id=str(spec.get("sequence_id", sequence_id)),
+                            azimuth_convention=str(
+                                spec.get(
+                                    "azimuth_convention",
+                                    spec.get(
+                                        "radar_polar_azimuth_convention",
+                                        "north-clockwise",
+                                    ),
+                                )
+                            ),
+                            angle_unit=angle_unit,
+                            range_std_m=float(
+                                spec.get(
+                                    "range_std_m",
+                                    spec.get("radar_polar_range_std_m", 2.0),
+                                )
+                            ),
+                            angle_std_deg=float(
+                                spec.get(
+                                    "angle_std_deg",
+                                    spec.get("radar_polar_angle_std_deg", 2.0),
+                                )
+                            ),
+                            z_std_m=float(
+                                spec.get(
+                                    "z_std_m",
+                                    spec.get("radar_polar_z_std_m", 5.0),
+                                )
+                            ),
+                        )
+                        candidate_frames.append(frame)
+                        rows = len(frame.rows)
+                    else:
+                        rows = 0
                 elif kind in {"navsatfix_truth", "geopoint_truth", "geopose_truth"}:
                     rows_for_message = geodetic_message_to_rows(
                         message,
@@ -621,6 +684,372 @@ def _camera_info_matrix(message: Any, *names: str) -> list[float] | None:
         if values:
             return values
     return None
+
+
+def radar_polar_message_to_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    angle_unit: str = "rad",
+) -> list[dict[str, Any]]:
+    """Convert common native polar radar message shapes into table rows."""
+
+    target_angle_unit = _normalize_radar_angle_unit(angle_unit)
+    parent_time_s = _message_stamp_time_s(message)
+    default_time_s = parent_time_s if parent_time_s is not None else float(time_s)
+    array_rows = _radar_parallel_array_rows(
+        message,
+        sequence_id=sequence_id,
+        time_s=default_time_s,
+        target_angle_unit=target_angle_unit,
+    )
+    if array_rows:
+        return array_rows
+    children = _radar_child_messages(message)
+    if children:
+        rows: list[dict[str, Any]] = []
+        for index, child in enumerate(children):
+            child_time_s = _message_stamp_time_s(child)
+            row = _radar_polar_row_from_message(
+                child,
+                sequence_id=sequence_id,
+                time_s=child_time_s if child_time_s is not None else default_time_s,
+                target_angle_unit=target_angle_unit,
+                index=index,
+            )
+            if row is not None:
+                rows.append(row)
+        return rows
+    row = _radar_polar_row_from_message(
+        message,
+        sequence_id=sequence_id,
+        time_s=default_time_s,
+        target_angle_unit=target_angle_unit,
+        index=None,
+    )
+    return [row] if row is not None else []
+
+
+def _radar_parallel_array_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    target_angle_unit: str,
+) -> list[dict[str, Any]]:
+    ranges = _numeric_field_sequence(
+        message,
+        (
+            "ranges_m",
+            "range_m",
+            "ranges",
+            "range",
+            "r",
+            "rho",
+            "distances_m",
+            "distances",
+        ),
+    )
+    azimuths = _angle_field_sequence(
+        message,
+        (
+            "azimuths_rad",
+            "azimuth_rad",
+            "bearings_rad",
+            "bearing_rad",
+            "azimuths_deg",
+            "azimuth_deg",
+            "bearings_deg",
+            "bearing_deg",
+            "azimuths",
+            "azimuth",
+            "bearings",
+            "bearing",
+            "az",
+            "theta",
+        ),
+        target_angle_unit=target_angle_unit,
+    )
+    if not ranges or not azimuths:
+        return []
+    elevations = _angle_field_sequence(
+        message,
+        (
+            "elevations_rad",
+            "elevation_rad",
+            "elevations_deg",
+            "elevation_deg",
+            "elevations",
+            "elevation",
+            "pitch",
+            "el",
+        ),
+        target_angle_unit=target_angle_unit,
+    )
+    confidences = _numeric_field_sequence(
+        message,
+        ("confidence", "confidences", "score", "scores", "probability", "probabilities"),
+    )
+    track_ids = _field_sequence(
+        message,
+        ("track_ids", "track_id", "ids", "id", "object_ids", "object_id"),
+    )
+    class_names = _field_sequence(
+        message,
+        ("class_names", "class_name", "labels", "label", "categories", "category"),
+    )
+    times = _numeric_field_sequence(
+        message,
+        ("times_s", "time_s", "timestamps_s", "timestamp_s", "timestamps", "timestamp"),
+    )
+    count = min(len(ranges), len(azimuths))
+    rows: list[dict[str, Any]] = []
+    for index in range(count):
+        row: dict[str, Any] = {
+            "sequence_id": str(sequence_id),
+            "time_s": times[index] if index < len(times) else float(time_s),
+            "range_m": ranges[index],
+            "azimuth": azimuths[index],
+            "elevation": elevations[index] if index < len(elevations) else 0.0,
+            "radar_detection_index": int(index),
+        }
+        if index < len(confidences):
+            row["confidence"] = confidences[index]
+        if index < len(track_ids):
+            row["track_id"] = str(track_ids[index])
+        if index < len(class_names):
+            row["class_name"] = str(class_names[index])
+        rows.append(row)
+    return rows
+
+
+def _radar_child_messages(message: Any) -> list[Any]:
+    for name in (
+        "radar_polar",
+        "radar_detections",
+        "detections",
+        "targets",
+        "objects",
+        "measurements",
+        "returns",
+        "tracks",
+        "points",
+    ):
+        children = _field_sequence(message, (name,))
+        if not children or all(_is_scalar_like(item) for item in children):
+            continue
+        return children
+    return []
+
+
+def _radar_polar_row_from_message(
+    detection: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    target_angle_unit: str,
+    index: int | None,
+) -> dict[str, Any] | None:
+    range_m = _field_float(
+        detection,
+        "range_m",
+        "range",
+        "r",
+        "rho",
+        "distance_m",
+        "distance",
+    )
+    azimuth = _angle_field_value(
+        detection,
+        (
+            "azimuth_rad",
+            "bearing_rad",
+            "azimuth_deg",
+            "bearing_deg",
+            "azimuth",
+            "bearing",
+            "az",
+            "theta",
+        ),
+        target_angle_unit=target_angle_unit,
+    )
+    if range_m is None or azimuth is None:
+        return None
+    elevation = _angle_field_value(
+        detection,
+        (
+            "elevation_rad",
+            "elevation_deg",
+            "elevation",
+            "pitch",
+            "el",
+        ),
+        target_angle_unit=target_angle_unit,
+    )
+    row: dict[str, Any] = {
+        "sequence_id": str(sequence_id),
+        "time_s": float(time_s),
+        "range_m": range_m,
+        "azimuth": azimuth,
+        "elevation": elevation if elevation is not None else 0.0,
+    }
+    if index is not None:
+        row["radar_detection_index"] = int(index)
+    for key, names in {
+        "track_id": ("track_id", "track", "id", "object_id", "target_id"),
+        "confidence": ("confidence", "score", "probability", "catprob", "cat_prob"),
+        "class_name": ("class_name", "class", "label", "category", "uav_type"),
+    }.items():
+        value = _field_value(detection, *names)
+        if value not in (None, ""):
+            row[key] = str(value) if key != "confidence" else float(value)
+    return row
+
+
+def _field_value(value: Any, *names: str) -> Any | None:
+    if isinstance(value, dict):
+        lower = {str(key).lower(): item for key, item in value.items()}
+        for name in names:
+            if name.lower() in lower:
+                return lower[name.lower()]
+        return None
+    for name in names:
+        item = getattr(value, name, None)
+        if item is not None:
+            return item
+    return None
+
+
+def _field_float(value: Any, *names: str) -> float | None:
+    raw = _field_value(value, *names)
+    if raw in (None, ""):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _angle_field_value(
+    value: Any,
+    names: tuple[str, ...],
+    *,
+    target_angle_unit: str,
+) -> float | None:
+    for name in names:
+        raw = _field_value(value, name)
+        if raw in (None, ""):
+            continue
+        try:
+            angle = float(raw)
+        except (TypeError, ValueError):
+            continue
+        return _convert_angle_unit(
+            angle,
+            source_unit=_angle_unit_from_name(name) or target_angle_unit,
+            target_unit=target_angle_unit,
+        )
+    return None
+
+
+def _numeric_field_sequence(value: Any, names: tuple[str, ...]) -> list[float]:
+    for name in names:
+        raw_values = _field_sequence(value, (name,))
+        if not raw_values:
+            continue
+        numbers: list[float] = []
+        for raw in raw_values:
+            try:
+                numbers.append(float(raw))
+            except (TypeError, ValueError):
+                numbers = []
+                break
+        if numbers:
+            return numbers
+    return []
+
+
+def _angle_field_sequence(
+    value: Any,
+    names: tuple[str, ...],
+    *,
+    target_angle_unit: str,
+) -> list[float]:
+    for name in names:
+        raw_values = _field_sequence(value, (name,))
+        if not raw_values:
+            continue
+        source_unit = _angle_unit_from_name(name) or target_angle_unit
+        angles: list[float] = []
+        for raw in raw_values:
+            try:
+                angle = float(raw)
+            except (TypeError, ValueError):
+                angles = []
+                break
+            angles.append(
+                _convert_angle_unit(
+                    angle,
+                    source_unit=source_unit,
+                    target_unit=target_angle_unit,
+                )
+            )
+        if angles:
+            return angles
+    return []
+
+
+def _field_sequence(value: Any, names: tuple[str, ...]) -> list[Any]:
+    raw = _field_value(value, *names)
+    if raw is None or isinstance(raw, (str, bytes, bytearray, dict)):
+        return []
+    try:
+        items = list(raw)
+    except TypeError:
+        return []
+    return items
+
+
+def _is_scalar_like(value: Any) -> bool:
+    if isinstance(value, (str, bytes, bytearray)):
+        return True
+    try:
+        float(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _normalize_radar_angle_unit(unit: str) -> str:
+    normalized = str(unit).strip().lower()
+    if normalized not in {"deg", "rad"}:
+        raise ValueError("native radar angle_unit must be 'deg' or 'rad'")
+    return normalized
+
+
+def _angle_unit_from_name(name: str) -> str | None:
+    lowered = str(name).lower()
+    if "deg" in lowered:
+        return "deg"
+    if "rad" in lowered:
+        return "rad"
+    return None
+
+
+def _convert_angle_unit(
+    value: float,
+    *,
+    source_unit: str,
+    target_unit: str,
+) -> float:
+    if source_unit == target_unit:
+        return float(value)
+    if source_unit == "deg" and target_unit == "rad":
+        return math.radians(float(value))
+    if source_unit == "rad" and target_unit == "deg":
+        return math.degrees(float(value))
+    raise ValueError("native radar angle units must be 'deg' or 'rad'")
 
 
 def _message_stamp_time_s(message: Any) -> float | None:
