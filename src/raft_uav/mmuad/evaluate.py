@@ -116,7 +116,9 @@ def match_submission_to_truth(
             continue
         truth_track_ids = _track_ids(truth_seq) if "track_id" in truth_seq.columns else set()
         submitted_track_ids = _track_ids(pred_seq) if "track_id" in pred_seq.columns else set()
-        restrict_to_track_id = bool(truth_track_ids and truth_track_ids.intersection(submitted_track_ids))
+        restrict_to_track_id = bool(
+            truth_track_ids and truth_track_ids.intersection(submitted_track_ids)
+        )
         for _, pred in pred_seq.iterrows():
             candidate_truth = truth_seq
             if restrict_to_track_id:
