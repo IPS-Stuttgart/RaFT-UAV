@@ -4244,6 +4244,73 @@ def test_sequence_root_loads_binary_livox_point_cloud_export(tmp_path: Path) -> 
     assert truth is not None
 
 
+def test_sequence_root_uses_point_cloud_timestamp_sidecar_by_filename(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "seq_livox_sidecar"
+    livox = seq / "livox_avia"
+    livox.mkdir(parents=True)
+    bin_path = livox / "frame_a.bin"
+    np.array(
+        [
+            [3.0, 4.0, 5.0, 0.5],
+            [3.1, 4.0, 5.1, 0.6],
+            [3.0, 4.1, 5.0, 0.7],
+        ],
+        dtype="<f4",
+    ).tofile(bin_path)
+    pd.DataFrame(
+        {
+            "filename": ["frame_a.bin"],
+            "time_s": [12.75],
+        }
+    ).to_csv(livox / "timestamps.csv", index=False)
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(
+        discovered[0],
+        voxel_size_m=0.5,
+        min_cluster_points=3,
+    )
+
+    assert discovered[0].point_cloud_files == (bin_path,)
+    assert len(candidates.rows) == 1
+    assert abs(float(candidates.rows.loc[0, "time_s"]) - 12.75) < 1e-9
+    assert truth is None
+
+
+def test_sequence_root_uses_ordered_point_cloud_timestamp_sidecar(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "seq_livox_ordered_sidecar"
+    livox = seq / "livox_avia"
+    livox.mkdir(parents=True)
+    for frame_name, x_offset in (("frame_a.bin", 0.0), ("frame_b.bin", 10.0)):
+        np.array(
+            [
+                [3.0 + x_offset, 4.0, 5.0, 0.5],
+                [3.1 + x_offset, 4.0, 5.1, 0.6],
+                [3.0 + x_offset, 4.1, 5.0, 0.7],
+            ],
+            dtype="<f4",
+        ).tofile(livox / frame_name)
+    (livox / "frame_times.txt").write_text("10.0\n11.5\n", encoding="utf-8")
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(
+        discovered[0],
+        voxel_size_m=0.5,
+        min_cluster_points=3,
+    )
+
+    assert discovered[0].point_cloud_files == (
+        livox / "frame_a.bin",
+        livox / "frame_b.bin",
+    )
+    assert candidates.rows["time_s"].tolist() == [10.0, 11.5]
+    assert truth is None
+
+
 def test_sequence_root_loads_gzipped_binary_livox_point_cloud_export(tmp_path: Path) -> None:
     seq = tmp_path / "seq_livox_bin_gz"
     livox = seq / "livox_avia"
