@@ -65,6 +65,7 @@ from raft_uav.mmuad.native_ros import (
     position_message_to_row,
     position_message_to_rows,
     pointcloud_message_to_points,
+    radar_cartesian_message_to_rows,
     radar_polar_message_to_rows,
     range_message_to_rows,
     tracked_objects_message_to_rows,
@@ -9835,6 +9836,84 @@ def test_native_ros_radar_polar_message_to_rows_accepts_parallel_arrays() -> Non
     assert abs(rows[1]["elevation"] - np.pi / 6.0) < 1.0e-12
 
 
+def test_native_ros_radar_cartesian_message_to_rows_accepts_parallel_arrays() -> None:
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=4, nanosec=125_000_000)),
+        x=[1.0, 4.0],
+        y=[2.0, 5.0],
+        z=[3.0, 6.0],
+        point_ids=[101, 102],
+        velocities=[-1.5, 0.25],
+        intensities=[12.0, 18.0],
+        scores=[0.8, 0.6],
+    )
+
+    rows = radar_cartesian_message_to_rows(
+        message,
+        sequence_id="seq_radar_xyz",
+        time_s=9.0,
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["sequence_id"] == "seq_radar_xyz"
+    assert rows[0]["time_s"] == pytest.approx(4.125)
+    assert rows[0]["x_m"] == pytest.approx(1.0)
+    assert rows[0]["y_m"] == pytest.approx(2.0)
+    assert rows[0]["z_m"] == pytest.approx(3.0)
+    assert rows[0]["track_id"] == "101"
+    assert rows[0]["radar_detection_id"] == "101"
+    assert rows[0]["radar_velocity_m_s"] == pytest.approx(-1.5)
+    assert rows[0]["radar_intensity"] == pytest.approx(12.0)
+    assert rows[0]["confidence"] == pytest.approx(0.8)
+    assert rows[1]["x_m"] == pytest.approx(4.0)
+    assert rows[1]["track_id"] == "102"
+
+
+def test_native_ros_radar_cartesian_message_to_rows_accepts_child_returns() -> None:
+    message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=5, nanosec=0),
+            frame_id="radar_frame",
+        ),
+        detections=[
+            SimpleNamespace(
+                point_id=7,
+                x=1.0,
+                y=2.0,
+                z=0.5,
+                velocity=-2.0,
+                snr=17.0,
+                score=0.9,
+                label="uav",
+            ),
+            SimpleNamespace(
+                point_id=8,
+                position=SimpleNamespace(x=3.0, y=4.0, z=1.5),
+            ),
+        ],
+    )
+
+    rows = radar_cartesian_message_to_rows(
+        message,
+        sequence_id="seq_radar_children",
+        time_s=0.0,
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["time_s"] == pytest.approx(5.0)
+    assert rows[0]["x_m"] == pytest.approx(1.0)
+    assert rows[0]["y_m"] == pytest.approx(2.0)
+    assert rows[0]["z_m"] == pytest.approx(0.5)
+    assert rows[0]["frame_id"] == "radar_frame"
+    assert rows[0]["track_id"] == "7"
+    assert rows[0]["radar_velocity_m_s"] == pytest.approx(-2.0)
+    assert rows[0]["radar_intensity"] == pytest.approx(17.0)
+    assert rows[0]["confidence"] == pytest.approx(0.9)
+    assert rows[0]["class_name"] == "uav"
+    assert rows[1]["x_m"] == pytest.approx(3.0)
+    assert rows[1]["track_id"] == "8"
+
+
 def test_native_ros_laserscan_message_to_rows_filters_invalid_ranges() -> None:
     message = SimpleNamespace(
         header=SimpleNamespace(stamp=SimpleNamespace(sec=2, nanosec=0)),
@@ -10060,6 +10139,104 @@ def test_native_ros_extraction_supports_radar_polar_candidates(
     assert extracted.manifest["candidate_rows"] == 1
     assert extracted.manifest["extracted_messages"][0]["status"] == "extracted"
     assert extracted.manifest["extracted_messages"][0]["kind"] == "radar_polar_candidate"
+    assert (output / "native_ros_candidates.csv").exists()
+
+
+def test_native_ros_extraction_supports_radar_cartesian_candidates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_radar_cartesian_native.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_radar_cartesian_native",
+                "exports": [
+                    {
+                        "topic": "/ti_mmwave/radar_scan",
+                        "kind": "radar_cartesian_candidate",
+                        "source": "ti_mmwave",
+                        "std_xy_m": 1.2,
+                        "std_z_m": 3.4,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    connection = SimpleNamespace(
+        topic="/ti_mmwave/radar_scan",
+        msgtype="ti_mmwave_rospkg/msg/RadarScanArray",
+    )
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=4, nanosec=0)),
+        targets=[
+            SimpleNamespace(
+                point_id=42,
+                x=1.0,
+                y=2.0,
+                z=0.5,
+                velocity=-0.75,
+                snr=21.0,
+                score=0.65,
+            )
+        ],
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [connection]
+            return [(connection, 4_000_000_000, b"radar-cartesian")]
+
+        def deserialize(self, rawdata, msgtype):
+            assert rawdata == b"radar-cartesian"
+            assert msgtype == "ti_mmwave_rospkg/msg/RadarScanArray"
+            return message
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is not None
+    rows = extracted.candidates.rows
+    assert len(rows) == 1
+    assert rows.loc[0, "sequence_id"] == "seq_radar_cartesian_native"
+    assert rows.loc[0, "source"] == "ti_mmwave"
+    assert rows.loc[0, "track_id"] == "42"
+    assert rows.loc[0, "x_m"] == pytest.approx(1.0)
+    assert rows.loc[0, "y_m"] == pytest.approx(2.0)
+    assert rows.loc[0, "z_m"] == pytest.approx(0.5)
+    assert rows.loc[0, "std_xy_m"] == pytest.approx(1.2)
+    assert rows.loc[0, "std_z_m"] == pytest.approx(3.4)
+    assert rows.loc[0, "confidence"] == pytest.approx(0.65)
+    assert rows.loc[0, "radar_velocity_m_s"] == pytest.approx(-0.75)
+    assert rows.loc[0, "radar_intensity"] == pytest.approx(21.0)
+    assert extracted.manifest["candidate_rows"] == 1
+    assert extracted.manifest["extracted_messages"][0]["status"] == "extracted"
+    assert extracted.manifest["extracted_messages"][0]["kind"] == "radar_cartesian_candidate"
     assert (output / "native_ros_candidates.csv").exists()
 
 
@@ -10359,6 +10536,38 @@ def test_ros2_topic_map_template_infers_polar_radar_topics(tmp_path: Path) -> No
     assert export["column_aliases"]["range"] == "range_m"
     assert export["column_aliases"]["bearing"] == "azimuth_deg"
     assert export["column_aliases"]["el"] == "elevation_deg"
+
+
+def test_ros2_topic_map_template_infers_cartesian_radar_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /ti_mmwave/radar_scan",
+                "        type: ti_mmwave_rospkg/msg/RadarScan",
+                "      message_count: 4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(
+        report,
+        tmp_path / "topic_map_template.json",
+        template_mode="native",
+    )
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    export = payload["exports"][0]
+    assert export["kind"] == "radar_cartesian_candidate"
+    assert export["source"] == "ti_mmwave_radar_scan"
+    assert export["std_xy_m"] == 2.0
+    assert export["std_z_m"] == 5.0
 
 
 def test_ros2_topic_map_template_infers_laserscan_topics(tmp_path: Path) -> None:

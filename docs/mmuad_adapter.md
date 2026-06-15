@@ -1173,6 +1173,9 @@ adjacent-return clustering,
 `sensor_msgs/msg/Range` as `range_candidate` single-return rows using a
 topic-map bearing/elevation, defaulting to +X forward when no angles are
 provided,
+common Cartesian mmWave/radar return messages as
+`radar_cartesian_candidate` rows when messages already contain `x`/`y`/`z`
+coordinates,
 common custom polar/range-azimuth radar message shapes as
 `radar_polar_candidate` or `polar_radar_candidate`,
 `sensor_msgs/msg/NavSatFix` as `navsatfix_truth` or
@@ -1299,6 +1302,13 @@ Native `range_candidate` topic-map entries convert finite, in-range
 map to place fixed range sensors in the tracking frame; angles default to zero
 with the same `x-forward-left-positive` convention as LaserScan. Topic maps can
 also override `range_std_m`, `angle_std_deg`, and `z_std_m`.
+Native `radar_cartesian_candidate` topic-map entries convert common mmWave or
+radar return messages that already contain Cartesian `x`/`y`/`z` coordinates.
+The bridge handles single return messages, parallel `x`/`y`/`z` arrays, and
+wrappers with `detections`, `targets`, `tracks`, `objects`, or `returns`
+children. It preserves available point/target IDs as `track_id`, plus optional
+velocity/doppler and intensity/SNR metadata, while topic maps can override
+`std_xy_m`, `std_z_m`, `confidence`, and `class_name`.
 Sequence-root mode can also run native extraction automatically when each
 sequence folder contains one native `topic_map*.json/yaml` file and one ROS bag
 or recording file. Per-sequence native manifests are written below

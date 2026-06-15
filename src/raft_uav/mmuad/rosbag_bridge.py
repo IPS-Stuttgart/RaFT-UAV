@@ -162,6 +162,23 @@ def write_topic_map_template(
                         "el": "elevation_deg",
                     }
                 )
+        if _is_radar_cartesian_kind(kind):
+            if mode == "native":
+                entry["std_xy_m"] = 2.0
+                entry["std_z_m"] = 5.0
+            else:
+                entry["column_aliases"].update(
+                    {
+                        "x": "x_m",
+                        "y": "y_m",
+                        "z": "z_m",
+                        "point_id": "track_id",
+                        "target_id": "track_id",
+                        "velocity": "radar_velocity_m_s",
+                        "doppler": "radar_velocity_m_s",
+                        "snr": "radar_intensity",
+                    }
+                )
         if _is_geodetic_kind(kind):
             entry["enu_origin_lla"] = "LAT,LON,ALT"
         exports.append(entry)
@@ -328,6 +345,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "range_candidate"
     if _looks_like_polar_radar_topic(name, msg_type):
         return "radar_polar_candidate"
+    if _looks_like_cartesian_radar_topic(name, msg_type):
+        return "radar_cartesian_candidate"
     if compact_type.endswith("navsatfix"):
         return "navsatfix_truth" if truth_like else "navsatfix_candidate"
     if compact_type.endswith("geoposestamped") or compact_type.endswith("geopose"):
@@ -426,6 +445,20 @@ def _is_radar_polar_kind(kind: str) -> bool:
     }
 
 
+def _is_radar_cartesian_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "radar_cartesian",
+        "radar_cartesian_candidate",
+        "cartesian_radar",
+        "cartesian_radar_candidate",
+        "radar_xyz",
+        "radar_xyz_candidate",
+        "radar_point_candidate",
+        "radar_points_candidate",
+    }
+
+
 def _is_laserscan_candidate_kind(kind: str) -> bool:
     normalized = str(kind).strip().lower()
     return normalized in {
@@ -492,6 +525,26 @@ def _looks_like_polar_radar_topic(name: str, msg_type: str) -> bool:
         )
     )
     return radar_like and polar_like
+
+
+def _looks_like_cartesian_radar_topic(name: str, msg_type: str) -> bool:
+    text = f"{name} {msg_type}".lower().replace("_", "").replace("-", "")
+    radar_like = any(token in text for token in ("radar", "mmwave", "mmw"))
+    cartesian_like = any(
+        token in text
+        for token in (
+            "cartesian",
+            "point",
+            "points",
+            "scan",
+            "track",
+            "tracks",
+            "target",
+            "targets",
+            "xyz",
+        )
+    )
+    return radar_like and cartesian_like
 
 
 def _looks_like_laserscan_topic(name: str, msg_type: str) -> bool:
