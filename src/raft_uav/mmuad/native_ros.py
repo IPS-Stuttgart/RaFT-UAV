@@ -1192,19 +1192,49 @@ def kinematic_message_to_timestamp_rows(
     normalized_kind = str(kind).strip().lower()
     if "accel" in normalized_kind or "acceleration" in normalized_kind:
         _add_accel_components(row, _kinematic_vector_source(message, "accel"))
+        _add_kinematic_covariance_diagonal(
+            row,
+            _kinematic_covariance_source(message, "accel"),
+            linear_prefix="linear_acceleration_covariance",
+            angular_prefix="angular_acceleration_covariance",
+        )
     elif "twist" in normalized_kind or "velocity" in normalized_kind:
         _add_twist_components(row, _kinematic_vector_source(message, "twist"))
+        _add_kinematic_covariance_diagonal(
+            row,
+            _kinematic_covariance_source(message, "twist"),
+            linear_prefix="linear_velocity_covariance",
+            angular_prefix="angular_velocity_covariance",
+        )
     else:
         twist_source = _kinematic_vector_source(message, "twist")
         accel_source = _kinematic_vector_source(message, "accel")
         if _has_linear_or_angular_vector(twist_source):
             _add_twist_components(row, twist_source)
+            _add_kinematic_covariance_diagonal(
+                row,
+                _kinematic_covariance_source(message, "twist"),
+                linear_prefix="linear_velocity_covariance",
+                angular_prefix="angular_velocity_covariance",
+            )
         if _has_linear_or_angular_vector(accel_source):
             _add_accel_components(row, accel_source)
+            _add_kinematic_covariance_diagonal(
+                row,
+                _kinematic_covariance_source(message, "accel"),
+                linear_prefix="linear_acceleration_covariance",
+                angular_prefix="angular_acceleration_covariance",
+            )
         if not _has_linear_or_angular_vector(twist_source) and _has_linear_or_angular_vector(
             message
         ):
             _add_twist_components(row, message)
+            _add_kinematic_covariance_diagonal(
+                row,
+                _kinematic_covariance_source(message, "twist"),
+                linear_prefix="linear_velocity_covariance",
+                angular_prefix="angular_velocity_covariance",
+            )
 
     return [row]
 
@@ -1227,6 +1257,24 @@ def _kinematic_vector_source(message: Any, kind: str) -> Any:
         if _has_linear_or_angular_vector(source):
             return source
     return message
+
+
+def _kinematic_covariance_source(message: Any, kind: str) -> Any | None:
+    candidates: list[Any] = []
+    if kind == "twist":
+        wrapper = _field_value(message, "twist")
+        candidates.extend([wrapper, message])
+    elif kind == "accel":
+        wrapper = _field_value(message, "accel", "acceleration")
+        candidates.extend([wrapper, message])
+    else:
+        candidates.append(message)
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        if _field_value(candidate, "covariance") is not None:
+            return candidate
+    return None
 
 
 def _has_linear_or_angular_vector(value: Any) -> bool:
@@ -1267,6 +1315,39 @@ def _add_accel_components(row: dict[str, Any], source: Any) -> None:
         components=("x", "y", "z"),
         suffix="_rad_s2",
     )
+
+
+def _add_kinematic_covariance_diagonal(
+    row: dict[str, Any],
+    source: Any | None,
+    *,
+    linear_prefix: str,
+    angular_prefix: str,
+) -> None:
+    if source is None:
+        return
+    raw = _field_value(source, "covariance")
+    if raw is None or isinstance(raw, (str, bytes, bytearray, dict)):
+        return
+    try:
+        values = [float(value) for value in raw]
+    except (TypeError, ValueError):
+        return
+    if len(values) >= 36:
+        for index, label in ((0, "xx"), (7, "yy"), (14, "zz")):
+            value = values[index]
+            if math.isfinite(value):
+                row[f"{linear_prefix}_{label}"] = value
+        for index, label in ((21, "xx"), (28, "yy"), (35, "zz")):
+            value = values[index]
+            if math.isfinite(value):
+                row[f"{angular_prefix}_{label}"] = value
+        return
+    if len(values) >= 9:
+        for index, label in ((0, "xx"), (4, "yy"), (8, "zz")):
+            value = values[index]
+            if math.isfinite(value):
+                row[f"{linear_prefix}_{label}"] = value
 
 
 def audio_message_to_timestamp_rows(
