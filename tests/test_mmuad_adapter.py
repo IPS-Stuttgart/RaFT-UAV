@@ -1417,6 +1417,137 @@ def test_sequence_root_discovers_json_camera_detection_tables(tmp_path: Path) ->
     assert truth is not None
 
 
+def test_camera_coco_annotations_json_loads_as_candidates(tmp_path: Path) -> None:
+    camera = tmp_path / "cam0"
+    camera.mkdir()
+    annotations_path = camera / "annotations.json"
+    annotations_path.write_text(
+        json.dumps(
+            {
+                "images": [
+                    {
+                        "id": 1,
+                        "file_name": "cam0/3.25.png",
+                        "width": 100,
+                        "height": 80,
+                    }
+                ],
+                "categories": [{"id": 2, "name": "quadrotor"}],
+                "annotations": [
+                    {
+                        "id": 9,
+                        "image_id": 1,
+                        "category_id": 2,
+                        "bbox": [40.0, 30.0, 20.0, 20.0],
+                        "score": 0.9,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    calibration_path = camera / "camera_info.json"
+    calibration_path.write_text(
+        json.dumps(
+            {
+                "source": "cam0",
+                "fx": 100.0,
+                "fy": 100.0,
+                "cx": 50.0,
+                "cy": 40.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    camera_models = load_camera_models(calibration_path)
+
+    candidates = load_camera_detections_csv_as_candidates(
+        annotations_path,
+        camera_models=camera_models,
+        default_source="cam0",
+        sequence_id="seq_coco",
+        fixed_depth_m=8.0,
+    )
+
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_coco"
+    assert row["source"] == "cam0"
+    assert row["track_id"] == 9
+    assert abs(float(row["time_s"]) - 3.25) < 1e-12
+    assert (float(row["x_m"]), float(row["y_m"]), float(row["z_m"])) == (0.0, 0.0, 8.0)
+    assert abs(float(row["confidence"]) - 0.9) < 1e-12
+    assert row["class_name"] == "quadrotor"
+
+
+def test_sequence_root_discovers_coco_camera_annotations(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_camera_coco"
+    camera = seq / "Image" / "cam0"
+    camera.mkdir(parents=True)
+    _write_png_header(camera / "4.5.png", width=160, height=120)
+    (camera / "annotations.json").write_text(
+        json.dumps(
+            {
+                "images": [{"id": "frame-a", "file_name": "4.5.png"}],
+                "annotations": [
+                    {
+                        "image_id": "frame-a",
+                        "category_id": 5,
+                        "bbox": [70.0, 50.0, 20.0, 20.0],
+                        "score": 0.75,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (camera / "camera_info.json").write_text(
+        json.dumps(
+            {
+                "width": 160,
+                "height": 120,
+                "k": [
+                    120.0,
+                    0.0,
+                    80.0,
+                    0.0,
+                    120.0,
+                    60.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        {
+            "time_s": [4.5],
+            "x_m": [0.0],
+            "y_m": [0.0],
+            "z_m": [9.0],
+        }
+    ).to_csv(seq / "truth.csv", index=False)
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, calibration = load_sequence_export(
+        discovered[0],
+        camera_fixed_depth_m=9.0,
+    )
+
+    assert discovered[0].camera_detection_csvs == (camera / "annotations.json",)
+    assert discovered[0].camera_calibration_files == (camera / "camera_info.json",)
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_camera_coco"
+    assert row["source"] == "cam0"
+    assert abs(float(row["time_s"]) - 4.5) < 1e-12
+    assert (float(row["x_m"]), float(row["y_m"]), float(row["z_m"])) == (0.0, 0.0, 9.0)
+    assert abs(float(row["confidence"]) - 0.75) < 1e-12
+    assert row["class_name"] == "5"
+    assert truth is not None
+    assert calibration is None
+
+
 def test_camera_yolo_label_sidecar_loads_as_candidates(tmp_path: Path) -> None:
     camera = tmp_path / "cam0"
     camera.mkdir()

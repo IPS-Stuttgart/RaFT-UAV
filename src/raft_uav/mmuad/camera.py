@@ -119,8 +119,10 @@ def load_camera_detections_csv_as_candidates(
     ``x1,y1,x2,y2``, COCO-style ``bbox=[x,y,width,height]``, or explicit
     ``bbox_xyxy=[x1,y1,x2,y2]``.  Depth must come from ``depth_m``/``range_m``
     unless a ``fixed_depth_m`` fallback is supplied. CSV/TSV/TXT and JSON
-    row/table exports are supported. Detection2D-style JSON rows can also carry
-    metric depth on nested ``bbox.center.position.z``/``bbox.center.z`` fields.
+    row/table exports are supported, including COCO-style JSON objects with
+    top-level ``images`` and ``annotations`` arrays. Detection2D-style JSON rows
+    can also carry metric depth on nested ``bbox.center.position.z`` /
+    ``bbox.center.z`` fields.
     YOLO-style ``class cx cy width height [confidence]`` TXT sidecars are also
     accepted when a same-stem image is present for normalized pixel scaling.
     This is a detector-output bridge, not a camera detector.
@@ -176,6 +178,10 @@ def camera_detection_frame_to_candidates(
         if fixed_depth_m is None:
             raise ValueError("camera detections need depth_m/range_m or --camera-fixed-depth-m")
         frame["depth_m"] = float(fixed_depth_m)
+    elif fixed_depth_m is not None:
+        frame["depth_m"] = pd.to_numeric(frame["depth_m"], errors="coerce").fillna(
+            float(fixed_depth_m)
+        )
     records: list[dict[str, Any]] = []
     for _, row in frame.iterrows():
         time_s = float(row["time_s"])
@@ -577,11 +583,16 @@ def _looks_normalized_box(center_x: float, center_y: float, width: float, height
 
 
 def _timestamp_from_stem(path: Path) -> float:
+    timestamp = _timestamp_from_stem_or_none(path)
+    return 0.0 if timestamp is None else timestamp
+
+
+def _timestamp_from_stem_or_none(path: Path) -> float | None:
     import re
 
     tokens = re.findall(r"[-+]?\d*\.?\d+", Path(path).stem)
     if not tokens:
-        return 0.0
+        return None
     return float(tokens[-1])
 
 
@@ -663,8 +674,119 @@ def _bmp_size_px(raw: bytes) -> tuple[int, int] | None:
 
 def _read_json_detection_table(path: Path) -> pd.DataFrame:
     payload = read_json_export_payload(path)
+    coco_frame = _coco_detection_frame(payload)
+    if coco_frame is not None:
+        return coco_frame
     records = _json_detection_records(payload)
     return _json_detection_records_to_frame(records, path=path)
+
+
+def _coco_detection_frame(payload: Any) -> pd.DataFrame | None:
+    if not isinstance(payload, dict):
+        return None
+    images = _mapping_get_case_insensitive(payload, "images")
+    annotations = _mapping_get_case_insensitive(payload, "annotations")
+    if not isinstance(images, list) or not isinstance(annotations, list):
+        return None
+    image_rows = [item for item in images if isinstance(item, dict)]
+    annotation_rows = [item for item in annotations if isinstance(item, dict)]
+    if not image_rows or not annotation_rows:
+        return pd.DataFrame()
+    image_by_id = {
+        _coco_key(_first_mapping_value(image, ("id", "image_id", "file_name", "file"))): image
+        for image in image_rows
+    }
+    categories = _mapping_get_case_insensitive(payload, "categories")
+    category_by_id = _coco_category_map(categories)
+    rows: list[dict[str, Any]] = []
+    for annotation_idx, annotation in enumerate(annotation_rows):
+        image_key = _coco_key(
+            _first_mapping_value(annotation, ("image_id", "image", "file_name", "file"))
+        )
+        image = image_by_id.get(image_key, {})
+        bbox = _first_mapping_value(annotation, ("bbox", "bbox_xywh", "box", "xywh"))
+        if bbox is None:
+            continue
+        category_id = _first_mapping_value(
+            annotation,
+            ("category_id", "class_id", "class", "label"),
+        )
+        rows.append(
+            {
+                "time_s": _coco_time_s(annotation, image),
+                "source": _coco_source(image),
+                "track_id": _first_mapping_value(annotation, ("id", "annotation_id"))
+                or f"annotation:{annotation_idx}",
+                "bbox": bbox,
+                "confidence": _first_mapping_value(
+                    annotation,
+                    ("score", "confidence", "probability"),
+                ),
+                "class_name": category_by_id.get(_coco_key(category_id), category_id),
+                "depth_m": _first_mapping_value(
+                    annotation,
+                    ("depth_m", "depth", "range_m", "distance_m"),
+                ),
+                "image_file": _first_mapping_value(image, ("file_name", "file", "path")),
+            }
+        )
+    return pd.DataFrame.from_records(rows)
+
+
+def _coco_key(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _coco_category_map(categories: Any) -> dict[str, Any]:
+    if not isinstance(categories, list):
+        return {}
+    out: dict[str, Any] = {}
+    for category in categories:
+        if not isinstance(category, dict):
+            continue
+        category_id = _first_mapping_value(category, ("id", "category_id", "class_id"))
+        name = _first_mapping_value(category, ("name", "class_name", "label", "category"))
+        if category_id is not None and name is not None:
+            out[_coco_key(category_id)] = name
+    return out
+
+
+def _coco_time_s(annotation: dict[Any, Any], image: dict[Any, Any]) -> float | None:
+    for mapping in (annotation, image):
+        timestamp = _stamp_to_seconds(
+            _first_mapping_value(
+                mapping,
+                (
+                    "time_s",
+                    "timestamp_s",
+                    "timestamp",
+                    "time",
+                    "t",
+                    "stamp",
+                ),
+            )
+        )
+        if timestamp is not None:
+            return timestamp
+    file_name = _first_mapping_value(image, ("file_name", "file", "path"))
+    if file_name is not None:
+        return _timestamp_from_stem_or_none(Path(str(file_name)))
+    return None
+
+
+def _coco_source(image: dict[Any, Any]) -> Any | None:
+    source = _first_mapping_value(image, ("source", "camera", "camera_id", "sensor"))
+    if source is not None:
+        return source
+    file_name = _first_mapping_value(image, ("file_name", "file", "path"))
+    if file_name is None:
+        return None
+    parent = Path(str(file_name)).parent
+    return parent.name if parent.name else None
 
 
 def _json_detection_records(payload: Any) -> Any:
