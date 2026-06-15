@@ -146,6 +146,10 @@ def write_topic_map_template(
                     entry["cluster_adjacent_ranges"] = False
                     entry["min_cluster_points"] = 2
                     entry["max_cluster_range_gap_m"] = 1.0
+                if _is_range_candidate_kind(kind):
+                    entry["azimuth_convention"] = "x-forward-left-positive"
+                    entry["azimuth_rad"] = 0.0
+                    entry["elevation_rad"] = 0.0
             else:
                 entry["column_aliases"].update(
                     {
@@ -320,6 +324,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "pointcloud_candidate"
     if _looks_like_laserscan_topic(name, msg_type):
         return "laserscan_candidate"
+    if _looks_like_range_topic(name, msg_type):
+        return "range_candidate"
     if _looks_like_polar_radar_topic(name, msg_type):
         return "radar_polar_candidate"
     if compact_type.endswith("navsatfix"):
@@ -413,6 +419,10 @@ def _is_radar_polar_kind(kind: str) -> bool:
         "scan_candidate",
         "range_scan_candidate",
         "range_scan",
+        "range_candidate",
+        "range_sensor_candidate",
+        "sensor_range_candidate",
+        "single_range_candidate",
     }
 
 
@@ -424,6 +434,16 @@ def _is_laserscan_candidate_kind(kind: str) -> bool:
         "scan_candidate",
         "range_scan_candidate",
         "range_scan",
+    }
+
+
+def _is_range_candidate_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "range_candidate",
+        "range_sensor_candidate",
+        "sensor_range_candidate",
+        "single_range_candidate",
     }
 
 
@@ -482,6 +502,15 @@ def _looks_like_laserscan_topic(name: str, msg_type: str) -> bool:
         or compact_type.endswith("msg/laserscan")
         or "laserscan" in compact_type
         or "laserscan" in compact_name
+    )
+
+
+def _looks_like_range_topic(name: str, msg_type: str) -> bool:
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    return (
+        compact_type.endswith("/range")
+        or compact_type.endswith("msg/range")
+        or compact_type.endswith("sensor_msgs/msg/range")
     )
 
 
