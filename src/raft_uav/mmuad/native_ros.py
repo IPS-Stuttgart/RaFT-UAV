@@ -11,6 +11,7 @@ tracking logs:
 * ``sensor_msgs/msg/Image`` / ``CompressedImage`` -> timestamp template rows;
 * common ROS audio messages -> timestamp inventory rows;
 * ``sensor_msgs/msg/Imu`` -> timestamp/kinematics inventory rows;
+* ``sensor_msgs/msg/LaserScan`` -> range-scan candidate detections;
 * common polar/range-azimuth radar messages -> polar radar candidates;
 * ``sensor_msgs/msg/NavSatFix`` -> geodetic rows projected into local ENU;
 * ``geographic_msgs/msg/GeoPointStamped`` / ``GeoPoseStamped`` -> local ENU rows;
@@ -95,6 +96,10 @@ def extract_native_rosbag_topic_map(
         Decode common range/azimuth message shapes and convert them through
         the same polar radar bridge as exported table rows.  Native ROS angles
         default to radians unless ``angle_unit`` is set in the topic map.
+    ``laserscan_candidate`` / ``laser_scan_candidate``
+        Decode ``sensor_msgs/msg/LaserScan`` ranges into polar candidate rows.
+        LaserScan angles follow the ROS convention of zero forward on +X and
+        positive counterclockwise/left by default.
     ``camera_info`` / ``camera_info_calibration``
         Decode ``sensor_msgs/msg/CameraInfo`` intrinsics for native
         Detection2D back-projection.  Detection2D topics with the same source
@@ -244,6 +249,54 @@ def extract_native_rosbag_topic_map(
                             ),
                             min_confidence=float(
                                 spec.get("min_confidence", 0.0)
+                            ),
+                        )
+                        candidate_frames.append(frame)
+                        rows = len(frame.rows)
+                    else:
+                        rows = 0
+                elif _is_laserscan_candidate_kind(kind):
+                    angle_unit = str(
+                        spec.get(
+                            "angle_unit",
+                            spec.get("laserscan_angle_unit", "rad"),
+                        )
+                    )
+                    rows_for_message = laserscan_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        angle_unit=angle_unit,
+                    )
+                    if rows_for_message:
+                        frame = radar_polar_frame_to_candidates(
+                            pd.DataFrame.from_records(rows_for_message),
+                            source=source,
+                            sequence_id=str(spec.get("sequence_id", sequence_id)),
+                            azimuth_convention=str(
+                                spec.get(
+                                    "azimuth_convention",
+                                    spec.get(
+                                        "laserscan_azimuth_convention",
+                                        "x-forward-left-positive",
+                                    ),
+                                )
+                            ),
+                            angle_unit=angle_unit,
+                            range_std_m=float(
+                                spec.get(
+                                    "range_std_m",
+                                    spec.get("laserscan_range_std_m", 1.0),
+                                )
+                            ),
+                            angle_std_deg=float(
+                                spec.get(
+                                    "angle_std_deg",
+                                    spec.get("laserscan_angle_std_deg", 0.5),
+                                )
+                            ),
+                            z_std_m=float(
+                                spec.get("z_std_m", spec.get("laserscan_z_std_m", 2.0))
                             ),
                         )
                         candidate_frames.append(frame)
@@ -894,6 +947,17 @@ def _is_imu_timestamp_kind(kind: str) -> bool:
     }
 
 
+def _is_laserscan_candidate_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "laserscan_candidate",
+        "laser_scan_candidate",
+        "scan_candidate",
+        "range_scan_candidate",
+        "range_scan",
+    }
+
+
 def image_message_to_timestamp_rows(
     message: Any,
     *,
@@ -1409,6 +1473,81 @@ def radar_polar_message_to_rows(
         index=None,
     )
     return [row] if row is not None else []
+
+
+def laserscan_message_to_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    angle_unit: str = "rad",
+) -> list[dict[str, Any]]:
+    """Convert a native ROS LaserScan message into polar range rows."""
+
+    target_angle_unit = _normalize_radar_angle_unit(angle_unit)
+    parent_time_s = _message_stamp_time_s(message)
+    default_time_s = parent_time_s if parent_time_s is not None else float(time_s)
+    ranges = _numeric_field_sequence(message, ("ranges", "ranges_m", "range", "range_m"))
+    if not ranges:
+        return []
+    angle_min = _field_float(message, "angle_min", "min_angle", "start_angle")
+    if angle_min is None:
+        angle_min = 0.0
+    angle_increment = _field_float(
+        message,
+        "angle_increment",
+        "angle_step",
+        "increment",
+        "resolution",
+    )
+    if angle_increment is None:
+        angle_max = _field_float(message, "angle_max", "max_angle", "end_angle")
+        if angle_max is not None and len(ranges) > 1:
+            angle_increment = (float(angle_max) - float(angle_min)) / float(len(ranges) - 1)
+        else:
+            angle_increment = 0.0
+    range_min = _field_float(message, "range_min", "min_range", "minimum_range")
+    range_max = _field_float(message, "range_max", "max_range", "maximum_range")
+    time_increment = _field_float(
+        message,
+        "time_increment",
+        "time_increment_s",
+        "sample_time_s",
+    )
+    intensities = _numeric_field_sequence(
+        message,
+        ("intensities", "intensity", "reflectivity", "reflectivities"),
+    )
+    rows: list[dict[str, Any]] = []
+    for index, range_m in enumerate(ranges):
+        if not math.isfinite(range_m) or range_m <= 0.0:
+            continue
+        if range_min is not None and range_m < range_min:
+            continue
+        if range_max is not None and range_m > range_max:
+            continue
+        azimuth_rad = float(angle_min) + float(index) * float(angle_increment)
+        row_time_s = (
+            float(default_time_s) + float(index) * float(time_increment)
+            if time_increment is not None
+            else float(default_time_s)
+        )
+        row: dict[str, Any] = {
+            "sequence_id": str(sequence_id),
+            "time_s": row_time_s,
+            "range_m": float(range_m),
+            "azimuth": _convert_angle_unit(
+                azimuth_rad,
+                source_unit="rad",
+                target_unit=target_angle_unit,
+            ),
+            "elevation": 0.0,
+            "scan_index": int(index),
+        }
+        if index < len(intensities) and math.isfinite(intensities[index]):
+            row["scan_intensity"] = float(intensities[index])
+        rows.append(row)
+    return rows
 
 
 def _radar_parallel_array_rows(

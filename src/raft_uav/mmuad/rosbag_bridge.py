@@ -141,6 +141,8 @@ def write_topic_map_template(
         if _is_radar_polar_kind(kind):
             if mode == "native":
                 entry["angle_unit"] = "rad"
+                if _is_laserscan_candidate_kind(kind):
+                    entry["azimuth_convention"] = "x-forward-left-positive"
             else:
                 entry["column_aliases"].update(
                     {
@@ -311,6 +313,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "livox_custommsg_candidate"
     if "pointcloud2" in msg_type:
         return "pointcloud2_candidate"
+    if _looks_like_laserscan_topic(name, msg_type):
+        return "laserscan_candidate"
     if _looks_like_polar_radar_topic(name, msg_type):
         return "radar_polar_candidate"
     if compact_type.endswith("navsatfix"):
@@ -397,6 +401,22 @@ def _is_radar_polar_kind(kind: str) -> bool:
         "radar_polar_candidate",
         "polar_radar",
         "polar_radar_candidate",
+        "laserscan_candidate",
+        "laser_scan_candidate",
+        "scan_candidate",
+        "range_scan_candidate",
+        "range_scan",
+    }
+
+
+def _is_laserscan_candidate_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "laserscan_candidate",
+        "laser_scan_candidate",
+        "scan_candidate",
+        "range_scan_candidate",
+        "range_scan",
     }
 
 
@@ -432,6 +452,17 @@ def _looks_like_polar_radar_topic(name: str, msg_type: str) -> bool:
         )
     )
     return radar_like and polar_like
+
+
+def _looks_like_laserscan_topic(name: str, msg_type: str) -> bool:
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    compact_name = name.lower().replace("_", "").replace("-", "")
+    return (
+        compact_type.endswith("/laserscan")
+        or compact_type.endswith("msg/laserscan")
+        or "laserscan" in compact_type
+        or "laserscan" in compact_name
+    )
 
 
 def _looks_like_tracked_objects_topic(name: str, msg_type: str) -> bool:

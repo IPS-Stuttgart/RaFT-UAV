@@ -53,6 +53,7 @@ from raft_uav.mmuad.native_ros import (
     detection3d_message_to_rows,
     extract_native_rosbag_topic_map,
     geodetic_message_to_rows,
+    laserscan_message_to_rows,
     livox_custom_message_to_points,
     marker_message_to_rows,
     multidof_message_to_rows,
@@ -9230,6 +9231,39 @@ def test_native_ros_radar_polar_message_to_rows_accepts_parallel_arrays() -> Non
     assert abs(rows[1]["elevation"] - np.pi / 6.0) < 1.0e-12
 
 
+def test_native_ros_laserscan_message_to_rows_filters_invalid_ranges() -> None:
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=2, nanosec=0)),
+        angle_min=0.0,
+        angle_increment=np.pi / 2.0,
+        range_min=0.5,
+        range_max=5.0,
+        time_increment=0.01,
+        ranges=[1.0, float("inf"), 0.25, 2.0],
+        intensities=[0.2, 0.0, 0.1, 0.7],
+    )
+
+    rows = laserscan_message_to_rows(
+        message,
+        sequence_id="seq_laserscan",
+        time_s=9.0,
+        angle_unit="rad",
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["sequence_id"] == "seq_laserscan"
+    assert rows[0]["time_s"] == 2.0
+    assert rows[0]["range_m"] == 1.0
+    assert rows[0]["azimuth"] == 0.0
+    assert rows[0]["scan_index"] == 0
+    assert rows[0]["scan_intensity"] == 0.2
+    assert abs(rows[1]["time_s"] - 2.03) < 1.0e-12
+    assert rows[1]["range_m"] == 2.0
+    assert abs(rows[1]["azimuth"] - 3.0 * np.pi / 2.0) < 1.0e-12
+    assert rows[1]["scan_index"] == 3
+    assert rows[1]["scan_intensity"] == 0.7
+
+
 def test_native_ros_extraction_supports_radar_polar_candidates(
     tmp_path: Path,
     monkeypatch,
@@ -9328,6 +9362,97 @@ def test_native_ros_extraction_supports_radar_polar_candidates(
     assert (output / "native_ros_candidates.csv").exists()
 
 
+def test_native_ros_extraction_supports_laserscan_candidates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_laserscan_native.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_laserscan_native",
+                "exports": [
+                    {
+                        "topic": "/radar/scan",
+                        "kind": "laserscan_candidate",
+                        "source": "scan",
+                        "angle_unit": "rad",
+                        "range_std_m": 1.5,
+                        "angle_std_deg": 0.25,
+                        "z_std_m": 2.5,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    connection = SimpleNamespace(
+        topic="/radar/scan",
+        msgtype="sensor_msgs/msg/LaserScan",
+    )
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=5, nanosec=0)),
+        angle_min=0.0,
+        angle_increment=np.pi / 2.0,
+        range_min=0.1,
+        range_max=10.0,
+        ranges=[2.0, 3.0],
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [connection]
+            return [(connection, 5_000_000_000, b"scan")]
+
+        def deserialize(self, rawdata, msgtype):
+            assert rawdata == b"scan"
+            assert msgtype == "sensor_msgs/msg/LaserScan"
+            return message
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is not None
+    rows = extracted.candidates.rows
+    assert len(rows) == 2
+    assert rows.loc[0, "sequence_id"] == "seq_laserscan_native"
+    assert rows.loc[0, "source"] == "scan"
+    assert abs(float(rows.loc[0, "x_m"]) - 2.0) < 1.0e-9
+    assert abs(float(rows.loc[0, "y_m"])) < 1.0e-9
+    assert abs(float(rows.loc[1, "x_m"])) < 1.0e-9
+    assert abs(float(rows.loc[1, "y_m"]) - 3.0) < 1.0e-9
+    assert rows.loc[0, "std_xy_m"] == 1.5
+    assert rows.loc[0, "std_z_m"] == 2.5
+    assert extracted.manifest["candidate_rows"] == 2
+    assert extracted.manifest["extracted_messages"][0]["status"] == "extracted"
+    assert extracted.manifest["extracted_messages"][0]["kind"] == "laserscan_candidate"
+    assert (output / "native_ros_candidates.csv").exists()
+
+
 def test_ros2_topic_map_template_infers_polar_radar_topics(tmp_path: Path) -> None:
     bag = tmp_path / "bagdir"
     bag.mkdir()
@@ -9355,6 +9480,38 @@ def test_ros2_topic_map_template_infers_polar_radar_topics(tmp_path: Path) -> No
     assert export["column_aliases"]["range"] == "range_m"
     assert export["column_aliases"]["bearing"] == "azimuth_deg"
     assert export["column_aliases"]["el"] == "elevation_deg"
+
+
+def test_ros2_topic_map_template_infers_laserscan_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /radar/scan",
+                "        type: sensor_msgs/msg/LaserScan",
+                "      message_count: 5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(
+        report,
+        tmp_path / "topic_map_template.json",
+        template_mode="native",
+    )
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    export = payload["exports"][0]
+    assert export["kind"] == "laserscan_candidate"
+    assert export["source"] == "radar_scan"
+    assert export["angle_unit"] == "rad"
+    assert export["azimuth_convention"] == "x-forward-left-positive"
 
 
 def test_ros2_topic_map_template_infers_point_and_transform_topics(
