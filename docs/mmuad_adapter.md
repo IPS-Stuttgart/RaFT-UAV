@@ -1042,6 +1042,23 @@ PYTHONPATH=src python scripts/extract_mmuad_rosbag_topics.py \
   --output-dir outputs/mmuad_native_ros_seq001
 ```
 
+To start from an unknown ROS bag, inspect the recording and write a native
+topic-map template:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --rosbag-path data/mmuad_raw/seq001 \
+  --topic-map-template-json data/mmuad_raw/seq001/topic_map_native.json \
+  --topic-map-template-mode native \
+  --output-dir outputs/mmuad_native_ros_seq001/inspect
+```
+
+Native templates contain topic names and inferred supported kinds without CSV
+export `path` fields, so after editing sources, camera calibration/depth, radar
+angle units, or geodetic origins they can be passed directly to
+`--native-ros-extract-output-dir`. The default template mode remains `export`
+for workflows that first dump ROS topics to CSV/JSON tables.
+
 The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
 `pointcloud2_candidate`, `livox_ros_driver/msg/CustomMsg` and
 `livox_ros_driver2/msg/CustomMsg` as `livox_custommsg_candidate`,

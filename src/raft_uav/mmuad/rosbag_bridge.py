@@ -91,9 +91,15 @@ def inspect_rosbag(path: Path) -> dict[str, Any]:
     }
 
 
-def write_topic_map_template(report: dict[str, Any], path: Path) -> Path:
+def write_topic_map_template(
+    report: dict[str, Any],
+    path: Path,
+    *,
+    template_mode: str = "export",
+) -> Path:
     """Write a topic-map JSON template from an inspection report."""
 
+    mode = _normalize_topic_map_template_mode(template_mode)
     topics = report.get("topics", [])
     exports = []
     for idx, topic in enumerate(topics):
@@ -103,59 +109,84 @@ def write_topic_map_template(report: dict[str, Any], path: Path) -> Path:
         entry = {
             "topic": name,
             "kind": kind,
-            "path": f"exports/{safe}.csv",
             "source": safe if not _is_truth_kind(kind) else None,
             "sequence_id": report.get(
                 "sequence_id",
                 Path(str(report.get("path", "sequence"))).stem,
             ),
-            "column_aliases": {
+        }
+        if mode == "export":
+            entry["path"] = f"exports/{safe}.csv"
+            entry["column_aliases"] = {
                 "stamp": "time_s",
                 "timestamp": "time_s",
                 "x": "x_m",
                 "y": "y_m",
                 "z": "z_m",
-            },
-        }
+            }
         if _is_camera_detection_kind(kind):
             entry["camera_calibration_file"] = "PATH/TO/camera_info.json"
-            entry["column_aliases"].update(
-                {
-                    "center_x": "u_px",
-                    "center_y": "v_px",
-                    "bbox_center_x": "u_px",
-                    "bbox_center_y": "v_px",
-                    "score": "confidence",
-                }
-            )
+            if mode == "native":
+                entry["camera_fixed_depth_m"] = "SET_DEPTH_OR_REMOVE_IF_MESSAGE_HAS_DEPTH"
+            else:
+                entry["column_aliases"].update(
+                    {
+                        "center_x": "u_px",
+                        "center_y": "v_px",
+                        "bbox_center_x": "u_px",
+                        "bbox_center_y": "v_px",
+                        "score": "confidence",
+                    }
+                )
         if _is_radar_polar_kind(kind):
-            entry["column_aliases"].update(
-                {
-                    "range": "range_m",
-                    "r": "range_m",
-                    "rho": "range_m",
-                    "bearing": "azimuth_deg",
-                    "az": "azimuth_deg",
-                    "azimuth": "azimuth_deg",
-                    "el": "elevation_deg",
-                }
-            )
+            if mode == "native":
+                entry["angle_unit"] = "rad"
+            else:
+                entry["column_aliases"].update(
+                    {
+                        "range": "range_m",
+                        "r": "range_m",
+                        "rho": "range_m",
+                        "bearing": "azimuth_deg",
+                        "az": "azimuth_deg",
+                        "azimuth": "azimuth_deg",
+                        "el": "elevation_deg",
+                    }
+                )
         if _is_geodetic_kind(kind):
             entry["enu_origin_lla"] = "LAT,LON,ALT"
         exports.append(entry)
     payload = {
         "schema": "raft-uav-mmuad-topic-map-v1",
+        "template_mode": mode,
         "sequence_id": report.get(
             "sequence_id",
             Path(str(report.get("path", "sequence"))).stem,
         ),
-        "description": "Edit paths and aliases to point at CSV exports of ROS topics.",
+        "description": _topic_map_template_description(mode),
         "exports": exports,
     }
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return path
+
+
+def _normalize_topic_map_template_mode(value: str) -> str:
+    mode = str(value).strip().lower()
+    if mode not in {"export", "native"}:
+        raise ValueError("template_mode must be 'export' or 'native'")
+    return mode
+
+
+def _topic_map_template_description(mode: str) -> str:
+    if mode == "native":
+        return (
+            "Native ROS extraction template. Edit sources, calibration/depth, "
+            "geodetic origins, and topic-specific options, then run with "
+            "--native-ros-extract-output-dir and --topic-map-file."
+        )
+    return "Edit paths and aliases to point at CSV exports of ROS topics."
 
 
 def load_topic_map_payload(path: Path) -> dict[str, Any]:

@@ -161,6 +161,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rosbag-report-json", type=Path)
     parser.add_argument("--topic-map-template-json", type=Path)
     parser.add_argument(
+        "--topic-map-template-mode",
+        choices=("export", "native"),
+        default="export",
+        help=(
+            "write CSV-export topic-map templates or native extraction templates "
+            "for --topic-map-template-json"
+        ),
+    )
+    parser.add_argument(
         "--topic-map-file",
         "--topic-map-json",
         dest="topic_map_file",
@@ -287,7 +296,11 @@ def main(argv: list[str] | None = None) -> int:
             args.rosbag_report_json.parent.mkdir(parents=True, exist_ok=True)
             args.rosbag_report_json.write_text(json.dumps(report, indent=2), encoding="utf-8")
         if args.topic_map_template_json is not None:
-            write_topic_map_template(report, args.topic_map_template_json)
+            write_topic_map_template(
+                report,
+                args.topic_map_template_json,
+                template_mode=args.topic_map_template_mode,
+            )
         if args.native_ros_extract_output_dir is not None:
             if args.topic_map_file is None:
                 raise SystemExit(
