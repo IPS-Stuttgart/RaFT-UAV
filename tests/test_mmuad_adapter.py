@@ -7042,13 +7042,118 @@ def test_ros2_metadata_inspection_and_topic_map_template(tmp_path: Path) -> None
     template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
     payload = json.loads(template.read_text(encoding="utf-8"))
     assert payload["schema"] == "raft-uav-mmuad-topic-map-v1"
+    assert payload["template_mode"] == "export"
     assert [entry["kind"] for entry in payload["exports"]] == [
         "pointcloud2_candidate",
         "pose_truth",
         "odometry_candidate",
     ]
+    assert all("path" in entry for entry in payload["exports"])
     assert payload["exports"][0]["source"] == "radar_points"
     assert payload["exports"][1]["source"] is None
+
+
+def test_ros2_topic_map_template_native_mode_is_extraction_ready(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "seq_native_template"
+    seq.mkdir()
+    (seq / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  relative_file_paths:",
+                "    - data_0.db3",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /livox/points",
+                "        type: sensor_msgs/msg/PointCloud2",
+                "      message_count: 3",
+                "    - topic_metadata:",
+                "        name: /mmwave/range_azimuth",
+                "        type: custom_msgs/msg/RadarPolarArray",
+                "      message_count: 3",
+                "    - topic_metadata:",
+                "        name: /camera/detections",
+                "        type: vision_msgs/msg/Detection2DArray",
+                "      message_count: 3",
+                "    - topic_metadata:",
+                "        name: /ground_truth/pose",
+                "        type: geometry_msgs/msg/PoseStamped",
+                "      message_count: 3",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (seq / "data_0.db3").write_bytes(b"fake sqlite bag")
+
+    report = inspect_rosbag(seq)
+    template = write_topic_map_template(
+        report,
+        seq / "topic_map_native.json",
+        template_mode="native",
+    )
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert payload["template_mode"] == "native"
+    assert "Native ROS extraction template" in payload["description"]
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "pointcloud2_candidate",
+        "radar_polar_candidate",
+        "camera_detections_candidate",
+        "pose_truth",
+    ]
+    assert all("path" not in entry for entry in payload["exports"])
+    assert all("column_aliases" not in entry for entry in payload["exports"])
+    radar_export = payload["exports"][1]
+    assert radar_export["angle_unit"] == "rad"
+    camera_export = payload["exports"][2]
+    assert camera_export["camera_calibration_file"] == "PATH/TO/camera_info.json"
+    assert camera_export["camera_fixed_depth_m"] == "SET_DEPTH_OR_REMOVE_IF_MESSAGE_HAS_DEPTH"
+
+    discovered = discover_sequence_paths(tmp_path)
+    assert len(discovered) == 1
+    assert discovered[0].native_topic_map_jsons == (template,)
+    assert discovered[0].rosbag_paths == (seq,)
+
+
+def test_cli_writes_native_topic_map_template(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /detector/point",
+                "        type: geometry_msgs/msg/PointStamped",
+                "      message_count: 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "out"
+    template = output / "topic_map_native.json"
+
+    status = mmuad_cli_main(
+        [
+            "--rosbag-path",
+            str(bag),
+            "--topic-map-template-json",
+            str(template),
+            "--topic-map-template-mode",
+            "native",
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    payload = json.loads(template.read_text(encoding="utf-8"))
+    assert payload["template_mode"] == "native"
+    assert payload["exports"][0]["kind"] == "point_candidate"
+    assert "path" not in payload["exports"][0]
 
 
 def test_standalone_mcap_inspection_reports_missing_native_reader(
