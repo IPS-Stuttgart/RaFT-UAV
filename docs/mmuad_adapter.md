@@ -592,9 +592,11 @@ only the nearest unused prediction covers a requested template timestamp; other
 non-duplicate predictions in the same tolerance window remain extras.
 `mmuad_official_upload_manifest.json` is a compact, machine-readable readiness
 index for release scripts and CI. It records the checked artifact path,
-validation JSON/row paths, ZIP members and columns, global readiness flags,
-blocking reasons, sequence counts, and per-sequence prediction/template
-coverage. It does not upload results or replace the closed Codabench evaluator.
+artifact byte size and SHA-256 hash, the root `mmaud_results.csv` member
+SHA-256/CRC32/byte sizes for ZIP submissions, validation JSON/row paths, ZIP
+members and columns, global readiness flags, blocking reasons, sequence counts,
+and per-sequence prediction/template coverage. It does not upload results or
+replace the closed Codabench evaluator.
 Official Track 5 CSV/ZIP writers also fail before writing when tracker output
 contains non-finite timestamps or positions, preventing a seemingly valid ZIP
 from silently dropping rows. For local diagnostics only, pass

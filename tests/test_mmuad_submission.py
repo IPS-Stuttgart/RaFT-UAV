@@ -1,3 +1,4 @@
+import hashlib
 import json
 from zipfile import ZipFile
 
@@ -747,6 +748,22 @@ def test_official_track5_submission_validator_accepts_exact_zip_and_template(tmp
     validation = validate_official_track5_submission(zip_path, template=template)
 
     assert validation.summary["valid"] is True
+    assert validation.summary["artifact_exists"] is True
+    assert validation.summary["artifact_size_bytes"] == zip_path.stat().st_size
+    assert validation.summary["artifact_sha256"] == hashlib.sha256(
+        zip_path.read_bytes()
+    ).hexdigest()
+    with ZipFile(zip_path) as archive:
+        result_bytes = archive.read("mmaud_results.csv")
+        result_info = archive.getinfo("mmaud_results.csv")
+    assert validation.summary["mmaud_results_csv_size_bytes"] == len(result_bytes)
+    assert validation.summary["mmaud_results_csv_compressed_size_bytes"] == int(
+        result_info.compress_size
+    )
+    assert validation.summary["mmaud_results_csv_crc32"] == f"{result_info.CRC:08x}"
+    assert validation.summary["mmaud_results_csv_sha256"] == hashlib.sha256(
+        result_bytes
+    ).hexdigest()
     assert validation.summary["contains_only_mmaud_results_csv"] is True
     assert validation.summary["row_count"] == 2
     assert validation.summary["template_checked"] is True
