@@ -325,6 +325,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "camera_detections_candidate"
     if "detection2d" in compact_type:
         return "camera_detections_candidate"
+    if _looks_like_image_timestamp_topic(name, msg_type):
+        return "image_timestamps"
     if "detection3darray" in compact_type:
         return "detection3d_array_truth" if truth_like else "detection3d_array_candidate"
     if "detection3d" in compact_type:
@@ -458,6 +460,19 @@ def _looks_like_bounding_box3d_topic(name: str, msg_type: str) -> bool:
 def _looks_like_bounding_box3d_array_topic(msg_type: str) -> bool:
     compact_type = msg_type.lower().replace("_", "").replace("-", "")
     return "array" in compact_type or compact_type.endswith("boxes")
+
+
+def _looks_like_image_timestamp_topic(name: str, msg_type: str) -> bool:
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    compact_name = name.lower().replace("_", "").replace("-", "")
+    return (
+        compact_type.endswith("/image")
+        or compact_type.endswith("msg/image")
+        or compact_type.endswith("compressedimage")
+        or compact_type.endswith("msg/compressedimage")
+        or compact_name.endswith("/image")
+        or compact_name.endswith("_image")
+    )
 
 
 def _is_camera_detection_kind(kind: str) -> bool:

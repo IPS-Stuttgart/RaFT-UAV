@@ -1126,6 +1126,8 @@ The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
 `livox_ros_driver2/msg/CustomMsg` as `livox_custommsg_candidate`,
 `sensor_msgs/msg/CameraInfo` as
 `camera_info_calibration` intrinsics for Detection2D back-projection,
+`sensor_msgs/msg/Image` and `sensor_msgs/msg/CompressedImage` as
+`image_timestamps` timestamp/template inventory rows,
 common custom polar/range-azimuth radar message shapes as
 `radar_polar_candidate` or `polar_radar_candidate`,
 `sensor_msgs/msg/NavSatFix` as `navsatfix_truth` or
@@ -1206,6 +1208,12 @@ Native extraction uses the same tracker artifact writer as exported CSV/sequence
 roots, so `submission.csv/json/zip`, UG2 result CSV/ZIP, official Track 5
 CSV/ZIP, validation JSON/rows, and trajectory metrics can be requested from the
 same run.
+When the topic map includes native image timestamp topics, the extractor also
+writes `native_ros_image_timestamps.csv` and
+`native_ros_image_timestamp_template.csv`. The latter is a zero-position
+timestamp template that can be passed as `--official-validation-template-file`
+or used automatically by the CLI for official validation when candidate rows are
+present but no truth/template file was provided.
 Sequence-root mode can also run native extraction automatically when each
 sequence folder contains one native `topic_map*.json/yaml` file and one ROS bag
 or recording file. Per-sequence native manifests are written below

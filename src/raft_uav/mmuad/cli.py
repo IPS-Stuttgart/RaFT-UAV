@@ -56,6 +56,7 @@ from raft_uav.mmuad.rosbag_bridge import (
 )
 from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_export
 from raft_uav.mmuad.sequence import official_track5_timestamp_template
+from raft_uav.mmuad.schema import normalize_truth_columns
 from raft_uav.mmuad.splits import (
     filter_sequences_by_split,
     filter_sequences_by_split_folder,
@@ -332,6 +333,8 @@ def main(argv: list[str] | None = None) -> int:
                 voxel_size_m=args.voxel_size_m,
                 min_points=args.min_cluster_points,
             )
+            _maybe_set_official_validation_template_from_truth(args, extracted.truth)
+            _maybe_set_official_validation_template_from_native_images(args, extracted)
             if extracted.candidates is None or extracted.candidates.rows.empty:
                 manifest_path = (
                     args.native_ros_extract_output_dir
@@ -342,7 +345,6 @@ def main(argv: list[str] | None = None) -> int:
                     f"{manifest_path} and update the topic map to include "
                     "candidate-bearing topics"
                 )
-            _maybe_set_official_validation_template_from_truth(args, extracted.truth)
             if args.infer_ug2_class_map_from_candidates:
                 args._inferred_class_map = infer_sequence_class_map_from_candidates(
                     extracted.candidates,
@@ -1082,6 +1084,48 @@ def _maybe_set_official_validation_template_from_truth(
     args._official_validation_template = truth.rows
 
 
+def _maybe_set_official_validation_template_from_native_images(
+    args: argparse.Namespace,
+    extracted,
+) -> None:
+    template = _native_image_timestamp_template_frame(extracted)
+    if template is None:
+        return
+    _maybe_set_official_validation_template_from_frames(args, [template])
+
+
+def _maybe_set_official_validation_template_from_frames(
+    args: argparse.Namespace,
+    frames: list[pd.DataFrame],
+) -> None:
+    if getattr(args, "_official_validation_template", None) is not None:
+        return
+    if _official_validation_template_path(args) is not None:
+        return
+    rows = [frame for frame in frames if frame is not None and not frame.empty]
+    if not rows:
+        return
+    args._official_validation_template = normalize_truth_columns(
+        pd.concat(rows, ignore_index=True)
+        .drop_duplicates(subset=["sequence_id", "time_s"])
+        .sort_values(["sequence_id", "time_s"])
+        .reset_index(drop=True)
+    )
+
+
+def _native_image_timestamp_template_frame(extracted) -> pd.DataFrame | None:
+    image_timestamps = getattr(extracted, "image_timestamps", None)
+    if image_timestamps is None or getattr(image_timestamps, "empty", True):
+        return None
+    if not {"sequence_id", "time_s"}.issubset(set(image_timestamps.columns)):
+        return None
+    template = image_timestamps[["sequence_id", "time_s"]].copy()
+    template["x_m"] = 0.0
+    template["y_m"] = 0.0
+    template["z_m"] = 0.0
+    return template
+
+
 def _run_explicit_files(args: argparse.Namespace):
     frames = [load_candidate_csv(path) for path in args.candidate_csv]
     frames.extend(load_candidate_file(path) for path in args.candidate_file)
@@ -1304,9 +1348,13 @@ def _run_sequence_root(args: argparse.Namespace):
     candidate_frames = []
     truth_frames = []
     native_manifests = []
+    native_image_template_frames = []
     for paths in sequences:
         if paths.native_topic_map_jsons:
-            candidates, truth, manifest_path = _load_native_sequence_export(args, paths)
+            candidates, truth, manifest_path, extracted = _load_native_sequence_export(
+                args,
+                paths,
+            )
             native_manifests.append(
                 {
                     "sequence_id": paths.sequence_id,
@@ -1318,6 +1366,9 @@ def _run_sequence_root(args: argparse.Namespace):
             candidate_frames.append(candidates)
             if truth is not None:
                 truth_frames.append(truth)
+            image_template = _native_image_timestamp_template_frame(extracted)
+            if image_template is not None:
+                native_image_template_frames.append(image_template)
         if _has_exported_sequence_inputs(paths):
             candidates, truth, _calibration = load_sequence_export(
                 paths,
@@ -1352,6 +1403,10 @@ def _run_sequence_root(args: argparse.Namespace):
         manifest_summary_path.write_text(json.dumps(native_manifests, indent=2), encoding="utf-8")
         args._native_ros_sequence_manifests_json = manifest_summary_path
         _maybe_set_official_validation_template_from_truth(args, truth)
+        _maybe_set_official_validation_template_from_frames(
+            args,
+            native_image_template_frames,
+        )
     return _run_tracker_for_mode(args, candidates, truth)
 
 
@@ -1394,7 +1449,12 @@ def _load_native_sequence_export(args: argparse.Namespace, paths):
             f"sequence {paths.sequence_id!r}; inspect {manifest_path} and update "
             "the topic map to include candidate-bearing topics"
         )
-    return extracted.candidates, extracted.truth, output_dir / "native_ros_extraction_manifest.json"
+    return (
+        extracted.candidates,
+        extracted.truth,
+        output_dir / "native_ros_extraction_manifest.json",
+        extracted,
+    )
 
 
 def _native_sequence_extract_output_dir(args: argparse.Namespace, sequence_id: str) -> Path:
