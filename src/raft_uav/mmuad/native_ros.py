@@ -26,7 +26,8 @@ tracking logs:
 * ``sensor_msgs/msg/MultiDOFJointState`` /
   ``trajectory_msgs/msg/MultiDOFJointTrajectory`` -> transform rows.
 
-Unknown topics are recorded in the extraction manifest and skipped.
+Unsupported and missing topic-map topics are recorded in the extraction
+manifest and skipped.
 """
 
 from __future__ import annotations
@@ -142,7 +143,20 @@ def extract_native_rosbag_topic_map(
         output.mkdir(parents=True, exist_ok=True)
 
     with AnyReader([Path(bag_path)]) as reader:
-        topic_connections = [connection for connection in reader.connections if connection.topic in by_topic]
+        reader_topics = {str(connection.topic) for connection in reader.connections}
+        for topic, spec in by_topic.items():
+            if topic in reader_topics:
+                continue
+            extracted.append(
+                {
+                    "topic": topic,
+                    "kind": str(spec.get("kind", "candidate")).strip().lower(),
+                    "status": "missing_topic",
+                }
+            )
+        topic_connections = [
+            connection for connection in reader.connections if connection.topic in by_topic
+        ]
         native_camera_models, camera_info_messages = _camera_models_from_camera_info_topics(
             reader,
             topic_connections=topic_connections,
