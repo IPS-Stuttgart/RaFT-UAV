@@ -11000,6 +11000,61 @@ def test_native_ros_position_message_to_rows_expands_pose_array_parent_header() 
     assert rows[1]["z_m"] == 6.0
 
 
+def test_native_ros_position_message_to_rows_preserves_odometry_metadata() -> None:
+    pose_covariance = [0.0] * 36
+    twist_covariance = [0.0] * 36
+    pose_covariance[0] = 4.0
+    pose_covariance[7] = 9.0
+    pose_covariance[14] = 16.0
+    twist_covariance[0] = 1.0
+    twist_covariance[7] = 2.0
+    twist_covariance[14] = 3.0
+    twist_covariance[21] = 0.01
+    twist_covariance[28] = 0.02
+    twist_covariance[35] = 0.03
+    odometry = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=42, nanosec=500_000_000),
+            frame_id="map",
+        ),
+        child_frame_id="uav_base",
+        pose=SimpleNamespace(
+            pose=SimpleNamespace(position=SimpleNamespace(x=1.0, y=2.0, z=3.0)),
+            covariance=pose_covariance,
+        ),
+        twist=SimpleNamespace(
+            twist=SimpleNamespace(
+                linear=SimpleNamespace(x=7.0, y=8.0, z=9.0),
+                angular=SimpleNamespace(x=0.1, y=0.2, z=0.3),
+            ),
+            covariance=twist_covariance,
+        ),
+    )
+
+    rows = position_message_to_rows(
+        odometry,
+        sequence_id="seq_odom",
+        time_s=1.0,
+        frame_id="map",
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["sequence_id"] == "seq_odom"
+    assert row["time_s"] == 1.0
+    assert row["x_m"] == 1.0
+    assert row["y_m"] == 2.0
+    assert row["z_m"] == 3.0
+    assert row["frame_id"] == "map"
+    assert row["child_frame_id"] == "uav_base"
+    assert row["std_xy_m"] == pytest.approx(3.0)
+    assert row["std_z_m"] == pytest.approx(4.0)
+    assert row["linear_velocity_x_m_s"] == pytest.approx(7.0)
+    assert row["angular_velocity_z_rad_s"] == pytest.approx(0.3)
+    assert row["linear_velocity_covariance_yy"] == pytest.approx(2.0)
+    assert row["angular_velocity_covariance_zz"] == pytest.approx(0.03)
+
+
 def test_native_ros_geodetic_message_to_rows_projects_navsatfix() -> None:
     projector = LocalENUProjector(35.0, -78.0, 100.0)
     message = SimpleNamespace(
