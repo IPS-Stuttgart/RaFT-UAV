@@ -10,6 +10,7 @@ tracking logs:
 * ``sensor_msgs/msg/CameraInfo`` -> camera intrinsics for native Detection2D;
 * ``sensor_msgs/msg/Image`` / ``CompressedImage`` -> timestamp template rows;
 * common ROS audio messages -> timestamp inventory rows;
+* ``sensor_msgs/msg/Imu`` -> timestamp/kinematics inventory rows;
 * common polar/range-azimuth radar messages -> polar radar candidates;
 * ``sensor_msgs/msg/NavSatFix`` -> geodetic rows projected into local ENU;
 * ``geographic_msgs/msg/GeoPointStamped`` / ``GeoPoseStamped`` -> local ENU rows;
@@ -69,6 +70,7 @@ class NativeRosExtraction:
     manifest: dict[str, Any]
     image_timestamps: pd.DataFrame | None = None
     audio_timestamps: pd.DataFrame | None = None
+    imu_timestamps: pd.DataFrame | None = None
 
 
 def extract_native_rosbag_topic_map(
@@ -105,6 +107,9 @@ def extract_native_rosbag_topic_map(
         Extract native audio message timestamps into CSV inventory artifacts.
         This is timestamp/sample metadata only; acoustic detections remain
         external candidate exports.
+    ``imu_timestamps`` / ``imu_timestamp_inventory``
+        Extract native ``sensor_msgs/msg/Imu`` timestamps and kinematics into
+        CSV inventory artifacts. This is raw sensor metadata only.
     ``navsatfix_truth`` / ``geopoint_truth`` / ``geopose_truth`` /
     ``navsatfix_candidate`` / ``geopoint_candidate`` / ``geopose_candidate``
         Project geodetic GPS/geographic positions into local ENU rows. These
@@ -158,6 +163,7 @@ def extract_native_rosbag_topic_map(
     truth_rows: list[dict[str, Any]] = []
     image_timestamp_rows: list[dict[str, Any]] = []
     audio_timestamp_rows: list[dict[str, Any]] = []
+    imu_timestamp_rows: list[dict[str, Any]] = []
     extracted: list[dict[str, Any]] = []
     sequence_id = str(payload.get("sequence_id", Path(bag_path).stem))
     output = Path(output_dir) if output_dir is not None else None
@@ -588,6 +594,17 @@ def extract_native_rosbag_topic_map(
                     )
                     audio_timestamp_rows.extend(rows_for_message)
                     rows = len(rows_for_message)
+                elif _is_imu_timestamp_kind(kind):
+                    rows_for_message = imu_message_to_timestamp_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        topic=str(connection.topic),
+                        source=source,
+                        message_index=replay_message_counts[str(connection.topic)] - 1,
+                    )
+                    imu_timestamp_rows.extend(rows_for_message)
+                    rows = len(rows_for_message)
                 elif kind in {"marker_truth", "marker_array_truth"}:
                     rows_for_message = marker_message_to_rows(
                         message,
@@ -779,6 +796,9 @@ def extract_native_rosbag_topic_map(
     audio_timestamps = (
         pd.DataFrame.from_records(audio_timestamp_rows) if audio_timestamp_rows else None
     )
+    imu_timestamps = (
+        pd.DataFrame.from_records(imu_timestamp_rows) if imu_timestamp_rows else None
+    )
     manifest = {
         "schema": "raft-uav-mmuad-native-ros-extraction-v1",
         "bag_path": str(bag_path),
@@ -787,6 +807,7 @@ def extract_native_rosbag_topic_map(
         "truth_rows": int(len(truth.rows)) if truth is not None else 0,
         "image_timestamp_rows": int(len(image_timestamps)) if image_timestamps is not None else 0,
         "audio_timestamp_rows": int(len(audio_timestamps)) if audio_timestamps is not None else 0,
+        "imu_timestamp_rows": int(len(imu_timestamps)) if imu_timestamps is not None else 0,
         "extracted_messages": extracted,
     }
     if output is not None:
@@ -807,6 +828,9 @@ def extract_native_rosbag_topic_map(
         if audio_timestamps is not None:
             audio_timestamps.to_csv(output / "native_ros_audio_timestamps.csv", index=False)
             manifest["audio_timestamps_csv"] = str(output / "native_ros_audio_timestamps.csv")
+        if imu_timestamps is not None:
+            imu_timestamps.to_csv(output / "native_ros_imu_timestamps.csv", index=False)
+            manifest["imu_timestamps_csv"] = str(output / "native_ros_imu_timestamps.csv")
         (output / "native_ros_extraction_manifest.json").write_text(
             json.dumps(manifest, indent=2), encoding="utf-8"
         )
@@ -816,6 +840,7 @@ def extract_native_rosbag_topic_map(
         manifest=manifest,
         image_timestamps=image_timestamps,
         audio_timestamps=audio_timestamps,
+        imu_timestamps=imu_timestamps,
     )
 
 
@@ -856,6 +881,19 @@ def _is_audio_timestamp_kind(kind: str) -> bool:
     }
 
 
+def _is_imu_timestamp_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "imu_timestamp",
+        "imu_timestamps",
+        "imu_frame",
+        "imu_frames",
+        "imu_frame_timestamp",
+        "imu_frame_timestamps",
+        "imu_timestamp_inventory",
+    }
+
+
 def image_message_to_timestamp_rows(
     message: Any,
     *,
@@ -892,6 +930,53 @@ def image_message_to_timestamp_rows(
     data_length = _sequence_length(data)
     if data_length is not None:
         row["data_length"] = data_length
+    return [row]
+
+
+def imu_message_to_timestamp_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    topic: str,
+    source: str,
+    message_index: int,
+) -> list[dict[str, Any]]:
+    """Convert a native ROS IMU message into timestamp/kinematics metadata."""
+
+    row: dict[str, Any] = {
+        "sequence_id": str(sequence_id),
+        "time_s": float(time_s),
+        "topic": str(topic),
+        "source": str(source),
+        "message_index": int(message_index),
+    }
+    frame_id = _message_frame_id(message)
+    if frame_id not in (None, ""):
+        row["frame_id"] = str(frame_id)
+    _add_vector_components(
+        row,
+        "orientation",
+        _field_value(message, "orientation"),
+        components=("x", "y", "z", "w"),
+    )
+    _add_vector_components(
+        row,
+        "angular_velocity",
+        _field_value(message, "angular_velocity"),
+        components=("x", "y", "z"),
+        suffix="_rad_s",
+    )
+    _add_vector_components(
+        row,
+        "linear_acceleration",
+        _field_value(message, "linear_acceleration"),
+        components=("x", "y", "z"),
+        suffix="_m_s2",
+    )
+    _add_covariance_diagonal(row, "orientation_covariance", message)
+    _add_covariance_diagonal(row, "angular_velocity_covariance", message)
+    _add_covariance_diagonal(row, "linear_acceleration_covariance", message)
     return [row]
 
 
@@ -948,6 +1033,39 @@ def audio_message_to_timestamp_rows(
     if duration_s is not None:
         row["duration_s"] = duration_s
     return [row]
+
+
+def _add_vector_components(
+    row: dict[str, Any],
+    prefix: str,
+    value: Any,
+    *,
+    components: tuple[str, ...],
+    suffix: str = "",
+) -> None:
+    if value is None:
+        return
+    for component in components:
+        parsed = _field_float(value, component)
+        if parsed is not None and math.isfinite(parsed):
+            row[f"{prefix}_{component}{suffix}"] = parsed
+
+
+def _add_covariance_diagonal(row: dict[str, Any], field_name: str, message: Any) -> None:
+    raw = _field_value(message, field_name)
+    if raw is None or isinstance(raw, (str, bytes, bytearray, dict)):
+        return
+    try:
+        values = [float(value) for value in raw]
+    except (TypeError, ValueError):
+        return
+    if len(values) < 9:
+        return
+    prefix = field_name
+    for index, label in ((0, "xx"), (4, "yy"), (8, "zz")):
+        value = values[index]
+        if math.isfinite(value):
+            row[f"{prefix}_{label}"] = value
 
 
 def _sequence_length(value: Any) -> int | None:

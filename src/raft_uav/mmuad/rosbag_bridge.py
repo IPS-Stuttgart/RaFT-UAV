@@ -327,6 +327,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "camera_detections_candidate"
     if _looks_like_audio_timestamp_topic(name, msg_type):
         return "audio_timestamps"
+    if _looks_like_imu_timestamp_topic(name, msg_type):
+        return "imu_timestamps"
     if _looks_like_image_timestamp_topic(name, msg_type):
         return "image_timestamps"
     if "detection3darray" in compact_type:
@@ -500,6 +502,18 @@ def _looks_like_audio_timestamp_topic(name: str, msg_type: str) -> bool:
             "audiosample",
             "sounddata",
         )
+    )
+
+
+def _looks_like_imu_timestamp_topic(name: str, msg_type: str) -> bool:
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    name_tokens = set(re.split(r"[^a-z0-9]+", name.lower()))
+    name_tokens.discard("")
+    return (
+        compact_type.endswith("/imu")
+        or compact_type.endswith("msg/imu")
+        or "imumsg" in compact_type
+        or "imu" in name_tokens
     )
 
 
