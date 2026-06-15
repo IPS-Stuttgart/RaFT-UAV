@@ -283,9 +283,10 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_pcd_smoke
 ```
 
-This is still an exported-file bridge for point-cloud files. Native ROS Livox
-CustomMsg topics are handled by the native extraction path described below;
-undocumented raw Livox binary packets still need dataset-specific decoding.
+This is still an exported-file bridge for point-cloud files. Native ROS
+PointCloud2, legacy PointCloud, and Livox CustomMsg topics are handled by the
+native extraction path described below; undocumented raw Livox binary packets
+still need dataset-specific decoding.
 
 ### Split manifests
 
@@ -1102,7 +1103,7 @@ such as `id,type`, plain JSON/YAML objects such as `{"seq001": "Mavic3"}`, or
 exported row-style JSON/YAML such as
 `{"sequences": [{"id": "seq001", "type": "Mavic3"}]}`.
 
-## Native ROS And PointCloud2 Bridge
+## Native ROS And Point-Cloud Bridge
 
 The adapter also includes an optional native ROS extraction path. Normal imports
 do not require ROS or `rosbags`; when `rosbags` is installed, supported topics
@@ -1133,7 +1134,8 @@ angle units, or geodetic origins they can be passed directly to
 for workflows that first dump ROS topics to CSV/JSON tables.
 
 The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
-`pointcloud2_candidate`, `livox_ros_driver/msg/CustomMsg` and
+`pointcloud2_candidate`, legacy `sensor_msgs/msg/PointCloud` as
+`pointcloud_candidate`, `livox_ros_driver/msg/CustomMsg` and
 `livox_ros_driver2/msg/CustomMsg` as `livox_custommsg_candidate`,
 `sensor_msgs/msg/CameraInfo` as
 `camera_info_calibration` intrinsics for Detection2D back-projection,
@@ -1243,6 +1245,10 @@ time, frame/source, orientation, angular velocity, linear acceleration, and
 covariance-diagonal metadata when present. These rows are likewise raw-sensor
 inventory for timing/kinematics diagnostics and are not official Track 5
 timestamp templates.
+Native `pointcloud_candidate` topic-map entries decode legacy
+`sensor_msgs/msg/PointCloud` `points[]` arrays, preserve channel values such as
+`intensity` in the intermediate point rows, and cluster those points through the
+same centroid bridge used by PointCloud2 and exported PCD/PLY/CSV point clouds.
 Native `laserscan_candidate` topic-map entries convert finite, in-range
 `sensor_msgs/msg/LaserScan` returns into candidate rows through the polar radar
 bridge. The default azimuth convention is `x-forward-left-positive`, matching

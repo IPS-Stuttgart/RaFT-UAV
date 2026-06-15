@@ -316,6 +316,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "livox_custommsg_candidate"
     if "pointcloud2" in msg_type:
         return "pointcloud2_candidate"
+    if _looks_like_legacy_pointcloud_topic(name, msg_type):
+        return "pointcloud_candidate"
     if _looks_like_laserscan_topic(name, msg_type):
         return "laserscan_candidate"
     if _looks_like_polar_radar_topic(name, msg_type):
@@ -427,6 +429,10 @@ def _is_pointcloud_topic_kind(kind: str) -> bool:
     normalized = str(kind).strip().lower()
     return normalized in {
         "pointcloud2_candidate",
+        "pointcloud_candidate",
+        "pointcloud1_candidate",
+        "legacy_pointcloud_candidate",
+        "sensor_msgs_pointcloud_candidate",
         "livox_custom_candidate",
         "livox_custommsg_candidate",
         "livox_custom_pointcloud_candidate",
@@ -438,6 +444,15 @@ def _looks_like_livox_custom_topic(name: str, msg_type: str) -> bool:
     text = f"{name} {msg_type}".lower().replace("_", "").replace("-", "")
     return "livox" in text and (
         "custommsg" in text or "custompoint" in text or "custom" in text
+    )
+
+
+def _looks_like_legacy_pointcloud_topic(name: str, msg_type: str) -> bool:
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    return (
+        compact_type.endswith("/pointcloud")
+        or compact_type.endswith("msg/pointcloud")
+        or compact_type.endswith("sensor_msgs/msg/pointcloud")
     )
 
 
