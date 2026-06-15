@@ -27,6 +27,11 @@ def main(argv: list[str] | None = None) -> int:
         help="official template/results file for timestamp coverage",
     )
     parser.add_argument("--class-map", type=Path, help="sequence-to-class map CSV/JSON/YAML")
+    parser.add_argument(
+        "--official-upload-manifest",
+        type=Path,
+        help="mmuad_official_upload_manifest.json to verify with the scorecard",
+    )
     parser.add_argument("--allow-csv-submission", action="store_true")
     parser.add_argument("--timestamp-tolerance-s", type=float, default=1.0e-6)
     parser.add_argument("--nearest-time-delta-s", type=float, default=0.5)
@@ -50,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         truth_path=args.truth,
         template_path=args.template,
         class_map_path=args.class_map,
+        upload_manifest_path=args.official_upload_manifest,
         require_zip=not args.allow_csv_submission,
         timestamp_tolerance_s=args.timestamp_tolerance_s,
         max_time_delta_s=args.nearest_time_delta_s,
@@ -67,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     print("track5_scorecard=ok")
     print(f"leaderboard_ready={summary['scorecard_leaderboard_ready']}")
     print(f"codabench_upload_ready={summary['codabench_upload_ready']}")
+    if summary.get("upload_manifest_valid") is not None:
+        print(f"upload_manifest_valid={summary['upload_manifest_valid']}")
     pooled = (summary.get("public_track5") or {}).get("pooled", {})
     if "pose_mse_loss_m2" in pooled:
         print(f"pose_mse_loss_m2={pooled['pose_mse_loss_m2']}")
