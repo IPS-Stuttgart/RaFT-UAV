@@ -329,6 +329,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "detection3d_array_truth" if truth_like else "detection3d_array_candidate"
     if "detection3d" in compact_type:
         return "detection3d_truth" if truth_like else "detection3d_candidate"
+    if _looks_like_tracked_objects_topic(name, msg_type):
+        return "tracked_objects_truth" if truth_like else "tracked_objects_candidate"
     if compact_type.endswith("markerarray"):
         return "marker_array_truth" if truth_like else "marker_array_candidate"
     if compact_type.endswith("marker"):
@@ -419,6 +421,22 @@ def _looks_like_polar_radar_topic(name: str, msg_type: str) -> bool:
         )
     )
     return radar_like and polar_like
+
+
+def _looks_like_tracked_objects_topic(name: str, msg_type: str) -> bool:
+    text = f"{name} {msg_type}".lower().replace("_", "").replace("-", "")
+    return any(
+        token in text
+        for token in (
+            "trackedobjects",
+            "trackedobjectarray",
+            "objectarray",
+            "detectedobjects",
+            "detectedobjectarray",
+            "perceptionobjects",
+            "perceptionobjectarray",
+        )
+    )
 
 
 def _is_camera_detection_kind(kind: str) -> bool:
