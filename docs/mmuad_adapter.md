@@ -378,8 +378,9 @@ NumPy exports. It also infers timestamps from filenames when possible and
 reports what each sequence is missing for a tracking smoke test. Point-cloud
 inventory includes common PCD, PLY, LAS/LAZ, and simple float32 `.bin` exports.
 Audio inventory covers common WAV/FLAC/AAC/MP3 recordings for evidence
-gathering; acoustic detections still need to be exported as candidate tables
-before tracking.
+gathering, and native ROS audio topics can be extracted as timestamp/sample
+inventory rows; acoustic detections still need to be exported as candidate
+tables before tracking.
 
 ### Binary PCD, PLY, LAS, BIN, and NumPy point clouds
 
@@ -1134,6 +1135,8 @@ The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
 `camera_info_calibration` intrinsics for Detection2D back-projection,
 `sensor_msgs/msg/Image` and `sensor_msgs/msg/CompressedImage` as
 `image_timestamps` timestamp/template inventory rows,
+common audio messages such as `audio_common_msgs/msg/AudioData` and
+`audio_common_msgs/msg/AudioStamped` as `audio_timestamps` inventory rows,
 common custom polar/range-azimuth radar message shapes as
 `radar_polar_candidate` or `polar_radar_candidate`,
 `sensor_msgs/msg/NavSatFix` as `navsatfix_truth` or
@@ -1221,6 +1224,11 @@ timestamp template that can be passed as `--official-validation-template-file`
 or used automatically by the CLI for official validation and
 `--ug2-official-complete-to-sequence-timestamps` when candidate rows are present
 but no truth/template file was provided.
+When the topic map includes native audio timestamp topics, extraction writes
+`native_ros_audio_timestamps.csv` with message time, frame/source, sample-rate,
+channel, byte/sample count, and duration metadata when present. These rows are
+only raw-sensor inventory; they are not used as official Track 5 timestamp
+templates and do not replace an acoustic detector.
 Sequence-root mode can also run native extraction automatically when each
 sequence folder contains one native `topic_map*.json/yaml` file and one ROS bag
 or recording file. Per-sequence native manifests are written below

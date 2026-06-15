@@ -7247,6 +7247,111 @@ def test_native_ros_extraction_supports_image_timestamp_topics(
     )
 
 
+def test_native_ros_extraction_supports_audio_timestamp_topics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_audio.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map_native.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_audio",
+                "exports": [
+                    {
+                        "topic": "/microphone/audio",
+                        "kind": "audio_timestamps",
+                        "source": "mic",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    audio_connection = SimpleNamespace(
+        topic="/microphone/audio",
+        msgtype="audio_common_msgs/msg/AudioData",
+    )
+    audio_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=3, nanosec=250_000_000),
+            frame_id="microphone",
+        ),
+        sample_rate=48_000,
+        channels=2,
+        encoding="s16le",
+        data=bytes(range(16)),
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [audio_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [audio_connection]
+            return [(audio_connection, 3_000_000_000, b"audio")]
+
+        def deserialize(self, rawdata, msgtype):
+            assert rawdata == b"audio"
+            assert msgtype == "audio_common_msgs/msg/AudioData"
+            return audio_message
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is None
+    assert extracted.truth is None
+    assert extracted.image_timestamps is None
+    assert extracted.audio_timestamps is not None
+    rows = extracted.audio_timestamps
+    assert rows["sequence_id"].tolist() == ["seq_audio"]
+    assert rows["time_s"].tolist() == [3.25]
+    assert rows["source"].tolist() == ["mic"]
+    assert rows["frame_id"].tolist() == ["microphone"]
+    assert rows.loc[0, "sample_rate_hz"] == 48_000
+    assert rows.loc[0, "channels"] == 2
+    assert rows.loc[0, "data_length"] == 16
+    assert rows.loc[0, "byte_count"] == 16
+    assert rows.loc[0, "sample_count"] == 8
+    assert rows.loc[0, "frame_count"] == 4
+    assert rows.loc[0, "duration_s"] == pytest.approx(4 / 48_000)
+    assert extracted.manifest["candidate_rows"] == 0
+    assert extracted.manifest["truth_rows"] == 0
+    assert extracted.manifest["image_timestamp_rows"] == 0
+    assert extracted.manifest["audio_timestamp_rows"] == 1
+
+    saved_rows = pd.read_csv(output / "native_ros_audio_timestamps.csv")
+    saved_manifest = json.loads(
+        (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
+    )
+    assert saved_rows["time_s"].tolist() == [3.25]
+    assert saved_manifest["audio_timestamp_rows"] == 1
+    assert saved_manifest["audio_timestamps_csv"] == str(
+        output / "native_ros_audio_timestamps.csv"
+    )
+    assert not (output / "native_ros_audio_timestamp_template.csv").exists()
+
+
 def test_native_ros_extraction_supports_bounding_box3d_topics(
     tmp_path: Path,
     monkeypatch,
@@ -9518,6 +9623,44 @@ def test_ros2_topic_map_template_infers_image_timestamp_topics(tmp_path: Path) -
     ]
     assert payload["exports"][0]["source"] == "camera_front_image_raw"
     assert payload["exports"][1]["source"] == "camera_front_image_compressed"
+    assert all("path" not in entry for entry in payload["exports"])
+
+
+def test_ros2_topic_map_template_infers_audio_timestamp_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /microphone/audio",
+                "        type: audio_common_msgs/msg/AudioData",
+                "      message_count: 3",
+                "    - topic_metadata:",
+                "        name: /array/audio_stamped",
+                "        type: audio_common_msgs/msg/AudioStamped",
+                "      message_count: 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(
+        report,
+        tmp_path / "topic_map_template.json",
+        template_mode="native",
+    )
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "audio_timestamps",
+        "audio_timestamps",
+    ]
+    assert payload["exports"][0]["source"] == "microphone_audio"
+    assert payload["exports"][1]["source"] == "array_audio_stamped"
     assert all("path" not in entry for entry in payload["exports"])
 
 

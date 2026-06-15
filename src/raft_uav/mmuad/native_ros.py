@@ -9,6 +9,7 @@ tracking logs:
 * ``livox_ros_driver(2)/msg/CustomMsg`` -> clustered candidate detections;
 * ``sensor_msgs/msg/CameraInfo`` -> camera intrinsics for native Detection2D;
 * ``sensor_msgs/msg/Image`` / ``CompressedImage`` -> timestamp template rows;
+* common ROS audio messages -> timestamp inventory rows;
 * common polar/range-azimuth radar messages -> polar radar candidates;
 * ``sensor_msgs/msg/NavSatFix`` -> geodetic rows projected into local ENU;
 * ``geographic_msgs/msg/GeoPointStamped`` / ``GeoPoseStamped`` -> local ENU rows;
@@ -67,6 +68,7 @@ class NativeRosExtraction:
     truth: TruthFrame | None
     manifest: dict[str, Any]
     image_timestamps: pd.DataFrame | None = None
+    audio_timestamps: pd.DataFrame | None = None
 
 
 def extract_native_rosbag_topic_map(
@@ -99,6 +101,10 @@ def extract_native_rosbag_topic_map(
         Extract native ``sensor_msgs/msg/Image`` or ``CompressedImage`` frame
         timestamps into CSV/template artifacts. This is timestamp inventory
         only; image object detection remains external.
+    ``audio_timestamps`` / ``audio_timestamp_inventory``
+        Extract native audio message timestamps into CSV inventory artifacts.
+        This is timestamp/sample metadata only; acoustic detections remain
+        external candidate exports.
     ``navsatfix_truth`` / ``geopoint_truth`` / ``geopose_truth`` /
     ``navsatfix_candidate`` / ``geopoint_candidate`` / ``geopose_candidate``
         Project geodetic GPS/geographic positions into local ENU rows. These
@@ -151,6 +157,7 @@ def extract_native_rosbag_topic_map(
     candidate_frames: list[CandidateFrame] = []
     truth_rows: list[dict[str, Any]] = []
     image_timestamp_rows: list[dict[str, Any]] = []
+    audio_timestamp_rows: list[dict[str, Any]] = []
     extracted: list[dict[str, Any]] = []
     sequence_id = str(payload.get("sequence_id", Path(bag_path).stem))
     output = Path(output_dir) if output_dir is not None else None
@@ -570,6 +577,17 @@ def extract_native_rosbag_topic_map(
                     )
                     image_timestamp_rows.extend(rows_for_message)
                     rows = len(rows_for_message)
+                elif _is_audio_timestamp_kind(kind):
+                    rows_for_message = audio_message_to_timestamp_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        topic=str(connection.topic),
+                        source=source,
+                        message_index=replay_message_counts[str(connection.topic)] - 1,
+                    )
+                    audio_timestamp_rows.extend(rows_for_message)
+                    rows = len(rows_for_message)
                 elif kind in {"marker_truth", "marker_array_truth"}:
                     rows_for_message = marker_message_to_rows(
                         message,
@@ -758,6 +776,9 @@ def extract_native_rosbag_topic_map(
     image_timestamps = (
         pd.DataFrame.from_records(image_timestamp_rows) if image_timestamp_rows else None
     )
+    audio_timestamps = (
+        pd.DataFrame.from_records(audio_timestamp_rows) if audio_timestamp_rows else None
+    )
     manifest = {
         "schema": "raft-uav-mmuad-native-ros-extraction-v1",
         "bag_path": str(bag_path),
@@ -765,6 +786,7 @@ def extract_native_rosbag_topic_map(
         "candidate_rows": int(len(candidates.rows)) if candidates is not None else 0,
         "truth_rows": int(len(truth.rows)) if truth is not None else 0,
         "image_timestamp_rows": int(len(image_timestamps)) if image_timestamps is not None else 0,
+        "audio_timestamp_rows": int(len(audio_timestamps)) if audio_timestamps is not None else 0,
         "extracted_messages": extracted,
     }
     if output is not None:
@@ -782,6 +804,9 @@ def extract_native_rosbag_topic_map(
             manifest["image_timestamp_template_csv"] = str(
                 output / "native_ros_image_timestamp_template.csv"
             )
+        if audio_timestamps is not None:
+            audio_timestamps.to_csv(output / "native_ros_audio_timestamps.csv", index=False)
+            manifest["audio_timestamps_csv"] = str(output / "native_ros_audio_timestamps.csv")
         (output / "native_ros_extraction_manifest.json").write_text(
             json.dumps(manifest, indent=2), encoding="utf-8"
         )
@@ -790,6 +815,7 @@ def extract_native_rosbag_topic_map(
         truth=truth,
         manifest=manifest,
         image_timestamps=image_timestamps,
+        audio_timestamps=audio_timestamps,
     )
 
 
@@ -812,6 +838,21 @@ def _is_image_timestamp_kind(kind: str) -> bool:
         "image_timestamp_template",
         "compressed_image_timestamp",
         "compressed_image_timestamps",
+    }
+
+
+def _is_audio_timestamp_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "audio_timestamp",
+        "audio_timestamps",
+        "audio_frame",
+        "audio_frames",
+        "audio_frame_timestamp",
+        "audio_frame_timestamps",
+        "audio_timestamp_inventory",
+        "audio_sample_timestamp",
+        "audio_sample_timestamps",
     }
 
 
@@ -854,6 +895,61 @@ def image_message_to_timestamp_rows(
     return [row]
 
 
+def audio_message_to_timestamp_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    topic: str,
+    source: str,
+    message_index: int,
+) -> list[dict[str, Any]]:
+    """Convert a native ROS audio message into timestamp/sample metadata."""
+
+    row: dict[str, Any] = {
+        "sequence_id": str(sequence_id),
+        "time_s": float(time_s),
+        "topic": str(topic),
+        "source": str(source),
+        "message_index": int(message_index),
+    }
+    frame_id = _message_frame_id(message)
+    if frame_id not in (None, ""):
+        row["frame_id"] = str(frame_id)
+    for output_key, names in {
+        "encoding": ("encoding", "sample_format", "format"),
+        "sample_rate_hz": ("sample_rate", "sample_rate_hz", "rate", "frequency"),
+        "channels": ("channels", "channel_count", "num_channels"),
+        "layout": ("layout",),
+    }.items():
+        value = _field_value(message, *names)
+        if value not in (None, ""):
+            row[output_key] = value
+    data = _field_value(message, "data", "samples", "audio", "frames")
+    data_length = _sequence_length(data)
+    if data_length is not None:
+        row["data_length"] = data_length
+    sample_count, frame_count, byte_count = _audio_sample_and_frame_counts(
+        data,
+        data_length,
+        channels=_optional_positive_int(row.get("channels")),
+        encoding=row.get("encoding"),
+    )
+    if byte_count is not None:
+        row["byte_count"] = byte_count
+    if sample_count is not None:
+        row["sample_count"] = sample_count
+    if frame_count is not None:
+        row["frame_count"] = frame_count
+    duration_s = _audio_duration_s(
+        frame_count=frame_count,
+        sample_rate_hz=_optional_positive_float(row.get("sample_rate_hz")),
+    )
+    if duration_s is not None:
+        row["duration_s"] = duration_s
+    return [row]
+
+
 def _sequence_length(value: Any) -> int | None:
     if value is None:
         return None
@@ -861,6 +957,75 @@ def _sequence_length(value: Any) -> int | None:
         return int(len(value))
     except TypeError:
         return None
+
+
+def _audio_sample_and_frame_counts(
+    data: Any,
+    data_length: int | None,
+    *,
+    channels: int | None,
+    encoding: Any,
+) -> tuple[int | None, int | None, int | None]:
+    if data_length is None:
+        return None, None, None
+    byte_count = int(data_length) if isinstance(data, (bytes, bytearray, memoryview)) else None
+    if byte_count is not None:
+        bytes_per_sample = _audio_bytes_per_sample(encoding)
+        if bytes_per_sample is None:
+            return None, None, byte_count
+        sample_count = int(byte_count) // int(bytes_per_sample)
+    else:
+        sample_count = int(data_length)
+    if channels is None or channels <= 1:
+        return sample_count, sample_count, byte_count
+    return sample_count, int(sample_count) // int(channels), byte_count
+
+
+def _audio_bytes_per_sample(encoding: Any) -> int | None:
+    normalized = str(encoding or "").strip().lower().replace("-", "").replace("_", "")
+    if not normalized:
+        return None
+    if any(token in normalized for token in ("float64", "f64", "double")):
+        return 8
+    if any(token in normalized for token in ("float32", "f32", "32")):
+        return 4
+    if "24" in normalized:
+        return 3
+    if "16" in normalized:
+        return 2
+    if "8" in normalized:
+        return 1
+    return None
+
+
+def _audio_duration_s(
+    *,
+    frame_count: int | None,
+    sample_rate_hz: float | None,
+) -> float | None:
+    if frame_count is None or sample_rate_hz is None or sample_rate_hz <= 0.0:
+        return None
+    return float(frame_count) / float(sample_rate_hz)
+
+
+def _optional_positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _optional_positive_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        return None
+    return parsed
 
 
 def _image_timestamp_template_rows(image_timestamps: pd.DataFrame) -> pd.DataFrame:
