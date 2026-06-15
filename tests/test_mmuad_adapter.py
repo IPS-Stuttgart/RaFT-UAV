@@ -59,6 +59,7 @@ from raft_uav.mmuad.native_ros import (
     multidof_message_to_rows,
     position_message_to_row,
     position_message_to_rows,
+    pointcloud_message_to_points,
     radar_polar_message_to_rows,
     tracked_objects_message_to_rows,
 )
@@ -8536,6 +8537,37 @@ def test_ros2_topic_map_template_infers_livox_custom_topics(tmp_path: Path) -> N
     assert export["source"] == "livox_lidar"
 
 
+def test_ros2_topic_map_template_infers_legacy_pointcloud_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /radar/legacy_points",
+                "        type: sensor_msgs/msg/PointCloud",
+                "      message_count: 4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(
+        report,
+        tmp_path / "topic_map_template.json",
+        template_mode="native",
+    )
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    export = payload["exports"][0]
+    assert export["kind"] == "pointcloud_candidate"
+    assert export["source"] == "radar_legacy_points"
+    assert "path" not in export
+
+
 def test_native_ros_extraction_supports_detection2d_camera_candidates(
     tmp_path: Path,
     monkeypatch,
@@ -9114,6 +9146,127 @@ def test_native_ros_livox_custom_message_to_points_accepts_custom_points() -> No
     assert rows[0]["livox_offset_time"] == 10_000
     assert rows[0]["livox_tag"] == 7
     assert rows[0]["livox_line"] == 2
+
+
+def test_native_ros_pointcloud_message_to_points_accepts_legacy_points() -> None:
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=7, nanosec=250_000_000)),
+        points=[
+            SimpleNamespace(x=1.0, y=2.0, z=3.0),
+            SimpleNamespace(x=4.0, y=5.0, z=6.0),
+        ],
+        channels=[
+            SimpleNamespace(name="intensity", values=[42.0, 24.0]),
+            SimpleNamespace(name="ring id", values=[1.0, 2.0]),
+        ],
+    )
+
+    rows = pointcloud_message_to_points(
+        message,
+        sequence_id="seq_pointcloud",
+        time_s=9.0,
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["sequence_id"] == "seq_pointcloud"
+    assert rows[0]["time_s"] == 7.25
+    assert rows[0]["x_m"] == 1.0
+    assert rows[0]["y_m"] == 2.0
+    assert rows[0]["z_m"] == 3.0
+    assert rows[0]["pointcloud_point_index"] == 0
+    assert rows[0]["intensity"] == 42.0
+    assert rows[0]["pointcloud_channel_intensity"] == 42.0
+    assert rows[0]["pointcloud_channel_ring_id"] == 1.0
+    assert rows[1]["pointcloud_point_index"] == 1
+    assert rows[1]["intensity"] == 24.0
+
+
+def test_native_ros_extraction_supports_legacy_pointcloud_candidates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_pointcloud_native.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_pointcloud_native",
+                "exports": [
+                    {
+                        "topic": "/radar/legacy_points",
+                        "kind": "pointcloud_candidate",
+                        "source": "legacy_points",
+                        "voxel_size_m": 1.0,
+                        "min_points": 3,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    connection = SimpleNamespace(
+        topic="/radar/legacy_points",
+        msgtype="sensor_msgs/msg/PointCloud",
+    )
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=8, nanosec=0)),
+        points=[
+            SimpleNamespace(x=1.0, y=2.0, z=3.0),
+            SimpleNamespace(x=1.2, y=2.0, z=3.0),
+            SimpleNamespace(x=1.1, y=2.1, z=3.0),
+        ],
+        channels=[SimpleNamespace(name="intensity", values=[10.0, 11.0, 12.0])],
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [connection]
+            return [(connection, 8_000_000_000, b"pointcloud")]
+
+        def deserialize(self, rawdata, msgtype):
+            assert rawdata == b"pointcloud"
+            assert msgtype == "sensor_msgs/msg/PointCloud"
+            return message
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is not None
+    rows = extracted.candidates.rows
+    assert len(rows) == 1
+    assert rows.loc[0, "sequence_id"] == "seq_pointcloud_native"
+    assert rows.loc[0, "source"] == "legacy_points"
+    assert abs(float(rows.loc[0, "x_m"]) - 1.1) < 1.0e-9
+    assert abs(float(rows.loc[0, "y_m"]) - 2.033333333333333) < 1.0e-9
+    assert abs(float(rows.loc[0, "z_m"]) - 3.0) < 1.0e-9
+    assert rows.loc[0, "confidence"] == 3.0
+    assert extracted.manifest["candidate_rows"] == 1
+    assert extracted.manifest["extracted_messages"][0]["status"] == "extracted"
+    assert extracted.manifest["extracted_messages"][0]["kind"] == "pointcloud_candidate"
+    assert (output / "native_ros_candidates.csv").exists()
 
 
 def test_native_ros_extraction_supports_livox_custom_candidates(

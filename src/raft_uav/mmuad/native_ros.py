@@ -5,7 +5,8 @@ package when available, but the rest of the MMUAD adapter imports without ROS.
 The extractor currently supports common message families that appear in UAV
 tracking logs:
 
-* ``sensor_msgs/msg/PointCloud2`` -> clustered candidate detections;
+* ``sensor_msgs/msg/PointCloud2`` / ``PointCloud`` -> clustered candidate
+  detections;
 * ``livox_ros_driver(2)/msg/CustomMsg`` -> clustered candidate detections;
 * ``sensor_msgs/msg/CameraInfo`` -> camera intrinsics for native Detection2D;
 * ``sensor_msgs/msg/Image`` / ``CompressedImage`` -> timestamp template rows;
@@ -89,6 +90,9 @@ def extract_native_rosbag_topic_map(
 
     ``pointcloud2_candidate``
         Decode ``sensor_msgs/msg/PointCloud2`` and cluster points.
+    ``pointcloud_candidate`` / ``legacy_pointcloud_candidate``
+        Decode legacy ``sensor_msgs/msg/PointCloud`` point arrays and cluster
+        them through the same point-row bridge as other point clouds.
     ``livox_custom_candidate`` / ``livox_custommsg_candidate``
         Decode common Livox CustomMsg point arrays and cluster them through the
         same point-row bridge as exported point-cloud files.
@@ -225,6 +229,31 @@ def extract_native_rosbag_topic_map(
                     )
                     candidate_frames.append(frame)
                     rows = len(frame.rows)
+                elif _is_pointcloud_candidate_kind(kind):
+                    point_rows = pointcloud_message_to_points(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                    )
+                    if point_rows:
+                        frame = point_rows_to_candidates(
+                            pd.DataFrame.from_records(point_rows),
+                            source=source,
+                            voxel_size_m=float(
+                                spec.get("voxel_size_m", spec.get("voxel_size", voxel_size_m))
+                            ),
+                            min_points=int(
+                                spec.get(
+                                    "min_cluster_points",
+                                    spec.get("min_points", min_points),
+                                )
+                            ),
+                            min_confidence=float(spec.get("min_confidence", 0.0)),
+                        )
+                        candidate_frames.append(frame)
+                        rows = len(frame.rows)
+                    else:
+                        rows = 0
                 elif kind in {
                     "livox_custom_candidate",
                     "livox_custommsg_candidate",
@@ -978,6 +1007,16 @@ def _is_laserscan_candidate_kind(kind: str) -> bool:
     }
 
 
+def _is_pointcloud_candidate_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "pointcloud_candidate",
+        "pointcloud1_candidate",
+        "legacy_pointcloud_candidate",
+        "sensor_msgs_pointcloud_candidate",
+    }
+
+
 def image_message_to_timestamp_rows(
     message: Any,
     *,
@@ -1478,6 +1517,64 @@ def livox_custom_message_to_points(
                 row[key] = value
         rows.append(row)
     return rows
+
+
+def pointcloud_message_to_points(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+) -> list[dict[str, Any]]:
+    """Convert legacy sensor_msgs/PointCloud messages into normalized point rows."""
+
+    parent_time_s = _message_stamp_time_s(message)
+    base_time_s = parent_time_s if parent_time_s is not None else float(time_s)
+    points = _field_sequence(message, ("points", "point", "cloud", "pointcloud"))
+    if not points:
+        return []
+    channels = _pointcloud_channel_values(message)
+    rows: list[dict[str, Any]] = []
+    for index, point in enumerate(points):
+        xyz = _xyz_from_position(point)
+        if xyz is None:
+            continue
+        row: dict[str, Any] = {
+            "sequence_id": str(sequence_id),
+            "time_s": float(base_time_s),
+            "x_m": xyz[0],
+            "y_m": xyz[1],
+            "z_m": xyz[2],
+            "pointcloud_point_index": int(index),
+        }
+        for channel_name, values in channels.items():
+            if index >= len(values):
+                continue
+            value = values[index]
+            row[f"pointcloud_channel_{channel_name}"] = value
+            if channel_name in {"intensity", "reflectivity", "reflectance"}:
+                row["intensity"] = value
+        rows.append(row)
+    return rows
+
+
+def _pointcloud_channel_values(message: Any) -> dict[str, list[float]]:
+    channels = _field_sequence(message, ("channels", "channel"))
+    out: dict[str, list[float]] = {}
+    for channel_index, channel in enumerate(channels):
+        raw_name = _field_value(channel, "name")
+        name = _safe_metadata_name(raw_name, default=f"channel_{channel_index}")
+        values = _numeric_field_sequence(channel, ("values", "data"))
+        if values:
+            out[name] = values
+    return out
+
+
+def _safe_metadata_name(value: Any, *, default: str) -> str:
+    text = str(value or "").strip().lower()
+    safe = "".join(char if char.isalnum() else "_" for char in text).strip("_")
+    while "__" in safe:
+        safe = safe.replace("__", "_")
+    return safe or default
 
 
 def _livox_point_time_s(point: Any, *, base_time_s: float) -> float:
