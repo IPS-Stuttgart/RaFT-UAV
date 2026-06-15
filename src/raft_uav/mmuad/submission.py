@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Mapping
 from dataclasses import dataclass
+import hashlib
 from io import BytesIO
 import json
 from pathlib import Path, PurePosixPath
@@ -645,6 +646,7 @@ def validate_official_track5_submission(
     summary: dict[str, Any] = {
         "schema": "raft-uav-mmuad-official-track5-validation-v1",
         "path": str(path),
+        **_official_track5_artifact_fingerprint(path),
         "is_zip": bool(is_zip),
         "require_zip": bool(require_zip),
         "members": members,
@@ -761,6 +763,12 @@ def _read_official_track5_zip_for_validation(
             and member != "mmaud_results.csv"
         ]
         root_results_count = sum(member == "mmaud_results.csv" for member in file_members)
+        root_result_infos = [
+            info
+            for info in infos
+            if not info.is_dir()
+            and _normalized_zip_member_name(info.filename) == "mmaud_results.csv"
+        ]
         summary = {
             "file_members": file_members,
             "directory_members": directory_members,
@@ -782,9 +790,44 @@ def _read_official_track5_zip_for_validation(
             return None, members, summary
         if root_results_count > 1:
             errors.append("official Track 5 ZIP contains duplicate mmaud_results.csv members")
-        with archive.open("mmaud_results.csv") as handle:
-            frame = pd.read_csv(BytesIO(handle.read()))
+        result_info = root_result_infos[0]
+        with archive.open(result_info) as handle:
+            result_bytes = handle.read()
+        summary.update(_official_track5_zip_member_fingerprint(result_info, result_bytes))
+        frame = pd.read_csv(BytesIO(result_bytes))
     return frame, members, summary
+
+
+def _official_track5_artifact_fingerprint(path: Path) -> dict[str, Any]:
+    path = Path(path)
+    try:
+        stat = path.stat()
+    except OSError:
+        return {
+            "artifact_exists": False,
+            "artifact_size_bytes": None,
+            "artifact_sha256": None,
+        }
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return {
+        "artifact_exists": True,
+        "artifact_size_bytes": int(stat.st_size),
+        "artifact_sha256": digest.hexdigest(),
+    }
+
+
+def _official_track5_zip_member_fingerprint(info: Any, payload: bytes) -> dict[str, Any]:
+    return {
+        "mmaud_results_csv_size_bytes": int(getattr(info, "file_size", len(payload))),
+        "mmaud_results_csv_compressed_size_bytes": int(
+            getattr(info, "compress_size", 0)
+        ),
+        "mmaud_results_csv_crc32": f"{int(getattr(info, 'CRC', 0)):08x}",
+        "mmaud_results_csv_sha256": hashlib.sha256(payload).hexdigest(),
+    }
 
 
 def _normalized_zip_member_name(name: str) -> str:

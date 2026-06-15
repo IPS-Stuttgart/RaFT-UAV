@@ -3781,6 +3781,15 @@ def test_cli_validates_official_zip_against_sequence_timestamps(tmp_path: Path) 
     assert manifest["artifact_path"] == str(zip_path)
     assert manifest["validation_json"] == str(output / "validation.json")
     assert manifest["validation_rows_csv"] == str(output / "validation_rows.csv")
+    assert manifest["artifact_exists"] is True
+    assert manifest["artifact_size_bytes"] == summary["artifact_size_bytes"]
+    assert manifest["artifact_sha256"] == summary["artifact_sha256"]
+    assert manifest["mmaud_results_csv_size_bytes"] == summary["mmaud_results_csv_size_bytes"]
+    assert manifest["mmaud_results_csv_compressed_size_bytes"] == summary[
+        "mmaud_results_csv_compressed_size_bytes"
+    ]
+    assert manifest["mmaud_results_csv_crc32"] == summary["mmaud_results_csv_crc32"]
+    assert manifest["mmaud_results_csv_sha256"] == summary["mmaud_results_csv_sha256"]
     assert manifest["codabench_upload_ready"] is True
     assert manifest["leaderboard_ready"] is True
     assert manifest["sequence_count"] == 1

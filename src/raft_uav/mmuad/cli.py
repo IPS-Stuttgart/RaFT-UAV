@@ -808,6 +808,17 @@ def _official_upload_manifest_payload(
         "validation_rows_csv": (
             str(validation_rows_path) if validation_rows_path is not None else None
         ),
+        "artifact_exists": bool(summary.get("artifact_exists", False)),
+        "artifact_size_bytes": _optional_int(summary.get("artifact_size_bytes")),
+        "artifact_sha256": summary.get("artifact_sha256"),
+        "mmaud_results_csv_size_bytes": _optional_int(
+            summary.get("mmaud_results_csv_size_bytes")
+        ),
+        "mmaud_results_csv_compressed_size_bytes": _optional_int(
+            summary.get("mmaud_results_csv_compressed_size_bytes")
+        ),
+        "mmaud_results_csv_crc32": summary.get("mmaud_results_csv_crc32"),
+        "mmaud_results_csv_sha256": summary.get("mmaud_results_csv_sha256"),
         "is_zip": bool(summary.get("is_zip", False)),
         "codabench_upload_ready": bool(summary.get("codabench_upload_ready", False)),
         "leaderboard_ready": bool(summary.get("leaderboard_ready", False)),
