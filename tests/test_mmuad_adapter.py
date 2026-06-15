@@ -7701,6 +7701,26 @@ def test_native_ros_extraction_supports_imu_timestamp_topics(
 
 
 def test_native_ros_kinematic_message_to_timestamp_rows_extracts_twist_and_accel() -> None:
+    twist_covariance = [0.0] * 36
+    accel_covariance = [0.0] * 36
+    for index, value in (
+        (0, 1.0),
+        (7, 2.0),
+        (14, 3.0),
+        (21, 0.01),
+        (28, 0.02),
+        (35, 0.03),
+    ):
+        twist_covariance[index] = value
+    for index, value in (
+        (0, 4.0),
+        (7, 5.0),
+        (14, 6.0),
+        (21, 0.04),
+        (28, 0.05),
+        (35, 0.06),
+    ):
+        accel_covariance[index] = value
     twist_message = SimpleNamespace(
         header=SimpleNamespace(frame_id="base_link"),
         child_frame_id="uav",
@@ -7708,14 +7728,18 @@ def test_native_ros_kinematic_message_to_timestamp_rows_extracts_twist_and_accel
             twist=SimpleNamespace(
                 linear=SimpleNamespace(x=1.0, y=2.0, z=3.0),
                 angular=SimpleNamespace(x=0.1, y=0.2, z=0.3),
-            )
+            ),
+            covariance=twist_covariance,
         ),
     )
     accel_message = SimpleNamespace(
         header=SimpleNamespace(frame_id="base_link"),
         accel=SimpleNamespace(
-            linear=SimpleNamespace(x=4.0, y=5.0, z=6.0),
-            angular=SimpleNamespace(x=0.4, y=0.5, z=0.6),
+            accel=SimpleNamespace(
+                linear=SimpleNamespace(x=4.0, y=5.0, z=6.0),
+                angular=SimpleNamespace(x=0.4, y=0.5, z=0.6),
+            ),
+            covariance=accel_covariance,
         ),
     )
 
@@ -7742,8 +7766,12 @@ def test_native_ros_kinematic_message_to_timestamp_rows_extracts_twist_and_accel
     assert twist_rows[0]["child_frame_id"] == "uav"
     assert twist_rows[0]["linear_velocity_x_m_s"] == pytest.approx(1.0)
     assert twist_rows[0]["angular_velocity_z_rad_s"] == pytest.approx(0.3)
+    assert twist_rows[0]["linear_velocity_covariance_yy"] == pytest.approx(2.0)
+    assert twist_rows[0]["angular_velocity_covariance_zz"] == pytest.approx(0.03)
     assert accel_rows[0]["linear_acceleration_y_m_s2"] == pytest.approx(5.0)
     assert accel_rows[0]["angular_acceleration_z_rad_s2"] == pytest.approx(0.6)
+    assert accel_rows[0]["linear_acceleration_covariance_zz"] == pytest.approx(6.0)
+    assert accel_rows[0]["angular_acceleration_covariance_yy"] == pytest.approx(0.05)
 
 
 def test_native_ros_extraction_supports_kinematic_timestamp_topics(
@@ -7781,8 +7809,14 @@ def test_native_ros_extraction_supports_kinematic_timestamp_topics(
     )
     accel_connection = SimpleNamespace(
         topic="/filter/accel",
-        msgtype="geometry_msgs/msg/AccelStamped",
+        msgtype="geometry_msgs/msg/AccelWithCovarianceStamped",
     )
+    twist_covariance = [0.0] * 36
+    accel_covariance = [0.0] * 36
+    twist_covariance[7] = 2.0
+    twist_covariance[35] = 0.03
+    accel_covariance[14] = 6.0
+    accel_covariance[21] = 0.04
     twist_message = SimpleNamespace(
         header=SimpleNamespace(
             stamp=SimpleNamespace(sec=5, nanosec=250_000_000),
@@ -7792,6 +7826,7 @@ def test_native_ros_extraction_supports_kinematic_timestamp_topics(
             linear=SimpleNamespace(x=1.0, y=2.0, z=3.0),
             angular=SimpleNamespace(x=0.1, y=0.2, z=0.3),
         ),
+        covariance=twist_covariance,
     )
     accel_message = SimpleNamespace(
         header=SimpleNamespace(
@@ -7799,8 +7834,11 @@ def test_native_ros_extraction_supports_kinematic_timestamp_topics(
             frame_id="base_link",
         ),
         accel=SimpleNamespace(
-            linear=SimpleNamespace(x=4.0, y=5.0, z=6.0),
-            angular=SimpleNamespace(x=0.4, y=0.5, z=0.6),
+            accel=SimpleNamespace(
+                linear=SimpleNamespace(x=4.0, y=5.0, z=6.0),
+                angular=SimpleNamespace(x=0.4, y=0.5, z=0.6),
+            ),
+            covariance=accel_covariance,
         ),
     )
 
@@ -7827,7 +7865,7 @@ def test_native_ros_extraction_supports_kinematic_timestamp_topics(
                 assert msgtype == "geometry_msgs/msg/TwistStamped"
                 return twist_message
             if rawdata == b"accel":
-                assert msgtype == "geometry_msgs/msg/AccelStamped"
+                assert msgtype == "geometry_msgs/msg/AccelWithCovarianceStamped"
                 return accel_message
             raise AssertionError(rawdata)
 
@@ -7852,8 +7890,12 @@ def test_native_ros_extraction_supports_kinematic_timestamp_topics(
     assert rows["time_s"].tolist() == [5.25, 6.5]
     assert rows["source"].tolist() == ["filter_twist", "filter_accel"]
     assert rows.loc[0, "linear_velocity_y_m_s"] == pytest.approx(2.0)
+    assert rows.loc[0, "linear_velocity_covariance_yy"] == pytest.approx(2.0)
+    assert rows.loc[0, "angular_velocity_covariance_zz"] == pytest.approx(0.03)
     assert rows.loc[1, "linear_acceleration_z_m_s2"] == pytest.approx(6.0)
     assert rows.loc[1, "angular_acceleration_x_rad_s2"] == pytest.approx(0.4)
+    assert rows.loc[1, "linear_acceleration_covariance_zz"] == pytest.approx(6.0)
+    assert rows.loc[1, "angular_acceleration_covariance_xx"] == pytest.approx(0.04)
     assert extracted.manifest["kinematic_timestamp_rows"] == 2
     assert extracted.manifest["candidate_rows"] == 0
     assert extracted.manifest["truth_rows"] == 0
