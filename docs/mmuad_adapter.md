@@ -1143,6 +1143,8 @@ common audio messages such as `audio_common_msgs/msg/AudioData` and
 `audio_common_msgs/msg/AudioStamped` as `audio_timestamps` inventory rows,
 `sensor_msgs/msg/Imu` as `imu_timestamps` inventory rows with orientation,
 angular velocity, linear acceleration, and covariance diagonals when present,
+`sensor_msgs/msg/LaserScan` as `laserscan_candidate` range-scan rows using
+the ROS scan convention of +X forward and positive angle left,
 common custom polar/range-azimuth radar message shapes as
 `radar_polar_candidate` or `polar_radar_candidate`,
 `sensor_msgs/msg/NavSatFix` as `navsatfix_truth` or
@@ -1240,6 +1242,12 @@ time, frame/source, orientation, angular velocity, linear acceleration, and
 covariance-diagonal metadata when present. These rows are likewise raw-sensor
 inventory for timing/kinematics diagnostics and are not official Track 5
 timestamp templates.
+Native `laserscan_candidate` topic-map entries convert finite, in-range
+`sensor_msgs/msg/LaserScan` returns into candidate rows through the polar radar
+bridge. The default azimuth convention is `x-forward-left-positive`, matching
+ROS LaserScan angles; per-topic maps can override `azimuth_convention`,
+`range_std_m`, `angle_std_deg`, and `z_std_m` when a specific sensor model is
+known.
 Sequence-root mode can also run native extraction automatically when each
 sequence folder contains one native `topic_map*.json/yaml` file and one ROS bag
 or recording file. Per-sequence native manifests are written below
@@ -1257,5 +1265,6 @@ from a misspelled or unavailable topic.
 
 This is still not a complete native ROS parser for every possible MMUAD bag. It
 is a first native message bridge for common ROS message types. Undocumented
-binary radar/Livox payloads and camera image detectors still need
+binary radar/Livox payloads, dense scan clustering beyond one candidate per
+finite LaserScan return, and camera image detectors still need
 dataset-specific work.
