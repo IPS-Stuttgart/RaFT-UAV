@@ -48,6 +48,7 @@ from raft_uav.mmuad.mot import (
     run_mmuad_multi_object_tracker,
 )
 from raft_uav.mmuad.native_ros import (
+    bounding_box3d_message_to_rows,
     detection2d_message_to_rows,
     detection3d_message_to_rows,
     extract_native_rosbag_topic_map,
@@ -6680,6 +6681,131 @@ def test_native_ros_extraction_manifest_reports_empty_matched_topics(
     assert saved["extracted_messages"] == extracted.manifest["extracted_messages"]
 
 
+def test_native_ros_extraction_supports_bounding_box3d_topics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_boxes.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map_native.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_boxes",
+                "exports": [
+                    {
+                        "topic": "/detector/boxes",
+                        "kind": "bounding_box3d_array_candidate",
+                        "source": "boxes",
+                    },
+                    {
+                        "topic": "/ground_truth/box",
+                        "kind": "bounding_box3d_truth",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate_connection = SimpleNamespace(
+        topic="/detector/boxes",
+        msgtype="vision_msgs/msg/BoundingBox3DArray",
+    )
+    truth_connection = SimpleNamespace(
+        topic="/ground_truth/box",
+        msgtype="vision_msgs/msg/BoundingBox3D",
+    )
+    candidate_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=3, nanosec=0),
+            frame_id="world",
+        ),
+        boxes=[
+            SimpleNamespace(
+                id="box-a",
+                center=SimpleNamespace(
+                    position=SimpleNamespace(x=1.0, y=2.0, z=3.0)
+                ),
+                size=SimpleNamespace(x=1.0, y=2.0, z=3.0),
+                label="quadrotor",
+                confidence=0.9,
+            )
+        ],
+    )
+    truth_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=3, nanosec=100_000_000),
+            frame_id="world",
+        ),
+        center=SimpleNamespace(position=SimpleNamespace(x=1.5, y=2.5, z=3.5)),
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [candidate_connection, truth_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [candidate_connection, truth_connection]
+            return [
+                (candidate_connection, 3_000_000_000, b"candidate-boxes"),
+                (truth_connection, 3_100_000_000, b"truth-box"),
+            ]
+
+        def deserialize(self, rawdata, msgtype):
+            if rawdata == b"candidate-boxes":
+                assert msgtype == "vision_msgs/msg/BoundingBox3DArray"
+                return candidate_message
+            if rawdata == b"truth-box":
+                assert msgtype == "vision_msgs/msg/BoundingBox3D"
+                return truth_message
+            raise AssertionError(f"unexpected rawdata: {rawdata!r}")
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is not None
+    assert extracted.truth is not None
+    candidates = extracted.candidates.rows
+    truth = extracted.truth.rows
+    assert len(candidates) == 1
+    assert len(truth) == 1
+    assert candidates.loc[0, "sequence_id"] == "seq_boxes"
+    assert candidates.loc[0, "source"] == "boxes"
+    assert candidates.loc[0, "track_id"] == "box-a"
+    assert candidates.loc[0, "x_m"] == 1.0
+    assert candidates.loc[0, "confidence"] == 0.9
+    assert candidates.loc[0, "class_name"] == "quadrotor"
+    assert truth.loc[0, "time_s"] == 3.1
+    assert truth.loc[0, "x_m"] == 1.5
+    assert extracted.manifest["candidate_rows"] == 1
+    assert extracted.manifest["truth_rows"] == 1
+    assert [row["kind"] for row in extracted.manifest["extracted_messages"]] == [
+        "bounding_box3d_array_candidate",
+        "bounding_box3d_truth",
+    ]
+    assert (output / "native_ros_candidates.csv").exists()
+    assert (output / "native_ros_truth.csv").exists()
+
+
 def test_topic_map_exports_load_json_candidates_and_truth(tmp_path: Path) -> None:
     exports = tmp_path / "exports"
     exports.mkdir()
@@ -8720,6 +8846,39 @@ def test_ros2_topic_map_template_infers_detection3d_topics(tmp_path: Path) -> No
     assert payload["exports"][1]["source"] is None
 
 
+def test_ros2_topic_map_template_infers_bounding_box3d_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /detector/boxes",
+                "        type: vision_msgs/msg/BoundingBox3DArray",
+                "      message_count: 2",
+                "    - topic_metadata:",
+                "        name: /ground_truth/box",
+                "        type: jsk_recognition_msgs/msg/BoundingBox",
+                "      message_count: 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "bounding_box3d_array_candidate",
+        "bounding_box3d_truth",
+    ]
+    assert payload["exports"][0]["source"] == "detector_boxes"
+    assert payload["exports"][1]["source"] is None
+
+
 def test_ros2_topic_map_template_infers_tracked_object_topics(tmp_path: Path) -> None:
     bag = tmp_path / "bagdir"
     bag.mkdir()
@@ -9246,6 +9405,78 @@ def test_native_ros_detection3d_message_to_rows_uses_highest_score_result() -> N
     assert len(rows) == 1
     assert rows[0]["confidence"] == 0.85
     assert rows[0]["class_name"] == "uav"
+
+
+def test_native_ros_bounding_box3d_message_to_rows_extracts_centers() -> None:
+    boxes = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=41, nanosec=250_000_000),
+            frame_id="world",
+        ),
+        boxes=[
+            SimpleNamespace(
+                id="box-1",
+                center=SimpleNamespace(
+                    position=SimpleNamespace(x=7.0, y=8.0, z=9.0)
+                ),
+                size=SimpleNamespace(x=1.5, y=2.5, z=3.5),
+                label="quadrotor",
+                confidence=0.77,
+            ),
+            SimpleNamespace(
+                header=SimpleNamespace(frame_id="camera"),
+                id="box-2",
+                center=SimpleNamespace(
+                    position=SimpleNamespace(x=1.0, y=2.0, z=3.0)
+                ),
+            ),
+        ],
+    )
+
+    rows = bounding_box3d_message_to_rows(
+        boxes,
+        sequence_id="seq_boxes",
+        time_s=1.0,
+        frame_id="world",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["sequence_id"] == "seq_boxes"
+    assert rows[0]["time_s"] == 41.25
+    assert rows[0]["x_m"] == 7.0
+    assert rows[0]["y_m"] == 8.0
+    assert rows[0]["z_m"] == 9.0
+    assert rows[0]["frame_id"] == "world"
+    assert rows[0]["box_index"] == 0
+    assert rows[0]["box_id"] == "box-1"
+    assert rows[0]["track_id"] == "box-1"
+    assert rows[0]["class_name"] == "quadrotor"
+    assert rows[0]["confidence"] == 0.77
+    assert rows[0]["box_size_x_m"] == 1.5
+    assert rows[0]["box_size_y_m"] == 2.5
+    assert rows[0]["box_size_z_m"] == 3.5
+
+
+def test_native_ros_bounding_box3d_message_to_rows_accepts_single_box() -> None:
+    box = {
+        "header": {"frame_id": "world"},
+        "box_id": "single-box",
+        "center": {"position": {"x": 1.0, "y": 2.0, "z": 3.0}},
+        "dimensions": {"x": 4.0, "y": 5.0, "z": 6.0},
+    }
+
+    rows = bounding_box3d_message_to_rows(
+        box,
+        sequence_id="seq_single_box",
+        time_s=12.0,
+        frame_id="world",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["time_s"] == 12.0
+    assert rows[0]["box_id"] == "single-box"
+    assert rows[0]["x_m"] == 1.0
+    assert rows[0]["box_size_z_m"] == 6.0
 
 
 def test_native_ros_tracked_objects_message_to_rows_extracts_kinematics() -> None:

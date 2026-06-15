@@ -1117,6 +1117,10 @@ a topic-map `camera_info_calibration` export from a native CameraInfo topic,
 `vision_msgs/msg/Detection3D` as `detection3d_truth` or
 `detection3d_candidate`, `vision_msgs/msg/Detection3DArray` as
 `detection3d_array_truth` or `detection3d_array_candidate`,
+`vision_msgs/msg/BoundingBox3D` as `bounding_box3d_truth` or
+`bounding_box3d_candidate`, `vision_msgs/msg/BoundingBox3DArray` and common
+`BoundingBoxArray` topics as `bounding_box3d_array_truth` or
+`bounding_box3d_array_candidate`,
 common tracked/detected object arrays such as `TrackedObjects`,
 `DetectedObjects`, or `ObjectArray` as `tracked_objects_truth` or
 `tracked_objects_candidate` using nested object pose/kinematics/bbox center
@@ -1148,9 +1152,10 @@ TFMessage
 topic-map entries can include `child_frame_id` or `frame_id` to select the UAV
 transform from a shared `/tf` stream; Detection3D, tracked object arrays,
 Marker, Path, and PoseArray entries can use `frame_id`, with Detection3DArray,
-tracked object arrays, MarkerArray, and PoseArray rows inheriting the parent
-message timestamp and frame. MultiDOF rows inherit the parent frame and use
-`joint_names` as row provenance and default track IDs when available. Geodetic
+BoundingBox3DArray, tracked object arrays, MarkerArray, and PoseArray rows
+inheriting the parent message timestamp and frame. MultiDOF rows inherit the
+parent frame and use `joint_names` as row provenance and default track IDs when
+available. Geodetic
 topics must include `enu_origin_lla` as `LAT,LON,ALT` or separate
 `origin_latitude_deg`, `origin_longitude_deg`, and `origin_altitude_m` fields so
 the rows can be projected into local ENU meters.

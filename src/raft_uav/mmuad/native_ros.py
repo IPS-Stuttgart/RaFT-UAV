@@ -14,6 +14,7 @@ tracking logs:
 * ``vision_msgs/msg/Detection2D`` / ``Detection2DArray`` -> calibrated camera
   detection candidates;
 * ``vision_msgs/msg/Detection3D`` / ``Detection3DArray`` -> bbox center rows;
+* ``vision_msgs/msg/BoundingBox3D`` / ``BoundingBox3DArray`` -> bbox center rows;
 * common tracked/detected object arrays -> object pose rows;
 * ``visualization_msgs/msg/Marker`` / ``MarkerArray`` -> marker position rows;
 * ``geometry_msgs/msg/Pose`` / ``PoseStamped`` /
@@ -100,6 +101,9 @@ def extract_native_rosbag_topic_map(
     ``detection3d_truth`` / ``detection3d_array_truth`` /
     ``detection3d_candidate`` / ``detection3d_array_candidate``
         Convert vision_msgs 3D detection bbox centers into truth/candidate rows.
+    ``bounding_box3d_truth`` / ``bounding_box3d_array_truth`` /
+    ``bounding_box3d_candidate`` / ``bounding_box3d_array_candidate``
+        Convert vision_msgs 3D bounding-box centers into truth/candidate rows.
     ``tracked_objects_truth`` / ``tracked_objects_candidate``
         Convert common perception/tracker object arrays with ``objects``,
         ``tracks``, ``detections``, or ``targets`` children into pose rows.
@@ -355,6 +359,66 @@ def extract_native_rosbag_topic_map(
                                 "track_id": spec.get(
                                     "track_id",
                                     row.get("detection_id", source),
+                                ),
+                                "std_xy_m": spec.get("std_xy_m", 2.0),
+                                "std_z_m": spec.get("std_z_m", 5.0),
+                                "confidence": spec.get(
+                                    "confidence",
+                                    row.get("confidence", 1.0),
+                                ),
+                                "class_name": spec.get(
+                                    "class_name",
+                                    row.get("class_name", "uav"),
+                                ),
+                            }
+                        )
+                        candidate_rows.append(row)
+                    if candidate_rows:
+                        candidate_frames.append(
+                            CandidateFrame(pd.DataFrame.from_records(candidate_rows))
+                        )
+                    rows = len(candidate_rows)
+                elif kind in {
+                    "bounding_box3d_truth",
+                    "bounding_box3d_array_truth",
+                    "boundingbox3d_truth",
+                    "boundingbox3d_array_truth",
+                    "bbox3d_truth",
+                    "bbox3d_array_truth",
+                }:
+                    rows_for_message = bounding_box3d_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        frame_id=spec.get("frame_id"),
+                    )
+                    truth_rows.extend(rows_for_message)
+                    rows = len(rows_for_message)
+                elif kind in {
+                    "bounding_box3d_candidate",
+                    "bounding_box3d_array_candidate",
+                    "boundingbox3d_candidate",
+                    "boundingbox3d_array_candidate",
+                    "bbox3d_candidate",
+                    "bbox3d_array_candidate",
+                }:
+                    rows_for_message = bounding_box3d_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        frame_id=spec.get("frame_id"),
+                    )
+                    candidate_rows = []
+                    for row in rows_for_message:
+                        row.update(
+                            {
+                                "source": source,
+                                "track_id": spec.get(
+                                    "track_id",
+                                    row.get(
+                                        "track_id",
+                                        row.get("box_id", row.get("box_index", source)),
+                                    ),
                                 ),
                                 "std_xy_m": spec.get("std_xy_m", 2.0),
                                 "std_z_m": spec.get("std_z_m", 5.0),
@@ -1399,6 +1463,54 @@ def detection3d_message_to_rows(
     return rows
 
 
+def bounding_box3d_message_to_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    frame_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Convert BoundingBox3D/BoundingBox3DArray-style messages into rows."""
+
+    boxes = _bounding_box3d_children(message)
+    if not boxes and _bounding_box3d_position(message) is not None:
+        boxes = [message]
+    parent_time_s = _message_stamp_time_s(message)
+    parent_frame_id = _message_frame_id(message)
+    rows: list[dict[str, Any]] = []
+    for box_index, box in enumerate(boxes):
+        if not _frame_filter_matches(
+            box,
+            child_frame_id=None,
+            frame_id=frame_id,
+            fallback_frame_id=parent_frame_id,
+        ):
+            continue
+        position = _bounding_box3d_position(box)
+        xyz = _xyz_from_position(position)
+        if xyz is None:
+            continue
+        box_time_s = _message_stamp_time_s(box)
+        row = {
+            "sequence_id": sequence_id,
+            "time_s": (
+                box_time_s
+                if box_time_s is not None
+                else parent_time_s
+                if parent_time_s is not None
+                else float(time_s)
+            ),
+            "x_m": xyz[0],
+            "y_m": xyz[1],
+            "z_m": xyz[2],
+            "box_index": int(box_index),
+        }
+        _add_frame_metadata(row, box, fallback_frame_id=parent_frame_id)
+        _add_bounding_box3d_metadata(row, box)
+        rows.append(row)
+    return rows
+
+
 def detection2d_message_to_rows(
     message: Any,
     *,
@@ -2077,6 +2189,64 @@ def _detection3d_position(detection: Any) -> Any | None:
     if center is None:
         return None
     return _position_from_message(center)
+
+
+def _bounding_box3d_children(message: Any) -> list[Any]:
+    for name in (
+        "boxes",
+        "bounding_boxes",
+        "boundingboxes",
+        "bboxes",
+        "boxes3d",
+        "bounding_boxes3d",
+    ):
+        values = _field_sequence(message, (name,))
+        if values:
+            return [value for value in values if value is not None]
+    return []
+
+
+def _bounding_box3d_position(box: Any) -> Any | None:
+    for source in (
+        _field_value(box, "center"),
+        _nested_field_value(box, "bbox", "center"),
+        _nested_field_value(box, "bounding_box", "center"),
+        _nested_field_value(box, "box", "center"),
+        _field_value(box, "pose"),
+        box,
+    ):
+        if source is None:
+            continue
+        position = _position_from_message(source)
+        if _xyz_from_position(position) is not None:
+            return position
+    return None
+
+
+def _add_bounding_box3d_metadata(row: dict[str, Any], box: Any) -> None:
+    box_id = _tracked_object_id(box)
+    if box_id is None:
+        box_id = _format_object_identifier(_field_value(box, "box_id", "bbox_id"))
+    if box_id is not None:
+        row["box_id"] = box_id
+        row["track_id"] = box_id
+    class_name = _tracked_object_class_name(box)
+    if class_name is not None:
+        row["class_name"] = class_name
+    confidence = _tracked_object_confidence(box)
+    if confidence is not None:
+        row["confidence"] = confidence
+    size = _field_value(box, "size", "dimensions", "scale", "extent")
+    for key, nested_names, direct_names in (
+        ("box_size_x_m", ("x", "size_x", "length"), ("size_x", "length")),
+        ("box_size_y_m", ("y", "size_y", "width"), ("size_y", "width")),
+        ("box_size_z_m", ("z", "size_z", "height"), ("size_z", "height")),
+    ):
+        value = _field_float(size, *nested_names) if size is not None else None
+        if value is None:
+            value = _field_float(box, *direct_names)
+        if value is not None:
+            row[key] = value
 
 
 def _detection2d_center(bbox: Any | None) -> tuple[float, float] | None:
