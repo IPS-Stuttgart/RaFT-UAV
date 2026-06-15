@@ -890,6 +890,9 @@ The scorecard reports `scorecard_leaderboard_ready`,
 `codabench_upload_ready`, public Track 5 pose/classification metrics, nearest
 time diagnostics, and blocking reasons. It remains a local sanity check and
 does not replace the closed Codabench runtime. When
+summary CSVs are requested, both public classification aliases
+`uav_type_accuracy` and `classification_accuracy` are written so downstream
+reports can use either name. When
 `--official-upload-manifest` is supplied, the scorecard also verifies the
 manifest fingerprints against the current ZIP and blocks readiness with
 `official_upload_manifest_invalid` if the artifact no longer matches the
