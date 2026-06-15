@@ -66,6 +66,7 @@ from raft_uav.mmuad.native_ros import (
     position_message_to_rows,
     pointcloud_message_to_points,
     radar_polar_message_to_rows,
+    range_message_to_rows,
     tracked_objects_message_to_rows,
 )
 from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates, pointcloud2_to_dataframe
@@ -9902,6 +9903,68 @@ def test_native_ros_laserscan_message_to_rows_clusters_adjacent_returns() -> Non
     assert abs(rows[1]["range_m"] - 4.05) < 1.0e-12
 
 
+def test_native_ros_range_message_to_rows_uses_topic_bearing_metadata() -> None:
+    message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=3, nanosec=250_000_000),
+            frame_id="range_link",
+        ),
+        radiation_type=0,
+        field_of_view=0.25,
+        min_range=0.2,
+        max_range=10.0,
+        range=5.5,
+    )
+
+    rows = range_message_to_rows(
+        message,
+        sequence_id="seq_range",
+        time_s=0.0,
+        angle_unit="deg",
+        azimuth=90.0,
+        elevation=5.0,
+        track_id="range-front-left",
+        confidence=0.8,
+        class_name="uav",
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["sequence_id"] == "seq_range"
+    assert row["time_s"] == pytest.approx(3.25)
+    assert row["range_m"] == pytest.approx(5.5)
+    assert row["azimuth"] == pytest.approx(90.0)
+    assert row["elevation"] == pytest.approx(5.0)
+    assert row["frame_id"] == "range_link"
+    assert row["field_of_view_rad"] == pytest.approx(0.25)
+    assert row["radiation_type"] == 0
+    assert row["track_id"] == "range-front-left"
+    assert row["confidence"] == pytest.approx(0.8)
+    assert row["class_name"] == "uav"
+
+
+def test_native_ros_range_message_to_rows_filters_invalid_ranges() -> None:
+    too_far = SimpleNamespace(range=11.0, min_range=0.1, max_range=10.0)
+    missing = SimpleNamespace(min_range=0.1, max_range=10.0)
+
+    assert (
+        range_message_to_rows(
+            too_far,
+            sequence_id="seq_range",
+            time_s=1.0,
+        )
+        == []
+    )
+    assert (
+        range_message_to_rows(
+            missing,
+            sequence_id="seq_range",
+            time_s=1.0,
+        )
+        == []
+    )
+
+
 def test_native_ros_extraction_supports_radar_polar_candidates(
     tmp_path: Path,
     monkeypatch,
@@ -9997,6 +10060,99 @@ def test_native_ros_extraction_supports_radar_polar_candidates(
     assert extracted.manifest["candidate_rows"] == 1
     assert extracted.manifest["extracted_messages"][0]["status"] == "extracted"
     assert extracted.manifest["extracted_messages"][0]["kind"] == "radar_polar_candidate"
+    assert (output / "native_ros_candidates.csv").exists()
+
+
+def test_native_ros_extraction_supports_range_candidates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_range_native.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_range_native",
+                "exports": [
+                    {
+                        "topic": "/range/front_left",
+                        "kind": "range_candidate",
+                        "source": "range_front_left",
+                        "angle_unit": "rad",
+                        "azimuth_rad": np.pi / 2.0,
+                        "elevation_rad": 0.0,
+                        "range_std_m": 0.5,
+                        "angle_std_deg": 1.0,
+                        "z_std_m": 1.5,
+                        "confidence": 0.7,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    connection = SimpleNamespace(
+        topic="/range/front_left",
+        msgtype="sensor_msgs/msg/Range",
+    )
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=4, nanosec=500_000_000)),
+        min_range=0.2,
+        max_range=20.0,
+        range=6.0,
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [connection]
+            return [(connection, 4_500_000_000, b"range")]
+
+        def deserialize(self, rawdata, msgtype):
+            assert rawdata == b"range"
+            assert msgtype == "sensor_msgs/msg/Range"
+            return message
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is not None
+    rows = extracted.candidates.rows
+    assert len(rows) == 1
+    assert rows.loc[0, "sequence_id"] == "seq_range_native"
+    assert rows.loc[0, "source"] == "range_front_left"
+    assert rows.loc[0, "track_id"] == "range_front_left"
+    assert abs(float(rows.loc[0, "x_m"])) < 1.0e-9
+    assert abs(float(rows.loc[0, "y_m"]) - 6.0) < 1.0e-9
+    assert abs(float(rows.loc[0, "z_m"])) < 1.0e-9
+    assert rows.loc[0, "std_xy_m"] == pytest.approx(0.5)
+    assert rows.loc[0, "std_z_m"] == pytest.approx(1.5)
+    assert rows.loc[0, "confidence"] == pytest.approx(0.7)
+    assert extracted.manifest["candidate_rows"] == 1
+    assert extracted.manifest["extracted_messages"][0]["status"] == "extracted"
+    assert extracted.manifest["extracted_messages"][0]["kind"] == "range_candidate"
     assert (output / "native_ros_candidates.csv").exists()
 
 
@@ -10238,6 +10394,40 @@ def test_ros2_topic_map_template_infers_laserscan_topics(tmp_path: Path) -> None
     assert export["cluster_adjacent_ranges"] is False
     assert export["min_cluster_points"] == 2
     assert export["max_cluster_range_gap_m"] == 1.0
+
+
+def test_ros2_topic_map_template_infers_range_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /range/front_left",
+                "        type: sensor_msgs/msg/Range",
+                "      message_count: 5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(
+        report,
+        tmp_path / "topic_map_template.json",
+        template_mode="native",
+    )
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    export = payload["exports"][0]
+    assert export["kind"] == "range_candidate"
+    assert export["source"] == "range_front_left"
+    assert export["angle_unit"] == "rad"
+    assert export["azimuth_convention"] == "x-forward-left-positive"
+    assert export["azimuth_rad"] == 0.0
+    assert export["elevation_rad"] == 0.0
 
 
 def test_ros2_topic_map_template_infers_point_and_transform_topics(

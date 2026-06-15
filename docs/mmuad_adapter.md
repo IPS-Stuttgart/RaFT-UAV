@@ -1170,6 +1170,9 @@ with standard 6x6 covariance diagonals when present,
 `sensor_msgs/msg/LaserScan` as `laserscan_candidate` range-scan rows using
 the ROS scan convention of +X forward and positive angle left, with optional
 adjacent-return clustering,
+`sensor_msgs/msg/Range` as `range_candidate` single-return rows using a
+topic-map bearing/elevation, defaulting to +X forward when no angles are
+provided,
 common custom polar/range-azimuth radar message shapes as
 `radar_polar_candidate` or `polar_radar_candidate`,
 `sensor_msgs/msg/NavSatFix` as `navsatfix_truth` or
@@ -1290,6 +1293,12 @@ known. Set `cluster_adjacent_ranges: true` to collapse contiguous finite
 returns into centroid candidates, with `min_cluster_points` and
 `max_cluster_range_gap_m` controlling small-cluster filtering and range-jump
 splitting.
+Native `range_candidate` topic-map entries convert finite, in-range
+`sensor_msgs/msg/Range` messages into one polar candidate per message. Use
+`azimuth_rad` / `azimuth_deg` and `elevation_rad` / `elevation_deg` in the topic
+map to place fixed range sensors in the tracking frame; angles default to zero
+with the same `x-forward-left-positive` convention as LaserScan. Topic maps can
+also override `range_std_m`, `angle_std_deg`, and `z_std_m`.
 Sequence-root mode can also run native extraction automatically when each
 sequence folder contains one native `topic_map*.json/yaml` file and one ROS bag
 or recording file. Per-sequence native manifests are written below

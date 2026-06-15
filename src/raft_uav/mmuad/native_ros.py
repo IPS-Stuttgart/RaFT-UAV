@@ -15,6 +15,7 @@ tracking logs:
 * ``geometry_msgs/msg/Twist`` / ``Accel`` -> velocity/acceleration inventory
   rows;
 * ``sensor_msgs/msg/LaserScan`` -> range-scan candidate detections;
+* ``sensor_msgs/msg/Range`` -> single range-bearing candidate detections;
 * common polar/range-azimuth radar messages -> polar radar candidates;
 * ``sensor_msgs/msg/NavSatFix`` -> geodetic rows projected into local ENU;
 * ``geographic_msgs/msg/GeoPointStamped`` / ``GeoPoseStamped`` -> local ENU rows;
@@ -109,6 +110,11 @@ def extract_native_rosbag_topic_map(
         positive counterclockwise/left by default.  Set
         ``cluster_adjacent_ranges`` to combine contiguous returns into
         centroid candidates.
+    ``range_candidate`` / ``range_sensor_candidate``
+        Decode ``sensor_msgs/msg/Range`` messages into one polar candidate per
+        message.  Topic maps can set ``azimuth_rad`` / ``azimuth_deg`` and
+        ``elevation_rad`` / ``elevation_deg`` to place a fixed range sensor in
+        the tracking frame; angles default to zero.
     ``camera_info`` / ``camera_info_calibration``
         Decode ``sensor_msgs/msg/CameraInfo`` intrinsics for native
         Detection2D back-projection.  Detection2D topics with the same source
@@ -354,6 +360,82 @@ def extract_native_rosbag_topic_map(
                             ),
                             z_std_m=float(
                                 spec.get("z_std_m", spec.get("laserscan_z_std_m", 2.0))
+                            ),
+                        )
+                        candidate_frames.append(frame)
+                        rows = len(frame.rows)
+                    else:
+                        rows = 0
+                elif _is_range_candidate_kind(kind):
+                    angle_unit = str(
+                        spec.get(
+                            "angle_unit",
+                            spec.get("range_angle_unit", "rad"),
+                        )
+                    )
+                    target_angle_unit = _normalize_radar_angle_unit(angle_unit)
+                    rows_for_message = range_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        angle_unit=target_angle_unit,
+                        azimuth=_angle_spec_value(
+                            spec,
+                            (
+                                "azimuth_rad",
+                                "bearing_rad",
+                                "azimuth_deg",
+                                "bearing_deg",
+                                "azimuth",
+                                "bearing",
+                            ),
+                            target_angle_unit=target_angle_unit,
+                        ),
+                        elevation=_angle_spec_value(
+                            spec,
+                            (
+                                "elevation_rad",
+                                "pitch_rad",
+                                "elevation_deg",
+                                "pitch_deg",
+                                "elevation",
+                                "pitch",
+                            ),
+                            target_angle_unit=target_angle_unit,
+                        ),
+                        track_id=spec.get("track_id", source),
+                        confidence=spec.get("confidence", 1.0),
+                        class_name=spec.get("class_name", "uav"),
+                    )
+                    if rows_for_message:
+                        frame = radar_polar_frame_to_candidates(
+                            pd.DataFrame.from_records(rows_for_message),
+                            source=source,
+                            sequence_id=str(spec.get("sequence_id", sequence_id)),
+                            azimuth_convention=str(
+                                spec.get(
+                                    "azimuth_convention",
+                                    spec.get(
+                                        "range_azimuth_convention",
+                                        "x-forward-left-positive",
+                                    ),
+                                )
+                            ),
+                            angle_unit=target_angle_unit,
+                            range_std_m=float(
+                                spec.get(
+                                    "range_std_m",
+                                    spec.get("range_sensor_range_std_m", 1.0),
+                                )
+                            ),
+                            angle_std_deg=float(
+                                spec.get(
+                                    "angle_std_deg",
+                                    spec.get("range_sensor_angle_std_deg", 2.0),
+                                )
+                            ),
+                            z_std_m=float(
+                                spec.get("z_std_m", spec.get("range_sensor_z_std_m", 2.0))
                             ),
                         )
                         candidate_frames.append(frame)
@@ -1064,6 +1146,16 @@ def _is_laserscan_candidate_kind(kind: str) -> bool:
         "scan_candidate",
         "range_scan_candidate",
         "range_scan",
+    }
+
+
+def _is_range_candidate_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "range_candidate",
+        "range_sensor_candidate",
+        "sensor_range_candidate",
+        "single_range_candidate",
     }
 
 
@@ -1999,6 +2091,89 @@ def laserscan_message_to_rows(
     return rows
 
 
+def range_message_to_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    angle_unit: str = "rad",
+    azimuth: float | None = None,
+    elevation: float | None = None,
+    track_id: Any | None = None,
+    confidence: Any | None = None,
+    class_name: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Convert a native ROS Range message into one polar range row."""
+
+    target_angle_unit = _normalize_radar_angle_unit(angle_unit)
+    parent_time_s = _message_stamp_time_s(message)
+    default_time_s = parent_time_s if parent_time_s is not None else float(time_s)
+    range_m = _field_float(message, "range", "range_m", "distance", "distance_m")
+    if range_m is None or not math.isfinite(float(range_m)):
+        return []
+    min_range = _field_float(message, "min_range", "range_min", "minimum_range")
+    max_range = _field_float(message, "max_range", "range_max", "maximum_range")
+    if min_range is not None and float(range_m) < float(min_range):
+        return []
+    if max_range is not None and float(range_m) > float(max_range):
+        return []
+    row_azimuth = azimuth
+    if row_azimuth is None:
+        row_azimuth = _angle_field_value(
+            message,
+            (
+                "azimuth_rad",
+                "bearing_rad",
+                "azimuth_deg",
+                "bearing_deg",
+                "azimuth",
+                "bearing",
+            ),
+            target_angle_unit=target_angle_unit,
+        )
+    if row_azimuth is None:
+        row_azimuth = 0.0
+    row_elevation = elevation
+    if row_elevation is None:
+        row_elevation = _angle_field_value(
+            message,
+            (
+                "elevation_rad",
+                "pitch_rad",
+                "elevation_deg",
+                "pitch_deg",
+                "elevation",
+                "pitch",
+            ),
+            target_angle_unit=target_angle_unit,
+        )
+    if row_elevation is None:
+        row_elevation = 0.0
+    row: dict[str, Any] = {
+        "sequence_id": str(sequence_id),
+        "time_s": default_time_s,
+        "range_m": float(range_m),
+        "azimuth": float(row_azimuth),
+        "elevation": float(row_elevation),
+    }
+    frame_id = _message_frame_id(message)
+    if frame_id not in (None, ""):
+        row["frame_id"] = str(frame_id)
+    field_of_view = _field_float(message, "field_of_view", "fov", "fov_rad")
+    if field_of_view is not None and math.isfinite(float(field_of_view)):
+        row["field_of_view_rad"] = float(field_of_view)
+    radiation_type = _field_value(message, "radiation_type")
+    if radiation_type not in (None, ""):
+        row["radiation_type"] = radiation_type
+    if track_id not in (None, ""):
+        row["track_id"] = str(track_id)
+    if confidence not in (None, ""):
+        row["confidence"] = float(confidence)
+    if class_name not in (None, ""):
+        row["class_name"] = str(class_name)
+    return [row]
+
+
 def _laserscan_cluster_rows(
     valid_returns: list[dict[str, Any]],
     *,
@@ -2281,6 +2456,28 @@ def _angle_field_value(
 ) -> float | None:
     for name in names:
         raw = _field_value(value, name)
+        if raw in (None, ""):
+            continue
+        try:
+            angle = float(raw)
+        except (TypeError, ValueError):
+            continue
+        return _convert_angle_unit(
+            angle,
+            source_unit=_angle_unit_from_name(name) or target_angle_unit,
+            target_unit=target_angle_unit,
+        )
+    return None
+
+
+def _angle_spec_value(
+    spec: dict[str, Any],
+    names: tuple[str, ...],
+    *,
+    target_angle_unit: str,
+) -> float | None:
+    for name in names:
+        raw = spec.get(name)
         if raw in (None, ""):
             continue
         try:
