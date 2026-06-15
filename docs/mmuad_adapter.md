@@ -994,6 +994,12 @@ from the same-stem PNG/JPEG/BMP dimensions, timestamps are inferred from the
 label filename, and `--camera-fixed-depth-m` or per-row depth is still required
 for 3D back-projection.
 
+COCO-style detector JSON is supported when an object contains top-level
+`images`, `annotations`, and optional `categories` arrays. Annotation `bbox`
+values are interpreted as `[x,y,width,height]`; image `file_name` values should
+carry the MMUAD timestamp in the filename or the image/annotation rows should
+provide an explicit timestamp field.
+
 ### Polar Radar Table Exports
 
 Use `--radar-polar-csv` for radar detections exported as CSV/TSV/TXT
@@ -1075,8 +1081,9 @@ live at the sequence root or beside detections in camera folders such as
 camera source and merged with any other discovered camera models. These can
 be used for back-projection even when they do not contain generic sensor
 extrinsics. Detections can provide `u_px`/`v_px` or
-`x1,y1,x2,y2` boxes. JSON/JSONL exports may be row lists, column maps, or objects with
-keys such as `camera_detections`, `detections`, `boxes`, `objects`,
+`x1,y1,x2,y2` boxes. JSON/JSONL exports may be row lists, column maps, COCO-style
+`images`/`annotations` objects, or objects with keys such as
+`camera_detections`, `detections`, `annotations`, `boxes`, `objects`,
 `predictions`, `results`, `instances`, `rows`, or `data`. Depth must come from
 `depth_m`/`range_m`, or from a fixed fallback via
 `--camera-fixed-depth-m`. Compact boxes such as COCO-style

@@ -1638,7 +1638,16 @@ def _looks_like_camera_detection_file(path: Path) -> bool:
     name = path.stem.lower()
     if any(
         token in name
-        for token in ("camera_detection", "image_detection", "detection", "bbox", "boxes")
+        for token in (
+            "camera_detection",
+            "image_detection",
+            "detection",
+            "annotation",
+            "annotations",
+            "bbox",
+            "boxes",
+            "coco",
+        )
     ):
         return True
     return _table_has_camera_detection_columns(path)
@@ -1741,6 +1750,7 @@ def _json_payload_columns(payload: Any) -> list[str]:
         "radar_polar",
         "radar_detections",
         "detections",
+        "annotations",
         "objects",
         "targets",
         "measurements",
