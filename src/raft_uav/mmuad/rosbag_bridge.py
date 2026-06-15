@@ -325,6 +325,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "camera_detections_candidate"
     if "detection2d" in compact_type:
         return "camera_detections_candidate"
+    if _looks_like_audio_timestamp_topic(name, msg_type):
+        return "audio_timestamps"
     if _looks_like_image_timestamp_topic(name, msg_type):
         return "image_timestamps"
     if "detection3darray" in compact_type:
@@ -472,6 +474,32 @@ def _looks_like_image_timestamp_topic(name: str, msg_type: str) -> bool:
         or compact_type.endswith("msg/compressedimage")
         or compact_name.endswith("/image")
         or compact_name.endswith("_image")
+    )
+
+
+def _looks_like_audio_timestamp_topic(name: str, msg_type: str) -> bool:
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    name_tokens = set(re.split(r"[^a-z0-9]+", name.lower()))
+    name_tokens.discard("")
+    audio_like = bool(
+        name_tokens
+        & {
+            "audio",
+            "microphone",
+            "mic",
+            "acoustic",
+            "sound",
+        }
+    )
+    return audio_like or any(
+        token in compact_type
+        for token in (
+            "audiodata",
+            "audiostamped",
+            "audioinfo",
+            "audiosample",
+            "sounddata",
+        )
     )
 
 
