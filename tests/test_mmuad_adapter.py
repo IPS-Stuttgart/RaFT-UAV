@@ -4163,6 +4163,74 @@ def test_official_track5_validation_rejects_nested_results_member(
     assert validation.rows.empty
 
 
+def test_cli_normalizes_nested_official_submission_zip(
+    tmp_path: Path,
+) -> None:
+    source_zip = tmp_path / "nested_official_submission.zip"
+    official = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [1.0, 0.0],
+            "Position": ["array([1, 0, 10])", "(0,0,10)"],
+            "Classification": [2, 2],
+        }
+    )
+    with ZipFile(source_zip, "w") as archive:
+        archive.writestr("submission/mmaud_results.csv", official.to_csv(index=False))
+        archive.writestr("README.txt", "not part of the upload")
+    template = tmp_path / "template.csv"
+    pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,10)", "(1,0,10)"],
+            "Classification": [2, 2],
+        }
+    ).to_csv(template, index=False)
+    output = tmp_path / "out"
+    normalized_zip = output / "normalized_submission.zip"
+    normalized_csv = output / "mmaud_results.csv"
+
+    status = mmuad_cli_main(
+        [
+            "--normalize-ug2-official-submission",
+            str(source_zip),
+            "--normalized-ug2-official-codabench-zip",
+            str(normalized_zip),
+            "--normalized-ug2-official-results-csv",
+            str(normalized_csv),
+            "--official-normalization-json",
+            str(output / "normalization.json"),
+            "--official-validation-template-file",
+            str(template),
+            "--official-validation-json",
+            str(output / "validation.json"),
+            "--official-validation-rows-csv",
+            str(output / "validation_rows.csv"),
+            "--official-upload-manifest-json",
+            str(output / "upload_manifest.json"),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    with ZipFile(normalized_zip) as archive:
+        assert archive.namelist() == ["mmaud_results.csv"]
+        normalized = pd.read_csv(archive.open("mmaud_results.csv"))
+    assert normalized["Timestamp"].tolist() == [0.0, 1.0]
+    assert normalized["Position"].tolist() == ["(0,0,10)", "(1,0,10)"]
+    normalization = json.loads((output / "normalization.json").read_text(encoding="utf-8"))
+    validation = json.loads((output / "validation.json").read_text(encoding="utf-8"))
+    manifest = json.loads((output / "upload_manifest.json").read_text(encoding="utf-8"))
+    assert normalization["source_selection"] == "nested_mmaud_results_csv"
+    assert normalization["source_member"] == "submission/mmaud_results.csv"
+    assert validation["codabench_upload_ready"] is True
+    assert manifest["codabench_upload_ready"] is True
+    assert normalized_csv.exists()
+    assert (output / "validation_rows.csv").exists()
+
+
 def test_cli_validates_official_zip_against_official_template_zip(tmp_path: Path) -> None:
     submission_zip = tmp_path / "official_submission.zip"
     submission = pd.DataFrame(

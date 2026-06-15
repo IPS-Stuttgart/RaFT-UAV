@@ -6,8 +6,11 @@ from raft_uav.mmuad.schema import CandidateFrame, TruthFrame
 from raft_uav.mmuad.evaluate import evaluate_submission_csv
 from raft_uav.mmuad.inspect import inspect_sequence_root
 from raft_uav.mmuad.submission import estimates_to_submission_frame
+from raft_uav.mmuad.submission import load_official_track5_results_frame
 from raft_uav.mmuad.submission import load_official_track5_template_file
+from raft_uav.mmuad.submission import normalize_official_track5_results_frame
 from raft_uav.mmuad.submission import validate_official_track5_submission
+from raft_uav.mmuad.submission import write_normalized_official_track5_submission
 from raft_uav.mmuad.tracker import TrackerConfig, TrackerOutput, run_mmuad_tracker
 
 __all__ = [
@@ -22,8 +25,11 @@ __all__ = [
     "estimates_to_submission_frame",
     "evaluate_submission_csv",
     "inspect_sequence_root",
+    "load_official_track5_results_frame",
     "load_official_track5_template_file",
+    "normalize_official_track5_results_frame",
     "run_mmuad_multi_object_tracker",
     "run_mmuad_tracker",
     "validate_official_track5_submission",
+    "write_normalized_official_track5_submission",
 ]
