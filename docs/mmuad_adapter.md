@@ -1212,6 +1212,9 @@ present,
 `multidof_joint_state_candidate`, and
 `trajectory_msgs/msg/MultiDOFJointTrajectory` as
 `multidof_joint_trajectory_truth` or `multidof_joint_trajectory_candidate`.
+Odometry and pose-with-covariance rows preserve pose covariance as
+`std_xy_m`/`std_z_m`, and odometry rows also preserve linear/angular twist
+metadata plus standard twist covariance diagonals when available.
 When Detection2D or Detection3D messages include multiple classification
 hypotheses, the native bridge uses the highest-score result for confidence and
 class labels.

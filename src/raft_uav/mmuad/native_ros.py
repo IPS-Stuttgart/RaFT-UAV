@@ -1317,6 +1317,18 @@ def _add_accel_components(row: dict[str, Any], source: Any) -> None:
     )
 
 
+def _add_twist_metadata(row: dict[str, Any], message: Any) -> None:
+    source = _kinematic_vector_source(message, "twist")
+    if _has_linear_or_angular_vector(source):
+        _add_twist_components(row, source)
+    _add_kinematic_covariance_diagonal(
+        row,
+        _kinematic_covariance_source(message, "twist"),
+        linear_prefix="linear_velocity_covariance",
+        angular_prefix="angular_velocity_covariance",
+    )
+
+
 def _add_kinematic_covariance_diagonal(
     row: dict[str, Any],
     source: Any | None,
@@ -2799,7 +2811,7 @@ def position_message_to_rows(
                 sequence_id=sequence_id,
                 time_s=transform_time_s if transform_time_s is not None else time_s,
             )
-            _add_frame_metadata(row, transform)
+            _add_position_row_metadata(row, transform)
             rows.append(row)
         return rows
     poses = getattr(message, "poses", None)
@@ -2827,7 +2839,7 @@ def position_message_to_rows(
                     else time_s
                 ),
             )
-            _add_frame_metadata(row, pose, fallback_frame_id=message_frame_id)
+            _add_position_row_metadata(row, pose, fallback_frame_id=message_frame_id)
             rows.append(row)
         return rows
     if not _frame_filter_matches(
@@ -2837,8 +2849,19 @@ def position_message_to_rows(
     ):
         return []
     row = position_message_to_row(message, sequence_id=sequence_id, time_s=time_s)
-    _add_frame_metadata(row, message)
+    _add_position_row_metadata(row, message)
     return [row]
+
+
+def _add_position_row_metadata(
+    row: dict[str, Any],
+    message: Any,
+    *,
+    fallback_frame_id: Any | None = None,
+) -> None:
+    _add_frame_metadata(row, message, fallback_frame_id=fallback_frame_id)
+    _add_pose_covariance_metadata(row, message)
+    _add_twist_metadata(row, message)
 
 
 def _frame_filter_matches(
