@@ -53,8 +53,11 @@ def test_track5_scorecard_reports_ready_zero_error_submission(tmp_path: Path) ->
     pooled = scorecard.summary["public_track5"]["pooled"]
     assert pooled["pose_mse_loss_m2"] == 0.0
     assert pooled["uav_type_accuracy"] == 1.0
+    assert pooled["classification_accuracy"] == 1.0
     flat = scorecard_summary_frame(scorecard.summary)
     assert flat.loc[0, "pose_mse_loss_m2"] == 0.0
+    assert flat.loc[0, "uav_type_accuracy"] == 1.0
+    assert flat.loc[0, "classification_accuracy"] == 1.0
 
 
 def test_track5_scorecard_writes_all_requested_artifacts(tmp_path: Path) -> None:
@@ -151,11 +154,15 @@ def test_track5_scorecard_cli_writes_ready_artifacts(tmp_path: Path, capsys) -> 
     stdout = capsys.readouterr().out
     assert "track5_scorecard=ok" in stdout
     assert "leaderboard_ready=True" in stdout
+    assert "uav_type_accuracy=1.0" in stdout
+    assert "classification_accuracy=1.0" in stdout
     summary = json.loads((output / "scorecard.json").read_text(encoding="utf-8"))
     assert summary["schema"] == "raft-uav-mmuad-track5-scorecard-v1"
     assert summary["scorecard_leaderboard_ready"] is True
     assert summary["codabench_upload_ready"] is True
     assert summary["public_track5"]["pooled"]["pose_mse_loss_m2"] == 0.0
+    flat = pd.read_csv(output / "scorecard.csv")
+    assert flat.loc[0, "classification_accuracy"] == 1.0
     assert (output / "scorecard.csv").exists()
     assert (output / "validation_rows.csv").exists()
     assert (output / "public_rows.csv").exists()

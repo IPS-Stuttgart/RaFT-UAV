@@ -214,6 +214,7 @@ def scorecard_summary_frame(summary: dict[str, Any]) -> pd.DataFrame:
         "public_p95_3d_m": public_pooled.get("p95_3d_m"),
         "public_max_3d_m": public_pooled.get("max_3d_m"),
         "uav_type_accuracy": public_pooled.get("uav_type_accuracy"),
+        "classification_accuracy": public_pooled.get("classification_accuracy"),
         "nearest_mean_3d_m": nearest_pooled.get("mean_3d_m"),
         "nearest_p95_3d_m": nearest_pooled.get("p95_3d_m"),
         "nearest_max_3d_m": nearest_pooled.get("max_3d_m"),

@@ -80,6 +80,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"pose_mse_loss_m2={pooled['pose_mse_loss_m2']}")
     if "uav_type_accuracy" in pooled:
         print(f"uav_type_accuracy={pooled['uav_type_accuracy']}")
+    if "classification_accuracy" in pooled:
+        print(f"classification_accuracy={pooled['classification_accuracy']}")
     if args.require_leaderboard_ready and not summary["scorecard_leaderboard_ready"]:
         reasons = ", ".join(summary.get("leaderboard_blocking_reasons", [])) or "unknown"
         raise SystemExit(f"Track 5 scorecard is not leaderboard-ready: {reasons}")
