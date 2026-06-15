@@ -8,6 +8,7 @@ tracking logs:
 * ``sensor_msgs/msg/PointCloud2`` -> clustered candidate detections;
 * ``livox_ros_driver(2)/msg/CustomMsg`` -> clustered candidate detections;
 * ``sensor_msgs/msg/CameraInfo`` -> camera intrinsics for native Detection2D;
+* ``sensor_msgs/msg/Image`` / ``CompressedImage`` -> timestamp template rows;
 * common polar/range-azimuth radar messages -> polar radar candidates;
 * ``sensor_msgs/msg/NavSatFix`` -> geodetic rows projected into local ENU;
 * ``geographic_msgs/msg/GeoPointStamped`` / ``GeoPoseStamped`` -> local ENU rows;
@@ -65,6 +66,7 @@ class NativeRosExtraction:
     candidates: CandidateFrame | None
     truth: TruthFrame | None
     manifest: dict[str, Any]
+    image_timestamps: pd.DataFrame | None = None
 
 
 def extract_native_rosbag_topic_map(
@@ -93,6 +95,10 @@ def extract_native_rosbag_topic_map(
         Decode ``sensor_msgs/msg/CameraInfo`` intrinsics for native
         Detection2D back-projection.  Detection2D topics with the same source
         can then omit ``camera_calibration_file`` sidecars.
+    ``image_timestamps`` / ``image_timestamp_template``
+        Extract native ``sensor_msgs/msg/Image`` or ``CompressedImage`` frame
+        timestamps into CSV/template artifacts. This is timestamp inventory
+        only; image object detection remains external.
     ``navsatfix_truth`` / ``geopoint_truth`` / ``geopose_truth`` /
     ``navsatfix_candidate`` / ``geopoint_candidate`` / ``geopose_candidate``
         Project geodetic GPS/geographic positions into local ENU rows. These
@@ -144,6 +150,7 @@ def extract_native_rosbag_topic_map(
     by_topic = {str(spec["topic"]): spec for spec in specs if "topic" in spec}
     candidate_frames: list[CandidateFrame] = []
     truth_rows: list[dict[str, Any]] = []
+    image_timestamp_rows: list[dict[str, Any]] = []
     extracted: list[dict[str, Any]] = []
     sequence_id = str(payload.get("sequence_id", Path(bag_path).stem))
     output = Path(output_dir) if output_dir is not None else None
@@ -552,6 +559,17 @@ def extract_native_rosbag_topic_map(
                         rows = len(frame.rows)
                     else:
                         rows = 0
+                elif _is_image_timestamp_kind(kind):
+                    rows_for_message = image_message_to_timestamp_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        topic=str(connection.topic),
+                        source=source,
+                        message_index=replay_message_counts[str(connection.topic)] - 1,
+                    )
+                    image_timestamp_rows.extend(rows_for_message)
+                    rows = len(rows_for_message)
                 elif kind in {"marker_truth", "marker_array_truth"}:
                     rows_for_message = marker_message_to_rows(
                         message,
@@ -737,12 +755,16 @@ def extract_native_rosbag_topic_map(
 
     candidates = merge_candidate_frames(candidate_frames) if candidate_frames else None
     truth = TruthFrame(normalize_truth_columns(pd.DataFrame.from_records(truth_rows))) if truth_rows else None
+    image_timestamps = (
+        pd.DataFrame.from_records(image_timestamp_rows) if image_timestamp_rows else None
+    )
     manifest = {
         "schema": "raft-uav-mmuad-native-ros-extraction-v1",
         "bag_path": str(bag_path),
         "topic_map_json": str(topic_map_json),
         "candidate_rows": int(len(candidates.rows)) if candidates is not None else 0,
         "truth_rows": int(len(truth.rows)) if truth is not None else 0,
+        "image_timestamp_rows": int(len(image_timestamps)) if image_timestamps is not None else 0,
         "extracted_messages": extracted,
     }
     if output is not None:
@@ -750,10 +772,25 @@ def extract_native_rosbag_topic_map(
             candidates.rows.to_csv(output / "native_ros_candidates.csv", index=False)
         if truth is not None:
             truth.rows.to_csv(output / "native_ros_truth.csv", index=False)
+        if image_timestamps is not None:
+            image_timestamps.to_csv(output / "native_ros_image_timestamps.csv", index=False)
+            _image_timestamp_template_rows(image_timestamps).to_csv(
+                output / "native_ros_image_timestamp_template.csv",
+                index=False,
+            )
+            manifest["image_timestamps_csv"] = str(output / "native_ros_image_timestamps.csv")
+            manifest["image_timestamp_template_csv"] = str(
+                output / "native_ros_image_timestamp_template.csv"
+            )
         (output / "native_ros_extraction_manifest.json").write_text(
             json.dumps(manifest, indent=2), encoding="utf-8"
         )
-    return NativeRosExtraction(candidates=candidates, truth=truth, manifest=manifest)
+    return NativeRosExtraction(
+        candidates=candidates,
+        truth=truth,
+        manifest=manifest,
+        image_timestamps=image_timestamps,
+    )
 
 
 def _message_time_s(message: Any, fallback_timestamp_ns: int) -> float:
@@ -761,6 +798,83 @@ def _message_time_s(message: Any, fallback_timestamp_ns: int) -> float:
     if stamp_time_s is not None:
         return stamp_time_s
     return float(fallback_timestamp_ns) * 1.0e-9
+
+
+def _is_image_timestamp_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "image_timestamp",
+        "image_timestamps",
+        "image_frame",
+        "image_frames",
+        "image_frame_timestamp",
+        "image_frame_timestamps",
+        "image_timestamp_template",
+        "compressed_image_timestamp",
+        "compressed_image_timestamps",
+    }
+
+
+def image_message_to_timestamp_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    topic: str,
+    source: str,
+    message_index: int,
+) -> list[dict[str, Any]]:
+    """Convert a native ROS image message into timestamp/template metadata."""
+
+    row: dict[str, Any] = {
+        "sequence_id": str(sequence_id),
+        "time_s": float(time_s),
+        "topic": str(topic),
+        "source": str(source),
+        "message_index": int(message_index),
+    }
+    frame_id = _message_frame_id(message)
+    if frame_id not in (None, ""):
+        row["frame_id"] = str(frame_id)
+    for output_key, names in {
+        "height": ("height",),
+        "width": ("width",),
+        "encoding": ("encoding",),
+        "format": ("format",),
+        "step": ("step",),
+        "is_bigendian": ("is_bigendian", "is_big_endian"),
+    }.items():
+        value = _field_value(message, *names)
+        if value not in (None, ""):
+            row[output_key] = value
+    data = _field_value(message, "data")
+    data_length = _sequence_length(data)
+    if data_length is not None:
+        row["data_length"] = data_length
+    return [row]
+
+
+def _sequence_length(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(len(value))
+    except TypeError:
+        return None
+
+
+def _image_timestamp_template_rows(image_timestamps: pd.DataFrame) -> pd.DataFrame:
+    template = (
+        image_timestamps[["sequence_id", "time_s"]]
+        .dropna(subset=["sequence_id", "time_s"])
+        .drop_duplicates()
+        .sort_values(["sequence_id", "time_s"])
+        .reset_index(drop=True)
+    )
+    template["x_m"] = 0.0
+    template["y_m"] = 0.0
+    template["z_m"] = 0.0
+    return normalize_truth_columns(template)
 
 
 def camera_info_message_to_model(

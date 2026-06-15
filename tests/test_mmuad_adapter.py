@@ -6377,6 +6377,119 @@ def test_cli_native_ros_extraction_writes_submission_artifacts(
     assert manifest["leaderboard_ready"] is True
 
 
+def test_cli_native_ros_extraction_uses_image_timestamps_for_official_validation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    bag = tmp_path / "seq_native_image_template.mcap"
+    bag.write_bytes(b"fake native bag")
+    topic_map = tmp_path / "topic_map_native.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_native_image_template",
+                "exports": [
+                    {"topic": "/radar", "kind": "pose_candidate"},
+                    {"topic": "/camera/image", "kind": "image_timestamps"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "out"
+    extracted_dir = output / "extracted"
+
+    def fake_extract_native_rosbag_topic_map(
+        *,
+        bag_path,
+        topic_map_json,
+        output_dir,
+        voxel_size_m,
+        min_points,
+    ):
+        assert bag_path == bag
+        assert topic_map_json == topic_map
+        output_dir.mkdir(parents=True)
+        (output_dir / "native_ros_extraction_manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema": "fake-native-extraction",
+                    "candidate_rows": 2,
+                    "truth_rows": 0,
+                    "image_timestamp_rows": 2,
+                }
+            ),
+            encoding="utf-8",
+        )
+        candidates = CandidateFrame(
+            pd.DataFrame(
+                {
+                    "sequence_id": ["seq_native_image_template"] * 2,
+                    "time_s": [0.0, 1.0],
+                    "source": ["radar", "radar"],
+                    "track_id": ["uav", "uav"],
+                    "x_m": [0.0, 1.0],
+                    "y_m": [0.0, 0.0],
+                    "z_m": [10.0, 10.0],
+                    "std_xy_m": [1.0, 1.0],
+                    "std_z_m": [1.0, 1.0],
+                    "confidence": [1.0, 1.0],
+                    "class_name": ["2", "2"],
+                }
+            )
+        )
+        image_timestamps = pd.DataFrame(
+            {
+                "sequence_id": ["seq_native_image_template"] * 2,
+                "time_s": [0.0, 1.0],
+                "topic": ["/camera/image", "/camera/image"],
+                "source": ["front", "front"],
+            }
+        )
+        return SimpleNamespace(
+            candidates=candidates,
+            truth=None,
+            image_timestamps=image_timestamps,
+            manifest={"image_timestamp_rows": 2},
+        )
+
+    monkeypatch.setattr(
+        "raft_uav.mmuad.cli.extract_native_rosbag_topic_map",
+        fake_extract_native_rosbag_topic_map,
+    )
+
+    status = mmuad_cli_main(
+        [
+            "--rosbag-path",
+            str(bag),
+            "--topic-map-file",
+            str(topic_map),
+            "--native-ros-extract-output-dir",
+            str(extracted_dir),
+            "--output-dir",
+            str(output),
+            "--ug2-official-results-csv",
+            str(output / "official_mmaud_results.csv"),
+            "--ug2-official-codabench-zip",
+            str(output / "official_submission.zip"),
+            "--ug2-official-classification",
+            "2",
+            "--ug2-official-validate-on-write",
+        ]
+    )
+
+    assert status == 0
+    validation = json.loads(
+        (output / "mmuad_official_submission_validation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert validation["template_checked"] is True
+    assert validation["template_timestamp_count"] == 2
+    assert validation["leaderboard_ready"] is True
+    assert validation["codabench_upload_ready"] is True
+
+
 def test_cli_sequence_root_runs_native_ros_recording(
     tmp_path: Path,
     monkeypatch,
@@ -6747,6 +6860,137 @@ def test_native_ros_extraction_manifest_reports_empty_matched_topics(
         (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
     )
     assert saved["extracted_messages"] == extracted.manifest["extracted_messages"]
+
+
+def test_native_ros_extraction_supports_image_timestamp_topics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_images.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map_native.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_images",
+                "exports": [
+                    {
+                        "topic": "/camera/front/image_raw",
+                        "kind": "image_timestamps",
+                        "source": "front",
+                    },
+                    {
+                        "topic": "/camera/front/image_compressed",
+                        "kind": "compressed_image_timestamps",
+                        "source": "front_compressed",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    image_connection = SimpleNamespace(
+        topic="/camera/front/image_raw",
+        msgtype="sensor_msgs/msg/Image",
+    )
+    compressed_connection = SimpleNamespace(
+        topic="/camera/front/image_compressed",
+        msgtype="sensor_msgs/msg/CompressedImage",
+    )
+    image_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=1, nanosec=250_000_000),
+            frame_id="front_optical",
+        ),
+        height=480,
+        width=640,
+        encoding="rgb8",
+        step=1920,
+        data=b"rgb",
+    )
+    compressed_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=2, nanosec=500_000_000),
+            frame_id="front_optical",
+        ),
+        format="jpeg",
+        data=b"jpeg-bytes",
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [image_connection, compressed_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [image_connection, compressed_connection]
+            return [
+                (image_connection, 1_000_000_000, b"image"),
+                (compressed_connection, 2_000_000_000, b"compressed"),
+            ]
+
+        def deserialize(self, rawdata, msgtype):
+            if rawdata == b"image":
+                assert msgtype == "sensor_msgs/msg/Image"
+                return image_message
+            if rawdata == b"compressed":
+                assert msgtype == "sensor_msgs/msg/CompressedImage"
+                return compressed_message
+            raise AssertionError(f"unexpected rawdata: {rawdata!r}")
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is None
+    assert extracted.truth is None
+    assert extracted.image_timestamps is not None
+    rows = extracted.image_timestamps
+    assert rows["sequence_id"].tolist() == ["seq_images", "seq_images"]
+    assert rows["time_s"].tolist() == [1.25, 2.5]
+    assert rows["source"].tolist() == ["front", "front_compressed"]
+    assert rows["frame_id"].tolist() == ["front_optical", "front_optical"]
+    assert rows.loc[0, "height"] == 480
+    assert rows.loc[0, "width"] == 640
+    assert rows.loc[0, "encoding"] == "rgb8"
+    assert rows.loc[1, "format"] == "jpeg"
+    assert extracted.manifest["candidate_rows"] == 0
+    assert extracted.manifest["truth_rows"] == 0
+    assert extracted.manifest["image_timestamp_rows"] == 2
+    assert [row["status"] for row in extracted.manifest["extracted_messages"]] == [
+        "extracted",
+        "extracted",
+    ]
+
+    saved_rows = pd.read_csv(output / "native_ros_image_timestamps.csv")
+    saved_template = pd.read_csv(output / "native_ros_image_timestamp_template.csv")
+    saved_manifest = json.loads(
+        (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
+    )
+    assert saved_rows["time_s"].tolist() == [1.25, 2.5]
+    assert saved_template.columns.tolist() == ["sequence_id", "time_s", "x_m", "y_m", "z_m"]
+    assert saved_template["time_s"].tolist() == [1.25, 2.5]
+    assert saved_manifest["image_timestamp_rows"] == 2
+    assert saved_manifest["image_timestamp_template_csv"] == str(
+        output / "native_ros_image_timestamp_template.csv"
+    )
 
 
 def test_native_ros_extraction_supports_bounding_box3d_topics(
@@ -8978,6 +9222,49 @@ def test_ros2_topic_map_template_infers_tracked_object_topics(tmp_path: Path) ->
     ]
     assert payload["exports"][0]["source"] == "perception_tracked_objects"
     assert payload["exports"][1]["source"] is None
+
+
+def test_ros2_topic_map_template_infers_image_timestamp_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /camera/front/image_raw",
+                "        type: sensor_msgs/msg/Image",
+                "      message_count: 4",
+                "    - topic_metadata:",
+                "        name: /camera/front/image_compressed",
+                "        type: sensor_msgs/msg/CompressedImage",
+                "      message_count: 4",
+                "    - topic_metadata:",
+                "        name: /camera/front/camera_info",
+                "        type: sensor_msgs/msg/CameraInfo",
+                "      message_count: 1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(
+        report,
+        tmp_path / "topic_map_template.json",
+        template_mode="native",
+    )
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "image_timestamps",
+        "image_timestamps",
+        "camera_info_calibration",
+    ]
+    assert payload["exports"][0]["source"] == "camera_front_image_raw"
+    assert payload["exports"][1]["source"] == "camera_front_image_compressed"
+    assert all("path" not in entry for entry in payload["exports"])
 
 
 def test_ros2_topic_map_template_infers_detection2d_topics(tmp_path: Path) -> None:

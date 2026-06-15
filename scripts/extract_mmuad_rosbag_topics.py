@@ -29,6 +29,9 @@ def main(argv: list[str] | None = None) -> int:
     print("mmuad_native_ros_extraction=ok")
     print(f"candidate_rows={result.manifest['candidate_rows']}")
     print(f"truth_rows={result.manifest['truth_rows']}")
+    print(f"image_timestamp_rows={result.manifest.get('image_timestamp_rows', 0)}")
+    if "image_timestamp_template_csv" in result.manifest:
+        print(f"image_timestamp_template_csv={result.manifest['image_timestamp_template_csv']}")
     print(f"manifest_json={args.output_dir / 'native_ros_extraction_manifest.json'}")
     return 0
 
