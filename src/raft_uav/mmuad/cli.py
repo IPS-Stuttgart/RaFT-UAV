@@ -69,6 +69,7 @@ from raft_uav.mmuad.submission import (
     load_sequence_class_map,
     validate_official_track5_submission,
     verify_official_upload_manifest,
+    write_normalized_official_track5_submission,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
     write_submission_csv,
@@ -92,6 +93,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--layout-report-csv", type=Path)
     parser.add_argument("--evaluate-submission-csv", type=Path)
     parser.add_argument("--validate-ug2-official-codabench-zip", type=Path)
+    parser.add_argument("--normalize-ug2-official-submission", type=Path)
+    parser.add_argument("--normalized-ug2-official-codabench-zip", type=Path)
+    parser.add_argument("--normalized-ug2-official-results-csv", type=Path)
+    parser.add_argument("--official-normalization-json", type=Path)
     parser.add_argument("--official-validation-json", type=Path)
     parser.add_argument("--official-validation-rows-csv", type=Path)
     parser.add_argument("--official-upload-manifest-json", type=Path)
@@ -295,6 +300,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.verify_official_upload_manifest is not None:
         return _run_official_upload_manifest_verification(args)
+
+    if args.normalize_ug2_official_submission is not None:
+        _maybe_prepare_sequence_root_archive(args)
+        return _run_official_submission_normalization(args)
 
     if args.validate_ug2_official_codabench_zip is not None:
         _maybe_prepare_sequence_root_archive(args)
@@ -767,6 +776,57 @@ def _run_official_submission_validation(args: argparse.Namespace) -> int:
     for name, path in paths.items():
         print(f"{name}={path}")
     return 0 if validation.summary["codabench_upload_ready"] else 1
+
+
+def _run_official_submission_normalization(args: argparse.Namespace) -> int:
+    output_zip = args.normalized_ug2_official_codabench_zip or (
+        args.output_dir / "normalized_official_submission.zip"
+    )
+    normalization = write_normalized_official_track5_submission(
+        args.normalize_ug2_official_submission,
+        output_zip,
+        results_csv_path=args.normalized_ug2_official_results_csv,
+    )
+    normalization_json = args.official_normalization_json or (
+        args.output_dir / "mmuad_official_submission_normalization.json"
+    )
+    normalization_json.parent.mkdir(parents=True, exist_ok=True)
+    normalization_json.write_text(json.dumps(normalization, indent=2), encoding="utf-8")
+
+    template = _official_submission_validation_template(args)
+    validation = validate_official_track5_submission(
+        output_zip,
+        template=template,
+        timestamp_tolerance_s=args.official_validation_timestamp_tolerance_s,
+        require_zip=True,
+    )
+    json_path = args.official_validation_json or (
+        args.output_dir / "mmuad_official_submission_validation.json"
+    )
+    rows_path = args.official_validation_rows_csv or (
+        args.output_dir / "mmuad_official_submission_validation_rows.csv"
+    )
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    rows_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(validation.summary, indent=2), encoding="utf-8")
+    validation.rows.to_csv(rows_path, index=False)
+    manifest_path = _write_official_upload_manifest(
+        args,
+        validation.summary,
+        artifact_path=output_zip,
+        validation_json_path=json_path,
+        validation_rows_path=rows_path,
+    )
+    print("mmuad_official_submission_normalization=ok")
+    print(f"normalized_zip={output_zip}")
+    print(f"normalization_json={normalization_json}")
+    print(f"valid={validation.summary['valid']}")
+    print(f"leaderboard_ready={validation.summary['leaderboard_ready']}")
+    print(f"codabench_upload_ready={validation.summary['codabench_upload_ready']}")
+    print(f"official_validation_json={json_path}")
+    print(f"official_validation_rows_csv={rows_path}")
+    print(f"official_upload_manifest_json={manifest_path}")
+    return 0 if validation.summary["valid"] else 1
 
 
 def _run_official_upload_manifest_verification(args: argparse.Namespace) -> int:

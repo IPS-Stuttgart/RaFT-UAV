@@ -634,6 +634,31 @@ SHA-256/CRC32/byte sizes for ZIP submissions, validation JSON/row paths, ZIP
 members and columns, global readiness flags, blocking reasons, sequence counts,
 and per-sequence prediction/template coverage. It does not upload results or
 replace the closed Codabench evaluator.
+
+If a result CSV is already official-style but not packaged exactly, the CLI can
+normalize it into a Codabench-shaped ZIP before validation. The input can be a
+CSV, a ZIP with root `mmaud_results.csv`, a ZIP with one nested
+`mmaud_results.csv`, or a ZIP with one unambiguous CSV member:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --normalize-ug2-official-submission outputs/mmuad_val/messy_submission.zip \
+  --normalized-ug2-official-codabench-zip outputs/mmuad_val/ug2_codabench_submission.zip \
+  --normalized-ug2-official-results-csv outputs/mmuad_val/mmaud_results.csv \
+  --official-validation-template-file data/mmuad_export/track5_template.csv \
+  --official-normalization-json outputs/mmuad_val/official_submission_normalization.json \
+  --official-validation-json outputs/mmuad_val/official_submission_validation.json \
+  --official-validation-rows-csv outputs/mmuad_val/official_submission_validation_rows.csv \
+  --official-upload-manifest-json outputs/mmuad_val/official_upload_manifest.json \
+  --output-dir outputs/mmuad_val
+```
+
+The normalizer rewrites exact `Sequence,Timestamp,Position,Classification`
+columns, canonicalizes permissive `Position` strings such as NumPy-style
+`array([...])` representations, sorts rows by sequence/timestamp, and writes a
+ZIP containing only root `mmaud_results.csv`. It still does not upload to
+Codabench; use the generated ZIP and readiness manifest for manual upload.
+
 After a manifest has been written, verify that the referenced artifact still
 matches those recorded fingerprints:
 

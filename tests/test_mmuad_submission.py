@@ -18,8 +18,11 @@ from raft_uav.mmuad.submission import (
     estimates_to_mmaud_results_frame,
     estimates_to_submission_frame,
     load_official_track5_template_file,
+    load_official_track5_results_frame,
+    normalize_official_track5_results_frame,
     parse_official_position_cell,
     validate_official_track5_submission,
+    write_normalized_official_track5_submission,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
     write_submission_json,
@@ -414,6 +417,96 @@ def test_official_track5_results_loader_accepts_numpy_array_position_repr():
     assert frame.loc[0, "sequence_id"] == "seq1"
     assert frame.loc[0, ["x", "y", "z"]].tolist() == [1.5, 2.5, 3.5]
     assert frame.loc[0, "uav_type"] == "3"
+
+
+def test_official_track5_results_normalizer_canonicalizes_columns():
+    frame = normalize_official_track5_results_frame(
+        pd.DataFrame(
+            {
+                "classification": ["3", "2"],
+                "position": ["array([1.5, 2.5, 3.5])", "[0 1 2]"],
+                "timestamp": [2.0, 1.0],
+                "sequence": ["seqB", "seqA"],
+            }
+        )
+    )
+
+    assert frame.columns.tolist() == list(OFFICIAL_UG2_RESULT_COLUMNS)
+    assert frame["Sequence"].tolist() == ["seqA", "seqB"]
+    assert frame["Timestamp"].tolist() == [1.0, 2.0]
+    assert frame["Position"].tolist() == ["(0,1,2)", "(1.5,2.5,3.5)"]
+    assert frame["Classification"].tolist() == [2, 3]
+
+
+def test_official_track5_results_normalizer_repackages_nested_zip(tmp_path):
+    source = tmp_path / "messy_submission.zip"
+    output_zip = tmp_path / "normalized_submission.zip"
+    output_csv = tmp_path / "normalized_mmaud_results.csv"
+    with ZipFile(source, "w") as archive:
+        archive.writestr("nested/mmaud_results.csv", pd.DataFrame(
+            {
+                "Sequence": ["seq1", "seq1"],
+                "Timestamp": [1.0, 0.0],
+                "Position": ["array([1, 0, 0])", "(0,0,0)"],
+                "Classification": [4, 4],
+            }
+        ).to_csv(index=False))
+        archive.writestr("notes.txt", "extra member should not survive")
+
+    summary = write_normalized_official_track5_submission(
+        source,
+        output_zip,
+        results_csv_path=output_csv,
+    )
+
+    assert summary["source_selection"] == "nested_mmaud_results_csv"
+    assert summary["source_member"] == "nested/mmaud_results.csv"
+    assert summary["row_count"] == 2
+    assert output_csv.exists()
+    with ZipFile(output_zip) as archive:
+        assert archive.namelist() == ["mmaud_results.csv"]
+        normalized = pd.read_csv(archive.open("mmaud_results.csv"))
+    assert normalized.columns.tolist() == list(OFFICIAL_UG2_RESULT_COLUMNS)
+    assert normalized["Timestamp"].tolist() == [0.0, 1.0]
+    assert normalized["Position"].tolist() == ["(0,0,0)", "(1,0,0)"]
+    template = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,0)", "(1,0,0)"],
+            "Classification": [4, 4],
+        }
+    )
+    validation = validate_official_track5_submission(output_zip, template=template)
+    assert validation.summary["codabench_upload_ready"] is True
+
+
+def test_official_track5_results_loader_accepts_single_csv_zip_member(tmp_path):
+    source = tmp_path / "submission_bundle.zip"
+    with ZipFile(source, "w") as archive:
+        archive.writestr("submission.csv", pd.DataFrame(
+            {
+                "Sequence": ["seq1"],
+                "Timestamp": [0.0],
+                "Position": ["(0,0,0)"],
+                "Classification": [1],
+            }
+        ).to_csv(index=False))
+
+    frame = load_official_track5_results_frame(source)
+
+    assert frame.columns.tolist() == list(OFFICIAL_UG2_RESULT_COLUMNS)
+    assert frame.loc[0, "Sequence"] == "seq1"
+
+
+def test_official_track5_results_loader_rejects_ambiguous_zip(tmp_path):
+    source = tmp_path / "ambiguous.zip"
+    with ZipFile(source, "w") as archive:
+        archive.writestr("a.csv", "Sequence,Timestamp,Position,Classification\n")
+        archive.writestr("b.csv", "Sequence,Timestamp,Position,Classification\n")
+
+    with pytest.raises(ValueError, match="unambiguous results CSV"):
+        load_official_track5_results_frame(source)
 
 
 def test_official_track5_results_evaluator_reports_public_metric_aliases():

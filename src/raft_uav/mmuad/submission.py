@@ -575,6 +575,96 @@ def write_official_ug2_codabench_zip(
     return path
 
 
+def normalize_official_track5_results_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Return canonical public Track 5 result rows from a CSV-like frame.
+
+    The normalizer accepts case-insensitive official column names and permissive
+    ``Position`` cell formats, then writes the exact public column names used by
+    the Codabench upload package.
+    """
+
+    lower_to_original = {
+        str(column).strip().lower(): column
+        for column in frame.columns
+    }
+    missing = [
+        column
+        for column in OFFICIAL_UG2_RESULT_COLUMNS
+        if column.lower() not in lower_to_original
+    ]
+    if missing:
+        raise ValueError(f"official Track 5 results missing columns: {missing}")
+    sequence_col = lower_to_original["sequence"]
+    timestamp_col = lower_to_original["timestamp"]
+    position_col = lower_to_original["position"]
+    classification_col = lower_to_original["classification"]
+
+    sequences = [parse_official_sequence_cell(value) for value in frame[sequence_col]]
+    timestamps = [parse_official_timestamp_cell(value) for value in frame[timestamp_col]]
+    positions = [parse_official_position_cell(value) for value in frame[position_col]]
+    classifications = [
+        parse_official_classification_cell(value)
+        for value in frame[classification_col]
+    ]
+    rows = pd.DataFrame(
+        {
+            "Sequence": sequences,
+            "Timestamp": [float(value) for value in timestamps],
+            "Position": [
+                _format_official_position(x, y, z)
+                for x, y, z in positions
+            ],
+            "Classification": [int(value) for value in classifications],
+        }
+    )
+    return rows[list(OFFICIAL_UG2_RESULT_COLUMNS)].sort_values(
+        ["Sequence", "Timestamp"]
+    ).reset_index(drop=True)
+
+
+def load_official_track5_results_frame(path: Path) -> pd.DataFrame:
+    """Load and canonicalize a public Track 5 results CSV or ZIP."""
+
+    frame, _ = _read_official_track5_results_input(path)
+    return normalize_official_track5_results_frame(frame)
+
+
+def write_normalized_official_track5_submission(
+    input_path: Path,
+    output_zip_path: Path,
+    *,
+    results_csv_path: Path | None = None,
+) -> dict[str, Any]:
+    """Repackage an official-style results CSV/ZIP as an upload-ready ZIP.
+
+    This helper is a local packaging normalizer: it does not upload to
+    Codabench, but it produces a ZIP containing exactly root
+    ``mmaud_results.csv``.
+    """
+
+    frame, source_summary = _read_official_track5_results_input(input_path)
+    normalized = normalize_official_track5_results_frame(frame)
+    csv_text = normalized.to_csv(index=False)
+    if results_csv_path is not None:
+        results_csv_path = Path(results_csv_path)
+        results_csv_path.parent.mkdir(parents=True, exist_ok=True)
+        results_csv_path.write_text(csv_text, encoding="utf-8")
+    output_zip_path = Path(output_zip_path)
+    output_zip_path.parent.mkdir(parents=True, exist_ok=True)
+    with ZipFile(output_zip_path, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("mmaud_results.csv", csv_text)
+    return {
+        "schema": "raft-uav-mmuad-official-track5-normalization-v1",
+        "input_path": str(input_path),
+        "output_zip": str(output_zip_path),
+        "results_csv": str(results_csv_path) if results_csv_path is not None else None,
+        "row_count": int(len(normalized)),
+        "columns": list(normalized.columns),
+        **source_summary,
+        **_official_track5_artifact_fingerprint(output_zip_path),
+    }
+
+
 def inspect_submission_zip(path: Path) -> dict[str, Any]:
     """Return a small structural summary for a submission ZIP."""
 
@@ -1039,6 +1129,63 @@ def _read_official_track5_zip_for_validation(
         summary.update(_official_track5_zip_member_fingerprint(result_info, result_bytes))
         frame = pd.read_csv(BytesIO(result_bytes))
     return frame, members, summary
+
+
+def _read_official_track5_results_input(
+    path: Path,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    path = Path(path)
+    if path.suffix.lower() != ".zip":
+        return pd.read_csv(path), {
+            "input_is_zip": False,
+            "source_member": None,
+            "source_selection": "csv_file",
+        }
+
+    with ZipFile(path) as archive:
+        infos = [info for info in archive.infolist() if not info.is_dir()]
+        root_results = [
+            info
+            for info in infos
+            if _normalized_zip_member_name(info.filename) == "mmaud_results.csv"
+        ]
+        basename_results = [
+            info
+            for info in infos
+            if PurePosixPath(_normalized_zip_member_name(info.filename)).name
+            == "mmaud_results.csv"
+        ]
+        csv_members = [
+            info
+            for info in infos
+            if PurePosixPath(_normalized_zip_member_name(info.filename)).suffix.lower()
+            == ".csv"
+        ]
+        if len(root_results) > 1:
+            raise ValueError("official Track 5 ZIP has duplicate root mmaud_results.csv members")
+        if root_results:
+            selected = root_results[0]
+            selection = "root_mmaud_results_csv"
+        elif len(basename_results) == 1:
+            selected = basename_results[0]
+            selection = "nested_mmaud_results_csv"
+        elif len(csv_members) == 1:
+            selected = csv_members[0]
+            selection = "single_csv_member"
+        else:
+            raise ValueError(
+                "official Track 5 ZIP must contain an unambiguous results CSV: "
+                "root mmaud_results.csv, one nested mmaud_results.csv, or one CSV member"
+            )
+        with archive.open(selected) as handle:
+            payload = handle.read()
+    return pd.read_csv(BytesIO(payload)), {
+        "input_is_zip": True,
+        "source_member": selected.filename,
+        "source_selection": selection,
+        "input_file_member_count": int(len(infos)),
+        "input_csv_member_count": int(len(csv_members)),
+    }
 
 
 def _official_track5_artifact_fingerprint(path: Path) -> dict[str, Any]:
