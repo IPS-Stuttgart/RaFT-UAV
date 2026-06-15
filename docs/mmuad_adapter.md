@@ -488,6 +488,30 @@ when their JSON/YAML metadata is readable. This is an onboarding and readiness
 check only; tracking still expects extracted normalized exports, or explicit
 native ROS extraction inputs, before running the adapter.
 
+For normalized/exported sequence roots and public Track 5 folder bundles, the
+main CLI can also accept an archive directly:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --sequence-root data/mmuad_export.zip \
+  --output-dir outputs/mmuad_from_archive \
+  --ug2-official-complete-to-sequence-timestamps \
+  --ug2-official-timestamp-source image \
+  --ug2-official-results-csv outputs/mmuad_from_archive/mmaud_results.csv \
+  --ug2-official-codabench-zip outputs/mmuad_from_archive/ug2_submission.zip \
+  --ug2-official-validate-on-write
+```
+
+Archives are extracted under `outputs/mmuad_from_archive/` by default before
+normal sequence discovery runs, and the CLI writes
+`mmuad_sequence_root_archive_manifest.json` with the archive hash, extracted
+root, extracted files, and skipped unsafe members. Use
+`--sequence-root-archive-extract-dir` to choose a different extraction parent.
+The extractor rejects absolute paths, parent-directory traversal, drive-like
+member names, and archive links. This bridge covers packaged normalized/public
+Track 5 layouts; it still does not parse undocumented native binary packet
+streams.
+
 The public UG2+ Track 5 README requires a ZIP containing only
 `mmaud_results.csv`. The official public CSV columns are
 `Sequence,Timestamp,Position,Classification`, where `Position` is written as a
