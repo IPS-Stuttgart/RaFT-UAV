@@ -6016,6 +6016,98 @@ def test_native_ros_extraction_manifest_reports_missing_topic_map_topics(
     assert saved["extracted_messages"] == extracted.manifest["extracted_messages"]
 
 
+def test_native_ros_extraction_manifest_reports_empty_matched_topics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_empty_matched_topics.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map_native.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_empty_matched_topics",
+                "exports": [
+                    {
+                        "topic": "/camera/camera_info",
+                        "kind": "camera_info_calibration",
+                        "source": "cam0",
+                    },
+                    {
+                        "topic": "/detector/pose",
+                        "kind": "pose_candidate",
+                        "source": "detector",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    camera_connection = SimpleNamespace(
+        topic="/camera/camera_info",
+        msgtype="sensor_msgs/msg/CameraInfo",
+    )
+    candidate_connection = SimpleNamespace(
+        topic="/detector/pose",
+        msgtype="geometry_msgs/msg/PoseStamped",
+    )
+    observed_calls: list[tuple[str, ...]] = []
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [camera_connection, candidate_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            observed_calls.append(tuple(connection.topic for connection in connections))
+            return []
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert observed_calls == [("/camera/camera_info",), ("/detector/pose",)]
+    assert extracted.candidates is None
+    assert extracted.truth is None
+    assert extracted.manifest["candidate_rows"] == 0
+    assert extracted.manifest["truth_rows"] == 0
+    assert extracted.manifest["extracted_messages"] == [
+        {
+            "topic": "/camera/camera_info",
+            "kind": "camera_info_calibration",
+            "status": "matched_topic_no_messages",
+            "msgtype": "sensor_msgs/msg/CameraInfo",
+        },
+        {
+            "topic": "/detector/pose",
+            "kind": "pose_candidate",
+            "status": "matched_topic_no_messages",
+            "msgtype": "geometry_msgs/msg/PoseStamped",
+        },
+    ]
+    saved = json.loads(
+        (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
+    )
+    assert saved["extracted_messages"] == extracted.manifest["extracted_messages"]
+
+
 def test_topic_map_exports_load_json_candidates_and_truth(tmp_path: Path) -> None:
     exports = tmp_path / "exports"
     exports.mkdir()

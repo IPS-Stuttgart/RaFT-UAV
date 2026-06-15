@@ -168,7 +168,11 @@ def extract_native_rosbag_topic_map(
             for connection in topic_connections
             if not _is_camera_info_kind(by_topic[connection.topic])
         ]
+        replay_message_counts = {str(connection.topic): 0 for connection in replay_connections}
         for connection, timestamp_ns, rawdata in reader.messages(connections=replay_connections):
+            replay_message_counts[str(connection.topic)] = (
+                replay_message_counts.get(str(connection.topic), 0) + 1
+            )
             spec = by_topic[connection.topic]
             kind = str(spec.get("kind", "candidate")).strip().lower()
             message = reader.deserialize(rawdata, connection.msgtype)
@@ -585,6 +589,19 @@ def extract_native_rosbag_topic_map(
                     "rows": int(rows),
                 }
             )
+        for connection in replay_connections:
+            topic = str(connection.topic)
+            if replay_message_counts.get(topic, 0) > 0:
+                continue
+            spec = by_topic[connection.topic]
+            extracted.append(
+                {
+                    "topic": connection.topic,
+                    "kind": str(spec.get("kind", "candidate")).strip().lower(),
+                    "status": "matched_topic_no_messages",
+                    "msgtype": str(getattr(connection, "msgtype", "")),
+                }
+            )
 
     candidates = merge_candidate_frames(candidate_frames) if candidate_frames else None
     truth = TruthFrame(normalize_truth_columns(pd.DataFrame.from_records(truth_rows))) if truth_rows else None
@@ -647,7 +664,11 @@ def _camera_models_from_camera_info_topics(
         return {}, []
     models: dict[str, CameraModel] = {}
     extracted: list[dict[str, Any]] = []
+    message_counts = {str(connection.topic): 0 for connection in connections}
     for connection, timestamp_ns, rawdata in reader.messages(connections=connections):
+        message_counts[str(connection.topic)] = (
+            message_counts.get(str(connection.topic), 0) + 1
+        )
         spec = by_topic[connection.topic]
         kind = str(spec.get("kind", "camera_info")).strip().lower()
         message = reader.deserialize(rawdata, connection.msgtype)
@@ -677,6 +698,19 @@ def _camera_models_from_camera_info_topics(
                 "time_s": time_s,
                 "rows": 1,
                 "source": source,
+            }
+        )
+    for connection in connections:
+        topic = str(connection.topic)
+        if message_counts.get(topic, 0) > 0:
+            continue
+        spec = by_topic[connection.topic]
+        extracted.append(
+            {
+                "topic": connection.topic,
+                "kind": str(spec.get("kind", "camera_info")).strip().lower(),
+                "status": "matched_topic_no_messages",
+                "msgtype": str(getattr(connection, "msgtype", "")),
             }
         )
     return models, extracted
