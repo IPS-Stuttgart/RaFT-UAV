@@ -826,6 +826,12 @@ PYTHONPATH=src python -m raft_uav.mmuad.cli \
   --output-dir outputs/mmuad_val
 ```
 
+For local evaluation only, ZIP loading is intentionally a little more
+permissive than upload validation: it accepts a root `mmaud_results.csv`, one
+nested `mmaud_results.csv`, or one unambiguous CSV member. Nested or extra
+members still block `codabench_upload_ready` and `leaderboard_ready`; normalize
+the package before upload.
+
 ## Leaderboard-Style Local Metrics And Completion
 
 The adapter can compute a closer UG2-style local sanity metric with

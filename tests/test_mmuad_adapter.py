@@ -5689,6 +5689,74 @@ def test_cli_evaluates_official_zip_with_public_track5_protocol(tmp_path: Path) 
     assert rows["matched"].tolist() == [True, True]
 
 
+def test_cli_evaluates_nested_official_zip_but_marks_not_upload_ready(
+    tmp_path: Path,
+) -> None:
+    zip_path = tmp_path / "nested_official_submission.zip"
+    official = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,10)", "(1,0,10)"],
+            "Classification": [2, 2],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("submission/mmaud_results.csv", official.to_csv(index=False))
+        archive.writestr("README.txt", "not upload-ready until normalized")
+    truth = tmp_path / "truth.csv"
+    output = tmp_path / "out"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+            "uav_type": ["2", "2"],
+        }
+    ).to_csv(truth, index=False)
+
+    status = mmuad_cli_main(
+        [
+            "--evaluate-results-zip",
+            str(zip_path),
+            "--evaluate-truth-csv",
+            str(truth),
+            "--evaluation-protocol",
+            "public-track5",
+            "--evaluation-timestamp-tolerance-s",
+            "0",
+            "--evaluation-json",
+            str(output / "public_track5_eval_nested.json"),
+            "--evaluation-rows-csv",
+            str(output / "public_track5_eval_nested_rows.csv"),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    metrics = json.loads(
+        (output / "public_track5_eval_nested.json").read_text(encoding="utf-8")
+    )
+    rows = pd.read_csv(output / "public_track5_eval_nested_rows.csv")
+    assert metrics["matched_count"] == 2
+    assert metrics["pooled"]["mean_square_loss_m2"] == 0.0
+    assert rows["matched"].tolist() == [True, True]
+    assert metrics["official_submission_valid"] is False
+    assert metrics["score_valid_for_leaderboard"] is False
+    assert metrics["leaderboard_ready"] is False
+    assert metrics["codabench_upload_ready"] is False
+    validation = metrics["official_submission_validation"]
+    assert validation["nested_mmaud_results_csv_members"] == [
+        "submission/mmaud_results.csv"
+    ]
+    assert validation["has_root_mmaud_results_csv"] is False
+    assert "official_upload_package_not_ready" in metrics["leaderboard_blocking_reasons"]
+    assert "official_zip_members_invalid" in metrics["leaderboard_blocking_reasons"]
+
+
 def test_cli_public_track5_evaluation_reports_csv_not_upload_ready(
     tmp_path: Path,
 ) -> None:
@@ -5817,6 +5885,67 @@ def test_cli_evaluates_official_zip_against_official_truth_zip(
         (output / "official_truth_eval.json").read_text(encoding="utf-8")
     )
     rows = pd.read_csv(output / "official_truth_eval_rows.csv")
+    assert metrics["leaderboard_ready"] is True
+    assert metrics["score_valid_for_leaderboard"] is True
+    assert metrics["codabench_upload_ready"] is True
+    assert metrics["pooled"]["mean_square_loss_m2"] == 0.5
+    assert metrics["pooled"]["classification_accuracy"] == 0.5
+    assert rows["truth_x_m"].tolist() == [0.0, 1.0]
+    assert rows["truth_uav_type"].tolist() == [2, 2]
+
+
+def test_cli_evaluates_official_zip_against_nested_official_truth_zip(
+    tmp_path: Path,
+) -> None:
+    predictions_zip = tmp_path / "official_submission.zip"
+    truth_zip = tmp_path / "nested_official_truth.zip"
+    output = tmp_path / "out"
+    predictions = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,10)", "(2,0,10)"],
+            "Classification": [2, 1],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,10)", "(1,0,10)"],
+            "Classification": [2, 2],
+        }
+    )
+    with ZipFile(predictions_zip, "w") as archive:
+        archive.writestr("mmaud_results.csv", predictions.to_csv(index=False))
+    with ZipFile(truth_zip, "w") as archive:
+        archive.writestr("truth/mmaud_results.csv", truth.to_csv(index=False))
+        archive.writestr("README.txt", "truth bundle exported from a nested folder")
+
+    status = mmuad_cli_main(
+        [
+            "--evaluate-results-zip",
+            str(predictions_zip),
+            "--evaluate-truth-file",
+            str(truth_zip),
+            "--evaluation-protocol",
+            "public-track5",
+            "--evaluation-timestamp-tolerance-s",
+            "0",
+            "--evaluation-json",
+            str(output / "nested_official_truth_eval.json"),
+            "--evaluation-rows-csv",
+            str(output / "nested_official_truth_eval_rows.csv"),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    metrics = json.loads(
+        (output / "nested_official_truth_eval.json").read_text(encoding="utf-8")
+    )
+    rows = pd.read_csv(output / "nested_official_truth_eval_rows.csv")
     assert metrics["leaderboard_ready"] is True
     assert metrics["score_valid_for_leaderboard"] is True
     assert metrics["codabench_upload_ready"] is True
