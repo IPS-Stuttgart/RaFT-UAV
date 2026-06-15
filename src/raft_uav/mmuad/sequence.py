@@ -193,6 +193,23 @@ TIMESTAMP_JSON_CONTAINER_KEYS = (
     "data",
     "samples",
 )
+TIMESTAMP_FRAME_NAME_ALIASES = (
+    "file",
+    "filename",
+    "file_name",
+    "path",
+    "relative_path",
+    "frame",
+    "frame_name",
+    "frame_id",
+    "sample",
+    "sample_name",
+    "image",
+    "image_file",
+    "lidar_file",
+    "point_cloud_file",
+    "pointcloud_file",
+)
 RADAR_RANGE_ALIASES = ("range_m", "range", "r", "rho", "distance_m")
 RADAR_AZIMUTH_ALIASES = ("azimuth_deg", "azimuth", "az", "bearing", "bearing_deg")
 CANDIDATE_TIME_ALIASES = (
@@ -480,7 +497,7 @@ def load_sequence_export(
                 default=path.stem.replace("_points", "-cluster"),
             ),
             sequence_id=paths.sequence_id,
-            time_s=_official_point_cloud_frame_time_s(path, sequence_root=paths.root),
+            time_s=_point_cloud_frame_time_s(path, sequence_root=paths.root),
             voxel_size_m=voxel_size_m,
             min_points=min_cluster_points,
         )
@@ -903,7 +920,7 @@ def _point_files(path: Path) -> list[Path]:
             suffixes=POINT_FILE_SUFFIXES,
         )
     )
-    return _unique_paths(files)
+    return _unique_paths([item for item in files if not _looks_like_timestamp_sidecar(item)])
 
 
 def _truth_file(path: Path) -> Path | None:
@@ -1097,16 +1114,17 @@ def _point_numpy_files(path: Path) -> list[Path]:
     ]
 
 
-def _official_point_cloud_frame_time_s(path: Path, *, sequence_root: Path) -> float | None:
-    if data_file_suffix(path) not in {".npy", ".npz"}:
-        return None
+def _point_cloud_frame_time_s(path: Path, *, sequence_root: Path) -> float | None:
+    sidecar_time = _timestamp_sidecar_time_for_file(path)
+    if sidecar_time is not None:
+        return sidecar_time
     if not _relative_path_has_any(
         path,
         root=sequence_root,
         tokens=("lidar_360", "livox_avia", "radar_enhance_pcl"),
     ):
         return None
-    return infer_time_s_from_filename(path)
+    return _timestamp_from_filename_or_none(path)
 
 
 def _all_official_timestamp_dirs() -> tuple[str, ...]:
@@ -1178,19 +1196,213 @@ def _normalized_data_stem(path: Path) -> str:
 
 
 def _timestamps_from_timestamp_sidecar(path: Path) -> set[float]:
+    return _finite_timestamp_set(_ordered_timestamps_from_timestamp_sidecar(path))
+
+
+def _ordered_timestamps_from_timestamp_sidecar(path: Path) -> list[float]:
     try:
         suffix = data_file_suffix(path)
         if suffix in {".csv", ".tsv", ".txt"}:
-            values = _timestamps_from_delimited_sidecar(path)
+            return _timestamps_from_delimited_sidecar(path)
         elif suffix in {".json", ".jsonl", ".ndjson"}:
-            values = _timestamps_from_json_sidecar_payload(read_json_export_payload(path))
+            return _timestamps_from_json_sidecar_payload(read_json_export_payload(path))
         elif suffix in {".npy", ".npz"}:
-            values = _timestamps_from_numpy_sidecar(path)
-        else:
-            values = []
+            return _timestamps_from_numpy_sidecar(path)
     except (OSError, ValueError, json.JSONDecodeError, pd.errors.ParserError):
-        values = []
-    return _finite_timestamp_set(values)
+        return []
+    return []
+
+
+def _timestamp_sidecar_time_for_file(path: Path) -> float | None:
+    for sidecar in _timestamp_sidecar_files(path.parent):
+        explicit = _timestamp_sidecar_explicit_map(sidecar)
+        for key in _timestamp_sidecar_lookup_keys(path):
+            value = explicit.get(key)
+            if value is not None:
+                return value
+        ordered = _ordered_timestamps_from_timestamp_sidecar(sidecar)
+        if not ordered:
+            continue
+        siblings = _timestamped_point_cloud_siblings(sidecar)
+        if len(siblings) != len(ordered):
+            continue
+        for sibling, timestamp in zip(siblings, ordered, strict=False):
+            if sibling == path:
+                if np.isfinite(timestamp):
+                    return float(timestamp)
+                return None
+    return None
+
+
+def _timestamp_sidecar_files(directory: Path) -> list[Path]:
+    if not Path(directory).is_dir():
+        return []
+    return [
+        item
+        for item in sorted(Path(directory).iterdir())
+        if item.is_file() and _looks_like_timestamp_sidecar(item)
+    ]
+
+
+def _timestamp_sidecar_explicit_map(path: Path) -> dict[str, float]:
+    try:
+        suffix = data_file_suffix(path)
+        if suffix in {".csv", ".tsv", ".txt"}:
+            try:
+                frame = pd.read_csv(path, sep=None, engine="python")
+            except Exception:
+                frame = pd.DataFrame()
+            return _timestamp_map_from_frame(frame)
+        if suffix in {".json", ".jsonl", ".ndjson"}:
+            return _timestamp_map_from_json_payload(read_json_export_payload(path))
+        if suffix in {".npy", ".npz"}:
+            return _timestamp_map_from_numpy_sidecar(path)
+    except (OSError, ValueError, json.JSONDecodeError, pd.errors.ParserError):
+        return {}
+    return {}
+
+
+def _timestamp_map_from_frame(frame: pd.DataFrame) -> dict[str, float]:
+    if frame.empty:
+        return {}
+    name_column = _first_matching_column(frame, TIMESTAMP_FRAME_NAME_ALIASES)
+    if name_column is None:
+        return {}
+    normalized = normalize_time_column_aliases(frame)
+    if "time_s" not in normalized.columns:
+        return {}
+    names = normalized[name_column].astype(str)
+    times = pd.to_numeric(normalized["time_s"], errors="coerce")
+    out: dict[str, float] = {}
+    for raw_name, timestamp in zip(names, times, strict=False):
+        if not np.isfinite(timestamp):
+            continue
+        for key in _timestamp_sidecar_name_keys(raw_name):
+            out[key] = float(timestamp)
+    return out
+
+
+def _timestamp_map_from_json_payload(payload: Any) -> dict[str, float]:
+    if isinstance(payload, Mapping):
+        if all(not isinstance(value, (list, tuple, Mapping)) for value in payload.values()):
+            out: dict[str, float] = {}
+            for raw_name, raw_timestamp in payload.items():
+                timestamp = _coerce_timestamp_value(raw_timestamp)
+                if not np.isfinite(timestamp):
+                    continue
+                for key in _timestamp_sidecar_name_keys(raw_name):
+                    out[key] = float(timestamp)
+            if out:
+                return out
+        for key in TIMESTAMP_JSON_CONTAINER_KEYS:
+            nested = _mapping_get_case_insensitive(payload, key)
+            if nested is not None:
+                out = _timestamp_map_from_json_payload(nested)
+                if out:
+                    return out
+        frame = _json_mapping_to_timestamp_frame(payload)
+        return _timestamp_map_from_frame(frame)
+    if isinstance(payload, list):
+        rows = [item for item in payload if isinstance(item, Mapping)]
+        if rows:
+            return _timestamp_map_from_frame(pd.DataFrame(rows))
+    return {}
+
+
+def _timestamp_map_from_numpy_sidecar(path: Path) -> dict[str, float]:
+    payload = np.load(path, allow_pickle=True)
+    try:
+        if isinstance(payload, np.lib.npyio.NpzFile):
+            name_key = _matching_npz_key_or_none(
+                payload,
+                preferred=TIMESTAMP_FRAME_NAME_ALIASES,
+            )
+            time_key = _matching_npz_key_or_none(
+                payload,
+                preferred=(
+                    "time_s",
+                    "timestamp_s",
+                    "timestamp",
+                    "timestamps",
+                    "times",
+                    "frame_times",
+                    "frame_timestamps",
+                ),
+            )
+            if name_key is None or time_key is None:
+                return {}
+            return _timestamp_map_from_name_time_arrays(payload[name_key], payload[time_key])
+        array = np.asarray(payload)
+        if array.dtype.names:
+            frame = pd.DataFrame({name: array[name] for name in array.dtype.names})
+            return _timestamp_map_from_frame(frame)
+        return {}
+    finally:
+        if isinstance(payload, np.lib.npyio.NpzFile):
+            payload.close()
+
+
+def _timestamp_map_from_name_time_arrays(names: Any, times: Any) -> dict[str, float]:
+    name_array = np.asarray(names).reshape(-1)
+    time_array = np.asarray(times).reshape(-1)
+    out: dict[str, float] = {}
+    for raw_name, raw_timestamp in zip(name_array, time_array, strict=False):
+        timestamp = _coerce_timestamp_value(raw_timestamp)
+        if not np.isfinite(timestamp):
+            continue
+        for key in _timestamp_sidecar_name_keys(raw_name):
+            out[key] = float(timestamp)
+    return out
+
+
+def _timestamp_sidecar_lookup_keys(path: Path) -> tuple[str, ...]:
+    keys: list[str] = []
+    for raw in (path.name, path.stem, path.as_posix()):
+        keys.extend(_timestamp_sidecar_name_keys(raw))
+    return tuple(dict.fromkeys(keys))
+
+
+def _timestamp_sidecar_name_keys(value: Any) -> tuple[str, ...]:
+    text = str(value).strip().replace("\\", "/")
+    if not text:
+        return ()
+    path = Path(text)
+    values = [text, text.lower(), path.name, path.name.lower(), path.stem, path.stem.lower()]
+    return tuple(dict.fromkeys(item for item in values if item))
+
+
+def _timestamped_point_cloud_siblings(sidecar: Path) -> list[Path]:
+    directory = Path(sidecar).parent
+    return [
+        item
+        for item in sorted(directory.iterdir())
+        if item.is_file()
+        and item != sidecar
+        and path_matches_suffix(item, POINT_FILE_SUFFIXES)
+        and not _looks_like_timestamp_sidecar(item)
+    ]
+
+
+def _first_matching_column(frame: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
+    lower = {str(column).lower(): str(column) for column in frame.columns}
+    for alias in aliases:
+        column = lower.get(alias.lower())
+        if column is not None:
+            return column
+    return None
+
+
+def _matching_npz_key_or_none(
+    payload: np.lib.npyio.NpzFile,
+    *,
+    preferred: tuple[str, ...],
+) -> str | None:
+    lower_to_key = {key.lower(): key for key in payload.files}
+    for key in preferred:
+        matched = lower_to_key.get(key.lower())
+        if matched is not None:
+            return matched
+    return None
 
 
 def _timestamps_from_numpy_sidecar(path: Path) -> list[float]:

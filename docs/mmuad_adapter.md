@@ -405,10 +405,14 @@ Folder-style exports are also supported: files inside `livox_avia`, `lidar`,
 inside `tracking_results`, `tracks`, `trajectories`, `detections`, or
 `candidates` folders are loaded as candidate trajectories. Per-frame NumPy pose
 files may contain only `x_m,y_m,z_m`; their timestamp is inferred from the
-filename. Files named `class`, `classes`, `uav_type`, or `category`, and files
-inside matching folders, are read as sequence class labels when they are
-CSV/TSV/TXT, JSON, or compact NumPy exports. JSON class files may be direct
-labels, row lists, or sequence-to-type maps. Loaded class labels are attached to
+filename. Point-cloud frame files in official-style modality folders also use
+same-folder timestamp sidecars such as `timestamps.csv`, `frame_times.txt`,
+`timestamps.json`, or `frame_times.npz`; sidecars may map `filename`/`path` to a
+timestamp or provide timestamps in the same order as the sorted frame files.
+Files named `class`, `classes`, `uav_type`, or `category`, and files inside
+matching folders, are read as sequence class labels when they are CSV/TSV/TXT,
+JSON, or compact NumPy exports. JSON class files may be direct labels, row
+lists, or sequence-to-type maps. Loaded class labels are attached to
 otherwise-unlabeled candidates; numeric labels are preserved as strings unless
 you provide an external class map for official names. This is still a
 normalized/exported-data bridge, not a parser for undocumented native packets.
