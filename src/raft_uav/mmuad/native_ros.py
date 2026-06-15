@@ -14,6 +14,7 @@ tracking logs:
 * ``vision_msgs/msg/Detection2D`` / ``Detection2DArray`` -> calibrated camera
   detection candidates;
 * ``vision_msgs/msg/Detection3D`` / ``Detection3DArray`` -> bbox center rows;
+* common tracked/detected object arrays -> object pose rows;
 * ``visualization_msgs/msg/Marker`` / ``MarkerArray`` -> marker position rows;
 * ``geometry_msgs/msg/Pose`` / ``PoseStamped`` /
   ``PoseWithCovariance(Stamped)`` -> truth rows or candidate rows;
@@ -99,6 +100,9 @@ def extract_native_rosbag_topic_map(
     ``detection3d_truth`` / ``detection3d_array_truth`` /
     ``detection3d_candidate`` / ``detection3d_array_candidate``
         Convert vision_msgs 3D detection bbox centers into truth/candidate rows.
+    ``tracked_objects_truth`` / ``tracked_objects_candidate``
+        Convert common perception/tracker object arrays with ``objects``,
+        ``tracks``, ``detections``, or ``targets`` children into pose rows.
     ``camera_detections_candidate`` / ``detection2d_candidate`` /
     ``detection2d_array_candidate``
         Convert vision_msgs 2D detections into calibrated camera candidates.
@@ -354,6 +358,70 @@ def extract_native_rosbag_topic_map(
                                 ),
                                 "std_xy_m": spec.get("std_xy_m", 2.0),
                                 "std_z_m": spec.get("std_z_m", 5.0),
+                                "confidence": spec.get(
+                                    "confidence",
+                                    row.get("confidence", 1.0),
+                                ),
+                                "class_name": spec.get(
+                                    "class_name",
+                                    row.get("class_name", "uav"),
+                                ),
+                            }
+                        )
+                        candidate_rows.append(row)
+                    if candidate_rows:
+                        candidate_frames.append(
+                            CandidateFrame(pd.DataFrame.from_records(candidate_rows))
+                        )
+                    rows = len(candidate_rows)
+                elif kind in {
+                    "tracked_object_truth",
+                    "tracked_objects_truth",
+                    "tracked_object_array_truth",
+                    "object_array_truth",
+                    "detected_objects_truth",
+                }:
+                    rows_for_message = tracked_objects_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        frame_id=spec.get("frame_id"),
+                    )
+                    truth_rows.extend(rows_for_message)
+                    rows = len(rows_for_message)
+                elif kind in {
+                    "tracked_object_candidate",
+                    "tracked_objects_candidate",
+                    "tracked_object_array_candidate",
+                    "object_array_candidate",
+                    "detected_objects_candidate",
+                }:
+                    rows_for_message = tracked_objects_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        frame_id=spec.get("frame_id"),
+                    )
+                    candidate_rows = []
+                    for row in rows_for_message:
+                        row.update(
+                            {
+                                "source": source,
+                                "track_id": spec.get(
+                                    "track_id",
+                                    row.get(
+                                        "track_id",
+                                        row.get("object_id", row.get("object_index", source)),
+                                    ),
+                                ),
+                                "std_xy_m": spec.get(
+                                    "std_xy_m",
+                                    row.get("std_xy_m", 2.0),
+                                ),
+                                "std_z_m": spec.get(
+                                    "std_z_m",
+                                    row.get("std_z_m", 5.0),
+                                ),
                                 "confidence": spec.get(
                                     "confidence",
                                     row.get("confidence", 1.0),
@@ -1204,11 +1272,15 @@ def _convert_angle_unit(
 
 
 def _message_stamp_time_s(message: Any) -> float | None:
-    header = getattr(message, "header", None)
-    stamp = getattr(header, "stamp", None)
+    header = _field_value(message, "header")
+    stamp = _field_value(header, "stamp") if header is not None else None
+    if stamp is None:
+        stamp = _field_value(message, "stamp")
     if stamp is not None:
-        sec = getattr(stamp, "sec", getattr(stamp, "secs", None))
-        nanosec = getattr(stamp, "nanosec", getattr(stamp, "nsecs", 0))
+        sec = _field_value(stamp, "sec", "secs")
+        nanosec = _field_value(stamp, "nanosec", "nsecs")
+        if nanosec is None:
+            nanosec = 0
         if sec is not None:
             return float(sec) + float(nanosec) * 1.0e-9
     return None
@@ -1434,6 +1506,70 @@ def marker_message_to_rows(
     return rows
 
 
+def tracked_objects_message_to_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    frame_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Convert common tracked/detected object arrays into normalized pose rows."""
+
+    objects = _tracked_object_children(message)
+    if not objects and _tracked_object_pose_source(message) is not None:
+        objects = [message]
+    parent_time_s = _message_stamp_time_s(message)
+    parent_frame_id = _message_frame_id(message)
+    rows: list[dict[str, Any]] = []
+    for object_index, tracked_object in enumerate(objects):
+        if not _frame_filter_matches(
+            tracked_object,
+            child_frame_id=None,
+            frame_id=frame_id,
+            fallback_frame_id=parent_frame_id,
+        ):
+            continue
+        source = _tracked_object_pose_source(tracked_object)
+        if source is None:
+            continue
+        xyz = _message_position_xyz(source)
+        if xyz is None:
+            continue
+        object_time_s = _message_stamp_time_s(tracked_object)
+        row = {
+            "sequence_id": sequence_id,
+            "time_s": (
+                object_time_s
+                if object_time_s is not None
+                else parent_time_s
+                if parent_time_s is not None
+                else float(time_s)
+            ),
+            "x_m": xyz[0],
+            "y_m": xyz[1],
+            "z_m": xyz[2],
+            "object_index": int(object_index),
+        }
+        _add_frame_metadata(
+            row,
+            tracked_object,
+            fallback_frame_id=parent_frame_id,
+        )
+        object_id = _tracked_object_id(tracked_object)
+        if object_id is not None:
+            row["object_id"] = object_id
+            row["track_id"] = object_id
+        class_name = _tracked_object_class_name(tracked_object)
+        if class_name is not None:
+            row["class_name"] = class_name
+        confidence = _tracked_object_confidence(tracked_object)
+        if confidence is not None:
+            row["confidence"] = confidence
+        _add_pose_covariance_metadata(row, tracked_object)
+        rows.append(row)
+    return rows
+
+
 def multidof_message_to_rows(
     message: Any,
     *,
@@ -1581,12 +1717,14 @@ def _add_frame_metadata(
 
 
 def _message_child_frame_id(message: Any) -> Any | None:
-    return getattr(message, "child_frame_id", None)
+    return _field_value(message, "child_frame_id")
 
 
 def _message_frame_id(message: Any) -> Any | None:
-    header = getattr(message, "header", None)
-    return getattr(header, "frame_id", None)
+    header = _field_value(message, "header")
+    if header is None:
+        return _field_value(message, "frame_id")
+    return _field_value(header, "frame_id")
 
 
 def _projector_from_spec(spec: dict[str, Any]) -> LocalENUProjector:
@@ -1887,23 +2025,32 @@ def _add_navsat_covariance_metadata(row: dict[str, Any], message: Any) -> None:
 
 
 def _position_from_message(message: Any) -> Any | None:
-    if all(hasattr(message, attr) for attr in ("x", "y", "z")):
+    if all(_field_value(message, attr) is not None for attr in ("x", "y", "z")):
         return message
-    point = getattr(message, "point", None)
+    point = _field_value(message, "point")
     if point is not None:
         return point
-    transform = getattr(message, "transform", None)
+    position = _field_value(message, "position")
+    if position is not None:
+        return position
+    center = _field_value(message, "center", "centroid")
+    if center is not None:
+        return center
+    transform = _field_value(message, "transform")
     if transform is not None:
-        translation = getattr(transform, "translation", None)
+        translation = _field_value(transform, "translation")
         if translation is not None:
             return translation
-    translation = getattr(message, "translation", None)
+    translation = _field_value(message, "translation")
     if translation is not None:
         return translation
-    pose = getattr(message, "pose", message)
-    if hasattr(pose, "pose"):
-        pose = pose.pose
-    return getattr(pose, "position", None)
+    pose = _field_value(message, "pose")
+    if pose is None:
+        pose = message
+    inner_pose = _field_value(pose, "pose")
+    if inner_pose is not None:
+        pose = inner_pose
+    return _field_value(pose, "position")
 
 
 def _message_position_xyz(message: Any) -> tuple[float, float, float] | None:
@@ -1916,9 +2063,9 @@ def _xyz_from_position(position: Any | None) -> tuple[float, float, float] | Non
         return None
     try:
         return (
-            float(getattr(position, "x")),
-            float(getattr(position, "y")),
-            float(getattr(position, "z")),
+            float(_field_value(position, "x")),
+            float(_field_value(position, "y")),
+            float(_field_value(position, "z")),
         )
     except (TypeError, ValueError, AttributeError):
         return None
@@ -2076,6 +2223,234 @@ def _marker_track_id(*, marker_id: Any | None, namespace: Any | None) -> str | N
     if has_namespace:
         return str(namespace)
     return None
+
+
+def _tracked_object_children(message: Any) -> list[Any]:
+    for name in (
+        "objects",
+        "tracked_objects",
+        "detected_objects",
+        "perception_objects",
+        "tracks",
+        "detections",
+        "targets",
+    ):
+        values = _field_sequence(message, (name,))
+        if values:
+            return [value for value in values if value is not None]
+    return []
+
+
+def _tracked_object_pose_source(tracked_object: Any) -> Any | None:
+    for path in (
+        (),
+        ("pose",),
+        ("position",),
+        ("point",),
+        ("center",),
+        ("centroid",),
+        ("bbox", "center"),
+        ("bounding_box", "center"),
+        ("box", "center"),
+        ("pose_with_covariance",),
+        ("pose_with_covariance", "pose"),
+        ("kinematics", "pose_with_covariance"),
+        ("kinematics", "pose_with_covariance", "pose"),
+        ("state", "pose"),
+        ("state", "pose", "pose"),
+        ("state", "pose_covariance"),
+        ("state", "pose_covariance", "pose"),
+        ("state", "pose_with_covariance"),
+        ("state", "pose_with_covariance", "pose"),
+        ("object", "pose"),
+        ("object", "pose", "pose"),
+    ):
+        source = tracked_object if not path else _nested_field_value(tracked_object, *path)
+        if source is not None and _message_position_xyz(source) is not None:
+            return source
+    return None
+
+
+def _tracked_object_id(tracked_object: Any) -> str | None:
+    for path in (
+        ("track_id",),
+        ("tracking_id",),
+        ("object_id",),
+        ("object_id", "uuid"),
+        ("object_id", "value"),
+        ("id",),
+        ("id", "uuid"),
+        ("id", "value"),
+        ("uuid",),
+        ("track", "id"),
+    ):
+        raw = _nested_field_value(tracked_object, *path)
+        object_id = _format_object_identifier(raw)
+        if object_id is not None:
+            return object_id
+    return None
+
+
+def _format_object_identifier(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (bytes, bytearray)):
+        return value.hex()
+    if isinstance(value, str):
+        return value
+    if _is_scalar_like(value):
+        return str(value)
+    for name in ("uuid", "value", "data", "id"):
+        nested = _field_value(value, name)
+        if nested is not None and nested is not value:
+            formatted = _format_object_identifier(nested)
+            if formatted is not None:
+                return formatted
+    try:
+        items = list(value)
+    except TypeError:
+        return str(value)
+    if not items:
+        return None
+    if all(isinstance(item, int) and 0 <= item <= 255 for item in items):
+        return "".join(f"{int(item):02x}" for item in items)
+    if len(items) <= 8:
+        return ":".join(str(item) for item in items)
+    return str(value)
+
+
+def _tracked_object_class_name(tracked_object: Any) -> str | None:
+    for path in (
+        ("class_name",),
+        ("class_id",),
+        ("category",),
+        ("label",),
+        ("type",),
+        ("object_class",),
+        ("classification",),
+        ("classification", "label"),
+        ("classification", "class_id"),
+        ("classification", "name"),
+        ("hypothesis", "class_id"),
+        ("semantic", "label"),
+    ):
+        label = _classification_label(_nested_field_value(tracked_object, *path))
+        if label is not None:
+            return label
+    for classification in _field_sequence(
+        tracked_object,
+        ("classifications", "classification_results", "labels"),
+    ):
+        label = _classification_label(classification)
+        if label is not None:
+            return label
+    return None
+
+
+def _classification_label(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, str):
+        return value
+    if _is_scalar_like(value):
+        return str(value)
+    hypothesis = _field_value(value, "hypothesis")
+    if hypothesis is not None:
+        label = _classification_label(hypothesis)
+        if label is not None:
+            return label
+    for name in ("class_name", "class_id", "label", "name", "category", "type", "id"):
+        raw = _field_value(value, name)
+        if raw not in (None, ""):
+            return str(raw)
+    return None
+
+
+def _tracked_object_confidence(tracked_object: Any) -> float | None:
+    for path in (
+        ("confidence",),
+        ("score",),
+        ("probability",),
+        ("existence_probability",),
+        ("tracking_confidence",),
+        ("classification", "probability"),
+        ("classification", "score"),
+        ("hypothesis", "score"),
+    ):
+        value = _nested_field_float(tracked_object, *path)
+        if value is not None:
+            return value
+    scores = [
+        _classification_confidence(classification)
+        for classification in _field_sequence(
+            tracked_object,
+            ("classifications", "classification_results", "labels"),
+        )
+    ]
+    valid_scores = [score for score in scores if score is not None]
+    if valid_scores:
+        return max(valid_scores)
+    return None
+
+
+def _classification_confidence(value: Any) -> float | None:
+    for name in ("confidence", "score", "probability"):
+        score = _field_float(value, name)
+        if score is not None:
+            return score
+    hypothesis = _field_value(value, "hypothesis")
+    if hypothesis is not None:
+        return _classification_confidence(hypothesis)
+    return None
+
+
+def _add_pose_covariance_metadata(row: dict[str, Any], message: Any) -> None:
+    for source in _pose_covariance_sources(message):
+        values = _numeric_field_sequence(source, ("covariance",))
+        if len(values) < 15:
+            continue
+        xy_variance = max(values[0], values[7])
+        z_variance = values[14]
+        if xy_variance >= 0.0:
+            row["std_xy_m"] = float(xy_variance) ** 0.5
+        if z_variance >= 0.0:
+            row["std_z_m"] = float(z_variance) ** 0.5
+        return
+
+
+def _pose_covariance_sources(message: Any) -> list[Any]:
+    sources: list[Any] = []
+    for path in (
+        (),
+        ("pose",),
+        ("pose_with_covariance",),
+        ("kinematics", "pose_with_covariance"),
+        ("state", "pose_covariance"),
+        ("state", "pose_with_covariance"),
+    ):
+        source = message if not path else _nested_field_value(message, *path)
+        if source is not None:
+            sources.append(source)
+    return sources
+
+
+def _nested_field_value(value: Any, *path: str) -> Any | None:
+    current = value
+    for name in path:
+        if current is None:
+            return None
+        current = _field_value(current, name)
+    return current
+
+
+def _nested_field_float(value: Any, *path: str) -> float | None:
+    raw = _nested_field_value(value, *path)
+    if raw in (None, ""):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _detection3d_confidence(detection: Any) -> float | None:

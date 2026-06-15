@@ -58,6 +58,7 @@ from raft_uav.mmuad.native_ros import (
     position_message_to_row,
     position_message_to_rows,
     radar_polar_message_to_rows,
+    tracked_objects_message_to_rows,
 )
 from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates, pointcloud2_to_dataframe
 from raft_uav.mmuad.rosbag_bridge import (
@@ -7889,6 +7890,100 @@ def test_native_ros_extraction_supports_plain_point_topics(
     assert extracted.manifest["truth_rows"] == 1
 
 
+def test_native_ros_extraction_supports_tracked_object_candidates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_tracked_objects.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_tracked_objects",
+                "exports": [
+                    {
+                        "topic": "/tracker/objects",
+                        "kind": "tracked_objects_candidate",
+                        "source": "tracker_objects",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    connection = SimpleNamespace(
+        topic="/tracker/objects",
+        msgtype="autoware_auto_perception_msgs/msg/TrackedObjects",
+    )
+    message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=5, nanosec=500_000_000),
+            frame_id="map",
+        ),
+        objects=[
+            SimpleNamespace(
+                track_id="track-42",
+                pose=SimpleNamespace(
+                    position=SimpleNamespace(x=4.0, y=5.0, z=6.0)
+                ),
+                label="uav",
+                confidence=0.88,
+            )
+        ],
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [connection]
+            return [(connection, 5_500_000_000, b"tracked-objects")]
+
+        def deserialize(self, rawdata, msgtype):
+            assert rawdata == b"tracked-objects"
+            assert msgtype == "autoware_auto_perception_msgs/msg/TrackedObjects"
+            return message
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is not None
+    rows = extracted.candidates.rows
+    assert len(rows) == 1
+    assert rows.loc[0, "sequence_id"] == "seq_tracked_objects"
+    assert rows.loc[0, "source"] == "tracker_objects"
+    assert rows.loc[0, "track_id"] == "track-42"
+    assert rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [4.0, 5.0, 6.0]
+    assert rows.loc[0, "class_name"] == "uav"
+    assert rows.loc[0, "confidence"] == 0.88
+    assert extracted.manifest["candidate_rows"] == 1
+    assert extracted.manifest["extracted_messages"][0]["kind"] == (
+        "tracked_objects_candidate"
+    )
+    assert (output / "native_ros_candidates.csv").exists()
+
+
 def test_native_ros_extraction_uses_camera_info_for_detection2d_intrinsics(
     tmp_path: Path,
     monkeypatch,
@@ -8558,6 +8653,39 @@ def test_ros2_topic_map_template_infers_detection3d_topics(tmp_path: Path) -> No
     assert payload["exports"][1]["source"] is None
 
 
+def test_ros2_topic_map_template_infers_tracked_object_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /perception/tracked_objects",
+                "        type: autoware_auto_perception_msgs/msg/TrackedObjects",
+                "      message_count: 2",
+                "    - topic_metadata:",
+                "        name: /ground_truth/detected_objects",
+                "        type: autoware_auto_perception_msgs/msg/DetectedObjectArray",
+                "      message_count: 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "tracked_objects_candidate",
+        "tracked_objects_truth",
+    ]
+    assert payload["exports"][0]["source"] == "perception_tracked_objects"
+    assert payload["exports"][1]["source"] is None
+
+
 def test_ros2_topic_map_template_infers_detection2d_topics(tmp_path: Path) -> None:
     bag = tmp_path / "bagdir"
     bag.mkdir()
@@ -9051,6 +9179,62 @@ def test_native_ros_detection3d_message_to_rows_uses_highest_score_result() -> N
     assert len(rows) == 1
     assert rows[0]["confidence"] == 0.85
     assert rows[0]["class_name"] == "uav"
+
+
+def test_native_ros_tracked_objects_message_to_rows_extracts_kinematics() -> None:
+    covariance = [0.0] * 36
+    covariance[0] = 0.25
+    covariance[7] = 0.36
+    covariance[14] = 0.49
+    message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=80, nanosec=250_000_000),
+            frame_id="world",
+        ),
+        objects=[
+            SimpleNamespace(
+                object_id=SimpleNamespace(uuid=[1, 2, 3, 4]),
+                kinematics=SimpleNamespace(
+                    pose_with_covariance=SimpleNamespace(
+                        pose=SimpleNamespace(
+                            position=SimpleNamespace(x=10.0, y=20.0, z=30.0)
+                        ),
+                        covariance=covariance,
+                    )
+                ),
+                classification=SimpleNamespace(label="quadrotor", probability=0.91),
+            ),
+            SimpleNamespace(
+                header=SimpleNamespace(frame_id="camera"),
+                track_id="filtered",
+                pose=SimpleNamespace(
+                    position=SimpleNamespace(x=1.0, y=2.0, z=3.0)
+                ),
+            ),
+        ],
+    )
+
+    rows = tracked_objects_message_to_rows(
+        message,
+        sequence_id="seq_objects",
+        time_s=1.0,
+        frame_id="world",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["sequence_id"] == "seq_objects"
+    assert rows[0]["time_s"] == 80.25
+    assert rows[0]["x_m"] == 10.0
+    assert rows[0]["y_m"] == 20.0
+    assert rows[0]["z_m"] == 30.0
+    assert rows[0]["frame_id"] == "world"
+    assert rows[0]["object_index"] == 0
+    assert rows[0]["object_id"] == "01020304"
+    assert rows[0]["track_id"] == "01020304"
+    assert rows[0]["class_name"] == "quadrotor"
+    assert rows[0]["confidence"] == 0.91
+    assert rows[0]["std_xy_m"] == 0.6
+    assert rows[0]["std_z_m"] == 0.7
 
 
 def test_native_ros_marker_message_to_rows_extracts_marker_positions() -> None:
