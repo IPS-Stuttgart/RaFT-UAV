@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from zipfile import ZipInfo
 from zipfile import ZipFile
 
 import json
@@ -27,6 +28,7 @@ from raft_uav.mmuad.schema import (
 from raft_uav.mmuad.submission import (
     OFFICIAL_UG2_RESULT_COLUMNS,
     UG2_RESULT_COLUMNS,
+    load_official_track5_results_frame,
     load_sequence_class_map,
     parse_official_classification_cell,
     parse_official_position_cell,
@@ -96,15 +98,16 @@ def load_mmaud_results_zip(
     *,
     member_name: str = "mmaud_results.csv",
 ) -> ResultsFrame:
-    """Load and validate ``mmaud_results.csv`` from a ZIP archive."""
+    """Load and validate result rows from a ZIP archive.
+
+    Public Track 5 upload readiness still requires root ``mmaud_results.csv``.
+    Evaluation is more permissive so local diagnostics can score archives before
+    they are normalized: root ``mmaud_results.csv``, one nested
+    ``mmaud_results.csv``, or one unambiguous CSV member are accepted.
+    """
 
     path = Path(path)
-    with ZipFile(path) as archive:
-        names = archive.namelist()
-        if member_name not in names:
-            raise ValueError(f"{path} does not contain {member_name!r}; members={names}")
-        with archive.open(member_name) as handle:
-            frame = pd.read_csv(BytesIO(handle.read()))
+    frame = _read_results_zip_csv(path, member_name=member_name)
     return ResultsFrame(validate_mmaud_results_frame(frame))
 
 
@@ -180,16 +183,57 @@ def _official_track5_results_to_local_frame(frame: pd.DataFrame) -> pd.DataFrame
 
 
 def _load_official_track5_truth_file(path: Path) -> pd.DataFrame:
-    path = Path(path)
-    if path.suffix.lower() == ".zip":
-        with ZipFile(path) as archive:
-            if "mmaud_results.csv" not in archive.namelist():
-                raise ValueError(f"{path} does not contain 'mmaud_results.csv'")
-            with archive.open("mmaud_results.csv") as handle:
-                frame = pd.read_csv(BytesIO(handle.read()))
-    else:
-        frame = pd.read_csv(path)
+    frame = load_official_track5_results_frame(Path(path))
     return _official_track5_truth_to_rows(frame)
+
+
+def _read_results_zip_csv(path: Path, *, member_name: str) -> pd.DataFrame:
+    with ZipFile(path) as archive:
+        infos = [info for info in archive.infolist() if not info.is_dir()]
+        selected = _select_results_zip_member(infos, member_name=member_name)
+        with archive.open(selected) as handle:
+            return pd.read_csv(BytesIO(handle.read()))
+
+
+def _select_results_zip_member(
+    infos: list[ZipInfo],
+    *,
+    member_name: str,
+) -> ZipInfo:
+    root_results = [
+        info
+        for info in infos
+        if _normalized_zip_member_name(info.filename) == member_name
+    ]
+    basename_results = [
+        info
+        for info in infos
+        if Path(_normalized_zip_member_name(info.filename)).name == member_name
+    ]
+    csv_members = [
+        info
+        for info in infos
+        if Path(_normalized_zip_member_name(info.filename)).suffix.lower() == ".csv"
+    ]
+    if len(root_results) > 1:
+        raise ValueError(
+            f"results ZIP has duplicate root {member_name!r} members"
+        )
+    if root_results:
+        return root_results[0]
+    if len(basename_results) == 1:
+        return basename_results[0]
+    if len(csv_members) == 1:
+        return csv_members[0]
+    names = [info.filename for info in infos]
+    raise ValueError(
+        "results ZIP must contain an unambiguous CSV: root "
+        f"{member_name}, one nested {member_name}, or one CSV member; members={names}"
+    )
+
+
+def _normalized_zip_member_name(name: str) -> str:
+    return str(name).replace("\\", "/").lstrip("/")
 
 
 def _official_track5_truth_to_rows(frame: pd.DataFrame) -> pd.DataFrame:
