@@ -9264,6 +9264,41 @@ def test_native_ros_laserscan_message_to_rows_filters_invalid_ranges() -> None:
     assert rows[1]["scan_intensity"] == 0.7
 
 
+def test_native_ros_laserscan_message_to_rows_clusters_adjacent_returns() -> None:
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=10, nanosec=0)),
+        angle_min=0.0,
+        angle_increment=0.0,
+        range_min=0.1,
+        range_max=20.0,
+        time_increment=0.1,
+        ranges=[1.0, 1.2, 4.0, 4.1, 9.0],
+        intensities=[0.2, 0.4, 0.6, 0.8, 1.0],
+    )
+
+    rows = laserscan_message_to_rows(
+        message,
+        sequence_id="seq_laserscan_cluster",
+        time_s=0.0,
+        angle_unit="rad",
+        cluster_adjacent=True,
+        min_cluster_points=2,
+        max_cluster_range_gap_m=0.5,
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["track_id"] == "laserscan:seq_laserscan_cluster:0-1"
+    assert abs(rows[0]["time_s"] - 10.05) < 1.0e-12
+    assert abs(rows[0]["range_m"] - 1.1) < 1.0e-12
+    assert rows[0]["confidence"] == 2.0
+    assert rows[0]["scan_cluster_index"] == 0
+    assert rows[0]["scan_start_index"] == 0
+    assert rows[0]["scan_end_index"] == 1
+    assert abs(rows[0]["scan_intensity"] - 0.3) < 1.0e-12
+    assert rows[1]["track_id"] == "laserscan:seq_laserscan_cluster:2-3"
+    assert abs(rows[1]["range_m"] - 4.05) < 1.0e-12
+
+
 def test_native_ros_extraction_supports_radar_polar_candidates(
     tmp_path: Path,
     monkeypatch,
@@ -9453,6 +9488,91 @@ def test_native_ros_extraction_supports_laserscan_candidates(
     assert (output / "native_ros_candidates.csv").exists()
 
 
+def test_native_ros_extraction_clusters_laserscan_candidates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_laserscan_cluster_native.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_laserscan_cluster_native",
+                "exports": [
+                    {
+                        "topic": "/radar/scan",
+                        "kind": "laserscan_candidate",
+                        "source": "scan",
+                        "cluster_adjacent_ranges": "true",
+                        "min_cluster_points": 2,
+                        "max_cluster_range_gap_m": 0.5,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    connection = SimpleNamespace(
+        topic="/radar/scan",
+        msgtype="sensor_msgs/msg/LaserScan",
+    )
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=6, nanosec=0)),
+        angle_min=0.0,
+        angle_increment=0.0,
+        range_min=0.1,
+        range_max=10.0,
+        ranges=[2.0, 2.2, 8.0],
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [connection]
+            return [(connection, 6_000_000_000, b"scan")]
+
+        def deserialize(self, rawdata, msgtype):
+            assert rawdata == b"scan"
+            assert msgtype == "sensor_msgs/msg/LaserScan"
+            return message
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is not None
+    rows = extracted.candidates.rows
+    assert len(rows) == 1
+    assert rows.loc[0, "source"] == "scan"
+    assert rows.loc[0, "track_id"] == "laserscan:seq_laserscan_cluster_native:0-1"
+    assert abs(float(rows.loc[0, "x_m"]) - 2.1) < 1.0e-12
+    assert abs(float(rows.loc[0, "y_m"])) < 1.0e-12
+    assert rows.loc[0, "confidence"] == 2.0
+    assert extracted.manifest["candidate_rows"] == 1
+    assert extracted.manifest["extracted_messages"][0]["rows"] == 1
+
+
 def test_ros2_topic_map_template_infers_polar_radar_topics(tmp_path: Path) -> None:
     bag = tmp_path / "bagdir"
     bag.mkdir()
@@ -9512,6 +9632,9 @@ def test_ros2_topic_map_template_infers_laserscan_topics(tmp_path: Path) -> None
     assert export["source"] == "radar_scan"
     assert export["angle_unit"] == "rad"
     assert export["azimuth_convention"] == "x-forward-left-positive"
+    assert export["cluster_adjacent_ranges"] is False
+    assert export["min_cluster_points"] == 2
+    assert export["max_cluster_range_gap_m"] == 1.0
 
 
 def test_ros2_topic_map_template_infers_point_and_transform_topics(

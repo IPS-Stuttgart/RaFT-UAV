@@ -99,7 +99,9 @@ def extract_native_rosbag_topic_map(
     ``laserscan_candidate`` / ``laser_scan_candidate``
         Decode ``sensor_msgs/msg/LaserScan`` ranges into polar candidate rows.
         LaserScan angles follow the ROS convention of zero forward on +X and
-        positive counterclockwise/left by default.
+        positive counterclockwise/left by default.  Set
+        ``cluster_adjacent_ranges`` to combine contiguous returns into
+        centroid candidates.
     ``camera_info`` / ``camera_info_calibration``
         Decode ``sensor_msgs/msg/CameraInfo`` intrinsics for native
         Detection2D back-projection.  Detection2D topics with the same source
@@ -267,6 +269,24 @@ def extract_native_rosbag_topic_map(
                         sequence_id=str(spec.get("sequence_id", sequence_id)),
                         time_s=time_s,
                         angle_unit=angle_unit,
+                        cluster_adjacent=_spec_bool(
+                            spec,
+                            "cluster_adjacent_ranges",
+                            "laserscan_cluster_adjacent_ranges",
+                            "cluster_adjacent",
+                        ),
+                        min_cluster_points=_spec_int(
+                            spec,
+                            "min_cluster_points",
+                            "laserscan_min_cluster_points",
+                            default=1,
+                        ),
+                        max_cluster_range_gap_m=_spec_float(
+                            spec,
+                            "max_cluster_range_gap_m",
+                            "laserscan_max_cluster_range_gap_m",
+                            default=1.0,
+                        ),
                     )
                     if rows_for_message:
                         frame = radar_polar_frame_to_candidates(
@@ -1210,6 +1230,52 @@ def _optional_positive_float(value: Any) -> float | None:
     return parsed
 
 
+def _spec_bool(spec: dict[str, Any], *names: str, default: bool = False) -> bool:
+    for name in names:
+        if name not in spec:
+            continue
+        value = spec[name]
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return bool(value)
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", ""}:
+            return False
+        return default
+    return default
+
+
+def _spec_int(spec: dict[str, Any], *names: str, default: int) -> int:
+    for name in names:
+        if name not in spec:
+            continue
+        value = spec[name]
+        if value in (None, ""):
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
+def _spec_float(spec: dict[str, Any], *names: str, default: float) -> float:
+    for name in names:
+        if name not in spec:
+            continue
+        value = spec[name]
+        if value in (None, ""):
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
 def _image_timestamp_template_rows(image_timestamps: pd.DataFrame) -> pd.DataFrame:
     template = (
         image_timestamps[["sequence_id", "time_s"]]
@@ -1481,6 +1547,9 @@ def laserscan_message_to_rows(
     sequence_id: str,
     time_s: float,
     angle_unit: str = "rad",
+    cluster_adjacent: bool = False,
+    min_cluster_points: int = 1,
+    max_cluster_range_gap_m: float | None = 1.0,
 ) -> list[dict[str, Any]]:
     """Convert a native ROS LaserScan message into polar range rows."""
 
@@ -1518,7 +1587,7 @@ def laserscan_message_to_rows(
         message,
         ("intensities", "intensity", "reflectivity", "reflectivities"),
     )
-    rows: list[dict[str, Any]] = []
+    valid_returns: list[dict[str, Any]] = []
     for index, range_m in enumerate(ranges):
         if not math.isfinite(range_m) or range_m <= 0.0:
             continue
@@ -1532,20 +1601,118 @@ def laserscan_message_to_rows(
             if time_increment is not None
             else float(default_time_s)
         )
+        intensity = (
+            float(intensities[index])
+            if index < len(intensities) and math.isfinite(intensities[index])
+            else None
+        )
+        valid_returns.append(
+            {
+                "index": int(index),
+                "time_s": row_time_s,
+                "range_m": float(range_m),
+                "azimuth_rad": azimuth_rad,
+                "intensity": intensity,
+            }
+        )
+    if cluster_adjacent:
+        return _laserscan_cluster_rows(
+            valid_returns,
+            sequence_id=sequence_id,
+            target_angle_unit=target_angle_unit,
+            min_cluster_points=min_cluster_points,
+            max_cluster_range_gap_m=max_cluster_range_gap_m,
+        )
+    rows: list[dict[str, Any]] = []
+    for item in valid_returns:
         row: dict[str, Any] = {
             "sequence_id": str(sequence_id),
-            "time_s": row_time_s,
-            "range_m": float(range_m),
+            "time_s": item["time_s"],
+            "range_m": item["range_m"],
+            "azimuth": _convert_angle_unit(
+                float(item["azimuth_rad"]),
+                source_unit="rad",
+                target_unit=target_angle_unit,
+            ),
+            "elevation": 0.0,
+            "scan_index": int(item["index"]),
+        }
+        if item["intensity"] is not None:
+            row["scan_intensity"] = item["intensity"]
+        rows.append(row)
+    return rows
+
+
+def _laserscan_cluster_rows(
+    valid_returns: list[dict[str, Any]],
+    *,
+    sequence_id: str,
+    target_angle_unit: str,
+    min_cluster_points: int,
+    max_cluster_range_gap_m: float | None,
+) -> list[dict[str, Any]]:
+    min_points = max(int(min_cluster_points), 1)
+    max_gap = (
+        float(max_cluster_range_gap_m)
+        if max_cluster_range_gap_m is not None and math.isfinite(float(max_cluster_range_gap_m))
+        else None
+    )
+    clusters: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    previous: dict[str, Any] | None = None
+    for item in valid_returns:
+        starts_new = False
+        if previous is not None:
+            starts_new = int(item["index"]) != int(previous["index"]) + 1
+            if max_gap is not None and not starts_new:
+                starts_new = abs(float(item["range_m"]) - float(previous["range_m"])) > max_gap
+        if starts_new and current:
+            clusters.append(current)
+            current = []
+        current.append(item)
+        previous = item
+    if current:
+        clusters.append(current)
+
+    rows: list[dict[str, Any]] = []
+    for cluster_index, cluster in enumerate(clusters):
+        if len(cluster) < min_points:
+            continue
+        xs = [
+            float(item["range_m"]) * math.cos(float(item["azimuth_rad"]))
+            for item in cluster
+        ]
+        ys = [
+            float(item["range_m"]) * math.sin(float(item["azimuth_rad"]))
+            for item in cluster
+        ]
+        x_mean = sum(xs) / float(len(xs))
+        y_mean = sum(ys) / float(len(ys))
+        range_m = math.hypot(x_mean, y_mean)
+        azimuth_rad = math.atan2(y_mean, x_mean)
+        start_index = int(cluster[0]["index"])
+        end_index = int(cluster[-1]["index"])
+        row: dict[str, Any] = {
+            "sequence_id": str(sequence_id),
+            "time_s": sum(float(item["time_s"]) for item in cluster) / float(len(cluster)),
+            "range_m": range_m,
             "azimuth": _convert_angle_unit(
                 azimuth_rad,
                 source_unit="rad",
                 target_unit=target_angle_unit,
             ),
             "elevation": 0.0,
-            "scan_index": int(index),
+            "track_id": f"laserscan:{sequence_id}:{start_index}-{end_index}",
+            "confidence": float(len(cluster)),
+            "scan_cluster_index": int(cluster_index),
+            "scan_start_index": start_index,
+            "scan_end_index": end_index,
         }
-        if index < len(intensities) and math.isfinite(intensities[index]):
-            row["scan_intensity"] = float(intensities[index])
+        intensities = [
+            float(item["intensity"]) for item in cluster if item["intensity"] is not None
+        ]
+        if intensities:
+            row["scan_intensity"] = sum(intensities) / float(len(intensities))
         rows.append(row)
     return rows
 
