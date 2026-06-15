@@ -21,6 +21,10 @@ from raft_uav.mmuad.calibration import (
     load_calibration_json,
     transform_candidate_frame,
 )
+from raft_uav.mmuad.camera import (
+    load_camera_detections_csv_as_candidates,
+    load_camera_models,
+)
 from raft_uav.mmuad.cli import main as mmuad_cli_main
 from raft_uav.mmuad.completion import complete_results_to_truth_timestamps
 from raft_uav.mmuad.evaluator import (
@@ -95,6 +99,16 @@ from raft_uav.mmuad.tracker import (
     run_mmuad_tracker,
     write_tracker_output,
 )
+
+
+def _write_png_header(path: Path, *, width: int, height: int) -> None:
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + struct.pack(">I", 13)
+        + b"IHDR"
+        + struct.pack(">II", int(width), int(height))
+        + b"\x08\x02\x00\x00\x00"
+    )
 
 
 def test_candidate_loader_accepts_aliases(tmp_path: Path) -> None:
@@ -1401,6 +1415,98 @@ def test_sequence_root_discovers_json_camera_detection_tables(tmp_path: Path) ->
     assert abs(float(row["time_s"]) - 1.25) < 1e-12
     assert abs(float(row["z_m"]) - 5.0) < 1e-12
     assert truth is not None
+
+
+def test_camera_yolo_label_sidecar_loads_as_candidates(tmp_path: Path) -> None:
+    camera = tmp_path / "cam0"
+    camera.mkdir()
+    _write_png_header(camera / "1.25.png", width=100, height=80)
+    label_path = camera / "1.25.txt"
+    label_path.write_text("2 0.5 0.5 0.2 0.25 0.7\n", encoding="utf-8")
+    calibration_path = camera / "camera_info.json"
+    calibration_path.write_text(
+        json.dumps(
+            {
+                "source": "cam0",
+                "fx": 100.0,
+                "fy": 100.0,
+                "cx": 50.0,
+                "cy": 40.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    camera_models = load_camera_models(calibration_path)
+
+    candidates = load_camera_detections_csv_as_candidates(
+        label_path,
+        camera_models=camera_models,
+        default_source="cam0",
+        sequence_id="seq_yolo",
+        fixed_depth_m=10.0,
+    )
+
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_yolo"
+    assert row["source"] == "cam0"
+    assert abs(float(row["time_s"]) - 1.25) < 1e-12
+    assert (float(row["x_m"]), float(row["y_m"]), float(row["z_m"])) == (0.0, 0.0, 10.0)
+    assert abs(float(row["confidence"]) - 0.7) < 1e-12
+    assert row["class_name"] == "2"
+
+
+def test_sequence_root_discovers_yolo_camera_label_sidecars(tmp_path: Path) -> None:
+    seq = tmp_path / "seq_camera_yolo"
+    camera = seq / "Image" / "cam0"
+    camera.mkdir(parents=True)
+    _write_png_header(camera / "2.5.png", width=160, height=120)
+    (camera / "2.5.txt").write_text("3 0.5 0.5 0.25 0.25 0.8\n", encoding="utf-8")
+    (camera / "camera_info.json").write_text(
+        json.dumps(
+            {
+                "width": 160,
+                "height": 120,
+                "k": [
+                    120.0,
+                    0.0,
+                    80.0,
+                    0.0,
+                    120.0,
+                    60.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        {
+            "time_s": [2.5],
+            "x_m": [0.0],
+            "y_m": [0.0],
+            "z_m": [6.0],
+        }
+    ).to_csv(seq / "truth.csv", index=False)
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, calibration = load_sequence_export(
+        discovered[0],
+        camera_fixed_depth_m=6.0,
+    )
+
+    assert discovered[0].camera_detection_csvs == (camera / "2.5.txt",)
+    assert discovered[0].camera_calibration_files == (camera / "camera_info.json",)
+    row = candidates.rows.iloc[0]
+    assert row["sequence_id"] == "seq_camera_yolo"
+    assert row["source"] == "cam0"
+    assert abs(float(row["time_s"]) - 2.5) < 1e-12
+    assert (float(row["x_m"]), float(row["y_m"]), float(row["z_m"])) == (0.0, 0.0, 6.0)
+    assert abs(float(row["confidence"]) - 0.8) < 1e-12
+    assert row["class_name"] == "3"
+    assert truth is not None
+    assert calibration is None
 
 
 def test_sequence_root_discovers_camera_compact_bbox_columns(tmp_path: Path) -> None:

@@ -1,8 +1,8 @@
 """Camera detection bridges for MMUAD-style experiments.
 
 This module does not run image detection.  It converts exported camera detector
-table rows into 3D candidate points when per-detection depth or a fixed depth
-proxy is available.
+table rows or detector sidecar labels into 3D candidate points when
+per-detection depth or a fixed depth proxy is available.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import json
 from pathlib import Path
+import struct
 from typing import Any, Callable, Iterable
 
 import numpy as np
@@ -120,6 +121,8 @@ def load_camera_detections_csv_as_candidates(
     unless a ``fixed_depth_m`` fallback is supplied. CSV/TSV/TXT and JSON
     row/table exports are supported. Detection2D-style JSON rows can also carry
     metric depth on nested ``bbox.center.position.z``/``bbox.center.z`` fields.
+    YOLO-style ``class cx cy width height [confidence]`` TXT sidecars are also
+    accepted when a same-stem image is present for normalized pixel scaling.
     This is a detector-output bridge, not a camera detector.
     """
 
@@ -465,9 +468,197 @@ def _read_delimited_table(path: Path) -> pd.DataFrame:
 
 def _read_detection_table(path: Path) -> pd.DataFrame:
     path = Path(path)
+    if data_file_suffix(path) == ".txt" and _looks_like_yolo_label_file(path):
+        return _read_yolo_label_table(path)
     if data_file_suffix(path) in JSON_TABLE_SUFFIXES:
         return _read_json_detection_table(path)
     return _read_delimited_table(path)
+
+
+YOLO_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp")
+
+
+def _looks_like_yolo_label_file(path: Path) -> bool:
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return False
+    observed = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split()
+        if len(parts) not in {5, 6}:
+            return False
+        try:
+            [float(part) for part in parts]
+        except ValueError:
+            return False
+        observed = True
+    return observed
+
+
+def _read_yolo_label_table(path: Path) -> pd.DataFrame:
+    image_path = _same_stem_image_path(path)
+    image_size = _image_size_px(image_path) if image_path is not None else None
+    rows: list[dict[str, Any]] = []
+    time_s = _timestamp_from_stem(path)
+    for line_idx, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines()):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = [float(part) for part in stripped.split()]
+        if len(parts) not in {5, 6}:
+            continue
+        class_id, center_x, center_y, width, height = parts[:5]
+        confidence = parts[5] if len(parts) == 6 else 1.0
+        if _looks_normalized_box(center_x, center_y, width, height):
+            if image_size is None:
+                raise ValueError(
+                    f"YOLO label file {path} uses normalized boxes but no same-stem "
+                    "image with readable dimensions was found"
+                )
+            image_width, image_height = image_size
+            center_x *= image_width
+            width *= image_width
+            center_y *= image_height
+            height *= image_height
+        x1 = center_x - (width / 2.0)
+        y1 = center_y - (height / 2.0)
+        x2 = center_x + (width / 2.0)
+        y2 = center_y + (height / 2.0)
+        rows.append(
+            {
+                "time_s": time_s,
+                "u_px": center_x,
+                "v_px": center_y,
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "confidence": confidence,
+                "class_name": str(int(class_id)) if float(class_id).is_integer() else str(class_id),
+                "track_id": f"{Path(path).stem}:{line_idx}",
+                "image_file": str(image_path) if image_path is not None else "",
+            }
+        )
+    return pd.DataFrame.from_records(
+        rows,
+        columns=[
+            "time_s",
+            "u_px",
+            "v_px",
+            "x1",
+            "y1",
+            "x2",
+            "y2",
+            "confidence",
+            "class_name",
+            "track_id",
+            "image_file",
+        ],
+    )
+
+
+def _same_stem_image_path(path: Path) -> Path | None:
+    stem = Path(path).stem
+    directory = Path(path).parent
+    for suffix in YOLO_IMAGE_SUFFIXES:
+        for candidate in (directory / f"{stem}{suffix}", directory / f"{stem}{suffix.upper()}"):
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def _looks_normalized_box(center_x: float, center_y: float, width: float, height: float) -> bool:
+    values = (center_x, center_y, width, height)
+    return all(np.isfinite(value) for value in values) and all(0.0 <= value <= 1.0 for value in values)
+
+
+def _timestamp_from_stem(path: Path) -> float:
+    import re
+
+    tokens = re.findall(r"[-+]?\d*\.?\d+", Path(path).stem)
+    if not tokens:
+        return 0.0
+    return float(tokens[-1])
+
+
+def _image_size_px(path: Path | None) -> tuple[int, int] | None:
+    if path is None:
+        return None
+    try:
+        raw = Path(path).read_bytes()
+    except OSError:
+        return None
+    suffix = Path(path).suffix.lower()
+    if suffix == ".png":
+        return _png_size_px(raw)
+    if suffix in {".jpg", ".jpeg"}:
+        return _jpeg_size_px(raw)
+    if suffix == ".bmp":
+        return _bmp_size_px(raw)
+    return None
+
+
+def _png_size_px(raw: bytes) -> tuple[int, int] | None:
+    if len(raw) < 24 or raw[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    return (int.from_bytes(raw[16:20], "big"), int.from_bytes(raw[20:24], "big"))
+
+
+def _jpeg_size_px(raw: bytes) -> tuple[int, int] | None:
+    if len(raw) < 4 or raw[:2] != b"\xff\xd8":
+        return None
+    offset = 2
+    while offset + 9 <= len(raw):
+        if raw[offset] != 0xFF:
+            offset += 1
+            continue
+        while offset < len(raw) and raw[offset] == 0xFF:
+            offset += 1
+        if offset >= len(raw):
+            return None
+        marker = raw[offset]
+        offset += 1
+        if marker in {0xD8, 0xD9}:
+            continue
+        if offset + 2 > len(raw):
+            return None
+        segment_length = int.from_bytes(raw[offset : offset + 2], "big")
+        if segment_length < 2 or offset + segment_length > len(raw):
+            return None
+        if marker in {
+            0xC0,
+            0xC1,
+            0xC2,
+            0xC3,
+            0xC5,
+            0xC6,
+            0xC7,
+            0xC9,
+            0xCA,
+            0xCB,
+            0xCD,
+            0xCE,
+            0xCF,
+        }:
+            height = int.from_bytes(raw[offset + 3 : offset + 5], "big")
+            width = int.from_bytes(raw[offset + 5 : offset + 7], "big")
+            return (width, height)
+        offset += segment_length
+    return None
+
+
+def _bmp_size_px(raw: bytes) -> tuple[int, int] | None:
+    if len(raw) < 26 or raw[:2] != b"BM":
+        return None
+    width = struct.unpack_from("<i", raw, 18)[0]
+    height = abs(struct.unpack_from("<i", raw, 22)[0])
+    if width <= 0 or height <= 0:
+        return None
+    return (int(width), int(height))
 
 
 def _read_json_detection_table(path: Path) -> pd.DataFrame:

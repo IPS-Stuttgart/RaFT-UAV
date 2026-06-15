@@ -986,6 +986,14 @@ range/azimuth message shapes. Camera detections still require exported detector
 outputs or native Detection2D messages; raw image object detection remains
 external.
 
+Camera folders can also contain external detector sidecars in YOLO TXT format
+beside same-stem image frames, for example `Image/cam0/1706255054.386069.png`
+and `Image/cam0/1706255054.386069.txt`. Each label row should be
+`class cx cy width height [confidence]`; normalized box coordinates are scaled
+from the same-stem PNG/JPEG/BMP dimensions, timestamps are inferred from the
+label filename, and `--camera-fixed-depth-m` or per-row depth is still required
+for 3D back-projection.
+
 ### Polar Radar Table Exports
 
 Use `--radar-polar-csv` for radar detections exported as CSV/TSV/TXT

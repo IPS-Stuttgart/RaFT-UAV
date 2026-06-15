@@ -116,6 +116,7 @@ CLASS_FILE_SUFFIXES = (
 )
 RADAR_DIR_TOKENS = ("radar", "mmwave", "mmw")
 CAMERA_DIR_TOKENS = ("camera", "cam", "image", "images")
+CAMERA_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp")
 CAMERA_INTRINSICS_NAMES = {
     "camera_info.json",
     "camera_info.yaml",
@@ -536,6 +537,7 @@ def load_sequence_export(
                     sequence_root=paths.root,
                     default="camera",
                 ),
+                sequence_id=paths.sequence_id,
                 fixed_depth_m=camera_fixed_depth_m,
                 std_xy_m=camera_std_xy_m,
                 std_z_m=camera_std_z_m,
@@ -1629,6 +1631,10 @@ def _looks_like_cartesian_candidate_file(path: Path) -> bool:
 
 
 def _looks_like_camera_detection_file(path: Path) -> bool:
+    if _looks_like_timestamp_sidecar(path):
+        return False
+    if _looks_like_yolo_label_file(path):
+        return True
     name = path.stem.lower()
     if any(
         token in name
@@ -1636,6 +1642,39 @@ def _looks_like_camera_detection_file(path: Path) -> bool:
     ):
         return True
     return _table_has_camera_detection_columns(path)
+
+
+def _looks_like_yolo_label_file(path: Path) -> bool:
+    if data_file_suffix(path) != ".txt" or not _same_stem_image_exists(path):
+        return False
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return False
+    observed = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split()
+        if len(parts) not in {5, 6}:
+            return False
+        try:
+            [float(part) for part in parts]
+        except ValueError:
+            return False
+        observed = True
+    return observed
+
+
+def _same_stem_image_exists(path: Path) -> bool:
+    directory = Path(path).parent
+    stem = Path(path).stem
+    return any(
+        candidate.exists()
+        for suffix in CAMERA_IMAGE_SUFFIXES
+        for candidate in (directory / f"{stem}{suffix}", directory / f"{stem}{suffix.upper()}")
+    )
 
 
 def _table_has_camera_detection_columns(path: Path) -> bool:
