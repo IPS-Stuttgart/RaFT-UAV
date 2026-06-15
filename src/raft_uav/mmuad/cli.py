@@ -67,6 +67,7 @@ from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
     load_sequence_class_map,
     validate_official_track5_submission,
+    verify_official_upload_manifest,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
     write_submission_csv,
@@ -93,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--official-validation-json", type=Path)
     parser.add_argument("--official-validation-rows-csv", type=Path)
     parser.add_argument("--official-upload-manifest-json", type=Path)
+    parser.add_argument("--verify-official-upload-manifest", type=Path)
+    parser.add_argument("--official-upload-manifest-verification-json", type=Path)
     parser.add_argument("--official-validation-template-csv", type=Path)
     parser.add_argument("--official-validation-template-file", type=Path)
     parser.add_argument("--official-validation-timestamp-tolerance-s", type=float, default=1.0e-6)
@@ -271,6 +274,9 @@ def main(argv: list[str] | None = None) -> int:
         help="sequence-to-UAV-type truth class map in CSV, JSON, or YAML form",
     )
     args = parser.parse_args(argv)
+
+    if args.verify_official_upload_manifest is not None:
+        return _run_official_upload_manifest_verification(args)
 
     if args.validate_ug2_official_codabench_zip is not None:
         return _run_official_submission_validation(args)
@@ -717,6 +723,20 @@ def _run_official_submission_validation(args: argparse.Namespace) -> int:
     for name, path in paths.items():
         print(f"{name}={path}")
     return 0 if validation.summary["codabench_upload_ready"] else 1
+
+
+def _run_official_upload_manifest_verification(args: argparse.Namespace) -> int:
+    verification = verify_official_upload_manifest(args.verify_official_upload_manifest)
+    json_path = args.official_upload_manifest_verification_json or (
+        args.output_dir / "mmuad_official_upload_manifest_verification.json"
+    )
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(verification, indent=2), encoding="utf-8")
+    print("mmuad_official_upload_manifest_verification=ok")
+    print(f"valid={verification['valid']}")
+    print(f"codabench_upload_ready={verification['codabench_upload_ready']}")
+    print(f"official_upload_manifest_verification_json={json_path}")
+    return 0 if verification["valid"] else 1
 
 
 def _validate_written_official_zip(args: argparse.Namespace) -> dict[str, str]:

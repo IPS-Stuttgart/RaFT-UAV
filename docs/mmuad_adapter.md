@@ -597,6 +597,23 @@ SHA-256/CRC32/byte sizes for ZIP submissions, validation JSON/row paths, ZIP
 members and columns, global readiness flags, blocking reasons, sequence counts,
 and per-sequence prediction/template coverage. It does not upload results or
 replace the closed Codabench evaluator.
+After a manifest has been written, verify that the referenced artifact still
+matches those recorded fingerprints:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --verify-official-upload-manifest outputs/mmuad_val/official_upload_manifest.json \
+  --official-upload-manifest-verification-json outputs/mmuad_val/official_upload_manifest_verification.json \
+  --output-dir outputs/mmuad_val
+```
+
+The verifier resolves relative artifact and validation paths beside the
+manifest, recomputes the artifact size/SHA-256 and root `mmaud_results.csv`
+member SHA-256/CRC32/byte sizes, checks that validation artifacts still exist,
+and exits nonzero when any recorded value no longer matches. The verification
+JSON reports both the manifest's original `codabench_upload_ready` value and a
+fresh `codabench_upload_ready` value that only stays true when the manifest is
+internally consistent.
 Official Track 5 CSV/ZIP writers also fail before writing when tracker output
 contains non-finite timestamps or positions, preventing a seemingly valid ZIP
 from silently dropping rows. For local diagnostics only, pass
