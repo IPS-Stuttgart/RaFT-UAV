@@ -194,7 +194,18 @@ def load_topic_map_payload(path: Path) -> dict[str, Any]:
 
     path = Path(path)
     text = path.read_text(encoding="utf-8")
-    if path.suffix.lower() == ".json":
+    return load_topic_map_payload_text(text, name=str(path), suffix=path.suffix)
+
+
+def load_topic_map_payload_text(
+    text: str,
+    *,
+    name: str = "<topic-map>",
+    suffix: str = ".json",
+) -> dict[str, Any]:
+    """Load a topic-map metadata payload from JSON or YAML text."""
+
+    if suffix.lower() == ".json":
         payload = json.loads(text)
     else:
         try:
@@ -205,9 +216,9 @@ def load_topic_map_payload(path: Path) -> dict[str, Any]:
             try:
                 payload = yaml.safe_load(text)
             except Exception as exc:
-                raise ValueError(f"invalid topic map YAML: {path}") from exc
+                raise ValueError(f"invalid topic map YAML: {name}") from exc
     if not isinstance(payload, dict):
-        raise ValueError(f"topic map {path} must contain a mapping")
+        raise ValueError(f"topic map {name} must contain a mapping")
     return payload
 
 

@@ -479,6 +479,15 @@ sequence-root mode through the native extraction bridge. Ambiguous native
 folders with multiple maps or recordings should still use explicit
 `--rosbag-path` and `--topic-map-file/--topic-map-json`.
 
+The same inspection commands also inventory ZIP and TAR-family archives
+(`.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`, `.tbz2`, `.tar.xz`, `.txz`)
+without extracting them. Archive members are reported as paths such as
+`mmuad_export.zip::val/seq001/candidates.csv`, sequence IDs are inferred from
+the member path, and embedded topic maps are classified as exported or native
+when their JSON/YAML metadata is readable. This is an onboarding and readiness
+check only; tracking still expects extracted normalized exports, or explicit
+native ROS extraction inputs, before running the adapter.
+
 The public UG2+ Track 5 README requires a ZIP containing only
 `mmaud_results.csv`. The official public CSV columns are
 `Sequence,Timestamp,Position,Classification`, where `Position` is written as a

@@ -11,8 +11,10 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import tarfile
 from typing import Any
+import zipfile
 
 import pandas as pd
 
@@ -22,13 +24,16 @@ from raft_uav.mmuad.io import (
     data_file_suffix,
     infer_time_s_from_filename,
 )
-from raft_uav.mmuad.rosbag_bridge import load_topic_map_payload
+from raft_uav.mmuad.rosbag_bridge import load_topic_map_payload, load_topic_map_payload_text
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 AUDIO_SUFFIXES = {".wav", ".flac", ".aac", ".mp3"}
 POINT_SUFFIXES = {".pcd", ".ply", ".las", ".laz", ".bin"}
 NUMPY_SUFFIXES = {".npy", ".npz"}
 YAML_SUFFIXES = {".yaml", ".yml"}
+ZIP_SUFFIXES = {".zip"}
+TAR_SUFFIXES = {".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz"}
+ARCHIVE_SUFFIXES = ZIP_SUFFIXES | TAR_SUFFIXES
 TABLE_SUFFIXES = DELIMITED_TABLE_SUFFIXES
 CALIBRATION_NAMES = {
     f"{stem}{suffix}"
@@ -117,6 +122,7 @@ class InspectedFile:
     inferred_time_s: float | None
     size_bytes: int
     topic_map_has_truth_export: bool = False
+    archive_path: str | None = None
 
 
 def inspect_sequence_root(
@@ -128,10 +134,24 @@ def inspect_sequence_root(
     """Inspect an MMUAD-like root and return a serializable layout report."""
 
     root = Path(root)
-    sequence_dirs = _discover_sequence_dirs(root, sequence_glob=sequence_glob)
     records: list[InspectedFile] = []
-    for sequence_dir in sequence_dirs:
-        records.extend(_inspect_sequence(sequence_dir, recursive=recursive))
+    archives: list[dict[str, Any]] = []
+    if root.is_file():
+        sequence_dirs: list[Path] = []
+        if _is_supported_archive(root):
+            archive_summary, archive_records = _inspect_archive(root, root.parent)
+            archives.append(archive_summary)
+            records.extend(archive_records)
+    else:
+        sequence_dirs = _discover_sequence_dirs(root, sequence_glob=sequence_glob)
+        for sequence_dir in sequence_dirs:
+            records.extend(_inspect_sequence(sequence_dir, recursive=recursive))
+        for archive_path in sorted(path for path in root.rglob("*") if path.is_file()):
+            if not _is_supported_archive(archive_path):
+                continue
+            archive_summary, archive_records = _inspect_archive(archive_path, root)
+            archives.append(archive_summary)
+            records.extend(archive_records)
     file_rows = [record.__dict__ for record in records]
     sequence_reports = _summarize_by_sequence(file_rows)
     category_counts = Counter(row["category"] for row in file_rows)
@@ -143,6 +163,9 @@ def inspect_sequence_root(
         "file_count": len(file_rows),
         "category_counts": dict(sorted(category_counts.items())),
         "modality_counts": dict(sorted(modality_counts.items())),
+        "archive_count": len(archives),
+        "archive_member_count": int(sum(row["member_count"] for row in archives)),
+        "archives": archives,
         "sequences": sequence_reports,
         "files": file_rows,
     }
@@ -163,6 +186,15 @@ def write_layout_report(report: dict[str, Any], *, json_path: Path, csv_path: Pa
 def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
     """Return ``(category, modality, inferred_time_s)`` for a file path."""
 
+    return _classify_logical_file(path)
+
+
+def _classify_logical_file(
+    path: Path,
+    *,
+    topic_map_text: str | None = None,
+    topic_map_name: str | None = None,
+) -> tuple[str, str, float | None]:
     suffix = data_file_suffix(path)
     name = path.name.lower()
     stem = path.stem.lower()
@@ -177,6 +209,16 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
     if name in CALIBRATION_NAMES:
         return "calibration", modality, None
     if suffix in {".json", ".yaml", ".yml"} and "topic_map" in name:
+        if topic_map_text is not None:
+            return (
+                _topic_map_category_from_text(
+                    topic_map_text,
+                    name=topic_map_name or path.as_posix(),
+                    suffix=suffix,
+                ),
+                "ros",
+                None,
+            )
         return _topic_map_category(path), "ros", None
     if suffix in (
         NUMPY_SUFFIXES | TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | YAML_SUFFIXES
@@ -215,6 +257,8 @@ def _discover_sequence_dirs(root: Path, *, sequence_glob: str) -> list[Path]:
     root = Path(root)
     if not root.exists():
         raise FileNotFoundError(root)
+    if root.is_file():
+        return []
     children = [path for path in sorted(root.glob(sequence_glob)) if path.is_dir()]
     if not children:
         return [root]
@@ -269,6 +313,8 @@ def _inspect_sequence(sequence_dir: Path, *, recursive: bool) -> list[InspectedF
     records: list[InspectedFile] = []
     for path in sorted(iterator):
         if not path.is_file():
+            continue
+        if _is_supported_archive(path):
             continue
         category, modality, time_s = classify_mmuad_file(path)
         records.append(
@@ -361,11 +407,38 @@ def _topic_map_category(path: Path) -> str:
     return "metadata"
 
 
+def _topic_map_category_from_text(text: str, *, name: str, suffix: str) -> str:
+    try:
+        payload = load_topic_map_payload_text(text, name=name, suffix=suffix)
+    except (json.JSONDecodeError, ValueError):
+        return "metadata"
+    exports = payload.get("exports", [])
+    if not isinstance(exports, list):
+        return "metadata"
+    if any(isinstance(item, dict) and item.get("path") for item in exports):
+        return "topic_map_export"
+    if exports:
+        return "topic_map_native"
+    return "metadata"
+
+
 def _topic_map_has_truth_export(path: Path) -> bool:
     try:
         payload = load_topic_map_payload(path)
     except (OSError, json.JSONDecodeError, ValueError):
         return False
+    return _topic_map_payload_has_truth_export(payload)
+
+
+def _topic_map_text_has_truth_export(text: str, *, name: str, suffix: str) -> bool:
+    try:
+        payload = load_topic_map_payload_text(text, name=name, suffix=suffix)
+    except (json.JSONDecodeError, ValueError):
+        return False
+    return _topic_map_payload_has_truth_export(payload)
+
+
+def _topic_map_payload_has_truth_export(payload: dict[str, Any]) -> bool:
     for export in payload.get("exports", []):
         if not isinstance(export, dict):
             continue
@@ -376,3 +449,162 @@ def _topic_map_has_truth_export(path: Path) -> bool:
         ):
             return True
     return False
+
+
+def _is_supported_archive(path: Path) -> bool:
+    name = path.name.lower()
+    return any(name.endswith(suffix) for suffix in ARCHIVE_SUFFIXES)
+
+
+def _archive_kind(path: Path) -> str:
+    name = path.name.lower()
+    if any(name.endswith(suffix) for suffix in ZIP_SUFFIXES):
+        return "zip"
+    if any(name.endswith(suffix) for suffix in TAR_SUFFIXES):
+        return "tar"
+    return "unknown"
+
+
+def _inspect_archive(archive_path: Path, root: Path) -> tuple[dict[str, Any], list[InspectedFile]]:
+    kind = _archive_kind(archive_path)
+    if kind == "zip":
+        rows = _inspect_zip_archive(archive_path, root)
+    elif kind == "tar":
+        rows = _inspect_tar_archive(archive_path, root)
+    else:
+        rows = []
+    try:
+        archive_rel = archive_path.relative_to(root).as_posix()
+    except ValueError:
+        archive_rel = archive_path.name
+    summary = {
+        "path": archive_rel,
+        "format": kind,
+        "member_count": len(rows),
+        "total_uncompressed_size_bytes": int(sum(row.size_bytes for row in rows)),
+    }
+    return summary, rows
+
+
+def _inspect_zip_archive(archive_path: Path, root: Path) -> list[InspectedFile]:
+    rows: list[InspectedFile] = []
+    with zipfile.ZipFile(archive_path) as archive:
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            name = _normalize_archive_member_name(info.filename)
+            topic_map_text = None
+            if _is_topic_map_member(name):
+                with archive.open(info) as handle:
+                    topic_map_text = handle.read().decode("utf-8")
+            rows.append(
+                _archive_member_record(
+                    archive_path,
+                    root,
+                    member_name=name,
+                    size_bytes=int(info.file_size),
+                    topic_map_text=topic_map_text,
+                )
+            )
+    return rows
+
+
+def _inspect_tar_archive(archive_path: Path, root: Path) -> list[InspectedFile]:
+    rows: list[InspectedFile] = []
+    with tarfile.open(archive_path, mode="r:*") as archive:
+        for info in archive.getmembers():
+            if not info.isfile():
+                continue
+            name = _normalize_archive_member_name(info.name)
+            topic_map_text = None
+            if _is_topic_map_member(name):
+                handle = archive.extractfile(info)
+                if handle is not None:
+                    with handle:
+                        topic_map_text = handle.read().decode("utf-8")
+            rows.append(
+                _archive_member_record(
+                    archive_path,
+                    root,
+                    member_name=name,
+                    size_bytes=int(info.size),
+                    topic_map_text=topic_map_text,
+                )
+            )
+    return rows
+
+
+def _archive_member_record(
+    archive_path: Path,
+    root: Path,
+    *,
+    member_name: str,
+    size_bytes: int,
+    topic_map_text: str | None,
+) -> InspectedFile:
+    logical = _normalize_archive_member_name(member_name)
+    sequence_id = _sequence_id_from_logical_path(logical, default=_archive_sequence_id(archive_path))
+    category, modality, time_s = _classify_logical_file(
+        Path(logical),
+        topic_map_text=topic_map_text,
+        topic_map_name=f"{archive_path.name}::{logical}",
+    )
+    try:
+        archive_rel = archive_path.relative_to(root).as_posix()
+    except ValueError:
+        archive_rel = archive_path.name
+    topic_map_has_truth = False
+    if category == "topic_map_export" and topic_map_text is not None:
+        topic_map_has_truth = _topic_map_text_has_truth_export(
+            topic_map_text,
+            name=f"{archive_path.name}::{logical}",
+            suffix=data_file_suffix(Path(logical)),
+        )
+    return InspectedFile(
+        sequence_id=sequence_id,
+        relative_path=f"{archive_rel}::{logical}",
+        suffix=data_file_suffix(Path(logical)) or "<none>",
+        category=category,
+        modality=modality,
+        inferred_time_s=time_s,
+        size_bytes=int(size_bytes),
+        topic_map_has_truth_export=topic_map_has_truth,
+        archive_path=archive_rel,
+    )
+
+
+def _sequence_id_from_logical_path(logical_path: str, *, default: str) -> str:
+    parts = PurePosixPath(logical_path).parts
+    if len(parts) <= 1:
+        return default
+    parent_parts = parts[:-1]
+    candidate_indices = [
+        index
+        for index, part in enumerate(parent_parts)
+        if _normalized_dir_name(part) not in MODALITY_DIR_HINTS
+    ]
+    if not candidate_indices:
+        return default
+    return parent_parts[candidate_indices[-1]]
+
+
+def _normalized_dir_name(name: str) -> str:
+    return str(name).lower().replace("-", "_").replace(" ", "_")
+
+
+def _archive_sequence_id(path: Path) -> str:
+    name = path.name
+    for suffix in sorted(ARCHIVE_SUFFIXES, key=len, reverse=True):
+        if name.lower().endswith(suffix):
+            return name[: -len(suffix)]
+    return path.stem
+
+
+def _normalize_archive_member_name(name: str) -> str:
+    return str(PurePosixPath(str(name).replace("\\", "/")))
+
+
+def _is_topic_map_member(name: str) -> bool:
+    path = PurePosixPath(name)
+    suffix = data_file_suffix(Path(path.name))
+    return suffix in {".json", ".yaml", ".yml"} and "topic_map" in path.name.lower()

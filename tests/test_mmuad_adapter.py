@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import gzip
+import io
 import json
 import struct
 import sys
+import tarfile
 from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZipFile
@@ -4845,6 +4847,145 @@ def test_layout_inspectors_preserve_sequence_ids_under_split_folders(tmp_path: P
     assert sequence["has_candidates_or_points"] is True
     assert sequence["has_truth_or_labels"] is True
     assert sequence["has_class_labels"] is True
+
+
+def test_layout_inspectors_inventory_zip_archive_members(tmp_path: Path) -> None:
+    archive_path = tmp_path / "mmuad_export.zip"
+    with ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            "val/seq001/topic_map.json",
+            json.dumps(
+                {
+                    "sequence_id": "seq001",
+                    "exports": [
+                        {"kind": "candidate", "path": "candidates.csv"},
+                        {"kind": "pose_truth", "path": "truth.csv"},
+                    ],
+                }
+            ),
+        )
+        archive.writestr("val/seq001/candidates.csv", "time_s,x_m,y_m,z_m\n0,0,0,1\n")
+        archive.writestr("val/seq001/truth.csv", "time_s,x_m,y_m,z_m\n0,0,0,1\n")
+        archive.writestr(
+            "val/seq001/livox_avia/20.5.pcd",
+            "\n".join(
+                [
+                    "VERSION 0.7",
+                    "FIELDS x y z",
+                    "SIZE 4 4 4",
+                    "TYPE F F F",
+                    "COUNT 1 1 1",
+                    "WIDTH 1",
+                    "HEIGHT 1",
+                    "POINTS 1",
+                    "DATA ascii",
+                    "0 0 0",
+                ]
+            ),
+        )
+
+    detailed = inspect_sequence_root(archive_path)
+    assert detailed["archive_count"] == 1
+    assert detailed["archive_member_count"] == 4
+    assert detailed["sequence_count"] == 1
+    assert detailed["sequences"][0]["sequence_id"] == "seq001"
+    assert detailed["sequences"][0]["missing_for_tracking_smoke"] == ["calibration"]
+    by_name = {
+        row["relative_path"].split("::", 1)[1]: row
+        for row in detailed["files"]
+    }
+    assert by_name["val/seq001/topic_map.json"]["category"] == "topic_map_export"
+    assert by_name["val/seq001/topic_map.json"]["topic_map_has_truth_export"] is True
+    assert by_name["val/seq001/candidates.csv"]["category"] == "candidate"
+    assert by_name["val/seq001/truth.csv"]["category"] == "truth"
+    assert by_name["val/seq001/livox_avia/20.5.pcd"]["category"] == "point_cloud"
+    assert by_name["val/seq001/livox_avia/20.5.pcd"]["inferred_time_s"] == 20.5
+
+    inventory = inspect_mmuad_layout(archive_path)
+    assert inventory["archive_count"] == 1
+    assert inventory["archives"][0]["path"] == "mmuad_export.zip"
+    assert inventory["category_counts"]["topic_map_export"] == 1
+    assert inventory["category_counts"]["candidate_or_point_table"] == 1
+    assert inventory["category_counts"]["truth_or_label"] == 1
+    assert inventory["category_counts"]["point_cloud"] == 1
+    sequence = inventory["sequence_candidates"][0]
+    assert sequence["sequence_id"] == "seq001"
+    assert sequence["has_topic_map_export"] is True
+    assert sequence["has_candidates_or_points"] is True
+    assert sequence["has_truth_or_labels"] is True
+    assert any("Archive files found" in item for item in inventory["recommendations"])
+
+
+def test_layout_inspectors_inventory_tar_archive_members(tmp_path: Path) -> None:
+    archive_path = tmp_path / "mmuad_raw.tar.gz"
+
+    def add_text(archive: tarfile.TarFile, name: str, text: str) -> None:
+        payload = text.encode("utf-8")
+        info = tarfile.TarInfo(name)
+        info.size = len(payload)
+        archive.addfile(info, io.BytesIO(payload))
+
+    with tarfile.open(archive_path, "w:gz") as archive:
+        add_text(
+            archive,
+            "train/seq002/topic_map_native.yaml",
+            "\n".join(
+                [
+                    "sequence_id: seq002",
+                    "exports:",
+                    "  - topic: /radar/points",
+                    "    kind: pointcloud2_candidate",
+                ]
+            ),
+        )
+        add_text(archive, "train/seq002/recording.mcap", "not-a-real-recording")
+        add_text(archive, "train/seq002/classes.yaml", "seq002: 1\n")
+
+    detailed = inspect_sequence_root(tmp_path)
+    assert detailed["archive_count"] == 1
+    assert detailed["archive_member_count"] == 3
+    by_name = {
+        row["relative_path"].split("::", 1)[1]: row
+        for row in detailed["files"]
+    }
+    assert by_name["train/seq002/topic_map_native.yaml"]["category"] == "topic_map_native"
+    assert by_name["train/seq002/recording.mcap"]["category"] == "ros_recording"
+    assert by_name["train/seq002/classes.yaml"]["category"] == "class_label"
+
+    inventory = inspect_mmuad_layout(tmp_path)
+    assert inventory["archives"][0]["format"] == "tar"
+    assert inventory["category_counts"]["topic_map_native"] == 1
+    assert inventory["category_counts"]["rosbag_or_recording"] == 1
+    assert inventory["category_counts"]["class_or_label"] == 1
+    sequence = inventory["sequence_candidates"][0]
+    assert sequence["sequence_id"] == "seq002"
+    assert sequence["has_native_topic_map"] is True
+    assert sequence["has_candidates_or_points"] is True
+
+
+def test_cli_inspect_layout_only_inventories_archive_members(tmp_path: Path) -> None:
+    archive_path = tmp_path / "mmuad_cli_export.zip"
+    with ZipFile(archive_path, "w") as archive:
+        archive.writestr("seq_cli/candidates.csv", "time_s,x_m,y_m,z_m\n0,0,0,1\n")
+        archive.writestr("seq_cli/truth.csv", "time_s,x_m,y_m,z_m\n0,0,0,1\n")
+
+    output = tmp_path / "layout_out"
+    status = mmuad_cli_main(
+        [
+            "--sequence-root",
+            str(tmp_path),
+            "--inspect-layout-only",
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    report = json.loads((output / "mmuad_layout_report.json").read_text(encoding="utf-8"))
+    assert report["archive_count"] == 1
+    assert report["archive_member_count"] == 2
+    assert report["sequence_candidates"][0]["sequence_id"] == "seq_cli"
+    assert report["sequence_candidates"][0]["has_truth_or_labels"] is True
 
 
 def test_submission_evaluator_matches_truth(tmp_path: Path) -> None:
