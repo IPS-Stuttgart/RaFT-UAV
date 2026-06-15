@@ -143,6 +143,9 @@ def write_topic_map_template(
                 entry["angle_unit"] = "rad"
                 if _is_laserscan_candidate_kind(kind):
                     entry["azimuth_convention"] = "x-forward-left-positive"
+                    entry["cluster_adjacent_ranges"] = False
+                    entry["min_cluster_points"] = 2
+                    entry["max_cluster_range_gap_m"] = 1.0
             else:
                 entry["column_aliases"].update(
                     {
