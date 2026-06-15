@@ -382,7 +382,10 @@ Audio inventory covers common WAV/FLAC/AAC/MP3 recordings for evidence
 gathering, and native ROS audio topics can be extracted as timestamp/sample
 inventory rows. Native ROS IMU topics can also be extracted as
 timestamp/kinematics inventory rows for timing diagnostics; acoustic detections
-still need to be exported as candidate tables before tracking.
+still need to be exported as candidate tables before tracking. Native ROS
+Twist/Accel topics can likewise be extracted as velocity/acceleration inventory
+rows to help diagnose raw-bag timing and kinematics; they are not position
+candidates and are not official Track 5 timestamp templates.
 
 ### Binary PCD, PLY, LAS, BIN, and NumPy point clouds
 
@@ -1160,6 +1163,9 @@ common audio messages such as `audio_common_msgs/msg/AudioData` and
 `audio_common_msgs/msg/AudioStamped` as `audio_timestamps` inventory rows,
 `sensor_msgs/msg/Imu` as `imu_timestamps` inventory rows with orientation,
 angular velocity, linear acceleration, and covariance diagonals when present,
+`geometry_msgs/msg/Twist`, `TwistStamped`, `TwistWithCovarianceStamped`,
+`Accel`, `AccelStamped`, and `AccelWithCovarianceStamped` as
+`twist_timestamps` / `accel_timestamps` velocity/acceleration inventory rows,
 `sensor_msgs/msg/LaserScan` as `laserscan_candidate` range-scan rows using
 the ROS scan convention of +X forward and positive angle left, with optional
 adjacent-return clustering,
@@ -1260,6 +1266,11 @@ time, frame/source, orientation, angular velocity, linear acceleration, and
 covariance-diagonal metadata when present. These rows are likewise raw-sensor
 inventory for timing/kinematics diagnostics and are not official Track 5
 timestamp templates.
+Native Twist/Accel topic-map entries write `native_ros_kinematic_timestamps.csv`
+with message time, frame/source, linear/angular velocity, and linear/angular
+acceleration fields when present. These rows are raw kinematic inventory only:
+velocity-only or acceleration-only messages are not tracker position candidates
+and are not official Track 5 timestamp templates.
 Native `pointcloud_candidate` topic-map entries decode legacy
 `sensor_msgs/msg/PointCloud` `points[]` arrays, preserve channel values such as
 `intensity` in the intermediate point rows, and cluster those points through the
