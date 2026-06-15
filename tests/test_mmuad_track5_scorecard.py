@@ -7,6 +7,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pandas as pd
 import pytest
 
+from raft_uav.mmuad.cli import main as mmuad_cli_main
 from raft_uav.mmuad.track5_scorecard_cli import main as track5_scorecard_cli_main
 from raft_uav.mmuad.track5_scorecard import (
     build_track5_scorecard,
@@ -159,6 +160,161 @@ def test_track5_scorecard_cli_writes_ready_artifacts(tmp_path: Path, capsys) -> 
     assert (output / "validation_rows.csv").exists()
     assert (output / "public_rows.csv").exists()
     assert (output / "nearest_rows.csv").exists()
+
+
+def test_track5_scorecard_cli_verifies_official_upload_manifest(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    results_zip = _write_official_zip(
+        tmp_path / "submission.zip",
+        pd.DataFrame(
+            {
+                "Sequence": ["seq001", "seq001"],
+                "Timestamp": [0.0, 1.0],
+                "Position": ["(0,0,10)", "(1,0,10)"],
+                "Classification": [2, 2],
+            }
+        ),
+    )
+    truth_csv = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq001", "seq001"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+            "class_name": [2, 2],
+        }
+    ).to_csv(truth_csv, index=False)
+    manifest_path = tmp_path / "official_upload_manifest.json"
+    validation_output = tmp_path / "validation"
+    assert (
+        mmuad_cli_main(
+            [
+                "--validate-ug2-official-codabench-zip",
+                str(results_zip),
+                "--official-validation-template-file",
+                str(truth_csv),
+                "--official-upload-manifest-json",
+                str(manifest_path),
+                "--output-dir",
+                str(validation_output),
+            ]
+        )
+        == 0
+    )
+    output = tmp_path / "scorecard"
+
+    status = track5_scorecard_cli_main(
+        [
+            "--results",
+            str(results_zip),
+            "--truth",
+            str(truth_csv),
+            "--official-upload-manifest",
+            str(manifest_path),
+            "--output-json",
+            str(output / "scorecard.json"),
+            "--summary-csv",
+            str(output / "scorecard.csv"),
+            "--require-leaderboard-ready",
+        ]
+    )
+
+    assert status == 0
+    stdout = capsys.readouterr().out
+    assert "upload_manifest_valid=True" in stdout
+    summary = json.loads((output / "scorecard.json").read_text(encoding="utf-8"))
+    assert summary["scorecard_leaderboard_ready"] is True
+    assert summary["upload_manifest_valid"] is True
+    assert summary["upload_manifest_codabench_upload_ready"] is True
+    assert summary["upload_manifest_verification"]["artifact_sha256_matches"] is True
+    flat = pd.read_csv(output / "scorecard.csv")
+    assert bool(flat.loc[0, "upload_manifest_valid"]) is True
+
+
+def test_track5_scorecard_cli_blocks_tampered_manifest_artifact(
+    tmp_path: Path,
+) -> None:
+    results_zip = _write_official_zip(
+        tmp_path / "submission.zip",
+        pd.DataFrame(
+            {
+                "Sequence": ["seq001", "seq001"],
+                "Timestamp": [0.0, 1.0],
+                "Position": ["(0,0,10)", "(1,0,10)"],
+                "Classification": [2, 2],
+            }
+        ),
+    )
+    truth_csv = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq001", "seq001"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+            "class_name": [2, 2],
+        }
+    ).to_csv(truth_csv, index=False)
+    manifest_path = tmp_path / "official_upload_manifest.json"
+    validation_output = tmp_path / "validation"
+    assert (
+        mmuad_cli_main(
+            [
+                "--validate-ug2-official-codabench-zip",
+                str(results_zip),
+                "--official-validation-template-file",
+                str(truth_csv),
+                "--official-upload-manifest-json",
+                str(manifest_path),
+                "--output-dir",
+                str(validation_output),
+            ]
+        )
+        == 0
+    )
+    _write_official_zip(
+        results_zip,
+        pd.DataFrame(
+            {
+                "Sequence": ["seq001", "seq001"],
+                "Timestamp": [0.0, 1.0],
+                "Position": ["(0,0,10)", "(999,0,10)"],
+                "Classification": [2, 2],
+            }
+        ),
+    )
+    output = tmp_path / "scorecard"
+
+    with pytest.raises(SystemExit, match="official_upload_manifest_invalid"):
+        track5_scorecard_cli_main(
+            [
+                "--results",
+                str(results_zip),
+                "--truth",
+                str(truth_csv),
+                "--official-upload-manifest",
+                str(manifest_path),
+                "--output-json",
+                str(output / "scorecard.json"),
+                "--require-leaderboard-ready",
+            ]
+        )
+
+    summary = json.loads((output / "scorecard.json").read_text(encoding="utf-8"))
+    assert summary["validation"]["codabench_upload_ready"] is True
+    assert summary["public_track5"]["leaderboard_ready"] is True
+    assert summary["scorecard_leaderboard_ready"] is False
+    assert summary["upload_manifest_valid"] is False
+    assert "official_upload_manifest_invalid" in summary["leaderboard_blocking_reasons"]
+    assert (
+        summary["upload_manifest_verification"]["mmaud_results_csv_sha256_matches"]
+        is False
+    )
 
 
 def test_track5_scorecard_cli_requires_truth_for_leaderboard_ready(

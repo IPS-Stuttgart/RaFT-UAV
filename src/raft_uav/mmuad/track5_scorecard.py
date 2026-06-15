@@ -25,6 +25,7 @@ from raft_uav.mmuad.submission import (
     OfficialTrack5Validation,
     load_official_track5_template_file,
     validate_official_track5_submission,
+    verify_official_upload_manifest,
 )
 
 
@@ -44,6 +45,7 @@ def build_track5_scorecard(
     truth_path: Path | None = None,
     template_path: Path | None = None,
     class_map_path: Path | None = None,
+    upload_manifest_path: Path | None = None,
     require_zip: bool = True,
     timestamp_tolerance_s: float = 1.0e-6,
     max_time_delta_s: float = 0.5,
@@ -65,6 +67,10 @@ def build_track5_scorecard(
         supplied, the normalized truth timestamps become the validation template.
     class_map_path:
         Optional sequence-to-class map for evaluation.
+    upload_manifest_path:
+        Optional ``mmuad_official_upload_manifest.json`` written by the
+        official validation path.  When supplied, scorecard readiness also
+        requires the manifest fingerprints to match the current artifact.
     require_zip:
         Whether validation should require a ZIP.  Keep this true for Codabench
         preflight; set false for local CSV development checks.
@@ -74,6 +80,9 @@ def build_track5_scorecard(
     truth_path = Path(truth_path) if truth_path is not None else None
     template_path = Path(template_path) if template_path is not None else None
     class_map_path = Path(class_map_path) if class_map_path is not None else None
+    upload_manifest_path = (
+        Path(upload_manifest_path) if upload_manifest_path is not None else None
+    )
 
     truth_frame = load_evaluation_truth_file(truth_path) if truth_path is not None else None
     template = _scorecard_template_frame(truth_frame=truth_frame, template_path=template_path)
@@ -86,6 +95,7 @@ def build_track5_scorecard(
 
     public_eval: dict[str, Any] | None = None
     nearest_eval: dict[str, Any] | None = None
+    manifest_verification: dict[str, Any] | None = None
     public_rows = pd.DataFrame()
     nearest_rows = pd.DataFrame()
     if truth_frame is not None:
@@ -106,18 +116,22 @@ def build_track5_scorecard(
         )
         public_rows = public_eval["rows"]
         nearest_rows = nearest_eval["rows"]
+    if upload_manifest_path is not None:
+        manifest_verification = verify_official_upload_manifest(upload_manifest_path)
 
     summary = _scorecard_summary(
         results_path=results_path,
         truth_path=truth_path,
         template_path=template_path,
         class_map_path=class_map_path,
+        upload_manifest_path=upload_manifest_path,
         require_zip=require_zip,
         timestamp_tolerance_s=timestamp_tolerance_s,
         max_time_delta_s=max_time_delta_s,
         validation=validation,
         public_eval=public_eval,
         nearest_eval=nearest_eval,
+        manifest_verification=manifest_verification,
     )
     return Track5Scorecard(
         summary=summary,
@@ -180,7 +194,12 @@ def scorecard_summary_frame(summary: dict[str, Any]) -> pd.DataFrame:
         "results_path": summary.get("results_path"),
         "truth_path": summary.get("truth_path"),
         "template_path": summary.get("template_path"),
+        "upload_manifest_path": summary.get("upload_manifest_path"),
         "codabench_upload_ready": validation.get("codabench_upload_ready"),
+        "upload_manifest_valid": summary.get("upload_manifest_valid"),
+        "upload_manifest_codabench_upload_ready": summary.get(
+            "upload_manifest_codabench_upload_ready"
+        ),
         "validation_leaderboard_ready": validation.get("leaderboard_ready"),
         "public_metric_leaderboard_ready": public.get("leaderboard_ready")
         if isinstance(public, dict)
@@ -231,12 +250,14 @@ def _scorecard_summary(
     truth_path: Path | None,
     template_path: Path | None,
     class_map_path: Path | None,
+    upload_manifest_path: Path | None,
     require_zip: bool,
     timestamp_tolerance_s: float,
     max_time_delta_s: float,
     validation: OfficialTrack5Validation,
     public_eval: dict[str, Any] | None,
     nearest_eval: dict[str, Any] | None,
+    manifest_verification: dict[str, Any] | None,
 ) -> dict[str, Any]:
     public_summary = public_eval["summary"] if public_eval is not None else None
     nearest_summary = nearest_eval["summary"] if nearest_eval is not None else None
@@ -247,6 +268,14 @@ def _scorecard_summary(
     else:
         public_ready = bool(public_summary.get("leaderboard_ready", False))
         reasons.extend(str(item) for item in public_summary.get("leaderboard_blocking_reasons", []))
+    if manifest_verification is None:
+        manifest_ready = True
+    else:
+        manifest_ready = bool(manifest_verification.get("codabench_upload_ready", False))
+        if not manifest_verification.get("valid", False):
+            reasons.append("official_upload_manifest_invalid")
+        if not manifest_verification.get("codabench_upload_ready", False):
+            reasons.append("official_upload_manifest_not_upload_ready")
     unique_reasons = sorted(set(str(reason) for reason in reasons if str(reason)))
     return {
         "schema": "raft-uav-mmuad-track5-scorecard-v1",
@@ -259,14 +288,30 @@ def _scorecard_summary(
         "truth_path": str(truth_path) if truth_path is not None else None,
         "template_path": str(template_path) if template_path is not None else None,
         "class_map_path": str(class_map_path) if class_map_path is not None else None,
+        "upload_manifest_path": (
+            str(upload_manifest_path) if upload_manifest_path is not None else None
+        ),
         "require_zip": bool(require_zip),
         "timestamp_tolerance_s": float(timestamp_tolerance_s),
         "max_time_delta_s": float(max_time_delta_s),
         "validation": validation.summary,
+        "upload_manifest_verification": manifest_verification,
+        "upload_manifest_valid": (
+            bool(manifest_verification.get("valid", False))
+            if manifest_verification is not None
+            else None
+        ),
+        "upload_manifest_codabench_upload_ready": (
+            bool(manifest_verification.get("codabench_upload_ready", False))
+            if manifest_verification is not None
+            else None
+        ),
         "public_track5": public_summary,
         "nearest_time": nearest_summary,
         "scorecard_leaderboard_ready": bool(
-            validation.summary.get("leaderboard_ready", False) and public_ready
+            validation.summary.get("leaderboard_ready", False)
+            and public_ready
+            and manifest_ready
         ),
         "codabench_upload_ready": bool(validation.summary.get("codabench_upload_ready", False)),
         "leaderboard_blocking_reasons": unique_reasons,
