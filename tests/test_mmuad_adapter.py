@@ -15,6 +15,7 @@ import pandas as pd
 import pytest
 
 from raft_uav.coordinates import LocalENUProjector
+from raft_uav.mmuad.archive import extract_mmuad_archive
 from raft_uav.mmuad.calibration import (
     load_calibration_file,
     load_calibration_json,
@@ -3589,6 +3590,159 @@ def test_cli_completes_official_results_to_sequence_timestamps(tmp_path: Path) -
         assert archive.namelist() == ["mmaud_results.csv"]
         zipped = pd.read_csv(archive.open("mmaud_results.csv"))
     assert zipped["Timestamp"].tolist() == [0.0, 1.0]
+
+
+def test_cli_sequence_root_runs_normalized_zip_archive(tmp_path: Path) -> None:
+    archive_path = tmp_path / "mmuad_normalized.zip"
+    with ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            "seq_archive/candidates.csv",
+            "\n".join(
+                [
+                    "sequence_id,time_s,source,x_m,y_m,z_m",
+                    "seq_archive,0.0,radar,0.0,0.0,10.0",
+                    "seq_archive,1.0,radar,1.0,0.0,10.0",
+                ]
+            ),
+        )
+        archive.writestr(
+            "seq_archive/truth.csv",
+            "\n".join(
+                [
+                    "sequence_id,time_s,x_m,y_m,z_m",
+                    "seq_archive,0.0,0.0,0.0,10.0",
+                    "seq_archive,1.0,1.0,0.0,10.0",
+                ]
+            ),
+        )
+    output = tmp_path / "zip_out"
+
+    status = mmuad_cli_main(
+        [
+            "--sequence-root",
+            str(archive_path),
+            "--output-dir",
+            str(output),
+            "--submission-csv",
+            str(output / "submission.csv"),
+        ]
+    )
+
+    assert status == 0
+    estimates = pd.read_csv(output / "mmuad_estimates.csv")
+    assert estimates["sequence_id"].tolist() == ["seq_archive", "seq_archive"]
+    assert estimates["time_s"].tolist() == [0.0, 1.0]
+    metrics = json.loads((output / "mmuad_metrics.json").read_text(encoding="utf-8"))
+    assert metrics["pooled"]["mean_3d_m"] < 1.0
+    archive_manifest = json.loads(
+        (output / "mmuad_sequence_root_archive_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert archive_manifest["schema"] == "raft-uav-mmuad-archive-extraction-v1"
+    assert archive_manifest["archive_format"] == "zip"
+    assert archive_manifest["extracted_file_count"] == 2
+    assert archive_manifest["skipped_member_count"] == 0
+    assert Path(archive_manifest["extract_root"]).is_dir()
+
+
+def test_mmuad_archive_extraction_skips_unsafe_members(tmp_path: Path) -> None:
+    archive_path = tmp_path / "unsafe.zip"
+    with ZipFile(archive_path, "w") as archive:
+        archive.writestr("../outside.txt", "escape")
+        archive.writestr("seq_safe/candidates.csv", "time_s,x_m,y_m,z_m\n0,0,0,1\n")
+
+    manifest = extract_mmuad_archive(archive_path, tmp_path / "extract")
+
+    assert manifest["extracted_file_count"] == 1
+    assert manifest["skipped_member_count"] == 1
+    assert manifest["skipped_members"] == [
+        {"member": "../outside.txt", "reason": "unsafe_member_path"}
+    ]
+    assert not (tmp_path / "outside.txt").exists()
+    assert (Path(manifest["extract_root"]) / "seq_safe" / "candidates.csv").exists()
+
+
+def test_cli_completes_official_results_from_zipped_track5_frames(
+    tmp_path: Path,
+) -> None:
+    archive_path = tmp_path / "mmuad_track5.zip"
+
+    def npy_payload(points: np.ndarray) -> bytes:
+        buffer = io.BytesIO()
+        np.save(buffer, points)
+        return buffer.getvalue()
+
+    with ZipFile(archive_path, "w") as archive:
+        for timestamp in ("0.0", "1.0"):
+            archive.writestr(
+                f"val/seq_zip/Image/{timestamp}.png",
+                b"not-a-real-image",
+            )
+        for timestamp, x in (("0.0", 0.0), ("2.0", 2.0)):
+            archive.writestr(
+                f"val/seq_zip/livox_avia/{timestamp}.npy",
+                npy_payload(
+                    np.array(
+                        [
+                            [x, 0.0, 10.0],
+                            [x + 0.1, 0.0, 10.0],
+                            [x, 0.1, 10.0],
+                        ]
+                    )
+                ),
+            )
+    output = tmp_path / "track5_zip_out"
+    results = output / "mmaud_results.csv"
+    zip_path = output / "official_submission.zip"
+
+    status = mmuad_cli_main(
+        [
+            "--sequence-root",
+            str(archive_path),
+            "--split-name",
+            "val",
+            "--voxel-size-m",
+            "0.5",
+            "--min-cluster-points",
+            "3",
+            "--completion-max-interpolation-gap-s",
+            "3.0",
+            "--ug2-official-complete-to-sequence-timestamps",
+            "--ug2-official-timestamp-source",
+            "image",
+            "--ug2-official-results-csv",
+            str(results),
+            "--ug2-official-codabench-zip",
+            str(zip_path),
+            "--ug2-official-classification",
+            "2",
+            "--ug2-official-validate-on-write",
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    rows = pd.read_csv(results)
+    assert rows["Sequence"].tolist() == ["seq_zip", "seq_zip"]
+    assert rows["Timestamp"].tolist() == [0.0, 1.0]
+    assert rows["Classification"].tolist() == [2, 2]
+    validation = json.loads(
+        (output / "mmuad_official_submission_validation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert validation["codabench_upload_ready"] is True
+    assert validation["template_timestamp_count"] == 2
+    archive_manifest = json.loads(
+        (output / "mmuad_sequence_root_archive_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert archive_manifest["archive_format"] == "zip"
+    assert archive_manifest["extracted_file_count"] == 4
+    assert all(".." not in row["member"] for row in archive_manifest["extracted_files"])
 
 
 def test_cli_completes_official_results_to_template_file_without_sequence_root(

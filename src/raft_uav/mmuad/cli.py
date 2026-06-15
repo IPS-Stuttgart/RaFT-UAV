@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from raft_uav.mmuad.archive import extract_mmuad_archive, is_supported_archive
 from raft_uav.mmuad.calibration import load_calibration_auto, transform_candidate_frame
 from raft_uav.mmuad.camera import (
     load_camera_detections_csv_as_candidates,
@@ -156,6 +157,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--camera-std-xy-m", type=float, default=5.0)
     parser.add_argument("--camera-std-z-m", type=float, default=10.0)
     parser.add_argument("--sequence-root", type=Path)
+    parser.add_argument(
+        "--sequence-root-archive-extract-dir",
+        type=Path,
+        help=(
+            "directory for extracting ZIP/TAR sequence-root archives before "
+            "normal MMUAD sequence discovery; defaults under --output-dir"
+        ),
+    )
     parser.add_argument("--inspect-layout-only", action="store_true")
     parser.add_argument("--rosbag-path", type=Path)
     parser.add_argument("--rosbag-report-json", type=Path)
@@ -288,6 +297,7 @@ def main(argv: list[str] | None = None) -> int:
         return _run_official_upload_manifest_verification(args)
 
     if args.validate_ug2_official_codabench_zip is not None:
+        _maybe_prepare_sequence_root_archive(args)
         return _run_official_submission_validation(args)
 
     if args.rosbag_path is not None:
@@ -401,6 +411,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.sequence_root is not None:
+        _maybe_prepare_sequence_root_archive(args)
         output = _run_sequence_root(args)
     else:
         output = _run_explicit_files(args)
@@ -416,6 +427,9 @@ def _write_tracking_artifacts(
     paths = write_tracker_output(output, args.output_dir)
     if extra_paths:
         paths.update(extra_paths)
+    archive_manifest = getattr(args, "_sequence_root_archive_manifest_json", None)
+    if archive_manifest is not None:
+        paths["sequence_root_archive_manifest_json"] = str(archive_manifest)
     native_sequence_manifests = getattr(args, "_native_ros_sequence_manifests_json", None)
     if native_sequence_manifests is not None:
         paths["native_ros_sequence_manifests_json"] = str(native_sequence_manifests)
@@ -672,6 +686,23 @@ def _run_inspect(args: argparse.Namespace) -> int:
     print(f"sequence_count={report['sequence_count']}")
     print(f"file_count={report['file_count']}")
     return 0
+
+
+def _maybe_prepare_sequence_root_archive(args: argparse.Namespace) -> None:
+    if args.sequence_root is None:
+        return
+    if not is_supported_archive(args.sequence_root):
+        return
+    extract_parent = args.sequence_root_archive_extract_dir or (
+        args.output_dir / "mmuad_sequence_root_archive"
+    )
+    manifest = extract_mmuad_archive(args.sequence_root, extract_parent)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = args.output_dir / "mmuad_sequence_root_archive_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    args._sequence_root_archive_manifest_json = manifest_path
+    args._sequence_root_archive_original = args.sequence_root
+    args.sequence_root = Path(manifest["extract_root"])
 
 
 def _run_submission_evaluation(args: argparse.Namespace) -> int:
