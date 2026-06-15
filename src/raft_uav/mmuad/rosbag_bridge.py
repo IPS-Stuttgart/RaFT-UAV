@@ -338,6 +338,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "audio_timestamps"
     if _looks_like_imu_timestamp_topic(name, msg_type):
         return "imu_timestamps"
+    if _looks_like_kinematic_timestamp_topic(name, msg_type):
+        return _kinematic_timestamp_kind(msg_type)
     if _looks_like_image_timestamp_topic(name, msg_type):
         return "image_timestamps"
     if "detection3darray" in compact_type:
@@ -564,6 +566,43 @@ def _looks_like_imu_timestamp_topic(name: str, msg_type: str) -> bool:
         or "imumsg" in compact_type
         or "imu" in name_tokens
     )
+
+
+def _looks_like_kinematic_timestamp_topic(name: str, msg_type: str) -> bool:
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    name_tokens = set(re.split(r"[^a-z0-9]+", name.lower()))
+    name_tokens.discard("")
+    return (
+        compact_type.endswith("/twist")
+        or compact_type.endswith("msg/twist")
+        or compact_type.endswith("/twiststamped")
+        or compact_type.endswith("msg/twiststamped")
+        or compact_type.endswith("/twistwithcovariance")
+        or compact_type.endswith("msg/twistwithcovariance")
+        or compact_type.endswith("/twistwithcovariancestamped")
+        or compact_type.endswith("msg/twistwithcovariancestamped")
+        or compact_type.endswith("/accel")
+        or compact_type.endswith("msg/accel")
+        or compact_type.endswith("/accelstamped")
+        or compact_type.endswith("msg/accelstamped")
+        or compact_type.endswith("/accelwithcovariance")
+        or compact_type.endswith("msg/accelwithcovariance")
+        or compact_type.endswith("/accelwithcovariancestamped")
+        or compact_type.endswith("msg/accelwithcovariancestamped")
+        or "twist" in name_tokens
+        or "velocity" in name_tokens
+        or "accel" in name_tokens
+        or "acceleration" in name_tokens
+    )
+
+
+def _kinematic_timestamp_kind(msg_type: str) -> str:
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    if "accel" in compact_type:
+        return "accel_timestamps"
+    if "twist" in compact_type:
+        return "twist_timestamps"
+    return "kinematic_timestamps"
 
 
 def _is_camera_detection_kind(kind: str) -> bool:

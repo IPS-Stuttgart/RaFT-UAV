@@ -57,6 +57,7 @@ from raft_uav.mmuad.native_ros import (
     detection3d_message_to_rows,
     extract_native_rosbag_topic_map,
     geodetic_message_to_rows,
+    kinematic_message_to_timestamp_rows,
     laserscan_message_to_rows,
     livox_custom_message_to_points,
     marker_message_to_rows,
@@ -7699,6 +7700,176 @@ def test_native_ros_extraction_supports_imu_timestamp_topics(
     assert not (output / "native_ros_imu_timestamp_template.csv").exists()
 
 
+def test_native_ros_kinematic_message_to_timestamp_rows_extracts_twist_and_accel() -> None:
+    twist_message = SimpleNamespace(
+        header=SimpleNamespace(frame_id="base_link"),
+        child_frame_id="uav",
+        twist=SimpleNamespace(
+            twist=SimpleNamespace(
+                linear=SimpleNamespace(x=1.0, y=2.0, z=3.0),
+                angular=SimpleNamespace(x=0.1, y=0.2, z=0.3),
+            )
+        ),
+    )
+    accel_message = SimpleNamespace(
+        header=SimpleNamespace(frame_id="base_link"),
+        accel=SimpleNamespace(
+            linear=SimpleNamespace(x=4.0, y=5.0, z=6.0),
+            angular=SimpleNamespace(x=0.4, y=0.5, z=0.6),
+        ),
+    )
+
+    twist_rows = kinematic_message_to_timestamp_rows(
+        twist_message,
+        sequence_id="seq_kin",
+        time_s=5.0,
+        topic="/filter/twist",
+        source="filter_twist",
+        message_index=0,
+        kind="twist_timestamps",
+    )
+    accel_rows = kinematic_message_to_timestamp_rows(
+        accel_message,
+        sequence_id="seq_kin",
+        time_s=6.0,
+        topic="/filter/accel",
+        source="filter_accel",
+        message_index=1,
+        kind="accel_timestamps",
+    )
+
+    assert twist_rows[0]["frame_id"] == "base_link"
+    assert twist_rows[0]["child_frame_id"] == "uav"
+    assert twist_rows[0]["linear_velocity_x_m_s"] == pytest.approx(1.0)
+    assert twist_rows[0]["angular_velocity_z_rad_s"] == pytest.approx(0.3)
+    assert accel_rows[0]["linear_acceleration_y_m_s2"] == pytest.approx(5.0)
+    assert accel_rows[0]["angular_acceleration_z_rad_s2"] == pytest.approx(0.6)
+
+
+def test_native_ros_extraction_supports_kinematic_timestamp_topics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_kinematic.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map_native.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_kinematic",
+                "exports": [
+                    {
+                        "topic": "/filter/twist",
+                        "kind": "twist_timestamps",
+                        "source": "filter_twist",
+                    },
+                    {
+                        "topic": "/filter/accel",
+                        "kind": "accel_timestamps",
+                        "source": "filter_accel",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    twist_connection = SimpleNamespace(
+        topic="/filter/twist",
+        msgtype="geometry_msgs/msg/TwistStamped",
+    )
+    accel_connection = SimpleNamespace(
+        topic="/filter/accel",
+        msgtype="geometry_msgs/msg/AccelStamped",
+    )
+    twist_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=5, nanosec=250_000_000),
+            frame_id="base_link",
+        ),
+        twist=SimpleNamespace(
+            linear=SimpleNamespace(x=1.0, y=2.0, z=3.0),
+            angular=SimpleNamespace(x=0.1, y=0.2, z=0.3),
+        ),
+    )
+    accel_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=6, nanosec=500_000_000),
+            frame_id="base_link",
+        ),
+        accel=SimpleNamespace(
+            linear=SimpleNamespace(x=4.0, y=5.0, z=6.0),
+            angular=SimpleNamespace(x=0.4, y=0.5, z=0.6),
+        ),
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [twist_connection, accel_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [twist_connection, accel_connection]
+            return [
+                (twist_connection, 5_000_000_000, b"twist"),
+                (accel_connection, 6_000_000_000, b"accel"),
+            ]
+
+        def deserialize(self, rawdata, msgtype):
+            if rawdata == b"twist":
+                assert msgtype == "geometry_msgs/msg/TwistStamped"
+                return twist_message
+            if rawdata == b"accel":
+                assert msgtype == "geometry_msgs/msg/AccelStamped"
+                return accel_message
+            raise AssertionError(rawdata)
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is None
+    assert extracted.truth is None
+    assert extracted.kinematic_timestamps is not None
+    rows = extracted.kinematic_timestamps.sort_values("time_s").reset_index(drop=True)
+    assert rows["sequence_id"].tolist() == ["seq_kinematic", "seq_kinematic"]
+    assert rows["time_s"].tolist() == [5.25, 6.5]
+    assert rows["source"].tolist() == ["filter_twist", "filter_accel"]
+    assert rows.loc[0, "linear_velocity_y_m_s"] == pytest.approx(2.0)
+    assert rows.loc[1, "linear_acceleration_z_m_s2"] == pytest.approx(6.0)
+    assert rows.loc[1, "angular_acceleration_x_rad_s2"] == pytest.approx(0.4)
+    assert extracted.manifest["kinematic_timestamp_rows"] == 2
+    assert extracted.manifest["candidate_rows"] == 0
+    assert extracted.manifest["truth_rows"] == 0
+
+    saved_rows = pd.read_csv(output / "native_ros_kinematic_timestamps.csv")
+    saved_manifest = json.loads(
+        (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
+    )
+    assert saved_rows["time_s"].tolist() == [5.25, 6.5]
+    assert saved_manifest["kinematic_timestamp_rows"] == 2
+    assert saved_manifest["kinematic_timestamps_csv"] == str(
+        output / "native_ros_kinematic_timestamps.csv"
+    )
+    assert not (output / "native_ros_kinematic_timestamp_template.csv").exists()
+
+
 def test_native_ros_extraction_supports_bounding_box3d_topics(
     tmp_path: Path,
     monkeypatch,
@@ -10477,6 +10648,44 @@ def test_ros2_topic_map_template_infers_imu_timestamp_topics(tmp_path: Path) -> 
     ]
     assert payload["exports"][0]["source"] == "os1_cloud_node1_imu"
     assert payload["exports"][1]["source"] == "os1_cloud_node2_imu"
+    assert all("path" not in entry for entry in payload["exports"])
+
+
+def test_ros2_topic_map_template_infers_kinematic_timestamp_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /filter/twist",
+                "        type: geometry_msgs/msg/TwistStamped",
+                "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /filter/accel",
+                "        type: geometry_msgs/msg/AccelWithCovarianceStamped",
+                "      message_count: 5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(
+        report,
+        tmp_path / "topic_map_template.json",
+        template_mode="native",
+    )
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "twist_timestamps",
+        "accel_timestamps",
+    ]
+    assert payload["exports"][0]["source"] == "filter_twist"
+    assert payload["exports"][1]["source"] == "filter_accel"
     assert all("path" not in entry for entry in payload["exports"])
 
 

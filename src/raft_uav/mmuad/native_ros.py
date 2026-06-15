@@ -12,6 +12,8 @@ tracking logs:
 * ``sensor_msgs/msg/Image`` / ``CompressedImage`` -> timestamp template rows;
 * common ROS audio messages -> timestamp inventory rows;
 * ``sensor_msgs/msg/Imu`` -> timestamp/kinematics inventory rows;
+* ``geometry_msgs/msg/Twist`` / ``Accel`` -> velocity/acceleration inventory
+  rows;
 * ``sensor_msgs/msg/LaserScan`` -> range-scan candidate detections;
 * common polar/range-azimuth radar messages -> polar radar candidates;
 * ``sensor_msgs/msg/NavSatFix`` -> geodetic rows projected into local ENU;
@@ -73,6 +75,7 @@ class NativeRosExtraction:
     image_timestamps: pd.DataFrame | None = None
     audio_timestamps: pd.DataFrame | None = None
     imu_timestamps: pd.DataFrame | None = None
+    kinematic_timestamps: pd.DataFrame | None = None
 
 
 def extract_native_rosbag_topic_map(
@@ -121,6 +124,10 @@ def extract_native_rosbag_topic_map(
     ``imu_timestamps`` / ``imu_timestamp_inventory``
         Extract native ``sensor_msgs/msg/Imu`` timestamps and kinematics into
         CSV inventory artifacts. This is raw sensor metadata only.
+    ``kinematic_timestamps`` / ``twist_timestamps`` / ``accel_timestamps``
+        Extract native ``geometry_msgs/msg/Twist``/``TwistStamped`` and
+        ``geometry_msgs/msg/Accel``/``AccelStamped`` vectors into CSV
+        inventory artifacts. This is velocity/acceleration metadata only.
     ``navsatfix_truth`` / ``geopoint_truth`` / ``geopose_truth`` /
     ``navsatfix_candidate`` / ``geopoint_candidate`` / ``geopose_candidate``
         Project geodetic GPS/geographic positions into local ENU rows. These
@@ -175,6 +182,7 @@ def extract_native_rosbag_topic_map(
     image_timestamp_rows: list[dict[str, Any]] = []
     audio_timestamp_rows: list[dict[str, Any]] = []
     imu_timestamp_rows: list[dict[str, Any]] = []
+    kinematic_timestamp_rows: list[dict[str, Any]] = []
     extracted: list[dict[str, Any]] = []
     sequence_id = str(payload.get("sequence_id", Path(bag_path).stem))
     output = Path(output_dir) if output_dir is not None else None
@@ -707,6 +715,18 @@ def extract_native_rosbag_topic_map(
                     )
                     imu_timestamp_rows.extend(rows_for_message)
                     rows = len(rows_for_message)
+                elif _is_kinematic_timestamp_kind(kind):
+                    rows_for_message = kinematic_message_to_timestamp_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        topic=str(connection.topic),
+                        source=source,
+                        message_index=replay_message_counts[str(connection.topic)] - 1,
+                        kind=kind,
+                    )
+                    kinematic_timestamp_rows.extend(rows_for_message)
+                    rows = len(rows_for_message)
                 elif kind in {"marker_truth", "marker_array_truth"}:
                     rows_for_message = marker_message_to_rows(
                         message,
@@ -901,6 +921,11 @@ def extract_native_rosbag_topic_map(
     imu_timestamps = (
         pd.DataFrame.from_records(imu_timestamp_rows) if imu_timestamp_rows else None
     )
+    kinematic_timestamps = (
+        pd.DataFrame.from_records(kinematic_timestamp_rows)
+        if kinematic_timestamp_rows
+        else None
+    )
     manifest = {
         "schema": "raft-uav-mmuad-native-ros-extraction-v1",
         "bag_path": str(bag_path),
@@ -910,6 +935,9 @@ def extract_native_rosbag_topic_map(
         "image_timestamp_rows": int(len(image_timestamps)) if image_timestamps is not None else 0,
         "audio_timestamp_rows": int(len(audio_timestamps)) if audio_timestamps is not None else 0,
         "imu_timestamp_rows": int(len(imu_timestamps)) if imu_timestamps is not None else 0,
+        "kinematic_timestamp_rows": (
+            int(len(kinematic_timestamps)) if kinematic_timestamps is not None else 0
+        ),
         "extracted_messages": extracted,
     }
     if output is not None:
@@ -933,6 +961,14 @@ def extract_native_rosbag_topic_map(
         if imu_timestamps is not None:
             imu_timestamps.to_csv(output / "native_ros_imu_timestamps.csv", index=False)
             manifest["imu_timestamps_csv"] = str(output / "native_ros_imu_timestamps.csv")
+        if kinematic_timestamps is not None:
+            kinematic_timestamps.to_csv(
+                output / "native_ros_kinematic_timestamps.csv",
+                index=False,
+            )
+            manifest["kinematic_timestamps_csv"] = str(
+                output / "native_ros_kinematic_timestamps.csv"
+            )
         (output / "native_ros_extraction_manifest.json").write_text(
             json.dumps(manifest, indent=2), encoding="utf-8"
         )
@@ -943,6 +979,7 @@ def extract_native_rosbag_topic_map(
         image_timestamps=image_timestamps,
         audio_timestamps=audio_timestamps,
         imu_timestamps=imu_timestamps,
+        kinematic_timestamps=kinematic_timestamps,
     )
 
 
@@ -993,6 +1030,29 @@ def _is_imu_timestamp_kind(kind: str) -> bool:
         "imu_frame_timestamp",
         "imu_frame_timestamps",
         "imu_timestamp_inventory",
+    }
+
+
+def _is_kinematic_timestamp_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "kinematic_timestamp",
+        "kinematic_timestamps",
+        "kinematics_timestamp",
+        "kinematics_timestamps",
+        "kinematic_timestamp_inventory",
+        "twist_timestamp",
+        "twist_timestamps",
+        "twist_timestamp_inventory",
+        "velocity_timestamp",
+        "velocity_timestamps",
+        "velocity_timestamp_inventory",
+        "accel_timestamp",
+        "accel_timestamps",
+        "accel_timestamp_inventory",
+        "acceleration_timestamp",
+        "acceleration_timestamps",
+        "acceleration_timestamp_inventory",
     }
 
 
@@ -1101,6 +1161,112 @@ def imu_message_to_timestamp_rows(
     _add_covariance_diagonal(row, "angular_velocity_covariance", message)
     _add_covariance_diagonal(row, "linear_acceleration_covariance", message)
     return [row]
+
+
+def kinematic_message_to_timestamp_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    topic: str,
+    source: str,
+    message_index: int,
+    kind: str = "kinematic_timestamps",
+) -> list[dict[str, Any]]:
+    """Convert native ROS Twist/Accel messages into vector inventory rows."""
+
+    row: dict[str, Any] = {
+        "sequence_id": str(sequence_id),
+        "time_s": float(time_s),
+        "topic": str(topic),
+        "source": str(source),
+        "message_index": int(message_index),
+    }
+    frame_id = _message_frame_id(message)
+    if frame_id not in (None, ""):
+        row["frame_id"] = str(frame_id)
+    child_frame_id = _message_child_frame_id(message)
+    if child_frame_id not in (None, ""):
+        row["child_frame_id"] = str(child_frame_id)
+
+    normalized_kind = str(kind).strip().lower()
+    if "accel" in normalized_kind or "acceleration" in normalized_kind:
+        _add_accel_components(row, _kinematic_vector_source(message, "accel"))
+    elif "twist" in normalized_kind or "velocity" in normalized_kind:
+        _add_twist_components(row, _kinematic_vector_source(message, "twist"))
+    else:
+        twist_source = _kinematic_vector_source(message, "twist")
+        accel_source = _kinematic_vector_source(message, "accel")
+        if _has_linear_or_angular_vector(twist_source):
+            _add_twist_components(row, twist_source)
+        if _has_linear_or_angular_vector(accel_source):
+            _add_accel_components(row, accel_source)
+        if not _has_linear_or_angular_vector(twist_source) and _has_linear_or_angular_vector(
+            message
+        ):
+            _add_twist_components(row, message)
+
+    return [row]
+
+
+def _kinematic_vector_source(message: Any, kind: str) -> Any:
+    if kind == "twist":
+        source = _field_value(message, "twist")
+        nested = _field_value(source, "twist") if source is not None else None
+        if _has_linear_or_angular_vector(nested):
+            return nested
+        if _has_linear_or_angular_vector(source):
+            return source
+    if kind == "accel":
+        source = _field_value(message, "accel", "acceleration")
+        nested = (
+            _field_value(source, "accel", "acceleration") if source is not None else None
+        )
+        if _has_linear_or_angular_vector(nested):
+            return nested
+        if _has_linear_or_angular_vector(source):
+            return source
+    return message
+
+
+def _has_linear_or_angular_vector(value: Any) -> bool:
+    if value is None:
+        return False
+    return _field_value(value, "linear") is not None or _field_value(value, "angular") is not None
+
+
+def _add_twist_components(row: dict[str, Any], source: Any) -> None:
+    _add_vector_components(
+        row,
+        "linear_velocity",
+        _field_value(source, "linear", "linear_velocity"),
+        components=("x", "y", "z"),
+        suffix="_m_s",
+    )
+    _add_vector_components(
+        row,
+        "angular_velocity",
+        _field_value(source, "angular", "angular_velocity"),
+        components=("x", "y", "z"),
+        suffix="_rad_s",
+    )
+
+
+def _add_accel_components(row: dict[str, Any], source: Any) -> None:
+    _add_vector_components(
+        row,
+        "linear_acceleration",
+        _field_value(source, "linear", "linear_acceleration"),
+        components=("x", "y", "z"),
+        suffix="_m_s2",
+    )
+    _add_vector_components(
+        row,
+        "angular_acceleration",
+        _field_value(source, "angular", "angular_acceleration"),
+        components=("x", "y", "z"),
+        suffix="_rad_s2",
+    )
 
 
 def audio_message_to_timestamp_rows(
