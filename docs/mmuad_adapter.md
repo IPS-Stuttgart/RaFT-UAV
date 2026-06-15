@@ -827,6 +827,24 @@ so an unexpected sequence ID is visible without inspecting every row. With
 `--evaluation-require-complete-track5`, the CLI writes the JSON/row artifacts
 and exits nonzero when those strict public Track 5 readiness checks fail.
 
+The stable interchange submission CSV path can use the same public metric grid
+without first writing `mmaud_results.csv`:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --evaluate-submission-csv outputs/mmuad_val/submission.csv \
+  --evaluate-truth-csv data/mmuad_export/val_truth.csv \
+  --evaluation-protocol public-track5 \
+  --evaluation-json outputs/mmuad_val/submission_public_track5_eval.json \
+  --output-dir outputs/mmuad_val
+```
+
+That path reports `public_track5_metric=true` and can set
+`score_valid_for_leaderboard=true` when the timestamp grid is complete, but it
+keeps `leaderboard_ready=false` with
+`stable_submission_csv_not_official_track5_package` because the stable
+interchange CSV is not the public Track 5 upload package.
+
 The submission writer also accepts a sequence-to-class map so different
 sequences can use different UAV type labels:
 

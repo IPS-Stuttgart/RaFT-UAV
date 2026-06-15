@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.evaluator import evaluate_mmaud_results, load_evaluation_truth_file
 from raft_uav.mmuad.io import load_truth_file
 from raft_uav.mmuad.schema import normalize_time_column_aliases, normalize_truth_columns
 
@@ -21,6 +22,16 @@ _SUBMISSION_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "x_m": ("x", "east_m", "pos_x", "center_x", "cx"),
     "y_m": ("y", "north_m", "pos_y", "center_y", "cy"),
     "z_m": ("z", "up_m", "pos_z", "center_z", "cz"),
+    "uav_type": (
+        "classification",
+        "class_id",
+        "class_name",
+        "class",
+        "label",
+        "category",
+        "type",
+        "uav_class",
+    ),
     "score": ("confidence", "probability"),
 }
 
@@ -41,6 +52,8 @@ def load_submission_csv(path: Path) -> pd.DataFrame:
         frame[col] = pd.to_numeric(frame[col], errors="coerce")
     frame["sequence_id"] = frame["sequence_id"].astype(str)
     frame["track_id"] = frame["track_id"].astype(str)
+    if "uav_type" in frame.columns:
+        frame["uav_type"] = frame["uav_type"].astype(str)
     return frame.loc[np.isfinite(frame[["time_s", "x_m", "y_m", "z_m"]]).all(axis=1)].copy()
 
 
@@ -69,10 +82,25 @@ def evaluate_submission_csv(
     truth_file: Path,
     *,
     max_time_delta_s: float = 0.5,
+    metric_protocol: str = "nearest-time",
+    timestamp_tolerance_s: float = 1.0e-6,
+    class_map_path: Path | None = None,
+    class_map_csv: Path | None = None,
 ) -> dict[str, Any]:
     """Evaluate a stable trajectory CSV against normalized truth rows."""
 
     submission = load_submission_csv(submission_csv)
+    if _normalize_submission_metric_protocol(metric_protocol) == "public_track5":
+        class_map_file = class_map_path if class_map_path is not None else class_map_csv
+        result = evaluate_mmaud_results(
+            _submission_to_results_frame(submission),
+            load_evaluation_truth_file(truth_file),
+            metric_protocol="public-track5",
+            timestamp_tolerance_s=timestamp_tolerance_s,
+            class_map_path=class_map_file,
+        )
+        return _stable_submission_public_track5_summary(result["summary"])
+
     truth = load_truth_file(truth_file).rows
     matched = match_submission_to_truth(
         submission,
@@ -80,6 +108,62 @@ def evaluate_submission_csv(
         max_time_delta_s=max_time_delta_s,
     )
     return metrics_from_matches(matched, submission=submission, truth=truth)
+
+
+def _normalize_submission_metric_protocol(value: str) -> str:
+    text = str(value).strip().lower().replace("_", "-")
+    if text in {"nearest-time", "nearest", "nearest-truth"}:
+        return "nearest_time"
+    if text in {
+        "public-track5",
+        "track5-public",
+        "official-track5",
+        "public-track5-timestamp-aligned",
+    }:
+        return "public_track5"
+    raise ValueError(
+        "metric_protocol must be 'nearest-time' or 'public-track5'; "
+        f"got {value!r}"
+    )
+
+
+def _submission_to_results_frame(submission: pd.DataFrame) -> pd.DataFrame:
+    rows = pd.DataFrame(
+        {
+            "sequence_id": submission["sequence_id"].astype(str),
+            "timestamp": pd.to_numeric(submission["time_s"], errors="coerce"),
+            "x": pd.to_numeric(submission["x_m"], errors="coerce"),
+            "y": pd.to_numeric(submission["y_m"], errors="coerce"),
+            "z": pd.to_numeric(submission["z_m"], errors="coerce"),
+            "uav_type": (
+                submission["uav_type"].astype(str)
+                if "uav_type" in submission.columns
+                else "unknown"
+            ),
+            "score": pd.to_numeric(submission["score"], errors="coerce"),
+        }
+    )
+    return rows
+
+
+def _stable_submission_public_track5_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    out = dict(summary)
+    out["schema"] = "raft-uav-mmuad-submission-eval-v1"
+    out["stable_submission_csv"] = True
+    out["official_ug2_metric"] = False
+    out["closed_codabench_evaluator"] = False
+    out["codabench_upload_ready"] = False
+    out["leaderboard_ready"] = False
+    reasons = [
+        str(reason)
+        for reason in out.get("leaderboard_blocking_reasons", [])
+        if str(reason)
+    ]
+    reason = "stable_submission_csv_not_official_track5_package"
+    if reason not in reasons:
+        reasons.append(reason)
+    out["leaderboard_blocking_reasons"] = reasons
+    return out
 
 
 def match_submission_to_truth(

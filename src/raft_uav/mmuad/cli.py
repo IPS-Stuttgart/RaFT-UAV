@@ -666,9 +666,14 @@ def _run_submission_evaluation(args: argparse.Namespace) -> int:
         args.evaluate_submission_csv,
         evaluation_truth,
         max_time_delta_s=args.evaluation_max_time_delta_s,
+        metric_protocol=args.evaluation_protocol,
+        timestamp_tolerance_s=args.evaluation_timestamp_tolerance_s,
+        class_map_path=args.evaluation_class_map_file,
     )
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_json.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    if args.evaluation_require_complete_track5:
+        _require_complete_track5_evaluation(args, metrics)
     print("mmuad_evaluate=ok")
     print(f"evaluation_json={output_json}")
     pooled = metrics.get("pooled", {})

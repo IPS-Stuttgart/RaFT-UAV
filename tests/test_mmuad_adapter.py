@@ -4776,6 +4776,115 @@ def test_submission_evaluator_matches_truth(tmp_path: Path) -> None:
     assert metrics["pooled"]["mean_3d_m"] == 0.0
 
 
+def test_submission_evaluator_supports_public_track5_protocol(tmp_path: Path) -> None:
+    submission = tmp_path / "submission.csv"
+    truth = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "Sequence": ["s1", "s1"],
+            "Timestamp": [0.0, 1.0],
+            "Track": ["uav", "uav"],
+            "x": [0.0, 2.0],
+            "y": [0.0, 0.0],
+            "z": [2.0, 2.0],
+            "Classification": [2, 2],
+        }
+    ).to_csv(submission, index=False)
+    pd.DataFrame(
+        {
+            "sequence_id": ["s1", "s1"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [2.0, 2.0],
+            "classification": [2, 2],
+        }
+    ).to_csv(truth, index=False)
+
+    metrics = evaluate_submission_csv(
+        submission,
+        truth,
+        metric_protocol="public-track5",
+        timestamp_tolerance_s=0.0,
+    )
+
+    assert metrics["schema"] == "raft-uav-mmuad-submission-eval-v1"
+    assert metrics["metric_protocol"] == "public_track5_timestamp_aligned"
+    assert metrics["public_track5_metric"] is True
+    assert metrics["official_ug2_metric"] is False
+    assert metrics["closed_codabench_evaluator"] is False
+    assert metrics["stable_submission_csv"] is True
+    assert metrics["score_valid_for_leaderboard"] is True
+    assert metrics["leaderboard_ready"] is False
+    assert metrics["codabench_upload_ready"] is False
+    assert (
+        "stable_submission_csv_not_official_track5_package"
+        in metrics["leaderboard_blocking_reasons"]
+    )
+    assert metrics["matched_count"] == 2
+    assert metrics["missing_prediction_count"] == 0
+    assert metrics["extra_prediction_count"] == 0
+    assert metrics["pooled"]["pose_mse_loss_m2"] == 0.5
+    assert metrics["pooled"]["classification_accuracy"] == 1.0
+
+
+def test_cli_evaluates_submission_csv_with_public_track5_protocol(
+    tmp_path: Path,
+) -> None:
+    submission = tmp_path / "submission.csv"
+    truth = tmp_path / "truth.csv"
+    output = tmp_path / "out"
+    pd.DataFrame(
+        {
+            "sequence_id": ["s1", "s1"],
+            "time_s": [0.0, 1.0],
+            "track_id": ["uav", "uav"],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [2.0, 2.0],
+            "classification": [4, 4],
+        }
+    ).to_csv(submission, index=False)
+    pd.DataFrame(
+        {
+            "sequence_id": ["s1", "s1"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [2.0, 2.0],
+            "classification": [4, 4],
+        }
+    ).to_csv(truth, index=False)
+
+    status = mmuad_cli_main(
+        [
+            "--evaluate-submission-csv",
+            str(submission),
+            "--evaluate-truth-csv",
+            str(truth),
+            "--evaluation-protocol",
+            "public-track5",
+            "--evaluation-timestamp-tolerance-s",
+            "0",
+            "--evaluation-json",
+            str(output / "submission_public_track5.json"),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert status == 0
+    metrics = json.loads(
+        (output / "submission_public_track5.json").read_text(encoding="utf-8")
+    )
+    assert metrics["metric_protocol"] == "public_track5_timestamp_aligned"
+    assert metrics["stable_submission_csv"] is True
+    assert metrics["score_valid_for_leaderboard"] is True
+    assert metrics["leaderboard_ready"] is False
+    assert metrics["pooled"]["pose_mse_loss_m2"] == 0.0
+    assert metrics["pooled"]["classification_accuracy"] == 1.0
+
+
 def test_submission_evaluator_accepts_nanosecond_timestamps(tmp_path: Path) -> None:
     submission = tmp_path / "submission.csv"
     truth = tmp_path / "truth.csv"
