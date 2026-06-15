@@ -464,7 +464,11 @@ def _write_tracking_artifacts(
         diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
         completion.diagnostics.to_csv(diagnostics_path, index=False)
         summary = completion_summary(completion, requested_count=len(template))
-        summary["timestamp_source"] = args.ug2_official_timestamp_source
+        summary["timestamp_source"] = getattr(
+            args,
+            "_official_completion_template_source",
+            args.ug2_official_timestamp_source,
+        )
         summary_path = args.output_dir / "mmuad_official_timestamp_completion_summary.json"
         summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
         paths["official_timestamp_completion_rows_csv"] = str(diagnostics_path)
@@ -1092,6 +1096,7 @@ def _maybe_set_official_validation_template_from_native_images(
     if template is None:
         return
     _maybe_set_official_validation_template_from_frames(args, [template])
+    _maybe_set_official_native_image_template_from_frames(args, [template])
 
 
 def _maybe_set_official_validation_template_from_frames(
@@ -1106,6 +1111,21 @@ def _maybe_set_official_validation_template_from_frames(
     if not rows:
         return
     args._official_validation_template = normalize_truth_columns(
+        pd.concat(rows, ignore_index=True)
+        .drop_duplicates(subset=["sequence_id", "time_s"])
+        .sort_values(["sequence_id", "time_s"])
+        .reset_index(drop=True)
+    )
+
+
+def _maybe_set_official_native_image_template_from_frames(
+    args: argparse.Namespace,
+    frames: list[pd.DataFrame],
+) -> None:
+    rows = [frame for frame in frames if frame is not None and not frame.empty]
+    if not rows:
+        return
+    args._official_native_image_timestamp_template = normalize_truth_columns(
         pd.concat(rows, ignore_index=True)
         .drop_duplicates(subset=["sequence_id", "time_s"])
         .sort_values(["sequence_id", "time_s"])
@@ -1281,13 +1301,19 @@ def _official_completion_template(args: argparse.Namespace) -> pd.DataFrame:
             raise SystemExit(
                 "official Track 5 completion template contains no usable timestamps"
             )
+        args._official_completion_template_source = "official-validation-template"
         return template
 
     sequences = getattr(args, "_sequence_paths", None)
     if not sequences:
+        native_template = getattr(args, "_official_native_image_timestamp_template", None)
+        if native_template is not None and not native_template.empty:
+            args._official_completion_template_source = "native-image-timestamps"
+            return native_template
         raise SystemExit(
             "--ug2-official-complete-to-sequence-timestamps requires "
-            "--sequence-root or --official-validation-template-file"
+            "--sequence-root, --official-validation-template-file, or native image "
+            "timestamp topics"
         )
     template_frames = [
         official_track5_timestamp_template(
@@ -1298,10 +1324,15 @@ def _official_completion_template(args: argparse.Namespace) -> pd.DataFrame:
     ]
     rows = [frame.rows for frame in template_frames if not frame.rows.empty]
     if not rows:
+        native_template = getattr(args, "_official_native_image_timestamp_template", None)
+        if native_template is not None and not native_template.empty:
+            args._official_completion_template_source = "native-image-timestamps"
+            return native_template
         raise SystemExit(
             "no official Track 5 timestamps found in --sequence-root for "
             f"source {args.ug2_official_timestamp_source!r}"
         )
+    args._official_completion_template_source = args.ug2_official_timestamp_source
     return pd.concat(rows, ignore_index=True)
 
 
@@ -1404,6 +1435,10 @@ def _run_sequence_root(args: argparse.Namespace):
         args._native_ros_sequence_manifests_json = manifest_summary_path
         _maybe_set_official_validation_template_from_truth(args, truth)
         _maybe_set_official_validation_template_from_frames(
+            args,
+            native_image_template_frames,
+        )
+        _maybe_set_official_native_image_template_from_frames(
             args,
             native_image_template_frames,
         )

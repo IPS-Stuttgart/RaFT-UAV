@@ -6490,6 +6490,131 @@ def test_cli_native_ros_extraction_uses_image_timestamps_for_official_validation
     assert validation["codabench_upload_ready"] is True
 
 
+def test_cli_native_ros_extraction_completes_official_rows_to_image_timestamps(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    bag = tmp_path / "seq_native_image_completion.mcap"
+    bag.write_bytes(b"fake native bag")
+    topic_map = tmp_path / "topic_map_native.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_native_image_completion",
+                "exports": [
+                    {"topic": "/radar", "kind": "pose_candidate"},
+                    {"topic": "/camera/image", "kind": "image_timestamps"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "out"
+    extracted_dir = output / "extracted"
+
+    def fake_extract_native_rosbag_topic_map(
+        *,
+        bag_path,
+        topic_map_json,
+        output_dir,
+        voxel_size_m,
+        min_points,
+    ):
+        assert bag_path == bag
+        assert topic_map_json == topic_map
+        output_dir.mkdir(parents=True)
+        (output_dir / "native_ros_extraction_manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema": "fake-native-extraction",
+                    "candidate_rows": 2,
+                    "truth_rows": 0,
+                    "image_timestamp_rows": 3,
+                }
+            ),
+            encoding="utf-8",
+        )
+        candidates = CandidateFrame(
+            pd.DataFrame(
+                {
+                    "sequence_id": ["seq_native_image_completion"] * 2,
+                    "time_s": [0.0, 1.0],
+                    "source": ["radar", "radar"],
+                    "track_id": ["uav", "uav"],
+                    "x_m": [0.0, 1.0],
+                    "y_m": [0.0, 0.0],
+                    "z_m": [10.0, 10.0],
+                    "std_xy_m": [1.0, 1.0],
+                    "std_z_m": [1.0, 1.0],
+                    "confidence": [1.0, 1.0],
+                    "class_name": ["2", "2"],
+                }
+            )
+        )
+        image_timestamps = pd.DataFrame(
+            {
+                "sequence_id": ["seq_native_image_completion"] * 3,
+                "time_s": [0.0, 0.5, 1.0],
+                "topic": ["/camera/image"] * 3,
+                "source": ["front"] * 3,
+            }
+        )
+        return SimpleNamespace(
+            candidates=candidates,
+            truth=None,
+            image_timestamps=image_timestamps,
+            manifest={"image_timestamp_rows": 3},
+        )
+
+    monkeypatch.setattr(
+        "raft_uav.mmuad.cli.extract_native_rosbag_topic_map",
+        fake_extract_native_rosbag_topic_map,
+    )
+
+    status = mmuad_cli_main(
+        [
+            "--rosbag-path",
+            str(bag),
+            "--topic-map-file",
+            str(topic_map),
+            "--native-ros-extract-output-dir",
+            str(extracted_dir),
+            "--output-dir",
+            str(output),
+            "--ug2-official-complete-to-sequence-timestamps",
+            "--ug2-official-results-csv",
+            str(output / "official_mmaud_results.csv"),
+            "--ug2-official-codabench-zip",
+            str(output / "official_submission.zip"),
+            "--ug2-official-classification",
+            "2",
+            "--ug2-official-validate-on-write",
+        ]
+    )
+
+    assert status == 0
+    official = pd.read_csv(output / "official_mmaud_results.csv")
+    assert official["Timestamp"].tolist() == [0.0, 0.5, 1.0]
+    assert official["Classification"].tolist() == [2, 2, 2]
+    completion_summary = json.loads(
+        (output / "mmuad_official_timestamp_completion_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert completion_summary["timestamp_source"] == "native-image-timestamps"
+    assert completion_summary["requested_count"] == 3
+    assert completion_summary["completed_count"] == 3
+    validation = json.loads(
+        (output / "mmuad_official_submission_validation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert validation["template_checked"] is True
+    assert validation["template_timestamp_count"] == 3
+    assert validation["leaderboard_ready"] is True
+    assert validation["codabench_upload_ready"] is True
+
+
 def test_cli_sequence_root_runs_native_ros_recording(
     tmp_path: Path,
     monkeypatch,

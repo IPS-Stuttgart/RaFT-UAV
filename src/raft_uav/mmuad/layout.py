@@ -439,8 +439,8 @@ def _layout_recommendations(
         )
     if category_counts.get("rosbag_or_recording", 0):
         recommendations.append(
-            "ROS bag / recording files found: add a native rosbag extraction adapter "
-            "or export candidate CSV/PCD files before tracking."
+            "ROS bag / recording files found: use native ROS extraction with a "
+            "topic-map template, or export candidate CSV/PCD files before tracking."
         )
     if category_counts.get("point_cloud", 0):
         recommendations.append(
