@@ -3795,6 +3795,97 @@ def test_cli_validates_official_zip_against_sequence_timestamps(tmp_path: Path) 
     assert manifest["sequence_count"] == 1
     assert manifest["ready_sequence_count"] == 1
     assert manifest["sequences"]["seq1"]["covered_template_timestamp_count"] == 2
+    verification_path = output / "manifest_verification.json"
+    verify_status = mmuad_cli_main(
+        [
+            "--verify-official-upload-manifest",
+            str(manifest_path),
+            "--official-upload-manifest-verification-json",
+            str(verification_path),
+            "--output-dir",
+            str(output),
+        ]
+    )
+    assert verify_status == 0
+    verification = json.loads(verification_path.read_text(encoding="utf-8"))
+    assert verification["valid"] is True
+    assert verification["codabench_upload_ready"] is True
+    assert verification["artifact_size_matches"] is True
+    assert verification["artifact_sha256_matches"] is True
+    assert verification["mmaud_results_csv_present"] is True
+    assert verification["mmaud_results_csv_size_matches"] is True
+    assert verification["mmaud_results_csv_compressed_size_matches"] is True
+    assert verification["mmaud_results_csv_crc32_matches"] is True
+    assert verification["mmaud_results_csv_sha256_matches"] is True
+    assert verification["validation_json_exists"] is True
+    assert verification["validation_rows_csv_exists"] is True
+
+
+def test_cli_official_upload_manifest_verification_rejects_tampered_zip(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "data"
+    seq = root / "val" / "seq1"
+    image = seq / "Image"
+    image.mkdir(parents=True)
+    for timestamp in ("0.0", "1.0"):
+        (image / f"{timestamp}.png").write_bytes(b"not-a-real-image")
+    zip_path = tmp_path / "official_submission.zip"
+    manifest_path = tmp_path / "official_upload_manifest.json"
+    official = pd.DataFrame(
+        {
+            "Sequence": ["seq1", "seq1"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,10)", "(1,0,10)"],
+            "Classification": [2, 2],
+        }
+    )
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", official.to_csv(index=False))
+    output = tmp_path / "out"
+
+    status = mmuad_cli_main(
+        [
+            "--validate-ug2-official-codabench-zip",
+            str(zip_path),
+            "--sequence-root",
+            str(root),
+            "--split-name",
+            "val",
+            "--ug2-official-timestamp-source",
+            "image",
+            "--official-upload-manifest-json",
+            str(manifest_path),
+            "--output-dir",
+            str(output),
+        ]
+    )
+    assert status == 0
+
+    tampered = official.copy()
+    tampered.loc[1, "Position"] = "(999,0,10)"
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("mmaud_results.csv", tampered.to_csv(index=False))
+
+    verification_path = output / "tampered_manifest_verification.json"
+    verify_status = mmuad_cli_main(
+        [
+            "--verify-official-upload-manifest",
+            str(manifest_path),
+            "--official-upload-manifest-verification-json",
+            str(verification_path),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert verify_status == 1
+    verification = json.loads(verification_path.read_text(encoding="utf-8"))
+    assert verification["valid"] is False
+    assert verification["codabench_upload_ready"] is False
+    assert verification["artifact_sha256_matches"] is False
+    assert verification["mmaud_results_csv_sha256_matches"] is False
+    assert any("sha256 mismatch" in error for error in verification["errors"])
 
 
 def test_cli_official_zip_validation_requires_template_for_upload_ready(

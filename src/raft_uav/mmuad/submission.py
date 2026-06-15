@@ -44,6 +44,10 @@ OFFICIAL_UG2_RESULT_COLUMNS = (
     "Position",
     "Classification",
 )
+OFFICIAL_UPLOAD_MANIFEST_SCHEMA = "raft-uav-mmuad-official-upload-manifest-v1"
+OFFICIAL_UPLOAD_MANIFEST_VERIFICATION_SCHEMA = (
+    "raft-uav-mmuad-official-upload-manifest-verification-v1"
+)
 OFFICIAL_TRACK5_INVALID_SEQUENCE_BUCKET = "__invalid_sequence__"
 
 _SEQUENCE_ID_ALIASES = (
@@ -737,6 +741,245 @@ def load_official_track5_template_file(path: Path) -> pd.DataFrame:
     else:
         frame = pd.read_csv(path)
     return _normalize_track5_template(frame)
+
+
+def verify_official_upload_manifest(path: Path) -> dict[str, Any]:
+    """Verify artifact fingerprints recorded in an official upload manifest."""
+
+    manifest_path = Path(path)
+    errors: list[str] = []
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        payload = {}
+        errors.append(f"could not read official upload manifest: {exc}")
+    if not isinstance(payload, dict):
+        payload = {}
+        errors.append("official upload manifest must be a JSON object")
+
+    manifest_schema = payload.get("schema")
+    if manifest_schema != OFFICIAL_UPLOAD_MANIFEST_SCHEMA:
+        errors.append(
+            "official upload manifest schema mismatch: "
+            f"expected {OFFICIAL_UPLOAD_MANIFEST_SCHEMA!r}, got {manifest_schema!r}"
+        )
+
+    artifact_path = _manifest_resolved_path(manifest_path, payload.get("artifact_path"))
+    validation_json_path = _manifest_resolved_path(
+        manifest_path,
+        payload.get("validation_json"),
+    )
+    validation_rows_path = _manifest_resolved_path(
+        manifest_path,
+        payload.get("validation_rows_csv"),
+    )
+    summary: dict[str, Any] = {
+        "schema": OFFICIAL_UPLOAD_MANIFEST_VERIFICATION_SCHEMA,
+        "manifest_path": str(manifest_path),
+        "manifest_schema": manifest_schema,
+        "manifest_codabench_upload_ready": bool(
+            payload.get("codabench_upload_ready", False)
+        ),
+        "manifest_leaderboard_ready": bool(payload.get("leaderboard_ready", False)),
+        "artifact_path": str(artifact_path) if artifact_path is not None else None,
+        "validation_json": (
+            str(validation_json_path) if validation_json_path is not None else None
+        ),
+        "validation_rows_csv": (
+            str(validation_rows_path) if validation_rows_path is not None else None
+        ),
+    }
+
+    if artifact_path is None:
+        errors.append("official upload manifest missing artifact_path")
+        artifact_fingerprint = {
+            "artifact_exists": False,
+            "artifact_size_bytes": None,
+            "artifact_sha256": None,
+        }
+    else:
+        artifact_fingerprint = _official_track5_artifact_fingerprint(artifact_path)
+        if not artifact_fingerprint["artifact_exists"]:
+            errors.append(f"artifact_path does not exist: {artifact_path}")
+    summary.update(artifact_fingerprint)
+    _attach_manifest_match(
+        summary,
+        errors,
+        match_name="artifact_size_matches",
+        manifest_name="manifest_artifact_size_bytes",
+        observed=summary.get("artifact_size_bytes"),
+        expected=payload.get("artifact_size_bytes"),
+    )
+    _attach_manifest_match(
+        summary,
+        errors,
+        match_name="artifact_sha256_matches",
+        manifest_name="manifest_artifact_sha256",
+        observed=summary.get("artifact_sha256"),
+        expected=payload.get("artifact_sha256"),
+    )
+
+    should_check_zip_member = bool(payload.get("is_zip", False)) or any(
+        payload.get(key) is not None
+        for key in (
+            "mmaud_results_csv_size_bytes",
+            "mmaud_results_csv_compressed_size_bytes",
+            "mmaud_results_csv_crc32",
+            "mmaud_results_csv_sha256",
+        )
+    )
+    zip_member_fingerprint = {
+        "mmaud_results_csv_present": None,
+        "mmaud_results_csv_size_bytes": None,
+        "mmaud_results_csv_compressed_size_bytes": None,
+        "mmaud_results_csv_crc32": None,
+        "mmaud_results_csv_sha256": None,
+    }
+    if should_check_zip_member:
+        zip_member_fingerprint = _official_track5_zip_manifest_fingerprint(
+            artifact_path,
+            errors,
+        )
+    summary.update(zip_member_fingerprint)
+    _attach_manifest_match(
+        summary,
+        errors,
+        match_name="mmaud_results_csv_size_matches",
+        manifest_name="manifest_mmaud_results_csv_size_bytes",
+        observed=summary.get("mmaud_results_csv_size_bytes"),
+        expected=payload.get("mmaud_results_csv_size_bytes"),
+    )
+    _attach_manifest_match(
+        summary,
+        errors,
+        match_name="mmaud_results_csv_compressed_size_matches",
+        manifest_name="manifest_mmaud_results_csv_compressed_size_bytes",
+        observed=summary.get("mmaud_results_csv_compressed_size_bytes"),
+        expected=payload.get("mmaud_results_csv_compressed_size_bytes"),
+    )
+    _attach_manifest_match(
+        summary,
+        errors,
+        match_name="mmaud_results_csv_crc32_matches",
+        manifest_name="manifest_mmaud_results_csv_crc32",
+        observed=summary.get("mmaud_results_csv_crc32"),
+        expected=payload.get("mmaud_results_csv_crc32"),
+    )
+    _attach_manifest_match(
+        summary,
+        errors,
+        match_name="mmaud_results_csv_sha256_matches",
+        manifest_name="manifest_mmaud_results_csv_sha256",
+        observed=summary.get("mmaud_results_csv_sha256"),
+        expected=payload.get("mmaud_results_csv_sha256"),
+    )
+
+    _attach_manifest_path_check(
+        summary,
+        errors,
+        name="validation_json_exists",
+        path=validation_json_path,
+        required=payload.get("validation_json") is not None,
+    )
+    _attach_manifest_path_check(
+        summary,
+        errors,
+        name="validation_rows_csv_exists",
+        path=validation_rows_path,
+        required=payload.get("validation_rows_csv") is not None,
+    )
+
+    summary["errors"] = errors
+    summary["valid"] = not errors
+    summary["codabench_upload_ready"] = bool(
+        summary["valid"] and summary["manifest_codabench_upload_ready"]
+    )
+    return summary
+
+
+def _manifest_resolved_path(manifest_path: Path, value: Any) -> Path | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    path = Path(text)
+    if path.is_absolute():
+        return path
+    return manifest_path.parent / path
+
+
+def _attach_manifest_match(
+    summary: dict[str, Any],
+    errors: list[str],
+    *,
+    match_name: str,
+    manifest_name: str,
+    observed: Any,
+    expected: Any,
+) -> None:
+    summary[manifest_name] = expected
+    if expected is None:
+        summary[match_name] = None
+        return
+    matches = observed == expected
+    summary[match_name] = bool(matches)
+    if not matches:
+        errors.append(
+            f"{manifest_name.removeprefix('manifest_')} mismatch: "
+            f"manifest={expected!r}, observed={observed!r}"
+        )
+
+
+def _attach_manifest_path_check(
+    summary: dict[str, Any],
+    errors: list[str],
+    *,
+    name: str,
+    path: Path | None,
+    required: bool,
+) -> None:
+    exists = path.exists() if path is not None else None
+    summary[name] = exists
+    if required and not exists:
+        errors.append(f"{name.removesuffix('_exists')} does not exist: {path}")
+
+
+def _official_track5_zip_manifest_fingerprint(
+    path: Path | None,
+    errors: list[str],
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "mmaud_results_csv_present": False,
+        "mmaud_results_csv_size_bytes": None,
+        "mmaud_results_csv_compressed_size_bytes": None,
+        "mmaud_results_csv_crc32": None,
+        "mmaud_results_csv_sha256": None,
+    }
+    if path is None or not path.exists():
+        return summary
+    try:
+        with ZipFile(path) as archive:
+            result_infos = [
+                info
+                for info in archive.infolist()
+                if not info.is_dir()
+                and _normalized_zip_member_name(info.filename) == "mmaud_results.csv"
+            ]
+            if not result_infos:
+                errors.append("artifact ZIP does not contain root mmaud_results.csv")
+                return summary
+            if len(result_infos) > 1:
+                errors.append("artifact ZIP contains duplicate mmaud_results.csv members")
+            result_info = result_infos[0]
+            with archive.open(result_info) as handle:
+                result_bytes = handle.read()
+    except Exception as exc:
+        errors.append(f"could not inspect artifact ZIP: {exc}")
+        return summary
+    summary["mmaud_results_csv_present"] = True
+    summary.update(_official_track5_zip_member_fingerprint(result_info, result_bytes))
+    return summary
 
 
 def _read_official_track5_zip_for_validation(
