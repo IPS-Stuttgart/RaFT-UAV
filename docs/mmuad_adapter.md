@@ -379,8 +379,9 @@ reports what each sequence is missing for a tracking smoke test. Point-cloud
 inventory includes common PCD, PLY, LAS/LAZ, and simple float32 `.bin` exports.
 Audio inventory covers common WAV/FLAC/AAC/MP3 recordings for evidence
 gathering, and native ROS audio topics can be extracted as timestamp/sample
-inventory rows; acoustic detections still need to be exported as candidate
-tables before tracking.
+inventory rows. Native ROS IMU topics can also be extracted as
+timestamp/kinematics inventory rows for timing diagnostics; acoustic detections
+still need to be exported as candidate tables before tracking.
 
 ### Binary PCD, PLY, LAS, BIN, and NumPy point clouds
 
@@ -1137,6 +1138,8 @@ The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
 `image_timestamps` timestamp/template inventory rows,
 common audio messages such as `audio_common_msgs/msg/AudioData` and
 `audio_common_msgs/msg/AudioStamped` as `audio_timestamps` inventory rows,
+`sensor_msgs/msg/Imu` as `imu_timestamps` inventory rows with orientation,
+angular velocity, linear acceleration, and covariance diagonals when present,
 common custom polar/range-azimuth radar message shapes as
 `radar_polar_candidate` or `polar_radar_candidate`,
 `sensor_msgs/msg/NavSatFix` as `navsatfix_truth` or
@@ -1229,6 +1232,11 @@ When the topic map includes native audio timestamp topics, extraction writes
 channel, byte/sample count, and duration metadata when present. These rows are
 only raw-sensor inventory; they are not used as official Track 5 timestamp
 templates and do not replace an acoustic detector.
+Native IMU topic-map entries write `native_ros_imu_timestamps.csv` with message
+time, frame/source, orientation, angular velocity, linear acceleration, and
+covariance-diagonal metadata when present. These rows are likewise raw-sensor
+inventory for timing/kinematics diagnostics and are not official Track 5
+timestamp templates.
 Sequence-root mode can also run native extraction automatically when each
 sequence folder contains one native `topic_map*.json/yaml` file and one ROS bag
 or recording file. Per-sequence native manifests are written below

@@ -7352,6 +7352,114 @@ def test_native_ros_extraction_supports_audio_timestamp_topics(
     assert not (output / "native_ros_audio_timestamp_template.csv").exists()
 
 
+def test_native_ros_extraction_supports_imu_timestamp_topics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_imu.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map_native.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_imu",
+                "exports": [
+                    {
+                        "topic": "/os1_cloud_node1/imu",
+                        "kind": "imu_timestamps",
+                        "source": "os1_imu",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    imu_connection = SimpleNamespace(
+        topic="/os1_cloud_node1/imu",
+        msgtype="sensor_msgs/msg/Imu",
+    )
+    imu_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=4, nanosec=500_000_000),
+            frame_id="os1_imu",
+        ),
+        orientation=SimpleNamespace(x=0.1, y=0.2, z=0.3, w=0.9),
+        angular_velocity=SimpleNamespace(x=1.0, y=2.0, z=3.0),
+        linear_acceleration=SimpleNamespace(x=4.0, y=5.0, z=6.0),
+        orientation_covariance=[0.01, 0.0, 0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.03],
+        angular_velocity_covariance=[0.1, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.0, 0.3],
+        linear_acceleration_covariance=[1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0],
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [imu_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [imu_connection]
+            return [(imu_connection, 4_000_000_000, b"imu")]
+
+        def deserialize(self, rawdata, msgtype):
+            assert rawdata == b"imu"
+            assert msgtype == "sensor_msgs/msg/Imu"
+            return imu_message
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is None
+    assert extracted.truth is None
+    assert extracted.image_timestamps is None
+    assert extracted.audio_timestamps is None
+    assert extracted.imu_timestamps is not None
+    rows = extracted.imu_timestamps
+    assert rows["sequence_id"].tolist() == ["seq_imu"]
+    assert rows["time_s"].tolist() == [4.5]
+    assert rows["source"].tolist() == ["os1_imu"]
+    assert rows["frame_id"].tolist() == ["os1_imu"]
+    assert rows.loc[0, "orientation_w"] == pytest.approx(0.9)
+    assert rows.loc[0, "angular_velocity_z_rad_s"] == pytest.approx(3.0)
+    assert rows.loc[0, "linear_acceleration_y_m_s2"] == pytest.approx(5.0)
+    assert rows.loc[0, "orientation_covariance_zz"] == pytest.approx(0.03)
+    assert rows.loc[0, "angular_velocity_covariance_yy"] == pytest.approx(0.2)
+    assert rows.loc[0, "linear_acceleration_covariance_xx"] == pytest.approx(1.0)
+    assert extracted.manifest["candidate_rows"] == 0
+    assert extracted.manifest["truth_rows"] == 0
+    assert extracted.manifest["image_timestamp_rows"] == 0
+    assert extracted.manifest["audio_timestamp_rows"] == 0
+    assert extracted.manifest["imu_timestamp_rows"] == 1
+
+    saved_rows = pd.read_csv(output / "native_ros_imu_timestamps.csv")
+    saved_manifest = json.loads(
+        (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
+    )
+    assert saved_rows["time_s"].tolist() == [4.5]
+    assert saved_manifest["imu_timestamp_rows"] == 1
+    assert saved_manifest["imu_timestamps_csv"] == str(
+        output / "native_ros_imu_timestamps.csv"
+    )
+    assert not (output / "native_ros_imu_timestamp_template.csv").exists()
+
+
 def test_native_ros_extraction_supports_bounding_box3d_topics(
     tmp_path: Path,
     monkeypatch,
@@ -9661,6 +9769,44 @@ def test_ros2_topic_map_template_infers_audio_timestamp_topics(tmp_path: Path) -
     ]
     assert payload["exports"][0]["source"] == "microphone_audio"
     assert payload["exports"][1]["source"] == "array_audio_stamped"
+    assert all("path" not in entry for entry in payload["exports"])
+
+
+def test_ros2_topic_map_template_infers_imu_timestamp_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /os1_cloud_node1/imu",
+                "        type: sensor_msgs/msg/Imu",
+                "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /os1_cloud_node2/imu",
+                "        type: sensor_msgs/msg/Imu",
+                "      message_count: 5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(
+        report,
+        tmp_path / "topic_map_template.json",
+        template_mode="native",
+    )
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "imu_timestamps",
+        "imu_timestamps",
+    ]
+    assert payload["exports"][0]["source"] == "os1_cloud_node1_imu"
+    assert payload["exports"][1]["source"] == "os1_cloud_node2_imu"
     assert all("path" not in entry for entry in payload["exports"])
 
 
