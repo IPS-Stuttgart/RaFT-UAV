@@ -1083,7 +1083,8 @@ choose a different extraction base directory.
 If native extraction writes a manifest but yields no candidate rows, the CLI
 exits before tracking and points to `native_ros_extraction_manifest.json`; update
 the topic map to include candidate-bearing topics or export candidate detections
-first.
+first. Topic-map entries whose ROS topics are absent from the recording are
+listed with `status=missing_topic` in that manifest.
 
 This is still not a complete native ROS parser for every possible MMUAD bag. It
 is a first native message bridge for common ROS message types. Undocumented

@@ -5940,6 +5940,82 @@ def test_cli_native_ros_extraction_requires_candidate_rows(
     assert not (output / "mmuad_estimates.csv").exists()
 
 
+def test_native_ros_extraction_manifest_reports_missing_topic_map_topics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_missing_topics.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map_native.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_missing_topics",
+                "exports": [
+                    {
+                        "topic": "/detector/pose",
+                        "kind": "pose_candidate",
+                        "source": "detector",
+                    },
+                    {"topic": "/ground_truth/pose", "kind": "pose_truth"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == []
+            return []
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is None
+    assert extracted.truth is None
+    assert extracted.manifest["candidate_rows"] == 0
+    assert extracted.manifest["truth_rows"] == 0
+    assert extracted.manifest["extracted_messages"] == [
+        {
+            "topic": "/detector/pose",
+            "kind": "pose_candidate",
+            "status": "missing_topic",
+        },
+        {
+            "topic": "/ground_truth/pose",
+            "kind": "pose_truth",
+            "status": "missing_topic",
+        },
+    ]
+    saved = json.loads(
+        (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
+    )
+    assert saved["extracted_messages"] == extracted.manifest["extracted_messages"]
+
+
 def test_topic_map_exports_load_json_candidates_and_truth(tmp_path: Path) -> None:
     exports = tmp_path / "exports"
     exports.mkdir()
