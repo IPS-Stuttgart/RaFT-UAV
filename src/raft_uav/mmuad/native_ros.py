@@ -16,6 +16,7 @@ tracking logs:
   rows;
 * ``sensor_msgs/msg/LaserScan`` -> range-scan candidate detections;
 * ``sensor_msgs/msg/Range`` -> single range-bearing candidate detections;
+* common Cartesian radar messages -> XYZ radar candidates;
 * common polar/range-azimuth radar messages -> polar radar candidates;
 * ``sensor_msgs/msg/NavSatFix`` -> geodetic rows projected into local ENU;
 * ``geographic_msgs/msg/GeoPointStamped`` / ``GeoPoseStamped`` -> local ENU rows;
@@ -115,6 +116,10 @@ def extract_native_rosbag_topic_map(
         message.  Topic maps can set ``azimuth_rad`` / ``azimuth_deg`` and
         ``elevation_rad`` / ``elevation_deg`` to place a fixed range sensor in
         the tracking frame; angles default to zero.
+    ``radar_cartesian_candidate`` / ``cartesian_radar_candidate``
+        Decode common radar return messages that already contain ``x``/``y``/``z``
+        coordinates, including parallel arrays and wrappers with ``detections``
+        or ``targets`` children.
     ``camera_info`` / ``camera_info_calibration``
         Decode ``sensor_msgs/msg/CameraInfo`` intrinsics for native
         Detection2D back-projection.  Detection2D topics with the same source
@@ -442,6 +447,50 @@ def extract_native_rosbag_topic_map(
                         rows = len(frame.rows)
                     else:
                         rows = 0
+                elif _is_radar_cartesian_candidate_kind(kind):
+                    candidate_rows = radar_cartesian_message_to_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        frame_id=spec.get("frame_id"),
+                    )
+                    for row in candidate_rows:
+                        row.update(
+                            {
+                                "source": source,
+                                "track_id": spec.get(
+                                    "track_id",
+                                    row.get(
+                                        "track_id",
+                                        row.get(
+                                            "radar_detection_id",
+                                            row.get("radar_detection_index", source),
+                                        ),
+                                    ),
+                                ),
+                                "std_xy_m": spec.get(
+                                    "std_xy_m",
+                                    spec.get("radar_cartesian_std_xy_m", 2.0),
+                                ),
+                                "std_z_m": spec.get(
+                                    "std_z_m",
+                                    spec.get("radar_cartesian_std_z_m", 5.0),
+                                ),
+                                "confidence": spec.get(
+                                    "confidence",
+                                    row.get("confidence", 1.0),
+                                ),
+                                "class_name": spec.get(
+                                    "class_name",
+                                    row.get("class_name", "uav"),
+                                ),
+                            }
+                        )
+                    if candidate_rows:
+                        candidate_frames.append(
+                            CandidateFrame(pd.DataFrame.from_records(candidate_rows))
+                        )
+                    rows = len(candidate_rows)
                 elif kind in {
                     "radar_polar",
                     "radar_polar_candidate",
@@ -1156,6 +1205,20 @@ def _is_range_candidate_kind(kind: str) -> bool:
         "range_sensor_candidate",
         "sensor_range_candidate",
         "single_range_candidate",
+    }
+
+
+def _is_radar_cartesian_candidate_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "radar_cartesian",
+        "radar_cartesian_candidate",
+        "cartesian_radar",
+        "cartesian_radar_candidate",
+        "radar_xyz",
+        "radar_xyz_candidate",
+        "radar_point_candidate",
+        "radar_points_candidate",
     }
 
 
@@ -2172,6 +2235,234 @@ def range_message_to_rows(
     if class_name not in (None, ""):
         row["class_name"] = str(class_name)
     return [row]
+
+
+def radar_cartesian_message_to_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    frame_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Convert common native Cartesian radar messages into candidate rows."""
+
+    parent_time_s = _message_stamp_time_s(message)
+    default_time_s = parent_time_s if parent_time_s is not None else float(time_s)
+    array_rows = _radar_cartesian_parallel_array_rows(
+        message,
+        sequence_id=sequence_id,
+        time_s=default_time_s,
+    )
+    if array_rows:
+        return array_rows
+    children = _radar_child_messages(message)
+    if children:
+        rows: list[dict[str, Any]] = []
+        parent_frame_id = _message_frame_id(message)
+        for index, child in enumerate(children):
+            row = _radar_cartesian_row_from_message(
+                child,
+                sequence_id=sequence_id,
+                time_s=default_time_s,
+                index=index,
+                frame_id=frame_id,
+                fallback_frame_id=parent_frame_id,
+            )
+            if row is not None:
+                rows.append(row)
+        return rows
+    row = _radar_cartesian_row_from_message(
+        message,
+        sequence_id=sequence_id,
+        time_s=default_time_s,
+        index=None,
+        frame_id=frame_id,
+        fallback_frame_id=None,
+    )
+    return [row] if row is not None else []
+
+
+def _radar_cartesian_parallel_array_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+) -> list[dict[str, Any]]:
+    xs = _numeric_field_sequence(message, ("x_m", "xs_m", "x", "xs", "pos_x", "positions_x"))
+    ys = _numeric_field_sequence(message, ("y_m", "ys_m", "y", "ys", "pos_y", "positions_y"))
+    if not xs or not ys:
+        return []
+    zs = _numeric_field_sequence(message, ("z_m", "zs_m", "z", "zs", "pos_z", "positions_z"))
+    confidences = _numeric_field_sequence(
+        message,
+        ("confidence", "confidences", "score", "scores", "probability", "probabilities"),
+    )
+    track_ids = _field_sequence(
+        message,
+        ("track_ids", "track_id", "ids", "id", "object_ids", "object_id", "point_ids", "point_id"),
+    )
+    class_names = _field_sequence(
+        message,
+        ("class_names", "class_name", "labels", "label", "categories", "category"),
+    )
+    times = _numeric_field_sequence(
+        message,
+        ("times_s", "time_s", "timestamps_s", "timestamp_s", "timestamps", "timestamp"),
+    )
+    velocities = _numeric_field_sequence(
+        message,
+        ("velocities_m_s", "velocity_m_s", "velocities", "velocity", "dopplers", "doppler"),
+    )
+    intensities = _numeric_field_sequence(
+        message,
+        ("intensities", "intensity", "snrs", "snr", "powers", "power"),
+    )
+    count = min(len(xs), len(ys))
+    rows: list[dict[str, Any]] = []
+    for index in range(count):
+        row: dict[str, Any] = {
+            "sequence_id": str(sequence_id),
+            "time_s": times[index] if index < len(times) else float(time_s),
+            "x_m": xs[index],
+            "y_m": ys[index],
+            "z_m": zs[index] if index < len(zs) else 0.0,
+            "radar_detection_index": int(index),
+        }
+        if index < len(confidences):
+            row["confidence"] = confidences[index]
+        if index < len(track_ids):
+            row["track_id"] = str(track_ids[index])
+            row["radar_detection_id"] = str(track_ids[index])
+        if index < len(class_names):
+            row["class_name"] = str(class_names[index])
+        if index < len(velocities):
+            row["radar_velocity_m_s"] = velocities[index]
+        if index < len(intensities):
+            row["radar_intensity"] = intensities[index]
+        rows.append(row)
+    return rows
+
+
+def _radar_cartesian_row_from_message(
+    detection: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    index: int | None,
+    frame_id: str | None,
+    fallback_frame_id: Any | None,
+) -> dict[str, Any] | None:
+    if not _frame_filter_matches(
+        detection,
+        child_frame_id=None,
+        frame_id=frame_id,
+        fallback_frame_id=fallback_frame_id,
+    ):
+        return None
+    xyz = _radar_cartesian_xyz(detection)
+    if xyz is None:
+        return None
+    detection_time_s = _message_stamp_time_s(detection)
+    row: dict[str, Any] = {
+        "sequence_id": str(sequence_id),
+        "time_s": detection_time_s if detection_time_s is not None else float(time_s),
+        "x_m": xyz[0],
+        "y_m": xyz[1],
+        "z_m": xyz[2],
+    }
+    if index is not None:
+        row["radar_detection_index"] = int(index)
+    _add_frame_metadata(row, detection, fallback_frame_id=fallback_frame_id)
+    detection_id = _radar_detection_id(detection)
+    if detection_id is not None:
+        row["radar_detection_id"] = detection_id
+        row["track_id"] = detection_id
+    confidence = _radar_detection_confidence(detection)
+    if confidence is not None:
+        row["confidence"] = confidence
+    class_name = _radar_detection_class_name(detection)
+    if class_name is not None:
+        row["class_name"] = class_name
+    velocity = _radar_detection_velocity(detection)
+    if velocity is not None:
+        row["radar_velocity_m_s"] = velocity
+    intensity = _radar_detection_intensity(detection)
+    if intensity is not None:
+        row["radar_intensity"] = intensity
+    return row
+
+
+def _radar_cartesian_xyz(detection: Any) -> tuple[float, float, float] | None:
+    for source in (
+        detection,
+        _field_value(detection, "point", "position", "center", "centroid"),
+        _nested_field_value(detection, "pose", "position"),
+        _nested_field_value(detection, "pose", "pose", "position"),
+        _nested_field_value(detection, "target", "position"),
+    ):
+        xyz = _xyz_from_position(source)
+        if xyz is not None:
+            return xyz
+    x = _field_float(detection, "x_m", "x", "pos_x", "position_x")
+    y = _field_float(detection, "y_m", "y", "pos_y", "position_y")
+    if x is None or y is None:
+        return None
+    z = _field_float(detection, "z_m", "z", "pos_z", "position_z")
+    return float(x), float(y), float(z) if z is not None else 0.0
+
+
+def _radar_detection_id(detection: Any) -> str | None:
+    raw = _field_value(
+        detection,
+        "track_id",
+        "target_id",
+        "object_id",
+        "detection_id",
+        "point_id",
+        "id",
+    )
+    return _format_object_identifier(raw)
+
+
+def _radar_detection_confidence(detection: Any) -> float | None:
+    return _field_float(
+        detection,
+        "confidence",
+        "score",
+        "probability",
+        "catprob",
+        "cat_prob",
+    )
+
+
+def _radar_detection_class_name(detection: Any) -> str | None:
+    value = _field_value(detection, "class_name", "class", "label", "category", "uav_type")
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def _radar_detection_velocity(detection: Any) -> float | None:
+    return _field_float(
+        detection,
+        "velocity_m_s",
+        "velocity",
+        "doppler_m_s",
+        "doppler",
+        "radial_velocity",
+        "range_rate",
+    )
+
+
+def _radar_detection_intensity(detection: Any) -> float | None:
+    return _field_float(
+        detection,
+        "intensity",
+        "snr",
+        "power",
+        "amplitude",
+        "rcs",
+    )
 
 
 def _laserscan_cluster_rows(
