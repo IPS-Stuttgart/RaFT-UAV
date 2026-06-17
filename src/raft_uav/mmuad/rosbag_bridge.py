@@ -353,6 +353,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "geopose_truth" if truth_like else "geopose_candidate"
     if compact_type.endswith("geopointstamped") or compact_type.endswith("geopoint"):
         return "geopoint_truth" if truth_like else "geopoint_candidate"
+    if _looks_like_px4_local_position_topic(name, msg_type):
+        return "odometry_truth" if truth_like else "odometry_candidate"
     if compact_type.endswith("camerainfo"):
         return "camera_info_calibration"
     if "detection2darray" in compact_type:
@@ -508,6 +510,12 @@ def _looks_like_livox_custom_topic(name: str, msg_type: str) -> bool:
     return "livox" in text and (
         "custommsg" in text or "custompoint" in text or "custom" in text
     )
+
+
+def _looks_like_px4_local_position_topic(name: str, msg_type: str) -> bool:
+    del name
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    return "vehiclelocalposition" in compact_type
 
 
 def _looks_like_legacy_pointcloud_topic(name: str, msg_type: str) -> bool:

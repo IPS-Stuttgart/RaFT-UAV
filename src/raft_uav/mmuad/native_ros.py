@@ -4170,6 +4170,9 @@ def detection3d_message_to_rows(
         position = _detection3d_position(detection)
         if position is None:
             continue
+        xyz = _xyz_from_position(position)
+        if xyz is None:
+            continue
         detection_time_s = _message_stamp_time_s(detection)
         row = {
             "sequence_id": sequence_id,
@@ -4180,9 +4183,9 @@ def detection3d_message_to_rows(
                 if parent_time_s is not None
                 else float(time_s)
             ),
-            "x_m": float(getattr(position, "x")),
-            "y_m": float(getattr(position, "y")),
-            "z_m": float(getattr(position, "z")),
+            "x_m": xyz[0],
+            "y_m": xyz[1],
+            "z_m": xyz[2],
         }
         _add_frame_metadata(row, detection, fallback_frame_id=parent_frame_id)
         detection_id = getattr(detection, "id", None)
@@ -4931,6 +4934,9 @@ def _message_position_xyz(message: Any) -> tuple[float, float, float] | None:
 def _xyz_from_position(position: Any | None) -> tuple[float, float, float] | None:
     if position is None:
         return None
+    sequence_xyz = _xyz_from_numeric_sequence(position)
+    if sequence_xyz is not None:
+        return sequence_xyz
     try:
         return (
             float(_field_value(position, "x")),
@@ -4939,6 +4945,24 @@ def _xyz_from_position(position: Any | None) -> tuple[float, float, float] | Non
         )
     except (TypeError, ValueError, AttributeError):
         return None
+
+
+def _xyz_from_numeric_sequence(value: Any) -> tuple[float, float, float] | None:
+    if value is None or isinstance(value, (str, bytes, bytearray, dict)):
+        return None
+    try:
+        values = list(value)
+    except TypeError:
+        return None
+    if len(values) < 3:
+        return None
+    try:
+        xyz = (float(values[0]), float(values[1]), float(values[2]))
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(item) for item in xyz):
+        return None
+    return xyz
 
 
 def _detection3d_position(detection: Any) -> Any | None:

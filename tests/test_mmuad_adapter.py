@@ -12518,6 +12518,41 @@ def test_ros2_topic_map_template_infers_multidof_topics(tmp_path: Path) -> None:
     assert payload["exports"][1]["source"] is None
 
 
+def test_ros2_topic_map_template_infers_px4_vehicle_local_position_topics(
+    tmp_path: Path,
+) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /fmu/out/vehicle_local_position",
+                "        type: px4_msgs/msg/VehicleLocalPosition",
+                "      message_count: 3",
+                "    - topic_metadata:",
+                "        name: /ground_truth/vehicle_local_position",
+                "        type: px4_msgs/msg/VehicleLocalPosition",
+                "      message_count: 3",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(report, tmp_path / "topic_map_template.json")
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "odometry_candidate",
+        "odometry_truth",
+    ]
+    assert payload["exports"][0]["source"] == "fmu_out_vehicle_local_position"
+    assert payload["exports"][1]["source"] is None
+
+
 def test_native_ros_position_message_to_row_accepts_common_position_messages() -> None:
     point_message = SimpleNamespace(point=SimpleNamespace(x=1.0, y=2.0, z=3.0))
     transform_message = SimpleNamespace(
@@ -12571,6 +12606,42 @@ def test_native_ros_position_message_to_row_accepts_common_position_messages() -
     assert exact_pose_row["x_m"] == 10.0
     assert exact_pose_row["time_s"] == 4.25
     assert covariance_pose_row["z_m"] == 15.0
+
+
+def test_native_ros_position_message_to_rows_accepts_array_backed_positions() -> None:
+    message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=12, nanosec=250_000_000),
+            frame_id="vehicle_local_frame",
+        ),
+        child_frame_id="px4_vehicle",
+        position=np.array([1.5, -2.5, 3.5]),
+    )
+
+    rows = position_message_to_rows(
+        message,
+        sequence_id="seq_px4",
+        time_s=1.0,
+        frame_id="vehicle_local_frame",
+    )
+    direct_row = position_message_to_row(
+        SimpleNamespace(pose=SimpleNamespace(position=[4.0, 5.0, 6.0])),
+        sequence_id="seq_array",
+        time_s=2.0,
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["sequence_id"] == "seq_px4"
+    assert row["time_s"] == 1.0
+    assert row["x_m"] == pytest.approx(1.5)
+    assert row["y_m"] == pytest.approx(-2.5)
+    assert row["z_m"] == pytest.approx(3.5)
+    assert row["frame_id"] == "vehicle_local_frame"
+    assert row["child_frame_id"] == "px4_vehicle"
+    assert direct_row["x_m"] == pytest.approx(4.0)
+    assert direct_row["y_m"] == pytest.approx(5.0)
+    assert direct_row["z_m"] == pytest.approx(6.0)
 
 
 def test_native_ros_position_message_to_rows_filters_tf_message_transforms() -> None:
