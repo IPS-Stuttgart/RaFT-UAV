@@ -54,6 +54,7 @@ from raft_uav.mmuad.mot import (
 from raft_uav.mmuad.native_ros import (
     actuation_message_to_timestamp_rows,
     bounding_box3d_message_to_rows,
+    diagnostic_message_to_timestamp_rows,
     detection2d_message_to_rows,
     detection3d_message_to_rows,
     extract_native_rosbag_topic_map,
@@ -8356,6 +8357,128 @@ def test_native_ros_extraction_supports_timing_timestamp_topics(
     )
 
 
+def test_native_ros_extraction_supports_diagnostic_timestamp_topics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_diagnostics.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map_native.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_diagnostics",
+                "exports": [
+                    {
+                        "topic": "/diagnostics",
+                        "kind": "diagnostic_timestamps",
+                        "source": "diagnostics",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    diagnostic_connection = SimpleNamespace(
+        topic="/diagnostics",
+        msgtype="diagnostic_msgs/msg/DiagnosticArray",
+    )
+    diagnostic_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=12, nanosec=250_000_000),
+            frame_id="base_link",
+        ),
+        status=[
+            SimpleNamespace(
+                name="lidar",
+                level=0,
+                message="OK",
+                hardware_id="livox",
+                values=[
+                    SimpleNamespace(key="temperature_c", value="42.5"),
+                    SimpleNamespace(key="packet_loss", value="0"),
+                ],
+            ),
+            SimpleNamespace(
+                name="radar",
+                level=1,
+                message="degraded",
+                hardware_id="radar0",
+            ),
+        ],
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [diagnostic_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [diagnostic_connection]
+            return [(diagnostic_connection, 12_000_000_000, b"diagnostics")]
+
+        def deserialize(self, rawdata, msgtype):
+            assert rawdata == b"diagnostics"
+            assert msgtype == "diagnostic_msgs/msg/DiagnosticArray"
+            return diagnostic_message
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is None
+    assert extracted.truth is None
+    assert extracted.diagnostic_timestamps is not None
+    rows = extracted.diagnostic_timestamps.sort_values("diagnostic_index").reset_index(
+        drop=True
+    )
+    assert rows["sequence_id"].tolist() == ["seq_diagnostics", "seq_diagnostics"]
+    assert rows["time_s"].tolist() == [12.25, 12.25]
+    assert rows["source"].tolist() == ["diagnostics", "diagnostics"]
+    assert rows.loc[0, "frame_id"] == "base_link"
+    assert rows.loc[0, "diagnostic_name"] == "lidar"
+    assert rows.loc[0, "diagnostic_level"] == 0
+    assert rows.loc[0, "diagnostic_level_name"] == "ok"
+    assert rows.loc[0, "diagnostic_hardware_id"] == "livox"
+    assert rows.loc[0, "diagnostic_value_count"] == 2
+    assert json.loads(rows.loc[0, "diagnostic_values_json"]) == [
+        {"key": "temperature_c", "value": "42.5"},
+        {"key": "packet_loss", "value": "0"},
+    ]
+    assert rows.loc[1, "diagnostic_level_name"] == "warn"
+    assert rows.loc[1, "diagnostic_message"] == "degraded"
+    assert extracted.manifest["diagnostic_timestamp_rows"] == 2
+    assert extracted.manifest["candidate_rows"] == 0
+    assert extracted.manifest["truth_rows"] == 0
+
+    saved_rows = pd.read_csv(output / "native_ros_diagnostic_timestamps.csv")
+    saved_manifest = json.loads(
+        (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
+    )
+    assert saved_rows["time_s"].tolist() == [12.25, 12.25]
+    assert saved_manifest["diagnostic_timestamp_rows"] == 2
+    assert saved_manifest["diagnostic_timestamps_csv"] == str(
+        output / "native_ros_diagnostic_timestamps.csv"
+    )
+
+
 def test_native_ros_extraction_supports_sensor_status_timestamp_topics(
     tmp_path: Path,
     monkeypatch,
@@ -11852,6 +11975,46 @@ def test_ros2_topic_map_template_infers_timing_timestamp_topics(tmp_path: Path) 
     assert all("path" not in entry for entry in payload["exports"])
 
 
+def test_ros2_topic_map_template_infers_diagnostic_timestamp_topics(
+    tmp_path: Path,
+) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /diagnostics",
+                "        type: diagnostic_msgs/msg/DiagnosticArray",
+                "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /radar/diagnostic_status",
+                "        type: diagnostic_msgs/msg/DiagnosticStatus",
+                "      message_count: 3",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(
+        report,
+        tmp_path / "topic_map_template.json",
+        template_mode="native",
+    )
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "diagnostic_timestamps",
+        "diagnostic_status_timestamps",
+    ]
+    assert payload["exports"][0]["source"] == "diagnostics"
+    assert payload["exports"][1]["source"] == "radar_diagnostic_status"
+    assert all("path" not in entry for entry in payload["exports"])
+
+
 def test_ros2_topic_map_template_infers_sensor_status_timestamp_topics(
     tmp_path: Path,
 ) -> None:
@@ -12600,6 +12763,64 @@ def test_native_ros_timing_message_to_timestamp_rows_extracts_reference_and_cloc
     assert time_ref_rows[0]["reference_source"] == "pps"
     assert clock_rows[0]["clock_time_s"] == pytest.approx(20.75)
     assert clock_rows[0]["clock_to_message_time_offset_s"] == pytest.approx(18.75)
+
+
+def test_native_ros_diagnostic_message_to_timestamp_rows_expands_status_values() -> None:
+    rows = diagnostic_message_to_timestamp_rows(
+        SimpleNamespace(
+            header=SimpleNamespace(
+                stamp=SimpleNamespace(sec=3, nanosec=500_000_000),
+                frame_id="base",
+            ),
+            status=[
+                SimpleNamespace(
+                    name="camera",
+                    level=2,
+                    message="overheated",
+                    hardware_id="cam0",
+                    values={"temperature_c": 80.0, "fps": 15},
+                )
+            ],
+        ),
+        sequence_id="seq_diagnostics",
+        time_s=1.0,
+        topic="/diagnostics",
+        source="diagnostics",
+        message_index=0,
+        kind="diagnostic_timestamps",
+    )
+    single_status_rows = diagnostic_message_to_timestamp_rows(
+        SimpleNamespace(
+            name="gps",
+            level=3,
+            message="stale",
+            hardware_id="gps0",
+            values=[SimpleNamespace(key="age_s", value="2.5")],
+        ),
+        sequence_id="seq_diagnostics",
+        time_s=4.0,
+        topic="/gps/status",
+        source="gps_status",
+        message_index=1,
+        kind="diagnostic_status_timestamps",
+    )
+
+    assert rows[0]["time_s"] == pytest.approx(3.5)
+    assert rows[0]["frame_id"] == "base"
+    assert rows[0]["diagnostic_name"] == "camera"
+    assert rows[0]["diagnostic_level"] == 2
+    assert rows[0]["diagnostic_level_name"] == "error"
+    assert rows[0]["diagnostic_message"] == "overheated"
+    assert json.loads(rows[0]["diagnostic_values_json"]) == [
+        {"key": "temperature_c", "value": "80.0"},
+        {"key": "fps", "value": "15"},
+    ]
+    assert single_status_rows[0]["time_s"] == pytest.approx(4.0)
+    assert single_status_rows[0]["diagnostic_name"] == "gps"
+    assert single_status_rows[0]["diagnostic_level_name"] == "stale"
+    assert json.loads(single_status_rows[0]["diagnostic_values_json"]) == [
+        {"key": "age_s", "value": "2.5"}
+    ]
 
 
 def test_native_ros_tracked_objects_message_to_rows_extracts_kinematics() -> None:
