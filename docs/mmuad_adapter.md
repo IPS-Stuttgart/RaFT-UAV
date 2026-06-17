@@ -1275,7 +1275,12 @@ writes `native_ros_image_timestamps.csv` and
 timestamp template that can be passed as `--official-validation-template-file`
 or used automatically by the CLI for official validation and
 `--ug2-official-complete-to-sequence-timestamps` when candidate rows are present
-but no truth/template file was provided.
+but no truth/template file was provided. Add `write_frame_files: true`,
+`write_image_frames: true`, or `write_payload_bytes: true` to an image topic-map
+entry to persist raw message payload bytes under `native_ros_image_frames/`; the
+timestamp CSV then records `payload_file`, `payload_suffix`, `payload_sha256`,
+`byte_count`, pixel dimensions, and expected raw byte counts when they can be
+derived. This is an inventory/debug artifact only, not an in-repo image detector.
 When the topic map includes native audio timestamp topics, extraction writes
 `native_ros_audio_timestamps.csv` with message time, frame/source, sample-rate,
 channel, byte/sample count, and duration metadata when present. These rows are

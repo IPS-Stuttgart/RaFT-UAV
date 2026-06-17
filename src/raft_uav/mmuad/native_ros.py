@@ -9,7 +9,8 @@ tracking logs:
   detections;
 * ``livox_ros_driver(2)/msg/CustomMsg`` -> clustered candidate detections;
 * ``sensor_msgs/msg/CameraInfo`` -> camera intrinsics/inventory for native Detection2D;
-* ``sensor_msgs/msg/Image`` / ``CompressedImage`` -> timestamp template rows;
+* ``sensor_msgs/msg/Image`` / ``CompressedImage`` -> timestamp template rows
+  and optional frame payload inventories;
 * common ROS audio messages -> timestamp inventory rows;
 * ``sensor_msgs/msg/Imu`` -> timestamp/kinematics inventory rows;
 * ``geometry_msgs/msg/Twist`` / ``Accel`` -> velocity/acceleration inventory
@@ -45,6 +46,7 @@ manifest and skipped.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import math
 from pathlib import Path
 from typing import Any
@@ -132,7 +134,10 @@ def extract_native_rosbag_topic_map(
     ``image_timestamps`` / ``image_timestamp_template``
         Extract native ``sensor_msgs/msg/Image`` or ``CompressedImage`` frame
         timestamps into CSV/template artifacts. This is timestamp inventory
-        only; image object detection remains external.
+        only; image object detection remains external. Set
+        ``write_frame_files`` / ``write_image_frames`` / ``write_payload_bytes``
+        in the topic-map entry to persist raw message payload bytes under
+        ``native_ros_image_frames/`` for downstream camera debugging.
     ``audio_timestamps`` / ``audio_timestamp_inventory``
         Extract native audio message timestamps into CSV inventory artifacts.
         This is timestamp/sample metadata only; acoustic detections remain
@@ -838,6 +843,18 @@ def extract_native_rosbag_topic_map(
                         topic=str(connection.topic),
                         source=source,
                         message_index=replay_message_counts[str(connection.topic)] - 1,
+                        frame_output_dir=(
+                            output / "native_ros_image_frames"
+                            if output is not None
+                            and _spec_bool(
+                                spec,
+                                "write_frame_files",
+                                "write_image_frames",
+                                "write_payload_bytes",
+                                "write_payload",
+                            )
+                            else None
+                        ),
                     )
                     image_timestamp_rows.extend(rows_for_message)
                     rows = len(rows_for_message)
@@ -1100,6 +1117,11 @@ def extract_native_rosbag_topic_map(
         "truth_rows": int(len(truth.rows)) if truth is not None else 0,
         "camera_info_rows": int(len(camera_info)) if camera_info is not None else 0,
         "image_timestamp_rows": int(len(image_timestamps)) if image_timestamps is not None else 0,
+        "image_payload_file_rows": (
+            int(image_timestamps["payload_file"].notna().sum())
+            if image_timestamps is not None and "payload_file" in image_timestamps
+            else 0
+        ),
         "audio_timestamp_rows": int(len(audio_timestamps)) if audio_timestamps is not None else 0,
         "imu_timestamp_rows": int(len(imu_timestamps)) if imu_timestamps is not None else 0,
         "kinematic_timestamp_rows": (
@@ -1130,6 +1152,8 @@ def extract_native_rosbag_topic_map(
             manifest["image_timestamp_template_csv"] = str(
                 output / "native_ros_image_timestamp_template.csv"
             )
+            if int(manifest["image_payload_file_rows"]) > 0:
+                manifest["image_frame_payload_dir"] = str(output / "native_ros_image_frames")
         if audio_timestamps is not None:
             audio_timestamps.to_csv(output / "native_ros_audio_timestamps.csv", index=False)
             manifest["audio_timestamps_csv"] = str(output / "native_ros_audio_timestamps.csv")
@@ -1324,6 +1348,7 @@ def image_message_to_timestamp_rows(
     topic: str,
     source: str,
     message_index: int,
+    frame_output_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Convert a native ROS image message into timestamp/template metadata."""
 
@@ -1348,11 +1373,128 @@ def image_message_to_timestamp_rows(
         value = _field_value(message, *names)
         if value not in (None, ""):
             row[output_key] = value
+    height = _optional_positive_int(row.get("height"))
+    width = _optional_positive_int(row.get("width"))
+    step = _optional_positive_int(row.get("step"))
+    if height is not None:
+        row["height_px"] = height
+    if width is not None:
+        row["width_px"] = width
+    if step is not None:
+        row["row_stride_bytes"] = step
     data = _field_value(message, "data")
     data_length = _sequence_length(data)
     if data_length is not None:
         row["data_length"] = data_length
+    payload_bytes = _bytes_payload(data)
+    if payload_bytes is not None:
+        row["byte_count"] = len(payload_bytes)
+    expected_data_length = _image_expected_data_length(
+        height=height,
+        width=width,
+        step=step,
+        encoding=row.get("encoding"),
+    )
+    if expected_data_length is not None:
+        row["expected_data_length"] = expected_data_length
+    if frame_output_dir is not None and payload_bytes is not None:
+        frame_output_dir.mkdir(parents=True, exist_ok=True)
+        payload_suffix = _image_payload_suffix(row)
+        payload_path = frame_output_dir / (
+            f"{_safe_artifact_slug(sequence_id)}__"
+            f"{_safe_artifact_slug(source)}__"
+            f"{int(message_index):06d}__"
+            f"{_time_token(time_s)}{payload_suffix}"
+        )
+        payload_path.write_bytes(payload_bytes)
+        row["payload_file"] = str(payload_path)
+        row["payload_suffix"] = payload_suffix
+        row["payload_sha256"] = hashlib.sha256(payload_bytes).hexdigest()
     return [row]
+
+
+def _bytes_payload(value: Any) -> bytes | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, (bytearray, memoryview)):
+        return bytes(value)
+    if isinstance(value, str):
+        return None
+    try:
+        return bytes(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _image_expected_data_length(
+    *,
+    height: int | None,
+    width: int | None,
+    step: int | None,
+    encoding: Any,
+) -> int | None:
+    if height is None:
+        return None
+    if step is not None:
+        return int(height) * int(step)
+    if width is None:
+        return None
+    bytes_per_pixel = _image_bytes_per_pixel(encoding)
+    if bytes_per_pixel is None:
+        return None
+    return int(height) * int(width) * int(bytes_per_pixel)
+
+
+def _image_bytes_per_pixel(encoding: Any) -> int | None:
+    normalized = str(encoding or "").strip().lower().replace("-", "").replace("_", "")
+    if not normalized:
+        return None
+    if normalized in {"mono8", "8uc1", "8sc1", "bayerbg8", "bayergb8", "bayerrg8", "bayergr8"}:
+        return 1
+    if normalized in {
+        "mono16",
+        "16uc1",
+        "16sc1",
+        "bayerbg16",
+        "bayergb16",
+        "bayerrg16",
+        "bayergr16",
+    }:
+        return 2
+    if normalized in {"rgb8", "bgr8", "8uc3", "8sc3"}:
+        return 3
+    if normalized in {"rgba8", "bgra8", "8uc4", "8sc4"}:
+        return 4
+    if normalized in {"rgb16", "bgr16", "16uc3", "16sc3", "32fc1", "32sc1"}:
+        return 4
+    if normalized in {"rgba16", "bgra16", "16uc4", "16sc4", "32fc2", "64fc1"}:
+        return 8
+    return None
+
+
+def _image_payload_suffix(row: dict[str, Any]) -> str:
+    image_format = str(row.get("format") or "").strip().lower()
+    if "jpeg" in image_format or "jpg" in image_format:
+        return ".jpg"
+    if "png" in image_format:
+        return ".png"
+    if "tiff" in image_format or "tif" in image_format:
+        return ".tiff"
+    if "webp" in image_format:
+        return ".webp"
+    return ".bin"
+
+
+def _safe_artifact_slug(value: Any) -> str:
+    text = str(value or "item").strip()
+    slug = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in text)
+    return slug.strip("_") or "item"
+
+
+def _time_token(time_s: float) -> str:
+    return f"{float(time_s):.9f}".rstrip("0").rstrip(".").replace(".", "p")
 
 
 def imu_message_to_timestamp_rows(

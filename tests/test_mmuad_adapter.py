@@ -7466,11 +7466,18 @@ def test_native_ros_extraction_supports_image_timestamp_topics(
     assert rows["frame_id"].tolist() == ["front_optical", "front_optical"]
     assert rows.loc[0, "height"] == 480
     assert rows.loc[0, "width"] == 640
+    assert rows.loc[0, "height_px"] == 480
+    assert rows.loc[0, "width_px"] == 640
     assert rows.loc[0, "encoding"] == "rgb8"
+    assert rows.loc[0, "byte_count"] == 3
+    assert rows.loc[0, "expected_data_length"] == 921600
     assert rows.loc[1, "format"] == "jpeg"
+    assert rows.loc[1, "byte_count"] == len(b"jpeg-bytes")
+    assert "payload_file" not in rows
     assert extracted.manifest["candidate_rows"] == 0
     assert extracted.manifest["truth_rows"] == 0
     assert extracted.manifest["image_timestamp_rows"] == 2
+    assert extracted.manifest["image_payload_file_rows"] == 0
     assert [row["status"] for row in extracted.manifest["extracted_messages"]] == [
         "extracted",
         "extracted",
@@ -7487,6 +7494,128 @@ def test_native_ros_extraction_supports_image_timestamp_topics(
     assert saved_manifest["image_timestamp_rows"] == 2
     assert saved_manifest["image_timestamp_template_csv"] == str(
         output / "native_ros_image_timestamp_template.csv"
+    )
+
+
+def test_native_ros_extraction_can_write_image_payload_inventory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_image_payloads.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map_native.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_image_payloads",
+                "exports": [
+                    {
+                        "topic": "/camera/front/image_raw",
+                        "kind": "image_timestamps",
+                        "source": "front",
+                        "write_frame_files": True,
+                    },
+                    {
+                        "topic": "/camera/front/image_compressed",
+                        "kind": "compressed_image_timestamps",
+                        "source": "front_compressed",
+                        "write_payload_bytes": True,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    image_connection = SimpleNamespace(
+        topic="/camera/front/image_raw",
+        msgtype="sensor_msgs/msg/Image",
+    )
+    compressed_connection = SimpleNamespace(
+        topic="/camera/front/image_compressed",
+        msgtype="sensor_msgs/msg/CompressedImage",
+    )
+    image_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=1, nanosec=250_000_000),
+            frame_id="front_optical",
+        ),
+        height=1,
+        width=3,
+        encoding="rgb8",
+        data=bytearray(b"rgb"),
+    )
+    compressed_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=2, nanosec=500_000_000),
+            frame_id="front_optical",
+        ),
+        format="jpeg",
+        data=b"jpeg-bytes",
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [image_connection, compressed_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [image_connection, compressed_connection]
+            return [
+                (image_connection, 1_000_000_000, b"image"),
+                (compressed_connection, 2_000_000_000, b"compressed"),
+            ]
+
+        def deserialize(self, rawdata, msgtype):
+            if rawdata == b"image":
+                assert msgtype == "sensor_msgs/msg/Image"
+                return image_message
+            if rawdata == b"compressed":
+                assert msgtype == "sensor_msgs/msg/CompressedImage"
+                return compressed_message
+            raise AssertionError(f"unexpected rawdata: {rawdata!r}")
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.image_timestamps is not None
+    rows = extracted.image_timestamps
+    payload_paths = [Path(value) for value in rows["payload_file"].tolist()]
+    assert [path.suffix for path in payload_paths] == [".bin", ".jpg"]
+    assert [path.read_bytes() for path in payload_paths] == [b"rgb", b"jpeg-bytes"]
+    assert rows["payload_suffix"].tolist() == [".bin", ".jpg"]
+    assert rows["payload_sha256"].str.len().tolist() == [64, 64]
+    assert rows["byte_count"].tolist() == [3, len(b"jpeg-bytes")]
+    assert extracted.manifest["image_payload_file_rows"] == 2
+    assert extracted.manifest["image_frame_payload_dir"] == str(
+        output / "native_ros_image_frames"
+    )
+
+    saved_rows = pd.read_csv(output / "native_ros_image_timestamps.csv")
+    saved_manifest = json.loads(
+        (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
+    )
+    assert saved_rows["payload_file"].tolist() == [str(path) for path in payload_paths]
+    assert saved_manifest["image_payload_file_rows"] == 2
+    assert saved_manifest["image_frame_payload_dir"] == str(
+        output / "native_ros_image_frames"
     )
 
 
