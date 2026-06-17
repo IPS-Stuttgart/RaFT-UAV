@@ -7974,6 +7974,101 @@ def test_native_ros_sensor_status_message_to_timestamp_rows_extracts_common_fiel
     assert battery_rows[0]["battery_serial_number"] == "BAT-001"
 
 
+def test_native_ros_sensor_status_message_to_timestamp_rows_extracts_mavros_fields() -> None:
+    state_message = SimpleNamespace(
+        connected=True,
+        armed=True,
+        guided=False,
+        manual_input=True,
+        mode="AUTO.LOITER",
+        system_status=4,
+    )
+    gps_message = SimpleNamespace(
+        header=SimpleNamespace(frame_id="gps"),
+        fix_type=3,
+        lat=481234567,
+        lon=91234567,
+        alt=520123,
+        alt_ellipsoid=521456,
+        satellites_visible=14,
+        eph=50,
+        epv=75,
+        vel_acc=12,
+        yaw=12345,
+        cog=5432,
+    )
+    telemetry_message = SimpleNamespace(
+        header=SimpleNamespace(frame_id="base_link"),
+        monotonic=100.0,
+        amsl=520.5,
+        local=18.0,
+        relative=16.5,
+        terrain=504.0,
+        bottom_clearance=2.5,
+        airspeed=12.5,
+        groundspeed=10.2,
+        heading=270,
+        throttle=42,
+        altitude=520.0,
+        climb=-1.2,
+        channels=[1000, 1500, 2000],
+        rssi=128,
+        geo=SimpleNamespace(latitude=48.1, longitude=9.2, altitude=503.0),
+        position=SimpleNamespace(x=1.0, y=-2.0, z=3.0),
+    )
+
+    state_rows = sensor_status_message_to_timestamp_rows(
+        state_message,
+        sequence_id="seq_mavros",
+        time_s=1.0,
+        topic="/mavros/state",
+        source="mavros_state",
+        message_index=0,
+        kind="sensor_status_timestamps",
+    )
+    gps_rows = sensor_status_message_to_timestamp_rows(
+        gps_message,
+        sequence_id="seq_mavros",
+        time_s=2.0,
+        topic="/mavros/gpsstatus/gps1/raw",
+        source="gps_raw",
+        message_index=1,
+        kind="sensor_status_timestamps",
+    )
+    telemetry_rows = sensor_status_message_to_timestamp_rows(
+        telemetry_message,
+        sequence_id="seq_mavros",
+        time_s=3.0,
+        topic="/mavros/telemetry",
+        source="telemetry",
+        message_index=2,
+        kind="sensor_status_timestamps",
+    )
+
+    assert state_rows[0]["mavros_connected"] is True
+    assert state_rows[0]["mavros_armed"] is True
+    assert state_rows[0]["mavros_guided"] is False
+    assert state_rows[0]["mavros_mode"] == "AUTO.LOITER"
+    assert state_rows[0]["mavros_system_status"] == 4
+    assert gps_rows[0]["frame_id"] == "gps"
+    assert gps_rows[0]["gps_fix_type"] == 3
+    assert gps_rows[0]["gps_latitude_deg"] == pytest.approx(48.1234567)
+    assert gps_rows[0]["gps_longitude_deg"] == pytest.approx(9.1234567)
+    assert gps_rows[0]["gps_altitude_m"] == pytest.approx(520.123)
+    assert gps_rows[0]["gps_altitude_ellipsoid_m"] == pytest.approx(521.456)
+    assert gps_rows[0]["gps_yaw_deg"] == pytest.approx(123.45)
+    assert gps_rows[0]["gps_course_over_ground_deg"] == pytest.approx(54.32)
+    assert telemetry_rows[0]["frame_id"] == "base_link"
+    assert telemetry_rows[0]["altitude_amsl_m"] == pytest.approx(520.5)
+    assert telemetry_rows[0]["vfr_groundspeed_m_s"] == pytest.approx(10.2)
+    assert telemetry_rows[0]["vfr_climb_m_s"] == pytest.approx(-1.2)
+    assert telemetry_rows[0]["rc_channel_pwm_count"] == 3
+    assert telemetry_rows[0]["rc_channel_pwm_mean"] == pytest.approx(1500.0)
+    assert json.loads(telemetry_rows[0]["rc_channels_json"]) == [1000.0, 1500.0, 2000.0]
+    assert telemetry_rows[0]["home_latitude_deg"] == pytest.approx(48.1)
+    assert telemetry_rows[0]["home_position_y_m"] == pytest.approx(-2.0)
+
+
 def test_native_ros_extraction_supports_kinematic_timestamp_topics(
     tmp_path: Path,
     monkeypatch,
@@ -8597,6 +8692,134 @@ def test_native_ros_extraction_supports_sensor_status_timestamp_topics(
         (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
     )
     assert saved_rows["time_s"].tolist() == [7.25, 8.5]
+    assert saved_manifest["sensor_status_timestamp_rows"] == 2
+    assert saved_manifest["sensor_status_timestamps_csv"] == str(
+        output / "native_ros_sensor_status_timestamps.csv"
+    )
+
+
+def test_native_ros_extraction_supports_mavros_status_timestamp_topics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_mavros_status.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map_native.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_mavros_status",
+                "exports": [
+                    {
+                        "topic": "/mavros/state",
+                        "kind": "sensor_status_timestamps",
+                        "source": "mavros_state",
+                    },
+                    {
+                        "topic": "/mavros/gpsstatus/gps1/raw",
+                        "kind": "sensor_status_timestamps",
+                        "source": "gps_raw",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    state_connection = SimpleNamespace(
+        topic="/mavros/state",
+        msgtype="mavros_msgs/msg/State",
+    )
+    gps_connection = SimpleNamespace(
+        topic="/mavros/gpsstatus/gps1/raw",
+        msgtype="mavros_msgs/msg/GPSRAW",
+    )
+    state_message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=3, nanosec=250_000_000)),
+        connected=True,
+        armed=True,
+        guided=False,
+        mode="AUTO.MISSION",
+        system_status=4,
+    )
+    gps_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=4, nanosec=500_000_000),
+            frame_id="gps",
+        ),
+        fix_type=3,
+        lat=481234567,
+        lon=91234567,
+        alt=520123,
+        satellites_visible=14,
+        yaw=12345,
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [state_connection, gps_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [state_connection, gps_connection]
+            return [
+                (state_connection, 3_000_000_000, b"state"),
+                (gps_connection, 4_000_000_000, b"gps"),
+            ]
+
+        def deserialize(self, rawdata, msgtype):
+            if rawdata == b"state":
+                assert msgtype == "mavros_msgs/msg/State"
+                return state_message
+            if rawdata == b"gps":
+                assert msgtype == "mavros_msgs/msg/GPSRAW"
+                return gps_message
+            raise AssertionError(rawdata)
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is None
+    assert extracted.truth is None
+    assert extracted.sensor_status_timestamps is not None
+    rows = extracted.sensor_status_timestamps.sort_values("time_s").reset_index(drop=True)
+    assert rows["sequence_id"].tolist() == [
+        "seq_mavros_status",
+        "seq_mavros_status",
+    ]
+    assert rows["time_s"].tolist() == [3.25, 4.5]
+    assert rows["source"].tolist() == ["mavros_state", "gps_raw"]
+    assert bool(rows.loc[0, "mavros_armed"]) is True
+    assert rows.loc[0, "mavros_mode"] == "AUTO.MISSION"
+    assert rows.loc[1, "frame_id"] == "gps"
+    assert rows.loc[1, "gps_latitude_deg"] == pytest.approx(48.1234567)
+    assert rows.loc[1, "gps_altitude_m"] == pytest.approx(520.123)
+    assert extracted.manifest["sensor_status_timestamp_rows"] == 2
+    assert extracted.manifest["candidate_rows"] == 0
+    assert extracted.manifest["truth_rows"] == 0
+
+    saved_rows = pd.read_csv(output / "native_ros_sensor_status_timestamps.csv")
+    saved_manifest = json.loads(
+        (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
+    )
+    assert saved_rows["time_s"].tolist() == [3.25, 4.5]
     assert saved_manifest["sensor_status_timestamp_rows"] == 2
     assert saved_manifest["sensor_status_timestamps_csv"] == str(
         output / "native_ros_sensor_status_timestamps.csv"
@@ -12037,6 +12260,18 @@ def test_ros2_topic_map_template_infers_sensor_status_timestamp_topics(
                 "        name: /imu/mag",
                 "        type: sensor_msgs/msg/MagneticField",
                 "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /mavros/state",
+                "        type: mavros_msgs/msg/State",
+                "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /mavros/gpsstatus/gps1/raw",
+                "        type: mavros_msgs/msg/GPSRAW",
+                "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /mavros/rc/in",
+                "        type: mavros_msgs/msg/RCIn",
+                "      message_count: 5",
             ]
         ),
         encoding="utf-8",
@@ -12054,10 +12289,16 @@ def test_ros2_topic_map_template_infers_sensor_status_timestamp_topics(
         "sensor_status_timestamps",
         "sensor_status_timestamps",
         "sensor_status_timestamps",
+        "sensor_status_timestamps",
+        "sensor_status_timestamps",
+        "sensor_status_timestamps",
     ]
     assert payload["exports"][0]["source"] == "environment_pressure"
     assert payload["exports"][1]["source"] == "power_battery"
     assert payload["exports"][2]["source"] == "imu_mag"
+    assert payload["exports"][3]["source"] == "mavros_state"
+    assert payload["exports"][4]["source"] == "mavros_gpsstatus_gps1_raw"
+    assert payload["exports"][5]["source"] == "mavros_rc_in"
     assert all("path" not in entry for entry in payload["exports"])
 
 

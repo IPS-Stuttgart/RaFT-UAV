@@ -21,7 +21,8 @@ tracking logs:
   reference inventory rows;
 * ``diagnostic_msgs/msg/DiagnosticArray`` / ``DiagnosticStatus`` -> diagnostic
   inventory rows;
-* common sensor status messages -> timestamp/status inventory rows;
+* common sensor status and MAVROS/PX4 telemetry messages -> timestamp/status
+  inventory rows;
 * ``sensor_msgs/msg/LaserScan`` -> range-scan candidate detections;
 * ``sensor_msgs/msg/Range`` -> single range-bearing candidate detections;
 * common Cartesian radar messages -> XYZ radar candidates;
@@ -173,8 +174,9 @@ def extract_native_rosbag_topic_map(
     ``sensor_status_timestamps`` / ``sensor_status_inventory``
         Extract common native ``sensor_msgs`` status topics such as
         ``MagneticField``, ``FluidPressure``, ``Temperature``,
-        ``RelativeHumidity``, ``Illuminance``, and ``BatteryState`` into CSV
-        inventory artifacts. This is raw sensor/status metadata only.
+        ``RelativeHumidity``, ``Illuminance``, ``BatteryState``, and common
+        MAVROS/PX4 telemetry messages into CSV inventory artifacts. This is
+        raw sensor/status metadata only.
     ``navsatfix_truth`` / ``geopoint_truth`` / ``geopose_truth`` /
     ``navsatfix_candidate`` / ``geopoint_candidate`` / ``geopose_candidate``
         Project geodetic GPS/geographic positions into local ENU rows. These
@@ -2160,7 +2162,153 @@ def sensor_status_message_to_timestamp_rows(
         "cell_temperature_c",
         _field_value(message, "cell_temperature"),
     )
+    _add_mavros_status_metadata(row, message)
     return [row]
+
+
+def _add_mavros_status_metadata(row: dict[str, Any], message: Any) -> None:
+    for output_key, names in {
+        "mavros_connected": ("connected",),
+        "mavros_armed": ("armed",),
+        "mavros_guided": ("guided",),
+        "mavros_manual_input": ("manual_input",),
+        "mavros_mode": ("mode",),
+        "mavros_system_status": ("system_status",),
+        "mavros_vtol_state": ("vtol_state",),
+        "mavros_landed_state": ("landed_state",),
+        "gps_fix_type": ("fix_type",),
+        "gps_satellites_visible": ("satellites_visible", "satellites"),
+    }.items():
+        _add_scalar_metadata(row, output_key, _field_value(message, *names))
+
+    for output_key, names in {
+        "altitude_monotonic_m": ("monotonic", "monotonic_m"),
+        "altitude_amsl_m": ("amsl", "amsl_m"),
+        "altitude_local_m": ("local", "local_m"),
+        "altitude_relative_m": ("relative", "relative_m"),
+        "altitude_terrain_m": ("terrain", "terrain_m"),
+        "altitude_bottom_clearance_m": ("bottom_clearance", "bottom_clearance_m"),
+        "vfr_airspeed_m_s": ("airspeed", "air_speed", "airspeed_m_s"),
+        "vfr_groundspeed_m_s": ("groundspeed", "ground_speed", "groundspeed_m_s"),
+        "vfr_heading_deg": ("heading", "heading_deg"),
+        "vfr_throttle_percent": ("throttle", "throttle_percent"),
+        "vfr_altitude_m": ("altitude", "altitude_m"),
+        "vfr_climb_m_s": ("climb", "climb_m_s"),
+        "rc_rssi": ("rssi",),
+    }.items():
+        _add_float_metadata(row, output_key, _field_float(message, *names))
+
+    _add_mavros_gps_metadata(row, message)
+    _add_mavros_home_position_metadata(row, message)
+    _add_mavros_rc_metadata(row, message)
+
+
+def _add_scalar_metadata(row: dict[str, Any], key: str, value: Any) -> None:
+    if value not in (None, ""):
+        row[key] = value
+
+
+def _add_mavros_gps_metadata(row: dict[str, Any], message: Any) -> None:
+    latitude = _scaled_gps_degrees(_field_value(message, "lat", "latitude"))
+    longitude = _scaled_gps_degrees(_field_value(message, "lon", "longitude"))
+    altitude = _scaled_gps_altitude_m(_field_value(message, "alt", "altitude"))
+    ellipsoid_altitude = _scaled_gps_altitude_m(
+        _field_value(message, "alt_ellipsoid", "altitude_ellipsoid")
+    )
+    yaw = _scaled_heading_degrees(_field_value(message, "yaw", "heading"))
+    cog = _scaled_heading_degrees(_field_value(message, "cog", "course_over_ground"))
+    _add_float_metadata(row, "gps_latitude_deg", latitude)
+    _add_float_metadata(row, "gps_longitude_deg", longitude)
+    _add_float_metadata(row, "gps_altitude_m", altitude)
+    _add_float_metadata(row, "gps_altitude_ellipsoid_m", ellipsoid_altitude)
+    _add_float_metadata(row, "gps_yaw_deg", yaw)
+    _add_float_metadata(row, "gps_course_over_ground_deg", cog)
+    for output_key, names in {
+        "gps_eph": ("eph",),
+        "gps_epv": ("epv",),
+        "gps_horizontal_accuracy": ("h_acc", "horizontal_accuracy"),
+        "gps_vertical_accuracy": ("v_acc", "vertical_accuracy"),
+        "gps_velocity_accuracy": ("vel_acc", "velocity_accuracy"),
+        "gps_heading_accuracy": ("hdg_acc", "heading_accuracy"),
+        "gps_dgps_channel_count": ("dgps_numch",),
+        "gps_dgps_age_s": ("dgps_age",),
+    }.items():
+        _add_float_metadata(row, output_key, _field_float(message, *names))
+
+
+def _add_mavros_home_position_metadata(row: dict[str, Any], message: Any) -> None:
+    geo = _field_value(message, "geo", "geopoint", "home_geo")
+    if geo is not None:
+        _add_float_metadata(
+            row,
+            "home_latitude_deg",
+            _scaled_gps_degrees(_field_value(geo, "latitude", "lat")),
+        )
+        _add_float_metadata(
+            row,
+            "home_longitude_deg",
+            _scaled_gps_degrees(_field_value(geo, "longitude", "lon")),
+        )
+        _add_float_metadata(
+            row,
+            "home_altitude_m",
+            _field_float(geo, "altitude", "alt"),
+        )
+    position = _field_value(message, "position", "home_position")
+    _add_vector_components(
+        row,
+        "home_position",
+        position,
+        components=("x", "y", "z"),
+        suffix="_m",
+    )
+
+
+def _add_mavros_rc_metadata(row: dict[str, Any], message: Any) -> None:
+    channels = _numeric_sequence(_field_value(message, "channels", "chan", "raw"))
+    if not channels:
+        return
+    row["rc_channel_pwm_count"] = int(len(channels))
+    row["rc_channel_pwm_min"] = min(channels)
+    row["rc_channel_pwm_max"] = max(channels)
+    row["rc_channel_pwm_mean"] = sum(channels) / len(channels)
+    row["rc_channels_json"] = _json_float_array(channels)
+
+
+def _scaled_gps_degrees(value: Any) -> float | None:
+    parsed = _optional_numeric_float(value)
+    if parsed is None:
+        return None
+    if abs(parsed) > 1000.0:
+        parsed *= 1.0e-7
+    return parsed if math.isfinite(parsed) else None
+
+
+def _scaled_gps_altitude_m(value: Any) -> float | None:
+    parsed = _optional_numeric_float(value)
+    if parsed is None:
+        return None
+    if abs(parsed) > 10000.0:
+        parsed *= 1.0e-3
+    return parsed if math.isfinite(parsed) else None
+
+
+def _scaled_heading_degrees(value: Any) -> float | None:
+    parsed = _optional_numeric_float(value)
+    if parsed is None:
+        return None
+    if abs(parsed) > 360.0:
+        parsed *= 0.01
+    return parsed if math.isfinite(parsed) else None
+
+
+def _optional_numeric_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _kinematic_vector_source(message: Any, kind: str) -> Any:

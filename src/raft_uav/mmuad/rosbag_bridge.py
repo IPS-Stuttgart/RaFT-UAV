@@ -785,6 +785,36 @@ def _looks_like_sensor_status_timestamp_topic(name: str, msg_type: str) -> bool:
     compact_type = msg_type.lower().replace("_", "").replace("-", "")
     name_tokens = set(re.split(r"[^a-z0-9]+", name.lower()))
     name_tokens.discard("")
+    mavros_status_types = (
+        "mavrosmsgs/msg/state",
+        "mavrosmsgs/msg/extendedstate",
+        "mavrosmsgs/msg/altitude",
+        "mavrosmsgs/msg/vfrhud",
+        "mavrosmsgs/msg/gpsraw",
+        "mavrosmsgs/msg/homeposition",
+        "mavrosmsgs/msg/rcin",
+        "mavrosmsgs/msg/rcout",
+        "mavrosmsgs/msg/overridercin",
+    )
+    mavros_name_like = (
+        "mavros" in name_tokens
+        and bool(
+            name_tokens
+            & {
+                "state",
+                "extended",
+                "altitude",
+                "vfr",
+                "hud",
+                "gps",
+                "raw",
+                "home",
+                "rc",
+                "in",
+                "out",
+            }
+        )
+    )
     return (
         any(
             token in compact_type
@@ -797,6 +827,8 @@ def _looks_like_sensor_status_timestamp_topic(name: str, msg_type: str) -> bool:
                 "batterystate",
             )
         )
+        or any(token in compact_type for token in mavros_status_types)
+        or mavros_name_like
         or bool(
             name_tokens
             & {
