@@ -19,6 +19,8 @@ tracking logs:
   inventory rows;
 * ``sensor_msgs/msg/TimeReference`` and ``rosgraph_msgs/msg/Clock`` -> timing
   reference inventory rows;
+* ``diagnostic_msgs/msg/DiagnosticArray`` / ``DiagnosticStatus`` -> diagnostic
+  inventory rows;
 * common sensor status messages -> timestamp/status inventory rows;
 * ``sensor_msgs/msg/LaserScan`` -> range-scan candidate detections;
 * ``sensor_msgs/msg/Range`` -> single range-bearing candidate detections;
@@ -88,6 +90,7 @@ class NativeRosExtraction:
     kinematic_timestamps: pd.DataFrame | None = None
     actuation_timestamps: pd.DataFrame | None = None
     timing_timestamps: pd.DataFrame | None = None
+    diagnostic_timestamps: pd.DataFrame | None = None
     sensor_status_timestamps: pd.DataFrame | None = None
 
 
@@ -163,6 +166,10 @@ def extract_native_rosbag_topic_map(
         Extract native ``sensor_msgs/msg/TimeReference`` and
         ``rosgraph_msgs/msg/Clock`` messages into CSV inventory artifacts.
         This is timing/reference metadata only.
+    ``diagnostic_timestamps`` / ``diagnostic_status_timestamps``
+        Extract native ``diagnostic_msgs/msg/DiagnosticArray`` and
+        ``DiagnosticStatus`` messages into CSV inventory artifacts. This is
+        sensor/system health metadata only.
     ``sensor_status_timestamps`` / ``sensor_status_inventory``
         Extract common native ``sensor_msgs`` status topics such as
         ``MagneticField``, ``FluidPressure``, ``Temperature``,
@@ -226,6 +233,7 @@ def extract_native_rosbag_topic_map(
     kinematic_timestamp_rows: list[dict[str, Any]] = []
     actuation_timestamp_rows: list[dict[str, Any]] = []
     timing_timestamp_rows: list[dict[str, Any]] = []
+    diagnostic_timestamp_rows: list[dict[str, Any]] = []
     sensor_status_timestamp_rows: list[dict[str, Any]] = []
     extracted: list[dict[str, Any]] = []
     sequence_id = str(payload.get("sequence_id", Path(bag_path).stem))
@@ -933,6 +941,18 @@ def extract_native_rosbag_topic_map(
                     )
                     timing_timestamp_rows.extend(rows_for_message)
                     rows = len(rows_for_message)
+                elif _is_diagnostic_timestamp_kind(kind):
+                    rows_for_message = diagnostic_message_to_timestamp_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        topic=str(connection.topic),
+                        source=source,
+                        message_index=replay_message_counts[str(connection.topic)] - 1,
+                        kind=kind,
+                    )
+                    diagnostic_timestamp_rows.extend(rows_for_message)
+                    rows = len(rows_for_message)
                 elif _is_sensor_status_timestamp_kind(kind):
                     rows_for_message = sensor_status_message_to_timestamp_rows(
                         message,
@@ -1153,6 +1173,11 @@ def extract_native_rosbag_topic_map(
     timing_timestamps = (
         pd.DataFrame.from_records(timing_timestamp_rows) if timing_timestamp_rows else None
     )
+    diagnostic_timestamps = (
+        pd.DataFrame.from_records(diagnostic_timestamp_rows)
+        if diagnostic_timestamp_rows
+        else None
+    )
     sensor_status_timestamps = (
         pd.DataFrame.from_records(sensor_status_timestamp_rows)
         if sensor_status_timestamp_rows
@@ -1186,6 +1211,9 @@ def extract_native_rosbag_topic_map(
         ),
         "timing_timestamp_rows": (
             int(len(timing_timestamps)) if timing_timestamps is not None else 0
+        ),
+        "diagnostic_timestamp_rows": (
+            int(len(diagnostic_timestamps)) if diagnostic_timestamps is not None else 0
         ),
         "sensor_status_timestamp_rows": (
             int(len(sensor_status_timestamps))
@@ -1244,6 +1272,14 @@ def extract_native_rosbag_topic_map(
             manifest["timing_timestamps_csv"] = str(
                 output / "native_ros_timing_timestamps.csv"
             )
+        if diagnostic_timestamps is not None:
+            diagnostic_timestamps.to_csv(
+                output / "native_ros_diagnostic_timestamps.csv",
+                index=False,
+            )
+            manifest["diagnostic_timestamps_csv"] = str(
+                output / "native_ros_diagnostic_timestamps.csv"
+            )
         if sensor_status_timestamps is not None:
             sensor_status_timestamps.to_csv(
                 output / "native_ros_sensor_status_timestamps.csv",
@@ -1266,6 +1302,7 @@ def extract_native_rosbag_topic_map(
         kinematic_timestamps=kinematic_timestamps,
         actuation_timestamps=actuation_timestamps,
         timing_timestamps=timing_timestamps,
+        diagnostic_timestamps=diagnostic_timestamps,
         sensor_status_timestamps=sensor_status_timestamps,
     )
 
@@ -1385,6 +1422,26 @@ def _is_timing_timestamp_kind(kind: str) -> bool:
         "clock_timestamp_inventory",
         "ros_clock_timestamp",
         "ros_clock_timestamps",
+    }
+
+
+def _is_diagnostic_timestamp_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "diagnostic_timestamp",
+        "diagnostic_timestamps",
+        "diagnostic_timestamp_inventory",
+        "diagnostics_timestamp",
+        "diagnostics_timestamps",
+        "diagnostics_inventory",
+        "diagnostic_status",
+        "diagnostic_status_timestamp",
+        "diagnostic_status_timestamps",
+        "diagnostic_array",
+        "diagnostic_array_timestamp",
+        "diagnostic_array_timestamps",
+        "diagnostic_msgs",
+        "diagnostic_msgs_timestamps",
     }
 
 
@@ -1959,6 +2016,67 @@ def timing_message_to_timestamp_rows(
     if reference_source not in (None, ""):
         row["reference_source"] = str(reference_source)
     return [row]
+
+
+def diagnostic_message_to_timestamp_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    topic: str,
+    source: str,
+    message_index: int,
+    kind: str = "diagnostic_timestamps",
+) -> list[dict[str, Any]]:
+    """Convert native ROS DiagnosticArray/DiagnosticStatus messages into rows."""
+
+    parent_frame_id = _message_frame_id(message)
+    parent_time_s = _message_stamp_time_s(message)
+    if parent_time_s is None:
+        parent_time_s = float(time_s)
+    statuses = _diagnostic_status_children(message)
+    if not statuses:
+        statuses = [message]
+    rows: list[dict[str, Any]] = []
+    for status_index, status in enumerate(statuses):
+        row_time_s = _message_stamp_time_s(status)
+        if row_time_s is None:
+            row_time_s = float(parent_time_s)
+        row: dict[str, Any] = {
+            "sequence_id": str(sequence_id),
+            "time_s": float(row_time_s),
+            "topic": str(topic),
+            "source": str(source),
+            "message_index": int(message_index),
+            "diagnostic_kind": str(kind).strip().lower(),
+        }
+        if len(statuses) > 1:
+            row["diagnostic_index"] = int(status_index)
+        frame_id = _message_frame_id(status)
+        if frame_id in (None, ""):
+            frame_id = parent_frame_id
+        if frame_id not in (None, ""):
+            row["frame_id"] = str(frame_id)
+        name = _field_value(status, "name", "diagnostic_name")
+        if name not in (None, ""):
+            row["diagnostic_name"] = str(name)
+        level = _field_float(status, "level", "status_level", "diagnostic_level")
+        if level is not None and math.isfinite(level):
+            level_int = int(level)
+            row["diagnostic_level"] = level_int
+            row["diagnostic_level_name"] = _diagnostic_level_name(level_int)
+        message_text = _field_value(status, "message", "status_message")
+        if message_text not in (None, ""):
+            row["diagnostic_message"] = str(message_text)
+        hardware_id = _field_value(status, "hardware_id", "hardwareid", "device_id")
+        if hardware_id not in (None, ""):
+            row["diagnostic_hardware_id"] = str(hardware_id)
+        key_values = _diagnostic_key_value_pairs(status)
+        if key_values:
+            row["diagnostic_value_count"] = int(len(key_values))
+            row["diagnostic_values_json"] = json.dumps(key_values, separators=(",", ":"))
+        rows.append(row)
+    return rows
 
 
 def sensor_status_message_to_timestamp_rows(
@@ -3622,6 +3740,41 @@ def _field_sequence(value: Any, names: tuple[str, ...]) -> list[Any]:
     except TypeError:
         return []
     return items
+
+
+def _diagnostic_status_children(message: Any) -> list[Any]:
+    for name in ("status", "statuses", "diagnostics", "diagnostic_status"):
+        values = _field_sequence(message, (name,))
+        if values:
+            return [value for value in values if value is not None]
+    return []
+
+
+def _diagnostic_key_value_pairs(status: Any) -> list[dict[str, str]]:
+    raw = _field_value(status, "values", "key_values", "keyvalues")
+    pairs: list[dict[str, str]] = []
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if key in (None, ""):
+                continue
+            pairs.append({"key": str(key), "value": str(value)})
+        return pairs
+    for item in _field_sequence(status, ("values", "key_values", "keyvalues")):
+        key = _field_value(item, "key", "name")
+        value = _field_value(item, "value", "data")
+        if key in (None, "") and value in (None, ""):
+            continue
+        pairs.append(
+            {
+                "key": str(key) if key not in (None, "") else "",
+                "value": str(value) if value not in (None, "") else "",
+            }
+        )
+    return pairs
+
+
+def _diagnostic_level_name(level: int) -> str:
+    return {0: "ok", 1: "warn", 2: "error", 3: "stale"}.get(int(level), "unknown")
 
 
 def _is_scalar_like(value: Any) -> bool:

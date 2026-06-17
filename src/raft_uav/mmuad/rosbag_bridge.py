@@ -363,6 +363,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "audio_timestamps"
     if _looks_like_timing_timestamp_topic(name, msg_type):
         return _timing_timestamp_kind(name, msg_type)
+    if _looks_like_diagnostic_timestamp_topic(name, msg_type):
+        return _diagnostic_timestamp_kind(msg_type)
     if _looks_like_sensor_status_timestamp_topic(name, msg_type):
         return "sensor_status_timestamps"
     if _looks_like_imu_timestamp_topic(name, msg_type):
@@ -753,6 +755,30 @@ def _timing_timestamp_kind(name: str, msg_type: str) -> str:
     if "clock" in compact_type or compact_name.endswith("/clock") or compact_name == "clock":
         return "clock_timestamps"
     return "timing_timestamps"
+
+
+def _looks_like_diagnostic_timestamp_topic(name: str, msg_type: str) -> bool:
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    name_tokens = set(re.split(r"[^a-z0-9]+", name.lower()))
+    name_tokens.discard("")
+    return (
+        "diagnosticarray" in compact_type
+        or "diagnosticstatus" in compact_type
+        or compact_type.endswith("/diagnosticarray")
+        or compact_type.endswith("/diagnosticstatus")
+        or compact_type.endswith("msg/diagnosticarray")
+        or compact_type.endswith("msg/diagnosticstatus")
+        or bool(name_tokens & {"diagnostics", "diagnostic"})
+    )
+
+
+def _diagnostic_timestamp_kind(msg_type: str) -> str:
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    if "diagnosticstatus" in compact_type:
+        return "diagnostic_status_timestamps"
+    if "diagnosticarray" in compact_type:
+        return "diagnostic_timestamps"
+    return "diagnostic_timestamps"
 
 
 def _looks_like_sensor_status_timestamp_topic(name: str, msg_type: str) -> bool:
