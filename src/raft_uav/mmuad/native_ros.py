@@ -8,7 +8,7 @@ tracking logs:
 * ``sensor_msgs/msg/PointCloud2`` / ``PointCloud`` -> clustered candidate
   detections;
 * ``livox_ros_driver(2)/msg/CustomMsg`` -> clustered candidate detections;
-* ``sensor_msgs/msg/CameraInfo`` -> camera intrinsics for native Detection2D;
+* ``sensor_msgs/msg/CameraInfo`` -> camera intrinsics/inventory for native Detection2D;
 * ``sensor_msgs/msg/Image`` / ``CompressedImage`` -> timestamp template rows;
 * common ROS audio messages -> timestamp inventory rows;
 * ``sensor_msgs/msg/Imu`` -> timestamp/kinematics inventory rows;
@@ -75,6 +75,7 @@ class NativeRosExtraction:
     candidates: CandidateFrame | None
     truth: TruthFrame | None
     manifest: dict[str, Any]
+    camera_info: pd.DataFrame | None = None
     image_timestamps: pd.DataFrame | None = None
     audio_timestamps: pd.DataFrame | None = None
     imu_timestamps: pd.DataFrame | None = None
@@ -125,7 +126,9 @@ def extract_native_rosbag_topic_map(
     ``camera_info`` / ``camera_info_calibration``
         Decode ``sensor_msgs/msg/CameraInfo`` intrinsics for native
         Detection2D back-projection.  Detection2D topics with the same source
-        can then omit ``camera_calibration_file`` sidecars.
+        can then omit ``camera_calibration_file`` sidecars. Usable CameraInfo
+        messages are also written as calibration inventory when an output
+        directory is supplied.
     ``image_timestamps`` / ``image_timestamp_template``
         Extract native ``sensor_msgs/msg/Image`` or ``CompressedImage`` frame
         timestamps into CSV/template artifacts. This is timestamp inventory
@@ -224,10 +227,15 @@ def extract_native_rosbag_topic_map(
         topic_connections = [
             connection for connection in reader.connections if connection.topic in by_topic
         ]
-        native_camera_models, camera_info_messages = _camera_models_from_camera_info_topics(
+        (
+            native_camera_models,
+            camera_info_messages,
+            camera_info_rows,
+        ) = _camera_models_from_camera_info_topics(
             reader,
             topic_connections=topic_connections,
             by_topic=by_topic,
+            sequence_id=sequence_id,
         )
         extracted.extend(camera_info_messages)
         replay_connections = [
@@ -1064,6 +1072,7 @@ def extract_native_rosbag_topic_map(
 
     candidates = merge_candidate_frames(candidate_frames) if candidate_frames else None
     truth = TruthFrame(normalize_truth_columns(pd.DataFrame.from_records(truth_rows))) if truth_rows else None
+    camera_info = pd.DataFrame.from_records(camera_info_rows) if camera_info_rows else None
     image_timestamps = (
         pd.DataFrame.from_records(image_timestamp_rows) if image_timestamp_rows else None
     )
@@ -1089,6 +1098,7 @@ def extract_native_rosbag_topic_map(
         "topic_map_json": str(topic_map_json),
         "candidate_rows": int(len(candidates.rows)) if candidates is not None else 0,
         "truth_rows": int(len(truth.rows)) if truth is not None else 0,
+        "camera_info_rows": int(len(camera_info)) if camera_info is not None else 0,
         "image_timestamp_rows": int(len(image_timestamps)) if image_timestamps is not None else 0,
         "audio_timestamp_rows": int(len(audio_timestamps)) if audio_timestamps is not None else 0,
         "imu_timestamp_rows": int(len(imu_timestamps)) if imu_timestamps is not None else 0,
@@ -1107,6 +1117,9 @@ def extract_native_rosbag_topic_map(
             candidates.rows.to_csv(output / "native_ros_candidates.csv", index=False)
         if truth is not None:
             truth.rows.to_csv(output / "native_ros_truth.csv", index=False)
+        if camera_info is not None:
+            camera_info.to_csv(output / "native_ros_camera_info.csv", index=False)
+            manifest["camera_info_csv"] = str(output / "native_ros_camera_info.csv")
         if image_timestamps is not None:
             image_timestamps.to_csv(output / "native_ros_image_timestamps.csv", index=False)
             _image_timestamp_template_rows(image_timestamps).to_csv(
@@ -1146,6 +1159,7 @@ def extract_native_rosbag_topic_map(
         candidates=candidates,
         truth=truth,
         manifest=manifest,
+        camera_info=camera_info,
         image_timestamps=image_timestamps,
         audio_timestamps=audio_timestamps,
         imu_timestamps=imu_timestamps,
@@ -1936,21 +1950,84 @@ def camera_info_message_to_model(
     )
 
 
+def camera_info_message_to_row(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    topic: str,
+    source: str,
+    message_index: int,
+    model: CameraModel | None = None,
+) -> dict[str, Any]:
+    """Convert a native CameraInfo message into calibration inventory metadata."""
+
+    intrinsics = model.intrinsics if model is not None else _camera_info_intrinsics(message)
+    row: dict[str, Any] = {
+        "sequence_id": str(sequence_id),
+        "time_s": float(time_s),
+        "topic": str(topic),
+        "source": str(source),
+        "message_index": int(message_index),
+        "fx_px": float(intrinsics.fx),
+        "fy_px": float(intrinsics.fy),
+        "cx_px": float(intrinsics.cx),
+        "cy_px": float(intrinsics.cy),
+    }
+    frame_id = _message_frame_id(message)
+    if frame_id not in (None, ""):
+        row["frame_id"] = str(frame_id)
+    for output_key, names in {
+        "height_px": ("height",),
+        "width_px": ("width",),
+        "distortion_model": ("distortion_model",),
+        "binning_x": ("binning_x",),
+        "binning_y": ("binning_y",),
+    }.items():
+        value = _field_value(message, *names)
+        if value not in (None, ""):
+            row[output_key] = value
+    for output_key, names in {
+        "camera_matrix": ("k", "K", "camera_matrix"),
+        "projection_matrix": ("p", "P", "projection_matrix"),
+        "rectification_matrix": ("r", "R", "rectification_matrix"),
+        "distortion_coefficients": ("d", "D", "distortion_coefficients"),
+    }.items():
+        values = _camera_info_array(message, *names)
+        if values is not None:
+            row[output_key] = _json_float_array(values)
+    roi = _field_value(message, "roi", "region_of_interest")
+    if roi is not None:
+        for output_key, names in {
+            "roi_x_offset": ("x_offset",),
+            "roi_y_offset": ("y_offset",),
+            "roi_height": ("height",),
+            "roi_width": ("width",),
+            "roi_do_rectify": ("do_rectify",),
+        }.items():
+            value = _field_value(roi, *names)
+            if value not in (None, ""):
+                row[output_key] = value
+    return row
+
+
 def _camera_models_from_camera_info_topics(
     reader: Any,
     *,
     topic_connections: list[Any],
     by_topic: dict[str, dict[str, Any]],
-) -> tuple[dict[str, CameraModel], list[dict[str, Any]]]:
+    sequence_id: str,
+) -> tuple[dict[str, CameraModel], list[dict[str, Any]], list[dict[str, Any]]]:
     connections = [
         connection
         for connection in topic_connections
         if _is_camera_info_kind(by_topic[connection.topic])
     ]
     if not connections:
-        return {}, []
+        return {}, [], []
     models: dict[str, CameraModel] = {}
     extracted: list[dict[str, Any]] = []
+    camera_info_rows: list[dict[str, Any]] = []
     message_counts = {str(connection.topic): 0 for connection in connections}
     for connection, timestamp_ns, rawdata in reader.messages(connections=connections):
         message_counts[str(connection.topic)] = (
@@ -1966,6 +2043,15 @@ def _camera_models_from_camera_info_topics(
             continue
         try:
             model = camera_info_message_to_model(message, source=source, spec=spec)
+            row = camera_info_message_to_row(
+                message,
+                sequence_id=str(spec.get("sequence_id", sequence_id)),
+                time_s=time_s,
+                topic=str(connection.topic),
+                source=source,
+                message_index=message_counts[str(connection.topic)] - 1,
+                model=model,
+            )
         except Exception as exc:  # pragma: no cover - data-dependent failure details
             extracted.append(
                 {
@@ -1977,6 +2063,7 @@ def _camera_models_from_camera_info_topics(
             )
             continue
         models[key] = model
+        camera_info_rows.append(row)
         extracted.append(
             {
                 "topic": connection.topic,
@@ -2000,7 +2087,7 @@ def _camera_models_from_camera_info_topics(
                 "msgtype": str(getattr(connection, "msgtype", "")),
             }
         )
-    return models, extracted
+    return models, extracted, camera_info_rows
 
 
 def _camera_info_source(
@@ -2052,8 +2139,12 @@ def _camera_info_intrinsics(message: Any) -> CameraIntrinsics:
 
 
 def _camera_info_matrix(message: Any, *names: str) -> list[float] | None:
+    return _camera_info_array(message, *names)
+
+
+def _camera_info_array(message: Any, *names: str) -> list[float] | None:
     for name in names:
-        value = getattr(message, name, None)
+        value = _field_value(message, name)
         if value is None:
             continue
         data = getattr(value, "data", value)
@@ -2064,6 +2155,10 @@ def _camera_info_matrix(message: Any, *names: str) -> list[float] | None:
         if values:
             return values
     return None
+
+
+def _json_float_array(values: list[float]) -> str:
+    return json.dumps([float(value) for value in values], separators=(",", ":"))
 
 
 def livox_custom_message_to_points(

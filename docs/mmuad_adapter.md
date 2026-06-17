@@ -1156,7 +1156,8 @@ The native extractor currently supports `sensor_msgs/msg/PointCloud2` as
 `pointcloud_candidate`, `livox_ros_driver/msg/CustomMsg` and
 `livox_ros_driver2/msg/CustomMsg` as `livox_custommsg_candidate`,
 `sensor_msgs/msg/CameraInfo` as
-`camera_info_calibration` intrinsics for Detection2D back-projection,
+`camera_info_calibration` intrinsics for Detection2D back-projection and
+`native_ros_camera_info.csv` calibration inventory,
 `sensor_msgs/msg/Image` and `sensor_msgs/msg/CompressedImage` as
 `image_timestamps` timestamp/template inventory rows,
 common audio messages such as `audio_common_msgs/msg/AudioData` and
@@ -1263,6 +1264,11 @@ Native extraction uses the same tracker artifact writer as exported CSV/sequence
 roots, so `submission.csv/json/zip`, UG2 result CSV/ZIP, official Track 5
 CSV/ZIP, validation JSON/rows, and trajectory metrics can be requested from the
 same run.
+When the topic map includes native CameraInfo topics, extraction writes
+`native_ros_camera_info.csv` with message time, frame/source, image size,
+distortion model, K/P/R/D arrays, derived `fx_px`/`fy_px`/`cx_px`/`cy_px`, and
+ROI/binning metadata when present. The same CameraInfo rows are also used
+in-memory for native Detection2D back-projection when the `source` matches.
 When the topic map includes native image timestamp topics, the extractor also
 writes `native_ros_image_timestamps.csv` and
 `native_ros_image_timestamp_template.csv`. The latter is a zero-position

@@ -9666,7 +9666,35 @@ def test_native_ros_extraction_uses_camera_info_for_detection2d_intrinsics(
             stamp=SimpleNamespace(sec=1, nanosec=0),
             frame_id="cam0",
         ),
+        height=720,
+        width=1280,
+        distortion_model="plumb_bob",
         k=[100.0, 0.0, 50.0, 0.0, 100.0, 40.0, 0.0, 0.0, 1.0],
+        p=[
+            100.0,
+            0.0,
+            50.0,
+            0.0,
+            0.0,
+            100.0,
+            40.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+        ],
+        r=[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        d=[0.1, -0.01, 0.001, 0.0, 0.0],
+        binning_x=2,
+        binning_y=3,
+        roi=SimpleNamespace(
+            x_offset=10,
+            y_offset=20,
+            height=300,
+            width=400,
+            do_rectify=True,
+        ),
     )
     detection_message = SimpleNamespace(
         header=SimpleNamespace(
@@ -9740,10 +9768,62 @@ def test_native_ros_extraction_uses_camera_info_for_detection2d_intrinsics(
     assert rows.loc[0, "y_m"] == 3.0
     assert rows.loc[0, "z_m"] == 13.0
     assert rows.loc[0, "confidence"] == 0.8
+    assert extracted.camera_info is not None
+    camera_rows = extracted.camera_info
+    assert len(camera_rows) == 1
+    assert camera_rows.loc[0, "sequence_id"] == "seq_camera_info"
+    assert camera_rows.loc[0, "time_s"] == 1.0
+    assert camera_rows.loc[0, "source"] == "cam0"
+    assert camera_rows.loc[0, "frame_id"] == "cam0"
+    assert camera_rows.loc[0, "height_px"] == 720
+    assert camera_rows.loc[0, "width_px"] == 1280
+    assert camera_rows.loc[0, "distortion_model"] == "plumb_bob"
+    assert camera_rows.loc[0, "fx_px"] == pytest.approx(100.0)
+    assert camera_rows.loc[0, "cy_px"] == pytest.approx(40.0)
+    assert json.loads(camera_rows.loc[0, "camera_matrix"]) == [
+        100.0,
+        0.0,
+        50.0,
+        0.0,
+        100.0,
+        40.0,
+        0.0,
+        0.0,
+        1.0,
+    ]
+    assert json.loads(camera_rows.loc[0, "distortion_coefficients"]) == [
+        0.1,
+        -0.01,
+        0.001,
+        0.0,
+        0.0,
+    ]
+    assert camera_rows.loc[0, "binning_x"] == 2
+    assert camera_rows.loc[0, "binning_y"] == 3
+    assert camera_rows.loc[0, "roi_x_offset"] == 10
+    assert bool(camera_rows.loc[0, "roi_do_rectify"]) is True
+    assert extracted.manifest["camera_info_rows"] == 1
+    assert extracted.manifest["camera_info_csv"] == str(output / "native_ros_camera_info.csv")
     assert extracted.manifest["extracted_messages"][0]["kind"] == "camera_info_calibration"
     assert extracted.manifest["extracted_messages"][0]["source"] == "cam0"
     assert extracted.manifest["extracted_messages"][1]["kind"] == "camera_detections_candidate"
     assert (output / "native_ros_candidates.csv").exists()
+    saved_camera_info = pd.read_csv(output / "native_ros_camera_info.csv")
+    assert saved_camera_info.loc[0, "source"] == "cam0"
+    assert json.loads(saved_camera_info.loc[0, "projection_matrix"]) == [
+        100.0,
+        0.0,
+        50.0,
+        0.0,
+        0.0,
+        100.0,
+        40.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+    ]
 
 
 def test_native_ros_livox_custom_message_to_points_accepts_custom_points() -> None:
