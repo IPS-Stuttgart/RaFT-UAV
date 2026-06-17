@@ -811,6 +811,14 @@ def _looks_like_sensor_status_timestamp_topic(name: str, msg_type: str) -> bool:
         "mavrosmsgs/msg/rcout",
         "mavrosmsgs/msg/overridercin",
     )
+    px4_status_types = (
+        "px4msgs/msg/sensorgps",
+        "px4msgs/msg/vehiclestatus",
+        "px4msgs/msg/vehiclelanddetected",
+        "px4msgs/msg/batterystatus",
+        "px4msgs/msg/estimatorstatus",
+        "px4msgs/msg/estimatorstatusflags",
+    )
     mavros_name_like = (
         "mavros" in name_tokens
         and bool(
@@ -843,6 +851,7 @@ def _looks_like_sensor_status_timestamp_topic(name: str, msg_type: str) -> bool:
             )
         )
         or any(token in compact_type for token in mavros_status_types)
+        or any(token in compact_type for token in px4_status_types)
         or mavros_name_like
         or bool(
             name_tokens

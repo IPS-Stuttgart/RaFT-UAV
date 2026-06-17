@@ -1180,7 +1180,9 @@ common `sensor_msgs` status messages such as `MagneticField`,
 `FluidPressure`, `Temperature`, `RelativeHumidity`, `Illuminance`, and
 `BatteryState`, plus common MAVROS/PX4 telemetry messages such as
 `mavros_msgs/msg/State`, `ExtendedState`, `Altitude`, `VFR_HUD`, `GPSRAW`,
-`HomePosition`, `RCIn`, and `RCOut`, as `sensor_status_timestamps` inventory rows,
+`HomePosition`, `RCIn`, and `RCOut`, plus common PX4 telemetry messages such as
+`px4_msgs/msg/SensorGps`, `VehicleStatus`, `BatteryStatus`, and
+`EstimatorStatus`, as `sensor_status_timestamps` inventory rows,
 `sensor_msgs/msg/LaserScan` as `laserscan_candidate` range-scan rows using
 the ROS scan convention of +X forward and positive angle left, with optional
 adjacent-return clustering,
@@ -1341,7 +1343,9 @@ available scalar/vector metadata from `MagneticField`, `FluidPressure`,
 including magnetic-field covariance diagonals and battery cell-voltage/
 cell-temperature summaries when present. MAVROS/PX4 status and telemetry rows
 preserve armed/connected/mode state, landed/VTOL state, altitude, VFR HUD,
-GPSRAW, RC channel, and home-position metadata when present. These rows are raw diagnostic
+GPSRAW, RC channel, and home-position metadata when present. Native PX4 rows
+preserve GPS accuracy/velocity metadata, vehicle arming/navigation state,
+battery state, and estimator health ratios/flag fields when present. These rows are raw diagnostic
 inventory only and are not tracker position candidates or official Track 5
 timestamp templates.
 Native `pointcloud_candidate` topic-map entries decode legacy

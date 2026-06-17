@@ -8069,6 +8069,113 @@ def test_native_ros_sensor_status_message_to_timestamp_rows_extracts_mavros_fiel
     assert telemetry_rows[0]["home_position_y_m"] == pytest.approx(-2.0)
 
 
+def test_native_ros_sensor_status_message_to_timestamp_rows_extracts_px4_fields() -> None:
+    gps_message = SimpleNamespace(
+        fix_type=3,
+        lat=481234567,
+        lon=91234567,
+        alt=520123,
+        alt_ellipsoid=521456,
+        satellites_used=13,
+        hdop=0.8,
+        vdop=1.1,
+        s_variance_m_s=0.04,
+        c_variance_rad=0.02,
+        vel_m_s=12.5,
+        vel_n_m_s=1.0,
+        vel_e_m_s=2.0,
+        vel_d_m_s=-0.5,
+        vel_ned_valid=True,
+        jamming_indicator=3,
+        noise_per_ms=42,
+    )
+    vehicle_status = SimpleNamespace(
+        nav_state=14,
+        arming_state=2,
+        hil_state=0,
+        failsafe=False,
+        system_type=2,
+        vehicle_type=1,
+        is_vtol=True,
+        in_transition_mode=False,
+        latest_arming_reason=1,
+    )
+    battery_status = SimpleNamespace(
+        total_voltage_v=15.4,
+        current_filtered_a=-2.5,
+        remaining=0.62,
+        discharged_mah=420.0,
+        time_remaining_s=300.0,
+        cell_count=4,
+        voltages=[3.8, 3.9, 3.85, 3.86],
+        connected=True,
+        warning=1,
+    )
+    estimator_status = SimpleNamespace(
+        attitude_test_ratio=0.1,
+        vel_test_ratio=0.2,
+        pos_test_ratio=0.3,
+        hgt_test_ratio=0.4,
+        mag_test_ratio=0.5,
+        hagl_test_ratio=0.6,
+        solution_status_flags=7,
+        gps_check_fail_flags=0,
+    )
+
+    gps_rows = sensor_status_message_to_timestamp_rows(
+        gps_message,
+        sequence_id="seq_px4",
+        time_s=1.0,
+        topic="/fmu/out/vehicle_gps_position",
+        source="vehicle_gps_position",
+        message_index=0,
+    )
+    status_rows = sensor_status_message_to_timestamp_rows(
+        vehicle_status,
+        sequence_id="seq_px4",
+        time_s=2.0,
+        topic="/fmu/out/vehicle_status",
+        source="vehicle_status",
+        message_index=1,
+    )
+    battery_rows = sensor_status_message_to_timestamp_rows(
+        battery_status,
+        sequence_id="seq_px4",
+        time_s=3.0,
+        topic="/fmu/out/battery_status",
+        source="battery_status",
+        message_index=2,
+    )
+    estimator_rows = sensor_status_message_to_timestamp_rows(
+        estimator_status,
+        sequence_id="seq_px4",
+        time_s=4.0,
+        topic="/fmu/out/estimator_status",
+        source="estimator_status",
+        message_index=3,
+    )
+
+    assert gps_rows[0]["gps_latitude_deg"] == pytest.approx(48.1234567)
+    assert gps_rows[0]["gps_altitude_m"] == pytest.approx(520.123)
+    assert gps_rows[0]["gps_satellites_used"] == 13
+    assert gps_rows[0]["gps_hdop"] == pytest.approx(0.8)
+    assert gps_rows[0]["gps_velocity_n_m_s"] == pytest.approx(1.0)
+    assert gps_rows[0]["gps_vel_ned_valid"] is True
+    assert status_rows[0]["px4_nav_state"] == 14
+    assert status_rows[0]["px4_arming_state"] == 2
+    assert status_rows[0]["px4_failsafe"] is False
+    assert status_rows[0]["px4_is_vtol"] is True
+    assert battery_rows[0]["voltage_v"] == pytest.approx(15.4)
+    assert battery_rows[0]["current_a"] == pytest.approx(-2.5)
+    assert battery_rows[0]["percentage"] == pytest.approx(0.62)
+    assert battery_rows[0]["battery_discharged_mah"] == pytest.approx(420.0)
+    assert battery_rows[0]["px4_battery_cell_count"] == 4
+    assert battery_rows[0]["cell_voltage_v_count"] == 4
+    assert estimator_rows[0]["px4_estimator_velocity_test_ratio"] == pytest.approx(0.2)
+    assert estimator_rows[0]["px4_estimator_position_test_ratio"] == pytest.approx(0.3)
+    assert estimator_rows[0]["px4_estimator_solution_status_flags"] == 7
+
+
 def test_native_ros_extraction_supports_kinematic_timestamp_topics(
     tmp_path: Path,
     monkeypatch,
@@ -12375,6 +12482,22 @@ def test_ros2_topic_map_template_infers_sensor_status_timestamp_topics(
                 "        name: /mavros/rc/in",
                 "        type: mavros_msgs/msg/RCIn",
                 "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /fmu/out/vehicle_gps_position",
+                "        type: px4_msgs/msg/SensorGps",
+                "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /fmu/out/vehicle_status",
+                "        type: px4_msgs/msg/VehicleStatus",
+                "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /fmu/out/battery_status",
+                "        type: px4_msgs/msg/BatteryStatus",
+                "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /fmu/out/estimator_status",
+                "        type: px4_msgs/msg/EstimatorStatus",
+                "      message_count: 5",
             ]
         ),
         encoding="utf-8",
@@ -12395,6 +12518,10 @@ def test_ros2_topic_map_template_infers_sensor_status_timestamp_topics(
         "sensor_status_timestamps",
         "sensor_status_timestamps",
         "sensor_status_timestamps",
+        "sensor_status_timestamps",
+        "sensor_status_timestamps",
+        "sensor_status_timestamps",
+        "sensor_status_timestamps",
     ]
     assert payload["exports"][0]["source"] == "environment_pressure"
     assert payload["exports"][1]["source"] == "power_battery"
@@ -12402,6 +12529,10 @@ def test_ros2_topic_map_template_infers_sensor_status_timestamp_topics(
     assert payload["exports"][3]["source"] == "mavros_state"
     assert payload["exports"][4]["source"] == "mavros_gpsstatus_gps1_raw"
     assert payload["exports"][5]["source"] == "mavros_rc_in"
+    assert payload["exports"][6]["source"] == "fmu_out_vehicle_gps_position"
+    assert payload["exports"][7]["source"] == "fmu_out_vehicle_status"
+    assert payload["exports"][8]["source"] == "fmu_out_battery_status"
+    assert payload["exports"][9]["source"] == "fmu_out_estimator_status"
     assert all("path" not in entry for entry in payload["exports"])
 
 

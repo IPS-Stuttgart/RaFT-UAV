@@ -2190,12 +2190,12 @@ def sensor_status_message_to_timestamp_rows(
         "relative_humidity_variance": ("relative_humidity_variance", "humidity_variance"),
         "illuminance_lux": ("illuminance", "illuminance_lux"),
         "illuminance_variance": ("illuminance_variance",),
-        "voltage_v": ("voltage",),
-        "current_a": ("current",),
+        "voltage_v": ("voltage", "voltage_v", "voltage_filtered_v", "total_voltage_v"),
+        "current_a": ("current", "current_a", "current_filtered_a", "current_average_a"),
         "charge_ah": ("charge",),
         "capacity_ah": ("capacity",),
         "design_capacity_ah": ("design_capacity",),
-        "percentage": ("percentage",),
+        "percentage": ("percentage", "remaining"),
     }.items():
         _add_float_metadata(row, output_key, _field_float(message, *names))
 
@@ -2223,13 +2223,24 @@ def sensor_status_message_to_timestamp_rows(
         if value not in (None, ""):
             row[output_key] = value
 
-    _add_numeric_sequence_summary(row, "cell_voltage_v", _field_value(message, "cell_voltage"))
+    _add_numeric_sequence_summary(
+        row,
+        "cell_voltage_v",
+        _field_value(
+            message,
+            "cell_voltage",
+            "cell_voltage_v",
+            "cell_voltages",
+            "voltages",
+        ),
+    )
     _add_numeric_sequence_summary(
         row,
         "cell_temperature_c",
-        _field_value(message, "cell_temperature"),
+        _field_value(message, "cell_temperature", "cell_temperature_c", "temperatures"),
     )
     _add_mavros_status_metadata(row, message)
+    _add_px4_status_metadata(row, message)
     return [row]
 
 
@@ -2297,10 +2308,108 @@ def _add_mavros_gps_metadata(row: dict[str, Any], message: Any) -> None:
         "gps_vertical_accuracy": ("v_acc", "vertical_accuracy"),
         "gps_velocity_accuracy": ("vel_acc", "velocity_accuracy"),
         "gps_heading_accuracy": ("hdg_acc", "heading_accuracy"),
+        "gps_hdop": ("hdop",),
+        "gps_vdop": ("vdop",),
+        "gps_speed_accuracy_m_s": ("s_variance_m_s", "speed_accuracy_m_s"),
+        "gps_course_accuracy_rad": ("c_variance_rad", "course_accuracy_rad"),
+        "gps_jamming_indicator": ("jamming_indicator",),
+        "gps_noise_per_ms": ("noise_per_ms",),
         "gps_dgps_channel_count": ("dgps_numch",),
         "gps_dgps_age_s": ("dgps_age",),
     }.items():
         _add_float_metadata(row, output_key, _field_float(message, *names))
+
+    for output_key, names in {
+        "gps_satellites_used": ("satellites_used", "satellite_count"),
+        "gps_vel_ned_valid": ("vel_ned_valid",),
+    }.items():
+        _add_scalar_metadata(row, output_key, _field_value(message, *names))
+
+    for output_key, names in {
+        "gps_velocity_m_s": ("vel_m_s", "velocity_m_s"),
+        "gps_velocity_n_m_s": ("vel_n_m_s", "velocity_n_m_s"),
+        "gps_velocity_e_m_s": ("vel_e_m_s", "velocity_e_m_s"),
+        "gps_velocity_d_m_s": ("vel_d_m_s", "velocity_d_m_s"),
+        "gps_heading_motion_rad": ("heading_motion", "heading_motion_rad"),
+    }.items():
+        _add_float_metadata(row, output_key, _field_float(message, *names))
+
+
+def _add_px4_status_metadata(row: dict[str, Any], message: Any) -> None:
+    if not _looks_like_px4_status_message(message):
+        return
+    for output_key, names in {
+        "px4_nav_state": ("nav_state",),
+        "px4_arming_state": ("arming_state",),
+        "px4_hil_state": ("hil_state",),
+        "px4_failsafe": ("failsafe",),
+        "px4_failsafe_and_user_took_over": ("failsafe_and_user_took_over",),
+        "px4_system_type": ("system_type",),
+        "px4_vehicle_type": ("vehicle_type",),
+        "px4_is_vtol": ("is_vtol",),
+        "px4_is_vtol_tailsitter": ("is_vtol_tailsitter",),
+        "px4_in_transition_mode": ("in_transition_mode",),
+        "px4_vehicle_landed": ("landed", "landed_state"),
+        "px4_altitude_lock": ("altitude_lock",),
+        "px4_ground_contact": ("ground_contact",),
+        "px4_maybe_landed": ("maybe_landed",),
+        "px4_freefall": ("freefall",),
+        "px4_latest_arming_reason": ("latest_arming_reason",),
+        "px4_latest_disarming_reason": ("latest_disarming_reason",),
+        "px4_battery_warning": ("warning", "battery_warning"),
+        "px4_battery_connected": ("connected", "battery_connected"),
+        "px4_battery_cell_count": ("cell_count",),
+        "px4_estimator_solution_status_flags": ("solution_status_flags",),
+        "px4_estimator_control_mode_flags": ("control_mode_flags",),
+        "px4_estimator_filter_fault_flags": ("filter_fault_flags",),
+        "px4_estimator_innovation_check_flags": ("innovation_check_flags",),
+        "px4_estimator_gps_check_fail_flags": ("gps_check_fail_flags",),
+    }.items():
+        _add_scalar_metadata(row, output_key, _field_value(message, *names))
+
+    for output_key, names in {
+        "battery_discharged_mah": ("discharged_mah",),
+        "battery_time_remaining_s": ("time_remaining_s",),
+        "battery_temperature_c": ("temperature", "temperature_c"),
+        "px4_estimator_attitude_test_ratio": ("attitude_test_ratio",),
+        "px4_estimator_velocity_test_ratio": ("vel_test_ratio", "velocity_test_ratio"),
+        "px4_estimator_position_test_ratio": ("pos_test_ratio", "position_test_ratio"),
+        "px4_estimator_height_test_ratio": ("hgt_test_ratio", "height_test_ratio"),
+        "px4_estimator_airspeed_test_ratio": ("tas_test_ratio", "airspeed_test_ratio"),
+        "px4_estimator_heading_test_ratio": ("heading_test_ratio",),
+        "px4_estimator_mag_test_ratio": ("mag_test_ratio",),
+        "px4_estimator_hagl_test_ratio": ("hagl_test_ratio",),
+        "px4_estimator_beta_test_ratio": ("beta_test_ratio",),
+    }.items():
+        _add_float_metadata(row, output_key, _field_float(message, *names))
+
+
+def _looks_like_px4_status_message(message: Any) -> bool:
+    return any(
+        _field_value(message, name) not in (None, "")
+        for name in (
+            "nav_state",
+            "arming_state",
+            "hil_state",
+            "vehicle_type",
+            "is_vtol",
+            "satellites_used",
+            "vel_n_m_s",
+            "vel_e_m_s",
+            "vel_d_m_s",
+            "vel_ned_valid",
+            "total_voltage_v",
+            "voltage_filtered_v",
+            "remaining",
+            "discharged_mah",
+            "cell_count",
+            "solution_status_flags",
+            "control_mode_flags",
+            "filter_fault_flags",
+            "innovation_check_flags",
+            "gps_check_fail_flags",
+        )
+    )
 
 
 def _add_mavros_home_position_metadata(row: dict[str, Any], message: Any) -> None:
