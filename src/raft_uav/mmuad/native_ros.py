@@ -19,8 +19,8 @@ tracking logs:
   inventory rows;
 * ``sensor_msgs/msg/TimeReference`` and ``rosgraph_msgs/msg/Clock`` -> timing
   reference inventory rows;
-* ``diagnostic_msgs/msg/DiagnosticArray`` / ``DiagnosticStatus`` -> diagnostic
-  inventory rows;
+* ``diagnostic_msgs/msg/DiagnosticArray`` / ``DiagnosticStatus`` and ROS log
+  messages -> diagnostic inventory rows;
 * common sensor status and MAVROS/PX4 telemetry messages -> timestamp/status
   inventory rows;
 * ``sensor_msgs/msg/LaserScan`` -> range-scan candidate detections;
@@ -167,10 +167,11 @@ def extract_native_rosbag_topic_map(
         Extract native ``sensor_msgs/msg/TimeReference`` and
         ``rosgraph_msgs/msg/Clock`` messages into CSV inventory artifacts.
         This is timing/reference metadata only.
-    ``diagnostic_timestamps`` / ``diagnostic_status_timestamps``
-        Extract native ``diagnostic_msgs/msg/DiagnosticArray`` and
-        ``DiagnosticStatus`` messages into CSV inventory artifacts. This is
-        sensor/system health metadata only.
+    ``diagnostic_timestamps`` / ``diagnostic_status_timestamps`` /
+    ``ros_log_timestamps``
+        Extract native ``diagnostic_msgs/msg/DiagnosticArray``,
+        ``DiagnosticStatus``, and ROS log messages into CSV inventory
+        artifacts. This is sensor/system health metadata only.
     ``sensor_status_timestamps`` / ``sensor_status_inventory``
         Extract common native ``sensor_msgs`` status topics such as
         ``MagneticField``, ``FluidPressure``, ``Temperature``,
@@ -1444,6 +1445,12 @@ def _is_diagnostic_timestamp_kind(kind: str) -> bool:
         "diagnostic_array_timestamps",
         "diagnostic_msgs",
         "diagnostic_msgs_timestamps",
+        "ros_log",
+        "ros_log_timestamp",
+        "ros_log_timestamps",
+        "rosout",
+        "rosout_timestamp",
+        "rosout_timestamps",
     }
 
 
@@ -2030,12 +2037,24 @@ def diagnostic_message_to_timestamp_rows(
     message_index: int,
     kind: str = "diagnostic_timestamps",
 ) -> list[dict[str, Any]]:
-    """Convert native ROS DiagnosticArray/DiagnosticStatus messages into rows."""
+    """Convert native ROS diagnostic or log messages into inventory rows."""
 
     parent_frame_id = _message_frame_id(message)
     parent_time_s = _message_stamp_time_s(message)
     if parent_time_s is None:
         parent_time_s = float(time_s)
+    if _looks_like_ros_log_message(message, kind):
+        return [
+            _ros_log_message_to_diagnostic_row(
+                message,
+                sequence_id=sequence_id,
+                time_s=float(parent_time_s),
+                topic=topic,
+                source=source,
+                message_index=message_index,
+                kind=kind,
+            )
+        ]
     statuses = _diagnostic_status_children(message)
     if not statuses:
         statuses = [message]
@@ -2079,6 +2098,54 @@ def diagnostic_message_to_timestamp_rows(
             row["diagnostic_values_json"] = json.dumps(key_values, separators=(",", ":"))
         rows.append(row)
     return rows
+
+
+def _looks_like_ros_log_message(message: Any, kind: str) -> bool:
+    normalized_kind = str(kind).strip().lower()
+    return "ros_log" in normalized_kind or "rosout" in normalized_kind
+
+
+def _ros_log_message_to_diagnostic_row(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    topic: str,
+    source: str,
+    message_index: int,
+    kind: str,
+) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "sequence_id": str(sequence_id),
+        "time_s": float(time_s),
+        "topic": str(topic),
+        "source": str(source),
+        "message_index": int(message_index),
+        "diagnostic_kind": str(kind).strip().lower(),
+    }
+    frame_id = _message_frame_id(message)
+    if frame_id not in (None, ""):
+        row["frame_id"] = str(frame_id)
+    logger_name = _field_value(message, "name", "logger_name")
+    if logger_name not in (None, ""):
+        row["diagnostic_name"] = str(logger_name)
+    level = _field_float(message, "level", "severity")
+    if level is not None and math.isfinite(level):
+        level_int = int(level)
+        row["diagnostic_level"] = level_int
+        row["diagnostic_level_name"] = _ros_log_level_name(level_int)
+    message_text = _field_value(message, "msg", "message", "text")
+    if message_text not in (None, ""):
+        row["diagnostic_message"] = str(message_text)
+    for output_key, names in {
+        "ros_log_file": ("file", "filename"),
+        "ros_log_function": ("function", "function_name"),
+        "ros_log_line": ("line", "line_number"),
+    }.items():
+        value = _field_value(message, *names)
+        if value not in (None, ""):
+            row[output_key] = value
+    return row
 
 
 def sensor_status_message_to_timestamp_rows(
@@ -3923,6 +3990,21 @@ def _diagnostic_key_value_pairs(status: Any) -> list[dict[str, str]]:
 
 def _diagnostic_level_name(level: int) -> str:
     return {0: "ok", 1: "warn", 2: "error", 3: "stale"}.get(int(level), "unknown")
+
+
+def _ros_log_level_name(level: int) -> str:
+    return {
+        1: "debug",
+        2: "info",
+        4: "warn",
+        8: "error",
+        10: "debug",
+        16: "fatal",
+        20: "info",
+        30: "warn",
+        40: "error",
+        50: "fatal",
+    }.get(int(level), "unknown")
 
 
 def _is_scalar_like(value: Any) -> bool:

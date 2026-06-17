@@ -764,16 +764,23 @@ def _looks_like_diagnostic_timestamp_topic(name: str, msg_type: str) -> bool:
     return (
         "diagnosticarray" in compact_type
         or "diagnosticstatus" in compact_type
+        or "rclinterfaces/msg/log" in compact_type
+        or "rosgraphmsgs/msg/log" in compact_type
         or compact_type.endswith("/diagnosticarray")
         or compact_type.endswith("/diagnosticstatus")
         or compact_type.endswith("msg/diagnosticarray")
         or compact_type.endswith("msg/diagnosticstatus")
-        or bool(name_tokens & {"diagnostics", "diagnostic"})
+        or compact_type.endswith("msg/log")
+        or bool(name_tokens & {"diagnostics", "diagnostic", "rosout"})
     )
 
 
 def _diagnostic_timestamp_kind(msg_type: str) -> str:
     compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    if "rclinterfaces/msg/log" in compact_type or "rosgraphmsgs/msg/log" in compact_type:
+        return "ros_log_timestamps"
+    if compact_type.endswith("msg/log"):
+        return "ros_log_timestamps"
     if "diagnosticstatus" in compact_type:
         return "diagnostic_status_timestamps"
     if "diagnosticarray" in compact_type:

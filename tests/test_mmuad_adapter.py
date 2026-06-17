@@ -8574,6 +8574,103 @@ def test_native_ros_extraction_supports_diagnostic_timestamp_topics(
     )
 
 
+def test_native_ros_extraction_supports_rosout_log_topics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_rosout.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map_native.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_rosout",
+                "exports": [
+                    {
+                        "topic": "/rosout",
+                        "kind": "ros_log_timestamps",
+                        "source": "rosout",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    log_connection = SimpleNamespace(
+        topic="/rosout",
+        msgtype="rcl_interfaces/msg/Log",
+    )
+    log_message = SimpleNamespace(
+        stamp=SimpleNamespace(sec=14, nanosec=250_000_000),
+        name="uav_node",
+        level=40,
+        msg="state estimator reset",
+        file="estimator.cpp",
+        function="reset",
+        line=123,
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [log_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [log_connection]
+            return [(log_connection, 14_000_000_000, b"rosout")]
+
+        def deserialize(self, rawdata, msgtype):
+            assert rawdata == b"rosout"
+            assert msgtype == "rcl_interfaces/msg/Log"
+            return log_message
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is None
+    assert extracted.truth is None
+    assert extracted.diagnostic_timestamps is not None
+    rows = extracted.diagnostic_timestamps.reset_index(drop=True)
+    assert rows["sequence_id"].tolist() == ["seq_rosout"]
+    assert rows["time_s"].tolist() == [14.25]
+    assert rows.loc[0, "source"] == "rosout"
+    assert rows.loc[0, "diagnostic_kind"] == "ros_log_timestamps"
+    assert rows.loc[0, "diagnostic_level_name"] == "error"
+    assert rows.loc[0, "diagnostic_message"] == "state estimator reset"
+    assert rows.loc[0, "ros_log_file"] == "estimator.cpp"
+    assert extracted.manifest["diagnostic_timestamp_rows"] == 1
+    assert extracted.manifest["candidate_rows"] == 0
+    assert extracted.manifest["truth_rows"] == 0
+
+    saved_rows = pd.read_csv(output / "native_ros_diagnostic_timestamps.csv")
+    saved_manifest = json.loads(
+        (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
+    )
+    assert saved_rows["time_s"].tolist() == [14.25]
+    assert saved_manifest["diagnostic_timestamp_rows"] == 1
+    assert saved_manifest["diagnostic_timestamps_csv"] == str(
+        output / "native_ros_diagnostic_timestamps.csv"
+    )
+
+
 def test_native_ros_extraction_supports_sensor_status_timestamp_topics(
     tmp_path: Path,
     monkeypatch,
@@ -12216,6 +12313,10 @@ def test_ros2_topic_map_template_infers_diagnostic_timestamp_topics(
                 "        name: /radar/diagnostic_status",
                 "        type: diagnostic_msgs/msg/DiagnosticStatus",
                 "      message_count: 3",
+                "    - topic_metadata:",
+                "        name: /rosout",
+                "        type: rcl_interfaces/msg/Log",
+                "      message_count: 7",
             ]
         ),
         encoding="utf-8",
@@ -12232,9 +12333,11 @@ def test_ros2_topic_map_template_infers_diagnostic_timestamp_topics(
     assert [entry["kind"] for entry in payload["exports"]] == [
         "diagnostic_timestamps",
         "diagnostic_status_timestamps",
+        "ros_log_timestamps",
     ]
     assert payload["exports"][0]["source"] == "diagnostics"
     assert payload["exports"][1]["source"] == "radar_diagnostic_status"
+    assert payload["exports"][2]["source"] == "rosout"
     assert all("path" not in entry for entry in payload["exports"])
 
 
@@ -13062,6 +13165,36 @@ def test_native_ros_diagnostic_message_to_timestamp_rows_expands_status_values()
     assert json.loads(single_status_rows[0]["diagnostic_values_json"]) == [
         {"key": "age_s", "value": "2.5"}
     ]
+
+
+def test_native_ros_diagnostic_message_to_timestamp_rows_extracts_ros_logs() -> None:
+    rows = diagnostic_message_to_timestamp_rows(
+        SimpleNamespace(
+            stamp=SimpleNamespace(sec=5, nanosec=250_000_000),
+            name="uav_node",
+            level=30,
+            msg="sensor timeout",
+            file="tracker.cpp",
+            function="spin_once",
+            line=42,
+        ),
+        sequence_id="seq_logs",
+        time_s=4.0,
+        topic="/rosout",
+        source="rosout",
+        message_index=0,
+        kind="ros_log_timestamps",
+    )
+
+    assert rows[0]["time_s"] == pytest.approx(5.25)
+    assert rows[0]["diagnostic_kind"] == "ros_log_timestamps"
+    assert rows[0]["diagnostic_name"] == "uav_node"
+    assert rows[0]["diagnostic_level"] == 30
+    assert rows[0]["diagnostic_level_name"] == "warn"
+    assert rows[0]["diagnostic_message"] == "sensor timeout"
+    assert rows[0]["ros_log_file"] == "tracker.cpp"
+    assert rows[0]["ros_log_function"] == "spin_once"
+    assert rows[0]["ros_log_line"] == 42
 
 
 def test_native_ros_tracked_objects_message_to_rows_extracts_kinematics() -> None:
