@@ -15,6 +15,8 @@ tracking logs:
 * ``sensor_msgs/msg/Imu`` -> timestamp/kinematics inventory rows;
 * ``geometry_msgs/msg/Twist`` / ``Accel`` -> velocity/acceleration inventory
   rows;
+* ``sensor_msgs/msg/JointState`` and ``geometry_msgs/msg/Wrench`` -> actuation
+  inventory rows;
 * common sensor status messages -> timestamp/status inventory rows;
 * ``sensor_msgs/msg/LaserScan`` -> range-scan candidate detections;
 * ``sensor_msgs/msg/Range`` -> single range-bearing candidate detections;
@@ -82,6 +84,7 @@ class NativeRosExtraction:
     audio_timestamps: pd.DataFrame | None = None
     imu_timestamps: pd.DataFrame | None = None
     kinematic_timestamps: pd.DataFrame | None = None
+    actuation_timestamps: pd.DataFrame | None = None
     sensor_status_timestamps: pd.DataFrame | None = None
 
 
@@ -149,6 +152,10 @@ def extract_native_rosbag_topic_map(
         Extract native ``geometry_msgs/msg/Twist``/``TwistStamped`` and
         ``geometry_msgs/msg/Accel``/``AccelStamped`` vectors into CSV
         inventory artifacts. This is velocity/acceleration metadata only.
+    ``actuation_timestamps`` / ``joint_state_timestamps`` / ``wrench_timestamps``
+        Extract native ``sensor_msgs/msg/JointState`` and
+        ``geometry_msgs/msg/Wrench``/``WrenchStamped`` telemetry into CSV
+        inventory artifacts. This is actuator/control metadata only.
     ``sensor_status_timestamps`` / ``sensor_status_inventory``
         Extract common native ``sensor_msgs`` status topics such as
         ``MagneticField``, ``FluidPressure``, ``Temperature``,
@@ -210,6 +217,7 @@ def extract_native_rosbag_topic_map(
     audio_timestamp_rows: list[dict[str, Any]] = []
     imu_timestamp_rows: list[dict[str, Any]] = []
     kinematic_timestamp_rows: list[dict[str, Any]] = []
+    actuation_timestamp_rows: list[dict[str, Any]] = []
     sensor_status_timestamp_rows: list[dict[str, Any]] = []
     extracted: list[dict[str, Any]] = []
     sequence_id = str(payload.get("sequence_id", Path(bag_path).stem))
@@ -892,6 +900,18 @@ def extract_native_rosbag_topic_map(
                     )
                     kinematic_timestamp_rows.extend(rows_for_message)
                     rows = len(rows_for_message)
+                elif _is_actuation_timestamp_kind(kind):
+                    rows_for_message = actuation_message_to_timestamp_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        topic=str(connection.topic),
+                        source=source,
+                        message_index=replay_message_counts[str(connection.topic)] - 1,
+                        kind=kind,
+                    )
+                    actuation_timestamp_rows.extend(rows_for_message)
+                    rows = len(rows_for_message)
                 elif _is_sensor_status_timestamp_kind(kind):
                     rows_for_message = sensor_status_message_to_timestamp_rows(
                         message,
@@ -1104,6 +1124,11 @@ def extract_native_rosbag_topic_map(
         if kinematic_timestamp_rows
         else None
     )
+    actuation_timestamps = (
+        pd.DataFrame.from_records(actuation_timestamp_rows)
+        if actuation_timestamp_rows
+        else None
+    )
     sensor_status_timestamps = (
         pd.DataFrame.from_records(sensor_status_timestamp_rows)
         if sensor_status_timestamp_rows
@@ -1131,6 +1156,9 @@ def extract_native_rosbag_topic_map(
         "imu_timestamp_rows": int(len(imu_timestamps)) if imu_timestamps is not None else 0,
         "kinematic_timestamp_rows": (
             int(len(kinematic_timestamps)) if kinematic_timestamps is not None else 0
+        ),
+        "actuation_timestamp_rows": (
+            int(len(actuation_timestamps)) if actuation_timestamps is not None else 0
         ),
         "sensor_status_timestamp_rows": (
             int(len(sensor_status_timestamps))
@@ -1173,6 +1201,14 @@ def extract_native_rosbag_topic_map(
             manifest["kinematic_timestamps_csv"] = str(
                 output / "native_ros_kinematic_timestamps.csv"
             )
+        if actuation_timestamps is not None:
+            actuation_timestamps.to_csv(
+                output / "native_ros_actuation_timestamps.csv",
+                index=False,
+            )
+            manifest["actuation_timestamps_csv"] = str(
+                output / "native_ros_actuation_timestamps.csv"
+            )
         if sensor_status_timestamps is not None:
             sensor_status_timestamps.to_csv(
                 output / "native_ros_sensor_status_timestamps.csv",
@@ -1193,6 +1229,7 @@ def extract_native_rosbag_topic_map(
         audio_timestamps=audio_timestamps,
         imu_timestamps=imu_timestamps,
         kinematic_timestamps=kinematic_timestamps,
+        actuation_timestamps=actuation_timestamps,
         sensor_status_timestamps=sensor_status_timestamps,
     )
 
@@ -1267,6 +1304,32 @@ def _is_kinematic_timestamp_kind(kind: str) -> bool:
         "acceleration_timestamp",
         "acceleration_timestamps",
         "acceleration_timestamp_inventory",
+    }
+
+
+def _is_actuation_timestamp_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "actuation_timestamp",
+        "actuation_timestamps",
+        "actuation_timestamp_inventory",
+        "actuator_timestamp",
+        "actuator_timestamps",
+        "actuator_timestamp_inventory",
+        "control_timestamp",
+        "control_timestamps",
+        "control_timestamp_inventory",
+        "joint_state_timestamp",
+        "joint_state_timestamps",
+        "joint_state_timestamp_inventory",
+        "joint_state_inventory",
+        "wrench_timestamp",
+        "wrench_timestamps",
+        "wrench_timestamp_inventory",
+        "wrench_inventory",
+        "force_torque_timestamp",
+        "force_torque_timestamps",
+        "force_torque_timestamp_inventory",
     }
 
 
@@ -1728,6 +1791,69 @@ def kinematic_message_to_timestamp_rows(
     return [row]
 
 
+def actuation_message_to_timestamp_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    topic: str,
+    source: str,
+    message_index: int,
+    kind: str = "actuation_timestamps",
+) -> list[dict[str, Any]]:
+    """Convert native ROS JointState/Wrench messages into actuation metadata."""
+
+    row: dict[str, Any] = {
+        "sequence_id": str(sequence_id),
+        "time_s": float(time_s),
+        "topic": str(topic),
+        "source": str(source),
+        "message_index": int(message_index),
+        "actuation_kind": str(kind).strip().lower(),
+    }
+    frame_id = _message_frame_id(message)
+    if frame_id not in (None, ""):
+        row["frame_id"] = str(frame_id)
+    child_frame_id = _message_child_frame_id(message)
+    if child_frame_id not in (None, ""):
+        row["child_frame_id"] = str(child_frame_id)
+
+    joint_names = _string_sequence(
+        _field_value(message, "name", "names", "joint_names", "joint_name")
+    )
+    if joint_names:
+        row["joint_count"] = int(len(joint_names))
+        row["joint_names_json"] = json.dumps(joint_names, separators=(",", ":"))
+    for prefix, names in {
+        "joint_position": ("position", "positions"),
+        "joint_velocity": ("velocity", "velocities"),
+        "joint_effort": ("effort", "efforts"),
+    }.items():
+        values = _numeric_sequence(_field_value(message, *names))
+        if not values:
+            continue
+        row[f"{prefix}_json"] = _json_float_array(values)
+        _add_numeric_sequence_summary(row, prefix, values)
+
+    wrench_source = _wrench_source(message)
+    if wrench_source is not None:
+        _add_vector_components(
+            row,
+            "force",
+            _field_value(wrench_source, "force"),
+            components=("x", "y", "z"),
+            suffix="_n",
+        )
+        _add_vector_components(
+            row,
+            "torque",
+            _field_value(wrench_source, "torque"),
+            components=("x", "y", "z"),
+            suffix="_n_m",
+        )
+    return [row]
+
+
 def sensor_status_message_to_timestamp_rows(
     message: Any,
     *,
@@ -2025,6 +2151,36 @@ def _add_numeric_sequence_summary(row: dict[str, Any], prefix: str, value: Any) 
     row[f"{prefix}_min"] = min(values)
     row[f"{prefix}_max"] = max(values)
     row[f"{prefix}_mean"] = sum(values) / len(values)
+
+
+def _numeric_sequence(value: Any) -> list[float]:
+    if value is None or isinstance(value, (str, bytes, bytearray, dict)):
+        return []
+    try:
+        values = [float(item) for item in value]
+    except (TypeError, ValueError):
+        return []
+    return [item for item in values if math.isfinite(item)]
+
+
+def _string_sequence(value: Any) -> list[str]:
+    if value is None or isinstance(value, (str, bytes, bytearray, dict)):
+        return []
+    try:
+        values = [str(item) for item in value]
+    except TypeError:
+        return []
+    return [item for item in values if item]
+
+
+def _wrench_source(message: Any) -> Any | None:
+    candidates = (_field_value(message, "wrench"), message)
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        if _field_value(candidate, "force") is not None or _field_value(candidate, "torque") is not None:
+            return candidate
+    return None
 
 
 def _add_covariance_diagonal(row: dict[str, Any], field_name: str, message: Any) -> None:
