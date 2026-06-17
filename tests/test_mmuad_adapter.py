@@ -68,6 +68,7 @@ from raft_uav.mmuad.native_ros import (
     radar_cartesian_message_to_rows,
     radar_polar_message_to_rows,
     range_message_to_rows,
+    sensor_status_message_to_timestamp_rows,
     tracked_objects_message_to_rows,
 )
 from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates, pointcloud2_to_dataframe
@@ -7776,6 +7777,62 @@ def test_native_ros_kinematic_message_to_timestamp_rows_extracts_twist_and_accel
     assert accel_rows[0]["angular_acceleration_covariance_yy"] == pytest.approx(0.05)
 
 
+def test_native_ros_sensor_status_message_to_timestamp_rows_extracts_common_fields() -> None:
+    magnetic_covariance = [0.0] * 9
+    magnetic_covariance[8] = 0.03
+    magnetic_message = SimpleNamespace(
+        header=SimpleNamespace(frame_id="mag_link"),
+        magnetic_field=SimpleNamespace(x=0.1, y=0.2, z=0.3),
+        magnetic_field_covariance=magnetic_covariance,
+    )
+    battery_message = SimpleNamespace(
+        header=SimpleNamespace(frame_id="battery"),
+        voltage=15.2,
+        current=-1.1,
+        charge=2.5,
+        capacity=5.0,
+        percentage=0.8,
+        power_supply_status=2,
+        present=True,
+        cell_voltage=[3.8, 3.7, 3.9, 3.8],
+        cell_temperature=[32.0, 33.0],
+        location="bay",
+        serial_number="BAT-001",
+    )
+
+    magnetic_rows = sensor_status_message_to_timestamp_rows(
+        magnetic_message,
+        sequence_id="seq_sensor",
+        time_s=1.0,
+        topic="/imu/mag",
+        source="mag",
+        message_index=0,
+        kind="magnetic_field_timestamps",
+    )
+    battery_rows = sensor_status_message_to_timestamp_rows(
+        battery_message,
+        sequence_id="seq_sensor",
+        time_s=2.0,
+        topic="/power/battery",
+        source="battery",
+        message_index=1,
+        kind="battery_state_timestamps",
+    )
+
+    assert magnetic_rows[0]["frame_id"] == "mag_link"
+    assert magnetic_rows[0]["magnetic_field_y_t"] == pytest.approx(0.2)
+    assert magnetic_rows[0]["magnetic_field_covariance_zz"] == pytest.approx(0.03)
+    assert battery_rows[0]["frame_id"] == "battery"
+    assert battery_rows[0]["voltage_v"] == pytest.approx(15.2)
+    assert battery_rows[0]["current_a"] == pytest.approx(-1.1)
+    assert battery_rows[0]["power_supply_status"] == 2
+    assert battery_rows[0]["battery_present"] is True
+    assert battery_rows[0]["cell_voltage_v_count"] == 4
+    assert battery_rows[0]["cell_voltage_v_mean"] == pytest.approx(3.8)
+    assert battery_rows[0]["cell_temperature_c_max"] == pytest.approx(33.0)
+    assert battery_rows[0]["battery_serial_number"] == "BAT-001"
+
+
 def test_native_ros_extraction_supports_kinematic_timestamp_topics(
     tmp_path: Path,
     monkeypatch,
@@ -7912,6 +7969,130 @@ def test_native_ros_extraction_supports_kinematic_timestamp_topics(
         output / "native_ros_kinematic_timestamps.csv"
     )
     assert not (output / "native_ros_kinematic_timestamp_template.csv").exists()
+
+
+def test_native_ros_extraction_supports_sensor_status_timestamp_topics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_sensor_status.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map_native.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_sensor_status",
+                "exports": [
+                    {
+                        "topic": "/environment/pressure",
+                        "kind": "fluid_pressure_timestamps",
+                        "source": "barometer",
+                    },
+                    {
+                        "topic": "/power/battery",
+                        "kind": "battery_state_timestamps",
+                        "source": "battery",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    pressure_connection = SimpleNamespace(
+        topic="/environment/pressure",
+        msgtype="sensor_msgs/msg/FluidPressure",
+    )
+    battery_connection = SimpleNamespace(
+        topic="/power/battery",
+        msgtype="sensor_msgs/msg/BatteryState",
+    )
+    pressure_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=7, nanosec=250_000_000),
+            frame_id="baro",
+        ),
+        fluid_pressure=101325.0,
+        variance=4.0,
+    )
+    battery_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=8, nanosec=500_000_000),
+            frame_id="battery",
+        ),
+        voltage=15.2,
+        current=-1.1,
+        percentage=0.8,
+        power_supply_health=1,
+        cell_voltage=[3.8, 3.7, 3.9, 3.8],
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [pressure_connection, battery_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [pressure_connection, battery_connection]
+            return [
+                (pressure_connection, 7_000_000_000, b"pressure"),
+                (battery_connection, 8_000_000_000, b"battery"),
+            ]
+
+        def deserialize(self, rawdata, msgtype):
+            if rawdata == b"pressure":
+                assert msgtype == "sensor_msgs/msg/FluidPressure"
+                return pressure_message
+            if rawdata == b"battery":
+                assert msgtype == "sensor_msgs/msg/BatteryState"
+                return battery_message
+            raise AssertionError(rawdata)
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is None
+    assert extracted.truth is None
+    assert extracted.sensor_status_timestamps is not None
+    rows = extracted.sensor_status_timestamps.sort_values("time_s").reset_index(drop=True)
+    assert rows["sequence_id"].tolist() == ["seq_sensor_status", "seq_sensor_status"]
+    assert rows["time_s"].tolist() == [7.25, 8.5]
+    assert rows["source"].tolist() == ["barometer", "battery"]
+    assert rows.loc[0, "fluid_pressure_pa"] == pytest.approx(101325.0)
+    assert rows.loc[0, "fluid_pressure_variance"] == pytest.approx(4.0)
+    assert rows.loc[1, "voltage_v"] == pytest.approx(15.2)
+    assert rows.loc[1, "cell_voltage_v_count"] == 4
+    assert rows.loc[1, "cell_voltage_v_min"] == pytest.approx(3.7)
+    assert extracted.manifest["sensor_status_timestamp_rows"] == 2
+    assert extracted.manifest["candidate_rows"] == 0
+    assert extracted.manifest["truth_rows"] == 0
+
+    saved_rows = pd.read_csv(output / "native_ros_sensor_status_timestamps.csv")
+    saved_manifest = json.loads(
+        (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
+    )
+    assert saved_rows["time_s"].tolist() == [7.25, 8.5]
+    assert saved_manifest["sensor_status_timestamp_rows"] == 2
+    assert saved_manifest["sensor_status_timestamps_csv"] == str(
+        output / "native_ros_sensor_status_timestamps.csv"
+    )
 
 
 def test_native_ros_extraction_supports_bounding_box3d_topics(
@@ -11127,6 +11308,52 @@ def test_ros2_topic_map_template_infers_kinematic_timestamp_topics(tmp_path: Pat
     ]
     assert payload["exports"][0]["source"] == "filter_twist"
     assert payload["exports"][1]["source"] == "filter_accel"
+    assert all("path" not in entry for entry in payload["exports"])
+
+
+def test_ros2_topic_map_template_infers_sensor_status_timestamp_topics(
+    tmp_path: Path,
+) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /environment/pressure",
+                "        type: sensor_msgs/msg/FluidPressure",
+                "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /power/battery",
+                "        type: sensor_msgs/msg/BatteryState",
+                "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /imu/mag",
+                "        type: sensor_msgs/msg/MagneticField",
+                "      message_count: 5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(
+        report,
+        tmp_path / "topic_map_template.json",
+        template_mode="native",
+    )
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "sensor_status_timestamps",
+        "sensor_status_timestamps",
+        "sensor_status_timestamps",
+    ]
+    assert payload["exports"][0]["source"] == "environment_pressure"
+    assert payload["exports"][1]["source"] == "power_battery"
+    assert payload["exports"][2]["source"] == "imu_mag"
     assert all("path" not in entry for entry in payload["exports"])
 
 

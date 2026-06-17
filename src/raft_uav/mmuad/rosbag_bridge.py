@@ -361,6 +361,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "camera_detections_candidate"
     if _looks_like_audio_timestamp_topic(name, msg_type):
         return "audio_timestamps"
+    if _looks_like_sensor_status_timestamp_topic(name, msg_type):
+        return "sensor_status_timestamps"
     if _looks_like_imu_timestamp_topic(name, msg_type):
         return "imu_timestamps"
     if _looks_like_kinematic_timestamp_topic(name, msg_type):
@@ -685,6 +687,38 @@ def _kinematic_timestamp_kind(msg_type: str) -> str:
     if "twist" in compact_type:
         return "twist_timestamps"
     return "kinematic_timestamps"
+
+
+def _looks_like_sensor_status_timestamp_topic(name: str, msg_type: str) -> bool:
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    name_tokens = set(re.split(r"[^a-z0-9]+", name.lower()))
+    name_tokens.discard("")
+    return (
+        any(
+            token in compact_type
+            for token in (
+                "magneticfield",
+                "fluidpressure",
+                "temperature",
+                "relativehumidity",
+                "illuminance",
+                "batterystate",
+            )
+        )
+        or bool(
+            name_tokens
+            & {
+                "magnetometer",
+                "magnetic",
+                "pressure",
+                "barometer",
+                "temperature",
+                "humidity",
+                "illuminance",
+                "battery",
+            }
+        )
+    )
 
 
 def _is_camera_detection_kind(kind: str) -> bool:
