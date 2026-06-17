@@ -11464,6 +11464,7 @@ def test_native_ros_geodetic_message_to_rows_projects_navsatfix() -> None:
         latitude=35.0,
         longitude=-78.0,
         altitude=112.0,
+        status=SimpleNamespace(status=0, service=1),
         position_covariance=[
             4.0,
             0.0,
@@ -11499,6 +11500,8 @@ def test_native_ros_geodetic_message_to_rows_projects_navsatfix() -> None:
     assert rows[0]["altitude_m"] == 112.0
     assert rows[0]["std_xy_m"] == 3.0
     assert rows[0]["std_z_m"] == 4.0
+    assert rows[0]["navsat_status"] == "0"
+    assert rows[0]["navsat_service"] == "1"
     assert rows[0]["navsat_covariance_type"] == "2"
 
 
