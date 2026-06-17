@@ -14,6 +14,7 @@ tracking logs:
 * ``sensor_msgs/msg/Imu`` -> timestamp/kinematics inventory rows;
 * ``geometry_msgs/msg/Twist`` / ``Accel`` -> velocity/acceleration inventory
   rows;
+* common sensor status messages -> timestamp/status inventory rows;
 * ``sensor_msgs/msg/LaserScan`` -> range-scan candidate detections;
 * ``sensor_msgs/msg/Range`` -> single range-bearing candidate detections;
 * common Cartesian radar messages -> XYZ radar candidates;
@@ -78,6 +79,7 @@ class NativeRosExtraction:
     audio_timestamps: pd.DataFrame | None = None
     imu_timestamps: pd.DataFrame | None = None
     kinematic_timestamps: pd.DataFrame | None = None
+    sensor_status_timestamps: pd.DataFrame | None = None
 
 
 def extract_native_rosbag_topic_map(
@@ -139,6 +141,11 @@ def extract_native_rosbag_topic_map(
         Extract native ``geometry_msgs/msg/Twist``/``TwistStamped`` and
         ``geometry_msgs/msg/Accel``/``AccelStamped`` vectors into CSV
         inventory artifacts. This is velocity/acceleration metadata only.
+    ``sensor_status_timestamps`` / ``sensor_status_inventory``
+        Extract common native ``sensor_msgs`` status topics such as
+        ``MagneticField``, ``FluidPressure``, ``Temperature``,
+        ``RelativeHumidity``, ``Illuminance``, and ``BatteryState`` into CSV
+        inventory artifacts. This is raw sensor/status metadata only.
     ``navsatfix_truth`` / ``geopoint_truth`` / ``geopose_truth`` /
     ``navsatfix_candidate`` / ``geopoint_candidate`` / ``geopose_candidate``
         Project geodetic GPS/geographic positions into local ENU rows. These
@@ -195,6 +202,7 @@ def extract_native_rosbag_topic_map(
     audio_timestamp_rows: list[dict[str, Any]] = []
     imu_timestamp_rows: list[dict[str, Any]] = []
     kinematic_timestamp_rows: list[dict[str, Any]] = []
+    sensor_status_timestamp_rows: list[dict[str, Any]] = []
     extracted: list[dict[str, Any]] = []
     sequence_id = str(payload.get("sequence_id", Path(bag_path).stem))
     output = Path(output_dir) if output_dir is not None else None
@@ -859,6 +867,18 @@ def extract_native_rosbag_topic_map(
                     )
                     kinematic_timestamp_rows.extend(rows_for_message)
                     rows = len(rows_for_message)
+                elif _is_sensor_status_timestamp_kind(kind):
+                    rows_for_message = sensor_status_message_to_timestamp_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        topic=str(connection.topic),
+                        source=source,
+                        message_index=replay_message_counts[str(connection.topic)] - 1,
+                        kind=kind,
+                    )
+                    sensor_status_timestamp_rows.extend(rows_for_message)
+                    rows = len(rows_for_message)
                 elif kind in {"marker_truth", "marker_array_truth"}:
                     rows_for_message = marker_message_to_rows(
                         message,
@@ -1058,6 +1078,11 @@ def extract_native_rosbag_topic_map(
         if kinematic_timestamp_rows
         else None
     )
+    sensor_status_timestamps = (
+        pd.DataFrame.from_records(sensor_status_timestamp_rows)
+        if sensor_status_timestamp_rows
+        else None
+    )
     manifest = {
         "schema": "raft-uav-mmuad-native-ros-extraction-v1",
         "bag_path": str(bag_path),
@@ -1069,6 +1094,11 @@ def extract_native_rosbag_topic_map(
         "imu_timestamp_rows": int(len(imu_timestamps)) if imu_timestamps is not None else 0,
         "kinematic_timestamp_rows": (
             int(len(kinematic_timestamps)) if kinematic_timestamps is not None else 0
+        ),
+        "sensor_status_timestamp_rows": (
+            int(len(sensor_status_timestamps))
+            if sensor_status_timestamps is not None
+            else 0
         ),
         "extracted_messages": extracted,
     }
@@ -1101,6 +1131,14 @@ def extract_native_rosbag_topic_map(
             manifest["kinematic_timestamps_csv"] = str(
                 output / "native_ros_kinematic_timestamps.csv"
             )
+        if sensor_status_timestamps is not None:
+            sensor_status_timestamps.to_csv(
+                output / "native_ros_sensor_status_timestamps.csv",
+                index=False,
+            )
+            manifest["sensor_status_timestamps_csv"] = str(
+                output / "native_ros_sensor_status_timestamps.csv"
+            )
         (output / "native_ros_extraction_manifest.json").write_text(
             json.dumps(manifest, indent=2), encoding="utf-8"
         )
@@ -1112,6 +1150,7 @@ def extract_native_rosbag_topic_map(
         audio_timestamps=audio_timestamps,
         imu_timestamps=imu_timestamps,
         kinematic_timestamps=kinematic_timestamps,
+        sensor_status_timestamps=sensor_status_timestamps,
     )
 
 
@@ -1185,6 +1224,36 @@ def _is_kinematic_timestamp_kind(kind: str) -> bool:
         "acceleration_timestamp",
         "acceleration_timestamps",
         "acceleration_timestamp_inventory",
+    }
+
+
+def _is_sensor_status_timestamp_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "sensor_status_timestamp",
+        "sensor_status_timestamps",
+        "sensor_status_inventory",
+        "sensor_status",
+        "magnetic_field_timestamp",
+        "magnetic_field_timestamps",
+        "magneticfield_timestamp",
+        "magneticfield_timestamps",
+        "fluid_pressure_timestamp",
+        "fluid_pressure_timestamps",
+        "pressure_timestamp",
+        "pressure_timestamps",
+        "temperature_timestamp",
+        "temperature_timestamps",
+        "relative_humidity_timestamp",
+        "relative_humidity_timestamps",
+        "humidity_timestamp",
+        "humidity_timestamps",
+        "illuminance_timestamp",
+        "illuminance_timestamps",
+        "battery_state_timestamp",
+        "battery_state_timestamps",
+        "batterystate_timestamp",
+        "batterystate_timestamps",
     }
 
 
@@ -1395,6 +1464,90 @@ def kinematic_message_to_timestamp_rows(
     return [row]
 
 
+def sensor_status_message_to_timestamp_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    topic: str,
+    source: str,
+    message_index: int,
+    kind: str = "sensor_status_timestamps",
+) -> list[dict[str, Any]]:
+    """Convert native ROS sensor status messages into timestamp inventory rows."""
+
+    row: dict[str, Any] = {
+        "sequence_id": str(sequence_id),
+        "time_s": float(time_s),
+        "topic": str(topic),
+        "source": str(source),
+        "message_index": int(message_index),
+        "sensor_status_kind": str(kind).strip().lower(),
+    }
+    frame_id = _message_frame_id(message)
+    if frame_id not in (None, ""):
+        row["frame_id"] = str(frame_id)
+
+    _add_vector_components(
+        row,
+        "magnetic_field",
+        _field_value(message, "magnetic_field", "magnetic"),
+        components=("x", "y", "z"),
+        suffix="_t",
+    )
+    _add_covariance_diagonal(row, "magnetic_field_covariance", message)
+
+    for output_key, names in {
+        "fluid_pressure_pa": ("fluid_pressure", "pressure", "pressure_pa"),
+        "fluid_pressure_variance": ("fluid_pressure_variance", "pressure_variance"),
+        "temperature_c": ("temperature", "temperature_c"),
+        "temperature_variance": ("temperature_variance",),
+        "relative_humidity": ("relative_humidity", "humidity"),
+        "relative_humidity_variance": ("relative_humidity_variance", "humidity_variance"),
+        "illuminance_lux": ("illuminance", "illuminance_lux"),
+        "illuminance_variance": ("illuminance_variance",),
+        "voltage_v": ("voltage",),
+        "current_a": ("current",),
+        "charge_ah": ("charge",),
+        "capacity_ah": ("capacity",),
+        "design_capacity_ah": ("design_capacity",),
+        "percentage": ("percentage",),
+    }.items():
+        _add_float_metadata(row, output_key, _field_float(message, *names))
+
+    variance = _field_float(message, "variance")
+    if variance is not None and math.isfinite(variance):
+        for key in (
+            "fluid_pressure_pa",
+            "temperature_c",
+            "relative_humidity",
+            "illuminance_lux",
+        ):
+            if key in row:
+                row[f"{key.rsplit('_', 1)[0]}_variance"] = variance
+                break
+
+    for output_key, names in {
+        "power_supply_status": ("power_supply_status",),
+        "power_supply_health": ("power_supply_health",),
+        "power_supply_technology": ("power_supply_technology",),
+        "battery_present": ("present",),
+        "battery_location": ("location",),
+        "battery_serial_number": ("serial_number",),
+    }.items():
+        value = _field_value(message, *names)
+        if value not in (None, ""):
+            row[output_key] = value
+
+    _add_numeric_sequence_summary(row, "cell_voltage_v", _field_value(message, "cell_voltage"))
+    _add_numeric_sequence_summary(
+        row,
+        "cell_temperature_c",
+        _field_value(message, "cell_temperature"),
+    )
+    return [row]
+
+
 def _kinematic_vector_source(message: Any, kind: str) -> Any:
     if kind == "twist":
         source = _field_value(message, "twist")
@@ -1587,6 +1740,27 @@ def _add_vector_components(
         parsed = _field_float(value, component)
         if parsed is not None and math.isfinite(parsed):
             row[f"{prefix}_{component}{suffix}"] = parsed
+
+
+def _add_float_metadata(row: dict[str, Any], key: str, value: float | None) -> None:
+    if value is not None and math.isfinite(value):
+        row[key] = value
+
+
+def _add_numeric_sequence_summary(row: dict[str, Any], prefix: str, value: Any) -> None:
+    if value is None or isinstance(value, (str, bytes, bytearray, dict)):
+        return
+    try:
+        values = [float(item) for item in value]
+    except (TypeError, ValueError):
+        return
+    values = [item for item in values if math.isfinite(item)]
+    if not values:
+        return
+    row[f"{prefix}_count"] = int(len(values))
+    row[f"{prefix}_min"] = min(values)
+    row[f"{prefix}_max"] = max(values)
+    row[f"{prefix}_mean"] = sum(values) / len(values)
 
 
 def _add_covariance_diagonal(row: dict[str, Any], field_name: str, message: Any) -> None:

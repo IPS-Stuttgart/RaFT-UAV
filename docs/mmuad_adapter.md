@@ -1167,6 +1167,9 @@ angular velocity, linear acceleration, and covariance diagonals when present,
 `Accel`, `AccelStamped`, and `AccelWithCovarianceStamped` as
 `twist_timestamps` / `accel_timestamps` velocity/acceleration inventory rows
 with standard 6x6 covariance diagonals when present,
+common `sensor_msgs` status messages such as `MagneticField`,
+`FluidPressure`, `Temperature`, `RelativeHumidity`, `Illuminance`, and
+`BatteryState` as `sensor_status_timestamps` inventory rows,
 `sensor_msgs/msg/LaserScan` as `laserscan_candidate` range-scan rows using
 the ROS scan convention of +X forward and positive angle left, with optional
 adjacent-return clustering,
@@ -1284,6 +1287,14 @@ acceleration fields when present. `TwistWithCovariance` and
 diagonals as linear/angular vector covariance columns. These rows are raw
 kinematic inventory only: velocity-only or acceleration-only messages are not
 tracker position candidates and are not official Track 5 timestamp templates.
+Native sensor status topic-map entries write
+`native_ros_sensor_status_timestamps.csv` with message time, frame/source, and
+available scalar/vector metadata from `MagneticField`, `FluidPressure`,
+`Temperature`, `RelativeHumidity`, `Illuminance`, and `BatteryState` messages,
+including magnetic-field covariance diagonals and battery cell-voltage/
+cell-temperature summaries when present. These rows are raw diagnostic
+inventory only and are not tracker position candidates or official Track 5
+timestamp templates.
 Native `pointcloud_candidate` topic-map entries decode legacy
 `sensor_msgs/msg/PointCloud` `points[]` arrays, preserve channel values such as
 `intensity` in the intermediate point rows, and cluster those points through the
