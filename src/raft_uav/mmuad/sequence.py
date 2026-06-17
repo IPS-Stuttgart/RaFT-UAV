@@ -1165,7 +1165,7 @@ def _official_timestamp_dirs(root: Path, wanted: set[str]) -> list[Path]:
 
 
 def _normalize_official_dir_name(name: str) -> str:
-    return str(name).lower().replace("-", "_").replace(" ", "_")
+    return _normalized_token_forms(name)[1]
 
 
 def _timestamp_from_filename_or_none(path: Path) -> float | None:
@@ -1537,8 +1537,12 @@ def _relative_path_has_any(path: Path, *, root: Path, tokens: tuple[str, ...]) -
         parts = Path(path).relative_to(root).parts
     except ValueError:
         parts = (Path(path).name,)
-    text = " ".join(part.lower() for part in parts)
-    return any(token in text for token in tokens)
+    text = " ".join(parts)
+    normalized, folded = _normalized_token_forms(text)
+    return any(
+        token in normalized or _normalized_token_forms(token)[1] in folded
+        for token in tokens
+    )
 
 
 def _files_under_named_dirs(
@@ -1586,31 +1590,59 @@ def _is_modality_dir(path: Path) -> bool:
 
 
 def _is_modality_name(name: str) -> bool:
-    normalized = str(name).lower().replace("-", "_").replace(" ", "_")
-    return normalized in set(MODALITY_DIR_TOKENS) or _sensor_directory_name_has_any(
-        normalized,
+    return _directory_name_has_any(
+        name,
+        MODALITY_DIR_TOKENS,
+        allow_suffix=False,
+    ) or _sensor_directory_name_has_any(
+        name,
         CAMERA_DIR_TOKENS + RADAR_DIR_TOKENS,
+        allow_suffix=False,
     )
 
 
-def _directory_name_has_any(name: str, tokens: tuple[str, ...]) -> bool:
-    normalized = str(name).lower().replace("-", "_").replace(" ", "_")
-    return any(
-        normalized == token
-        or normalized.startswith(f"{token}_")
-        or normalized.endswith(f"_{token}")
-        for token in tokens
-    )
+def _directory_name_has_any(
+    name: str,
+    tokens: tuple[str, ...],
+    *,
+    allow_suffix: bool = True,
+) -> bool:
+    normalized, folded = _normalized_token_forms(name)
+    for token in tokens:
+        token_normalized, token_folded = _normalized_token_forms(token)
+        if (
+            normalized == token_normalized
+            or normalized.startswith(f"{token_normalized}_")
+            or folded == token_folded
+            or folded.startswith(token_folded)
+        ):
+            return True
+        if allow_suffix and (
+            normalized.endswith(f"_{token_normalized}") or folded.endswith(token_folded)
+        ):
+            return True
+    return False
 
 
-def _sensor_directory_name_has_any(name: str, tokens: tuple[str, ...]) -> bool:
-    normalized = str(name).lower().replace("-", "_").replace(" ", "_")
-    if _directory_name_has_any(normalized, tokens):
+def _sensor_directory_name_has_any(
+    name: str,
+    tokens: tuple[str, ...],
+    *,
+    allow_suffix: bool = True,
+) -> bool:
+    normalized, _ = _normalized_token_forms(name)
+    if _directory_name_has_any(normalized, tokens, allow_suffix=allow_suffix):
         return True
     for token in tokens:
         if normalized.startswith(token) and normalized[len(token) :].isdigit():
             return True
     return False
+
+
+def _normalized_token_forms(value: Any) -> tuple[str, str]:
+    normalized = str(value).lower().replace("-", "_").replace(" ", "_")
+    folded = re.sub(r"[^a-z0-9]+", "", normalized)
+    return normalized, folded
 
 
 def _looks_like_radar_polar_file(path: Path) -> bool:

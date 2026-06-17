@@ -11,6 +11,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 import json
 from pathlib import Path, PurePosixPath
+import re
 import tarfile
 from typing import Any
 import zipfile
@@ -75,6 +76,7 @@ MODALITY_DIR_TOKENS = (
     "images",
     "label",
     "labels",
+    "leica",
     "lidar",
     "livox",
     "livox_avia",
@@ -240,18 +242,21 @@ def _category_for_logical_file(
         category = "calibration"
     elif suffix in (
         TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES | YAML_SUFFIXES
-    ) and any(token in name or token in parent_text for token in CLASS_TOKENS):
+    ) and _logical_text_has_any((name, parent_text), CLASS_TOKENS):
         category = "class_or_label"
-    elif suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
-        token in name or token in parent_text for token in TRUTH_TOKENS
+    elif suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES and _logical_text_has_any(
+        (name, parent_text),
+        TRUTH_TOKENS,
     ):
         category = "truth_or_label"
-    elif suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
-        token in name or token in parent_text for token in POINT_CLOUD_TOKENS
+    elif suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES and _logical_text_has_any(
+        (name, parent_text),
+        POINT_CLOUD_TOKENS,
     ):
         category = "candidate_or_point_table"
-    elif suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES and any(
-        token in name or token in parent_text for token in CANDIDATE_TOKENS
+    elif suffix in TABLE_SUFFIXES | JSON_TABLE_SUFFIXES | NUMPY_SUFFIXES and _logical_text_has_any(
+        (name, parent_text),
+        CANDIDATE_TOKENS,
     ):
         category = "candidate_or_point_table"
     elif suffix in JSON_TABLE_SUFFIXES:
@@ -315,7 +320,10 @@ def _sequence_key(relative_path: str) -> str:
     candidate_indices = [
         index
         for index, part in enumerate(parent_parts)
-        if _normalized_dir_name(part) not in MODALITY_DIR_TOKENS + SPLIT_DIR_TOKENS
+        if not _directory_name_matches_any(
+            part,
+            MODALITY_DIR_TOKENS + SPLIT_DIR_TOKENS,
+        )
     ]
     if not candidate_indices:
         return "."
@@ -324,6 +332,35 @@ def _sequence_key(relative_path: str) -> str:
 
 def _normalized_dir_name(name: str) -> str:
     return str(name).lower().replace("-", "_").replace(" ", "_")
+
+
+def _folded_dir_name(name: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _normalized_dir_name(str(name)))
+
+
+def _directory_name_matches_any(name: str, tokens: tuple[str, ...]) -> bool:
+    normalized = _normalized_dir_name(name)
+    folded = _folded_dir_name(name)
+    for token in tokens:
+        token_normalized = _normalized_dir_name(token)
+        token_folded = _folded_dir_name(token)
+        if (
+            normalized == token_normalized
+            or normalized.startswith(f"{token_normalized}_")
+            or folded == token_folded
+            or folded.startswith(token_folded)
+        ):
+            return True
+    return False
+
+
+def _logical_text_has_any(parts: tuple[str, ...], tokens: tuple[str, ...]) -> bool:
+    normalized = " ".join(_normalized_dir_name(part) for part in parts)
+    folded = _folded_dir_name(normalized)
+    return any(
+        token in normalized or _folded_dir_name(token) in folded
+        for token in tokens
+    )
 
 
 def _logical_member_path(relative_path: str) -> str:
