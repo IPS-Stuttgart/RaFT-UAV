@@ -1229,6 +1229,8 @@ present,
 `transform_candidate`, `tf2_msgs/msg/TFMessage` as `tf_truth` or
 `tf_candidate`, `nav_msgs/msg/Path` as `path_truth` or `path_candidate`, and
 `nav_msgs/msg/Odometry` as `odometry_truth` or `odometry_candidate`,
+PX4 `px4_msgs/msg/VehicleLocalPosition` topics as odometry-style local
+position candidates/truth when topic names indicate detections or ground truth,
 `sensor_msgs/msg/MultiDOFJointState` as `multidof_joint_state_truth` or
 `multidof_joint_state_candidate`, and
 `trajectory_msgs/msg/MultiDOFJointTrajectory` as
@@ -1236,6 +1238,10 @@ present,
 Odometry and pose-with-covariance rows preserve pose covariance as
 `std_xy_m`/`std_z_m`, and odometry rows also preserve linear/angular twist
 metadata plus standard twist covariance diagonals when available.
+Position-bearing native messages may store coordinates as `x/y/z` fields or as
+three-value arrays such as `position=[x,y,z]`; array values are treated as
+local coordinates in the message frame, so dataset-specific ENU/NED handling
+still belongs in calibration/topic-map preprocessing.
 When Detection2D or Detection3D messages include multiple classification
 hypotheses, the native bridge uses the highest-score result for confidence and
 class labels.
