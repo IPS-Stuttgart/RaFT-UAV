@@ -1173,8 +1173,9 @@ with standard 6x6 covariance diagonals when present,
 inventory rows,
 `sensor_msgs/msg/TimeReference` as `time_reference_timestamps` and
 `rosgraph_msgs/msg/Clock` as `clock_timestamps` timing/reference inventory rows,
-`diagnostic_msgs/msg/DiagnosticArray` and `DiagnosticStatus` as
-`diagnostic_timestamps` diagnostic inventory rows,
+`diagnostic_msgs/msg/DiagnosticArray`, `DiagnosticStatus`, and ROS log topics
+such as `rcl_interfaces/msg/Log`, `rosgraph_msgs/msg/Log`, or `/rosout` as
+`diagnostic_timestamps` / `ros_log_timestamps` diagnostic inventory rows,
 common `sensor_msgs` status messages such as `MagneticField`,
 `FluidPressure`, `Temperature`, `RelativeHumidity`, `Illuminance`, and
 `BatteryState`, plus common MAVROS/PX4 telemetry messages such as
@@ -1323,6 +1324,8 @@ timestamp templates.
 Native diagnostic topic-map entries write
 `native_ros_diagnostic_timestamps.csv` with DiagnosticArray/DiagnosticStatus
 level, name, message, hardware ID, and key-value payload metadata when present.
+ROS log rows preserve logger name, severity, message text, and source file,
+function, and line metadata when present.
 These rows are raw sensor/system health inventory only and are not tracker
 position candidates or official Track 5 timestamp templates.
 Native sensor status topic-map entries write
