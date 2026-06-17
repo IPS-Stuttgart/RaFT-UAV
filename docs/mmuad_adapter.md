@@ -1171,6 +1171,8 @@ with standard 6x6 covariance diagonals when present,
 `sensor_msgs/msg/JointState` as `joint_state_timestamps` and
 `geometry_msgs/msg/Wrench` / `WrenchStamped` as `wrench_timestamps` actuation
 inventory rows,
+`sensor_msgs/msg/TimeReference` as `time_reference_timestamps` and
+`rosgraph_msgs/msg/Clock` as `clock_timestamps` timing/reference inventory rows,
 common `sensor_msgs` status messages such as `MagneticField`,
 `FluidPressure`, `Temperature`, `RelativeHumidity`, `Illuminance`, and
 `BatteryState` as `sensor_status_timestamps` inventory rows,
@@ -1309,6 +1311,11 @@ Native JointState/Wrench topic-map entries write
 names, joint position/velocity/effort summaries, and force/torque vectors when
 present. These rows are actuator/control inventory only and are not tracker
 position candidates or official Track 5 timestamp templates.
+Native TimeReference/Clock topic-map entries write
+`native_ros_timing_timestamps.csv` with bag/header message time, reference time,
+clock time, and derived offsets when present. These rows are raw timing
+diagnostics only and are not tracker position candidates or official Track 5
+timestamp templates.
 Native sensor status topic-map entries write
 `native_ros_sensor_status_timestamps.csv` with message time, frame/source, and
 available scalar/vector metadata from `MagneticField`, `FluidPressure`,

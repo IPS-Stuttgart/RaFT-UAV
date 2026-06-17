@@ -70,6 +70,7 @@ from raft_uav.mmuad.native_ros import (
     radar_polar_message_to_rows,
     range_message_to_rows,
     sensor_status_message_to_timestamp_rows,
+    timing_message_to_timestamp_rows,
     tracked_objects_message_to_rows,
 )
 from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates, pointcloud2_to_dataframe
@@ -8237,6 +8238,124 @@ def test_native_ros_extraction_supports_actuation_timestamp_topics(
     )
 
 
+def test_native_ros_extraction_supports_timing_timestamp_topics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_timing.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map_native.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_timing",
+                "exports": [
+                    {
+                        "topic": "/gps/time_reference",
+                        "kind": "time_reference_timestamps",
+                        "source": "gps_time",
+                    },
+                    {
+                        "topic": "/clock",
+                        "kind": "clock_timestamps",
+                        "source": "sim_clock",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    time_ref_connection = SimpleNamespace(
+        topic="/gps/time_reference",
+        msgtype="sensor_msgs/msg/TimeReference",
+    )
+    clock_connection = SimpleNamespace(
+        topic="/clock",
+        msgtype="rosgraph_msgs/msg/Clock",
+    )
+    time_ref_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=4, nanosec=250_000_000),
+            frame_id="gps",
+        ),
+        time_ref=SimpleNamespace(sec=100, nanosec=500_000_000),
+        source="gps_pps",
+    )
+    clock_message = SimpleNamespace(
+        clock=SimpleNamespace(sec=200, nanosec=750_000_000),
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [time_ref_connection, clock_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [time_ref_connection, clock_connection]
+            return [
+                (time_ref_connection, 4_000_000_000, b"time-ref"),
+                (clock_connection, 6_000_000_000, b"clock"),
+            ]
+
+        def deserialize(self, rawdata, msgtype):
+            if rawdata == b"time-ref":
+                assert msgtype == "sensor_msgs/msg/TimeReference"
+                return time_ref_message
+            if rawdata == b"clock":
+                assert msgtype == "rosgraph_msgs/msg/Clock"
+                return clock_message
+            raise AssertionError(rawdata)
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is None
+    assert extracted.truth is None
+    assert extracted.timing_timestamps is not None
+    rows = extracted.timing_timestamps.sort_values("time_s").reset_index(drop=True)
+    assert rows["sequence_id"].tolist() == ["seq_timing", "seq_timing"]
+    assert rows["time_s"].tolist() == [4.25, 6.0]
+    assert rows["source"].tolist() == ["gps_time", "sim_clock"]
+    assert rows.loc[0, "frame_id"] == "gps"
+    assert rows.loc[0, "reference_time_s"] == pytest.approx(100.5)
+    assert rows.loc[0, "reference_source"] == "gps_pps"
+    assert rows.loc[0, "reference_to_message_time_offset_s"] == pytest.approx(96.25)
+    assert rows.loc[1, "clock_time_s"] == pytest.approx(200.75)
+    assert rows.loc[1, "bag_time_s"] == pytest.approx(6.0)
+    assert rows.loc[1, "clock_to_message_time_offset_s"] == pytest.approx(194.75)
+    assert extracted.manifest["timing_timestamp_rows"] == 2
+    assert extracted.manifest["candidate_rows"] == 0
+    assert extracted.manifest["truth_rows"] == 0
+
+    saved_rows = pd.read_csv(output / "native_ros_timing_timestamps.csv")
+    saved_manifest = json.loads(
+        (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
+    )
+    assert saved_rows["time_s"].tolist() == [4.25, 6.0]
+    assert saved_manifest["timing_timestamp_rows"] == 2
+    assert saved_manifest["timing_timestamps_csv"] == str(
+        output / "native_ros_timing_timestamps.csv"
+    )
+
+
 def test_native_ros_extraction_supports_sensor_status_timestamp_topics(
     tmp_path: Path,
     monkeypatch,
@@ -11695,6 +11814,44 @@ def test_ros2_topic_map_template_infers_actuation_timestamp_topics(tmp_path: Pat
     assert all("path" not in entry for entry in payload["exports"])
 
 
+def test_ros2_topic_map_template_infers_timing_timestamp_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /gps/time_reference",
+                "        type: sensor_msgs/msg/TimeReference",
+                "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /clock",
+                "        type: rosgraph_msgs/msg/Clock",
+                "      message_count: 5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(
+        report,
+        tmp_path / "topic_map_template.json",
+        template_mode="native",
+    )
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "time_reference_timestamps",
+        "clock_timestamps",
+    ]
+    assert payload["exports"][0]["source"] == "gps_time_reference"
+    assert payload["exports"][1]["source"] == "clock"
+    assert all("path" not in entry for entry in payload["exports"])
+
+
 def test_ros2_topic_map_template_infers_sensor_status_timestamp_topics(
     tmp_path: Path,
 ) -> None:
@@ -12405,6 +12562,44 @@ def test_native_ros_actuation_message_to_timestamp_rows_extracts_joint_and_wrenc
     assert joint_rows[0]["joint_effort_json"] == "[2.0,3.0]"
     assert wrench_rows[0]["force_x_n"] == pytest.approx(1.0)
     assert wrench_rows[0]["torque_z_n_m"] == pytest.approx(0.3)
+
+
+def test_native_ros_timing_message_to_timestamp_rows_extracts_reference_and_clock() -> None:
+    time_ref_rows = timing_message_to_timestamp_rows(
+        SimpleNamespace(
+            header=SimpleNamespace(
+                stamp=SimpleNamespace(sec=1, nanosec=250_000_000),
+                frame_id="gps",
+            ),
+            time_ref=SimpleNamespace(sec=10, nanosec=500_000_000),
+            source="pps",
+        ),
+        sequence_id="seq_timing",
+        time_s=1.25,
+        bag_time_s=1.0,
+        topic="/gps/time_reference",
+        source="gps_time",
+        message_index=0,
+        kind="time_reference_timestamps",
+    )
+    clock_rows = timing_message_to_timestamp_rows(
+        {"clock": {"sec": 20, "nanosec": 750_000_000}},
+        sequence_id="seq_timing",
+        time_s=2.0,
+        bag_time_s=2.0,
+        topic="/clock",
+        source="sim_clock",
+        message_index=1,
+        kind="clock_timestamps",
+    )
+
+    assert time_ref_rows[0]["header_time_s"] == pytest.approx(1.25)
+    assert time_ref_rows[0]["reference_time_s"] == pytest.approx(10.5)
+    assert time_ref_rows[0]["reference_to_message_time_offset_s"] == pytest.approx(9.25)
+    assert time_ref_rows[0]["message_to_bag_time_offset_s"] == pytest.approx(0.25)
+    assert time_ref_rows[0]["reference_source"] == "pps"
+    assert clock_rows[0]["clock_time_s"] == pytest.approx(20.75)
+    assert clock_rows[0]["clock_to_message_time_offset_s"] == pytest.approx(18.75)
 
 
 def test_native_ros_tracked_objects_message_to_rows_extracts_kinematics() -> None:
