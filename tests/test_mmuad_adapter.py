@@ -10588,6 +10588,100 @@ def test_native_ros_extraction_supports_plain_point_topics(
     assert extracted.manifest["truth_rows"] == 1
 
 
+def test_native_ros_extraction_applies_position_coordinate_frame(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_px4_local_position.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map.json"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_px4_local_position",
+                "exports": [
+                    {
+                        "topic": "/fmu/out/vehicle_local_position",
+                        "kind": "odometry_candidate",
+                        "source": "px4_local_position",
+                        "position_coordinate_frame": "ned",
+                    },
+                    {
+                        "topic": "/ground_truth/vehicle_local_position",
+                        "kind": "odometry_truth",
+                        "position_coordinate_frame": "ned",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate_connection = SimpleNamespace(
+        topic="/fmu/out/vehicle_local_position",
+        msgtype="px4_msgs/msg/VehicleLocalPosition",
+    )
+    truth_connection = SimpleNamespace(
+        topic="/ground_truth/vehicle_local_position",
+        msgtype="px4_msgs/msg/VehicleLocalPosition",
+    )
+    messages = {
+        candidate_connection.topic: SimpleNamespace(x=1.0, y=2.0, z=-3.0),
+        truth_connection.topic: SimpleNamespace(x=1.5, y=2.5, z=-3.5),
+    }
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [candidate_connection, truth_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [candidate_connection, truth_connection]
+            return [
+                (candidate_connection, 4_000_000_000, b"candidate"),
+                (truth_connection, 4_000_000_000, b"truth"),
+            ]
+
+        def deserialize(self, rawdata, msgtype):
+            if rawdata == b"candidate":
+                assert msgtype == "px4_msgs/msg/VehicleLocalPosition"
+                return messages[candidate_connection.topic]
+            if rawdata == b"truth":
+                assert msgtype == "px4_msgs/msg/VehicleLocalPosition"
+                return messages[truth_connection.topic]
+            raise AssertionError(f"unexpected rawdata: {rawdata!r}")
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+    )
+
+    assert extracted.candidates is not None
+    assert extracted.truth is not None
+    candidate = extracted.candidates.rows.iloc[0]
+    truth = extracted.truth.rows.iloc[0]
+    assert candidate["source"] == "px4_local_position"
+    assert candidate[["x_m", "y_m", "z_m"]].tolist() == [2.0, 1.0, 3.0]
+    assert candidate["position_coordinate_frame"] == "ned"
+    assert truth[["x_m", "y_m", "z_m"]].tolist() == [2.5, 1.5, 3.5]
+    assert truth["position_coordinate_frame"] == "ned"
+    assert extracted.manifest["candidate_rows"] == 1
+    assert extracted.manifest["truth_rows"] == 1
+
+
 def test_native_ros_extraction_supports_tracked_object_candidates(
     tmp_path: Path,
     monkeypatch,
@@ -12808,6 +12902,17 @@ def test_ros2_topic_map_template_infers_px4_vehicle_local_position_topics(
     assert payload["exports"][0]["source"] == "fmu_out_vehicle_local_position"
     assert payload["exports"][1]["source"] is None
 
+    native_template = write_topic_map_template(
+        report,
+        tmp_path / "topic_map_template_native.json",
+        template_mode="native",
+    )
+    native_payload = json.loads(native_template.read_text(encoding="utf-8"))
+    assert [
+        entry.get("position_coordinate_frame")
+        for entry in native_payload["exports"]
+    ] == ["ned", "ned"]
+
 
 def test_native_ros_position_message_to_row_accepts_common_position_messages() -> None:
     point_message = SimpleNamespace(point=SimpleNamespace(x=1.0, y=2.0, z=3.0))
@@ -12898,6 +13003,46 @@ def test_native_ros_position_message_to_rows_accepts_array_backed_positions() ->
     assert direct_row["x_m"] == pytest.approx(4.0)
     assert direct_row["y_m"] == pytest.approx(5.0)
     assert direct_row["z_m"] == pytest.approx(6.0)
+
+
+def test_native_ros_position_message_to_rows_applies_ned_coordinate_frame() -> None:
+    message = SimpleNamespace(
+        header=SimpleNamespace(frame_id="vehicle_local_frame"),
+        child_frame_id="px4_vehicle",
+        position=np.array([1.5, -2.5, 3.5]),
+    )
+
+    rows = position_message_to_rows(
+        message,
+        sequence_id="seq_px4_ned",
+        time_s=1.0,
+        frame_id="vehicle_local_frame",
+        coordinate_frame="north-east-down",
+    )
+    direct_row = position_message_to_row(
+        SimpleNamespace(position=[10.0, 20.0, -30.0]),
+        sequence_id="seq_direct_ned",
+        time_s=2.0,
+        coordinate_frame="ned",
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["x_m"] == pytest.approx(-2.5)
+    assert row["y_m"] == pytest.approx(1.5)
+    assert row["z_m"] == pytest.approx(-3.5)
+    assert row["position_coordinate_frame"] == "ned"
+    assert direct_row["x_m"] == pytest.approx(20.0)
+    assert direct_row["y_m"] == pytest.approx(10.0)
+    assert direct_row["z_m"] == pytest.approx(30.0)
+
+    with pytest.raises(ValueError, match="position_coordinate_frame"):
+        position_message_to_row(
+            SimpleNamespace(position=[1.0, 2.0, 3.0]),
+            sequence_id="seq_bad_frame",
+            time_s=3.0,
+            coordinate_frame="body",
+        )
 
 
 def test_native_ros_position_message_to_rows_filters_tf_message_transforms() -> None:

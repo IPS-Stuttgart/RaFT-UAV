@@ -1246,8 +1246,14 @@ Odometry and pose-with-covariance rows preserve pose covariance as
 metadata plus standard twist covariance diagonals when available.
 Position-bearing native messages may store coordinates as `x/y/z` fields or as
 three-value arrays such as `position=[x,y,z]`; array values are treated as
-local coordinates in the message frame, so dataset-specific ENU/NED handling
-still belongs in calibration/topic-map preprocessing.
+local coordinates in the message frame by default. Native pose/odometry/point,
+TF, Path, and PoseArray topic-map entries can set
+`position_coordinate_frame: ned` when the message stores north/east/down
+coordinates; the bridge writes `x_m=east`, `y_m=north`, and `z_m=up`. The
+default is `identity`/`enu`, and native templates generated for PX4
+`VehicleLocalPosition` topics include the NED hint automatically. This is only a
+local frame convention transform; dataset-specific origin, map alignment, and
+sensor calibration still belong in calibration/topic-map preprocessing.
 When Detection2D or Detection3D messages include multiple classification
 hypotheses, the native bridge uses the highest-score result for confidence and
 class labels.
