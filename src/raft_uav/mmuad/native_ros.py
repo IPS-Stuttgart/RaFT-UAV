@@ -143,7 +143,8 @@ def extract_native_rosbag_topic_map(
     ``navsatfix_candidate`` / ``geopoint_candidate`` / ``geopose_candidate``
         Project geodetic GPS/geographic positions into local ENU rows. These
         entries require ``enu_origin_lla`` or separate origin latitude,
-        longitude, and altitude fields in the topic map.
+        longitude, and altitude fields in the topic map. Native NavSatFix
+        status/service and covariance metadata are preserved when present.
     ``detection3d_truth`` / ``detection3d_array_truth`` /
     ``detection3d_candidate`` / ``detection3d_array_candidate``
         Convert vision_msgs 3D detection bbox centers into truth/candidate rows.
@@ -2952,6 +2953,7 @@ def geodetic_message_to_rows(
         "altitude_m": altitude,
     }
     _add_frame_metadata(row, message)
+    _add_navsat_status_metadata(row, message)
     _add_navsat_covariance_metadata(row, message)
     return [row]
 
@@ -3692,6 +3694,18 @@ def _add_navsat_covariance_metadata(row: dict[str, Any], message: Any) -> None:
     covariance_type = getattr(message, "position_covariance_type", None)
     if covariance_type not in (None, ""):
         row["navsat_covariance_type"] = str(covariance_type)
+
+
+def _add_navsat_status_metadata(row: dict[str, Any], message: Any) -> None:
+    status = getattr(message, "status", None)
+    if status is None:
+        return
+    fix_status = getattr(status, "status", None)
+    if fix_status not in (None, ""):
+        row["navsat_status"] = str(fix_status)
+    service = getattr(status, "service", None)
+    if service not in (None, ""):
+        row["navsat_service"] = str(service)
 
 
 def _position_from_message(message: Any) -> Any | None:

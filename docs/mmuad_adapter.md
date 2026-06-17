@@ -1182,7 +1182,8 @@ common custom polar/range-azimuth radar message shapes as
 `navsatfix_candidate`, `geographic_msgs/msg/GeoPointStamped` as
 `geopoint_truth` or `geopoint_candidate`,
 `geographic_msgs/msg/GeoPoseStamped` as `geopose_truth` or
-`geopose_candidate`, `vision_msgs/msg/Detection2D` or
+`geopose_candidate`, preserving NavSatFix status/service and covariance
+metadata when present, `vision_msgs/msg/Detection2D` or
 `vision_msgs/msg/Detection2DArray` as `camera_detections_candidate`; legacy
 singular aliases such as `camera_detection_candidate` and `detection2d_candidate`
 are also accepted when camera calibration and depth/fixed-depth metadata are provided.
