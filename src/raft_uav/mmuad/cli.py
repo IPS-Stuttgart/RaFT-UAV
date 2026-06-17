@@ -193,6 +193,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--topic-map-base-dir", type=Path)
     parser.add_argument("--native-ros-extract-output-dir", type=Path)
+    parser.add_argument(
+        "--native-ros-auto-topic-map",
+        action="store_true",
+        help=(
+            "in sequence-root mode, inspect ROS-only sequence folders, write a "
+            "native topic-map template, and run native extraction from it"
+        ),
+    )
+    parser.add_argument(
+        "--native-ros-auto-topic-map-dir",
+        type=Path,
+        help=(
+            "directory for generated sequence-root native topic maps and ROS "
+            "inspection reports; defaults under --output-dir"
+        ),
+    )
     parser.add_argument("--sequence-glob", default="*")
     parser.add_argument("--split-file", type=Path)
     parser.add_argument("--split-name")
@@ -1381,19 +1397,29 @@ def _run_sequence_root(args: argparse.Namespace):
     native_manifests = []
     native_image_template_frames = []
     for paths in sequences:
-        if paths.native_topic_map_jsons:
-            candidates, truth, manifest_path, extracted = _load_native_sequence_export(
+        if _should_run_native_sequence_export(args, paths):
+            (
+                candidates,
+                truth,
+                manifest_path,
+                extracted,
+                topic_map_file,
+                auto_report_file,
+                auto_generated,
+            ) = _load_native_sequence_export(
                 args,
                 paths,
             )
-            native_manifests.append(
-                {
-                    "sequence_id": paths.sequence_id,
-                    "bag_path": str(paths.rosbag_paths[0]),
-                    "topic_map_file": str(paths.native_topic_map_jsons[0]),
-                    "manifest_json": str(manifest_path),
-                }
-            )
+            manifest_row = {
+                "sequence_id": paths.sequence_id,
+                "bag_path": str(paths.rosbag_paths[0]),
+                "topic_map_file": str(topic_map_file),
+                "manifest_json": str(manifest_path),
+                "auto_topic_map_generated": bool(auto_generated),
+            }
+            if auto_report_file is not None:
+                manifest_row["rosbag_report_json"] = str(auto_report_file)
+            native_manifests.append(manifest_row)
             candidate_frames.append(candidates)
             if truth is not None:
                 truth_frames.append(truth)
@@ -1445,6 +1471,12 @@ def _run_sequence_root(args: argparse.Namespace):
     return _run_tracker_for_mode(args, candidates, truth)
 
 
+def _should_run_native_sequence_export(args: argparse.Namespace, paths) -> bool:
+    if paths.native_topic_map_jsons:
+        return True
+    return bool(args.native_ros_auto_topic_map and paths.rosbag_paths)
+
+
 def _has_exported_sequence_inputs(paths) -> bool:
     return any(
         (
@@ -1459,20 +1491,20 @@ def _has_exported_sequence_inputs(paths) -> bool:
 
 
 def _load_native_sequence_export(args: argparse.Namespace, paths):
-    if len(paths.native_topic_map_jsons) != 1:
-        raise SystemExit(
-            f"sequence {paths.sequence_id!r} has {len(paths.native_topic_map_jsons)} "
-            "native topic maps; use explicit --rosbag-path and --topic-map-file"
-        )
     if len(paths.rosbag_paths) != 1:
         raise SystemExit(
             f"sequence {paths.sequence_id!r} has {len(paths.rosbag_paths)} ROS recordings; "
             "use explicit --rosbag-path and --topic-map-file"
         )
+    topic_map_json, auto_generated, auto_report_json = _native_sequence_topic_map(
+        args,
+        paths,
+        bag_path=paths.rosbag_paths[0],
+    )
     output_dir = _native_sequence_extract_output_dir(args, paths.sequence_id)
     extracted = extract_native_rosbag_topic_map(
         bag_path=paths.rosbag_paths[0],
-        topic_map_json=paths.native_topic_map_jsons[0],
+        topic_map_json=topic_map_json,
         output_dir=output_dir,
         voxel_size_m=args.voxel_size_m,
         min_points=args.min_cluster_points,
@@ -1489,7 +1521,51 @@ def _load_native_sequence_export(args: argparse.Namespace, paths):
         extracted.truth,
         output_dir / "native_ros_extraction_manifest.json",
         extracted,
+        topic_map_json,
+        auto_report_json,
+        auto_generated,
     )
+
+
+def _native_sequence_topic_map(
+    args: argparse.Namespace,
+    paths,
+    *,
+    bag_path: Path,
+) -> tuple[Path, bool, Path | None]:
+    if len(paths.native_topic_map_jsons) == 1:
+        return paths.native_topic_map_jsons[0], False, None
+    if len(paths.native_topic_map_jsons) > 1:
+        raise SystemExit(
+            f"sequence {paths.sequence_id!r} has {len(paths.native_topic_map_jsons)} "
+            "native topic maps; use explicit --rosbag-path and --topic-map-file"
+        )
+    if not args.native_ros_auto_topic_map:
+        raise SystemExit(
+            f"sequence {paths.sequence_id!r} has no native topic map; provide one "
+            "or pass --native-ros-auto-topic-map"
+        )
+    auto_dir = _native_sequence_auto_topic_map_dir(args, paths.sequence_id)
+    auto_dir.mkdir(parents=True, exist_ok=True)
+    report = inspect_rosbag(bag_path)
+    if not report.get("topics"):
+        reason = report.get("native_reader_error") or report.get("recommendation") or "no topics"
+        raise SystemExit(
+            "native ROS auto-topic-map found no inspectable topics for "
+            f"sequence {paths.sequence_id!r}: {reason}"
+        )
+    report_path = auto_dir / "rosbag_report.json"
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    topic_map_path = auto_dir / "topic_map_native.json"
+    write_topic_map_template(report, topic_map_path, template_mode="native")
+    return topic_map_path, True, report_path
+
+
+def _native_sequence_auto_topic_map_dir(args: argparse.Namespace, sequence_id: str) -> Path:
+    base = args.native_ros_auto_topic_map_dir or (
+        args.output_dir / "native_ros_auto_topic_maps"
+    )
+    return base / _safe_path_component(sequence_id)
 
 
 def _native_sequence_extract_output_dir(args: argparse.Namespace, sequence_id: str) -> Path:

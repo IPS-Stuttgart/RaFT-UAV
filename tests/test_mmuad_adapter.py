@@ -7102,6 +7102,7 @@ def test_cli_sequence_root_runs_native_ros_recording(
             "manifest_json": str(
                 expected_extract_dir / "native_ros_extraction_manifest.json"
             ),
+            "auto_topic_map_generated": False,
         }
     ]
     validation = json.loads(
@@ -7112,6 +7113,130 @@ def test_cli_sequence_root_runs_native_ros_recording(
     assert validation["template_checked"] is True
     assert validation["leaderboard_ready"] is True
     assert validation["codabench_upload_ready"] is True
+
+
+def test_cli_sequence_root_auto_generates_native_topic_map(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    seq = tmp_path / "seq_auto_native"
+    seq.mkdir()
+    (seq / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /detector/pose",
+                "        type: geometry_msgs/msg/PoseStamped",
+                "      message_count: 2",
+                "    - topic_metadata:",
+                "        name: /ground_truth/pose",
+                "        type: geometry_msgs/msg/PoseStamped",
+                "      message_count: 2",
+                "  relative_file_paths:",
+                "    - data_0.db3",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (seq / "data_0.db3").write_bytes(b"fake sqlite bag")
+    output = tmp_path / "out"
+    expected_extract_dir = output / "native_ros_extracted" / "seq_auto_native"
+    expected_auto_dir = output / "native_ros_auto_topic_maps" / "seq_auto_native"
+    expected_topic_map = expected_auto_dir / "topic_map_native.json"
+    expected_report = expected_auto_dir / "rosbag_report.json"
+
+    def fake_extract_native_rosbag_topic_map(
+        *,
+        bag_path,
+        topic_map_json,
+        output_dir,
+        voxel_size_m,
+        min_points,
+    ):
+        assert bag_path == seq
+        assert topic_map_json == expected_topic_map
+        assert output_dir == expected_extract_dir
+        assert voxel_size_m == 0.75
+        assert min_points == 3
+        payload = json.loads(topic_map_json.read_text(encoding="utf-8"))
+        assert [entry["kind"] for entry in payload["exports"]] == [
+            "pose_candidate",
+            "pose_truth",
+        ]
+        output_dir.mkdir(parents=True)
+        (output_dir / "native_ros_extraction_manifest.json").write_text(
+            json.dumps({"schema": "fake-native-extraction", "candidate_rows": 2}),
+            encoding="utf-8",
+        )
+        candidates = CandidateFrame(
+            pd.DataFrame(
+                {
+                    "sequence_id": ["seq_auto_native", "seq_auto_native"],
+                    "time_s": [0.0, 1.0],
+                    "source": ["detector_pose", "detector_pose"],
+                    "track_id": ["uav", "uav"],
+                    "x_m": [0.0, 1.0],
+                    "y_m": [0.0, 0.0],
+                    "z_m": [10.0, 10.0],
+                    "std_xy_m": [1.0, 1.0],
+                    "std_z_m": [1.0, 1.0],
+                    "confidence": [1.0, 1.0],
+                }
+            )
+        )
+        truth = TruthFrame(
+            pd.DataFrame(
+                {
+                    "sequence_id": ["seq_auto_native", "seq_auto_native"],
+                    "time_s": [0.0, 1.0],
+                    "x_m": [0.0, 1.0],
+                    "y_m": [0.0, 0.0],
+                    "z_m": [10.0, 10.0],
+                }
+            )
+        )
+        return SimpleNamespace(candidates=candidates, truth=truth, manifest={})
+
+    monkeypatch.setattr(
+        "raft_uav.mmuad.cli.extract_native_rosbag_topic_map",
+        fake_extract_native_rosbag_topic_map,
+    )
+
+    status = mmuad_cli_main(
+        [
+            "--sequence-root",
+            str(tmp_path),
+            "--native-ros-auto-topic-map",
+            "--output-dir",
+            str(output),
+            "--submission-csv",
+            str(output / "submission.csv"),
+        ]
+    )
+
+    assert status == 0
+    assert expected_topic_map.exists()
+    assert expected_report.exists()
+    manifest_summary = json.loads(
+        (output / "native_ros_sequence_manifests.json").read_text(encoding="utf-8")
+    )
+    assert manifest_summary == [
+        {
+            "sequence_id": "seq_auto_native",
+            "bag_path": str(seq),
+            "topic_map_file": str(expected_topic_map),
+            "manifest_json": str(
+                expected_extract_dir / "native_ros_extraction_manifest.json"
+            ),
+            "auto_topic_map_generated": True,
+            "rosbag_report_json": str(expected_report),
+        }
+    ]
+    assert (output / "mmuad_estimates.csv").exists()
+    submission = pd.read_csv(output / "submission.csv")
+    assert submission["sequence_id"].tolist() == ["seq_auto_native", "seq_auto_native"]
 
 
 def test_cli_native_ros_extraction_requires_candidate_rows(
