@@ -17,6 +17,8 @@ tracking logs:
   rows;
 * ``sensor_msgs/msg/JointState`` and ``geometry_msgs/msg/Wrench`` -> actuation
   inventory rows;
+* ``sensor_msgs/msg/TimeReference`` and ``rosgraph_msgs/msg/Clock`` -> timing
+  reference inventory rows;
 * common sensor status messages -> timestamp/status inventory rows;
 * ``sensor_msgs/msg/LaserScan`` -> range-scan candidate detections;
 * ``sensor_msgs/msg/Range`` -> single range-bearing candidate detections;
@@ -85,6 +87,7 @@ class NativeRosExtraction:
     imu_timestamps: pd.DataFrame | None = None
     kinematic_timestamps: pd.DataFrame | None = None
     actuation_timestamps: pd.DataFrame | None = None
+    timing_timestamps: pd.DataFrame | None = None
     sensor_status_timestamps: pd.DataFrame | None = None
 
 
@@ -156,6 +159,10 @@ def extract_native_rosbag_topic_map(
         Extract native ``sensor_msgs/msg/JointState`` and
         ``geometry_msgs/msg/Wrench``/``WrenchStamped`` telemetry into CSV
         inventory artifacts. This is actuator/control metadata only.
+    ``timing_timestamps`` / ``time_reference_timestamps`` / ``clock_timestamps``
+        Extract native ``sensor_msgs/msg/TimeReference`` and
+        ``rosgraph_msgs/msg/Clock`` messages into CSV inventory artifacts.
+        This is timing/reference metadata only.
     ``sensor_status_timestamps`` / ``sensor_status_inventory``
         Extract common native ``sensor_msgs`` status topics such as
         ``MagneticField``, ``FluidPressure``, ``Temperature``,
@@ -218,6 +225,7 @@ def extract_native_rosbag_topic_map(
     imu_timestamp_rows: list[dict[str, Any]] = []
     kinematic_timestamp_rows: list[dict[str, Any]] = []
     actuation_timestamp_rows: list[dict[str, Any]] = []
+    timing_timestamp_rows: list[dict[str, Any]] = []
     sensor_status_timestamp_rows: list[dict[str, Any]] = []
     extracted: list[dict[str, Any]] = []
     sequence_id = str(payload.get("sequence_id", Path(bag_path).stem))
@@ -912,6 +920,19 @@ def extract_native_rosbag_topic_map(
                     )
                     actuation_timestamp_rows.extend(rows_for_message)
                     rows = len(rows_for_message)
+                elif _is_timing_timestamp_kind(kind):
+                    rows_for_message = timing_message_to_timestamp_rows(
+                        message,
+                        sequence_id=str(spec.get("sequence_id", sequence_id)),
+                        time_s=time_s,
+                        bag_time_s=float(timestamp_ns) * 1.0e-9,
+                        topic=str(connection.topic),
+                        source=source,
+                        message_index=replay_message_counts[str(connection.topic)] - 1,
+                        kind=kind,
+                    )
+                    timing_timestamp_rows.extend(rows_for_message)
+                    rows = len(rows_for_message)
                 elif _is_sensor_status_timestamp_kind(kind):
                     rows_for_message = sensor_status_message_to_timestamp_rows(
                         message,
@@ -1129,6 +1150,9 @@ def extract_native_rosbag_topic_map(
         if actuation_timestamp_rows
         else None
     )
+    timing_timestamps = (
+        pd.DataFrame.from_records(timing_timestamp_rows) if timing_timestamp_rows else None
+    )
     sensor_status_timestamps = (
         pd.DataFrame.from_records(sensor_status_timestamp_rows)
         if sensor_status_timestamp_rows
@@ -1159,6 +1183,9 @@ def extract_native_rosbag_topic_map(
         ),
         "actuation_timestamp_rows": (
             int(len(actuation_timestamps)) if actuation_timestamps is not None else 0
+        ),
+        "timing_timestamp_rows": (
+            int(len(timing_timestamps)) if timing_timestamps is not None else 0
         ),
         "sensor_status_timestamp_rows": (
             int(len(sensor_status_timestamps))
@@ -1209,6 +1236,14 @@ def extract_native_rosbag_topic_map(
             manifest["actuation_timestamps_csv"] = str(
                 output / "native_ros_actuation_timestamps.csv"
             )
+        if timing_timestamps is not None:
+            timing_timestamps.to_csv(
+                output / "native_ros_timing_timestamps.csv",
+                index=False,
+            )
+            manifest["timing_timestamps_csv"] = str(
+                output / "native_ros_timing_timestamps.csv"
+            )
         if sensor_status_timestamps is not None:
             sensor_status_timestamps.to_csv(
                 output / "native_ros_sensor_status_timestamps.csv",
@@ -1230,6 +1265,7 @@ def extract_native_rosbag_topic_map(
         imu_timestamps=imu_timestamps,
         kinematic_timestamps=kinematic_timestamps,
         actuation_timestamps=actuation_timestamps,
+        timing_timestamps=timing_timestamps,
         sensor_status_timestamps=sensor_status_timestamps,
     )
 
@@ -1330,6 +1366,25 @@ def _is_actuation_timestamp_kind(kind: str) -> bool:
         "force_torque_timestamp",
         "force_torque_timestamps",
         "force_torque_timestamp_inventory",
+    }
+
+
+def _is_timing_timestamp_kind(kind: str) -> bool:
+    normalized = str(kind).strip().lower()
+    return normalized in {
+        "timing_timestamp",
+        "timing_timestamps",
+        "timing_timestamp_inventory",
+        "time_reference_timestamp",
+        "time_reference_timestamps",
+        "time_reference_inventory",
+        "timeref_timestamp",
+        "timeref_timestamps",
+        "clock_timestamp",
+        "clock_timestamps",
+        "clock_timestamp_inventory",
+        "ros_clock_timestamp",
+        "ros_clock_timestamps",
     }
 
 
@@ -1851,6 +1906,58 @@ def actuation_message_to_timestamp_rows(
             components=("x", "y", "z"),
             suffix="_n_m",
         )
+    return [row]
+
+
+def timing_message_to_timestamp_rows(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    topic: str,
+    source: str,
+    message_index: int,
+    kind: str = "timing_timestamps",
+    bag_time_s: float | None = None,
+) -> list[dict[str, Any]]:
+    """Convert native ROS TimeReference/Clock messages into timing inventory."""
+
+    row: dict[str, Any] = {
+        "sequence_id": str(sequence_id),
+        "time_s": float(time_s),
+        "topic": str(topic),
+        "source": str(source),
+        "message_index": int(message_index),
+        "timing_kind": str(kind).strip().lower(),
+    }
+    if bag_time_s is not None:
+        row["bag_time_s"] = float(bag_time_s)
+        row["message_to_bag_time_offset_s"] = float(time_s) - float(bag_time_s)
+    frame_id = _message_frame_id(message)
+    if frame_id not in (None, ""):
+        row["frame_id"] = str(frame_id)
+    header_time_s = _message_stamp_time_s(message)
+    if header_time_s is not None:
+        row["header_time_s"] = float(header_time_s)
+    reference_time_s = _time_field_to_s(
+        _field_value(message, "time_ref", "time_reference", "reference_time")
+    )
+    if reference_time_s is not None:
+        row["reference_time_s"] = float(reference_time_s)
+        row["reference_to_message_time_offset_s"] = float(reference_time_s) - float(time_s)
+    clock_time_s = _time_field_to_s(_field_value(message, "clock", "ros_time", "time"))
+    if clock_time_s is not None:
+        row["clock_time_s"] = float(clock_time_s)
+        row["clock_to_message_time_offset_s"] = float(clock_time_s) - float(time_s)
+    reference_source = _field_value(
+        message,
+        "source",
+        "time_source",
+        "reference_source",
+        "clock_source",
+    )
+    if reference_source not in (None, ""):
+        row["reference_source"] = str(reference_source)
     return [row]
 
 
@@ -3563,14 +3670,35 @@ def _message_stamp_time_s(message: Any) -> float | None:
     stamp = _field_value(header, "stamp") if header is not None else None
     if stamp is None:
         stamp = _field_value(message, "stamp")
-    if stamp is not None:
-        sec = _field_value(stamp, "sec", "secs")
-        nanosec = _field_value(stamp, "nanosec", "nsecs")
-        if nanosec is None:
-            nanosec = 0
+    return _time_field_to_s(stamp)
+
+
+def _time_field_to_s(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, dict):
+        sec = _field_value(value, "sec", "secs", "seconds")
+        nanosec = _field_value(value, "nanosec", "nsecs", "nanoseconds")
         if sec is not None:
-            return float(sec) + float(nanosec) * 1.0e-9
-    return None
+            try:
+                return float(sec) + float(nanosec or 0) * 1.0e-9
+            except (TypeError, ValueError):
+                return None
+    else:
+        sec = _field_value(value, "sec", "secs", "seconds")
+        nanosec = _field_value(value, "nanosec", "nsecs", "nanoseconds")
+        if sec is not None:
+            try:
+                return float(sec) + float(nanosec or 0) * 1.0e-9
+            except (TypeError, ValueError):
+                return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return float(numeric)
 
 
 def position_message_to_row(message: Any, *, sequence_id: str, time_s: float) -> dict[str, Any]:

@@ -361,6 +361,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "camera_detections_candidate"
     if _looks_like_audio_timestamp_topic(name, msg_type):
         return "audio_timestamps"
+    if _looks_like_timing_timestamp_topic(name, msg_type):
+        return _timing_timestamp_kind(name, msg_type)
     if _looks_like_sensor_status_timestamp_topic(name, msg_type):
         return "sensor_status_timestamps"
     if _looks_like_imu_timestamp_topic(name, msg_type):
@@ -721,6 +723,36 @@ def _actuation_timestamp_kind(msg_type: str) -> str:
     if "wrench" in compact_type:
         return "wrench_timestamps"
     return "actuation_timestamps"
+
+
+def _looks_like_timing_timestamp_topic(name: str, msg_type: str) -> bool:
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    compact_name = name.lower().replace("_", "").replace("-", "")
+    name_tokens = set(re.split(r"[^a-z0-9]+", name.lower()))
+    name_tokens.discard("")
+    return (
+        "timereference" in compact_type
+        or compact_type.endswith("/clock")
+        or compact_type.endswith("msg/clock")
+        or compact_type.endswith("rosgraphmsgs/msg/clock")
+        or compact_name in {"clock", "/clock"}
+        or compact_name.endswith("/clock")
+        or "timereference" in compact_name
+        or "time_reference" in name.lower()
+        or bool(name_tokens & {"timeref", "time_reference"})
+    )
+
+
+def _timing_timestamp_kind(name: str, msg_type: str) -> str:
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    compact_name = name.lower().replace("_", "").replace("-", "")
+    if "timereference" in compact_type or "timereference" in compact_name:
+        return "time_reference_timestamps"
+    if "time_reference" in name.lower() or "timeref" in compact_name:
+        return "time_reference_timestamps"
+    if "clock" in compact_type or compact_name.endswith("/clock") or compact_name == "clock":
+        return "clock_timestamps"
+    return "timing_timestamps"
 
 
 def _looks_like_sensor_status_timestamp_topic(name: str, msg_type: str) -> bool:
