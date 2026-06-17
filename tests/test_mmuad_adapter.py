@@ -7478,6 +7478,7 @@ def test_native_ros_extraction_supports_image_timestamp_topics(
     assert extracted.manifest["truth_rows"] == 0
     assert extracted.manifest["image_timestamp_rows"] == 2
     assert extracted.manifest["image_payload_file_rows"] == 0
+    assert extracted.manifest["image_viewable_file_rows"] == 0
     assert [row["status"] for row in extracted.manifest["extracted_messages"]] == [
         "extracted",
         "extracted",
@@ -7542,7 +7543,7 @@ def test_native_ros_extraction_can_write_image_payload_inventory(
             frame_id="front_optical",
         ),
         height=1,
-        width=3,
+        width=1,
         encoding="rgb8",
         data=bytearray(b"rgb"),
     )
@@ -7603,7 +7604,14 @@ def test_native_ros_extraction_can_write_image_payload_inventory(
     assert rows["payload_suffix"].tolist() == [".bin", ".jpg"]
     assert rows["payload_sha256"].str.len().tolist() == [64, 64]
     assert rows["byte_count"].tolist() == [3, len(b"jpeg-bytes")]
+    image_paths = [Path(value) for value in rows["image_file"].tolist()]
+    assert [path.suffix for path in image_paths] == [".ppm", ".jpg"]
+    assert image_paths[0].read_bytes() == b"P6\n1 1\n255\nrgb"
+    assert image_paths[1] == payload_paths[1]
+    assert rows["image_file_format"].tolist() == ["ppm", "jpg"]
+    assert rows["image_file_sha256"].dropna().str.len().tolist() == [64]
     assert extracted.manifest["image_payload_file_rows"] == 2
+    assert extracted.manifest["image_viewable_file_rows"] == 2
     assert extracted.manifest["image_frame_payload_dir"] == str(
         output / "native_ros_image_frames"
     )
@@ -7614,6 +7622,7 @@ def test_native_ros_extraction_can_write_image_payload_inventory(
     )
     assert saved_rows["payload_file"].tolist() == [str(path) for path in payload_paths]
     assert saved_manifest["image_payload_file_rows"] == 2
+    assert saved_manifest["image_viewable_file_rows"] == 2
     assert saved_manifest["image_frame_payload_dir"] == str(
         output / "native_ros_image_frames"
     )

@@ -1280,7 +1280,10 @@ but no truth/template file was provided. Add `write_frame_files: true`,
 entry to persist raw message payload bytes under `native_ros_image_frames/`; the
 timestamp CSV then records `payload_file`, `payload_suffix`, `payload_sha256`,
 `byte_count`, pixel dimensions, and expected raw byte counts when they can be
-derived. This is an inventory/debug artifact only, not an in-repo image detector.
+derived. Compressed image payloads are referenced as viewable files directly,
+and common raw `mono8`/`rgb8`/`bgr8`/`rgba8`/`bgra8` frames also get a sibling
+PGM/PPM inspection file recorded as `image_file`. This is an inventory/debug
+artifact only, not an in-repo image detector or a complete camera decoder.
 When the topic map includes native audio timestamp topics, extraction writes
 `native_ros_audio_timestamps.csv` with message time, frame/source, sample-rate,
 channel, byte/sample count, and duration metadata when present. These rows are

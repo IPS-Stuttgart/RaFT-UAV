@@ -1122,6 +1122,11 @@ def extract_native_rosbag_topic_map(
             if image_timestamps is not None and "payload_file" in image_timestamps
             else 0
         ),
+        "image_viewable_file_rows": (
+            int(image_timestamps["image_file"].notna().sum())
+            if image_timestamps is not None and "image_file" in image_timestamps
+            else 0
+        ),
         "audio_timestamp_rows": int(len(audio_timestamps)) if audio_timestamps is not None else 0,
         "imu_timestamp_rows": int(len(imu_timestamps)) if imu_timestamps is not None else 0,
         "kinematic_timestamp_rows": (
@@ -1400,17 +1405,120 @@ def image_message_to_timestamp_rows(
     if frame_output_dir is not None and payload_bytes is not None:
         frame_output_dir.mkdir(parents=True, exist_ok=True)
         payload_suffix = _image_payload_suffix(row)
-        payload_path = frame_output_dir / (
+        payload_stem = (
             f"{_safe_artifact_slug(sequence_id)}__"
             f"{_safe_artifact_slug(source)}__"
             f"{int(message_index):06d}__"
-            f"{_time_token(time_s)}{payload_suffix}"
+            f"{_time_token(time_s)}"
         )
+        payload_path = frame_output_dir / f"{payload_stem}{payload_suffix}"
         payload_path.write_bytes(payload_bytes)
         row["payload_file"] = str(payload_path)
         row["payload_suffix"] = payload_suffix
         row["payload_sha256"] = hashlib.sha256(payload_bytes).hexdigest()
+        if payload_suffix != ".bin":
+            row["image_file"] = str(payload_path)
+            row["image_file_format"] = payload_suffix.lstrip(".")
+        else:
+            viewable_frame = _viewable_raw_image_frame(row, payload_bytes)
+            if viewable_frame is not None:
+                image_bytes, image_suffix, image_format = viewable_frame
+                image_path = frame_output_dir / f"{payload_stem}{image_suffix}"
+                image_path.write_bytes(image_bytes)
+                row["image_file"] = str(image_path)
+                row["image_file_format"] = image_format
+                row["image_file_sha256"] = hashlib.sha256(image_bytes).hexdigest()
     return [row]
+
+
+def _viewable_raw_image_frame(
+    row: dict[str, Any],
+    payload_bytes: bytes,
+) -> tuple[bytes, str, str] | None:
+    height = _optional_positive_int(row.get("height_px", row.get("height")))
+    width = _optional_positive_int(row.get("width_px", row.get("width")))
+    if height is None or width is None:
+        return None
+    encoding = str(row.get("encoding") or "").strip().lower().replace("-", "").replace("_", "")
+    if encoding in {"mono8", "8uc1", "8sc1"}:
+        image = _extract_interleaved_image_payload(
+            payload_bytes,
+            height=height,
+            width=width,
+            channels=1,
+            row_stride=_optional_positive_int(row.get("row_stride_bytes", row.get("step"))),
+        )
+        if image is None:
+            return None
+        header = f"P5\n{width} {height}\n255\n".encode("ascii")
+        return header + image, ".pgm", "pgm"
+    if encoding in {"rgb8", "bgr8", "rgba8", "bgra8", "8uc3", "8sc3", "8uc4", "8sc4"}:
+        source_channels = 4 if encoding in {"rgba8", "bgra8", "8uc4", "8sc4"} else 3
+        image = _extract_interleaved_image_payload(
+            payload_bytes,
+            height=height,
+            width=width,
+            channels=source_channels,
+            row_stride=_optional_positive_int(row.get("row_stride_bytes", row.get("step"))),
+        )
+        if image is None:
+            return None
+        rgb = _raw_color_image_to_rgb(image, encoding=encoding, channels=source_channels)
+        if rgb is None:
+            return None
+        header = f"P6\n{width} {height}\n255\n".encode("ascii")
+        return header + rgb, ".ppm", "ppm"
+    return None
+
+
+def _extract_interleaved_image_payload(
+    payload_bytes: bytes,
+    *,
+    height: int,
+    width: int,
+    channels: int,
+    row_stride: int | None,
+) -> bytes | None:
+    row_bytes = int(width) * int(channels)
+    stride = int(row_stride) if row_stride is not None else row_bytes
+    if stride < row_bytes:
+        return None
+    required_bytes = (int(height) - 1) * stride + row_bytes
+    if len(payload_bytes) < required_bytes:
+        return None
+    if stride == row_bytes:
+        return payload_bytes[: int(height) * row_bytes]
+    out = bytearray()
+    for row_index in range(int(height)):
+        start = row_index * stride
+        out.extend(payload_bytes[start : start + row_bytes])
+    return bytes(out)
+
+
+def _raw_color_image_to_rgb(
+    image_bytes: bytes,
+    *,
+    encoding: str,
+    channels: int,
+) -> bytes | None:
+    if channels == 3 and encoding in {"rgb8", "8uc3", "8sc3"}:
+        return image_bytes
+    out = bytearray()
+    if encoding in {"bgr8"}:
+        for offset in range(0, len(image_bytes), 3):
+            b, g, r = image_bytes[offset : offset + 3]
+            out.extend((r, g, b))
+        return bytes(out)
+    if channels == 4 and encoding in {"rgba8", "8uc4", "8sc4"}:
+        for offset in range(0, len(image_bytes), 4):
+            out.extend(image_bytes[offset : offset + 3])
+        return bytes(out)
+    if encoding == "bgra8":
+        for offset in range(0, len(image_bytes), 4):
+            b, g, r, _alpha = image_bytes[offset : offset + 4]
+            out.extend((r, g, b))
+        return bytes(out)
+    return None
 
 
 def _bytes_payload(value: Any) -> bytes | None:
