@@ -3636,6 +3636,68 @@ def test_sequence_root_loads_official_track5_point_cloud_folders(tmp_path: Path)
     assert truth.rows["time_s"].tolist() == [float(timestamp)]
 
 
+def test_sequence_root_loads_official_track5_modality_folder_aliases(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "Val" / "seq_alias"
+    timestamp = "1706255054.386069"
+    for folder, offset in (
+        ("Lidar360", 0.0),
+        ("LivoxAvia", 10.0),
+        ("RadarEnhancePCL", 20.0),
+    ):
+        directory = seq / folder
+        directory.mkdir(parents=True, exist_ok=True)
+        np.save(
+            directory / f"{timestamp}.npy",
+            np.array(
+                [
+                    [1.0 + offset, 2.0, 3.0, 0.1],
+                    [1.1 + offset, 2.0, 3.0, 0.2],
+                    [1.0 + offset, 2.1, 3.0, 0.3],
+                ]
+            ),
+        )
+    truth_file = seq / "GroundTruth" / "Leica" / f"{timestamp}.npy"
+    truth_file.parent.mkdir(parents=True)
+    np.save(truth_file, np.array([1.0, 2.0, 3.0]))
+    class_file = seq / "UAVType" / f"{timestamp}.npy"
+    class_file.parent.mkdir()
+    np.save(class_file, np.array(3))
+
+    discovered = discover_sequence_paths(tmp_path)
+    candidates, truth, _ = load_sequence_export(
+        discovered[0],
+        voxel_size_m=0.5,
+        min_cluster_points=3,
+    )
+    truth_template = official_track5_timestamp_template(discovered[0])
+    livox_template = official_track5_timestamp_template(
+        discovered[0],
+        timestamp_source="livox-avia",
+    )
+
+    assert [sequence.sequence_id for sequence in discovered] == ["seq_alias"]
+    assert {
+        path.relative_to(seq).as_posix()
+        for path in discovered[0].point_cloud_files
+    } == {
+        f"Lidar360/{timestamp}.npy",
+        f"LivoxAvia/{timestamp}.npy",
+        f"RadarEnhancePCL/{timestamp}.npy",
+    }
+    assert discovered[0].truth_files == (truth_file,)
+    assert discovered[0].class_files == (class_file,)
+    assert len(candidates.rows) == 3
+    assert set(candidates.rows["source"]) == {"Lidar360", "LivoxAvia", "RadarEnhancePCL"}
+    assert candidates.rows["time_s"].tolist() == [float(timestamp)] * 3
+    assert candidates.rows["class_name"].tolist() == ["3", "3", "3"]
+    assert truth is not None
+    assert truth.rows["time_s"].tolist() == [float(timestamp)]
+    assert truth_template.rows["time_s"].tolist() == [float(timestamp)]
+    assert livox_template.rows["time_s"].tolist() == [float(timestamp)]
+
+
 def test_official_track5_timestamp_template_prefers_truth_then_sensor_frames(
     tmp_path: Path,
 ) -> None:
@@ -5380,6 +5442,29 @@ def test_layout_inspectors_preserve_sequence_ids_under_split_folders(tmp_path: P
 
     inventory = inspect_mmuad_layout(tmp_path)
     assert [row["sequence_id"] for row in inventory["sequence_candidates"]] == ["seq0001"]
+    sequence = inventory["sequence_candidates"][0]
+    assert sequence["has_candidates_or_points"] is True
+    assert sequence["has_truth_or_labels"] is True
+    assert sequence["has_class_labels"] is True
+
+
+def test_layout_inspector_groups_official_modality_folder_aliases(
+    tmp_path: Path,
+) -> None:
+    seq = tmp_path / "Val" / "seq_alias"
+    (seq / "LivoxAvia").mkdir(parents=True)
+    (seq / "GroundTruth" / "Leica").mkdir(parents=True)
+    (seq / "UAVType").mkdir()
+    np.save(seq / "LivoxAvia" / "20.0.npy", np.zeros((3, 3)))
+    np.save(seq / "GroundTruth" / "Leica" / "20.0.npy", np.array([0.0, 0.0, 1.0]))
+    np.save(seq / "UAVType" / "20.0.npy", np.array(2))
+
+    inventory = inspect_mmuad_layout(tmp_path)
+
+    assert inventory["category_counts"]["candidate_or_point_table"] == 1
+    assert inventory["category_counts"]["truth_or_label"] == 1
+    assert inventory["category_counts"]["class_or_label"] == 1
+    assert [row["sequence_id"] for row in inventory["sequence_candidates"]] == ["seq_alias"]
     sequence = inventory["sequence_candidates"][0]
     assert sequence["has_candidates_or_points"] is True
     assert sequence["has_truth_or_labels"] is True
