@@ -212,7 +212,10 @@ def extract_native_rosbag_topic_map(
     ``pose_candidate`` / ``odometry_candidate`` / ``point_candidate`` /
     ``transform_candidate`` / ``tf_candidate`` / ``path_candidate`` /
     ``pose_array_candidate``
-        Convert pose/odometry messages into candidate detections.
+        Convert pose/odometry messages into candidate detections. Position-like
+        topic-map entries may set ``position_coordinate_frame`` to ``identity``
+        or ``ned``; ``ned`` maps north/east/down message coordinates to
+        east/north/up output columns.
     """
 
     payload = load_topic_map_payload(topic_map_json)
@@ -1075,6 +1078,7 @@ def extract_native_rosbag_topic_map(
                         time_s=time_s,
                         child_frame_id=spec.get("child_frame_id"),
                         frame_id=spec.get("frame_id"),
+                        coordinate_frame=_position_coordinate_frame_from_spec(spec),
                     )
                     truth_rows.extend(rows_for_message)
                     rows = len(rows_for_message)
@@ -1093,6 +1097,7 @@ def extract_native_rosbag_topic_map(
                         time_s=time_s,
                         child_frame_id=spec.get("child_frame_id"),
                         frame_id=spec.get("frame_id"),
+                        coordinate_frame=_position_coordinate_frame_from_spec(spec),
                     )
                     candidate_rows = []
                     for row in rows_for_message:
@@ -4193,19 +4198,75 @@ def _time_field_to_s(value: Any) -> float | None:
     return float(numeric)
 
 
-def position_message_to_row(message: Any, *, sequence_id: str, time_s: float) -> dict[str, Any]:
+def position_message_to_row(
+    message: Any,
+    *,
+    sequence_id: str,
+    time_s: float,
+    coordinate_frame: str | None = None,
+) -> dict[str, Any]:
     """Convert common position-bearing ROS messages into a normalized row."""
 
     xyz = _message_position_xyz(message)
     if xyz is None:
         raise ValueError("position-like message has no position/point/translation")
-    return {
+    frame = _normalize_position_coordinate_frame(coordinate_frame)
+    xyz = _transform_position_xyz(xyz, coordinate_frame=frame)
+    row = {
         "sequence_id": sequence_id,
         "time_s": float(time_s),
         "x_m": xyz[0],
         "y_m": xyz[1],
         "z_m": xyz[2],
     }
+    if frame != "identity":
+        row["position_coordinate_frame"] = frame
+    return row
+
+
+def _position_coordinate_frame_from_spec(spec: dict[str, Any]) -> str:
+    return _normalize_position_coordinate_frame(
+        spec.get(
+            "position_coordinate_frame",
+            spec.get("coordinate_frame", spec.get("local_coordinate_frame")),
+        )
+    )
+
+
+def _normalize_position_coordinate_frame(value: Any | None) -> str:
+    if value in (None, ""):
+        return "identity"
+    normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "identity": "identity",
+        "none": "identity",
+        "native": "identity",
+        "local": "identity",
+        "local_frame": "identity",
+        "enu": "identity",
+        "local_enu": "identity",
+        "east_north_up": "identity",
+        "ned": "ned",
+        "local_ned": "ned",
+        "north_east_down": "ned",
+    }
+    frame = aliases.get(normalized)
+    if frame is None:
+        raise ValueError("position_coordinate_frame must be 'identity'/'enu' or 'ned'")
+    return frame
+
+
+def _transform_position_xyz(
+    xyz: tuple[float, float, float],
+    *,
+    coordinate_frame: str,
+) -> tuple[float, float, float]:
+    if coordinate_frame == "identity":
+        return xyz
+    if coordinate_frame == "ned":
+        north, east, down = xyz
+        return east, north, -down
+    raise ValueError("position_coordinate_frame must be 'identity'/'enu' or 'ned'")
 
 
 def geodetic_message_to_rows(
@@ -4580,9 +4641,11 @@ def position_message_to_rows(
     time_s: float,
     child_frame_id: str | None = None,
     frame_id: str | None = None,
+    coordinate_frame: str | None = None,
 ) -> list[dict[str, Any]]:
     """Convert a position-bearing message or TFMessage into normalized rows."""
 
+    position_coordinate_frame = _normalize_position_coordinate_frame(coordinate_frame)
     transforms = getattr(message, "transforms", None)
     if transforms is not None:
         rows: list[dict[str, Any]] = []
@@ -4598,6 +4661,7 @@ def position_message_to_rows(
                 transform,
                 sequence_id=sequence_id,
                 time_s=transform_time_s if transform_time_s is not None else time_s,
+                coordinate_frame=position_coordinate_frame,
             )
             _add_position_row_metadata(row, transform)
             rows.append(row)
@@ -4626,6 +4690,7 @@ def position_message_to_rows(
                     if message_time_s is not None
                     else time_s
                 ),
+                coordinate_frame=position_coordinate_frame,
             )
             _add_position_row_metadata(row, pose, fallback_frame_id=message_frame_id)
             rows.append(row)
@@ -4636,7 +4701,12 @@ def position_message_to_rows(
         frame_id=frame_id,
     ):
         return []
-    row = position_message_to_row(message, sequence_id=sequence_id, time_s=time_s)
+    row = position_message_to_row(
+        message,
+        sequence_id=sequence_id,
+        time_s=time_s,
+        coordinate_frame=position_coordinate_frame,
+    )
     _add_position_row_metadata(row, message)
     return [row]
 

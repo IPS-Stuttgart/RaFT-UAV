@@ -104,6 +104,7 @@ def write_topic_map_template(
     exports = []
     for idx, topic in enumerate(topics):
         name = str(topic.get("name", topic.get("topic", f"topic_{idx}")))
+        msg_type = str(topic.get("type", topic.get("msgtype", "")))
         safe = re.sub(r"[^A-Za-z0-9_]+", "_", name.strip("/")).strip("_") or f"topic_{idx}"
         kind = _infer_topic_map_kind(topic)
         entry = {
@@ -115,6 +116,8 @@ def write_topic_map_template(
                 Path(str(report.get("path", "sequence"))).stem,
             ),
         }
+        if mode == "native" and _looks_like_px4_local_position_topic(name, msg_type):
+            entry["position_coordinate_frame"] = "ned"
         if mode == "export":
             entry["path"] = f"exports/{safe}.csv"
             entry["column_aliases"] = {
