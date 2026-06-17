@@ -234,6 +234,10 @@ tracking. Native topic-map templates without a recording are still inspection
 artifacts; use explicit `--rosbag-path --topic-map-file` when a folder contains
 multiple recordings or multiple native maps (`--topic-map-json` remains accepted
 for existing scripts).
+For ROS-only sequence folders, pass `--native-ros-auto-topic-map` to inspect
+each single-recording sequence, write `native_ros_auto_topic_maps/<sequence_id>/`
+with a `rosbag_report.json` and generated `topic_map_native.json`, and then run
+the existing native extraction bridge from that generated map.
 
 ### Submission/interchange output
 
@@ -1374,12 +1378,18 @@ wrappers with `detections`, `targets`, `tracks`, `objects`, or `returns`
 children. It preserves available point/target IDs as `track_id`, plus optional
 velocity/doppler and intensity/SNR metadata, while topic maps can override
 `std_xy_m`, `std_z_m`, `confidence`, and `class_name`.
-Sequence-root mode can also run native extraction automatically when each
-sequence folder contains one native `topic_map*.json/yaml` file and one ROS bag
-or recording file. Per-sequence native manifests are written below
+Sequence-root mode can also run native extraction when each sequence folder
+contains one native `topic_map*.json/yaml` file and one ROS bag or recording
+file. For ROS-only sequence folders, `--native-ros-auto-topic-map` first
+inspects the recording and writes a generated native topic map plus
+`rosbag_report.json` below `native_ros_auto_topic_maps/<sequence_id>/`; the
+generated map is then passed to the same extractor. Per-sequence native
+manifests are written below
 `native_ros_extracted/<sequence_id>/` by default and summarized in
 `native_ros_sequence_manifests.json`; pass `--native-ros-extract-output-dir` to
-choose a different extraction base directory.
+choose a different extraction base directory, or
+`--native-ros-auto-topic-map-dir` to choose a different generated-template
+directory.
 If native extraction writes a manifest but yields no candidate rows, the CLI
 exits before tracking and points to `native_ros_extraction_manifest.json`; update
 the topic map to include candidate-bearing topics or export candidate detections

@@ -355,9 +355,10 @@ def discover_sequence_paths(root: Path, *, sequence_glob: str = "*") -> list[Seq
     for common names such as ``candidates.csv``, ``*_candidates.csv``,
     delimited variants such as ``candidates.tsv`` or ``detections.txt``,
     JSON/JSONL row tables, compact NumPy trajectory tables, point-cloud files,
-    exported ROS topic-map JSON/YAML files, ``truth.csv`` / ``truth.npy``, and
-    ``calibration.json`` under each sequence folder.  If ``root`` itself holds
-    such files, it is treated as a single sequence.
+    exported ROS topic-map JSON/YAML files, native ROS recordings,
+    ``truth.csv`` / ``truth.npy``, and ``calibration.json`` under each sequence
+    folder.  If ``root`` itself holds such files, it is treated as a single
+    sequence.
     """
 
     root = Path(root)
@@ -651,6 +652,7 @@ def _looks_like_sequence(path: Path) -> bool:
         or _point_files(path)
         or _topic_map_files(path)
         or (_native_topic_map_files(path) and _rosbag_paths(path))
+        or _rosbag_paths(path)
         or _truth_files(path)
         or _class_files(path)
         or _timestamps_from_official_dirs(path, _all_official_timestamp_dirs())
