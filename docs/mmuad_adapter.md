@@ -1168,6 +1168,9 @@ angular velocity, linear acceleration, and covariance diagonals when present,
 `Accel`, `AccelStamped`, and `AccelWithCovarianceStamped` as
 `twist_timestamps` / `accel_timestamps` velocity/acceleration inventory rows
 with standard 6x6 covariance diagonals when present,
+`sensor_msgs/msg/JointState` as `joint_state_timestamps` and
+`geometry_msgs/msg/Wrench` / `WrenchStamped` as `wrench_timestamps` actuation
+inventory rows,
 common `sensor_msgs` status messages such as `MagneticField`,
 `FluidPressure`, `Temperature`, `RelativeHumidity`, `Illuminance`, and
 `BatteryState` as `sensor_status_timestamps` inventory rows,
@@ -1301,6 +1304,11 @@ acceleration fields when present. `TwistWithCovariance` and
 diagonals as linear/angular vector covariance columns. These rows are raw
 kinematic inventory only: velocity-only or acceleration-only messages are not
 tracker position candidates and are not official Track 5 timestamp templates.
+Native JointState/Wrench topic-map entries write
+`native_ros_actuation_timestamps.csv` with message time, frame/source, joint
+names, joint position/velocity/effort summaries, and force/torque vectors when
+present. These rows are actuator/control inventory only and are not tracker
+position candidates or official Track 5 timestamp templates.
 Native sensor status topic-map entries write
 `native_ros_sensor_status_timestamps.csv` with message time, frame/source, and
 available scalar/vector metadata from `MagneticField`, `FluidPressure`,

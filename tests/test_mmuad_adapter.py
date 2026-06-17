@@ -52,6 +52,7 @@ from raft_uav.mmuad.mot import (
     run_mmuad_multi_object_tracker,
 )
 from raft_uav.mmuad.native_ros import (
+    actuation_message_to_timestamp_rows,
     bounding_box3d_message_to_rows,
     detection2d_message_to_rows,
     detection3d_message_to_rows,
@@ -8109,6 +8110,133 @@ def test_native_ros_extraction_supports_kinematic_timestamp_topics(
     assert not (output / "native_ros_kinematic_timestamp_template.csv").exists()
 
 
+def test_native_ros_extraction_supports_actuation_timestamp_topics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mcap = tmp_path / "seq_actuation.mcap"
+    mcap.write_bytes(b"fake-reader-does-not-open-this")
+    topic_map = tmp_path / "topic_map_native.json"
+    output = tmp_path / "native_out"
+    topic_map.write_text(
+        json.dumps(
+            {
+                "schema": "raft-uav-mmuad-topic-map-v1",
+                "sequence_id": "seq_actuation",
+                "exports": [
+                    {
+                        "topic": "/uav/joint_states",
+                        "kind": "joint_state_timestamps",
+                        "source": "joints",
+                    },
+                    {
+                        "topic": "/uav/wrench",
+                        "kind": "wrench_timestamps",
+                        "source": "wrench",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    joint_connection = SimpleNamespace(
+        topic="/uav/joint_states",
+        msgtype="sensor_msgs/msg/JointState",
+    )
+    wrench_connection = SimpleNamespace(
+        topic="/uav/wrench",
+        msgtype="geometry_msgs/msg/WrenchStamped",
+    )
+    joint_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=9, nanosec=250_000_000),
+            frame_id="base_link",
+        ),
+        name=["rotor_1", "rotor_2"],
+        position=[0.1, 0.2],
+        velocity=[10.0, 11.0],
+        effort=[1.5, 1.7],
+    )
+    wrench_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=10, nanosec=500_000_000),
+            frame_id="base_link",
+        ),
+        wrench=SimpleNamespace(
+            force=SimpleNamespace(x=1.0, y=2.0, z=3.0),
+            torque=SimpleNamespace(x=0.1, y=0.2, z=0.3),
+        ),
+    )
+
+    class FakeAnyReader:
+        def __init__(self, paths):
+            assert paths == [mcap]
+            self.connections = [joint_connection, wrench_connection]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def messages(self, *, connections):
+            assert connections == [joint_connection, wrench_connection]
+            return [
+                (joint_connection, 9_000_000_000, b"joint"),
+                (wrench_connection, 10_000_000_000, b"wrench"),
+            ]
+
+        def deserialize(self, rawdata, msgtype):
+            if rawdata == b"joint":
+                assert msgtype == "sensor_msgs/msg/JointState"
+                return joint_message
+            if rawdata == b"wrench":
+                assert msgtype == "geometry_msgs/msg/WrenchStamped"
+                return wrench_message
+            raise AssertionError(rawdata)
+
+    monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "rosbags.highlevel",
+        SimpleNamespace(AnyReader=FakeAnyReader),
+    )
+
+    extracted = extract_native_rosbag_topic_map(
+        bag_path=mcap,
+        topic_map_json=topic_map,
+        output_dir=output,
+    )
+
+    assert extracted.candidates is None
+    assert extracted.truth is None
+    assert extracted.actuation_timestamps is not None
+    rows = extracted.actuation_timestamps.sort_values("time_s").reset_index(drop=True)
+    assert rows["sequence_id"].tolist() == ["seq_actuation", "seq_actuation"]
+    assert rows["time_s"].tolist() == [9.25, 10.5]
+    assert rows["source"].tolist() == ["joints", "wrench"]
+    assert rows.loc[0, "joint_count"] == 2
+    assert json.loads(rows.loc[0, "joint_names_json"]) == ["rotor_1", "rotor_2"]
+    assert rows.loc[0, "joint_position_mean"] == pytest.approx(0.15)
+    assert rows.loc[0, "joint_velocity_max"] == pytest.approx(11.0)
+    assert rows.loc[0, "joint_effort_json"] == "[1.5,1.7]"
+    assert rows.loc[1, "force_z_n"] == pytest.approx(3.0)
+    assert rows.loc[1, "torque_y_n_m"] == pytest.approx(0.2)
+    assert extracted.manifest["actuation_timestamp_rows"] == 2
+    assert extracted.manifest["candidate_rows"] == 0
+    assert extracted.manifest["truth_rows"] == 0
+
+    saved_rows = pd.read_csv(output / "native_ros_actuation_timestamps.csv")
+    saved_manifest = json.loads(
+        (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
+    )
+    assert saved_rows["time_s"].tolist() == [9.25, 10.5]
+    assert saved_manifest["actuation_timestamp_rows"] == 2
+    assert saved_manifest["actuation_timestamps_csv"] == str(
+        output / "native_ros_actuation_timestamps.csv"
+    )
+
+
 def test_native_ros_extraction_supports_sensor_status_timestamp_topics(
     tmp_path: Path,
     monkeypatch,
@@ -11529,6 +11657,44 @@ def test_ros2_topic_map_template_infers_kinematic_timestamp_topics(tmp_path: Pat
     assert all("path" not in entry for entry in payload["exports"])
 
 
+def test_ros2_topic_map_template_infers_actuation_timestamp_topics(tmp_path: Path) -> None:
+    bag = tmp_path / "bagdir"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "\n".join(
+            [
+                "rosbag2_bagfile_information:",
+                "  topics_with_message_count:",
+                "    - topic_metadata:",
+                "        name: /uav/joint_states",
+                "        type: sensor_msgs/msg/JointState",
+                "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /uav/force_torque",
+                "        type: geometry_msgs/msg/WrenchStamped",
+                "      message_count: 5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = inspect_rosbag(bag)
+    template = write_topic_map_template(
+        report,
+        tmp_path / "topic_map_template.json",
+        template_mode="native",
+    )
+    payload = json.loads(template.read_text(encoding="utf-8"))
+
+    assert [entry["kind"] for entry in payload["exports"]] == [
+        "joint_state_timestamps",
+        "wrench_timestamps",
+    ]
+    assert payload["exports"][0]["source"] == "uav_joint_states"
+    assert payload["exports"][1]["source"] == "uav_force_torque"
+    assert all("path" not in entry for entry in payload["exports"])
+
+
 def test_ros2_topic_map_template_infers_sensor_status_timestamp_topics(
     tmp_path: Path,
 ) -> None:
@@ -12198,6 +12364,47 @@ def test_native_ros_bounding_box3d_message_to_rows_accepts_single_box() -> None:
     assert rows[0]["box_id"] == "single-box"
     assert rows[0]["x_m"] == 1.0
     assert rows[0]["box_size_z_m"] == 6.0
+
+
+def test_native_ros_actuation_message_to_timestamp_rows_extracts_joint_and_wrench() -> None:
+    joint_rows = actuation_message_to_timestamp_rows(
+        SimpleNamespace(
+            header=SimpleNamespace(frame_id="base_link"),
+            name=["rotor_a", "rotor_b"],
+            position=[0.0, 0.5],
+            velocity=[100.0, 110.0],
+            effort=[2.0, 3.0],
+        ),
+        sequence_id="seq_actuation",
+        time_s=1.25,
+        topic="/joint_states",
+        source="joint_states",
+        message_index=0,
+        kind="joint_state_timestamps",
+    )
+    wrench_rows = actuation_message_to_timestamp_rows(
+        SimpleNamespace(
+            wrench=SimpleNamespace(
+                force=SimpleNamespace(x=1.0, y=2.0, z=3.0),
+                torque=SimpleNamespace(x=0.1, y=0.2, z=0.3),
+            )
+        ),
+        sequence_id="seq_actuation",
+        time_s=2.5,
+        topic="/wrench",
+        source="wrench",
+        message_index=1,
+        kind="wrench_timestamps",
+    )
+
+    assert joint_rows[0]["frame_id"] == "base_link"
+    assert joint_rows[0]["joint_count"] == 2
+    assert json.loads(joint_rows[0]["joint_names_json"]) == ["rotor_a", "rotor_b"]
+    assert joint_rows[0]["joint_position_mean"] == pytest.approx(0.25)
+    assert joint_rows[0]["joint_velocity_max"] == pytest.approx(110.0)
+    assert joint_rows[0]["joint_effort_json"] == "[2.0,3.0]"
+    assert wrench_rows[0]["force_x_n"] == pytest.approx(1.0)
+    assert wrench_rows[0]["torque_z_n_m"] == pytest.approx(0.3)
 
 
 def test_native_ros_tracked_objects_message_to_rows_extracts_kinematics() -> None:

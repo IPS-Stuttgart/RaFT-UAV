@@ -367,6 +367,8 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
         return "imu_timestamps"
     if _looks_like_kinematic_timestamp_topic(name, msg_type):
         return _kinematic_timestamp_kind(msg_type)
+    if _looks_like_actuation_timestamp_topic(name, msg_type):
+        return _actuation_timestamp_kind(msg_type)
     if _looks_like_image_timestamp_topic(name, msg_type):
         return "image_timestamps"
     if "detection3darray" in compact_type:
@@ -687,6 +689,38 @@ def _kinematic_timestamp_kind(msg_type: str) -> str:
     if "twist" in compact_type:
         return "twist_timestamps"
     return "kinematic_timestamps"
+
+
+def _looks_like_actuation_timestamp_topic(name: str, msg_type: str) -> bool:
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    if "multidofjointstate" in compact_type:
+        return False
+    name_tokens = set(re.split(r"[^a-z0-9]+", name.lower()))
+    name_tokens.discard("")
+    return (
+        compact_type.endswith("/jointstate")
+        or compact_type.endswith("msg/jointstate")
+        or compact_type.endswith("/wrench")
+        or compact_type.endswith("msg/wrench")
+        or compact_type.endswith("/wrenchstamped")
+        or compact_type.endswith("msg/wrenchstamped")
+        or "jointstate" in compact_type
+        or "wrench" in compact_type
+        or "jointstate" in name_tokens
+        or "joint_states" in name.lower()
+        or "jointstates" in name.lower().replace("_", "").replace("-", "")
+        or "wrench" in name_tokens
+        or "forcetorque" in name.lower().replace("_", "").replace("-", "")
+    )
+
+
+def _actuation_timestamp_kind(msg_type: str) -> str:
+    compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    if "jointstate" in compact_type:
+        return "joint_state_timestamps"
+    if "wrench" in compact_type:
+        return "wrench_timestamps"
+    return "actuation_timestamps"
 
 
 def _looks_like_sensor_status_timestamp_topic(name: str, msg_type: str) -> bool:
