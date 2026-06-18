@@ -96,6 +96,9 @@ from raft_uav.mmuad.trajectory_completion import (
 )
 
 
+DEFAULT_UG2_OFFICIAL_CLASSIFICATION = "2"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="raft-uav-mmuad-track",
@@ -285,10 +288,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ug2-class-name", default="unknown")
     parser.add_argument(
         "--ug2-official-classification",
-        default="0",
+        default=DEFAULT_UG2_OFFICIAL_CLASSIFICATION,
         help=(
-            "default integer Classification id for official Track 5 result rows; "
-            "numeric --ug2-class-map-file values override this per sequence"
+            "default integer Classification id for official Track 5 result rows "
+            f"(default: {DEFAULT_UG2_OFFICIAL_CLASSIFICATION}, the public "
+            "validation global-majority prior); numeric --ug2-class-map-file "
+            "values override this per sequence"
         ),
     )
     parser.add_argument(
