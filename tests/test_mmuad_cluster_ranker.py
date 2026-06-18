@@ -8,6 +8,7 @@ import pytest
 
 from raft_uav.mmuad.cluster_ranker import (
     build_cluster_feature_table,
+    evaluate_cluster_ranker_loso,
     load_cluster_ranker_model,
     main as cluster_ranker_main,
     merge_cross_sensor_candidate_clusters,
@@ -41,6 +42,48 @@ def _truth_rows() -> pd.DataFrame:
             "x_m": [0.05],
             "y_m": [0.05],
             "z_m": [1.05],
+        }
+    )
+
+
+def _multi_sequence_candidate_rows() -> pd.DataFrame:
+    records = []
+    for sequence_id in ("seqA", "seqB", "seqC"):
+        records.extend(
+            [
+                {
+                    "sequence_id": sequence_id,
+                    "time_s": 0.0,
+                    "source": "lidar_360",
+                    "track_id": f"{sequence_id}-good",
+                    "x_m": 0.0,
+                    "y_m": 0.0,
+                    "z_m": 1.0,
+                    "confidence": 1.0,
+                },
+                {
+                    "sequence_id": sequence_id,
+                    "time_s": 0.0,
+                    "source": "lidar_360",
+                    "track_id": f"{sequence_id}-bad",
+                    "x_m": 10.0,
+                    "y_m": 10.0,
+                    "z_m": 4.0,
+                    "confidence": 1.0,
+                },
+            ]
+        )
+    return pd.DataFrame.from_records(records)
+
+
+def _multi_sequence_truth_rows() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqB", "seqC"],
+            "time_s": [0.0, 0.0, 0.0],
+            "x_m": [0.0, 0.0, 0.0],
+            "y_m": [0.0, 0.0, 0.0],
+            "z_m": [1.0, 1.0, 1.0],
         }
     )
 
@@ -191,6 +234,74 @@ def test_cluster_ranker_cli_trains_and_scores(tmp_path: Path) -> None:
     scored = pd.read_csv(scored_csv).sort_values("x_m")
     assert scored["ranker_score"].iloc[0] > scored["ranker_score"].iloc[1]
     assert json.loads(model_json.read_text(encoding="utf-8"))["model_type"] == "logistic"
+
+
+def test_cluster_ranker_loso_evaluation_reports_non_leaky_protocol() -> None:
+    features = build_cluster_feature_table(
+        CandidateFrame(_multi_sequence_candidate_rows()),
+        truth=_multi_sequence_truth_rows(),
+        good_threshold_m=1.0,
+        max_truth_time_delta_s=0.1,
+    )
+
+    predictions, fold_summary, pooled_summary = evaluate_cluster_ranker_loso(
+        features,
+        iterations=20,
+        learning_rate=0.1,
+    )
+
+    assert set(fold_summary["sequence_id"]) == {"seqA", "seqB", "seqC"}
+    assert pooled_summary.loc[0, "split"] == "pooled_loso"
+    assert pooled_summary.loc[0, "fold_count"] == 3
+    assert predictions["loso_protocol"].str.contains("not submission-valid").all()
+    assert predictions["ranker_score"].notna().all()
+    assert "candidate_regret_p95_3d_m" in fold_summary.columns
+
+
+def test_cluster_ranker_cli_writes_loso_outputs(tmp_path: Path) -> None:
+    candidates_csv = tmp_path / "candidates.csv"
+    truth_csv = tmp_path / "truth.csv"
+    model_json = tmp_path / "model.json"
+    predictions_csv = tmp_path / "loso_predictions.csv"
+    fold_summary_csv = tmp_path / "loso_folds.csv"
+    summary_csv = tmp_path / "loso_summary.csv"
+    protocol_json = tmp_path / "loso_protocol.json"
+    _multi_sequence_candidate_rows().to_csv(candidates_csv, index=False)
+    _multi_sequence_truth_rows().to_csv(truth_csv, index=False)
+
+    status = cluster_ranker_main(
+        [
+            "--train-candidates",
+            str(candidates_csv),
+            "--train-truth",
+            str(truth_csv),
+            "--model-json",
+            str(model_json),
+            "--loso-eval",
+            "--loso-predictions-csv",
+            str(predictions_csv),
+            "--loso-fold-summary-csv",
+            str(fold_summary_csv),
+            "--loso-summary-csv",
+            str(summary_csv),
+            "--loso-protocol-json",
+            str(protocol_json),
+            "--good-threshold-m",
+            "1.0",
+            "--max-truth-time-delta-s",
+            "0.1",
+            "--iterations",
+            "20",
+        ]
+    )
+
+    assert status == 0
+    assert predictions_csv.exists()
+    assert fold_summary_csv.exists()
+    assert summary_csv.exists()
+    assert protocol_json.exists()
+    assert pd.read_csv(summary_csv).loc[0, "fold_count"] == 3
+    assert json.loads(protocol_json.read_text(encoding="utf-8"))["fold_count"] == 3
 
 
 def test_cluster_ranker_cli_trains_from_sequence_root(tmp_path: Path) -> None:

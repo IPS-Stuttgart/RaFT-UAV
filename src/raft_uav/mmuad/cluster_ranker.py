@@ -583,6 +583,226 @@ def write_ranker_diagnostics(features: pd.DataFrame, path: Path) -> Path:
     return path
 
 
+def evaluate_cluster_ranker_loso(
+    features: pd.DataFrame,
+    *,
+    model_type: str = "logistic",
+    target_column: str = "good_cluster",
+    learning_rate: float = 0.05,
+    iterations: int = 600,
+    random_state: int = 13,
+    n_estimators: int = 200,
+    score_distance_scale_m: float = 10.0,
+    min_train_sequences: int = 1,
+    protocol: str = "LOSO public-validation diagnostic, not submission-valid",
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Evaluate a cluster ranker with leave-one-sequence-out folds."""
+
+    rows = pd.DataFrame(features).copy()
+    if rows.empty:
+        raise ValueError("no feature rows for LOSO cluster-ranker evaluation")
+    if "sequence_id" not in rows.columns:
+        raise ValueError("LOSO cluster-ranker evaluation requires sequence_id")
+    rows["sequence_id"] = rows["sequence_id"].astype(str)
+    sequences = sorted(rows["sequence_id"].dropna().unique())
+    if len(sequences) < 2:
+        raise ValueError("LOSO cluster-ranker evaluation requires at least two sequences")
+    predictions: list[pd.DataFrame] = []
+    fold_rows: list[dict[str, Any]] = []
+    for heldout_sequence in sequences:
+        train_rows = rows.loc[rows["sequence_id"] != heldout_sequence].copy()
+        heldout_rows = rows.loc[rows["sequence_id"] == heldout_sequence].copy()
+        train_sequences = sorted(train_rows["sequence_id"].dropna().unique())
+        if len(train_sequences) < int(min_train_sequences) or train_rows.empty or heldout_rows.empty:
+            continue
+        model = train_cluster_ranker(
+            train_rows,
+            model_type=model_type,
+            target_column=target_column,
+            learning_rate=learning_rate,
+            iterations=iterations,
+            random_state=random_state,
+            n_estimators=n_estimators,
+            score_distance_scale_m=score_distance_scale_m,
+        )
+        heldout_rows["ranker_score"] = predict_cluster_scores(heldout_rows, model)
+        heldout_rows["raw_confidence"] = pd.to_numeric(
+            heldout_rows.get("confidence", np.nan),
+            errors="coerce",
+        )
+        heldout_rows["confidence"] = heldout_rows["ranker_score"]
+        heldout_rows["loso_heldout_sequence"] = heldout_sequence
+        heldout_rows["loso_train_sequence_count"] = int(len(train_sequences))
+        heldout_rows["loso_model_type"] = model.model_type
+        heldout_rows["loso_target_column"] = model.target_column
+        heldout_rows["loso_protocol"] = protocol
+        predictions.append(heldout_rows)
+        fold_summary = _ranker_prediction_summary(
+            heldout_rows,
+            sequence=heldout_sequence,
+            split="heldout_sequence",
+            protocol=protocol,
+        )
+        fold_summary["train_sequence_count"] = int(len(train_sequences))
+        fold_summary["model_type"] = model.model_type
+        fold_summary["target_column"] = model.target_column
+        fold_rows.append(fold_summary)
+    if not predictions:
+        raise ValueError("no LOSO folds could be evaluated")
+    prediction_frame = pd.concat(predictions, ignore_index=True)
+    fold_summary_frame = pd.DataFrame.from_records(fold_rows).sort_values("sequence_id")
+    pooled_summary = pd.DataFrame.from_records(
+        [
+            _ranker_prediction_summary(
+                prediction_frame,
+                sequence="__pooled__",
+                split="pooled_loso",
+                protocol=protocol,
+            )
+            | {
+                "fold_count": int(len(fold_summary_frame)),
+                "sequence_count": int(len(sequences)),
+                "model_type": str(model_type),
+                "target_column": str(target_column),
+            }
+        ]
+    )
+    return prediction_frame, fold_summary_frame.reset_index(drop=True), pooled_summary
+
+
+def _ranker_prediction_summary(
+    rows: pd.DataFrame,
+    *,
+    sequence: str,
+    split: str,
+    protocol: str,
+) -> dict[str, Any]:
+    labeled = rows.loc[pd.to_numeric(rows.get("truth_distance_3d_m"), errors="coerce").notna()].copy()
+    frame_rows = _ranker_frame_selection_rows(labeled)
+    selected = pd.to_numeric(frame_rows.get("selected_truth_distance_3d_m"), errors="coerce")
+    oracle = pd.to_numeric(frame_rows.get("oracle_truth_distance_3d_m"), errors="coerce")
+    regret = pd.to_numeric(frame_rows.get("candidate_regret_3d_m"), errors="coerce")
+    good = rows.get("good_cluster")
+    good_values = pd.Series(good, index=rows.index).fillna(False).astype(bool) if good is not None else pd.Series(dtype=bool)
+    return {
+        "protocol": protocol,
+        "split": split,
+        "sequence_id": sequence,
+        "candidate_rows": int(len(rows)),
+        "labeled_candidate_rows": int(len(labeled)),
+        "positive_candidate_rows": int(good_values.sum()),
+        "positive_candidate_rate": _safe_mean(good_values.astype(float)),
+        "frame_count": int(len(frame_rows)),
+        "top1_mean_3d_m": _safe_mean(selected),
+        "top1_median_3d_m": _safe_quantile(selected, 0.50),
+        "top1_p95_3d_m": _safe_quantile(selected, 0.95),
+        "top1_max_3d_m": _safe_max(selected),
+        "oracle_mean_3d_m": _safe_mean(oracle),
+        "oracle_p95_3d_m": _safe_quantile(oracle, 0.95),
+        "candidate_regret_mean_3d_m": _safe_mean(regret),
+        "candidate_regret_p95_3d_m": _safe_quantile(regret, 0.95),
+        "top1_within_2m": _within_rate(selected, 2.0),
+        "top1_within_5m": _within_rate(selected, 5.0),
+        "top1_within_10m": _within_rate(selected, 10.0),
+        "oracle_within_2m": _within_rate(oracle, 2.0),
+        "oracle_within_5m": _within_rate(oracle, 5.0),
+        "oracle_within_10m": _within_rate(oracle, 10.0),
+        "score_auc": _binary_auc(
+            pd.Series(rows.get("ranker_score"), index=rows.index),
+            good_values,
+        ),
+    }
+
+
+def _ranker_frame_selection_rows(rows: pd.DataFrame) -> pd.DataFrame:
+    if rows.empty:
+        return pd.DataFrame(
+            columns=[
+                "sequence_id",
+                "time_s",
+                "selected_truth_distance_3d_m",
+                "oracle_truth_distance_3d_m",
+                "candidate_regret_3d_m",
+            ]
+        )
+    out: list[dict[str, Any]] = []
+    work = rows.copy()
+    work["truth_distance_3d_m"] = pd.to_numeric(work["truth_distance_3d_m"], errors="coerce")
+    work["ranker_score"] = pd.to_numeric(work.get("ranker_score"), errors="coerce")
+    for (sequence_id, time_s), group in work.groupby(["sequence_id", "time_s"], sort=True):
+        group = group.loc[group["truth_distance_3d_m"].notna()].copy()
+        if group.empty:
+            continue
+        score = group["ranker_score"].fillna(float("-inf"))
+        selected = group.iloc[int(np.argmax(score.to_numpy(float)))]
+        oracle_distance = float(group["truth_distance_3d_m"].min())
+        selected_distance = float(selected["truth_distance_3d_m"])
+        out.append(
+            {
+                "sequence_id": str(sequence_id),
+                "time_s": float(time_s),
+                "selected_source": str(selected.get("source", "")),
+                "selected_track_id": str(selected.get("track_id", "")),
+                "selected_ranker_score": float(selected.get("ranker_score", np.nan)),
+                "selected_truth_distance_3d_m": selected_distance,
+                "oracle_truth_distance_3d_m": oracle_distance,
+                "candidate_regret_3d_m": selected_distance - oracle_distance,
+                "candidate_count": int(len(group)),
+            }
+        )
+    return pd.DataFrame.from_records(out)
+
+
+def _safe_mean(values: pd.Series) -> float:
+    finite = pd.to_numeric(values, errors="coerce")
+    finite = finite.loc[np.isfinite(finite)]
+    return float(finite.mean()) if len(finite) else float("nan")
+
+
+def _safe_quantile(values: pd.Series, quantile: float) -> float:
+    finite = pd.to_numeric(values, errors="coerce")
+    finite = finite.loc[np.isfinite(finite)]
+    return float(finite.quantile(float(quantile))) if len(finite) else float("nan")
+
+
+def _safe_max(values: pd.Series) -> float:
+    finite = pd.to_numeric(values, errors="coerce")
+    finite = finite.loc[np.isfinite(finite)]
+    return float(finite.max()) if len(finite) else float("nan")
+
+
+def _within_rate(values: pd.Series, threshold_m: float) -> float:
+    finite = pd.to_numeric(values, errors="coerce")
+    finite = finite.loc[np.isfinite(finite)]
+    return float((finite <= float(threshold_m)).mean()) if len(finite) else float("nan")
+
+
+def _binary_auc(scores: pd.Series, labels: pd.Series) -> float:
+    score_values = pd.to_numeric(scores, errors="coerce")
+    label_values = labels.fillna(False).astype(bool)
+    valid = score_values.notna() & label_values.notna()
+    if not valid.any():
+        return float("nan")
+    score_array = score_values.loc[valid].to_numpy(float)
+    label_array = label_values.loc[valid].to_numpy(bool)
+    positives = int(label_array.sum())
+    negatives = int((~label_array).sum())
+    if positives == 0 or negatives == 0:
+        return float("nan")
+    order = np.argsort(score_array, kind="mergesort")
+    ranks = np.empty(len(score_array), dtype=float)
+    sorted_scores = score_array[order]
+    start = 0
+    while start < len(sorted_scores):
+        end = start + 1
+        while end < len(sorted_scores) and sorted_scores[end] == sorted_scores[start]:
+            end += 1
+        ranks[order[start:end]] = (start + end + 1) / 2.0
+        start = end
+    positive_rank_sum = float(ranks[label_array].sum())
+    return float((positive_rank_sum - positives * (positives + 1) / 2.0) / (positives * negatives))
+
+
 def _candidate_rows(candidates: CandidateFrame | pd.DataFrame) -> pd.DataFrame:
     rows = candidates.rows.copy() if isinstance(candidates, CandidateFrame) else pd.DataFrame(candidates).copy()
     if rows.empty:
@@ -999,6 +1219,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--score-candidates-output-csv", type=Path)
     parser.add_argument("--scored-candidates-csv", type=Path)
     parser.add_argument("--merged-candidates-csv", type=Path)
+    parser.add_argument(
+        "--loso-eval",
+        action="store_true",
+        help="run leave-one-sequence-out candidate-ranker evaluation on the training input",
+    )
+    parser.add_argument("--loso-predictions-csv", type=Path)
+    parser.add_argument("--loso-fold-summary-csv", type=Path)
+    parser.add_argument("--loso-summary-csv", type=Path)
+    parser.add_argument("--loso-protocol-json", type=Path)
     parser.add_argument("--good-threshold-m", type=float, default=5.0)
     parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
     parser.add_argument("--cross-sensor-time-window-s", type=float, default=0.05)
@@ -1056,6 +1285,51 @@ def main(argv: list[str] | None = None) -> int:
         save_cluster_ranker_model(model, args.model_json)
         if args.train_features_csv is not None:
             write_ranker_diagnostics(train_features, args.train_features_csv)
+        if args.loso_eval:
+            loso_predictions, loso_fold_summary, loso_summary = evaluate_cluster_ranker_loso(
+                train_features,
+                model_type=args.model_type,
+                target_column=args.target_column,
+                learning_rate=args.learning_rate,
+                iterations=args.iterations,
+                random_state=args.random_state,
+                n_estimators=args.n_estimators,
+                score_distance_scale_m=(
+                    args.score_distance_scale_m
+                    if args.score_distance_scale_m is not None
+                    else args.good_threshold_m
+                ),
+            )
+            if args.loso_predictions_csv is not None:
+                args.loso_predictions_csv.parent.mkdir(parents=True, exist_ok=True)
+                loso_predictions.to_csv(args.loso_predictions_csv, index=False)
+            if args.loso_fold_summary_csv is not None:
+                args.loso_fold_summary_csv.parent.mkdir(parents=True, exist_ok=True)
+                loso_fold_summary.to_csv(args.loso_fold_summary_csv, index=False)
+            if args.loso_summary_csv is not None:
+                args.loso_summary_csv.parent.mkdir(parents=True, exist_ok=True)
+                loso_summary.to_csv(args.loso_summary_csv, index=False)
+            if args.loso_protocol_json is not None:
+                args.loso_protocol_json.parent.mkdir(parents=True, exist_ok=True)
+                protocol_payload = {
+                    "protocol": "LOSO public-validation diagnostic, not submission-valid",
+                    "model_type": args.model_type,
+                    "target_column": args.target_column,
+                    "good_threshold_m": float(args.good_threshold_m),
+                    "max_truth_time_delta_s": float(args.max_truth_time_delta_s),
+                    "sequence_count": int(loso_summary.loc[0, "sequence_count"]),
+                    "fold_count": int(loso_summary.loc[0, "fold_count"]),
+                    "candidate_rows": int(loso_summary.loc[0, "candidate_rows"]),
+                    "frame_count": int(loso_summary.loc[0, "frame_count"]),
+                }
+                args.loso_protocol_json.write_text(
+                    json.dumps(protocol_payload, indent=2),
+                    encoding="utf-8",
+                )
+            print("cluster_ranker_loso=ok")
+            print(f"loso_folds={int(loso_summary.loc[0, 'fold_count'])}")
+            print(f"loso_top1_mean_3d_m={loso_summary.loc[0, 'top1_mean_3d_m']}")
+            print(f"loso_candidate_regret_p95_3d_m={loso_summary.loc[0, 'candidate_regret_p95_3d_m']}")
         print("cluster_ranker_train=ok")
         print(f"model_json={args.model_json}")
         print(f"model_type={model.model_type}")
