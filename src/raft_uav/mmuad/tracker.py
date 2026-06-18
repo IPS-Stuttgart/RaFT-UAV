@@ -179,9 +179,16 @@ def _tracklet_score(group: pd.DataFrame, *, config: TrackerConfig) -> float:
 
 
 def _source_priority(source: str, *, config: TrackerConfig) -> float:
+    source_lower = source.lower()
+    best_idx: int | None = None
+    best_length = -1
     for idx, name in enumerate(config.source_priority):
-        if source.lower().startswith(name.lower()):
-            return float(idx)
+        name_lower = name.lower()
+        if source_lower.startswith(name_lower) and len(name_lower) > best_length:
+            best_idx = idx
+            best_length = len(name_lower)
+    if best_idx is not None:
+        return float(best_idx)
     return float(len(config.source_priority))
 
 
