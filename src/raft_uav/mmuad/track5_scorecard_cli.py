@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
+from raft_uav.mmuad.archive import extract_mmuad_archive, is_supported_archive
+from raft_uav.mmuad.schema import load_jsonable
 from raft_uav.mmuad.sequence import OFFICIAL_TRACK5_TIMESTAMP_SOURCES
 from raft_uav.mmuad.track5_scorecard import (
     build_track5_scorecard,
@@ -20,8 +23,17 @@ def main(argv: list[str] | None = None) -> int:
             "and nearest-time diagnostics"
         ),
     )
-    parser.add_argument("--results", type=Path, required=True, help="mmaud_results.csv or ZIP")
-    parser.add_argument("--truth", type=Path, help="normalized or official Track 5 truth CSV/ZIP")
+    parser.add_argument(
+        "--results",
+        type=Path,
+        required=True,
+        help="mmaud_results.csv or ZIP",
+    )
+    parser.add_argument(
+        "--truth",
+        type=Path,
+        help="normalized or official Track 5 truth CSV/ZIP",
+    )
     parser.add_argument(
         "--template",
         type=Path,
@@ -32,7 +44,24 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help=(
             "public Track 5 sequence root used to build a timestamp template "
-            "directly from Image/ground_truth/LiDAR folders"
+            "directly from Image/ground_truth/LiDAR folders; ZIP/TAR-family "
+            "archives are safely extracted before inspection"
+        ),
+    )
+    parser.add_argument(
+        "--sequence-root-archive-extract-dir",
+        type=Path,
+        help=(
+            "directory for extracting ZIP/TAR sequence roots before building "
+            "the Track 5 scorecard template; defaults beside --output-json"
+        ),
+    )
+    parser.add_argument(
+        "--sequence-root-archive-manifest-json",
+        type=Path,
+        help=(
+            "where to write the extraction manifest when --sequence-root is an "
+            "archive; defaults beside --output-json"
         ),
     )
     parser.add_argument("--sequence-glob", default="*", help="sequence discovery glob")
@@ -75,11 +104,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    sequence_root, archive_manifest_path = _prepare_scorecard_sequence_root(args)
     scorecard = build_track5_scorecard(
         results_path=args.results,
         truth_path=args.truth,
         template_path=args.template,
-        sequence_root=args.sequence_root,
+        sequence_root=sequence_root,
         sequence_glob=args.sequence_glob,
         split_name=args.split_name,
         timestamp_source=args.timestamp_source,
@@ -90,7 +120,9 @@ def main(argv: list[str] | None = None) -> int:
         timestamp_tolerance_s=args.timestamp_tolerance_s,
         max_time_delta_s=args.nearest_time_delta_s,
     )
-    write_track5_scorecard(
+    if archive_manifest_path is not None:
+        scorecard.summary["sequence_root_archive_manifest_json"] = str(archive_manifest_path)
+    written_paths = write_track5_scorecard(
         scorecard,
         summary_json=args.output_json,
         summary_csv=args.summary_csv,
@@ -101,6 +133,10 @@ def main(argv: list[str] | None = None) -> int:
 
     summary = scorecard.summary
     print("track5_scorecard=ok")
+    for name, path in written_paths.items():
+        print(f"{name}={path}")
+    if archive_manifest_path is not None:
+        print(f"sequence_root_archive_manifest_json={archive_manifest_path}")
     print(f"leaderboard_ready={summary['scorecard_leaderboard_ready']}")
     print(f"codabench_upload_ready={summary['codabench_upload_ready']}")
     if summary.get("sequence_root") is not None:
@@ -121,6 +157,32 @@ def main(argv: list[str] | None = None) -> int:
         reasons = ", ".join(summary.get("leaderboard_blocking_reasons", [])) or "unknown"
         raise SystemExit(f"Track 5 scorecard is not leaderboard-ready: {reasons}")
     return 0
+
+
+def _prepare_scorecard_sequence_root(
+    args: argparse.Namespace,
+) -> tuple[Path | None, Path | None]:
+    """Return a usable sequence root and optional extraction-manifest path."""
+
+    sequence_root = args.sequence_root
+    if sequence_root is None:
+        return None, None
+    if not is_supported_archive(sequence_root):
+        return sequence_root, None
+
+    extract_dir = args.sequence_root_archive_extract_dir or (
+        args.output_json.parent / "mmuad_scorecard_sequence_root_archive"
+    )
+    manifest = extract_mmuad_archive(sequence_root, extract_dir)
+    manifest_path = args.sequence_root_archive_manifest_json or (
+        args.output_json.parent / "mmuad_scorecard_sequence_root_archive_manifest.json"
+    )
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(load_jsonable(manifest), indent=2),
+        encoding="utf-8",
+    )
+    return Path(manifest["extract_root"]), manifest_path
 
 
 if __name__ == "__main__":  # pragma: no cover
