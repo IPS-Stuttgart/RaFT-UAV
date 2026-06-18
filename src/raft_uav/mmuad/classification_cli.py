@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 
 from raft_uav.mmuad.classification import (
+    SEQUENCE_CLASSIFIER_METHODS,
     classify_sequences_from_features,
     load_sequence_class_labels,
     sequence_features_from_files,
@@ -48,14 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--method",
-        choices=(
-            "majority",
-            "nearest-neighbor",
-            "nearest-centroid",
-            "logistic-regression",
-            "random-forest",
-            "hist-gradient-boosting",
-        ),
+        choices=SEQUENCE_CLASSIFIER_METHODS,
         default="nearest-neighbor",
     )
     parser.add_argument("--k", type=int, default=1, help="nearest-neighbor vote count")

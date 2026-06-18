@@ -886,6 +886,16 @@ def verify_official_upload_manifest(path: Path) -> dict[str, Any]:
             str(validation_rows_path) if validation_rows_path is not None else None
         ),
     }
+    for key in (
+        "classification_model_path",
+        "classification_method",
+        "classification_train_sequences",
+        "classification_feature_columns",
+        "classification_class_map",
+        "classification_prediction_mode",
+    ):
+        if key in payload:
+            summary[key] = payload.get(key)
 
     if artifact_path is None:
         errors.append("official upload manifest missing artifact_path")

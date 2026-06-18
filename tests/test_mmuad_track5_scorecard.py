@@ -105,6 +105,61 @@ def test_track5_scorecard_writes_all_requested_artifacts(tmp_path: Path) -> None
         assert Path(path).exists()
 
 
+def test_track5_scorecard_reports_sequence_classifier_provenance(tmp_path: Path) -> None:
+    results_zip = _write_official_zip(
+        tmp_path / "submission.zip",
+        pd.DataFrame(
+            {
+                "Sequence": ["seq001"],
+                "Timestamp": [0.0],
+                "Position": ["(0,0,10)"],
+                "Classification": [3],
+            }
+        ),
+    )
+    truth_csv = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq001"],
+            "time_s": [0.0],
+            "x_m": [0.0],
+            "y_m": [0.0],
+            "z_m": [10.0],
+            "class_name": [3],
+        }
+    ).to_csv(truth_csv, index=False)
+    provenance_json = tmp_path / "classifier_provenance.json"
+    provenance_json.write_text(
+        json.dumps(
+            {
+                "classification_model_path": "outputs/mmuad_sequence_classifier_rf.joblib",
+                "classification_method": "random-forest",
+                "classification_train_sequences": ["seq_train_0", "seq_train_3"],
+                "classification_feature_columns": ["row_count", "z_m_mean"],
+                "classification_class_map": {"seq001": "3"},
+                "classification_prediction_mode": "sequence_level",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    scorecard = build_track5_scorecard(
+        results_path=results_zip,
+        truth_path=truth_csv,
+        classification_provenance_path=provenance_json,
+    )
+
+    assert scorecard.summary["classification_method"] == "random-forest"
+    assert scorecard.summary["classification_prediction_mode"] == "sequence_level"
+    assert scorecard.summary["classification_class_map"] == {"seq001": "3"}
+    flat = scorecard_summary_frame(scorecard.summary)
+    assert flat.loc[0, "classification_model_path"].endswith(
+        "mmuad_sequence_classifier_rf.joblib"
+    )
+    assert flat.loc[0, "classification_train_sequences"] == "seq_train_0;seq_train_3"
+    assert json.loads(flat.loc[0, "classification_class_map"]) == {"seq001": "3"}
+
+
 def test_track5_scorecard_cli_writes_ready_artifacts(tmp_path: Path, capsys) -> None:
     results_zip = _write_official_zip(
         tmp_path / "submission.zip",
