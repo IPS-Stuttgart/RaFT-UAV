@@ -106,6 +106,84 @@ def test_runtime_calibration_scales_covariance_from_environment(tmp_path, monkey
     np.testing.assert_allclose(scaled, 2.0 * covariance)
 
 
+def test_runtime_radar_position_calibration_scales_velocity_augmented_position_block(
+    tmp_path,
+    monkeypatch,
+):
+    payload = {
+        "schema": "raft-uav-nis-covariance-calibration-v1",
+        "groups": {
+            "radar:3": {
+                "source": "radar",
+                "measurement_dim": 3,
+                "count": 10,
+                "method": "mean",
+                "statistic": 6.0,
+                "target": 3.0,
+                "raw_scale": 2.0,
+                "applied_scale": 2.0,
+                "enabled": True,
+                "accepted_only": True,
+                "quantile": None,
+            }
+        },
+    }
+    path = write_nis_covariance_calibration(payload, tmp_path / "calibration.json")
+    monkeypatch.setenv(ENV_NIS_COVARIANCE_CALIBRATION_JSON, str(path))
+
+    covariance = np.eye(6)
+    covariance[0, 3] = covariance[3, 0] = 0.25
+    scaled = scale_covariance_for_calibrated_source("radar", 6, covariance)
+
+    np.testing.assert_allclose(scaled[:3, :3], 2.0 * np.eye(3))
+    np.testing.assert_allclose(scaled[3:, 3:], np.eye(3))
+    assert scaled[0, 3] == scaled[3, 0] == np.sqrt(2.0) * 0.25
+
+
+def test_runtime_exact_radar_velocity_calibration_overrides_position_fallback(
+    tmp_path,
+    monkeypatch,
+):
+    payload = {
+        "schema": "raft-uav-nis-covariance-calibration-v1",
+        "groups": {
+            "radar:3": {
+                "source": "radar",
+                "measurement_dim": 3,
+                "count": 10,
+                "method": "mean",
+                "statistic": 6.0,
+                "target": 3.0,
+                "raw_scale": 2.0,
+                "applied_scale": 2.0,
+                "enabled": True,
+                "accepted_only": True,
+                "quantile": None,
+            },
+            "radar:6": {
+                "source": "radar",
+                "measurement_dim": 6,
+                "count": 10,
+                "method": "mean",
+                "statistic": 18.0,
+                "target": 6.0,
+                "raw_scale": 3.0,
+                "applied_scale": 3.0,
+                "enabled": True,
+                "accepted_only": True,
+                "quantile": None,
+            },
+        },
+    }
+    path = write_nis_covariance_calibration(payload, tmp_path / "calibration.json")
+    monkeypatch.setenv(ENV_NIS_COVARIANCE_CALIBRATION_JSON, str(path))
+
+    covariance = np.eye(6)
+    scaled = scale_covariance_for_calibrated_source("radar", 6, covariance)
+
+    np.testing.assert_allclose(scaled, 3.0 * covariance)
+
+
 def test_written_payload_is_json_and_round_trippable(tmp_path):
     diagnostics = pd.DataFrame(
         {
