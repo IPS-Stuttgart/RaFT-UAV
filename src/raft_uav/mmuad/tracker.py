@@ -23,6 +23,7 @@ class TrackerConfig:
     soft_anchor_gate_m: float = 12.0
     first_selected_bootstrap: bool = True
     source_priority: tuple[str, ...] = ("radar", "lidar", "lidar-cluster", "candidate")
+    selection_mobility_radius_m: float = 3.0
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class TrackerOutput:
 
 
 _CANDIDATE_ROW_ID = "_candidate_row_id"
+_MOBILITY = "_mobility"
 
 
 def run_mmuad_tracker(
@@ -208,9 +210,52 @@ def _source_priority(source: str, *, config: TrackerConfig) -> float:
     return float(len(config.source_priority))
 
 
+def _candidate_mobility(frame: pd.DataFrame, *, radius_m: float) -> np.ndarray:
+    """Return a per-candidate mobility score in ``[0, 1]``.
+
+    A position that is occupied across many distinct timestamps (within
+    ``radius_m``) is static clutter such as ground or structure and scores near
+    ``0``; a position visited at only its own timestamp is mobile and scores near
+    ``1``.  This is an unsupervised prior used to seed/rank greedy path selection
+    when no learned cluster score is available; it needs only candidate
+    positions and timestamps.  ``radius_m <= 0`` disables it (all ones).
+    """
+
+    n = len(frame)
+    if n == 0:
+        return np.ones(0, dtype=float)
+    if radius_m is None or radius_m <= 0:
+        return np.ones(n, dtype=float)
+    times = pd.to_numeric(frame["time_s"], errors="coerce").to_numpy(float)
+    unique_times = np.unique(times[np.isfinite(times)])
+    if unique_times.size <= 1:
+        return np.ones(n, dtype=float)
+    from scipy.spatial import cKDTree
+
+    xyz = frame[["x_m", "y_m", "z_m"]].to_numpy(float)
+    tree = cKDTree(xyz)
+    neighbors = tree.query_ball_point(xyz, r=float(radius_m))
+    denominator = float(unique_times.size - 1)
+    mobility = np.empty(n, dtype=float)
+    for index, neighbor_indices in enumerate(neighbors):
+        neighbor_times = times[neighbor_indices]
+        other_times = np.unique(neighbor_times[neighbor_times != times[index]])
+        mobility[index] = 1.0 - (other_times.size / denominator)
+    return mobility
+
+
 def _greedy_path(frame: pd.DataFrame, *, config: TrackerConfig) -> pd.DataFrame:
-    del config
-    ranked = frame.sort_values(["time_s", "confidence"], ascending=[True, False]).copy()
+    frame = frame.copy()
+    frame[_MOBILITY] = _candidate_mobility(
+        frame, radius_m=config.selection_mobility_radius_m
+    )
+    # Seed and break ties by mobility first, then confidence: a UAV moves between
+    # frames (high mobility) while ground/structure clusters recur in place
+    # (low mobility).  This keeps the greedy path from anchoring on a dense but
+    # static ground cluster when no learned cluster score is available.
+    ranked = frame.sort_values(
+        ["time_s", _MOBILITY, "confidence"], ascending=[True, False, False]
+    ).copy()
     chosen_rows = []
     last_xyz: np.ndarray | None = None
     last_time: float | None = None
@@ -219,7 +264,9 @@ def _greedy_path(frame: pd.DataFrame, *, config: TrackerConfig) -> pd.DataFrame:
         if group.empty:
             continue
         if last_xyz is None or last_time is None:
-            chosen = group.sort_values("confidence", ascending=False).iloc[0]
+            chosen = group.sort_values(
+                [_MOBILITY, "confidence"], ascending=False
+            ).iloc[0]
         else:
             xyz = group[["x_m", "y_m", "z_m"]].to_numpy(float)
             dt = max(float(time_s) - float(last_time), 1.0)
@@ -229,8 +276,12 @@ def _greedy_path(frame: pd.DataFrame, *, config: TrackerConfig) -> pd.DataFrame:
         last_time = float(chosen["time_s"])
         chosen_rows.append(chosen)
     if not chosen_rows:
-        return frame.iloc[0:0].copy()
-    selected = pd.DataFrame(chosen_rows).reset_index(drop=True)
+        return frame.iloc[0:0].drop(columns=[_MOBILITY], errors="ignore").copy()
+    selected = (
+        pd.DataFrame(chosen_rows)
+        .drop(columns=[_MOBILITY], errors="ignore")
+        .reset_index(drop=True)
+    )
     selected["selected_path_rank"] = 0
     selected["selected_path_score"] = 0.0
     return selected

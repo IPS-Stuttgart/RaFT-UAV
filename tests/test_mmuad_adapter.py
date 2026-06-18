@@ -809,6 +809,79 @@ def test_tracker_soft_anchor_gate_can_be_disabled() -> None:
     assert "soft_anchor_gated" not in output.estimates["update_action"].tolist()
 
 
+def _moving_and_static_clutter_candidates() -> tuple[CandidateFrame, TruthFrame]:
+    rows = []
+    truth_rows = []
+    for time_s in range(6):
+        t = float(time_s)
+        moving_x = 2.0 * t
+        truth_rows.append(
+            {"sequence_id": "s1", "time_s": t, "x_m": moving_x, "y_m": 0.0, "z_m": 10.0}
+        )
+        # Moving UAV cluster: low point count / confidence.
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": t,
+                "source": "lidar-cluster",
+                "track_id": np.nan,
+                "x_m": moving_x,
+                "y_m": 0.0,
+                "z_m": 10.0,
+                "confidence": 3.0,
+                "std_xy_m": 1.0,
+                "std_z_m": 1.0,
+            }
+        )
+        # Static ground clutter: high point count, fixed location every frame.
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": t,
+                "source": "lidar-cluster",
+                "track_id": np.nan,
+                "x_m": 40.0,
+                "y_m": 40.0,
+                "z_m": 0.0,
+                "confidence": 500.0,
+                "std_xy_m": 1.0,
+                "std_z_m": 1.0,
+            }
+        )
+    return CandidateFrame(pd.DataFrame(rows)), TruthFrame(pd.DataFrame(truth_rows))
+
+
+def test_tracker_mobility_prior_prefers_moving_cluster_over_static_clutter() -> None:
+    """The greedy seed follows the moving UAV, not a denser static clutter.
+
+    Without the mobility prior the high-confidence (dense) static clutter would
+    be seeded; mobility recognizes it recurs in place across frames and prefers
+    the moving cluster instead.
+    """
+
+    candidates, truth = _moving_and_static_clutter_candidates()
+
+    output = run_mmuad_tracker(candidates, truth, config=TrackerConfig())
+
+    selected = output.selected_tracklets.sort_values("time_s")
+    assert selected["x_m"].tolist() == [0.0, 2.0, 4.0, 6.0, 8.0, 10.0]
+    assert output.metrics["pooled"]["mean_3d_m"] < 2.0
+
+
+def test_tracker_mobility_prior_can_be_disabled() -> None:
+    """``selection_mobility_radius_m=0`` restores confidence-only seeding."""
+
+    candidates, truth = _moving_and_static_clutter_candidates()
+
+    output = run_mmuad_tracker(
+        candidates, truth, config=TrackerConfig(selection_mobility_radius_m=0.0)
+    )
+
+    selected = output.selected_tracklets.sort_values("time_s")
+    # Confidence-only seeding locks onto the dense static clutter.
+    assert (selected["x_m"] == 40.0).all()
+
+
 def test_point_cloud_clusters_do_not_collapse_selected_path(tmp_path: Path) -> None:
     """Per-frame-unique cluster track IDs must not collapse the selected path.
 
