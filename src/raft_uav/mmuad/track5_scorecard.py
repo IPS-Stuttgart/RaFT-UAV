@@ -21,6 +21,12 @@ from raft_uav.mmuad.evaluator import (
     load_mmaud_results_file,
 )
 from raft_uav.mmuad.schema import load_jsonable
+from raft_uav.mmuad.sequence import (
+    OFFICIAL_TRACK5_TIMESTAMP_SOURCES,
+    discover_sequence_paths,
+    official_track5_timestamp_template,
+)
+from raft_uav.mmuad.splits import filter_sequences_by_split_folder
 from raft_uav.mmuad.submission import (
     OfficialTrack5Validation,
     load_official_track5_template_file,
@@ -44,6 +50,10 @@ def build_track5_scorecard(
     results_path: Path,
     truth_path: Path | None = None,
     template_path: Path | None = None,
+    sequence_root: Path | None = None,
+    sequence_glob: str = "*",
+    split_name: str | None = None,
+    timestamp_source: str = "ground-truth-or-all",
     class_map_path: Path | None = None,
     upload_manifest_path: Path | None = None,
     require_zip: bool = True,
@@ -65,6 +75,18 @@ def build_track5_scorecard(
         Optional official result/template CSV or ZIP.  Validation uses only the
         requested ``Sequence``/``Timestamp`` grid.  When omitted and ``truth`` is
         supplied, the normalized truth timestamps become the validation template.
+    sequence_root:
+        Optional public Track 5 sequence root used to build the timestamp
+        template directly from folders such as ``Image`` or ``ground_truth``.
+        This closes the previous workflow gap where users first had to generate
+        a separate template file before running the scorecard.
+    sequence_glob:
+        Glob passed to sequence discovery when ``sequence_root`` is supplied.
+    split_name:
+        Optional top-level split folder name, for layouts such as ``val/seq001``.
+    timestamp_source:
+        Public Track 5 modality folder used for the template when
+        ``sequence_root`` is supplied.
     class_map_path:
         Optional sequence-to-class map for evaluation.
     upload_manifest_path:
@@ -76,16 +98,30 @@ def build_track5_scorecard(
         preflight; set false for local CSV development checks.
     """
 
+    if template_path is not None and sequence_root is not None:
+        raise ValueError("pass either template_path or sequence_root, not both")
+    if timestamp_source not in OFFICIAL_TRACK5_TIMESTAMP_SOURCES:
+        allowed = ", ".join(OFFICIAL_TRACK5_TIMESTAMP_SOURCES)
+        raise ValueError(f"unsupported timestamp_source {timestamp_source!r}; allowed={allowed}")
+
     results_path = Path(results_path)
     truth_path = Path(truth_path) if truth_path is not None else None
     template_path = Path(template_path) if template_path is not None else None
+    sequence_root = Path(sequence_root) if sequence_root is not None else None
     class_map_path = Path(class_map_path) if class_map_path is not None else None
     upload_manifest_path = (
         Path(upload_manifest_path) if upload_manifest_path is not None else None
     )
 
     truth_frame = load_evaluation_truth_file(truth_path) if truth_path is not None else None
-    template = _scorecard_template_frame(truth_frame=truth_frame, template_path=template_path)
+    template = _scorecard_template_frame(
+        truth_frame=truth_frame,
+        template_path=template_path,
+        sequence_root=sequence_root,
+        sequence_glob=sequence_glob,
+        split_name=split_name,
+        timestamp_source=timestamp_source,
+    )
     validation = validate_official_track5_submission(
         results_path,
         template=template,
@@ -123,6 +159,10 @@ def build_track5_scorecard(
         results_path=results_path,
         truth_path=truth_path,
         template_path=template_path,
+        sequence_root=sequence_root,
+        sequence_glob=sequence_glob,
+        split_name=split_name,
+        timestamp_source=timestamp_source,
         class_map_path=class_map_path,
         upload_manifest_path=upload_manifest_path,
         require_zip=require_zip,
@@ -194,6 +234,10 @@ def scorecard_summary_frame(summary: dict[str, Any]) -> pd.DataFrame:
         "results_path": summary.get("results_path"),
         "truth_path": summary.get("truth_path"),
         "template_path": summary.get("template_path"),
+        "sequence_root": summary.get("sequence_root"),
+        "sequence_glob": summary.get("sequence_glob"),
+        "split_name": summary.get("split_name"),
+        "timestamp_source": summary.get("timestamp_source"),
         "upload_manifest_path": summary.get("upload_manifest_path"),
         "codabench_upload_ready": validation.get("codabench_upload_ready"),
         "upload_manifest_valid": summary.get("upload_manifest_valid"),
@@ -234,9 +278,68 @@ def scorecard_summary_frame(summary: dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame([row])
 
 
-def _scorecard_template_frame(*, truth_frame, template_path: Path | None) -> pd.DataFrame | None:
+def template_frame_from_sequence_root(
+    sequence_root: Path,
+    *,
+    sequence_glob: str = "*",
+    split_name: str | None = None,
+    timestamp_source: str = "ground-truth-or-all",
+) -> pd.DataFrame:
+    """Build a Track 5 timestamp template from a public sequence root.
+
+    The returned frame has the normalized ``sequence_id,time_s`` columns accepted
+    by the existing official-submission validator.  It is intentionally a
+    timestamp template only; hidden validation/test labels are not inferred.
+    """
+
+    if timestamp_source not in OFFICIAL_TRACK5_TIMESTAMP_SOURCES:
+        allowed = ", ".join(OFFICIAL_TRACK5_TIMESTAMP_SOURCES)
+        raise ValueError(f"unsupported timestamp_source {timestamp_source!r}; allowed={allowed}")
+    root = Path(sequence_root)
+    sequences = discover_sequence_paths(root, sequence_glob=sequence_glob)
+    if split_name is not None:
+        sequences = filter_sequences_by_split_folder(sequences, root, split_name)
+    if not sequences:
+        split_suffix = f" for split {split_name!r}" if split_name is not None else ""
+        raise ValueError(f"no Track 5 sequences discovered in {root}{split_suffix}")
+
+    frames: list[pd.DataFrame] = []
+    for sequence in sequences:
+        template = official_track5_timestamp_template(
+            sequence,
+            timestamp_source=timestamp_source,
+        )
+        if not template.rows.empty:
+            frames.append(template.rows[["sequence_id", "time_s"]].copy())
+    if not frames:
+        raise ValueError(
+            f"no Track 5 timestamps discovered in {root} using source {timestamp_source!r}"
+        )
+    frame = pd.concat(frames, ignore_index=True)
+    frame["sequence_id"] = frame["sequence_id"].astype(str)
+    frame["time_s"] = pd.to_numeric(frame["time_s"], errors="coerce")
+    frame = frame.loc[frame["time_s"].notna()].drop_duplicates()
+    return frame.sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+
+
+def _scorecard_template_frame(
+    *,
+    truth_frame,
+    template_path: Path | None,
+    sequence_root: Path | None,
+    sequence_glob: str,
+    split_name: str | None,
+    timestamp_source: str,
+) -> pd.DataFrame | None:
     if template_path is not None:
         return load_official_track5_template_file(template_path)
+    if sequence_root is not None:
+        return template_frame_from_sequence_root(
+            sequence_root,
+            sequence_glob=sequence_glob,
+            split_name=split_name,
+            timestamp_source=timestamp_source,
+        )
     if truth_frame is None:
         return None
     rows = truth_frame.rows[["sequence_id", "time_s"]].copy()
@@ -250,6 +353,10 @@ def _scorecard_summary(
     results_path: Path,
     truth_path: Path | None,
     template_path: Path | None,
+    sequence_root: Path | None,
+    sequence_glob: str,
+    split_name: str | None,
+    timestamp_source: str,
     class_map_path: Path | None,
     upload_manifest_path: Path | None,
     require_zip: bool,
@@ -288,6 +395,10 @@ def _scorecard_summary(
         "results_path": str(results_path),
         "truth_path": str(truth_path) if truth_path is not None else None,
         "template_path": str(template_path) if template_path is not None else None,
+        "sequence_root": str(sequence_root) if sequence_root is not None else None,
+        "sequence_glob": str(sequence_glob),
+        "split_name": str(split_name) if split_name is not None else None,
+        "timestamp_source": str(timestamp_source),
         "class_map_path": str(class_map_path) if class_map_path is not None else None,
         "upload_manifest_path": (
             str(upload_manifest_path) if upload_manifest_path is not None else None
