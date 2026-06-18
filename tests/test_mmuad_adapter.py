@@ -13197,7 +13197,7 @@ def test_native_ros_position_message_to_rows_accepts_array_backed_positions() ->
     assert len(rows) == 1
     row = rows[0]
     assert row["sequence_id"] == "seq_px4"
-    assert row["time_s"] == 1.0
+    assert row["time_s"] == pytest.approx(12.25)
     assert row["x_m"] == pytest.approx(1.5)
     assert row["y_m"] == pytest.approx(-2.5)
     assert row["z_m"] == pytest.approx(3.5)
@@ -13390,7 +13390,7 @@ def test_native_ros_position_message_to_rows_preserves_odometry_metadata() -> No
     assert len(rows) == 1
     row = rows[0]
     assert row["sequence_id"] == "seq_odom"
-    assert row["time_s"] == 1.0
+    assert row["time_s"] == pytest.approx(42.5)
     assert row["x_m"] == 1.0
     assert row["y_m"] == 2.0
     assert row["z_m"] == 3.0
