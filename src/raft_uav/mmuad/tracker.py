@@ -24,6 +24,11 @@ class TrackerConfig:
     first_selected_bootstrap: bool = True
     source_priority: tuple[str, ...] = ("radar", "lidar", "lidar-cluster", "candidate")
     selection_mobility_radius_m: float = 3.0
+    selection_motion_weight: float = 1.0
+    selection_confidence_weight: float = 0.0
+    selection_mobility_weight: float = 0.0
+    selection_source_priority_weight: float = 0.0
+    selection_speed_scale_mps: float = 20.0
 
 
 @dataclass(frozen=True)
@@ -36,6 +41,7 @@ class TrackerOutput:
 _CANDIDATE_ROW_ID = "_candidate_row_id"
 _MOBILITY = "_mobility"
 _SOURCE_PRIORITY = "_source_priority"
+_SELECTION_COST = "_selection_cost"
 
 
 def run_mmuad_tracker(
@@ -273,26 +279,73 @@ def _greedy_path(frame: pd.DataFrame, *, config: TrackerConfig) -> pd.DataFrame:
                 ascending=[False, True, False],
             ).iloc[0]
         else:
-            xyz = group[["x_m", "y_m", "z_m"]].to_numpy(float)
-            dt = max(float(time_s) - float(last_time), 1.0)
-            distances = np.linalg.norm(xyz - last_xyz, axis=1) / dt
-            chosen = group.iloc[int(np.argmin(distances))]
+            costs = _path_step_costs(
+                group,
+                last_xyz=last_xyz,
+                dt_s=max(float(time_s) - float(last_time), 1.0e-3),
+                config=config,
+            )
+            group = group.assign(**{_SELECTION_COST: costs})
+            chosen = group.sort_values(
+                [_SELECTION_COST, _SOURCE_PRIORITY, "confidence"],
+                ascending=[True, True, False],
+            ).iloc[0]
         last_xyz = chosen[["x_m", "y_m", "z_m"]].to_numpy(float)
         last_time = float(chosen["time_s"])
         chosen_rows.append(chosen)
     if not chosen_rows:
         return frame.iloc[0:0].drop(
-            columns=[_MOBILITY, _SOURCE_PRIORITY],
+            columns=[_MOBILITY, _SOURCE_PRIORITY, _SELECTION_COST],
             errors="ignore",
         ).copy()
     selected = (
         pd.DataFrame(chosen_rows)
-        .drop(columns=[_MOBILITY, _SOURCE_PRIORITY], errors="ignore")
+        .drop(columns=[_MOBILITY, _SOURCE_PRIORITY, _SELECTION_COST], errors="ignore")
         .reset_index(drop=True)
     )
     selected["selected_path_rank"] = 0
     selected["selected_path_score"] = 0.0
     return selected
+
+
+def _path_step_costs(
+    group: pd.DataFrame,
+    *,
+    last_xyz: np.ndarray,
+    dt_s: float,
+    config: TrackerConfig,
+) -> np.ndarray:
+    xyz = group[["x_m", "y_m", "z_m"]].to_numpy(float)
+    speed = np.linalg.norm(xyz - last_xyz, axis=1) / max(float(dt_s), 1.0e-3)
+    speed_scale = max(float(config.selection_speed_scale_mps), 1.0e-6)
+    motion_cost = speed / speed_scale
+    confidence = _normalized_frame_confidence(group)
+    mobility = pd.to_numeric(group.get(_MOBILITY, 1.0), errors="coerce").fillna(1.0).to_numpy(float)
+    source_priority = (
+        pd.to_numeric(group.get(_SOURCE_PRIORITY, 0.0), errors="coerce")
+        .fillna(0.0)
+        .to_numpy(float)
+    )
+    return (
+        float(config.selection_motion_weight) * motion_cost
+        - float(config.selection_confidence_weight) * confidence
+        - float(config.selection_mobility_weight) * mobility
+        + float(config.selection_source_priority_weight) * source_priority
+    )
+
+
+def _normalized_frame_confidence(group: pd.DataFrame) -> np.ndarray:
+    confidence = pd.to_numeric(group.get("confidence", 0.0), errors="coerce").fillna(0.0)
+    values = confidence.to_numpy(float)
+    finite = np.isfinite(values)
+    if not finite.any():
+        return np.zeros(len(group), dtype=float)
+    values = np.where(finite, values, np.nanmin(values[finite]))
+    minimum = float(np.nanmin(values))
+    maximum = float(np.nanmax(values))
+    if maximum <= minimum:
+        return np.full(len(group), 0.5, dtype=float)
+    return (values - minimum) / (maximum - minimum)
 
 
 def _run_sequence_filter(

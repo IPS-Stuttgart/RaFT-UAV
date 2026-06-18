@@ -288,6 +288,36 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--soft-anchor-cap-m", type=float, default=2.0)
     parser.add_argument("--secondary-covariance-scale", type=float, default=25.0)
     parser.add_argument("--acceleration-std-mps2", type=float, default=8.0)
+    parser.add_argument(
+        "--selection-motion-weight",
+        type=float,
+        default=1.0,
+        help="greedy path cost weight for motion speed after the first selected candidate",
+    )
+    parser.add_argument(
+        "--selection-confidence-weight",
+        type=float,
+        default=0.0,
+        help="greedy path reward for per-frame normalized candidate confidence/ranker score",
+    )
+    parser.add_argument(
+        "--selection-mobility-weight",
+        type=float,
+        default=0.0,
+        help="greedy path reward for the unsupervised mobility prior after the first candidate",
+    )
+    parser.add_argument(
+        "--selection-source-priority-weight",
+        type=float,
+        default=0.0,
+        help="greedy path cost weight for configured source priority after the first candidate",
+    )
+    parser.add_argument(
+        "--selection-speed-scale-mps",
+        type=float,
+        default=20.0,
+        help="speed scale used to normalize motion cost in greedy path selection",
+    )
     parser.add_argument("--submission-csv", type=Path)
     parser.add_argument("--submission-json", type=Path)
     parser.add_argument("--submission-zip", type=Path)
@@ -1816,6 +1846,11 @@ def _run_tracker_for_mode(args, candidates, truth):
                 acceleration_std_mps2=args.acceleration_std_mps2,
                 soft_anchor_cap_m=args.soft_anchor_cap_m,
                 secondary_covariance_scale=args.secondary_covariance_scale,
+                selection_motion_weight=args.selection_motion_weight,
+                selection_confidence_weight=args.selection_confidence_weight,
+                selection_mobility_weight=args.selection_mobility_weight,
+                selection_source_priority_weight=args.selection_source_priority_weight,
+                selection_speed_scale_mps=args.selection_speed_scale_mps,
             ),
         )
     return _maybe_apply_trajectory_completion(args, output, truth)
