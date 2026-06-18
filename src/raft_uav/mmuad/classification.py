@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import pickle
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Any
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import numpy as np
 
@@ -14,15 +16,32 @@ import pandas as pd
 
 from raft_uav.mmuad.schema import CandidateFrame
 from raft_uav.mmuad.submission import (
+    OFFICIAL_TRACK5_CLASS_IDS,
     load_official_track5_results_frame,
     load_sequence_class_map,
+    parse_official_classification_cell,
 )
 
 
 SEQUENCE_CLASSIFIER_MODEL_SCHEMA = "raft-uav-mmuad-sequence-classifier-v1"
 SEQUENCE_CLASSIFIER_PREDICTION_MODE = "sequence_level"
+SEQUENCE_CLASSIFIER_LOSO_PREDICTION_COLUMNS = (
+    "sequence",
+    "heldout_sequence",
+    "method",
+    "truth_class",
+    "predicted_class",
+    "predicted_probability_0",
+    "predicted_probability_1",
+    "predicted_probability_2",
+    "predicted_probability_3",
+    "correct",
+    "train_sequences",
+    "feature_columns",
+)
 UNKNOWN_LABELS = {"", "unknown", "nan", "none", "uav", "drone"}
 CLASSIFIER_METADATA_COLUMNS = {"sequence_id", "uav_type"}
+OFFICIAL_SEQUENCE_CLASS_LABELS = ("0", "1", "2", "3")
 SEQUENCE_CLASSIFIER_METHODS = (
     "majority",
     "nearest-neighbor",
@@ -594,6 +613,183 @@ def write_sequence_classification_result(
         metrics_json.write_text(json.dumps(_jsonable(result.metrics), indent=2), encoding="utf-8")
         paths["metrics_json"] = str(metrics_json)
     return paths
+
+
+def build_sequence_classifier_loso_predictions(
+    *,
+    features: pd.DataFrame,
+    labels: dict[str, str],
+    method: str = "random-forest",
+    class_labels: tuple[str, ...] = OFFICIAL_SEQUENCE_CLASS_LABELS,
+    random_state: int = 13,
+    n_estimators: int = 200,
+    max_depth: int | None = None,
+) -> pd.DataFrame:
+    """Return one held-out sequence-level prediction row per labeled sequence.
+
+    This is a public-validation diagnostic helper: each row trains on all other
+    labeled sequences, predicts the held-out sequence class, and formats the
+    result as official Track 5 class IDs plus per-class probabilities.
+    """
+
+    if features.empty:
+        raise ValueError("no sequence feature rows were provided")
+    if "sequence_id" not in features.columns:
+        raise ValueError("sequence features must contain a sequence_id column")
+    method = _normalize_sequence_classifier_method(method)
+    feature_rows = features.copy()
+    feature_rows["sequence_id"] = feature_rows["sequence_id"].astype(str)
+    label_map = {str(key): str(value) for key, value in labels.items()}
+    heldout_sequences = sorted(
+        set(feature_rows["sequence_id"].astype(str)).intersection(label_map)
+    )
+    if len(heldout_sequences) < 2:
+        raise ValueError("LOSO sequence classification needs at least two labeled sequences")
+    class_labels = tuple(str(label) for label in class_labels)
+    records: list[dict[str, Any]] = []
+    for heldout_sequence in heldout_sequences:
+        train_sequences = [sequence for sequence in heldout_sequences if sequence != heldout_sequence]
+        fold_train_features = feature_rows.loc[
+            feature_rows["sequence_id"].isin(train_sequences)
+        ].reset_index(drop=True)
+        fold_predict_features = feature_rows.loc[
+            feature_rows["sequence_id"].eq(heldout_sequence)
+        ].reset_index(drop=True)
+        fold_labels = {sequence: label_map[sequence] for sequence in train_sequences}
+        fold_result = train_sequence_classifier_model(
+            train_features=fold_train_features,
+            train_labels=fold_labels,
+            method=method,
+            random_state=random_state,
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+        )
+        fold_predictions = predict_sequence_classes_from_model(
+            fold_result.model,
+            fold_predict_features,
+        )
+        fold_probabilities = predict_sequence_class_probabilities_from_model(
+            fold_result.model,
+            fold_predict_features,
+            class_labels=class_labels,
+        )
+        prediction = fold_predictions.iloc[0]
+        probability = fold_probabilities.iloc[0]
+        truth_class = str(label_map[heldout_sequence])
+        predicted_class = str(prediction["predicted_class"])
+        record: dict[str, Any] = {
+            "sequence": heldout_sequence,
+            "heldout_sequence": heldout_sequence,
+            "method": method,
+            "truth_class": truth_class,
+            "predicted_class": predicted_class,
+            "correct": bool(predicted_class == truth_class),
+            "train_sequences": ";".join(train_sequences),
+            "feature_columns": ";".join(str(value) for value in fold_result.model["feature_columns"]),
+        }
+        for class_label in OFFICIAL_SEQUENCE_CLASS_LABELS:
+            column = f"predicted_probability_{class_label}"
+            record[column] = float(probability.get(column, 0.0))
+        records.append(record)
+    return pd.DataFrame.from_records(records, columns=SEQUENCE_CLASSIFIER_LOSO_PREDICTION_COLUMNS)
+
+
+def predict_sequence_class_probabilities_from_model(
+    model: dict[str, Any],
+    predict_features: pd.DataFrame,
+    *,
+    class_labels: tuple[str, ...] = OFFICIAL_SEQUENCE_CLASS_LABELS,
+) -> pd.DataFrame:
+    """Return per-class sequence probabilities for a trained classifier model."""
+
+    if predict_features.empty:
+        raise ValueError("no prediction feature rows were provided")
+    method = _normalize_sequence_classifier_method(str(model.get("method", "")))
+    features = predict_features.copy()
+    features["sequence_id"] = features["sequence_id"].astype(str)
+    feature_columns = [str(column) for column in model.get("feature_columns", [])]
+    if not feature_columns:
+        raise ValueError("sequence classifier model has no feature_columns")
+    matrix = _transform_standardized_feature_matrix(
+        features,
+        feature_columns,
+        np.asarray(model.get("feature_means", []), dtype=float),
+        np.asarray(model.get("feature_scales", []), dtype=float),
+    )
+    labels = tuple(str(label) for label in class_labels)
+    if method == "majority":
+        predicted = [str(model.get("majority_class", "0"))] * len(features)
+        return _one_hot_probability_frame(features["sequence_id"], predicted, labels)
+    if method == "nearest-neighbor":
+        return _nearest_neighbor_probability_frame(model, features, matrix, labels)
+    if method == "nearest-centroid":
+        return _nearest_centroid_probability_frame(model, features, matrix, labels)
+    return _sklearn_probability_frame(model, features, matrix, labels)
+
+
+def write_sequence_classifier_loso_predictions(
+    predictions: pd.DataFrame,
+    path: Path,
+) -> Path:
+    """Write ``mmuad_sequence_classifier_loso_predictions.csv``."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    predictions.to_csv(path, index=False)
+    return path
+
+
+def apply_sequence_loso_labels_to_submission_frame(
+    submission_rows: pd.DataFrame,
+    loso_predictions: pd.DataFrame,
+) -> pd.DataFrame:
+    """Copy held-out sequence labels into submission rows without changing pose columns."""
+
+    if submission_rows.empty:
+        return submission_rows.copy()
+    sequence_column = _submission_sequence_column(submission_rows)
+    classification_column = _submission_classification_column(submission_rows)
+    prediction_sequence_column = _prediction_sequence_column(loso_predictions)
+    if "predicted_class" not in loso_predictions.columns:
+        raise ValueError("LOSO predictions must contain a predicted_class column")
+    class_map = {
+        str(row[prediction_sequence_column]): str(row["predicted_class"])
+        for _, row in loso_predictions.iterrows()
+        if pd.notna(row.get(prediction_sequence_column)) and pd.notna(row.get("predicted_class"))
+    }
+    sequences = submission_rows[sequence_column].astype(str)
+    missing = sorted(set(sequences).difference(class_map))
+    if missing:
+        examples = ", ".join(missing[:5])
+        suffix = "..." if len(missing) > 5 else ""
+        raise ValueError(f"LOSO predictions missing submission sequences: {examples}{suffix}")
+    out = submission_rows.copy()
+    values = [class_map[str(sequence)] for sequence in sequences]
+    if classification_column.lower() == "classification":
+        out[classification_column] = [_official_classification_id(value) for value in values]
+    else:
+        out[classification_column] = values
+    return out
+
+
+def apply_sequence_loso_labels_to_submission(
+    *,
+    submission_in: Path,
+    loso_predictions: pd.DataFrame,
+    submission_out: Path,
+) -> Path:
+    """Read a CSV/ZIP submission and write a relabeled copy."""
+
+    rows = _read_submission_rows_preserving_columns(submission_in)
+    relabeled = apply_sequence_loso_labels_to_submission_frame(rows, loso_predictions)
+    output = Path(submission_out)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if output.suffix.lower() == ".zip":
+        with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
+            archive.writestr("mmaud_results.csv", relabeled.to_csv(index=False))
+    else:
+        relabeled.to_csv(output, index=False)
+    return output
 
 
 def sequence_classification_metrics(
@@ -1307,6 +1503,158 @@ def _predict_model_sklearn(
             "classification_confidence": confidence,
         }
     )
+
+
+def _one_hot_probability_frame(
+    sequence_ids: pd.Series,
+    predicted_labels: list[str],
+    class_labels: tuple[str, ...],
+) -> pd.DataFrame:
+    records: list[dict[str, Any]] = []
+    for sequence_id, predicted in zip(sequence_ids.astype(str), predicted_labels, strict=False):
+        record: dict[str, Any] = {"sequence_id": str(sequence_id)}
+        for class_label in class_labels:
+            record[f"predicted_probability_{class_label}"] = float(str(predicted) == class_label)
+        records.append(record)
+    return pd.DataFrame.from_records(records)
+
+
+def _nearest_neighbor_probability_frame(
+    model: dict[str, Any],
+    predict_features: pd.DataFrame,
+    predict_matrix: np.ndarray,
+    class_labels: tuple[str, ...],
+) -> pd.DataFrame:
+    train_matrix = np.asarray(model.get("train_matrix", []), dtype=float)
+    labels = [str(label) for label in model.get("train_labels", [])]
+    if train_matrix.ndim != 2 or train_matrix.shape[0] == 0:
+        raise ValueError("nearest-neighbor sequence classifier model has no train_matrix")
+    records: list[dict[str, Any]] = []
+    for row_idx, sequence_id in enumerate(predict_features["sequence_id"].astype(str)):
+        distances = np.linalg.norm(train_matrix - predict_matrix[row_idx], axis=1)
+        weights: dict[str, float] = {}
+        for label, distance in zip(labels, distances, strict=False):
+            weights[label] = weights.get(label, 0.0) + 1.0 / max(float(distance), 1.0e-9)
+        records.append(_probability_record(sequence_id, weights, class_labels))
+    return pd.DataFrame.from_records(records)
+
+
+def _nearest_centroid_probability_frame(
+    model: dict[str, Any],
+    predict_features: pd.DataFrame,
+    predict_matrix: np.ndarray,
+    class_labels: tuple[str, ...],
+) -> pd.DataFrame:
+    train_matrix = np.asarray(model.get("train_matrix", []), dtype=float)
+    labels = np.asarray([str(label) for label in model.get("train_labels", [])])
+    if train_matrix.ndim != 2 or train_matrix.shape[0] == 0:
+        raise ValueError("nearest-centroid sequence classifier model has no train_matrix")
+    centroids = [
+        (label, train_matrix[labels == label].mean(axis=0))
+        for label in sorted(set(labels.astype(str)))
+    ]
+    records: list[dict[str, Any]] = []
+    for row_idx, sequence_id in enumerate(predict_features["sequence_id"].astype(str)):
+        weights = {
+            label: 1.0 / max(float(np.linalg.norm(predict_matrix[row_idx] - centroid)), 1.0e-9)
+            for label, centroid in centroids
+        }
+        records.append(_probability_record(sequence_id, weights, class_labels))
+    return pd.DataFrame.from_records(records)
+
+
+def _sklearn_probability_frame(
+    model: dict[str, Any],
+    predict_features: pd.DataFrame,
+    predict_matrix: np.ndarray,
+    class_labels: tuple[str, ...],
+) -> pd.DataFrame:
+    estimator = model.get("estimator")
+    if estimator is None:
+        raise ValueError("sequence classifier model has no estimator")
+    if not hasattr(estimator, "predict_proba"):
+        predicted = [str(label) for label in estimator.predict(predict_matrix)]
+        return _one_hot_probability_frame(predict_features["sequence_id"], predicted, class_labels)
+    probabilities = estimator.predict_proba(predict_matrix)
+    estimator_classes = [str(label) for label in getattr(estimator, "classes_", [])]
+    records: list[dict[str, Any]] = []
+    for row_idx, sequence_id in enumerate(predict_features["sequence_id"].astype(str)):
+        weights = {
+            estimator_classes[column_idx]: float(probabilities[row_idx, column_idx])
+            for column_idx in range(min(len(estimator_classes), probabilities.shape[1]))
+        }
+        records.append(_probability_record(sequence_id, weights, class_labels))
+    return pd.DataFrame.from_records(records)
+
+
+def _probability_record(
+    sequence_id: str,
+    weights: dict[str, float],
+    class_labels: tuple[str, ...],
+) -> dict[str, Any]:
+    total = float(sum(value for value in weights.values() if np.isfinite(value) and value >= 0.0))
+    record: dict[str, Any] = {"sequence_id": str(sequence_id)}
+    for class_label in class_labels:
+        value = float(weights.get(str(class_label), 0.0))
+        record[f"predicted_probability_{class_label}"] = value / total if total > 0.0 else 0.0
+    return record
+
+
+def _read_submission_rows_preserving_columns(path: Path) -> pd.DataFrame:
+    path = Path(path)
+    if path.suffix.lower() != ".zip":
+        return pd.read_csv(path)
+    with ZipFile(path) as archive:
+        names = [name for name in archive.namelist() if not name.endswith("/")]
+        selected = next((name for name in names if name.replace("\\", "/") == "mmaud_results.csv"), None)
+        if selected is None:
+            selected = next(
+                (
+                    name
+                    for name in names
+                    if Path(name.replace("\\", "/")).name == "mmaud_results.csv"
+                ),
+                None,
+            )
+        if selected is None:
+            csv_names = [name for name in names if Path(name.replace("\\", "/")).suffix == ".csv"]
+            if len(csv_names) == 1:
+                selected = csv_names[0]
+        if selected is None:
+            raise ValueError("submission ZIP must contain an unambiguous mmaud_results.csv")
+        with archive.open(selected) as handle:
+            return pd.read_csv(BytesIO(handle.read()))
+
+
+def _submission_sequence_column(rows: pd.DataFrame) -> str:
+    for column in ("Sequence", "sequence_id", "sequence", "seq", "scene_id"):
+        match = _find_column(rows, (column,))
+        if match is not None:
+            return match
+    raise ValueError("submission rows must contain a sequence column")
+
+
+def _submission_classification_column(rows: pd.DataFrame) -> str:
+    for column in ("Classification", "classification", "uav_type", "class_id", "class_name"):
+        match = _find_column(rows, (column,))
+        if match is not None:
+            return match
+    raise ValueError("submission rows must contain a Classification/uav_type column")
+
+
+def _prediction_sequence_column(rows: pd.DataFrame) -> str:
+    for column in ("sequence", "heldout_sequence", "sequence_id"):
+        if column in rows.columns:
+            return column
+    raise ValueError("LOSO predictions must contain a sequence column")
+
+
+def _official_classification_id(value: Any) -> int:
+    class_id = parse_official_classification_cell(value)
+    if class_id not in OFFICIAL_TRACK5_CLASS_IDS:
+        allowed = ", ".join(str(label) for label in sorted(OFFICIAL_TRACK5_CLASS_IDS))
+        raise ValueError(f"official Track 5 class labels must be in {{{allowed}}}; got {class_id}")
+    return class_id
 
 
 def _sequence_paths_have_feature_inputs(paths: Any) -> bool:
