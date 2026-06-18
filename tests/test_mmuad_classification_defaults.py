@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.classification import (
     classify_sequences_from_features,
     infer_sequence_class_map_from_candidates,
     load_sequence_class_labels,
+    sequence_features_from_files,
     sequence_features_from_rows,
     write_sequence_classification_result,
 )
@@ -79,6 +81,36 @@ def test_sequence_features_use_state_positions_and_velocity() -> None:
     assert features.loc["seqA", "source_count_lidar_360"] == 2
 
 
+def test_sequence_features_include_sensor_point_cluster_and_empty_radar_stats() -> None:
+    rows = pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA", "seqA", "seqA"],
+            "time_s": [0.0, 1.0, 0.0, 1.0],
+            "source": ["lidar_360", "lidar_360", "radar_enhance_pcl", "radar_enhance_pcl"],
+            "x_m": [3.0, 4.0, None, 6.0],
+            "y_m": [4.0, 3.0, None, 8.0],
+            "z_m": [10.0, 12.0, None, 15.0],
+            "cluster_point_count": [10, 20, 0, 5],
+            "cluster_extent_x_m": [0.5, 0.7, None, 1.0],
+            "cluster_extent_y_m": [0.4, 0.5, None, 1.5],
+            "cluster_extent_z_m": [0.3, 0.4, None, 0.8],
+            "cluster_extent_3d_m": [0.7, 0.9, None, 2.0],
+        }
+    )
+
+    features = sequence_features_from_rows(rows).set_index("sequence_id")
+
+    assert features.loc["seqA", "cluster_point_count_mean"] == 8.75
+    assert features.loc["seqA", "source_lidar_360_cluster_point_count_mean"] == 15.0
+    assert features.loc["seqA", "source_lidar_360_cluster_point_count_p95"] == 19.5
+    assert features.loc["seqA", "source_radar_enhance_pcl_cluster_point_count_mean"] == 2.5
+    assert features.loc["seqA", "cluster_extent_3d_m_mean"] == 1.2
+    assert features.loc["seqA", "source_radar_enhance_pcl_range_3d_m_mean"] == (6.0**2 + 8.0**2 + 15.0**2) ** 0.5
+    assert features.loc["seqA", "radar_frame_count"] == 2
+    assert features.loc["seqA", "radar_empty_frame_count"] == 1
+    assert features.loc["seqA", "radar_empty_frame_fraction"] == 0.5
+
+
 def test_nearest_neighbor_sequence_classifier_writes_class_map(tmp_path) -> None:
     train_rows = pd.DataFrame(
         {
@@ -117,6 +149,63 @@ def test_nearest_neighbor_sequence_classifier_writes_class_map(tmp_path) -> None
         {"sequence_id": "seq_target", "uav_type": 1}
     ]
     assert "sequence_accuracy" not in result.metrics
+
+
+def test_sequence_feature_reader_accepts_saved_sequence_feature_tables(tmp_path) -> None:
+    feature_table = tmp_path / "sequence_features.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqB"],
+            "cluster_point_count_mean": [10.0, 40.0],
+            "cluster_extent_3d_m_mean": [0.5, 2.0],
+        }
+    ).to_csv(feature_table, index=False)
+
+    features = sequence_features_from_files([feature_table])
+
+    assert features["sequence_id"].tolist() == ["seqA", "seqB"]
+    assert features["cluster_point_count_mean"].tolist() == [10.0, 40.0]
+    assert features["cluster_extent_3d_m_mean"].tolist() == [0.5, 2.0]
+
+
+@pytest.mark.parametrize("method", ["random-forest", "hist-gradient-boosting"])
+def test_sklearn_sequence_classifiers_predict_one_label_per_sequence(method: str) -> None:
+    pytest.importorskip("sklearn")
+    train_features = pd.DataFrame(
+        {
+            "sequence_id": ["c0a", "c0b", "c1a", "c1b", "c2a", "c2b"],
+            "cluster_point_count_mean": [8.0, 9.0, 30.0, 31.0, 80.0, 82.0],
+            "cluster_extent_3d_m_mean": [0.4, 0.45, 1.2, 1.1, 2.4, 2.6],
+            "diff_speed_mps_mean": [2.0, 2.2, 6.0, 6.5, 12.0, 12.5],
+        }
+    )
+    predict_features = pd.DataFrame(
+        {
+            "sequence_id": ["target"],
+            "cluster_point_count_mean": [81.0],
+            "cluster_extent_3d_m_mean": [2.5],
+            "diff_speed_mps_mean": [12.2],
+        }
+    )
+
+    result = classify_sequences_from_features(
+        train_features=train_features,
+        train_labels={
+            "c0a": "0",
+            "c0b": "0",
+            "c1a": "1",
+            "c1b": "1",
+            "c2a": "2",
+            "c2b": "2",
+        },
+        predict_features=predict_features,
+        method=method,
+    )
+
+    assert result.predictions["sequence_id"].tolist() == ["target"]
+    assert result.predictions["predicted_class"].tolist() == ["2"]
+    assert result.metrics["method"] == method
+    assert "cluster_point_count_mean" in result.metrics["feature_columns"]
 
 
 def test_sequence_class_labels_read_official_truth(tmp_path) -> None:
