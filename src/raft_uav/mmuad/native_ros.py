@@ -4306,9 +4306,10 @@ def position_message_to_row(
         raise ValueError("position-like message has no position/point/translation")
     frame = _normalize_position_coordinate_frame(coordinate_frame)
     xyz = _transform_position_xyz(xyz, coordinate_frame=frame)
+    stamp_time_s = _message_stamp_time_s(message)
     row = {
         "sequence_id": sequence_id,
-        "time_s": float(time_s),
+        "time_s": stamp_time_s if stamp_time_s is not None else float(time_s),
         "x_m": xyz[0],
         "y_m": xyz[1],
         "z_m": xyz[2],

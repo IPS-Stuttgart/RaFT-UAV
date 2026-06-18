@@ -1255,7 +1255,9 @@ coordinates; the bridge writes `x_m=east`, `y_m=north`, and `z_m=up`. The
 default is `identity`/`enu`, and native templates generated for PX4
 `VehicleLocalPosition` topics include the NED hint automatically. This is only a
 local frame convention transform; dataset-specific origin, map alignment, and
-sensor calibration still belong in calibration/topic-map preprocessing.
+sensor calibration still belong in calibration/topic-map preprocessing. Native
+position-like messages use `header.stamp` or `stamp` when available and fall
+back to the bag replay timestamp otherwise.
 When Detection2D or Detection3D messages include multiple classification
 hypotheses, the native bridge uses the highest-score result for confidence and
 class labels.
