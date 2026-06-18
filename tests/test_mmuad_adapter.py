@@ -3815,6 +3815,41 @@ def test_official_track5_timestamp_template_reads_text_frame_lists(
     assert image_template.rows["time_s"].tolist() == [5.0, 6.5]
 
 
+def test_official_track5_timestamp_template_accepts_image_folder_aliases(
+    tmp_path: Path,
+) -> None:
+    images_seq = tmp_path / "val" / "seq_images_alias"
+    camera_seq = tmp_path / "val" / "seq_camera_alias"
+    images_dir = images_seq / "Images" / "front"
+    camera_dir = camera_seq / "Camera" / "front"
+    images_dir.mkdir(parents=True)
+    camera_dir.mkdir(parents=True)
+    (images_dir / "front_a.png").write_bytes(b"not-a-real-image")
+    (images_dir / "timestamps.json").write_text(
+        json.dumps({"front_a.png": 30.25}),
+        encoding="utf-8",
+    )
+    (camera_dir / "31.5.png").write_bytes(b"not-a-real-image")
+
+    discovered = {
+        paths.sequence_id: paths for paths in discover_sequence_paths(tmp_path)
+    }
+
+    images_template = official_track5_timestamp_template(
+        discovered["seq_images_alias"],
+        timestamp_source="image",
+    )
+    camera_template = official_track5_timestamp_template(
+        discovered["seq_camera_alias"],
+        timestamp_source="image",
+    )
+    fallback_template = official_track5_timestamp_template(discovered["seq_images_alias"])
+
+    assert images_template.rows["time_s"].tolist() == [30.25]
+    assert camera_template.rows["time_s"].tolist() == [31.5]
+    assert fallback_template.rows["time_s"].tolist() == [30.25]
+
+
 def test_cli_completes_official_results_to_sequence_timestamps(tmp_path: Path) -> None:
     root = tmp_path / "data"
     seq = root / "val" / "seq1"
