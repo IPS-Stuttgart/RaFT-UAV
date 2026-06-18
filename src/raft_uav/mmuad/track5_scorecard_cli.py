@@ -86,6 +86,16 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="mmuad_sequence_classifier_provenance.json from a classifier-backed run",
     )
+    parser.add_argument(
+        "--selected-tracklets-csv",
+        type=Path,
+        help="mmuad_selected_tracklets.csv used to annotate pose-by-sequence sensor usage",
+    )
+    parser.add_argument(
+        "--candidate-oracle-gap-csv",
+        type=Path,
+        help="mmuad_candidate_oracle_gap.csv used to summarize candidate regret",
+    )
     parser.add_argument("--allow-csv-submission", action="store_true")
     parser.add_argument("--timestamp-tolerance-s", type=float, default=1.0e-6)
     parser.add_argument("--nearest-time-delta-s", type=float, default=0.5)
@@ -94,6 +104,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--validation-rows-csv", type=Path)
     parser.add_argument("--public-evaluation-rows-csv", type=Path)
     parser.add_argument("--nearest-time-rows-csv", type=Path)
+    parser.add_argument("--pose-by-sequence-csv", type=Path)
+    parser.add_argument("--candidate-regret-summary-csv", type=Path)
     parser.add_argument(
         "--require-leaderboard-ready",
         action="store_true",
@@ -116,6 +128,8 @@ def main(argv: list[str] | None = None) -> int:
         class_map_path=args.class_map,
         upload_manifest_path=args.official_upload_manifest,
         classification_provenance_path=args.classification_provenance_json,
+        selected_tracklets_path=args.selected_tracklets_csv,
+        candidate_oracle_gap_path=args.candidate_oracle_gap_csv,
         require_zip=not args.allow_csv_submission,
         timestamp_tolerance_s=args.timestamp_tolerance_s,
         max_time_delta_s=args.nearest_time_delta_s,
@@ -129,6 +143,8 @@ def main(argv: list[str] | None = None) -> int:
         validation_rows_csv=args.validation_rows_csv,
         public_evaluation_rows_csv=args.public_evaluation_rows_csv,
         nearest_time_rows_csv=args.nearest_time_rows_csv,
+        pose_by_sequence_csv=args.pose_by_sequence_csv,
+        candidate_regret_summary_csv=args.candidate_regret_summary_csv,
     )
 
     summary = scorecard.summary
