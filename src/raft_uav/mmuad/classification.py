@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import pickle
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-import json
 import numpy as np
-from pathlib import Path
 
 import pandas as pd
 
@@ -373,26 +374,35 @@ def train_sequence_classifier_model(
 
 
 def save_sequence_classifier_model(model: dict[str, Any], path: Path) -> Path:
-    """Persist a sequence classifier payload with joblib."""
+    """Persist a sequence classifier payload."""
 
-    try:
-        import joblib
-    except Exception as exc:  # pragma: no cover - depends on optional sklearn stack
-        raise ValueError("saving a sequence classifier model requires joblib") from exc
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(model, path)
+    try:
+        import joblib
+    except ModuleNotFoundError:
+        with path.open("wb") as handle:
+            pickle.dump(model, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    else:
+        joblib.dump(model, path)
     return path
 
 
 def load_sequence_classifier_model(path: Path) -> dict[str, Any]:
-    """Load and validate a joblib sequence classifier payload."""
+    """Load and validate a sequence classifier payload."""
 
+    path = Path(path)
     try:
         import joblib
-    except Exception as exc:  # pragma: no cover - depends on optional sklearn stack
-        raise ValueError("loading a sequence classifier model requires joblib") from exc
-    model = joblib.load(Path(path))
+    except ModuleNotFoundError:
+        with path.open("rb") as handle:
+            model = pickle.load(handle)
+    else:
+        try:
+            model = joblib.load(path)
+        except Exception:
+            with path.open("rb") as handle:
+                model = pickle.load(handle)
     if not isinstance(model, dict) or model.get("schema") != SEQUENCE_CLASSIFIER_MODEL_SCHEMA:
         raise ValueError(f"{path} is not an MMUAD sequence classifier model")
     return model
