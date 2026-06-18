@@ -36,7 +36,7 @@ def test_train_sequence_classifier_and_copy_prediction_to_submission(tmp_path: P
     pd.DataFrame(
         {"sequence_id": ["seq_train_0", "seq_train_3"], "uav_type": [0, 3]}
     ).to_csv(reference, index=False)
-    model_path = tmp_path / "outputs" / "mmuad_sequence_classifier_rf.joblib"
+    model_path = tmp_path / "outputs" / "mmuad_sequence_classifier_nn.joblib"
     feature_report = tmp_path / "outputs" / "features.csv"
 
     train_status = train_sequence_classifier_main(
@@ -45,13 +45,11 @@ def test_train_sequence_classifier_and_copy_prediction_to_submission(tmp_path: P
             "--reference",
             str(reference),
             "--method",
-            "random-forest",
+            "nearest-neighbor",
             "--output",
             str(model_path),
             "--feature-report",
             str(feature_report),
-            "--n-estimators",
-            "30",
         ]
     )
 
@@ -59,7 +57,7 @@ def test_train_sequence_classifier_and_copy_prediction_to_submission(tmp_path: P
     assert model_path.exists()
     assert feature_report.exists()
     model = load_sequence_classifier_model(model_path)
-    assert model["method"] == "random-forest"
+    assert model["method"] == "nearest-neighbor"
     assert model["prediction_mode"] == "sequence_level"
     assert set(model["train_sequences"]) == {"seq_train_0", "seq_train_3"}
 
@@ -89,6 +87,6 @@ def test_train_sequence_classifier_and_copy_prediction_to_submission(tmp_path: P
         (output / "mmuad_sequence_classifier_provenance.json").read_text(encoding="utf-8")
     )
     assert provenance["classification_model_path"] == str(model_path)
-    assert provenance["classification_method"] == "random-forest"
+    assert provenance["classification_method"] == "nearest-neighbor"
     assert provenance["classification_prediction_mode"] == "sequence_level"
     assert provenance["classification_class_map"] == {"seq_target": "3"}
