@@ -22,7 +22,8 @@ seq001,0.00,1.0,2.0,3.0
 Timestamp columns may be supplied in seconds via `time_s`, `timestamp_s`,
 `time`, or `sec`; in larger exported units via `timestamp_ns`, `timestamp_us`,
 or `timestamp_ms`; or as ROS-style second/nanosecond pairs such as
-`sec,nanosec`.
+`sec,nanosec`, `header.stamp.sec,header.stamp.nanosec`, or ROS1-style
+`header.stamp.secs,header.stamp.nsecs`.
 
 Candidate and truth rows can also be supplied as JSON row lists, JSONL/NDJSON
 row streams, column maps, or objects containing common keys such as
