@@ -49,6 +49,13 @@ OFFICIAL_UPLOAD_MANIFEST_VERIFICATION_SCHEMA = (
     "raft-uav-mmuad-official-upload-manifest-verification-v1"
 )
 OFFICIAL_TRACK5_INVALID_SEQUENCE_BUCKET = "__invalid_sequence__"
+_OFFICIAL_POSITION_MAPPING_KEY_SETS = (
+    ("x", "y", "z"),
+    ("x_m", "y_m", "z_m"),
+    ("east_m", "north_m", "up_m"),
+    ("position.x", "position.y", "position.z"),
+    ("pose.position.x", "pose.position.y", "pose.position.z"),
+)
 
 _SEQUENCE_ID_ALIASES = (
     "sequence_id",
@@ -1576,18 +1583,33 @@ def parse_official_position_cell(value: Any) -> tuple[float, float, float]:
             parsed = _split_official_position_text(text)
     else:
         parsed = value
-    if isinstance(parsed, np.ndarray):
-        values = parsed.reshape(-1).tolist()
-    elif isinstance(parsed, list | tuple):
-        values = list(parsed)
-    else:
-        raise ValueError(f"invalid Track 5 Position value: {value!r}")
+    values = _official_position_values(parsed, original_value=value)
     if len(values) != 3:
         raise ValueError(f"Track 5 Position must contain exactly 3 values: {value!r}")
     xyz = (float(values[0]), float(values[1]), float(values[2]))
     if not np.isfinite(np.asarray(xyz, dtype=float)).all():
         raise ValueError(f"Track 5 Position must contain finite values: {value!r}")
     return xyz
+
+
+def _official_position_values(parsed: Any, *, original_value: Any) -> list[Any]:
+    if isinstance(parsed, np.ndarray):
+        return parsed.reshape(-1).tolist()
+    if isinstance(parsed, list | tuple):
+        return list(parsed)
+    if isinstance(parsed, Mapping):
+        lower_to_key = {str(key).lower(): key for key in parsed}
+        for key_set in _OFFICIAL_POSITION_MAPPING_KEY_SETS:
+            if all(key in lower_to_key for key in key_set):
+                return [parsed[lower_to_key[key]] for key in key_set]
+        for nested_key in ("position", "coordinates", "xyz"):
+            original_key = lower_to_key.get(nested_key)
+            if original_key is not None:
+                return _official_position_values(
+                    parsed[original_key],
+                    original_value=original_value,
+                )
+    raise ValueError(f"invalid Track 5 Position value: {original_value!r}")
 
 
 def parse_official_sequence_cell(value: Any) -> str:

@@ -547,6 +547,10 @@ The class-map file used for official output should map each sequence to the
 integer challenge class id, for example `sequence_id,uav_type` with values such
 as `seq1,0`. If no per-sequence numeric class map is provided, the CLI uses
 `--ug2-official-classification` as the default id.
+The local official-results loader and validator accept `Position` cells written
+as `(x,y,z)`, list/array-style strings, or object cells with `x,y,z`,
+`x_m,y_m,z_m`, `east_m,north_m,up_m`, `position`, `coordinates`, or `xyz`
+fields before re-normalizing them to the public column order.
 
 For leaderboard-style packaging, the public README asks for positions at the
 given sequence timestamps. With `--sequence-root`, the CLI can resample the
