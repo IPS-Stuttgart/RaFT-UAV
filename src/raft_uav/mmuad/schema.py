@@ -71,6 +71,7 @@ _COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "pos_y",
         "position_y",
         "center_y",
+        "bbox_center_y",
         "cy",
         "py",
         "point.y",
