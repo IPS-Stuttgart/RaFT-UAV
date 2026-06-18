@@ -268,3 +268,115 @@ def test_sequence_classifier_cli_writes_outputs(tmp_path) -> None:
         == 0
     )
     assert pd.read_csv(tmp_path / "out_class_map.csv")["uav_type"].tolist() == [1]
+
+
+def test_sequence_classifier_cli_loso_relabels_official_submission(tmp_path) -> None:
+    pytest.importorskip("sklearn")
+    selected_tracklets = tmp_path / "mmuad_selected_tracklets.csv"
+    reference = tmp_path / "validation_ref_new_for_your_ref.csv"
+    submission_in = tmp_path / "mmaud_results.csv"
+    submission_out = tmp_path / "mmaud_results_loso_classifier.csv"
+    predictions_csv = tmp_path / "mmuad_sequence_classifier_loso_predictions.csv"
+    sequence_classes = {
+        "seq0a": 0,
+        "seq0b": 0,
+        "seq1a": 1,
+        "seq1b": 1,
+        "seq2a": 2,
+        "seq2b": 2,
+        "seq3a": 3,
+        "seq3b": 3,
+    }
+    feature_rows = []
+    reference_rows = []
+    submission_rows = []
+    for index, (sequence, class_id) in enumerate(sequence_classes.items()):
+        base = float(class_id * 50 + index * 0.1)
+        for step in range(2):
+            feature_rows.append(
+                {
+                    "sequence_id": sequence,
+                    "time_s": float(step),
+                    "source": "lidar_360",
+                    "x_m": base + step,
+                    "y_m": base + 0.5 * step,
+                    "z_m": 10.0 + class_id,
+                    "cluster_point_count": 10 + class_id * 20,
+                    "cluster_extent_3d_m": 0.5 + class_id,
+                }
+            )
+        reference_rows.append(
+            {
+                "Sequence": sequence,
+                "Timestamp": 0.0,
+                "Position": f"({base},{base},10)",
+                "Classification": class_id,
+            }
+        )
+        submission_rows.append(
+            {
+                "Sequence": sequence,
+                "Timestamp": 0.0,
+                "Position": f"({base},{base},10)",
+                "Classification": 0,
+            }
+        )
+    pd.DataFrame(feature_rows).to_csv(selected_tracklets, index=False)
+    pd.DataFrame(reference_rows).to_csv(reference, index=False)
+    pd.DataFrame(submission_rows).to_csv(submission_in, index=False)
+
+    assert (
+        sequence_classifier_main(
+            [
+                "--loso-eval",
+                "--method",
+                "random-forest",
+                "--reference",
+                str(reference),
+                "--selected-tracklets",
+                str(selected_tracklets),
+                "--submission-in",
+                str(submission_in),
+                "--submission-out",
+                str(submission_out),
+                "--loso-predictions-csv",
+                str(predictions_csv),
+            ]
+        )
+        == 0
+    )
+
+    predictions = pd.read_csv(predictions_csv)
+    assert list(predictions.columns) == [
+        "sequence",
+        "heldout_sequence",
+        "method",
+        "truth_class",
+        "predicted_class",
+        "predicted_probability_0",
+        "predicted_probability_1",
+        "predicted_probability_2",
+        "predicted_probability_3",
+        "correct",
+        "train_sequences",
+        "feature_columns",
+    ]
+    assert set(predictions["sequence"]) == set(sequence_classes)
+    for _, row in predictions.iterrows():
+        assert str(row["sequence"]) not in str(row["train_sequences"]).split(";")
+    probability_columns = [
+        "predicted_probability_0",
+        "predicted_probability_1",
+        "predicted_probability_2",
+        "predicted_probability_3",
+    ]
+    assert predictions[probability_columns].notna().all().all()
+
+    original = pd.read_csv(submission_in)
+    relabeled = pd.read_csv(submission_out)
+    assert relabeled.drop(columns=["Classification"]).equals(
+        original.drop(columns=["Classification"])
+    )
+    class_map = dict(zip(predictions["sequence"], predictions["predicted_class"], strict=False))
+    expected = [int(class_map[sequence]) for sequence in original["Sequence"]]
+    assert relabeled["Classification"].tolist() == expected
