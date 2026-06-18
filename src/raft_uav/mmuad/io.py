@@ -415,6 +415,9 @@ def _point_rows_to_candidates(
                 continue
             centroid = cluster.mean(axis=0)
             spread = np.maximum(cluster.std(axis=0), 0.25)
+            extent = np.ptp(cluster, axis=0)
+            bbox_volume = float(np.prod(np.maximum(extent, 0.05)))
+            density = float(len(cluster) / bbox_volume) if bbox_volume > 0 else float(len(cluster))
             records.append(
                 {
                     "sequence_id": sequence_id,
@@ -428,6 +431,17 @@ def _point_rows_to_candidates(
                     "std_z_m": float(max(spread[2], 0.5)),
                     "confidence": confidence,
                     "class_name": "uav",
+                    "cluster_point_count": int(len(cluster)),
+                    "cluster_extent_x_m": float(extent[0]),
+                    "cluster_extent_y_m": float(extent[1]),
+                    "cluster_extent_z_m": float(extent[2]),
+                    "cluster_extent_xy_m": float(np.linalg.norm(extent[:2])),
+                    "cluster_extent_3d_m": float(np.linalg.norm(extent)),
+                    "cluster_bbox_volume_m3": bbox_volume,
+                    "cluster_density_points_per_m3": density,
+                    "cluster_range_xy_m": float(np.linalg.norm(centroid[:2])),
+                    "cluster_range_3d_m": float(np.linalg.norm(centroid)),
+                    "cluster_height_m": float(centroid[2]),
                 }
             )
     return CandidateFrame(normalize_candidate_columns(pd.DataFrame.from_records(records)))
