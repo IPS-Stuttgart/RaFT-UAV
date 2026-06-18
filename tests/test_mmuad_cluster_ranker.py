@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.cluster_ranker import (
     build_cluster_feature_table,
@@ -76,6 +77,44 @@ def test_cluster_ranker_labels_and_scores_good_cluster_higher() -> None:
     assert scored.rows.sort_values("x_m")["ranker_score"].iloc[0] > scored.rows.sort_values("x_m")[
         "ranker_score"
     ].iloc[1]
+
+
+def test_cluster_ranker_feature_table_includes_frame_rank_features() -> None:
+    candidates = point_rows_to_candidates(_point_rows(), voxel_size_m=0.5, min_points=3)
+    features = build_cluster_feature_table(candidates)
+
+    assert {
+        "frame_candidate_count",
+        "frame_rank_point_count_desc",
+        "frame_rank_density_desc",
+        "frame_rank_range_3d_asc",
+        "source_frame_rank_point_count_desc",
+    }.issubset(features.columns)
+    assert features["frame_candidate_count"].tolist() == [2, 2]
+    assert features.sort_values("cluster_range_3d_m")["frame_rank_range_3d_asc"].iloc[0] == 1.0
+
+
+def test_cluster_ranker_trains_sklearn_hist_gradient_classifier() -> None:
+    pytest.importorskip("sklearn")
+    candidates = point_rows_to_candidates(_point_rows(), voxel_size_m=0.5, min_points=3)
+    features = build_cluster_feature_table(
+        candidates,
+        truth=_truth_rows(),
+        good_threshold_m=1.0,
+        max_truth_time_delta_s=0.1,
+    )
+
+    model = train_cluster_ranker(
+        features,
+        model_type="hist-gradient-boosting-classifier",
+        n_estimators=5,
+    )
+    scores = predict_cluster_scores(features, model)
+
+    assert model.sklearn_estimator_base64
+    assert scores.shape == (2,)
+    assert (scores >= 0.0).all()
+    assert (scores <= 1.0).all()
 
 
 def test_cross_sensor_candidate_merging_creates_extra_candidate() -> None:
@@ -152,6 +191,52 @@ def test_cluster_ranker_cli_trains_and_scores(tmp_path: Path) -> None:
     scored = pd.read_csv(scored_csv).sort_values("x_m")
     assert scored["ranker_score"].iloc[0] > scored["ranker_score"].iloc[1]
     assert json.loads(model_json.read_text(encoding="utf-8"))["model_type"] == "logistic"
+
+
+def test_cluster_ranker_cli_trains_from_sequence_root(tmp_path: Path) -> None:
+    root = tmp_path / "mmuad"
+    seq = root / "seqA" / "lidar_360"
+    seq.mkdir(parents=True)
+    _point_rows().drop(columns=["sequence_id", "time_s"]).to_csv(seq / "0.0.csv", index=False)
+    truth_csv = tmp_path / "truth.csv"
+    model_json = tmp_path / "model.json"
+    candidates_csv = tmp_path / "train_candidates.csv"
+    features_csv = tmp_path / "train_features.csv"
+    scored_csv = tmp_path / "scored.csv"
+    _truth_rows().to_csv(truth_csv, index=False)
+
+    status = cluster_ranker_main(
+        [
+            "--train-sequence-root",
+            str(root),
+            "--score-sequence-root",
+            str(root),
+            "--train-truth",
+            str(truth_csv),
+            "--model-json",
+            str(model_json),
+            "--train-candidates-output-csv",
+            str(candidates_csv),
+            "--train-features-csv",
+            str(features_csv),
+            "--scored-candidates-csv",
+            str(scored_csv),
+            "--good-threshold-m",
+            "1.0",
+            "--max-truth-time-delta-s",
+            "0.1",
+            "--voxel-size-m",
+            "0.5",
+            "--min-cluster-points",
+            "3",
+        ]
+    )
+
+    assert status == 0
+    assert model_json.exists()
+    assert candidates_csv.exists()
+    assert features_csv.exists()
+    assert scored_csv.exists()
 
 
 def test_cluster_ranker_model_round_trips(tmp_path: Path) -> None:

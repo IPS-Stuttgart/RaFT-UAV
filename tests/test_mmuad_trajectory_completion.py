@@ -97,6 +97,47 @@ def test_gap_interpolation_fills_truth_timestamp_and_reports_gap() -> None:
     assert result.gap_summary.loc[0, "filled_count"] == 1
 
 
+def test_speed_gate_local_linear_replaces_isolated_spike() -> None:
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1", "seq1"],
+            "time_s": [0.0, 1.0, 2.0],
+            "source": ["lidar", "lidar", "lidar"],
+            "track_id": ["a", "b", "a"],
+            "class_name": ["uav", "uav", "uav"],
+            "update_action": ["selected_update", "selected_update", "selected_update"],
+            "selected_path_update": [True, True, True],
+            "state_x_m": [0.0, 100.0, 2.0],
+            "state_y_m": [0.0, 0.0, 0.0],
+            "state_z_m": [5.0, 5.0, 5.0],
+            "v_x_mps": [0.0, 0.0, 0.0],
+            "v_y_mps": [0.0, 0.0, 0.0],
+            "v_z_mps": [0.0, 0.0, 0.0],
+        }
+    )
+
+    result = complete_and_smooth_estimates(
+        estimates,
+        _truth_rows(),
+        config=TrajectoryCompletionConfig(
+            mode="gap-interpolation",
+            speed_gate_mps=20.0,
+            outlier_replacement="local-linear",
+            max_gap_s=3.0,
+        ),
+    )
+
+    middle = result.estimates.loc[result.estimates["time_s"] == 1.0].iloc[0]
+    assert abs(float(middle["state_x_m"]) - 1.0) < 1.0e-6
+    assert bool(middle["trajectory_speed_gate_outlier"])
+    assert bool(middle["trajectory_outlier_replaced"])
+    speed_summary = result.speed_gate_summary.iloc[0]
+    assert int(speed_summary["speed_gate_outlier_count"]) == 1
+    assert int(speed_summary["outlier_replaced_count"]) == 1
+    sequence_summary = result.sequence_error_summary.iloc[0]
+    assert int(sequence_summary["outlier_replaced_count"]) == 1
+
+
 def test_mmuad_cli_writes_trajectory_completion_diagnostics(tmp_path: Path) -> None:
     candidates_csv = tmp_path / "candidates.csv"
     truth_csv = tmp_path / "truth.csv"
@@ -127,15 +168,21 @@ def test_mmuad_cli_writes_trajectory_completion_diagnostics(tmp_path: Path) -> N
             "gap-interpolation",
             "--trajectory-completion-max-gap-s",
             "3.0",
+            "--trajectory-speed-gate-mps",
+            "20.0",
+            "--trajectory-outlier-replacement",
+            "local-linear",
         ]
     )
 
     assert status == 0
     estimates = pd.read_csv(output_dir / "mmuad_estimates.csv")
     gap_summary = pd.read_csv(output_dir / "mmuad_gap_summary.csv")
+    speed_summary = pd.read_csv(output_dir / "mmuad_speed_gate_summary.csv")
     ablation = pd.read_csv(output_dir / "mmuad_smoothing_ablation.csv")
     sequence_summary = pd.read_csv(output_dir / "mmuad_sequence_error_summary.csv")
     assert estimates["time_s"].tolist() == [0.0, 1.0, 2.0]
     assert int(gap_summary.loc[0, "filled_count"]) == 1
+    assert "speed_gate_outlier_count" in speed_summary.columns
     assert "__pooled__" in set(ablation["sequence_id"])
     assert sequence_summary.loc[0, "trajectory_completion_mode"] == "gap-interpolation"

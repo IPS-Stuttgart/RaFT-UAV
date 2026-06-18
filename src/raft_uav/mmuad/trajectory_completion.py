@@ -39,6 +39,9 @@ class TrajectoryCompletionConfig:
     smoothing_blend: float = 1.0
     include_truth_timestamps: bool = True
     infer_missing_grid: bool = True
+    speed_gate_mps: float = 0.0
+    outlier_replacement: Literal["none", "local-linear"] = "none"
+    outlier_replacement_max_gap_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,7 @@ class TrajectoryCompletionResult:
 
     estimates: pd.DataFrame
     gap_summary: pd.DataFrame
+    speed_gate_summary: pd.DataFrame
     smoothing_ablation: pd.DataFrame
     sequence_error_summary: pd.DataFrame
 
@@ -64,17 +68,27 @@ def complete_and_smooth_estimates(
     truth_rows = _truth_rows(truth)
     if rows.empty:
         empty = pd.DataFrame()
-        return TrajectoryCompletionResult(empty, empty, empty, empty)
+        return TrajectoryCompletionResult(empty, empty, empty, empty, empty)
 
     final_groups: list[pd.DataFrame] = []
     gap_rows: list[dict[str, Any]] = []
+    speed_gate_rows: list[dict[str, Any]] = []
     ablation_frames: dict[str, list[pd.DataFrame]] = {mode: [] for mode in _ABLATION_MODES}
     for sequence_id, trajectory_id, group in _trajectory_groups(rows):
+        source = _prepare_trajectory_source(group, config=config)
         sequence_truth = _truth_for_sequence(truth_rows, sequence_id)
-        target_times = _target_times(group, sequence_truth, config=config)
+        target_times = _target_times(source, sequence_truth, config=config)
+        speed_gate_rows.append(
+            _speed_gate_summary_row(
+                source,
+                sequence_id=sequence_id,
+                trajectory_id=trajectory_id,
+                config=config,
+            )
+        )
         gap_rows.extend(
             _gap_summary_rows(
-                group,
+                source,
                 target_times,
                 sequence_id=sequence_id,
                 trajectory_id=trajectory_id,
@@ -84,7 +98,7 @@ def complete_and_smooth_estimates(
         for mode in _ABLATION_MODES:
             ablation_frames[mode].append(
                 _complete_group(
-                    group,
+                    source,
                     target_times if mode != "raw" else _unique_times(group),
                     mode=mode,
                     config=config,
@@ -95,7 +109,7 @@ def complete_and_smooth_estimates(
         final_mode = config.mode if config.mode != "none" else "raw"
         final_groups.append(
             _complete_group(
-                group,
+                source,
                 target_times if final_mode != "raw" else _unique_times(group),
                 mode=final_mode,
                 config=config,
@@ -118,6 +132,7 @@ def complete_and_smooth_estimates(
     return TrajectoryCompletionResult(
         estimates=final_estimates.sort_values(_sort_columns(final_estimates)).reset_index(drop=True),
         gap_summary=pd.DataFrame.from_records(gap_rows),
+        speed_gate_summary=pd.DataFrame.from_records(speed_gate_rows),
         smoothing_ablation=pd.DataFrame.from_records(ablation_rows),
         sequence_error_summary=_sequence_error_summary(
             raw=_attach_truth_errors_by_sequence(_concat_frames(ablation_frames["raw"]), truth_rows),
@@ -140,10 +155,12 @@ def write_trajectory_completion_diagnostics(
     output_dir.mkdir(parents=True, exist_ok=True)
     paths = {
         "gap_summary_csv": output_dir / "mmuad_gap_summary.csv",
+        "speed_gate_summary_csv": output_dir / "mmuad_speed_gate_summary.csv",
         "smoothing_ablation_csv": output_dir / "mmuad_smoothing_ablation.csv",
         "sequence_error_summary_csv": output_dir / "mmuad_sequence_error_summary.csv",
     }
     result.gap_summary.to_csv(paths["gap_summary_csv"], index=False)
+    result.speed_gate_summary.to_csv(paths["speed_gate_summary_csv"], index=False)
     result.smoothing_ablation.to_csv(paths["smoothing_ablation_csv"], index=False)
     result.sequence_error_summary.to_csv(paths["sequence_error_summary_csv"], index=False)
     return {key: str(value) for key, value in paths.items()}
@@ -233,6 +250,117 @@ def _time_supported_by_short_gap(timestamp: float, times: np.ndarray, max_gap_s:
     return float(times[insert] - times[insert - 1]) <= float(max_gap_s)
 
 
+def _prepare_trajectory_source(
+    group: pd.DataFrame,
+    *,
+    config: TrajectoryCompletionConfig,
+) -> pd.DataFrame:
+    source = _dedupe_by_time(group)
+    return _apply_speed_gate_outlier_replacement(source, config=config)
+
+
+def _apply_speed_gate_outlier_replacement(
+    source: pd.DataFrame,
+    *,
+    config: TrajectoryCompletionConfig,
+) -> pd.DataFrame:
+    out = source.sort_values("time_s").reset_index(drop=True).copy()
+    for column in ("state_x_m", "state_y_m", "state_z_m"):
+        out[f"trajectory_original_{column}"] = pd.to_numeric(out[column], errors="coerce")
+    out["trajectory_prev_speed_mps"] = np.nan
+    out["trajectory_next_speed_mps"] = np.nan
+    out["trajectory_local_linear_residual_m"] = np.nan
+    out["trajectory_speed_gate_mps"] = float(config.speed_gate_mps or 0.0)
+    out["trajectory_speed_gate_outlier"] = False
+    out["trajectory_outlier_replaced"] = False
+    out["trajectory_outlier_replacement_method"] = "none"
+    if out.empty or not _speed_gate_enabled(config):
+        return out
+    times = out["time_s"].to_numpy(float)
+    xyz = out[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
+    speeds = _segment_speeds(times, xyz)
+    if speeds.size:
+        out.loc[out.index[1:], "trajectory_prev_speed_mps"] = speeds
+        out.loc[out.index[:-1], "trajectory_next_speed_mps"] = speeds
+    gate = float(config.speed_gate_mps)
+    outlier = np.zeros(len(out), dtype=bool)
+    residuals = np.full(len(out), np.nan, dtype=float)
+    for idx in range(1, len(out) - 1):
+        left_dt = max(float(times[idx] - times[idx - 1]), 1.0e-9)
+        right_dt = max(float(times[idx + 1] - times[idx]), 1.0e-9)
+        total_dt = max(float(times[idx + 1] - times[idx - 1]), 1.0e-9)
+        alpha = float((times[idx] - times[idx - 1]) / total_dt)
+        predicted = xyz[idx - 1] + alpha * (xyz[idx + 1] - xyz[idx - 1])
+        residual = float(np.linalg.norm(xyz[idx] - predicted))
+        residuals[idx] = residual
+        residual_gate = 0.5 * gate * min(left_dt, right_dt)
+        if speeds[idx - 1] > gate and speeds[idx] > gate and residual > residual_gate:
+            outlier[idx] = True
+    out["trajectory_local_linear_residual_m"] = residuals
+    out["trajectory_speed_gate_outlier"] = outlier
+    if config.outlier_replacement == "local-linear":
+        out = _replace_speed_gate_outliers(out, config=config)
+    return out
+
+
+def _speed_gate_enabled(config: TrajectoryCompletionConfig) -> bool:
+    try:
+        gate = float(config.speed_gate_mps)
+    except (TypeError, ValueError):
+        return False
+    return np.isfinite(gate) and gate > 0.0
+
+
+def _segment_speeds(times: np.ndarray, xyz: np.ndarray) -> np.ndarray:
+    if len(times) < 2:
+        return np.asarray([], dtype=float)
+    dt = np.diff(times)
+    distances = np.linalg.norm(np.diff(xyz, axis=0), axis=1)
+    speeds = np.divide(
+        distances,
+        np.maximum(dt, 1.0e-9),
+        out=np.full(len(distances), np.nan, dtype=float),
+        where=np.isfinite(dt) & (dt > 0.0),
+    )
+    return speeds
+
+
+def _replace_speed_gate_outliers(
+    rows: pd.DataFrame,
+    *,
+    config: TrajectoryCompletionConfig,
+) -> pd.DataFrame:
+    out = rows.copy()
+    outlier = out["trajectory_speed_gate_outlier"].astype(bool).to_numpy()
+    if not outlier.any():
+        return out
+    times = out["time_s"].to_numpy(float)
+    xyz = out[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
+    max_gap = (
+        float(config.outlier_replacement_max_gap_s)
+        if config.outlier_replacement_max_gap_s is not None
+        else float(config.max_gap_s)
+    )
+    for idx in np.flatnonzero(outlier):
+        left = idx - 1
+        while left >= 0 and outlier[left]:
+            left -= 1
+        right = idx + 1
+        while right < len(out) and outlier[right]:
+            right += 1
+        if left < 0 or right >= len(out):
+            continue
+        total_gap = float(times[right] - times[left])
+        if total_gap <= 0.0 or total_gap > max_gap:
+            continue
+        alpha = float((times[idx] - times[left]) / total_gap)
+        replacement = xyz[left] + alpha * (xyz[right] - xyz[left])
+        out.loc[idx, ["state_x_m", "state_y_m", "state_z_m"]] = replacement
+        out.loc[idx, "trajectory_outlier_replaced"] = True
+        out.loc[idx, "trajectory_outlier_replacement_method"] = "local-linear"
+    return out
+
+
 def _complete_group(
     group: pd.DataFrame,
     target_times: np.ndarray,
@@ -242,7 +370,7 @@ def _complete_group(
     sequence_id: str,
     trajectory_id: str,
 ) -> pd.DataFrame:
-    source = _dedupe_by_time(group)
+    source = group.sort_values("time_s").reset_index(drop=True)
     source_times = source["time_s"].to_numpy(float)
     source_xyz = source[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
     if source.empty or target_times.size == 0:
@@ -521,6 +649,50 @@ def _gap_summary_rows(
     return rows
 
 
+def _speed_gate_summary_row(
+    source: pd.DataFrame,
+    *,
+    sequence_id: str,
+    trajectory_id: str,
+    config: TrajectoryCompletionConfig,
+) -> dict[str, Any]:
+    times = source["time_s"].to_numpy(float) if "time_s" in source.columns else np.asarray([])
+    xyz = (
+        source[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
+        if {"state_x_m", "state_y_m", "state_z_m"}.issubset(source.columns)
+        else np.empty((0, 3), dtype=float)
+    )
+    speeds = _segment_speeds(times, xyz)
+    finite_speeds = speeds[np.isfinite(speeds)]
+    outliers = (
+        source.get("trajectory_speed_gate_outlier", pd.Series(False, index=source.index))
+        .fillna(False)
+        .astype(bool)
+    )
+    replaced = (
+        source.get("trajectory_outlier_replaced", pd.Series(False, index=source.index))
+        .fillna(False)
+        .astype(bool)
+    )
+    gate = float(config.speed_gate_mps or 0.0)
+    return {
+        "sequence_id": sequence_id,
+        "trajectory_id": trajectory_id,
+        "trajectory_speed_gate_mps": gate,
+        "trajectory_outlier_replacement": config.outlier_replacement,
+        "source_row_count": int(len(source)),
+        "segment_count": int(len(speeds)),
+        "segment_over_gate_count": int(np.sum(finite_speeds > gate)) if gate > 0.0 else 0,
+        "speed_gate_outlier_count": int(outliers.sum()),
+        "outlier_replaced_count": int(replaced.sum()),
+        "max_segment_speed_mps": float(np.max(finite_speeds)) if finite_speeds.size else np.nan,
+        "p95_segment_speed_mps": float(np.percentile(finite_speeds, 95.0))
+        if finite_speeds.size
+        else np.nan,
+        "median_segment_speed_mps": float(np.median(finite_speeds)) if finite_speeds.size else np.nan,
+    }
+
+
 def _ablation_rows(
     estimates: pd.DataFrame,
     truth_rows: pd.DataFrame | None,
@@ -559,6 +731,12 @@ def _sequence_error_summary(
         truth_seq = _truth_for_sequence(truth_rows, sequence_id)
         raw_metrics = compute_metrics(raw_seq, truth_seq)
         final_metrics = compute_metrics(final_seq, truth_seq)
+        speed_stats = _speed_gate_summary_row(
+            final_seq,
+            sequence_id=sequence_id,
+            trajectory_id="__all__",
+            config=TrajectoryCompletionConfig(mode=mode if mode != "raw" else "none"),
+        )
         records.append(
             {
                 "sequence_id": sequence_id,
@@ -581,6 +759,10 @@ def _sequence_error_summary(
                 "final_max_3d_m": final_metrics.get("max_3d_m"),
                 "delta_max_3d_m": _metric_delta(raw_metrics, final_metrics, "max_3d_m"),
                 "final_roughness_mps2": _trajectory_roughness(final_seq),
+                "speed_gate_outlier_count": speed_stats["speed_gate_outlier_count"],
+                "outlier_replaced_count": speed_stats["outlier_replaced_count"],
+                "max_segment_speed_mps": speed_stats["max_segment_speed_mps"],
+                "p95_segment_speed_mps": speed_stats["p95_segment_speed_mps"],
             }
         )
     return pd.DataFrame.from_records(records)

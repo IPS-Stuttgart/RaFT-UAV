@@ -56,6 +56,7 @@ def build_track5_scorecard(
     timestamp_source: str = "ground-truth-or-all",
     class_map_path: Path | None = None,
     upload_manifest_path: Path | None = None,
+    classification_provenance_path: Path | None = None,
     require_zip: bool = True,
     timestamp_tolerance_s: float = 1.0e-6,
     max_time_delta_s: float = 0.5,
@@ -93,6 +94,9 @@ def build_track5_scorecard(
         Optional ``mmuad_official_upload_manifest.json`` written by the
         official validation path.  When supplied, scorecard readiness also
         requires the manifest fingerprints to match the current artifact.
+    classification_provenance_path:
+        Optional classifier provenance JSON written by ``raft-uav-mmuad-run``
+        when ``--sequence-classifier`` is used.
     require_zip:
         Whether validation should require a ZIP.  Keep this true for Codabench
         preflight; set false for local CSV development checks.
@@ -111,6 +115,14 @@ def build_track5_scorecard(
     class_map_path = Path(class_map_path) if class_map_path is not None else None
     upload_manifest_path = (
         Path(upload_manifest_path) if upload_manifest_path is not None else None
+    )
+    classification_provenance_path = (
+        Path(classification_provenance_path)
+        if classification_provenance_path is not None
+        else None
+    )
+    classification_provenance = _load_classification_provenance(
+        classification_provenance_path
     )
 
     truth_frame = load_evaluation_truth_file(truth_path) if truth_path is not None else None
@@ -165,6 +177,7 @@ def build_track5_scorecard(
         timestamp_source=timestamp_source,
         class_map_path=class_map_path,
         upload_manifest_path=upload_manifest_path,
+        classification_provenance=classification_provenance,
         require_zip=require_zip,
         timestamp_tolerance_s=timestamp_tolerance_s,
         max_time_delta_s=max_time_delta_s,
@@ -239,6 +252,19 @@ def scorecard_summary_frame(summary: dict[str, Any]) -> pd.DataFrame:
         "split_name": summary.get("split_name"),
         "timestamp_source": summary.get("timestamp_source"),
         "upload_manifest_path": summary.get("upload_manifest_path"),
+        "classification_model_path": summary.get("classification_model_path"),
+        "classification_method": summary.get("classification_method"),
+        "classification_train_sequences": ";".join(
+            str(item) for item in summary.get("classification_train_sequences", []) or []
+        ),
+        "classification_feature_columns": ";".join(
+            str(item) for item in summary.get("classification_feature_columns", []) or []
+        ),
+        "classification_class_map": json.dumps(
+            summary.get("classification_class_map", {}) or {},
+            sort_keys=True,
+        ),
+        "classification_prediction_mode": summary.get("classification_prediction_mode"),
         "codabench_upload_ready": validation.get("codabench_upload_ready"),
         "upload_manifest_valid": summary.get("upload_manifest_valid"),
         "upload_manifest_codabench_upload_ready": summary.get(
@@ -366,6 +392,7 @@ def _scorecard_summary(
     public_eval: dict[str, Any] | None,
     nearest_eval: dict[str, Any] | None,
     manifest_verification: dict[str, Any] | None,
+    classification_provenance: dict[str, Any] | None,
 ) -> dict[str, Any]:
     public_summary = public_eval["summary"] if public_eval is not None else None
     nearest_summary = nearest_eval["summary"] if nearest_eval is not None else None
@@ -385,7 +412,7 @@ def _scorecard_summary(
         if not manifest_verification.get("codabench_upload_ready", False):
             reasons.append("official_upload_manifest_not_upload_ready")
     unique_reasons = sorted(set(str(reason) for reason in reasons if str(reason)))
-    return {
+    summary = {
         "schema": "raft-uav-mmuad-track5-scorecard-v1",
         "closed_codabench_evaluator": False,
         "description": (
@@ -428,3 +455,36 @@ def _scorecard_summary(
         "codabench_upload_ready": bool(validation.summary.get("codabench_upload_ready", False)),
         "leaderboard_blocking_reasons": unique_reasons,
     }
+    summary.update(
+        _classification_provenance_fields(
+            classification_provenance,
+            manifest_verification=manifest_verification,
+        )
+    )
+    return summary
+
+
+def _load_classification_provenance(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("classification provenance JSON must contain an object")
+    return payload
+
+
+def _classification_provenance_fields(
+    provenance: dict[str, Any] | None,
+    *,
+    manifest_verification: dict[str, Any] | None,
+) -> dict[str, Any]:
+    source = provenance or manifest_verification or {}
+    keys = (
+        "classification_model_path",
+        "classification_method",
+        "classification_train_sequences",
+        "classification_feature_columns",
+        "classification_class_map",
+        "classification_prediction_mode",
+    )
+    return {key: source.get(key) for key in keys}

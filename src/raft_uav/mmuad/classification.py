@@ -18,8 +18,18 @@ from raft_uav.mmuad.submission import (
 )
 
 
+SEQUENCE_CLASSIFIER_MODEL_SCHEMA = "raft-uav-mmuad-sequence-classifier-v1"
+SEQUENCE_CLASSIFIER_PREDICTION_MODE = "sequence_level"
 UNKNOWN_LABELS = {"", "unknown", "nan", "none", "uav", "drone"}
 CLASSIFIER_METADATA_COLUMNS = {"sequence_id", "uav_type"}
+SEQUENCE_CLASSIFIER_METHODS = (
+    "majority",
+    "nearest-neighbor",
+    "nearest-centroid",
+    "logistic-regression",
+    "random-forest",
+    "hist-gradient-boosting",
+)
 SEQUENCE_ID_ALIASES = ("sequence_id", "Sequence", "sequence", "seq", "scene_id", "id")
 TIME_ALIASES = ("time_s", "Timestamp", "timestamp", "timestamp_s", "t", "time")
 SOURCE_ALIASES = ("source", "sensor", "modality")
@@ -103,6 +113,16 @@ class SequenceClassificationResult:
     predictions: pd.DataFrame
     train_features: pd.DataFrame
     predict_features: pd.DataFrame
+    metrics: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SequenceClassifierTrainingResult:
+    """Saved-model training outputs for sequence-level UAV classification."""
+
+    model: dict[str, Any]
+    train_features: pd.DataFrame
+    train_predictions: pd.DataFrame
     metrics: dict[str, Any]
 
 
@@ -222,6 +242,237 @@ def sequence_features_from_files(paths: list[Path]) -> pd.DataFrame:
             sequence_features_from_rows(pd.concat(row_frames, ignore_index=True))
         )
     return _merge_sequence_feature_tables(sequence_feature_frames)
+
+
+def sequence_features_from_sequence_root(
+    sequence_root: Path,
+    *,
+    sequence_glob: str = "*",
+    split_file: Path | None = None,
+    split_name: str | None = None,
+    apply_calibration: bool = True,
+    voxel_size_m: float = 0.75,
+    min_cluster_points: int = 3,
+    radar_azimuth_convention: str = "north-clockwise",
+    radar_angle_unit: str = "deg",
+    radar_polar_range_std_m: float = 2.0,
+    radar_polar_angle_std_deg: float = 2.0,
+    radar_polar_z_std_m: float = 5.0,
+    camera_fixed_depth_m: float | None = None,
+    camera_std_xy_m: float = 5.0,
+    camera_std_z_m: float = 10.0,
+) -> pd.DataFrame:
+    """Extract sequence-level candidate features directly from an MMUAD root."""
+
+    from raft_uav.mmuad.io import merge_candidate_frames
+    from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_export
+    from raft_uav.mmuad.splits import (
+        filter_sequences_by_split,
+        filter_sequences_by_split_folder,
+        load_split_manifest,
+    )
+
+    root = Path(sequence_root)
+    sequences = discover_sequence_paths(root, sequence_glob=sequence_glob)
+    if split_file is not None:
+        if not split_name:
+            raise ValueError("split_name is required when split_file is provided")
+        sequences = filter_sequences_by_split(sequences, load_split_manifest(split_file), split_name)
+    elif split_name:
+        sequences = filter_sequences_by_split_folder(sequences, root, split_name)
+    frames: list[CandidateFrame] = []
+    for paths in sequences:
+        if not _sequence_paths_have_feature_inputs(paths):
+            continue
+        candidates, _truth, _calibration = load_sequence_export(
+            paths,
+            apply_calibration=apply_calibration,
+            voxel_size_m=voxel_size_m,
+            min_cluster_points=min_cluster_points,
+            radar_azimuth_convention=radar_azimuth_convention,
+            radar_angle_unit=radar_angle_unit,
+            radar_polar_range_std_m=radar_polar_range_std_m,
+            radar_polar_angle_std_deg=radar_polar_angle_std_deg,
+            radar_polar_z_std_m=radar_polar_z_std_m,
+            camera_fixed_depth_m=camera_fixed_depth_m,
+            camera_std_xy_m=camera_std_xy_m,
+            camera_std_z_m=camera_std_z_m,
+        )
+        frames.append(candidates)
+    if not frames:
+        return pd.DataFrame(columns=["sequence_id"])
+    return sequence_features_from_rows(merge_candidate_frames(frames).rows)
+
+
+def train_sequence_classifier_model(
+    *,
+    train_features: pd.DataFrame,
+    train_labels: dict[str, str],
+    method: str = "random-forest",
+    random_state: int = 13,
+    n_estimators: int = 200,
+    max_depth: int | None = None,
+) -> SequenceClassifierTrainingResult:
+    """Train a persistable sequence-level classifier model payload."""
+
+    method = _normalize_sequence_classifier_method(method)
+    train = _attach_labels(train_features, train_labels)
+    if train.empty:
+        raise ValueError("no training feature rows have labels")
+    feature_columns = _feature_columns(train, train)
+    train_matrix, means, scales = _fit_standardized_feature_matrix(train, feature_columns)
+    labels = train["uav_type"].astype(str).to_numpy()
+    train_sequences = train["sequence_id"].astype(str).tolist()
+    model: dict[str, Any] = {
+        "schema": SEQUENCE_CLASSIFIER_MODEL_SCHEMA,
+        "method": method,
+        "prediction_mode": SEQUENCE_CLASSIFIER_PREDICTION_MODE,
+        "feature_columns": feature_columns,
+        "feature_means": [float(value) for value in means],
+        "feature_scales": [float(value) for value in scales],
+        "train_sequences": train_sequences,
+        "class_map": {str(key): str(value) for key, value in train_labels.items()},
+        "classes": sorted(set(str(label) for label in labels)),
+        "majority_class": _majority_label(pd.Series(labels)),
+        "random_state": int(random_state),
+        "n_estimators": int(n_estimators),
+        "max_depth": None if max_depth is None else int(max_depth),
+    }
+    if method in {"nearest-neighbor", "nearest-centroid"}:
+        model["train_matrix"] = train_matrix
+        model["train_labels"] = [str(label) for label in labels]
+    elif method != "majority":
+        model["estimator"] = _fit_sklearn_sequence_estimator(
+            method,
+            train_matrix,
+            labels,
+            random_state=random_state,
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+        )
+    train_predictions = predict_sequence_classes_from_model(model, train)
+    metrics = sequence_classification_metrics(
+        train_predictions,
+        eval_labels={str(row["sequence_id"]): str(row["uav_type"]) for _, row in train.iterrows()},
+    )
+    metrics.update(
+        {
+            "method": method,
+            "prediction_mode": SEQUENCE_CLASSIFIER_PREDICTION_MODE,
+            "train_sequence_count": int(len(train)),
+            "feature_count": int(len(feature_columns)),
+            "feature_columns": feature_columns,
+        }
+    )
+    return SequenceClassifierTrainingResult(
+        model=model,
+        train_features=train,
+        train_predictions=train_predictions,
+        metrics=metrics,
+    )
+
+
+def save_sequence_classifier_model(model: dict[str, Any], path: Path) -> Path:
+    """Persist a sequence classifier payload with joblib."""
+
+    try:
+        import joblib
+    except Exception as exc:  # pragma: no cover - depends on optional sklearn stack
+        raise ValueError("saving a sequence classifier model requires joblib") from exc
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(model, path)
+    return path
+
+
+def load_sequence_classifier_model(path: Path) -> dict[str, Any]:
+    """Load and validate a joblib sequence classifier payload."""
+
+    try:
+        import joblib
+    except Exception as exc:  # pragma: no cover - depends on optional sklearn stack
+        raise ValueError("loading a sequence classifier model requires joblib") from exc
+    model = joblib.load(Path(path))
+    if not isinstance(model, dict) or model.get("schema") != SEQUENCE_CLASSIFIER_MODEL_SCHEMA:
+        raise ValueError(f"{path} is not an MMUAD sequence classifier model")
+    return model
+
+
+def predict_sequence_classes_from_model(
+    model: dict[str, Any],
+    predict_features: pd.DataFrame,
+) -> pd.DataFrame:
+    """Predict one UAV type/class ID per sequence from a saved model payload."""
+
+    if predict_features.empty:
+        raise ValueError("no prediction feature rows were provided")
+    method = _normalize_sequence_classifier_method(str(model.get("method", "")))
+    features = predict_features.copy()
+    features["sequence_id"] = features["sequence_id"].astype(str)
+    feature_columns = [str(column) for column in model.get("feature_columns", [])]
+    if not feature_columns:
+        raise ValueError("sequence classifier model has no feature_columns")
+    matrix = _transform_standardized_feature_matrix(
+        features,
+        feature_columns,
+        np.asarray(model.get("feature_means", []), dtype=float),
+        np.asarray(model.get("feature_scales", []), dtype=float),
+    )
+    if method == "majority":
+        return _predict_model_majority(model, features)
+    if method == "nearest-neighbor":
+        return _predict_model_nearest_neighbor(model, features, matrix)
+    if method == "nearest-centroid":
+        return _predict_model_nearest_centroid(model, features, matrix)
+    return _predict_model_sklearn(model, features, matrix)
+
+
+def sequence_class_map_from_predictions(predictions: pd.DataFrame) -> dict[str, str]:
+    """Return ``sequence_id -> predicted_class`` from model predictions."""
+
+    if predictions.empty:
+        return {}
+    return {
+        str(row["sequence_id"]): str(row["predicted_class"])
+        for _, row in predictions.iterrows()
+        if pd.notna(row.get("sequence_id")) and pd.notna(row.get("predicted_class"))
+    }
+
+
+def sequence_classifier_provenance(
+    model: dict[str, Any],
+    *,
+    model_path: Path | None = None,
+    class_map: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Return scorecard/run provenance for a sequence-level classifier."""
+
+    return {
+        "classification_model_path": str(model_path) if model_path is not None else None,
+        "classification_method": str(model.get("method", "")),
+        "classification_train_sequences": [str(value) for value in model.get("train_sequences", [])],
+        "classification_feature_columns": [
+            str(value) for value in model.get("feature_columns", [])
+        ],
+        "classification_class_map": {
+            str(key): str(value) for key, value in (class_map or model.get("class_map", {})).items()
+        },
+        "classification_prediction_mode": str(
+            model.get("prediction_mode", SEQUENCE_CLASSIFIER_PREDICTION_MODE)
+        ),
+    }
+
+
+def write_sequence_classifier_provenance(
+    provenance: dict[str, Any],
+    path: Path,
+) -> Path:
+    """Write sequence classifier provenance JSON."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_jsonable(provenance), indent=2), encoding="utf-8")
+    return path
 
 
 def classify_sequences_from_features(
@@ -686,6 +937,33 @@ def _standardized_feature_matrices(
     return (train_matrix - means) / scale, (predict_matrix - means) / scale
 
 
+def _fit_standardized_feature_matrix(
+    rows: pd.DataFrame,
+    feature_columns: list[str],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    matrix = _numeric_matrix(rows, feature_columns)
+    means = np.nanmean(matrix, axis=0)
+    means = np.where(np.isfinite(means), means, 0.0)
+    matrix = np.where(np.isfinite(matrix), matrix, means)
+    scales = np.nanstd(matrix, axis=0)
+    scales = np.where(np.isfinite(scales) & (scales > 1.0e-9), scales, 1.0)
+    return (matrix - means) / scales, means, scales
+
+
+def _transform_standardized_feature_matrix(
+    rows: pd.DataFrame,
+    feature_columns: list[str],
+    means: np.ndarray,
+    scales: np.ndarray,
+) -> np.ndarray:
+    if means.shape[0] != len(feature_columns) or scales.shape[0] != len(feature_columns):
+        raise ValueError("sequence classifier model feature statistics do not match feature_columns")
+    matrix = _numeric_matrix(rows, feature_columns)
+    matrix = np.where(np.isfinite(matrix), matrix, means)
+    scales = np.where(np.isfinite(scales) & (scales > 1.0e-9), scales, 1.0)
+    return (matrix - means) / scales
+
+
 def _numeric_matrix(rows: pd.DataFrame, columns: list[str]) -> np.ndarray:
     numeric = {
         column: _numeric_feature_series(rows, column)
@@ -864,6 +1142,173 @@ def _predict_sklearn_model(
             "nearest_distance": np.nan,
             "classification_confidence": confidence,
         }
+    )
+
+
+def _normalize_sequence_classifier_method(method: str) -> str:
+    normalized = str(method).strip().lower().replace("_", "-")
+    aliases = {
+        "randomforest": "random-forest",
+        "rf": "random-forest",
+        "hist-gradient": "hist-gradient-boosting",
+        "hist-gradient-boosting-classifier": "hist-gradient-boosting",
+        "hgb": "hist-gradient-boosting",
+        "logistic": "logistic-regression",
+        "logreg": "logistic-regression",
+        "nn": "nearest-neighbor",
+        "centroid": "nearest-centroid",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in SEQUENCE_CLASSIFIER_METHODS:
+        allowed = ", ".join(SEQUENCE_CLASSIFIER_METHODS)
+        raise ValueError(f"unsupported MMUAD sequence classifier method {method!r}; allowed={allowed}")
+    return normalized
+
+
+def _fit_sklearn_sequence_estimator(
+    method: str,
+    train_matrix: np.ndarray,
+    labels: np.ndarray,
+    *,
+    random_state: int,
+    n_estimators: int,
+    max_depth: int | None,
+) -> Any:
+    try:
+        if method == "logistic-regression":
+            from sklearn.linear_model import LogisticRegression
+
+            estimator = LogisticRegression(max_iter=1000, class_weight="balanced")
+        elif method == "random-forest":
+            from sklearn.ensemble import RandomForestClassifier
+
+            estimator = RandomForestClassifier(
+                n_estimators=int(n_estimators),
+                max_depth=max_depth,
+                random_state=int(random_state),
+                class_weight="balanced",
+                min_samples_leaf=1,
+            )
+        elif method == "hist-gradient-boosting":
+            from sklearn.ensemble import HistGradientBoostingClassifier
+
+            estimator = HistGradientBoostingClassifier(random_state=int(random_state))
+        else:  # pragma: no cover - caller normalizes methods
+            raise ValueError(f"unsupported sklearn sequence classifier method {method!r}")
+    except Exception as exc:  # pragma: no cover - depends on optional sklearn
+        raise ValueError(f"{method} sequence classifier requires scikit-learn") from exc
+    estimator.fit(train_matrix, labels.astype(str))
+    return estimator
+
+
+def _predict_model_majority(model: dict[str, Any], predict_features: pd.DataFrame) -> pd.DataFrame:
+    label = str(model.get("majority_class", "0"))
+    return pd.DataFrame(
+        {
+            "sequence_id": predict_features["sequence_id"].astype(str),
+            "predicted_class": label,
+            "class_source": "sequence-majority-model",
+            "nearest_train_sequence_id": "",
+            "nearest_distance": np.nan,
+        }
+    )
+
+
+def _predict_model_nearest_neighbor(
+    model: dict[str, Any],
+    predict_features: pd.DataFrame,
+    predict_matrix: np.ndarray,
+) -> pd.DataFrame:
+    train_matrix = np.asarray(model.get("train_matrix", []), dtype=float)
+    labels = [str(label) for label in model.get("train_labels", [])]
+    sequence_ids = [str(sequence_id) for sequence_id in model.get("train_sequences", [])]
+    if train_matrix.ndim != 2 or train_matrix.shape[0] == 0:
+        raise ValueError("nearest-neighbor sequence classifier model has no train_matrix")
+    records: list[dict[str, Any]] = []
+    for row_idx, sequence_id in enumerate(predict_features["sequence_id"].astype(str)):
+        distances = np.linalg.norm(train_matrix - predict_matrix[row_idx], axis=1)
+        best = int(np.argmin(distances))
+        records.append(
+            {
+                "sequence_id": sequence_id,
+                "predicted_class": labels[best],
+                "class_source": "sequence-nearest-neighbor-model",
+                "nearest_train_sequence_id": sequence_ids[best] if best < len(sequence_ids) else "",
+                "nearest_distance": float(distances[best]),
+            }
+        )
+    return pd.DataFrame.from_records(records)
+
+
+def _predict_model_nearest_centroid(
+    model: dict[str, Any],
+    predict_features: pd.DataFrame,
+    predict_matrix: np.ndarray,
+) -> pd.DataFrame:
+    train_matrix = np.asarray(model.get("train_matrix", []), dtype=float)
+    labels = np.asarray([str(label) for label in model.get("train_labels", [])])
+    if train_matrix.ndim != 2 or train_matrix.shape[0] == 0:
+        raise ValueError("nearest-centroid sequence classifier model has no train_matrix")
+    centroids = [
+        (label, train_matrix[labels == label].mean(axis=0))
+        for label in sorted(set(labels.astype(str)))
+    ]
+    records: list[dict[str, Any]] = []
+    for row_idx, sequence_id in enumerate(predict_features["sequence_id"].astype(str)):
+        distances = [
+            (label, float(np.linalg.norm(predict_matrix[row_idx] - centroid)))
+            for label, centroid in centroids
+        ]
+        predicted, distance = sorted(distances, key=lambda item: (item[1], item[0]))[0]
+        records.append(
+            {
+                "sequence_id": sequence_id,
+                "predicted_class": predicted,
+                "class_source": "sequence-nearest-centroid-model",
+                "nearest_train_sequence_id": "",
+                "nearest_distance": distance,
+            }
+        )
+    return pd.DataFrame.from_records(records)
+
+
+def _predict_model_sklearn(
+    model: dict[str, Any],
+    predict_features: pd.DataFrame,
+    predict_matrix: np.ndarray,
+) -> pd.DataFrame:
+    estimator = model.get("estimator")
+    if estimator is None:
+        raise ValueError("sequence classifier model has no estimator")
+    predicted = estimator.predict(predict_matrix)
+    confidence = (
+        np.max(estimator.predict_proba(predict_matrix), axis=1)
+        if hasattr(estimator, "predict_proba")
+        else [np.nan] * len(predicted)
+    )
+    method = str(model.get("method", "sklearn"))
+    return pd.DataFrame(
+        {
+            "sequence_id": predict_features["sequence_id"].astype(str),
+            "predicted_class": [str(label) for label in predicted],
+            "class_source": f"sequence-{method}-model",
+            "nearest_train_sequence_id": "",
+            "nearest_distance": np.nan,
+            "classification_confidence": confidence,
+        }
+    )
+
+
+def _sequence_paths_have_feature_inputs(paths: Any) -> bool:
+    return any(
+        (
+            getattr(paths, "candidate_csvs", ()),
+            getattr(paths, "candidate_trajectory_files", ()),
+            getattr(paths, "radar_polar_csvs", ()),
+            getattr(paths, "camera_detection_csvs", ()),
+            getattr(paths, "point_cloud_files", ()),
+            getattr(paths, "topic_map_jsons", ()),
+        )
     )
 
 

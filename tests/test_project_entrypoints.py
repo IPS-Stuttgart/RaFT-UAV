@@ -41,6 +41,14 @@ def test_mmuad_tracking_entrypoint_target_imports() -> None:
     _assert_entrypoint_target_imports("raft-uav-mmuad-track")
 
 
+def test_mmuad_run_entrypoint_is_exposed() -> None:
+    assert _project_scripts()["raft-uav-mmuad-run"] == "raft_uav.mmuad.run:main"
+
+
+def test_mmuad_run_entrypoint_target_imports() -> None:
+    _assert_entrypoint_target_imports("raft-uav-mmuad-run")
+
+
 def test_mmuad_track5_scorecard_entrypoint_is_exposed() -> None:
     assert (
         _project_scripts()["raft-uav-mmuad-track5-scorecard"]
@@ -50,6 +58,17 @@ def test_mmuad_track5_scorecard_entrypoint_is_exposed() -> None:
 
 def test_mmuad_track5_scorecard_entrypoint_target_imports() -> None:
     _assert_entrypoint_target_imports("raft-uav-mmuad-track5-scorecard")
+
+
+def test_mmuad_train_sequence_classifier_entrypoint_is_exposed() -> None:
+    assert (
+        _project_scripts()["raft-uav-mmuad-train-sequence-classifier"]
+        == "raft_uav.mmuad.train_sequence_classifier:main"
+    )
+
+
+def test_mmuad_train_sequence_classifier_entrypoint_target_imports() -> None:
+    _assert_entrypoint_target_imports("raft-uav-mmuad-train-sequence-classifier")
 
 
 def test_playbook_runnable_commands_are_installed_entrypoints() -> None:

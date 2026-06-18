@@ -16,6 +16,12 @@ from raft_uav.mmuad.camera import (
 )
 from raft_uav.mmuad.classification import (
     infer_sequence_class_map_from_candidates,
+    load_sequence_classifier_model,
+    predict_sequence_classes_from_model,
+    sequence_class_map_from_predictions,
+    sequence_classifier_provenance,
+    sequence_features_from_rows,
+    write_sequence_classifier_provenance,
     write_sequence_class_map,
 )
 from raft_uav.mmuad.completion import (
@@ -264,6 +270,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--trajectory-completion-max-gap-s", type=float, default=1.0)
     parser.add_argument("--trajectory-smoothing-lag-s", type=float, default=1.0)
     parser.add_argument("--trajectory-smoothing-blend", type=float, default=1.0)
+    parser.add_argument(
+        "--trajectory-speed-gate-mps",
+        type=float,
+        default=0.0,
+        help="mark isolated trajectory points that imply speeds above this gate; 0 disables",
+    )
+    parser.add_argument(
+        "--trajectory-outlier-replacement",
+        choices=("none", "local-linear"),
+        default="none",
+        help="replace speed-gated interior outliers before smoothing",
+    )
+    parser.add_argument("--trajectory-outlier-replacement-max-gap-s", type=float)
     parser.add_argument("--trajectory-completion-no-truth-timestamps", action="store_true")
     parser.add_argument("--trajectory-completion-no-infer-grid", action="store_true")
     parser.add_argument("--soft-anchor-cap-m", type=float, default=2.0)
@@ -336,6 +355,29 @@ def main(argv: list[str] | None = None) -> int:
         dest="ug2_class_map_file",
         type=Path,
         help="sequence-to-UAV-type class map in CSV, JSON, or YAML form",
+    )
+    parser.add_argument(
+        "--sequence-classifier",
+        type=Path,
+        help=(
+            "joblib model from raft-uav-mmuad-train-sequence-classifier; predicted "
+            "sequence classes are copied to every Track 5 timestamp for that sequence"
+        ),
+    )
+    parser.add_argument(
+        "--sequence-classifier-predictions-csv",
+        type=Path,
+        help="optional CSV for per-sequence classifier predictions",
+    )
+    parser.add_argument(
+        "--sequence-classifier-feature-report",
+        type=Path,
+        help="optional CSV for features used by --sequence-classifier at apply time",
+    )
+    parser.add_argument(
+        "--sequence-classifier-provenance-json",
+        type=Path,
+        help="optional JSON with classifier provenance for scorecards",
     )
     parser.add_argument("--infer-ug2-class-map-from-candidates", action="store_true")
     parser.add_argument("--inferred-class-map-csv", type=Path)
@@ -510,10 +552,14 @@ def _write_tracking_artifacts(
     trajectory_completion_paths = getattr(args, "_trajectory_completion_paths", None)
     if trajectory_completion_paths:
         paths.update(trajectory_completion_paths)
+    sequence_classifier_paths = getattr(args, "_sequence_classifier_paths", None)
+    if sequence_classifier_paths:
+        paths.update(sequence_classifier_paths)
     explicit_class_map = load_sequence_class_map(args.ug2_class_map_file)
     inferred_class_map = getattr(args, "_inferred_class_map", {})
-    # Prefer explicit class-map files when both are provided.
-    class_map = {**inferred_class_map, **explicit_class_map}
+    sequence_classifier_class_map = getattr(args, "_sequence_classifier_class_map", {})
+    # Prefer explicit class-map files when multiple sources are provided.
+    class_map = {**inferred_class_map, **sequence_classifier_class_map, **explicit_class_map}
     if args.inferred_class_map_csv is not None and inferred_class_map:
         paths["inferred_class_map_csv"] = str(
             write_sequence_class_map(inferred_class_map, args.inferred_class_map_csv)
@@ -976,6 +1022,7 @@ def _write_official_upload_manifest(
         artifact_path=artifact_path,
         validation_json_path=validation_json_path,
         validation_rows_path=validation_rows_path,
+        classification_provenance=getattr(args, "_sequence_classifier_provenance", None),
     )
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest_path
@@ -987,6 +1034,7 @@ def _official_upload_manifest_payload(
     artifact_path: Path,
     validation_json_path: Path,
     validation_rows_path: Path | None,
+    classification_provenance: dict | None = None,
 ) -> dict:
     sequence_summaries = {
         str(sequence_id): _official_upload_sequence_manifest(row)
@@ -997,7 +1045,7 @@ def _official_upload_manifest_payload(
         for sequence_id, row in sequence_summaries.items()
         if not row.get("leaderboard_ready", False)
     ]
-    return {
+    manifest = {
         "schema": "raft-uav-mmuad-official-upload-manifest-v1",
         "artifact_path": str(artifact_path),
         "validation_json": str(validation_json_path),
@@ -1043,6 +1091,17 @@ def _official_upload_manifest_payload(
         "blocking_sequences": blocking_sequences,
         "sequences": sequence_summaries,
     }
+    if classification_provenance:
+        for key in (
+            "classification_model_path",
+            "classification_method",
+            "classification_train_sequences",
+            "classification_feature_columns",
+            "classification_class_map",
+            "classification_prediction_mode",
+        ):
+            manifest[key] = classification_provenance.get(key)
+    return manifest
 
 
 def _official_upload_sequence_manifest(row: dict) -> dict:
@@ -1293,6 +1352,7 @@ def _run_explicit_files(args: argparse.Namespace):
     if calibration_path is not None and not args.no_apply_calibration:
         calibration = load_calibration_auto(calibration_path)
         candidates = transform_candidate_frame(candidates, calibration)
+    _maybe_apply_sequence_classifier(args, candidates)
     candidates = _maybe_apply_cluster_ranker(args, candidates)
     truth_path = _explicit_truth_path(args)
     truth = load_truth_file(truth_path) if truth_path is not None else topic_truth
@@ -1505,6 +1565,7 @@ def _run_sequence_root(args: argparse.Namespace):
             default_class=args.ug2_class_name,
         )
     truth = merge_truth_frames(truth_frames) if truth_frames else None
+    _maybe_apply_sequence_classifier(args, candidates)
     candidates = _maybe_apply_cluster_ranker(args, candidates)
     if native_manifests:
         args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1633,6 +1694,43 @@ def _safe_path_component(value: str) -> str:
     return safe or "sequence"
 
 
+def _maybe_apply_sequence_classifier(args, candidates) -> None:
+    if args.sequence_classifier is None:
+        return
+    model = load_sequence_classifier_model(args.sequence_classifier)
+    features = sequence_features_from_rows(candidates.rows)
+    predictions = predict_sequence_classes_from_model(model, features)
+    class_map = sequence_class_map_from_predictions(predictions)
+    provenance = sequence_classifier_provenance(
+        model,
+        model_path=args.sequence_classifier,
+        class_map=class_map,
+    )
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    predictions_csv = args.sequence_classifier_predictions_csv or (
+        args.output_dir / "mmuad_sequence_classifier_predictions.csv"
+    )
+    feature_report = args.sequence_classifier_feature_report or (
+        args.output_dir / "mmuad_sequence_classifier_features.csv"
+    )
+    provenance_json = args.sequence_classifier_provenance_json or (
+        args.output_dir / "mmuad_sequence_classifier_provenance.json"
+    )
+    predictions_csv.parent.mkdir(parents=True, exist_ok=True)
+    predictions.to_csv(predictions_csv, index=False)
+    feature_report.parent.mkdir(parents=True, exist_ok=True)
+    features.to_csv(feature_report, index=False)
+    write_sequence_classifier_provenance(provenance, provenance_json)
+    args._sequence_classifier_class_map = class_map
+    args._sequence_classifier_provenance = provenance
+    args._sequence_classifier_paths = {
+        "sequence_classifier_model": str(args.sequence_classifier),
+        "sequence_classifier_predictions_csv": str(predictions_csv),
+        "sequence_classifier_feature_report_csv": str(feature_report),
+        "sequence_classifier_provenance_json": str(provenance_json),
+    }
+
+
 def _maybe_apply_cluster_ranker(args, candidates):
     if args.cluster_ranker_model_json is None:
         return candidates
@@ -1736,6 +1834,9 @@ def _maybe_apply_trajectory_completion(args, output, truth):
             smoothing_blend=args.trajectory_smoothing_blend,
             include_truth_timestamps=not args.trajectory_completion_no_truth_timestamps,
             infer_missing_grid=not args.trajectory_completion_no_infer_grid,
+            speed_gate_mps=args.trajectory_speed_gate_mps,
+            outlier_replacement=args.trajectory_outlier_replacement,
+            outlier_replacement_max_gap_s=args.trajectory_outlier_replacement_max_gap_s,
         ),
     )
     args._trajectory_completion_paths = write_trajectory_completion_diagnostics(

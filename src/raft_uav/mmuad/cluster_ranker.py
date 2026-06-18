@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import pickle
 from typing import Any
 
 import numpy as np
@@ -14,6 +16,7 @@ import pandas as pd
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 from raft_uav.mmuad.io import merge_candidate_frames
 from raft_uav.mmuad.schema import CandidateFrame, normalize_candidate_columns
+from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_export
 
 
 BASE_CLUSTER_FEATURE_COLUMNS = (
@@ -32,6 +35,18 @@ BASE_CLUSTER_FEATURE_COLUMNS = (
     "cluster_range_xy_m",
     "cluster_range_3d_m",
     "cluster_height_m",
+    "frame_candidate_count",
+    "frame_source_candidate_count",
+    "frame_source_fraction",
+    "frame_rank_confidence_desc",
+    "frame_rank_point_count_desc",
+    "frame_rank_density_desc",
+    "frame_rank_range_3d_asc",
+    "frame_rank_height_abs_asc",
+    "source_frame_rank_confidence_desc",
+    "source_frame_rank_point_count_desc",
+    "source_frame_rank_density_desc",
+    "source_frame_rank_range_3d_asc",
     "nearest_cross_sensor_distance_m",
     "nearest_cross_sensor_score",
     "cross_sensor_neighbor_count",
@@ -57,6 +72,10 @@ class ClusterRankerModel:
     bias: float
     source_values: list[str]
     constant_score: float | None = None
+    sklearn_estimator_base64: str | None = None
+    target_column: str = "good_cluster"
+    score_transform: str = "probability"
+    score_distance_scale_m: float = 10.0
 
 
 def build_cluster_feature_table(
@@ -76,6 +95,7 @@ def build_cluster_feature_table(
     if rows.empty:
         return rows
     rows = _with_default_cluster_geometry(rows)
+    rows = _add_frame_rank_features(rows)
     rows = _add_cross_sensor_features(
         rows,
         time_window_s=cross_sensor_time_window_s,
@@ -158,31 +178,47 @@ def label_cluster_features_against_truth(
 def train_cluster_ranker(
     features: pd.DataFrame,
     *,
+    model_type: str = "logistic",
     target_column: str = "good_cluster",
     learning_rate: float = 0.05,
     iterations: int = 600,
     l2: float = 1.0e-3,
+    random_state: int = 13,
+    n_estimators: int = 200,
+    score_distance_scale_m: float = 10.0,
 ) -> ClusterRankerModel:
-    """Train a small logistic cluster ranker in pure NumPy."""
+    """Train a point-cloud cluster ranker.
 
-    rows = features.loc[features[target_column].notna()].copy()
+    ``model_type="logistic"`` keeps the portable pure-NumPy baseline.  When
+    scikit-learn is installed, tree and sklearn-logistic variants can be used
+    and are serialized into the same JSON model wrapper.
+    """
+
+    model_type = str(model_type)
+    actual_target = _actual_target_column(features, model_type=model_type, target_column=target_column)
+    rows = features.loc[features[actual_target].notna()].copy()
     if rows.empty:
-        raise ValueError(f"no rows with target column {target_column!r}")
-    y = rows[target_column].astype(bool).astype(float).to_numpy()
+        raise ValueError(f"no rows with target column {actual_target!r}")
     source_values = sorted(rows["source"].fillna("").astype(str).unique())
     feature_columns = _ranker_feature_columns(rows, source_values)
     matrix = _feature_matrix(rows, feature_columns, source_values=source_values)
-    finite_mask = np.isfinite(matrix)
-    means = np.divide(
-        np.where(finite_mask, matrix, 0.0).sum(axis=0),
-        finite_mask.sum(axis=0),
-        out=np.zeros(matrix.shape[1], dtype=float),
-        where=finite_mask.sum(axis=0) > 0,
-    )
-    matrix = np.where(np.isfinite(matrix), matrix, means)
-    scales = np.nanstd(matrix, axis=0)
-    scales = np.where(np.isfinite(scales) & (scales > 1.0e-9), scales, 1.0)
+    matrix, means, scales = _standardize_training_matrix(matrix)
     x = (matrix - means) / scales
+    if model_type != "logistic":
+        return _train_sklearn_cluster_ranker(
+            x,
+            rows,
+            model_type=model_type,
+            target_column=actual_target,
+            feature_columns=feature_columns,
+            feature_means=means,
+            feature_scales=scales,
+            source_values=source_values,
+            random_state=random_state,
+            n_estimators=n_estimators,
+            score_distance_scale_m=score_distance_scale_m,
+        )
+    y = rows[actual_target].astype(bool).astype(float).to_numpy()
     positive_rate = float(np.mean(y))
     if positive_rate <= 0.0 or positive_rate >= 1.0:
         return ClusterRankerModel(
@@ -194,6 +230,8 @@ def train_cluster_ranker(
             bias=_logit(np.clip(positive_rate, 1.0e-6, 1.0 - 1.0e-6)),
             source_values=source_values,
             constant_score=positive_rate,
+            target_column=actual_target,
+            score_distance_scale_m=float(score_distance_scale_m),
         )
     weights = np.zeros(x.shape[1], dtype=float)
     bias = _logit(positive_rate)
@@ -212,7 +250,164 @@ def train_cluster_ranker(
         bias=float(bias),
         source_values=source_values,
         constant_score=None,
+        target_column=actual_target,
+        score_distance_scale_m=float(score_distance_scale_m),
     )
+
+
+def _actual_target_column(features: pd.DataFrame, *, model_type: str, target_column: str) -> str:
+    if model_type.endswith("-regressor") and target_column == "good_cluster":
+        if "truth_distance_3d_m" in features.columns:
+            return "truth_distance_3d_m"
+    return target_column
+
+
+def _standardize_training_matrix(matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    finite_mask = np.isfinite(matrix)
+    means = np.divide(
+        np.where(finite_mask, matrix, 0.0).sum(axis=0),
+        finite_mask.sum(axis=0),
+        out=np.zeros(matrix.shape[1], dtype=float),
+        where=finite_mask.sum(axis=0) > 0,
+    )
+    matrix = np.where(np.isfinite(matrix), matrix, means)
+    scales = np.nanstd(matrix, axis=0)
+    scales = np.where(np.isfinite(scales) & (scales > 1.0e-9), scales, 1.0)
+    return matrix, means, scales
+
+
+def _train_sklearn_cluster_ranker(
+    x: np.ndarray,
+    rows: pd.DataFrame,
+    *,
+    model_type: str,
+    target_column: str,
+    feature_columns: list[str],
+    feature_means: np.ndarray,
+    feature_scales: np.ndarray,
+    source_values: list[str],
+    random_state: int,
+    n_estimators: int,
+    score_distance_scale_m: float,
+) -> ClusterRankerModel:
+    estimator, score_transform = _make_sklearn_estimator(
+        model_type=model_type,
+        random_state=random_state,
+        n_estimators=n_estimators,
+    )
+    if score_transform == "inverse-distance":
+        y = pd.to_numeric(rows[target_column], errors="coerce").to_numpy(float)
+    else:
+        y = rows[target_column].astype(bool).astype(int).to_numpy()
+        unique = np.unique(y)
+        if unique.size < 2:
+            constant_score = float(unique[0]) if unique.size else 0.0
+            return ClusterRankerModel(
+                model_type="constant-logistic",
+                feature_columns=feature_columns,
+                feature_means=feature_means.tolist(),
+                feature_scales=feature_scales.tolist(),
+                weights=[0.0] * len(feature_columns),
+                bias=_logit(np.clip(constant_score, 1.0e-6, 1.0 - 1.0e-6)),
+                source_values=source_values,
+                constant_score=constant_score,
+                target_column=target_column,
+                score_distance_scale_m=float(score_distance_scale_m),
+            )
+    finite = np.isfinite(y)
+    if not finite.any():
+        raise ValueError(f"no finite target values for {target_column!r}")
+    estimator.fit(x[finite], y[finite])
+    return ClusterRankerModel(
+        model_type=model_type,
+        feature_columns=feature_columns,
+        feature_means=feature_means.tolist(),
+        feature_scales=feature_scales.tolist(),
+        weights=[0.0] * len(feature_columns),
+        bias=0.0,
+        source_values=source_values,
+        constant_score=None,
+        sklearn_estimator_base64=_encode_sklearn_estimator(estimator),
+        target_column=target_column,
+        score_transform=score_transform,
+        score_distance_scale_m=float(score_distance_scale_m),
+    )
+
+
+def _make_sklearn_estimator(
+    *,
+    model_type: str,
+    random_state: int,
+    n_estimators: int,
+) -> tuple[Any, str]:
+    try:
+        if model_type == "sklearn-logistic":
+            from sklearn.linear_model import LogisticRegression
+
+            return LogisticRegression(max_iter=1000, class_weight="balanced"), "probability"
+        if model_type == "random-forest-classifier":
+            from sklearn.ensemble import RandomForestClassifier
+
+            return (
+                RandomForestClassifier(
+                    n_estimators=max(int(n_estimators), 1),
+                    random_state=int(random_state),
+                    class_weight="balanced_subsample",
+                    min_samples_leaf=2,
+                    n_jobs=-1,
+                ),
+                "probability",
+            )
+        if model_type == "hist-gradient-boosting-classifier":
+            from sklearn.ensemble import HistGradientBoostingClassifier
+
+            return (
+                HistGradientBoostingClassifier(
+                    random_state=int(random_state),
+                    max_iter=max(int(n_estimators), 1),
+                    learning_rate=0.05,
+                    l2_regularization=0.01,
+                ),
+                "probability",
+            )
+        if model_type == "random-forest-regressor":
+            from sklearn.ensemble import RandomForestRegressor
+
+            return (
+                RandomForestRegressor(
+                    n_estimators=max(int(n_estimators), 1),
+                    random_state=int(random_state),
+                    min_samples_leaf=2,
+                    n_jobs=-1,
+                ),
+                "inverse-distance",
+            )
+        if model_type == "hist-gradient-boosting-regressor":
+            from sklearn.ensemble import HistGradientBoostingRegressor
+
+            return (
+                HistGradientBoostingRegressor(
+                    random_state=int(random_state),
+                    max_iter=max(int(n_estimators), 1),
+                    learning_rate=0.05,
+                    l2_regularization=0.01,
+                    loss="squared_error",
+                ),
+                "inverse-distance",
+            )
+    except ImportError as exc:
+        raise ValueError(
+            f"{model_type} requires scikit-learn; install sklearn or use model_type='logistic'"
+        ) from exc
+    raise ValueError(f"unsupported cluster ranker model_type={model_type!r}")
+
+
+def _encode_sklearn_estimator(estimator: Any) -> str:
+    return base64.b64encode(pickle.dumps(estimator)).decode("ascii")
+
+
+def _decode_sklearn_estimator(payload: str) -> Any:
+    return pickle.loads(base64.b64decode(payload.encode("ascii")))
 
 
 def score_cluster_candidates(
@@ -255,6 +450,21 @@ def predict_cluster_scores(features: pd.DataFrame, model: ClusterRankerModel) ->
     scales = np.asarray(model.feature_scales, dtype=float)
     matrix = np.where(np.isfinite(matrix), matrix, means)
     x = (matrix - means) / scales
+    if model.sklearn_estimator_base64:
+        estimator = _decode_sklearn_estimator(model.sklearn_estimator_base64)
+        if model.score_transform == "inverse-distance":
+            distances = np.asarray(estimator.predict(x), dtype=float)
+            distances = np.maximum(np.nan_to_num(distances, nan=1.0e6), 0.0)
+            scale = max(float(model.score_distance_scale_m), 1.0e-6)
+            return 1.0 / (1.0 + distances / scale)
+        if hasattr(estimator, "predict_proba"):
+            probabilities = estimator.predict_proba(x)
+            if probabilities.ndim == 2 and probabilities.shape[1] >= 2:
+                return np.asarray(probabilities[:, 1], dtype=float)
+            return np.asarray(probabilities).reshape(-1).astype(float)
+        if hasattr(estimator, "decision_function"):
+            return _sigmoid(np.asarray(estimator.decision_function(x), dtype=float))
+        return np.asarray(estimator.predict(x), dtype=float)
     if model.constant_score is not None:
         return np.full(len(features), float(model.constant_score), dtype=float)
     logits = x @ np.asarray(model.weights, dtype=float) + float(model.bias)
@@ -357,6 +567,10 @@ def load_cluster_ranker_model(path: Path) -> ClusterRankerModel:
             if payload.get("constant_score") is None
             else float(payload["constant_score"])
         ),
+        sklearn_estimator_base64=payload.get("sklearn_estimator_base64"),
+        target_column=str(payload.get("target_column", "good_cluster")),
+        score_transform=str(payload.get("score_transform", "probability")),
+        score_distance_scale_m=float(payload.get("score_distance_scale_m", 10.0)),
     )
 
 
@@ -412,6 +626,62 @@ def _with_default_cluster_geometry(rows: pd.DataFrame) -> pd.DataFrame:
     out["cluster_range_3d_m"] = _numeric_series(out, "cluster_range_3d_m").fillna(range_3d_fallback)
     out["cluster_height_m"] = _numeric_series(out, "cluster_height_m").fillna(xyz["z_m"])
     return out
+
+
+def _add_frame_rank_features(rows: pd.DataFrame) -> pd.DataFrame:
+    out = rows.copy()
+    if out.empty:
+        return out
+    out["frame_candidate_count"] = 0
+    out["frame_source_candidate_count"] = 0
+    for _, group in out.groupby(["sequence_id", "time_s"], sort=False):
+        frame_indices = group.index
+        out.loc[frame_indices, "frame_candidate_count"] = int(len(group))
+        out.loc[frame_indices, "frame_rank_confidence_desc"] = _rank_desc(
+            _numeric_series(group, "confidence", default=0.0)
+        ).to_numpy()
+        out.loc[frame_indices, "frame_rank_point_count_desc"] = _rank_desc(
+            _numeric_series(group, "cluster_point_count", default=0.0)
+        ).to_numpy()
+        out.loc[frame_indices, "frame_rank_density_desc"] = _rank_desc(
+            _numeric_series(group, "cluster_density_points_per_m3", default=0.0)
+        ).to_numpy()
+        out.loc[frame_indices, "frame_rank_range_3d_asc"] = _rank_asc(
+            _numeric_series(group, "cluster_range_3d_m", default=np.inf)
+        ).to_numpy()
+        out.loc[frame_indices, "frame_rank_height_abs_asc"] = _rank_asc(
+            _numeric_series(group, "cluster_height_m", default=np.inf).abs()
+        ).to_numpy()
+    for _, group in out.groupby(["sequence_id", "time_s", "source"], sort=False):
+        source_indices = group.index
+        out.loc[source_indices, "frame_source_candidate_count"] = int(len(group))
+        out.loc[source_indices, "source_frame_rank_confidence_desc"] = _rank_desc(
+            _numeric_series(group, "confidence", default=0.0)
+        ).to_numpy()
+        out.loc[source_indices, "source_frame_rank_point_count_desc"] = _rank_desc(
+            _numeric_series(group, "cluster_point_count", default=0.0)
+        ).to_numpy()
+        out.loc[source_indices, "source_frame_rank_density_desc"] = _rank_desc(
+            _numeric_series(group, "cluster_density_points_per_m3", default=0.0)
+        ).to_numpy()
+        out.loc[source_indices, "source_frame_rank_range_3d_asc"] = _rank_asc(
+            _numeric_series(group, "cluster_range_3d_m", default=np.inf)
+        ).to_numpy()
+    out["frame_source_fraction"] = (
+        pd.to_numeric(out["frame_source_candidate_count"], errors="coerce")
+        / pd.to_numeric(out["frame_candidate_count"], errors="coerce").replace(0, np.nan)
+    )
+    return out
+
+
+def _rank_desc(values: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce").fillna(-np.inf)
+    return numeric.rank(method="min", ascending=False)
+
+
+def _rank_asc(values: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce").fillna(np.inf)
+    return numeric.rank(method="min", ascending=True)
 
 
 def _add_cross_sensor_features(
@@ -630,6 +900,60 @@ def _load_candidates(path: Path) -> CandidateFrame:
     return CandidateFrame(normalize_candidate_columns(pd.read_csv(path)))
 
 
+def _load_sequence_root_candidates(
+    root: Path,
+    *,
+    sequence_glob: str,
+    apply_calibration: bool,
+    voxel_size_m: float,
+    min_cluster_points: int,
+) -> CandidateFrame:
+    frames: list[CandidateFrame] = []
+    sequences = discover_sequence_paths(Path(root), sequence_glob=sequence_glob)
+    for paths in sequences:
+        try:
+            candidates, _, _ = load_sequence_export(
+                paths,
+                apply_calibration=apply_calibration,
+                voxel_size_m=voxel_size_m,
+                min_cluster_points=min_cluster_points,
+            )
+        except Exception:
+            continue
+        if not candidates.rows.empty:
+            frames.append(candidates)
+    if not frames:
+        raise ValueError(f"no candidate rows loaded from sequence root {root}")
+    return merge_candidate_frames(frames)
+
+
+def _load_candidates_from_args(
+    *,
+    csv_path: Path | None,
+    sequence_root: Path | None,
+    sequence_glob: str,
+    apply_calibration: bool,
+    voxel_size_m: float,
+    min_cluster_points: int,
+) -> CandidateFrame:
+    frames: list[CandidateFrame] = []
+    if csv_path is not None:
+        frames.append(_load_candidates(csv_path))
+    if sequence_root is not None:
+        frames.append(
+            _load_sequence_root_candidates(
+                sequence_root,
+                sequence_glob=sequence_glob,
+                apply_calibration=apply_calibration,
+                voxel_size_m=voxel_size_m,
+                min_cluster_points=min_cluster_points,
+            )
+        )
+    if not frames:
+        raise ValueError("provide a candidate CSV or sequence root")
+    return merge_candidate_frames(frames)
+
+
 def _load_truth(path: Path | None) -> pd.DataFrame | None:
     return None if path is None else load_evaluation_truth_file(Path(path)).rows
 
@@ -648,29 +972,65 @@ def main(argv: list[str] | None = None) -> int:
         description="train or apply a supervised point-cloud cluster ranker",
     )
     parser.add_argument("--train-candidates", type=Path, help="training candidate CSV")
+    parser.add_argument("--train-sequence-root", type=Path, help="training MMUAD sequence root")
     parser.add_argument("--train-truth", type=Path, help="training truth CSV/ZIP")
     parser.add_argument("--score-candidates", type=Path, help="candidate CSV to score")
+    parser.add_argument("--score-sequence-root", type=Path, help="MMUAD sequence root to score")
     parser.add_argument("--previous-states", type=Path, help="optional state/estimate CSV")
     parser.add_argument("--train-image-evidence-csv", type=Path)
     parser.add_argument("--score-image-evidence-csv", type=Path)
     parser.add_argument("--model-json", type=Path, required=True)
+    parser.add_argument(
+        "--model-type",
+        choices=(
+            "logistic",
+            "sklearn-logistic",
+            "random-forest-classifier",
+            "hist-gradient-boosting-classifier",
+            "random-forest-regressor",
+            "hist-gradient-boosting-regressor",
+        ),
+        default="logistic",
+    )
+    parser.add_argument("--target-column", default="good_cluster")
     parser.add_argument("--train-features-csv", type=Path)
     parser.add_argument("--score-features-csv", type=Path)
+    parser.add_argument("--train-candidates-output-csv", type=Path)
+    parser.add_argument("--score-candidates-output-csv", type=Path)
     parser.add_argument("--scored-candidates-csv", type=Path)
     parser.add_argument("--merged-candidates-csv", type=Path)
     parser.add_argument("--good-threshold-m", type=float, default=5.0)
     parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
     parser.add_argument("--cross-sensor-time-window-s", type=float, default=0.05)
     parser.add_argument("--cross-sensor-distance-gate-m", type=float, default=5.0)
+    parser.add_argument("--sequence-glob", default="*")
+    parser.add_argument("--score-sequence-glob")
+    parser.add_argument("--voxel-size-m", type=float, default=0.75)
+    parser.add_argument("--min-cluster-points", type=int, default=3)
+    parser.add_argument("--no-apply-calibration", action="store_true")
     parser.add_argument("--iterations", type=int, default=600)
     parser.add_argument("--learning-rate", type=float, default=0.05)
+    parser.add_argument("--random-state", type=int, default=13)
+    parser.add_argument("--n-estimators", type=int, default=200)
+    parser.add_argument("--score-distance-scale-m", type=float)
     args = parser.parse_args(argv)
 
-    if args.train_candidates is not None:
+    if args.train_candidates is not None or args.train_sequence_root is not None:
         if args.train_truth is None:
-            raise SystemExit("--train-candidates requires --train-truth")
+            raise SystemExit("--train-candidates/--train-sequence-root requires --train-truth")
+        train_candidates = _load_candidates_from_args(
+            csv_path=args.train_candidates,
+            sequence_root=args.train_sequence_root,
+            sequence_glob=args.sequence_glob,
+            apply_calibration=not args.no_apply_calibration,
+            voxel_size_m=args.voxel_size_m,
+            min_cluster_points=args.min_cluster_points,
+        )
+        if args.train_candidates_output_csv is not None:
+            args.train_candidates_output_csv.parent.mkdir(parents=True, exist_ok=True)
+            train_candidates.rows.to_csv(args.train_candidates_output_csv, index=False)
         train_features = build_cluster_feature_table(
-            _load_candidates(args.train_candidates),
+            train_candidates,
             truth=_load_truth(args.train_truth),
             good_threshold_m=args.good_threshold_m,
             max_truth_time_delta_s=args.max_truth_time_delta_s,
@@ -681,21 +1041,41 @@ def main(argv: list[str] | None = None) -> int:
         )
         model = train_cluster_ranker(
             train_features,
+            model_type=args.model_type,
+            target_column=args.target_column,
             learning_rate=args.learning_rate,
             iterations=args.iterations,
+            random_state=args.random_state,
+            n_estimators=args.n_estimators,
+            score_distance_scale_m=(
+                args.score_distance_scale_m
+                if args.score_distance_scale_m is not None
+                else args.good_threshold_m
+            ),
         )
         save_cluster_ranker_model(model, args.model_json)
         if args.train_features_csv is not None:
             write_ranker_diagnostics(train_features, args.train_features_csv)
         print("cluster_ranker_train=ok")
         print(f"model_json={args.model_json}")
+        print(f"model_type={model.model_type}")
         print(f"train_rows={len(train_features)}")
         print(f"positive_rows={int(train_features['good_cluster'].fillna(False).sum())}")
     else:
         model = load_cluster_ranker_model(args.model_json)
 
-    if args.score_candidates is not None:
-        candidates = _load_candidates(args.score_candidates)
+    if args.score_candidates is not None or args.score_sequence_root is not None:
+        candidates = _load_candidates_from_args(
+            csv_path=args.score_candidates,
+            sequence_root=args.score_sequence_root,
+            sequence_glob=args.score_sequence_glob or args.sequence_glob,
+            apply_calibration=not args.no_apply_calibration,
+            voxel_size_m=args.voxel_size_m,
+            min_cluster_points=args.min_cluster_points,
+        )
+        if args.score_candidates_output_csv is not None:
+            args.score_candidates_output_csv.parent.mkdir(parents=True, exist_ok=True)
+            candidates.rows.to_csv(args.score_candidates_output_csv, index=False)
         merged = merge_cross_sensor_candidate_clusters(
             candidates,
             time_window_s=args.cross_sensor_time_window_s,

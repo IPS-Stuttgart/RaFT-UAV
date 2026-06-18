@@ -52,6 +52,11 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="mmuad_official_upload_manifest.json to verify with the scorecard",
     )
+    parser.add_argument(
+        "--classification-provenance-json",
+        type=Path,
+        help="mmuad_sequence_classifier_provenance.json from a classifier-backed run",
+    )
     parser.add_argument("--allow-csv-submission", action="store_true")
     parser.add_argument("--timestamp-tolerance-s", type=float, default=1.0e-6)
     parser.add_argument("--nearest-time-delta-s", type=float, default=0.5)
@@ -80,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         timestamp_source=args.timestamp_source,
         class_map_path=args.class_map,
         upload_manifest_path=args.official_upload_manifest,
+        classification_provenance_path=args.classification_provenance_json,
         require_zip=not args.allow_csv_submission,
         timestamp_tolerance_s=args.timestamp_tolerance_s,
         max_time_delta_s=args.nearest_time_delta_s,
