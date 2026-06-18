@@ -42,10 +42,23 @@ def test_classification_audit_detects_constant_default_label() -> None:
     assert audit.summary["majority_baseline_accuracy"] == 0.5
 
     rows = audit.classification_audit.set_index("sequence")
-    assert rows.loc["seq0001", "class_source"] == "submission_constant_label"
+    assert rows.loc["seq0001", "class_source"] == "default_or_constant_submission_label"
     assert bool(rows.loc["seq0001", "valid_class_mapping"]) is True
+    assert bool(rows.loc["seq0001", "valid_submission_label"]) is True
+    assert rows.loc["seq0001", "truth_class_values"] == "0"
+    assert rows.loc["seq0001", "predicted_class_values"] == "0"
+    assert rows.loc["seq0001", "truth_majority_class"] == "0"
+    assert rows.loc["seq0001", "predicted_majority_class"] == "0"
     assert rows.loc["seq0001", "class_string"] == OFFICIAL_TRACK5_CLASS_NAMES[0]
     assert rows.loc["seq0002", "per_sequence_accuracy"] == 0.0
+    assert rows.loc["seq0002", "sequence_accuracy"] == 0.0
+    assert rows.loc["seq0001", "constant_class_0_accuracy"] == 0.25
+    assert rows.loc["seq0001", "constant_class_1_accuracy"] == 0.25
+    assert rows.loc["seq0001", "constant_class_2_accuracy"] == 0.5
+    assert rows.loc["seq0001", "constant_class_3_accuracy"] == 0.0
+    assert rows.loc["seq0001", "global_majority_class"] == "2"
+    assert rows.loc["seq0001", "global_majority_accuracy"] == 0.5
+    assert rows.loc["seq0001", "per_sequence_oracle_majority_accuracy"] == 1.0
 
     confusion = audit.confusion_matrix.set_index(["ground_truth_class", "predicted_class"])
     assert confusion.loc[("0", "0"), "count"] == 2
@@ -70,14 +83,16 @@ def test_classification_audit_writes_requested_csvs(tmp_path: Path) -> None:
     audit_rows = pd.read_csv(paths["classification_audit_csv"])
     assert {
         "sequence",
-        "ground_truth_class",
-        "predicted_class",
+        "row_count",
+        "truth_class_values",
+        "predicted_class_values",
+        "truth_majority_class",
+        "predicted_majority_class",
         "class_source",
-        "class_id",
-        "class_string",
-        "valid_class_mapping",
-        "per_sequence_accuracy",
-        "majority_baseline_prediction",
+        "class_map_key",
+        "class_map_value",
+        "valid_submission_label",
+        "sequence_accuracy",
     }.issubset(audit_rows.columns)
 
 
@@ -92,3 +107,25 @@ def test_classification_audit_reads_official_files(tmp_path: Path) -> None:
     assert audit.summary["truth_unique_classes"] == ["0", "1"]
     assert audit.summary["predicted_unique_classes"] == ["0"]
     assert audit.sequence_class_summary["training_labels_available"].eq(False).all()
+
+
+def test_classification_audit_reports_class_map_source() -> None:
+    truth = _official_rows({"seq0001": 0, "seq0002": 1})
+    results = truth.copy()
+    results.loc[results["Sequence"] == "seq0002", "Classification"] = 0
+
+    audit = build_mmuad_classification_audit(
+        truth=truth,
+        results=results,
+        class_map={"seq0001": "0", "seq0002": "1"},
+    )
+
+    rows = audit.classification_audit.set_index("sequence")
+    assert rows.loc["seq0001", "class_source"] == "class_map_sequence_label"
+    assert rows.loc["seq0001", "class_map_key"] == "seq0001"
+    assert rows.loc["seq0001", "class_map_value"] == "0"
+    assert (
+        rows.loc["seq0002", "class_source"]
+        == "class_map_sequence_label_ignored_or_remapped"
+    )
+    assert audit.summary["class_map_sequence_count"] == 2

@@ -5,12 +5,15 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
 
-from raft_uav.mmuad.submission import load_official_track5_results_frame
+from raft_uav.mmuad.submission import (
+    load_official_track5_results_frame,
+    load_sequence_class_map,
+)
 
 
 OFFICIAL_TRACK5_CLASS_NAMES = {
@@ -37,6 +40,7 @@ def build_mmuad_classification_audit(
     truth: pd.DataFrame,
     results: pd.DataFrame,
     training_truth: pd.DataFrame | None = None,
+    class_map: Mapping[str, Any] | None = None,
     class_names: dict[int, str] | None = None,
 ) -> MmuadClassificationAudit:
     """Compare official Track 5 truth and result classifications.
@@ -50,12 +54,19 @@ def build_mmuad_classification_audit(
     truth_rows = _class_rows(truth)
     result_rows = _class_rows(results)
     training_rows = _class_rows(training_truth) if training_truth is not None else None
+    class_map = {str(key): value for key, value in dict(class_map or {}).items()}
 
     truth_majority = _majority_class(truth_rows["Classification"])
     result_constant = _constant_class(result_rows["Classification"])
     training_majority = (
         _majority_class(training_rows["Classification"]) if training_rows is not None else None
     )
+    constant_baselines = {
+        class_id: _constant_prediction_accuracy(truth_rows, class_id)
+        for class_id in sorted(OFFICIAL_TRACK5_CLASS_IDS)
+    }
+    majority_accuracy = _constant_prediction_accuracy(truth_rows, truth_majority)
+    per_sequence_oracle_accuracy = _per_sequence_oracle_majority_accuracy(truth_rows)
 
     truth_by_sequence = _sequence_class_stats(truth_rows, prefix="truth")
     result_by_sequence = _sequence_class_stats(result_rows, prefix="predicted")
@@ -67,13 +78,21 @@ def build_mmuad_classification_audit(
         result_stats = result_by_sequence.get(sequence, {})
         truth_class = truth_stats.get("truth_class")
         predicted_class = result_stats.get("predicted_class")
+        class_map_key = sequence if sequence in class_map else ""
+        class_map_value = class_map.get(sequence, "")
         predicted_rows = int(result_stats.get("predicted_row_count", 0) or 0)
         correct_rows = _sequence_correct_count(result_rows, sequence, truth_class)
         per_sequence_accuracy = (
             float(correct_rows / predicted_rows) if predicted_rows > 0 else np.nan
         )
-        class_source = _class_source(result_stats)
+        class_source = _class_source(
+            result_stats,
+            sequence=sequence,
+            predicted_class=predicted_class,
+            class_map=class_map,
+        )
         valid_class_mapping = _valid_class_id(truth_class) and _valid_class_id(predicted_class)
+        valid_submission_label = _valid_sequence_submission_labels(result_rows, sequence)
         majority_correct = (
             bool(_classes_equal(truth_class, truth_majority)) if truth_class is not None else False
         )
@@ -84,16 +103,33 @@ def build_mmuad_classification_audit(
         )
         row = {
             "sequence": sequence,
+            "row_count": int(truth_stats.get("truth_row_count", 0) or predicted_rows or 0),
+            "truth_class_values": str(truth_stats.get("truth_class_values", "")),
+            "predicted_class_values": str(result_stats.get("predicted_class_values", "")),
+            "truth_majority_class": _class_text(truth_class),
+            "predicted_majority_class": _class_text(predicted_class),
             "ground_truth_class": _class_text(truth_class),
             "predicted_class": _class_text(predicted_class),
             "class_source": class_source,
+            "class_map_key": class_map_key,
+            "class_map_value": _class_text(class_map_value),
+            "valid_submission_label": bool(valid_submission_label),
             "class_id": _class_text(predicted_class),
             "class_string": _class_string(predicted_class, class_names),
             "valid_class_mapping": bool(valid_class_mapping),
             "per_sequence_accuracy": per_sequence_accuracy,
+            "sequence_accuracy": per_sequence_accuracy,
             "majority_baseline_prediction": _class_text(truth_majority),
             "majority_baseline_class_string": _class_string(truth_majority, class_names),
             "majority_baseline_correct": majority_correct,
+            "constant_class_0_accuracy": float(constant_baselines[0]),
+            "constant_class_1_accuracy": float(constant_baselines[1]),
+            "constant_class_2_accuracy": float(constant_baselines[2]),
+            "constant_class_3_accuracy": float(constant_baselines[3]),
+            "global_majority_class": _class_text(truth_majority),
+            "global_majority_accuracy": float(majority_accuracy),
+            "per_sequence_oracle_majority_class": _class_text(truth_class),
+            "per_sequence_oracle_majority_accuracy": float(per_sequence_oracle_accuracy),
             "training_labels_available": training_rows is not None,
             "training_majority_prediction": _class_text(training_majority),
             "training_majority_class_string": _class_string(training_majority, class_names),
@@ -117,9 +153,10 @@ def build_mmuad_classification_audit(
     sequence_summary = pd.DataFrame(sequence_records)
     current_accuracy = _row_accuracy_from_sequence_truth(result_rows, truth_by_sequence)
     constant_accuracy = (
-        _constant_prediction_accuracy(truth_rows, result_constant) if result_constant is not None else np.nan
+        _constant_prediction_accuracy(truth_rows, result_constant)
+        if result_constant is not None
+        else np.nan
     )
-    majority_accuracy = _constant_prediction_accuracy(truth_rows, truth_majority)
     training_majority_accuracy = (
         _constant_prediction_accuracy(truth_rows, training_majority)
         if training_majority is not None
@@ -136,14 +173,29 @@ def build_mmuad_classification_audit(
 
     audit_columns = [
         "sequence",
-        "ground_truth_class",
-        "predicted_class",
+        "row_count",
+        "truth_class_values",
+        "predicted_class_values",
+        "truth_majority_class",
+        "predicted_majority_class",
         "class_source",
+        "class_map_key",
+        "class_map_value",
+        "valid_submission_label",
+        "sequence_accuracy",
         "class_id",
         "class_string",
         "valid_class_mapping",
         "per_sequence_accuracy",
         "majority_baseline_prediction",
+        "constant_class_0_accuracy",
+        "constant_class_1_accuracy",
+        "constant_class_2_accuracy",
+        "constant_class_3_accuracy",
+        "global_majority_class",
+        "global_majority_accuracy",
+        "per_sequence_oracle_majority_class",
+        "per_sequence_oracle_majority_accuracy",
     ]
     audit = sequence_summary[audit_columns].copy()
     confusion = _confusion_matrix_rows(
@@ -167,10 +219,18 @@ def build_mmuad_classification_audit(
         "submission_constant_prediction": _class_text(result_constant),
         "submission_constant_class_string": _class_string(result_constant, class_names),
         "constant_prediction_accuracy": float(constant_accuracy),
+        "constant_class_0_accuracy": float(constant_baselines[0]),
+        "constant_class_1_accuracy": float(constant_baselines[1]),
+        "constant_class_2_accuracy": float(constant_baselines[2]),
+        "constant_class_3_accuracy": float(constant_baselines[3]),
         "default_label_explains_score": bool(default_explains),
         "majority_baseline_prediction": _class_text(truth_majority),
         "majority_baseline_class_string": _class_string(truth_majority, class_names),
         "majority_baseline_accuracy": float(majority_accuracy),
+        "global_majority_class": _class_text(truth_majority),
+        "global_majority_accuracy": float(majority_accuracy),
+        "per_sequence_oracle_majority_accuracy": float(per_sequence_oracle_accuracy),
+        "class_map_sequence_count": int(len(class_map)),
         "training_labels_available": training_rows is not None,
         "training_majority_prediction": _class_text(training_majority),
         "training_majority_class_string": _class_string(training_majority, class_names),
@@ -213,6 +273,7 @@ def build_audit_from_files(
     truth_path: Path,
     results_path: Path,
     training_truth_path: Path | None = None,
+    class_map_path: Path | None = None,
 ) -> MmuadClassificationAudit:
     """Load official Track 5 files and build the classification audit."""
 
@@ -225,6 +286,7 @@ def build_audit_from_files(
         truth=load_official_track5_results_frame(truth_path),
         results=load_official_track5_results_frame(results_path),
         training_truth=training_truth,
+        class_map=load_sequence_class_map(class_map_path),
     )
 
 
@@ -273,6 +335,7 @@ def _sequence_class_stats(rows: pd.DataFrame, *, prefix: str) -> dict[str, dict[
             f"{prefix}_row_count": int(len(group)),
             f"{prefix}_unique_class_count": int(values.nunique(dropna=False)),
             f"{prefix}_class_counts": _format_class_counts(counts),
+            f"{prefix}_class_values": _format_class_values(values),
         }
     return stats
 
@@ -317,6 +380,31 @@ def _constant_prediction_accuracy(rows: pd.DataFrame, prediction: int | str | No
         total += 1
         correct += int(_classes_equal(prediction, truth_class))
     return float(correct / total) if total else np.nan
+
+
+def _per_sequence_oracle_majority_accuracy(rows: pd.DataFrame) -> float:
+    if rows.empty:
+        return np.nan
+    total = 0
+    correct = 0
+    truth_by_sequence = _sequence_class_stats(rows, prefix="truth")
+    for _, row in rows.iterrows():
+        truth_class = truth_by_sequence.get(str(row["Sequence"]), {}).get("truth_class")
+        if truth_class is None:
+            continue
+        total += 1
+        correct += int(_classes_equal(row["Classification"], truth_class))
+    return float(correct / total) if total else np.nan
+
+
+def _valid_sequence_submission_labels(result_rows: pd.DataFrame, sequence: str) -> bool:
+    predicted = result_rows.loc[
+        result_rows["Sequence"].astype(str) == str(sequence),
+        "Classification",
+    ]
+    if predicted.empty:
+        return False
+    return _valid_class_series(predicted)
 
 
 def _confusion_matrix_rows(
@@ -413,17 +501,32 @@ def _format_class_counts(counts: pd.Series) -> str:
     return ";".join(f"{_class_text(label)}:{int(count)}" for label, count in counts.items())
 
 
+def _format_class_values(values: pd.Series) -> str:
+    return ";".join(_sorted_class_texts(values))
+
+
 def _sorted_class_texts(values: pd.Series) -> list[str]:
     return sorted({_class_text(value) for value in values.dropna().tolist()})
 
 
-def _class_source(result_stats: dict[str, Any]) -> str:
+def _class_source(
+    result_stats: dict[str, Any],
+    *,
+    sequence: str,
+    predicted_class: int | str | None,
+    class_map: Mapping[str, Any],
+) -> str:
     row_count = int(result_stats.get("predicted_row_count", 0) or 0)
     unique_count = int(result_stats.get("predicted_unique_class_count", 0) or 0)
     if row_count == 0:
         return "missing_prediction"
+    if sequence in class_map:
+        mapped_class = _normal_class_value(class_map.get(sequence))
+        if _classes_equal(mapped_class, predicted_class):
+            return "class_map_sequence_label"
+        return "class_map_sequence_label_ignored_or_remapped"
     if unique_count == 1:
-        return "submission_constant_label"
+        return "default_or_constant_submission_label"
     return "submission_row_labels"
 
 
@@ -439,6 +542,11 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="optional official training truth/class labels for a training-majority baseline",
     )
+    parser.add_argument(
+        "--class-map",
+        type=Path,
+        help="optional sequence-to-class map used to diagnose ignored/missing class sources",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
 
@@ -446,6 +554,7 @@ def main(argv: list[str] | None = None) -> int:
         truth_path=args.truth,
         results_path=args.results,
         training_truth_path=args.training_truth,
+        class_map_path=args.class_map,
     )
     paths = write_mmuad_classification_audit(audit, output_dir=args.output_dir)
     print("mmuad_classification_audit=ok")

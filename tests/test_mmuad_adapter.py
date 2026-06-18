@@ -4056,6 +4056,7 @@ def test_cli_completes_official_results_to_sequence_timestamps(tmp_path: Path) -
     ]
     assert rows["Sequence"].tolist() == ["seq1", "seq1"]
     assert rows["Timestamp"].tolist() == [0.0, 1.0]
+    assert rows["Classification"].tolist() == [2, 2]
     assert (output / "mmuad_official_timestamp_completion_rows.csv").exists()
     summary = json.loads(
         (output / "mmuad_official_timestamp_completion_summary.json").read_text(
