@@ -74,6 +74,8 @@ def test_candidate_normalizer_accepts_flattened_ros_pose_columns():
     (
         ("stamp.secs", "stamp.nsecs"),
         ("header.stamp.secs", "header.stamp.nsecs"),
+        ("timestamp.sec", "timestamp.nanosec"),
+        ("timestamp.sec", "timestamp.nsec"),
         ("timestamp.secs", "timestamp.nsecs"),
     ),
 )
