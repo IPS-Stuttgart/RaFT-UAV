@@ -88,6 +88,14 @@ def test_time_normalizer_accepts_ros1_plural_flattened_stamp_pairs(
     assert abs(float(rows.loc[0, "time_s"]) - 7.125) < 1.0e-12
 
 
+def test_time_normalizer_combines_seconds_and_nanoseconds_columns():
+    raw = pd.DataFrame({"seconds": [12], "nanoseconds": [345_000_000]})
+
+    rows = normalize_time_column_aliases(raw)
+
+    assert float(rows.loc[0, "time_s"]) == pytest.approx(12.345)
+
+
 @pytest.mark.parametrize("stamp_column", ("timestamp", "stamp", "time"))
 def test_time_normalizer_accepts_ros_stamp_dict_columns(stamp_column: str):
     raw = pd.DataFrame(

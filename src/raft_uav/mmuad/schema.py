@@ -180,6 +180,7 @@ _TIME_SECOND_NANOSECOND_PAIRS = (
     ("sec", "nanosec"),
     ("sec", "nsec"),
     ("secs", "nsecs"),
+    ("seconds", "nanoseconds"),
     ("stamp_sec", "stamp_nanosec"),
     ("stamp_secs", "stamp_nsecs"),
     ("stamp.sec", "stamp.nanosec"),

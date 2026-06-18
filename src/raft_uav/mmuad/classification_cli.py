@@ -48,7 +48,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--method",
-        choices=("majority", "nearest-neighbor", "nearest-centroid", "logistic-regression"),
+        choices=(
+            "majority",
+            "nearest-neighbor",
+            "nearest-centroid",
+            "logistic-regression",
+            "random-forest",
+            "hist-gradient-boosting",
+        ),
         default="nearest-neighbor",
     )
     parser.add_argument("--k", type=int, default=1, help="nearest-neighbor vote count")

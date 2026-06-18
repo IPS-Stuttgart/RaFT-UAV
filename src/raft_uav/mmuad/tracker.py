@@ -35,6 +35,7 @@ class TrackerOutput:
 
 _CANDIDATE_ROW_ID = "_candidate_row_id"
 _MOBILITY = "_mobility"
+_SOURCE_PRIORITY = "_source_priority"
 
 
 def run_mmuad_tracker(
@@ -249,12 +250,15 @@ def _greedy_path(frame: pd.DataFrame, *, config: TrackerConfig) -> pd.DataFrame:
     frame[_MOBILITY] = _candidate_mobility(
         frame, radius_m=config.selection_mobility_radius_m
     )
-    # Seed and break ties by mobility first, then confidence: a UAV moves between
-    # frames (high mobility) while ground/structure clusters recur in place
-    # (low mobility).  This keeps the greedy path from anchoring on a dense but
+    frame[_SOURCE_PRIORITY] = [
+        _source_priority(str(source), config=config) for source in frame["source"]
+    ]
+    # Seed and break ties by mobility first, then configured source priority,
+    # then confidence.  This keeps the greedy path from anchoring on a dense but
     # static ground cluster when no learned cluster score is available.
     ranked = frame.sort_values(
-        ["time_s", _MOBILITY, "confidence"], ascending=[True, False, False]
+        ["time_s", _MOBILITY, _SOURCE_PRIORITY, "confidence"],
+        ascending=[True, False, True, False],
     ).copy()
     chosen_rows = []
     last_xyz: np.ndarray | None = None
@@ -265,7 +269,8 @@ def _greedy_path(frame: pd.DataFrame, *, config: TrackerConfig) -> pd.DataFrame:
             continue
         if last_xyz is None or last_time is None:
             chosen = group.sort_values(
-                [_MOBILITY, "confidence"], ascending=False
+                [_MOBILITY, _SOURCE_PRIORITY, "confidence"],
+                ascending=[False, True, False],
             ).iloc[0]
         else:
             xyz = group[["x_m", "y_m", "z_m"]].to_numpy(float)
@@ -276,10 +281,13 @@ def _greedy_path(frame: pd.DataFrame, *, config: TrackerConfig) -> pd.DataFrame:
         last_time = float(chosen["time_s"])
         chosen_rows.append(chosen)
     if not chosen_rows:
-        return frame.iloc[0:0].drop(columns=[_MOBILITY], errors="ignore").copy()
+        return frame.iloc[0:0].drop(
+            columns=[_MOBILITY, _SOURCE_PRIORITY],
+            errors="ignore",
+        ).copy()
     selected = (
         pd.DataFrame(chosen_rows)
-        .drop(columns=[_MOBILITY], errors="ignore")
+        .drop(columns=[_MOBILITY, _SOURCE_PRIORITY], errors="ignore")
         .reset_index(drop=True)
     )
     selected["selected_path_rank"] = 0

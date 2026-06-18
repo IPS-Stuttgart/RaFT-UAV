@@ -33,6 +33,67 @@ VZ_ALIASES = ("v_z_mps", "vz_mps", "vz", "velocity_z")
 CONFIDENCE_ALIASES = ("confidence", "score", "probability")
 STD_XY_ALIASES = ("std_xy_m", "xy_std_m", "std_m", "sigma_xy_m")
 STD_Z_ALIASES = ("std_z_m", "z_std_m", "sigma_z_m")
+CLUSTER_POINT_COUNT_ALIASES = (
+    "cluster_point_count",
+    "point_count",
+    "points",
+    "num_points",
+    "n_points",
+    "return_count",
+)
+CLUSTER_EXTENT_X_ALIASES = (
+    "cluster_extent_x_m",
+    "bbox_extent_x_m",
+    "extent_x_m",
+    "bbox_size_x_m",
+    "size_x_m",
+    "width_m",
+)
+CLUSTER_EXTENT_Y_ALIASES = (
+    "cluster_extent_y_m",
+    "bbox_extent_y_m",
+    "extent_y_m",
+    "bbox_size_y_m",
+    "size_y_m",
+    "depth_m",
+)
+CLUSTER_EXTENT_Z_ALIASES = (
+    "cluster_extent_z_m",
+    "bbox_extent_z_m",
+    "extent_z_m",
+    "bbox_size_z_m",
+    "size_z_m",
+    "height_m",
+)
+CLUSTER_EXTENT_XY_ALIASES = ("cluster_extent_xy_m", "bbox_extent_xy_m", "extent_xy_m")
+CLUSTER_EXTENT_3D_ALIASES = (
+    "cluster_extent_3d_m",
+    "bbox_extent_3d_m",
+    "extent_3d_m",
+    "cluster_size_m",
+)
+CLUSTER_DENSITY_ALIASES = (
+    "cluster_density_points_per_m3",
+    "density_points_per_m3",
+    "point_density",
+)
+EMPTY_FRAME_ALIASES = (
+    "empty_frame",
+    "is_empty",
+    "frame_empty",
+    "radar_empty",
+    "empty_radar_frame",
+)
+ROW_LEVEL_ALIASES = (
+    TIME_ALIASES
+    + X_ALIASES
+    + Y_ALIASES
+    + Z_ALIASES
+    + VX_ALIASES
+    + VY_ALIASES
+    + VZ_ALIASES
+    + SOURCE_ALIASES
+)
 
 
 @dataclass(frozen=True)
@@ -124,9 +185,18 @@ def sequence_features_from_rows(rows: pd.DataFrame) -> pd.DataFrame:
         _add_numeric_stats(record, "x_m", group.get("x_m"))
         _add_numeric_stats(record, "y_m", group.get("y_m"))
         _add_numeric_stats(record, "z_m", group.get("z_m"))
+        _add_numeric_stats(record, "cluster_point_count", group.get("cluster_point_count"))
+        _add_numeric_stats(record, "cluster_extent_x_m", group.get("cluster_extent_x_m"))
+        _add_numeric_stats(record, "cluster_extent_y_m", group.get("cluster_extent_y_m"))
+        _add_numeric_stats(record, "cluster_extent_z_m", group.get("cluster_extent_z_m"))
+        _add_numeric_stats(record, "cluster_extent_xy_m", group.get("cluster_extent_xy_m"))
+        _add_numeric_stats(record, "cluster_extent_3d_m", group.get("cluster_extent_3d_m"))
+        _add_numeric_stats(record, "cluster_density_points_per_m3", group.get("cluster_density_points_per_m3"))
         _add_numeric_stats(record, "confidence", group.get("confidence"))
         _add_numeric_stats(record, "std_xy_m", group.get("std_xy_m"))
         _add_numeric_stats(record, "std_z_m", group.get("std_z_m"))
+        _add_sensor_numeric_features(record, group)
+        _add_empty_radar_features(record, group)
         _add_position_features(record, group)
         _add_velocity_features(record, group)
         records.append(record)
@@ -148,7 +218,9 @@ def sequence_features_from_files(paths: list[Path]) -> pd.DataFrame:
         else:
             row_frames.append(frame)
     if row_frames:
-        sequence_feature_frames.append(sequence_features_from_rows(pd.concat(row_frames, ignore_index=True)))
+        sequence_feature_frames.append(
+            sequence_features_from_rows(pd.concat(row_frames, ignore_index=True))
+        )
     return _merge_sequence_feature_tables(sequence_feature_frames)
 
 
@@ -189,11 +261,17 @@ def classify_sequences_from_features(
         predictions = _predict_nearest_centroid(train, predict_features, train_matrix, predict_matrix)
     elif method == "logistic-regression":
         predictions = _predict_logistic_regression(train, predict_features, train_matrix, predict_matrix)
+    elif method == "random-forest":
+        predictions = _predict_random_forest(train, predict_features, train_matrix, predict_matrix)
+    elif method in {"hist-gradient-boosting", "hist-gradient"}:
+        predictions = _predict_hist_gradient_boosting(
+            train, predict_features, train_matrix, predict_matrix
+        )
     else:
         raise ValueError(
             "unsupported MMUAD sequence classifier method "
             f"{method!r}; expected majority, nearest-neighbor, nearest-centroid, "
-            "or logistic-regression"
+            "logistic-regression, random-forest, or hist-gradient-boosting"
         )
     metrics = sequence_classification_metrics(predictions, eval_labels=eval_labels)
     metrics.update(
@@ -305,10 +383,32 @@ def _normalize_feature_rows(rows: pd.DataFrame) -> pd.DataFrame:
     out["confidence"] = _numeric_column(rows, CONFIDENCE_ALIASES)
     out["std_xy_m"] = _numeric_column(rows, STD_XY_ALIASES)
     out["std_z_m"] = _numeric_column(rows, STD_Z_ALIASES)
+    out["cluster_point_count"] = _numeric_column(rows, CLUSTER_POINT_COUNT_ALIASES)
+    out["cluster_extent_x_m"] = _numeric_column(rows, CLUSTER_EXTENT_X_ALIASES)
+    out["cluster_extent_y_m"] = _numeric_column(rows, CLUSTER_EXTENT_Y_ALIASES)
+    out["cluster_extent_z_m"] = _numeric_column(rows, CLUSTER_EXTENT_Z_ALIASES)
+    out["cluster_extent_xy_m"] = _numeric_column(rows, CLUSTER_EXTENT_XY_ALIASES)
+    out["cluster_extent_3d_m"] = _numeric_column(rows, CLUSTER_EXTENT_3D_ALIASES)
+    out["cluster_density_points_per_m3"] = _numeric_column(rows, CLUSTER_DENSITY_ALIASES)
+    out["empty_frame"] = _empty_frame_column(rows, out)
     finite_position = out[["x_m", "y_m", "z_m"]].notna().any(axis=1)
     finite_velocity = out[["v_x_mps", "v_y_mps", "v_z_mps"]].notna().any(axis=1)
     finite_signal = out[["confidence", "std_xy_m", "std_z_m"]].notna().any(axis=1)
-    return out.loc[finite_position | finite_velocity | finite_signal].reset_index(drop=True)
+    finite_cluster = out[
+        [
+            "cluster_point_count",
+            "cluster_extent_x_m",
+            "cluster_extent_y_m",
+            "cluster_extent_z_m",
+            "cluster_extent_xy_m",
+            "cluster_extent_3d_m",
+            "cluster_density_points_per_m3",
+            "empty_frame",
+        ]
+    ].notna().any(axis=1)
+    return out.loc[
+        finite_position | finite_velocity | finite_signal | finite_cluster
+    ].reset_index(drop=True)
 
 
 def _read_feature_frame(path: Path) -> pd.DataFrame:
@@ -321,7 +421,14 @@ def _read_feature_frame(path: Path) -> pd.DataFrame:
 def _looks_like_precomputed_sequence_features(rows: pd.DataFrame) -> bool:
     if _find_column(rows, SEQUENCE_ID_ALIASES) is None:
         return False
-    return any(str(column).lower().startswith("image_") for column in rows.columns)
+    if any(str(column).lower().startswith("image_") for column in rows.columns):
+        return True
+    if any(_find_column(rows, (alias,)) is not None for alias in ROW_LEVEL_ALIASES):
+        return False
+    return any(
+        column != "sequence_id" and pd.to_numeric(rows[column], errors="coerce").notna().any()
+        for column in rows.columns
+    )
 
 
 def _normalize_precomputed_sequence_features(rows: pd.DataFrame) -> pd.DataFrame:
@@ -329,7 +436,7 @@ def _normalize_precomputed_sequence_features(rows: pd.DataFrame) -> pd.DataFrame
     out["sequence_id"] = _text_column(rows, SEQUENCE_ID_ALIASES, default="default")
     for column in rows.columns:
         column_text = str(column)
-        if column_text == "sequence_id" or not column_text.lower().startswith("image_"):
+        if column_text in CLASSIFIER_METADATA_COLUMNS:
             continue
         numeric = pd.to_numeric(rows[column], errors="coerce")
         if numeric.notna().any():
@@ -371,6 +478,16 @@ def _numeric_column(rows: pd.DataFrame, aliases: tuple[str, ...]) -> pd.Series:
     if column is None:
         return pd.Series([np.nan] * len(rows), index=rows.index, dtype=float)
     return pd.to_numeric(rows[column], errors="coerce")
+
+
+def _empty_frame_column(rows: pd.DataFrame, normalized: pd.DataFrame) -> pd.Series:
+    raw_empty = _numeric_column(rows, EMPTY_FRAME_ALIASES)
+    point_count = pd.to_numeric(normalized["cluster_point_count"], errors="coerce")
+    empty_from_points = pd.Series(np.nan, index=rows.index, dtype=float)
+    empty_from_points.loc[point_count.notna()] = (point_count.loc[point_count.notna()] <= 0).astype(
+        float
+    )
+    return raw_empty.combine_first(empty_from_points)
 
 
 def _find_column(rows: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
@@ -425,6 +542,66 @@ def _add_numeric_stats(record: dict[str, Any], prefix: str, values: Any | None) 
     record[f"{prefix}_p10"] = float(np.percentile(data, 10))
     record[f"{prefix}_p50"] = float(np.percentile(data, 50))
     record[f"{prefix}_p90"] = float(np.percentile(data, 90))
+    record[f"{prefix}_p95"] = float(np.percentile(data, 95))
+
+
+def _add_sensor_numeric_features(record: dict[str, Any], group: pd.DataFrame) -> None:
+    if "source" not in group.columns:
+        return
+    fields = (
+        "cluster_point_count",
+        "cluster_extent_x_m",
+        "cluster_extent_y_m",
+        "cluster_extent_z_m",
+        "cluster_extent_xy_m",
+        "cluster_extent_3d_m",
+        "cluster_density_points_per_m3",
+        "z_m",
+    )
+    for source, sensor_group in group.groupby(group["source"].astype(str), sort=True):
+        source_key = _feature_key(source)
+        if not source_key:
+            continue
+        if "time_s" in sensor_group.columns:
+            sensor_times = pd.to_numeric(sensor_group["time_s"], errors="coerce").dropna()
+            record[f"source_{source_key}_frame_count"] = int(sensor_times.nunique())
+            if sensor_times.nunique() > 0:
+                record[f"source_{source_key}_mean_rows_per_frame"] = float(
+                    len(sensor_group) / sensor_times.nunique()
+                )
+        for field in fields:
+            _add_numeric_stats(record, f"source_{source_key}_{field}", sensor_group.get(field))
+        xyz = sensor_group[["x_m", "y_m", "z_m"]].apply(pd.to_numeric, errors="coerce")
+        valid = xyz.notna().all(axis=1)
+        if valid.any():
+            _add_numeric_stats(
+                record,
+                f"source_{source_key}_range_xy_m",
+                np.hypot(xyz.loc[valid, "x_m"], xyz.loc[valid, "y_m"]),
+            )
+            _add_numeric_stats(
+                record,
+                f"source_{source_key}_range_3d_m",
+                np.linalg.norm(xyz.loc[valid, ["x_m", "y_m", "z_m"]].to_numpy(float), axis=1),
+            )
+
+
+def _add_empty_radar_features(record: dict[str, Any], group: pd.DataFrame) -> None:
+    if "source" not in group.columns or "time_s" not in group.columns:
+        return
+    radar_rows = group.loc[group["source"].astype(str).str.contains("radar", case=False, na=False)]
+    if radar_rows.empty:
+        return
+    empty = pd.to_numeric(radar_rows.get("empty_frame"), errors="coerce")
+    if empty.notna().any():
+        by_time = (
+            radar_rows.assign(_empty_frame=empty)
+            .groupby("time_s", sort=True)["_empty_frame"]
+            .max()
+        )
+        record["radar_frame_count"] = int(len(by_time))
+        record["radar_empty_frame_count"] = int((by_time >= 0.5).sum())
+        record["radar_empty_frame_fraction"] = float((by_time >= 0.5).mean())
 
 
 def _add_position_features(record: dict[str, Any], group: pd.DataFrame) -> None:
@@ -605,6 +782,73 @@ def _predict_logistic_regression(
         raise ValueError("logistic-regression sequence classifier requires scikit-learn") from exc
     model = LogisticRegression(max_iter=1000, class_weight="balanced")
     model.fit(train_matrix, train["uav_type"].astype(str))
+    return _predict_sklearn_model(
+        model,
+        predict_features,
+        predict_matrix,
+        class_source="sequence-logistic-regression",
+    )
+
+
+def _predict_random_forest(
+    train: pd.DataFrame,
+    predict_features: pd.DataFrame,
+    train_matrix: np.ndarray,
+    predict_matrix: np.ndarray,
+) -> pd.DataFrame:
+    try:
+        from sklearn.ensemble import RandomForestClassifier
+    except Exception as exc:  # pragma: no cover - depends on optional sklearn
+        raise ValueError("random-forest sequence classifier requires scikit-learn") from exc
+    model = RandomForestClassifier(
+        n_estimators=200,
+        random_state=0,
+        class_weight="balanced",
+        min_samples_leaf=1,
+    )
+    model.fit(train_matrix, train["uav_type"].astype(str))
+    return _predict_sklearn_model(
+        model,
+        predict_features,
+        predict_matrix,
+        class_source="sequence-random-forest",
+    )
+
+
+def _predict_hist_gradient_boosting(
+    train: pd.DataFrame,
+    predict_features: pd.DataFrame,
+    train_matrix: np.ndarray,
+    predict_matrix: np.ndarray,
+) -> pd.DataFrame:
+    try:
+        from sklearn.ensemble import HistGradientBoostingClassifier
+    except Exception as exc:  # pragma: no cover - depends on optional sklearn
+        raise ValueError(
+            "hist-gradient-boosting sequence classifier requires scikit-learn"
+        ) from exc
+    model = HistGradientBoostingClassifier(
+        max_iter=100,
+        learning_rate=0.1,
+        min_samples_leaf=1,
+        random_state=0,
+    )
+    model.fit(train_matrix, train["uav_type"].astype(str))
+    return _predict_sklearn_model(
+        model,
+        predict_features,
+        predict_matrix,
+        class_source="sequence-hist-gradient-boosting",
+    )
+
+
+def _predict_sklearn_model(
+    model: Any,
+    predict_features: pd.DataFrame,
+    predict_matrix: np.ndarray,
+    *,
+    class_source: str,
+) -> pd.DataFrame:
     predicted = model.predict(predict_matrix)
     confidence = (
         np.max(model.predict_proba(predict_matrix), axis=1)
@@ -615,7 +859,7 @@ def _predict_logistic_regression(
         {
             "sequence_id": predict_features["sequence_id"].astype(str),
             "predicted_class": [str(label) for label in predicted],
-            "class_source": "sequence-logistic-regression",
+            "class_source": class_source,
             "nearest_train_sequence_id": "",
             "nearest_distance": np.nan,
             "classification_confidence": confidence,
