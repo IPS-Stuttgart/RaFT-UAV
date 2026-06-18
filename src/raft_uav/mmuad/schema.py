@@ -184,10 +184,13 @@ _TIME_SECOND_NANOSECOND_PAIRS = (
     ("stamp_secs", "stamp_nsecs"),
     ("stamp.sec", "stamp.nanosec"),
     ("stamp.sec", "stamp.nsec"),
+    ("stamp.secs", "stamp.nsecs"),
     ("header.stamp.sec", "header.stamp.nanosec"),
     ("header.stamp.sec", "header.stamp.nsec"),
+    ("header.stamp.secs", "header.stamp.nsecs"),
     ("timestamp_sec", "timestamp_nanosec"),
     ("timestamp_secs", "timestamp_nsecs"),
+    ("timestamp.secs", "timestamp.nsecs"),
 )
 
 
