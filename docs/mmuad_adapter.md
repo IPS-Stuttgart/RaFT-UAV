@@ -527,6 +527,35 @@ member names, and archive links. This bridge covers packaged normalized/public
 Track 5 layouts; it still does not parse undocumented native binary packet
 streams.
 
+### Observed public validation archive layout
+
+A public MMUAD validation archive inspected during adapter smoke testing used a
+top-level split folder with one directory per sequence:
+
+```text
+val/
+  seq0001/
+    Image/
+      <timestamp>.png
+    lidar_360/
+      <timestamp>.npy
+    livox_avia/
+      <timestamp>.npy
+    radar_enhance_pcl/
+      <timestamp>.npy
+  seq0002/
+    ...
+```
+
+The inspected validation split contained 16 sequences, 2,426 images, and 2,818
+NumPy point-cloud frames. The point-cloud payloads were plain numeric arrays in
+`(N,3)` `x,y,z` order for LiDAR, Livox, and enhanced radar frames; some empty
+radar frames were saved as shape `(0,)` and are treated as valid empty frames.
+That archive did not include visible truth or class-label files, so local runs
+can smoke-test loading, tracking, timestamp completion, and upload-shape
+validation, but they cannot establish official hidden-test metrics or
+Codabench leaderboard equivalence.
+
 The public UG2+ Track 5 README requires a ZIP containing only
 `mmaud_results.csv`. The official public CSV columns are
 `Sequence,Timestamp,Position,Classification`, where `Position` is written as a
