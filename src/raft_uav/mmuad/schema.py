@@ -375,9 +375,68 @@ def normalize_time_column_aliases(
     for alias in _TIME_SECOND_ALIASES:
         original = lower_to_original.get(alias)
         if original is not None:
-            out[target] = pd.to_numeric(out[original], errors="coerce")
+            out[target] = _seconds_or_stamp_dict_series(out[original])
             return out
     return out
+
+
+def _seconds_or_stamp_dict_series(values: pd.Series) -> pd.Series:
+    """Return seconds from scalar values, falling back to ROS stamp dictionaries."""
+
+    numeric = pd.to_numeric(values, errors="coerce")
+    parsed = pd.to_numeric(values.map(_stamp_dict_to_seconds), errors="coerce")
+    return numeric.fillna(parsed)
+
+
+def _stamp_dict_to_seconds(value: Any) -> float | None:
+    if isinstance(value, np.generic):
+        value = value.item()
+    if not isinstance(value, dict):
+        return None
+
+    nested = _mapping_get_case_insensitive(value, "stamp")
+    if nested is not None:
+        nested_time = _stamp_dict_to_seconds(nested)
+        if nested_time is not None:
+            return nested_time
+
+    seconds = _first_mapping_value_case_insensitive(value, ("sec", "secs", "seconds"))
+    nanoseconds = _first_mapping_value_case_insensitive(
+        value,
+        ("nanosec", "nsec", "nsecs", "nanoseconds"),
+    )
+    if seconds is not None:
+        try:
+            return float(seconds) + float(nanoseconds or 0.0) * 1.0e-9
+        except (TypeError, ValueError):
+            return None
+
+    scalar = _first_mapping_value_case_insensitive(
+        value,
+        ("time_s", "timestamp_s", "timestamp", "stamp", "time"),
+    )
+    try:
+        return None if scalar is None else float(scalar)
+    except (TypeError, ValueError):
+        return None
+
+
+def _mapping_get_case_insensitive(mapping: dict[Any, Any], key: str) -> Any | None:
+    for candidate, value in mapping.items():
+        if str(candidate).lower() == key.lower():
+            return value
+    return None
+
+
+def _first_mapping_value_case_insensitive(
+    mapping: dict[Any, Any],
+    keys: tuple[str, ...],
+) -> Any | None:
+    for key in keys:
+        value = _mapping_get_case_insensitive(mapping, key)
+        if value is not None:
+            return value
+    return None
 
 
 def load_jsonable(value: Any) -> Any:
