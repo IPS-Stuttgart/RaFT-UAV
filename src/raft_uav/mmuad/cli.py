@@ -22,6 +22,14 @@ from raft_uav.mmuad.completion import (
     complete_results_to_truth_timestamps,
     completion_summary,
 )
+from raft_uav.mmuad.cluster_ranker import (
+    build_cluster_feature_table,
+    load_cluster_ranker_model,
+    merge_cross_sensor_candidate_clusters,
+    predict_cluster_scores,
+    score_cluster_candidates,
+    write_ranker_diagnostics,
+)
 from raft_uav.mmuad.evaluate import evaluate_submission_csv
 from raft_uav.mmuad.evaluator import (
     evaluate_mmaud_results,
@@ -80,6 +88,12 @@ from raft_uav.mmuad.submission import (
     write_ug2_codabench_zip,
 )
 from raft_uav.mmuad.tracker import TrackerConfig, run_mmuad_tracker, write_tracker_output
+from raft_uav.mmuad.tracker import TrackerOutput, compute_metrics
+from raft_uav.mmuad.trajectory_completion import (
+    TrajectoryCompletionConfig,
+    complete_and_smooth_estimates,
+    write_trajectory_completion_diagnostics,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -224,6 +238,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--point-source", default="lidar-cluster")
     parser.add_argument("--voxel-size-m", type=float, default=0.75)
     parser.add_argument("--min-cluster-points", type=int, default=3)
+    parser.add_argument("--cluster-ranker-model-json", type=Path)
+    parser.add_argument("--cluster-ranker-previous-states-csv", type=Path)
+    parser.add_argument("--cluster-ranker-image-evidence-csv", type=Path)
+    parser.add_argument("--cluster-ranker-scored-candidates-csv", type=Path)
+    parser.add_argument("--cluster-ranker-score-features-csv", type=Path)
+    parser.add_argument("--cluster-ranker-merged-candidates-csv", type=Path)
+    parser.add_argument("--cluster-ranker-keep-confidence", action="store_true")
+    parser.add_argument("--cluster-ranker-cross-sensor-time-window-s", type=float, default=0.05)
+    parser.add_argument("--cluster-ranker-cross-sensor-distance-gate-m", type=float, default=5.0)
+    parser.add_argument(
+        "--trajectory-completion-mode",
+        choices=(
+            "none",
+            "gap-interpolation",
+            "fixed-lag",
+            "constant-velocity",
+            "constant-acceleration",
+        ),
+        default="none",
+    )
+    parser.add_argument("--trajectory-completion-max-gap-s", type=float, default=1.0)
+    parser.add_argument("--trajectory-smoothing-lag-s", type=float, default=1.0)
+    parser.add_argument("--trajectory-smoothing-blend", type=float, default=1.0)
+    parser.add_argument("--trajectory-completion-no-truth-timestamps", action="store_true")
+    parser.add_argument("--trajectory-completion-no-infer-grid", action="store_true")
     parser.add_argument("--soft-anchor-cap-m", type=float, default=2.0)
     parser.add_argument("--secondary-covariance-scale", type=float, default=25.0)
     parser.add_argument("--acceleration-std-mps2", type=float, default=8.0)
@@ -460,6 +499,12 @@ def _write_tracking_artifacts(
     native_sequence_manifests = getattr(args, "_native_ros_sequence_manifests_json", None)
     if native_sequence_manifests is not None:
         paths["native_ros_sequence_manifests_json"] = str(native_sequence_manifests)
+    cluster_ranker_paths = getattr(args, "_cluster_ranker_paths", None)
+    if cluster_ranker_paths:
+        paths.update(cluster_ranker_paths)
+    trajectory_completion_paths = getattr(args, "_trajectory_completion_paths", None)
+    if trajectory_completion_paths:
+        paths.update(trajectory_completion_paths)
     explicit_class_map = load_sequence_class_map(args.ug2_class_map_file)
     inferred_class_map = getattr(args, "_inferred_class_map", {})
     # Prefer explicit class-map files when both are provided.
@@ -1243,6 +1288,7 @@ def _run_explicit_files(args: argparse.Namespace):
     if calibration_path is not None and not args.no_apply_calibration:
         calibration = load_calibration_auto(calibration_path)
         candidates = transform_candidate_frame(candidates, calibration)
+    candidates = _maybe_apply_cluster_ranker(args, candidates)
     truth_path = _explicit_truth_path(args)
     truth = load_truth_file(truth_path) if truth_path is not None else topic_truth
     _maybe_set_official_validation_template_from_truth(args, truth)
@@ -1454,6 +1500,7 @@ def _run_sequence_root(args: argparse.Namespace):
             default_class=args.ug2_class_name,
         )
     truth = merge_truth_frames(truth_frames) if truth_frames else None
+    candidates = _maybe_apply_cluster_ranker(args, candidates)
     if native_manifests:
         args.output_dir.mkdir(parents=True, exist_ok=True)
         manifest_summary_path = args.output_dir / "native_ros_sequence_manifests.json"
@@ -1581,11 +1628,75 @@ def _safe_path_component(value: str) -> str:
     return safe or "sequence"
 
 
+def _maybe_apply_cluster_ranker(args, candidates):
+    if args.cluster_ranker_model_json is None:
+        return candidates
+    model = load_cluster_ranker_model(args.cluster_ranker_model_json)
+    previous_states = (
+        None
+        if args.cluster_ranker_previous_states_csv is None
+        else pd.read_csv(args.cluster_ranker_previous_states_csv)
+    )
+    image_evidence = (
+        None
+        if args.cluster_ranker_image_evidence_csv is None
+        else pd.read_csv(args.cluster_ranker_image_evidence_csv)
+    )
+    merged = merge_cross_sensor_candidate_clusters(
+        candidates,
+        time_window_s=args.cluster_ranker_cross_sensor_time_window_s,
+        distance_gate_m=args.cluster_ranker_cross_sensor_distance_gate_m,
+    )
+    frames = [candidates]
+    if not merged.rows.empty:
+        frames.append(merged)
+    score_input = merge_candidate_frames(frames)
+    paths: dict[str, str] = {
+        "cluster_ranker_model_json": str(args.cluster_ranker_model_json),
+    }
+    if args.cluster_ranker_merged_candidates_csv is not None:
+        args.cluster_ranker_merged_candidates_csv.parent.mkdir(parents=True, exist_ok=True)
+        merged.rows.to_csv(args.cluster_ranker_merged_candidates_csv, index=False)
+        paths["cluster_ranker_merged_candidates_csv"] = str(
+            args.cluster_ranker_merged_candidates_csv
+        )
+    scored = score_cluster_candidates(
+        score_input,
+        model,
+        replace_confidence=not args.cluster_ranker_keep_confidence,
+        previous_states=previous_states,
+        image_evidence=image_evidence,
+        cross_sensor_time_window_s=args.cluster_ranker_cross_sensor_time_window_s,
+        cross_sensor_distance_gate_m=args.cluster_ranker_cross_sensor_distance_gate_m,
+    )
+    if args.cluster_ranker_scored_candidates_csv is not None:
+        args.cluster_ranker_scored_candidates_csv.parent.mkdir(parents=True, exist_ok=True)
+        scored.rows.to_csv(args.cluster_ranker_scored_candidates_csv, index=False)
+        paths["cluster_ranker_scored_candidates_csv"] = str(
+            args.cluster_ranker_scored_candidates_csv
+        )
+    if args.cluster_ranker_score_features_csv is not None:
+        features = build_cluster_feature_table(
+            score_input,
+            previous_states=previous_states,
+            image_evidence=image_evidence,
+            cross_sensor_time_window_s=args.cluster_ranker_cross_sensor_time_window_s,
+            cross_sensor_distance_gate_m=args.cluster_ranker_cross_sensor_distance_gate_m,
+        )
+        features["ranker_score"] = predict_cluster_scores(features, model)
+        write_ranker_diagnostics(features, args.cluster_ranker_score_features_csv)
+        paths["cluster_ranker_score_features_csv"] = str(
+            args.cluster_ranker_score_features_csv
+        )
+    args._cluster_ranker_paths = paths
+    return scored
+
+
 
 
 def _run_tracker_for_mode(args, candidates, truth):
     if args.tracker_mode == "multi-object":
-        return run_mmuad_multi_object_tracker(
+        output = run_mmuad_multi_object_tracker(
             candidates,
             truth,
             config=MultiObjectTrackerConfig(
@@ -1594,15 +1705,72 @@ def _run_tracker_for_mode(args, candidates, truth):
                 max_track_age_s=args.mot_max_track_age_s,
             ),
         )
-    return run_mmuad_tracker(
-        candidates,
-        truth,
-        config=TrackerConfig(
-            acceleration_std_mps2=args.acceleration_std_mps2,
-            soft_anchor_cap_m=args.soft_anchor_cap_m,
-            secondary_covariance_scale=args.secondary_covariance_scale,
+    else:
+        output = run_mmuad_tracker(
+            candidates,
+            truth,
+            config=TrackerConfig(
+                acceleration_std_mps2=args.acceleration_std_mps2,
+                soft_anchor_cap_m=args.soft_anchor_cap_m,
+                secondary_covariance_scale=args.secondary_covariance_scale,
+            ),
+        )
+    return _maybe_apply_trajectory_completion(args, output, truth)
+
+
+def _maybe_apply_trajectory_completion(args, output, truth):
+    if args.trajectory_completion_mode == "none" or output.estimates.empty:
+        return output
+    result = complete_and_smooth_estimates(
+        output.estimates,
+        None if truth is None else truth.rows,
+        config=TrajectoryCompletionConfig(
+            mode=args.trajectory_completion_mode,
+            max_gap_s=args.trajectory_completion_max_gap_s,
+            fixed_lag_s=args.trajectory_smoothing_lag_s,
+            smoothing_blend=args.trajectory_smoothing_blend,
+            include_truth_timestamps=not args.trajectory_completion_no_truth_timestamps,
+            infer_missing_grid=not args.trajectory_completion_no_infer_grid,
         ),
     )
+    args._trajectory_completion_paths = write_trajectory_completion_diagnostics(
+        result,
+        args.output_dir,
+    )
+    metrics = _recompute_tracker_metrics(args, result.estimates, truth)
+    return TrackerOutput(result.estimates, metrics, output.selected_tracklets)
+
+
+def _recompute_tracker_metrics(args, estimates, truth):
+    truth_rows = None if truth is None else truth.rows
+    if args.tracker_mode == "multi-object":
+        from raft_uav.mmuad.mot import compute_multi_object_metrics
+
+        sequence_metrics = {}
+        if not estimates.empty and "sequence_id" in estimates.columns:
+            for sequence_id, sequence_estimates in estimates.groupby("sequence_id", sort=True):
+                sequence_truth = None
+                if truth_rows is not None and "sequence_id" in truth_rows.columns:
+                    sequence_truth = truth_rows.loc[truth_rows["sequence_id"].astype(str) == str(sequence_id)]
+                sequence_metrics[str(sequence_id)] = compute_multi_object_metrics(
+                    sequence_estimates,
+                    sequence_truth,
+                )
+        return {
+            "sequences": sequence_metrics,
+            "pooled": compute_multi_object_metrics(estimates, truth_rows),
+        }
+    sequence_metrics = {}
+    if not estimates.empty and "sequence_id" in estimates.columns:
+        for sequence_id, sequence_estimates in estimates.groupby("sequence_id", sort=True):
+            sequence_metrics[str(sequence_id)] = compute_metrics(
+                sequence_estimates,
+                None if truth_rows is None else truth_rows.loc[truth_rows["sequence_id"].astype(str) == str(sequence_id)],
+            )
+    return {
+        "sequences": sequence_metrics,
+        "pooled": compute_metrics(estimates, truth_rows),
+    }
 
 
 def merge_truth_frames(frames):
