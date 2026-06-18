@@ -223,6 +223,21 @@ def test_official_results_frame_rejects_boolean_classification():
         estimates_to_official_mmaud_results_frame(estimates)
 
 
+def test_official_results_frame_rejects_out_of_range_class_map():
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq1"],
+            "time_s": [1.0],
+            "state_x_m": [1.0],
+            "state_y_m": [2.0],
+            "state_z_m": [3.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="must be one of"):
+        estimates_to_official_mmaud_results_frame(estimates, class_map={"seq1": "4"})
+
+
 def test_official_results_frame_rejects_nonfinite_rows_by_default():
     estimates = pd.DataFrame(
         {

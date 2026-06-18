@@ -44,6 +44,7 @@ OFFICIAL_UG2_RESULT_COLUMNS = (
     "Position",
     "Classification",
 )
+OFFICIAL_TRACK5_CLASS_IDS = frozenset({0, 1, 2, 3})
 OFFICIAL_UPLOAD_MANIFEST_SCHEMA = "raft-uav-mmuad-official-upload-manifest-v1"
 OFFICIAL_UPLOAD_MANIFEST_VERIFICATION_SCHEMA = (
     "raft-uav-mmuad-official-upload-manifest-verification-v1"
@@ -489,7 +490,14 @@ def parse_official_classification_cell(value: Any) -> int:
 
 
 def _classification_to_int(value: Any) -> int:
-    return parse_official_classification_cell(value)
+    class_id = parse_official_classification_cell(value)
+    if class_id not in OFFICIAL_TRACK5_CLASS_IDS:
+        allowed = ", ".join(str(item) for item in sorted(OFFICIAL_TRACK5_CLASS_IDS))
+        raise ValueError(
+            "official MMUAD Classification values must be one of "
+            f"{{{allowed}}}; got {class_id!r}"
+        )
+    return class_id
 
 
 def _format_official_position(x: Any, y: Any, z: Any) -> str:
