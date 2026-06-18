@@ -574,6 +574,8 @@ layouts such as `Image/front_camera/<timestamp>.png` or
 timestamps, discovery also reads conservative timestamp sidecars such as
 `timestamps.csv`, `timestamps.json`, `frame_times.txt`, `timestamps.npy`,
 `frame_times.npz`, or `frames.csv/json` inside the same official modality folders.
+The `image` timestamp source accepts common top-level folder aliases such as
+`Image`, `Images`, `Camera`, and `Cameras`.
 Table sidecars may use common
 timestamp columns such as `time_s`, `timestamp`, `timestamp_ns`,
 `timestamp_us`, or `timestamp_ms`; simple text frame lists use the last numeric

@@ -141,7 +141,7 @@ MODALITY_DIR_TOKENS = (
 )
 OFFICIAL_TRACK5_TIMESTAMP_SOURCE_DIRS = {
     "ground-truth": ("ground_truth",),
-    "image": ("image",),
+    "image": ("image", "images", "camera", "cameras"),
     "lidar-360": ("lidar_360",),
     "livox-avia": ("livox_avia",),
     "radar-enhance-pcl": ("radar_enhance_pcl",),
@@ -1500,6 +1500,10 @@ def _timestamps_from_json_sidecar_payload(payload: Any) -> list[float]:
         return values
     if not isinstance(payload, Mapping):
         return []
+    if payload and all(
+        not isinstance(value, (Mapping, list, tuple)) for value in payload.values()
+    ):
+        return [_coerce_timestamp_value(value) for value in payload.values()]
 
     for key in TIMESTAMP_JSON_CONTAINER_KEYS:
         nested = _mapping_get_case_insensitive(payload, key)
