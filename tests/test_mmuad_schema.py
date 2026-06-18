@@ -64,6 +64,25 @@ def test_candidate_normalizer_accepts_flattened_ros_pose_columns():
     assert rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [4.0, 5.0, 6.0]
 
 
+def test_truth_normalizer_accepts_ros1_plural_flattened_stamp_columns():
+    raw = pd.DataFrame(
+        {
+            "sequence_id": ["seqRos1"],
+            "header.stamp.secs": [7],
+            "header.stamp.nsecs": [125_000_000],
+            "pose.position.x": [1.0],
+            "pose.position.y": [2.0],
+            "pose.position.z": [3.0],
+        }
+    )
+
+    rows = normalize_truth_columns(raw)
+
+    assert rows.loc[0, "sequence_id"] == "seqRos1"
+    assert abs(float(rows.loc[0, "time_s"]) - 7.125) < 1.0e-12
+    assert rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+
+
 def test_candidate_normalizer_uses_flattened_ros_frame_as_source():
     raw = pd.DataFrame(
         {
