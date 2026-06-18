@@ -704,6 +704,39 @@ def test_tracker_replays_only_selected_duplicate_rows_without_track_ids() -> Non
     assert "_candidate_row_id" not in output.selected_tracklets.columns
 
 
+def test_point_cloud_clusters_do_not_collapse_selected_path(tmp_path: Path) -> None:
+    """Per-frame-unique cluster track IDs must not collapse the selected path.
+
+    Point-cloud clustering assigns a unique synthetic ``track_id`` to every
+    cluster in every frame.  Grouping by ``(source, track_id)`` previously
+    reduced the selected tracklet to a single detection, anchoring the whole
+    sequence to one cluster.  The selected path must instead span one detection
+    per frame via the greedy fallback.
+    """
+
+    path = tmp_path / "points.csv"
+    rows = []
+    for frame in range(4):
+        t = float(frame)
+        moving = [(frame * 5.0, 0.0), (frame * 5.0 + 0.1, 0.0), (frame * 5.0, 0.1)]
+        clutter = [(50.0, 50.0), (50.1, 50.0), (50.0, 50.1)]
+        for x, y in moving:
+            rows.append({"sequence_id": "s1", "time_s": t, "x_m": x, "y_m": y, "z_m": 5.0})
+        for x, y in clutter:
+            rows.append({"sequence_id": "s1", "time_s": t, "x_m": x, "y_m": y, "z_m": 1.0})
+    pd.DataFrame(rows).to_csv(path, index=False)
+
+    candidates = load_point_cloud_csv_as_candidates(path, voxel_size_m=0.5, min_points=3)
+    # Every cluster carries a frame-unique synthetic track_id.
+    assert candidates.rows["track_id"].nunique() == len(candidates.rows)
+
+    output = run_mmuad_tracker(candidates, config=TrackerConfig())
+
+    # Pre-fix this collapsed to a single anchored detection (1 row, 1 timestamp).
+    assert output.selected_tracklets["time_s"].nunique() == 4
+    assert len(output.selected_tracklets) == 4
+
+
 def test_add_truth_errors_sorts_truth_times() -> None:
     estimates = pd.DataFrame(
         {

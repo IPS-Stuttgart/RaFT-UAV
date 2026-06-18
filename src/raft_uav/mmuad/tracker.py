@@ -124,8 +124,16 @@ def _candidate_rows_with_optional_defaults(rows: pd.DataFrame) -> pd.DataFrame:
 def select_tracklet_path(candidates: pd.DataFrame, *, config: TrackerConfig) -> pd.DataFrame:
     """Select a single globally plausible candidate tracklet path.
 
-    If stable track IDs are present, score each source/track_id group.  If not,
-    fall back to a greedy nearest-neighbor path over highest-confidence rows.
+    If stable multi-frame track IDs are present, score each source/track_id
+    group.  Otherwise fall back to a greedy nearest-neighbor path over
+    highest-confidence rows.
+
+    Only track IDs that span at least two distinct timestamps are treated as
+    real tracklets.  Point-cloud clustering assigns a per-frame-unique synthetic
+    track_id to every cluster, so grouping by ``(source, track_id)`` would
+    otherwise collapse the selected "path" to a single detection and anchor the
+    whole sequence to one cluster.  Such single-frame IDs are routed to the
+    greedy path, which associates one detection per frame.
     """
 
     frame = _candidate_rows_with_optional_defaults(candidates).sort_values("time_s")
@@ -134,30 +142,37 @@ def select_tracklet_path(candidates: pd.DataFrame, *, config: TrackerConfig) -> 
         return candidates.iloc[0:0].copy()
     non_null_track = frame.loc[frame["track_id"].notna()].copy()
     if not non_null_track.empty:
-        rows: list[dict[str, object]] = []
-        for (source, track_id), group in non_null_track.groupby(["source", "track_id"], sort=True):
-            group = group.sort_values("time_s")
-            score = _tracklet_score(group, config=config)
-            rows.append(
-                {
-                    "source": source,
-                    "track_id": track_id,
-                    "score": score,
-                    "rows": len(group),
-                }
+        timestamps_per_track = non_null_track.groupby(["source", "track_id"])[
+            "time_s"
+        ].transform("nunique")
+        multi_frame_track = non_null_track.loc[timestamps_per_track >= 2].copy()
+        if not multi_frame_track.empty:
+            rows: list[dict[str, object]] = []
+            for (source, track_id), group in multi_frame_track.groupby(
+                ["source", "track_id"], sort=True
+            ):
+                group = group.sort_values("time_s")
+                score = _tracklet_score(group, config=config)
+                rows.append(
+                    {
+                        "source": source,
+                        "track_id": track_id,
+                        "score": score,
+                        "rows": len(group),
+                    }
+                )
+            ranked = pd.DataFrame.from_records(rows).sort_values(
+                ["score", "rows"],
+                ascending=[True, False],
             )
-        ranked = pd.DataFrame.from_records(rows).sort_values(
-            ["score", "rows"],
-            ascending=[True, False],
-        )
-        best = ranked.iloc[0]
-        selected = non_null_track.loc[
-            (non_null_track["source"] == best["source"])
-            & (non_null_track["track_id"] == best["track_id"])
-        ].copy()
-        selected["selected_path_rank"] = 0
-        selected["selected_path_score"] = float(best["score"])
-        return selected.sort_values("time_s").reset_index(drop=True)
+            best = ranked.iloc[0]
+            selected = multi_frame_track.loc[
+                (multi_frame_track["source"] == best["source"])
+                & (multi_frame_track["track_id"] == best["track_id"])
+            ].copy()
+            selected["selected_path_rank"] = 0
+            selected["selected_path_score"] = float(best["score"])
+            return selected.sort_values("time_s").reset_index(drop=True)
     return _greedy_path(frame, config=config)
 
 
