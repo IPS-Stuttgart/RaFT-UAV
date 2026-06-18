@@ -189,5 +189,5 @@ def test_truth_normalizer_accepts_flattened_detection3d_bbox_columns():
     rows = normalize_truth_columns(raw)
 
     assert rows.loc[0, "sequence_id"] == "seqD"
-    assert abs(float(rows.loc[0, "time_s") - 4.5) < 1.0e-12
+    assert abs(float(rows.loc[0, "time_s"]) - 4.5) < 1.0e-12
     assert rows.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [7.0, 8.0, 9.0]
