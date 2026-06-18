@@ -20,6 +20,7 @@ class TrackerConfig:
     primary_covariance_scale: float = 1.0
     secondary_covariance_scale: float = 25.0
     soft_anchor_cap_m: float = 2.0
+    soft_anchor_gate_m: float = 12.0
     first_selected_bootstrap: bool = True
     source_priority: tuple[str, ...] = ("radar", "lidar", "lidar-cluster", "candidate")
 
@@ -275,14 +276,24 @@ def _run_sequence_filter(
             action = "selected_update"
             filt.update(z, covariance * config.primary_covariance_scale)
         else:
-            action = "soft_anchor"
             predicted = filt.state[:3].copy()
             innovation = z - predicted
-            horizontal_norm = float(np.linalg.norm(innovation[:2]))
-            if horizontal_norm > config.soft_anchor_cap_m > 0:
-                innovation[:2] *= config.soft_anchor_cap_m / horizontal_norm
-            capped_z = predicted + innovation
-            filt.update(capped_z, covariance * config.secondary_covariance_scale)
+            if config.soft_anchor_gate_m > 0 and (
+                float(np.linalg.norm(innovation)) > config.soft_anchor_gate_m
+            ):
+                # The measurement is too far from the predicted state to
+                # plausibly be the same target.  Treat it as clutter (e.g. a
+                # ground/structure point-cloud cluster) and leave the estimate
+                # on its predicted track instead of dragging it toward the
+                # clutter centroid.
+                action = "soft_anchor_gated"
+            else:
+                action = "soft_anchor"
+                horizontal_norm = float(np.linalg.norm(innovation[:2]))
+                if horizontal_norm > config.soft_anchor_cap_m > 0:
+                    innovation[:2] *= config.soft_anchor_cap_m / horizontal_norm
+                capped_z = predicted + innovation
+                filt.update(capped_z, covariance * config.secondary_covariance_scale)
         state = filt.state.copy()
         record = {
             "time_s": time_s,

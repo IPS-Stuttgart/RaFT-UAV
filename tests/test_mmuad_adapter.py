@@ -685,7 +685,8 @@ def test_tracker_replays_only_selected_duplicate_rows_without_track_ids() -> Non
                 "time_s": float(time_s),
                 "source": "candidate",
                 "track_id": np.nan,
-                "x_m": 100.0 + float(time_s),
+                # Near (within the soft-anchor gate) non-selected duplicate.
+                "x_m": float(time_s) + 4.0,
                 "y_m": 0.0,
                 "z_m": 2.0,
                 "confidence": 0.5,
@@ -702,6 +703,110 @@ def test_tracker_replays_only_selected_duplicate_rows_without_track_ids() -> Non
     assert output.estimates["update_action"].tolist().count("soft_anchor") == 3
     assert output.selected_tracklets["x_m"].tolist() == [0.0, 1.0, 2.0]
     assert "_candidate_row_id" not in output.selected_tracklets.columns
+
+
+def test_tracker_gates_distant_soft_anchor_clutter() -> None:
+    """Distant non-selected clusters are gated instead of dragging the state.
+
+    Point-cloud sequences contain many ground/structure clusters far from the
+    UAV.  Without gating, each one applies a capped soft-anchor update that pulls
+    the estimate toward the clutter centroid.  Such measurements must instead be
+    rejected (predict-only) so the estimate stays on the target track.
+    """
+
+    rows = []
+    truth_rows = []
+    for time_s in range(5):
+        t = float(time_s)
+        truth_rows.append(
+            {"sequence_id": "s1", "time_s": t, "x_m": t, "y_m": 0.0, "z_m": 2.0}
+        )
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": t,
+                "source": "candidate",
+                "track_id": np.nan,
+                "x_m": t,
+                "y_m": 0.0,
+                "z_m": 2.0,
+                "confidence": 1.0,
+                "std_xy_m": 1.0,
+                "std_z_m": 1.0,
+            }
+        )
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": t,
+                "source": "candidate",
+                "track_id": np.nan,
+                "x_m": 100.0,
+                "y_m": 100.0,
+                "z_m": 2.0,
+                "confidence": 0.1,
+                "std_xy_m": 1.0,
+                "std_z_m": 1.0,
+            }
+        )
+    candidates = CandidateFrame(pd.DataFrame(rows))
+    truth = TruthFrame(pd.DataFrame(truth_rows))
+
+    output = run_mmuad_tracker(candidates, truth, config=TrackerConfig())
+
+    assert output.estimates["update_action"].tolist().count("soft_anchor_gated") == 5
+    assert "soft_anchor" not in output.estimates["update_action"].tolist()
+    # The estimate stays on the target rather than being pulled toward clutter.
+    assert output.metrics["pooled"]["mean_3d_m"] < 1.0
+
+
+def test_tracker_soft_anchor_gate_can_be_disabled() -> None:
+    """``soft_anchor_gate_m=0`` restores the previous ungated soft-anchor path."""
+
+    rows = []
+    truth_rows = []
+    for time_s in range(3):
+        t = float(time_s)
+        truth_rows.append(
+            {"sequence_id": "s1", "time_s": t, "x_m": t, "y_m": 0.0, "z_m": 2.0}
+        )
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": t,
+                "source": "candidate",
+                "track_id": np.nan,
+                "x_m": t,
+                "y_m": 0.0,
+                "z_m": 2.0,
+                "confidence": 1.0,
+                "std_xy_m": 1.0,
+                "std_z_m": 1.0,
+            }
+        )
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": t,
+                "source": "candidate",
+                "track_id": np.nan,
+                "x_m": 100.0 + t,
+                "y_m": 0.0,
+                "z_m": 2.0,
+                "confidence": 0.5,
+                "std_xy_m": 1.0,
+                "std_z_m": 1.0,
+            }
+        )
+    candidates = CandidateFrame(pd.DataFrame(rows))
+    truth = TruthFrame(pd.DataFrame(truth_rows))
+
+    output = run_mmuad_tracker(
+        candidates, truth, config=TrackerConfig(soft_anchor_gate_m=0.0)
+    )
+
+    assert output.estimates["update_action"].tolist().count("soft_anchor") == 3
+    assert "soft_anchor_gated" not in output.estimates["update_action"].tolist()
 
 
 def test_point_cloud_clusters_do_not_collapse_selected_path(tmp_path: Path) -> None:
