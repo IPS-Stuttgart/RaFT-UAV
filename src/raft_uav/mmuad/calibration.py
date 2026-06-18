@@ -73,13 +73,27 @@ class CalibrationSet:
     world_frame: str = "world"
 
     def get(self, source: str) -> SensorCalibration | None:
+        """Return the best calibration entry for a candidate source name.
+
+        Candidate sources can be more specific than calibration keys, e.g.
+        ``radar_enhance_pcl_clusters`` should match ``radar_enhance_pcl``.
+        When both a generic key (``radar``) and a specific key match, prefer the
+        longest key; otherwise JSON insertion order could make the generic entry
+        shadow the specific calibration.
+        """
+
         source_l = str(source).lower()
-        if source_l in self.sensors:
-            return self.sensors[source_l]
         for key, value in self.sensors.items():
-            if source_l.startswith(key) or key.startswith(source_l):
+            if source_l == str(key).lower():
                 return value
-        return None
+        matches: list[tuple[int, SensorCalibration]] = []
+        for key, value in self.sensors.items():
+            key_l = str(key).lower()
+            if source_l.startswith(key_l) or key_l.startswith(source_l):
+                matches.append((len(key_l), value))
+        if not matches:
+            return None
+        return max(matches, key=lambda item: item[0])[1]
 
 
 def load_calibration_auto(path: Path) -> CalibrationSet:
