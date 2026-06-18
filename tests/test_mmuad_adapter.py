@@ -685,7 +685,8 @@ def test_tracker_replays_only_selected_duplicate_rows_without_track_ids() -> Non
                 "time_s": float(time_s),
                 "source": "candidate",
                 "track_id": np.nan,
-                "x_m": 100.0 + float(time_s),
+                # Near (within the soft-anchor gate) non-selected duplicate.
+                "x_m": float(time_s) + 4.0,
                 "y_m": 0.0,
                 "z_m": 2.0,
                 "confidence": 0.5,
@@ -702,6 +703,183 @@ def test_tracker_replays_only_selected_duplicate_rows_without_track_ids() -> Non
     assert output.estimates["update_action"].tolist().count("soft_anchor") == 3
     assert output.selected_tracklets["x_m"].tolist() == [0.0, 1.0, 2.0]
     assert "_candidate_row_id" not in output.selected_tracklets.columns
+
+
+def test_tracker_gates_distant_soft_anchor_clutter() -> None:
+    """Distant non-selected clusters are gated instead of dragging the state.
+
+    Point-cloud sequences contain many ground/structure clusters far from the
+    UAV.  Without gating, each one applies a capped soft-anchor update that pulls
+    the estimate toward the clutter centroid.  Such measurements must instead be
+    rejected (predict-only) so the estimate stays on the target track.
+    """
+
+    rows = []
+    truth_rows = []
+    for time_s in range(5):
+        t = float(time_s)
+        truth_rows.append(
+            {"sequence_id": "s1", "time_s": t, "x_m": t, "y_m": 0.0, "z_m": 2.0}
+        )
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": t,
+                "source": "candidate",
+                "track_id": np.nan,
+                "x_m": t,
+                "y_m": 0.0,
+                "z_m": 2.0,
+                "confidence": 1.0,
+                "std_xy_m": 1.0,
+                "std_z_m": 1.0,
+            }
+        )
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": t,
+                "source": "candidate",
+                "track_id": np.nan,
+                "x_m": 100.0,
+                "y_m": 100.0,
+                "z_m": 2.0,
+                "confidence": 0.1,
+                "std_xy_m": 1.0,
+                "std_z_m": 1.0,
+            }
+        )
+    candidates = CandidateFrame(pd.DataFrame(rows))
+    truth = TruthFrame(pd.DataFrame(truth_rows))
+
+    output = run_mmuad_tracker(candidates, truth, config=TrackerConfig())
+
+    assert output.estimates["update_action"].tolist().count("soft_anchor_gated") == 5
+    assert "soft_anchor" not in output.estimates["update_action"].tolist()
+    # The estimate stays on the target rather than being pulled toward clutter.
+    assert output.metrics["pooled"]["mean_3d_m"] < 1.0
+
+
+def test_tracker_soft_anchor_gate_can_be_disabled() -> None:
+    """``soft_anchor_gate_m=0`` restores the previous ungated soft-anchor path."""
+
+    rows = []
+    truth_rows = []
+    for time_s in range(3):
+        t = float(time_s)
+        truth_rows.append(
+            {"sequence_id": "s1", "time_s": t, "x_m": t, "y_m": 0.0, "z_m": 2.0}
+        )
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": t,
+                "source": "candidate",
+                "track_id": np.nan,
+                "x_m": t,
+                "y_m": 0.0,
+                "z_m": 2.0,
+                "confidence": 1.0,
+                "std_xy_m": 1.0,
+                "std_z_m": 1.0,
+            }
+        )
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": t,
+                "source": "candidate",
+                "track_id": np.nan,
+                "x_m": 100.0 + t,
+                "y_m": 0.0,
+                "z_m": 2.0,
+                "confidence": 0.5,
+                "std_xy_m": 1.0,
+                "std_z_m": 1.0,
+            }
+        )
+    candidates = CandidateFrame(pd.DataFrame(rows))
+    truth = TruthFrame(pd.DataFrame(truth_rows))
+
+    output = run_mmuad_tracker(
+        candidates, truth, config=TrackerConfig(soft_anchor_gate_m=0.0)
+    )
+
+    assert output.estimates["update_action"].tolist().count("soft_anchor") == 3
+    assert "soft_anchor_gated" not in output.estimates["update_action"].tolist()
+
+
+def _moving_and_static_clutter_candidates() -> tuple[CandidateFrame, TruthFrame]:
+    rows = []
+    truth_rows = []
+    for time_s in range(6):
+        t = float(time_s)
+        moving_x = 2.0 * t
+        truth_rows.append(
+            {"sequence_id": "s1", "time_s": t, "x_m": moving_x, "y_m": 0.0, "z_m": 10.0}
+        )
+        # Moving UAV cluster: low point count / confidence.
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": t,
+                "source": "lidar-cluster",
+                "track_id": np.nan,
+                "x_m": moving_x,
+                "y_m": 0.0,
+                "z_m": 10.0,
+                "confidence": 3.0,
+                "std_xy_m": 1.0,
+                "std_z_m": 1.0,
+            }
+        )
+        # Static ground clutter: high point count, fixed location every frame.
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": t,
+                "source": "lidar-cluster",
+                "track_id": np.nan,
+                "x_m": 40.0,
+                "y_m": 40.0,
+                "z_m": 0.0,
+                "confidence": 500.0,
+                "std_xy_m": 1.0,
+                "std_z_m": 1.0,
+            }
+        )
+    return CandidateFrame(pd.DataFrame(rows)), TruthFrame(pd.DataFrame(truth_rows))
+
+
+def test_tracker_mobility_prior_prefers_moving_cluster_over_static_clutter() -> None:
+    """The greedy seed follows the moving UAV, not a denser static clutter.
+
+    Without the mobility prior the high-confidence (dense) static clutter would
+    be seeded; mobility recognizes it recurs in place across frames and prefers
+    the moving cluster instead.
+    """
+
+    candidates, truth = _moving_and_static_clutter_candidates()
+
+    output = run_mmuad_tracker(candidates, truth, config=TrackerConfig())
+
+    selected = output.selected_tracklets.sort_values("time_s")
+    assert selected["x_m"].tolist() == [0.0, 2.0, 4.0, 6.0, 8.0, 10.0]
+    assert output.metrics["pooled"]["mean_3d_m"] < 2.0
+
+
+def test_tracker_mobility_prior_can_be_disabled() -> None:
+    """``selection_mobility_radius_m=0`` restores confidence-only seeding."""
+
+    candidates, truth = _moving_and_static_clutter_candidates()
+
+    output = run_mmuad_tracker(
+        candidates, truth, config=TrackerConfig(selection_mobility_radius_m=0.0)
+    )
+
+    selected = output.selected_tracklets.sort_values("time_s")
+    # Confidence-only seeding locks onto the dense static clutter.
+    assert (selected["x_m"] == 40.0).all()
 
 
 def test_point_cloud_clusters_do_not_collapse_selected_path(tmp_path: Path) -> None:
@@ -3951,6 +4129,7 @@ def test_cli_completes_official_results_to_sequence_timestamps(tmp_path: Path) -
     ]
     assert rows["Sequence"].tolist() == ["seq1", "seq1"]
     assert rows["Timestamp"].tolist() == [0.0, 1.0]
+    assert rows["Classification"].tolist() == [2, 2]
     assert (output / "mmuad_official_timestamp_completion_rows.csv").exists()
     summary = json.loads(
         (output / "mmuad_official_timestamp_completion_summary.json").read_text(

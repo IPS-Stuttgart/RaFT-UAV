@@ -20,8 +20,10 @@ class TrackerConfig:
     primary_covariance_scale: float = 1.0
     secondary_covariance_scale: float = 25.0
     soft_anchor_cap_m: float = 2.0
+    soft_anchor_gate_m: float = 12.0
     first_selected_bootstrap: bool = True
     source_priority: tuple[str, ...] = ("radar", "lidar", "lidar-cluster", "candidate")
+    selection_mobility_radius_m: float = 3.0
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,8 @@ class TrackerOutput:
 
 
 _CANDIDATE_ROW_ID = "_candidate_row_id"
+_MOBILITY = "_mobility"
+_SOURCE_PRIORITY = "_source_priority"
 
 
 def run_mmuad_tracker(
@@ -207,9 +211,55 @@ def _source_priority(source: str, *, config: TrackerConfig) -> float:
     return float(len(config.source_priority))
 
 
+def _candidate_mobility(frame: pd.DataFrame, *, radius_m: float) -> np.ndarray:
+    """Return a per-candidate mobility score in ``[0, 1]``.
+
+    A position that is occupied across many distinct timestamps (within
+    ``radius_m``) is static clutter such as ground or structure and scores near
+    ``0``; a position visited at only its own timestamp is mobile and scores near
+    ``1``.  This is an unsupervised prior used to seed/rank greedy path selection
+    when no learned cluster score is available; it needs only candidate
+    positions and timestamps.  ``radius_m <= 0`` disables it (all ones).
+    """
+
+    n = len(frame)
+    if n == 0:
+        return np.ones(0, dtype=float)
+    if radius_m is None or radius_m <= 0:
+        return np.ones(n, dtype=float)
+    times = pd.to_numeric(frame["time_s"], errors="coerce").to_numpy(float)
+    unique_times = np.unique(times[np.isfinite(times)])
+    if unique_times.size <= 1:
+        return np.ones(n, dtype=float)
+    from scipy.spatial import cKDTree
+
+    xyz = frame[["x_m", "y_m", "z_m"]].to_numpy(float)
+    tree = cKDTree(xyz)
+    neighbors = tree.query_ball_point(xyz, r=float(radius_m))
+    denominator = float(unique_times.size - 1)
+    mobility = np.empty(n, dtype=float)
+    for index, neighbor_indices in enumerate(neighbors):
+        neighbor_times = times[neighbor_indices]
+        other_times = np.unique(neighbor_times[neighbor_times != times[index]])
+        mobility[index] = 1.0 - (other_times.size / denominator)
+    return mobility
+
+
 def _greedy_path(frame: pd.DataFrame, *, config: TrackerConfig) -> pd.DataFrame:
-    del config
-    ranked = frame.sort_values(["time_s", "confidence"], ascending=[True, False]).copy()
+    frame = frame.copy()
+    frame[_MOBILITY] = _candidate_mobility(
+        frame, radius_m=config.selection_mobility_radius_m
+    )
+    frame[_SOURCE_PRIORITY] = [
+        _source_priority(str(source), config=config) for source in frame["source"]
+    ]
+    # Seed and break ties by mobility first, then configured source priority,
+    # then confidence.  This keeps the greedy path from anchoring on a dense but
+    # static ground cluster when no learned cluster score is available.
+    ranked = frame.sort_values(
+        ["time_s", _MOBILITY, _SOURCE_PRIORITY, "confidence"],
+        ascending=[True, False, True, False],
+    ).copy()
     chosen_rows = []
     last_xyz: np.ndarray | None = None
     last_time: float | None = None
@@ -218,7 +268,10 @@ def _greedy_path(frame: pd.DataFrame, *, config: TrackerConfig) -> pd.DataFrame:
         if group.empty:
             continue
         if last_xyz is None or last_time is None:
-            chosen = group.sort_values("confidence", ascending=False).iloc[0]
+            chosen = group.sort_values(
+                [_MOBILITY, _SOURCE_PRIORITY, "confidence"],
+                ascending=[False, True, False],
+            ).iloc[0]
         else:
             xyz = group[["x_m", "y_m", "z_m"]].to_numpy(float)
             dt = max(float(time_s) - float(last_time), 1.0)
@@ -228,8 +281,15 @@ def _greedy_path(frame: pd.DataFrame, *, config: TrackerConfig) -> pd.DataFrame:
         last_time = float(chosen["time_s"])
         chosen_rows.append(chosen)
     if not chosen_rows:
-        return frame.iloc[0:0].copy()
-    selected = pd.DataFrame(chosen_rows).reset_index(drop=True)
+        return frame.iloc[0:0].drop(
+            columns=[_MOBILITY, _SOURCE_PRIORITY],
+            errors="ignore",
+        ).copy()
+    selected = (
+        pd.DataFrame(chosen_rows)
+        .drop(columns=[_MOBILITY, _SOURCE_PRIORITY], errors="ignore")
+        .reset_index(drop=True)
+    )
     selected["selected_path_rank"] = 0
     selected["selected_path_score"] = 0.0
     return selected
@@ -275,14 +335,24 @@ def _run_sequence_filter(
             action = "selected_update"
             filt.update(z, covariance * config.primary_covariance_scale)
         else:
-            action = "soft_anchor"
             predicted = filt.state[:3].copy()
             innovation = z - predicted
-            horizontal_norm = float(np.linalg.norm(innovation[:2]))
-            if horizontal_norm > config.soft_anchor_cap_m > 0:
-                innovation[:2] *= config.soft_anchor_cap_m / horizontal_norm
-            capped_z = predicted + innovation
-            filt.update(capped_z, covariance * config.secondary_covariance_scale)
+            if config.soft_anchor_gate_m > 0 and (
+                float(np.linalg.norm(innovation)) > config.soft_anchor_gate_m
+            ):
+                # The measurement is too far from the predicted state to
+                # plausibly be the same target.  Treat it as clutter (e.g. a
+                # ground/structure point-cloud cluster) and leave the estimate
+                # on its predicted track instead of dragging it toward the
+                # clutter centroid.
+                action = "soft_anchor_gated"
+            else:
+                action = "soft_anchor"
+                horizontal_norm = float(np.linalg.norm(innovation[:2]))
+                if horizontal_norm > config.soft_anchor_cap_m > 0:
+                    innovation[:2] *= config.soft_anchor_cap_m / horizontal_norm
+                capped_z = predicted + innovation
+                filt.update(capped_z, covariance * config.secondary_covariance_scale)
         state = filt.state.copy()
         record = {
             "time_s": time_s,
