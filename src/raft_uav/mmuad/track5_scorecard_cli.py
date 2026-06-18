@@ -23,8 +23,17 @@ def main(argv: list[str] | None = None) -> int:
             "and nearest-time diagnostics"
         ),
     )
-    parser.add_argument("--results", type=Path, required=True, help="mmaud_results.csv or ZIP")
-    parser.add_argument("--truth", type=Path, help="normalized or official Track 5 truth CSV/ZIP")
+    parser.add_argument(
+        "--results",
+        type=Path,
+        required=True,
+        help="mmaud_results.csv or ZIP",
+    )
+    parser.add_argument(
+        "--truth",
+        type=Path,
+        help="normalized or official Track 5 truth CSV/ZIP",
+    )
     parser.add_argument(
         "--template",
         type=Path,
@@ -144,7 +153,9 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _prepare_scorecard_sequence_root(args: argparse.Namespace) -> tuple[Path | None, Path | None]:
+def _prepare_scorecard_sequence_root(
+    args: argparse.Namespace,
+) -> tuple[Path | None, Path | None]:
     """Return a usable sequence root and optional extraction-manifest path."""
 
     sequence_root = args.sequence_root
@@ -161,7 +172,10 @@ def _prepare_scorecard_sequence_root(args: argparse.Namespace) -> tuple[Path | N
         args.output_json.parent / "mmuad_scorecard_sequence_root_archive_manifest.json"
     )
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(load_jsonable(manifest), indent=2), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(load_jsonable(manifest), indent=2),
+        encoding="utf-8",
+    )
     return Path(manifest["extract_root"]), manifest_path
 
 
