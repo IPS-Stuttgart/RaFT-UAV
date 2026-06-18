@@ -8128,6 +8128,47 @@ def test_native_ros_kinematic_message_to_timestamp_rows_extracts_twist_and_accel
     assert accel_rows[0]["angular_acceleration_covariance_yy"] == pytest.approx(0.05)
 
 
+def test_native_ros_kinematic_message_to_timestamp_rows_extracts_vector3() -> None:
+    velocity_rows = kinematic_message_to_timestamp_rows(
+        SimpleNamespace(
+            header=SimpleNamespace(frame_id="base_link"),
+            vector=SimpleNamespace(x=1.0, y=2.0, z=3.0),
+        ),
+        sequence_id="seq_vector",
+        time_s=7.0,
+        topic="/filter/velocity",
+        source="filter_velocity",
+        message_index=0,
+        kind="linear_velocity_timestamps",
+    )
+    angular_accel_rows = kinematic_message_to_timestamp_rows(
+        SimpleNamespace(x=0.1, y=0.2, z=0.3),
+        sequence_id="seq_vector",
+        time_s=8.0,
+        topic="/filter/angular_acceleration",
+        source="filter_angular_accel",
+        message_index=1,
+        kind="angular_acceleration_timestamps",
+    )
+    generic_rows = kinematic_message_to_timestamp_rows(
+        SimpleNamespace(vector=SimpleNamespace(x=4.0, y=5.0, z=6.0)),
+        sequence_id="seq_vector",
+        time_s=9.0,
+        topic="/filter/vector",
+        source="filter_vector",
+        message_index=2,
+        kind="vector3_timestamps",
+    )
+
+    assert velocity_rows[0]["frame_id"] == "base_link"
+    assert velocity_rows[0]["vector_y"] == pytest.approx(2.0)
+    assert velocity_rows[0]["linear_velocity_z_m_s"] == pytest.approx(3.0)
+    assert angular_accel_rows[0]["vector_x"] == pytest.approx(0.1)
+    assert angular_accel_rows[0]["angular_acceleration_y_rad_s2"] == pytest.approx(0.2)
+    assert generic_rows[0]["vector_z"] == pytest.approx(6.0)
+    assert "linear_velocity_x_m_s" not in generic_rows[0]
+
+
 def test_native_ros_sensor_status_message_to_timestamp_rows_extracts_common_fields() -> None:
     magnetic_covariance = [0.0] * 9
     magnetic_covariance[8] = 0.03
@@ -8410,6 +8451,11 @@ def test_native_ros_extraction_supports_kinematic_timestamp_topics(
                         "kind": "accel_timestamps",
                         "source": "filter_accel",
                     },
+                    {
+                        "topic": "/filter/velocity",
+                        "kind": "linear_velocity_timestamps",
+                        "source": "filter_velocity",
+                    },
                 ],
             }
         ),
@@ -8422,6 +8468,10 @@ def test_native_ros_extraction_supports_kinematic_timestamp_topics(
     accel_connection = SimpleNamespace(
         topic="/filter/accel",
         msgtype="geometry_msgs/msg/AccelWithCovarianceStamped",
+    )
+    velocity_connection = SimpleNamespace(
+        topic="/filter/velocity",
+        msgtype="geometry_msgs/msg/Vector3Stamped",
     )
     twist_covariance = [0.0] * 36
     accel_covariance = [0.0] * 36
@@ -8453,11 +8503,18 @@ def test_native_ros_extraction_supports_kinematic_timestamp_topics(
             covariance=accel_covariance,
         ),
     )
+    velocity_message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=7, nanosec=750_000_000),
+            frame_id="base_link",
+        ),
+        vector=SimpleNamespace(x=7.0, y=8.0, z=9.0),
+    )
 
     class FakeAnyReader:
         def __init__(self, paths):
             assert paths == [mcap]
-            self.connections = [twist_connection, accel_connection]
+            self.connections = [twist_connection, accel_connection, velocity_connection]
 
         def __enter__(self):
             return self
@@ -8466,10 +8523,11 @@ def test_native_ros_extraction_supports_kinematic_timestamp_topics(
             return False
 
         def messages(self, *, connections):
-            assert connections == [twist_connection, accel_connection]
+            assert connections == [twist_connection, accel_connection, velocity_connection]
             return [
                 (twist_connection, 5_000_000_000, b"twist"),
                 (accel_connection, 6_000_000_000, b"accel"),
+                (velocity_connection, 7_000_000_000, b"velocity"),
             ]
 
         def deserialize(self, rawdata, msgtype):
@@ -8479,6 +8537,9 @@ def test_native_ros_extraction_supports_kinematic_timestamp_topics(
             if rawdata == b"accel":
                 assert msgtype == "geometry_msgs/msg/AccelWithCovarianceStamped"
                 return accel_message
+            if rawdata == b"velocity":
+                assert msgtype == "geometry_msgs/msg/Vector3Stamped"
+                return velocity_message
             raise AssertionError(rawdata)
 
     monkeypatch.setitem(sys.modules, "rosbags", SimpleNamespace())
@@ -8498,9 +8559,17 @@ def test_native_ros_extraction_supports_kinematic_timestamp_topics(
     assert extracted.truth is None
     assert extracted.kinematic_timestamps is not None
     rows = extracted.kinematic_timestamps.sort_values("time_s").reset_index(drop=True)
-    assert rows["sequence_id"].tolist() == ["seq_kinematic", "seq_kinematic"]
-    assert rows["time_s"].tolist() == [5.25, 6.5]
-    assert rows["source"].tolist() == ["filter_twist", "filter_accel"]
+    assert rows["sequence_id"].tolist() == [
+        "seq_kinematic",
+        "seq_kinematic",
+        "seq_kinematic",
+    ]
+    assert rows["time_s"].tolist() == [5.25, 6.5, 7.75]
+    assert rows["source"].tolist() == [
+        "filter_twist",
+        "filter_accel",
+        "filter_velocity",
+    ]
     assert rows.loc[0, "linear_velocity_y_m_s"] == pytest.approx(2.0)
     assert rows.loc[0, "linear_velocity_covariance_yy"] == pytest.approx(2.0)
     assert rows.loc[0, "angular_velocity_covariance_zz"] == pytest.approx(0.03)
@@ -8508,7 +8577,9 @@ def test_native_ros_extraction_supports_kinematic_timestamp_topics(
     assert rows.loc[1, "angular_acceleration_x_rad_s2"] == pytest.approx(0.4)
     assert rows.loc[1, "linear_acceleration_covariance_zz"] == pytest.approx(6.0)
     assert rows.loc[1, "angular_acceleration_covariance_xx"] == pytest.approx(0.04)
-    assert extracted.manifest["kinematic_timestamp_rows"] == 2
+    assert rows.loc[2, "vector_z"] == pytest.approx(9.0)
+    assert rows.loc[2, "linear_velocity_x_m_s"] == pytest.approx(7.0)
+    assert extracted.manifest["kinematic_timestamp_rows"] == 3
     assert extracted.manifest["candidate_rows"] == 0
     assert extracted.manifest["truth_rows"] == 0
 
@@ -8516,8 +8587,8 @@ def test_native_ros_extraction_supports_kinematic_timestamp_topics(
     saved_manifest = json.loads(
         (output / "native_ros_extraction_manifest.json").read_text(encoding="utf-8")
     )
-    assert saved_rows["time_s"].tolist() == [5.25, 6.5]
-    assert saved_manifest["kinematic_timestamp_rows"] == 2
+    assert saved_rows["time_s"].tolist() == [5.25, 6.5, 7.75]
+    assert saved_manifest["kinematic_timestamp_rows"] == 3
     assert saved_manifest["kinematic_timestamps_csv"] == str(
         output / "native_ros_kinematic_timestamps.csv"
     )
@@ -12608,6 +12679,14 @@ def test_ros2_topic_map_template_infers_kinematic_timestamp_topics(tmp_path: Pat
                 "        name: /filter/accel",
                 "        type: geometry_msgs/msg/AccelWithCovarianceStamped",
                 "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /filter/velocity_vector",
+                "        type: geometry_msgs/msg/Vector3Stamped",
+                "      message_count: 5",
+                "    - topic_metadata:",
+                "        name: /filter/angular_acceleration",
+                "        type: geometry_msgs/msg/Vector3",
+                "      message_count: 5",
             ]
         ),
         encoding="utf-8",
@@ -12624,9 +12703,13 @@ def test_ros2_topic_map_template_infers_kinematic_timestamp_topics(tmp_path: Pat
     assert [entry["kind"] for entry in payload["exports"]] == [
         "twist_timestamps",
         "accel_timestamps",
+        "linear_velocity_timestamps",
+        "angular_acceleration_timestamps",
     ]
     assert payload["exports"][0]["source"] == "filter_twist"
     assert payload["exports"][1]["source"] == "filter_accel"
+    assert payload["exports"][2]["source"] == "filter_velocity_vector"
+    assert payload["exports"][3]["source"] == "filter_angular_acceleration"
     assert all("path" not in entry for entry in payload["exports"])
 
 
