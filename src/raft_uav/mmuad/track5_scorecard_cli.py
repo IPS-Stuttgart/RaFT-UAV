@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from raft_uav.mmuad.sequence import OFFICIAL_TRACK5_TIMESTAMP_SOURCES
 from raft_uav.mmuad.track5_scorecard import (
     build_track5_scorecard,
     write_track5_scorecard,
@@ -25,6 +26,25 @@ def main(argv: list[str] | None = None) -> int:
         "--template",
         type=Path,
         help="official template/results file for timestamp coverage",
+    )
+    parser.add_argument(
+        "--sequence-root",
+        type=Path,
+        help=(
+            "public Track 5 sequence root used to build a timestamp template "
+            "directly from Image/ground_truth/LiDAR folders"
+        ),
+    )
+    parser.add_argument("--sequence-glob", default="*", help="sequence discovery glob")
+    parser.add_argument(
+        "--split-name",
+        help="optional top-level split folder to score, e.g. val or test",
+    )
+    parser.add_argument(
+        "--timestamp-source",
+        choices=OFFICIAL_TRACK5_TIMESTAMP_SOURCES,
+        default="ground-truth-or-all",
+        help="modality folder used for --sequence-root timestamp-template discovery",
     )
     parser.add_argument("--class-map", type=Path, help="sequence-to-class map CSV/JSON/YAML")
     parser.add_argument(
@@ -54,6 +74,10 @@ def main(argv: list[str] | None = None) -> int:
         results_path=args.results,
         truth_path=args.truth,
         template_path=args.template,
+        sequence_root=args.sequence_root,
+        sequence_glob=args.sequence_glob,
+        split_name=args.split_name,
+        timestamp_source=args.timestamp_source,
         class_map_path=args.class_map,
         upload_manifest_path=args.official_upload_manifest,
         require_zip=not args.allow_csv_submission,
@@ -73,6 +97,11 @@ def main(argv: list[str] | None = None) -> int:
     print("track5_scorecard=ok")
     print(f"leaderboard_ready={summary['scorecard_leaderboard_ready']}")
     print(f"codabench_upload_ready={summary['codabench_upload_ready']}")
+    if summary.get("sequence_root") is not None:
+        template_count = summary.get("validation", {}).get("template_timestamp_count")
+        print(f"sequence_root={summary['sequence_root']}")
+        print(f"timestamp_source={summary['timestamp_source']}")
+        print(f"template_timestamp_count={template_count}")
     if summary.get("upload_manifest_valid") is not None:
         print(f"upload_manifest_valid={summary['upload_manifest_valid']}")
     pooled = (summary.get("public_track5") or {}).get("pooled", {})
