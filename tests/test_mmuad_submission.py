@@ -321,6 +321,40 @@ def test_official_track5_results_loader_accepts_position_strings():
     assert frame.loc[0, "uav_type"] == "3"
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (
+        ({"x": 1.5, "y": 2.5, "z": 3.5}, (1.5, 2.5, 3.5)),
+        ("{'x_m': 1.5, 'y_m': 2.5, 'z_m': 3.5}", (1.5, 2.5, 3.5)),
+        ('{"east_m": 1.5, "north_m": 2.5, "up_m": 3.5}', (1.5, 2.5, 3.5)),
+        ('{"position": [1.5, 2.5, 3.5]}', (1.5, 2.5, 3.5)),
+        (
+            '{"pose.position.x": 1.5, "pose.position.y": 2.5, "pose.position.z": 3.5}',
+            (1.5, 2.5, 3.5),
+        ),
+    ),
+)
+def test_official_position_parser_accepts_object_cells(value, expected):
+    assert parse_official_position_cell(value) == expected
+
+
+def test_official_track5_results_loader_accepts_object_position_strings():
+    frame = validate_mmaud_results_frame(
+        pd.DataFrame(
+            {
+                "Sequence": ["seq1"],
+                "Timestamp": [1706255054.386069],
+                "Position": ['{"x": 1.5, "y": 2.5, "z": 3.5}'],
+                "Classification": [3],
+            }
+        )
+    )
+
+    assert frame.loc[0, "sequence_id"] == "seq1"
+    assert frame.loc[0, ["x", "y", "z"]].tolist() == [1.5, 2.5, 3.5]
+    assert frame.loc[0, "uav_type"] == "3"
+
+
 def test_official_track5_results_loader_rejects_blank_sequence():
     with pytest.raises(ValueError, match="Sequence values must be nonblank"):
         validate_mmaud_results_frame(

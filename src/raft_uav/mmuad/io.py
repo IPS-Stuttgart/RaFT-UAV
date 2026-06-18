@@ -622,6 +622,14 @@ def _read_numpy_point_cloud(path: Path) -> pd.DataFrame:
     else:
         arr = payload
     arr = np.asarray(arr)
+    if arr.size == 0:
+        return pd.DataFrame(
+            {
+                "x_m": pd.Series(dtype=float),
+                "y_m": pd.Series(dtype=float),
+                "z_m": pd.Series(dtype=float),
+            }
+        )
     if arr.ndim != 2 or arr.shape[1] < 3:
         raise ValueError(f"NumPy point cloud must be shape (N, >=3), got {arr.shape}")
     frame = pd.DataFrame({"x_m": arr[:, 0], "y_m": arr[:, 1], "z_m": arr[:, 2]})

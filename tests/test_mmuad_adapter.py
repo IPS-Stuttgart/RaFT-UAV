@@ -3403,6 +3403,15 @@ def test_numpy_point_cloud_file_is_clustered(tmp_path: Path) -> None:
     assert abs(float(frame.rows.loc[0, "time_s"]) - 3.0) < 1e-9
 
 
+def test_empty_numpy_point_cloud_returns_empty_candidates(tmp_path: Path) -> None:
+    npy = tmp_path / "radar_empty_3.5.npy"
+    np.save(npy, np.array([]))
+
+    frame = load_point_cloud_file_as_candidates(npy, voxel_size_m=0.5, min_points=3)
+
+    assert frame.rows.empty
+
+
 def test_numpy_point_cloud_keeps_xyzt_column_order(tmp_path: Path) -> None:
     points = np.array(
         [
