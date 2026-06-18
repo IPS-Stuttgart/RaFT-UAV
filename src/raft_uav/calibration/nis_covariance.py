@@ -173,7 +173,10 @@ def write_nis_covariance_calibration(payload: Mapping[str, Any], path: Path | st
 
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(_jsonable_payload(payload), indent=2, sort_keys=True), encoding="utf-8")
+    out.write_text(
+        json.dumps(_jsonable_payload(payload), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     return out
 
 
@@ -212,13 +215,8 @@ def covariance_scale_for_source_dim(
 ) -> float:
     """Return the configured covariance multiplier for a source/dimension pair."""
 
-    if calibration is None:
-        return 1.0
-    groups = calibration.get("groups", {})
-    if not isinstance(groups, Mapping):
-        return 1.0
-    group = groups.get(_group_key(source, int(measurement_dim)))
-    if not isinstance(group, Mapping) or not bool(group.get("enabled", False)):
+    group = _calibration_group(calibration, source, int(measurement_dim))
+    if group is None or not bool(group.get("enabled", False)):
         return 1.0
     scale = float(group.get("applied_scale", 1.0))
     if not np.isfinite(scale) or scale <= 0.0:
@@ -257,17 +255,36 @@ def scale_covariance_for_calibrated_source(
     measurement_dim: int,
     covariance: np.ndarray,
 ) -> np.ndarray:
-    """Scale a measurement covariance using the runtime calibration if configured."""
+    """Scale a measurement covariance using the runtime calibration if configured.
+
+    Exact source/dimension calibration groups take precedence.  When a radar
+    measurement is augmented with velocity and no explicit ``radar:6`` group is
+    available, reuse a fitted ``radar:3`` position calibration for the leading
+    position block.  LOFO NIS calibration is usually fitted from position-only
+    diagnostics, while the result-oriented SOTA runner can later enable radar
+    velocity updates; without this fallback those radar measurements would
+    silently bypass the fitted radar covariance scale.
+    """
 
     array = np.asarray(covariance, dtype=float)
-    scale = covariance_scale_for_source_dim(
-        runtime_nis_covariance_calibration(),
-        str(source),
-        int(measurement_dim),
-    )
-    if scale == 1.0:
-        return array
-    return array * float(scale)
+    source_str = str(source)
+    measurement_dim_int = int(measurement_dim)
+    calibration = runtime_nis_covariance_calibration()
+
+    scale = covariance_scale_for_source_dim(calibration, source_str, measurement_dim_int)
+    if scale != 1.0:
+        return array * float(scale)
+
+    if (
+        source_str == "radar"
+        and measurement_dim_int == 6
+        and _calibration_group(calibration, source_str, measurement_dim_int) is None
+    ):
+        position_scale = covariance_scale_for_source_dim(calibration, source_str, 3)
+        if position_scale != 1.0:
+            return _scale_leading_position_block(array, position_dim=3, scale=position_scale)
+
+    return array
 
 
 def environment_assignment(path: Path | str) -> str:
@@ -333,6 +350,32 @@ def _fit_group(
         accepted_only=bool(accepted_only),
         quantile=quantile_value,
     )
+
+
+def _calibration_group(
+    calibration: Mapping[str, Any] | None,
+    source: str,
+    measurement_dim: int,
+) -> Mapping[str, Any] | None:
+    if calibration is None:
+        return None
+    groups = calibration.get("groups", {})
+    if not isinstance(groups, Mapping):
+        return None
+    group = groups.get(_group_key(source, int(measurement_dim)))
+    return group if isinstance(group, Mapping) else None
+
+
+def _scale_leading_position_block(
+    covariance: np.ndarray,
+    *,
+    position_dim: int,
+    scale: float,
+) -> np.ndarray:
+    array = np.asarray(covariance, dtype=float)
+    factors = np.ones(array.shape[0], dtype=float)
+    factors[: int(position_dim)] = np.sqrt(float(scale))
+    return array * np.outer(factors, factors)
 
 
 def _group_key(source: str, measurement_dim: int) -> str:
