@@ -882,6 +882,61 @@ def test_tracker_mobility_prior_can_be_disabled() -> None:
     assert (selected["x_m"] == 40.0).all()
 
 
+def test_tracker_greedy_path_can_use_ranker_confidence_after_seed() -> None:
+    """Ranker confidence can beat nearest-neighbor drift after bootstrap."""
+
+    rows = []
+    truth_rows = []
+    for time_s, true_x, decoy_x in [(0.0, 0.0, 0.1), (1.0, 10.0, 0.2), (2.0, 20.0, 0.4)]:
+        truth_rows.append(
+            {"sequence_id": "s1", "time_s": time_s, "x_m": true_x, "y_m": 0.0, "z_m": 5.0}
+        )
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": time_s,
+                "source": "lidar-cluster",
+                "track_id": np.nan,
+                "x_m": true_x,
+                "y_m": 0.0,
+                "z_m": 5.0,
+                "confidence": 0.95,
+            }
+        )
+        rows.append(
+            {
+                "sequence_id": "s1",
+                "time_s": time_s,
+                "source": "lidar-cluster",
+                "track_id": np.nan,
+                "x_m": decoy_x,
+                "y_m": 0.0,
+                "z_m": 5.0,
+                "confidence": 0.05,
+            }
+        )
+    candidates = CandidateFrame(pd.DataFrame(rows))
+    truth = TruthFrame(pd.DataFrame(truth_rows))
+
+    motion_only = run_mmuad_tracker(candidates, truth, config=TrackerConfig())
+    ranker_aware = run_mmuad_tracker(
+        candidates,
+        truth,
+        config=TrackerConfig(selection_confidence_weight=2.0, selection_speed_scale_mps=10.0),
+    )
+
+    assert motion_only.selected_tracklets.sort_values("time_s")["x_m"].tolist() == [0.0, 0.2, 0.4]
+    assert ranker_aware.selected_tracklets.sort_values("time_s")["x_m"].tolist() == [
+        0.0,
+        10.0,
+        20.0,
+    ]
+    assert (
+        ranker_aware.metrics["pooled"]["rmse_3d_m"]
+        < motion_only.metrics["pooled"]["rmse_3d_m"]
+    )
+
+
 def test_point_cloud_clusters_do_not_collapse_selected_path(tmp_path: Path) -> None:
     """Per-frame-unique cluster track IDs must not collapse the selected path.
 
