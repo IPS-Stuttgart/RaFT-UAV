@@ -375,7 +375,7 @@ def _infer_topic_map_kind(topic: dict[str, Any]) -> str:
     if _looks_like_imu_timestamp_topic(name, msg_type):
         return "imu_timestamps"
     if _looks_like_kinematic_timestamp_topic(name, msg_type):
-        return _kinematic_timestamp_kind(msg_type)
+        return _kinematic_timestamp_kind(msg_type, name=name)
     if _looks_like_actuation_timestamp_topic(name, msg_type):
         return _actuation_timestamp_kind(msg_type)
     if _looks_like_image_timestamp_topic(name, msg_type):
@@ -690,19 +690,38 @@ def _looks_like_kinematic_timestamp_topic(name: str, msg_type: str) -> bool:
         or compact_type.endswith("msg/accelwithcovariance")
         or compact_type.endswith("/accelwithcovariancestamped")
         or compact_type.endswith("msg/accelwithcovariancestamped")
+        or compact_type.endswith("/vector3")
+        or compact_type.endswith("msg/vector3")
+        or compact_type.endswith("/vector3stamped")
+        or compact_type.endswith("msg/vector3stamped")
         or "twist" in name_tokens
         or "velocity" in name_tokens
+        or "vel" in name_tokens
         or "accel" in name_tokens
         or "acceleration" in name_tokens
+        or "vector" in name_tokens
     )
 
 
-def _kinematic_timestamp_kind(msg_type: str) -> str:
+def _kinematic_timestamp_kind(msg_type: str, *, name: str = "") -> str:
     compact_type = msg_type.lower().replace("_", "").replace("-", "")
+    compact_name = name.lower().replace("_", "").replace("-", "")
     if "accel" in compact_type:
         return "accel_timestamps"
     if "twist" in compact_type:
         return "twist_timestamps"
+    if "vector3" in compact_type:
+        if "angular" in compact_name and (
+            "accel" in compact_name or "acceleration" in compact_name
+        ):
+            return "angular_acceleration_timestamps"
+        if "accel" in compact_name or "acceleration" in compact_name:
+            return "linear_acceleration_timestamps"
+        if "angular" in compact_name and ("velocity" in compact_name or "vel" in compact_name):
+            return "angular_velocity_timestamps"
+        if "velocity" in compact_name or "vel" in compact_name:
+            return "linear_velocity_timestamps"
+        return "vector3_timestamps"
     return "kinematic_timestamps"
 
 

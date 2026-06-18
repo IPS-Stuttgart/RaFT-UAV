@@ -1322,13 +1322,17 @@ time, frame/source, orientation, angular velocity, linear acceleration, and
 covariance-diagonal metadata when present. These rows are likewise raw-sensor
 inventory for timing/kinematics diagnostics and are not official Track 5
 timestamp templates.
-Native Twist/Accel topic-map entries write `native_ros_kinematic_timestamps.csv`
-with message time, frame/source, linear/angular velocity, and linear/angular
-acceleration fields when present. `TwistWithCovariance` and
-`AccelWithCovariance` wrappers also preserve the standard 6x6 covariance
-diagonals as linear/angular vector covariance columns. These rows are raw
-kinematic inventory only: velocity-only or acceleration-only messages are not
-tracker position candidates and are not official Track 5 timestamp templates.
+Native Twist/Accel/Vector3 topic-map entries write
+`native_ros_kinematic_timestamps.csv` with message time, frame/source,
+linear/angular velocity, linear/angular acceleration, or generic vector fields
+when present. `TwistWithCovariance` and `AccelWithCovariance` wrappers also
+preserve the standard 6x6 covariance diagonals as linear/angular vector
+covariance columns. `geometry_msgs/msg/Vector3` and `Vector3Stamped` streams are
+kept as vector metadata, and auto-generated native topic maps classify
+velocity/acceleration-named Vector3 topics as linear or angular kinematic
+inventory. These rows are raw kinematic inventory only: velocity-only,
+acceleration-only, or generic vector messages are not tracker position
+candidates and are not official Track 5 timestamp templates.
 Native JointState/Wrench topic-map entries write
 `native_ros_actuation_timestamps.csv` with message time, frame/source, joint
 names, joint position/velocity/effort summaries, and force/torque vectors when

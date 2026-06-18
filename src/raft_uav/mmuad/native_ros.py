@@ -13,8 +13,8 @@ tracking logs:
   and optional frame payload inventories;
 * common ROS audio messages -> timestamp inventory rows;
 * ``sensor_msgs/msg/Imu`` -> timestamp/kinematics inventory rows;
-* ``geometry_msgs/msg/Twist`` / ``Accel`` -> velocity/acceleration inventory
-  rows;
+* ``geometry_msgs/msg/Twist`` / ``Accel`` / ``Vector3Stamped`` ->
+  velocity/acceleration/vector inventory rows;
 * ``sensor_msgs/msg/JointState`` and ``geometry_msgs/msg/Wrench`` -> actuation
   inventory rows;
 * ``sensor_msgs/msg/TimeReference`` and ``rosgraph_msgs/msg/Clock`` -> timing
@@ -1379,12 +1379,30 @@ def _is_kinematic_timestamp_kind(kind: str) -> bool:
         "velocity_timestamp",
         "velocity_timestamps",
         "velocity_timestamp_inventory",
+        "linear_velocity_timestamp",
+        "linear_velocity_timestamps",
+        "linear_velocity_timestamp_inventory",
+        "angular_velocity_timestamp",
+        "angular_velocity_timestamps",
+        "angular_velocity_timestamp_inventory",
         "accel_timestamp",
         "accel_timestamps",
         "accel_timestamp_inventory",
         "acceleration_timestamp",
         "acceleration_timestamps",
         "acceleration_timestamp_inventory",
+        "linear_acceleration_timestamp",
+        "linear_acceleration_timestamps",
+        "linear_acceleration_timestamp_inventory",
+        "angular_acceleration_timestamp",
+        "angular_acceleration_timestamps",
+        "angular_acceleration_timestamp_inventory",
+        "vector3_timestamp",
+        "vector3_timestamps",
+        "vector3_timestamp_inventory",
+        "vector_timestamp",
+        "vector_timestamps",
+        "vector_timestamp_inventory",
     }
 
 
@@ -1914,6 +1932,7 @@ def kinematic_message_to_timestamp_rows(
                 angular_prefix="angular_velocity_covariance",
             )
 
+    _add_vector3_kinematic_components(row, message, normalized_kind)
     return [row]
 
 
@@ -2510,6 +2529,81 @@ def _kinematic_vector_source(message: Any, kind: str) -> Any:
         if _has_linear_or_angular_vector(source):
             return source
     return message
+
+
+def _vector3_source(message: Any) -> Any | None:
+    source = _field_value(
+        message,
+        "vector",
+        "vector3",
+        "velocity",
+        "acceleration",
+        "linear_velocity",
+        "linear_acceleration",
+        "angular_velocity",
+        "angular_acceleration",
+    )
+    if _has_xyz_components(source):
+        return source
+    if _has_xyz_components(message):
+        return message
+    return None
+
+
+def _has_xyz_components(value: Any) -> bool:
+    if value is None:
+        return False
+    return any(_field_float(value, component) is not None for component in ("x", "y", "z"))
+
+
+def _add_vector3_kinematic_components(
+    row: dict[str, Any],
+    message: Any,
+    normalized_kind: str,
+) -> None:
+    source = _vector3_source(message)
+    if source is None:
+        return
+    _add_vector_components(
+        row,
+        "vector",
+        source,
+        components=("x", "y", "z"),
+    )
+    if "angular" in normalized_kind and (
+        "accel" in normalized_kind or "acceleration" in normalized_kind
+    ):
+        _add_vector_components(
+            row,
+            "angular_acceleration",
+            source,
+            components=("x", "y", "z"),
+            suffix="_rad_s2",
+        )
+    elif "accel" in normalized_kind or "acceleration" in normalized_kind:
+        _add_vector_components(
+            row,
+            "linear_acceleration",
+            source,
+            components=("x", "y", "z"),
+            suffix="_m_s2",
+        )
+    elif "angular" in normalized_kind and "velocity" in normalized_kind:
+        _add_vector_components(
+            row,
+            "angular_velocity",
+            source,
+            components=("x", "y", "z"),
+            suffix="_rad_s",
+        )
+    elif "velocity" in normalized_kind:
+        _add_vector_components(
+            row,
+            "linear_velocity",
+            source,
+            components=("x", "y", "z"),
+            suffix="_m_s",
+        )
 
 
 def _kinematic_covariance_source(message: Any, kind: str) -> Any | None:
