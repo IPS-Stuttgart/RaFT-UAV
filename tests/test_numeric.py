@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from raft_uav.numeric import optional_float, optional_int
@@ -19,6 +20,8 @@ from raft_uav.numeric import optional_float, optional_int
         object(),
         True,
         False,
+        np.bool_(True),
+        np.bool_(False),
     ],
 )
 def test_optional_float_rejects_absent_malformed_nonfinite_and_boolean_values(
@@ -41,7 +44,18 @@ def test_optional_float_accepts_finite_values(value: object, expected: float) ->
 
 @pytest.mark.parametrize(
     "value",
-    [None, "", "nan", float("nan"), float("inf"), object(), True, False],
+    [
+        None,
+        "",
+        "nan",
+        float("nan"),
+        float("inf"),
+        object(),
+        True,
+        False,
+        np.bool_(True),
+        np.bool_(False),
+    ],
 )
 def test_optional_int_rejects_absent_malformed_nonfinite_and_boolean_values(value: object) -> None:
     assert optional_int(value) is None
