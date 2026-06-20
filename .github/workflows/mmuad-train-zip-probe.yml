@@ -6,6 +6,10 @@ on:
     paths:
       - ".github/workflows/mmuad-train-zip-probe.yml"
       - ".github/mmuad-train-zip-probe.trigger"
+  pull_request:
+    paths:
+      - ".github/workflows/mmuad-train-zip-probe.yml"
+      - ".github/mmuad-train-zip-probe.trigger"
 
 jobs:
   probe:
