@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 
 def optional_float(value: object) -> float | None:
     """Return a finite float or ``None`` for absent/malformed values."""
 
     if value is None:
         return None
-    if isinstance(value, bool):
+    if isinstance(value, bool | np.bool_):
         return None
     try:
         number = float(value)
