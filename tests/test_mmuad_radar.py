@@ -39,6 +39,30 @@ def test_nested_radar_json_detections_inherit_parent_metadata(tmp_path: Path) ->
     )
 
 
+def test_nested_radar_json_detections_inherit_parent_microsecond_timestamp(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "radar_us.json"
+    path.write_text(
+        json.dumps(
+            {
+                "sequence_id": "seq_radar_us",
+                "timestamp_us": 1_250_000,
+                "radar_detections": [
+                    {"range_m": 10.0, "azimuth_deg": 0.0},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    frame = load_radar_polar_csv_as_candidates(path)
+
+    assert len(frame.rows) == 1
+    assert frame.rows["sequence_id"].tolist() == ["seq_radar_us"]
+    assert frame.rows["time_s"].tolist() == [1.25]
+
+
 def test_radar_polar_frame_fills_missing_sequence_ids_from_call_default() -> None:
     frame = pd.DataFrame(
         {
