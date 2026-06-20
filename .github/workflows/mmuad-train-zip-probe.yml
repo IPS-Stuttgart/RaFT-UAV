@@ -1,0 +1,106 @@
+name: MMUAD train.zip probe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mmuad-train-zip-probe.yml"
+      - ".github/mmuad-train-zip-probe.trigger"
+
+jobs:
+  probe:
+    name: Probe self-hosted MMUAD data
+    runs-on: self-hosted
+    timeout-minutes: 10
+    steps:
+      - name: Probe train archive and MMUAD layout
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REPORT="mmuad_train_zip_probe_report.txt"
+          : > "$REPORT"
+          log() { echo "$*" | tee -a "$REPORT"; }
+
+          log "probe_started=$(date -Is)"
+          log "hostname=$(hostname)"
+          log "runner_name=${RUNNER_NAME:-unknown}"
+          log "runner_os=${RUNNER_OS:-unknown}"
+          log "repo=${GITHUB_REPOSITORY:-unknown}"
+          log "sha=${GITHUB_SHA:-unknown}"
+          log ""
+
+          roots=(
+            "/mnt/lexar4tb/mmuad_realdata"
+            "/mnt/lexar4tb"
+          )
+
+          log "== Candidate train archives =="
+          found_train_zip=0
+          for root in "${roots[@]}"; do
+            if [[ -d "$root" ]]; then
+              log "-- root: $root"
+              while IFS= read -r path; do
+                found_train_zip=1
+                if command -v stat >/dev/null 2>&1; then
+                  size=$(stat -c '%s' "$path" 2>/dev/null || echo unknown)
+                  mtime=$(stat -c '%y' "$path" 2>/dev/null || echo unknown)
+                  log "TRAIN_ZIP: $path | size=$size | mtime=$mtime"
+                else
+                  log "TRAIN_ZIP: $path"
+                fi
+              done < <(find "$root" -maxdepth 8 -type f \( -iname 'train.zip' -o -iname '*train*.zip' \) -print 2>/dev/null | sort)
+            else
+              log "-- missing root: $root"
+            fi
+          done
+          log "train_zip_found=$found_train_zip"
+          log ""
+
+          log "== MMUAD train-like directories/files =="
+          for root in "${roots[@]}"; do
+            if [[ -d "$root" ]]; then
+              log "-- root: $root"
+              find "$root" -maxdepth 6 \( \
+                -iname '*train*' -o \
+                -iname '*label*' -o \
+                -iname '*class*.npy' -o \
+                -iname '*reference*.csv' \
+              \) -print 2>/dev/null | sort | head -200 | tee -a "$REPORT"
+            fi
+          done
+          log ""
+
+          log "== Expected known locations =="
+          for p in \
+            /mnt/lexar4tb/mmuad_realdata/downloads/train.zip \
+            /mnt/lexar4tb/mmuad_realdata/train.zip \
+            /mnt/lexar4tb/mmuad_realdata/extracted/train \
+            /mnt/lexar4tb/mmuad_realdata/extracted \
+            /mnt/lexar4tb/mmuad_realdata/challenge_meta; do
+            if [[ -e "$p" ]]; then
+              log "EXISTS: $p"
+              ls -ld "$p" | tee -a "$REPORT"
+            else
+              log "MISSING: $p"
+            fi
+          done
+
+          if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+            {
+              echo "# MMUAD train.zip probe"
+              echo
+              echo "- Host: $(hostname)"
+              echo "- Train zip found: $found_train_zip"
+              echo
+              echo '```text'
+              cat "$REPORT"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload probe report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mmuad-train-zip-probe-report
+          path: mmuad_train_zip_probe_report.txt
