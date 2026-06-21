@@ -65,12 +65,14 @@ jobs:
           for root in "${roots[@]}"; do
             if [[ -d "$root" ]]; then
               log "-- root: $root"
-              find "$root" -maxdepth 6 \( \
-                -iname '*train*' -o \
-                -iname '*label*' -o \
-                -iname '*class*.npy' -o \
-                -iname '*reference*.csv' \
-              \) -print 2>/dev/null | sort | head -200 | tee -a "$REPORT"
+              {
+                find "$root" -maxdepth 6 \( \
+                  -iname '*train*' -o \
+                  -iname '*label*' -o \
+                  -iname '*class*.npy' -o \
+                  -iname '*reference*.csv' \
+                \) -print 2>/dev/null | sort | sed -n '1,200p'
+              } | tee -a "$REPORT"
             fi
           done
           log ""
