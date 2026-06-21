@@ -414,6 +414,15 @@ def _stamp_dict_to_seconds(value: Any) -> float | None:
         except (TypeError, ValueError):
             return None
 
+    for alias, scale in _TIME_UNIT_ALIASES.items():
+        scalar = _mapping_get_case_insensitive(value, alias)
+        if scalar is None:
+            continue
+        try:
+            return float(scalar) * scale
+        except (TypeError, ValueError):
+            return None
+
     scalar = _first_mapping_value_case_insensitive(
         value,
         ("time_s", "timestamp_s", "timestamp", "stamp", "time"),
