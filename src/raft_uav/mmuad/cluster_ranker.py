@@ -36,8 +36,12 @@ BASE_CLUSTER_FEATURE_COLUMNS = (
     "cluster_range_3d_m",
     "cluster_height_m",
     "frame_candidate_count",
+    "frame_source_count",
     "frame_source_candidate_count",
     "frame_source_fraction",
+    "sensor_available_lidar_360",
+    "sensor_available_livox_avia",
+    "sensor_available_radar_enhance_pcl",
     "frame_rank_confidence_desc",
     "frame_rank_point_count_desc",
     "frame_rank_density_desc",
@@ -53,10 +57,15 @@ BASE_CLUSTER_FEATURE_COLUMNS = (
     "prev_same_source_distance_m",
     "prev_same_source_dt_s",
     "prev_same_source_speed_mps",
+    "constant_velocity_prediction_residual_m",
+    "constant_velocity_prediction_dt_s",
+    "constant_velocity_prediction_speed_residual_mps",
     "temporal_continuity_score",
+    "distance_to_previous_selected_m",
     "prev_state_distance_m",
     "prev_state_dt_s",
     "prev_state_speed_mps",
+    "prev_state_constant_velocity_residual_m",
 )
 
 
@@ -96,6 +105,7 @@ def build_cluster_feature_table(
         return rows
     rows = _with_default_cluster_geometry(rows)
     rows = _add_frame_rank_features(rows)
+    rows = _add_sensor_availability_features(rows)
     rows = _add_cross_sensor_features(
         rows,
         time_window_s=cross_sensor_time_window_s,
@@ -171,6 +181,7 @@ def label_cluster_features_against_truth(
     out["good_cluster_2m"] = out["truth_distance_3d_m"] <= 2.0
     out["good_cluster_5m"] = out["truth_distance_3d_m"] <= 5.0
     out["good_cluster_10m"] = out["truth_distance_3d_m"] <= 10.0
+    out["good_cluster_20m"] = out["truth_distance_3d_m"] <= 20.0
     out["good_cluster"] = out["truth_distance_3d_m"] <= float(good_threshold_m)
     return out
 
@@ -853,10 +864,12 @@ def _add_frame_rank_features(rows: pd.DataFrame) -> pd.DataFrame:
     if out.empty:
         return out
     out["frame_candidate_count"] = 0
+    out["frame_source_count"] = 0
     out["frame_source_candidate_count"] = 0
     for _, group in out.groupby(["sequence_id", "time_s"], sort=False):
         frame_indices = group.index
         out.loc[frame_indices, "frame_candidate_count"] = int(len(group))
+        out.loc[frame_indices, "frame_source_count"] = int(group["source"].astype(str).nunique())
         out.loc[frame_indices, "frame_rank_confidence_desc"] = _rank_desc(
             _numeric_series(group, "confidence", default=0.0)
         ).to_numpy()
@@ -891,6 +904,29 @@ def _add_frame_rank_features(rows: pd.DataFrame) -> pd.DataFrame:
         pd.to_numeric(out["frame_source_candidate_count"], errors="coerce")
         / pd.to_numeric(out["frame_candidate_count"], errors="coerce").replace(0, np.nan)
     )
+    return out
+
+
+def _add_sensor_availability_features(rows: pd.DataFrame) -> pd.DataFrame:
+    out = rows.copy()
+    for column in (
+        "sensor_available_lidar_360",
+        "sensor_available_livox_avia",
+        "sensor_available_radar_enhance_pcl",
+    ):
+        out[column] = 0.0
+    if out.empty:
+        return out
+    source_by_column = {
+        "sensor_available_lidar_360": "lidar_360",
+        "sensor_available_livox_avia": "livox_avia",
+        "sensor_available_radar_enhance_pcl": "radar_enhance_pcl",
+    }
+    for _, group in out.groupby(["sequence_id", "time_s"], sort=False):
+        frame_indices = group.index
+        sources = set(group["source"].fillna("").astype(str))
+        for column, source in source_by_column.items():
+            out.loc[frame_indices, column] = 1.0 if source in sources else 0.0
     return out
 
 
@@ -938,8 +974,16 @@ def _add_temporal_features(rows: pd.DataFrame) -> pd.DataFrame:
     out["prev_same_source_distance_m"] = np.nan
     out["prev_same_source_dt_s"] = np.nan
     out["prev_same_source_speed_mps"] = np.nan
-    for _, group in out.groupby(["sequence_id", "source"], sort=False):
+    out["constant_velocity_prediction_residual_m"] = np.nan
+    out["constant_velocity_prediction_dt_s"] = np.nan
+    out["constant_velocity_prediction_speed_residual_mps"] = np.nan
+    grouping_columns = ["sequence_id", "source"]
+    if "track_id" in out.columns and out["track_id"].notna().any():
+        grouping_columns.append("track_id")
+    for _, group in out.groupby(grouping_columns, sort=False, dropna=False):
         group = group.sort_values("time_s")
+        prev_prev_xyz: np.ndarray | None = None
+        prev_prev_time: float | None = None
         prev_xyz: np.ndarray | None = None
         prev_time: float | None = None
         for index, row in group.iterrows():
@@ -951,6 +995,16 @@ def _add_temporal_features(rows: pd.DataFrame) -> pd.DataFrame:
                 out.loc[index, "prev_same_source_distance_m"] = distance
                 out.loc[index, "prev_same_source_dt_s"] = dt
                 out.loc[index, "prev_same_source_speed_mps"] = distance / dt
+                if prev_prev_xyz is not None and prev_prev_time is not None:
+                    prev_dt = max(prev_time - prev_prev_time, 1.0e-6)
+                    velocity = (prev_xyz - prev_prev_xyz) / prev_dt
+                    prediction = prev_xyz + velocity * dt
+                    residual = float(np.linalg.norm(xyz - prediction))
+                    out.loc[index, "constant_velocity_prediction_residual_m"] = residual
+                    out.loc[index, "constant_velocity_prediction_dt_s"] = dt
+                    out.loc[index, "constant_velocity_prediction_speed_residual_mps"] = residual / dt
+            prev_prev_xyz = prev_xyz
+            prev_prev_time = prev_time
             prev_xyz = xyz
             prev_time = time_s
     out["temporal_continuity_score"] = 1.0 / (
@@ -965,6 +1019,8 @@ def _add_previous_state_features(rows: pd.DataFrame, previous_states: pd.DataFra
     out["prev_state_distance_m"] = np.nan
     out["prev_state_dt_s"] = np.nan
     out["prev_state_speed_mps"] = np.nan
+    out["distance_to_previous_selected_m"] = np.nan
+    out["prev_state_constant_velocity_residual_m"] = np.nan
     state_by_sequence = {
         str(sequence_id): group.sort_values("time_s")
         for sequence_id, group in states.groupby("sequence_id", sort=True)
@@ -985,8 +1041,19 @@ def _add_previous_state_features(rows: pd.DataFrame, previous_states: pd.DataFra
             )
         )
         out.loc[index, "prev_state_distance_m"] = distance
+        out.loc[index, "distance_to_previous_selected_m"] = distance
         out.loc[index, "prev_state_dt_s"] = dt
         out.loc[index, "prev_state_speed_mps"] = distance / dt
+        if len(prior) >= 2:
+            previous = prior.iloc[-2]
+            previous_dt = max(float(state["time_s"]) - float(previous["time_s"]), 1.0e-6)
+            velocity = (
+                state[["x_m", "y_m", "z_m"]].to_numpy(float)
+                - previous[["x_m", "y_m", "z_m"]].to_numpy(float)
+            ) / previous_dt
+            prediction = state[["x_m", "y_m", "z_m"]].to_numpy(float) + velocity * dt
+            residual = float(np.linalg.norm(row[["x_m", "y_m", "z_m"]].to_numpy(float) - prediction))
+            out.loc[index, "prev_state_constant_velocity_residual_m"] = residual
     return out
 
 

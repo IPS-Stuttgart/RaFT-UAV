@@ -1,305 +1,562 @@
-#!/usr/bin/env python3
-"""Run a leakage-guarded MMUAD train-to-public-validation experiment.
+#!/usr/bin/env python
+"""One-command MMUAD train-to-validation experiment harness.
 
-The script is intentionally an orchestration layer around the maintained MMUAD
-CLIs.  It does not implement a new tracker; it inventories the train/validation
-layout, trains models on the train reference, applies them to validation, writes
-an official-style Track 5 submission, and scores it against the validation
-reference.
+The script inventories the train layout, trains the existing MMUAD sequence
+classifier and cluster ranker on train, applies both to public validation,
+writes official Track 5 artifacts, scores them locally, and records provenance.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
+from datetime import datetime, timezone
 import json
+import os
+from pathlib import Path
+import platform
 import subprocess
 import sys
-import zipfile
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Sequence
+import time
+from typing import Any
+from zipfile import BadZipFile, ZipFile
+
+import pandas as pd
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from raft_uav.mmuad.classification import load_sequence_class_labels  # noqa: E402
+from raft_uav.mmuad.io import load_truth_file  # noqa: E402
+from raft_uav.mmuad.sequence import (  # noqa: E402
+    _sequence_class_label,
+    discover_sequence_paths,
+)
 
 
-@dataclass(frozen=True)
-class ExperimentPaths:
-    """Canonical output locations for one train-to-val experiment."""
+WORK_ROOT = Path("/mnt/lexar4tb/mmuad_realdata")
+DEFAULT_VAL_ROOT = WORK_ROOT / "extracted/val-d2b4424284f3/val"
+DEFAULT_VAL_REFERENCE = WORK_ROOT / "challenge_meta/validation_ref_new_for_your_ref.csv"
+DEFAULT_OUTPUT_DIR = WORK_ROOT / "outputs/mmuad_train_to_val"
 
-    output_dir: Path
-    inventory_json: Path
-    manifest_json: Path
-    classifier_model: Path
-    classifier_features_csv: Path
-    classifier_metrics_json: Path
-    ranker_model: Path
-    ranker_train_features_csv: Path
-    ranker_score_features_csv: Path
-    ranker_scored_candidates_csv: Path
-    tracker_output_dir: Path
-    official_results_csv: Path
-    official_zip: Path
-    scorecard_json: Path
-    scorecard_csv: Path
-    pose_by_sequence_csv: Path
+CLASS_NAME_TO_ID = {
+    "0": "0",
+    "mavic 3": "0",
+    "mavic3": "0",
+    "dji mavic 3": "0",
+    "1": "1",
+    "m30": "1",
+    "matrice 30": "1",
+    "dji m30": "1",
+    "2": "2",
+    "m300": "2",
+    "matrice 300": "2",
+    "dji m300": "2",
+    "3": "3",
+    "phantom 4": "3",
+    "phantom4": "3",
+    "dji phantom 4": "3",
+}
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--work-root", type=Path, default=WORK_ROOT)
     parser.add_argument("--train-root", type=Path, required=True)
-    parser.add_argument("--val-root", type=Path, required=True)
-    parser.add_argument("--train-reference", type=Path, required=True)
-    parser.add_argument("--val-reference", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--train-zip", type=Path, action="append", default=[])
+    parser.add_argument("--train-reference", type=Path)
+    parser.add_argument("--train-truth", type=Path)
+    parser.add_argument("--val-root", type=Path, default=DEFAULT_VAL_ROOT)
+    parser.add_argument("--val-reference", type=Path, default=DEFAULT_VAL_REFERENCE)
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--sequence-glob", default="*")
     parser.add_argument("--classifier-method", default="random-forest")
     parser.add_argument("--ranker-model-type", default="random-forest-classifier")
     parser.add_argument("--ranker-target-column", default="good_cluster_5m")
-    parser.add_argument("--ranker-good-threshold-m", type=float, default=5.0)
-    parser.add_argument("--selection-confidence-weight", type=float, default=1.0)
-    parser.add_argument("--selection-mobility-weight", type=float, default=0.5)
-    parser.add_argument("--selection-source-priority-weight", type=float, default=0.25)
-    parser.add_argument("--selection-motion-weight", type=float, default=1.0)
+    parser.add_argument("--good-threshold-m", type=float, default=5.0)
+    parser.add_argument("--selection-confidence-weight", type=float, default=64.0)
+    parser.add_argument("--n-estimators", type=int, default=200)
+    parser.add_argument("--random-state", type=int, default=13)
+    parser.add_argument("--voxel-size-m", type=float, default=0.75)
+    parser.add_argument("--min-cluster-points", type=int, default=3)
     parser.add_argument("--timestamp-source", default="ground-truth-or-all")
-    parser.add_argument("--python", default=sys.executable)
+    parser.add_argument("--no-apply-calibration", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
-    paths = experiment_paths(args.output_dir)
+    if args.train_reference is not None and args.train_reference.resolve() == args.val_reference.resolve():
+        raise ValueError("train and validation references must be different files")
+
+    paths = artifact_paths(args.output_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    _guard_against_reference_leakage(args.train_reference, args.val_reference)
-    inventory = inventory_layout(args.train_root, args.val_root, args.train_reference, args.val_reference)
-    paths.inventory_json.write_text(json.dumps(inventory, indent=2), encoding="utf-8")
+    (args.output_dir / "logs").mkdir(exist_ok=True)
+    started_at = utc_now()
+    commands: list[dict[str, Any]] = []
 
-    commands = build_commands(args, paths)
-    manifest = {
-        "protocol": "MMUAD train-to-public-validation; validation reference is scoring-only",
-        "train_root": str(args.train_root),
-        "val_root": str(args.val_root),
-        "train_reference": str(args.train_reference),
-        "val_reference": str(args.val_reference),
-        "output_dir": str(args.output_dir),
-        "dry_run": bool(args.dry_run),
-        "inventory_json": str(paths.inventory_json),
-        "commands": [{"name": name, "command": command} for name, command in commands],
-    }
-    paths.manifest_json.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    try:
+        inventory = build_train_inventory(args)
+        write_json(paths["train_inventory"], inventory)
+        resolved = resolve_train_inputs(args, paths)
+        planned = command_plan(args, paths, resolved)
+        if not args.dry_run:
+            for step, command in planned:
+                run_step(step, command, args.output_dir, commands)
+        summary = build_summary(args, paths, resolved, commands, started_at, "dry_run" if args.dry_run else "ok", None, planned)
+    except Exception as exc:
+        summary = build_summary(args, paths, locals().get("resolved"), commands, started_at, "failed", str(exc), locals().get("planned"))
+        write_json(paths["summary_json"], summary)
+        write_summary_csv(paths["summary_csv"], summary)
+        write_provenance(args, paths, summary, commands)
+        raise
 
-    if args.dry_run:
-        print(f"manifest_json={paths.manifest_json}")
-        print(f"inventory_json={paths.inventory_json}")
-        for name, command in commands:
-            print(f"[{name}] {' '.join(command)}")
-        return 0
-
-    for name, command in commands:
-        print(f"running={name}")
-        subprocess.run(command, check=True)
-    print("mmuad_train_to_val=ok")
-    print(f"manifest_json={paths.manifest_json}")
-    print(f"scorecard_json={paths.scorecard_json}")
+    write_json(paths["summary_json"], summary)
+    write_summary_csv(paths["summary_csv"], summary)
+    write_provenance(args, paths, summary, commands)
+    print(f"mmuad_train_to_val_summary_json={paths['summary_json']}")
+    print(f"mmuad_train_to_val_summary_csv={paths['summary_csv']}")
+    print(f"train_inventory_json={paths['train_inventory']}")
+    print(f"track5_scorecard_train_to_val_json={paths['scorecard_json']}")
+    print(f"mmaud_results_train_to_val_csv={paths['official_results_csv']}")
+    print(f"ug2_submission_train_to_val_zip={paths['official_zip']}")
     return 0
 
 
-def experiment_paths(output_dir: Path) -> ExperimentPaths:
-    output_dir = Path(output_dir)
-    classifier_dir = output_dir / "sequence_classifier"
-    ranker_dir = output_dir / "cluster_ranker"
-    tracker_dir = output_dir / "validation_tracker"
-    scorecard_dir = output_dir / "scorecard"
-    return ExperimentPaths(
-        output_dir=output_dir,
-        inventory_json=output_dir / "train_to_val_inventory.json",
-        manifest_json=output_dir / "mmuad_train_to_val_manifest.json",
-        classifier_model=classifier_dir / "sequence_classifier.joblib",
-        classifier_features_csv=classifier_dir / "train_sequence_features.csv",
-        classifier_metrics_json=classifier_dir / "train_sequence_classifier_metrics.json",
-        ranker_model=ranker_dir / "cluster_ranker.json",
-        ranker_train_features_csv=ranker_dir / "train_cluster_features.csv",
-        ranker_score_features_csv=ranker_dir / "val_cluster_features.csv",
-        ranker_scored_candidates_csv=ranker_dir / "val_scored_candidates.csv",
-        tracker_output_dir=tracker_dir,
-        official_results_csv=tracker_dir / "mmaud_results.csv",
-        official_zip=tracker_dir / "ug2_submission.zip",
-        scorecard_json=scorecard_dir / "track5_scorecard_train_to_val.json",
-        scorecard_csv=scorecard_dir / "track5_scorecard_train_to_val.csv",
-        pose_by_sequence_csv=scorecard_dir / "mmuad_pose_by_sequence.csv",
-    )
-
-
-def build_commands(args: argparse.Namespace, paths: ExperimentPaths) -> list[tuple[str, list[str]]]:
-    py = str(args.python)
-    train_root = str(args.train_root)
-    val_root = str(args.val_root)
-    commands: list[tuple[str, list[str]]] = []
-    commands.append(
-        (
-            "train_sequence_classifier",
-            [
-                py,
-                "-m",
-                "raft_uav.mmuad.train_sequence_classifier",
-                train_root,
-                "--reference",
-                str(args.train_reference),
-                "--method",
-                str(args.classifier_method),
-                "--output",
-                str(paths.classifier_model),
-                "--feature-report",
-                str(paths.classifier_features_csv),
-                "--metrics-json",
-                str(paths.classifier_metrics_json),
-                "--sequence-glob",
-                str(args.sequence_glob),
-            ],
-        )
-    )
-    commands.append(
-        (
-            "train_and_score_cluster_ranker",
-            [
-                py,
-                "-m",
-                "raft_uav.mmuad.cluster_ranker",
-                "--train-sequence-root",
-                train_root,
-                "--train-truth",
-                str(args.train_reference),
-                "--score-sequence-root",
-                val_root,
-                "--model-json",
-                str(paths.ranker_model),
-                "--model-type",
-                str(args.ranker_model_type),
-                "--target-column",
-                str(args.ranker_target_column),
-                "--good-threshold-m",
-                str(args.ranker_good_threshold_m),
-                "--train-features-csv",
-                str(paths.ranker_train_features_csv),
-                "--score-features-csv",
-                str(paths.ranker_score_features_csv),
-                "--scored-candidates-csv",
-                str(paths.ranker_scored_candidates_csv),
-                "--sequence-glob",
-                str(args.sequence_glob),
-            ],
-        )
-    )
-    commands.append(
-        (
-            "run_validation_tracker",
-            [
-                py,
-                "-m",
-                "raft_uav.mmuad.run",
-                val_root,
-                "--output-dir",
-                str(paths.tracker_output_dir),
-                "--candidate-csv",
-                str(paths.ranker_scored_candidates_csv),
-                "--selection-confidence-weight",
-                str(args.selection_confidence_weight),
-                "--selection-mobility-weight",
-                str(args.selection_mobility_weight),
-                "--selection-source-priority-weight",
-                str(args.selection_source_priority_weight),
-                "--selection-motion-weight",
-                str(args.selection_motion_weight),
-                "--sequence-classifier",
-                str(paths.classifier_model),
-                "--sequence-classifier-provenance-json",
-                str(paths.tracker_output_dir / "mmuad_sequence_classifier_provenance.json"),
-                "--ug2-official-complete-to-sequence-timestamps",
-                "--ug2-official-timestamp-source",
-                str(args.timestamp_source),
-                "--ug2-official-results-csv",
-                str(paths.official_results_csv),
-                "--ug2-official-codabench-zip",
-                str(paths.official_zip),
-                "--ug2-official-validate-on-write",
-            ],
-        )
-    )
-    commands.append(
-        (
-            "score_public_validation",
-            [
-                py,
-                "-m",
-                "raft_uav.mmuad.track5_scorecard_cli",
-                "--results",
-                str(paths.official_zip),
-                "--truth",
-                str(args.val_reference),
-                "--sequence-root",
-                val_root,
-                "--timestamp-source",
-                str(args.timestamp_source),
-                "--classification-provenance-json",
-                str(paths.tracker_output_dir / "mmuad_sequence_classifier_provenance.json"),
-                "--selected-tracklets-csv",
-                str(paths.tracker_output_dir / "mmuad_selected_tracklets.csv"),
-                "--output-json",
-                str(paths.scorecard_json),
-                "--summary-csv",
-                str(paths.scorecard_csv),
-                "--pose-by-sequence-csv",
-                str(paths.pose_by_sequence_csv),
-                "--require-leaderboard-ready",
-            ],
-        )
-    )
-    return commands
-
-
-def inventory_layout(
-    train_root: Path,
-    val_root: Path,
-    train_reference: Path,
-    val_reference: Path,
-) -> dict[str, Any]:
+def artifact_paths(output_dir: Path) -> dict[str, Path]:
     return {
-        "train_root": _path_inventory(train_root),
-        "val_root": _path_inventory(val_root),
-        "train_reference": _path_inventory(train_reference),
-        "val_reference": _path_inventory(val_reference),
-        "leakage_guard": {
-            "train_reference_equals_val_reference": train_reference.resolve()
-            == val_reference.resolve(),
-            "train_root_equals_val_root": train_root.resolve() == val_root.resolve(),
-        },
+        "summary_json": output_dir / "mmuad_train_to_val_summary.json",
+        "summary_csv": output_dir / "mmuad_train_to_val_summary.csv",
+        "train_inventory": output_dir / "train_inventory.json",
+        "scorecard_json": output_dir / "track5_scorecard_train_to_val.json",
+        "official_results_csv": output_dir / "mmaud_results_train_to_val.csv",
+        "official_zip": output_dir / "ug2_submission_train_to_val.zip",
+        "provenance": output_dir / "mmuad_train_to_val_provenance.json",
+        "auto_truth": output_dir / "train_truth_auto.csv",
+        "auto_class_map": output_dir / "train_class_map_auto.csv",
+        "classifier_model": output_dir / "mmuad_sequence_classifier_train.joblib",
+        "classifier_features": output_dir / "mmuad_sequence_classifier_train_features.csv",
+        "classifier_predictions": output_dir / "mmuad_sequence_classifier_train_predictions.csv",
+        "classifier_metrics": output_dir / "mmuad_sequence_classifier_train_metrics.json",
+        "ranker_model": output_dir / "mmuad_cluster_ranker_train.json",
+        "ranker_features": output_dir / "mmuad_cluster_ranker_train_features.csv",
+        "ranker_candidates": output_dir / "mmuad_cluster_ranker_train_candidates.csv",
+        "tracker_dir": output_dir / "tracker_train_to_val",
+        "ranker_val_scored": output_dir / "mmuad_cluster_ranker_val_scored_candidates.csv",
+        "ranker_val_features": output_dir / "mmuad_cluster_ranker_val_score_features.csv",
+        "ranker_val_merged": output_dir / "mmuad_cluster_ranker_val_merged_candidates.csv",
+        "classifier_val_predictions": output_dir / "mmuad_sequence_classifier_val_predictions.csv",
+        "classifier_val_features": output_dir / "mmuad_sequence_classifier_val_features.csv",
+        "classifier_provenance": output_dir / "mmuad_sequence_classifier_provenance.json",
+        "official_validation_json": output_dir / "mmuad_official_submission_validation_train_to_val.json",
+        "official_validation_rows": output_dir / "mmuad_official_submission_validation_rows_train_to_val.csv",
+        "official_manifest": output_dir / "mmuad_official_upload_manifest_train_to_val.json",
+        "scorecard_csv": output_dir / "track5_scorecard_train_to_val.csv",
+        "scorecard_validation_rows": output_dir / "track5_scorecard_validation_rows_train_to_val.csv",
+        "scorecard_public_rows": output_dir / "track5_scorecard_public_rows_train_to_val.csv",
+        "scorecard_nearest_rows": output_dir / "track5_scorecard_nearest_rows_train_to_val.csv",
     }
 
 
-def _path_inventory(path: Path) -> dict[str, Any]:
-    path = Path(path)
-    info: dict[str, Any] = {
-        "path": str(path),
-        "exists": path.exists(),
-        "is_file": path.is_file(),
-        "is_dir": path.is_dir(),
+def build_train_inventory(args: argparse.Namespace) -> dict[str, Any]:
+    sequences = discover_sequence_paths(args.train_root, sequence_glob=args.sequence_glob)
+    rows = []
+    for paths in sequences:
+        child_dirs = {child.name.lower() for child in paths.root.iterdir() if child.is_dir()}
+        label = normalize_class_label(_sequence_class_label(paths.class_files, sequence_id=paths.sequence_id))
+        rows.append(
+            {
+                "sequence_id": paths.sequence_id,
+                "root": str(paths.root),
+                "has_image_dir": bool({"image", "images"} & child_dirs),
+                "has_lidar_360_dir": "lidar_360" in child_dirs,
+                "has_livox_avia_dir": "livox_avia" in child_dirs,
+                "has_radar_enhance_pcl_dir": "radar_enhance_pcl" in child_dirs,
+                "truth_file_count": len(paths.truth_files),
+                "class_file_count": len(paths.class_files),
+                "class_label": label,
+                "truth_files_sample": [str(path) for path in paths.truth_files[:10]],
+                "class_files_sample": [str(path) for path in paths.class_files[:10]],
+            }
+        )
+    layout = {
+        "sequence_count": len(rows),
+        "with_image_dir": sum(row["has_image_dir"] for row in rows),
+        "with_lidar_360_dir": sum(row["has_lidar_360_dir"] for row in rows),
+        "with_livox_avia_dir": sum(row["has_livox_avia_dir"] for row in rows),
+        "with_radar_enhance_pcl_dir": sum(row["has_radar_enhance_pcl_dir"] for row in rows),
+        "with_truth_files": sum(row["truth_file_count"] > 0 for row in rows),
+        "with_class_files": sum(row["class_file_count"] > 0 for row in rows),
+        "with_class_label": sum(bool(row["class_label"]) for row in rows),
     }
+    layout["has_expected_track5_train_layout"] = bool(
+        layout["sequence_count"]
+        and layout["with_image_dir"] == layout["sequence_count"]
+        and layout["with_lidar_360_dir"] == layout["sequence_count"]
+        and layout["with_livox_avia_dir"] == layout["sequence_count"]
+        and layout["with_radar_enhance_pcl_dir"] == layout["sequence_count"]
+    )
+    zips = unique_paths([*args.train_zip, *(args.work_root.rglob("*train*.zip") if args.work_root.exists() else [])])
+    return {
+        "schema": "raft-uav-mmuad-train-inventory-v1",
+        "created_at_utc": utc_now(),
+        "train_root": str(args.train_root),
+        "train_root_exists": args.train_root.exists(),
+        "sequence_glob": args.sequence_glob,
+        "layout": layout,
+        "sequence_rows": rows,
+        "zip_candidates": [zip_inventory(path) for path in zips],
+    }
+
+
+def resolve_train_inputs(args: argparse.Namespace, paths: dict[str, Path]) -> dict[str, Any]:
+    auto_truth, auto_class_map = write_auto_refs(args.train_root, args.sequence_glob, paths["auto_truth"], paths["auto_class_map"])
+    train_reference = args.train_reference or auto_class_map
+    train_truth = args.train_truth or auto_truth
+    if train_reference is None or not train_reference.exists():
+        raise ValueError("could not resolve train labels; pass --train-reference or provide class files")
+    if train_truth is None or not train_truth.exists():
+        raise ValueError("could not resolve train truth; pass --train-truth or provide ground_truth files")
+    labels = load_sequence_class_labels(train_reference)
+    return {
+        "train_reference": str(train_reference),
+        "train_truth": str(train_truth),
+        "auto_train_truth": str(auto_truth) if auto_truth else None,
+        "auto_train_class_map": str(auto_class_map) if auto_class_map else None,
+        "train_label_sequence_count": len(labels),
+        "train_label_values": sorted({str(value) for value in labels.values()}),
+    }
+
+
+def write_auto_refs(train_root: Path, sequence_glob: str, truth_path: Path, class_map_path: Path) -> tuple[Path | None, Path | None]:
+    truth_frames: list[pd.DataFrame] = []
+    class_rows: list[dict[str, str]] = []
+    for paths in discover_sequence_paths(train_root, sequence_glob=sequence_glob):
+        label = normalize_class_label(_sequence_class_label(paths.class_files, sequence_id=paths.sequence_id))
+        if label:
+            class_rows.append({"sequence_id": paths.sequence_id, "uav_type": label})
+        for truth_file in paths.truth_files:
+            truth = load_truth_file(truth_file, default_sequence_id=paths.sequence_id).rows.copy()
+            if label:
+                truth["uav_type"] = label
+            truth_frames.append(truth)
+    wrote_truth = None
+    wrote_class = None
+    if truth_frames:
+        truth_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.concat(truth_frames, ignore_index=True).drop_duplicates(
+            subset=["sequence_id", "time_s"]
+        ).sort_values(["sequence_id", "time_s"]).to_csv(truth_path, index=False)
+        wrote_truth = truth_path
+    if class_rows:
+        class_map_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(class_rows).drop_duplicates(subset=["sequence_id"]).sort_values(
+            "sequence_id"
+        ).to_csv(class_map_path, index=False)
+        wrote_class = class_map_path
+    return wrote_truth, wrote_class
+
+
+def command_plan(args: argparse.Namespace, paths: dict[str, Path], resolved: dict[str, Any]) -> list[tuple[str, list[str]]]:
+    common = ["--sequence-glob", args.sequence_glob, "--voxel-size-m", str(args.voxel_size_m), "--min-cluster-points", str(args.min_cluster_points)]
+    if args.no_apply_calibration:
+        common.append("--no-apply-calibration")
+    classifier = [
+        sys.executable,
+        "-m",
+        "raft_uav.mmuad.train_sequence_classifier",
+        str(args.train_root),
+        "--reference",
+        resolved["train_reference"],
+        "--method",
+        args.classifier_method,
+        "--output",
+        str(paths["classifier_model"]),
+        "--feature-report",
+        str(paths["classifier_features"]),
+        "--predictions-csv",
+        str(paths["classifier_predictions"]),
+        "--metrics-json",
+        str(paths["classifier_metrics"]),
+        "--random-state",
+        str(args.random_state),
+        "--n-estimators",
+        str(args.n_estimators),
+        *common,
+    ]
+    ranker = [
+        sys.executable,
+        "-m",
+        "raft_uav.mmuad.cluster_ranker",
+        "--train-sequence-root",
+        str(args.train_root),
+        "--train-truth",
+        resolved["train_truth"],
+        "--model-json",
+        str(paths["ranker_model"]),
+        "--model-type",
+        args.ranker_model_type,
+        "--target-column",
+        args.ranker_target_column,
+        "--good-threshold-m",
+        str(args.good_threshold_m),
+        "--train-features-csv",
+        str(paths["ranker_features"]),
+        "--train-candidates-output-csv",
+        str(paths["ranker_candidates"]),
+        "--random-state",
+        str(args.random_state),
+        "--n-estimators",
+        str(args.n_estimators),
+        *common,
+    ]
+    tracker = [
+        sys.executable,
+        "-m",
+        "raft_uav.mmuad.run",
+        str(args.val_root),
+        "--output-dir",
+        str(paths["tracker_dir"]),
+        "--cluster-ranker-model-json",
+        str(paths["ranker_model"]),
+        "--cluster-ranker-scored-candidates-csv",
+        str(paths["ranker_val_scored"]),
+        "--cluster-ranker-score-features-csv",
+        str(paths["ranker_val_features"]),
+        "--cluster-ranker-merged-candidates-csv",
+        str(paths["ranker_val_merged"]),
+        "--sequence-classifier",
+        str(paths["classifier_model"]),
+        "--sequence-classifier-predictions-csv",
+        str(paths["classifier_val_predictions"]),
+        "--sequence-classifier-feature-report",
+        str(paths["classifier_val_features"]),
+        "--sequence-classifier-provenance-json",
+        str(paths["classifier_provenance"]),
+        "--selection-confidence-weight",
+        str(args.selection_confidence_weight),
+        "--ug2-official-results-csv",
+        str(paths["official_results_csv"]),
+        "--ug2-official-codabench-zip",
+        str(paths["official_zip"]),
+        "--ug2-official-complete-to-sequence-timestamps",
+        "--ug2-official-timestamp-source",
+        args.timestamp_source,
+        "--official-validation-template-file",
+        str(args.val_reference),
+        "--ug2-official-validate-on-write",
+        "--official-validation-json",
+        str(paths["official_validation_json"]),
+        "--official-validation-rows-csv",
+        str(paths["official_validation_rows"]),
+        "--official-upload-manifest-json",
+        str(paths["official_manifest"]),
+        *common,
+    ]
+    scorecard = [
+        sys.executable,
+        "-m",
+        "raft_uav.mmuad.track5_scorecard_cli",
+        "--results",
+        str(paths["official_zip"]),
+        "--truth",
+        str(args.val_reference),
+        "--template",
+        str(args.val_reference),
+        "--official-upload-manifest",
+        str(paths["official_manifest"]),
+        "--classification-provenance-json",
+        str(paths["classifier_provenance"]),
+        "--output-json",
+        str(paths["scorecard_json"]),
+        "--summary-csv",
+        str(paths["scorecard_csv"]),
+        "--validation-rows-csv",
+        str(paths["scorecard_validation_rows"]),
+        "--public-evaluation-rows-csv",
+        str(paths["scorecard_public_rows"]),
+        "--nearest-time-rows-csv",
+        str(paths["scorecard_nearest_rows"]),
+    ]
+    return [
+        ("train_sequence_classifier", classifier),
+        ("train_cluster_ranker", ranker),
+        ("run_validation_tracker", tracker),
+        ("track5_scorecard", scorecard),
+    ]
+
+
+def run_step(name: str, command: list[str], output_dir: Path, records: list[dict[str, Any]]) -> None:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(SRC_ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    started = time.time()
+    result = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    stdout = output_dir / "logs" / f"{name}.stdout.log"
+    stderr = output_dir / "logs" / f"{name}.stderr.log"
+    stdout.write_text(result.stdout, encoding="utf-8")
+    stderr.write_text(result.stderr, encoding="utf-8")
+    records.append(
+        {
+            "name": name,
+            "command": command,
+            "returncode": result.returncode,
+            "duration_s": round(time.time() - started, 3),
+            "stdout_log": str(stdout),
+            "stderr_log": str(stderr),
+        }
+    )
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, command, result.stdout, result.stderr)
+
+
+def build_summary(
+    args: argparse.Namespace,
+    paths: dict[str, Path],
+    resolved: dict[str, Any] | None,
+    commands: list[dict[str, Any]],
+    started_at: str,
+    status: str,
+    failure: str | None,
+    planned: list[tuple[str, list[str]]] | None,
+) -> dict[str, Any]:
+    scorecard = read_json(paths["scorecard_json"])
+    pooled = (scorecard.get("public_track5") or {}).get("pooled") or {}
+    nearest = (scorecard.get("nearest_time") or {}).get("pooled") or {}
+    summary = {
+        "schema": "raft-uav-mmuad-train-to-val-summary-v1",
+        "status": status,
+        "failure": failure,
+        "started_at_utc": started_at,
+        "finished_at_utc": utc_now(),
+        "train_root": str(args.train_root),
+        "val_root": str(args.val_root),
+        "val_reference": str(args.val_reference),
+        "train_inventory_json": str(paths["train_inventory"]),
+        "train_reference": None if resolved is None else resolved.get("train_reference"),
+        "train_truth": None if resolved is None else resolved.get("train_truth"),
+        "mmaud_results_train_to_val_csv": str(paths["official_results_csv"]),
+        "ug2_submission_train_to_val_zip": str(paths["official_zip"]),
+        "track5_scorecard_train_to_val_json": str(paths["scorecard_json"]),
+        "pose_mse_loss_m2": pooled.get("pose_mse_loss_m2"),
+        "pose_rmse_m": nearest.get("rmse_3d_m"),
+        "p95_3d_m": pooled.get("p95_3d_m") or nearest.get("p95_3d_m"),
+        "classification_accuracy": pooled.get("classification_accuracy"),
+        "uav_type_accuracy": pooled.get("uav_type_accuracy"),
+        "commands": commands,
+        "planned_commands": None if planned is None else [{"name": name, "command": command} for name, command in planned],
+    }
+    if resolved:
+        summary.update(resolved)
+    return summary
+
+
+def write_provenance(args: argparse.Namespace, paths: dict[str, Path], summary: dict[str, Any], commands: list[dict[str, Any]]) -> None:
+    payload = {
+        "schema": "raft-uav-mmuad-train-to-val-provenance-v1",
+        "created_at_utc": utc_now(),
+        "repo_root": str(REPO_ROOT),
+        "git": git_info(),
+        "python": sys.version,
+        "platform": platform.platform(),
+        "args": {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
+        "summary_json": str(paths["summary_json"]),
+        "summary": summary,
+        "commands": commands,
+    }
+    write_json(paths["provenance"], payload)
+
+
+def zip_inventory(path: Path) -> dict[str, Any]:
+    item: dict[str, Any] = {"zip": str(path), "exists": path.exists()}
     if not path.exists():
-        return info
-    stat = path.stat()
-    info["size_bytes"] = int(stat.st_size)
-    if path.is_dir():
-        entries = sorted(path.iterdir(), key=lambda item: item.name)
-        info["entry_count"] = len(entries)
-        info["sample_entries"] = [entry.name for entry in entries[:50]]
-    elif zipfile.is_zipfile(path):
-        with zipfile.ZipFile(path) as archive:
+        return item
+    item["size_bytes"] = path.stat().st_size
+    try:
+        with ZipFile(path) as archive:
             names = archive.namelist()
-        info["zip_entry_count"] = len(names)
-        info["zip_top_level"] = sorted({name.split("/", 1)[0] for name in names if name})
-        info["zip_sample_entries"] = names[:100]
-    return info
+    except (BadZipFile, OSError) as exc:
+        item["read_error"] = str(exc)
+        return item
+    item["entries"] = len(names)
+    item["top_level"] = sorted({name.split("/", 1)[0] for name in names if name})
+    item["first_50"] = names[:50]
+    item["sample"] = names[:200]
+    return item
 
 
-def _guard_against_reference_leakage(train_reference: Path, val_reference: Path) -> None:
-    if Path(train_reference).resolve() == Path(val_reference).resolve():
-        raise ValueError("train and validation references must be different files")
+def normalize_class_label(label: Any) -> str:
+    if label is None:
+        return ""
+    text = str(label).strip()
+    key = text.lower().replace("_", " ").replace("-", " ")
+    return CLASS_NAME_TO_ID.get(key, CLASS_NAME_TO_ID.get(key.replace(" ", ""), text))
 
 
-if __name__ == "__main__":  # pragma: no cover
+def unique_paths(paths: list[Path]) -> list[Path]:
+    seen = set()
+    out = []
+    for path in paths:
+        key = str(path)
+        if key not in seen:
+            out.append(path)
+            seen.add(key)
+    return sorted(out)
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(jsonable(value), indent=2), encoding="utf-8")
+
+
+def write_summary_csv(path: Path, summary: dict[str, Any]) -> None:
+    row = {key: json.dumps(value, sort_keys=True) if isinstance(value, (dict, list)) else value for key, value in summary.items()}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(row))
+        writer.writeheader()
+        writer.writerow(row)
+
+
+def jsonable(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [jsonable(item) for item in value]
+    return value
+
+
+def git_info() -> dict[str, Any]:
+    def run(*args: str) -> str | None:
+        result = subprocess.run(["git", *args], cwd=REPO_ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    status = run("status", "--porcelain")
+    return {"sha": run("rev-parse", "HEAD"), "branch": run("branch", "--show-current"), "dirty": bool(status)}
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+if __name__ == "__main__":
     raise SystemExit(main())
