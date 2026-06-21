@@ -141,12 +141,18 @@ def pointcloud2_to_candidates(
     )
 
 
+def _normalize_field_name(value: Any) -> str:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    return str(value).strip("\x00").strip()
+
+
 def _normalize_fields(fields: Iterable[Any]) -> list[PointFieldSpec]:
     normalized: list[PointFieldSpec] = []
     for field in fields:
         normalized.append(
             PointFieldSpec(
-                name=str(getattr(field, "name")),
+                name=_normalize_field_name(getattr(field, "name")),
                 offset=int(getattr(field, "offset")),
                 datatype=int(getattr(field, "datatype")),
                 count=int(getattr(field, "count", 1)),
