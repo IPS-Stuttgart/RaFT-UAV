@@ -64,6 +64,26 @@ def test_mmuad_run_entrypoint_help_does_not_require_sequence_root(monkeypatch) -
     assert forwarded == ["--help"]
 
 
+def test_mmuad_run_entrypoint_preserves_leading_value_options(monkeypatch) -> None:
+    from raft_uav.mmuad import run
+
+    forwarded: list[str] = []
+
+    def fake_track_main(argv: list[str] | None = None) -> int:
+        forwarded.extend(argv or [])
+        return 0
+
+    monkeypatch.setattr(run, "track_main", fake_track_main)
+
+    assert run.main(["--output-dir", "outputs/mmuad", "data/mmuad"]) == 0
+    assert forwarded == [
+        "--sequence-root",
+        "data/mmuad",
+        "--output-dir",
+        "outputs/mmuad",
+    ]
+
+
 def test_mmuad_track5_scorecard_entrypoint_is_exposed() -> None:
     assert (
         _project_scripts()["raft-uav-mmuad-track5-scorecard"]
