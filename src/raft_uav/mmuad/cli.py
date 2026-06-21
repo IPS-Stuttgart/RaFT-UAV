@@ -1129,6 +1129,7 @@ def _official_upload_manifest_payload(
             "classification_feature_columns",
             "classification_class_map",
             "classification_prediction_mode",
+            "train_data_available",
         ):
             manifest[key] = classification_provenance.get(key)
     return manifest

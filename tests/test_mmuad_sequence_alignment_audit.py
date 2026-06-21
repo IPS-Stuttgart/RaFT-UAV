@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from raft_uav.mmuad.sequence_alignment_audit import (
+    build_sequence_alignment_decision_summary,
     build_sequence_alignment_audit,
     main as sequence_alignment_audit_main,
 )
@@ -104,6 +105,75 @@ def test_sequence_alignment_median_translation_diagnostic_is_available(
     assert translated["translation_mode"] == "per-sequence-median-diagnostic"
 
 
+def test_sequence_alignment_decision_summary_flags_translation_offset(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "mmuad"
+    seq = root / "seq0002" / "lidar_360"
+    _write_point_frame(seq / "0.0.csv", [(110.0, 2.0, 3.0)])
+    _write_point_frame(seq / "1.0.csv", [(111.0, 2.0, 3.0)])
+    truth = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq0002", "seq0002"],
+            "time_s": [0.0, 1.0],
+            "x_m": [10.0, 11.0],
+            "y_m": [2.0, 2.0],
+            "z_m": [3.0, 3.0],
+        }
+    ).to_csv(truth, index=False)
+
+    audit = build_sequence_alignment_audit(
+        root,
+        truth,
+        sequence_glob="seq0002",
+        voxel_size_m=0.5,
+        min_cluster_points=1,
+        max_time_delta_s=0.1,
+    )
+    summary = build_sequence_alignment_decision_summary(audit)
+
+    row = summary.loc[summary["sensor"] == "lidar_360"].iloc[0]
+    assert row["diagnosis"] == "translation_offset_suspected"
+    assert float(row["median_translation_norm"]) > 99.0
+    assert int(row["frames_with_candidate_within_5m"]) == 0
+    assert float(row["after_translation_nearest_p95"]) < 0.1
+
+
+def test_sequence_alignment_decision_summary_flags_empty_radar_extraction(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "mmuad"
+    seq = root / "seq0002" / "radar_enhance_pcl"
+    _write_point_frame(seq / "0.0.csv", [])
+    _write_point_frame(seq / "1.0.csv", [])
+    truth = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq0002", "seq0002"],
+            "time_s": [0.0, 1.0],
+            "x_m": [10.0, 11.0],
+            "y_m": [2.0, 2.0],
+            "z_m": [3.0, 3.0],
+        }
+    ).to_csv(truth, index=False)
+
+    audit = build_sequence_alignment_audit(
+        root,
+        truth,
+        sequence_glob="seq0002",
+        voxel_size_m=0.5,
+        min_cluster_points=1,
+        max_time_delta_s=0.1,
+    )
+    summary = build_sequence_alignment_decision_summary(audit)
+
+    row = summary.loc[summary["sensor"] == "radar_enhance_pcl"].iloc[0]
+    assert row["diagnosis"] == "candidate_extraction_empty"
+    assert int(row["radar_raw_point_count"]) == 0
+    assert int(row["radar_candidate_count"]) == 0
+
+
 def test_sequence_alignment_audit_cli_writes_requested_csv(tmp_path: Path) -> None:
     root = _toy_sequence_root(tmp_path)
     truth = tmp_path / "truth.csv"
@@ -130,7 +200,9 @@ def test_sequence_alignment_audit_cli_writes_requested_csv(tmp_path: Path) -> No
 
     assert status == 0
     path = output / "mmuad_sequence_alignment_audit.csv"
+    decision_path = output / "mmuad_sequence_alignment_decision_summary.csv"
     assert path.exists()
+    assert decision_path.exists()
     rows = pd.read_csv(path)
     assert {
         "sequence_id",
@@ -140,3 +212,12 @@ def test_sequence_alignment_audit_cli_writes_requested_csv(tmp_path: Path) -> No
         "p95_nearest_cluster_to_truth_distance_m",
         "fraction_frames_with_cluster_within_20m",
     }.issubset(rows.columns)
+    decision = pd.read_csv(decision_path)
+    assert {
+        "sequence",
+        "sensor",
+        "as_is_nearest_mean",
+        "after_translation_nearest_p95",
+        "radar_candidate_count",
+        "diagnosis",
+    }.issubset(decision.columns)
