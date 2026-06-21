@@ -84,6 +84,47 @@ def test_mmuad_run_entrypoint_preserves_leading_value_options(monkeypatch) -> No
     ]
 
 
+def test_mmuad_run_entrypoint_preserves_all_leading_mmuad_value_options(monkeypatch) -> None:
+    from raft_uav.mmuad import run
+
+    forwarded: list[str] = []
+
+    def fake_track_main(argv: list[str] | None = None) -> int:
+        forwarded.extend(argv or [])
+        return 0
+
+    monkeypatch.setattr(run, "track_main", fake_track_main)
+
+    assert (
+        run.main(
+            [
+                "--candidate-file",
+                "external_candidates.csv",
+                "--sequence-root-archive-extract-dir",
+                "outputs/extracted",
+                "--ug2-class-map-file",
+                "classes.csv",
+                "data/mmuad",
+                "--output-dir",
+                "outputs/mmuad",
+            ]
+        )
+        == 0
+    )
+    assert forwarded == [
+        "--sequence-root",
+        "data/mmuad",
+        "--candidate-file",
+        "external_candidates.csv",
+        "--sequence-root-archive-extract-dir",
+        "outputs/extracted",
+        "--ug2-class-map-file",
+        "classes.csv",
+        "--output-dir",
+        "outputs/mmuad",
+    ]
+
+
 def test_mmuad_track5_scorecard_entrypoint_is_exposed() -> None:
     assert (
         _project_scripts()["raft-uav-mmuad-track5-scorecard"]
