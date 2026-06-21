@@ -380,6 +380,14 @@ def normalize_time_column_aliases(
         if original is not None:
             out[target] = _seconds_or_stamp_dict_series(out[original])
             return out
+    for alias in ("header.stamp", "header"):
+        original = lower_to_original.get(alias)
+        if original is None:
+            continue
+        parsed = _seconds_or_stamp_dict_series(out[original])
+        if parsed.notna().any():
+            out[target] = parsed
+            return out
     return out
 
 

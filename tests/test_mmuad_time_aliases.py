@@ -19,3 +19,19 @@ def test_stamp_dict_unit_timestamp_aliases_are_scaled_to_seconds() -> None:
     normalized = normalize_time_column_aliases(frame)
 
     assert normalized["time_s"].tolist() == [1.25, 2.5, 3.0]
+
+
+def test_header_stamp_dict_unit_timestamp_aliases_are_scaled_to_seconds() -> None:
+    frame = pd.DataFrame(
+        {
+            "header": [
+                {"stamp": {"timestamp_us": 1_500_000}},
+                {"stamp": {"time_ms": 2500}},
+                {"stamp": {"stamp_ns": 3_000_000_000}},
+            ]
+        }
+    )
+
+    normalized = normalize_time_column_aliases(frame)
+
+    assert normalized["time_s"].tolist() == [1.5, 2.5, 3.0]
