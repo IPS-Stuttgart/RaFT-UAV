@@ -16,11 +16,20 @@ def _parse_constraint(text: str) -> tuple[str, tuple[str, float]]:
         token = f":{op}:"
         if token in text:
             column, value = text.split(token, 1)
-            return column, (op, float(value))
+            column = column.strip()
+            if not column:
+                raise argparse.ArgumentTypeError("constraint column must be non-empty")
+            try:
+                threshold = float(value)
+            except ValueError as exc:
+                raise argparse.ArgumentTypeError(
+                    f"constraint value must be numeric; got {value!r}"
+                ) from exc
+            return column, (op, threshold)
     raise argparse.ArgumentTypeError("constraint must look like column:ge:0.95")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("leaderboard_csv", type=Path)
     parser.add_argument("--output-csv", type=Path, default=None)
@@ -29,12 +38,13 @@ def main() -> int:
         "--constraint",
         action="append",
         default=[],
+        type=_parse_constraint,
         help="Constraint in the form column:ge:0.95, column:le:10, etc.",
     )
     parser.add_argument("--runtime-column", default="wall_time_s")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    constraints = dict(_parse_constraint(text) for text in args.constraint)
+    constraints = dict(args.constraint)
     rows = pd.read_csv(args.leaderboard_csv)
     ranked = conservative_leaderboard_rank(rows, objective=args.objective, constraints=constraints)
     if args.runtime_column in ranked.columns:
