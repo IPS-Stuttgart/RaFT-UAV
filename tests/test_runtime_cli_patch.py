@@ -43,6 +43,50 @@ def test_runtime_cli_patch_restores_runtime_environment_between_run_baseline_cal
     ]
 
 
+def test_runtime_cli_patch_accepts_runtime_flags_before_run_baseline(
+    monkeypatch,
+) -> None:
+    mode_key = "RAFT_UAV_RADAR_COVARIANCE_MODE"
+    anchor_key = "RAFT_UAV_TRACKLET_USE_RF_ANCHOR"
+    monkeypatch.delenv(mode_key, raising=False)
+    monkeypatch.delenv(anchor_key, raising=False)
+    calls: list[tuple[list[str], str | None, str | None]] = []
+
+    def fake_main(argv: list[str] | None = None) -> int:
+        calls.append(
+            (
+                list(argv or []),
+                os.environ.get(mode_key),
+                os.environ.get(anchor_key),
+            )
+        )
+        return 0
+
+    monkeypatch.setattr(runtime_cli_patch, "_ORIGINAL_MAIN", fake_main)
+    monkeypatch.setattr(runtime_cli_patch, "_CURRENT_RUNTIME_CONFIG", None)
+
+    assert (
+        runtime_cli_patch._main_with_runtime_config(
+            [
+                "--radar-covariance-mode",
+                "fixed",
+                "--disable-tracklet-rf-anchor",
+                "run-baseline",
+                "/data/aerpaw",
+                "--flight",
+                "Opt1",
+            ]
+        )
+        == 0
+    )
+
+    assert os.environ.get(mode_key) is None
+    assert os.environ.get(anchor_key) is None
+    assert calls == [
+        (["run-baseline", "/data/aerpaw", "--flight", "Opt1"], "fixed", "0")
+    ]
+
+
 def test_tracklet_cli_restores_base_dispatch_bindings(monkeypatch) -> None:
     """The tracklet wrapper must not permanently monkey-patch the base CLI."""
 
