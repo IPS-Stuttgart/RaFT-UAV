@@ -33,3 +33,15 @@ def test_pointcloud2_decoder_accepts_bytes_and_padded_field_names():
     )
 
     assert frame.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+
+
+def test_pointcloud2_decoder_strips_nul_padding_after_whitespace():
+    frame = pointcloud2_to_dataframe(
+        _message(
+            _field(b" x\x00 ", 0),
+            _field(" y\x00 ", 4),
+            _field(b" z\x00 ", 8),
+        )
+    )
+
+    assert frame.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
