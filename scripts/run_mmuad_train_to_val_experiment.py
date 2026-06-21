@@ -86,6 +86,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
+    if args.train_reference is not None and args.train_reference.resolve() == args.val_reference.resolve():
+        raise ValueError("train and validation references must be different files")
+
     paths = artifact_paths(args.output_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "logs").mkdir(exist_ok=True)
