@@ -128,13 +128,65 @@ def test_cluster_ranker_feature_table_includes_frame_rank_features() -> None:
 
     assert {
         "frame_candidate_count",
+        "frame_source_count",
         "frame_rank_point_count_desc",
         "frame_rank_density_desc",
         "frame_rank_range_3d_asc",
         "source_frame_rank_point_count_desc",
+        "sensor_available_lidar_360",
+        "sensor_available_livox_avia",
+        "sensor_available_radar_enhance_pcl",
+        "constant_velocity_prediction_residual_m",
     }.issubset(features.columns)
     assert features["frame_candidate_count"].tolist() == [2, 2]
     assert features.sort_values("cluster_range_3d_m")["frame_rank_range_3d_asc"].iloc[0] == 1.0
+
+
+def test_cluster_ranker_feature_table_includes_good20_and_previous_state_features() -> None:
+    candidates = CandidateFrame(
+        pd.DataFrame(
+            {
+                "sequence_id": ["seqA", "seqA"],
+                "time_s": [2.0, 2.0],
+                "source": ["lidar_360", "livox_avia"],
+                "track_id": ["good", "bad"],
+                "x_m": [2.0, 30.0],
+                "y_m": [0.0, 0.0],
+                "z_m": [1.0, 1.0],
+                "confidence": [1.0, 1.0],
+            }
+        )
+    )
+    previous_states = pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [1.0, 1.0],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seqA"],
+            "time_s": [2.0],
+            "x_m": [2.0],
+            "y_m": [0.0],
+            "z_m": [1.0],
+        }
+    )
+
+    features = build_cluster_feature_table(
+        candidates,
+        truth=truth,
+        previous_states=previous_states,
+        max_truth_time_delta_s=0.1,
+    )
+
+    assert "good_cluster_20m" in features.columns
+    assert features.sort_values("x_m")["good_cluster_20m"].tolist() == [True, False]
+    assert features.sort_values("x_m")["distance_to_previous_selected_m"].iloc[0] == 1.0
+    assert features.sort_values("x_m")["prev_state_constant_velocity_residual_m"].iloc[0] == 0.0
 
 
 def test_cluster_ranker_trains_sklearn_hist_gradient_classifier() -> None:

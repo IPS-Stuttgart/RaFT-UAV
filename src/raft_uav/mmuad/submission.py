@@ -901,6 +901,7 @@ def verify_official_upload_manifest(path: Path) -> dict[str, Any]:
         "classification_feature_columns",
         "classification_class_map",
         "classification_prediction_mode",
+        "train_data_available",
     ):
         if key in payload:
             summary[key] = payload.get(key)

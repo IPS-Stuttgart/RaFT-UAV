@@ -72,6 +72,7 @@ raft-uav-mmuad-train-sequence-classifier = "raft_uav.mmuad.train_sequence_classi
 raft-uav-mmuad-cluster-ranker = "raft_uav.mmuad.cluster_ranker:main"
 raft-uav-mmuad-coordinate-audit = "raft_uav.mmuad.coordinate_alignment_audit:main"
 raft-uav-mmuad-sequence-alignment-audit = "raft_uav.mmuad.sequence_alignment_audit:main"
+raft-uav-mmuad-radar-extraction-audit = "raft_uav.mmuad.radar_extraction_audit:main"
 raft-uav-mmuad-candidate-oracle-gap = "raft_uav.mmuad.candidate_oracle_gap:main"
 raft-uav-mmuad-image-evidence = "raft_uav.mmuad.image_evidence:main"
 

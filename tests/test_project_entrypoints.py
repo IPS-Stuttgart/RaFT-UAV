@@ -117,6 +117,17 @@ def test_mmuad_sequence_alignment_audit_entrypoint_target_imports() -> None:
     _assert_entrypoint_target_imports("raft-uav-mmuad-sequence-alignment-audit")
 
 
+def test_mmuad_radar_extraction_audit_entrypoint_is_exposed() -> None:
+    assert (
+        _project_scripts()["raft-uav-mmuad-radar-extraction-audit"]
+        == "raft_uav.mmuad.radar_extraction_audit:main"
+    )
+
+
+def test_mmuad_radar_extraction_audit_entrypoint_target_imports() -> None:
+    _assert_entrypoint_target_imports("raft-uav-mmuad-radar-extraction-audit")
+
+
 def test_playbook_runnable_commands_are_installed_entrypoints() -> None:
     playbook = Path("docs/results_improvement_playbook.md").read_text(encoding="utf-8")
     documented = set(re.findall(r"`(raft-uav-[a-z0-9][a-z0-9-]*)`", playbook))

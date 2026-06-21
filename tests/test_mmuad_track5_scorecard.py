@@ -234,6 +234,7 @@ def test_track5_scorecard_reports_sequence_classifier_provenance(tmp_path: Path)
                 "classification_feature_columns": ["row_count", "z_m_mean"],
                 "classification_class_map": {"seq001": "3"},
                 "classification_prediction_mode": "sequence_level",
+                "train_data_available": False,
             }
         ),
         encoding="utf-8",
@@ -248,12 +249,14 @@ def test_track5_scorecard_reports_sequence_classifier_provenance(tmp_path: Path)
     assert scorecard.summary["classification_method"] == "random-forest"
     assert scorecard.summary["classification_prediction_mode"] == "sequence_level"
     assert scorecard.summary["classification_class_map"] == {"seq001": "3"}
+    assert scorecard.summary["train_data_available"] is False
     flat = scorecard_summary_frame(scorecard.summary)
     assert flat.loc[0, "classification_model_path"].endswith(
         "mmuad_sequence_classifier_rf.joblib"
     )
     assert flat.loc[0, "classification_train_sequences"] == "seq_train_0;seq_train_3"
     assert json.loads(flat.loc[0, "classification_class_map"]) == {"seq001": "3"}
+    assert bool(flat.loc[0, "train_data_available"]) is False
 
 
 def test_track5_scorecard_cli_writes_ready_artifacts(tmp_path: Path, capsys) -> None:

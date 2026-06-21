@@ -473,9 +473,12 @@ def sequence_classifier_provenance(
     *,
     model_path: Path | None = None,
     class_map: dict[str, str] | None = None,
+    train_data_available: bool | None = None,
 ) -> dict[str, Any]:
     """Return scorecard/run provenance for a sequence-level classifier."""
 
+    if train_data_available is None:
+        train_data_available = model.get("train_data_available")
     return {
         "classification_model_path": str(model_path) if model_path is not None else None,
         "classification_method": str(model.get("method", "")),
@@ -489,6 +492,7 @@ def sequence_classifier_provenance(
         "classification_prediction_mode": str(
             model.get("prediction_mode", SEQUENCE_CLASSIFIER_PREDICTION_MODE)
         ),
+        "train_data_available": train_data_available,
     }
 
 

@@ -425,6 +425,7 @@ def scorecard_summary_frame(summary: dict[str, Any]) -> pd.DataFrame:
             sort_keys=True,
         ),
         "classification_prediction_mode": summary.get("classification_prediction_mode"),
+        "train_data_available": summary.get("train_data_available"),
         "codabench_upload_ready": validation.get("codabench_upload_ready"),
         "upload_manifest_valid": summary.get("upload_manifest_valid"),
         "upload_manifest_codabench_upload_ready": summary.get(
@@ -816,5 +817,6 @@ def _classification_provenance_fields(
         "classification_feature_columns",
         "classification_class_map",
         "classification_prediction_mode",
+        "train_data_available",
     )
     return {key: source.get(key) for key in keys}

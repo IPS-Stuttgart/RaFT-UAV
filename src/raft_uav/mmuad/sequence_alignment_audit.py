@@ -124,6 +124,80 @@ def write_sequence_alignment_audit(frame: pd.DataFrame, path: Path) -> Path:
     return path
 
 
+def build_sequence_alignment_decision_summary(audit: pd.DataFrame) -> pd.DataFrame:
+    """Summarize sequence/sensor alignment evidence into parser decisions."""
+
+    rows = pd.DataFrame(audit).copy()
+    if rows.empty:
+        return pd.DataFrame(columns=_decision_summary_columns())
+    records: list[dict[str, Any]] = []
+    for (sequence_id, sensor), group in rows.groupby(["sequence_id", "sensor"], sort=True):
+        as_is = _pick_variant_row(group, variant="as-is")
+        translated = _pick_best_translation_row(group)
+        if as_is is None:
+            as_is = group.iloc[0]
+        if translated is None:
+            translated = as_is
+        truth_frame_count = _numeric_value(as_is, "truth_frame_count")
+        within_5 = _frame_count_from_fraction(
+            _numeric_value(as_is, "fraction_frames_with_cluster_within_5m"),
+            truth_frame_count,
+        )
+        within_10 = _frame_count_from_fraction(
+            _numeric_value(as_is, "fraction_frames_with_cluster_within_10m"),
+            truth_frame_count,
+        )
+        within_20 = _frame_count_from_fraction(
+            _numeric_value(as_is, "fraction_frames_with_cluster_within_20m"),
+            truth_frame_count,
+        )
+        translation = np.asarray(
+            [
+                _numeric_value(translated, "translation_x_m"),
+                _numeric_value(translated, "translation_y_m"),
+                _numeric_value(translated, "translation_z_m"),
+            ],
+            dtype=float,
+        )
+        if not np.isfinite(translation).all():
+            translation = np.zeros(3, dtype=float)
+        record = {
+            "sequence": str(sequence_id),
+            "sensor": str(sensor),
+            "as_is_nearest_mean": _numeric_value(as_is, "mean_nearest_cluster_to_truth_distance_m"),
+            "as_is_nearest_p95": _numeric_value(as_is, "p95_nearest_cluster_to_truth_distance_m"),
+            "median_translation_vector_x": float(translation[0]),
+            "median_translation_vector_y": float(translation[1]),
+            "median_translation_vector_z": float(translation[2]),
+            "median_translation_norm": float(np.linalg.norm(translation)),
+            "after_translation_nearest_mean": _numeric_value(
+                translated,
+                "mean_nearest_cluster_to_truth_distance_m",
+            ),
+            "after_translation_nearest_p95": _numeric_value(
+                translated,
+                "p95_nearest_cluster_to_truth_distance_m",
+            ),
+            "frames_with_candidate_within_5m": within_5,
+            "frames_with_candidate_within_10m": within_10,
+            "frames_with_candidate_within_20m": within_20,
+            "radar_raw_point_count": _radar_value(as_is, "raw_point_count"),
+            "radar_candidate_count": _radar_value(as_is, "candidate_count"),
+        }
+        record["diagnosis"] = _diagnose_alignment(group, as_is, translated)
+        records.append(record)
+    return pd.DataFrame.from_records(records, columns=_decision_summary_columns())
+
+
+def write_sequence_alignment_decision_summary(frame: pd.DataFrame, path: Path) -> Path:
+    """Write ``mmuad_sequence_alignment_decision_summary.csv``."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path, index=False)
+    return path
+
+
 def _load_sequence_sensor_extractions(
     paths,
     *,
@@ -224,6 +298,7 @@ def _extraction_stats(
         ),
         "candidate_frame_count": int(len(np.unique(candidate_times))) if candidate_times.size else 0,
         "candidate_count": int(len(candidates)),
+        "raw_point_count": int(np.nansum(point_counts)) if point_counts.size else 0,
         "source_frame_with_candidates_fraction": _fraction(
             extraction.source_frame_count
             - extraction.empty_frame_count
@@ -363,6 +438,7 @@ def _audit_columns() -> list[str]:
         "no_candidate_source_frame_count",
         "candidate_frame_count",
         "candidate_count",
+        "raw_point_count",
         "source_frame_with_candidates_fraction",
         "mean_nearest_source_frame_abs_time_delta_s",
         "p95_nearest_source_frame_abs_time_delta_s",
@@ -394,6 +470,145 @@ def _audit_columns() -> list[str]:
     ]
 
 
+def _decision_summary_columns() -> list[str]:
+    return [
+        "sequence",
+        "sensor",
+        "as_is_nearest_mean",
+        "as_is_nearest_p95",
+        "median_translation_vector_x",
+        "median_translation_vector_y",
+        "median_translation_vector_z",
+        "median_translation_norm",
+        "after_translation_nearest_mean",
+        "after_translation_nearest_p95",
+        "frames_with_candidate_within_5m",
+        "frames_with_candidate_within_10m",
+        "frames_with_candidate_within_20m",
+        "radar_raw_point_count",
+        "radar_candidate_count",
+        "diagnosis",
+    ]
+
+
+def _pick_variant_row(group: pd.DataFrame, *, variant: str) -> pd.Series | None:
+    rows = group.loc[group["variant"].astype(str) == variant]
+    if rows.empty:
+        return None
+    return rows.iloc[0]
+
+
+def _pick_best_translation_row(group: pd.DataFrame) -> pd.Series | None:
+    translated = group.loc[
+        group["translation_mode"].astype(str) == "per-sequence-median-diagnostic"
+    ].copy()
+    if translated.empty:
+        return _pick_variant_row(group, variant="as-is+median-translation")
+    translated["_sort_p95"] = pd.to_numeric(
+        translated.get("p95_nearest_cluster_to_truth_distance_m"),
+        errors="coerce",
+    )
+    translated["_sort_mean"] = pd.to_numeric(
+        translated.get("mean_nearest_cluster_to_truth_distance_m"),
+        errors="coerce",
+    )
+    translated = translated.sort_values(
+        ["_sort_p95", "_sort_mean"],
+        na_position="last",
+    )
+    return translated.iloc[0]
+
+
+def _numeric_value(row: pd.Series, column: str) -> float:
+    if column not in row.index:
+        return float("nan")
+    value = pd.to_numeric(pd.Series([row[column]]), errors="coerce").iloc[0]
+    return float(value) if np.isfinite(value) else float("nan")
+
+
+def _frame_count_from_fraction(fraction: float, truth_frame_count: float) -> int:
+    if not np.isfinite(fraction) or not np.isfinite(truth_frame_count):
+        return 0
+    return int(round(float(fraction) * float(truth_frame_count)))
+
+
+def _radar_value(row: pd.Series, column: str) -> float:
+    sensor = str(row.get("sensor", "")).lower()
+    if "radar" not in sensor:
+        return float("nan")
+    return _numeric_value(row, column)
+
+
+def _diagnose_alignment(
+    group: pd.DataFrame,
+    as_is: pd.Series,
+    translated: pd.Series,
+) -> str:
+    candidate_count = _numeric_value(as_is, "candidate_count")
+    source_frame_count = _numeric_value(as_is, "source_frame_count")
+    source_match_fraction = _numeric_value(as_is, "source_time_matched_truth_frame_fraction")
+    source_candidate_fraction = _numeric_value(as_is, "source_frame_with_candidates_fraction")
+    as_is_mean = _numeric_value(as_is, "mean_nearest_cluster_to_truth_distance_m")
+    as_is_p95 = _numeric_value(as_is, "p95_nearest_cluster_to_truth_distance_m")
+    translated_p95 = _numeric_value(translated, "p95_nearest_cluster_to_truth_distance_m")
+    translated_mean = _numeric_value(translated, "mean_nearest_cluster_to_truth_distance_m")
+    within_20 = _numeric_value(as_is, "fraction_frames_with_cluster_within_20m")
+    translation_norm = float(
+        np.linalg.norm(
+            [
+                _numeric_value(translated, "translation_x_m"),
+                _numeric_value(translated, "translation_y_m"),
+                _numeric_value(translated, "translation_z_m"),
+            ]
+        )
+    )
+    if not np.isfinite(candidate_count) or candidate_count <= 0:
+        return "candidate_extraction_empty"
+    if (
+        not np.isfinite(source_frame_count)
+        or source_frame_count <= 0
+        or (np.isfinite(source_match_fraction) and source_match_fraction < 0.5)
+        or (np.isfinite(source_candidate_fraction) and source_candidate_fraction < 0.5)
+    ):
+        return "missing_sensor_frames"
+    if _is_good_alignment(as_is_mean, as_is_p95):
+        return "as_is_good"
+    if (
+        _is_good_alignment(translated_mean, translated_p95)
+        and np.isfinite(translation_norm)
+        and translation_norm >= 5.0
+    ):
+        return "translation_offset_suspected"
+    best_nontranslation_p95 = _best_nontranslation_p95(group)
+    if (
+        np.isfinite(best_nontranslation_p95)
+        and np.isfinite(as_is_p95)
+        and best_nontranslation_p95 < min(as_is_p95 * 0.7, as_is_p95 - 5.0)
+    ):
+        return "axis_or_scale_suspected"
+    if np.isfinite(within_20) and within_20 >= 0.5:
+        return "ranker_problem"
+    return "axis_or_scale_suspected"
+
+
+def _is_good_alignment(mean_m: float, p95_m: float) -> bool:
+    return (
+        np.isfinite(mean_m)
+        and np.isfinite(p95_m)
+        and (mean_m <= 5.0 or p95_m <= 10.0)
+    )
+
+
+def _best_nontranslation_p95(group: pd.DataFrame) -> float:
+    variants = group.loc[group["translation_mode"].astype(str) != "per-sequence-median-diagnostic"]
+    values = pd.to_numeric(
+        variants.get("p95_nearest_cluster_to_truth_distance_m"),
+        errors="coerce",
+    )
+    values = values.loc[np.isfinite(values)]
+    return float(values.min()) if len(values) else float("nan")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="raft-uav-mmuad-sequence-alignment-audit",
@@ -403,6 +618,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--truth-file", required=True, type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--output-csv", type=Path)
+    parser.add_argument("--decision-summary-csv", type=Path)
     parser.add_argument("--sequence-glob", default="seq0002")
     parser.add_argument("--voxel-size-m", type=float, default=0.75)
     parser.add_argument("--min-cluster-points", type=int, default=3)
@@ -428,9 +644,16 @@ def main(argv: list[str] | None = None) -> int:
         scales=scales,
     )
     path = write_sequence_alignment_audit(audit, output_csv)
+    decision_csv = args.decision_summary_csv
+    if decision_csv is None:
+        decision_csv = Path(output_csv).parent / "mmuad_sequence_alignment_decision_summary.csv"
+    decision = build_sequence_alignment_decision_summary(audit)
+    decision_path = write_sequence_alignment_decision_summary(decision, decision_csv)
     print("mmuad_sequence_alignment_audit=ok")
     print(f"output_csv={path}")
+    print(f"decision_summary_csv={decision_path}")
     print(f"rows={len(audit)}")
+    print(f"decision_rows={len(decision)}")
     return 0
 
 
