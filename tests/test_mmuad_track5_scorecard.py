@@ -105,6 +105,102 @@ def test_track5_scorecard_writes_all_requested_artifacts(tmp_path: Path) -> None
         assert Path(path).exists()
 
 
+def test_track5_scorecard_writes_paper_pose_and_candidate_regret_tables(
+    tmp_path: Path,
+) -> None:
+    results_zip = _write_official_zip(
+        tmp_path / "submission.zip",
+        pd.DataFrame(
+            {
+                "Sequence": ["seq001", "seq001", "seq002"],
+                "Timestamp": [0.0, 1.0, 0.0],
+                "Position": ["(0,0,10)", "(4,0,10)", "(0,3,0)"],
+                "Classification": [1, 1, 2],
+            }
+        ),
+    )
+    truth_csv = tmp_path / "truth.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq001", "seq001", "seq002"],
+            "time_s": [0.0, 1.0, 0.0],
+            "x_m": [0.0, 1.0, 0.0],
+            "y_m": [0.0, 0.0, 0.0],
+            "z_m": [10.0, 10.0, 0.0],
+            "class_name": [1, 1, 2],
+        }
+    ).to_csv(truth_csv, index=False)
+    selected_csv = tmp_path / "mmuad_selected_tracklets.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq001", "seq001", "seq002"],
+            "time_s": [0.0, 1.0, 0.0],
+            "source": ["lidar_360", "radar-enhance-pcl", "livox_avia"],
+            "track_id": ["a", "b", "c"],
+            "x_m": [0.0, 4.0, 0.0],
+            "y_m": [0.0, 0.0, 3.0],
+            "z_m": [10.0, 10.0, 0.0],
+        }
+    ).to_csv(selected_csv, index=False)
+    gap_csv = tmp_path / "mmuad_candidate_oracle_gap.csv"
+    pd.DataFrame(
+        {
+            "sequence": ["seq001", "seq001", "seq002"],
+            "sequence_id": ["seq001", "seq001", "seq002"],
+            "time_s": [0.0, 1.0, 0.0],
+            "sensor": ["lidar_360", "radar_enhance_pcl", "livox_avia"],
+            "nearest_candidate_found": [True, False, True],
+            "selected_candidate_found": [True, True, True],
+            "selected_source_matches_sensor": [True, True, True],
+            "candidate_count_at_nearest_time": [2, 0, 1],
+            "selected_minus_truth_error_m": [0.0, 3.0, 3.0],
+            "nearest_minus_truth_error_m": [0.0, None, 1.0],
+            "candidate_regret_m": [0.0, None, 2.0],
+            "nearest_candidate_time_delta_s": [0.0, None, 0.1],
+        }
+    ).to_csv(gap_csv, index=False)
+
+    scorecard = build_track5_scorecard(
+        results_path=results_zip,
+        truth_path=truth_csv,
+        selected_tracklets_path=selected_csv,
+        candidate_oracle_gap_path=gap_csv,
+    )
+    paths = write_track5_scorecard(
+        scorecard,
+        summary_json=tmp_path / "scorecard.json",
+        summary_csv=tmp_path / "scorecard.csv",
+        pose_by_sequence_csv=tmp_path / "mmuad_pose_by_sequence.csv",
+        candidate_regret_summary_csv=tmp_path / "mmuad_candidate_regret_summary.csv",
+    )
+
+    assert "pose_by_sequence_csv" in paths
+    assert "candidate_regret_summary_csv" in paths
+    pose = pd.read_csv(paths["pose_by_sequence_csv"])
+    seq001 = pose.loc[pose["sequence"] == "seq001"].iloc[0]
+    assert int(seq001["count"]) == 2
+    assert float(seq001["mse"]) == 4.5
+    assert float(seq001["rmse"]) == pytest.approx(4.5**0.5)
+    assert seq001["dominant_sensor"] in {"lidar_360", "radar"}
+    assert int(seq001["used_lidar_360_count"]) == 1
+    assert int(seq001["used_radar_count"]) == 1
+    assert int(seq001["empty_radar_count"]) == 1
+    regret = pd.read_csv(paths["candidate_regret_summary_csv"])
+    livox = regret.loc[
+        (regret["sequence"] == "seq002") & (regret["sensor"] == "livox_avia")
+    ].iloc[0]
+    assert float(livox["mean_candidate_regret_m"]) == 2.0
+    assert float(livox["positive_regret_fraction"]) == 1.0
+    summary = json.loads((tmp_path / "scorecard.json").read_text(encoding="utf-8"))
+    assert summary["selected_tracklets_path"] == str(selected_csv)
+    assert summary["candidate_oracle_gap_path"] == str(gap_csv)
+    assert summary["paper_artifacts"]["pose_by_sequence_rows"] == 2
+    assert summary["paper_artifacts"]["candidate_regret_summary_rows"] == 3
+    flat = pd.read_csv(tmp_path / "scorecard.csv")
+    assert int(flat.loc[0, "paper_pose_by_sequence_rows"]) == 2
+    assert int(flat.loc[0, "paper_candidate_regret_summary_rows"]) == 3
+
+
 def test_track5_scorecard_reports_sequence_classifier_provenance(tmp_path: Path) -> None:
     results_zip = _write_official_zip(
         tmp_path / "submission.zip",
@@ -183,6 +279,35 @@ def test_track5_scorecard_cli_writes_ready_artifacts(tmp_path: Path, capsys) -> 
             "class_name": [2, 2],
         }
     ).to_csv(truth_csv, index=False)
+    selected_csv = tmp_path / "selected.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq001", "seq001"],
+            "time_s": [0.0, 1.0],
+            "source": ["lidar_360", "lidar_360"],
+            "track_id": ["a", "a"],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [10.0, 10.0],
+        }
+    ).to_csv(selected_csv, index=False)
+    gap_csv = tmp_path / "candidate_gap.csv"
+    pd.DataFrame(
+        {
+            "sequence": ["seq001"],
+            "sequence_id": ["seq001"],
+            "time_s": [0.0],
+            "sensor": ["lidar_360"],
+            "nearest_candidate_found": [True],
+            "selected_candidate_found": [True],
+            "selected_source_matches_sensor": [True],
+            "candidate_count_at_nearest_time": [1],
+            "selected_minus_truth_error_m": [0.0],
+            "nearest_minus_truth_error_m": [0.0],
+            "candidate_regret_m": [0.0],
+            "nearest_candidate_time_delta_s": [0.0],
+        }
+    ).to_csv(gap_csv, index=False)
     output = tmp_path / "scorecard"
 
     status = track5_scorecard_cli_main(
@@ -201,6 +326,14 @@ def test_track5_scorecard_cli_writes_ready_artifacts(tmp_path: Path, capsys) -> 
             str(output / "public_rows.csv"),
             "--nearest-time-rows-csv",
             str(output / "nearest_rows.csv"),
+            "--selected-tracklets-csv",
+            str(selected_csv),
+            "--candidate-oracle-gap-csv",
+            str(gap_csv),
+            "--pose-by-sequence-csv",
+            str(output / "mmuad_pose_by_sequence.csv"),
+            "--candidate-regret-summary-csv",
+            str(output / "mmuad_candidate_regret_summary.csv"),
             "--require-leaderboard-ready",
         ]
     )
@@ -222,6 +355,8 @@ def test_track5_scorecard_cli_writes_ready_artifacts(tmp_path: Path, capsys) -> 
     assert (output / "validation_rows.csv").exists()
     assert (output / "public_rows.csv").exists()
     assert (output / "nearest_rows.csv").exists()
+    assert (output / "mmuad_pose_by_sequence.csv").exists()
+    assert (output / "mmuad_candidate_regret_summary.csv").exists()
 
 
 def test_track5_scorecard_cli_verifies_official_upload_manifest(

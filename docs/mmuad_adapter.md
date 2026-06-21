@@ -927,6 +927,10 @@ raft-uav-mmuad-track5-scorecard \
   --validation-rows-csv outputs/mmuad_val/track5_validation_rows.csv \
   --public-evaluation-rows-csv outputs/mmuad_val/track5_public_rows.csv \
   --nearest-time-rows-csv outputs/mmuad_val/track5_nearest_rows.csv \
+  --selected-tracklets-csv outputs/mmuad_val/mmuad_selected_tracklets.csv \
+  --candidate-oracle-gap-csv outputs/mmuad_val/mmuad_candidate_oracle_gap.csv \
+  --pose-by-sequence-csv outputs/mmuad_val/mmuad_pose_by_sequence.csv \
+  --candidate-regret-summary-csv outputs/mmuad_val/mmuad_candidate_regret_summary.csv \
   --require-leaderboard-ready
 ```
 
@@ -940,7 +944,11 @@ reports can use either name. When
 `--official-upload-manifest` is supplied, the scorecard also verifies the
 manifest fingerprints against the current ZIP and blocks readiness with
 `official_upload_manifest_invalid` if the artifact no longer matches the
-validated upload package.
+validated upload package. Supplying `--selected-tracklets-csv` and
+`--candidate-oracle-gap-csv` additionally enables paper-facing diagnostic CSVs:
+`mmuad_pose_by_sequence.csv` breaks public Track 5 pose error down by sequence
+and selected sensor usage, while `mmuad_candidate_regret_summary.csv` groups
+candidate-oracle regret by sequence and sensor.
 
 Use `--evaluate-results-csv` for local metric checks of an unpacked
 `mmaud_results.csv`; a complete CSV can set `score_valid_for_leaderboard=true`,
