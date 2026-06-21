@@ -155,9 +155,19 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("the following arguments are required: sequence_root")
 
     sequence_root = args[sequence_root_index]
-    remainder = [arg for index, arg in enumerate(args) if index != sequence_root_index]
+    remainder = _forwarding_remainder(args, sequence_root_index=sequence_root_index)
     forwarded = ["--sequence-root", sequence_root, *remainder]
     return track_main(forwarded)
+
+
+def _forwarding_remainder(args: list[str], *, sequence_root_index: int) -> list[str]:
+    delimiter_index = sequence_root_index - 1
+    return [
+        arg
+        for index, arg in enumerate(args)
+        if index != sequence_root_index
+        and not (index == delimiter_index and arg == "--")
+    ]
 
 
 def _has_explicit_sequence_root(args: list[str]) -> bool:
