@@ -25,6 +25,7 @@ _INSTALLED = False
 _ORIGINAL_MAIN: Any = None
 _ORIGINAL_BASELINE_METRICS: Any = None
 _CURRENT_RUNTIME_CONFIG: dict[str, Any] | None = None
+_RUNTIME_VALUELESS_FLAGS = frozenset({"--disable-tracklet-rf-anchor"})
 
 
 def install() -> None:
@@ -43,6 +44,24 @@ def install() -> None:
     _INSTALLED = True
 
 
+def _runtime_aware_command(argv: list[str]) -> str | None:
+    """Return the command after any leading runtime-only options."""
+
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token == "--":
+            return argv[index + 1] if index + 1 < len(argv) else None
+        option, separator, _ = token.partition("=")
+        if option in _RUNTIME_FLAG_ENV_NAMES:
+            index += 1
+            if not separator and option not in _RUNTIME_VALUELESS_FLAGS:
+                index += 1
+            continue
+        return token
+    return None
+
+
 def _main_with_runtime_config(argv: list[str] | None = None) -> int:
     """Parse runtime flags before delegating to the original CLI."""
 
@@ -50,7 +69,7 @@ def _main_with_runtime_config(argv: list[str] | None = None) -> int:
 
     global _CURRENT_RUNTIME_CONFIG
     original_argv = list(sys.argv[1:] if argv is None else argv)
-    if original_argv[:1] != ["run-baseline"]:
+    if _runtime_aware_command(original_argv) != "run-baseline":
         return _ORIGINAL_MAIN(argv)
 
     runtime_config, remaining = parse_runtime_config(original_argv)
