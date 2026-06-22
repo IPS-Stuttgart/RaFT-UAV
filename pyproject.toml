@@ -77,6 +77,7 @@ raft-uav-mmuad-candidate-oracle-gap = "raft_uav.mmuad.candidate_oracle_gap:main"
 raft-uav-mmuad-image-evidence = "raft_uav.mmuad.image_evidence:main"
 raft-uav-mmuad-fit-source-calibration = "raft_uav.mmuad.source_calibration:fit_main"
 raft-uav-mmuad-apply-source-calibration = "raft_uav.mmuad.source_calibration:apply_main"
+raft-uav-mmuad-select-train-config = "raft_uav.mmuad.train_selected_config:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
