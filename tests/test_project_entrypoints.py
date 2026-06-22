@@ -189,6 +189,24 @@ def test_mmuad_radar_extraction_audit_entrypoint_target_imports() -> None:
     _assert_entrypoint_target_imports("raft-uav-mmuad-radar-extraction-audit")
 
 
+def test_mmuad_source_calibration_entrypoints_are_exposed() -> None:
+    scripts = _project_scripts()
+
+    assert (
+        scripts["raft-uav-mmuad-fit-source-calibration"]
+        == "raft_uav.mmuad.source_calibration:fit_main"
+    )
+    assert (
+        scripts["raft-uav-mmuad-apply-source-calibration"]
+        == "raft_uav.mmuad.source_calibration:apply_main"
+    )
+
+
+def test_mmuad_source_calibration_entrypoint_targets_import() -> None:
+    _assert_entrypoint_target_imports("raft-uav-mmuad-fit-source-calibration")
+    _assert_entrypoint_target_imports("raft-uav-mmuad-apply-source-calibration")
+
+
 def test_playbook_runnable_commands_are_installed_entrypoints() -> None:
     playbook = Path("docs/results_improvement_playbook.md").read_text(encoding="utf-8")
     documented = set(re.findall(r"`(raft-uav-[a-z0-9][a-z0-9-]*)`", playbook))

@@ -71,6 +71,10 @@ from raft_uav.mmuad.rosbag_bridge import (
 from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_export
 from raft_uav.mmuad.sequence import official_track5_timestamp_template
 from raft_uav.mmuad.schema import normalize_truth_columns
+from raft_uav.mmuad.source_calibration import (
+    SOURCE_CALIBRATION_MODES,
+    apply_source_calibration_json,
+)
 from raft_uav.mmuad.splits import (
     filter_sequences_by_split,
     filter_sequences_by_split_folder,
@@ -240,6 +244,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--calibration-json", type=Path)
     parser.add_argument("--calibration-file", type=Path, help="JSON/YAML/TXT calibration interchange file")
     parser.add_argument("--no-apply-calibration", action="store_true")
+    parser.add_argument("--mmuad-source-calibration-json", type=Path)
+    parser.add_argument(
+        "--mmuad-source-calibration-mode",
+        choices=SOURCE_CALIBRATION_MODES,
+    )
+    parser.add_argument("--mmuad-source-calibrated-candidates-csv", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--tracker-mode", choices=("single-uav", "multi-object"), default="single-uav")
     parser.add_argument("--mot-max-association-distance-m", type=float, default=15.0)
@@ -585,6 +595,9 @@ def _write_tracking_artifacts(
     sequence_classifier_paths = getattr(args, "_sequence_classifier_paths", None)
     if sequence_classifier_paths:
         paths.update(sequence_classifier_paths)
+    source_calibration_paths = getattr(args, "_mmuad_source_calibration_paths", None)
+    if source_calibration_paths:
+        paths.update(source_calibration_paths)
     explicit_class_map = load_sequence_class_map(args.ug2_class_map_file)
     inferred_class_map = getattr(args, "_inferred_class_map", {})
     sequence_classifier_class_map = getattr(args, "_sequence_classifier_class_map", {})
@@ -1383,6 +1396,7 @@ def _run_explicit_files(args: argparse.Namespace):
     if calibration_path is not None and not args.no_apply_calibration:
         calibration = load_calibration_auto(calibration_path)
         candidates = transform_candidate_frame(candidates, calibration)
+    candidates = _maybe_apply_source_calibration(args, candidates)
     _maybe_apply_sequence_classifier(args, candidates)
     candidates = _maybe_apply_cluster_ranker(args, candidates)
     truth_path = _explicit_truth_path(args)
@@ -1589,6 +1603,7 @@ def _run_sequence_root(args: argparse.Namespace):
     if not candidate_frames:
         raise SystemExit(f"no MMUAD sequence exports found under {args.sequence_root}")
     candidates = merge_candidate_frames(candidate_frames)
+    candidates = _maybe_apply_source_calibration(args, candidates)
     if args.infer_ug2_class_map_from_candidates:
         args._inferred_class_map = infer_sequence_class_map_from_candidates(
             candidates,
@@ -1760,6 +1775,28 @@ def _maybe_apply_sequence_classifier(args, candidates) -> None:
         "sequence_classifier_feature_report_csv": str(feature_report),
         "sequence_classifier_provenance_json": str(provenance_json),
     }
+
+
+def _maybe_apply_source_calibration(args, candidates):
+    if args.mmuad_source_calibration_json is None:
+        return candidates
+    calibrated = apply_source_calibration_json(
+        candidates,
+        args.mmuad_source_calibration_json,
+        mode=args.mmuad_source_calibration_mode,
+    )
+    paths = {
+        "mmuad_source_calibration_json": str(args.mmuad_source_calibration_json),
+        "mmuad_source_calibration_mode": str(args.mmuad_source_calibration_mode or "from-json"),
+    }
+    if args.mmuad_source_calibrated_candidates_csv is not None:
+        args.mmuad_source_calibrated_candidates_csv.parent.mkdir(parents=True, exist_ok=True)
+        calibrated.rows.to_csv(args.mmuad_source_calibrated_candidates_csv, index=False)
+        paths["mmuad_source_calibrated_candidates_csv"] = str(
+            args.mmuad_source_calibrated_candidates_csv
+        )
+    args._mmuad_source_calibration_paths = paths
+    return calibrated
 
 
 def _maybe_apply_cluster_ranker(args, candidates):

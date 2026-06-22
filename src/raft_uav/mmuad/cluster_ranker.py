@@ -17,6 +17,10 @@ from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 from raft_uav.mmuad.io import merge_candidate_frames
 from raft_uav.mmuad.schema import CandidateFrame, normalize_candidate_columns
 from raft_uav.mmuad.sequence import discover_sequence_paths, load_sequence_export
+from raft_uav.mmuad.source_calibration import (
+    SOURCE_CALIBRATION_MODES,
+    apply_source_calibration_json,
+)
 
 
 BASE_CLUSTER_FEATURE_COLUMNS = (
@@ -1253,6 +1257,22 @@ def _load_image_evidence(path: Path | None) -> pd.DataFrame | None:
     return None if path is None else pd.read_csv(path)
 
 
+def _maybe_apply_source_calibration(
+    candidates: CandidateFrame,
+    *,
+    calibration_json: Path | None,
+    mode: str | None,
+    output_csv: Path | None,
+) -> CandidateFrame:
+    if calibration_json is None:
+        return candidates
+    calibrated = apply_source_calibration_json(candidates, calibration_json, mode=mode)
+    if output_csv is not None:
+        output_csv.parent.mkdir(parents=True, exist_ok=True)
+        calibrated.rows.to_csv(output_csv, index=False)
+    return calibrated
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="raft-uav-mmuad-cluster-ranker",
@@ -1304,6 +1324,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--voxel-size-m", type=float, default=0.75)
     parser.add_argument("--min-cluster-points", type=int, default=3)
     parser.add_argument("--no-apply-calibration", action="store_true")
+    parser.add_argument("--mmuad-source-calibration-json", type=Path)
+    parser.add_argument(
+        "--mmuad-source-calibration-mode",
+        choices=SOURCE_CALIBRATION_MODES,
+    )
+    parser.add_argument("--train-source-calibrated-candidates-csv", type=Path)
+    parser.add_argument("--score-source-calibrated-candidates-csv", type=Path)
     parser.add_argument("--iterations", type=int, default=600)
     parser.add_argument("--learning-rate", type=float, default=0.05)
     parser.add_argument("--random-state", type=int, default=13)
@@ -1321,6 +1348,12 @@ def main(argv: list[str] | None = None) -> int:
             apply_calibration=not args.no_apply_calibration,
             voxel_size_m=args.voxel_size_m,
             min_cluster_points=args.min_cluster_points,
+        )
+        train_candidates = _maybe_apply_source_calibration(
+            train_candidates,
+            calibration_json=args.mmuad_source_calibration_json,
+            mode=args.mmuad_source_calibration_mode,
+            output_csv=args.train_source_calibrated_candidates_csv,
         )
         if args.train_candidates_output_csv is not None:
             args.train_candidates_output_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -1413,6 +1446,12 @@ def main(argv: list[str] | None = None) -> int:
             apply_calibration=not args.no_apply_calibration,
             voxel_size_m=args.voxel_size_m,
             min_cluster_points=args.min_cluster_points,
+        )
+        candidates = _maybe_apply_source_calibration(
+            candidates,
+            calibration_json=args.mmuad_source_calibration_json,
+            mode=args.mmuad_source_calibration_mode,
+            output_csv=args.score_source_calibrated_candidates_csv,
         )
         if args.score_candidates_output_csv is not None:
             args.score_candidates_output_csv.parent.mkdir(parents=True, exist_ok=True)
