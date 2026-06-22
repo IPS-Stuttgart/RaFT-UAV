@@ -28,10 +28,11 @@ from raft_uav.mmuad.io import (
     data_file_suffix,
     load_candidate_file,
     infer_time_s_from_filename,
-    load_point_cloud_file_as_candidates,
+    load_point_cloud_file_as_points,
     load_truth_file,
     merge_candidate_frames,
     path_matches_suffix,
+    point_rows_to_candidates,
     read_json_export_payload,
     read_text_export,
 )
@@ -446,6 +447,11 @@ def load_sequence_export(
     camera_fixed_depth_m: float | None = None,
     camera_std_xy_m: float = 5.0,
     camera_std_z_m: float = 10.0,
+    point_extraction_mode: str = "static",
+    dynamic_background_voxel_size_m: float | None = None,
+    dynamic_background_min_frame_fraction: float = 0.6,
+    dynamic_background_min_frames: int = 3,
+    dynamic_background_neighbor_radius_voxels: int = 0,
 ) -> tuple[CandidateFrame, TruthFrame | None, CalibrationSet | None]:
     """Load candidates/truth for one discovered sequence export."""
 
@@ -490,8 +496,8 @@ def load_sequence_export(
         )
         for path in paths.radar_polar_csvs
     )
-    candidate_frames.extend(
-        load_point_cloud_file_as_candidates(
+    point_frames = [
+        load_point_cloud_file_as_points(
             path,
             source=_source_from_path(
                 path,
@@ -500,11 +506,25 @@ def load_sequence_export(
             ),
             sequence_id=paths.sequence_id,
             time_s=_point_cloud_frame_time_s(path, sequence_root=paths.root),
-            voxel_size_m=voxel_size_m,
-            min_points=min_cluster_points,
         )
         for path in paths.point_cloud_files
-    )
+    ]
+    if point_frames:
+        candidate_frames.append(
+            point_rows_to_candidates(
+                pd.concat(point_frames, ignore_index=True),
+                source="lidar-cluster",
+                voxel_size_m=voxel_size_m,
+                min_points=min_cluster_points,
+                point_extraction_mode=point_extraction_mode,
+                dynamic_background_voxel_size_m=dynamic_background_voxel_size_m,
+                dynamic_background_min_frame_fraction=dynamic_background_min_frame_fraction,
+                dynamic_background_min_frames=dynamic_background_min_frames,
+                dynamic_background_neighbor_radius_voxels=(
+                    dynamic_background_neighbor_radius_voxels
+                ),
+            )
+        )
     truth_frames: list[TruthFrame] = []
     for path in paths.topic_map_jsons:
         bundle = load_topic_map_exports(path, base_dir=path.parent)

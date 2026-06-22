@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from raft_uav.mmuad.io import POINT_EXTRACTION_MODES
 from raft_uav.mmuad.native_ros import extract_native_rosbag_topic_map
 
 
@@ -18,6 +19,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--voxel-size-m", type=float, default=0.75)
     parser.add_argument("--min-cluster-points", type=int, default=3)
+    parser.add_argument(
+        "--point-extraction-mode",
+        choices=POINT_EXTRACTION_MODES,
+        default="static",
+    )
+    parser.add_argument("--dynamic-background-voxel-size-m", type=float)
+    parser.add_argument("--dynamic-background-min-frame-fraction", type=float, default=0.6)
+    parser.add_argument("--dynamic-background-min-frames", type=int, default=3)
+    parser.add_argument("--dynamic-background-neighbor-radius-voxels", type=int, default=0)
     args = parser.parse_args(argv)
     result = extract_native_rosbag_topic_map(
         bag_path=args.bag_path,
@@ -25,6 +35,11 @@ def main(argv: list[str] | None = None) -> int:
         output_dir=args.output_dir,
         voxel_size_m=args.voxel_size_m,
         min_points=args.min_cluster_points,
+        point_extraction_mode=args.point_extraction_mode,
+        dynamic_background_voxel_size_m=args.dynamic_background_voxel_size_m,
+        dynamic_background_min_frame_fraction=args.dynamic_background_min_frame_fraction,
+        dynamic_background_min_frames=args.dynamic_background_min_frames,
+        dynamic_background_neighbor_radius_voxels=args.dynamic_background_neighbor_radius_voxels,
     )
     print("mmuad_native_ros_extraction=ok")
     print(f"candidate_rows={result.manifest['candidate_rows']}")

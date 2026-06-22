@@ -293,6 +293,38 @@ PointCloud2, legacy PointCloud, and Livox CustomMsg topics are handled by the
 native extraction path described below; undocumented raw Livox binary packets
 still need dataset-specific decoding.
 
+### Dynamic point-cloud extraction ablation
+
+Point-cloud candidate extraction defaults to the original static clustering
+path. For controlled ablations, the CLI can remove persistent occupied voxels
+per sequence/source before clustering residual points:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --sequence-root data/mmuad_export \
+  --point-extraction-mode dynamic \
+  --dynamic-background-voxel-size-m 0.75 \
+  --dynamic-background-min-frame-fraction 0.6 \
+  --dynamic-background-min-frames 3 \
+  --voxel-size-m 0.75 \
+  --min-cluster-points 3 \
+  --output-dir outputs/mmuad_dynamic_extraction_smoke
+```
+
+`--point-extraction-mode static-plus-dynamic` writes the union of the original
+static clusters and the dynamic residual clusters. Candidate rows include
+`point_extraction_mode` and dynamic-background diagnostic columns such as
+removed point count and persistent voxel count. This is an experimental
+detector ablation, not a default MMUAD method.
+
+Real-data smoke note: on unpacked public/validation-style roots with
+`Image/`, `lidar_360/`, `livox_avia/`, and `radar_enhance_pcl/` folders, use
+the command above first without an evaluation reference and inspect
+`mmuad_selected_tracklets.csv` plus `mmuad_metrics.json`. This checks that the
+real point-cloud frames load, residual candidates are produced, and official
+timestamp completion still writes the expected files. It does not establish
+hidden-test leaderboard compatibility or official MMUAD parsing completeness.
+
 ### Split manifests
 
 Sequence-root mode can be restricted to a split manifest:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import math
 from collections import deque
 from pathlib import Path
 from typing import Any, Iterable
@@ -21,6 +22,7 @@ from raft_uav.mmuad.schema import (
 DELIMITED_TABLE_SUFFIXES = {".csv", ".tsv", ".txt"}
 JSON_TABLE_SUFFIXES = {".json", ".jsonl", ".ndjson"}
 COMPRESSED_TABLE_SUFFIX = ".gz"
+POINT_EXTRACTION_MODES = ("static", "dynamic", "static-plus-dynamic")
 DISCOVERABLE_DELIMITED_TABLE_SUFFIXES = tuple(
     sorted(
         DELIMITED_TABLE_SUFFIXES
@@ -210,6 +212,11 @@ def load_point_cloud_csv_as_candidates(
     voxel_size_m: float = 0.75,
     min_points: int = 3,
     min_confidence: float = 0.0,
+    point_extraction_mode: str = "static",
+    dynamic_background_voxel_size_m: float | None = None,
+    dynamic_background_min_frame_fraction: float = 0.6,
+    dynamic_background_min_frames: int = 3,
+    dynamic_background_neighbor_radius_voxels: int = 0,
 ) -> CandidateFrame:
     """Cluster simple point-cloud CSV rows into UAV candidate centroids.
 
@@ -219,14 +226,34 @@ def load_point_cloud_csv_as_candidates(
     baseline and smoke-test feature rather than a competitive MMUAD detector.
     """
 
-    points = normalize_truth_columns(pd.read_csv(path))
-    return _point_rows_to_candidates(
+    points = load_point_cloud_csv_as_points(path, source=source)
+    return point_rows_to_candidates(
         points,
         source=source,
         voxel_size_m=voxel_size_m,
         min_points=min_points,
         min_confidence=min_confidence,
+        point_extraction_mode=point_extraction_mode,
+        dynamic_background_voxel_size_m=dynamic_background_voxel_size_m,
+        dynamic_background_min_frame_fraction=dynamic_background_min_frame_fraction,
+        dynamic_background_min_frames=dynamic_background_min_frames,
+        dynamic_background_neighbor_radius_voxels=dynamic_background_neighbor_radius_voxels,
     )
+
+
+def load_point_cloud_csv_as_points(
+    path: Path,
+    *,
+    source: str = "lidar-cluster",
+) -> pd.DataFrame:
+    """Load a point-cloud CSV row table without clustering it."""
+
+    points = normalize_truth_columns(pd.read_csv(path))
+    if "source" not in points.columns:
+        points["source"] = source
+    else:
+        points["source"] = _filled_text_series(points["source"], default=source)
+    return points
 
 
 
@@ -240,6 +267,11 @@ def load_point_cloud_file_as_candidates(
     voxel_size_m: float = 0.75,
     min_points: int = 3,
     min_confidence: float = 0.0,
+    point_extraction_mode: str = "static",
+    dynamic_background_voxel_size_m: float | None = None,
+    dynamic_background_min_frame_fraction: float = 0.6,
+    dynamic_background_min_frames: int = 3,
+    dynamic_background_neighbor_radius_voxels: int = 0,
 ) -> CandidateFrame:
     """Load exported point-cloud files and cluster them into candidates.
 
@@ -251,9 +283,39 @@ def load_point_cloud_file_as_candidates(
     filename when it contains a numeric token, otherwise it defaults to ``0.0``.
     """
 
+    source = source or Path(path).stem.replace("_points", "-cluster")
+    points = load_point_cloud_file_as_points(
+        path,
+        source=source,
+        sequence_id=sequence_id,
+        time_s=time_s,
+    )
+    return point_rows_to_candidates(
+        points,
+        source=source,
+        voxel_size_m=voxel_size_m,
+        min_points=min_points,
+        min_confidence=min_confidence,
+        point_extraction_mode=point_extraction_mode,
+        dynamic_background_voxel_size_m=dynamic_background_voxel_size_m,
+        dynamic_background_min_frame_fraction=dynamic_background_min_frame_fraction,
+        dynamic_background_min_frames=dynamic_background_min_frames,
+        dynamic_background_neighbor_radius_voxels=dynamic_background_neighbor_radius_voxels,
+    )
+
+
+def load_point_cloud_file_as_points(
+    path: Path,
+    *,
+    source: str | None = None,
+    sequence_id: str | None = None,
+    time_s: float | None = None,
+) -> pd.DataFrame:
+    """Load an exported point-cloud file and return normalized point rows."""
+
     path = Path(path)
     suffix = data_file_suffix(path)
-    source = source or path.stem.replace("_points", "-cluster")
+    point_source = source or path.stem.replace("_points", "-cluster")
     if suffix in DELIMITED_TABLE_SUFFIXES:
         points = _read_point_cloud_csv(path)
     elif suffix in JSON_TABLE_SUFFIXES:
@@ -272,19 +334,17 @@ def load_point_cloud_file_as_candidates(
         points = _read_binary_point_cloud(path)
     else:
         raise ValueError(f"unsupported point-cloud extension: {path.suffix}")
-    points = _add_point_cloud_metadata(
+    out = _add_point_cloud_metadata(
         points,
         path=path,
         sequence_id=sequence_id,
         time_s=time_s,
     )
-    return _point_rows_to_candidates(
-        points,
-        source=source,
-        voxel_size_m=voxel_size_m,
-        min_points=min_points,
-        min_confidence=min_confidence,
-    )
+    if "source" not in out.columns:
+        out["source"] = point_source
+    else:
+        out["source"] = _filled_text_series(out["source"], default=point_source)
+    return out
 
 
 def _read_point_cloud_csv(path: Path) -> pd.DataFrame:
@@ -360,6 +420,11 @@ def point_rows_to_candidates(
     voxel_size_m: float = 0.75,
     min_points: int = 3,
     min_confidence: float = 0.0,
+    point_extraction_mode: str = "static",
+    dynamic_background_voxel_size_m: float | None = None,
+    dynamic_background_min_frame_fraction: float = 0.6,
+    dynamic_background_min_frames: int = 3,
+    dynamic_background_neighbor_radius_voxels: int = 0,
 ) -> CandidateFrame:
     """Cluster normalized point rows into candidate centroids.
 
@@ -367,12 +432,21 @@ def point_rows_to_candidates(
     """
 
     normalized = normalize_truth_columns(points)
+    if "source" not in normalized.columns:
+        normalized["source"] = source
+    else:
+        normalized["source"] = _filled_text_series(normalized["source"], default=source)
     return _point_rows_to_candidates(
         normalized,
         source=source,
         voxel_size_m=voxel_size_m,
         min_points=min_points,
         min_confidence=min_confidence,
+        point_extraction_mode=point_extraction_mode,
+        dynamic_background_voxel_size_m=dynamic_background_voxel_size_m,
+        dynamic_background_min_frame_fraction=dynamic_background_min_frame_fraction,
+        dynamic_background_min_frames=dynamic_background_min_frames,
+        dynamic_background_neighbor_radius_voxels=dynamic_background_neighbor_radius_voxels,
     )
 
 
@@ -402,49 +476,207 @@ def _point_rows_to_candidates(
     voxel_size_m: float,
     min_points: int,
     min_confidence: float,
+    point_extraction_mode: str,
+    dynamic_background_voxel_size_m: float | None,
+    dynamic_background_min_frame_fraction: float,
+    dynamic_background_min_frames: int,
+    dynamic_background_neighbor_radius_voxels: int,
 ) -> CandidateFrame:
+    mode = _normalize_point_extraction_mode(point_extraction_mode)
+    point_sets: list[tuple[str, pd.DataFrame, dict[tuple[str, str], dict[str, object]]]] = []
+    if mode in {"static", "static-plus-dynamic"}:
+        point_sets.append(("static", points, {}))
+    if mode in {"dynamic", "static-plus-dynamic"}:
+        dynamic_points, dynamic_stats = _dynamic_point_residuals(
+            points,
+            voxel_size_m=(
+                voxel_size_m
+                if dynamic_background_voxel_size_m is None
+                else dynamic_background_voxel_size_m
+            ),
+            min_frame_fraction=dynamic_background_min_frame_fraction,
+            min_frames=dynamic_background_min_frames,
+            neighbor_radius_voxels=dynamic_background_neighbor_radius_voxels,
+        )
+        point_sets.append(("dynamic", dynamic_points, dynamic_stats))
+
     records: list[dict[str, object]] = []
-    for (sequence_id, time_s), group in points.groupby(["sequence_id", "time_s"], sort=True):
-        xyz = group[["x_m", "y_m", "z_m"]].to_numpy(dtype=float)
-        for cluster_idx, members in enumerate(
-            _voxel_connected_components(xyz, voxel_size_m=voxel_size_m, min_points=min_points)
+    for extraction_mode, extraction_points, dynamic_stats in point_sets:
+        if extraction_points.empty:
+            continue
+        group_columns = ["sequence_id", "source", "time_s"]
+        for (sequence_id, point_source, time_s), group in extraction_points.groupby(
+            group_columns,
+            sort=True,
         ):
-            cluster = xyz[members]
-            confidence = float(len(cluster))
-            if confidence < float(min_confidence):
-                continue
-            centroid = cluster.mean(axis=0)
-            spread = np.maximum(cluster.std(axis=0), 0.25)
-            extent = np.ptp(cluster, axis=0)
-            bbox_volume = float(np.prod(np.maximum(extent, 0.05)))
-            density = float(len(cluster) / bbox_volume) if bbox_volume > 0 else float(len(cluster))
-            records.append(
-                {
-                    "sequence_id": sequence_id,
-                    "time_s": float(time_s),
-                    "source": source,
-                    "track_id": f"{source}:{sequence_id}:{time_s}:{cluster_idx}",
-                    "x_m": centroid[0],
-                    "y_m": centroid[1],
-                    "z_m": centroid[2],
-                    "std_xy_m": float(max(spread[0], spread[1], 0.5)),
-                    "std_z_m": float(max(spread[2], 0.5)),
-                    "confidence": confidence,
-                    "class_name": "uav",
-                    "cluster_point_count": int(len(cluster)),
-                    "cluster_extent_x_m": float(extent[0]),
-                    "cluster_extent_y_m": float(extent[1]),
-                    "cluster_extent_z_m": float(extent[2]),
-                    "cluster_extent_xy_m": float(np.linalg.norm(extent[:2])),
-                    "cluster_extent_3d_m": float(np.linalg.norm(extent)),
-                    "cluster_bbox_volume_m3": bbox_volume,
-                    "cluster_density_points_per_m3": density,
-                    "cluster_range_xy_m": float(np.linalg.norm(centroid[:2])),
-                    "cluster_range_3d_m": float(np.linalg.norm(centroid)),
-                    "cluster_height_m": float(centroid[2]),
-                }
-            )
+            source_name = str(point_source) if pd.notna(point_source) else source
+            xyz = group[["x_m", "y_m", "z_m"]].to_numpy(dtype=float)
+            for cluster_idx, members in enumerate(
+                _voxel_connected_components(
+                    xyz,
+                    voxel_size_m=voxel_size_m,
+                    min_points=min_points,
+                )
+            ):
+                cluster = xyz[members]
+                confidence = float(len(cluster))
+                if confidence < float(min_confidence):
+                    continue
+                centroid = cluster.mean(axis=0)
+                spread = np.maximum(cluster.std(axis=0), 0.25)
+                extent = np.ptp(cluster, axis=0)
+                bbox_volume = float(np.prod(np.maximum(extent, 0.05)))
+                density = (
+                    float(len(cluster) / bbox_volume)
+                    if bbox_volume > 0
+                    else float(len(cluster))
+                )
+                dynamic_row = dynamic_stats.get((str(sequence_id), source_name), {})
+                records.append(
+                    {
+                        "sequence_id": sequence_id,
+                        "time_s": float(time_s),
+                        "source": source_name,
+                        "track_id": (
+                            f"{source_name}:{extraction_mode}:"
+                            f"{sequence_id}:{time_s}:{cluster_idx}"
+                        ),
+                        "x_m": centroid[0],
+                        "y_m": centroid[1],
+                        "z_m": centroid[2],
+                        "std_xy_m": float(max(spread[0], spread[1], 0.5)),
+                        "std_z_m": float(max(spread[2], 0.5)),
+                        "confidence": confidence,
+                        "class_name": "uav",
+                        "cluster_point_count": int(len(cluster)),
+                        "cluster_extent_x_m": float(extent[0]),
+                        "cluster_extent_y_m": float(extent[1]),
+                        "cluster_extent_z_m": float(extent[2]),
+                        "cluster_extent_xy_m": float(np.linalg.norm(extent[:2])),
+                        "cluster_extent_3d_m": float(np.linalg.norm(extent)),
+                        "cluster_bbox_volume_m3": bbox_volume,
+                        "cluster_density_points_per_m3": density,
+                        "cluster_range_xy_m": float(np.linalg.norm(centroid[:2])),
+                        "cluster_range_3d_m": float(np.linalg.norm(centroid)),
+                        "cluster_height_m": float(centroid[2]),
+                        "point_extraction_mode": extraction_mode,
+                        **dynamic_row,
+                    }
+                )
     return CandidateFrame(normalize_candidate_columns(pd.DataFrame.from_records(records)))
+
+
+def _normalize_point_extraction_mode(mode: str) -> str:
+    normalized = str(mode).strip().lower().replace("_", "-")
+    aliases = {
+        "static+dynamic": "static-plus-dynamic",
+        "static-dynamic": "static-plus-dynamic",
+        "union": "static-plus-dynamic",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in POINT_EXTRACTION_MODES:
+        allowed = ", ".join(POINT_EXTRACTION_MODES)
+        raise ValueError(f"unsupported point extraction mode {mode!r}; allowed={allowed}")
+    return normalized
+
+
+def _dynamic_point_residuals(
+    points: pd.DataFrame,
+    *,
+    voxel_size_m: float,
+    min_frame_fraction: float,
+    min_frames: int,
+    neighbor_radius_voxels: int,
+) -> tuple[pd.DataFrame, dict[tuple[str, str], dict[str, object]]]:
+    voxel_size = float(voxel_size_m)
+    if not np.isfinite(voxel_size) or voxel_size <= 0.0:
+        raise ValueError("--dynamic-background-voxel-size-m must be positive")
+    fraction = float(min_frame_fraction)
+    if not np.isfinite(fraction) or fraction <= 0.0 or fraction > 1.0:
+        raise ValueError("--dynamic-background-min-frame-fraction must be in (0, 1]")
+    minimum_frames = max(1, int(min_frames))
+    radius = max(0, int(neighbor_radius_voxels))
+    kept_groups: list[pd.DataFrame] = []
+    stats: dict[tuple[str, str], dict[str, object]] = {}
+    if points.empty:
+        return points.copy(), stats
+
+    for (sequence_id, source), group in points.groupby(["sequence_id", "source"], sort=True):
+        key = (str(sequence_id), str(source))
+        frame_count = int(group["time_s"].nunique())
+        base_stats: dict[str, object] = {
+            "dynamic_background_frame_count": frame_count,
+            "dynamic_background_total_points": int(len(group)),
+            "dynamic_background_voxel_size_m": voxel_size,
+            "dynamic_background_min_frame_fraction": fraction,
+            "dynamic_background_min_frames": minimum_frames,
+            "dynamic_background_neighbor_radius_voxels": radius,
+        }
+        if frame_count < max(2, minimum_frames):
+            kept_groups.append(group.copy())
+            stats[key] = {
+                **base_stats,
+                "dynamic_background_removed_points": 0,
+                "dynamic_background_persistent_voxel_count": 0,
+                "dynamic_background_status": "insufficient_frames",
+            }
+            continue
+
+        xyz = group[["x_m", "y_m", "z_m"]].to_numpy(dtype=float)
+        voxels = _point_voxels(xyz, voxel_size_m=voxel_size)
+        voxel_frames: dict[tuple[int, int, int], set[float]] = {}
+        for voxel, time_s in zip(voxels, group["time_s"].to_numpy(dtype=float), strict=False):
+            voxel_frames.setdefault(tuple(int(value) for value in voxel), set()).add(float(time_s))
+        required_frames = max(minimum_frames, int(math.ceil(fraction * frame_count)))
+        persistent = {
+            voxel
+            for voxel, frames in voxel_frames.items()
+            if len(frames) >= required_frames
+        }
+        if radius > 0 and persistent:
+            persistent = _expand_voxel_set(persistent, radius=radius)
+        keep_mask = np.array(
+            [tuple(int(value) for value in voxel) not in persistent for voxel in voxels],
+            dtype=bool,
+        )
+        kept = group.loc[keep_mask].copy()
+        if not kept.empty:
+            kept_groups.append(kept)
+        stats[key] = {
+            **base_stats,
+            "dynamic_background_removed_points": int((~keep_mask).sum()),
+            "dynamic_background_persistent_voxel_count": int(len(persistent)),
+            "dynamic_background_required_frames": int(required_frames),
+            "dynamic_background_status": "ok",
+        }
+
+    if not kept_groups:
+        return points.iloc[0:0].copy(), stats
+    return pd.concat(kept_groups, ignore_index=True), stats
+
+
+def _point_voxels(xyz: np.ndarray, *, voxel_size_m: float) -> np.ndarray:
+    return np.floor(xyz / float(voxel_size_m)).astype(int)
+
+
+def _expand_voxel_set(
+    voxels: set[tuple[int, int, int]],
+    *,
+    radius: int,
+) -> set[tuple[int, int, int]]:
+    expanded: set[tuple[int, int, int]] = set()
+    for x, y, z in voxels:
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                for dz in range(-radius, radius + 1):
+                    expanded.add((x + dx, y + dy, z + dz))
+    return expanded
+
+
+def _filled_text_series(values: pd.Series, *, default: str) -> pd.Series:
+    text = values.where(values.notna(), default).astype(str).str.strip()
+    missing = text.eq("") | text.str.lower().isin({"nan", "none", "<na>"})
+    return text.where(~missing, str(default))
 
 
 def _read_pcd(path: Path) -> pd.DataFrame:
