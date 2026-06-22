@@ -29,10 +29,20 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from raft_uav.mmuad.classification import load_sequence_class_labels  # noqa: E402
+from raft_uav.mmuad.cluster_ranker import _load_candidates_from_args  # noqa: E402
+from raft_uav.mmuad.evaluator import load_evaluation_truth_file  # noqa: E402
 from raft_uav.mmuad.io import load_truth_file  # noqa: E402
 from raft_uav.mmuad.sequence import (  # noqa: E402
     _sequence_class_label,
     discover_sequence_paths,
+)
+from raft_uav.mmuad.source_calibration import (  # noqa: E402
+    SOURCE_CALIBRATION_MODES,
+    fit_source_calibration,
+    write_source_calibration_json,
+)
+from raft_uav.mmuad.train_selected_config import (  # noqa: E402
+    load_train_selected_config,
 )
 
 
@@ -71,12 +81,36 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--val-root", type=Path, default=DEFAULT_VAL_ROOT)
     parser.add_argument("--val-reference", type=Path, default=DEFAULT_VAL_REFERENCE)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--selected-config-json", type=Path)
     parser.add_argument("--sequence-glob", default="*")
     parser.add_argument("--classifier-method", default="random-forest")
     parser.add_argument("--ranker-model-type", default="random-forest-classifier")
     parser.add_argument("--ranker-target-column", default="good_cluster_5m")
     parser.add_argument("--good-threshold-m", type=float, default=5.0)
     parser.add_argument("--selection-confidence-weight", type=float, default=64.0)
+    parser.add_argument(
+        "--source-calibration-mode",
+        choices=SOURCE_CALIBRATION_MODES,
+        default="identity",
+    )
+    parser.add_argument("--source-translation-alpha", type=float, default=1.0)
+    parser.add_argument("--source-calibration-max-truth-time-delta-s", type=float, default=0.5)
+    parser.add_argument("--source-calibration-max-pair-distance-m", type=float, default=120.0)
+    parser.add_argument("--source-calibration-min-pairs-per-source", type=int, default=20)
+    parser.add_argument("--mmuad-selection-mode", choices=("greedy", "viterbi"), default="greedy")
+    parser.add_argument("--mmuad-viterbi-motion-weight", type=float, default=1.0)
+    parser.add_argument("--mmuad-viterbi-ranker-weight", type=float, default=1.0)
+    parser.add_argument("--mmuad-viterbi-source-switch-penalty", type=float, default=0.0)
+    parser.add_argument("--mmuad-viterbi-max-speed-mps", type=float, default=60.0)
+    parser.add_argument("--mmuad-viterbi-gap-penalty", type=float, default=0.0)
+    parser.add_argument(
+        "--trajectory-completion-mode",
+        choices=("none", "gap-interpolation", "fixed-lag", "constant-velocity", "constant-acceleration"),
+        default="none",
+    )
+    parser.add_argument("--trajectory-speed-gate-mps", type=float, default=0.0)
+    parser.add_argument("--trajectory-smoothing-blend", type=float, default=1.0)
+    parser.add_argument("--image-nonimage-fusion-weight", type=float, default=0.0)
     parser.add_argument("--n-estimators", type=int, default=200)
     parser.add_argument("--random-state", type=int, default=13)
     parser.add_argument("--voxel-size-m", type=float, default=0.75)
@@ -85,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-apply-calibration", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    selected_config = apply_selected_config(args)
 
     if args.train_reference is not None and args.train_reference.resolve() == args.val_reference.resolve():
         raise ValueError("train and validation references must be different files")
@@ -99,13 +134,35 @@ def main(argv: list[str] | None = None) -> int:
         inventory = build_train_inventory(args)
         write_json(paths["train_inventory"], inventory)
         resolved = resolve_train_inputs(args, paths)
+        if not args.dry_run:
+            fit_selected_source_calibration(args, paths, resolved, commands)
         planned = command_plan(args, paths, resolved)
         if not args.dry_run:
             for step, command in planned:
                 run_step(step, command, args.output_dir, commands)
-        summary = build_summary(args, paths, resolved, commands, started_at, "dry_run" if args.dry_run else "ok", None, planned)
+        summary = build_summary(
+            args,
+            paths,
+            resolved,
+            commands,
+            started_at,
+            "dry_run" if args.dry_run else "ok",
+            None,
+            planned,
+            selected_config,
+        )
     except Exception as exc:
-        summary = build_summary(args, paths, locals().get("resolved"), commands, started_at, "failed", str(exc), locals().get("planned"))
+        summary = build_summary(
+            args,
+            paths,
+            locals().get("resolved"),
+            commands,
+            started_at,
+            "failed",
+            str(exc),
+            locals().get("planned"),
+            selected_config,
+        )
         write_json(paths["summary_json"], summary)
         write_summary_csv(paths["summary_csv"], summary)
         write_provenance(args, paths, summary, commands)
@@ -141,7 +198,12 @@ def artifact_paths(output_dir: Path) -> dict[str, Path]:
         "ranker_model": output_dir / "mmuad_cluster_ranker_train.json",
         "ranker_features": output_dir / "mmuad_cluster_ranker_train_features.csv",
         "ranker_candidates": output_dir / "mmuad_cluster_ranker_train_candidates.csv",
+        "source_calibration_json": output_dir / "mmuad_train_source_calibration.json",
+        "source_calibration_pairs": output_dir / "mmuad_train_source_calibration_pairs.csv",
+        "source_calibration_summary": output_dir / "mmuad_train_source_calibration_summary.csv",
+        "ranker_train_source_calibrated": output_dir / "mmuad_cluster_ranker_train_source_calibrated_candidates.csv",
         "tracker_dir": output_dir / "tracker_train_to_val",
+        "tracker_val_source_calibrated": output_dir / "mmuad_val_source_calibrated_candidates.csv",
         "ranker_val_scored": output_dir / "mmuad_cluster_ranker_val_scored_candidates.csv",
         "ranker_val_features": output_dir / "mmuad_cluster_ranker_val_score_features.csv",
         "ranker_val_merged": output_dir / "mmuad_cluster_ranker_val_merged_candidates.csv",
@@ -156,6 +218,90 @@ def artifact_paths(output_dir: Path) -> dict[str, Path]:
         "scorecard_public_rows": output_dir / "track5_scorecard_public_rows_train_to_val.csv",
         "scorecard_nearest_rows": output_dir / "track5_scorecard_nearest_rows_train_to_val.csv",
     }
+
+
+def apply_selected_config(args: argparse.Namespace) -> dict[str, Any] | None:
+    if args.selected_config_json is None:
+        return None
+    config = load_train_selected_config(args.selected_config_json)
+    mapping = {
+        "source_calibration_mode": "source_calibration_mode",
+        "source_translation_alpha": "source_translation_alpha",
+        "ranker_model_type": "ranker_model_type",
+        "ranker_target_column": "ranker_target_column",
+        "mmuad_selection_mode": "mmuad_selection_mode",
+        "viterbi_motion_weight": "mmuad_viterbi_motion_weight",
+        "viterbi_ranker_weight": "mmuad_viterbi_ranker_weight",
+        "viterbi_source_switch_penalty": "mmuad_viterbi_source_switch_penalty",
+        "viterbi_max_speed_mps": "mmuad_viterbi_max_speed_mps",
+        "viterbi_gap_penalty": "mmuad_viterbi_gap_penalty",
+        "smoothing_mode": "trajectory_completion_mode",
+        "smoothing_speed_gate_mps": "trajectory_speed_gate_mps",
+        "smoothing_blend": "trajectory_smoothing_blend",
+        "classifier_method": "classifier_method",
+        "image_nonimage_fusion_weight": "image_nonimage_fusion_weight",
+    }
+    for config_key, arg_name in mapping.items():
+        setattr(args, arg_name, config[config_key])
+    return config
+
+
+def fit_selected_source_calibration(
+    args: argparse.Namespace,
+    paths: dict[str, Path],
+    resolved: dict[str, Any],
+    commands: list[dict[str, Any]],
+) -> None:
+    if args.source_calibration_mode == "identity":
+        return
+    started = time.time()
+    candidates = _load_candidates_from_args(
+        csv_path=None,
+        sequence_root=args.train_root,
+        sequence_glob=args.sequence_glob,
+        apply_calibration=not args.no_apply_calibration,
+        voxel_size_m=args.voxel_size_m,
+        min_cluster_points=args.min_cluster_points,
+    )
+    truth = load_evaluation_truth_file(Path(resolved["train_truth"])).rows
+    payload, pairs, fit_summary = fit_source_calibration(
+        candidates,
+        truth,
+        mode=args.source_calibration_mode,
+        max_truth_time_delta_s=args.source_calibration_max_truth_time_delta_s,
+        max_pair_distance_m=args.source_calibration_max_pair_distance_m,
+        min_pairs_per_source=args.source_calibration_min_pairs_per_source,
+        source_translation_alpha_grid=[args.source_translation_alpha],
+    )
+    payload["provenance"] = {
+        "protocol": "fit_on_train_only_before_public_validation_eval",
+        "train_root": str(args.train_root),
+        "train_truth": resolved["train_truth"],
+        "selected_config_json": None
+        if args.selected_config_json is None
+        else str(args.selected_config_json),
+    }
+    write_source_calibration_json(payload, paths["source_calibration_json"])
+    pairs.to_csv(paths["source_calibration_pairs"], index=False)
+    fit_summary.to_csv(paths["source_calibration_summary"], index=False)
+    commands.append(
+        {
+            "name": "fit_source_calibration",
+            "command": [
+                "in-process",
+                "fit_source_calibration",
+                "--mode",
+                args.source_calibration_mode,
+                "--source-translation-alpha",
+                str(args.source_translation_alpha),
+            ],
+            "returncode": 0,
+            "duration_s": round(time.time() - started, 3),
+            "output_json": str(paths["source_calibration_json"]),
+            "fit_pairs_csv": str(paths["source_calibration_pairs"]),
+            "fit_summary_csv": str(paths["source_calibration_summary"]),
+        }
+    )
 
 
 def build_train_inventory(args: argparse.Namespace) -> dict[str, Any]:
@@ -261,6 +407,14 @@ def command_plan(args: argparse.Namespace, paths: dict[str, Path], resolved: dic
     common = ["--sequence-glob", args.sequence_glob, "--voxel-size-m", str(args.voxel_size_m), "--min-cluster-points", str(args.min_cluster_points)]
     if args.no_apply_calibration:
         common.append("--no-apply-calibration")
+    source_calibration_args = []
+    if args.source_calibration_mode != "identity":
+        source_calibration_args = [
+            "--mmuad-source-calibration-json",
+            str(paths["source_calibration_json"]),
+            "--mmuad-source-calibration-mode",
+            args.source_calibration_mode,
+        ]
     classifier = [
         sys.executable,
         "-m",
@@ -304,6 +458,15 @@ def command_plan(args: argparse.Namespace, paths: dict[str, Path], resolved: dic
         str(paths["ranker_features"]),
         "--train-candidates-output-csv",
         str(paths["ranker_candidates"]),
+        *source_calibration_args,
+        *(
+            [
+                "--train-source-calibrated-candidates-csv",
+                str(paths["ranker_train_source_calibrated"]),
+            ]
+            if source_calibration_args
+            else []
+        ),
         "--random-state",
         str(args.random_state),
         "--n-estimators",
@@ -333,8 +496,35 @@ def command_plan(args: argparse.Namespace, paths: dict[str, Path], resolved: dic
         str(paths["classifier_val_features"]),
         "--sequence-classifier-provenance-json",
         str(paths["classifier_provenance"]),
+        *source_calibration_args,
+        *(
+            [
+                "--mmuad-source-calibrated-candidates-csv",
+                str(paths["tracker_val_source_calibrated"]),
+            ]
+            if source_calibration_args
+            else []
+        ),
         "--selection-confidence-weight",
         str(args.selection_confidence_weight),
+        "--mmuad-selection-mode",
+        args.mmuad_selection_mode,
+        "--mmuad-viterbi-motion-weight",
+        str(args.mmuad_viterbi_motion_weight),
+        "--mmuad-viterbi-ranker-weight",
+        str(args.mmuad_viterbi_ranker_weight),
+        "--mmuad-viterbi-source-switch-penalty",
+        str(args.mmuad_viterbi_source_switch_penalty),
+        "--mmuad-viterbi-max-speed-mps",
+        str(args.mmuad_viterbi_max_speed_mps),
+        "--mmuad-viterbi-gap-penalty",
+        str(args.mmuad_viterbi_gap_penalty),
+        "--trajectory-completion-mode",
+        args.trajectory_completion_mode,
+        "--trajectory-speed-gate-mps",
+        str(args.trajectory_speed_gate_mps),
+        "--trajectory-smoothing-blend",
+        str(args.trajectory_smoothing_blend),
         "--ug2-official-results-csv",
         str(paths["official_results_csv"]),
         "--ug2-official-codabench-zip",
@@ -426,6 +616,7 @@ def build_summary(
     status: str,
     failure: str | None,
     planned: list[tuple[str, list[str]]] | None,
+    selected_config: dict[str, Any] | None,
 ) -> dict[str, Any]:
     scorecard = read_json(paths["scorecard_json"])
     pooled = (scorecard.get("public_track5") or {}).get("pooled") or {}
@@ -445,6 +636,35 @@ def build_summary(
         "mmaud_results_train_to_val_csv": str(paths["official_results_csv"]),
         "ug2_submission_train_to_val_zip": str(paths["official_zip"]),
         "track5_scorecard_train_to_val_json": str(paths["scorecard_json"]),
+        "selected_config_json": None
+        if args.selected_config_json is None
+        else str(args.selected_config_json),
+        "selected_config": selected_config,
+        "selection_protocol": (
+            "frozen_train_selected_config"
+            if selected_config is not None
+            else "direct_cli_settings"
+        ),
+        "source_calibration_mode": args.source_calibration_mode,
+        "source_translation_alpha": args.source_translation_alpha,
+        "source_calibration_json": (
+            str(paths["source_calibration_json"])
+            if args.source_calibration_mode != "identity"
+            else None
+        ),
+        "ranker_model_type": args.ranker_model_type,
+        "ranker_target_column": args.ranker_target_column,
+        "mmuad_selection_mode": args.mmuad_selection_mode,
+        "viterbi_motion_weight": args.mmuad_viterbi_motion_weight,
+        "viterbi_ranker_weight": args.mmuad_viterbi_ranker_weight,
+        "viterbi_source_switch_penalty": args.mmuad_viterbi_source_switch_penalty,
+        "viterbi_max_speed_mps": args.mmuad_viterbi_max_speed_mps,
+        "viterbi_gap_penalty": args.mmuad_viterbi_gap_penalty,
+        "smoothing_mode": args.trajectory_completion_mode,
+        "smoothing_speed_gate_mps": args.trajectory_speed_gate_mps,
+        "smoothing_blend": args.trajectory_smoothing_blend,
+        "classifier_method": args.classifier_method,
+        "image_nonimage_fusion_weight": args.image_nonimage_fusion_weight,
         "pose_mse_loss_m2": pooled.get("pose_mse_loss_m2"),
         "pose_rmse_m": nearest.get("rmse_3d_m"),
         "p95_3d_m": pooled.get("p95_3d_m") or nearest.get("p95_3d_m"),

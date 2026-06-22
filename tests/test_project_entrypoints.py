@@ -256,6 +256,17 @@ def test_mmuad_source_calibration_entrypoint_targets_import() -> None:
     _assert_entrypoint_target_imports("raft-uav-mmuad-apply-source-calibration")
 
 
+def test_mmuad_train_selected_config_entrypoint_is_exposed() -> None:
+    assert (
+        _project_scripts()["raft-uav-mmuad-select-train-config"]
+        == "raft_uav.mmuad.train_selected_config:main"
+    )
+
+
+def test_mmuad_train_selected_config_entrypoint_target_imports() -> None:
+    _assert_entrypoint_target_imports("raft-uav-mmuad-select-train-config")
+
+
 def test_playbook_runnable_commands_are_installed_entrypoints() -> None:
     playbook = Path("docs/results_improvement_playbook.md").read_text(encoding="utf-8")
     documented = set(re.findall(r"`(raft-uav-[a-z0-9][a-z0-9-]*)`", playbook))
