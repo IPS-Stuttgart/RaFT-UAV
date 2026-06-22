@@ -49,12 +49,14 @@ from raft_uav.mmuad.inspect import (
     write_layout_report as write_sequence_layout_report,
 )
 from raft_uav.mmuad.io import (
+    POINT_EXTRACTION_MODES,
     load_candidate_file,
     load_candidate_csv,
-    load_point_cloud_file_as_candidates,
-    load_point_cloud_csv_as_candidates,
+    load_point_cloud_csv_as_points,
+    load_point_cloud_file_as_points,
     load_truth_file,
     merge_candidate_frames,
+    point_rows_to_candidates,
 )
 from raft_uav.mmuad.mot import MultiObjectTrackerConfig, run_mmuad_multi_object_tracker
 from raft_uav.mmuad.native_ros import extract_native_rosbag_topic_map
@@ -257,6 +259,38 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--point-source", default="lidar-cluster")
     parser.add_argument("--voxel-size-m", type=float, default=0.75)
     parser.add_argument("--min-cluster-points", type=int, default=3)
+    parser.add_argument(
+        "--point-extraction-mode",
+        choices=POINT_EXTRACTION_MODES,
+        default="static",
+        help=(
+            "point-cloud candidate extraction mode; dynamic removes persistent "
+            "background voxels before clustering"
+        ),
+    )
+    parser.add_argument(
+        "--dynamic-background-voxel-size-m",
+        type=float,
+        help="voxel size for dynamic background occupancy; defaults to --voxel-size-m",
+    )
+    parser.add_argument(
+        "--dynamic-background-min-frame-fraction",
+        type=float,
+        default=0.6,
+        help="fraction of sequence frames a voxel must occupy to be treated as static",
+    )
+    parser.add_argument(
+        "--dynamic-background-min-frames",
+        type=int,
+        default=3,
+        help="minimum occupied frames before a voxel can be treated as static background",
+    )
+    parser.add_argument(
+        "--dynamic-background-neighbor-radius-voxels",
+        type=int,
+        default=0,
+        help="optional voxel-neighborhood radius around persistent background voxels",
+    )
     parser.add_argument("--cluster-ranker-model-json", type=Path)
     parser.add_argument("--cluster-ranker-previous-states-csv", type=Path)
     parser.add_argument("--cluster-ranker-image-evidence-csv", type=Path)
@@ -510,6 +544,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_dir=args.native_ros_extract_output_dir,
                 voxel_size_m=args.voxel_size_m,
                 min_points=args.min_cluster_points,
+                **_native_point_extraction_kwargs(args),
             )
             _maybe_set_official_validation_template_from_truth(args, extracted.truth)
             _maybe_set_official_validation_template_from_native_images(args, extracted)
@@ -1354,24 +1389,9 @@ def _native_image_timestamp_template_frame(extracted) -> pd.DataFrame | None:
 def _run_explicit_files(args: argparse.Namespace):
     frames = [load_candidate_csv(path) for path in args.candidate_csv]
     frames.extend(load_candidate_file(path) for path in args.candidate_file)
-    frames.extend(
-        load_point_cloud_csv_as_candidates(
-            path,
-            source=args.point_source,
-            voxel_size_m=args.voxel_size_m,
-            min_points=args.min_cluster_points,
-        )
-        for path in args.point_cloud_csv
-    )
-    frames.extend(
-        load_point_cloud_file_as_candidates(
-            path,
-            source=args.point_source,
-            voxel_size_m=args.voxel_size_m,
-            min_points=args.min_cluster_points,
-        )
-        for path in args.point_cloud_file
-    )
+    point_cloud_candidates = _load_explicit_point_cloud_candidates(args)
+    if point_cloud_candidates is not None:
+        frames.append(point_cloud_candidates)
     radar_polar_files = list(args.radar_polar_csv) + list(args.radar_polar_file)
     frames.extend(
         load_radar_polar_csv_as_candidates(
@@ -1439,6 +1459,50 @@ def _run_explicit_files(args: argparse.Namespace):
     truth = load_truth_file(truth_path) if truth_path is not None else topic_truth
     _maybe_set_official_validation_template_from_truth(args, truth)
     return _run_tracker_for_mode(args, candidates, truth)
+
+
+def _load_explicit_point_cloud_candidates(args: argparse.Namespace):
+    point_frames = [
+        load_point_cloud_csv_as_points(path, source=args.point_source)
+        for path in args.point_cloud_csv
+    ]
+    point_frames.extend(
+        load_point_cloud_file_as_points(path, source=args.point_source)
+        for path in args.point_cloud_file
+    )
+    if not point_frames:
+        return None
+    return point_rows_to_candidates(
+        pd.concat(point_frames, ignore_index=True),
+        source=args.point_source,
+        voxel_size_m=args.voxel_size_m,
+        min_points=args.min_cluster_points,
+        point_extraction_mode=args.point_extraction_mode,
+        dynamic_background_voxel_size_m=args.dynamic_background_voxel_size_m,
+        dynamic_background_min_frame_fraction=args.dynamic_background_min_frame_fraction,
+        dynamic_background_min_frames=args.dynamic_background_min_frames,
+        dynamic_background_neighbor_radius_voxels=args.dynamic_background_neighbor_radius_voxels,
+    )
+
+
+def _native_point_extraction_kwargs(args: argparse.Namespace) -> dict[str, object]:
+    if (
+        args.point_extraction_mode == "static"
+        and args.dynamic_background_voxel_size_m is None
+        and float(args.dynamic_background_min_frame_fraction) == 0.6
+        and int(args.dynamic_background_min_frames) == 3
+        and int(args.dynamic_background_neighbor_radius_voxels) == 0
+    ):
+        return {}
+    return {
+        "point_extraction_mode": args.point_extraction_mode,
+        "dynamic_background_voxel_size_m": args.dynamic_background_voxel_size_m,
+        "dynamic_background_min_frame_fraction": args.dynamic_background_min_frame_fraction,
+        "dynamic_background_min_frames": args.dynamic_background_min_frames,
+        "dynamic_background_neighbor_radius_voxels": (
+            args.dynamic_background_neighbor_radius_voxels
+        ),
+    }
 
 
 def _explicit_truth_path(args: argparse.Namespace) -> Path | None:
@@ -1632,6 +1696,15 @@ def _run_sequence_root(args: argparse.Namespace):
                 camera_fixed_depth_m=args.camera_fixed_depth_m,
                 camera_std_xy_m=args.camera_std_xy_m,
                 camera_std_z_m=args.camera_std_z_m,
+                point_extraction_mode=args.point_extraction_mode,
+                dynamic_background_voxel_size_m=args.dynamic_background_voxel_size_m,
+                dynamic_background_min_frame_fraction=(
+                    args.dynamic_background_min_frame_fraction
+                ),
+                dynamic_background_min_frames=args.dynamic_background_min_frames,
+                dynamic_background_neighbor_radius_voxels=(
+                    args.dynamic_background_neighbor_radius_voxels
+                ),
             )
             candidate_frames.append(candidates)
             if truth is not None:
@@ -1703,6 +1776,7 @@ def _load_native_sequence_export(args: argparse.Namespace, paths):
         output_dir=output_dir,
         voxel_size_m=args.voxel_size_m,
         min_points=args.min_cluster_points,
+        **_native_point_extraction_kwargs(args),
     )
     if extracted.candidates is None or extracted.candidates.rows.empty:
         manifest_path = output_dir / "native_ros_extraction_manifest.json"

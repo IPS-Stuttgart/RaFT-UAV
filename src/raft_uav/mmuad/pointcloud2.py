@@ -126,6 +126,11 @@ def pointcloud2_to_candidates(
     source: str = "pointcloud2-cluster",
     voxel_size_m: float = 0.75,
     min_points: int = 3,
+    point_extraction_mode: str = "static",
+    dynamic_background_voxel_size_m: float | None = None,
+    dynamic_background_min_frame_fraction: float = 0.6,
+    dynamic_background_min_frames: int = 3,
+    dynamic_background_neighbor_radius_voxels: int = 0,
 ) -> CandidateFrame:
     """Decode and cluster a PointCloud2-like message into candidate centroids."""
 
@@ -138,6 +143,11 @@ def pointcloud2_to_candidates(
         voxel_size_m=voxel_size_m,
         min_points=min_points,
         min_confidence=0.0,
+        point_extraction_mode=point_extraction_mode,
+        dynamic_background_voxel_size_m=dynamic_background_voxel_size_m,
+        dynamic_background_min_frame_fraction=dynamic_background_min_frame_fraction,
+        dynamic_background_min_frames=dynamic_background_min_frames,
+        dynamic_background_neighbor_radius_voxels=dynamic_background_neighbor_radius_voxels,
     )
 
 

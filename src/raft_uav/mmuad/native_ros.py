@@ -102,6 +102,11 @@ def extract_native_rosbag_topic_map(
     output_dir: Path | None = None,
     voxel_size_m: float = 0.75,
     min_points: int = 3,
+    point_extraction_mode: str = "static",
+    dynamic_background_voxel_size_m: float | None = None,
+    dynamic_background_min_frame_fraction: float = 0.6,
+    dynamic_background_min_frames: int = 3,
+    dynamic_background_neighbor_radius_voxels: int = 0,
 ) -> NativeRosExtraction:
     """Extract supported ROS topics according to a topic-map JSON/YAML file.
 
@@ -297,6 +302,13 @@ def extract_native_rosbag_topic_map(
                         source=source,
                         voxel_size_m=voxel_size_m,
                         min_points=min_points,
+                        point_extraction_mode=point_extraction_mode,
+                        dynamic_background_voxel_size_m=dynamic_background_voxel_size_m,
+                        dynamic_background_min_frame_fraction=dynamic_background_min_frame_fraction,
+                        dynamic_background_min_frames=dynamic_background_min_frames,
+                        dynamic_background_neighbor_radius_voxels=(
+                            dynamic_background_neighbor_radius_voxels
+                        ),
                     )
                     candidate_frames.append(frame)
                     rows = len(frame.rows)
@@ -320,6 +332,15 @@ def extract_native_rosbag_topic_map(
                                 )
                             ),
                             min_confidence=float(spec.get("min_confidence", 0.0)),
+                            point_extraction_mode=point_extraction_mode,
+                            dynamic_background_voxel_size_m=dynamic_background_voxel_size_m,
+                            dynamic_background_min_frame_fraction=(
+                                dynamic_background_min_frame_fraction
+                            ),
+                            dynamic_background_min_frames=dynamic_background_min_frames,
+                            dynamic_background_neighbor_radius_voxels=(
+                                dynamic_background_neighbor_radius_voxels
+                            ),
                         )
                         candidate_frames.append(frame)
                         rows = len(frame.rows)
@@ -351,6 +372,15 @@ def extract_native_rosbag_topic_map(
                             ),
                             min_confidence=float(
                                 spec.get("min_confidence", 0.0)
+                            ),
+                            point_extraction_mode=point_extraction_mode,
+                            dynamic_background_voxel_size_m=dynamic_background_voxel_size_m,
+                            dynamic_background_min_frame_fraction=(
+                                dynamic_background_min_frame_fraction
+                            ),
+                            dynamic_background_min_frames=dynamic_background_min_frames,
+                            dynamic_background_neighbor_radius_voxels=(
+                                dynamic_background_neighbor_radius_voxels
                             ),
                         )
                         candidate_frames.append(frame)
@@ -1195,6 +1225,17 @@ def extract_native_rosbag_topic_map(
         "schema": "raft-uav-mmuad-native-ros-extraction-v1",
         "bag_path": str(bag_path),
         "topic_map_json": str(topic_map_json),
+        "point_extraction_mode": str(point_extraction_mode),
+        "dynamic_background_voxel_size_m": (
+            None
+            if dynamic_background_voxel_size_m is None
+            else float(dynamic_background_voxel_size_m)
+        ),
+        "dynamic_background_min_frame_fraction": float(dynamic_background_min_frame_fraction),
+        "dynamic_background_min_frames": int(dynamic_background_min_frames),
+        "dynamic_background_neighbor_radius_voxels": int(
+            dynamic_background_neighbor_radius_voxels
+        ),
         "candidate_rows": int(len(candidates.rows)) if candidates is not None else 0,
         "truth_rows": int(len(truth.rows)) if truth is not None else 0,
         "camera_info_rows": int(len(camera_info)) if camera_info is not None else 0,

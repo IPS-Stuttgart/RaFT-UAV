@@ -145,6 +145,55 @@ def test_mmuad_run_entrypoint_preserves_all_leading_mmuad_value_options(monkeypa
     ]
 
 
+def test_mmuad_run_entrypoint_preserves_dynamic_extraction_value_options(monkeypatch) -> None:
+    from raft_uav.mmuad import run
+
+    forwarded: list[str] = []
+
+    def fake_track_main(argv: list[str] | None = None) -> int:
+        forwarded.extend(argv or [])
+        return 0
+
+    monkeypatch.setattr(run, "track_main", fake_track_main)
+
+    assert (
+        run.main(
+            [
+                "--point-extraction-mode",
+                "dynamic",
+                "--dynamic-background-voxel-size-m",
+                "1.0",
+                "--dynamic-background-min-frame-fraction",
+                "0.5",
+                "--dynamic-background-min-frames",
+                "2",
+                "--dynamic-background-neighbor-radius-voxels",
+                "1",
+                "data/mmuad",
+                "--output-dir",
+                "outputs/mmuad",
+            ]
+        )
+        == 0
+    )
+    assert forwarded == [
+        "--sequence-root",
+        "data/mmuad",
+        "--point-extraction-mode",
+        "dynamic",
+        "--dynamic-background-voxel-size-m",
+        "1.0",
+        "--dynamic-background-min-frame-fraction",
+        "0.5",
+        "--dynamic-background-min-frames",
+        "2",
+        "--dynamic-background-neighbor-radius-voxels",
+        "1",
+        "--output-dir",
+        "outputs/mmuad",
+    ]
+
+
 def test_mmuad_track5_scorecard_entrypoint_is_exposed() -> None:
     assert (
         _project_scripts()["raft-uav-mmuad-track5-scorecard"]
