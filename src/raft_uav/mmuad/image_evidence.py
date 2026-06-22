@@ -18,6 +18,12 @@ from raft_uav.mmuad.sequence import discover_sequence_paths, official_track5_seq
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 IMAGE_DIR_NAMES = {"image", "images", "camera", "cameras"}
 IMAGE_EVIDENCE_MODE = "sequence-level-no-calibration"
+IMAGE_FEATURE_BACKENDS = (
+    "handcrafted",
+    "auto",
+    "torchvision-resnet18",
+    "torchvision-efficientnet-b0",
+)
 
 
 @dataclass(frozen=True)
@@ -36,6 +42,7 @@ def build_image_evidence(
     timestamp_source: str = "image",
     max_frames_per_sequence: int = 32,
     max_image_time_delta_s: float | None = 0.5,
+    image_feature_backend: str = "handcrafted",
 ) -> ImageEvidenceResult:
     """Sample official image frames and extract conservative visual evidence.
 
@@ -44,6 +51,8 @@ def build_image_evidence(
     added.
     """
 
+    backend_requested = _normalize_image_feature_backend(image_feature_backend)
+    backend_resolved, feature_extractor = _make_image_feature_extractor(backend_requested)
     sequences = discover_sequence_paths(Path(sequence_root), sequence_glob=sequence_glob)
     truth_by_sequence = _truth_times_by_sequence(truth_file)
     frame_records: list[dict[str, Any]] = []
@@ -71,7 +80,7 @@ def build_image_evidence(
             max_frames=max_frames_per_sequence,
             max_time_delta_s=max_image_time_delta_s,
         ):
-            record = _image_feature_record(Path(image_row["image_path"]))
+            record = feature_extractor(Path(image_row["image_path"]))
             record.update(
                 {
                     "sequence_id": paths.sequence_id,
@@ -80,6 +89,8 @@ def build_image_evidence(
                     "image_time_delta_s": float(image_row["image_time_s"] - target_time_s),
                     "image_path": str(image_row["image_path"]),
                     "image_evidence_mode": IMAGE_EVIDENCE_MODE,
+                    "image_feature_backend_requested": backend_requested,
+                    "image_feature_backend_resolved": backend_resolved,
                 }
             )
             frame_records.append(record)
@@ -183,7 +194,69 @@ def _sample_nearest_image_rows(
         yield target_time, row
 
 
-def _image_feature_record(path: Path) -> dict[str, Any]:
+def _normalize_image_feature_backend(backend: str) -> str:
+    normalized = str(backend).strip().lower().replace("_", "-")
+    aliases = {
+        "resnet18": "torchvision-resnet18",
+        "efficientnet-b0": "torchvision-efficientnet-b0",
+        "efficientnet": "torchvision-efficientnet-b0",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in IMAGE_FEATURE_BACKENDS:
+        allowed = ", ".join(IMAGE_FEATURE_BACKENDS)
+        raise ValueError(f"unsupported image feature backend {backend!r}; allowed={allowed}")
+    return normalized
+
+
+def _make_image_feature_extractor(backend: str):
+    if backend == "handcrafted":
+        return "handcrafted", _handcrafted_image_feature_record
+    if backend == "auto":
+        try:
+            return _make_torchvision_feature_extractor("torchvision-resnet18")
+        except Exception:
+            return "handcrafted", _handcrafted_image_feature_record
+    return _make_torchvision_feature_extractor(backend)
+
+
+def _make_torchvision_feature_extractor(backend: str):
+    try:
+        import torch
+        from PIL import Image
+        from torchvision import models
+    except Exception as exc:  # pragma: no cover - depends on optional deep stack
+        raise ValueError(
+            f"{backend} image features require torch, torchvision, and pillow"
+        ) from exc
+
+    if backend == "torchvision-resnet18":
+        weights = models.ResNet18_Weights.DEFAULT
+        model = models.resnet18(weights=weights)
+        feature_model = torch.nn.Sequential(*(list(model.children())[:-1]))
+    elif backend == "torchvision-efficientnet-b0":
+        weights = models.EfficientNet_B0_Weights.DEFAULT
+        model = models.efficientnet_b0(weights=weights)
+        feature_model = torch.nn.Sequential(model.features, model.avgpool)
+    else:  # pragma: no cover - caller normalizes backends
+        raise ValueError(f"unsupported torchvision image backend {backend!r}")
+    preprocess = weights.transforms()
+    feature_model.eval()
+
+    def extractor(path: Path) -> dict[str, Any]:
+        record = _handcrafted_image_feature_record(path)
+        with Image.open(path) as image_file:
+            image = image_file.convert("RGB")
+            tensor = preprocess(image).unsqueeze(0)
+        with torch.no_grad():
+            embedding = feature_model(tensor).flatten().detach().cpu().numpy().astype(float)
+        for idx, value in enumerate(embedding):
+            record[f"image_pretrained_embedding_{idx}"] = float(value)
+        return record
+
+    return backend, extractor
+
+
+def _handcrafted_image_feature_record(path: Path) -> dict[str, Any]:
     image = _read_image_rgb(path)
     height, width = image.shape[:2]
     pixels = _sample_pixels(image)
@@ -209,10 +282,22 @@ def _image_feature_record(path: Path) -> dict[str, Any]:
     }
     for idx, value in enumerate(luma_hist):
         record[f"image_embedding_luma_bin_{idx}"] = float(value)
+    _add_rgb_histogram_features(record, pixels)
+    _add_center_crop_features(record, image)
+    _add_quadrant_features(record, image)
+    _add_gradient_orientation_features(record, image)
     return record
 
 
 def _read_image_rgb(path: Path) -> np.ndarray:
+    try:
+        from PIL import Image
+    except Exception:
+        Image = None  # type: ignore[assignment]
+    if Image is not None:
+        with Image.open(path) as image_file:
+            array = np.asarray(image_file.convert("RGB"), dtype=float) / 255.0
+        return np.clip(array, 0.0, 1.0)
     try:
         from matplotlib import image as mpimg
     except Exception as exc:  # pragma: no cover - matplotlib is a project dependency
@@ -259,6 +344,81 @@ def _objectness_score(*, luma: np.ndarray, saturation: np.ndarray, edge_score: f
     return float(np.clip(saliency, 0.0, 1.0))
 
 
+def _add_rgb_histogram_features(record: dict[str, Any], pixels: np.ndarray) -> None:
+    for channel_idx, channel in enumerate(("r", "g", "b")):
+        hist, _ = np.histogram(
+            pixels[:, channel_idx],
+            bins=8,
+            range=(0.0, 1.0),
+            density=False,
+        )
+        hist = hist.astype(float) / max(float(hist.sum()), 1.0)
+        for idx, value in enumerate(hist):
+            record[f"image_embedding_{channel}_bin_{idx}"] = float(value)
+
+
+def _add_center_crop_features(record: dict[str, Any], image: np.ndarray) -> None:
+    height, width = image.shape[:2]
+    crop_height = max(1, int(round(height * 0.5)))
+    crop_width = max(1, int(round(width * 0.5)))
+    y0 = max(0, (height - crop_height) // 2)
+    x0 = max(0, (width - crop_width) // 2)
+    crop = image[y0 : y0 + crop_height, x0 : x0 + crop_width]
+    pixels = _sample_pixels(crop)
+    luma = 0.2126 * pixels[:, 0] + 0.7152 * pixels[:, 1] + 0.0722 * pixels[:, 2]
+    saturation = _saturation(pixels)
+    edge_score = _edge_score(crop)
+    record["image_center_luma_mean"] = float(np.mean(luma))
+    record["image_center_luma_std"] = float(np.std(luma))
+    record["image_center_saturation_mean"] = float(np.mean(saturation))
+    record["image_center_edge_score"] = float(edge_score)
+    record["image_center_dark_fraction"] = float(np.mean(luma < 0.15))
+    record["image_center_bright_fraction"] = float(np.mean(luma > 0.85))
+    record["image_center_objectness_score"] = float(
+        _objectness_score(luma=luma, saturation=saturation, edge_score=edge_score)
+    )
+
+
+def _add_quadrant_features(record: dict[str, Any], image: np.ndarray) -> None:
+    height, width = image.shape[:2]
+    y_mid = max(1, height // 2)
+    x_mid = max(1, width // 2)
+    quadrants = {
+        "tl": image[:y_mid, :x_mid],
+        "tr": image[:y_mid, x_mid:],
+        "bl": image[y_mid:, :x_mid],
+        "br": image[y_mid:, x_mid:],
+    }
+    for name, quadrant in quadrants.items():
+        if quadrant.size == 0:
+            continue
+        pixels = _sample_pixels(quadrant)
+        luma = 0.2126 * pixels[:, 0] + 0.7152 * pixels[:, 1] + 0.0722 * pixels[:, 2]
+        record[f"image_quadrant_{name}_luma_mean"] = float(np.mean(luma))
+        record[f"image_quadrant_{name}_luma_std"] = float(np.std(luma))
+        record[f"image_quadrant_{name}_saturation_mean"] = float(np.mean(_saturation(pixels)))
+
+
+def _add_gradient_orientation_features(record: dict[str, Any], image: np.ndarray) -> None:
+    gray = 0.2126 * image[:, :, 0] + 0.7152 * image[:, :, 1] + 0.0722 * image[:, :, 2]
+    if min(gray.shape) < 3:
+        for idx in range(8):
+            record[f"image_grad_orientation_bin_{idx}"] = 0.0
+        return
+    gy, gx = np.gradient(gray)
+    magnitude = np.sqrt(gx * gx + gy * gy)
+    orientation = np.mod(np.arctan2(gy, gx), np.pi)
+    hist, _ = np.histogram(
+        orientation.reshape(-1),
+        bins=8,
+        range=(0.0, float(np.pi)),
+        weights=magnitude.reshape(-1),
+    )
+    hist = hist.astype(float) / max(float(hist.sum()), 1.0e-12)
+    for idx, value in enumerate(hist):
+        record[f"image_grad_orientation_bin_{idx}"] = float(value)
+
+
 def _sequence_features_from_frame_features(
     frame_features: pd.DataFrame,
     *,
@@ -271,6 +431,9 @@ def _sequence_features_from_frame_features(
         record: dict[str, Any] = {
             "sequence_id": str(sequence_id),
             "image_evidence_mode": IMAGE_EVIDENCE_MODE,
+            "image_feature_backend_resolved": ";".join(
+                sorted(set(group.get("image_feature_backend_resolved", pd.Series(dtype=str)).astype(str)))
+            ),
             "image_sampled_frame_count": int(len(group)),
             "image_target_count": int(target_counts.get(str(sequence_id), len(group))),
         }
@@ -327,6 +490,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timestamp-source", default="image")
     parser.add_argument("--max-frames-per-sequence", type=int, default=32)
     parser.add_argument("--max-image-time-delta-s", type=float, default=0.5)
+    parser.add_argument(
+        "--image-feature-backend",
+        choices=IMAGE_FEATURE_BACKENDS,
+        default="handcrafted",
+        help=(
+            "visual feature extractor; torchvision backends emit pretrained embeddings "
+            "when torch/torchvision are installed"
+        ),
+    )
     args = parser.parse_args(argv)
 
     result = build_image_evidence(
@@ -336,6 +508,7 @@ def main(argv: list[str] | None = None) -> int:
         timestamp_source=args.timestamp_source,
         max_frames_per_sequence=args.max_frames_per_sequence,
         max_image_time_delta_s=args.max_image_time_delta_s,
+        image_feature_backend=args.image_feature_backend,
     )
     paths = write_image_evidence(result, args.output_dir)
     print("mmuad_image_evidence=ok")
