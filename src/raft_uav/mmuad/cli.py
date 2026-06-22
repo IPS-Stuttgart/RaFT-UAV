@@ -328,6 +328,42 @@ def main(argv: list[str] | None = None) -> int:
         default=20.0,
         help="speed scale used to normalize motion cost in greedy path selection",
     )
+    parser.add_argument(
+        "--mmuad-selection-mode",
+        choices=("greedy", "viterbi"),
+        default="greedy",
+        help="single-UAV candidate path selector",
+    )
+    parser.add_argument(
+        "--mmuad-viterbi-motion-weight",
+        type=float,
+        default=1.0,
+        help="Viterbi edge-cost weight for constant-velocity residuals",
+    )
+    parser.add_argument(
+        "--mmuad-viterbi-ranker-weight",
+        type=float,
+        default=1.0,
+        help="Viterbi node reward weight for ranker/cluster/cross-sensor score",
+    )
+    parser.add_argument(
+        "--mmuad-viterbi-source-switch-penalty",
+        type=float,
+        default=0.0,
+        help="Viterbi edge cost added when consecutive candidates switch sensor source",
+    )
+    parser.add_argument(
+        "--mmuad-viterbi-max-speed-mps",
+        type=float,
+        default=60.0,
+        help="Viterbi soft speed gate; speeds above this receive a quadratic penalty",
+    )
+    parser.add_argument(
+        "--mmuad-viterbi-gap-penalty",
+        type=float,
+        default=0.0,
+        help="Viterbi edge cost per second between consecutive candidate timestamps",
+    )
     parser.add_argument("--submission-csv", type=Path)
     parser.add_argument("--submission-json", type=Path)
     parser.add_argument("--submission-zip", type=Path)
@@ -1889,6 +1925,12 @@ def _run_tracker_for_mode(args, candidates, truth):
                 selection_mobility_weight=args.selection_mobility_weight,
                 selection_source_priority_weight=args.selection_source_priority_weight,
                 selection_speed_scale_mps=args.selection_speed_scale_mps,
+                selection_mode=args.mmuad_selection_mode,
+                viterbi_motion_weight=args.mmuad_viterbi_motion_weight,
+                viterbi_ranker_weight=args.mmuad_viterbi_ranker_weight,
+                viterbi_source_switch_penalty=args.mmuad_viterbi_source_switch_penalty,
+                viterbi_max_speed_mps=args.mmuad_viterbi_max_speed_mps,
+                viterbi_gap_penalty=args.mmuad_viterbi_gap_penalty,
             ),
         )
     return _maybe_apply_trajectory_completion(args, output, truth)

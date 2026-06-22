@@ -327,6 +327,30 @@ If the sequence root is already arranged as split folders such as
 `val/fog/seq003`, omit `--split-file` and pass `--split-name val`; the CLI
 filters by the top-level folder name.
 
+### Single-object path selection
+
+The default single-UAV backend uses the existing greedy path selector.  For
+candidate streams with per-frame alternatives, a sequence-level Viterbi selector
+can be enabled without changing the rest of the tracker:
+
+```bash
+PYTHONPATH=src python -m raft_uav.mmuad.cli \
+  --sequence-root data/mmuad_export \
+  --mmuad-selection-mode viterbi \
+  --mmuad-viterbi-motion-weight 4 \
+  --mmuad-viterbi-ranker-weight 1 \
+  --mmuad-viterbi-max-speed-mps 60 \
+  --mmuad-viterbi-source-switch-penalty 0.25 \
+  --mmuad-viterbi-gap-penalty 0.0 \
+  --output-dir outputs/mmuad_viterbi \
+  --submission-zip outputs/mmuad_viterbi/submission.zip
+```
+
+The Viterbi node score uses candidate confidence plus optional cluster and
+cross-sensor columns when present.  Edge costs penalize constant-velocity
+residuals, speeds above `--mmuad-viterbi-max-speed-mps`, source switches, and
+timestamp gaps.  Keep `--mmuad-selection-mode greedy` for the previous behavior.
+
 ### Basic multi-object mode
 
 A lightweight greedy MOT backend is available for exported detections with

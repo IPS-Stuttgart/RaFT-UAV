@@ -29,6 +29,12 @@ class TrackerConfig:
     selection_mobility_weight: float = 0.0
     selection_source_priority_weight: float = 0.0
     selection_speed_scale_mps: float = 20.0
+    selection_mode: str = "greedy"
+    viterbi_motion_weight: float = 1.0
+    viterbi_ranker_weight: float = 1.0
+    viterbi_source_switch_penalty: float = 0.0
+    viterbi_max_speed_mps: float = 60.0
+    viterbi_gap_penalty: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -42,6 +48,7 @@ _CANDIDATE_ROW_ID = "_candidate_row_id"
 _MOBILITY = "_mobility"
 _SOURCE_PRIORITY = "_source_priority"
 _SELECTION_COST = "_selection_cost"
+_VITERBI_NODE_SCORE = "_viterbi_node_score"
 
 
 def run_mmuad_tracker(
@@ -150,6 +157,10 @@ def select_tracklet_path(candidates: pd.DataFrame, *, config: TrackerConfig) -> 
     frame = frame.loc[_finite_position_mask(frame)].copy()
     if frame.empty:
         return candidates.iloc[0:0].copy()
+    if config.selection_mode == "viterbi":
+        return _viterbi_path(frame, config=config)
+    if config.selection_mode != "greedy":
+        raise ValueError("selection_mode must be 'greedy' or 'viterbi'")
     non_null_track = frame.loc[frame["track_id"].notna()].copy()
     if not non_null_track.empty:
         timestamps_per_track = non_null_track.groupby(["source", "track_id"])[
@@ -184,6 +195,162 @@ def select_tracklet_path(candidates: pd.DataFrame, *, config: TrackerConfig) -> 
             selected["selected_path_score"] = float(best["score"])
             return selected.sort_values("time_s").reset_index(drop=True)
     return _greedy_path(frame, config=config)
+
+
+def _viterbi_path(frame: pd.DataFrame, *, config: TrackerConfig) -> pd.DataFrame:
+    frame = frame.copy()
+    frame[_MOBILITY] = _candidate_mobility(
+        frame, radius_m=config.selection_mobility_radius_m
+    )
+    frame[_SOURCE_PRIORITY] = [
+        _source_priority(str(source), config=config) for source in frame["source"]
+    ]
+    parts: list[pd.DataFrame] = []
+    for _time_s, group in frame.groupby("time_s", sort=True):
+        group = group.loc[_finite_position_mask(group)].copy()
+        if group.empty:
+            continue
+        group[_VITERBI_NODE_SCORE] = _viterbi_node_score(group)
+        parts.append(group.reset_index(drop=True))
+    if not parts:
+        return frame.iloc[0:0].drop(
+            columns=[_MOBILITY, _SOURCE_PRIORITY, _VITERBI_NODE_SCORE],
+            errors="ignore",
+        )
+
+    costs: list[np.ndarray] = []
+    velocities: list[np.ndarray] = []
+    backpointers: list[np.ndarray | None] = [None]
+    first = parts[0]
+    costs.append(_viterbi_node_cost(first, config=config))
+    velocities.append(np.zeros((len(first), 3), dtype=float))
+
+    for group_index in range(1, len(parts)):
+        previous = parts[group_index - 1]
+        current = parts[group_index]
+        dt_s = max(
+            float(current["time_s"].iloc[0]) - float(previous["time_s"].iloc[0]),
+            1.0e-3,
+        )
+        transition = _viterbi_transition_costs(
+            previous,
+            current,
+            previous_cost=costs[-1],
+            previous_velocity=velocities[-1],
+            dt_s=dt_s,
+            config=config,
+        )
+        best_previous = np.argmin(transition, axis=1)
+        best_cost = transition[np.arange(len(current)), best_previous]
+        current_xyz = current[["x_m", "y_m", "z_m"]].to_numpy(float)
+        previous_xyz = previous[["x_m", "y_m", "z_m"]].to_numpy(float)[best_previous]
+        current_velocity = (current_xyz - previous_xyz) / dt_s
+        costs.append(best_cost + _viterbi_node_cost(current, config=config))
+        velocities.append(current_velocity)
+        backpointers.append(best_previous)
+
+    selected_indices = [0] * len(parts)
+    selected_indices[-1] = int(np.argmin(costs[-1]))
+    for group_index in range(len(parts) - 1, 0, -1):
+        pointer = backpointers[group_index]
+        if pointer is None:
+            break
+        selected_indices[group_index - 1] = int(pointer[selected_indices[group_index]])
+    selected_rows = [
+        parts[group_index].iloc[selected_indices[group_index]]
+        for group_index in range(len(parts))
+    ]
+    selected = pd.DataFrame(selected_rows).reset_index(drop=True)
+    selected["selected_path_rank"] = 0
+    selected["selected_path_score"] = float(np.min(costs[-1])) if costs else 0.0
+    selected["selected_path_mode"] = "viterbi"
+    return selected.drop(
+        columns=[_MOBILITY, _SOURCE_PRIORITY, _VITERBI_NODE_SCORE, _SELECTION_COST],
+        errors="ignore",
+    )
+
+
+def _viterbi_node_cost(group: pd.DataFrame, *, config: TrackerConfig) -> np.ndarray:
+    node_score = (
+        pd.to_numeric(group[_VITERBI_NODE_SCORE], errors="coerce")
+        .fillna(0.0)
+        .to_numpy(float)
+    )
+    mobility = (
+        pd.to_numeric(group.get(_MOBILITY, 1.0), errors="coerce")
+        .fillna(1.0)
+        .to_numpy(float)
+    )
+    source_priority = (
+        pd.to_numeric(group.get(_SOURCE_PRIORITY, 0.0), errors="coerce")
+        .fillna(0.0)
+        .to_numpy(float)
+    )
+    return (
+        -float(config.viterbi_ranker_weight) * node_score
+        - float(config.selection_mobility_weight) * mobility
+        + float(config.selection_source_priority_weight) * source_priority
+    )
+
+
+def _viterbi_node_score(group: pd.DataFrame) -> np.ndarray:
+    confidence = _normalized_frame_confidence(group)
+    point_count = _normalized_frame_column(group, "cluster_point_count", high_good=True)
+    density = _normalized_frame_column(
+        group, "cluster_density_points_per_m3", high_good=True
+    )
+    cross_score = _normalized_frame_column(
+        group, "nearest_cross_sensor_score", high_good=True
+    )
+    cross_neighbors = _normalized_frame_column(
+        group, "cross_sensor_neighbor_count", high_good=True
+    )
+    return (
+        0.55 * confidence
+        + 0.15 * point_count
+        + 0.10 * density
+        + 0.15 * cross_score
+        + 0.05 * cross_neighbors
+    )
+
+
+def _viterbi_transition_costs(
+    previous: pd.DataFrame,
+    current: pd.DataFrame,
+    *,
+    previous_cost: np.ndarray,
+    previous_velocity: np.ndarray,
+    dt_s: float,
+    config: TrackerConfig,
+) -> np.ndarray:
+    previous_xyz = previous[["x_m", "y_m", "z_m"]].to_numpy(float)
+    current_xyz = current[["x_m", "y_m", "z_m"]].to_numpy(float)
+    delta = current_xyz[:, None, :] - previous_xyz[None, :, :]
+    velocity = delta / max(float(dt_s), 1.0e-3)
+    speed = np.linalg.norm(velocity, axis=2)
+    predicted = previous_xyz[None, :, :] + previous_velocity[None, :, :] * float(dt_s)
+    cv_residual = np.linalg.norm(current_xyz[:, None, :] - predicted, axis=2)
+    speed_scale = max(float(config.viterbi_max_speed_mps), 1.0e-6)
+    residual_scale = max(speed_scale * max(float(dt_s), 1.0e-3), 1.0e-6)
+    motion_cost = cv_residual / residual_scale
+    if config.viterbi_max_speed_mps > 0:
+        over_speed = np.maximum(speed - float(config.viterbi_max_speed_mps), 0.0)
+        motion_cost = motion_cost + 10.0 * (over_speed / speed_scale) ** 2
+    acceleration_std = max(float(config.acceleration_std_mps2), 1.0e-6)
+    acceleration = np.linalg.norm(
+        velocity - previous_velocity[None, :, :], axis=2
+    ) / max(float(dt_s), 1.0e-3)
+    motion_cost = motion_cost + 0.25 * (acceleration / (4.0 * acceleration_std)) ** 2
+    previous_source = previous["source"].fillna("").astype(str).to_numpy(object)
+    current_source = current["source"].fillna("").astype(str).to_numpy(object)
+    source_switch = (current_source[:, None] != previous_source[None, :]).astype(float)
+    gap_cost = float(config.viterbi_gap_penalty) * max(float(dt_s), 0.0)
+    return (
+        previous_cost[None, :]
+        + float(config.viterbi_motion_weight) * motion_cost
+        + float(config.viterbi_source_switch_penalty) * source_switch
+        + gap_cost
+    )
 
 
 def _tracklet_score(group: pd.DataFrame, *, config: TrackerConfig) -> float:
@@ -336,15 +503,29 @@ def _path_step_costs(
 
 def _normalized_frame_confidence(group: pd.DataFrame) -> np.ndarray:
     confidence = pd.to_numeric(group.get("confidence", 0.0), errors="coerce").fillna(0.0)
-    values = confidence.to_numpy(float)
+    return _normalized_values(confidence.to_numpy(float), length=len(group))
+
+
+def _normalized_frame_column(group: pd.DataFrame, column: str, *, high_good: bool) -> np.ndarray:
+    if column not in group.columns:
+        return np.zeros(len(group), dtype=float)
+    values = pd.to_numeric(group[column], errors="coerce").to_numpy(float)
+    normalized = _normalized_values(values, length=len(group))
+    return normalized if high_good else 1.0 - normalized
+
+
+def _normalized_values(values: np.ndarray, *, length: int) -> np.ndarray:
+    values = np.asarray(values, dtype=float)
+    if values.size != length:
+        return np.zeros(length, dtype=float)
     finite = np.isfinite(values)
     if not finite.any():
-        return np.zeros(len(group), dtype=float)
+        return np.zeros(length, dtype=float)
     values = np.where(finite, values, np.nanmin(values[finite]))
     minimum = float(np.nanmin(values))
     maximum = float(np.nanmax(values))
     if maximum <= minimum:
-        return np.full(len(group), 0.5, dtype=float)
+        return np.full(length, 0.5, dtype=float)
     return (values - minimum) / (maximum - minimum)
 
 
