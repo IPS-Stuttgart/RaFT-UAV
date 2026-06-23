@@ -53,7 +53,11 @@ jobs:
                 else
                   log "TRAIN_ZIP: $path"
                 fi
-              done < <(find "$root" -maxdepth 8 -type f \( -iname 'train.zip' -o -iname '*train*.zip' \) -print 2>/dev/null | sort)
+              done < <(
+                {
+                  find "$root" -maxdepth 8 -type f \( -iname 'train.zip' -o -iname '*train*.zip' \) -print 2>/dev/null || true
+                } | sort
+              )
             else
               log "-- missing root: $root"
             fi
@@ -71,8 +75,8 @@ jobs:
                   -iname '*label*' -o \
                   -iname '*class*.npy' -o \
                   -iname '*reference*.csv' \
-                \) -print 2>/dev/null | sort | sed -n '1,200p'
-              } | tee -a "$REPORT"
+                \) -print 2>/dev/null || true
+              } | sort | sed -n '1,200p' | tee -a "$REPORT"
             fi
           done
           log ""
