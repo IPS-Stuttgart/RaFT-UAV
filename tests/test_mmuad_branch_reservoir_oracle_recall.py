@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import sys
 
 import pandas as pd
 
@@ -12,6 +13,7 @@ MODULE_PATH = SCRIPTS_DIR / "mmuad_branch_reservoir_oracle_recall.py"
 spec = importlib.util.spec_from_file_location("mmuad_branch_reservoir_oracle_recall", MODULE_PATH)
 assert spec is not None and spec.loader is not None
 reservoir_oracle = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = reservoir_oracle
 spec.loader.exec_module(reservoir_oracle)
 
 
