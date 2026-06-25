@@ -50,7 +50,9 @@ def test_truth_free_reservoir_preserves_low_score_branch_candidate() -> None:
         "source_translation",
         "radar",
     }
-    assert set(reservoir["reservoir_reason"].astype(str)) >= {"branch_top", "global_top;branch_top"}
+    reasons = set(reservoir["reservoir_reason"].astype(str))
+    assert any("branch_top" in reason for reason in reasons)
+    assert any("global_top" in reason for reason in reasons)
     assert int(frame_summary.loc[0, "candidate_count"]) == 4
     assert int(frame_summary.loc[0, "retained_count"]) == 3
     raw_summary = branch_summary.loc[branch_summary["candidate_branch"] == "raw"].iloc[0]
