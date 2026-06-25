@@ -76,6 +76,7 @@ raft-uav-mmuad-radar-extraction-audit = "raft_uav.mmuad.radar_extraction_audit:m
 raft-uav-mmuad-candidate-oracle-gap = "raft_uav.mmuad.candidate_oracle_gap:main"
 raft-uav-mmuad-candidate-reservoir = "raft_uav.mmuad.candidate_reservoir:main"
 raft-uav-mmuad-image-evidence = "raft_uav.mmuad.image_evidence:main"
+raft-uav-mmuad-class-prob-context = "raft_uav.mmuad.class_probability_context:main"
 raft-uav-mmuad-fit-source-calibration = "raft_uav.mmuad.source_calibration:fit_main"
 raft-uav-mmuad-apply-source-calibration = "raft_uav.mmuad.source_calibration:apply_main"
 raft-uav-mmuad-select-train-config = "raft_uav.mmuad.train_selected_config:main"
