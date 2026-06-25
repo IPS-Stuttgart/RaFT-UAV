@@ -68,6 +68,30 @@ def test_branch_reservoir_oracle_reports_topk_recall_gap() -> None:
     assert len(frame_rows) == 3
 
 
+def test_branch_recall_summary_reports_winning_branch() -> None:
+    frame_rows, _, _, _ = reservoir_oracle.build_branch_reservoir_oracle_tables(
+        _candidate_rows(),
+        _truth_rows(),
+        max_time_delta_s=0.1,
+        top_k_values=(1, 3),
+        per_source_top_n=2,
+        per_branch_top_n=1,
+        global_top_n=1,
+    )
+
+    branch_summary = reservoir_oracle.build_branch_recall_summary(frame_rows)
+
+    top1 = branch_summary.loc[branch_summary["top_k"] == "1"].iloc[0]
+    all_raw = branch_summary.loc[
+        (branch_summary["top_k"] == "all")
+        & (branch_summary["oracle_candidate_branch"] == "raw")
+    ].iloc[0]
+    assert top1["oracle_candidate_branch"] == "raw"
+    assert top1["oracle_candidate_source"] == "lidar_360"
+    assert float(top1["oracle_mse_m2"]) == 400.0
+    assert float(all_raw["oracle_mse_m2"]) == 0.04000000000000001
+
+
 def test_branch_reservoir_oracle_cli_writes_artifacts(tmp_path: Path) -> None:
     truth = tmp_path / "truth.csv"
     raw = tmp_path / "raw.csv"
@@ -105,9 +129,13 @@ def test_branch_reservoir_oracle_cli_writes_artifacts(tmp_path: Path) -> None:
         "mmuad_branch_reservoir_oracle_frame_rows.csv",
         "mmuad_branch_reservoir_oracle_pooled.csv",
         "mmuad_branch_reservoir_oracle_by_sequence.csv",
+        "mmuad_branch_reservoir_branch_recall.csv",
         "mmuad_branch_reservoir_candidates.csv",
         "mmuad_branch_reservoir_oracle_provenance.json",
     ):
         assert (output / name).exists()
+    branch_recall = pd.read_csv(output / "mmuad_branch_reservoir_branch_recall.csv")
+    assert "oracle_candidate_branch" in branch_recall.columns
     provenance = json.loads((output / "mmuad_branch_reservoir_oracle_provenance.json").read_text())
     assert provenance["candidate_inputs"][0]["branch"] == "raw"
+    assert provenance["branch_recall_csv"].endswith("mmuad_branch_reservoir_branch_recall.csv")
