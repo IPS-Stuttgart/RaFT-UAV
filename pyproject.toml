@@ -88,6 +88,7 @@ raft-uav-mmuad-candidate-branch-context = "raft_uav.mmuad.candidate_branch_conte
 raft-uav-mmuad-candidate-branch-consensus = "raft_uav.mmuad.candidate_branch_consensus:main"
 raft-uav-mmuad-fit-candidate-sigma-calibration = "raft_uav.mmuad.candidate_uncertainty_calibration:fit_main"
 raft-uav-mmuad-apply-candidate-sigma-calibration = "raft_uav.mmuad.candidate_uncertainty_calibration:apply_main"
+raft-uav-mmuad-candidate-sigma-calibration-train-cv = "raft_uav.mmuad.candidate_uncertainty_calibration_train_cv:main"
 raft-uav-mmuad-fit-source-calibration = "raft_uav.mmuad.source_calibration:fit_main"
 raft-uav-mmuad-apply-source-calibration = "raft_uav.mmuad.source_calibration:apply_main"
 raft-uav-mmuad-source-calibration-branches = "raft_uav.mmuad.source_calibration_branches:main"
