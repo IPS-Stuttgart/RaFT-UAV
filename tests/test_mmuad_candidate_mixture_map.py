@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import tomllib
 from zipfile import ZipFile
 
 import numpy as np
@@ -8,56 +10,109 @@ import pandas as pd
 import pytest
 
 from raft_uav.mmuad.candidate_mixture_map import (
-    CandidateMixtureConfig,
+    CandidateMixtureMapConfig,
     compute_candidate_responsibilities,
-    main,
+    main as mixture_main,
     run_candidate_mixture_map,
 )
 
 
-def _candidate(
-    *,
-    time_s: float,
-    x_m: float,
-    score: float = 1.0,
-    branch: str = "raw",
-    source: str = "lidar_360",
-    sigma_m: float = 1.0,
-) -> dict[str, object]:
-    return {
-        "sequence_id": "seq0001",
-        "time_s": time_s,
-        "source": source,
-        "track_id": f"{branch}-{time_s}-{x_m}",
-        "candidate_branch": branch,
-        "x_m": x_m,
-        "y_m": 0.0,
-        "z_m": 0.0,
-        "candidate_reservoir_score": score,
-        "predicted_sigma_m": sigma_m,
-        "std_xy_m": sigma_m,
-        "std_z_m": sigma_m,
-        "confidence": score,
-    }
+def _uncertainty_candidates() -> pd.DataFrame:
+    records = []
+    for time_s in range(5):
+        records.extend(
+            [
+                {
+                    "sequence_id": "seqA",
+                    "time_s": float(time_s),
+                    "source": "lidar_360",
+                    "track_id": f"good-{time_s}",
+                    "candidate_branch": "raw",
+                    "x_m": float(time_s),
+                    "y_m": 0.0,
+                    "z_m": 1.0,
+                    "ranker_score": 0.1,
+                    "predicted_sigma_m": 1.0,
+                },
+                {
+                    "sequence_id": "seqA",
+                    "time_s": float(time_s),
+                    "source": "dynamic",
+                    "track_id": f"bad-{time_s}",
+                    "candidate_branch": "dynamic",
+                    "x_m": float(time_s + 10),
+                    "y_m": 0.0,
+                    "z_m": 1.0,
+                    "ranker_score": 0.9,
+                    "predicted_sigma_m": 20.0,
+                },
+            ]
+        )
+    return pd.DataFrame.from_records(records)
+
+
+def _truth_rows() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "sequence_id": ["seqA"] * 5,
+            "time_s": np.arange(5, dtype=float),
+            "x_m": np.arange(5, dtype=float),
+            "y_m": np.zeros(5),
+            "z_m": np.ones(5),
+        }
+    )
 
 
 def test_branch_balance_preserves_mass_for_small_candidate_branch() -> None:
     rows = pd.DataFrame(
         [
-            _candidate(time_s=0.0, x_m=0.0, branch="raw"),
-            _candidate(time_s=0.0, x_m=0.5, branch="raw"),
-            _candidate(time_s=0.0, x_m=10.0, branch="translated"),
+            {
+                "sequence_id": "seqA",
+                "time_s": 0.0,
+                "source": "lidar_360",
+                "track_id": "raw-near",
+                "candidate_branch": "raw",
+                "x_m": 0.0,
+                "y_m": 0.0,
+                "z_m": 0.0,
+                "ranker_score": 1.0,
+                "predicted_sigma_m": 1.0,
+            },
+            {
+                "sequence_id": "seqA",
+                "time_s": 0.0,
+                "source": "lidar_360",
+                "track_id": "raw-offset",
+                "candidate_branch": "raw",
+                "x_m": 0.5,
+                "y_m": 0.0,
+                "z_m": 0.0,
+                "ranker_score": 1.0,
+                "predicted_sigma_m": 1.0,
+            },
+            {
+                "sequence_id": "seqA",
+                "time_s": 0.0,
+                "source": "dynamic",
+                "track_id": "translated-far",
+                "candidate_branch": "translated",
+                "x_m": 10.0,
+                "y_m": 0.0,
+                "z_m": 0.0,
+                "ranker_score": 1.0,
+                "predicted_sigma_m": 1.0,
+            },
         ]
     )
     responsibilities = compute_candidate_responsibilities(
         rows,
         np.asarray([0.0, 0.0, 0.0]),
-        config=CandidateMixtureConfig(
+        config=CandidateMixtureMapConfig(
             top_k=0,
-            huber_scale=0.0,
+            score_column="ranker_score",
+            score_weight=0.0,
+            sigma_log_weight=0.0,
             branch_balance=1.0,
-            source_balance=0.0,
-            responsibility_floor=0.0,
         ),
     )
 
@@ -66,123 +121,144 @@ def test_branch_balance_preserves_mass_for_small_candidate_branch() -> None:
     assert mass["translated"] == pytest.approx(0.5)
 
 
-def test_huber_mixture_rejects_far_low_score_candidates() -> None:
-    rows: list[dict[str, object]] = []
-    for time_s, correct_x in enumerate((0.0, 1.0, 2.0)):
-        rows.append(_candidate(time_s=float(time_s), x_m=correct_x, score=2.0))
-        rows.append(
-            _candidate(
-                time_s=float(time_s),
-                x_m=100.0,
-                score=-2.0,
-                branch="clutter",
-                source="dynamic",
-            )
-        )
+def test_candidate_mixture_uses_learned_sigma_to_reject_high_score_clutter() -> None:
     result = run_candidate_mixture_map(
-        pd.DataFrame(rows),
-        config=CandidateMixtureConfig(
-            top_k=0,
-            temperature=1.0,
-            smoothness_weight=10.0,
-            huber_scale=1.0,
-            iterations=4,
-            branch_balance=0.0,
-            responsibility_floor=0.0,
-            initialization="best-score",
-        ),
-    )
-
-    expected = np.asarray([0.0, 1.0, 2.0])
-    actual = result.estimates["state_x_m"].to_numpy(float)
-    assert np.sqrt(np.mean((actual - expected) ** 2)) < 1.0
-    assert result.frame_diagnostics["dominant_candidate_branch"].eq("raw").all()
-
-
-def test_acceleration_regularization_reduces_isolated_impulse() -> None:
-    rows = pd.DataFrame(
-        [
-            _candidate(time_s=0.0, x_m=0.0),
-            _candidate(time_s=1.0, x_m=20.0),
-            _candidate(time_s=2.0, x_m=0.0),
-        ]
-    )
-    result = run_candidate_mixture_map(
-        rows,
-        config=CandidateMixtureConfig(
-            top_k=0,
+        _uncertainty_candidates(),
+        truth=_truth_rows(),
+        config=CandidateMixtureMapConfig(
+            top_k=2,
+            score_column="ranker_score",
+            sigma_column="predicted_sigma_m",
             smoothness_weight=100.0,
-            huber_scale=0.0,
-            iterations=1,
-            branch_balance=0.0,
-            responsibility_floor=0.0,
-            measurement_weight_mode="uniform",
+            iterations=5,
         ),
     )
 
-    middle = float(result.estimates.loc[1, "state_x_m"])
-    assert 0.0 < middle < 20.0
-    assert result.iteration_summary.loc[0, "mean_state_change_m"] > 0.0
+    expected = np.arange(5, dtype=float)
+    assert np.max(np.abs(result.estimates["state_x_m"].to_numpy(float) - expected)) < 0.05
+    dominant = result.assignments.loc[result.assignments["mixture_dominant"]]
+    assert dominant["track_id"].astype(str).str.startswith("good-").all()
+    assert result.summary["metrics"]["pooled"]["rmse_3d_m"] < 0.05
 
 
-def test_cli_writes_estimates_diagnostics_and_official_zip(tmp_path: Path) -> None:
-    candidates = pd.DataFrame(
-        [
-            _candidate(time_s=0.0, x_m=0.0),
-            _candidate(time_s=1.0, x_m=1.0),
-        ]
+def test_candidate_mixture_smoothness_recovers_from_one_high_score_outlier() -> None:
+    records = []
+    for time_s in range(5):
+        good_score = 0.5 if time_s == 2 else 0.9
+        bad_score = 0.9 if time_s == 2 else 0.1
+        records.extend(
+            [
+                {
+                    "sequence_id": "seqA",
+                    "time_s": float(time_s),
+                    "source": "lidar_360",
+                    "track_id": f"good-{time_s}",
+                    "x_m": float(time_s),
+                    "y_m": 0.0,
+                    "z_m": 0.0,
+                    "ranker_score": good_score,
+                    "predicted_sigma_m": 1.0,
+                },
+                {
+                    "sequence_id": "seqA",
+                    "time_s": float(time_s),
+                    "source": "dynamic",
+                    "track_id": f"bad-{time_s}",
+                    "x_m": float(20 + time_s),
+                    "y_m": 0.0,
+                    "z_m": 0.0,
+                    "ranker_score": bad_score,
+                    "predicted_sigma_m": 1.0,
+                },
+            ]
+        )
+
+    result = run_candidate_mixture_map(
+        pd.DataFrame.from_records(records),
+        config=CandidateMixtureMapConfig(
+            top_k=2,
+            score_column="ranker_score",
+            sigma_column="predicted_sigma_m",
+            smoothness_weight=100.0,
+            iterations=5,
+            loss="huber",
+            huber_delta=1.0,
+        ),
     )
+
+    middle = result.estimates.loc[result.estimates["time_s"] == 2.0, "state_x_m"].iloc[0]
+    assert middle == pytest.approx(2.0, abs=0.1)
+    middle_assignments = result.assignments.loc[result.assignments["time_s"] == 2.0]
+    dominant = middle_assignments.loc[middle_assignments["mixture_dominant"]].iloc[0]
+    assert str(dominant["track_id"]) == "good-2"
+
+
+def test_candidate_mixture_cli_writes_diagnostics(tmp_path) -> None:
     candidates_csv = tmp_path / "candidates.csv"
-    candidates.to_csv(candidates_csv, index=False)
-    class_map = tmp_path / "class_map.csv"
-    pd.DataFrame([{"sequence_id": "seq0001", "uav_type": 3}]).to_csv(
-        class_map,
+    truth_csv = tmp_path / "truth.csv"
+    class_map_csv = tmp_path / "class_map.csv"
+    output_dir = tmp_path / "out"
+    official_results_csv = tmp_path / "mmaud_results.csv"
+    official_zip = tmp_path / "ug2_submission.zip"
+    _uncertainty_candidates().to_csv(candidates_csv, index=False)
+    _truth_rows().to_csv(truth_csv, index=False)
+    pd.DataFrame([{"sequence_id": "seqA", "uav_type": 3}]).to_csv(
+        class_map_csv,
         index=False,
     )
-    estimates_csv = tmp_path / "estimates.csv"
-    diagnostics_csv = tmp_path / "diagnostics.csv"
-    assignments_csv = tmp_path / "assignments.csv"
-    summary_json = tmp_path / "summary.json"
-    results_csv = tmp_path / "mmaud_results.csv"
-    official_zip = tmp_path / "ug2_submission.zip"
 
-    rc = main(
+    status = mixture_main(
         [
             "--candidates-csv",
             str(candidates_csv),
-            "--output-estimates-csv",
-            str(estimates_csv),
-            "--frame-diagnostics-csv",
-            str(diagnostics_csv),
-            "--candidate-assignments-csv",
-            str(assignments_csv),
-            "--summary-json",
-            str(summary_json),
+            "--truth-csv",
+            str(truth_csv),
+            "--output-dir",
+            str(output_dir),
             "--top-k",
-            "0",
-            "--iterations",
-            "1",
+            "2",
+            "--score-column",
+            "ranker_score",
+            "--sigma-column",
+            "predicted_sigma_m",
             "--smoothness-weight",
-            "0",
-            "--branch-balance",
-            "0",
-            "--responsibility-floor",
-            "0",
+            "100",
+            "--iterations",
+            "5",
             "--class-map",
-            str(class_map),
+            str(class_map_csv),
             "--official-results-csv",
-            str(results_csv),
+            str(official_results_csv),
             "--official-zip",
             str(official_zip),
         ]
     )
 
-    assert rc == 0
-    assert estimates_csv.exists()
-    assert diagnostics_csv.exists()
-    assert assignments_csv.exists()
-    assert summary_json.exists()
-    official = pd.read_csv(results_csv)
-    assert official["Classification"].tolist() == [3, 3]
+    assert status == 0
+    assert (output_dir / "mmuad_candidate_mixture_estimates.csv").exists()
+    assert (output_dir / "mmuad_candidate_mixture_assignments.csv").exists()
+    assert (output_dir / "mmuad_candidate_mixture_iterations.csv").exists()
+    summary = json.loads(
+        (output_dir / "mmuad_candidate_mixture_summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["metrics"]["pooled"]["rmse_3d_m"] < 0.05
+    official = pd.read_csv(official_results_csv)
+    assert official["Classification"].tolist() == [3, 3, 3, 3, 3]
     with ZipFile(official_zip) as archive:
         assert archive.namelist() == ["mmaud_results.csv"]
+
+
+def test_candidate_mixture_validates_uniform_weight_floor() -> None:
+    with pytest.raises(ValueError, match="uniform_weight_floor"):
+        run_candidate_mixture_map(
+            _uncertainty_candidates(),
+            config=CandidateMixtureMapConfig(uniform_weight_floor=1.0),
+        )
+
+
+def test_candidate_mixture_entrypoint_is_exposed() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    assert (
+        pyproject["project"]["scripts"]["raft-uav-mmuad-candidate-mixture-map"]
+        == "raft_uav.mmuad.candidate_mixture_map:main"
+    )

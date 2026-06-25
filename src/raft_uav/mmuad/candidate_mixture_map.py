@@ -1,13 +1,17 @@
-"""Robust branch-balanced candidate-mixture trajectory inference for MMUAD.
+"""Robust candidate-mixture trajectory smoothing for MMUAD.
 
-The MMUAD experiments show that hard top-1 selection can discard useful raw,
-dynamic, or calibrated hypotheses before trajectory smoothing.  This module
-keeps a bounded candidate reservoir alive during inference, attaches learned
-candidate uncertainty when available, and alternates between robust candidate
-responsibilities and an acceleration-regularized trajectory solve.
+Hard per-frame candidate selection performed poorly in the MMUAD experiments,
+while an uncertainty-aware candidate mixture substantially reduced pose error.
+This module promotes that idea into an inference-safe, reusable implementation:
 
-The implementation is truth-free at inference time.  It consumes only candidate
-positions, scores, source/branch labels, and optional predicted uncertainty.
+* keep the top-K candidates at each timestamp;
+* combine ranker scores with learned per-candidate uncertainty;
+* form robust Huber responsibilities around the current trajectory;
+* solve a quadratic, irregular-time acceleration-regularized trajectory;
+* iterate until the candidate responsibilities and trajectory stabilize.
+
+Validation/test inference does not require truth. Truth is accepted only as an
+optional diagnostic input for local score summaries.
 """
 
 from __future__ import annotations
@@ -16,55 +20,61 @@ import argparse
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 from raft_uav.mmuad.io import load_candidate_file
-from raft_uav.mmuad.schema import normalize_candidate_columns
+from raft_uav.mmuad.schema import normalize_candidate_columns, normalize_truth_columns
 from raft_uav.mmuad.submission import (
     load_sequence_class_map,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
 )
+from raft_uav.mmuad.tracker import add_truth_errors, compute_metrics
 
-_REQUIRED_COLUMNS = ("sequence_id", "time_s", "x_m", "y_m", "z_m")
-_INITIALIZATION_MODES = ("weighted-mean", "best-score")
-_MEASUREMENT_WEIGHT_MODES = ("precision", "uniform")
+LOSS_CHOICES = ("huber", "squared")
+SCORE_NORMALIZATION_CHOICES = ("minmax", "rank", "none")
+INITIALIZATION_CHOICES = ("uncertainty-top1", "score-top1")
 
 
 @dataclass(frozen=True)
-class CandidateMixtureConfig:
+class CandidateMixtureMapConfig:
     """Configuration for robust candidate-mixture trajectory inference."""
 
     top_k: int = 20
-    score_column: str = "candidate_reservoir_score"
+    score_column: str = "candidate_reservoir_grid_score"
     fallback_score_columns: tuple[str, ...] = ("ranker_score", "confidence")
     sigma_column: str = "predicted_sigma_m"
-    fallback_sigma_m: float = 10.0
+    default_sigma_m: float = 10.0
     sigma_min_m: float = 1.0
-    sigma_max_m: float = 50.0
-    temperature: float = 128.0
+    sigma_max_m: float = 30.0
+    score_normalization: str = "minmax"
+    score_weight: float = 1.0
+    temperature: float = 1.0
+    sigma_log_weight: float = 3.0
+    loss: str = "huber"
+    huber_delta: float = 1.0
     smoothness_weight: float = 7200.0
-    huber_scale: float = 1.0
     iterations: int = 5
-    branch_balance: float = 0.25
+    tolerance_m: float = 1.0e-3
+    uniform_weight_floor: float = 0.0
+    branch_balance: float = 0.0
     source_balance: float = 0.0
-    responsibility_floor: float = 0.01
-    initialization: Literal["weighted-mean", "best-score"] = "weighted-mean"
-    measurement_weight_mode: Literal["precision", "uniform"] = "precision"
-    normalize_measurement_weights: bool = True
-    linear_solve_ridge: float = 1.0e-8
+    responsibility_floor: float = 0.0
+    min_measurement_precision: float = 1.0e-6
+    max_measurement_precision: float = 1.0e6
+    initialization: str = "uncertainty-top1"
 
 
 @dataclass(frozen=True)
-class CandidateMixtureResult:
-    """Outputs from candidate-mixture trajectory inference."""
+class CandidateMixtureMapResult:
+    """Trajectory estimates plus candidate-assignment diagnostics."""
 
     estimates: pd.DataFrame
-    frame_diagnostics: pd.DataFrame
-    candidate_assignments: pd.DataFrame
+    assignments: pd.DataFrame
     iteration_summary: pd.DataFrame
     summary: dict[str, Any]
 
@@ -72,541 +82,349 @@ class CandidateMixtureResult:
 def run_candidate_mixture_map(
     candidates: pd.DataFrame,
     *,
-    config: CandidateMixtureConfig | None = None,
-) -> CandidateMixtureResult:
-    """Estimate one trajectory per sequence from a soft candidate mixture."""
+    config: CandidateMixtureMapConfig | None = None,
+    initial_estimates: pd.DataFrame | None = None,
+    truth: pd.DataFrame | None = None,
+) -> CandidateMixtureMapResult:
+    """Estimate one smooth trajectory per sequence from candidate mixtures."""
 
-    config = config or CandidateMixtureConfig()
+    config = config or CandidateMixtureMapConfig()
     _validate_config(config)
-    rows = _prepare_candidate_rows(candidates, config=config)
+    rows = normalize_candidate_columns(pd.DataFrame(candidates).copy())
     if rows.empty:
         empty = pd.DataFrame()
-        return CandidateMixtureResult(
+        return CandidateMixtureMapResult(
             estimates=empty,
-            frame_diagnostics=empty,
-            candidate_assignments=empty,
+            assignments=empty,
             iteration_summary=empty,
-            summary={
-                "config": asdict(config),
-                "input_candidate_rows": int(len(candidates)),
-                "retained_candidate_rows": 0,
-                "sequence_count": 0,
-                "estimate_rows": 0,
-            },
+            summary={"candidate_rows": 0, "estimate_rows": 0, "config": asdict(config)},
         )
+    rows = rows.copy().reset_index(drop=True)
+    rows["_mixture_input_row"] = np.arange(len(rows), dtype=int)
+    truth_rows = None
+    if truth is not None:
+        truth_rows = normalize_truth_columns(pd.DataFrame(truth).copy())
+    initial_rows = _normalize_initial_estimates(initial_estimates)
 
     estimate_parts: list[pd.DataFrame] = []
-    diagnostic_parts: list[pd.DataFrame] = []
     assignment_parts: list[pd.DataFrame] = []
     iteration_parts: list[pd.DataFrame] = []
+    metrics_by_sequence: dict[str, Any] = {}
+    convergence_rows: list[dict[str, Any]] = []
     for sequence_id, sequence_rows in rows.groupby("sequence_id", sort=True):
-        estimates, diagnostics, assignments, iterations = _solve_sequence(
-            str(sequence_id),
-            sequence_rows,
+        frames = _prepare_candidate_frames(sequence_rows, config=config)
+        if not frames:
+            continue
+        times = np.asarray([frame["time_s"] for frame in frames], dtype=float)
+        state = _initial_trajectory(
+            frames,
+            times=times,
+            sequence_id=str(sequence_id),
+            initial_estimates=initial_rows,
             config=config,
         )
+        iteration_records: list[dict[str, Any]] = []
+        converged = False
+        final_response: list[dict[str, Any]] = []
+        for iteration in range(1, int(config.iterations) + 1):
+            response = _mixture_response(frames, state, config=config)
+            updated = _solve_smooth_trajectory(
+                times,
+                pseudo_positions=np.asarray([item["pseudo_position"] for item in response]),
+                measurement_precision=np.asarray(
+                    [item["measurement_precision"] for item in response]
+                ),
+                smoothness_weight=float(config.smoothness_weight),
+            )
+            displacement = np.linalg.norm(updated - state, axis=1)
+            objective = _quadratic_objective(
+                times,
+                updated,
+                pseudo_positions=np.asarray([item["pseudo_position"] for item in response]),
+                measurement_precision=np.asarray(
+                    [item["measurement_precision"] for item in response]
+                ),
+                smoothness_weight=float(config.smoothness_weight),
+            )
+            iteration_records.append(
+                {
+                    "sequence_id": str(sequence_id),
+                    "iteration": int(iteration),
+                    "max_displacement_m": float(np.max(displacement)),
+                    "mean_displacement_m": float(np.mean(displacement)),
+                    "mean_assignment_entropy": float(
+                        np.mean([item["entropy"] for item in response])
+                    ),
+                    "mean_effective_candidate_count": float(
+                        np.mean([item["effective_candidate_count"] for item in response])
+                    ),
+                    "quadratic_objective": float(objective),
+                }
+            )
+            state = updated
+            final_response = response
+            if float(np.max(displacement)) <= float(config.tolerance_m):
+                converged = True
+                break
+        final_response = _mixture_response(frames, state, config=config)
+        estimates = _estimate_rows(
+            sequence_id=str(sequence_id),
+            times=times,
+            state=state,
+            response=final_response,
+            iterations=len(iteration_records),
+            converged=converged,
+        )
+        sequence_truth = None
+        if truth_rows is not None:
+            sequence_truth = truth_rows.loc[
+                truth_rows["sequence_id"].astype(str) == str(sequence_id)
+            ]
+            if not sequence_truth.empty:
+                estimates = add_truth_errors(estimates, sequence_truth)
         estimate_parts.append(estimates)
-        diagnostic_parts.append(diagnostics)
-        assignment_parts.append(assignments)
-        iteration_parts.append(iterations)
+        assignment_parts.append(
+            _assignment_rows(
+                sequence_id=str(sequence_id),
+                state=state,
+                frames=frames,
+                response=final_response,
+            )
+        )
+        iteration_parts.append(pd.DataFrame.from_records(iteration_records))
+        metrics_by_sequence[str(sequence_id)] = compute_metrics(estimates, sequence_truth)
+        convergence_rows.append(
+            {
+                "sequence_id": str(sequence_id),
+                "frame_count": int(len(times)),
+                "iteration_count": int(len(iteration_records)),
+                "converged": bool(converged),
+            }
+        )
 
-    estimates = pd.concat(estimate_parts, ignore_index=True)
-    diagnostics = pd.concat(diagnostic_parts, ignore_index=True)
-    assignments = pd.concat(assignment_parts, ignore_index=True)
-    iterations = pd.concat(iteration_parts, ignore_index=True)
-    summary = build_candidate_mixture_summary(
-        input_candidates=pd.DataFrame(candidates),
-        retained_candidates=rows,
-        estimates=estimates,
-        frame_diagnostics=diagnostics,
-        iteration_summary=iterations,
-        config=config,
+    estimates_all = _concat(estimate_parts)
+    assignments_all = _concat(assignment_parts)
+    iteration_all = _concat(iteration_parts)
+    pooled_metrics = compute_metrics(estimates_all, truth_rows)
+    summary = {
+        "candidate_rows": int(len(rows)),
+        "sequence_count": int(estimates_all["sequence_id"].nunique())
+        if not estimates_all.empty
+        else 0,
+        "estimate_rows": int(len(estimates_all)),
+        "assignment_rows": int(len(assignments_all)),
+        "converged_sequence_count": int(
+            sum(bool(row["converged"]) for row in convergence_rows)
+        ),
+        "config": asdict(config),
+        "metrics": {
+            "pooled": pooled_metrics,
+            "sequences": metrics_by_sequence,
+        },
+        "convergence": convergence_rows,
+    }
+    return CandidateMixtureMapResult(
+        estimates=estimates_all,
+        assignments=assignments_all,
+        iteration_summary=iteration_all,
+        summary=_jsonable(summary),
     )
-    return CandidateMixtureResult(
-        estimates=estimates,
-        frame_diagnostics=diagnostics,
-        candidate_assignments=assignments,
-        iteration_summary=iterations,
-        summary=summary,
+
+
+def write_candidate_mixture_map_outputs(
+    result: CandidateMixtureMapResult,
+    output_dir: Path,
+) -> dict[str, Path]:
+    """Write mixture estimates, assignments, iteration rows, and summary JSON."""
+
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    paths = {
+        "estimates_csv": output / "mmuad_candidate_mixture_estimates.csv",
+        "assignments_csv": output / "mmuad_candidate_mixture_assignments.csv",
+        "iterations_csv": output / "mmuad_candidate_mixture_iterations.csv",
+        "summary_json": output / "mmuad_candidate_mixture_summary.json",
+    }
+    result.estimates.to_csv(paths["estimates_csv"], index=False)
+    result.assignments.to_csv(paths["assignments_csv"], index=False)
+    result.iteration_summary.to_csv(paths["iterations_csv"], index=False)
+    paths["summary_json"].write_text(
+        json.dumps(_jsonable(result.summary), indent=2),
+        encoding="utf-8",
     )
+    return paths
 
 
 def compute_candidate_responsibilities(
     candidates: pd.DataFrame,
     state_xyz: np.ndarray,
     *,
-    config: CandidateMixtureConfig | None = None,
+    config: CandidateMixtureMapConfig | None = None,
 ) -> pd.DataFrame:
-    """Return robust responsibilities for one frame, useful for diagnostics/tests."""
+    """Return final mixture responsibilities for a single candidate frame."""
 
-    config = config or CandidateMixtureConfig()
+    config = config or CandidateMixtureMapConfig()
     _validate_config(config)
-    rows = _prepare_candidate_rows(candidates, config=config)
+    rows = normalize_candidate_columns(pd.DataFrame(candidates).copy())
     if rows.empty:
-        return rows.assign(mixture_responsibility=pd.Series(dtype=float))
-    if rows[["sequence_id", "time_s"]].drop_duplicates().shape[0] != 1:
+        return rows.assign(
+            mixture_responsibility=pd.Series(dtype=float),
+            mixture_residual_m=pd.Series(dtype=float),
+        )
+    rows = rows.copy().reset_index(drop=True)
+    rows["_mixture_input_row"] = np.arange(len(rows), dtype=int)
+    frames: list[dict[str, Any]] = []
+    for _, sequence_rows in rows.groupby("sequence_id", sort=True):
+        frames.extend(_prepare_candidate_frames(sequence_rows, config=config))
+    if len(frames) != 1:
         raise ValueError("compute_candidate_responsibilities expects exactly one frame")
-    responsibility, residual = _responsibility_arrays(
-        rows,
-        np.asarray(state_xyz, dtype=float).reshape(3),
-        config=config,
-    )
-    out = rows.copy()
-    out["mixture_responsibility"] = responsibility
-    out["mixture_residual_m"] = residual
-    return out.drop(columns=["_mixture_row_id"], errors="ignore")
-
-
-def build_candidate_mixture_summary(
-    *,
-    input_candidates: pd.DataFrame,
-    retained_candidates: pd.DataFrame,
-    estimates: pd.DataFrame,
-    frame_diagnostics: pd.DataFrame,
-    iteration_summary: pd.DataFrame,
-    config: CandidateMixtureConfig,
-) -> dict[str, Any]:
-    """Build a compact JSON-serializable inference summary."""
-
-    entropy = pd.to_numeric(
-        frame_diagnostics.get("assignment_entropy"),
-        errors="coerce",
-    )
-    effective_count = pd.to_numeric(
-        frame_diagnostics.get("effective_candidate_count"),
-        errors="coerce",
-    )
-    sigma = pd.to_numeric(frame_diagnostics.get("effective_sigma_m"), errors="coerce")
-    state_change = pd.to_numeric(iteration_summary.get("mean_state_change_m"), errors="coerce")
-    return {
-        "schema": "raft-uav-mmuad-candidate-mixture-map-v1",
-        "config": asdict(config),
-        "input_candidate_rows": int(len(input_candidates)),
-        "retained_candidate_rows": int(len(retained_candidates)),
-        "sequence_count": int(estimates["sequence_id"].nunique()) if not estimates.empty else 0,
-        "estimate_rows": int(len(estimates)),
-        "assignment_entropy_mean": _safe_mean(entropy),
-        "effective_candidate_count_mean": _safe_mean(effective_count),
-        "effective_sigma_mean_m": _safe_mean(sigma),
-        "final_iteration_mean_state_change_m": _last_iteration_mean(state_change),
-        "dominant_branch_counts": _value_counts(frame_diagnostics, "dominant_candidate_branch"),
-        "dominant_source_counts": _value_counts(frame_diagnostics, "dominant_candidate_source"),
-    }
-
-
-def _solve_sequence(
-    sequence_id: str,
-    sequence_rows: pd.DataFrame,
-    *,
-    config: CandidateMixtureConfig,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    rows = sequence_rows.sort_values(["time_s", "_mixture_score"], ascending=[True, False])
-    grouped = [group.copy() for _, group in rows.groupby("time_s", sort=True)]
-    times = np.asarray([float(group["time_s"].iloc[0]) for group in grouped], dtype=float)
-    states = np.vstack([_initial_frame_state(group, config=config) for group in grouped])
-    iteration_records: list[dict[str, Any]] = []
-
-    for iteration in range(int(config.iterations)):
-        pseudo, effective_sigma, frame_entropy = _mixture_pseudo_measurements(
-            grouped,
-            states,
-            config=config,
-        )
-        measurement_weights = _measurement_weights(effective_sigma, config=config)
-        new_states = _smooth_trajectory(
-            times,
-            pseudo,
-            measurement_weights,
-            smoothness_weight=float(config.smoothness_weight),
-            ridge=float(config.linear_solve_ridge),
-        )
-        change = np.linalg.norm(new_states - states, axis=1)
-        iteration_records.append(
-            {
-                "sequence_id": sequence_id,
-                "iteration": int(iteration + 1),
-                "mean_state_change_m": float(np.mean(change)),
-                "max_state_change_m": float(np.max(change)),
-                "mean_assignment_entropy": float(np.mean(frame_entropy)),
-                "mean_effective_sigma_m": float(np.mean(effective_sigma)),
-            }
-        )
-        states = new_states
-
-    estimates_records: list[dict[str, Any]] = []
-    diagnostic_records: list[dict[str, Any]] = []
-    assignment_parts: list[pd.DataFrame] = []
-    for frame_index, (group, state) in enumerate(zip(grouped, states, strict=True)):
-        responsibility, residual = _responsibility_arrays(group, state, config=config)
-        xyz = group[["x_m", "y_m", "z_m"]].to_numpy(float)
-        pseudo = np.sum(responsibility[:, None] * xyz, axis=0)
-        effective_sigma = _effective_sigma(group, xyz, pseudo, responsibility, config=config)
-        entropy = _entropy(responsibility)
-        dominant_index = int(np.argmax(responsibility))
-        dominant = group.iloc[dominant_index]
-        branch_mass = _label_mass(responsibility, group["candidate_branch"])
-        source_mass = _label_mass(responsibility, group["source"])
-        estimates_records.append(
-            {
-                "sequence_id": sequence_id,
-                "time_s": float(times[frame_index]),
-                "state_x_m": float(state[0]),
-                "state_y_m": float(state[1]),
-                "state_z_m": float(state[2]),
-                "x_m": float(state[0]),
-                "y_m": float(state[1]),
-                "z_m": float(state[2]),
-                "score": float(np.max(responsibility)),
-                "mixture_effective_sigma_m": float(effective_sigma),
-                "mixture_effective_candidate_count": float(np.exp(entropy)),
-            }
-        )
-        diagnostic_records.append(
-            {
-                "sequence_id": sequence_id,
-                "time_s": float(times[frame_index]),
-                "candidate_count": int(len(group)),
-                "pseudo_x_m": float(pseudo[0]),
-                "pseudo_y_m": float(pseudo[1]),
-                "pseudo_z_m": float(pseudo[2]),
-                "state_x_m": float(state[0]),
-                "state_y_m": float(state[1]),
-                "state_z_m": float(state[2]),
-                "effective_sigma_m": float(effective_sigma),
-                "assignment_entropy": float(entropy),
-                "effective_candidate_count": float(np.exp(entropy)),
-                "dominant_responsibility": float(responsibility[dominant_index]),
-                "dominant_candidate_branch": str(dominant["candidate_branch"]),
-                "dominant_candidate_source": str(dominant["source"]),
-                "dominant_candidate_track_id": str(dominant.get("track_id", "")),
-                "branch_mass_json": json.dumps(branch_mass, sort_keys=True),
-                "source_mass_json": json.dumps(source_mass, sort_keys=True),
-            }
-        )
-        assignment = group.copy()
-        assignment["mixture_responsibility"] = responsibility
-        assignment["mixture_residual_m"] = residual
-        assignment["mixture_frame_index"] = int(frame_index)
-        assignment_parts.append(assignment)
-
-    estimates = pd.DataFrame.from_records(estimates_records)
-    diagnostics = pd.DataFrame.from_records(diagnostic_records)
-    assignments = pd.concat(assignment_parts, ignore_index=True).drop(
-        columns=["_mixture_row_id"],
+    state = np.asarray(state_xyz, dtype=float).reshape(1, 3)
+    response = _mixture_response(frames, state, config=config)[0]
+    out = frames[0]["rows"].copy()
+    out["mixture_responsibility"] = response["weights"]
+    out["mixture_residual_m"] = response["distances"]
+    return out.drop(
+        columns=[
+            "_mixture_input_row",
+            "_mixture_raw_score",
+            "_mixture_sigma_m",
+            "_mixture_candidate_rank",
+            "_mixture_normalized_score",
+        ],
         errors="ignore",
     )
-    iterations = pd.DataFrame.from_records(iteration_records)
-    return estimates, diagnostics, assignments, iterations
 
 
-def _prepare_candidate_rows(
-    candidates: pd.DataFrame,
-    *,
-    config: CandidateMixtureConfig,
-) -> pd.DataFrame:
-    rows = normalize_candidate_columns(pd.DataFrame(candidates).copy())
-    missing = set(_REQUIRED_COLUMNS).difference(rows.columns)
-    if missing:
-        raise ValueError(f"candidate mixture rows missing columns: {sorted(missing)}")
-    if rows.empty:
-        return rows
-    rows = rows.copy().reset_index(drop=True)
-    rows["sequence_id"] = rows["sequence_id"].astype(str)
-    for column in ("time_s", "x_m", "y_m", "z_m"):
-        rows[column] = pd.to_numeric(rows[column], errors="coerce")
-    finite = np.isfinite(rows[["time_s", "x_m", "y_m", "z_m"]].to_numpy(float)).all(axis=1)
-    rows = rows.loc[finite].copy().reset_index(drop=True)
-    if rows.empty:
-        return rows
-    rows["source"] = rows.get("source", pd.Series("unknown", index=rows.index))
-    rows["source"] = rows["source"].fillna("unknown").astype(str)
-    rows["candidate_branch"] = rows.get(
-        "candidate_branch",
-        rows["source"],
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="raft-uav-mmuad-candidate-mixture-map",
+        description="run robust uncertainty-aware MMUAD candidate-mixture smoothing",
     )
-    rows["candidate_branch"] = rows["candidate_branch"].fillna(rows["source"]).astype(str)
-    rows["_mixture_score"] = _candidate_scores(rows, config=config)
-    rows["_mixture_sigma_m"] = _candidate_sigmas(rows, config=config)
-    rows["_mixture_row_id"] = np.arange(len(rows), dtype=int)
-    if int(config.top_k) > 0:
-        rows = (
-            rows.sort_values(
-                ["sequence_id", "time_s", "_mixture_score"],
-                ascending=[True, True, False],
-            )
-            .groupby(["sequence_id", "time_s"], sort=False, as_index=False)
-            .head(int(config.top_k))
-            .reset_index(drop=True)
-        )
-    return rows
-
-
-def _candidate_scores(rows: pd.DataFrame, *, config: CandidateMixtureConfig) -> pd.Series:
-    score = pd.to_numeric(rows.get(config.score_column), errors="coerce")
-    if not isinstance(score, pd.Series):
-        score = pd.Series(np.nan, index=rows.index, dtype=float)
-    for column in config.fallback_score_columns:
-        fallback = pd.to_numeric(rows.get(column), errors="coerce")
-        if isinstance(fallback, pd.Series):
-            score = score.fillna(fallback)
-    return score.fillna(0.0).astype(float)
-
-
-def _candidate_sigmas(rows: pd.DataFrame, *, config: CandidateMixtureConfig) -> pd.Series:
-    sigma = pd.to_numeric(rows.get(config.sigma_column), errors="coerce")
-    if not isinstance(sigma, pd.Series):
-        sigma = pd.Series(np.nan, index=rows.index, dtype=float)
-    for column in ("std_xy_m", "std_z_m"):
-        fallback = pd.to_numeric(rows.get(column), errors="coerce")
-        if isinstance(fallback, pd.Series):
-            sigma = sigma.fillna(fallback)
-    sigma = sigma.fillna(float(config.fallback_sigma_m)).astype(float)
-    return sigma.clip(lower=float(config.sigma_min_m), upper=float(config.sigma_max_m))
-
-
-def _initial_frame_state(group: pd.DataFrame, *, config: CandidateMixtureConfig) -> np.ndarray:
-    xyz = group[["x_m", "y_m", "z_m"]].to_numpy(float)
-    if config.initialization == "best-score":
-        return xyz[int(np.argmax(group["_mixture_score"].to_numpy(float)))].copy()
-    sigma = group["_mixture_sigma_m"].to_numpy(float)
-    prior = _score_prior(group["_mixture_score"].to_numpy(float), config=config)
-    weight = prior / np.maximum(sigma**2, 1.0e-12)
-    weight = _normalize(weight)
-    return np.sum(weight[:, None] * xyz, axis=0)
-
-
-def _mixture_pseudo_measurements(
-    grouped: list[pd.DataFrame],
-    states: np.ndarray,
-    *,
-    config: CandidateMixtureConfig,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    pseudo_rows: list[np.ndarray] = []
-    sigma_rows: list[float] = []
-    entropy_rows: list[float] = []
-    for group, state in zip(grouped, states, strict=True):
-        responsibility, _ = _responsibility_arrays(group, state, config=config)
-        xyz = group[["x_m", "y_m", "z_m"]].to_numpy(float)
-        pseudo = np.sum(responsibility[:, None] * xyz, axis=0)
-        pseudo_rows.append(pseudo)
-        sigma_rows.append(_effective_sigma(group, xyz, pseudo, responsibility, config=config))
-        entropy_rows.append(_entropy(responsibility))
-    return (
-        np.vstack(pseudo_rows),
-        np.asarray(sigma_rows, dtype=float),
-        np.asarray(entropy_rows, dtype=float),
+    parser.add_argument("--candidates-csv", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--output-estimates-csv", type=Path)
+    parser.add_argument("--candidate-assignments-csv", type=Path)
+    parser.add_argument("--iteration-summary-csv", type=Path)
+    parser.add_argument("--summary-json", type=Path)
+    parser.add_argument("--initial-estimates-csv", type=Path)
+    parser.add_argument("--truth-csv", type=Path)
+    parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--score-column", default="candidate_reservoir_grid_score")
+    parser.add_argument("--fallback-score-column", action="append", default=[])
+    parser.add_argument("--sigma-column", default="predicted_sigma_m")
+    parser.add_argument("--default-sigma-m", type=float, default=10.0)
+    parser.add_argument("--sigma-min-m", type=float, default=1.0)
+    parser.add_argument("--sigma-max-m", type=float, default=30.0)
+    parser.add_argument(
+        "--score-normalization",
+        choices=SCORE_NORMALIZATION_CHOICES,
+        default="minmax",
     )
-
-
-def _responsibility_arrays(
-    group: pd.DataFrame,
-    state_xyz: np.ndarray,
-    *,
-    config: CandidateMixtureConfig,
-) -> tuple[np.ndarray, np.ndarray]:
-    xyz = group[["x_m", "y_m", "z_m"]].to_numpy(float)
-    sigma = group["_mixture_sigma_m"].to_numpy(float)
-    residual = np.linalg.norm(xyz - np.asarray(state_xyz, dtype=float).reshape(1, 3), axis=1)
-    normalized_residual = residual / np.maximum(sigma, 1.0e-12)
-    robust_weight = _huber_irls_weight(normalized_residual, scale=float(config.huber_scale))
-    prior = _score_prior(group["_mixture_score"].to_numpy(float), config=config)
-    raw = prior * robust_weight / np.maximum(sigma**2, 1.0e-12)
-    global_distribution = _normalize(raw)
-    distribution = global_distribution
-    if float(config.branch_balance) > 0.0:
-        branch_distribution = _balanced_label_distribution(
-            raw,
-            group["candidate_branch"].astype(str).to_numpy(),
-        )
-        distribution = (
-            (1.0 - float(config.branch_balance)) * distribution
-            + float(config.branch_balance) * branch_distribution
-        )
-    if float(config.source_balance) > 0.0:
-        source_distribution = _balanced_label_distribution(
-            raw,
-            group["source"].astype(str).to_numpy(),
-        )
-        distribution = (
-            (1.0 - float(config.source_balance)) * distribution
-            + float(config.source_balance) * source_distribution
-        )
-    if float(config.responsibility_floor) > 0.0:
-        uniform = np.full(len(distribution), 1.0 / len(distribution), dtype=float)
-        distribution = (
-            (1.0 - float(config.responsibility_floor)) * distribution
-            + float(config.responsibility_floor) * uniform
-        )
-    return _normalize(distribution), residual
-
-
-def _score_prior(scores: np.ndarray, *, config: CandidateMixtureConfig) -> np.ndarray:
-    scores = np.asarray(scores, dtype=float)
-    if not np.isfinite(scores).any():
-        return np.full(len(scores), 1.0 / max(len(scores), 1), dtype=float)
-    scores = np.nan_to_num(scores, nan=float(np.nanmin(scores[np.isfinite(scores)])))
-    temperature = max(float(config.temperature), 1.0e-9)
-    logits = np.clip((scores - float(np.max(scores))) / temperature, -60.0, 0.0)
-    return _normalize(np.exp(logits))
-
-
-def _balanced_label_distribution(raw: np.ndarray, labels: np.ndarray) -> np.ndarray:
-    labels = np.asarray(labels, dtype=str)
-    unique = sorted(set(labels.tolist()))
-    if not unique:
-        return _normalize(raw)
-    out = np.zeros(len(raw), dtype=float)
-    label_mass = 1.0 / len(unique)
-    for label in unique:
-        mask = labels == label
-        within = _normalize(np.asarray(raw, dtype=float)[mask])
-        out[mask] = label_mass * within
-    return _normalize(out)
-
-
-def _huber_irls_weight(residual: np.ndarray, *, scale: float) -> np.ndarray:
-    residual = np.asarray(residual, dtype=float)
-    if scale <= 0.0:
-        return np.ones_like(residual)
-    absolute = np.abs(residual)
-    return np.where(absolute <= scale, 1.0, scale / np.maximum(absolute, 1.0e-12))
-
-
-def _effective_sigma(
-    group: pd.DataFrame,
-    xyz: np.ndarray,
-    pseudo: np.ndarray,
-    responsibility: np.ndarray,
-    *,
-    config: CandidateMixtureConfig,
-) -> float:
-    sigma = group["_mixture_sigma_m"].to_numpy(float)
-    measurement_variance = float(np.sum(responsibility * sigma**2))
-    spatial_variance = float(
-        np.sum(responsibility * np.sum((xyz - pseudo.reshape(1, 3)) ** 2, axis=1)) / 3.0
+    parser.add_argument("--score-weight", type=float, default=1.0)
+    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--sigma-log-weight", type=float, default=3.0)
+    parser.add_argument("--loss", choices=LOSS_CHOICES, default="huber")
+    parser.add_argument("--huber-delta", type=float, default=1.0)
+    parser.add_argument("--smoothness-weight", type=float, default=7200.0)
+    parser.add_argument("--iterations", type=int, default=5)
+    parser.add_argument("--tolerance-m", type=float, default=1.0e-3)
+    parser.add_argument("--uniform-weight-floor", type=float, default=0.0)
+    parser.add_argument("--branch-balance", type=float, default=0.0)
+    parser.add_argument("--source-balance", type=float, default=0.0)
+    parser.add_argument("--responsibility-floor", type=float, default=0.0)
+    parser.add_argument(
+        "--initialization",
+        choices=INITIALIZATION_CHOICES,
+        default="uncertainty-top1",
     )
-    value = np.sqrt(max(measurement_variance + spatial_variance, config.sigma_min_m**2))
-    return float(np.clip(value, config.sigma_min_m, config.sigma_max_m))
+    parser.add_argument("--class-map", type=Path)
+    parser.add_argument("--default-classification", default="2")
+    parser.add_argument("--official-results-csv", type=Path)
+    parser.add_argument("--official-zip", type=Path)
+    args = parser.parse_args(argv)
+    if args.output_dir is None and args.output_estimates_csv is None:
+        parser.error("--output-dir or --output-estimates-csv is required")
 
-
-def _measurement_weights(
-    effective_sigma: np.ndarray,
-    *,
-    config: CandidateMixtureConfig,
-) -> np.ndarray:
-    if config.measurement_weight_mode == "uniform":
-        return np.ones(len(effective_sigma), dtype=float)
-    weights = 1.0 / np.maximum(np.asarray(effective_sigma, dtype=float) ** 2, 1.0e-12)
-    if config.normalize_measurement_weights:
-        finite = weights[np.isfinite(weights) & (weights > 0.0)]
-        if len(finite):
-            weights = weights / float(np.median(finite))
-    return np.clip(weights, 1.0e-6, 1.0e6)
-
-
-def _smooth_trajectory(
-    times: np.ndarray,
-    pseudo: np.ndarray,
-    measurement_weights: np.ndarray,
-    *,
-    smoothness_weight: float,
-    ridge: float,
-) -> np.ndarray:
-    times = np.asarray(times, dtype=float)
-    pseudo = np.asarray(pseudo, dtype=float)
-    weights = np.asarray(measurement_weights, dtype=float)
-    count = len(times)
-    if count < 3 or smoothness_weight <= 0.0:
-        return pseudo.copy()
-    difference = _acceleration_difference_matrix(times)
-    system = np.diag(weights) + float(smoothness_weight) * (difference.T @ difference)
-    system += float(max(ridge, 0.0)) * np.eye(count)
-    target = weights[:, None] * pseudo
-    try:
-        return np.linalg.solve(system, target)
-    except np.linalg.LinAlgError:
-        return np.linalg.lstsq(system, target, rcond=None)[0]
-
-
-def _acceleration_difference_matrix(times: np.ndarray) -> np.ndarray:
-    count = len(times)
-    matrix = np.zeros((max(count - 2, 0), count), dtype=float)
-    for index in range(1, count - 1):
-        dt_before = max(float(times[index] - times[index - 1]), 1.0e-6)
-        dt_after = max(float(times[index + 1] - times[index]), 1.0e-6)
-        span = dt_before + dt_after
-        row = index - 1
-        matrix[row, index - 1] = 2.0 / (dt_before * span)
-        matrix[row, index] = -2.0 * (1.0 / dt_before + 1.0 / dt_after) / span
-        matrix[row, index + 1] = 2.0 / (dt_after * span)
-    return matrix
-
-
-def _normalize(values: np.ndarray) -> np.ndarray:
-    values = np.asarray(values, dtype=float)
-    values = np.nan_to_num(values, nan=0.0, posinf=0.0, neginf=0.0)
-    values = np.maximum(values, 0.0)
-    total = float(np.sum(values))
-    if total <= 0.0:
-        return np.full(len(values), 1.0 / max(len(values), 1), dtype=float)
-    return values / total
-
-
-def _entropy(values: np.ndarray) -> float:
-    probability = np.clip(_normalize(values), 1.0e-15, 1.0)
-    return float(-np.sum(probability * np.log(probability)))
-
-
-def _label_mass(values: np.ndarray, labels: pd.Series) -> dict[str, float]:
-    out: dict[str, float] = {}
-    for label, value in zip(labels.astype(str), values, strict=True):
-        out[str(label)] = out.get(str(label), 0.0) + float(value)
-    return out
-
-
-def _validate_config(config: CandidateMixtureConfig) -> None:
-    if config.top_k < 0:
-        raise ValueError("top_k must be non-negative; use 0 for all candidates")
-    if config.temperature <= 0.0:
-        raise ValueError("temperature must be positive")
-    if config.iterations <= 0:
-        raise ValueError("iterations must be positive")
-    if config.sigma_min_m <= 0.0 or config.sigma_max_m < config.sigma_min_m:
-        raise ValueError("sigma bounds must satisfy 0 < sigma_min_m <= sigma_max_m")
-    for name, value in (
-        ("branch_balance", config.branch_balance),
-        ("source_balance", config.source_balance),
-        ("responsibility_floor", config.responsibility_floor),
-    ):
-        if not 0.0 <= float(value) <= 1.0:
-            raise ValueError(f"{name} must be within [0, 1]")
-    if config.initialization not in _INITIALIZATION_MODES:
-        raise ValueError(f"unsupported initialization={config.initialization!r}")
-    if config.measurement_weight_mode not in _MEASUREMENT_WEIGHT_MODES:
-        raise ValueError(
-            f"unsupported measurement_weight_mode={config.measurement_weight_mode!r}"
+    fallback_columns = tuple(args.fallback_score_column) or ("ranker_score", "confidence")
+    candidates = load_candidate_file(args.candidates_csv).rows
+    initial_estimates = (
+        None if args.initial_estimates_csv is None else pd.read_csv(args.initial_estimates_csv)
+    )
+    truth = None
+    if args.truth_csv is not None:
+        truth = load_evaluation_truth_file(args.truth_csv).rows
+    result = run_candidate_mixture_map(
+        candidates,
+        config=CandidateMixtureMapConfig(
+            top_k=args.top_k,
+            score_column=args.score_column,
+            fallback_score_columns=fallback_columns,
+            sigma_column=args.sigma_column,
+            default_sigma_m=args.default_sigma_m,
+            sigma_min_m=args.sigma_min_m,
+            sigma_max_m=args.sigma_max_m,
+            score_normalization=args.score_normalization,
+            score_weight=args.score_weight,
+            temperature=args.temperature,
+            sigma_log_weight=args.sigma_log_weight,
+            loss=args.loss,
+            huber_delta=args.huber_delta,
+            smoothness_weight=args.smoothness_weight,
+            iterations=args.iterations,
+            tolerance_m=args.tolerance_m,
+            uniform_weight_floor=args.uniform_weight_floor,
+            branch_balance=args.branch_balance,
+            source_balance=args.source_balance,
+            responsibility_floor=args.responsibility_floor,
+            initialization=args.initialization,
+        ),
+        initial_estimates=initial_estimates,
+        truth=truth,
+    )
+    paths: dict[str, Path] = {}
+    if args.output_dir is not None:
+        paths.update(write_candidate_mixture_map_outputs(result, args.output_dir))
+    if args.output_estimates_csv is not None:
+        paths["estimates_csv"] = args.output_estimates_csv
+        _write_frame(result.estimates, args.output_estimates_csv)
+    if args.candidate_assignments_csv is not None:
+        paths["assignments_csv"] = args.candidate_assignments_csv
+        _write_frame(result.assignments, args.candidate_assignments_csv)
+    if args.iteration_summary_csv is not None:
+        paths["iterations_csv"] = args.iteration_summary_csv
+        _write_frame(result.iteration_summary, args.iteration_summary_csv)
+    if args.summary_json is not None:
+        paths["summary_json"] = args.summary_json
+        args.summary_json.parent.mkdir(parents=True, exist_ok=True)
+        args.summary_json.write_text(
+            json.dumps(_jsonable(result.summary), indent=2),
+            encoding="utf-8",
         )
-
-
-def _safe_mean(values: pd.Series) -> float | None:
-    finite = pd.to_numeric(values, errors="coerce")
-    finite = finite[np.isfinite(finite)]
-    return float(finite.mean()) if len(finite) else None
-
-
-def _last_iteration_mean(values: pd.Series) -> float | None:
-    finite = pd.to_numeric(values, errors="coerce")
-    finite = finite[np.isfinite(finite)]
-    return float(finite.iloc[-1]) if len(finite) else None
-
-
-def _value_counts(rows: pd.DataFrame, column: str) -> dict[str, int]:
-    if column not in rows.columns:
-        return {}
-    return {
-        str(key): int(value)
-        for key, value in rows[column].fillna("unknown").astype(str).value_counts().items()
-    }
+    class_map = load_sequence_class_map(args.class_map) if args.class_map is not None else {}
+    if args.official_results_csv is not None:
+        write_official_mmaud_results_csv(
+            result.estimates,
+            args.official_results_csv,
+            classification=args.default_classification,
+            class_map=class_map,
+        )
+        paths["official_results_csv"] = args.official_results_csv
+    if args.official_zip is not None:
+        write_official_ug2_codabench_zip(
+            result.estimates,
+            args.official_zip,
+            classification=args.default_classification,
+            class_map=class_map,
+        )
+        paths["official_zip"] = args.official_zip
+    print("mmuad_candidate_mixture_map=ok")
+    print(f"estimate_rows={len(result.estimates)}")
+    pooled = result.summary.get("metrics", {}).get("pooled", {})
+    if pooled.get("rmse_3d_m") is not None:
+        print(f"rmse_3d_m={pooled['rmse_3d_m']}")
+    for name, path in paths.items():
+        print(f"{name}={path}")
+    return 0
 
 
 def _write_frame(frame: pd.DataFrame, path: Path | None) -> None:
@@ -616,101 +434,509 @@ def _write_frame(frame: pd.DataFrame, path: Path | None) -> None:
     frame.to_csv(path, index=False)
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="raft-uav-mmuad-candidate-mixture-map",
-        description="run robust branch-balanced candidate-mixture MMUAD smoothing",
-    )
-    parser.add_argument("--candidates-csv", type=Path, required=True)
-    parser.add_argument("--output-estimates-csv", type=Path, required=True)
-    parser.add_argument("--frame-diagnostics-csv", type=Path)
-    parser.add_argument("--candidate-assignments-csv", type=Path)
-    parser.add_argument("--iteration-summary-csv", type=Path)
-    parser.add_argument("--summary-json", type=Path)
-    parser.add_argument("--top-k", type=int, default=20)
-    parser.add_argument("--score-column", default="candidate_reservoir_score")
-    parser.add_argument("--sigma-column", default="predicted_sigma_m")
-    parser.add_argument("--fallback-sigma-m", type=float, default=10.0)
-    parser.add_argument("--sigma-min-m", type=float, default=1.0)
-    parser.add_argument("--sigma-max-m", type=float, default=50.0)
-    parser.add_argument("--temperature", type=float, default=128.0)
-    parser.add_argument("--smoothness-weight", type=float, default=7200.0)
-    parser.add_argument("--huber-scale", type=float, default=1.0)
-    parser.add_argument("--iterations", type=int, default=5)
-    parser.add_argument("--branch-balance", type=float, default=0.25)
-    parser.add_argument("--source-balance", type=float, default=0.0)
-    parser.add_argument("--responsibility-floor", type=float, default=0.01)
-    parser.add_argument("--initialization", choices=_INITIALIZATION_MODES, default="weighted-mean")
-    parser.add_argument(
-        "--measurement-weight-mode",
-        choices=_MEASUREMENT_WEIGHT_MODES,
-        default="precision",
-    )
-    parser.add_argument("--no-normalize-measurement-weights", action="store_true")
-    parser.add_argument("--class-map", type=Path)
-    parser.add_argument("--default-classification", default="2")
-    parser.add_argument("--official-results-csv", type=Path)
-    parser.add_argument("--official-zip", type=Path)
-    args = parser.parse_args(argv)
+def _prepare_candidate_frames(
+    sequence_rows: pd.DataFrame,
+    *,
+    config: CandidateMixtureMapConfig,
+) -> list[dict[str, Any]]:
+    frames: list[dict[str, Any]] = []
+    for time_s, frame in sequence_rows.groupby("time_s", sort=True):
+        group = frame.copy()
+        group["_mixture_raw_score"] = _candidate_scores(group, config=config)
+        group["_mixture_sigma_m"] = _candidate_sigmas(group, config=config)
+        group = group.sort_values(
+            ["_mixture_raw_score", "_mixture_sigma_m", "_mixture_input_row"],
+            ascending=[False, True, True],
+        )
+        if int(config.top_k) > 0:
+            group = group.head(int(config.top_k))
+        if group.empty:
+            continue
+        group = group.reset_index(drop=True)
+        group["_mixture_candidate_rank"] = np.arange(1, len(group) + 1, dtype=int)
+        normalized_score = _normalize_scores(
+            group["_mixture_raw_score"].to_numpy(float),
+            mode=config.score_normalization,
+        )
+        group["_mixture_normalized_score"] = normalized_score
+        frames.append(
+            {
+                "time_s": float(time_s),
+                "rows": group,
+                "positions": group[["x_m", "y_m", "z_m"]].to_numpy(float),
+                "raw_scores": group["_mixture_raw_score"].to_numpy(float),
+                "normalized_scores": normalized_score,
+                "sigmas": group["_mixture_sigma_m"].to_numpy(float),
+            }
+        )
+    return frames
 
-    config = CandidateMixtureConfig(
-        top_k=args.top_k,
-        score_column=args.score_column,
-        sigma_column=args.sigma_column,
-        fallback_sigma_m=args.fallback_sigma_m,
-        sigma_min_m=args.sigma_min_m,
-        sigma_max_m=args.sigma_max_m,
-        temperature=args.temperature,
-        smoothness_weight=args.smoothness_weight,
-        huber_scale=args.huber_scale,
-        iterations=args.iterations,
-        branch_balance=args.branch_balance,
-        source_balance=args.source_balance,
-        responsibility_floor=args.responsibility_floor,
-        initialization=args.initialization,
-        measurement_weight_mode=args.measurement_weight_mode,
-        normalize_measurement_weights=not args.no_normalize_measurement_weights,
-    )
-    candidates = load_candidate_file(args.candidates_csv).rows
-    result = run_candidate_mixture_map(candidates, config=config)
-    estimates = result.estimates.copy()
-    class_map = load_sequence_class_map(args.class_map) if args.class_map is not None else {}
-    estimates["classification"] = [
-        class_map.get(str(sequence_id), str(args.default_classification))
-        for sequence_id in estimates.get("sequence_id", pd.Series(dtype=str))
+
+def _initial_trajectory(
+    frames: Sequence[dict[str, Any]],
+    *,
+    times: np.ndarray,
+    sequence_id: str,
+    initial_estimates: pd.DataFrame | None,
+    config: CandidateMixtureMapConfig,
+) -> np.ndarray:
+    fallback = []
+    for frame in frames:
+        scores = np.asarray(frame["normalized_scores"], dtype=float)
+        sigmas = np.asarray(frame["sigmas"], dtype=float)
+        if config.initialization == "score-top1":
+            index = int(np.argmax(scores))
+        else:
+            initial_log_score = (
+                float(config.score_weight) * scores / float(config.temperature)
+                - float(config.sigma_log_weight) * np.log(sigmas)
+            )
+            index = int(np.argmax(initial_log_score))
+        fallback.append(np.asarray(frame["positions"][index], dtype=float))
+    fallback_state = np.asarray(fallback, dtype=float)
+    if initial_estimates is None or initial_estimates.empty:
+        return fallback_state
+    sequence_initial = initial_estimates.loc[
+        initial_estimates["sequence_id"].astype(str) == str(sequence_id)
     ]
-
-    _write_frame(estimates, args.output_estimates_csv)
-    _write_frame(result.frame_diagnostics, args.frame_diagnostics_csv)
-    _write_frame(result.candidate_assignments, args.candidate_assignments_csv)
-    _write_frame(result.iteration_summary, args.iteration_summary_csv)
-    if args.summary_json is not None:
-        args.summary_json.parent.mkdir(parents=True, exist_ok=True)
-        args.summary_json.write_text(json.dumps(result.summary, indent=2), encoding="utf-8")
-    if args.official_results_csv is not None:
-        write_official_mmaud_results_csv(
-            estimates,
-            args.official_results_csv,
-            classification=args.default_classification,
-            class_map=class_map,
+    if sequence_initial.empty:
+        return fallback_state
+    initial_times = sequence_initial["time_s"].to_numpy(float)
+    order = np.argsort(initial_times)
+    initial_times = initial_times[order]
+    initial_xyz = sequence_initial[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)[
+        order
+    ]
+    if len(initial_times) == 1:
+        interpolated = np.repeat(initial_xyz, len(times), axis=0)
+    else:
+        interpolated = np.column_stack(
+            [np.interp(times, initial_times, initial_xyz[:, axis]) for axis in range(3)]
         )
-    if args.official_zip is not None:
-        write_official_ug2_codabench_zip(
-            estimates,
-            args.official_zip,
-            classification=args.default_classification,
-            class_map=class_map,
-        )
+    finite = np.isfinite(interpolated).all(axis=1)
+    return np.where(finite[:, None], interpolated, fallback_state)
 
-    print("mmuad_candidate_mixture_map=ok")
-    print(f"output_estimates_csv={args.output_estimates_csv}")
-    print(f"estimate_rows={len(estimates)}")
-    print(f"sequence_count={estimates['sequence_id'].nunique() if not estimates.empty else 0}")
-    if args.official_results_csv is not None:
-        print(f"official_results_csv={args.official_results_csv}")
-    if args.official_zip is not None:
-        print(f"official_zip={args.official_zip}")
-    return 0
+
+def _mixture_response(
+    frames: Sequence[dict[str, Any]],
+    state: np.ndarray,
+    *,
+    config: CandidateMixtureMapConfig,
+) -> list[dict[str, Any]]:
+    response: list[dict[str, Any]] = []
+    for frame_index, frame in enumerate(frames):
+        positions = np.asarray(frame["positions"], dtype=float)
+        sigmas = np.asarray(frame["sigmas"], dtype=float)
+        scores = np.asarray(frame["normalized_scores"], dtype=float)
+        distances = np.linalg.norm(positions - state[frame_index], axis=1)
+        normalized_residual = distances / sigmas
+        robust_cost = _robust_cost(normalized_residual, config=config)
+        log_weight = (
+            float(config.score_weight) * scores / float(config.temperature)
+            - robust_cost
+            - float(config.sigma_log_weight) * np.log(sigmas)
+        )
+        weights = _stable_softmax(log_weight)
+        floor = float(config.uniform_weight_floor)
+        if floor > 0.0:
+            weights = (1.0 - floor) * weights + floor / len(weights)
+        rows = frame["rows"]
+        weights = _apply_label_balance(
+            weights,
+            rows["candidate_branch"].astype(str).to_numpy()
+            if "candidate_branch" in rows
+            else np.full(len(weights), "unknown", dtype=object),
+            balance=float(config.branch_balance),
+        )
+        weights = _apply_label_balance(
+            weights,
+            rows["source"].astype(str).to_numpy()
+            if "source" in rows
+            else np.full(len(weights), "unknown", dtype=object),
+            balance=float(config.source_balance),
+        )
+        floor = float(config.responsibility_floor)
+        if floor > 0.0:
+            weights = (1.0 - floor) * weights + floor / len(weights)
+        weights = _normalize_probability(weights)
+        pseudo = np.sum(weights[:, None] * positions, axis=0)
+        spread_variance = np.sum(
+            weights * np.sum((positions - pseudo) ** 2, axis=1) / 3.0
+        )
+        noise_variance = np.sum(weights * sigmas**2)
+        effective_variance = max(float(noise_variance + spread_variance), 1.0e-12)
+        precision = float(
+            np.clip(
+                1.0 / effective_variance,
+                float(config.min_measurement_precision),
+                float(config.max_measurement_precision),
+            )
+        )
+        entropy = float(-np.sum(weights * np.log(np.maximum(weights, 1.0e-300))))
+        response.append(
+            {
+                "weights": weights,
+                "distances": distances,
+                "normalized_residual": normalized_residual,
+                "robust_cost": robust_cost,
+                "log_weight": log_weight,
+                "pseudo_position": pseudo,
+                "effective_sigma_m": float(np.sqrt(effective_variance)),
+                "measurement_precision": precision,
+                "entropy": entropy,
+                "effective_candidate_count": float(np.exp(entropy)),
+                "dominant_index": int(np.argmax(weights)),
+            }
+        )
+    return response
+
+
+def _solve_smooth_trajectory(
+    times: np.ndarray,
+    *,
+    pseudo_positions: np.ndarray,
+    measurement_precision: np.ndarray,
+    smoothness_weight: float,
+) -> np.ndarray:
+    count = len(times)
+    precision = np.asarray(measurement_precision, dtype=float)
+    system = np.diag(precision)
+    second_derivative = _second_derivative_matrix(times)
+    if second_derivative.size and smoothness_weight > 0.0:
+        system = system + float(smoothness_weight) * (
+            second_derivative.T @ second_derivative
+        )
+    ridge = max(float(np.mean(np.diag(system))), 1.0) * 1.0e-10
+    system = system + ridge * np.eye(count)
+    estimate = np.zeros_like(pseudo_positions, dtype=float)
+    for axis in range(3):
+        rhs = precision * pseudo_positions[:, axis]
+        try:
+            estimate[:, axis] = np.linalg.solve(system, rhs)
+        except np.linalg.LinAlgError:
+            estimate[:, axis] = np.linalg.pinv(system) @ rhs
+    return estimate
+
+
+def _second_derivative_matrix(times: np.ndarray) -> np.ndarray:
+    count = len(times)
+    if count < 3:
+        return np.zeros((0, count), dtype=float)
+    matrix = np.zeros((count - 2, count), dtype=float)
+    for row, center in enumerate(range(1, count - 1)):
+        left_dt = max(float(times[center] - times[center - 1]), 1.0e-6)
+        right_dt = max(float(times[center + 1] - times[center]), 1.0e-6)
+        scale = 2.0 / (left_dt + right_dt)
+        matrix[row, center - 1] = scale / left_dt
+        matrix[row, center] = -scale * (1.0 / left_dt + 1.0 / right_dt)
+        matrix[row, center + 1] = scale / right_dt
+    return matrix
+
+
+def _quadratic_objective(
+    times: np.ndarray,
+    state: np.ndarray,
+    *,
+    pseudo_positions: np.ndarray,
+    measurement_precision: np.ndarray,
+    smoothness_weight: float,
+) -> float:
+    measurement = float(
+        np.sum(measurement_precision[:, None] * (state - pseudo_positions) ** 2)
+    )
+    second_derivative = _second_derivative_matrix(times)
+    smoothness = 0.0
+    if second_derivative.size and smoothness_weight > 0.0:
+        smoothness = float(smoothness_weight) * float(
+            np.sum((second_derivative @ state) ** 2)
+        )
+    return measurement + smoothness
+
+
+def _estimate_rows(
+    *,
+    sequence_id: str,
+    times: np.ndarray,
+    state: np.ndarray,
+    response: Sequence[dict[str, Any]],
+    iterations: int,
+    converged: bool,
+) -> pd.DataFrame:
+    velocity = _trajectory_velocity(times, state)
+    records: list[dict[str, Any]] = []
+    for index, time_s in enumerate(times):
+        item = response[index]
+        records.append(
+            {
+                "sequence_id": sequence_id,
+                "time_s": float(time_s),
+                "source": "candidate-mixture-map",
+                "track_id": "candidate-mixture-map",
+                "update_action": "candidate_mixture_map",
+                "selected_path_update": True,
+                "state_x_m": float(state[index, 0]),
+                "state_y_m": float(state[index, 1]),
+                "state_z_m": float(state[index, 2]),
+                "v_x_mps": float(velocity[index, 0]),
+                "v_y_mps": float(velocity[index, 1]),
+                "v_z_mps": float(velocity[index, 2]),
+                "mixture_candidate_count": int(len(item["weights"])),
+                "mixture_effective_candidate_count": float(
+                    item["effective_candidate_count"]
+                ),
+                "mixture_assignment_entropy": float(item["entropy"]),
+                "mixture_dominant_weight": float(
+                    item["weights"][int(item["dominant_index"])]
+                ),
+                "mixture_effective_sigma_m": float(item["effective_sigma_m"]),
+                "mixture_iteration_count": int(iterations),
+                "mixture_converged": bool(converged),
+            }
+        )
+    return pd.DataFrame.from_records(records)
+
+
+def _assignment_rows(
+    *,
+    sequence_id: str,
+    state: np.ndarray,
+    frames: Sequence[dict[str, Any]],
+    response: Sequence[dict[str, Any]],
+) -> pd.DataFrame:
+    records: list[dict[str, Any]] = []
+    for frame_index, frame in enumerate(frames):
+        rows = frame["rows"]
+        item = response[frame_index]
+        dominant = int(item["dominant_index"])
+        for candidate_index, (_, candidate) in enumerate(rows.iterrows()):
+            records.append(
+                {
+                    "sequence_id": sequence_id,
+                    "time_s": float(frame["time_s"]),
+                    "candidate_input_row": int(candidate["_mixture_input_row"]),
+                    "candidate_rank": int(candidate["_mixture_candidate_rank"]),
+                    "source": candidate.get("source"),
+                    "track_id": candidate.get("track_id"),
+                    "candidate_branch": candidate.get("candidate_branch"),
+                    "x_m": float(candidate["x_m"]),
+                    "y_m": float(candidate["y_m"]),
+                    "z_m": float(candidate["z_m"]),
+                    "mixture_raw_score": float(candidate["_mixture_raw_score"]),
+                    "mixture_normalized_score": float(
+                        candidate["_mixture_normalized_score"]
+                    ),
+                    "mixture_sigma_m": float(candidate["_mixture_sigma_m"]),
+                    "mixture_final_weight": float(item["weights"][candidate_index]),
+                    "mixture_distance_to_state_m": float(
+                        item["distances"][candidate_index]
+                    ),
+                    "mixture_normalized_residual": float(
+                        item["normalized_residual"][candidate_index]
+                    ),
+                    "mixture_robust_cost": float(item["robust_cost"][candidate_index]),
+                    "mixture_log_weight": float(item["log_weight"][candidate_index]),
+                    "mixture_dominant": bool(candidate_index == dominant),
+                    "state_x_m": float(state[frame_index, 0]),
+                    "state_y_m": float(state[frame_index, 1]),
+                    "state_z_m": float(state[frame_index, 2]),
+                }
+            )
+    return pd.DataFrame.from_records(records)
+
+
+def _candidate_scores(
+    rows: pd.DataFrame,
+    *,
+    config: CandidateMixtureMapConfig,
+) -> pd.Series:
+    columns = (config.score_column, *config.fallback_score_columns)
+    result = pd.Series(np.nan, index=rows.index, dtype=float)
+    for column in columns:
+        if column not in rows.columns:
+            continue
+        values = pd.to_numeric(rows[column], errors="coerce")
+        result = result.where(result.notna(), values)
+    return result.fillna(0.0).astype(float)
+
+
+def _candidate_sigmas(
+    rows: pd.DataFrame,
+    *,
+    config: CandidateMixtureMapConfig,
+) -> pd.Series:
+    if config.sigma_column in rows.columns:
+        sigma = pd.to_numeric(rows[config.sigma_column], errors="coerce")
+    else:
+        sigma = pd.Series(np.nan, index=rows.index, dtype=float)
+    if "std_xy_m" in rows.columns:
+        fallback = pd.to_numeric(rows["std_xy_m"], errors="coerce")
+        sigma = sigma.where(sigma.notna(), fallback)
+    sigma = sigma.fillna(float(config.default_sigma_m))
+    sigma = sigma.where(sigma > 0.0, float(config.default_sigma_m))
+    return sigma.clip(lower=float(config.sigma_min_m), upper=float(config.sigma_max_m))
+
+
+def _normalize_scores(values: np.ndarray, *, mode: str) -> np.ndarray:
+    score = np.asarray(values, dtype=float)
+    score = np.nan_to_num(score, nan=0.0, posinf=0.0, neginf=0.0)
+    if mode == "none":
+        return score
+    if mode == "rank":
+        if len(score) <= 1:
+            return np.full(len(score), 0.5, dtype=float)
+        order = np.argsort(np.argsort(score, kind="stable"), kind="stable")
+        return order.astype(float) / float(len(score) - 1)
+    minimum = float(np.min(score))
+    maximum = float(np.max(score))
+    if maximum <= minimum:
+        return np.full(len(score), 0.5, dtype=float)
+    return (score - minimum) / (maximum - minimum)
+
+
+def _robust_cost(
+    normalized_residual: np.ndarray,
+    *,
+    config: CandidateMixtureMapConfig,
+) -> np.ndarray:
+    residual = np.abs(np.asarray(normalized_residual, dtype=float))
+    if config.loss == "squared":
+        return 0.5 * residual**2
+    delta = float(config.huber_delta)
+    return np.where(
+        residual <= delta,
+        0.5 * residual**2,
+        delta * (residual - 0.5 * delta),
+    )
+
+
+def _stable_softmax(log_weight: np.ndarray) -> np.ndarray:
+    values = np.asarray(log_weight, dtype=float)
+    finite = np.isfinite(values)
+    if not finite.any():
+        return np.full(len(values), 1.0 / max(len(values), 1), dtype=float)
+    floor = float(np.min(values[finite])) - 100.0
+    values = np.where(finite, values, floor)
+    shifted = np.clip(values - float(np.max(values)), -700.0, 0.0)
+    exp_values = np.exp(shifted)
+    total = float(np.sum(exp_values))
+    if not np.isfinite(total) or total <= 0.0:
+        return np.full(len(values), 1.0 / max(len(values), 1), dtype=float)
+    return exp_values / total
+
+
+def _apply_label_balance(
+    weights: np.ndarray,
+    labels: np.ndarray,
+    *,
+    balance: float,
+) -> np.ndarray:
+    if balance <= 0.0:
+        return _normalize_probability(weights)
+    labels = np.asarray(labels, dtype=str)
+    if len(labels) != len(weights) or len(labels) == 0:
+        return _normalize_probability(weights)
+    unique = sorted(set(labels.tolist()))
+    if not unique:
+        return _normalize_probability(weights)
+    balanced = np.zeros(len(weights), dtype=float)
+    label_mass = 1.0 / float(len(unique))
+    for label in unique:
+        mask = labels == label
+        balanced[mask] = label_mass * _normalize_probability(weights[mask])
+    balance = float(np.clip(balance, 0.0, 1.0))
+    return _normalize_probability((1.0 - balance) * weights + balance * balanced)
+
+
+def _normalize_probability(values: np.ndarray) -> np.ndarray:
+    probability = np.asarray(values, dtype=float)
+    probability = np.nan_to_num(probability, nan=0.0, posinf=0.0, neginf=0.0)
+    probability = np.maximum(probability, 0.0)
+    total = float(np.sum(probability))
+    if total <= 0.0:
+        return np.full(len(probability), 1.0 / max(len(probability), 1), dtype=float)
+    return probability / total
+
+
+def _trajectory_velocity(times: np.ndarray, state: np.ndarray) -> np.ndarray:
+    if len(times) <= 1:
+        return np.zeros_like(state)
+    return np.column_stack(
+        [np.gradient(state[:, axis], times, edge_order=1) for axis in range(3)]
+    )
+
+
+def _normalize_initial_estimates(estimates: pd.DataFrame | None) -> pd.DataFrame | None:
+    if estimates is None:
+        return None
+    rows = pd.DataFrame(estimates).copy()
+    if rows.empty:
+        return rows
+    if "sequence_id" not in rows.columns:
+        rows["sequence_id"] = "default"
+    aliases = {
+        "x_m": "state_x_m",
+        "y_m": "state_y_m",
+        "z_m": "state_z_m",
+    }
+    for source, target in aliases.items():
+        if target not in rows.columns and source in rows.columns:
+            rows[target] = rows[source]
+    required = ["time_s", "state_x_m", "state_y_m", "state_z_m"]
+    missing = [column for column in required if column not in rows.columns]
+    if missing:
+        raise ValueError(f"initial estimates missing required columns: {missing}")
+    for column in required:
+        rows[column] = pd.to_numeric(rows[column], errors="coerce")
+    finite = np.isfinite(rows[required].to_numpy(float)).all(axis=1)
+    return rows.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+
+
+def _validate_config(config: CandidateMixtureMapConfig) -> None:
+    if int(config.top_k) < 0:
+        raise ValueError("top_k must be non-negative; use 0 for all candidates")
+    if not (0.0 < float(config.sigma_min_m) <= float(config.sigma_max_m)):
+        raise ValueError("sigma bounds must satisfy 0 < sigma_min_m <= sigma_max_m")
+    if float(config.default_sigma_m) <= 0.0:
+        raise ValueError("default_sigma_m must be positive")
+    if config.score_normalization not in SCORE_NORMALIZATION_CHOICES:
+        raise ValueError(f"unsupported score normalization {config.score_normalization!r}")
+    if float(config.temperature) <= 0.0:
+        raise ValueError("temperature must be positive")
+    if config.loss not in LOSS_CHOICES:
+        raise ValueError(f"unsupported loss {config.loss!r}")
+    if float(config.huber_delta) <= 0.0:
+        raise ValueError("huber_delta must be positive")
+    if float(config.smoothness_weight) < 0.0:
+        raise ValueError("smoothness_weight must be non-negative")
+    if int(config.iterations) <= 0:
+        raise ValueError("iterations must be positive")
+    if float(config.tolerance_m) < 0.0:
+        raise ValueError("tolerance_m must be non-negative")
+    if not (0.0 <= float(config.uniform_weight_floor) < 1.0):
+        raise ValueError("uniform_weight_floor must be in [0, 1)")
+    for name in ("branch_balance", "source_balance", "responsibility_floor"):
+        value = float(getattr(config, name))
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"{name} must be within [0, 1]")
+    if config.initialization not in INITIALIZATION_CHOICES:
+        raise ValueError(f"unsupported initialization {config.initialization!r}")
+
+
+def _concat(frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
+    nonempty = [frame for frame in frames if frame is not None and not frame.empty]
+    return pd.concat(nonempty, ignore_index=True) if nonempty else pd.DataFrame()
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value
 
 
 if __name__ == "__main__":  # pragma: no cover
