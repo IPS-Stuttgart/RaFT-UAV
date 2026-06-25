@@ -15,7 +15,6 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.io import load_candidate_file
