@@ -76,6 +76,7 @@ raft-uav-mmuad-radar-extraction-audit = "raft_uav.mmuad.radar_extraction_audit:m
 raft-uav-mmuad-candidate-oracle-gap = "raft_uav.mmuad.candidate_oracle_gap:main"
 raft-uav-mmuad-candidate-reservoir = "raft_uav.mmuad.candidate_reservoir:main"
 raft-uav-mmuad-diversity-cap-reservoir = "raft_uav.mmuad.candidate_reservoir_diversity:main"
+raft-uav-mmuad-spatial-diversity-reservoir = "raft_uav.mmuad.candidate_reservoir_spatial:main"
 raft-uav-mmuad-candidate-reservoir-grid = "raft_uav.mmuad.candidate_reservoir_grid:main"
 raft-uav-mmuad-candidate-reservoir-train-cv = "raft_uav.mmuad.candidate_reservoir_train_cv:main"
 raft-uav-mmuad-image-evidence = "raft_uav.mmuad.image_evidence:main"
