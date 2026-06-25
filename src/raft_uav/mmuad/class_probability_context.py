@@ -2,7 +2,7 @@
 
 The MMUAD sequence classifier can produce one probability vector per sequence.
 This module joins those probabilities onto candidate rows and emits ``image_*``
-feature columns that are already consumed by the cluster ranker.  It is intended
+feature columns that are already consumed by the cluster ranker. It is intended
 for pose experiments where type classification should inform candidate
 reliability without hard-branching on a possibly wrong class label.
 """
@@ -21,6 +21,12 @@ from raft_uav.mmuad.io import load_candidate_file
 from raft_uav.mmuad.schema import CandidateFrame, normalize_candidate_columns
 
 OFFICIAL_CLASS_LABELS = ("0", "1", "2", "3")
+SOURCE_CONTEXT_NAMES = (
+    "lidar_360",
+    "livox_avia",
+    "radar_enhance_pcl",
+    "cross_sensor_merged",
+)
 DEFAULT_INTERACTION_COLUMNS = (
     "confidence",
     "cluster_point_count",
@@ -29,6 +35,11 @@ DEFAULT_INTERACTION_COLUMNS = (
     "cluster_density_points_per_m3",
     "cluster_range_3d_m",
     "cluster_height_m",
+    "image_candidate_branch_dynamic_flag",
+    "image_source_is_lidar_360",
+    "image_source_is_livox_avia",
+    "image_source_is_radar_enhance_pcl",
+    "image_source_is_cross_sensor_merged",
 )
 SEQUENCE_ALIASES = ("sequence_id", "Sequence", "sequence", "seq", "scene_id")
 PREDICTED_CLASS_ALIASES = ("predicted_class", "Classification", "uav_type", "class_id")
@@ -55,6 +66,7 @@ def attach_class_probability_context(
     out = candidate_rows.merge(probability_rows, on="sequence_id", how="left")
     out = _fill_missing_probabilities(out, fill_missing=fill_missing)
     out = _add_probability_summaries(out)
+    out = _add_candidate_context_summaries(out)
     out = _add_probability_interactions(out, interaction_columns=tuple(interaction_columns))
     return CandidateFrame(normalize_candidate_columns(out))
 
@@ -86,6 +98,11 @@ def write_class_probability_context(
                     column
                     for column in candidates.rows.columns
                     if str(column).startswith("image_class_prob_") and "_x_" in str(column)
+                ],
+                "source_context_columns": [
+                    column
+                    for column in candidates.rows.columns
+                    if str(column).startswith("image_source_is_")
                 ],
             }
         )
@@ -233,6 +250,30 @@ def _add_probability_summaries(rows: pd.DataFrame) -> pd.DataFrame:
     for index, label in enumerate(OFFICIAL_CLASS_LABELS):
         out[f"image_predicted_class_{label}"] = (predicted == index).astype(float)
     return out
+
+
+def _add_candidate_context_summaries(rows: pd.DataFrame) -> pd.DataFrame:
+    out = rows.copy()
+    branch_text = _text_series(out, "candidate_branch", fallback_column="source")
+    source_text = _text_series(out, "source")
+    out["image_candidate_branch_dynamic_flag"] = branch_text.str.contains("dynamic").astype(float)
+    for source_name in SOURCE_CONTEXT_NAMES:
+        source_key = source_name.replace("_", "-")
+        source_match = source_text.eq(source_name) | source_text.eq(source_key)
+        source_match |= source_text.str.contains(source_name, regex=False)
+        source_match |= source_text.str.contains(source_key, regex=False)
+        out[f"image_source_is_{source_name}"] = source_match.astype(float)
+    return out
+
+
+def _text_series(rows: pd.DataFrame, column: str, *, fallback_column: str | None = None) -> pd.Series:
+    if column in rows.columns:
+        values = rows[column]
+    elif fallback_column is not None and fallback_column in rows.columns:
+        values = rows[fallback_column]
+    else:
+        values = pd.Series("", index=rows.index)
+    return values.fillna("").astype(str).str.lower().str.strip()
 
 
 def _add_probability_interactions(
