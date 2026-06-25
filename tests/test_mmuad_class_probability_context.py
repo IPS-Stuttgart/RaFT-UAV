@@ -19,6 +19,7 @@ def _candidate_rows() -> pd.DataFrame:
             "time_s": [0.0, 0.0, 0.0],
             "source": ["lidar_360", "livox_avia", "lidar_360"],
             "track_id": ["a", "b", "c"],
+            "candidate_branch": ["static_dynamic_union", "source_translation", "static_dynamic_union"],
             "x_m": [1.0, 2.0, 3.0],
             "y_m": [0.0, 0.0, 0.0],
             "z_m": [1.0, 1.0, 1.0],
@@ -46,15 +47,28 @@ def test_class_probability_context_adds_ranker_consumable_features() -> None:
     augmented = attach_class_probability_context(
         CandidateFrame(_candidate_rows()),
         _probability_rows(),
-        interaction_columns=("cluster_point_count", "cluster_extent_3d_m"),
+        interaction_columns=(
+            "cluster_point_count",
+            "cluster_extent_3d_m",
+            "image_candidate_branch_dynamic_flag",
+            "image_source_is_lidar_360",
+        ),
     )
     rows = augmented.rows.sort_values(["sequence_id", "track_id"]).reset_index(drop=True)
 
     assert "image_class_prob_2" in rows.columns
     assert "image_class_entropy" in rows.columns
+    assert "image_candidate_branch_dynamic_flag" in rows.columns
+    assert "image_source_is_lidar_360" in rows.columns
     assert "image_class_prob_2_x_cluster_point_count" in rows.columns
+    assert "image_class_prob_2_x_image_candidate_branch_dynamic_flag" in rows.columns
+    assert "image_class_prob_2_x_image_source_is_lidar_360" in rows.columns
     assert rows.loc[0, "image_class_prob_2"] == pytest.approx(0.6)
+    assert rows.loc[0, "image_candidate_branch_dynamic_flag"] == pytest.approx(1.0)
+    assert rows.loc[1, "image_candidate_branch_dynamic_flag"] == pytest.approx(0.0)
     assert rows.loc[0, "image_class_prob_2_x_cluster_point_count"] == pytest.approx(6.0)
+    assert rows.loc[0, "image_class_prob_2_x_image_candidate_branch_dynamic_flag"] == pytest.approx(0.6)
+    assert rows.loc[0, "image_class_prob_2_x_image_source_is_lidar_360"] == pytest.approx(0.6)
     assert rows.loc[2, "image_predicted_class_0"] == pytest.approx(1.0)
 
     features = build_cluster_feature_table(augmented)
@@ -65,6 +79,7 @@ def test_class_probability_context_adds_ranker_consumable_features() -> None:
     )
     assert "image_class_prob_2" in model.feature_columns
     assert "image_class_prob_2_x_cluster_point_count" in model.feature_columns
+    assert "image_class_prob_2_x_image_candidate_branch_dynamic_flag" in model.feature_columns
 
 
 def test_class_probability_context_fills_missing_sequences_uniformly() -> None:
@@ -109,8 +124,6 @@ def test_class_probability_context_cli_writes_outputs(tmp_path: Path) -> None:
             str(output),
             "--provenance-json",
             str(provenance),
-            "--interaction-column",
-            "cluster_point_count",
         ]
     )
 
@@ -119,5 +132,7 @@ def test_class_probability_context_cli_writes_outputs(tmp_path: Path) -> None:
     payload = json.loads(provenance.read_text(encoding="utf-8"))
     assert "image_class_prob_0" in rows.columns
     assert "image_class_prob_0_x_cluster_point_count" in rows.columns
+    assert "image_class_prob_0_x_image_candidate_branch_dynamic_flag" in rows.columns
     assert payload["row_count"] == 3
     assert "image_class_prob_0" in payload["class_probability_columns"]
+    assert "image_source_is_lidar_360" in payload["source_context_columns"]
