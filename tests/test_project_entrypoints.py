@@ -267,6 +267,17 @@ def test_mmuad_train_selected_config_entrypoint_target_imports() -> None:
     _assert_entrypoint_target_imports("raft-uav-mmuad-select-train-config")
 
 
+def test_mmuad_branch_reservoir_entrypoint_is_exposed() -> None:
+    assert (
+        _project_scripts()["raft-uav-mmuad-branch-reservoir"]
+        == "raft_uav.mmuad.candidate_reservoir:main"
+    )
+
+
+def test_mmuad_branch_reservoir_entrypoint_target_imports() -> None:
+    _assert_entrypoint_target_imports("raft-uav-mmuad-branch-reservoir")
+
+
 def test_playbook_runnable_commands_are_installed_entrypoints() -> None:
     playbook = Path("docs/results_improvement_playbook.md").read_text(encoding="utf-8")
     documented = set(re.findall(r"`(raft-uav-[a-z0-9][a-z0-9-]*)`", playbook))
