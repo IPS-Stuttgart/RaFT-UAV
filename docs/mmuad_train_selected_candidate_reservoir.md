@@ -54,6 +54,39 @@ raft-uav-mmuad-track \
   --output-dir outputs/mmuad_reservoir_tracker
 ```
 
+## 3. Robust branch-balanced candidate-mixture smoothing
+
+The candidate-mixture command keeps multiple reservoir candidates active during
+trajectory inference instead of committing to one cluster per frame. It uses
+candidate-specific uncertainty (`predicted_sigma_m` when available), a Huber
+IRLS weight, branch/source responsibility balancing, and an irregular-time
+acceleration penalty.
+
+```bash
+raft-uav-mmuad-candidate-mixture-map \
+  --candidates-csv outputs/mmuad_reservoir_target/mmuad_candidate_reservoir_applied.csv \
+  --score-column candidate_reservoir_score \
+  --sigma-column predicted_sigma_m \
+  --top-k 20 \
+  --temperature 128 \
+  --huber-scale 1 \
+  --smoothness-weight 7200 \
+  --branch-balance 0.25 \
+  --responsibility-floor 0.01 \
+  --class-map /path/predicted_class_map.csv \
+  --output-estimates-csv outputs/mmuad_mixture/estimates.csv \
+  --frame-diagnostics-csv outputs/mmuad_mixture/frame_diagnostics.csv \
+  --candidate-assignments-csv outputs/mmuad_mixture/candidate_assignments.csv \
+  --summary-json outputs/mmuad_mixture/summary.json \
+  --official-results-csv outputs/mmuad_mixture/mmaud_results.csv \
+  --official-zip outputs/mmuad_mixture/ug2_submission.zip
+```
+
+The inference command does not read truth. Tune reservoir and mixture settings
+on train folds, then apply the frozen settings to validation or hidden test.
+The frame diagnostics expose assignment entropy, effective candidate count,
+learned effective uncertainty, and branch/source responsibility mass.
+
 ## Cap modes
 
 `--cap-mode score` is the default and exactly reproduces the final score cap
