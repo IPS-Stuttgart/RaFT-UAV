@@ -28,6 +28,11 @@ import pandas as pd
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 from raft_uav.mmuad.io import load_candidate_file
 from raft_uav.mmuad.schema import normalize_candidate_columns, normalize_truth_columns
+from raft_uav.mmuad.submission import (
+    load_sequence_class_map,
+    write_official_mmaud_results_csv,
+    write_official_ug2_codabench_zip,
+)
 from raft_uav.mmuad.tracker import add_truth_errors, compute_metrics
 
 LOSS_CHOICES = ("huber", "squared")
@@ -56,6 +61,9 @@ class CandidateMixtureMapConfig:
     iterations: int = 5
     tolerance_m: float = 1.0e-3
     uniform_weight_floor: float = 0.0
+    branch_balance: float = 0.0
+    source_balance: float = 0.0
+    responsibility_floor: float = 0.0
     min_measurement_precision: float = 1.0e-6
     max_measurement_precision: float = 1.0e6
     initialization: str = "uncertainty-top1"
@@ -247,13 +255,57 @@ def write_candidate_mixture_map_outputs(
     return paths
 
 
+def compute_candidate_responsibilities(
+    candidates: pd.DataFrame,
+    state_xyz: np.ndarray,
+    *,
+    config: CandidateMixtureMapConfig | None = None,
+) -> pd.DataFrame:
+    """Return final mixture responsibilities for a single candidate frame."""
+
+    config = config or CandidateMixtureMapConfig()
+    _validate_config(config)
+    rows = normalize_candidate_columns(pd.DataFrame(candidates).copy())
+    if rows.empty:
+        return rows.assign(
+            mixture_responsibility=pd.Series(dtype=float),
+            mixture_residual_m=pd.Series(dtype=float),
+        )
+    rows = rows.copy().reset_index(drop=True)
+    rows["_mixture_input_row"] = np.arange(len(rows), dtype=int)
+    frames: list[dict[str, Any]] = []
+    for _, sequence_rows in rows.groupby("sequence_id", sort=True):
+        frames.extend(_prepare_candidate_frames(sequence_rows, config=config))
+    if len(frames) != 1:
+        raise ValueError("compute_candidate_responsibilities expects exactly one frame")
+    state = np.asarray(state_xyz, dtype=float).reshape(1, 3)
+    response = _mixture_response(frames, state, config=config)[0]
+    out = frames[0]["rows"].copy()
+    out["mixture_responsibility"] = response["weights"]
+    out["mixture_residual_m"] = response["distances"]
+    return out.drop(
+        columns=[
+            "_mixture_input_row",
+            "_mixture_raw_score",
+            "_mixture_sigma_m",
+            "_mixture_candidate_rank",
+            "_mixture_normalized_score",
+        ],
+        errors="ignore",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="raft-uav-mmuad-candidate-mixture-map",
         description="run robust uncertainty-aware MMUAD candidate-mixture smoothing",
     )
     parser.add_argument("--candidates-csv", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--output-estimates-csv", type=Path)
+    parser.add_argument("--candidate-assignments-csv", type=Path)
+    parser.add_argument("--iteration-summary-csv", type=Path)
+    parser.add_argument("--summary-json", type=Path)
     parser.add_argument("--initial-estimates-csv", type=Path)
     parser.add_argument("--truth-csv", type=Path)
     parser.add_argument("--top-k", type=int, default=20)
@@ -277,12 +329,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--tolerance-m", type=float, default=1.0e-3)
     parser.add_argument("--uniform-weight-floor", type=float, default=0.0)
+    parser.add_argument("--branch-balance", type=float, default=0.0)
+    parser.add_argument("--source-balance", type=float, default=0.0)
+    parser.add_argument("--responsibility-floor", type=float, default=0.0)
     parser.add_argument(
         "--initialization",
         choices=INITIALIZATION_CHOICES,
         default="uncertainty-top1",
     )
+    parser.add_argument("--class-map", type=Path)
+    parser.add_argument("--default-classification", default="2")
+    parser.add_argument("--official-results-csv", type=Path)
+    parser.add_argument("--official-zip", type=Path)
     args = parser.parse_args(argv)
+    if args.output_dir is None and args.output_estimates_csv is None:
+        parser.error("--output-dir or --output-estimates-csv is required")
 
     fallback_columns = tuple(args.fallback_score_column) or ("ranker_score", "confidence")
     candidates = load_candidate_file(args.candidates_csv).rows
@@ -312,12 +373,50 @@ def main(argv: list[str] | None = None) -> int:
             iterations=args.iterations,
             tolerance_m=args.tolerance_m,
             uniform_weight_floor=args.uniform_weight_floor,
+            branch_balance=args.branch_balance,
+            source_balance=args.source_balance,
+            responsibility_floor=args.responsibility_floor,
             initialization=args.initialization,
         ),
         initial_estimates=initial_estimates,
         truth=truth,
     )
-    paths = write_candidate_mixture_map_outputs(result, args.output_dir)
+    paths: dict[str, Path] = {}
+    if args.output_dir is not None:
+        paths.update(write_candidate_mixture_map_outputs(result, args.output_dir))
+    if args.output_estimates_csv is not None:
+        paths["estimates_csv"] = args.output_estimates_csv
+        _write_frame(result.estimates, args.output_estimates_csv)
+    if args.candidate_assignments_csv is not None:
+        paths["assignments_csv"] = args.candidate_assignments_csv
+        _write_frame(result.assignments, args.candidate_assignments_csv)
+    if args.iteration_summary_csv is not None:
+        paths["iterations_csv"] = args.iteration_summary_csv
+        _write_frame(result.iteration_summary, args.iteration_summary_csv)
+    if args.summary_json is not None:
+        paths["summary_json"] = args.summary_json
+        args.summary_json.parent.mkdir(parents=True, exist_ok=True)
+        args.summary_json.write_text(
+            json.dumps(_jsonable(result.summary), indent=2),
+            encoding="utf-8",
+        )
+    class_map = load_sequence_class_map(args.class_map) if args.class_map is not None else {}
+    if args.official_results_csv is not None:
+        write_official_mmaud_results_csv(
+            result.estimates,
+            args.official_results_csv,
+            classification=args.default_classification,
+            class_map=class_map,
+        )
+        paths["official_results_csv"] = args.official_results_csv
+    if args.official_zip is not None:
+        write_official_ug2_codabench_zip(
+            result.estimates,
+            args.official_zip,
+            classification=args.default_classification,
+            class_map=class_map,
+        )
+        paths["official_zip"] = args.official_zip
     print("mmuad_candidate_mixture_map=ok")
     print(f"estimate_rows={len(result.estimates)}")
     pooled = result.summary.get("metrics", {}).get("pooled", {})
@@ -326,6 +425,13 @@ def main(argv: list[str] | None = None) -> int:
     for name, path in paths.items():
         print(f"{name}={path}")
     return 0
+
+
+def _write_frame(frame: pd.DataFrame, path: Path | None) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path, index=False)
 
 
 def _prepare_candidate_frames(
@@ -341,7 +447,9 @@ def _prepare_candidate_frames(
         group = group.sort_values(
             ["_mixture_raw_score", "_mixture_sigma_m", "_mixture_input_row"],
             ascending=[False, True, True],
-        ).head(int(config.top_k))
+        )
+        if int(config.top_k) > 0:
+            group = group.head(int(config.top_k))
         if group.empty:
             continue
         group = group.reset_index(drop=True)
@@ -432,6 +540,25 @@ def _mixture_response(
         floor = float(config.uniform_weight_floor)
         if floor > 0.0:
             weights = (1.0 - floor) * weights + floor / len(weights)
+        rows = frame["rows"]
+        weights = _apply_label_balance(
+            weights,
+            rows["candidate_branch"].astype(str).to_numpy()
+            if "candidate_branch" in rows
+            else np.full(len(weights), "unknown", dtype=object),
+            balance=float(config.branch_balance),
+        )
+        weights = _apply_label_balance(
+            weights,
+            rows["source"].astype(str).to_numpy()
+            if "source" in rows
+            else np.full(len(weights), "unknown", dtype=object),
+            balance=float(config.source_balance),
+        )
+        floor = float(config.responsibility_floor)
+        if floor > 0.0:
+            weights = (1.0 - floor) * weights + floor / len(weights)
+        weights = _normalize_probability(weights)
         pseudo = np.sum(weights[:, None] * positions, axis=0)
         spread_variance = np.sum(
             weights * np.sum((positions - pseudo) ** 2, axis=1) / 3.0
@@ -697,6 +824,39 @@ def _stable_softmax(log_weight: np.ndarray) -> np.ndarray:
     return exp_values / total
 
 
+def _apply_label_balance(
+    weights: np.ndarray,
+    labels: np.ndarray,
+    *,
+    balance: float,
+) -> np.ndarray:
+    if balance <= 0.0:
+        return _normalize_probability(weights)
+    labels = np.asarray(labels, dtype=str)
+    if len(labels) != len(weights) or len(labels) == 0:
+        return _normalize_probability(weights)
+    unique = sorted(set(labels.tolist()))
+    if not unique:
+        return _normalize_probability(weights)
+    balanced = np.zeros(len(weights), dtype=float)
+    label_mass = 1.0 / float(len(unique))
+    for label in unique:
+        mask = labels == label
+        balanced[mask] = label_mass * _normalize_probability(weights[mask])
+    balance = float(np.clip(balance, 0.0, 1.0))
+    return _normalize_probability((1.0 - balance) * weights + balance * balanced)
+
+
+def _normalize_probability(values: np.ndarray) -> np.ndarray:
+    probability = np.asarray(values, dtype=float)
+    probability = np.nan_to_num(probability, nan=0.0, posinf=0.0, neginf=0.0)
+    probability = np.maximum(probability, 0.0)
+    total = float(np.sum(probability))
+    if total <= 0.0:
+        return np.full(len(probability), 1.0 / max(len(probability), 1), dtype=float)
+    return probability / total
+
+
 def _trajectory_velocity(times: np.ndarray, state: np.ndarray) -> np.ndarray:
     if len(times) <= 1:
         return np.zeros_like(state)
@@ -732,8 +892,8 @@ def _normalize_initial_estimates(estimates: pd.DataFrame | None) -> pd.DataFrame
 
 
 def _validate_config(config: CandidateMixtureMapConfig) -> None:
-    if int(config.top_k) <= 0:
-        raise ValueError("top_k must be positive")
+    if int(config.top_k) < 0:
+        raise ValueError("top_k must be non-negative; use 0 for all candidates")
     if not (0.0 < float(config.sigma_min_m) <= float(config.sigma_max_m)):
         raise ValueError("sigma bounds must satisfy 0 < sigma_min_m <= sigma_max_m")
     if float(config.default_sigma_m) <= 0.0:
@@ -754,6 +914,10 @@ def _validate_config(config: CandidateMixtureMapConfig) -> None:
         raise ValueError("tolerance_m must be non-negative")
     if not (0.0 <= float(config.uniform_weight_floor) < 1.0):
         raise ValueError("uniform_weight_floor must be in [0, 1)")
+    for name in ("branch_balance", "source_balance", "responsibility_floor"):
+        value = float(getattr(config, name))
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"{name} must be within [0, 1]")
     if config.initialization not in INITIALIZATION_CHOICES:
         raise ValueError(f"unsupported initialization {config.initialization!r}")
 

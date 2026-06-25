@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import tomllib
+from zipfile import ZipFile
 
 import numpy as np
 import pandas as pd
@@ -10,6 +11,7 @@ import pytest
 
 from raft_uav.mmuad.candidate_mixture_map import (
     CandidateMixtureMapConfig,
+    compute_candidate_responsibilities,
     main as mixture_main,
     run_candidate_mixture_map,
 )
@@ -59,6 +61,64 @@ def _truth_rows() -> pd.DataFrame:
             "z_m": np.ones(5),
         }
     )
+
+
+def test_branch_balance_preserves_mass_for_small_candidate_branch() -> None:
+    rows = pd.DataFrame(
+        [
+            {
+                "sequence_id": "seqA",
+                "time_s": 0.0,
+                "source": "lidar_360",
+                "track_id": "raw-near",
+                "candidate_branch": "raw",
+                "x_m": 0.0,
+                "y_m": 0.0,
+                "z_m": 0.0,
+                "ranker_score": 1.0,
+                "predicted_sigma_m": 1.0,
+            },
+            {
+                "sequence_id": "seqA",
+                "time_s": 0.0,
+                "source": "lidar_360",
+                "track_id": "raw-offset",
+                "candidate_branch": "raw",
+                "x_m": 0.5,
+                "y_m": 0.0,
+                "z_m": 0.0,
+                "ranker_score": 1.0,
+                "predicted_sigma_m": 1.0,
+            },
+            {
+                "sequence_id": "seqA",
+                "time_s": 0.0,
+                "source": "dynamic",
+                "track_id": "translated-far",
+                "candidate_branch": "translated",
+                "x_m": 10.0,
+                "y_m": 0.0,
+                "z_m": 0.0,
+                "ranker_score": 1.0,
+                "predicted_sigma_m": 1.0,
+            },
+        ]
+    )
+    responsibilities = compute_candidate_responsibilities(
+        rows,
+        np.asarray([0.0, 0.0, 0.0]),
+        config=CandidateMixtureMapConfig(
+            top_k=0,
+            score_column="ranker_score",
+            score_weight=0.0,
+            sigma_log_weight=0.0,
+            branch_balance=1.0,
+        ),
+    )
+
+    mass = responsibilities.groupby("candidate_branch")["mixture_responsibility"].sum()
+    assert mass["raw"] == pytest.approx(0.5)
+    assert mass["translated"] == pytest.approx(0.5)
 
 
 def test_candidate_mixture_uses_learned_sigma_to_reject_high_score_clutter() -> None:
@@ -136,9 +196,16 @@ def test_candidate_mixture_smoothness_recovers_from_one_high_score_outlier() -> 
 def test_candidate_mixture_cli_writes_diagnostics(tmp_path) -> None:
     candidates_csv = tmp_path / "candidates.csv"
     truth_csv = tmp_path / "truth.csv"
+    class_map_csv = tmp_path / "class_map.csv"
     output_dir = tmp_path / "out"
+    official_results_csv = tmp_path / "mmaud_results.csv"
+    official_zip = tmp_path / "ug2_submission.zip"
     _uncertainty_candidates().to_csv(candidates_csv, index=False)
     _truth_rows().to_csv(truth_csv, index=False)
+    pd.DataFrame([{"sequence_id": "seqA", "uav_type": 3}]).to_csv(
+        class_map_csv,
+        index=False,
+    )
 
     status = mixture_main(
         [
@@ -158,6 +225,12 @@ def test_candidate_mixture_cli_writes_diagnostics(tmp_path) -> None:
             "100",
             "--iterations",
             "5",
+            "--class-map",
+            str(class_map_csv),
+            "--official-results-csv",
+            str(official_results_csv),
+            "--official-zip",
+            str(official_zip),
         ]
     )
 
@@ -169,6 +242,10 @@ def test_candidate_mixture_cli_writes_diagnostics(tmp_path) -> None:
         (output_dir / "mmuad_candidate_mixture_summary.json").read_text(encoding="utf-8")
     )
     assert summary["metrics"]["pooled"]["rmse_3d_m"] < 0.05
+    official = pd.read_csv(official_results_csv)
+    assert official["Classification"].tolist() == [3, 3, 3, 3, 3]
+    with ZipFile(official_zip) as archive:
+        assert archive.namelist() == ["mmaud_results.csv"]
 
 
 def test_candidate_mixture_validates_uniform_weight_floor() -> None:
