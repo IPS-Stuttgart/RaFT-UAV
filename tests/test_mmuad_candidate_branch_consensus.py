@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import tomllib
 
 import pandas as pd
 import pytest
@@ -112,3 +113,11 @@ def test_branch_consensus_cli_writes_candidates_and_provenance(tmp_path: Path) -
         "raw": 3,
         "source_translation": 1,
     }
+
+
+def test_branch_consensus_entrypoint_is_exposed() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    assert (
+        pyproject["project"]["scripts"]["raft-uav-mmuad-candidate-branch-consensus"]
+        == "raft_uav.mmuad.candidate_branch_consensus:main"
+    )
