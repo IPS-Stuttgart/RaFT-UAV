@@ -346,7 +346,7 @@ def _summarize(frame_rows: pd.DataFrame, *, by_sequence: bool) -> pd.DataFrame:
         if by_sequence:
             columns.insert(0, "sequence_id")
         return pd.DataFrame(columns=columns)
-    keys = ["sequence_id", "top_k"] if by_sequence else ["top_k"]
+    keys: str | list[str] = ["sequence_id", "top_k"] if by_sequence else "top_k"
     records: list[dict[str, Any]] = []
     for group_key, group in frame_rows.groupby(keys, sort=False, dropna=False):
         errors = pd.to_numeric(group["oracle_error_m"], errors="coerce")
