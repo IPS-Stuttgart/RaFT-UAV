@@ -1,13 +1,14 @@
 #!/usr/bin/env python
-"""Build branch-preserving MMUAD candidate reservoirs and oracle-recall tables.
+"""Branch-preserving MMUAD candidate-reservoir oracle diagnostics.
 
-This experiment runner is intended for MMUAD top-3 development.  It keeps
-multiple candidate streams (for example raw/static, dynamic, source-translated,
-and cross-sensor-merged candidates) as explicit branches, then reports whether a
-bounded per-frame reservoir still contains a candidate close to the official
-truth timestamps.  The diagnostic is truth-aware and must not be used for hidden
-or validation inference; it is meant to decide whether the next bottleneck is
-candidate generation/retention or the trajectory smoother.
+The current MMUAD top-3 work showed that hard top-1 ranking can destroy the
+oracle ceiling when calibrated, dynamic, and raw candidate streams are pruned too
+early.  This experiment runner keeps candidate streams as explicit branches and
+reports oracle recall for a bounded reservoir that preserves top candidates per
+source, per branch, and globally.
+
+This script is truth-aware and diagnostic only.  It must not be used to fit or
+select hidden-test outputs.
 """
 
 from __future__ import annotations
@@ -22,7 +23,6 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
@@ -31,7 +31,6 @@ if str(SRC_ROOT) not in sys.path:
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file  # noqa: E402
 from raft_uav.mmuad.io import load_candidate_file  # noqa: E402
 from raft_uav.mmuad.schema import normalize_candidate_columns, normalize_truth_columns  # noqa: E402
-
 
 FRAME_ROWS_CSV = "mmuad_branch_reservoir_oracle_frame_rows.csv"
 POOLED_CSV = "mmuad_branch_reservoir_oracle_pooled.csv"
@@ -47,7 +46,7 @@ class CandidateInput:
 
 
 def parse_candidate_input(value: str) -> CandidateInput:
-    """Parse ``BRANCH=path`` or plain path candidate arguments."""
+    """Parse ``BRANCH=path`` or a plain path candidate argument."""
 
     if "=" in value:
         branch, path_text = value.split("=", 1)
@@ -55,6 +54,21 @@ def parse_candidate_input(value: str) -> CandidateInput:
         return CandidateInput(branch=branch, path=Path(path_text))
     path = Path(value)
     return CandidateInput(branch=_safe_label(path.stem) or "candidate", path=path)
+
+
+def load_branch_candidate_inputs(inputs: Iterable[CandidateInput]) -> pd.DataFrame:
+    """Load candidate CSVs and attach stable branch labels."""
+
+    frames: list[pd.DataFrame] = []
+    for item in inputs:
+        frame = load_candidate_file(item.path, source=item.branch)
+        rows = frame.rows.copy()
+        rows["candidate_branch"] = item.branch
+        rows["candidate_input_path"] = str(item.path)
+        frames.append(rows)
+    if not frames:
+        return normalize_candidate_columns(pd.DataFrame())
+    return pd.concat(frames, ignore_index=True, sort=False)
 
 
 def build_branch_reservoir_oracle_tables(
@@ -69,22 +83,24 @@ def build_branch_reservoir_oracle_tables(
     score_column: str = "ranker_score",
     score_floor_quantile: float | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Return frame, pooled, by-sequence, and retained-candidate tables."""
+    """Return frame-level, pooled, per-sequence, and retained-candidate tables."""
 
-    candidate_rows = _finite_candidate_rows(candidates)
+    candidate_rows = _finite_candidate_rows(candidates, score_column=score_column)
     truth_rows = _finite_truth_rows(truth)
     top_ks = tuple(sorted({int(k) for k in top_k_values if int(k) > 0}))
     if not top_ks:
         raise ValueError("at least one positive top-K value is required")
     if truth_rows.empty:
-        empty_frames = pd.DataFrame(columns=_frame_columns())
-        return empty_frames, _summarize(empty_frames, by_sequence=False), _summarize(empty_frames, by_sequence=True), candidate_rows.iloc[0:0].copy()
+        empty = pd.DataFrame(columns=_frame_columns())
+        return empty, _summarize(empty, by_sequence=False), _summarize(empty, by_sequence=True), empty
 
-    frame_records: list[dict[str, Any]] = []
-    reservoir_frames: list[pd.DataFrame] = []
+    records: list[dict[str, Any]] = []
+    reservoirs: list[pd.DataFrame] = []
     for sequence_id, truth_group in truth_rows.groupby("sequence_id", sort=True):
         sequence_candidates = candidate_rows.loc[candidate_rows["sequence_id"] == sequence_id]
-        sequence_candidates = sequence_candidates.sort_values(["time_s", "_reservoir_score"], ascending=[True, False])
+        sequence_candidates = sequence_candidates.sort_values(
+            ["time_s", "_reservoir_score"], ascending=[True, False]
+        )
         for _, truth_row in truth_group.sort_values("time_s").iterrows():
             nearby = _nearby_candidates(
                 sequence_candidates,
@@ -102,44 +118,23 @@ def build_branch_reservoir_oracle_tables(
                 reservoir = reservoir.copy()
                 reservoir["truth_sequence_id"] = str(truth_row["sequence_id"])
                 reservoir["truth_time_s"] = float(truth_row["time_s"])
-                reservoir["truth_x_m"] = float(truth_row["x_m"])
-                reservoir["truth_y_m"] = float(truth_row["y_m"])
-                reservoir["truth_z_m"] = float(truth_row["z_m"])
-                reservoir_frames.append(reservoir)
-            frame_records.extend(
-                _frame_records_for_truth(
-                    truth_row,
-                    nearby=nearby,
-                    reservoir=reservoir,
-                    top_ks=top_ks,
-                    score_column=score_column,
-                )
-            )
+                reservoirs.append(reservoir)
+            for k in top_ks:
+                records.append(_frame_record(truth_row, nearby, reservoir, reservoir.head(k), str(k)))
+            records.append(_frame_record(truth_row, nearby, reservoir, reservoir, "all"))
 
-    frame_rows = pd.DataFrame.from_records(frame_records, columns=_frame_columns())
-    pooled = _summarize(frame_rows, by_sequence=False)
-    by_sequence = _summarize(frame_rows, by_sequence=True)
+    frame_rows = pd.DataFrame.from_records(records, columns=_frame_columns())
     reservoir_rows = (
-        pd.concat(reservoir_frames, ignore_index=True, sort=False)
-        if reservoir_frames
+        pd.concat(reservoirs, ignore_index=True, sort=False)
+        if reservoirs
         else candidate_rows.iloc[0:0].copy()
     )
-    return frame_rows, pooled, by_sequence, reservoir_rows
-
-
-def load_branch_candidate_inputs(inputs: Iterable[CandidateInput]) -> pd.DataFrame:
-    """Load and concatenate normalized candidate rows with branch labels."""
-
-    frames: list[pd.DataFrame] = []
-    for item in inputs:
-        frame = load_candidate_file(item.path, source=item.branch)
-        rows = frame.rows.copy()
-        rows["candidate_branch"] = item.branch
-        rows["candidate_input_path"] = str(item.path)
-        frames.append(rows)
-    if not frames:
-        return normalize_candidate_columns(pd.DataFrame())
-    return pd.concat(frames, ignore_index=True, sort=False)
+    return (
+        frame_rows,
+        _summarize(frame_rows, by_sequence=False),
+        _summarize(frame_rows, by_sequence=True),
+        reservoir_rows,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -170,12 +165,11 @@ def main(argv: list[str] | None = None) -> int:
     inputs = tuple(parse_candidate_input(value) for value in args.candidate_csv)
     candidates = load_branch_candidate_inputs(inputs)
     truth = load_evaluation_truth_file(args.truth_file).rows
-    top_ks = _parse_top_k(args.top_k)
-    frame_rows, pooled, by_sequence, reservoir = build_branch_reservoir_oracle_tables(
+    frame_rows, pooled, by_sequence, reservoir_rows = build_branch_reservoir_oracle_tables(
         candidates,
         truth,
         max_time_delta_s=float(args.max_time_delta_s),
-        top_k_values=top_ks,
+        top_k_values=_parse_top_k(args.top_k),
         per_source_top_n=int(args.per_source_top_n),
         per_branch_top_n=int(args.per_branch_top_n),
         global_top_n=int(args.global_top_n),
@@ -186,17 +180,16 @@ def main(argv: list[str] | None = None) -> int:
     frame_path = args.output_dir / FRAME_ROWS_CSV
     pooled_path = args.output_dir / POOLED_CSV
     by_sequence_path = args.output_dir / BY_SEQUENCE_CSV
-    provenance_path = args.output_dir / PROVENANCE_JSON
     frame_rows.to_csv(frame_path, index=False)
     pooled.to_csv(pooled_path, index=False)
     by_sequence.to_csv(by_sequence_path, index=False)
     if args.write_reservoir_candidates:
-        reservoir.to_csv(args.output_dir / RESERVOIR_CSV, index=False)
+        reservoir_rows.to_csv(args.output_dir / RESERVOIR_CSV, index=False)
     provenance = {
         "truth_file": str(args.truth_file),
         "candidate_inputs": [{"branch": item.branch, "path": str(item.path)} for item in inputs],
         "max_time_delta_s": float(args.max_time_delta_s),
-        "top_k": list(top_ks),
+        "top_k": list(_parse_top_k(args.top_k)),
         "per_source_top_n": int(args.per_source_top_n),
         "per_branch_top_n": int(args.per_branch_top_n),
         "global_top_n": int(args.global_top_n),
@@ -206,23 +199,19 @@ def main(argv: list[str] | None = None) -> int:
         "pooled_csv": str(pooled_path),
         "by_sequence_csv": str(by_sequence_path),
     }
-    provenance_path.write_text(json.dumps(provenance, indent=2), encoding="utf-8")
+    (args.output_dir / PROVENANCE_JSON).write_text(json.dumps(provenance, indent=2), encoding="utf-8")
 
     print("mmuad_branch_reservoir_oracle_recall=ok")
     print(f"frame_rows_csv={frame_path}")
     print(f"pooled_csv={pooled_path}")
     print(f"by_sequence_csv={by_sequence_path}")
-    if not pooled.empty:
-        best = pooled.sort_values(["oracle_mse_m2", "top_k"], na_position="last").iloc[0]
-        print(f"best_top_k={best['top_k']}")
-        print(f"best_oracle_mse_m2={best['oracle_mse_m2']}")
     return 0
 
 
-def _finite_candidate_rows(candidates: pd.DataFrame) -> pd.DataFrame:
+def _finite_candidate_rows(candidates: pd.DataFrame, *, score_column: str) -> pd.DataFrame:
     rows = normalize_candidate_columns(pd.DataFrame(candidates)).copy()
     if rows.empty:
-        return pd.DataFrame(columns=["sequence_id", "time_s", "source", "track_id", "x_m", "y_m", "z_m", "confidence", "candidate_branch", "_reservoir_score"])
+        return pd.DataFrame(columns=_candidate_columns())
     if "track_id" not in rows.columns:
         rows["track_id"] = np.nan
     if "candidate_branch" not in rows.columns:
@@ -233,8 +222,7 @@ def _finite_candidate_rows(candidates: pd.DataFrame) -> pd.DataFrame:
         if column not in rows.columns:
             rows[column] = np.nan
         rows[column] = pd.to_numeric(rows[column], errors="coerce")
-    score = _candidate_score(rows)
-    rows["_reservoir_score"] = score
+    rows["_reservoir_score"] = _candidate_score(rows, score_column=score_column)
     finite = np.isfinite(rows[["time_s", "x_m", "y_m", "z_m"]].to_numpy(float)).all(axis=1)
     rows = rows.loc[finite].copy().reset_index(drop=True)
     rows["_candidate_row_id"] = np.arange(len(rows), dtype=int)
@@ -252,12 +240,13 @@ def _finite_truth_rows(truth: pd.DataFrame) -> pd.DataFrame:
     return rows.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
-def _candidate_score(rows: pd.DataFrame) -> pd.Series:
-    for column in ("ranker_score", "confidence", "score"):
+def _candidate_score(rows: pd.DataFrame, *, score_column: str) -> pd.Series:
+    for column in (score_column, "ranker_score", "confidence", "score"):
         if column in rows.columns:
             score = pd.to_numeric(rows[column], errors="coerce")
-            if np.isfinite(score.to_numpy(float)).any():
-                return score.fillna(float(np.nanmin(score.to_numpy(float))))
+            finite = score[np.isfinite(score.to_numpy(float))]
+            if not finite.empty:
+                return score.fillna(float(finite.min()))
     return pd.Series(np.ones(len(rows), dtype=float), index=rows.index)
 
 
@@ -284,10 +273,10 @@ def _select_reservoir(
     if nearby.empty:
         return nearby.copy()
     selected_ids: set[int] = set()
-    if per_source_top_n > 0 and "source" in nearby.columns:
+    if per_source_top_n > 0:
         for _, group in nearby.groupby("source", sort=True):
             selected_ids.update(_top_ids(group, per_source_top_n))
-    if per_branch_top_n > 0 and "candidate_branch" in nearby.columns:
+    if per_branch_top_n > 0:
         for _, group in nearby.groupby("candidate_branch", sort=True):
             selected_ids.update(_top_ids(group, per_branch_top_n))
     if global_top_n > 0:
@@ -303,36 +292,16 @@ def _select_reservoir(
 
 
 def _top_ids(rows: pd.DataFrame, n: int) -> set[int]:
-    if rows.empty or n <= 0:
-        return set()
     top = rows.sort_values(["_reservoir_score", "time_s"], ascending=[False, True]).head(int(n))
     return set(top["_candidate_row_id"].astype(int))
 
 
-def _frame_records_for_truth(
-    truth_row: pd.Series,
-    *,
-    nearby: pd.DataFrame,
-    reservoir: pd.DataFrame,
-    top_ks: tuple[int, ...],
-    score_column: str,
-) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    for top_k in top_ks:
-        subset = reservoir.head(top_k)
-        records.append(_frame_record(truth_row, nearby=nearby, reservoir=reservoir, subset=subset, top_k=top_k, score_column=score_column))
-    records.append(_frame_record(truth_row, nearby=nearby, reservoir=reservoir, subset=reservoir, top_k="all", score_column=score_column))
-    return records
-
-
 def _frame_record(
     truth_row: pd.Series,
-    *,
     nearby: pd.DataFrame,
     reservoir: pd.DataFrame,
     subset: pd.DataFrame,
-    top_k: int | str,
-    score_column: str,
+    top_k: str,
 ) -> dict[str, Any]:
     best = _best_candidate_to_truth(subset, truth_row)
     error = _candidate_error(best, truth_row)
@@ -349,7 +318,6 @@ def _frame_record(
         "oracle_candidate_branch": _candidate_text(best, "candidate_branch"),
         "oracle_candidate_track_id": _candidate_text(best, "track_id"),
         "oracle_candidate_score": _candidate_value(best, "_reservoir_score"),
-        "score_column": score_column,
     }
 
 
@@ -372,6 +340,44 @@ def _candidate_error(row: pd.Series | None, truth_row: pd.Series) -> float:
     return float(np.linalg.norm(candidate_xyz - truth_xyz))
 
 
+def _summarize(frame_rows: pd.DataFrame, *, by_sequence: bool) -> pd.DataFrame:
+    if frame_rows.empty:
+        columns = ["top_k", "frame_count", "oracle_mse_m2", "oracle_rmse_m", "oracle_p95_m"]
+        if by_sequence:
+            columns.insert(0, "sequence_id")
+        return pd.DataFrame(columns=columns)
+    keys = ["sequence_id", "top_k"] if by_sequence else ["top_k"]
+    records: list[dict[str, Any]] = []
+    for group_key, group in frame_rows.groupby(keys, sort=False, dropna=False):
+        errors = pd.to_numeric(group["oracle_error_m"], errors="coerce")
+        errors = errors[np.isfinite(errors.to_numpy(float))]
+        record: dict[str, Any] = {}
+        if by_sequence:
+            sequence_id, top_k = group_key if isinstance(group_key, tuple) else ("", group_key)
+            record["sequence_id"] = sequence_id
+            record["top_k"] = str(top_k)
+        else:
+            record["top_k"] = str(group_key)
+        record["frame_count"] = int(len(group))
+        record["candidate_found_count"] = int(group["oracle_candidate_found"].astype(bool).sum())
+        record["mean_reservoir_count"] = float(pd.to_numeric(group["reservoir_count"], errors="coerce").mean())
+        if errors.empty:
+            record.update({"oracle_mse_m2": np.nan, "oracle_rmse_m": np.nan, "oracle_mean_m": np.nan, "oracle_p50_m": np.nan, "oracle_p95_m": np.nan, "oracle_max_m": np.nan})
+        else:
+            squared = errors.to_numpy(float) ** 2
+            record.update({"oracle_mse_m2": float(np.mean(squared)), "oracle_rmse_m": float(np.sqrt(np.mean(squared))), "oracle_mean_m": float(errors.mean()), "oracle_p50_m": float(np.percentile(errors, 50)), "oracle_p95_m": float(np.percentile(errors, 95)), "oracle_max_m": float(errors.max())})
+        records.append(record)
+    return pd.DataFrame.from_records(records)
+
+
+def _frame_columns() -> list[str]:
+    return ["sequence_id", "time_s", "top_k", "candidate_count_window", "reservoir_count", "oracle_candidate_found", "oracle_error_m", "oracle_squared_error_m2", "oracle_candidate_source", "oracle_candidate_branch", "oracle_candidate_track_id", "oracle_candidate_score"]
+
+
+def _candidate_columns() -> list[str]:
+    return ["sequence_id", "time_s", "source", "track_id", "x_m", "y_m", "z_m", "confidence", "candidate_branch", "_reservoir_score"]
+
+
 def _candidate_text(row: pd.Series | None, column: str) -> str:
     if row is None or column not in row.index or pd.isna(row[column]):
         return ""
@@ -385,88 +391,12 @@ def _candidate_value(row: pd.Series | None, column: str) -> float:
     return float(value) if np.isfinite(value) else np.nan
 
 
-def _summarize(frame_rows: pd.DataFrame, *, by_sequence: bool) -> pd.DataFrame:
-    if frame_rows.empty:
-        columns = ["top_k", "frame_count", "oracle_mse_m2", "oracle_rmse_m", "oracle_mean_m", "oracle_p95_m", "oracle_max_m"]
-        if by_sequence:
-            columns.insert(0, "sequence_id")
-        return pd.DataFrame(columns=columns)
-    keys = ["top_k"]
-    if by_sequence:
-        keys = ["sequence_id", "top_k"]
-    records: list[dict[str, Any]] = []
-    for group_key, group in frame_rows.groupby(keys, sort=True, dropna=False):
-        errors = pd.to_numeric(group["oracle_error_m"], errors="coerce")
-        errors = errors[np.isfinite(errors.to_numpy(float))]
-        record: dict[str, Any] = {}
-        if by_sequence:
-            sequence_id, top_k = group_key if isinstance(group_key, tuple) else ("", group_key)
-            record["sequence_id"] = sequence_id
-            record["top_k"] = top_k
-        else:
-            record["top_k"] = group_key
-        record["frame_count"] = int(len(group))
-        record["candidate_found_count"] = int(group["oracle_candidate_found"].astype(bool).sum())
-        record["mean_reservoir_count"] = float(pd.to_numeric(group["reservoir_count"], errors="coerce").mean())
-        if errors.empty:
-            record.update(
-                {
-                    "oracle_mse_m2": np.nan,
-                    "oracle_rmse_m": np.nan,
-                    "oracle_mean_m": np.nan,
-                    "oracle_p50_m": np.nan,
-                    "oracle_p95_m": np.nan,
-                    "oracle_max_m": np.nan,
-                }
-            )
-        else:
-            squared = errors.to_numpy(float) ** 2
-            record.update(
-                {
-                    "oracle_mse_m2": float(np.mean(squared)),
-                    "oracle_rmse_m": float(np.sqrt(np.mean(squared))),
-                    "oracle_mean_m": float(errors.mean()),
-                    "oracle_p50_m": float(np.percentile(errors, 50)),
-                    "oracle_p95_m": float(np.percentile(errors, 95)),
-                    "oracle_max_m": float(errors.max()),
-                }
-            )
-        records.append(record)
-    return pd.DataFrame.from_records(records)
-
-
-def _frame_columns() -> list[str]:
-    return [
-        "sequence_id",
-        "time_s",
-        "top_k",
-        "candidate_count_window",
-        "reservoir_count",
-        "oracle_candidate_found",
-        "oracle_error_m",
-        "oracle_squared_error_m2",
-        "oracle_candidate_source",
-        "oracle_candidate_branch",
-        "oracle_candidate_track_id",
-        "oracle_candidate_score",
-        "score_column",
-    ]
-
-
 def _parse_top_k(text: str) -> tuple[int, ...]:
-    values: list[int] = []
-    for item in str(text).replace(";", ",").split(","):
-        item = item.strip()
-        if not item:
-            continue
-        values.append(int(item))
-    return tuple(values)
+    return tuple(int(item.strip()) for item in str(text).replace(";", ",").split(",") if item.strip())
 
 
 def _safe_label(value: object) -> str:
-    text = "" if value is None else str(value)
-    text = text.strip().replace(" ", "_").replace("/", "_").replace("\\", "_")
-    return text
+    return ("" if value is None else str(value)).strip().replace(" ", "_").replace("/", "_").replace("\\", "_")
 
 
 if __name__ == "__main__":  # pragma: no cover
