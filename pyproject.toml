@@ -86,6 +86,7 @@ raft-uav-mmuad-class-prob-context = "raft_uav.mmuad.class_probability_context:ma
 raft-uav-mmuad-class-conditioned-ranker = "raft_uav.mmuad.class_conditioned_ranker:main"
 raft-uav-mmuad-candidate-branch-context = "raft_uav.mmuad.candidate_branch_context:main"
 raft-uav-mmuad-candidate-branch-consensus = "raft_uav.mmuad.candidate_branch_consensus:main"
+raft-uav-mmuad-consensus-uncertainty = "raft_uav.mmuad.consensus_uncertainty:main"
 raft-uav-mmuad-fit-candidate-sigma-calibration = "raft_uav.mmuad.candidate_uncertainty_calibration:fit_main"
 raft-uav-mmuad-apply-candidate-sigma-calibration = "raft_uav.mmuad.candidate_uncertainty_calibration:apply_main"
 raft-uav-mmuad-fit-source-calibration = "raft_uav.mmuad.source_calibration:fit_main"
