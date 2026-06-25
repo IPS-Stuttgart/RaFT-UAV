@@ -19,7 +19,11 @@ import pandas as pd
 
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 from raft_uav.mmuad.io import load_candidate_file
-from raft_uav.mmuad.schema import load_jsonable, normalize_candidate_columns, normalize_truth_columns
+from raft_uav.mmuad.schema import (
+    load_jsonable,
+    normalize_candidate_columns,
+    normalize_truth_columns,
+)
 
 
 DEFAULT_TOP_K = (1, 3, 5, 10, 20)
@@ -86,11 +90,7 @@ def build_branch_reservoir(
     *,
     config: ReservoirConfig | None = None,
 ) -> pd.DataFrame:
-    """Keep a bounded union of per-source, per-branch, and global top candidates.
-
-    The returned table preserves candidates that a single global score ordering
-    could discard, which is useful before running expensive mixture-MAP variants.
-    """
+    """Keep a bounded union of per-source, per-branch, and global top candidates."""
 
     config = config or ReservoirConfig()
     rows = normalize_candidate_columns(pd.DataFrame(candidates)).copy()
@@ -102,12 +102,9 @@ def build_branch_reservoir(
     rows["_reservoir_score"] = _score_values(rows, config.score_column)
 
     selected: list[pd.DataFrame] = []
-    group_columns = ["sequence_id", "time_s"]
-    for _, frame_rows in rows.groupby(group_columns, sort=True, dropna=False):
-        frame = frame_rows.copy()
-        frame = _apply_score_floor(frame, config.score_floor_quantile)
-        selected_ids: set[int] = set()
-        selected_ids.update(_top_row_ids(frame, config.global_top_n))
+    for _, frame_rows in rows.groupby(["sequence_id", "time_s"], sort=True, dropna=False):
+        frame = _apply_score_floor(frame_rows.copy(), config.score_floor_quantile)
+        selected_ids: set[int] = set(_top_row_ids(frame, config.global_top_n))
         if config.per_source_top_n > 0:
             for _, source_rows in frame.groupby("source", sort=False, dropna=False):
                 selected_ids.update(_top_row_ids(source_rows, config.per_source_top_n))
@@ -251,7 +248,10 @@ def write_branch_reservoir_artifacts(
         "truth_rows": int(len(truth_rows)),
         "provenance": provenance or {},
     }
-    paths["provenance_json"].write_text(json.dumps(load_jsonable(metadata), indent=2), encoding="utf-8")
+    paths["provenance_json"].write_text(
+        json.dumps(load_jsonable(metadata), indent=2),
+        encoding="utf-8",
+    )
     return paths
 
 
@@ -393,7 +393,9 @@ def _summary_columns(*, by_sequence: bool) -> list[str]:
     return columns
 
 
-def _parse_top_k(value: str) -> tuple[int, ...]:
+def _parse_top_k(value: str | tuple[int, ...]) -> tuple[int, ...]:
+    if isinstance(value, tuple):
+        return value
     parts = [part.strip() for part in str(value).split(",")]
     top_k = tuple(sorted({int(part) for part in parts if part}))
     if not top_k:
