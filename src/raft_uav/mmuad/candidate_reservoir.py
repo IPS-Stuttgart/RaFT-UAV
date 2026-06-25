@@ -2,8 +2,8 @@
 
 The current MMUAD pose gap is often caused by early candidate pruning: a single
 ranker score may bury useful raw or calibrated candidates before the trajectory
-smoother can use them.  This module builds a conservative per-frame reservoir
-that keeps a global top-N plus top candidates per source and per branch.  It can
+smoother can use them. This module builds a conservative per-frame reservoir
+that keeps a global top-N plus top candidates per source and per branch. It can
 also write oracle-recall diagnostics when a validation/reference file is
 available.
 """
@@ -41,15 +41,11 @@ def build_candidate_reservoir(
 ) -> pd.DataFrame:
     """Return a branch/source-aware per-frame candidate reservoir.
 
-    The reservoir keeps the union of:
-
-    * global top-N candidates by score,
-    * top-N candidates per source,
-    * top-N candidates per candidate branch,
-    * optional score-floor candidates.
-
-    This preserves low-ranked candidates from raw/dynamic/calibrated branches
-    while still bounding per-frame candidate count for mixture-MAP experiments.
+    The reservoir keeps the union of global top-N candidates, top-N candidates
+    per source, top-N candidates per candidate branch, and optional score-floor
+    candidates. This preserves low-ranked candidates from raw/dynamic/calibrated
+    branches while still bounding per-frame candidate count for mixture-MAP
+    experiments.
     """
 
     config = config or ReservoirConfig()
@@ -159,11 +155,13 @@ def build_oracle_recall_tables(
         if abs(truth_dt) > float(max_truth_time_delta_s):
             continue
         truth_xyz = seq_truth.iloc[nearest_idx][["x_m", "y_m", "z_m"]].to_numpy(float)
-        ranked = group.sort_values(
-            ["candidate_reservoir_score"],
-            ascending=[False],
-        ).reset_index(drop=True)
-        distances = np.linalg.norm(ranked[["x_m", "y_m", "z_m"]].to_numpy(float) - truth_xyz, axis=1)
+        ranked = group.sort_values(["candidate_reservoir_score"], ascending=[False]).reset_index(
+            drop=True,
+        )
+        distances = np.linalg.norm(
+            ranked[["x_m", "y_m", "z_m"]].to_numpy(float) - truth_xyz,
+            axis=1,
+        )
         record: dict[str, Any] = {
             "sequence_id": str(sequence_id),
             "time_s": float(time_s),
@@ -184,19 +182,21 @@ def build_oracle_recall_tables(
         [
             _oracle_summary(group, sequence_id=str(sequence_id), top_k_values=top_k_values)
             for sequence_id, group in frame_rows.groupby("sequence_id", sort=True)
-        ]
+        ],
     )
     return frame_rows, pd.DataFrame.from_records([pooled]), by_sequence
 
 
 def _candidate_score(rows: pd.DataFrame, *, config: ReservoirConfig) -> pd.Series:
-    primary = pd.to_numeric(rows.get(config.score_column), errors="coerce")
-    fallback = pd.to_numeric(rows.get(config.fallback_score_column), errors="coerce")
-    if primary is None:
-        primary = pd.Series(np.nan, index=rows.index)
-    if fallback is None:
-        fallback = pd.Series(1.0, index=rows.index)
+    primary = _numeric_column(rows, config.score_column, default=np.nan)
+    fallback = _numeric_column(rows, config.fallback_score_column, default=1.0)
     return primary.fillna(fallback).fillna(0.0).astype(float)
+
+
+def _numeric_column(rows: pd.DataFrame, column: str, *, default: float) -> pd.Series:
+    if column in rows.columns:
+        return pd.to_numeric(rows[column], errors="coerce")
+    return pd.Series(default, index=rows.index, dtype=float)
 
 
 def _add_selected(
