@@ -11,14 +11,17 @@ available.
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.schema import normalize_candidate_columns, normalize_truth_columns
+
+_REQUIRED_COLUMNS = ("sequence_id", "time_s", "x_m", "y_m", "z_m")
 
 
 @dataclass(frozen=True)
@@ -34,10 +37,47 @@ class ReservoirConfig:
     score_floor_quantile: float | None = None
 
 
+def load_candidate_inputs(specs: Sequence[str]) -> pd.DataFrame:
+    """Load candidate CSV specs and attach branch metadata."""
+
+    frames: list[pd.DataFrame] = []
+    for spec in specs:
+        branch, path = _split_candidate_spec(spec)
+        rows = normalize_candidate_columns(pd.read_csv(path))
+        if rows.empty:
+            continue
+        _validate_required_columns(rows, path)
+        rows = rows.copy()
+        if "source" not in rows.columns:
+            rows["source"] = "unknown"
+        if "track_id" not in rows.columns:
+            rows["track_id"] = np.arange(len(rows), dtype=int).astype(str)
+        if "candidate_branch" not in rows.columns:
+            rows["candidate_branch"] = branch
+        else:
+            rows["candidate_branch"] = rows["candidate_branch"].fillna(branch).astype(str)
+            rows.loc[rows["candidate_branch"].str.len() == 0, "candidate_branch"] = branch
+        if "original_x_m" not in rows.columns:
+            rows["original_x_m"] = pd.to_numeric(rows["x_m"], errors="coerce")
+            rows["original_y_m"] = pd.to_numeric(rows["y_m"], errors="coerce")
+            rows["original_z_m"] = pd.to_numeric(rows["z_m"], errors="coerce")
+        rows["candidate_branch_input_path"] = str(path)
+        frames.append(rows)
+    if not frames:
+        return pd.DataFrame(columns=[*_REQUIRED_COLUMNS, "source", "candidate_branch"])
+    return pd.concat(frames, ignore_index=True)
+
+
 def build_candidate_reservoir(
     candidates: pd.DataFrame,
     *,
     config: ReservoirConfig | None = None,
+    top_per_source: int | None = None,
+    top_per_branch: int | None = None,
+    global_top_n: int | None = None,
+    max_candidates_per_frame: int | None = None,
+    score_columns: Sequence[str] | None = None,
+    score_floor_quantile: float | None = None,
 ) -> pd.DataFrame:
     """Return a branch/source-aware per-frame candidate reservoir.
 
@@ -48,7 +88,18 @@ def build_candidate_reservoir(
     experiments.
     """
 
-    config = config or ReservoirConfig()
+    if config is None:
+        score_column = score_columns[0] if score_columns else "ranker_score"
+        fallback_score_column = score_columns[1] if score_columns and len(score_columns) > 1 else "confidence"
+        config = ReservoirConfig(
+            global_top_n=40 if global_top_n is None else int(global_top_n),
+            per_source_top_n=3 if top_per_source is None else int(top_per_source),
+            per_branch_top_n=3 if top_per_branch is None else int(top_per_branch),
+            max_candidates_per_frame=40 if max_candidates_per_frame is None else int(max_candidates_per_frame),
+            score_column=score_column,
+            fallback_score_column=fallback_score_column,
+            score_floor_quantile=score_floor_quantile,
+        )
     rows = normalize_candidate_columns(pd.DataFrame(candidates).copy())
     if rows.empty:
         return rows.assign(
@@ -112,6 +163,7 @@ def build_candidate_reservoir(
         ";".join(sorted(reasons.get(int(row_id), set())))
         for row_id in out["_candidate_original_row"]
     ]
+    out["candidate_reservoir_reasons"] = out["candidate_reservoir_reason"]
     out = _cap_per_frame(out, max_candidates_per_frame=config.max_candidates_per_frame)
     out = out.sort_values(
         ["sequence_id", "time_s", "candidate_reservoir_rank", "source"],
@@ -187,6 +239,46 @@ def build_oracle_recall_tables(
     return frame_rows, pd.DataFrame.from_records([pooled]), by_sequence
 
 
+def build_reservoir_summary(candidates: pd.DataFrame, reservoir: pd.DataFrame) -> dict[str, Any]:
+    """Build a compact JSON-serializable reservoir summary."""
+
+    input_counts = _frame_counts(candidates)
+    reservoir_counts = _frame_counts(reservoir)
+    return {
+        "input_candidate_rows": int(len(candidates)),
+        "reservoir_candidate_rows": int(len(reservoir)),
+        "input_frame_count": int(len(input_counts)),
+        "reservoir_frame_count": int(len(reservoir_counts)),
+        "input_candidates_per_frame_mean": _safe_mean(input_counts),
+        "reservoir_candidates_per_frame_mean": _safe_mean(reservoir_counts),
+        "reservoir_candidates_per_frame_p95": _safe_quantile(reservoir_counts, 0.95),
+        "reservoir_candidates_per_frame_max": _safe_max(reservoir_counts),
+        "source_counts": _value_counts(reservoir, "source"),
+        "candidate_branch_counts": _value_counts(reservoir, "candidate_branch"),
+        "reservoir_reason_counts": _reason_counts(reservoir),
+    }
+
+
+def write_reservoir_outputs(
+    reservoir: pd.DataFrame,
+    *,
+    output_csv: Path,
+    summary_json: Path | None = None,
+    input_candidates: pd.DataFrame | None = None,
+) -> None:
+    """Write reservoir CSV and optional summary JSON."""
+
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
+    reservoir.to_csv(output_csv, index=False)
+    if summary_json is not None:
+        summary_json.parent.mkdir(parents=True, exist_ok=True)
+        summary = build_reservoir_summary(
+            input_candidates if input_candidates is not None else reservoir,
+            reservoir,
+        )
+        summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+
 def _candidate_score(rows: pd.DataFrame, *, config: ReservoirConfig) -> pd.Series:
     primary = _numeric_column(rows, config.score_column, default=np.nan)
     fallback = _numeric_column(rows, config.fallback_score_column, default=1.0)
@@ -257,20 +349,65 @@ def _oracle_summary(
 
 
 def _load_candidate_specs(specs: list[str]) -> pd.DataFrame:
-    frames: list[pd.DataFrame] = []
-    for spec in specs:
-        if "=" in spec:
-            branch, path_text = spec.split("=", 1)
-        else:
-            path_text = spec
-            branch = Path(spec).stem
-        rows = pd.read_csv(Path(path_text))
-        rows = normalize_candidate_columns(rows)
-        rows["candidate_branch"] = str(branch)
-        frames.append(rows)
-    if not frames:
+    candidates = load_candidate_inputs(specs)
+    if candidates.empty:
         raise ValueError("at least one --candidate BRANCH=PATH entry is required")
-    return pd.concat(frames, ignore_index=True)
+    return candidates
+
+
+def _split_candidate_spec(spec: str) -> tuple[str, Path]:
+    if "=" in spec:
+        branch, path_text = spec.split("=", 1)
+    else:
+        path_text = spec
+        branch = Path(spec).stem
+    branch = str(branch).strip().replace(" ", "_") or "candidate_branch"
+    return branch, Path(path_text)
+
+
+def _validate_required_columns(rows: pd.DataFrame, path: Path) -> None:
+    missing = [column for column in _REQUIRED_COLUMNS if column not in rows.columns]
+    if missing:
+        raise ValueError(f"candidate CSV {path} missing required columns: {missing}")
+
+
+def _frame_counts(rows: pd.DataFrame) -> pd.Series:
+    if rows.empty:
+        return pd.Series(dtype=int)
+    return rows.groupby(["sequence_id", "time_s"], dropna=False).size()
+
+
+def _safe_mean(values: pd.Series) -> float:
+    return float(values.mean()) if not values.empty else 0.0
+
+
+def _safe_quantile(values: pd.Series, quantile: float) -> float:
+    return float(values.quantile(quantile)) if not values.empty else 0.0
+
+
+def _safe_max(values: pd.Series) -> int:
+    return int(values.max()) if not values.empty else 0
+
+
+def _value_counts(rows: pd.DataFrame, column: str) -> dict[str, int]:
+    if column not in rows.columns:
+        return {}
+    return {str(key): int(value) for key, value in rows[column].value_counts(dropna=False).items()}
+
+
+def _reason_counts(rows: pd.DataFrame) -> dict[str, int]:
+    column = "candidate_reservoir_reason"
+    if column not in rows.columns:
+        column = "candidate_reservoir_reasons"
+    counts: dict[str, int] = {}
+    if column not in rows.columns:
+        return counts
+    for value in rows[column].dropna().astype(str):
+        for reason in value.replace(",", ";").split(";"):
+            reason = reason.strip()
+            if reason:
+                counts[reason] = counts.get(reason, 0) + 1
+    return counts
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -284,7 +421,14 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="candidate CSV as BRANCH=path; may be repeated",
     )
+    parser.add_argument(
+        "--candidate-csv",
+        action="append",
+        default=[],
+        help="alias for --candidate",
+    )
     parser.add_argument("--output-csv", type=Path, required=True)
+    parser.add_argument("--summary-json", type=Path)
     parser.add_argument("--truth-csv", type=Path)
     parser.add_argument("--oracle-frame-csv", type=Path)
     parser.add_argument("--oracle-summary-csv", type=Path)
@@ -292,6 +436,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--global-top-n", type=int, default=20)
     parser.add_argument("--per-source-top-n", type=int, default=3)
     parser.add_argument("--per-branch-top-n", type=int, default=3)
+    parser.add_argument("--top-per-source", type=int)
+    parser.add_argument("--top-per-branch", type=int)
     parser.add_argument("--max-candidates-per-frame", type=int, default=40)
     parser.add_argument("--score-column", default="ranker_score")
     parser.add_argument("--fallback-score-column", default="confidence")
@@ -300,21 +446,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
     args = parser.parse_args(argv)
 
-    candidates = _load_candidate_specs(list(args.candidate))
+    candidate_specs = [*args.candidate, *args.candidate_csv]
+    candidates = _load_candidate_specs(list(candidate_specs))
+    per_source_top_n = args.per_source_top_n if args.top_per_source is None else args.top_per_source
+    per_branch_top_n = args.per_branch_top_n if args.top_per_branch is None else args.top_per_branch
     reservoir = build_candidate_reservoir(
         candidates,
         config=ReservoirConfig(
             global_top_n=args.global_top_n,
-            per_source_top_n=args.per_source_top_n,
-            per_branch_top_n=args.per_branch_top_n,
+            per_source_top_n=per_source_top_n,
+            per_branch_top_n=per_branch_top_n,
             max_candidates_per_frame=args.max_candidates_per_frame,
             score_column=args.score_column,
             fallback_score_column=args.fallback_score_column,
             score_floor_quantile=args.score_floor_quantile,
         ),
     )
-    args.output_csv.parent.mkdir(parents=True, exist_ok=True)
-    reservoir.to_csv(args.output_csv, index=False)
+    write_reservoir_outputs(
+        reservoir,
+        output_csv=args.output_csv,
+        summary_json=args.summary_json,
+        input_candidates=candidates,
+    )
     print("mmuad_candidate_reservoir=ok")
     print(f"candidate_rows={len(candidates)}")
     print(f"reservoir_rows={len(reservoir)}")
