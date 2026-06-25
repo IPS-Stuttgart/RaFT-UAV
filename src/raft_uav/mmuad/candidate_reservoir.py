@@ -2,7 +2,7 @@
 
 The MMUAD pose diagnostics showed that early pruning can destroy the oracle
 ceiling: a translated/scored stream can be easier to rank but may no longer
-contain the best raw candidate.  This module builds a frame-wise reservoir from
+contain the best raw candidate. This module builds a frame-wise reservoir from
 multiple candidate branches so later mixture-MAP or smoothing experiments can
 preserve raw, dynamic, translated, and merged hypotheses instead of committing to
 one branch too early.
@@ -42,13 +42,12 @@ class ReservoirConfig:
 
 
 def load_branch_candidate_csvs(branch_specs: Iterable[str]) -> dict[str, pd.DataFrame]:
-    """Load ``name=path`` candidate-branch specifications."""
+    """Load repeated ``name=path`` candidate-branch specifications."""
 
     frames: dict[str, pd.DataFrame] = {}
     for spec in branch_specs:
         name, path = _parse_branch_spec(spec)
-        frame = pd.read_csv(path)
-        frames[name] = frame
+        frames[name] = pd.read_csv(path)
     if not frames:
         raise ValueError("at least one --branch name=path candidate table is required")
     return frames
@@ -61,38 +60,29 @@ def build_candidate_reservoir(
 ) -> pd.DataFrame:
     """Return a frame-wise candidate reservoir from named candidate branches.
 
-    Rows are selected by the union of:
-
-    * top-N candidates per ``sequence_id,time_s,source``;
-    * top-N candidates per ``sequence_id,time_s,candidate_branch``;
-    * top-N candidates per frame globally;
-    * optional score-floor quantile per frame.
-
-    The union is then optionally capped by ``max_candidates_per_frame``.  Each
-    output row records which reservoir rules selected it in
-    ``reservoir_selected_by``.
+    Rows are selected by the union of top-N per source, top-N per branch, top-N
+    per frame, and an optional frame-wise score-floor.  The final frame cap is a
+    hard cap and deliberately removes lower-scoring rows after those union rules.
     """
 
     cfg = config or ReservoirConfig()
+    _validate_config(cfg)
     rows = _prepare_branch_rows(branch_frames, cfg.score_columns)
     if rows.empty:
         return rows
-    _validate_config(cfg)
 
     selected_by: dict[int, set[str]] = {int(idx): set() for idx in rows.index}
-    for frame_key, group in rows.groupby(["sequence_id", "time_s"], sort=False):
+    for _, group in rows.groupby(["sequence_id", "time_s"], sort=False):
         frame_indices: set[int] = set()
         if cfg.per_source_top_n > 0:
             for source, source_group in group.groupby("source", sort=False):
                 idxs = _top_indices(source_group, cfg.per_source_top_n)
-                label = f"per_source_top{cfg.per_source_top_n}:{source}"
-                _mark_selected(selected_by, idxs, label)
+                _mark_selected(selected_by, idxs, f"per_source_top{cfg.per_source_top_n}:{source}")
                 frame_indices.update(idxs)
         if cfg.per_branch_top_n > 0:
             for branch, branch_group in group.groupby("candidate_branch", sort=False):
                 idxs = _top_indices(branch_group, cfg.per_branch_top_n)
-                label = f"per_branch_top{cfg.per_branch_top_n}:{branch}"
-                _mark_selected(selected_by, idxs, label)
+                _mark_selected(selected_by, idxs, f"per_branch_top{cfg.per_branch_top_n}:{branch}")
                 frame_indices.update(idxs)
         if cfg.global_top_n > 0:
             idxs = _top_indices(group, cfg.global_top_n)
@@ -109,10 +99,16 @@ def build_candidate_reservoir(
             kept = _top_indices(rows.loc[list(frame_indices)], cfg.max_candidates_per_frame)
             dropped = frame_indices.difference(kept)
             for idx in dropped:
-                selected_by[idx].discard(f"frame_cap{cfg.max_candidates_per_frame}")
-                selected_by[idx].add("dropped_by_frame_cap")
+                selected_by[int(idx)].clear()
+                selected_by[int(idx)].add("dropped_by_frame_cap")
             _mark_selected(selected_by, kept, f"frame_cap{cfg.max_candidates_per_frame}")
-    out = rows.loc[[idx for idx, labels in selected_by.items() if labels - {"dropped_by_frame_cap"}]].copy()
+
+    kept_indices = [
+        idx
+        for idx, labels in selected_by.items()
+        if labels and "dropped_by_frame_cap" not in labels
+    ]
+    out = rows.loc[kept_indices].copy()
     if out.empty:
         return rows.iloc[0:0].copy()
     out["reservoir_selected_by"] = [";".join(sorted(selected_by[int(idx)])) for idx in out.index]
@@ -178,7 +174,10 @@ def main(argv: list[str] | None = None) -> int:
         "--score-column",
         action="append",
         dest="score_columns",
-        help="score column priority; may be repeated; defaults to ranker_score/confidence/score/probability",
+        help=(
+            "score column priority; may be repeated; defaults to "
+            "ranker_score/confidence/score/probability"
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -260,7 +259,7 @@ def _top_indices(group: pd.DataFrame, n: int) -> set[int]:
     if n <= 0 or group.empty:
         return set()
     ordered = group.sort_values(
-        ["reservoir_score", "candidate_branch", "source", "track_id"],
+        ["reservoir_score", "candidate_branch", "source", "reservoir_row_id"],
         ascending=[False, True, True, True],
     )
     return set(int(idx) for idx in ordered.head(int(n)).index)
