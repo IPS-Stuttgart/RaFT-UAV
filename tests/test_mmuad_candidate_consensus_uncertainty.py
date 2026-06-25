@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import tomllib
 
 import numpy as np
 import pandas as pd
@@ -32,6 +33,8 @@ def _candidate_rows() -> pd.DataFrame:
                     "x_m": true_x,
                     "y_m": 0.0,
                     "z_m": 2.0,
+                    "std_xy_m": 10.0,
+                    "std_z_m": 10.0,
                     "confidence": 0.7,
                     "ranker_score": 0.7,
                     "cluster_point_count": 20,
@@ -47,6 +50,8 @@ def _candidate_rows() -> pd.DataFrame:
                     "x_m": true_x + 0.2,
                     "y_m": 0.1,
                     "z_m": 2.0,
+                    "std_xy_m": 10.0,
+                    "std_z_m": 10.0,
                     "confidence": 0.65,
                     "ranker_score": 0.65,
                     "cluster_point_count": 15,
@@ -62,6 +67,8 @@ def _candidate_rows() -> pd.DataFrame:
                     "x_m": true_x + 20.0,
                     "y_m": 10.0,
                     "z_m": 8.0,
+                    "std_xy_m": 10.0,
+                    "std_z_m": 10.0,
                     "confidence": 0.8,
                     "ranker_score": 0.8,
                     "cluster_point_count": 3,
@@ -197,3 +204,12 @@ def test_consensus_feature_aliases_skip_non_numeric_columns() -> None:
     assert aliases
     assert all(column.startswith("candidate_reservoir_consensus_") for column in aliases)
     assert "candidate_reservoir_consensus_nearest_cross_source" not in augmented.rows.columns
+
+
+def test_consensus_uncertainty_entrypoint_is_exposed() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    scripts = pyproject["project"]["scripts"]
+    assert (
+        scripts["raft-uav-mmuad-consensus-uncertainty"]
+        == "raft_uav.mmuad.candidate_consensus_uncertainty:main"
+    )
