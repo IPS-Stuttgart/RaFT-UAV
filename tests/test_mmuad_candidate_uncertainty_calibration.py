@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.candidate_uncertainty_calibration import (
     apply_candidate_sigma_calibration,
