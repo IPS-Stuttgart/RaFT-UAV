@@ -59,7 +59,10 @@ def load_branch_candidate_inputs(inputs: Iterable[CandidateInput]) -> pd.DataFra
     for item in inputs:
         frame = load_candidate_file(item.path, source=item.branch)
         rows = frame.rows.copy()
-        rows["candidate_branch"] = item.branch
+        if "candidate_branch" in rows:
+            rows["candidate_branch"] = rows["candidate_branch"].fillna(item.branch)
+        else:
+            rows["candidate_branch"] = item.branch
         rows["candidate_input_path"] = str(item.path)
         frames.append(rows)
     if not frames:
