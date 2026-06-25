@@ -35,6 +35,7 @@ from raft_uav.mmuad.schema import normalize_candidate_columns, normalize_truth_c
 FRAME_ROWS_CSV = "mmuad_branch_reservoir_oracle_frame_rows.csv"
 POOLED_CSV = "mmuad_branch_reservoir_oracle_pooled.csv"
 BY_SEQUENCE_CSV = "mmuad_branch_reservoir_oracle_by_sequence.csv"
+BRANCH_RECALL_CSV = "mmuad_branch_reservoir_branch_recall.csv"
 RESERVOIR_CSV = "mmuad_branch_reservoir_candidates.csv"
 PROVENANCE_JSON = "mmuad_branch_reservoir_oracle_provenance.json"
 
@@ -137,6 +138,51 @@ def build_branch_reservoir_oracle_tables(
     )
 
 
+def build_branch_recall_summary(frame_rows: pd.DataFrame) -> pd.DataFrame:
+    """Summarize which branch/source supplies the oracle candidate for each top-K."""
+
+    columns = [
+        "top_k",
+        "oracle_candidate_branch",
+        "oracle_candidate_source",
+        "frame_count",
+        "candidate_found_count",
+        "candidate_found_fraction",
+        "oracle_mse_m2",
+        "oracle_rmse_m",
+        "oracle_mean_m",
+        "oracle_p50_m",
+        "oracle_p95_m",
+        "oracle_max_m",
+    ]
+    if frame_rows.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows = frame_rows.copy()
+    rows["oracle_candidate_branch"] = rows["oracle_candidate_branch"].fillna("").astype(str)
+    rows["oracle_candidate_source"] = rows["oracle_candidate_source"].fillna("").astype(str)
+    rows.loc[~rows["oracle_candidate_found"].astype(bool), "oracle_candidate_branch"] = "missing"
+    rows.loc[~rows["oracle_candidate_found"].astype(bool), "oracle_candidate_source"] = "missing"
+
+    records: list[dict[str, Any]] = []
+    group_cols = ["top_k", "oracle_candidate_branch", "oracle_candidate_source"]
+    for group_key, group in rows.groupby(group_cols, sort=True, dropna=False):
+        top_k, branch, source = group_key
+        errors = pd.to_numeric(group["oracle_error_m"], errors="coerce")
+        errors = errors[np.isfinite(errors.to_numpy(float))]
+        record = {
+            "top_k": str(top_k),
+            "oracle_candidate_branch": str(branch),
+            "oracle_candidate_source": str(source),
+            "frame_count": int(len(group)),
+            "candidate_found_count": int(group["oracle_candidate_found"].astype(bool).sum()),
+            "candidate_found_fraction": float(group["oracle_candidate_found"].astype(bool).mean()),
+        }
+        record.update(_error_summary(errors))
+        records.append(record)
+    return pd.DataFrame.from_records(records, columns=columns)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--truth-file", type=Path, required=True)
@@ -176,13 +222,16 @@ def main(argv: list[str] | None = None) -> int:
         score_column=str(args.score_column),
         score_floor_quantile=args.score_floor_quantile,
     )
+    branch_recall = build_branch_recall_summary(frame_rows)
 
     frame_path = args.output_dir / FRAME_ROWS_CSV
     pooled_path = args.output_dir / POOLED_CSV
     by_sequence_path = args.output_dir / BY_SEQUENCE_CSV
+    branch_recall_path = args.output_dir / BRANCH_RECALL_CSV
     frame_rows.to_csv(frame_path, index=False)
     pooled.to_csv(pooled_path, index=False)
     by_sequence.to_csv(by_sequence_path, index=False)
+    branch_recall.to_csv(branch_recall_path, index=False)
     if args.write_reservoir_candidates:
         reservoir_rows.to_csv(args.output_dir / RESERVOIR_CSV, index=False)
     provenance = {
@@ -198,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
         "frame_rows_csv": str(frame_path),
         "pooled_csv": str(pooled_path),
         "by_sequence_csv": str(by_sequence_path),
+        "branch_recall_csv": str(branch_recall_path),
     }
     (args.output_dir / PROVENANCE_JSON).write_text(json.dumps(provenance, indent=2), encoding="utf-8")
 
@@ -205,6 +255,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"frame_rows_csv={frame_path}")
     print(f"pooled_csv={pooled_path}")
     print(f"by_sequence_csv={by_sequence_path}")
+    print(f"branch_recall_csv={branch_recall_path}")
     return 0
 
 
@@ -286,7 +337,8 @@ def _select_reservoir(
         if not 0.0 <= q <= 1.0:
             raise ValueError("score_floor_quantile must be in [0, 1]")
         threshold = float(np.nanquantile(nearby["_reservoir_score"].to_numpy(float), q))
-        selected_ids.update(nearby.loc[nearby["_reservoir_score"] >= threshold, "_candidate_row_id"].astype(int))
+        score_floor = nearby.loc[nearby["_reservoir_score"] >= threshold, "_candidate_row_id"]
+        selected_ids.update(score_floor.astype(int))
     reservoir = nearby.loc[nearby["_candidate_row_id"].astype(int).isin(selected_ids)].copy()
     return reservoir.sort_values(["_reservoir_score", "time_s"], ascending=[False, True]).reset_index(drop=True)
 
@@ -361,21 +413,63 @@ def _summarize(frame_rows: pd.DataFrame, *, by_sequence: bool) -> pd.DataFrame:
         record["frame_count"] = int(len(group))
         record["candidate_found_count"] = int(group["oracle_candidate_found"].astype(bool).sum())
         record["mean_reservoir_count"] = float(pd.to_numeric(group["reservoir_count"], errors="coerce").mean())
-        if errors.empty:
-            record.update({"oracle_mse_m2": np.nan, "oracle_rmse_m": np.nan, "oracle_mean_m": np.nan, "oracle_p50_m": np.nan, "oracle_p95_m": np.nan, "oracle_max_m": np.nan})
-        else:
-            squared = errors.to_numpy(float) ** 2
-            record.update({"oracle_mse_m2": float(np.mean(squared)), "oracle_rmse_m": float(np.sqrt(np.mean(squared))), "oracle_mean_m": float(errors.mean()), "oracle_p50_m": float(np.percentile(errors, 50)), "oracle_p95_m": float(np.percentile(errors, 95)), "oracle_max_m": float(errors.max())})
+        record.update(_error_summary(errors))
         records.append(record)
     return pd.DataFrame.from_records(records)
 
 
+def _error_summary(errors: pd.Series) -> dict[str, float]:
+    if errors.empty:
+        return {
+            "oracle_mse_m2": np.nan,
+            "oracle_rmse_m": np.nan,
+            "oracle_mean_m": np.nan,
+            "oracle_p50_m": np.nan,
+            "oracle_p95_m": np.nan,
+            "oracle_max_m": np.nan,
+        }
+    values = errors.to_numpy(float)
+    squared = values**2
+    return {
+        "oracle_mse_m2": float(np.mean(squared)),
+        "oracle_rmse_m": float(np.sqrt(np.mean(squared))),
+        "oracle_mean_m": float(errors.mean()),
+        "oracle_p50_m": float(np.percentile(values, 50)),
+        "oracle_p95_m": float(np.percentile(values, 95)),
+        "oracle_max_m": float(errors.max()),
+    }
+
+
 def _frame_columns() -> list[str]:
-    return ["sequence_id", "time_s", "top_k", "candidate_count_window", "reservoir_count", "oracle_candidate_found", "oracle_error_m", "oracle_squared_error_m2", "oracle_candidate_source", "oracle_candidate_branch", "oracle_candidate_track_id", "oracle_candidate_score"]
+    return [
+        "sequence_id",
+        "time_s",
+        "top_k",
+        "candidate_count_window",
+        "reservoir_count",
+        "oracle_candidate_found",
+        "oracle_error_m",
+        "oracle_squared_error_m2",
+        "oracle_candidate_source",
+        "oracle_candidate_branch",
+        "oracle_candidate_track_id",
+        "oracle_candidate_score",
+    ]
 
 
 def _candidate_columns() -> list[str]:
-    return ["sequence_id", "time_s", "source", "track_id", "x_m", "y_m", "z_m", "confidence", "candidate_branch", "_reservoir_score"]
+    return [
+        "sequence_id",
+        "time_s",
+        "source",
+        "track_id",
+        "x_m",
+        "y_m",
+        "z_m",
+        "confidence",
+        "candidate_branch",
+        "_reservoir_score",
+    ]
 
 
 def _candidate_text(row: pd.Series | None, column: str) -> str:
@@ -396,7 +490,9 @@ def _parse_top_k(text: str) -> tuple[int, ...]:
 
 
 def _safe_label(value: object) -> str:
-    return ("" if value is None else str(value)).strip().replace(" ", "_").replace("/", "_").replace("\\", "_")
+    return (
+        "" if value is None else str(value)
+    ).strip().replace(" ", "_").replace("/", "_").replace("\\", "_")
 
 
 if __name__ == "__main__":  # pragma: no cover
