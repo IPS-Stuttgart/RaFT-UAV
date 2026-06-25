@@ -92,7 +92,7 @@ def test_fit_candidate_sigma_calibration_learns_source_branch_scales() -> None:
     assert calibration.source_branch_scales[raw_lidar_key] == 0.5
     assert calibration.source_branch_scales[translated_lidar_key] == 2.0
     assert calibration.source_branch_scales[raw_radar_key] == 1.0
-    assert calibration.source_branch_scales[translated_radar_key] == 3.0
+    assert calibration.source_branch_scales[translated_radar_key] == pytest.approx(3.0)
     assert calibration.global_scale == 1.5
 
 
