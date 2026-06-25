@@ -1,15 +1,13 @@
 """Branch/source-stratified top-K selection for MMUAD mixture-MAP.
 
-The robust candidate-mixture smoother can only use candidates that survive its
-per-frame top-K cut.  When raw, dynamic, calibrated, and merged branches carry
-incomparable ranker scores, a global score-only top-K can remove an entire
-branch even though the upstream reservoir deliberately preserved it.  This
-module reserves a small quota per candidate branch and sensor source, fills the
-remaining budget globally, and then runs the existing uncertainty-aware
-mixture-MAP implementation unchanged.
+A global score-only top-K can remove an entire raw, dynamic, calibrated, or
+merged branch even though the upstream reservoir deliberately preserved it.
+This module reserves a small quota per candidate branch and sensor source,
+fills the remaining budget globally, and then runs the existing uncertainty-
+aware mixture-MAP implementation unchanged.
 
 The selector is inference-safe: it uses candidate metadata, scores, and learned
-uncertainty only.  Truth is optional and is passed solely to the existing local
+uncertainty only. Truth is optional and is passed solely to the existing local
 diagnostic score path.
 """
 
@@ -19,7 +17,7 @@ import argparse
 from dataclasses import asdict, dataclass, replace
 import json
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
@@ -69,7 +67,7 @@ def select_stratified_mixture_candidates(
     """Return at most ``top_k`` candidates per frame while preserving diversity."""
 
     config = config or StratifiedMixtureTopKConfig()
-    _validate_stratified_config(config)
+    _validate_config(config)
     rows = normalize_candidate_columns(pd.DataFrame(candidates).copy())
     if rows.empty:
         return rows.assign(
@@ -89,12 +87,15 @@ def select_stratified_mixture_candidates(
     parts: list[pd.DataFrame] = []
     for _, frame in rows.groupby(["sequence_id", "time_s"], sort=False):
         selected, reasons = _select_frame(frame, config=config)
-        selected = selected.sort_values(
-            ["_stratified_score", "_stratified_sigma", "_stratified_input_row"],
-            ascending=[False, True, True],
-        ).copy()
-        selected["mixture_stratified_score"] = selected["_stratified_score"].to_numpy(float)
-        selected["mixture_stratified_rank"] = np.arange(1, len(selected) + 1, dtype=float)
+        selected = _ranked_frame(selected).copy()
+        selected["mixture_stratified_score"] = selected["_stratified_score"].to_numpy(
+            float
+        )
+        selected["mixture_stratified_rank"] = np.arange(
+            1,
+            len(selected) + 1,
+            dtype=float,
+        )
         selected["mixture_stratified_reason"] = [
             ";".join(sorted(reasons.get(int(row_id), {"global_fill"})))
             for row_id in selected["_stratified_input_row"].astype(int)
@@ -109,10 +110,13 @@ def select_stratified_mixture_candidates(
         parts.append(selected)
 
     out = pd.concat(parts, ignore_index=True) if parts else rows.iloc[0:0].copy()
-    return out.drop(
+    out = out.drop(
         columns=["_stratified_input_row", "_stratified_score", "_stratified_sigma"],
         errors="ignore",
-    ).sort_values(["sequence_id", "time_s", "mixture_stratified_rank"]).reset_index(drop=True)
+    )
+    return out.sort_values(
+        ["sequence_id", "time_s", "mixture_stratified_rank"]
+    ).reset_index(drop=True)
 
 
 def run_stratified_candidate_mixture_map(
@@ -132,8 +136,14 @@ def run_stratified_candidate_mixture_map(
         fallback_score_columns=tuple(mixture_config.fallback_score_columns),
         sigma_column=str(mixture_config.sigma_column),
     )
-    selected = select_stratified_mixture_candidates(candidates, config=stratified_config)
-    effective_mixture_config = replace(mixture_config, top_k=int(stratified_config.top_k))
+    selected = select_stratified_mixture_candidates(
+        candidates,
+        config=stratified_config,
+    )
+    effective_mixture_config = replace(
+        mixture_config,
+        top_k=int(stratified_config.top_k),
+    )
     mixture_result = run_candidate_mixture_map(
         selected,
         config=effective_mixture_config,
@@ -163,7 +173,9 @@ def build_stratified_selection_summary(
     """Return compact coverage diagnostics for the stratified top-K cut."""
 
     input_rows = normalize_candidate_columns(pd.DataFrame(input_candidates).copy())
-    selected_rows = normalize_candidate_columns(pd.DataFrame(selected_candidates).copy())
+    selected_rows = normalize_candidate_columns(
+        pd.DataFrame(selected_candidates).copy()
+    )
     input_counts = _frame_counts(input_rows)
     selected_counts = _frame_counts(selected_rows)
     branch_coverage: list[float] = []
@@ -174,20 +186,28 @@ def build_stratified_selection_summary(
     selected_by_frame = {
         (str(sequence_id), float(time_s)): group
         for (sequence_id, time_s), group in selected_rows.groupby(
-            ["sequence_id", "time_s"], sort=False
+            ["sequence_id", "time_s"],
+            sort=False,
         )
     }
+
     if not input_rows.empty:
-        branch_column = _resolve_branch_column(input_rows, stratified_config.branch_column)
+        branch_column = _resolve_branch_column(
+            input_rows,
+            stratified_config.branch_column,
+        )
         input_rows = input_rows.copy()
         input_rows["candidate_branch"] = _branch_values(input_rows, branch_column)
         for (sequence_id, time_s), group in input_rows.groupby(
-            ["sequence_id", "time_s"], sort=False
+            ["sequence_id", "time_s"],
+            sort=False,
         ):
             frame_count += 1
             selected = selected_by_frame.get((str(sequence_id), float(time_s)))
             selected = selected if selected is not None else pd.DataFrame()
-            input_branches = set(group["candidate_branch"].fillna("candidate").astype(str))
+            input_branches = set(
+                group["candidate_branch"].fillna("candidate").astype(str)
+            )
             selected_branches = (
                 set(selected["candidate_branch"].fillna("candidate").astype(str))
                 if not selected.empty and "candidate_branch" in selected.columns
@@ -199,16 +219,8 @@ def build_stratified_selection_summary(
                 if not selected.empty and "source" in selected.columns
                 else set()
             )
-            branch_fraction = (
-                float(len(input_branches & selected_branches) / len(input_branches))
-                if input_branches
-                else 1.0
-            )
-            source_fraction = (
-                float(len(input_sources & selected_sources) / len(input_sources))
-                if input_sources
-                else 1.0
-            )
+            branch_fraction = _coverage_fraction(input_branches, selected_branches)
+            source_fraction = _coverage_fraction(input_sources, selected_sources)
             branch_coverage.append(branch_fraction)
             source_coverage.append(source_fraction)
             fully_preserved_branches += int(branch_fraction >= 1.0)
@@ -243,14 +255,17 @@ def write_stratified_candidate_mixture_outputs(
     result: StratifiedCandidateMixtureMapResult,
     output_dir: Path,
 ) -> dict[str, Path]:
-    """Write selected candidates, coverage summary, and standard mixture outputs."""
+    """Write selected candidates, coverage summary, and mixture outputs."""
 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     selected_path = output / "mmuad_stratified_mixture_candidates.csv"
     summary_path = output / "mmuad_stratified_mixture_selection_summary.json"
     result.selected_candidates.to_csv(selected_path, index=False)
-    summary_path.write_text(json.dumps(_jsonable(result.selection_summary), indent=2), encoding="utf-8")
+    summary_path.write_text(
+        json.dumps(_jsonable(result.selection_summary), indent=2),
+        encoding="utf-8",
+    )
     paths = write_candidate_mixture_map_outputs(result.mixture_result, output)
     paths["stratified_candidates_csv"] = selected_path
     paths["stratified_selection_summary_json"] = summary_path
@@ -260,7 +275,9 @@ def write_stratified_candidate_mixture_outputs(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="raft-uav-mmuad-stratified-candidate-mixture-map",
-        description="run branch/source-stratified robust MMUAD candidate-mixture smoothing",
+        description=(
+            "run branch/source-stratified robust MMUAD candidate-mixture smoothing"
+        ),
     )
     parser.add_argument("--candidates-csv", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -298,14 +315,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    fallback_columns = tuple(args.fallback_score_column) or ("ranker_score", "confidence")
+    fallback_columns = tuple(args.fallback_score_column) or (
+        "ranker_score",
+        "confidence",
+    )
     candidates = load_candidate_file(args.candidates_csv).rows
     initial_estimates = (
-        None if args.initial_estimates_csv is None else pd.read_csv(args.initial_estimates_csv)
+        None
+        if args.initial_estimates_csv is None
+        else pd.read_csv(args.initial_estimates_csv)
     )
-    truth = None
-    if args.truth_csv is not None:
-        truth = load_evaluation_truth_file(args.truth_csv).rows
+    truth = (
+        None
+        if args.truth_csv is None
+        else load_evaluation_truth_file(args.truth_csv).rows
+    )
     mixture_config = CandidateMixtureMapConfig(
         top_k=args.top_k,
         score_column=args.score_column,
@@ -390,16 +414,14 @@ def _select_frame(
         selected_ids=selected_ids,
         reasons=reasons,
     )
-    ranked = _ranked_frame(frame)
-    for row_id in ranked["_stratified_input_row"].astype(int):
+    for row_id in _ranked_frame(frame)["_stratified_input_row"].astype(int):
         if len(selected_ids) >= budget:
             break
-        if int(row_id) in selected_ids:
-            continue
-        selected_ids.add(int(row_id))
-        reasons.setdefault(int(row_id), set()).add("global_fill")
-    selected = frame.loc[frame["_stratified_input_row"].astype(int).isin(selected_ids)].copy()
-    return selected, reasons
+        if int(row_id) not in selected_ids:
+            selected_ids.add(int(row_id))
+            reasons.setdefault(int(row_id), set()).add("global_fill")
+    selected_mask = frame["_stratified_input_row"].astype(int).isin(selected_ids)
+    return frame.loc[selected_mask].copy(), reasons
 
 
 def _apply_group_quota(
@@ -414,7 +436,9 @@ def _apply_group_quota(
 ) -> None:
     if count <= 0 or len(selected_ids) >= budget:
         return
-    group_key: str | list[str] = group_columns[0] if len(group_columns) == 1 else list(group_columns)
+    group_key: str | list[str] = (
+        group_columns[0] if len(group_columns) == 1 else list(group_columns)
+    )
     groups = list(frame.groupby(group_key, sort=False, dropna=False))
     for quota_round in range(int(count)):
         proposals: list[tuple[float, float, str, int]] = []
@@ -440,10 +464,11 @@ def _apply_group_quota(
         for _, _, key_text, row_id in proposals:
             if len(selected_ids) >= budget:
                 return
-            if row_id in selected_ids:
-                continue
-            selected_ids.add(row_id)
-            reasons.setdefault(row_id, set()).add(f"{reason_prefix}:{key_text}")
+            if row_id not in selected_ids:
+                selected_ids.add(row_id)
+                reasons.setdefault(row_id, set()).add(
+                    f"{reason_prefix}:{key_text}"
+                )
 
 
 def _ranked_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -453,31 +478,40 @@ def _ranked_frame(frame: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _candidate_score(rows: pd.DataFrame, *, config: StratifiedMixtureTopKConfig) -> pd.Series:
+def _candidate_score(
+    rows: pd.DataFrame,
+    *,
+    config: StratifiedMixtureTopKConfig,
+) -> pd.Series:
     result = pd.Series(np.nan, index=rows.index, dtype=float)
     for column in (config.score_column, *config.fallback_score_columns):
-        if column not in rows.columns:
-            continue
-        values = pd.to_numeric(rows[column], errors="coerce")
-        result = result.where(result.notna(), values)
+        if column in rows.columns:
+            values = pd.to_numeric(rows[column], errors="coerce")
+            result = result.where(result.notna(), values)
     return result.fillna(0.0).astype(float)
 
 
-def _candidate_sigma(rows: pd.DataFrame, *, config: StratifiedMixtureTopKConfig) -> pd.Series:
-    columns = (config.sigma_column, "std_xy_m", "std_z_m")
+def _candidate_sigma(
+    rows: pd.DataFrame,
+    *,
+    config: StratifiedMixtureTopKConfig,
+) -> pd.Series:
     result = pd.Series(np.nan, index=rows.index, dtype=float)
-    for column in columns:
-        if column not in rows.columns:
-            continue
-        values = pd.to_numeric(rows[column], errors="coerce")
-        result = result.where(result.notna(), values)
+    for column in (config.sigma_column, "std_xy_m", "std_z_m"):
+        if column in rows.columns:
+            values = pd.to_numeric(rows[column], errors="coerce")
+            result = result.where(result.notna(), values)
     return result.where(result > 0.0, np.inf).fillna(np.inf).astype(float)
 
 
 def _resolve_branch_column(rows: pd.DataFrame, requested: str) -> str | None:
     if requested in rows.columns:
         return requested
-    for column in ("candidate_branch", "mmuad_source_calibration_branch", "branch"):
+    for column in (
+        "candidate_branch",
+        "mmuad_source_calibration_branch",
+        "branch",
+    ):
         if column in rows.columns:
             return column
     return None
@@ -498,7 +532,7 @@ def _group_key_text(value: object) -> str:
     return str(value)
 
 
-def _validate_stratified_config(config: StratifiedMixtureTopKConfig) -> None:
+def _validate_config(config: StratifiedMixtureTopKConfig) -> None:
     if int(config.top_k) <= 0:
         raise ValueError("top_k must be positive")
     for name, value in (
@@ -508,6 +542,10 @@ def _validate_stratified_config(config: StratifiedMixtureTopKConfig) -> None:
     ):
         if int(value) < 0:
             raise ValueError(f"{name} must be non-negative")
+
+
+def _coverage_fraction(expected: set[str], retained: set[str]) -> float:
+    return float(len(expected & retained) / len(expected)) if expected else 1.0
 
 
 def _frame_counts(rows: pd.DataFrame) -> pd.Series:
