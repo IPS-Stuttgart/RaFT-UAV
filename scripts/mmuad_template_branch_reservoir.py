@@ -70,6 +70,7 @@ def build_template_branch_reservoir(
     frame_records: list[dict[str, Any]] = []
     score_normalization = _normalize_score_normalization(score_normalization)
     min_candidates_per_template = max(int(min_candidates_per_template), 0)
+    retained_candidate_row_ids: set[int] = set()
 
     for row_index, template_row in template_rows.iterrows():
         sequence_id = str(template_row["sequence_id"])
@@ -105,7 +106,7 @@ def build_template_branch_reservoir(
             count=fallback_count,
             fallback_max_time_delta_s=fallback_max_time_delta_s,
             score_normalization=score_normalization,
-            excluded_candidate_row_ids=_candidate_row_ids(reservoir),
+            excluded_candidate_row_ids=retained_candidate_row_ids | _candidate_row_ids(reservoir),
         )
         if not fallback.empty:
             reservoir = pd.concat([reservoir, fallback], ignore_index=True, sort=False)
@@ -124,6 +125,7 @@ def build_template_branch_reservoir(
                     pd.to_numeric(reservoir["template_time_delta_s"], errors="coerce")
                 )
             selected_frames.append(reservoir)
+            retained_candidate_row_ids.update(_candidate_row_ids(reservoir))
         frame_records.append(
             {
                 "template_row_index": int(row_index),
