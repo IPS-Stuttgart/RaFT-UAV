@@ -120,3 +120,26 @@ def test_truth_free_reservoir_cli_writes_artifacts(tmp_path: Path) -> None:
     provenance = json.loads((output / "mmuad_branch_reservoir_export_provenance.json").read_text())
     assert provenance["truth_free"] is True
     assert provenance["config"]["global_top_n"] == 1
+
+
+def test_truth_free_reservoir_ranks_large_realistic_groups() -> None:
+    rows = pd.concat([_candidate_rows()] * 5, ignore_index=True)
+    rows["track_id"] = [f"track_{idx}" for idx in range(len(rows))]
+    rows["ranker_score"] = [float(idx % 7) for idx in range(len(rows))]
+    rows["confidence"] = rows["ranker_score"]
+
+    reservoir, frame_summary, branch_summary = reservoir_export.build_branch_reservoir_export_tables(
+        rows,
+        config=reservoir_export.ReservoirExportConfig(
+            per_source_top_n=2,
+            per_branch_top_n=2,
+            global_top_n=3,
+        ),
+    )
+
+    assert not reservoir.empty
+    assert {"reservoir_rank_source", "reservoir_rank_branch"}.issubset(reservoir.columns)
+    assert reservoir["reservoir_rank_source"].notna().all()
+    assert reservoir["reservoir_rank_branch"].notna().all()
+    assert int(frame_summary.loc[0, "candidate_count"]) == len(rows)
+    assert int(branch_summary["input_count"].sum()) == len(rows)

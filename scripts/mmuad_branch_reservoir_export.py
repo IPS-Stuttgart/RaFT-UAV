@@ -277,8 +277,8 @@ def _select_reservoir(
         return group.copy()
     ranked = group.copy()
     ranked["reservoir_rank_global"] = _rank_within(ranked)
-    ranked["reservoir_rank_source"] = ranked.groupby("source", group_keys=False).apply(_rank_within)
-    ranked["reservoir_rank_branch"] = ranked.groupby("candidate_branch", group_keys=False).apply(_rank_within)
+    ranked["reservoir_rank_source"] = _group_rank_within(ranked, "source")
+    ranked["reservoir_rank_branch"] = _group_rank_within(ranked, "candidate_branch")
     reasons: dict[int, set[str]] = {int(row_id): set() for row_id in ranked["_candidate_row_id"]}
     if global_top_n > 0:
         _mark_reasons(reasons, _top_ids(ranked, global_top_n), "global_top")
@@ -311,6 +311,13 @@ def _rank_within(rows: pd.DataFrame) -> pd.Series:
     ordered = rows.sort_values(["_reservoir_score", "time_s", "_candidate_row_id"], ascending=[False, True, True])
     ranks = pd.Series(index=ordered.index, data=np.arange(1, len(ordered) + 1, dtype=int))
     return ranks.reindex(rows.index)
+
+
+def _group_rank_within(rows: pd.DataFrame, column: str) -> pd.Series:
+    ranks = pd.Series(index=rows.index, dtype=int)
+    for _, group in rows.groupby(column, sort=True, dropna=False):
+        ranks.loc[group.index] = _rank_within(group)
+    return ranks.astype(int)
 
 
 def _top_ids(rows: pd.DataFrame, n: int) -> set[int]:
