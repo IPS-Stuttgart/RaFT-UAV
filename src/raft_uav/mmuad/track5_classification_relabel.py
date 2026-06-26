@@ -24,6 +24,24 @@ RELABEL_DIAGNOSTICS_CSV = "mmuad_track5_classification_relabel_diagnostics.csv"
 RELABEL_MANIFEST_JSON = "mmuad_track5_classification_relabel_manifest.json"
 RELABEL_VALIDATION_JSON = "mmuad_track5_classification_relabel_validation.json"
 RelabelMode = Literal["by-key", "by-sequence-majority"]
+VALID_CLASS_IDS = (0, 1, 2, 3)
+SEQUENCE_ALIASES = ("Sequence", "sequence_id", "sequence", "heldout_sequence", "seq")
+PREDICTED_CLASS_ALIASES = (
+    "predicted_class",
+    "Classification",
+    "classification",
+    "uav_type",
+    "class_id",
+    "label",
+)
+PROBABILITY_PREFIXES = (
+    "predicted_probability_",
+    "class_prob_",
+    "class_probability_",
+    "probability_",
+    "p_class_",
+    "prob_class_",
+)
 
 
 @dataclass(frozen=True)
@@ -60,34 +78,36 @@ def relabel_track5_classification(
         merged = pose.merge(labels, on="Sequence", how="left", validate="many_to_one")
     else:
         raise ValueError("classification relabel mode must be 'by-key' or 'by-sequence-majority'")
-    if merged["source_classification"].isna().any():
-        missing = merged.loc[merged["source_classification"].isna(), ["Sequence", "Timestamp"]]
-        raise ValueError(f"classification source is missing {len(missing)} pose rows")
-    diagnostics = merged[
-        ["Sequence", "Timestamp", "Classification", "source_classification"]
-    ].copy()
-    diagnostics.rename(columns={"Classification": "pose_classification"}, inplace=True)
-    diagnostics["relabelled_classification"] = diagnostics["source_classification"].astype(int)
-    diagnostics["classification_changed"] = (
-        diagnostics["pose_classification"].astype(int)
-        != diagnostics["relabelled_classification"].astype(int)
+    return _build_relabel_result(
+        pose,
+        merged,
+        mode=str(mode),
+        source_kind="official-submission",
     )
-    out = pose.copy()
-    out["Classification"] = merged["source_classification"].astype(int)
-    manifest = {
-        "schema": "raft-uav-mmuad-track5-classification-relabel-v1",
-        "mode": str(mode),
-        "row_count": int(len(out)),
-        "sequence_count": int(out["Sequence"].nunique()) if not out.empty else 0,
-        "changed_row_count": int(diagnostics["classification_changed"].sum()),
-        "changed_sequence_count": int(
-            diagnostics.loc[diagnostics["classification_changed"], "Sequence"].nunique()
-        ),
-    }
-    return ClassificationRelabelResult(
-        rows=out[["Sequence", "Timestamp", "Position", "Classification"]],
-        diagnostics=diagnostics,
-        manifest=manifest,
+
+
+def relabel_track5_classification_from_sequence_predictions(
+    pose_submission: pd.DataFrame,
+    sequence_predictions: pd.DataFrame,
+) -> ClassificationRelabelResult:
+    """Return pose rows with labels copied from sequence-level prediction rows.
+
+    The prediction table may contain one predicted class per sequence, official
+    ``Classification`` labels, or probability columns such as
+    ``predicted_probability_0`` ... ``predicted_probability_3``.  Probability
+    rows are averaged per sequence before taking argmax.  This makes it easy to
+    combine a strong pose submission with a non-image/image-fused sequence
+    classifier without first fabricating an official-style submission.
+    """
+
+    pose = _normalize_frame(pose_submission, name="pose_submission")
+    labels = _sequence_prediction_labels(sequence_predictions)
+    merged = pose.merge(labels, on="Sequence", how="left", validate="many_to_one")
+    return _build_relabel_result(
+        pose,
+        merged,
+        mode="by-sequence-prediction",
+        source_kind="sequence-predictions",
     )
 
 
@@ -99,6 +119,7 @@ def write_track5_classification_relabel_outputs(
     classification_submission_path: Path,
     template: pd.DataFrame | None = None,
     require_leaderboard_ready: bool = False,
+    classification_source_kind: str = "official-submission",
 ) -> dict[str, Path]:
     """Write relabelled official CSV/ZIP plus manifest and validation."""
 
@@ -135,6 +156,8 @@ def write_track5_classification_relabel_outputs(
         {
             "pose_submission": str(pose_submission_path),
             "classification_submission": str(classification_submission_path),
+            "classification_source": str(classification_submission_path),
+            "classification_source_kind": str(classification_source_kind),
             "validation": validation_summary,
             "paths": {name: str(path) for name, path in paths.items() if name != "manifest_json"},
         }
@@ -149,7 +172,15 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__,
     )
     parser.add_argument("--pose-submission", type=Path, required=True)
-    parser.add_argument("--classification-submission", type=Path, required=True)
+    parser.add_argument("--classification-submission", type=Path)
+    parser.add_argument(
+        "--classification-predictions",
+        type=Path,
+        help=(
+            "sequence-level classifier predictions CSV; accepts sequence_id/Sequence and either "
+            "predicted_class/Classification or predicted_probability_0..3"
+        ),
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--mode",
@@ -160,19 +191,35 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-leaderboard-ready", action="store_true")
     args = parser.parse_args(argv)
 
-    result = relabel_track5_classification(
-        load_official_track5_results_frame(args.pose_submission),
-        load_official_track5_results_frame(args.classification_submission),
-        mode=args.mode,
-    )
+    if (args.classification_submission is None) == (args.classification_predictions is None):
+        parser.error("provide exactly one of --classification-submission or --classification-predictions")
+
+    pose_rows = load_official_track5_results_frame(args.pose_submission)
+    if args.classification_predictions is not None:
+        source_path = args.classification_predictions
+        result = relabel_track5_classification_from_sequence_predictions(
+            pose_rows,
+            pd.read_csv(args.classification_predictions),
+        )
+        source_kind = "sequence-predictions"
+    else:
+        source_path = args.classification_submission
+        assert source_path is not None
+        result = relabel_track5_classification(
+            pose_rows,
+            load_official_track5_results_frame(source_path),
+            mode=args.mode,
+        )
+        source_kind = "official-submission"
     template = None if args.template is None else pd.read_csv(args.template)
     paths = write_track5_classification_relabel_outputs(
         result=result,
         output_dir=args.output_dir,
         pose_submission_path=args.pose_submission,
-        classification_submission_path=args.classification_submission,
+        classification_submission_path=source_path,
         template=template,
         require_leaderboard_ready=bool(args.require_leaderboard_ready),
+        classification_source_kind=source_kind,
     )
     manifest = json.loads(paths["manifest_json"].read_text(encoding="utf-8"))
     print("mmuad_track5_classification_relabel=ok")
@@ -185,6 +232,111 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _build_relabel_result(
+    pose: pd.DataFrame,
+    merged: pd.DataFrame,
+    *,
+    mode: str,
+    source_kind: str,
+) -> ClassificationRelabelResult:
+    if merged["source_classification"].isna().any():
+        missing = merged.loc[merged["source_classification"].isna(), ["Sequence", "Timestamp"]]
+        raise ValueError(f"classification source is missing {len(missing)} pose rows")
+    _validate_class_series(merged["source_classification"], name="source_classification")
+    diagnostics = merged[
+        ["Sequence", "Timestamp", "Classification", "source_classification"]
+    ].copy()
+    diagnostics.rename(columns={"Classification": "pose_classification"}, inplace=True)
+    diagnostics["relabelled_classification"] = diagnostics["source_classification"].astype(int)
+    diagnostics["classification_changed"] = (
+        diagnostics["pose_classification"].astype(int)
+        != diagnostics["relabelled_classification"].astype(int)
+    )
+    if "source_classification_probability" in merged.columns:
+        diagnostics["source_classification_probability"] = merged[
+            "source_classification_probability"
+        ]
+    if "source_sequence_label_method" in merged.columns:
+        diagnostics["source_sequence_label_method"] = merged["source_sequence_label_method"]
+    out = pose.copy()
+    out["Classification"] = merged["source_classification"].astype(int)
+    manifest = {
+        "schema": "raft-uav-mmuad-track5-classification-relabel-v1",
+        "mode": str(mode),
+        "classification_source_kind": str(source_kind),
+        "row_count": int(len(out)),
+        "sequence_count": int(out["Sequence"].nunique()) if not out.empty else 0,
+        "changed_row_count": int(diagnostics["classification_changed"].sum()),
+        "changed_sequence_count": int(
+            diagnostics.loc[diagnostics["classification_changed"], "Sequence"].nunique()
+        ),
+    }
+    if "source_classification_probability" in diagnostics.columns:
+        probability = pd.to_numeric(
+            diagnostics["source_classification_probability"],
+            errors="coerce",
+        )
+        manifest["source_probability_mean"] = _finite_mean(probability)
+        manifest["source_probability_min"] = _finite_min(probability)
+    return ClassificationRelabelResult(
+        rows=out[["Sequence", "Timestamp", "Position", "Classification"]],
+        diagnostics=diagnostics,
+        manifest=manifest,
+    )
+
+
+def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFrame:
+    rows = pd.DataFrame(sequence_predictions).copy()
+    if rows.empty:
+        raise ValueError("sequence prediction table is empty")
+    sequence_column = _first_present(rows, SEQUENCE_ALIASES)
+    if sequence_column is None:
+        raise ValueError("sequence prediction table missing Sequence/sequence_id column")
+    rows["Sequence"] = rows[sequence_column].astype(str)
+    probability_columns = _probability_columns(rows)
+    if len(probability_columns) == len(VALID_CLASS_IDS):
+        grouped = rows.groupby("Sequence", sort=True)[probability_columns].mean(numeric_only=True)
+        probs = grouped.to_numpy(float)
+        probs = np.where(np.isfinite(probs), probs, 0.0)
+        probs = np.clip(probs, 0.0, None)
+        totals = probs.sum(axis=1, keepdims=True)
+        probs = np.divide(
+            probs,
+            totals,
+            out=np.full_like(probs, 1.0 / len(VALID_CLASS_IDS), dtype=float),
+            where=totals > 0.0,
+        )
+        predicted = np.argmax(probs, axis=1)
+        probability = np.max(probs, axis=1)
+        out = pd.DataFrame(
+            {
+                "Sequence": grouped.index.astype(str),
+                "source_classification": predicted.astype(int),
+                "source_classification_probability": probability.astype(float),
+                "source_sequence_label_method": "probability-argmax",
+            }
+        )
+    else:
+        class_column = _first_present(rows, PREDICTED_CLASS_ALIASES)
+        if class_column is None:
+            raise ValueError(
+                "sequence prediction table needs predicted_probability_0..3 or predicted_class"
+            )
+        labels = rows[["Sequence", class_column]].copy()
+        labels[class_column] = pd.to_numeric(labels[class_column], errors="coerce")
+        _validate_class_series(labels[class_column], name=class_column)
+        out = (
+            labels.groupby("Sequence", sort=True)[class_column]
+            .agg(_majority_class)
+            .rename("source_classification")
+            .reset_index()
+        )
+        out["source_classification_probability"] = np.nan
+        out["source_sequence_label_method"] = "class-majority"
+    _validate_class_series(out["source_classification"], name="source_classification")
+    return out
+
+
 def _normalize_frame(frame: pd.DataFrame, *, name: str) -> pd.DataFrame:
     missing = {"Sequence", "Timestamp", "Position", "Classification"}.difference(frame.columns)
     if missing:
@@ -195,6 +347,7 @@ def _normalize_frame(frame: pd.DataFrame, *, name: str) -> pd.DataFrame:
     out["Classification"] = pd.to_numeric(out["Classification"], errors="coerce")
     if not np.isfinite(out[["Timestamp", "Classification"]].to_numpy(float)).all():
         raise ValueError(f"{name} contains non-finite Timestamp or Classification")
+    _validate_class_series(out["Classification"], name=f"{name}.Classification")
     return out.sort_values(["Sequence", "Timestamp"]).reset_index(drop=True)
 
 
@@ -204,6 +357,53 @@ def _majority_class(values: pd.Series) -> int:
         raise ValueError("cannot compute majority class for empty sequence")
     max_count = counts.max()
     return int(counts.loc[counts == max_count].sort_index().index[0])
+
+
+def _first_present(frame: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
+    lower_to_column = {str(column).lower(): str(column) for column in frame.columns}
+    for alias in aliases:
+        if alias in frame.columns:
+            return alias
+        column = lower_to_column.get(alias.lower())
+        if column is not None:
+            return column
+    return None
+
+
+def _probability_columns(frame: pd.DataFrame) -> list[str]:
+    columns: list[str] = []
+    lower_to_column = {str(column).lower(): str(column) for column in frame.columns}
+    for class_id in VALID_CLASS_IDS:
+        found = None
+        for prefix in PROBABILITY_PREFIXES:
+            found = lower_to_column.get(f"{prefix}{class_id}".lower())
+            if found is not None:
+                break
+        if found is not None:
+            columns.append(found)
+    return columns
+
+
+def _validate_class_series(values: pd.Series, *, name: str) -> None:
+    numeric = pd.to_numeric(values, errors="coerce")
+    if numeric.isna().any() or not np.isfinite(numeric.to_numpy(float)).all():
+        raise ValueError(f"{name} contains non-finite class labels")
+    rounded = numeric.astype(int)
+    if not np.allclose(numeric.to_numpy(float), rounded.to_numpy(float)):
+        raise ValueError(f"{name} contains non-integer class labels")
+    bad = sorted(set(rounded.loc[~rounded.isin(VALID_CLASS_IDS)].astype(int).tolist()))
+    if bad:
+        raise ValueError(f"{name} contains class labels outside 0..3: {bad}")
+
+
+def _finite_mean(values: pd.Series) -> float | None:
+    finite = pd.to_numeric(values, errors="coerce").dropna()
+    return float(finite.mean()) if not finite.empty else None
+
+
+def _finite_min(values: pd.Series) -> float | None:
+    finite = pd.to_numeric(values, errors="coerce").dropna()
+    return float(finite.min()) if not finite.empty else None
 
 
 def _jsonable(value: Any) -> Any:
