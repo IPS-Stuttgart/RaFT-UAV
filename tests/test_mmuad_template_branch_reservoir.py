@@ -110,6 +110,29 @@ def test_template_reservoir_branch_rank_score_normalization() -> None:
     assert set(frame_summary["score_normalization"]) == {"branch-rank"}
 
 
+def test_template_reservoir_nearest_fallback_fills_empty_template_rows() -> None:
+    reservoir, frame_summary, _ = template_reservoir.build_template_branch_reservoir(
+        _candidate_rows(),
+        _template_rows(),
+        max_time_delta_s=0.1,
+        per_source_top_n=1,
+        per_branch_top_n=1,
+        global_top_n=1,
+        min_candidates_per_template=1,
+        fallback_max_time_delta_s=15.0,
+    )
+
+    assert "too_late" in set(reservoir["track_id"])
+    fallback = reservoir.loc[reservoir["track_id"] == "too_late"].iloc[0]
+    assert float(fallback["template_timestamp_s"]) == 20.0
+    assert float(fallback["time_s"]) == 30.0
+    assert float(fallback["template_time_delta_s"]) == 10.0
+    assert fallback["template_candidate_origin"] == "nearest_fallback"
+    assert fallback["reservoir_selected_by"] == "nearest_template_fallback"
+    assert int(frame_summary.loc[1, "fallback_retained_count"]) == 1
+    assert int(frame_summary.loc[1, "reservoir_count"]) == 1
+
+
 def test_template_reservoir_cli_writes_artifacts(tmp_path: Path) -> None:
     template = tmp_path / "template.csv"
     raw = tmp_path / "raw.csv"
@@ -140,6 +163,10 @@ def test_template_reservoir_cli_writes_artifacts(tmp_path: Path) -> None:
             "1",
             "--score-normalization",
             "branch-rank",
+            "--min-candidates-per-template",
+            "1",
+            "--fallback-max-time-delta-s",
+            "15",
         ]
     )
 
@@ -154,8 +181,11 @@ def test_template_reservoir_cli_writes_artifacts(tmp_path: Path) -> None:
     reservoir = pd.read_csv(output / "mmuad_template_branch_reservoir_candidates.csv")
     assert "template_timestamp_s" in reservoir.columns
     assert set(reservoir["score_normalization"]) == {"branch-rank"}
+    assert "nearest_fallback" in set(reservoir["template_candidate_origin"])
     provenance_path = output / "mmuad_template_branch_reservoir_provenance.json"
     provenance = json.loads(provenance_path.read_text())
     assert provenance["template_rows"] == 2
     assert provenance["score_normalization"] == "branch-rank"
+    assert provenance["min_candidates_per_template"] == 1
+    assert provenance["fallback_rows"] == 1
     assert provenance["provenance"]["candidate_inputs"][0]["branch"] == "raw"
