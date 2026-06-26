@@ -71,6 +71,7 @@ raft-uav-mmuad-ensemble-track5-submissions = "raft_uav.mmuad.track5_submission_e
 raft-uav-mmuad-track5-estimate-ensemble = "raft_uav.mmuad.track5_estimate_ensemble:main"
 raft-uav-mmuad-track5-estimate-ensemble-grid = "raft_uav.mmuad.track5_estimate_ensemble_grid:main"
 raft-uav-mmuad-track5-classification-relabel = "raft_uav.mmuad.track5_classification_relabel:main"
+raft-uav-mmuad-track5-sequence-gate = "raft_uav.mmuad.track5_sequence_gate:main"
 raft-uav-mmuad-classification-audit = "raft_uav.mmuad.classification_audit:main"
 raft-uav-mmuad-sequence-classifier = "raft_uav.mmuad.classification_cli:main"
 raft-uav-mmuad-train-sequence-classifier = "raft_uav.mmuad.train_sequence_classifier:main"
