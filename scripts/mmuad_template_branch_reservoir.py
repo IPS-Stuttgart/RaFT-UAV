@@ -27,11 +27,11 @@ for root in (SRC_ROOT, SCRIPT_ROOT):
         sys.path.insert(0, str(root))
 
 from mmuad_build_branch_reservoir import (  # noqa: E402
+    _finite_candidate_rows,
+    _select_frame_reservoir,
     build_branch_summary,
     load_branch_candidate_inputs,
     parse_candidate_input,
-    _finite_candidate_rows,
-    _select_frame_reservoir,
 )
 from raft_uav.mmuad.submission import load_official_track5_template_file  # noqa: E402
 
@@ -72,10 +72,13 @@ def build_template_branch_reservoir(
         if sequence_candidates.empty:
             window = sequence_candidates.copy()
         else:
-            deltas = pd.to_numeric(sequence_candidates["time_s"], errors="coerce") - timestamp
+            deltas = pd.to_numeric(sequence_candidates["time_s"], errors="coerce")
+            deltas = deltas - timestamp
             window = sequence_candidates.loc[np.abs(deltas) <= float(max_time_delta_s)].copy()
             if not window.empty:
-                window["template_time_delta_s"] = pd.to_numeric(window["time_s"], errors="coerce") - timestamp
+                window["template_time_delta_s"] = (
+                    pd.to_numeric(window["time_s"], errors="coerce") - timestamp
+                )
         reservoir = _select_frame_reservoir(
             window,
             per_source_top_n=per_source_top_n,
@@ -90,7 +93,9 @@ def build_template_branch_reservoir(
             reservoir["template_sequence_id"] = sequence_id
             reservoir["template_timestamp_s"] = timestamp
             if "template_time_delta_s" not in reservoir.columns:
-                reservoir["template_time_delta_s"] = pd.to_numeric(reservoir["time_s"], errors="coerce") - timestamp
+                reservoir["template_time_delta_s"] = (
+                    pd.to_numeric(reservoir["time_s"], errors="coerce") - timestamp
+                )
             selected_frames.append(reservoir)
         frame_records.append(
             {
@@ -99,13 +104,37 @@ def build_template_branch_reservoir(
                 "template_timestamp_s": timestamp,
                 "candidate_count_window": int(len(window)),
                 "reservoir_count": int(len(reservoir)),
-                "retained_fraction": float(len(reservoir) / len(window)) if len(window) else 0.0,
-                "branch_count_window": int(window["candidate_branch"].nunique(dropna=False)) if not window.empty else 0,
-                "source_count_window": int(window["source"].nunique(dropna=False)) if not window.empty else 0,
-                "branch_count_reservoir": int(reservoir["candidate_branch"].nunique(dropna=False)) if not reservoir.empty else 0,
-                "source_count_reservoir": int(reservoir["source"].nunique(dropna=False)) if not reservoir.empty else 0,
-                "min_abs_time_delta_s": float(np.nanmin(np.abs(window["template_time_delta_s"]))) if not window.empty else np.nan,
-                "max_abs_time_delta_s": float(np.nanmax(np.abs(window["template_time_delta_s"]))) if not window.empty else np.nan,
+                "retained_fraction": (
+                    float(len(reservoir) / len(window)) if len(window) else 0.0
+                ),
+                "branch_count_window": (
+                    int(window["candidate_branch"].nunique(dropna=False))
+                    if not window.empty
+                    else 0
+                ),
+                "source_count_window": (
+                    int(window["source"].nunique(dropna=False)) if not window.empty else 0
+                ),
+                "branch_count_reservoir": (
+                    int(reservoir["candidate_branch"].nunique(dropna=False))
+                    if not reservoir.empty
+                    else 0
+                ),
+                "source_count_reservoir": (
+                    int(reservoir["source"].nunique(dropna=False))
+                    if not reservoir.empty
+                    else 0
+                ),
+                "min_abs_time_delta_s": (
+                    float(np.nanmin(np.abs(window["template_time_delta_s"])))
+                    if not window.empty
+                    else np.nan
+                ),
+                "max_abs_time_delta_s": (
+                    float(np.nanmax(np.abs(window["template_time_delta_s"])))
+                    if not window.empty
+                    else np.nan
+                ),
             }
         )
 
@@ -115,7 +144,11 @@ def build_template_branch_reservoir(
         else rows.iloc[0:0].copy()
     )
     reservoir_rows = reservoir_rows.drop(
-        columns=[column for column in ("_reservoir_score", "_candidate_row_id") if column in reservoir_rows.columns]
+        columns=[
+            column
+            for column in ("_reservoir_score", "_candidate_row_id")
+            if column in reservoir_rows.columns
+        ]
     )
     frame_summary = pd.DataFrame.from_records(frame_records)
     branch_summary = build_branch_summary(candidates, reservoir_rows, score_column=score_column)
@@ -215,7 +248,9 @@ def main(argv: list[str] | None = None) -> int:
         max_candidates_per_template=args.max_candidates_per_template,
         provenance={
             "template_csv": str(args.template_csv),
-            "candidate_inputs": [{"branch": item.branch, "path": str(item.path)} for item in inputs],
+            "candidate_inputs": [
+                {"branch": item.branch, "path": str(item.path)} for item in inputs
+            ],
         },
     )
     print("mmuad_template_branch_reservoir=ok")
@@ -236,7 +271,8 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
             "timestamp_s": pd.to_numeric(template[timestamp_col], errors="coerce"),
         }
     )
-    finite = rows["timestamp_s"].notna() & np.isfinite(rows["timestamp_s"].to_numpy(float))
+    finite = rows["timestamp_s"].notna()
+    finite &= np.isfinite(rows["timestamp_s"].to_numpy(float))
     return rows.loc[finite & rows["sequence_id"].ne("")].sort_values(
         ["sequence_id", "timestamp_s"]
     ).reset_index(drop=True)
