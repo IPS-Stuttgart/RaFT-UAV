@@ -7,7 +7,6 @@ from zipfile import ZipFile
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from raft_uav.mmuad.candidate_reservoir import ReservoirConfig
 from raft_uav.mmuad.candidate_mixture_map import CandidateMixtureMapConfig
