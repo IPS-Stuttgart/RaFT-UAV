@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import tomllib
+
+import pandas as pd
+import pytest
+
+from raft_uav.mmuad.track5_estimate_ensemble import parse_estimate_spec
+from raft_uav.mmuad.track5_estimate_ensemble_grid import evaluate_estimate_ensemble_weight_grid
+from raft_uav.mmuad.track5_estimate_ensemble_grid import generate_simplex_weight_grid
+from raft_uav.mmuad.track5_estimate_ensemble_grid import main as grid_main
+from raft_uav.mmuad.track5_estimate_ensemble_grid import write_estimate_ensemble_weight_grid_outputs
+
+
+def _template() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Sequence": ["seq0001", "seq0001", "seq0002"],
+            "Timestamp": [0.0, 5.0, 0.0],
+            "Position": ["(0,0,0)"] * 3,
+            "Classification": [2, 2, 1],
+        }
+    )
+
+
+def _truth() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "sequence_id": ["seq0001", "seq0001", "seq0002"],
+            "time_s": [0.0, 5.0, 0.0],
+            "x_m": [0.0, 5.0, 4.0],
+            "y_m": [0.0, 0.0, 4.0],
+            "z_m": [0.0, 0.0, 4.0],
+            "class_name": ["2", "2", "1"],
+        }
+    )
+
+
+def _estimate_good() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "sequence_id": ["seq0001", "seq0001", "seq0002"],
+            "time_s": [0.0, 10.0, 0.0],
+            "state_x_m": [0.0, 10.0, 4.0],
+            "state_y_m": [0.0, 0.0, 4.0],
+            "state_z_m": [0.0, 0.0, 4.0],
+        }
+    )
+
+
+def _estimate_bad() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "sequence_id": ["seq0001", "seq0001", "seq0002"],
+            "time_s": [0.0, 10.0, 0.0],
+            "state_x_m": [20.0, 30.0, 24.0],
+            "state_y_m": [20.0, 20.0, 24.0],
+            "state_z_m": [20.0, 20.0, 24.0],
+        }
+    )
+
+
+def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
+    good = tmp_path / "good.csv"
+    bad = tmp_path / "bad.csv"
+    template = tmp_path / "template.csv"
+    truth = tmp_path / "truth.csv"
+    class_map = tmp_path / "class_map.csv"
+    _estimate_good().to_csv(good, index=False)
+    _estimate_bad().to_csv(bad, index=False)
+    _template().to_csv(template, index=False)
+    _truth().to_csv(truth, index=False)
+    pd.DataFrame({"sequence_id": ["seq0001", "seq0002"], "uav_type": [2, 1]}).to_csv(
+        class_map,
+        index=False,
+    )
+    return good, bad, template, truth, class_map
+
+
+def test_generate_simplex_weight_grid() -> None:
+    grid = generate_simplex_weight_grid(2, step=0.5)
+    assert set(grid) == {(1.0, 0.0), (0.5, 0.5), (0.0, 1.0)}
+    assert generate_simplex_weight_grid(2, step=0.5, include_singletons=False) == [
+        (0.5, 0.5)
+    ]
+    with pytest.raises(ValueError, match="divide 1.0"):
+        generate_simplex_weight_grid(2, step=0.3)
+
+
+def test_estimate_ensemble_weight_grid_selects_best_weight(tmp_path: Path) -> None:
+    good, bad, _, _, _ = _write_inputs(tmp_path)
+    summary, by_sequence, best_weights = evaluate_estimate_ensemble_weight_grid(
+        [parse_estimate_spec(f"good={good}"), parse_estimate_spec(f"bad={bad}")],
+        template=_template(),
+        truth=_truth(),
+        weight_grid=generate_simplex_weight_grid(2, step=0.5),
+        default_classification=2,
+    )
+
+    assert best_weights == (1.0, 0.0)
+    assert summary.iloc[0]["weight_good"] == pytest.approx(1.0)
+    assert summary.iloc[0]["pose_mse"] == pytest.approx(0.0)
+    assert set(by_sequence["sequence_id"]) == {"seq0001", "seq0002"}
+
+
+def test_estimate_ensemble_weight_grid_writes_best_artifacts(tmp_path: Path) -> None:
+    good, bad, _, _, class_map = _write_inputs(tmp_path)
+    output_dir = tmp_path / "out"
+    paths = write_estimate_ensemble_weight_grid_outputs(
+        estimate_inputs=[parse_estimate_spec(f"good={good}"), parse_estimate_spec(f"bad={bad}")],
+        template=_template(),
+        truth=_truth(),
+        weight_grid=generate_simplex_weight_grid(2, step=0.5),
+        output_dir=output_dir,
+        class_map_path=class_map,
+    )
+
+    assert paths["summary_csv"].exists()
+    assert paths["manifest_json"].exists()
+    assert paths["best_official_zip"].exists()
+    manifest = json.loads(paths["manifest_json"].read_text(encoding="utf-8"))
+    assert manifest["best_weights"] == [1.0, 0.0]
+    assert manifest["best"]["pose_mse"] == pytest.approx(0.0)
+
+
+def test_estimate_ensemble_weight_grid_cli_writes_outputs(tmp_path: Path) -> None:
+    good, bad, template, truth, class_map = _write_inputs(tmp_path)
+    output_dir = tmp_path / "out_cli"
+    status = grid_main(
+        [
+            "--estimate-csv",
+            f"good={good}",
+            "--estimate-csv",
+            f"bad={bad}",
+            "--template",
+            str(template),
+            "--truth",
+            str(truth),
+            "--class-map",
+            str(class_map),
+            "--output-dir",
+            str(output_dir),
+            "--step",
+            "0.5",
+        ]
+    )
+
+    assert status == 0
+    assert (output_dir / "mmuad_track5_estimate_ensemble_weight_grid.csv").exists()
+    assert (output_dir / "best_ensemble" / "ug2_submission.zip").exists()
+
+
+def test_estimate_ensemble_weight_grid_entrypoint_is_exposed() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    assert (
+        pyproject["project"]["scripts"]["raft-uav-mmuad-track5-estimate-ensemble-grid"]
+        == "raft_uav.mmuad.track5_estimate_ensemble_grid:main"
+    )
