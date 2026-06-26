@@ -7,9 +7,12 @@ from zipfile import ZipFile
 import pandas as pd
 import pytest
 
-from raft_uav.mmuad.track5_template_resample import main as resample_main
-from raft_uav.mmuad.track5_template_resample import resample_estimates_to_track5_template
-from raft_uav.mmuad.track5_template_resample import write_track5_template_resample_outputs
+from raft_uav.mmuad.track5_template_resample import (
+    main as resample_main,
+    resample_estimates_to_track5_template,
+    summarize_template_resample_diagnostics,
+    write_track5_template_resample_outputs,
+)
 
 
 def _estimates() -> pd.DataFrame:
@@ -48,7 +51,35 @@ def test_resample_estimates_to_track5_template_interpolates_midpoints() -> None:
     assert diagnostics["valid"].all()
 
 
-def test_write_track5_template_resample_outputs_produces_upload_ready_zip(tmp_path: Path) -> None:
+def test_sequence_diagnostics_summarize_invalid_and_extrapolated_rows() -> None:
+    template = pd.DataFrame(
+        {
+            "Sequence": ["seq0001", "seq0001", "seq0001", "seq0003"],
+            "Timestamp": [0.0, 5.0, 20.0, 1.0],
+        }
+    )
+    _, diagnostics = resample_estimates_to_track5_template(
+        _estimates(),
+        template,
+        max_nearest_time_delta_s=1.0,
+    )
+
+    summary = summarize_template_resample_diagnostics(diagnostics).set_index(
+        "sequence_id",
+    )
+
+    assert summary.loc["seq0001", "template_row_count"] == 3
+    assert summary.loc["seq0001", "valid_row_count"] == 1
+    assert summary.loc["seq0001", "invalid_row_count"] == 2
+    assert summary.loc["seq0001", "extrapolated_row_count"] == 1
+    assert summary.loc["seq0001", "nearest_time_delta_abs_max_s"] == pytest.approx(10.0)
+    assert summary.loc["seq0003", "source_row_count_max"] == 0
+    assert summary.loc["seq0003", "invalid_row_count"] == 1
+
+
+def test_write_track5_template_resample_outputs_produces_upload_ready_zip(
+    tmp_path: Path,
+) -> None:
     paths = write_track5_template_resample_outputs(
         estimates=_estimates(),
         template=_template(),
@@ -58,6 +89,7 @@ def test_write_track5_template_resample_outputs_produces_upload_ready_zip(tmp_pa
 
     assert paths["official_zip"].exists()
     assert paths["official_results_csv"].exists()
+    assert paths["diagnostics_by_sequence_csv"].exists()
     validation = json.loads(paths["validation_json"].read_text(encoding="utf-8"))
     assert validation["leaderboard_ready"] is True
     assert validation["codabench_upload_ready"] is True
@@ -65,6 +97,8 @@ def test_write_track5_template_resample_outputs_produces_upload_ready_zip(tmp_pa
         assert archive.namelist() == ["mmaud_results.csv"]
     official_rows = pd.read_csv(paths["official_results_csv"])
     assert official_rows["Classification"].tolist() == [2, 2, 2, 1]
+    sequence_diagnostics = pd.read_csv(paths["diagnostics_by_sequence_csv"])
+    assert set(sequence_diagnostics["sequence_id"]) == {"seq0001", "seq0002"}
 
 
 def test_template_resample_cli_writes_artifacts(tmp_path: Path) -> None:
@@ -96,6 +130,9 @@ def test_template_resample_cli_writes_artifacts(tmp_path: Path) -> None:
     assert status == 0
     assert (output_dir / "ug2_submission.zip").exists()
     assert (output_dir / "mmuad_template_resample_manifest.json").exists()
+    assert (output_dir / "mmuad_template_resample_diagnostics_by_sequence.csv").exists()
     manifest = json.loads((output_dir / "mmuad_template_resample_manifest.json").read_text())
     assert manifest["row_count"] == 4
+    assert manifest["sequence_count"] == 2
+    assert manifest["invalid_sequence_count"] == 0
     assert manifest["leaderboard_ready"] is True

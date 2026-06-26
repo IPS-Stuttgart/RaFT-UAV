@@ -110,6 +110,64 @@ def resample_estimates_to_track5_template(
     return resampled, diagnostics
 
 
+def summarize_template_resample_diagnostics(diagnostics: pd.DataFrame) -> pd.DataFrame:
+    """Return per-sequence coverage diagnostics for template resampling."""
+
+    rows = pd.DataFrame(diagnostics).copy()
+    columns = [
+        "sequence_id",
+        "template_row_count",
+        "valid_row_count",
+        "invalid_row_count",
+        "valid_fraction",
+        "extrapolated_row_count",
+        "extrapolated_fraction",
+        "source_row_count_min",
+        "source_row_count_max",
+        "nearest_time_delta_abs_mean_s",
+        "nearest_time_delta_abs_p95_s",
+        "nearest_time_delta_abs_max_s",
+    ]
+    if rows.empty:
+        return pd.DataFrame(columns=columns)
+    if "sequence_id" not in rows.columns:
+        raise ValueError("diagnostics must include sequence_id")
+    rows["sequence_id"] = rows["sequence_id"].astype(str)
+    rows["valid"] = _bool_column(rows, "valid")
+    rows["extrapolated"] = _bool_column(rows, "extrapolated")
+    rows["source_row_count"] = pd.to_numeric(
+        rows.get("source_row_count", 0),
+        errors="coerce",
+    ).fillna(0)
+    rows["abs_nearest_time_delta_s"] = pd.to_numeric(
+        rows.get("abs_nearest_time_delta_s"),
+        errors="coerce",
+    )
+    records: list[dict[str, Any]] = []
+    for sequence_id, group in rows.groupby("sequence_id", sort=True):
+        row_count = int(len(group))
+        valid_count = int(group["valid"].sum())
+        extrapolated_count = int(group["extrapolated"].sum())
+        abs_delta = group["abs_nearest_time_delta_s"].dropna()
+        records.append(
+            {
+                "sequence_id": str(sequence_id),
+                "template_row_count": row_count,
+                "valid_row_count": valid_count,
+                "invalid_row_count": int(row_count - valid_count),
+                "valid_fraction": _fraction(valid_count, row_count),
+                "extrapolated_row_count": extrapolated_count,
+                "extrapolated_fraction": _fraction(extrapolated_count, row_count),
+                "source_row_count_min": int(group["source_row_count"].min()),
+                "source_row_count_max": int(group["source_row_count"].max()),
+                "nearest_time_delta_abs_mean_s": _mean(abs_delta),
+                "nearest_time_delta_abs_p95_s": _quantile(abs_delta, 0.95),
+                "nearest_time_delta_abs_max_s": _max(abs_delta),
+            }
+        )
+    return pd.DataFrame.from_records(records, columns=columns)
+
+
 def write_track5_template_resample_outputs(
     *,
     estimates: pd.DataFrame,
@@ -128,9 +186,13 @@ def write_track5_template_resample_outputs(
         template,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
     )
+    diagnostics_by_sequence = summarize_template_resample_diagnostics(diagnostics)
     paths = {
         "resampled_estimates_csv": output / "mmuad_template_resampled_estimates.csv",
         "diagnostics_csv": output / "mmuad_template_resample_diagnostics.csv",
+        "diagnostics_by_sequence_csv": (
+            output / "mmuad_template_resample_diagnostics_by_sequence.csv"
+        ),
         "official_results_csv": output / "mmaud_results.csv",
         "official_zip": output / "ug2_submission.zip",
         "validation_json": output / "mmuad_template_resample_validation.json",
@@ -139,6 +201,7 @@ def write_track5_template_resample_outputs(
     }
     resampled.to_csv(paths["resampled_estimates_csv"], index=False)
     diagnostics.to_csv(paths["diagnostics_csv"], index=False)
+    diagnostics_by_sequence.to_csv(paths["diagnostics_by_sequence_csv"], index=False)
     write_official_mmaud_results_csv(
         resampled,
         paths["official_results_csv"],
@@ -163,12 +226,28 @@ def write_track5_template_resample_outputs(
         encoding="utf-8",
     )
     validation.rows.to_csv(paths["validation_rows_csv"], index=False)
+    valid_rows = resampled.get("template_resample_valid", pd.Series(dtype=bool))
+    extrapolated_rows = resampled.get("template_extrapolated", pd.Series(dtype=bool))
     manifest = {
         "schema": "raft-uav-mmuad-track5-template-resample-v1",
         "row_count": int(len(resampled)),
         "template_row_count": int(len(_normalize_template_rows(template))),
-        "valid_resampled_rows": int(resampled.get("template_resample_valid", pd.Series(dtype=bool)).sum()),
-        "extrapolated_rows": int(resampled.get("template_extrapolated", pd.Series(dtype=bool)).sum()),
+        "sequence_count": int(len(diagnostics_by_sequence)),
+        "valid_resampled_rows": int(valid_rows.sum()),
+        "invalid_resampled_rows": int((~valid_rows.astype(bool)).sum()),
+        "extrapolated_rows": int(extrapolated_rows.sum()),
+        "invalid_sequence_count": int(
+            (diagnostics_by_sequence.get("invalid_row_count", pd.Series(dtype=int)) > 0).sum()
+        ),
+        "extrapolated_sequence_count": int(
+            (
+                diagnostics_by_sequence.get(
+                    "extrapolated_row_count",
+                    pd.Series(dtype=int),
+                )
+                > 0
+            ).sum()
+        ),
         "leaderboard_ready": bool(validation.summary.get("leaderboard_ready", False)),
         "codabench_upload_ready": bool(validation.summary.get("codabench_upload_ready", False)),
         "default_classification": str(default_classification),
@@ -309,6 +388,31 @@ def _diagnostic_record(
         "source_row_count": int(source_row_count),
         "valid": bool(valid),
     }
+
+
+def _bool_column(rows: pd.DataFrame, column: str) -> pd.Series:
+    if column not in rows.columns:
+        return pd.Series(False, index=rows.index, dtype=bool)
+    value = rows[column]
+    if value.dtype == bool:
+        return value.fillna(False).astype(bool)
+    return value.fillna(False).map(lambda item: str(item).lower() in {"1", "true", "yes"})
+
+
+def _fraction(numerator: int, denominator: int) -> float:
+    return float(numerator / denominator) if denominator else float("nan")
+
+
+def _mean(values: pd.Series) -> float:
+    return float(values.mean()) if not values.empty else float("nan")
+
+
+def _quantile(values: pd.Series, quantile: float) -> float:
+    return float(values.quantile(quantile)) if not values.empty else float("nan")
+
+
+def _max(values: pd.Series) -> float:
+    return float(values.max()) if not values.empty else float("nan")
 
 
 def _empty_resampled() -> pd.DataFrame:

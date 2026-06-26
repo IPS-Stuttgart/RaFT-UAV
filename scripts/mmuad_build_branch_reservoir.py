@@ -141,10 +141,15 @@ def build_frame_summary(candidates: pd.DataFrame, reservoir: pd.DataFrame) -> pd
     return pd.DataFrame.from_records(records, columns=columns)
 
 
-def build_branch_summary(candidates: pd.DataFrame, reservoir: pd.DataFrame) -> pd.DataFrame:
+def build_branch_summary(
+    candidates: pd.DataFrame,
+    reservoir: pd.DataFrame,
+    *,
+    score_column: str = "ranker_score",
+) -> pd.DataFrame:
     """Summarize candidate retention by input branch and source."""
 
-    all_rows = _finite_candidate_rows(candidates, score_column="ranker_score")
+    all_rows = _finite_candidate_rows(candidates, score_column=score_column)
     selected = normalize_candidate_columns(pd.DataFrame(reservoir)).copy()
     columns = [
         "candidate_branch",
