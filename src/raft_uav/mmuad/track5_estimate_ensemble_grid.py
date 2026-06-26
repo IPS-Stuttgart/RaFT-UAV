@@ -117,8 +117,7 @@ def evaluate_estimate_ensemble_weight_grid(
             class_map_path=class_map_path,
         )
         row = _grid_row(weights, evaluation)
-        record = _summary_record(inputs, row)
-        summary_records.append(record)
+        summary_records.append(_summary_record(inputs, row))
         sequence_records.extend(_sequence_records(inputs, row.weights, evaluation))
         if best_row is None or _row_sort_key(row) < _row_sort_key(best_row):
             best_row = row
@@ -273,15 +272,18 @@ def _ensemble_results_frame(
 
 def _grid_row(weights: tuple[float, ...], evaluation: dict[str, Any]) -> EnsembleGridRow:
     summary = evaluation.get("summary", evaluation)
+    pooled = summary.get("pooled", summary)
     return EnsembleGridRow(
         weights=tuple(float(weight) for weight in weights),
-        pose_mse=float(summary.get("pose_mse_loss", summary.get("mse_3d_m2", np.nan))),
-        rmse_m=float(summary.get("rmse_3d_m", np.nan)),
-        mean_error_m=float(summary.get("mean_error_3d_m", summary.get("mean_3d_m", np.nan))),
-        p95_error_m=float(summary.get("p95_error_3d_m", summary.get("p95_3d_m", np.nan))),
-        max_error_m=float(summary.get("max_error_3d_m", summary.get("max_3d_m", np.nan))),
-        class_accuracy=_optional_float(summary.get("uav_type_accuracy")),
-        matched_count=int(summary.get("matched_count", summary.get("count", 0)) or 0),
+        pose_mse=float(
+            pooled.get("pose_mse_loss_m2", pooled.get("mean_square_loss_m2", np.nan))
+        ),
+        rmse_m=float(pooled.get("rmse_3d_m", np.nan)),
+        mean_error_m=float(pooled.get("mean_3d_m", np.nan)),
+        p95_error_m=float(pooled.get("p95_3d_m", np.nan)),
+        max_error_m=float(pooled.get("max_3d_m", np.nan)),
+        class_accuracy=_optional_float(pooled.get("uav_type_accuracy")),
+        matched_count=int(summary.get("matched_count", pooled.get("count", 0)) or 0),
     )
 
 
@@ -311,7 +313,7 @@ def _sequence_records(
         return []
     records: list[dict[str, Any]] = []
     for sequence_id, group in rows.groupby("sequence_id", sort=True):
-        matched = group.loc[group.get("matched", True).astype(bool)] if "matched" in group else group
+        matched = group.loc[group["matched"].astype(bool)] if "matched" in group else group
         errors = pd.to_numeric(matched.get("error_3d_m", pd.Series(dtype=float)), errors="coerce")
         errors = errors[np.isfinite(errors.to_numpy(float))]
         if errors.empty:
