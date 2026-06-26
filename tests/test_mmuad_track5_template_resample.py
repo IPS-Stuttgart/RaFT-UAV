@@ -7,10 +7,12 @@ from zipfile import ZipFile
 import pandas as pd
 import pytest
 
-from raft_uav.mmuad.track5_template_resample import main as resample_main
-from raft_uav.mmuad.track5_template_resample import resample_estimates_to_track5_template
-from raft_uav.mmuad.track5_template_resample import summarize_template_resample_diagnostics
-from raft_uav.mmuad.track5_template_resample import write_track5_template_resample_outputs
+from raft_uav.mmuad.track5_template_resample import (
+    main as resample_main,
+    resample_estimates_to_track5_template,
+    summarize_template_resample_diagnostics,
+    write_track5_template_resample_outputs,
+)
 
 
 def _estimates() -> pd.DataFrame:
@@ -62,7 +64,9 @@ def test_sequence_diagnostics_summarize_invalid_and_extrapolated_rows() -> None:
         max_nearest_time_delta_s=1.0,
     )
 
-    summary = summarize_template_resample_diagnostics(diagnostics).set_index("sequence_id")
+    summary = summarize_template_resample_diagnostics(diagnostics).set_index(
+        "sequence_id",
+    )
 
     assert summary.loc["seq0001", "template_row_count"] == 3
     assert summary.loc["seq0001", "valid_row_count"] == 1
@@ -73,7 +77,9 @@ def test_sequence_diagnostics_summarize_invalid_and_extrapolated_rows() -> None:
     assert summary.loc["seq0003", "invalid_row_count"] == 1
 
 
-def test_write_track5_template_resample_outputs_produces_upload_ready_zip(tmp_path: Path) -> None:
+def test_write_track5_template_resample_outputs_produces_upload_ready_zip(
+    tmp_path: Path,
+) -> None:
     paths = write_track5_template_resample_outputs(
         estimates=_estimates(),
         template=_template(),
