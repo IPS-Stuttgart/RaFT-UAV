@@ -232,6 +232,7 @@ def write_template_branch_reservoir_artifacts(
     reservoir.to_csv(paths["reservoir_csv"], index=False)
     frame_summary.to_csv(paths["frame_summary_csv"], index=False)
     branch_summary.to_csv(paths["branch_summary_csv"], index=False)
+    fallback_rows = _count_fallback_rows(reservoir)
     payload = {
         "schema": "raft-uav-mmuad-template-branch-reservoir-v1",
         "max_time_delta_s": float(max_time_delta_s),
@@ -247,9 +248,7 @@ def write_template_branch_reservoir_artifacts(
         "input_candidate_rows": int(len(candidates)),
         "template_rows": int(len(_normalize_template_rows(template))),
         "reservoir_rows": int(len(reservoir)),
-        "fallback_rows": int(
-            (reservoir.get("template_candidate_origin", pd.Series(dtype=str)) == "nearest_fallback").sum()
-        ),
+        "fallback_rows": int(fallback_rows),
         "provenance": provenance or {},
     }
     paths["provenance_json"].write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -365,10 +364,13 @@ def _nearest_template_fallback_candidates(
         return sequence_candidates.iloc[0:0].copy()
     work = sequence_candidates.copy()
     if excluded_candidate_row_ids and "_candidate_row_id" in work.columns:
-        work = work.loc[~work["_candidate_row_id"].astype(int).isin(excluded_candidate_row_ids)]
+        is_excluded = work["_candidate_row_id"].astype(int).isin(excluded_candidate_row_ids)
+        work = work.loc[~is_excluded]
     if work.empty:
         return work
-    work["template_time_delta_s"] = pd.to_numeric(work["time_s"], errors="coerce") - float(timestamp)
+    work["template_time_delta_s"] = (
+        pd.to_numeric(work["time_s"], errors="coerce") - float(timestamp)
+    )
     work["template_abs_time_delta_s"] = np.abs(
         pd.to_numeric(work["template_time_delta_s"], errors="coerce")
     )
@@ -390,6 +392,12 @@ def _candidate_row_ids(rows: pd.DataFrame) -> set[int]:
     if rows.empty or "_candidate_row_id" not in rows.columns:
         return set()
     return set(rows["_candidate_row_id"].astype(int))
+
+
+def _count_fallback_rows(rows: pd.DataFrame) -> int:
+    if rows.empty or "template_candidate_origin" not in rows.columns:
+        return 0
+    return int((rows["template_candidate_origin"] == "nearest_fallback").sum())
 
 
 def _apply_score_normalization(rows: pd.DataFrame, mode: str) -> pd.DataFrame:
