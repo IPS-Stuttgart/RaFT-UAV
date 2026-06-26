@@ -28,10 +28,6 @@ for root in (SRC_ROOT, SCRIPT_ROOT):
         sys.path.insert(0, str(root))
 
 from mmuad_template_branch_reservoir import (  # noqa: E402
-    BRANCH_SUMMARY_CSV,
-    FRAME_SUMMARY_CSV,
-    PROVENANCE_JSON,
-    RESERVOIR_CSV,
     SCORE_NORMALIZATION_CHOICES,
     load_branch_candidate_inputs,
     parse_candidate_input,
@@ -112,7 +108,8 @@ def run_template_reservoir_sweep(
     summary = _sort_summary(summary)
     summary.to_csv(output_dir / SUMMARY_CSV, index=False)
     payload = {"rows": summary.to_dict(orient="records")}
-    (output_dir / SUMMARY_JSON).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    summary_json = json.dumps(payload, indent=2)
+    (output_dir / SUMMARY_JSON).write_text(summary_json, encoding="utf-8")
     return summary
 
 
@@ -248,7 +245,9 @@ def _sort_summary(summary: pd.DataFrame) -> pd.DataFrame:
         "mean_reservoir_count",
     ]
     existing = [column for column in columns if column in summary.columns]
-    return summary.sort_values(existing, ascending=[False] * len(existing)).reset_index(drop=True)
+    return summary.sort_values(existing, ascending=[False] * len(existing)).reset_index(
+        drop=True
+    )
 
 
 def _variant_label(
