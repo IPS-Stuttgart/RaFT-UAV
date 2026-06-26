@@ -10,7 +10,10 @@ import pandas as pd
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 MODULE_PATH = SCRIPTS_DIR / "mmuad_template_reservoir_sweep.py"
-spec = importlib.util.spec_from_file_location("mmuad_template_reservoir_sweep", MODULE_PATH)
+spec = importlib.util.spec_from_file_location(
+    "mmuad_template_reservoir_sweep",
+    MODULE_PATH,
+)
 assert spec is not None and spec.loader is not None
 template_sweep = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = template_sweep
@@ -68,7 +71,9 @@ def test_template_reservoir_sweep_writes_variant_summaries(tmp_path: Path) -> No
         assert Path(reservoir_csv).exists()
 
 
-def test_template_reservoir_sweep_min_candidate_fallback_improves_coverage(tmp_path: Path) -> None:
+def test_template_reservoir_sweep_min_candidate_fallback_improves_coverage(
+    tmp_path: Path,
+) -> None:
     summary = template_sweep.run_template_reservoir_sweep(
         candidates=_candidate_rows(),
         template=_template_rows(),
