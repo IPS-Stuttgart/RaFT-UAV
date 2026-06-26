@@ -54,6 +54,8 @@ def build_template_branch_reservoir(
     score_floor_quantile: float | None = None,
     max_candidates_per_template: int | None = None,
     score_normalization: str = "none",
+    min_candidates_per_template: int = 0,
+    fallback_max_time_delta_s: float | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Build a reservoir around each official template timestamp.
 
@@ -67,6 +69,7 @@ def build_template_branch_reservoir(
     selected_frames: list[pd.DataFrame] = []
     frame_records: list[dict[str, Any]] = []
     score_normalization = _normalize_score_normalization(score_normalization)
+    min_candidates_per_template = max(int(min_candidates_per_template), 0)
 
     for row_index, template_row in template_rows.iterrows():
         sequence_id = str(template_row["sequence_id"])
@@ -93,12 +96,32 @@ def build_template_branch_reservoir(
         )
         if not reservoir.empty:
             reservoir = reservoir.copy()
+            reservoir["template_candidate_origin"] = "window"
+
+        fallback_count = max(min_candidates_per_template - int(len(reservoir)), 0)
+        fallback = _nearest_template_fallback_candidates(
+            sequence_candidates,
+            timestamp=timestamp,
+            count=fallback_count,
+            fallback_max_time_delta_s=fallback_max_time_delta_s,
+            score_normalization=score_normalization,
+            excluded_candidate_row_ids=_candidate_row_ids(reservoir),
+        )
+        if not fallback.empty:
+            reservoir = pd.concat([reservoir, fallback], ignore_index=True, sort=False)
+
+        if not reservoir.empty:
+            reservoir = reservoir.copy()
             reservoir["template_row_index"] = int(row_index)
             reservoir["template_sequence_id"] = sequence_id
             reservoir["template_timestamp_s"] = timestamp
             if "template_time_delta_s" not in reservoir.columns:
                 reservoir["template_time_delta_s"] = (
                     pd.to_numeric(reservoir["time_s"], errors="coerce") - timestamp
+                )
+            if "template_abs_time_delta_s" not in reservoir.columns:
+                reservoir["template_abs_time_delta_s"] = np.abs(
+                    pd.to_numeric(reservoir["template_time_delta_s"], errors="coerce")
                 )
             selected_frames.append(reservoir)
         frame_records.append(
@@ -107,7 +130,9 @@ def build_template_branch_reservoir(
                 "sequence_id": sequence_id,
                 "template_timestamp_s": timestamp,
                 "candidate_count_window": int(len(window)),
+                "candidate_count_fallback_window": int(len(fallback)),
                 "reservoir_count": int(len(reservoir)),
+                "fallback_retained_count": int(len(fallback)),
                 "retained_fraction": (
                     float(len(reservoir) / len(window)) if len(window) else 0.0
                 ),
@@ -130,6 +155,8 @@ def build_template_branch_reservoir(
                     else 0
                 ),
                 "score_normalization": score_normalization,
+                "min_candidates_per_template": int(min_candidates_per_template),
+                "fallback_max_time_delta_s": fallback_max_time_delta_s,
                 "min_abs_time_delta_s": (
                     float(np.nanmin(np.abs(window["template_time_delta_s"])))
                     if not window.empty
@@ -173,12 +200,15 @@ def write_template_branch_reservoir_artifacts(
     score_floor_quantile: float | None = None,
     max_candidates_per_template: int | None = None,
     score_normalization: str = "none",
+    min_candidates_per_template: int = 0,
+    fallback_max_time_delta_s: float | None = None,
     provenance: dict[str, Any] | None = None,
 ) -> dict[str, Path]:
     """Write template-aligned reservoir candidates, summaries, and provenance."""
 
     output_dir.mkdir(parents=True, exist_ok=True)
     score_normalization = _normalize_score_normalization(score_normalization)
+    min_candidates_per_template = max(int(min_candidates_per_template), 0)
     reservoir, frame_summary, branch_summary = build_template_branch_reservoir(
         candidates,
         template,
@@ -190,6 +220,8 @@ def write_template_branch_reservoir_artifacts(
         score_floor_quantile=score_floor_quantile,
         max_candidates_per_template=max_candidates_per_template,
         score_normalization=score_normalization,
+        min_candidates_per_template=min_candidates_per_template,
+        fallback_max_time_delta_s=fallback_max_time_delta_s,
     )
     paths = {
         "reservoir_csv": output_dir / RESERVOIR_CSV,
@@ -210,9 +242,14 @@ def write_template_branch_reservoir_artifacts(
         "score_normalization": score_normalization,
         "score_floor_quantile": score_floor_quantile,
         "max_candidates_per_template": max_candidates_per_template,
+        "min_candidates_per_template": int(min_candidates_per_template),
+        "fallback_max_time_delta_s": fallback_max_time_delta_s,
         "input_candidate_rows": int(len(candidates)),
         "template_rows": int(len(_normalize_template_rows(template))),
         "reservoir_rows": int(len(reservoir)),
+        "fallback_rows": int(
+            (reservoir.get("template_candidate_origin", pd.Series(dtype=str)) == "nearest_fallback").sum()
+        ),
         "provenance": provenance or {},
     }
     paths["provenance_json"].write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -246,6 +283,20 @@ def main(argv: list[str] | None = None) -> int:
             "branch/source rank modes help compare candidate streams with different score scales"
         ),
     )
+    parser.add_argument(
+        "--min-candidates-per-template",
+        type=int,
+        default=0,
+        help=(
+            "truth-free coverage guard: if a template row retains fewer candidates than this, "
+            "add nearest-time candidates from the same sequence"
+        ),
+    )
+    parser.add_argument(
+        "--fallback-max-time-delta-s",
+        type=float,
+        help="maximum absolute candidate/template time difference for nearest fallback rows",
+    )
     args = parser.parse_args(argv)
 
     if not args.candidate_csv:
@@ -265,6 +316,8 @@ def main(argv: list[str] | None = None) -> int:
         score_floor_quantile=args.score_floor_quantile,
         max_candidates_per_template=args.max_candidates_per_template,
         score_normalization=str(args.score_normalization),
+        min_candidates_per_template=int(args.min_candidates_per_template),
+        fallback_max_time_delta_s=args.fallback_max_time_delta_s,
         provenance={
             "template_csv": str(args.template_csv),
             "candidate_inputs": [
@@ -295,6 +348,48 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     return rows.loc[finite & rows["sequence_id"].ne("")].sort_values(
         ["sequence_id", "timestamp_s"]
     ).reset_index(drop=True)
+
+
+def _nearest_template_fallback_candidates(
+    sequence_candidates: pd.DataFrame,
+    *,
+    timestamp: float,
+    count: int,
+    fallback_max_time_delta_s: float | None,
+    score_normalization: str,
+    excluded_candidate_row_ids: set[int],
+) -> pd.DataFrame:
+    """Return nearest-time candidates used only to satisfy template coverage."""
+
+    if count <= 0 or sequence_candidates.empty:
+        return sequence_candidates.iloc[0:0].copy()
+    work = sequence_candidates.copy()
+    if excluded_candidate_row_ids and "_candidate_row_id" in work.columns:
+        work = work.loc[~work["_candidate_row_id"].astype(int).isin(excluded_candidate_row_ids)]
+    if work.empty:
+        return work
+    work["template_time_delta_s"] = pd.to_numeric(work["time_s"], errors="coerce") - float(timestamp)
+    work["template_abs_time_delta_s"] = np.abs(
+        pd.to_numeric(work["template_time_delta_s"], errors="coerce")
+    )
+    if fallback_max_time_delta_s is not None:
+        work = work.loc[work["template_abs_time_delta_s"] <= float(fallback_max_time_delta_s)]
+    if work.empty:
+        return work
+    work = _apply_score_normalization(work, score_normalization)
+    fallback = work.sort_values(
+        ["template_abs_time_delta_s", "_reservoir_score", "time_s"],
+        ascending=[True, False, True],
+    ).head(int(count)).copy()
+    fallback["reservoir_selected_by"] = "nearest_template_fallback"
+    fallback["template_candidate_origin"] = "nearest_fallback"
+    return fallback
+
+
+def _candidate_row_ids(rows: pd.DataFrame) -> set[int]:
+    if rows.empty or "_candidate_row_id" not in rows.columns:
+        return set()
+    return set(rows["_candidate_row_id"].astype(int))
 
 
 def _apply_score_normalization(rows: pd.DataFrame, mode: str) -> pd.DataFrame:
