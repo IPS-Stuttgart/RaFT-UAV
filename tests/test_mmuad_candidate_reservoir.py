@@ -85,6 +85,39 @@ def test_candidate_reservoir_keeps_per_branch_candidates() -> None:
     assert reservoir["candidate_reservoir_rank"].min() == 1
 
 
+def test_cap_reason_bonus_keeps_multi_reason_candidate_under_tight_cap() -> None:
+    rows = pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA", "seqA"],
+            "time_s": [0.0, 0.0, 0.0],
+            "source": ["lidar_360", "lidar_360", "livox_avia"],
+            "track_id": ["score-top", "score-floor-only", "multi-reason"],
+            "candidate_branch": ["translated", "translated", "raw"],
+            "x_m": [10.0, 20.0, 0.0],
+            "y_m": [0.0, 0.0, 0.0],
+            "z_m": [1.0, 1.0, 1.0],
+            "confidence": [1.0, 0.95, 0.8],
+        }
+    )
+
+    reservoir = build_candidate_reservoir(
+        rows,
+        config=ReservoirConfig(
+            global_top_n=1,
+            per_source_top_n=1,
+            per_branch_top_n=1,
+            max_candidates_per_frame=2,
+            score_floor_quantile=0.0,
+            cap_reason_bonus=0.1,
+        ),
+    )
+
+    assert set(reservoir["track_id"]) == {"score-top", "multi-reason"}
+    multi_reason = reservoir.loc[reservoir["track_id"] == "multi-reason"].iloc[0]
+    assert multi_reason["candidate_reservoir_reason_count"] > 1
+    assert multi_reason["candidate_reservoir_cap_score"] > multi_reason["confidence"]
+
+
 def test_candidate_reservoir_summary_counts_branches_and_reasons() -> None:
     rows = _candidate_rows()
     reservoir = build_candidate_reservoir(rows, top_per_source=1, top_per_branch=1, global_top_n=1)
@@ -94,6 +127,7 @@ def test_candidate_reservoir_summary_counts_branches_and_reasons() -> None:
     assert summary["input_candidate_rows"] == 4
     assert summary["reservoir_candidate_rows"] >= 2
     assert summary["candidate_branch_counts"]["translated"] >= 1
+    assert summary["reservoir_reason_count_max"] >= 1
     assert any(key.startswith("branch:") for key in summary["reservoir_reason_counts"])
 
 
@@ -162,6 +196,8 @@ def test_candidate_reservoir_cli_writes_outputs(tmp_path) -> None:
             "1",
             "--max-truth-time-delta-s",
             "0.1",
+            "--cap-reason-bonus",
+            "0.05",
         ]
     )
 
@@ -172,7 +208,9 @@ def test_candidate_reservoir_cli_writes_outputs(tmp_path) -> None:
     assert by_sequence_csv.exists()
     assert frame_csv.exists()
     assert set(pd.read_csv(output_csv)["candidate_branch"]) == {"raw", "translated"}
-    assert json.loads(summary_json.read_text(encoding="utf-8"))["reservoir_frame_count"] == 2
+    summary = json.loads(summary_json.read_text(encoding="utf-8"))
+    assert summary["reservoir_frame_count"] == 2
+    assert "reservoir_reason_count_mean" in summary
 
 
 def test_candidate_reservoir_cli_accepts_candidate_csv_alias(tmp_path) -> None:
