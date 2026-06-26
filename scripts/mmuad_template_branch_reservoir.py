@@ -418,17 +418,22 @@ def _apply_score_normalization(rows: pd.DataFrame, mode: str) -> pd.DataFrame:
     if normalized_mode == "window-rank":
         normalized_score = _rank_normalized_score(work)
     elif normalized_mode == "branch-rank":
-        normalized_score = work.groupby("candidate_branch", group_keys=False).apply(
-            _rank_normalized_score
-        )
+        normalized_score = _group_rank_normalized_score(work, "candidate_branch")
     elif normalized_mode == "source-rank":
-        normalized_score = work.groupby("source", group_keys=False).apply(_rank_normalized_score)
+        normalized_score = _group_rank_normalized_score(work, "source")
     else:  # pragma: no cover - guarded by parser and normalizer
         raise ValueError(f"unsupported score_normalization={mode!r}")
     normalized_score = pd.Series(normalized_score, index=work.index).astype(float)
     work["normalized_reservoir_score"] = normalized_score
     work["_reservoir_score"] = normalized_score
     return work
+
+
+def _group_rank_normalized_score(rows: pd.DataFrame, column: str) -> pd.Series:
+    normalized = pd.Series(index=rows.index, dtype=float)
+    for _value, group in rows.groupby(column, sort=False, dropna=False):
+        normalized.loc[group.index] = _rank_normalized_score(group)
+    return normalized
 
 
 def _rank_normalized_score(rows: pd.DataFrame) -> pd.Series:
