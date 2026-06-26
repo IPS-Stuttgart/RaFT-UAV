@@ -47,7 +47,7 @@ class BranchBalanceConfig:
     branch_column: str = "candidate_branch"
     fallback_branch_column: str = "source"
     score_column: str = "candidate_reservoir_grid_score"
-    fallback_score_columns: tuple[str, ...] = (
+    fallback_score_columns: Sequence[str] = (
         "branch_consensus_rank_score",
         "ranker_score",
         "confidence",
@@ -347,8 +347,9 @@ def _round_robin_select(frame: pd.DataFrame, *, top_k: int) -> pd.DataFrame:
         )
     branch_order = [branch for _, _, branch in sorted(branch_keys)]
     selected_rows: list[pd.DataFrame] = []
+    selected_count = 0
     round_index = 1
-    while sum(len(rows) for rows in selected_rows) < int(top_k):
+    while selected_count < int(top_k):
         made_progress = False
         for branch in branch_order:
             group = branch_groups[branch]
@@ -357,8 +358,9 @@ def _round_robin_select(frame: pd.DataFrame, *, top_k: int) -> pd.DataFrame:
             row = group.iloc[[round_index - 1]].copy()
             row["branch_balance_selection_round"] = int(round_index)
             selected_rows.append(row)
+            selected_count += 1
             made_progress = True
-            if sum(len(rows) for rows in selected_rows) >= int(top_k):
+            if selected_count >= int(top_k):
                 break
         if not made_progress:
             break
@@ -408,7 +410,10 @@ def _candidate_sigmas(rows: pd.DataFrame, *, config: BranchBalanceConfig) -> pd.
     else:
         sigma = pd.Series(np.nan, index=rows.index, dtype=float)
     if "std_xy_m" in rows.columns:
-        sigma = sigma.where(sigma.notna(), pd.to_numeric(rows["std_xy_m"], errors="coerce"))
+        sigma = sigma.where(
+            sigma.notna(),
+            pd.to_numeric(rows["std_xy_m"], errors="coerce"),
+        )
     sigma = sigma.fillna(float(config.default_sigma_m))
     return sigma.where(sigma > 0.0, float(config.default_sigma_m)).astype(float)
 
@@ -466,10 +471,8 @@ def _value_counts(rows: pd.DataFrame, column: str) -> dict[str, int]:
     frame = pd.DataFrame(rows)
     if frame.empty or column not in frame.columns:
         return {}
-    return {
-        str(key): int(value)
-        for key, value in frame[column].fillna("").astype(str).value_counts().sort_index().items()
-    }
+    counts = frame[column].fillna("").astype(str).value_counts().sort_index()
+    return {str(key): int(value) for key, value in counts.items()}
 
 
 def _jsonable(value: Any) -> Any:
