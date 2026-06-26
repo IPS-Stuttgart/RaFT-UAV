@@ -92,6 +92,7 @@ raft-uav-mmuad-candidate-branch-context = "raft_uav.mmuad.candidate_branch_conte
 raft-uav-mmuad-candidate-branch-consensus = "raft_uav.mmuad.candidate_branch_consensus:main"
 raft-uav-mmuad-consensus-uncertainty = "raft_uav.mmuad.candidate_consensus_uncertainty:main"
 raft-uav-mmuad-temporal-consensus = "raft_uav.mmuad.candidate_temporal_consensus:main"
+raft-uav-mmuad-forward-backward-prior = "raft_uav.mmuad.candidate_forward_backward:main"
 raft-uav-mmuad-temporal-consensus-train-cv = "raft_uav.mmuad.candidate_temporal_consensus_train_cv:main"
 raft-uav-mmuad-apply-temporal-consensus-config = "raft_uav.mmuad.candidate_temporal_consensus_train_cv:apply_main"
 raft-uav-mmuad-temporal-consensus-assigned = "raft_uav.mmuad.candidate_temporal_consensus_assignment:main"
