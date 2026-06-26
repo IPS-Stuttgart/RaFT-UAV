@@ -39,6 +39,7 @@ RESERVOIR_CSV = "mmuad_template_branch_reservoir_candidates.csv"
 FRAME_SUMMARY_CSV = "mmuad_template_branch_reservoir_frame_summary.csv"
 BRANCH_SUMMARY_CSV = "mmuad_template_branch_reservoir_branch_summary.csv"
 PROVENANCE_JSON = "mmuad_template_branch_reservoir_provenance.json"
+SCORE_NORMALIZATION_CHOICES = ("none", "window-rank", "branch-rank", "source-rank")
 
 
 def build_template_branch_reservoir(
@@ -52,6 +53,7 @@ def build_template_branch_reservoir(
     score_column: str = "ranker_score",
     score_floor_quantile: float | None = None,
     max_candidates_per_template: int | None = None,
+    score_normalization: str = "none",
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Build a reservoir around each official template timestamp.
 
@@ -64,6 +66,7 @@ def build_template_branch_reservoir(
     template_rows = _normalize_template_rows(template)
     selected_frames: list[pd.DataFrame] = []
     frame_records: list[dict[str, Any]] = []
+    score_normalization = _normalize_score_normalization(score_normalization)
 
     for row_index, template_row in template_rows.iterrows():
         sequence_id = str(template_row["sequence_id"])
@@ -79,6 +82,7 @@ def build_template_branch_reservoir(
                 window["template_time_delta_s"] = (
                     pd.to_numeric(window["time_s"], errors="coerce") - timestamp
                 )
+                window = _apply_score_normalization(window, score_normalization)
         reservoir = _select_frame_reservoir(
             window,
             per_source_top_n=per_source_top_n,
@@ -125,6 +129,7 @@ def build_template_branch_reservoir(
                     if not reservoir.empty
                     else 0
                 ),
+                "score_normalization": score_normalization,
                 "min_abs_time_delta_s": (
                     float(np.nanmin(np.abs(window["template_time_delta_s"])))
                     if not window.empty
@@ -167,11 +172,13 @@ def write_template_branch_reservoir_artifacts(
     score_column: str = "ranker_score",
     score_floor_quantile: float | None = None,
     max_candidates_per_template: int | None = None,
+    score_normalization: str = "none",
     provenance: dict[str, Any] | None = None,
 ) -> dict[str, Path]:
     """Write template-aligned reservoir candidates, summaries, and provenance."""
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    score_normalization = _normalize_score_normalization(score_normalization)
     reservoir, frame_summary, branch_summary = build_template_branch_reservoir(
         candidates,
         template,
@@ -182,6 +189,7 @@ def write_template_branch_reservoir_artifacts(
         score_column=score_column,
         score_floor_quantile=score_floor_quantile,
         max_candidates_per_template=max_candidates_per_template,
+        score_normalization=score_normalization,
     )
     paths = {
         "reservoir_csv": output_dir / RESERVOIR_CSV,
@@ -199,6 +207,7 @@ def write_template_branch_reservoir_artifacts(
         "per_branch_top_n": int(per_branch_top_n),
         "global_top_n": int(global_top_n),
         "score_column": str(score_column),
+        "score_normalization": score_normalization,
         "score_floor_quantile": score_floor_quantile,
         "max_candidates_per_template": max_candidates_per_template,
         "input_candidate_rows": int(len(candidates)),
@@ -228,6 +237,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--score-column", default="ranker_score")
     parser.add_argument("--score-floor-quantile", type=float)
     parser.add_argument("--max-candidates-per-template", type=int)
+    parser.add_argument(
+        "--score-normalization",
+        choices=SCORE_NORMALIZATION_CHOICES,
+        default="none",
+        help=(
+            "normalize scores inside each template window before reservoir ranking; "
+            "branch/source rank modes help compare candidate streams with different score scales"
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not args.candidate_csv:
@@ -246,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         score_column=str(args.score_column),
         score_floor_quantile=args.score_floor_quantile,
         max_candidates_per_template=args.max_candidates_per_template,
+        score_normalization=str(args.score_normalization),
         provenance={
             "template_csv": str(args.template_csv),
             "candidate_inputs": [
@@ -276,6 +295,62 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     return rows.loc[finite & rows["sequence_id"].ne("")].sort_values(
         ["sequence_id", "timestamp_s"]
     ).reset_index(drop=True)
+
+
+def _apply_score_normalization(rows: pd.DataFrame, mode: str) -> pd.DataFrame:
+    """Apply truth-free score normalization inside one template window."""
+
+    normalized_mode = _normalize_score_normalization(mode)
+    if rows.empty:
+        return rows
+    work = rows.copy()
+    raw_score = pd.to_numeric(work["_reservoir_score"], errors="coerce").fillna(float("-inf"))
+    work["raw_reservoir_score"] = raw_score.astype(float)
+    work["score_normalization"] = normalized_mode
+    if normalized_mode == "none":
+        work["normalized_reservoir_score"] = raw_score.astype(float)
+        return work
+    if normalized_mode == "window-rank":
+        normalized_score = _rank_normalized_score(work)
+    elif normalized_mode == "branch-rank":
+        normalized_score = work.groupby("candidate_branch", group_keys=False).apply(
+            _rank_normalized_score
+        )
+    elif normalized_mode == "source-rank":
+        normalized_score = work.groupby("source", group_keys=False).apply(_rank_normalized_score)
+    else:  # pragma: no cover - guarded by parser and normalizer
+        raise ValueError(f"unsupported score_normalization={mode!r}")
+    normalized_score = pd.Series(normalized_score, index=work.index).astype(float)
+    work["normalized_reservoir_score"] = normalized_score
+    work["_reservoir_score"] = normalized_score
+    return work
+
+
+def _rank_normalized_score(rows: pd.DataFrame) -> pd.Series:
+    """Return descending rank score in [0, 1], with 1.0 assigned to the best row."""
+
+    if rows.empty:
+        return pd.Series(dtype=float, index=rows.index)
+    sorted_rows = rows.sort_values(
+        ["_reservoir_score", "time_s"],
+        ascending=[False, True],
+    )
+    if len(sorted_rows) == 1:
+        values = pd.Series([1.0], index=sorted_rows.index)
+    else:
+        values = pd.Series(
+            1.0 - np.arange(len(sorted_rows), dtype=float) / float(len(sorted_rows) - 1),
+            index=sorted_rows.index,
+        )
+    return values.reindex(rows.index)
+
+
+def _normalize_score_normalization(value: str) -> str:
+    normalized = str(value).strip().lower().replace("_", "-")
+    if normalized not in SCORE_NORMALIZATION_CHOICES:
+        allowed = ", ".join(SCORE_NORMALIZATION_CHOICES)
+        raise ValueError(f"unsupported score_normalization={value!r}; allowed={allowed}")
+    return normalized
 
 
 if __name__ == "__main__":  # pragma: no cover

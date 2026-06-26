@@ -48,6 +48,23 @@ def _candidate_rows() -> pd.DataFrame:
     )
 
 
+def _different_scale_candidate_rows() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "sequence_id": ["seq001", "seq001", "seq001"],
+            "time_s": [9.96, 10.0, 10.04],
+            "source": ["lidar_360", "lidar_360", "livox_avia"],
+            "track_id": ["raw_high", "raw_low", "translated_high"],
+            "candidate_branch": ["raw", "raw", "source_translation"],
+            "x_m": [0.0, 10.0, 1.0],
+            "y_m": [0.0, 0.0, 0.0],
+            "z_m": [0.0, 0.0, 0.0],
+            "ranker_score": [100.0, 99.0, 0.2],
+            "confidence": [100.0, 99.0, 0.2],
+        }
+    )
+
+
 def test_template_reservoir_selects_window_candidates_and_preserves_times() -> None:
     result = template_reservoir.build_template_branch_reservoir(
         _candidate_rows(),
@@ -70,6 +87,27 @@ def test_template_reservoir_selects_window_candidates_and_preserves_times() -> N
         branch_summary["candidate_branch"] == "source_translation"
     ].iloc[0]
     assert int(translated["reservoir_count"]) == 1
+
+
+def test_template_reservoir_branch_rank_score_normalization() -> None:
+    reservoir, frame_summary, _ = template_reservoir.build_template_branch_reservoir(
+        _different_scale_candidate_rows(),
+        _template_rows().iloc[[0]],
+        max_time_delta_s=0.1,
+        per_source_top_n=0,
+        per_branch_top_n=1,
+        global_top_n=0,
+        score_normalization="branch-rank",
+    )
+
+    retained = reservoir.set_index("track_id")
+    assert set(retained.index) == {"raw_high", "translated_high"}
+    assert float(retained.loc["raw_high", "raw_reservoir_score"]) == 100.0
+    assert float(retained.loc["translated_high", "raw_reservoir_score"]) == 0.2
+    assert float(retained.loc["raw_high", "normalized_reservoir_score"]) == 1.0
+    assert float(retained.loc["translated_high", "normalized_reservoir_score"]) == 1.0
+    assert set(retained["score_normalization"]) == {"branch-rank"}
+    assert set(frame_summary["score_normalization"]) == {"branch-rank"}
 
 
 def test_template_reservoir_cli_writes_artifacts(tmp_path: Path) -> None:
@@ -100,6 +138,8 @@ def test_template_reservoir_cli_writes_artifacts(tmp_path: Path) -> None:
             "1",
             "--global-top-n",
             "1",
+            "--score-normalization",
+            "branch-rank",
         ]
     )
 
@@ -113,7 +153,9 @@ def test_template_reservoir_cli_writes_artifacts(tmp_path: Path) -> None:
         assert (output / name).exists()
     reservoir = pd.read_csv(output / "mmuad_template_branch_reservoir_candidates.csv")
     assert "template_timestamp_s" in reservoir.columns
+    assert set(reservoir["score_normalization"]) == {"branch-rank"}
     provenance_path = output / "mmuad_template_branch_reservoir_provenance.json"
     provenance = json.loads(provenance_path.read_text())
     assert provenance["template_rows"] == 2
+    assert provenance["score_normalization"] == "branch-rank"
     assert provenance["provenance"]["candidate_inputs"][0]["branch"] == "raw"
