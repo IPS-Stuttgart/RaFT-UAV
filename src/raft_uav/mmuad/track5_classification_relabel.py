@@ -65,9 +65,14 @@ def relabel_track5_classification(
     source = _normalize_frame(classification_submission, name="classification_submission")
     if mode == "by-key":
         labels = source[["Sequence", "Timestamp", "Classification"]].rename(
-            columns={"Classification": "source_classification"}
+            columns={"Classification": "source_classification"},
         )
-        merged = pose.merge(labels, on=["Sequence", "Timestamp"], how="left", validate="one_to_one")
+        merged = pose.merge(
+            labels,
+            on=["Sequence", "Timestamp"],
+            how="left",
+            validate="one_to_one",
+        )
     elif mode == "by-sequence-majority":
         labels = (
             source.groupby("Sequence", sort=True)["Classification"]
@@ -77,7 +82,9 @@ def relabel_track5_classification(
         )
         merged = pose.merge(labels, on="Sequence", how="left", validate="many_to_one")
     else:
-        raise ValueError("classification relabel mode must be 'by-key' or 'by-sequence-majority'")
+        raise ValueError(
+            "classification relabel mode must be 'by-key' or 'by-sequence-majority'",
+        )
     return _build_relabel_result(
         pose,
         merged,
@@ -192,7 +199,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if (args.classification_submission is None) == (args.classification_predictions is None):
-        parser.error("provide exactly one of --classification-submission or --classification-predictions")
+        parser.error(
+            "provide exactly one of --classification-submission or --classification-predictions",
+        )
 
     pose_rows = load_official_track5_results_frame(args.pose_submission)
     if args.classification_predictions is not None:
@@ -295,7 +304,10 @@ def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFr
     rows["Sequence"] = rows[sequence_column].astype(str)
     probability_columns = _probability_columns(rows)
     if len(probability_columns) == len(VALID_CLASS_IDS):
-        grouped = rows.groupby("Sequence", sort=True)[probability_columns].mean(numeric_only=True)
+        probability_rows = rows[["Sequence", *probability_columns]].copy()
+        for column in probability_columns:
+            probability_rows[column] = pd.to_numeric(probability_rows[column], errors="coerce")
+        grouped = probability_rows.groupby("Sequence", sort=True)[probability_columns].mean()
         probs = grouped.to_numpy(float)
         probs = np.where(np.isfinite(probs), probs, 0.0)
         probs = np.clip(probs, 0.0, None)
