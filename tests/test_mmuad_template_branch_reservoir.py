@@ -10,7 +10,10 @@ import pandas as pd
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 MODULE_PATH = SCRIPTS_DIR / "mmuad_template_branch_reservoir.py"
-spec = importlib.util.spec_from_file_location("mmuad_template_branch_reservoir", MODULE_PATH)
+spec = importlib.util.spec_from_file_location(
+    "mmuad_template_branch_reservoir",
+    MODULE_PATH,
+)
 assert spec is not None and spec.loader is not None
 template_reservoir = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = template_reservoir
@@ -46,7 +49,7 @@ def _candidate_rows() -> pd.DataFrame:
 
 
 def test_template_reservoir_selects_window_candidates_and_preserves_times() -> None:
-    reservoir, frame_summary, branch_summary = template_reservoir.build_template_branch_reservoir(
+    result = template_reservoir.build_template_branch_reservoir(
         _candidate_rows(),
         _template_rows(),
         max_time_delta_s=0.1,
@@ -54,6 +57,7 @@ def test_template_reservoir_selects_window_candidates_and_preserves_times() -> N
         per_branch_top_n=1,
         global_top_n=1,
     )
+    reservoir, frame_summary, branch_summary = result
 
     assert set(reservoir["track_id"]) == {"raw", "translated", "radar_near"}
     assert "too_late" not in set(reservoir["track_id"])
@@ -109,6 +113,7 @@ def test_template_reservoir_cli_writes_artifacts(tmp_path: Path) -> None:
         assert (output / name).exists()
     reservoir = pd.read_csv(output / "mmuad_template_branch_reservoir_candidates.csv")
     assert "template_timestamp_s" in reservoir.columns
-    provenance = json.loads((output / "mmuad_template_branch_reservoir_provenance.json").read_text())
+    provenance_path = output / "mmuad_template_branch_reservoir_provenance.json"
+    provenance = json.loads(provenance_path.read_text())
     assert provenance["template_rows"] == 2
     assert provenance["provenance"]["candidate_inputs"][0]["branch"] == "raw"
