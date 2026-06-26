@@ -6,6 +6,11 @@ diversity, and dynamic prefixes.  This module provides an inference-safe bridge:
 it augments candidates with cross-sensor consensus, exposes numeric consensus
 features through the existing ``candidate_reservoir_*`` feature namespace, and
 then trains/applies the existing per-candidate sigma model.
+
+Application can also use consensus as a conservative reliability correction:
+independently supported candidates receive a smaller sigma while unsupported
+candidates retain the learned uncertainty.  The correction is opt-in and does
+not replace the original ranker score.
 """
 
 from __future__ import annotations
@@ -37,6 +42,8 @@ from raft_uav.mmuad.schema import CandidateFrame, normalize_candidate_columns
 
 CONSENSUS_INPUT_PREFIX = "branch_consensus_"
 CONSENSUS_UNCERTAINTY_PREFIX = "candidate_reservoir_consensus_"
+DEFAULT_CONSENSUS_SIGMA_SCORE_COLUMN = "branch_consensus_score"
+DEFAULT_CONSENSUS_SIGMA_FACTOR_COLUMN = "candidate_uncertainty_consensus_factor"
 
 
 def attach_consensus_uncertainty_features(
@@ -182,6 +189,10 @@ def apply_consensus_conditioned_uncertainty(
     output_column: str = "predicted_sigma_m",
     replace_covariance: bool = False,
     z_scale: float = 1.0,
+    consensus_sigma_weight: float = 0.0,
+    consensus_sigma_min_factor: float = 0.25,
+    consensus_sigma_score_column: str = DEFAULT_CONSENSUS_SIGMA_SCORE_COLUMN,
+    consensus_sigma_factor_column: str = DEFAULT_CONSENSUS_SIGMA_FACTOR_COLUMN,
     time_window_s: float = 0.05,
     time_scale_s: float | None = None,
     distance_gate_m: float = 5.0,
@@ -194,7 +205,21 @@ def apply_consensus_conditioned_uncertainty(
     origin_column: str | None = None,
     exclude_same_origin_support: bool = True,
 ) -> CandidateFrame:
-    """Apply a saved consensus-conditioned uncertainty model without truth."""
+    """Apply a saved consensus-conditioned uncertainty model without truth.
+
+    When ``consensus_sigma_weight`` is positive, the learned sigma is multiplied
+    by ``exp(-weight * consensus_score)`` and clipped to the configured minimum
+    factor.  A consensus score of zero leaves sigma unchanged.  This lets an
+    independent sensor agreement increase candidate precision without replacing
+    or globally reordering the ranker score.
+    """
+
+    if float(consensus_sigma_weight) < 0.0:
+        raise ValueError("consensus_sigma_weight must be non-negative")
+    if not 0.0 < float(consensus_sigma_min_factor) <= 1.0:
+        raise ValueError("consensus_sigma_min_factor must be in (0, 1]")
+    if float(z_scale) <= 0.0:
+        raise ValueError("z_scale must be positive")
 
     augmented, _ = attach_consensus_uncertainty_features(
         candidates,
@@ -210,13 +235,57 @@ def apply_consensus_conditioned_uncertainty(
         origin_column=origin_column,
         exclude_same_origin_support=exclude_same_origin_support,
     )
-    return apply_candidate_uncertainty(
+    if float(consensus_sigma_weight) == 0.0:
+        return apply_candidate_uncertainty(
+            augmented,
+            model,
+            output_column=output_column,
+            replace_covariance=replace_covariance,
+            z_scale=z_scale,
+        )
+
+    scored = apply_candidate_uncertainty(
         augmented,
         model,
         output_column=output_column,
-        replace_covariance=replace_covariance,
+        replace_covariance=False,
         z_scale=z_scale,
     )
+    rows = scored.rows.copy()
+    if consensus_sigma_score_column not in rows.columns:
+        raise ValueError(
+            f"consensus sigma score column {consensus_sigma_score_column!r} is missing"
+        )
+
+    raw_sigma = pd.to_numeric(rows[output_column], errors="coerce")
+    consensus_score = pd.to_numeric(
+        rows[consensus_sigma_score_column],
+        errors="coerce",
+    ).fillna(0.0)
+    consensus_score = consensus_score.clip(lower=0.0, upper=1.0)
+    factor = np.exp(-float(consensus_sigma_weight) * consensus_score.to_numpy(float))
+    factor = np.clip(factor, float(consensus_sigma_min_factor), 1.0)
+
+    rows[f"raw_{output_column}"] = raw_sigma
+    rows[consensus_sigma_factor_column] = factor
+    adjusted = np.nan_to_num(
+        raw_sigma.to_numpy(float) * factor,
+        nan=float(model.fallback_sigma_m),
+        posinf=float(model.sigma_max_m),
+        neginf=float(model.sigma_min_m),
+    )
+    rows[output_column] = np.clip(
+        adjusted,
+        float(model.sigma_min_m),
+        float(model.sigma_max_m),
+    )
+
+    if replace_covariance:
+        rows["raw_std_xy_m"] = pd.to_numeric(rows.get("std_xy_m"), errors="coerce")
+        rows["raw_std_z_m"] = pd.to_numeric(rows.get("std_z_m"), errors="coerce")
+        rows["std_xy_m"] = rows[output_column]
+        rows["std_z_m"] = rows[output_column] * float(z_scale)
+    return CandidateFrame(normalize_candidate_columns(rows))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -254,6 +323,16 @@ def main(argv: list[str] | None = None) -> int:
     apply_parser.add_argument("--output-column", default="predicted_sigma_m")
     apply_parser.add_argument("--replace-covariance", action="store_true")
     apply_parser.add_argument("--z-scale", type=float, default=1.0)
+    apply_parser.add_argument("--consensus-sigma-weight", type=float, default=0.0)
+    apply_parser.add_argument("--consensus-sigma-min-factor", type=float, default=0.25)
+    apply_parser.add_argument(
+        "--consensus-sigma-score-column",
+        default=DEFAULT_CONSENSUS_SIGMA_SCORE_COLUMN,
+    )
+    apply_parser.add_argument(
+        "--consensus-sigma-factor-column",
+        default=DEFAULT_CONSENSUS_SIGMA_FACTOR_COLUMN,
+    )
     _add_consensus_arguments(apply_parser)
 
     args = parser.parse_args(argv)
@@ -297,6 +376,10 @@ def main(argv: list[str] | None = None) -> int:
         output_column=args.output_column,
         replace_covariance=args.replace_covariance,
         z_scale=args.z_scale,
+        consensus_sigma_weight=args.consensus_sigma_weight,
+        consensus_sigma_min_factor=args.consensus_sigma_min_factor,
+        consensus_sigma_score_column=args.consensus_sigma_score_column,
+        consensus_sigma_factor_column=args.consensus_sigma_factor_column,
         **consensus_kwargs,
     )
     args.output_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -304,6 +387,8 @@ def main(argv: list[str] | None = None) -> int:
     print("mmuad_consensus_uncertainty_apply=ok")
     print(f"output_csv={args.output_csv}")
     print(f"output_rows={len(scored.rows)}")
+    if float(args.consensus_sigma_weight) > 0.0:
+        print(f"consensus_sigma_weight={args.consensus_sigma_weight}")
     return 0
 
 
