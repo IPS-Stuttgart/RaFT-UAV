@@ -79,7 +79,10 @@ def test_track5_classification_relabel_sequence_majority_mode() -> None:
         "Classification",
     ].tolist()
     assert seq1_labels == [1, 1]
-    assert result.rows.loc[result.rows["Sequence"] == "seq0002", "Classification"].tolist() == [2]
+    assert result.rows.loc[
+        result.rows["Sequence"] == "seq0002",
+        "Classification",
+    ].tolist() == [2]
 
 
 def test_track5_classification_relabel_accepts_sequence_prediction_probabilities() -> None:
@@ -93,7 +96,9 @@ def test_track5_classification_relabel_accepts_sequence_prediction_probabilities
     assert result.manifest["mode"] == "by-sequence-prediction"
     assert result.manifest["classification_source_kind"] == "sequence-predictions"
     assert result.manifest["source_probability_min"] == 0.70
-    assert result.diagnostics["source_sequence_label_method"].eq("probability-argmax").all()
+    assert result.diagnostics["source_sequence_label_method"].eq(
+        "probability-argmax",
+    ).all()
 
 
 def test_track5_classification_relabel_accepts_sequence_predicted_classes() -> None:
@@ -104,7 +109,10 @@ def test_track5_classification_relabel_accepts_sequence_predicted_classes() -> N
         }
     )
 
-    result = relabel_track5_classification_from_sequence_predictions(_pose_rows(), predictions)
+    result = relabel_track5_classification_from_sequence_predictions(
+        _pose_rows(),
+        predictions,
+    )
 
     assert result.rows["Classification"].tolist() == [1, 1, 2]
     assert result.diagnostics["source_sequence_label_method"].eq("class-majority").all()
@@ -148,7 +156,9 @@ def test_track5_classification_relabel_cli_writes_zip_and_validation(tmp_path: P
     assert manifest["validation"]["leaderboard_ready"] is True
 
 
-def test_track5_classification_relabel_cli_accepts_sequence_prediction_csv(tmp_path: Path) -> None:
+def test_track5_classification_relabel_cli_accepts_sequence_prediction_csv(
+    tmp_path: Path,
+) -> None:
     pose_csv = tmp_path / "pose.csv"
     predictions_csv = tmp_path / "sequence_predictions.csv"
     template_csv = tmp_path / "template.csv"
