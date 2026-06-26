@@ -42,6 +42,34 @@ raft-uav-mmuad-candidate-reservoir \
   --max-candidates-per-frame 40
 ```
 
+## Consensus-aware uncertainty
+
+The consensus-conditioned uncertainty model can now use cross-sensor agreement
+in two complementary ways:
+
+1. numeric `branch_consensus_*` features are available to the train-fitted sigma
+   model; and
+2. an optional monotonic sigma shrinkage can make independently supported
+   candidates more precise without replacing or reordering the ranker score.
+
+Train the model on the training split as before, then apply the optional shrinkage
+at validation/test time:
+
+```bash
+raft-uav-mmuad-consensus-uncertainty apply \
+  --candidates-csv outputs/mmuad/validation_branch_union.csv \
+  --model-json outputs/mmuad/consensus_uncertainty.json \
+  --output-csv outputs/mmuad/validation_consensus_uncertainty.csv \
+  --consensus-sigma-weight 0.5 \
+  --consensus-sigma-min-factor 0.5
+```
+
+For a consensus score in `[0, 1]`, the multiplicative factor is
+`max(min_factor, exp(-weight * score))`. A score of zero leaves the learned
+sigma unchanged. When enabled, the output also records `raw_predicted_sigma_m`
+and `candidate_uncertainty_consensus_factor` for ablation and provenance.
+Select the weight and minimum factor on training folds before validation/test.
+
 For an end-to-end experiment, compare the reservoir oracle-recall artifacts
 before launching the expensive mixture-MAP grid. Keep this feature as an
 ablation until train-CV selection confirms that it improves top-K recall and
