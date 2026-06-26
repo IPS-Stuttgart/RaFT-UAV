@@ -570,4 +570,183 @@ def _write_best_previous(
     previous: dict[str, Any],
     current: dict[str, Any],
     previous_forward: np.ndarray,
-    transition
+    transition: np.ndarray,
+) -> None:
+    values = previous_forward[:, None] + transition
+    best_previous = np.argmax(values, axis=0)
+    current_indices = np.asarray(current["indices"], dtype=int)
+    previous_indices = np.asarray(previous["indices"], dtype=int)
+    distance, speed = _transition_distance_speed(previous, current)
+    for current_position, previous_position in enumerate(best_previous):
+        row_index = current_indices[current_position]
+        out.loc[row_index, "candidate_forward_backward_best_previous_distance_m"] = distance[
+            previous_position, current_position
+        ]
+        out.loc[row_index, "candidate_forward_backward_best_previous_speed_mps"] = speed[
+            previous_position, current_position
+        ]
+        out.loc[row_index, "candidate_forward_backward_best_previous_source"] = str(
+            previous["sources"][previous_position]
+        )
+        out.loc[row_index, "candidate_forward_backward_best_previous_branch"] = str(
+            previous["branches"][previous_position]
+        )
+        out.loc[row_index, "candidate_forward_backward_best_previous_track_id"] = str(
+            previous["track_ids"][previous_position]
+        )
+        out.loc[row_index, "candidate_forward_backward_best_previous_row"] = int(
+            previous_indices[previous_position]
+        )
+
+
+def _write_best_next(
+    out: pd.DataFrame,
+    current: dict[str, Any],
+    next_frame: dict[str, Any],
+    next_emission: np.ndarray,
+    next_backward: np.ndarray,
+    transition: np.ndarray,
+) -> None:
+    values = transition + next_emission[None, :] + next_backward[None, :]
+    best_next = np.argmax(values, axis=1)
+    current_indices = np.asarray(current["indices"], dtype=int)
+    next_indices = np.asarray(next_frame["indices"], dtype=int)
+    distance, speed = _transition_distance_speed(current, next_frame)
+    for current_position, next_position in enumerate(best_next):
+        row_index = current_indices[current_position]
+        out.loc[row_index, "candidate_forward_backward_best_next_distance_m"] = distance[
+            current_position, next_position
+        ]
+        out.loc[row_index, "candidate_forward_backward_best_next_speed_mps"] = speed[
+            current_position, next_position
+        ]
+        out.loc[row_index, "candidate_forward_backward_best_next_source"] = str(
+            next_frame["sources"][next_position]
+        )
+        out.loc[row_index, "candidate_forward_backward_best_next_branch"] = str(
+            next_frame["branches"][next_position]
+        )
+        out.loc[row_index, "candidate_forward_backward_best_next_track_id"] = str(
+            next_frame["track_ids"][next_position]
+        )
+        out.loc[row_index, "candidate_forward_backward_best_next_row"] = int(
+            next_indices[next_position]
+        )
+
+
+def _transition_distance_speed(
+    previous: dict[str, Any],
+    current: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray]:
+    dt = max(float(current["time_s"] - previous["time_s"]), 1.0e-6)
+    previous_xyz = np.asarray(previous["positions"], dtype=float)
+    current_xyz = np.asarray(current["positions"], dtype=float)
+    distance = np.linalg.norm(previous_xyz[:, None, :] - current_xyz[None, :, :], axis=2)
+    return distance, distance / dt
+
+
+def _normalize_scores(values: np.ndarray, mode: str) -> np.ndarray:
+    values = np.asarray(values, dtype=float)
+    finite = np.isfinite(values)
+    if not finite.any():
+        return np.zeros_like(values, dtype=float)
+    clean = values.copy()
+    clean[~finite] = float(np.nanmin(clean[finite]))
+    if mode == "none":
+        return clean
+    if mode == "rank":
+        ranks = _descending_ranks(clean)
+        if len(ranks) <= 1:
+            return np.zeros_like(clean, dtype=float)
+        return 1.0 - (ranks - 1.0) / float(len(ranks) - 1)
+    if mode == "minmax":
+        span = float(np.max(clean) - np.min(clean))
+        if span <= 1.0e-12:
+            return np.zeros_like(clean, dtype=float)
+        return (clean - float(np.min(clean))) / span
+    raise ValueError(f"Unsupported score normalization mode {mode!r}.")
+
+
+def _descending_ranks(values: np.ndarray) -> np.ndarray:
+    order = np.argsort(-np.asarray(values, dtype=float), kind="mergesort")
+    ranks = np.empty(len(order), dtype=float)
+    ranks[order] = np.arange(1, len(order) + 1, dtype=float)
+    return ranks
+
+
+def _logsumexp(values: np.ndarray, axis: int | None = None) -> np.ndarray | float:
+    array = np.asarray(values, dtype=float)
+    maximum = np.max(array, axis=axis, keepdims=True)
+    maximum = np.where(np.isfinite(maximum), maximum, 0.0)
+    summed = np.sum(np.exp(array - maximum), axis=axis, keepdims=True)
+    result = np.log(summed) + maximum
+    if axis is None:
+        return float(np.squeeze(result))
+    return np.squeeze(result, axis=axis)
+
+
+def _valid_track_id(value: object) -> bool:
+    if value is None:
+        return False
+    try:
+        return bool(pd.notna(value)) and str(value) != ""
+    except (TypeError, ValueError):
+        return False
+
+
+def _numeric_column(rows: pd.DataFrame, column: str) -> pd.Series:
+    if column not in rows.columns:
+        return pd.Series(dtype=float)
+    return pd.to_numeric(rows[column], errors="coerce")
+
+
+def _posterior_sum_error(rows: pd.DataFrame, score_column: str) -> float:
+    if score_column not in rows.columns:
+        return 0.0
+    sums = rows.groupby(["sequence_id", "time_s"], sort=False)[score_column].sum()
+    if sums.empty:
+        return 0.0
+    return float(np.max(np.abs(sums.to_numpy(float) - 1.0)))
+
+
+def _safe_mean(values: Any) -> float | None:
+    series = pd.to_numeric(pd.Series(values), errors="coerce")
+    series = series[np.isfinite(series)]
+    if series.empty:
+        return None
+    return float(series.mean())
+
+
+def _safe_quantile(values: Any, quantile: float) -> float | None:
+    series = pd.to_numeric(pd.Series(values), errors="coerce")
+    series = series[np.isfinite(series)]
+    if series.empty:
+        return None
+    return float(series.quantile(quantile))
+
+
+def _value_counts(rows: pd.DataFrame, column: str) -> dict[str, int]:
+    if column not in rows.columns:
+        return {}
+    counts = rows[column].fillna("").astype(str).value_counts()
+    return {str(key): int(value) for key, value in counts.items()}
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return [_jsonable(item) for item in value.tolist()]
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        return float(value)
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
+    return value
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
