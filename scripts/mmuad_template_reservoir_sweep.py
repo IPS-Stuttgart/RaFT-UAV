@@ -127,26 +127,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--max-time-delta-s",
         action="append",
-        default=["0.25,0.5,1.0"],
+        default=[],
         help="candidate/template time windows in seconds; repeat or comma-separate values",
     )
     parser.add_argument(
         "--score-normalization",
         action="append",
         choices=SCORE_NORMALIZATION_CHOICES,
-        default=["none"],
+        default=[],
         help="score normalization modes to sweep; repeat for multiple modes",
     )
     parser.add_argument(
         "--min-candidates-per-template",
         action="append",
-        default=["0"],
+        default=[],
         help="minimum retained candidates per template row; repeat or comma-separate values",
     )
     parser.add_argument(
         "--fallback-max-time-delta-s",
         action="append",
-        default=["none"],
+        default=[],
         help="fallback time windows; use none for unlimited; repeat or comma-separate values",
     )
     parser.add_argument("--per-source-top-n", type=int, default=3)
@@ -166,11 +166,15 @@ def main(argv: list[str] | None = None) -> int:
         candidates=candidates,
         template=template,
         output_dir=args.output_dir,
-        max_time_delta_s_values=_parse_float_list(args.max_time_delta_s),
-        score_normalizations=args.score_normalization,
-        min_candidates_per_template_values=_parse_int_list(args.min_candidates_per_template),
+        max_time_delta_s_values=_parse_float_list(
+            args.max_time_delta_s or ["0.25,0.5,1.0"]
+        ),
+        score_normalizations=tuple(args.score_normalization) or ("none",),
+        min_candidates_per_template_values=_parse_int_list(
+            args.min_candidates_per_template or ["0"]
+        ),
         fallback_max_time_delta_s_values=_parse_optional_float_list(
-            args.fallback_max_time_delta_s
+            args.fallback_max_time_delta_s or ["none"]
         ),
         per_source_top_n=int(args.per_source_top_n),
         per_branch_top_n=int(args.per_branch_top_n),
