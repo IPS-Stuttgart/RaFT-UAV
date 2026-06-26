@@ -15,7 +15,6 @@ import ast
 from dataclasses import dataclass
 import json
 from pathlib import Path
-import tempfile
 from typing import Any, Iterable
 from zipfile import ZipFile
 
