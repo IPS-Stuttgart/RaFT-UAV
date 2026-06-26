@@ -75,6 +75,7 @@ raft-uav-mmuad-sequence-alignment-audit = "raft_uav.mmuad.sequence_alignment_aud
 raft-uav-mmuad-radar-extraction-audit = "raft_uav.mmuad.radar_extraction_audit:main"
 raft-uav-mmuad-candidate-oracle-gap = "raft_uav.mmuad.candidate_oracle_gap:main"
 raft-uav-mmuad-candidate-reservoir = "raft_uav.mmuad.candidate_reservoir:main"
+raft-uav-mmuad-candidate-oracle-attribution = "raft_uav.mmuad.candidate_oracle_attribution:main"
 raft-uav-mmuad-candidate-mixture-map = "raft_uav.mmuad.candidate_mixture_map:main"
 raft-uav-mmuad-grouped-candidate-mixture-map = "raft_uav.mmuad.candidate_mixture_map_grouped:main"
 raft-uav-mmuad-diversity-cap-reservoir = "raft_uav.mmuad.candidate_reservoir_diversity:main"
@@ -114,3 +115,6 @@ line-length = 100
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 addopts = "--basetemp=.pytest-tmp"
+markers = [
+    "integration: tests that require the external AERPAW/Dryad dataset",
+]
