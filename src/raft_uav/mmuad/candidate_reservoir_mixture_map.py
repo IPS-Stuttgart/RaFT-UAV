@@ -23,6 +23,7 @@ from raft_uav.mmuad.candidate_mixture_map import run_candidate_mixture_map
 from raft_uav.mmuad.candidate_mixture_map import write_candidate_mixture_map_outputs
 from raft_uav.mmuad.candidate_reservoir import ReservoirConfig
 from raft_uav.mmuad.candidate_reservoir import build_candidate_reservoir
+from raft_uav.mmuad.candidate_reservoir import build_oracle_recall_tables
 from raft_uav.mmuad.candidate_reservoir import build_reservoir_summary
 from raft_uav.mmuad.candidate_reservoir import load_candidate_inputs
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
@@ -35,6 +36,9 @@ from raft_uav.mmuad.submission import (
 RESERVOIR_CSV = "mmuad_reservoir_mixture_candidates.csv"
 RESERVOIR_SUMMARY_JSON = "mmuad_reservoir_mixture_reservoir_summary.json"
 COMBINED_SUMMARY_JSON = "mmuad_reservoir_mixture_summary.json"
+RESERVOIR_ORACLE_FRAME_CSV = "mmuad_reservoir_mixture_oracle_frames.csv"
+RESERVOIR_ORACLE_SUMMARY_CSV = "mmuad_reservoir_mixture_oracle_summary.csv"
+RESERVOIR_ORACLE_BY_SEQUENCE_CSV = "mmuad_reservoir_mixture_oracle_by_sequence.csv"
 
 
 def run_reservoir_mixture_map(
@@ -165,6 +169,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--default-classification", default="2")
     parser.add_argument("--official-results-csv", type=Path)
     parser.add_argument("--official-zip", type=Path)
+    parser.add_argument(
+        "--reservoir-oracle-frame-csv",
+        type=Path,
+        help="optional reservoir oracle recall rows; defaults inside --output-dir when truth is supplied",
+    )
+    parser.add_argument(
+        "--reservoir-oracle-summary-csv",
+        type=Path,
+        help="optional pooled reservoir oracle recall summary",
+    )
+    parser.add_argument(
+        "--reservoir-oracle-by-sequence-csv",
+        type=Path,
+        help="optional per-sequence reservoir oracle recall summary",
+    )
+    parser.add_argument("--oracle-top-k", type=int, action="append", default=[1, 3, 5, 10, 20])
+    parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
     args = parser.parse_args(argv)
 
     if not args.candidate_csv:
@@ -211,6 +232,35 @@ def main(argv: list[str] | None = None) -> int:
         initial_estimates=initial_estimates,
         truth=truth,
     )
+    oracle_paths: dict[str, Path] = {}
+    if truth is not None:
+        top_k_values = tuple(args.oracle_top_k)
+        frame_rows, pooled, by_sequence = build_oracle_recall_tables(
+            reservoir,
+            truth,
+            top_k_values=top_k_values,
+            max_truth_time_delta_s=float(args.max_truth_time_delta_s),
+        )
+        summary["reservoir_oracle"] = {
+            "top_k_values": list(top_k_values),
+            "max_truth_time_delta_s": float(args.max_truth_time_delta_s),
+            "frame_count": int(len(frame_rows)),
+            "pooled": _first_record(pooled),
+        }
+        frame_path = args.reservoir_oracle_frame_csv or args.output_dir / RESERVOIR_ORACLE_FRAME_CSV
+        pooled_path = args.reservoir_oracle_summary_csv or args.output_dir / RESERVOIR_ORACLE_SUMMARY_CSV
+        by_sequence_path = (
+            args.reservoir_oracle_by_sequence_csv
+            or args.output_dir / RESERVOIR_ORACLE_BY_SEQUENCE_CSV
+        )
+        _write_frame(frame_rows, frame_path)
+        _write_frame(pooled, pooled_path)
+        _write_frame(by_sequence, by_sequence_path)
+        oracle_paths = {
+            "reservoir_oracle_frame_csv": frame_path,
+            "reservoir_oracle_summary_csv": pooled_path,
+            "reservoir_oracle_by_sequence_csv": by_sequence_path,
+        }
     class_map = load_sequence_class_map(args.class_map) if args.class_map is not None else {}
     paths = write_reservoir_mixture_map_outputs(
         reservoir=reservoir,
@@ -222,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         official_results_csv=args.official_results_csv,
         official_zip=args.official_zip,
     )
+    paths.update(oracle_paths)
     print("mmuad_reservoir_mixture_map=ok")
     print(f"reservoir_rows={len(reservoir)}")
     print(f"estimate_rows={len(result.estimates)}")
@@ -231,6 +282,17 @@ def main(argv: list[str] | None = None) -> int:
     for name, path in paths.items():
         print(f"{name}={path}")
     return 0
+
+
+def _write_frame(frame: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path, index=False)
+
+
+def _first_record(frame: pd.DataFrame) -> dict[str, Any]:
+    if frame.empty:
+        return {}
+    return _jsonable(frame.iloc[0].to_dict())
 
 
 def _jsonable(value: Any) -> Any:
