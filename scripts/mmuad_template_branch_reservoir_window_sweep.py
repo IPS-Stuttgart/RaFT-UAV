@@ -26,15 +26,11 @@ for root in (SRC_ROOT, SCRIPT_ROOT):
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
 
-from mmuad_branch_reservoir_build import (  # noqa: E402
+from mmuad_build_branch_reservoir import (  # noqa: E402
     load_branch_candidate_inputs,
     parse_candidate_input,
 )
 from mmuad_template_branch_reservoir import (  # noqa: E402
-    BRANCH_SUMMARY_CSV,
-    FRAME_SUMMARY_CSV,
-    PROVENANCE_JSON,
-    RESERVOIR_CSV,
     write_template_branch_reservoir_artifacts,
 )
 from raft_uav.mmuad.submission import load_official_track5_template_file  # noqa: E402
