@@ -205,6 +205,17 @@ def test_mmuad_track5_scorecard_entrypoint_target_imports() -> None:
     _assert_entrypoint_target_imports("raft-uav-mmuad-track5-scorecard")
 
 
+def test_mmuad_track5_sequence_gate_fit_entrypoint_is_exposed() -> None:
+    assert (
+        _project_scripts()["raft-uav-mmuad-track5-sequence-gate-fit"]
+        == "raft_uav.mmuad.track5_sequence_gate_fit:main"
+    )
+
+
+def test_mmuad_track5_sequence_gate_fit_entrypoint_target_imports() -> None:
+    _assert_entrypoint_target_imports("raft-uav-mmuad-track5-sequence-gate-fit")
+
+
 def test_mmuad_train_sequence_classifier_entrypoint_is_exposed() -> None:
     assert (
         _project_scripts()["raft-uav-mmuad-train-sequence-classifier"]
