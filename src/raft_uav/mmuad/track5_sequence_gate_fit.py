@@ -33,6 +33,7 @@ APPLY_FEATURES_CSV = "mmuad_track5_sequence_gate_apply_features.csv"
 APPLY_WEIGHTS_CSV = "mmuad_track5_sequence_gate_apply_weights.csv"
 FEATURE_SHIFT_CSV = "mmuad_track5_sequence_gate_feature_shift.csv"
 APPLY_SEQUENCE_SHIFT_CSV = "mmuad_track5_sequence_gate_apply_sequence_shift.csv"
+FEATURE_PRESETS = ("all", "diff-only", "diff-no-std", "no-motion", "small-stable")
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,8 @@ class SequenceGateFitResult:
     apply_weights: pd.DataFrame | None = None
     feature_shift: pd.DataFrame | None = None
     apply_sequence_shift: pd.DataFrame | None = None
+    feature_preset: str = "all"
+    feature_columns: tuple[str, ...] = ()
 
 
 def fit_track5_sequence_gate(
@@ -60,6 +63,7 @@ def fit_track5_sequence_gate(
     models: tuple[str, ...] = ("ridge", "tree_d3_leaf1", "tree_d4_leaf1"),
     apply_base_submission: pd.DataFrame | None = None,
     apply_alternate_submission: pd.DataFrame | None = None,
+    feature_preset: str = "all",
     random_state: int = 13,
 ) -> SequenceGateFitResult:
     """Fit per-sequence blend weights and return same-split/LOSO diagnostics.
@@ -85,9 +89,11 @@ def fit_track5_sequence_gate(
         how="inner",
         validate="one_to_one",
     )
-    feature_columns = _feature_columns(sequence_features)
+    feature_columns = _feature_columns(sequence_features, preset=feature_preset)
     if not feature_columns:
-        raise ValueError("no finite sequence-gate feature columns available")
+        raise ValueError(
+            f"no finite sequence-gate feature columns available for preset {feature_preset!r}"
+        )
     summary_records: list[dict[str, Any]] = []
     same_split_predictions: dict[str, pd.DataFrame] = {}
     loso_predictions: dict[str, pd.DataFrame] = {}
@@ -115,6 +121,9 @@ def fit_track5_sequence_gate(
         summary_records.append(
             {
                 "model": model_name,
+                "feature_preset": str(feature_preset),
+                "feature_count": int(len(feature_columns)),
+                "feature_columns": ",".join(feature_columns),
                 **{f"same_split_{key}": value for key, value in same_metrics.items()},
                 **{f"loso_{key}": value for key, value in loso_metrics.items()},
                 "same_split_weights": _weights_text(same_weights),
@@ -170,6 +179,8 @@ def fit_track5_sequence_gate(
         apply_sequence_shift=None
         if apply_sequence_shift is None
         else apply_sequence_shift.reset_index(drop=True),
+        feature_preset=str(feature_preset),
+        feature_columns=tuple(feature_columns),
     )
 
 
@@ -234,6 +245,9 @@ def write_track5_sequence_gate_fit_outputs(
         "weight_min": float(np.min(weight_grid)),
         "weight_max": float(np.max(weight_grid)),
         "weight_count": int(len(weight_grid)),
+        "feature_preset": result.feature_preset,
+        "feature_columns": list(result.feature_columns),
+        "feature_count": int(len(result.feature_columns)),
         "best_model": result.best_model,
         "best_row": best_row,
         "apply_sequence_count": 0
@@ -261,6 +275,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--weight-min", type=float, default=0.0)
     parser.add_argument("--weight-max", type=float, default=0.5)
     parser.add_argument("--weight-step", type=float, default=0.01)
+    parser.add_argument(
+        "--feature-preset",
+        choices=FEATURE_PRESETS,
+        default="all",
+        help="feature subset used to train/apply the sequence gate; diagnostics still include all "
+        "raw sequence features",
+    )
     parser.add_argument(
         "--model",
         action="append",
@@ -297,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
             "rf_depth2",
             "extra_depth2",
         ),
+        feature_preset=args.feature_preset,
         random_state=args.random_state,
     )
     paths = write_track5_sequence_gate_fit_outputs(
@@ -516,7 +538,7 @@ def _trajectory_motion_features(
     return speed, accel, path_len
 
 
-def _feature_columns(rows: pd.DataFrame) -> list[str]:
+def _feature_columns(rows: pd.DataFrame, *, preset: str = "all") -> list[str]:
     excluded = {
         "sequence_id",
         "oracle_weight",
@@ -536,14 +558,41 @@ def _feature_columns(rows: pd.DataFrame) -> list[str]:
         "alternate_p95",
         "alternate_max",
     }
-    columns: list[str] = []
+    all_columns: list[str] = []
     for column in rows.columns:
         if column in excluded:
             continue
         values = pd.to_numeric(rows[column], errors="coerce")
         if np.isfinite(values.to_numpy(float)).any():
-            columns.append(str(column))
-    return columns
+            all_columns.append(str(column))
+    return _apply_feature_preset(all_columns, preset=preset)
+
+
+def _apply_feature_preset(columns: list[str], *, preset: str) -> list[str]:
+    """Select transfer-oriented sequence-gate feature subsets."""
+
+    name = str(preset)
+    if name not in FEATURE_PRESETS:
+        raise ValueError(
+            f"unsupported sequence-gate feature preset {preset!r}; "
+            f"supported presets: {', '.join(FEATURE_PRESETS)}"
+        )
+    if name == "all":
+        return list(columns)
+
+    diff_columns = [
+        column
+        for column in columns
+        if column.startswith("diff_") or column.startswith("z_diff_")
+    ]
+    if name in {"diff-only", "no-motion"}:
+        return diff_columns
+    if name == "diff-no-std":
+        return [column for column in diff_columns if column != "diff_std"]
+    if name == "small-stable":
+        preferred = ("diff_mean", "diff_p50", "diff_p95", "diff_max", "z_diff_mean")
+        return [column for column in preferred if column in columns]
+    raise AssertionError(name)
 
 
 def _feature_shift_table(
@@ -1013,7 +1062,10 @@ def _parse_depth_leaf(name: str, *, prefix: str) -> tuple[int, int]:
 
 
 def _feature_matrix(rows: pd.DataFrame, feature_columns: list[str]) -> np.ndarray:
-    matrix = rows[feature_columns].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+    matrix = rows[feature_columns].apply(pd.to_numeric, errors="coerce").to_numpy(
+        dtype=float,
+        copy=True,
+    )
     if matrix.ndim != 2:
         matrix = matrix.reshape(len(rows), -1)
     medians = np.nanmedian(matrix, axis=0)

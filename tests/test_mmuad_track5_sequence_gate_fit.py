@@ -98,6 +98,30 @@ def test_sequence_gate_fit_finds_oracle_sequence_weights(tmp_path: Path) -> None
     assert len(result.summary) == 1
 
 
+def test_sequence_gate_fit_feature_preset_limits_model_columns(tmp_path: Path) -> None:
+    base_path, alternate_path, truth_path = _write_fit_inputs(tmp_path)
+
+    result = fit_track5_sequence_gate(
+        base_submission=load_track5_submission(base_path),
+        alternate_submission=load_track5_submission(alternate_path),
+        truth=load_track5_submission(truth_path),
+        weight_grid=pd.Series([0.0, 0.25, 0.5]).to_numpy(float),
+        models=("tree_d1_leaf1",),
+        feature_preset="diff-no-std",
+    )
+
+    assert result.feature_preset == "diff-no-std"
+    assert set(result.feature_columns) == {
+        "diff_mean",
+        "diff_p50",
+        "diff_p95",
+        "diff_max",
+        "z_diff_mean",
+    }
+    assert result.summary.loc[0, "feature_preset"] == "diff-no-std"
+    assert int(result.summary.loc[0, "feature_count"]) == 5
+
+
 def test_sequence_gate_fit_writes_summary_and_weight_tables(tmp_path: Path) -> None:
     base_path, alternate_path, truth_path = _write_fit_inputs(tmp_path)
     apply_base_path, apply_alternate_path = _write_apply_inputs(tmp_path)
@@ -126,6 +150,9 @@ def test_sequence_gate_fit_writes_summary_and_weight_tables(tmp_path: Path) -> N
     payload = json.loads(paths["summary_json"].read_text(encoding="utf-8"))
     assert payload["schema"] == "raft-uav-mmuad-track5-sequence-gate-fit-v1"
     assert payload["protocol"] == "unit-test"
+    assert payload["feature_preset"] == "all"
+    assert payload["feature_count"] > 0
+    assert "diff_mean" in payload["feature_columns"]
     assert payload["apply_sequence_count"] == 2
     assert paths["summary_csv"].exists()
     assert paths["apply_weights_csv"].exists()
@@ -205,6 +232,8 @@ def test_sequence_gate_fit_cli_writes_outputs(tmp_path: Path) -> None:
             "0.25",
             "--model",
             "tree_d1_leaf1",
+            "--feature-preset",
+            "diff-no-std",
         ]
     )
 
@@ -212,6 +241,13 @@ def test_sequence_gate_fit_cli_writes_outputs(tmp_path: Path) -> None:
     assert (output_dir / "mmuad_track5_sequence_gate_fit_summary.csv").exists()
     assert (output_dir / "mmuad_track5_sequence_gate_loso_weights.csv").exists()
     assert (output_dir / "mmuad_track5_sequence_gate_apply_weights.csv").exists()
+    payload = json.loads(
+        (output_dir / "mmuad_track5_sequence_gate_fit_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert payload["feature_preset"] == "diff-no-std"
+    assert "diff_std" not in payload["feature_columns"]
 
 
 def test_sequence_gate_fit_cli_accepts_normalized_truth_rows(tmp_path: Path) -> None:
