@@ -193,15 +193,135 @@ def test_candidate_mixture_smoothness_recovers_from_one_high_score_outlier() -> 
     assert str(dominant["track_id"]) == "good-2"
 
 
+def test_candidate_mixture_anchor_pulls_toward_initial_estimates() -> None:
+    candidates = pd.DataFrame(
+        [
+            {
+                "sequence_id": "seqA",
+                "time_s": 0.0,
+                "source": "lidar_360",
+                "track_id": "offset",
+                "x_m": 10.0,
+                "y_m": 0.0,
+                "z_m": 0.0,
+                "ranker_score": 1.0,
+                "predicted_sigma_m": 1.0,
+            }
+        ]
+    )
+    initial = pd.DataFrame(
+        [
+            {
+                "sequence_id": "seqA",
+                "time_s": 0.0,
+                "state_x_m": 0.0,
+                "state_y_m": 0.0,
+                "state_z_m": 0.0,
+            }
+        ]
+    )
+
+    unanchored = run_candidate_mixture_map(
+        candidates,
+        initial_estimates=initial,
+        config=CandidateMixtureMapConfig(
+            top_k=1,
+            score_column="ranker_score",
+            sigma_column="predicted_sigma_m",
+            smoothness_weight=0.0,
+            anchor_weight=0.0,
+            iterations=1,
+        ),
+    )
+    anchored = run_candidate_mixture_map(
+        candidates,
+        initial_estimates=initial,
+        config=CandidateMixtureMapConfig(
+            top_k=1,
+            score_column="ranker_score",
+            sigma_column="predicted_sigma_m",
+            smoothness_weight=0.0,
+            anchor_weight=9.0,
+            iterations=1,
+        ),
+    )
+
+    assert unanchored.estimates["state_x_m"].iloc[0] == pytest.approx(10.0)
+    assert anchored.estimates["state_x_m"].iloc[0] == pytest.approx(1.0)
+    assert anchored.summary["config"]["anchor_weight"] == pytest.approx(9.0)
+
+
+def test_candidate_mixture_can_estimate_on_target_template_times() -> None:
+    candidates = pd.DataFrame(
+        [
+            {
+                "sequence_id": "seqA",
+                "time_s": 0.0,
+                "source": "lidar_360",
+                "track_id": "left",
+                "x_m": 0.0,
+                "y_m": 0.0,
+                "z_m": 0.0,
+                "ranker_score": 1.0,
+                "predicted_sigma_m": 1.0,
+            },
+            {
+                "sequence_id": "seqA",
+                "time_s": 2.0,
+                "source": "lidar_360",
+                "track_id": "right",
+                "x_m": 2.0,
+                "y_m": 0.0,
+                "z_m": 0.0,
+                "ranker_score": 1.0,
+                "predicted_sigma_m": 1.0,
+            },
+        ]
+    )
+    template = pd.DataFrame(
+        {
+            "Sequence": ["seqA", "seqA", "seqA"],
+            "Timestamp": [0.0, 1.0, 2.0],
+        }
+    )
+
+    result = run_candidate_mixture_map(
+        candidates,
+        target_template=template,
+        config=CandidateMixtureMapConfig(
+            top_k=1,
+            score_column="ranker_score",
+            sigma_column="predicted_sigma_m",
+            smoothness_weight=0.0,
+            target_time_tolerance_s=0.1,
+            iterations=1,
+        ),
+    )
+
+    assert result.estimates["time_s"].tolist() == [0.0, 1.0, 2.0]
+    assert len(result.assignments) == 3
+    middle = result.assignments.loc[result.assignments["time_s"] == 1.0].iloc[0]
+    assert str(middle["track_id"]) == "left"
+
+
 def test_candidate_mixture_cli_writes_diagnostics(tmp_path) -> None:
     candidates_csv = tmp_path / "candidates.csv"
     truth_csv = tmp_path / "truth.csv"
+    template_csv = tmp_path / "template.csv"
     class_map_csv = tmp_path / "class_map.csv"
     output_dir = tmp_path / "out"
     official_results_csv = tmp_path / "mmaud_results.csv"
     official_zip = tmp_path / "ug2_submission.zip"
     _uncertainty_candidates().to_csv(candidates_csv, index=False)
     _truth_rows().to_csv(truth_csv, index=False)
+    pd.DataFrame(
+        {
+            "Sequence": ["seqA"] * 5,
+            "Timestamp": np.arange(5, dtype=float),
+            "Position": [""] * 5,
+            "Classification": [""] * 5,
+        }
+    ).to_csv(template_csv, index=False)
     pd.DataFrame([{"sequence_id": "seqA", "uav_type": 3}]).to_csv(
         class_map_csv,
         index=False,
@@ -211,6 +331,8 @@ def test_candidate_mixture_cli_writes_diagnostics(tmp_path) -> None:
         [
             "--candidates-csv",
             str(candidates_csv),
+            "--target-template-csv",
+            str(template_csv),
             "--truth-csv",
             str(truth_csv),
             "--output-dir",
@@ -223,6 +345,8 @@ def test_candidate_mixture_cli_writes_diagnostics(tmp_path) -> None:
             "predicted_sigma_m",
             "--smoothness-weight",
             "100",
+            "--anchor-weight",
+            "0.01",
             "--iterations",
             "5",
             "--class-map",
@@ -242,6 +366,7 @@ def test_candidate_mixture_cli_writes_diagnostics(tmp_path) -> None:
         (output_dir / "mmuad_candidate_mixture_summary.json").read_text(encoding="utf-8")
     )
     assert summary["metrics"]["pooled"]["rmse_3d_m"] < 0.05
+    assert summary["config"]["anchor_weight"] == pytest.approx(0.01)
     official = pd.read_csv(official_results_csv)
     assert official["Classification"].tolist() == [3, 3, 3, 3, 3]
     with ZipFile(official_zip) as archive:
