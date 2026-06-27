@@ -129,6 +129,8 @@ def test_sequence_gate_fit_writes_summary_and_weight_tables(tmp_path: Path) -> N
     assert payload["apply_sequence_count"] == 2
     assert paths["summary_csv"].exists()
     assert paths["apply_weights_csv"].exists()
+    assert paths["feature_shift_csv"].exists()
+    assert paths["apply_sequence_shift_csv"].exists()
     assert pd.read_csv(paths["oracle_weights_csv"])["oracle_weight"].tolist() == [
         0.5,
         0.25,
@@ -137,6 +139,43 @@ def test_sequence_gate_fit_writes_summary_and_weight_tables(tmp_path: Path) -> N
     apply_weights = pd.read_csv(paths["apply_weights_csv"])
     assert apply_weights["sequence_id"].tolist() == ["seq0101", "seq0102"]
     assert apply_weights["blend_weight"].between(0.0, 0.5).all()
+    feature_shift = pd.read_csv(paths["feature_shift_csv"])
+    assert "feature" in feature_shift.columns
+    assert "apply_outside_train_range_fraction" in feature_shift.columns
+    sequence_shift = pd.read_csv(paths["apply_sequence_shift_csv"])
+    assert set(sequence_shift["sequence_id"]) == {"seq0101", "seq0102"}
+    assert "outside_train_range_fraction" in sequence_shift.columns
+    assert payload["apply_feature_shift"]["feature_count"] > 0
+    assert payload["apply_sequence_shift"]["sequence_count"] == 2
+
+
+def test_sequence_gate_fit_flags_apply_feature_shift(tmp_path: Path) -> None:
+    base_path, alternate_path, truth_path = _write_fit_inputs(tmp_path)
+    apply_base_path = tmp_path / "apply_base_shifted.csv"
+    apply_alternate_path = tmp_path / "apply_alternate_shifted.csv"
+    _rows({"seq0101": 0.0}).to_csv(apply_base_path, index=False)
+    _rows({"seq0101": 100.0}).to_csv(apply_alternate_path, index=False)
+
+    result = fit_track5_sequence_gate(
+        base_submission=load_track5_submission(base_path),
+        alternate_submission=load_track5_submission(alternate_path),
+        truth=load_track5_submission(truth_path),
+        apply_base_submission=load_track5_submission(apply_base_path),
+        apply_alternate_submission=load_track5_submission(apply_alternate_path),
+        weight_grid=pd.Series([0.0, 0.25, 0.5]).to_numpy(float),
+        models=("ridge",),
+    )
+
+    assert result.feature_shift is not None
+    assert result.apply_sequence_shift is not None
+    shifted_features = result.feature_shift.loc[
+        result.feature_shift["apply_outside_train_range_fraction"] > 0.0,
+        "feature",
+    ].tolist()
+    assert "diff_mean" in shifted_features
+    shifted_sequence = result.apply_sequence_shift.iloc[0]
+    assert shifted_sequence["sequence_id"] == "seq0101"
+    assert shifted_sequence["outside_train_range_count"] > 0
 
 
 def test_sequence_gate_fit_cli_writes_outputs(tmp_path: Path) -> None:

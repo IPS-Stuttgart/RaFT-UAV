@@ -31,6 +31,8 @@ SAME_SPLIT_WEIGHTS_CSV = "mmuad_track5_sequence_gate_same_split_weights.csv"
 LOSO_WEIGHTS_CSV = "mmuad_track5_sequence_gate_loso_weights.csv"
 APPLY_FEATURES_CSV = "mmuad_track5_sequence_gate_apply_features.csv"
 APPLY_WEIGHTS_CSV = "mmuad_track5_sequence_gate_apply_weights.csv"
+FEATURE_SHIFT_CSV = "mmuad_track5_sequence_gate_feature_shift.csv"
+APPLY_SEQUENCE_SHIFT_CSV = "mmuad_track5_sequence_gate_apply_sequence_shift.csv"
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,8 @@ class SequenceGateFitResult:
     best_model: str
     apply_sequence_features: pd.DataFrame | None = None
     apply_weights: pd.DataFrame | None = None
+    feature_shift: pd.DataFrame | None = None
+    apply_sequence_shift: pd.DataFrame | None = None
 
 
 def fit_track5_sequence_gate(
@@ -124,12 +128,24 @@ def fit_track5_sequence_gate(
     best_model = str(summary.iloc[0]["model"])
     apply_sequence_features = None
     apply_weights = None
+    feature_shift = None
+    apply_sequence_shift = None
     if apply_base_submission is not None and apply_alternate_submission is not None:
         apply_base, apply_alternate = _aligned_submission_frames(
             apply_base_submission,
             apply_alternate_submission,
         )
         apply_sequence_features = _sequence_feature_table(apply_base, apply_alternate)
+        feature_shift = _feature_shift_table(
+            sequence_features,
+            apply_sequence_features,
+            feature_columns,
+        )
+        apply_sequence_shift = _apply_sequence_shift_table(
+            sequence_features,
+            apply_sequence_features,
+            feature_columns,
+        )
         apply_weights = _predict_apply_weights(
             best_model,
             sequence_features,
@@ -150,6 +166,10 @@ def fit_track5_sequence_gate(
         if apply_sequence_features is None
         else apply_sequence_features.reset_index(drop=True),
         apply_weights=None if apply_weights is None else apply_weights.reset_index(drop=True),
+        feature_shift=None if feature_shift is None else feature_shift.reset_index(drop=True),
+        apply_sequence_shift=None
+        if apply_sequence_shift is None
+        else apply_sequence_shift.reset_index(drop=True),
     )
 
 
@@ -181,6 +201,10 @@ def write_track5_sequence_gate_fit_outputs(
         paths["apply_weights_csv"] = output / APPLY_WEIGHTS_CSV
     if result.apply_sequence_features is not None:
         paths["apply_features_csv"] = output / APPLY_FEATURES_CSV
+    if result.feature_shift is not None:
+        paths["feature_shift_csv"] = output / FEATURE_SHIFT_CSV
+    if result.apply_sequence_shift is not None:
+        paths["apply_sequence_shift_csv"] = output / APPLY_SEQUENCE_SHIFT_CSV
     result.summary.to_csv(paths["summary_csv"], index=False)
     result.sequence_features.to_csv(paths["sequence_features_csv"], index=False)
     result.oracle_weights.to_csv(paths["oracle_weights_csv"], index=False)
@@ -190,6 +214,10 @@ def write_track5_sequence_gate_fit_outputs(
         result.apply_weights.to_csv(paths["apply_weights_csv"], index=False)
     if result.apply_sequence_features is not None:
         result.apply_sequence_features.to_csv(paths["apply_features_csv"], index=False)
+    if result.feature_shift is not None:
+        result.feature_shift.to_csv(paths["feature_shift_csv"], index=False)
+    if result.apply_sequence_shift is not None:
+        result.apply_sequence_shift.to_csv(paths["apply_sequence_shift_csv"], index=False)
     best_row = result.summary.iloc[0].to_dict()
     payload = {
         "schema": "raft-uav-mmuad-track5-sequence-gate-fit-v1",
@@ -211,6 +239,8 @@ def write_track5_sequence_gate_fit_outputs(
         "apply_sequence_count": 0
         if result.apply_weights is None
         else int(result.apply_weights["sequence_id"].nunique()),
+        "apply_feature_shift": _feature_shift_summary(result.feature_shift),
+        "apply_sequence_shift": _apply_sequence_shift_summary(result.apply_sequence_shift),
         "paths": {name: str(path) for name, path in paths.items() if name != "summary_json"},
     }
     paths["summary_json"].write_text(json.dumps(_jsonable(payload), indent=2), encoding="utf-8")
@@ -514,6 +544,207 @@ def _feature_columns(rows: pd.DataFrame) -> list[str]:
         if np.isfinite(values.to_numpy(float)).any():
             columns.append(str(column))
     return columns
+
+
+def _feature_shift_table(
+    train_rows: pd.DataFrame,
+    apply_rows: pd.DataFrame,
+    feature_columns: list[str],
+) -> pd.DataFrame:
+    """Summarize train/apply feature distribution shift for gate inputs."""
+
+    records: list[dict[str, Any]] = []
+    for column in feature_columns:
+        if column not in train_rows.columns or column not in apply_rows.columns:
+            continue
+        train = _finite_series(train_rows[column])
+        apply = _finite_series(apply_rows[column])
+        if train.size == 0 or apply.size == 0:
+            continue
+        train_min = float(np.min(train))
+        train_max = float(np.max(train))
+        train_p05 = float(np.percentile(train, 5.0))
+        train_p50 = float(np.percentile(train, 50.0))
+        train_p95 = float(np.percentile(train, 95.0))
+        train_iqr = float(np.percentile(train, 75.0) - np.percentile(train, 25.0))
+        robust_scale = train_iqr if train_iqr > 1.0e-12 else float(np.std(train))
+        if robust_scale <= 1.0e-12 or not np.isfinite(robust_scale):
+            robust_scale = 1.0
+        below_min = int(np.count_nonzero(apply < train_min))
+        above_max = int(np.count_nonzero(apply > train_max))
+        robust_z = np.abs((apply - train_p50) / robust_scale)
+        records.append(
+            {
+                "feature": str(column),
+                "train_count": int(train.size),
+                "apply_count": int(apply.size),
+                "train_min": train_min,
+                "train_p05": train_p05,
+                "train_p50": train_p50,
+                "train_p95": train_p95,
+                "train_max": train_max,
+                "apply_min": float(np.min(apply)),
+                "apply_p05": float(np.percentile(apply, 5.0)),
+                "apply_p50": float(np.percentile(apply, 50.0)),
+                "apply_p95": float(np.percentile(apply, 95.0)),
+                "apply_max": float(np.max(apply)),
+                "apply_below_train_min_count": below_min,
+                "apply_above_train_max_count": above_max,
+                "apply_outside_train_range_count": below_min + above_max,
+                "apply_outside_train_range_fraction": float((below_min + above_max) / apply.size),
+                "apply_mean_abs_robust_z": float(np.mean(robust_z)),
+                "apply_max_abs_robust_z": float(np.max(robust_z)),
+            }
+        )
+    if not records:
+        return pd.DataFrame(
+            columns=[
+                "feature",
+                "train_count",
+                "apply_count",
+                "apply_outside_train_range_count",
+                "apply_outside_train_range_fraction",
+                "apply_mean_abs_robust_z",
+                "apply_max_abs_robust_z",
+            ]
+        )
+    return pd.DataFrame.from_records(records).sort_values(
+        ["apply_outside_train_range_fraction", "apply_max_abs_robust_z", "feature"],
+        ascending=[False, False, True],
+    )
+
+
+def _apply_sequence_shift_table(
+    train_rows: pd.DataFrame,
+    apply_rows: pd.DataFrame,
+    feature_columns: list[str],
+) -> pd.DataFrame:
+    """Summarize how far each apply sequence is from the train feature envelope."""
+
+    if apply_rows.empty:
+        return pd.DataFrame(
+            columns=[
+                "sequence_id",
+                "feature_count",
+                "outside_train_range_count",
+                "outside_train_range_fraction",
+                "mean_abs_robust_z",
+                "max_abs_robust_z",
+                "worst_shift_feature",
+            ]
+        )
+    train_stats: dict[str, dict[str, float]] = {}
+    for column in feature_columns:
+        if column not in train_rows.columns or column not in apply_rows.columns:
+            continue
+        train = _finite_series(train_rows[column])
+        if train.size == 0:
+            continue
+        iqr = float(np.percentile(train, 75.0) - np.percentile(train, 25.0))
+        scale = iqr if iqr > 1.0e-12 else float(np.std(train))
+        if scale <= 1.0e-12 or not np.isfinite(scale):
+            scale = 1.0
+        train_stats[column] = {
+            "min": float(np.min(train)),
+            "max": float(np.max(train)),
+            "median": float(np.percentile(train, 50.0)),
+            "scale": float(scale),
+        }
+    records: list[dict[str, Any]] = []
+    for row in apply_rows.itertuples(index=False):
+        sequence_id = str(getattr(row, "sequence_id"))
+        outside_count = 0
+        robust_z_values: list[float] = []
+        worst_feature = ""
+        worst_shift = -np.inf
+        for column, stats in train_stats.items():
+            value = getattr(row, column, np.nan)
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(numeric):
+                continue
+            if numeric < stats["min"] or numeric > stats["max"]:
+                outside_count += 1
+            robust_z = abs((numeric - stats["median"]) / stats["scale"])
+            robust_z_values.append(float(robust_z))
+            if robust_z > worst_shift:
+                worst_shift = float(robust_z)
+                worst_feature = str(column)
+        feature_count = len(robust_z_values)
+        records.append(
+            {
+                "sequence_id": sequence_id,
+                "feature_count": int(feature_count),
+                "outside_train_range_count": int(outside_count),
+                "outside_train_range_fraction": float(outside_count / feature_count)
+                if feature_count
+                else float("nan"),
+                "mean_abs_robust_z": float(np.mean(robust_z_values))
+                if robust_z_values
+                else float("nan"),
+                "max_abs_robust_z": float(np.max(robust_z_values))
+                if robust_z_values
+                else float("nan"),
+                "worst_shift_feature": worst_feature,
+            }
+        )
+    return pd.DataFrame.from_records(records).sort_values(
+        ["outside_train_range_fraction", "max_abs_robust_z", "sequence_id"],
+        ascending=[False, False, True],
+    )
+
+
+def _feature_shift_summary(feature_shift: pd.DataFrame | None) -> dict[str, Any]:
+    if feature_shift is None or feature_shift.empty:
+        return {
+            "feature_count": 0,
+            "shifted_feature_count": 0,
+            "max_outside_train_range_fraction": 0.0,
+            "max_abs_robust_z": 0.0,
+        }
+    outside = pd.to_numeric(
+        feature_shift["apply_outside_train_range_fraction"],
+        errors="coerce",
+    ).fillna(0.0)
+    robust_z = pd.to_numeric(feature_shift["apply_max_abs_robust_z"], errors="coerce").fillna(0.0)
+    shifted = feature_shift.loc[outside > 0.0, "feature"].astype(str).tolist()
+    return {
+        "feature_count": int(len(feature_shift)),
+        "shifted_feature_count": int(len(shifted)),
+        "shifted_features": shifted,
+        "max_outside_train_range_fraction": float(outside.max()),
+        "max_abs_robust_z": float(robust_z.max()),
+    }
+
+
+def _apply_sequence_shift_summary(apply_shift: pd.DataFrame | None) -> dict[str, Any]:
+    if apply_shift is None or apply_shift.empty:
+        return {
+            "sequence_count": 0,
+            "shifted_sequence_count": 0,
+            "max_outside_train_range_fraction": 0.0,
+            "max_abs_robust_z": 0.0,
+        }
+    outside = pd.to_numeric(
+        apply_shift["outside_train_range_fraction"],
+        errors="coerce",
+    ).fillna(0.0)
+    robust_z = pd.to_numeric(apply_shift["max_abs_robust_z"], errors="coerce").fillna(0.0)
+    shifted = apply_shift.loc[outside > 0.0, "sequence_id"].astype(str).tolist()
+    return {
+        "sequence_count": int(len(apply_shift)),
+        "shifted_sequence_count": int(len(shifted)),
+        "shifted_sequences": shifted,
+        "max_outside_train_range_fraction": float(outside.max()),
+        "max_abs_robust_z": float(robust_z.max()),
+    }
+
+
+def _finite_series(values: pd.Series) -> np.ndarray:
+    numeric = pd.to_numeric(values, errors="coerce").to_numpy(float)
+    return numeric[np.isfinite(numeric)]
 
 
 def _predict_same_split_weights(
