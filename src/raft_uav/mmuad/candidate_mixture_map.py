@@ -58,8 +58,10 @@ class CandidateMixtureMapConfig:
     loss: str = "huber"
     huber_delta: float = 1.0
     smoothness_weight: float = 7200.0
+    anchor_weight: float = 0.0
     iterations: int = 5
     tolerance_m: float = 1.0e-3
+    target_time_tolerance_s: float = 0.5
     uniform_weight_floor: float = 0.0
     branch_balance: float = 0.0
     source_balance: float = 0.0
@@ -84,6 +86,7 @@ def run_candidate_mixture_map(
     *,
     config: CandidateMixtureMapConfig | None = None,
     initial_estimates: pd.DataFrame | None = None,
+    target_template: pd.DataFrame | None = None,
     truth: pd.DataFrame | None = None,
 ) -> CandidateMixtureMapResult:
     """Estimate one smooth trajectory per sequence from candidate mixtures."""
@@ -105,14 +108,31 @@ def run_candidate_mixture_map(
     if truth is not None:
         truth_rows = normalize_truth_columns(pd.DataFrame(truth).copy())
     initial_rows = _normalize_initial_estimates(initial_estimates)
+    target_rows = _normalize_target_template(target_template)
 
     estimate_parts: list[pd.DataFrame] = []
     assignment_parts: list[pd.DataFrame] = []
     iteration_parts: list[pd.DataFrame] = []
     metrics_by_sequence: dict[str, Any] = {}
     convergence_rows: list[dict[str, Any]] = []
-    for sequence_id, sequence_rows in rows.groupby("sequence_id", sort=True):
-        frames = _prepare_candidate_frames(sequence_rows, config=config)
+    sequence_ids = sorted(rows["sequence_id"].astype(str).unique().tolist())
+    if target_rows is not None and not target_rows.empty:
+        sequence_ids = sorted(target_rows["sequence_id"].astype(str).unique().tolist())
+    for sequence_id in sequence_ids:
+        sequence_rows = rows.loc[rows["sequence_id"].astype(str) == str(sequence_id)]
+        if sequence_rows.empty:
+            continue
+        target_times = None
+        if target_rows is not None and not target_rows.empty:
+            sequence_targets = target_rows.loc[
+                target_rows["sequence_id"].astype(str) == str(sequence_id)
+            ]
+            target_times = sequence_targets["time_s"].to_numpy(float)
+        frames = _prepare_candidate_frames(
+            sequence_rows,
+            config=config,
+            target_times=target_times,
+        )
         if not frames:
             continue
         times = np.asarray([frame["time_s"] for frame in frames], dtype=float)
@@ -123,6 +143,7 @@ def run_candidate_mixture_map(
             initial_estimates=initial_rows,
             config=config,
         )
+        anchor_state = state.copy()
         iteration_records: list[dict[str, Any]] = []
         converged = False
         final_response: list[dict[str, Any]] = []
@@ -135,6 +156,8 @@ def run_candidate_mixture_map(
                     [item["measurement_precision"] for item in response]
                 ),
                 smoothness_weight=float(config.smoothness_weight),
+                anchor_positions=anchor_state,
+                anchor_weight=float(config.anchor_weight),
             )
             displacement = np.linalg.norm(updated - state, axis=1)
             objective = _quadratic_objective(
@@ -145,6 +168,8 @@ def run_candidate_mixture_map(
                     [item["measurement_precision"] for item in response]
                 ),
                 smoothness_weight=float(config.smoothness_weight),
+                anchor_positions=anchor_state,
+                anchor_weight=float(config.anchor_weight),
             )
             iteration_records.append(
                 {
@@ -307,6 +332,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--iteration-summary-csv", type=Path)
     parser.add_argument("--summary-json", type=Path)
     parser.add_argument("--initial-estimates-csv", type=Path)
+    parser.add_argument("--target-template-csv", type=Path)
     parser.add_argument("--truth-csv", type=Path)
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--score-column", default="candidate_reservoir_grid_score")
@@ -326,8 +352,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--loss", choices=LOSS_CHOICES, default="huber")
     parser.add_argument("--huber-delta", type=float, default=1.0)
     parser.add_argument("--smoothness-weight", type=float, default=7200.0)
+    parser.add_argument("--anchor-weight", type=float, default=0.0)
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--tolerance-m", type=float, default=1.0e-3)
+    parser.add_argument("--target-time-tolerance-s", type=float, default=0.5)
     parser.add_argument("--uniform-weight-floor", type=float, default=0.0)
     parser.add_argument("--branch-balance", type=float, default=0.0)
     parser.add_argument("--source-balance", type=float, default=0.0)
@@ -350,6 +378,9 @@ def main(argv: list[str] | None = None) -> int:
     initial_estimates = (
         None if args.initial_estimates_csv is None else pd.read_csv(args.initial_estimates_csv)
     )
+    target_template = (
+        None if args.target_template_csv is None else pd.read_csv(args.target_template_csv)
+    )
     truth = None
     if args.truth_csv is not None:
         truth = load_evaluation_truth_file(args.truth_csv).rows
@@ -370,8 +401,10 @@ def main(argv: list[str] | None = None) -> int:
             loss=args.loss,
             huber_delta=args.huber_delta,
             smoothness_weight=args.smoothness_weight,
+            anchor_weight=args.anchor_weight,
             iterations=args.iterations,
             tolerance_m=args.tolerance_m,
+            target_time_tolerance_s=args.target_time_tolerance_s,
             uniform_weight_floor=args.uniform_weight_floor,
             branch_balance=args.branch_balance,
             source_balance=args.source_balance,
@@ -379,6 +412,7 @@ def main(argv: list[str] | None = None) -> int:
             initialization=args.initialization,
         ),
         initial_estimates=initial_estimates,
+        target_template=target_template,
         truth=truth,
     )
     paths: dict[str, Path] = {}
@@ -438,9 +472,23 @@ def _prepare_candidate_frames(
     sequence_rows: pd.DataFrame,
     *,
     config: CandidateMixtureMapConfig,
+    target_times: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
     frames: list[dict[str, Any]] = []
-    for time_s, frame in sequence_rows.groupby("time_s", sort=True):
+    sequence_rows = sequence_rows.sort_values("time_s").reset_index(drop=True)
+    if target_times is None:
+        iterator = sequence_rows.groupby("time_s", sort=True)
+    else:
+        candidate_times = sequence_rows["time_s"].to_numpy(float)
+        target_values = np.asarray(target_times, dtype=float)
+        target_values = target_values[np.isfinite(target_values)]
+        iterator = _target_time_candidate_groups(
+            sequence_rows,
+            candidate_times=candidate_times,
+            target_times=np.sort(target_values),
+            tolerance_s=float(config.target_time_tolerance_s),
+        )
+    for time_s, frame in iterator:
         group = frame.copy()
         group["_mixture_raw_score"] = _candidate_scores(group, config=config)
         group["_mixture_sigma_m"] = _candidate_sigmas(group, config=config)
@@ -470,6 +518,29 @@ def _prepare_candidate_frames(
             }
         )
     return frames
+
+
+def _target_time_candidate_groups(
+    sequence_rows: pd.DataFrame,
+    *,
+    candidate_times: np.ndarray,
+    target_times: np.ndarray,
+    tolerance_s: float,
+) -> list[tuple[float, pd.DataFrame]]:
+    groups: list[tuple[float, pd.DataFrame]] = []
+    if len(sequence_rows) == 0 or len(target_times) == 0:
+        return groups
+    tolerance = max(float(tolerance_s), 0.0)
+    for target_time in target_times:
+        left = int(np.searchsorted(candidate_times, target_time - tolerance, side="left"))
+        right = int(np.searchsorted(candidate_times, target_time + tolerance, side="right"))
+        if right <= left:
+            nearest = int(np.argmin(np.abs(candidate_times - target_time)))
+            frame = sequence_rows.iloc[[nearest]]
+        else:
+            frame = sequence_rows.iloc[left:right]
+        groups.append((float(target_time), frame))
+    return groups
 
 
 def _initial_trajectory(
@@ -597,10 +668,15 @@ def _solve_smooth_trajectory(
     pseudo_positions: np.ndarray,
     measurement_precision: np.ndarray,
     smoothness_weight: float,
+    anchor_positions: np.ndarray,
+    anchor_weight: float,
 ) -> np.ndarray:
     count = len(times)
     precision = np.asarray(measurement_precision, dtype=float)
     system = np.diag(precision)
+    anchor_weight = max(float(anchor_weight), 0.0)
+    if anchor_weight > 0.0:
+        system = system + anchor_weight * np.eye(count)
     second_derivative = _second_derivative_matrix(times)
     if second_derivative.size and smoothness_weight > 0.0:
         system = system + float(smoothness_weight) * (
@@ -611,6 +687,8 @@ def _solve_smooth_trajectory(
     estimate = np.zeros_like(pseudo_positions, dtype=float)
     for axis in range(3):
         rhs = precision * pseudo_positions[:, axis]
+        if anchor_weight > 0.0:
+            rhs = rhs + anchor_weight * anchor_positions[:, axis]
         try:
             estimate[:, axis] = np.linalg.solve(system, rhs)
         except np.linalg.LinAlgError:
@@ -640,17 +718,22 @@ def _quadratic_objective(
     pseudo_positions: np.ndarray,
     measurement_precision: np.ndarray,
     smoothness_weight: float,
+    anchor_positions: np.ndarray,
+    anchor_weight: float,
 ) -> float:
     measurement = float(
         np.sum(measurement_precision[:, None] * (state - pseudo_positions) ** 2)
     )
+    anchor = 0.0
+    if anchor_weight > 0.0:
+        anchor = float(anchor_weight) * float(np.sum((state - anchor_positions) ** 2))
     second_derivative = _second_derivative_matrix(times)
     smoothness = 0.0
     if second_derivative.size and smoothness_weight > 0.0:
         smoothness = float(smoothness_weight) * float(
             np.sum((second_derivative @ state) ** 2)
         )
-    return measurement + smoothness
+    return measurement + anchor + smoothness
 
 
 def _estimate_rows(
@@ -891,6 +974,32 @@ def _normalize_initial_estimates(estimates: pd.DataFrame | None) -> pd.DataFrame
     return rows.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
+def _normalize_target_template(template: pd.DataFrame | None) -> pd.DataFrame | None:
+    if template is None:
+        return None
+    rows = pd.DataFrame(template).copy()
+    if rows.empty:
+        return rows
+    aliases = {
+        "Sequence": "sequence_id",
+        "sequence": "sequence_id",
+        "seq": "sequence_id",
+        "Timestamp": "time_s",
+        "timestamp": "time_s",
+    }
+    for source, target in aliases.items():
+        if target not in rows.columns and source in rows.columns:
+            rows[target] = rows[source]
+    required = ["sequence_id", "time_s"]
+    missing = [column for column in required if column not in rows.columns]
+    if missing:
+        raise ValueError(f"target template missing required columns: {missing}")
+    rows["sequence_id"] = rows["sequence_id"].astype(str)
+    rows["time_s"] = pd.to_numeric(rows["time_s"], errors="coerce")
+    finite = np.isfinite(rows["time_s"].to_numpy(float))
+    return rows.loc[finite, required].sort_values(required).reset_index(drop=True)
+
+
 def _validate_config(config: CandidateMixtureMapConfig) -> None:
     if int(config.top_k) < 0:
         raise ValueError("top_k must be non-negative; use 0 for all candidates")
@@ -908,10 +1017,14 @@ def _validate_config(config: CandidateMixtureMapConfig) -> None:
         raise ValueError("huber_delta must be positive")
     if float(config.smoothness_weight) < 0.0:
         raise ValueError("smoothness_weight must be non-negative")
+    if float(config.anchor_weight) < 0.0:
+        raise ValueError("anchor_weight must be non-negative")
     if int(config.iterations) <= 0:
         raise ValueError("iterations must be positive")
     if float(config.tolerance_m) < 0.0:
         raise ValueError("tolerance_m must be non-negative")
+    if float(config.target_time_tolerance_s) < 0.0:
+        raise ValueError("target_time_tolerance_s must be non-negative")
     if not (0.0 <= float(config.uniform_weight_floor) < 1.0):
         raise ValueError("uniform_weight_floor must be in [0, 1)")
     for name in ("branch_balance", "source_balance", "responsibility_floor"):
