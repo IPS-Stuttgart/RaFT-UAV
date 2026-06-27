@@ -29,6 +29,8 @@ SEQUENCE_FEATURES_CSV = "mmuad_track5_sequence_gate_fit_features.csv"
 ORACLE_WEIGHTS_CSV = "mmuad_track5_sequence_gate_oracle_weights.csv"
 SAME_SPLIT_WEIGHTS_CSV = "mmuad_track5_sequence_gate_same_split_weights.csv"
 LOSO_WEIGHTS_CSV = "mmuad_track5_sequence_gate_loso_weights.csv"
+APPLY_FEATURES_CSV = "mmuad_track5_sequence_gate_apply_features.csv"
+APPLY_WEIGHTS_CSV = "mmuad_track5_sequence_gate_apply_weights.csv"
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,8 @@ class SequenceGateFitResult:
     same_split_weights: pd.DataFrame
     loso_weights: pd.DataFrame
     best_model: str
+    apply_sequence_features: pd.DataFrame | None = None
+    apply_weights: pd.DataFrame | None = None
 
 
 def fit_track5_sequence_gate(
@@ -50,15 +54,23 @@ def fit_track5_sequence_gate(
     truth: pd.DataFrame,
     weight_grid: np.ndarray | None = None,
     models: tuple[str, ...] = ("ridge", "tree_d3_leaf1", "tree_d4_leaf1"),
+    apply_base_submission: pd.DataFrame | None = None,
+    apply_alternate_submission: pd.DataFrame | None = None,
     random_state: int = 13,
 ) -> SequenceGateFitResult:
     """Fit per-sequence blend weights and return same-split/LOSO diagnostics.
 
     ``base_submission``, ``alternate_submission``, and ``truth`` must be
     normalized frames from :func:`load_track5_submission` and share
-    ``sequence_id,time_s`` keys.  The returned model rows are sorted by LOSO
-    MSE first, then same-split MSE.
+    ``sequence_id,time_s`` keys.  If ``apply_base_submission`` and
+    ``apply_alternate_submission`` are provided, the best LOSO-selected model is
+    refit on the training split and used to predict sequence weights for the
+    apply split without using apply truth.  The returned model rows are sorted
+    by LOSO MSE first, then same-split MSE.
     """
+
+    if (apply_base_submission is None) != (apply_alternate_submission is None):
+        raise ValueError("apply-base-submission and apply-alternate-submission must be paired")
 
     base, alternate, truth_rows = _aligned_frames(base_submission, alternate_submission, truth)
     grid = _weight_grid(weight_grid)
@@ -110,6 +122,23 @@ def fit_track5_sequence_gate(
         ascending=[True, True, True],
     )
     best_model = str(summary.iloc[0]["model"])
+    apply_sequence_features = None
+    apply_weights = None
+    if apply_base_submission is not None and apply_alternate_submission is not None:
+        apply_base, apply_alternate = _aligned_submission_frames(
+            apply_base_submission,
+            apply_alternate_submission,
+        )
+        apply_sequence_features = _sequence_feature_table(apply_base, apply_alternate)
+        apply_weights = _predict_apply_weights(
+            best_model,
+            sequence_features,
+            apply_sequence_features,
+            feature_columns,
+            random_state=random_state,
+            min_weight=float(grid.min()),
+            max_weight=float(grid.max()),
+        )
     return SequenceGateFitResult(
         summary=summary.reset_index(drop=True),
         sequence_features=sequence_features.reset_index(drop=True),
@@ -117,6 +146,10 @@ def fit_track5_sequence_gate(
         same_split_weights=same_split_predictions[best_model].reset_index(drop=True),
         loso_weights=loso_predictions[best_model].reset_index(drop=True),
         best_model=best_model,
+        apply_sequence_features=None
+        if apply_sequence_features is None
+        else apply_sequence_features.reset_index(drop=True),
+        apply_weights=None if apply_weights is None else apply_weights.reset_index(drop=True),
     )
 
 
@@ -127,6 +160,8 @@ def write_track5_sequence_gate_fit_outputs(
     base_submission_path: Path,
     alternate_submission_path: Path,
     truth_path: Path,
+    apply_base_submission_path: Path | None = None,
+    apply_alternate_submission_path: Path | None = None,
     weight_grid: np.ndarray,
     protocol: str,
 ) -> dict[str, Path]:
@@ -142,11 +177,19 @@ def write_track5_sequence_gate_fit_outputs(
         "same_split_weights_csv": output / SAME_SPLIT_WEIGHTS_CSV,
         "loso_weights_csv": output / LOSO_WEIGHTS_CSV,
     }
+    if result.apply_weights is not None:
+        paths["apply_weights_csv"] = output / APPLY_WEIGHTS_CSV
+    if result.apply_sequence_features is not None:
+        paths["apply_features_csv"] = output / APPLY_FEATURES_CSV
     result.summary.to_csv(paths["summary_csv"], index=False)
     result.sequence_features.to_csv(paths["sequence_features_csv"], index=False)
     result.oracle_weights.to_csv(paths["oracle_weights_csv"], index=False)
     result.same_split_weights.to_csv(paths["same_split_weights_csv"], index=False)
     result.loso_weights.to_csv(paths["loso_weights_csv"], index=False)
+    if result.apply_weights is not None:
+        result.apply_weights.to_csv(paths["apply_weights_csv"], index=False)
+    if result.apply_sequence_features is not None:
+        result.apply_sequence_features.to_csv(paths["apply_features_csv"], index=False)
     best_row = result.summary.iloc[0].to_dict()
     payload = {
         "schema": "raft-uav-mmuad-track5-sequence-gate-fit-v1",
@@ -154,11 +197,20 @@ def write_track5_sequence_gate_fit_outputs(
         "base_submission": str(base_submission_path),
         "alternate_submission": str(alternate_submission_path),
         "truth": str(truth_path),
+        "apply_base_submission": None
+        if apply_base_submission_path is None
+        else str(apply_base_submission_path),
+        "apply_alternate_submission": None
+        if apply_alternate_submission_path is None
+        else str(apply_alternate_submission_path),
         "weight_min": float(np.min(weight_grid)),
         "weight_max": float(np.max(weight_grid)),
         "weight_count": int(len(weight_grid)),
         "best_model": result.best_model,
         "best_row": best_row,
+        "apply_sequence_count": 0
+        if result.apply_weights is None
+        else int(result.apply_weights["sequence_id"].nunique()),
         "paths": {name: str(path) for name, path in paths.items() if name != "summary_json"},
     }
     paths["summary_json"].write_text(json.dumps(_jsonable(payload), indent=2), encoding="utf-8")
@@ -173,6 +225,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-submission", type=Path, required=True)
     parser.add_argument("--alternate-submission", type=Path, required=True)
     parser.add_argument("--truth", type=Path, required=True)
+    parser.add_argument("--apply-base-submission", type=Path)
+    parser.add_argument("--apply-alternate-submission", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--weight-min", type=float, default=0.0)
     parser.add_argument("--weight-max", type=float, default=0.5)
@@ -197,6 +251,12 @@ def main(argv: list[str] | None = None) -> int:
         base_submission=load_track5_submission(args.base_submission),
         alternate_submission=load_track5_submission(args.alternate_submission),
         truth=load_track5_submission(args.truth),
+        apply_base_submission=None
+        if args.apply_base_submission is None
+        else load_track5_submission(args.apply_base_submission),
+        apply_alternate_submission=None
+        if args.apply_alternate_submission is None
+        else load_track5_submission(args.apply_alternate_submission),
         weight_grid=grid,
         models=tuple(args.model)
         or (
@@ -215,6 +275,8 @@ def main(argv: list[str] | None = None) -> int:
         base_submission_path=args.base_submission,
         alternate_submission_path=args.alternate_submission,
         truth_path=args.truth,
+        apply_base_submission_path=args.apply_base_submission,
+        apply_alternate_submission_path=args.apply_alternate_submission,
         weight_grid=grid,
         protocol=args.protocol,
     )
@@ -223,6 +285,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"summary_csv={paths['summary_csv']}")
     print(f"same_split_weights_csv={paths['same_split_weights_csv']}")
     print(f"loso_weights_csv={paths['loso_weights_csv']}")
+    if "apply_weights_csv" in paths:
+        print(f"apply_weights_csv={paths['apply_weights_csv']}")
     return 0
 
 
@@ -231,11 +295,8 @@ def _aligned_frames(
     alternate_submission: pd.DataFrame,
     truth: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    base = pd.DataFrame(base_submission).copy().sort_values(["sequence_id", "time_s"])
-    alternate = pd.DataFrame(alternate_submission).copy().sort_values(["sequence_id", "time_s"])
+    base, alternate = _aligned_submission_frames(base_submission, alternate_submission)
     truth_rows = pd.DataFrame(truth).copy().sort_values(["sequence_id", "time_s"])
-    if _submission_keys(base) != _submission_keys(alternate):
-        raise ValueError("base and alternate submissions do not match sequence/timestamp keys")
     if _submission_keys(base) != _submission_keys(truth_rows):
         raise ValueError("truth does not match submission sequence/timestamp keys")
     return (
@@ -243,6 +304,17 @@ def _aligned_frames(
         alternate.reset_index(drop=True),
         truth_rows.reset_index(drop=True),
     )
+
+
+def _aligned_submission_frames(
+    base_submission: pd.DataFrame,
+    alternate_submission: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    base = pd.DataFrame(base_submission).copy().sort_values(["sequence_id", "time_s"])
+    alternate = pd.DataFrame(alternate_submission).copy().sort_values(["sequence_id", "time_s"])
+    if _submission_keys(base) != _submission_keys(alternate):
+        raise ValueError("base and alternate submissions do not match sequence/timestamp keys")
+    return base.reset_index(drop=True), alternate.reset_index(drop=True)
 
 
 def _grid_from_args(weight_min: float, weight_max: float, weight_step: float) -> np.ndarray:
@@ -446,6 +518,29 @@ def _predict_loso_weights(
     return _weight_table(
         pd.Series([row["sequence_id"] for row in predictions]),
         np.asarray([row["blend_weight"] for row in predictions], dtype=float),
+        min_weight=min_weight,
+        max_weight=max_weight,
+    )
+
+
+def _predict_apply_weights(
+    model_name: str,
+    train_rows: pd.DataFrame,
+    apply_rows: pd.DataFrame,
+    feature_columns: list[str],
+    *,
+    random_state: int,
+    min_weight: float,
+    max_weight: float,
+) -> pd.DataFrame:
+    if apply_rows.empty:
+        return pd.DataFrame(columns=["sequence_id", "blend_weight"])
+    model = _make_model(model_name, random_state=random_state)
+    model.fit(_feature_matrix(train_rows, feature_columns), train_rows["oracle_weight"])
+    predicted = model.predict(_feature_matrix(apply_rows, feature_columns))
+    return _weight_table(
+        apply_rows["sequence_id"],
+        np.asarray(predicted, dtype=float),
         min_weight=min_weight,
         max_weight=max_weight,
     )
