@@ -76,6 +76,7 @@ raft-uav-mmuad-track5-sequence-gate-fit = "raft_uav.mmuad.track5_sequence_gate_f
 raft-uav-mmuad-track5-sequence-gate-train-apply = "raft_uav.mmuad.track5_sequence_gate_train_apply:main"
 raft-uav-mmuad-classification-audit = "raft_uav.mmuad.classification_audit:main"
 raft-uav-mmuad-sequence-classifier = "raft_uav.mmuad.classification_cli:main"
+raft-uav-mmuad-sequence-classifier-fusion = "raft_uav.mmuad.sequence_classifier_fusion:main"
 raft-uav-mmuad-train-sequence-classifier = "raft_uav.mmuad.train_sequence_classifier:main"
 raft-uav-mmuad-cluster-ranker = "raft_uav.mmuad.cluster_ranker:main"
 raft-uav-mmuad-coordinate-audit = "raft_uav.mmuad.coordinate_alignment_audit:main"
