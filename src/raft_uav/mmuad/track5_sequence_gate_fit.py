@@ -248,15 +248,15 @@ def main(argv: list[str] | None = None) -> int:
 
     grid = _grid_from_args(args.weight_min, args.weight_max, args.weight_step)
     result = fit_track5_sequence_gate(
-        base_submission=load_track5_submission(args.base_submission),
-        alternate_submission=load_track5_submission(args.alternate_submission),
-        truth=load_track5_submission(args.truth),
+        base_submission=_load_track5_gate_rows(args.base_submission),
+        alternate_submission=_load_track5_gate_rows(args.alternate_submission),
+        truth=_load_track5_gate_rows(args.truth),
         apply_base_submission=None
         if args.apply_base_submission is None
-        else load_track5_submission(args.apply_base_submission),
+        else _load_track5_gate_rows(args.apply_base_submission),
         apply_alternate_submission=None
         if args.apply_alternate_submission is None
-        else load_track5_submission(args.apply_alternate_submission),
+        else _load_track5_gate_rows(args.apply_alternate_submission),
         weight_grid=grid,
         models=tuple(args.model)
         or (
@@ -288,6 +288,44 @@ def main(argv: list[str] | None = None) -> int:
     if "apply_weights_csv" in paths:
         print(f"apply_weights_csv={paths['apply_weights_csv']}")
     return 0
+
+
+def _load_track5_gate_rows(path: Path) -> pd.DataFrame:
+    """Load official Track 5 rows or normalized train/reference rows."""
+
+    try:
+        return load_track5_submission(path)
+    except ValueError:
+        path = Path(path)
+        if path.suffix.lower() == ".zip":
+            raise
+        rows = pd.read_csv(path)
+    columns = {str(column).lower(): str(column) for column in rows.columns}
+    required = {
+        "sequence_id": columns.get("sequence_id"),
+        "time_s": columns.get("time_s"),
+        "state_x_m": columns.get("state_x_m") or columns.get("x_m"),
+        "state_y_m": columns.get("state_y_m") or columns.get("y_m"),
+        "state_z_m": columns.get("state_z_m") or columns.get("z_m"),
+    }
+    missing = [name for name, column in required.items() if column is None]
+    if missing:
+        raise ValueError(f"{path} missing official or normalized columns: {missing}")
+    normalized = pd.DataFrame(
+        {
+            "sequence_id": rows[required["sequence_id"]].astype(str),
+            "time_s": pd.to_numeric(rows[required["time_s"]], errors="raise"),
+            "state_x_m": pd.to_numeric(rows[required["state_x_m"]], errors="raise"),
+            "state_y_m": pd.to_numeric(rows[required["state_y_m"]], errors="raise"),
+            "state_z_m": pd.to_numeric(rows[required["state_z_m"]], errors="raise"),
+        }
+    )
+    class_column = (
+        columns.get("classification") or columns.get("uav_type") or columns.get("class_id")
+    )
+    if class_column is not None:
+        normalized["Classification"] = pd.to_numeric(rows[class_column], errors="coerce")
+    return normalized.sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
 def _aligned_frames(

@@ -57,6 +57,21 @@ def _write_apply_inputs(tmp_path: Path) -> tuple[Path, Path]:
     return base_path, alternate_path
 
 
+def _write_normalized_truth(tmp_path: Path) -> Path:
+    path = tmp_path / "truth_normalized.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["seq0001", "seq0001", "seq0002", "seq0002", "seq0003", "seq0003"],
+            "time_s": [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+            "x_m": [5.0, 7.0, 2.5, 4.5, 0.0, 2.0],
+            "y_m": [0.0] * 6,
+            "z_m": [1.0] * 6,
+            "uav_type": [1] * 6,
+        }
+    ).to_csv(path, index=False)
+    return path
+
+
 def test_sequence_gate_fit_finds_oracle_sequence_weights(tmp_path: Path) -> None:
     base_path, alternate_path, truth_path = _write_fit_inputs(tmp_path)
 
@@ -158,6 +173,32 @@ def test_sequence_gate_fit_cli_writes_outputs(tmp_path: Path) -> None:
     assert (output_dir / "mmuad_track5_sequence_gate_fit_summary.csv").exists()
     assert (output_dir / "mmuad_track5_sequence_gate_loso_weights.csv").exists()
     assert (output_dir / "mmuad_track5_sequence_gate_apply_weights.csv").exists()
+
+
+def test_sequence_gate_fit_cli_accepts_normalized_truth_rows(tmp_path: Path) -> None:
+    base_path, alternate_path, _ = _write_fit_inputs(tmp_path)
+    truth_path = _write_normalized_truth(tmp_path)
+    output_dir = tmp_path / "out_normalized"
+
+    status = sequence_gate_fit_main(
+        [
+            "--base-submission",
+            str(base_path),
+            "--alternate-submission",
+            str(alternate_path),
+            "--truth",
+            str(truth_path),
+            "--output-dir",
+            str(output_dir),
+            "--weight-step",
+            "0.25",
+            "--model",
+            "ridge",
+        ]
+    )
+
+    assert status == 0
+    assert (output_dir / "mmuad_track5_sequence_gate_fit_summary.json").exists()
 
 
 def test_sequence_gate_fit_requires_paired_apply_submissions(tmp_path: Path) -> None:
