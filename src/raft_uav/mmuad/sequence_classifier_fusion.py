@@ -92,18 +92,12 @@ def select_train_safe_fusion(
     labels = np.asarray([train_labels[sequence] for sequence in train_sequences], dtype=str)
     split_count = _effective_cv_folds(labels, cv_folds)
 
-    from sklearn.model_selection import StratifiedKFold
-
-    splitter = StratifiedKFold(
-        n_splits=split_count,
-        shuffle=True,
-        random_state=int(cv_random_state),
-    )
+    splits = _stratified_cv_splits(labels, split_count, int(cv_random_state))
     cv_rows: list[dict[str, Any]] = []
     oof_frames: list[pd.DataFrame] = []
     for spec in model_specs:
         fold_probability_pairs: list[tuple[pd.DataFrame, pd.DataFrame, dict[str, str], int]] = []
-        for fold, (train_idx, holdout_idx) in enumerate(splitter.split(np.zeros(len(labels)), labels)):
+        for fold, (train_idx, holdout_idx) in enumerate(splits):
             fold_labels = {
                 train_sequences[index]: train_labels[train_sequences[index]]
                 for index in train_idx
@@ -427,6 +421,30 @@ def _effective_cv_folds(labels: np.ndarray, cv_folds: int) -> int:
     if split_count < 2:
         raise ValueError("stratified fusion selection needs at least two examples per class")
     return split_count
+
+
+def _stratified_cv_splits(
+    labels: np.ndarray,
+    split_count: int,
+    random_state: int,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    labels = np.asarray(labels, dtype=str)
+    rng = np.random.default_rng(int(random_state))
+    holdout_by_fold: list[list[int]] = [[] for _ in range(int(split_count))]
+    for label in sorted(set(labels.tolist())):
+        indices = np.flatnonzero(labels == label).astype(int)
+        shuffled = indices.copy()
+        rng.shuffle(shuffled)
+        for fold, fold_indices in enumerate(np.array_split(shuffled, int(split_count))):
+            holdout_by_fold[fold].extend(int(index) for index in fold_indices)
+    all_indices = np.arange(len(labels), dtype=int)
+    splits: list[tuple[np.ndarray, np.ndarray]] = []
+    for holdout in holdout_by_fold:
+        holdout_idx = np.asarray(sorted(holdout), dtype=int)
+        train_mask = np.ones(len(labels), dtype=bool)
+        train_mask[holdout_idx] = False
+        splits.append((all_indices[train_mask], holdout_idx))
+    return splits
 
 
 def _accuracy_from_probability_rows(rows: pd.DataFrame) -> tuple[float | None, int | None]:
