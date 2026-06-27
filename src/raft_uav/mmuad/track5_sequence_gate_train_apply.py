@@ -27,6 +27,7 @@ from raft_uav.mmuad.track5_scorecard import build_track5_scorecard, write_track5
 from raft_uav.mmuad.track5_sequence_gate import blend_track5_sequence_gate
 from raft_uav.mmuad.track5_sequence_gate import write_track5_sequence_gate_outputs
 from raft_uav.mmuad.track5_sequence_gate_fit import _grid_from_args
+from raft_uav.mmuad.track5_sequence_gate_fit import FEATURE_PRESETS
 from raft_uav.mmuad.track5_sequence_gate_fit import _jsonable
 from raft_uav.mmuad.track5_sequence_gate_fit import _load_track5_gate_rows
 from raft_uav.mmuad.track5_sequence_gate_fit import fit_track5_sequence_gate
@@ -65,6 +66,7 @@ def run_track5_sequence_gate_train_apply(
     models: tuple[str, ...] = (),
     weight_grid: np.ndarray | None = None,
     class_policy: str = "base",
+    feature_preset: str = "all",
     protocol: str = "train_fit_apply_not_hidden_test_scored_unless_truth_provided",
     random_state: int = 13,
     require_leaderboard_ready: bool = False,
@@ -93,6 +95,7 @@ def run_track5_sequence_gate_train_apply(
         apply_alternate_submission=_load_track5_gate_rows(apply_alternate_submission_path),
         weight_grid=grid,
         models=tuple(selected_models),
+        feature_preset=feature_preset,
         random_state=int(random_state),
     )
     if fit_result.apply_weights is None:
@@ -129,6 +132,8 @@ def run_track5_sequence_gate_train_apply(
             "protocol": protocol,
             "fit_summary_json": str(fit_paths["summary_json"]),
             "fit_best_model": fit_result.best_model,
+            "feature_preset": fit_result.feature_preset,
+            "feature_columns": list(fit_result.feature_columns),
             "train_base_submission": str(train_base_submission_path),
             "train_alternate_submission": str(train_alternate_submission_path),
             "train_truth": str(train_truth_path),
@@ -175,6 +180,9 @@ def run_track5_sequence_gate_train_apply(
         "weight_min": float(np.min(grid)),
         "weight_max": float(np.max(grid)),
         "weight_count": int(len(grid)),
+        "feature_preset": fit_result.feature_preset,
+        "feature_columns": list(fit_result.feature_columns),
+        "feature_count": int(len(fit_result.feature_columns)),
         "best_model": fit_result.best_model,
         "best_fit_row": fit_result.summary.iloc[0].to_dict(),
         "apply_sequence_count": int(fit_result.apply_weights["sequence_id"].nunique()),
@@ -212,6 +220,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--weight-max", type=float, default=0.5)
     parser.add_argument("--weight-step", type=float, default=0.01)
     parser.add_argument("--model", action="append", default=[])
+    parser.add_argument(
+        "--feature-preset",
+        choices=FEATURE_PRESETS,
+        default="all",
+        help="feature subset used to train/apply the sequence gate",
+    )
     parser.add_argument("--class-policy", choices=("base", "alternate"), default="base")
     parser.add_argument("--protocol", default="train_fit_apply_not_hidden_test_scored_unless_truth_provided")
     parser.add_argument("--random-state", type=int, default=13)
@@ -230,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
         models=tuple(args.model),
         weight_grid=_grid_from_args(args.weight_min, args.weight_max, args.weight_step),
         class_policy=args.class_policy,
+        feature_preset=args.feature_preset,
         protocol=args.protocol,
         random_state=args.random_state,
         require_leaderboard_ready=bool(args.require_leaderboard_ready),

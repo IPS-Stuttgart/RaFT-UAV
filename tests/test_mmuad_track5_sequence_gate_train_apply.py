@@ -91,6 +91,7 @@ def test_sequence_gate_train_apply_writes_zip_manifest_and_scorecard(tmp_path: P
         output_dir=tmp_path / "out",
         weight_grid=pd.Series([0.0, 0.25, 0.5]).to_numpy(float),
         models=("ridge",),
+        feature_preset="diff-no-std",
         require_leaderboard_ready=True,
     )
 
@@ -100,6 +101,8 @@ def test_sequence_gate_train_apply_writes_zip_manifest_and_scorecard(tmp_path: P
     assert result.scorecard_paths["scorecard_json"].exists()
     manifest = json.loads(result.manifest_json.read_text(encoding="utf-8"))
     assert manifest["schema"] == "raft-uav-mmuad-track5-sequence-gate-train-apply-v1"
+    assert manifest["feature_preset"] == "diff-no-std"
+    assert "diff_std" not in manifest["feature_columns"]
     assert manifest["apply_sequence_count"] == 2
     with ZipFile(result.gate_paths["zip"]) as archive:
         assert archive.namelist() == ["mmaud_results.csv"]
@@ -131,12 +134,17 @@ def test_sequence_gate_train_apply_cli_writes_outputs(tmp_path: Path) -> None:
             "0.25",
             "--model",
             "ridge",
+            "--feature-preset",
+            "diff-no-std",
             "--require-leaderboard-ready",
         ]
     )
 
     assert status == 0
-    assert (output_dir / "mmuad_track5_sequence_gate_train_apply_manifest.json").exists()
+    manifest_path = output_dir / "mmuad_track5_sequence_gate_train_apply_manifest.json"
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["feature_preset"] == "diff-no-std"
     assert (output_dir / "sequence_gate_apply" / "ug2_submission_sequence_gate.zip").exists()
 
 
