@@ -238,6 +238,17 @@ def test_mmuad_train_sequence_classifier_entrypoint_target_imports() -> None:
     _assert_entrypoint_target_imports("raft-uav-mmuad-train-sequence-classifier")
 
 
+def test_mmuad_sequence_classifier_fusion_entrypoint_is_exposed() -> None:
+    assert (
+        _project_scripts()["raft-uav-mmuad-sequence-classifier-fusion"]
+        == "raft_uav.mmuad.sequence_classifier_fusion:main"
+    )
+
+
+def test_mmuad_sequence_classifier_fusion_entrypoint_target_imports() -> None:
+    _assert_entrypoint_target_imports("raft-uav-mmuad-sequence-classifier-fusion")
+
+
 def test_mmuad_sequence_alignment_audit_entrypoint_is_exposed() -> None:
     assert (
         _project_scripts()["raft-uav-mmuad-sequence-alignment-audit"]
