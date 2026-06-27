@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from raft_uav.mmuad.candidate_pull import CandidatePullConfig
+from raft_uav.mmuad.candidate_pull import candidate_pull_input_provenance
 from raft_uav.mmuad.candidate_pull import assign_candidate_pull_alphas
 from raft_uav.mmuad.candidate_pull import main as candidate_pull_main
 from raft_uav.mmuad.candidate_pull import parse_position
@@ -128,7 +129,35 @@ def test_candidate_pull_cli_writes_zip_and_provenance_without_truth(tmp_path: Pa
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     assert provenance["schema"] == "raft-uav-mmuad-candidate-pull-provenance-v1"
     assert provenance["policy"] == "constant"
+    assert provenance["results_in"] == str(results_csv)
+    assert provenance["candidates"] == str(candidates_csv)
+    assert provenance["input_result_row_count"] == 2
+    assert provenance["input_candidate_row_count"] == 4
+    assert provenance["candidate_score_column"] == "ranker_score"
+    assert provenance["candidate_score_summary"]["finite_count"] == 4
     assert "truth" not in json.dumps(provenance).lower()
+
+
+def test_candidate_pull_input_provenance_reports_score_and_sources(tmp_path: Path) -> None:
+    results_csv = tmp_path / "results.csv"
+    candidates_csv = tmp_path / "candidates.csv"
+    results = _results()
+    candidates = _candidates().assign(source=["lidar", "lidar", "radar", "radar"])
+
+    provenance = candidate_pull_input_provenance(
+        results_path=results_csv,
+        candidates_path=candidates_csv,
+        results=results,
+        candidates=candidates,
+    )
+
+    assert provenance["results_in"] == str(results_csv)
+    assert provenance["candidates"] == str(candidates_csv)
+    assert provenance["input_candidate_sequence_count"] == 1
+    assert provenance["input_candidate_timestamp_count"] == 2
+    assert provenance["candidate_score_column"] == "ranker_score"
+    assert provenance["candidate_score_summary"]["positive_fraction"] == pytest.approx(1.0)
+    assert provenance["candidate_source_counts"] == {"lidar": 2, "radar": 2}
 
 
 def test_candidate_pull_cli_rejects_truth_argument(tmp_path: Path) -> None:

@@ -701,10 +701,20 @@ def main(argv: list[str] | None = None) -> int:
         measurement_cross_sensor_weight=args.candidate_pull_measurement_cross_sensor_weight,
         rts_accel_std_mps2=args.candidate_pull_rts_accel_std_mps2,
     )
+    results = pd.read_csv(args.results_in)
+    candidates = pd.read_csv(args.candidates)
     result = refine_official_results_with_candidate_pull(
-        pd.read_csv(args.results_in),
-        pd.read_csv(args.candidates),
+        results,
+        candidates,
         config=config,
+    )
+    result.provenance.update(
+        candidate_pull_input_provenance(
+            results_path=args.results_in,
+            candidates_path=args.candidates,
+            results=results,
+            candidates=candidates,
+        )
     )
     paths = write_candidate_pull_artifacts(
         result,
@@ -719,6 +729,77 @@ def main(argv: list[str] | None = None) -> int:
     for key, value in paths.items():
         print(f"{key}={value}")
     return 0
+
+
+def candidate_pull_input_provenance(
+    *,
+    results_path: Path,
+    candidates_path: Path,
+    results: pd.DataFrame,
+    candidates: pd.DataFrame,
+) -> dict[str, Any]:
+    """Return truth-free input diagnostics for candidate-pull reproducibility."""
+
+    candidate_rows = pd.DataFrame(candidates).copy()
+    _rename_candidate_columns(candidate_rows)
+    result_rows = pd.DataFrame(results).copy()
+    score_column = _first_existing_column(
+        candidate_rows,
+        ("ranker_score", "cluster_ranker_score", "candidate_ranker_score", "confidence", "score"),
+    )
+    candidate_score_summary = _numeric_column_summary(candidate_rows, score_column)
+    source_counts: dict[str, int] = {}
+    if "source" in candidate_rows.columns:
+        source_counts = {
+            str(key): int(value)
+            for key, value in candidate_rows["source"].astype(str).value_counts().sort_index().items()
+        }
+    sequence_count = (
+        int(candidate_rows["Sequence"].astype(str).nunique())
+        if "Sequence" in candidate_rows.columns
+        else 0
+    )
+    candidate_timestamp_count = 0
+    if {"Sequence", "Timestamp"}.issubset(candidate_rows.columns):
+        candidate_timestamp_count = int(
+            candidate_rows[["Sequence", "Timestamp"]].drop_duplicates().shape[0]
+        )
+    result_sequence_count = (
+        int(result_rows["Sequence"].astype(str).nunique())
+        if "Sequence" in result_rows.columns
+        else 0
+    )
+    return {
+        "results_in": str(results_path),
+        "candidates": str(candidates_path),
+        "input_result_row_count": int(len(result_rows)),
+        "input_result_sequence_count": result_sequence_count,
+        "input_candidate_row_count": int(len(candidate_rows)),
+        "input_candidate_sequence_count": sequence_count,
+        "input_candidate_timestamp_count": candidate_timestamp_count,
+        "candidate_score_column": score_column,
+        "candidate_score_summary": candidate_score_summary,
+        "candidate_source_counts": source_counts,
+        "candidate_columns": [str(column) for column in candidate_rows.columns],
+    }
+
+
+def _numeric_column_summary(rows: pd.DataFrame, column: str | None) -> dict[str, Any]:
+    if column is None or column not in rows.columns:
+        return {"column": column, "finite_count": 0}
+    values = pd.to_numeric(rows[column], errors="coerce").to_numpy(float)
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return {"column": column, "finite_count": 0}
+    return {
+        "column": str(column),
+        "finite_count": int(finite.size),
+        "min": float(np.min(finite)),
+        "p50": float(np.percentile(finite, 50.0)),
+        "p95": float(np.percentile(finite, 95.0)),
+        "max": float(np.max(finite)),
+        "positive_fraction": float(np.count_nonzero(finite > 0.0) / finite.size),
+    }
 
 
 def _feature_rule_v2_alpha(row: object) -> tuple[float, float, str]:
