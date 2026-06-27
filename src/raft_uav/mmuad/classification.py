@@ -1268,8 +1268,9 @@ def _predict_logistic_regression(
         from sklearn.linear_model import LogisticRegression
     except Exception as exc:  # pragma: no cover - depends on optional sklearn
         raise ValueError("logistic-regression sequence classifier requires scikit-learn") from exc
-    model = LogisticRegression(max_iter=1000, class_weight="balanced")
-    model.fit(train_matrix, train["uav_type"].astype(str))
+    labels = train["uav_type"].astype(str).to_numpy()
+    model = LogisticRegression(max_iter=1000)
+    model.fit(train_matrix, labels, sample_weight=_balanced_sample_weights(labels))
     return _predict_sklearn_model(
         model,
         predict_features,
@@ -1291,10 +1292,10 @@ def _predict_random_forest(
     model = RandomForestClassifier(
         n_estimators=200,
         random_state=0,
-        class_weight="balanced",
         min_samples_leaf=1,
     )
-    model.fit(train_matrix, train["uav_type"].astype(str))
+    labels = train["uav_type"].astype(str).to_numpy()
+    model.fit(train_matrix, labels, sample_weight=_balanced_sample_weights(labels))
     return _predict_sklearn_model(
         model,
         predict_features,
@@ -1388,7 +1389,7 @@ def _fit_sklearn_sequence_estimator(
         if method == "logistic-regression":
             from sklearn.linear_model import LogisticRegression
 
-            estimator = LogisticRegression(max_iter=1000, class_weight="balanced")
+            estimator = LogisticRegression(max_iter=1000)
         elif method == "random-forest":
             from sklearn.ensemble import RandomForestClassifier
 
@@ -1396,7 +1397,6 @@ def _fit_sklearn_sequence_estimator(
                 n_estimators=int(n_estimators),
                 max_depth=max_depth,
                 random_state=int(random_state),
-                class_weight="balanced",
                 min_samples_leaf=1,
             )
         elif method == "hist-gradient-boosting":
@@ -1407,8 +1407,20 @@ def _fit_sklearn_sequence_estimator(
             raise ValueError(f"unsupported sklearn sequence classifier method {method!r}")
     except Exception as exc:  # pragma: no cover - depends on optional sklearn
         raise ValueError(f"{method} sequence classifier requires scikit-learn") from exc
-    estimator.fit(train_matrix, labels.astype(str))
+    labels = labels.astype(str)
+    estimator.fit(train_matrix, labels, sample_weight=_balanced_sample_weights(labels))
     return estimator
+
+
+def _balanced_sample_weights(labels: np.ndarray) -> np.ndarray:
+    labels = np.asarray(labels, dtype=str)
+    counts = pd.Series(labels).value_counts().to_dict()
+    class_count = max(len(counts), 1)
+    total = max(len(labels), 1)
+    return np.asarray(
+        [total / (class_count * float(counts.get(label, 1))) for label in labels],
+        dtype=float,
+    )
 
 
 def _predict_model_majority(model: dict[str, Any], predict_features: pd.DataFrame) -> pd.DataFrame:

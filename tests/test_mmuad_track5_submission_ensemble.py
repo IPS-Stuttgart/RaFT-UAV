@@ -45,7 +45,7 @@ def test_parse_submission_input_accepts_label_weight_path() -> None:
 
     assert parsed.label == "smooth"
     assert parsed.weight == pytest.approx(0.25)
-    assert str(parsed.path) == "/tmp/a.zip"
+    assert parsed.path.as_posix() == "/tmp/a.zip"
 
 
 def test_track5_submission_ensemble_averages_positions_and_votes_classes(tmp_path: Path) -> None:
