@@ -120,6 +120,7 @@ raft-uav-mmuad-apply-source-calibration = "raft_uav.mmuad.source_calibration:app
 raft-uav-mmuad-source-calibration-branches = "raft_uav.mmuad.source_calibration_branches:main"
 raft-uav-mmuad-select-train-config = "raft_uav.mmuad.train_selected_config:main"
 raft-uav-multi-uav-lts = "raft_uav.multi_uav_lts.cli:main"
+raft-uav-multi-uav-lts-coverage-audit = "raft_uav.multi_uav_lts.coverage_audit:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -131,6 +132,3 @@ line-length = 100
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 addopts = "--basetemp=.pytest-tmp"
-markers = [
-    "integration: tests that require the external AERPAW/Dryad dataset",
-]
