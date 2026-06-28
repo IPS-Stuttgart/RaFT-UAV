@@ -48,7 +48,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--file-summary-csv", type=Path)
     parser.add_argument("--weights", default="./yolov12/weights/ViA_yolov12n.pt")
     parser.add_argument("--img-size", type=int, default=1600)
+    parser.add_argument("--conf-thres", type=float)
+    parser.add_argument("--iou-thres", type=float)
     parser.add_argument("--track-buffer", type=int, default=60)
+    parser.add_argument("--track-high-thresh", type=float)
+    parser.add_argument("--track-low-thresh", type=float)
+    parser.add_argument("--new-track-thresh", type=float)
+    parser.add_argument("--match-thresh", type=float)
+    parser.add_argument("--min-box-area", type=float)
+    parser.add_argument("--proximity-thresh", type=float)
+    parser.add_argument("--appearance-thresh", type=float)
     parser.add_argument("--device", default=os.environ.get("GPU_ID", "0"))
     parser.add_argument("--shard-index", type=int, default=int(os.environ.get("SHARD_INDEX", "0")))
     parser.add_argument("--shard-count", type=int, default=int(os.environ.get("SHARD_COUNT", "1")))
@@ -57,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-reid", action="store_true")
     parser.add_argument("--fast-reid-config", default="logs/sbs_S50/config.yaml")
     parser.add_argument("--fast-reid-weights", default="logs/sbs_S50/model_0016.pth")
+    parser.add_argument("--fuse-score", action="store_true")
+    parser.add_argument("--cmc-method")
     parser.add_argument("--package-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
@@ -252,7 +263,24 @@ def _inference_command(
                 args.fast_reid_weights,
             ]
         )
+    _append_optional_value(command, "--conf-thres", args.conf_thres)
+    _append_optional_value(command, "--iou-thres", args.iou_thres)
+    _append_optional_value(command, "--track_high_thresh", args.track_high_thresh)
+    _append_optional_value(command, "--track_low_thresh", args.track_low_thresh)
+    _append_optional_value(command, "--new_track_thresh", args.new_track_thresh)
+    _append_optional_value(command, "--match_thresh", args.match_thresh)
+    _append_optional_value(command, "--min_box_area", args.min_box_area)
+    _append_optional_value(command, "--proximity_thresh", args.proximity_thresh)
+    _append_optional_value(command, "--appearance_thresh", args.appearance_thresh)
+    _append_optional_value(command, "--cmc-method", args.cmc_method)
+    if args.fuse_score:
+        command.append("--fuse-score")
     return command
+
+
+def _append_optional_value(command: list[str], flag: str, value: object | None) -> None:
+    if value is not None:
+        command.extend([flag, str(value)])
 
 
 def _write_json(payload: object, path: Path) -> None:
