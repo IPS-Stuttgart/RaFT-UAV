@@ -848,8 +848,17 @@ def _catprob_best_per_frame_rows(
     frame_column = _radar_frame_group_column(candidates)
     ranked = _catprob_ranked_rows(candidates, frame_column)
     if frame_column is None:
-        return ranked.head(1).sort_index()
-    return ranked.groupby(frame_column, sort=False, dropna=False).head(1).sort_index()
+        return _dataframe_from_ranked_records(ranked, [0]).sort_index()
+
+    keep_positions: list[int] = []
+    seen_frames: set[Any] = set()
+    for position, frame_value in enumerate(ranked[frame_column].tolist()):
+        frame_key = ("__missing_frame__",) if _is_missing_scalar(frame_value) else frame_value
+        if frame_key in seen_frames:
+            continue
+        seen_frames.add(frame_key)
+        keep_positions.append(position)
+    return _dataframe_from_ranked_records(ranked, keep_positions).sort_index()
 
 
 def _catprob_ranked_rows(
@@ -867,6 +876,13 @@ def _catprob_ranked_rows(
             sort_columns.append(tie_breaker)
             ascending.append(True)
     return candidates.sort_values(sort_columns, ascending=ascending, kind="mergesort")
+
+
+def _dataframe_from_ranked_records(ranked: pd.DataFrame, positions: list[int]) -> pd.DataFrame:
+    records = ranked.to_dict("records")
+    selected_records = [records[position] for position in positions]
+    selected_index = [ranked.index[position] for position in positions]
+    return pd.DataFrame.from_records(selected_records, columns=ranked.columns, index=selected_index)
 
 
 def _radar_frame_group_column(radar: pd.DataFrame) -> str | None:
