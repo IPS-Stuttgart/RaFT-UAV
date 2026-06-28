@@ -66,8 +66,10 @@ python -m raft_uav.multi_uav_lts.cli package-submission \
 ```
 
 Audit prediction coverage before packaging. This catches missing, extra, empty,
-malformed, and unsorted prediction files before the packager fills missing
-submission-template entries with empty files:
+malformed, unsorted, and out-of-range-frame prediction files before the packager
+fills missing submission-template entries with empty files. Passing
+`--sequence-root` lets the audit compare prediction frame IDs against actual
+image counts for each sequence:
 
 ```bash
 PYTHONPATH=src RAFT_UAV_SKIP_RUNTIME_HOOKS=1 \

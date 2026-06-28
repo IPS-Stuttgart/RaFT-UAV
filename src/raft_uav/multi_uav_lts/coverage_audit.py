@@ -16,10 +16,13 @@ from pathlib import Path
 from typing import Any
 
 from raft_uav.multi_uav_lts.cli import (
+    _parse_int_like,
     _prediction_texts,
     _summarize_prediction_text,
     expected_names_from_template,
 )
+
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
 @dataclass(frozen=True)
@@ -33,11 +36,13 @@ class PredictionCoverageRow:
     row_count: int
     first_frame: int | None
     last_frame: int | None
+    expected_frame_count: int | None
     unique_object_ids: int
     parse_errors: int
     invalid_geometry_rows: int
     invalid_confidence_rows: int
     unsorted_rows: int
+    out_of_range_frame_rows: int
 
 
 @dataclass(frozen=True)
@@ -57,9 +62,11 @@ class PredictionCoverageAudit:
     invalid_geometry_rows: int
     invalid_confidence_rows: int
     unsorted_rows: int
+    out_of_range_frame_rows: int
     missing_files: list[str]
     extra_files: list[str]
     empty_expected_files: list[str]
+    out_of_range_frame_files: list[str]
     rows: list[PredictionCoverageRow]
 
 
@@ -73,6 +80,7 @@ def audit_prediction_coverage(
 
     predictions = _prediction_texts(prediction_path)
     expected_names = _expected_prediction_names(template_zip=template_zip, sequence_root=sequence_root)
+    expected_frame_counts = _expected_frame_counts(sequence_root)
     present_names = sorted(predictions)
     expected_set = set(expected_names)
     present_set = set(present_names)
@@ -82,9 +90,11 @@ def audit_prediction_coverage(
     missing_files: list[str] = []
     extra_files: list[str] = []
     empty_expected_files: list[str] = []
+    out_of_range_frame_files: list[str] = []
     for name in all_names:
         expected = name in expected_set
         present = name in present_set
+        expected_frame_count = expected_frame_counts.get(name)
         if not present:
             status = "missing"
             missing_files.append(name)
@@ -96,15 +106,23 @@ def audit_prediction_coverage(
                 row_count=0,
                 first_frame=None,
                 last_frame=None,
+                expected_frame_count=expected_frame_count,
                 unique_object_ids=0,
                 parse_errors=0,
                 invalid_geometry_rows=0,
                 invalid_confidence_rows=0,
                 unsorted_rows=0,
+                out_of_range_frame_rows=0,
             )
             rows.append(row)
             continue
         summary = _summarize_prediction_text(name, predictions[name])
+        out_of_range_frame_rows = _count_out_of_range_frame_rows(
+            predictions[name],
+            expected_frame_count=expected_frame_count,
+        )
+        if out_of_range_frame_rows:
+            out_of_range_frame_files.append(name)
         if not expected:
             status = "extra"
             extra_files.append(name)
@@ -115,6 +133,7 @@ def audit_prediction_coverage(
             summary.parse_errors
             or summary.invalid_geometry_rows
             or summary.invalid_confidence_rows
+            or out_of_range_frame_rows
         ):
             status = "invalid"
         elif summary.unsorted_rows:
@@ -130,11 +149,13 @@ def audit_prediction_coverage(
                 row_count=summary.row_count,
                 first_frame=summary.first_frame,
                 last_frame=summary.last_frame,
+                expected_frame_count=expected_frame_count,
                 unique_object_ids=summary.unique_object_ids,
                 parse_errors=summary.parse_errors,
                 invalid_geometry_rows=summary.invalid_geometry_rows,
                 invalid_confidence_rows=summary.invalid_confidence_rows,
                 unsorted_rows=summary.unsorted_rows,
+                out_of_range_frame_rows=out_of_range_frame_rows,
             )
         )
 
@@ -142,12 +163,14 @@ def audit_prediction_coverage(
     invalid_geometry_rows = sum(row.invalid_geometry_rows for row in rows)
     invalid_confidence_rows = sum(row.invalid_confidence_rows for row in rows)
     unsorted_rows = sum(row.unsorted_rows for row in rows)
+    out_of_range_frame_rows = sum(row.out_of_range_frame_rows for row in rows)
     ready = (
         not missing_files
         and not extra_files
         and parse_errors == 0
         and invalid_geometry_rows == 0
         and invalid_confidence_rows == 0
+        and out_of_range_frame_rows == 0
     )
     return PredictionCoverageAudit(
         prediction_path=str(prediction_path),
@@ -163,9 +186,11 @@ def audit_prediction_coverage(
         invalid_geometry_rows=invalid_geometry_rows,
         invalid_confidence_rows=invalid_confidence_rows,
         unsorted_rows=unsorted_rows,
+        out_of_range_frame_rows=out_of_range_frame_rows,
         missing_files=missing_files,
         extra_files=extra_files,
         empty_expected_files=empty_expected_files,
+        out_of_range_frame_files=sorted(set(out_of_range_frame_files)),
         rows=rows,
     )
 
@@ -231,6 +256,39 @@ def _expected_prediction_names(
     if not names:
         raise ValueError("provide --template-zip and/or --sequence-root for coverage auditing")
     return sorted(names)
+
+
+def _expected_frame_counts(sequence_root: Path | None) -> dict[str, int]:
+    if sequence_root is None:
+        return {}
+    counts: dict[str, int] = {}
+    for sequence_dir in sorted(sequence_root.iterdir()):
+        if not sequence_dir.is_dir():
+            continue
+        counts[f"{sequence_dir.name}.txt"] = sum(
+            1 for path in sequence_dir.iterdir() if path.suffix.lower() in IMAGE_SUFFIXES
+        )
+    return counts
+
+
+def _count_out_of_range_frame_rows(text: str, *, expected_frame_count: int | None) -> int:
+    if expected_frame_count is None or expected_frame_count <= 0:
+        return 0
+    count = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 1:
+            continue
+        try:
+            frame_id = _parse_int_like(parts[0])
+        except ValueError:
+            continue
+        if frame_id < 1 or frame_id > expected_frame_count:
+            count += 1
+    return count
 
 
 if __name__ == "__main__":  # pragma: no cover
