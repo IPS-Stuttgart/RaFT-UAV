@@ -366,7 +366,7 @@ def normalize_radar(
 
     out["timestamp_raw"] = out["global_time_raw_s"]
     out["timestamp"] = pd.to_datetime(out["global_time_raw_s"], unit="s", errors="coerce")
-    out["timestamp"] = out["timestamp"] + pd.to_timedelta(clock_offset_s, unit="s")
+    out["timestamp"] = out["timestamp"] + timedelta(seconds=clock_offset_s)
     out["time_s"] = (out["timestamp"] - truth_origin_time).dt.total_seconds()
 
     for column in [
