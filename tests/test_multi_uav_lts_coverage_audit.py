@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+import json
+import zipfile
+from pathlib import Path
+
+import pytest
+
+from raft_uav.multi_uav_lts.coverage_audit import (
+    audit_prediction_coverage,
+    main as coverage_audit_main,
+)
+
+
+def _write_zip(path: Path, files: dict[str, str]) -> None:
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, text in files.items():
+            archive.writestr(name, text)
+
+
+def _row(frame: int = 1, object_id: int = 1) -> str:
+    return f"{frame},{object_id},10,20,5,6,0.9,1,1\n"
+
+
+def test_prediction_coverage_audit_detects_missing_extra_and_empty_files(tmp_path: Path) -> None:
+    template_zip = tmp_path / "template.zip"
+    prediction_dir = tmp_path / "predictions"
+    prediction_dir.mkdir()
+    _write_zip(template_zip, {"A_00.txt": "", "B_00.txt": "", "C_00.txt": ""})
+    prediction_dir.joinpath("A_00.txt").write_text(_row(), encoding="utf-8")
+    prediction_dir.joinpath("B_00.txt").write_text("", encoding="utf-8")
+    prediction_dir.joinpath("EXTRA_00.txt").write_text(_row(), encoding="utf-8")
+
+    audit = audit_prediction_coverage(prediction_dir, template_zip=template_zip)
+    rows_by_name = {row.name: row for row in audit.rows}
+
+    assert not audit.ready
+    assert audit.expected_file_count == 3
+    assert audit.present_file_count == 3
+    assert audit.missing_files == ["C_00.txt"]
+    assert audit.extra_files == ["EXTRA_00.txt"]
+    assert audit.empty_expected_files == ["B_00.txt"]
+    assert rows_by_name["A_00.txt"].status == "ok"
+    assert rows_by_name["B_00.txt"].status == "empty_expected"
+    assert rows_by_name["C_00.txt"].status == "missing"
+    assert rows_by_name["EXTRA_00.txt"].status == "extra"
+
+
+def test_prediction_coverage_audit_uses_sequence_root_names(tmp_path: Path) -> None:
+    sequence_root = tmp_path / "TestImages"
+    prediction_dir = tmp_path / "predictions"
+    (sequence_root / "S_00").mkdir(parents=True)
+    (sequence_root / "S_01").mkdir(parents=True)
+    prediction_dir.mkdir()
+    prediction_dir.joinpath("S_00.txt").write_text(_row(), encoding="utf-8")
+
+    audit = audit_prediction_coverage(prediction_dir, sequence_root=sequence_root)
+
+    assert not audit.ready
+    assert audit.expected_file_count == 2
+    assert audit.missing_files == ["S_01.txt"]
+
+
+def test_prediction_coverage_audit_cli_writes_json_and_rows(tmp_path: Path) -> None:
+    template_zip = tmp_path / "template.zip"
+    prediction_dir = tmp_path / "predictions"
+    output_json = tmp_path / "coverage.json"
+    row_csv = tmp_path / "coverage_rows.csv"
+    prediction_dir.mkdir()
+    _write_zip(template_zip, {"A_00.txt": ""})
+    prediction_dir.joinpath("A_00.txt").write_text(_row(), encoding="utf-8")
+
+    status = coverage_audit_main(
+        [
+            str(prediction_dir),
+            "--template-zip",
+            str(template_zip),
+            "--output-json",
+            str(output_json),
+            "--row-csv",
+            str(row_csv),
+            "--require-ready",
+        ]
+    )
+
+    assert status == 0
+    payload = json.loads(output_json.read_text(encoding="utf-8"))
+    assert payload["ready"] is True
+    assert payload["missing_file_count"] == 0
+    assert "A_00.txt" in row_csv.read_text(encoding="utf-8")
+
+
+def test_prediction_coverage_audit_require_ready_exits_nonzero(tmp_path: Path) -> None:
+    template_zip = tmp_path / "template.zip"
+    prediction_dir = tmp_path / "predictions"
+    prediction_dir.mkdir()
+    _write_zip(template_zip, {"A_00.txt": ""})
+
+    with pytest.raises(SystemExit) as exc_info:
+        coverage_audit_main(
+            [
+                str(prediction_dir),
+                "--template-zip",
+                str(template_zip),
+                "--require-ready",
+            ]
+        )
+
+    assert exc_info.value.code == 1
