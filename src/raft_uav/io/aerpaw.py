@@ -831,7 +831,11 @@ def _is_missing_scalar(value: Any) -> bool:
 def _catprob_threshold_rows(radar: pd.DataFrame, catprob_threshold: float) -> pd.DataFrame:
     if "cat_prob_uav" not in radar.columns:
         raise KeyError("radar catprob selection requires cat_prob_uav")
-    return radar.loc[radar["cat_prob_uav"] >= float(catprob_threshold)].copy()
+    cat_prob = pd.to_numeric(radar["cat_prob_uav"], errors="coerce").to_numpy(dtype=float)
+    keep = cat_prob >= float(catprob_threshold)
+    records = [row for row, keep_row in zip(radar.to_dict("records"), keep, strict=True) if keep_row]
+    index = radar.index[np.flatnonzero(keep)]
+    return pd.DataFrame.from_records(records, columns=radar.columns, index=index)
 
 
 def _catprob_best_per_frame_rows(
