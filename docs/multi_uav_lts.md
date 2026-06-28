@@ -65,6 +65,21 @@ python -m raft_uav.multi_uav_lts.cli package-submission \
   --file-summary-csv submission_file_summary.csv
 ```
 
+Audit prediction coverage before packaging. This catches missing, extra, empty,
+malformed, and unsorted prediction files before the packager fills missing
+submission-template entries with empty files:
+
+```bash
+PYTHONPATH=src RAFT_UAV_SKIP_RUNTIME_HOOKS=1 \
+raft-uav-multi-uav-lts-coverage-audit \
+  /mnt/lexar4tb/multi_uav_lts/outputs/official_baseline_via_first_init/predictions \
+  --template-zip /mnt/lexar4tb/multi_uav_lts/downloads/submission.zip \
+  --sequence-root /mnt/lexar4tb/multi_uav_lts/extracted/TestImages \
+  --output-json prediction_coverage_audit.json \
+  --row-csv prediction_coverage_rows.csv \
+  --require-ready
+```
+
 Extract train first-frame labels for tracker initialization:
 
 ```bash
