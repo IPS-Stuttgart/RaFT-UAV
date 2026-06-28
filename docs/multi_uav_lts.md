@@ -104,6 +104,7 @@ python scripts/run_multi_uav_lts_official_baseline.py \
   --work-root /mnt/lexar4tb/multi_uav_lts \
   --python python \
   --device 0 \
+  --img-size 1920 \
   --normalize \
   --sort-rows
 ```
@@ -143,6 +144,7 @@ python scripts/run_multi_uav_lts_official_baseline.py \
   --sequences BB1_00 BB1_01 \
   --python python \
   --device 0 \
+  --img-size 1920 \
   --normalize \
   --sort-rows
 ```
@@ -150,6 +152,13 @@ python scripts/run_multi_uav_lts_official_baseline.py \
 ## Current upload-ready artifacts
 
 Recommended first upload:
+
+```text
+C:\Users\emper\Downloads\multi_uav_lts_results_20260628\upload_0_img1920_official_baseline\submission.zip
+SHA-256: 3aabe92a4a30fce1733a1fd0e8af393e649aa02496a2fc6a3dddfe5312dc22f6
+```
+
+Fallback upload:
 
 ```text
 C:\Users\emper\Downloads\multi_uav_lts_results_20260628\upload_1_official_baseline_sorted\submission.zip
@@ -163,15 +172,15 @@ C:\Users\emper\Downloads\multi_uav_lts_results_20260628\upload_2_interpolated_so
 SHA-256: cfeaaf0d96a170c50b1d0e3e3f00bbfa7fa7b6b80a6220e3a158ac726a61635f
 ```
 
-Both ZIPs have 98 prediction files and pass the local validator with zero parse
-errors. They are not official results until Codabench scores them.
+All listed ZIPs have 98 prediction files and pass the local validator with zero
+parse errors. They are not official results until Codabench scores them.
 
 ## Interpretation
 
 The upstream README reports a strong public-baseline row, but the RaFT-UAV ZIPs
 above still need an official Codabench upload before we can claim a rank or
-metric. Use the sorted non-interpolated submission first; try the interpolated
-variant second only if submissions are cheap.
+metric. Use the 1920px sorted non-interpolated submission first; try the 1600px
+or interpolated variants only if submissions are cheap.
 
 Current train-split smoke diagnostics:
 
@@ -192,4 +201,20 @@ upstream YOLOv12-BoT-SORT smoke, BB1_00 + BB1_01:
   recall 0.967
   mean matched IoU 0.787
   ID switches 89
+
+representative train smoke, 11 sequences, img-size 1600:
+  MOTA-like 0.961
+  precision 0.984
+  recall 0.981
+  mean matched IoU 0.884
+
+representative train smoke, 11 sequences, img-size 1920:
+  MOTA-like 0.965
+  precision 0.985
+  recall 0.983
+  mean matched IoU 0.884
+
+BB2P_02 threshold grid:
+  img-size 1600 MOTA-like 0.687
+  img-size 1920 MOTA-like 0.744
 ```
