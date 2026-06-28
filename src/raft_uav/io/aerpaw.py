@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -309,8 +310,8 @@ def normalize_rf(
 
     out = rf.copy()
     out["timestamp_raw"] = out["Time"].astype(str)
-    out["timestamp"] = pd.to_datetime(out["Time"], errors="coerce") + pd.to_timedelta(
-        clock_offset_s, unit="s"
+    out["timestamp"] = pd.to_datetime(out["Time"], errors="coerce") + timedelta(
+        seconds=clock_offset_s
     )
     out["time_s"] = (out["timestamp"] - truth_origin_time).dt.total_seconds()
 
