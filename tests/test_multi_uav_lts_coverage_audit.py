@@ -22,6 +22,16 @@ def _row(frame: int = 1, object_id: int = 1) -> str:
     return f"{frame},{object_id},10,20,5,6,0.9,1,1\n"
 
 
+def _sequence_root(tmp_path: Path, names: tuple[str, ...] = ("A_00",)) -> Path:
+    root = tmp_path / "TestImages"
+    for name in names:
+        sequence_dir = root / name
+        sequence_dir.mkdir(parents=True)
+        for frame in range(1, 4):
+            sequence_dir.joinpath(f"{frame:06d}.jpg").write_text("", encoding="utf-8")
+    return root
+
+
 def test_prediction_coverage_audit_detects_missing_extra_and_empty_files(tmp_path: Path) -> None:
     template_zip = tmp_path / "template.zip"
     prediction_dir = tmp_path / "predictions"
@@ -61,6 +71,28 @@ def test_prediction_coverage_audit_uses_sequence_root_names(tmp_path: Path) -> N
     assert audit.missing_files == ["S_01.txt"]
 
 
+def test_prediction_coverage_audit_detects_frame_ids_beyond_sequence_length(
+    tmp_path: Path,
+) -> None:
+    sequence_root = _sequence_root(tmp_path, names=("A_00",))
+    prediction_dir = tmp_path / "predictions"
+    prediction_dir.mkdir()
+    prediction_dir.joinpath("A_00.txt").write_text(
+        _row(frame=1) + _row(frame=4, object_id=2),
+        encoding="utf-8",
+    )
+
+    audit = audit_prediction_coverage(prediction_dir, sequence_root=sequence_root)
+    row = audit.rows[0]
+
+    assert not audit.ready
+    assert audit.out_of_range_frame_rows == 1
+    assert audit.out_of_range_frame_files == ["A_00.txt"]
+    assert row.status == "invalid"
+    assert row.expected_frame_count == 3
+    assert row.out_of_range_frame_rows == 1
+
+
 def test_prediction_coverage_audit_cli_writes_json_and_rows(tmp_path: Path) -> None:
     template_zip = tmp_path / "template.zip"
     prediction_dir = tmp_path / "predictions"
@@ -87,6 +119,8 @@ def test_prediction_coverage_audit_cli_writes_json_and_rows(tmp_path: Path) -> N
     payload = json.loads(output_json.read_text(encoding="utf-8"))
     assert payload["ready"] is True
     assert payload["missing_file_count"] == 0
+    assert payload["out_of_range_frame_rows"] == 0
+    assert "expected_frame_count" in row_csv.read_text(encoding="utf-8")
     assert "A_00.txt" in row_csv.read_text(encoding="utf-8")
 
 
