@@ -10,8 +10,10 @@ from raft_uav.multi_uav_lts.cli import (
     inventory_path,
     normalize_prediction_text,
     package_submission,
+    score_lts_predictions,
     validate_submission_zip,
     write_constant_first_frame_predictions,
+    write_first_frame_labels,
 )
 
 
@@ -77,6 +79,20 @@ def test_package_submission_fills_missing_template_files(tmp_path: Path) -> None
         assert archive.read("B_00.txt") == b""
 
 
+def test_package_submission_without_template_expects_prediction_files_only(tmp_path: Path) -> None:
+    prediction_dir = tmp_path / "predictions"
+    output_zip = tmp_path / "submission.zip"
+    prediction_dir.mkdir()
+    (prediction_dir / "A_00.txt").write_text("1,1,10,20,5,6,1,1,1\n", encoding="utf-8")
+    (prediction_dir / "B_00.txt").write_text("1,1,10,20,5,6,1,1,1\n", encoding="utf-8")
+
+    validation = package_submission(prediction_dir, output_zip)
+
+    assert validation.valid
+    assert validation.file_count == 2
+    assert validation.expected_file_count == 2
+
+
 def test_package_submission_can_normalize_float_ids(tmp_path: Path) -> None:
     template = tmp_path / "template.zip"
     prediction_dir = tmp_path / "predictions"
@@ -88,7 +104,12 @@ def test_package_submission_can_normalize_float_ids(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    validation = package_submission(prediction_dir, output_zip, template_zip=template, normalize=True)
+    validation = package_submission(
+        prediction_dir,
+        output_zip,
+        template_zip=template,
+        normalize=True,
+    )
 
     assert validation.valid
     with zipfile.ZipFile(output_zip) as archive:
@@ -108,7 +129,12 @@ def test_package_submission_can_sort_rows(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    validation = package_submission(prediction_dir, output_zip, template_zip=template, sort_rows=True)
+    validation = package_submission(
+        prediction_dir,
+        output_zip,
+        template_zip=template,
+        sort_rows=True,
+    )
 
     assert validation.valid
     assert validation.unsorted_rows == 0
@@ -159,3 +185,65 @@ def test_constant_first_frame_predictions(tmp_path: Path) -> None:
     lines = (predictions / "S_00.txt").read_text(encoding="utf-8").splitlines()
     assert lines[0] == "1,7,10.5,20,5,6,1,1,1"
     assert lines[-1] == "3,8,30,40,7,8,0.5,1,0.8"
+
+
+def test_first_frame_label_extraction(tmp_path: Path) -> None:
+    truth = tmp_path / "truth"
+    output = tmp_path / "first"
+    truth.mkdir()
+    truth.joinpath("S_00.txt").write_text(
+        "1,7,10,20,5,6,1,1,1\n"
+        "2,7,11,20,5,6,1,1,1\n"
+        "1,8,30,40,7,8,1,1,1\n",
+        encoding="utf-8",
+    )
+
+    summary = write_first_frame_labels(truth, output)
+
+    assert summary["total_rows"] == 2
+    assert output.joinpath("S_00.txt").read_text(encoding="utf-8") == (
+        "1,7,10,20,5,6,1,1,1\n"
+        "1,8,30,40,7,8,1,1,1\n"
+    )
+
+
+def test_score_lts_predictions_perfect_and_id_switch(tmp_path: Path) -> None:
+    truth = tmp_path / "truth"
+    predictions = tmp_path / "predictions"
+    truth.mkdir()
+    predictions.mkdir()
+    truth.joinpath("S_00.txt").write_text(
+        "1,1,10,10,10,10,1,1,1\n"
+        "2,1,20,10,10,10,1,1,1\n",
+        encoding="utf-8",
+    )
+    predictions.joinpath("S_00.txt").write_text(
+        "1,5,10,10,10,10,1,1,1\n"
+        "2,6,20,10,10,10,1,1,1\n",
+        encoding="utf-8",
+    )
+
+    scorecard = score_lts_predictions(predictions, truth)
+
+    assert scorecard.sequence_count == 1
+    assert scorecard.matches == 2
+    assert scorecard.false_positives == 0
+    assert scorecard.false_negatives == 0
+    assert scorecard.id_switches == 1
+    assert scorecard.mota_like == 0.5
+    assert scorecard.precision == 1.0
+    assert scorecard.recall == 1.0
+    assert scorecard.mean_matched_iou == 1.0
+
+
+def test_score_lts_predictions_from_zip(tmp_path: Path) -> None:
+    truth = tmp_path / "truth"
+    submission = tmp_path / "submission.zip"
+    truth.mkdir()
+    truth.joinpath("S_00.txt").write_text("1,1,10,10,10,10,1,1,1\n", encoding="utf-8")
+    _write_zip(submission, {"S_00.txt": "1,1,10,10,10,10,1,1,1\n"})
+
+    scorecard = score_lts_predictions(submission, truth)
+
+    assert scorecard.matches == 1
+    assert scorecard.mota_like == 1.0

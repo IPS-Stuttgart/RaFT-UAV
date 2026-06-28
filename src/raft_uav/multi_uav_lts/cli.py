@@ -53,6 +53,56 @@ class SubmissionValidation:
     files: list[SubmissionFileSummary]
 
 
+@dataclass(frozen=True)
+class LtsDetection:
+    frame_id: int
+    object_id: int
+    x1: float
+    y1: float
+    w: float
+    h: float
+    confidence: float
+    class_id: int
+    visibility: float
+
+
+@dataclass(frozen=True)
+class LtsSequenceScore:
+    sequence: str
+    frame_count: int
+    gt_detections: int
+    predicted_detections: int
+    matches: int
+    false_positives: int
+    false_negatives: int
+    id_switches: int
+    mota_like: float | None
+    precision: float | None
+    recall: float | None
+    mean_matched_iou: float | None
+    id_switches_per_match: float | None
+
+
+@dataclass(frozen=True)
+class LtsScorecard:
+    prediction_path: str
+    truth_dir: str
+    iou_threshold: float
+    sequence_count: int
+    gt_detections: int
+    predicted_detections: int
+    matches: int
+    false_positives: int
+    false_negatives: int
+    id_switches: int
+    mota_like: float | None
+    precision: float | None
+    recall: float | None
+    mean_matched_iou: float | None
+    id_switches_per_match: float | None
+    sequences: list[LtsSequenceScore]
+
+
 def expected_names_from_template(template_zip: Path | None) -> list[str] | None:
     if template_zip is None:
         return None
@@ -179,6 +229,44 @@ def _summarize_prediction_text(name: str, text: str) -> SubmissionFileSummary:
     )
 
 
+def write_first_frame_labels(
+    truth_dir: Path,
+    output_dir: Path,
+    *,
+    frame_id: int = 1,
+) -> dict[str, object]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    records = []
+    total_rows = 0
+    for truth_path in sorted(truth_dir.glob("*.txt")):
+        rows = [
+            row
+            for row in _load_lts_detection_rows(truth_path.read_text(encoding="utf-8"))
+            if row.frame_id == frame_id
+        ]
+        output_path = output_dir / truth_path.name
+        with output_path.open("w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(_format_lts_detection(row) + "\n")
+        total_rows += len(rows)
+        records.append(
+            {
+                "sequence": truth_path.stem,
+                "frame_id": frame_id,
+                "row_count": len(rows),
+                "output_file": str(output_path),
+            }
+        )
+    return {
+        "truth_dir": str(truth_dir),
+        "output_dir": str(output_dir),
+        "frame_id": frame_id,
+        "sequence_count": len(records),
+        "total_rows": total_rows,
+        "sequences": records,
+    }
+
+
 def package_submission(
     prediction_dir: Path,
     output_zip: Path,
@@ -207,7 +295,224 @@ def package_submission(
                 )
             else:
                 archive.write(source, arcname=name)
-    return validate_submission_zip(output_zip, template_zip=template_zip)
+    expected_file_count = None if template_zip is not None else len(names)
+    return validate_submission_zip(
+        output_zip,
+        template_zip=template_zip,
+        expected_file_count=expected_file_count,
+    )
+
+
+def score_lts_predictions(
+    prediction_path: Path,
+    truth_dir: Path,
+    *,
+    iou_threshold: float = 0.5,
+    sequences: list[str] | None = None,
+) -> LtsScorecard:
+    prediction_files = _prediction_texts(prediction_path)
+    requested = set(sequences or [])
+    truth_paths = sorted(truth_dir.glob("*.txt"))
+    sequence_scores = []
+    for truth_path in truth_paths:
+        sequence = truth_path.stem
+        if requested and sequence not in requested:
+            continue
+        prediction_text = prediction_files.get(f"{sequence}.txt", "")
+        truth_text = truth_path.read_text(encoding="utf-8")
+        sequence_scores.append(
+            _score_lts_sequence(
+                sequence,
+                prediction_text,
+                truth_text,
+                iou_threshold=iou_threshold,
+            )
+        )
+    gt_count = sum(score.gt_detections for score in sequence_scores)
+    pred_count = sum(score.predicted_detections for score in sequence_scores)
+    matches = sum(score.matches for score in sequence_scores)
+    false_positives = sum(score.false_positives for score in sequence_scores)
+    false_negatives = sum(score.false_negatives for score in sequence_scores)
+    id_switches = sum(score.id_switches for score in sequence_scores)
+    weighted_iou_sum = sum(
+        score.matches * (score.mean_matched_iou or 0.0) for score in sequence_scores
+    )
+    return LtsScorecard(
+        prediction_path=str(prediction_path),
+        truth_dir=str(truth_dir),
+        iou_threshold=iou_threshold,
+        sequence_count=len(sequence_scores),
+        gt_detections=gt_count,
+        predicted_detections=pred_count,
+        matches=matches,
+        false_positives=false_positives,
+        false_negatives=false_negatives,
+        id_switches=id_switches,
+        mota_like=_safe_ratio(gt_count - false_positives - false_negatives - id_switches, gt_count),
+        precision=_safe_ratio(matches, pred_count),
+        recall=_safe_ratio(matches, gt_count),
+        mean_matched_iou=_safe_ratio(weighted_iou_sum, matches),
+        id_switches_per_match=_safe_ratio(id_switches, matches),
+        sequences=sequence_scores,
+    )
+
+
+def _prediction_texts(prediction_path: Path) -> dict[str, str]:
+    if prediction_path.is_dir():
+        return {
+            path.name: path.read_text(encoding="utf-8")
+            for path in sorted(prediction_path.glob("*.txt"))
+        }
+    with zipfile.ZipFile(prediction_path) as archive:
+        return {
+            name: archive.read(name).decode("utf-8", errors="replace")
+            for name in archive.namelist()
+            if name.endswith(".txt") and "/" not in name.rstrip("/")
+        }
+
+
+def _score_lts_sequence(
+    sequence: str,
+    prediction_text: str,
+    truth_text: str,
+    *,
+    iou_threshold: float,
+) -> LtsSequenceScore:
+    predictions = _rows_by_frame(_load_lts_detection_rows(prediction_text))
+    truth = _rows_by_frame(_load_lts_detection_rows(truth_text))
+    frames = sorted(set(predictions) | set(truth))
+    matches = 0
+    false_positives = 0
+    false_negatives = 0
+    id_switches = 0
+    iou_sum = 0.0
+    previous_match_by_gt_id: dict[int, int] = {}
+
+    for frame in frames:
+        gt_rows = truth.get(frame, [])
+        pred_rows = predictions.get(frame, [])
+        frame_matches = _match_rows_by_iou(gt_rows, pred_rows, iou_threshold=iou_threshold)
+        matches += len(frame_matches)
+        false_negatives += len(gt_rows) - len(frame_matches)
+        false_positives += len(pred_rows) - len(frame_matches)
+        for gt_index, pred_index, iou in frame_matches:
+            gt_id = gt_rows[gt_index].object_id
+            pred_id = pred_rows[pred_index].object_id
+            previous_pred_id = previous_match_by_gt_id.get(gt_id)
+            if previous_pred_id is not None and previous_pred_id != pred_id:
+                id_switches += 1
+            previous_match_by_gt_id[gt_id] = pred_id
+            iou_sum += iou
+
+    gt_count = sum(len(rows) for rows in truth.values())
+    pred_count = sum(len(rows) for rows in predictions.values())
+    return LtsSequenceScore(
+        sequence=sequence,
+        frame_count=len(frames),
+        gt_detections=gt_count,
+        predicted_detections=pred_count,
+        matches=matches,
+        false_positives=false_positives,
+        false_negatives=false_negatives,
+        id_switches=id_switches,
+        mota_like=_safe_ratio(gt_count - false_positives - false_negatives - id_switches, gt_count),
+        precision=_safe_ratio(matches, pred_count),
+        recall=_safe_ratio(matches, gt_count),
+        mean_matched_iou=_safe_ratio(iou_sum, matches),
+        id_switches_per_match=_safe_ratio(id_switches, matches),
+    )
+
+
+def _load_lts_detection_rows(text: str) -> list[LtsDetection]:
+    rows = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) != len(SUBMISSION_COLUMNS):
+            raise ValueError(f"expected {len(SUBMISSION_COLUMNS)} columns, got {len(parts)}")
+        rows.append(
+            LtsDetection(
+                frame_id=_parse_int_like(parts[0]),
+                object_id=_parse_int_like(parts[1]),
+                x1=float(parts[2]),
+                y1=float(parts[3]),
+                w=float(parts[4]),
+                h=float(parts[5]),
+                confidence=float(parts[6]),
+                class_id=_parse_int_like(parts[7]),
+                visibility=float(parts[8]),
+            )
+        )
+    return rows
+
+
+def _rows_by_frame(rows: list[LtsDetection]) -> dict[int, list[LtsDetection]]:
+    by_frame: dict[int, list[LtsDetection]] = {}
+    for row in rows:
+        by_frame.setdefault(row.frame_id, []).append(row)
+    return by_frame
+
+
+def _match_rows_by_iou(
+    truth: list[LtsDetection],
+    predictions: list[LtsDetection],
+    *,
+    iou_threshold: float,
+) -> list[tuple[int, int, float]]:
+    pairs = [
+        (gt_index, pred_index, _box_iou(gt_row, pred_row))
+        for gt_index, gt_row in enumerate(truth)
+        for pred_index, pred_row in enumerate(predictions)
+    ]
+    pairs = [pair for pair in pairs if pair[2] >= iou_threshold]
+    pairs.sort(key=lambda pair: (-pair[2], pair[0], pair[1]))
+    matched_gt: set[int] = set()
+    matched_pred: set[int] = set()
+    matches = []
+    for gt_index, pred_index, iou in pairs:
+        if gt_index in matched_gt or pred_index in matched_pred:
+            continue
+        matched_gt.add(gt_index)
+        matched_pred.add(pred_index)
+        matches.append((gt_index, pred_index, iou))
+    return matches
+
+
+def _box_iou(left: LtsDetection, right: LtsDetection) -> float:
+    left_x2 = left.x1 + left.w
+    left_y2 = left.y1 + left.h
+    right_x2 = right.x1 + right.w
+    right_y2 = right.y1 + right.h
+    inter_w = max(0.0, min(left_x2, right_x2) - max(left.x1, right.x1))
+    inter_h = max(0.0, min(left_y2, right_y2) - max(left.y1, right.y1))
+    intersection = inter_w * inter_h
+    union = left.w * left.h + right.w * right.h - intersection
+    if union <= 0.0:
+        return 0.0
+    return intersection / union
+
+
+def _safe_ratio(numerator: float, denominator: float) -> float | None:
+    if denominator == 0:
+        return None
+    return numerator / denominator
+
+
+def _format_lts_detection(row: LtsDetection) -> str:
+    values: list[float | int] = [
+        row.frame_id,
+        row.object_id,
+        row.x1,
+        row.y1,
+        row.w,
+        row.h,
+        row.confidence,
+        row.class_id,
+        row.visibility,
+    ]
+    return ",".join(_format_submission_value(value) for value in values)
 
 
 def normalize_prediction_text(text: str, *, sort_rows: bool = False) -> str:
@@ -270,7 +575,9 @@ def write_constant_first_frame_predictions(
             for frame_number in range(1, len(frames) + 1):
                 for row in template_rows:
                     values = [frame_number, *row[1:]]
-                    handle.write(",".join(_format_submission_value(value) for value in values) + "\n")
+                    handle.write(
+                        ",".join(_format_submission_value(value) for value in values) + "\n"
+                    )
                     row_count += 1
         total_rows += row_count
         records.append(
@@ -369,10 +676,23 @@ def _write_file_summary_csv(validation: SubmissionValidation, path: Path) -> Non
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _write_sequence_score_csv(scorecard: LtsScorecard, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = list(LtsSequenceScore.__dataclass_fields__)
+    lines = [",".join(header)]
+    for score in scorecard.sequences:
+        values = [getattr(score, field) for field in header]
+        lines.append(",".join("" if value is None else str(value) for value in values))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="raft-uav-multi-uav-lts",
-        description="Support utilities for the Beyond Strong Baseline Multi-UAV Tracking LTS benchmark.",
+        description=(
+            "Support utilities for the Beyond Strong Baseline Multi-UAV Tracking "
+            "LTS benchmark."
+        ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -387,7 +707,21 @@ def _build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--output-json", type=Path)
     validate.add_argument("--file-summary-csv", type=Path)
 
-    package = subparsers.add_parser("package-submission", help="package root-level .txt predictions")
+    score = subparsers.add_parser(
+        "score-predictions",
+        help="compute a local MOTA-like scorecard against full train labels",
+    )
+    score.add_argument("prediction_path", type=Path, help="prediction directory or submission ZIP")
+    score.add_argument("--truth-dir", type=Path, required=True)
+    score.add_argument("--iou-threshold", type=float, default=0.5)
+    score.add_argument("--sequences", nargs="*", help="optional sequence names to score")
+    score.add_argument("--output-json", type=Path)
+    score.add_argument("--sequence-summary-csv", type=Path)
+
+    package = subparsers.add_parser(
+        "package-submission",
+        help="package root-level .txt predictions",
+    )
     package.add_argument("prediction_dir", type=Path)
     package.add_argument("--output-zip", type=Path, required=True)
     package.add_argument("--template-zip", type=Path)
@@ -407,6 +741,15 @@ def _build_parser() -> argparse.ArgumentParser:
     constant.add_argument("--output-zip", type=Path)
     constant.add_argument("--output-json", type=Path)
     constant.add_argument("--file-summary-csv", type=Path)
+
+    first_frame = subparsers.add_parser(
+        "first-frame-labels",
+        help="extract first-frame-only labels from full train labels for tracker initialization",
+    )
+    first_frame.add_argument("--truth-dir", type=Path, required=True)
+    first_frame.add_argument("--output-dir", type=Path, required=True)
+    first_frame.add_argument("--frame-id", type=int, default=1)
+    first_frame.add_argument("--output-json", type=Path)
     return parser
 
 
@@ -435,6 +778,21 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(payload, indent=2, sort_keys=True))
         if not validation.valid:
             raise SystemExit(1)
+        return
+
+    if args.command == "score-predictions":
+        scorecard = score_lts_predictions(
+            args.prediction_path,
+            args.truth_dir,
+            iou_threshold=args.iou_threshold,
+            sequences=args.sequences,
+        )
+        payload = asdict(scorecard)
+        if args.output_json:
+            _write_json(payload, args.output_json)
+        if args.sequence_summary_csv:
+            _write_sequence_score_csv(scorecard, args.sequence_summary_csv)
+        print(json.dumps(payload, indent=2, sort_keys=True))
         return
 
     if args.command == "package-submission":
@@ -481,6 +839,17 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(payload, indent=2, sort_keys=True))
         if validation_payload and not validation_payload["valid"]:
             raise SystemExit(1)
+        return
+
+    if args.command == "first-frame-labels":
+        payload = write_first_frame_labels(
+            args.truth_dir,
+            args.output_dir,
+            frame_id=args.frame_id,
+        )
+        if args.output_json:
+            _write_json(payload, args.output_json)
+        print(json.dumps(payload, indent=2, sort_keys=True))
         return
 
     raise AssertionError(f"unhandled command: {args.command}")

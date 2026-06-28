@@ -40,6 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sequence-root", type=Path)
     parser.add_argument("--first-frame-label-dir", type=Path)
     parser.add_argument("--template-zip", type=Path)
+    parser.add_argument("--no-template", action="store_true")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--predictions-dir", type=Path)
     parser.add_argument("--submission-zip", type=Path)
@@ -51,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--device", default=os.environ.get("GPU_ID", "0"))
     parser.add_argument("--shard-index", type=int, default=int(os.environ.get("SHARD_INDEX", "0")))
     parser.add_argument("--shard-count", type=int, default=int(os.environ.get("SHARD_COUNT", "1")))
+    parser.add_argument("--sequences", nargs="*", help="optional sequence names to run/package")
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--no-reid", action="store_true")
     parser.add_argument("--fast-reid-config", default="logs/sbs_S50/config.yaml")
@@ -106,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         "dry_run": args.dry_run,
         "shard_index": args.shard_index,
         "shard_count": args.shard_count,
+        "sequences": args.sequences,
         "records": records,
         "submission_validation": validation_payload,
     }
@@ -131,7 +134,9 @@ def _resolve_paths(args: argparse.Namespace) -> dict[str, Path]:
         "sequence_root": args.sequence_root or work_root / "extracted/TestImages",
         "first_frame_label_dir": args.first_frame_label_dir
         or work_root / "extracted/TestLabels_FirstFrameOnly",
-        "template_zip": args.template_zip or work_root / "downloads/submission.zip",
+        "template_zip": None
+        if args.no_template
+        else args.template_zip or work_root / "downloads/submission.zip",
         "output_dir": output_dir,
         "predictions_dir": args.predictions_dir or output_dir / "predictions",
         "submission_zip": args.submission_zip or output_dir / "submission.zip",
@@ -141,15 +146,22 @@ def _resolve_paths(args: argparse.Namespace) -> dict[str, Path]:
 
 
 def _validate_inputs(paths: dict[str, Path], *, require_botsort: bool) -> None:
-    for key in ("sequence_root", "first_frame_label_dir", "template_zip"):
+    for key in ("sequence_root", "first_frame_label_dir"):
         if not paths[key].exists():
             raise FileNotFoundError(f"{key} does not exist: {paths[key]}")
+    if paths["template_zip"] is not None and not paths["template_zip"].exists():
+        raise FileNotFoundError(f"template_zip does not exist: {paths['template_zip']}")
     if require_botsort and not (paths["botsort_root"] / "tools/inference.py").exists():
-        raise FileNotFoundError(f"missing YOLOv12-BoT-SORT inference.py under {paths['botsort_root']}")
+        raise FileNotFoundError(
+            f"missing YOLOv12-BoT-SORT inference.py under {paths['botsort_root']}"
+        )
 
 
 def _run_sequences(args: argparse.Namespace, paths: dict[str, Path]) -> list[dict[str, Any]]:
     sequences = [path for path in sorted(paths["sequence_root"].iterdir()) if path.is_dir()]
+    if args.sequences:
+        sequence_filter = set(args.sequences)
+        sequences = [path for path in sequences if path.name in sequence_filter]
     records: list[dict[str, Any]] = []
     env = os.environ.copy()
     botsort_root = paths["botsort_root"]
@@ -166,7 +178,13 @@ def _run_sequences(args: argparse.Namespace, paths: dict[str, Path]) -> list[dic
         prediction_path = paths["predictions_dir"] / f"{sequence}.txt"
         log_path = paths["output_dir"] / "logs" / f"{sequence}.log"
         if prediction_path.exists() and prediction_path.stat().st_size > 0 and not args.overwrite:
-            records.append({"sequence": sequence, "status": "skipped_existing", "prediction": str(prediction_path)})
+            records.append(
+                {
+                    "sequence": sequence,
+                    "status": "skipped_existing",
+                    "prediction": str(prediction_path),
+                }
+            )
             continue
         command = _inference_command(args, paths, sequence_dir)
         record = {
