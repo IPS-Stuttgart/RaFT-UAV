@@ -31,13 +31,7 @@ from mmuad_build_branch_reservoir import (  # noqa: E402
     load_branch_candidate_inputs,
     parse_candidate_input,
 )
-from mmuad_template_branch_reservoir import (  # noqa: E402
-    BRANCH_SUMMARY_CSV,
-    FRAME_SUMMARY_CSV,
-    PROVENANCE_JSON,
-    RESERVOIR_CSV,
-    write_template_branch_reservoir_artifacts,
-)
+from mmuad_template_branch_reservoir import write_template_branch_reservoir_artifacts  # noqa: E402
 from raft_uav.mmuad.submission import load_official_track5_template_file  # noqa: E402
 
 SUMMARY_CSV = "mmuad_template_reservoir_window_sweep_summary.csv"
