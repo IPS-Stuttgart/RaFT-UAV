@@ -116,8 +116,8 @@ def main(argv: list[str] | None = None) -> int:
         help="candidate CSV to include; may be repeated; plain PATH uses file stem as branch",
     )
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--max-time-delta-s", action="append", default=["0.5"])
-    parser.add_argument("--score-normalization", action="append", default=["none"])
+    parser.add_argument("--max-time-delta-s", action="append")
+    parser.add_argument("--score-normalization", action="append")
     parser.add_argument("--per-source-top-n", type=int, default=3)
     parser.add_argument("--per-branch-top-n", type=int, default=3)
     parser.add_argument("--global-top-n", type=int, default=20)
@@ -137,8 +137,8 @@ def main(argv: list[str] | None = None) -> int:
         candidates,
         template,
         output_dir=args.output_dir,
-        max_time_delta_s_values=_parse_float_values(args.max_time_delta_s),
-        score_normalization_values=_parse_string_values(args.score_normalization),
+        max_time_delta_s_values=_parse_float_values(args.max_time_delta_s or ["0.5"]),
+        score_normalization_values=_parse_string_values(args.score_normalization or ["none"]),
         per_source_top_n=int(args.per_source_top_n),
         per_branch_top_n=int(args.per_branch_top_n),
         global_top_n=int(args.global_top_n),
