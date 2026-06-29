@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -33,6 +33,8 @@ COORDINATE_COLUMN_SETS = (
 )
 SEQUENCE_ALIASES = ("sequence_id", "Sequence", "sequence", "seq")
 TIME_ALIASES = ("time_s", "Timestamp", "timestamp", "timestamp_s", "time")
+RESAMPLE_METHODS = ("linear", "nearest")
+ResampleMethod = Literal["linear", "nearest"]
 
 
 def resample_estimates_to_track5_template(
@@ -40,15 +42,20 @@ def resample_estimates_to_track5_template(
     template: pd.DataFrame,
     *,
     max_nearest_time_delta_s: float | None = None,
+    resample_method: ResampleMethod = "linear",
+    max_interpolation_gap_s: float | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Interpolate estimate coordinates onto official template timestamps.
 
-    Returns ``(resampled_estimates, diagnostics)``.  Interpolation uses endpoint
-    hold outside each sequence's estimate time span, matching the pragmatic
-    leaderboard-submission need to produce one prediction for every requested
-    timestamp while making extrapolated rows auditable through diagnostics.
+    Returns ``(resampled_estimates, diagnostics)``.  ``linear`` interpolation
+    uses endpoint hold outside each sequence's estimate time span, matching the
+    pragmatic leaderboard-submission need to produce one prediction for every
+    requested timestamp while making extrapolated rows auditable through
+    diagnostics.  ``nearest`` is useful when tracker outputs are already aligned
+    to a template-like grid or when long-gap interpolation is unsafe.
     """
 
+    method = _normalize_resample_method(resample_method)
     estimate_rows = _normalize_estimate_rows(estimates)
     template_rows = _normalize_template_rows(template)
     if template_rows.empty:
@@ -65,7 +72,7 @@ def resample_estimates_to_track5_template(
         time_s = float(template_row["time_s"])
         group = estimate_by_sequence.get(sequence_id)
         if group is None or group.empty:
-            record = _missing_estimate_record(sequence_id, time_s)
+            record = _missing_estimate_record(sequence_id, time_s, method)
             resampled_records.append(record)
             diagnostic_records.append(
                 _diagnostic_record(
@@ -75,34 +82,54 @@ def resample_estimates_to_track5_template(
                     extrapolated=True,
                     source_row_count=0,
                     valid=False,
+                    resample_method=method,
+                    interpolation_gap_s=np.nan,
+                    large_gap_fallback=False,
                 )
             )
             continue
-        interp, nearest_delta, extrapolated = _interpolated_position(group, time_s)
-        valid = np.isfinite(interp).all()
-        if max_nearest_time_delta_s is not None and np.isfinite(nearest_delta):
-            valid = valid and abs(float(nearest_delta)) <= float(max_nearest_time_delta_s)
+        interp = _resampled_position(
+            group,
+            time_s,
+            resample_method=method,
+            max_interpolation_gap_s=max_interpolation_gap_s,
+        )
+        valid = np.isfinite(interp.position).all()
+        if max_nearest_time_delta_s is not None and np.isfinite(interp.nearest_delta_s):
+            valid = valid and abs(float(interp.nearest_delta_s)) <= float(max_nearest_time_delta_s)
         resampled_records.append(
             {
                 "sequence_id": sequence_id,
                 "time_s": time_s,
-                "state_x_m": float(interp[0]) if np.isfinite(interp[0]) else np.nan,
-                "state_y_m": float(interp[1]) if np.isfinite(interp[1]) else np.nan,
-                "state_z_m": float(interp[2]) if np.isfinite(interp[2]) else np.nan,
+                "state_x_m": float(interp.position[0])
+                if np.isfinite(interp.position[0])
+                else np.nan,
+                "state_y_m": float(interp.position[1])
+                if np.isfinite(interp.position[1])
+                else np.nan,
+                "state_z_m": float(interp.position[2])
+                if np.isfinite(interp.position[2])
+                else np.nan,
                 "template_resampled": True,
-                "template_nearest_time_delta_s": float(nearest_delta),
-                "template_extrapolated": bool(extrapolated),
+                "template_nearest_time_delta_s": float(interp.nearest_delta_s),
+                "template_extrapolated": bool(interp.extrapolated),
                 "template_resample_valid": bool(valid),
+                "template_resample_method": interp.method_used,
+                "template_interpolation_gap_s": interp.interpolation_gap_s,
+                "template_large_gap_fallback": bool(interp.large_gap_fallback),
             }
         )
         diagnostic_records.append(
             _diagnostic_record(
                 sequence_id=sequence_id,
                 time_s=time_s,
-                nearest_time_delta_s=nearest_delta,
-                extrapolated=extrapolated,
+                nearest_time_delta_s=interp.nearest_delta_s,
+                extrapolated=interp.extrapolated,
                 source_row_count=len(group),
                 valid=valid,
+                resample_method=interp.method_used,
+                interpolation_gap_s=interp.interpolation_gap_s,
+                large_gap_fallback=interp.large_gap_fallback,
             )
         )
     resampled = pd.DataFrame.from_records(resampled_records)
@@ -122,11 +149,18 @@ def summarize_template_resample_diagnostics(diagnostics: pd.DataFrame) -> pd.Dat
         "valid_fraction",
         "extrapolated_row_count",
         "extrapolated_fraction",
+        "large_gap_fallback_row_count",
+        "large_gap_fallback_fraction",
+        "linear_method_row_count",
+        "nearest_method_row_count",
         "source_row_count_min",
         "source_row_count_max",
         "nearest_time_delta_abs_mean_s",
         "nearest_time_delta_abs_p95_s",
         "nearest_time_delta_abs_max_s",
+        "interpolation_gap_mean_s",
+        "interpolation_gap_p95_s",
+        "interpolation_gap_max_s",
     ]
     if rows.empty:
         return pd.DataFrame(columns=columns)
@@ -135,6 +169,8 @@ def summarize_template_resample_diagnostics(diagnostics: pd.DataFrame) -> pd.Dat
     rows["sequence_id"] = rows["sequence_id"].astype(str)
     rows["valid"] = _bool_column(rows, "valid")
     rows["extrapolated"] = _bool_column(rows, "extrapolated")
+    rows["large_gap_fallback"] = _bool_column(rows, "large_gap_fallback")
+    rows["resample_method"] = rows.get("resample_method", "linear").astype(str)
     rows["source_row_count"] = pd.to_numeric(
         rows.get("source_row_count", 0),
         errors="coerce",
@@ -143,12 +179,18 @@ def summarize_template_resample_diagnostics(diagnostics: pd.DataFrame) -> pd.Dat
         rows.get("abs_nearest_time_delta_s"),
         errors="coerce",
     )
+    rows["interpolation_gap_s"] = pd.to_numeric(
+        rows.get("interpolation_gap_s"),
+        errors="coerce",
+    )
     records: list[dict[str, Any]] = []
     for sequence_id, group in rows.groupby("sequence_id", sort=True):
         row_count = int(len(group))
         valid_count = int(group["valid"].sum())
         extrapolated_count = int(group["extrapolated"].sum())
+        large_gap_count = int(group["large_gap_fallback"].sum())
         abs_delta = group["abs_nearest_time_delta_s"].dropna()
+        interpolation_gap = group["interpolation_gap_s"].dropna()
         records.append(
             {
                 "sequence_id": str(sequence_id),
@@ -158,11 +200,18 @@ def summarize_template_resample_diagnostics(diagnostics: pd.DataFrame) -> pd.Dat
                 "valid_fraction": _fraction(valid_count, row_count),
                 "extrapolated_row_count": extrapolated_count,
                 "extrapolated_fraction": _fraction(extrapolated_count, row_count),
+                "large_gap_fallback_row_count": large_gap_count,
+                "large_gap_fallback_fraction": _fraction(large_gap_count, row_count),
+                "linear_method_row_count": int((group["resample_method"] == "linear").sum()),
+                "nearest_method_row_count": int((group["resample_method"] == "nearest").sum()),
                 "source_row_count_min": int(group["source_row_count"].min()),
                 "source_row_count_max": int(group["source_row_count"].max()),
                 "nearest_time_delta_abs_mean_s": _mean(abs_delta),
                 "nearest_time_delta_abs_p95_s": _quantile(abs_delta, 0.95),
                 "nearest_time_delta_abs_max_s": _max(abs_delta),
+                "interpolation_gap_mean_s": _mean(interpolation_gap),
+                "interpolation_gap_p95_s": _quantile(interpolation_gap, 0.95),
+                "interpolation_gap_max_s": _max(interpolation_gap),
             }
         )
     return pd.DataFrame.from_records(records, columns=columns)
@@ -176,15 +225,20 @@ def write_track5_template_resample_outputs(
     class_map: dict[str, str] | None = None,
     default_classification: int | str = 0,
     max_nearest_time_delta_s: float | None = None,
+    resample_method: ResampleMethod = "linear",
+    max_interpolation_gap_s: float | None = None,
 ) -> dict[str, Path]:
     """Write resampled estimates, official CSV/ZIP, diagnostics, and validation."""
 
+    method = _normalize_resample_method(resample_method)
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     resampled, diagnostics = resample_estimates_to_track5_template(
         estimates,
         template,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
+        resample_method=method,
+        max_interpolation_gap_s=max_interpolation_gap_s,
     )
     diagnostics_by_sequence = summarize_template_resample_diagnostics(diagnostics)
     paths = {
@@ -228,14 +282,16 @@ def write_track5_template_resample_outputs(
     validation.rows.to_csv(paths["validation_rows_csv"], index=False)
     valid_rows = resampled.get("template_resample_valid", pd.Series(dtype=bool))
     extrapolated_rows = resampled.get("template_extrapolated", pd.Series(dtype=bool))
+    fallback_rows = resampled.get("template_large_gap_fallback", pd.Series(dtype=bool))
     manifest = {
-        "schema": "raft-uav-mmuad-track5-template-resample-v1",
+        "schema": "raft-uav-mmuad-track5-template-resample-v2",
         "row_count": int(len(resampled)),
         "template_row_count": int(len(_normalize_template_rows(template))),
         "sequence_count": int(len(diagnostics_by_sequence)),
         "valid_resampled_rows": int(valid_rows.sum()),
         "invalid_resampled_rows": int((~valid_rows.astype(bool)).sum()),
         "extrapolated_rows": int(extrapolated_rows.sum()),
+        "large_gap_fallback_rows": int(fallback_rows.sum()),
         "invalid_sequence_count": int(
             (diagnostics_by_sequence.get("invalid_row_count", pd.Series(dtype=int)) > 0).sum()
         ),
@@ -252,6 +308,8 @@ def write_track5_template_resample_outputs(
         "codabench_upload_ready": bool(validation.summary.get("codabench_upload_ready", False)),
         "default_classification": str(default_classification),
         "max_nearest_time_delta_s": max_nearest_time_delta_s,
+        "resample_method": method,
+        "max_interpolation_gap_s": max_interpolation_gap_s,
         "paths": {name: str(path) for name, path in paths.items() if name != "manifest_json"},
     }
     paths["manifest_json"].write_text(json.dumps(_jsonable(manifest), indent=2), encoding="utf-8")
@@ -269,6 +327,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--class-map", type=Path)
     parser.add_argument("--default-classification", default="0")
     parser.add_argument("--max-nearest-time-delta-s", type=float)
+    parser.add_argument("--resample-method", choices=RESAMPLE_METHODS, default="linear")
+    parser.add_argument("--max-interpolation-gap-s", type=float)
     parser.add_argument("--require-leaderboard-ready", action="store_true")
     args = parser.parse_args(argv)
 
@@ -282,6 +342,8 @@ def main(argv: list[str] | None = None) -> int:
         class_map=class_map,
         default_classification=args.default_classification,
         max_nearest_time_delta_s=args.max_nearest_time_delta_s,
+        resample_method=args.resample_method,
+        max_interpolation_gap_s=args.max_interpolation_gap_s,
     )
     summary = json.loads(paths["validation_json"].read_text(encoding="utf-8"))
     print("mmuad_template_resample=ok")
@@ -343,20 +405,98 @@ def _coordinate_columns(rows: pd.DataFrame) -> tuple[str, str, str]:
     raise ValueError(f"estimates must contain coordinate columns: {expected}")
 
 
-def _interpolated_position(group: pd.DataFrame, time_s: float) -> tuple[np.ndarray, float, bool]:
+class _TemplatePosition:
+    def __init__(
+        self,
+        *,
+        position: np.ndarray,
+        nearest_delta_s: float,
+        extrapolated: bool,
+        method_used: ResampleMethod,
+        interpolation_gap_s: float,
+        large_gap_fallback: bool,
+    ) -> None:
+        self.position = position
+        self.nearest_delta_s = nearest_delta_s
+        self.extrapolated = extrapolated
+        self.method_used = method_used
+        self.interpolation_gap_s = interpolation_gap_s
+        self.large_gap_fallback = large_gap_fallback
+
+
+def _resampled_position(
+    group: pd.DataFrame,
+    time_s: float,
+    *,
+    resample_method: ResampleMethod,
+    max_interpolation_gap_s: float | None,
+) -> _TemplatePosition:
     work = group.sort_values("time_s").drop_duplicates("time_s", keep="last")
     times = work["time_s"].to_numpy(float)
     xyz = work[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
     nearest_idx = int(np.argmin(np.abs(times - float(time_s))))
     nearest_delta = float(float(time_s) - times[nearest_idx])
     extrapolated = bool(float(time_s) < times[0] or float(time_s) > times[-1])
-    if len(times) == 1:
-        return xyz[0].astype(float), nearest_delta, extrapolated
+    interpolation_gap_s = _bracketing_gap_s(times, float(time_s))
+    if len(times) == 1 or resample_method == "nearest":
+        return _TemplatePosition(
+            position=xyz[nearest_idx].astype(float),
+            nearest_delta_s=nearest_delta,
+            extrapolated=extrapolated,
+            method_used="nearest",
+            interpolation_gap_s=interpolation_gap_s,
+            large_gap_fallback=False,
+        )
+    large_gap_fallback = (
+        max_interpolation_gap_s is not None
+        and np.isfinite(interpolation_gap_s)
+        and float(interpolation_gap_s) > float(max_interpolation_gap_s)
+    )
+    if large_gap_fallback:
+        return _TemplatePosition(
+            position=xyz[nearest_idx].astype(float),
+            nearest_delta_s=nearest_delta,
+            extrapolated=extrapolated,
+            method_used="nearest",
+            interpolation_gap_s=interpolation_gap_s,
+            large_gap_fallback=True,
+        )
     interpolated = np.asarray([np.interp(float(time_s), times, xyz[:, axis]) for axis in range(3)])
-    return interpolated, nearest_delta, extrapolated
+    return _TemplatePosition(
+        position=interpolated,
+        nearest_delta_s=nearest_delta,
+        extrapolated=extrapolated,
+        method_used="linear",
+        interpolation_gap_s=interpolation_gap_s,
+        large_gap_fallback=False,
+    )
 
 
-def _missing_estimate_record(sequence_id: str, time_s: float) -> dict[str, Any]:
+def _interpolated_position(group: pd.DataFrame, time_s: float) -> tuple[np.ndarray, float, bool]:
+    """Backward-compatible wrapper for older tests/imports."""
+
+    result = _resampled_position(
+        group,
+        time_s,
+        resample_method="linear",
+        max_interpolation_gap_s=None,
+    )
+    return result.position, result.nearest_delta_s, result.extrapolated
+
+
+def _bracketing_gap_s(times: np.ndarray, time_s: float) -> float:
+    if len(times) < 2:
+        return np.nan
+    if float(time_s) <= float(times[0]) or float(time_s) >= float(times[-1]):
+        return np.nan
+    right = int(np.searchsorted(times, float(time_s), side="right"))
+    left = max(0, right - 1)
+    if right >= len(times):
+        return np.nan
+    return float(times[right] - times[left])
+
+
+def _missing_estimate_record(sequence_id: str, time_s: float, resample_method: str) -> dict[str, Any]:
     return {
         "sequence_id": sequence_id,
         "time_s": time_s,
@@ -367,6 +507,9 @@ def _missing_estimate_record(sequence_id: str, time_s: float) -> dict[str, Any]:
         "template_nearest_time_delta_s": np.nan,
         "template_extrapolated": True,
         "template_resample_valid": False,
+        "template_resample_method": resample_method,
+        "template_interpolation_gap_s": np.nan,
+        "template_large_gap_fallback": False,
     }
 
 
@@ -378,6 +521,9 @@ def _diagnostic_record(
     extrapolated: bool,
     source_row_count: int,
     valid: bool,
+    resample_method: str,
+    interpolation_gap_s: float,
+    large_gap_fallback: bool,
 ) -> dict[str, Any]:
     return {
         "sequence_id": sequence_id,
@@ -387,6 +533,9 @@ def _diagnostic_record(
         "extrapolated": bool(extrapolated),
         "source_row_count": int(source_row_count),
         "valid": bool(valid),
+        "resample_method": str(resample_method),
+        "interpolation_gap_s": interpolation_gap_s,
+        "large_gap_fallback": bool(large_gap_fallback),
     }
 
 
@@ -420,7 +569,19 @@ def _empty_resampled() -> pd.DataFrame:
 
 
 def _empty_diagnostics() -> pd.DataFrame:
-    return pd.DataFrame(columns=["sequence_id", "time_s", "nearest_time_delta_s", "extrapolated", "source_row_count", "valid"])
+    return pd.DataFrame(
+        columns=[
+            "sequence_id",
+            "time_s",
+            "nearest_time_delta_s",
+            "extrapolated",
+            "source_row_count",
+            "valid",
+            "resample_method",
+            "interpolation_gap_s",
+            "large_gap_fallback",
+        ]
+    )
 
 
 def _first_present(rows: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
@@ -432,6 +593,13 @@ def _first_present(rows: pd.DataFrame, candidates: tuple[str, ...]) -> str | Non
         if found is not None:
             return found
     return None
+
+
+def _normalize_resample_method(method: str) -> ResampleMethod:
+    value = str(method).strip().lower()
+    if value not in RESAMPLE_METHODS:
+        raise ValueError(f"resample_method must be one of {RESAMPLE_METHODS}; got {method!r}")
+    return value  # type: ignore[return-value]
 
 
 def _jsonable(value: Any) -> Any:
