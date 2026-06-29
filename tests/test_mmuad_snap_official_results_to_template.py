@@ -12,7 +12,10 @@ import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 MODULE_PATH = SCRIPTS_DIR / "mmuad_snap_official_results_to_template.py"
-spec = importlib.util.spec_from_file_location("mmuad_snap_official_results_to_template", MODULE_PATH)
+spec = importlib.util.spec_from_file_location(
+    "mmuad_snap_official_results_to_template",
+    MODULE_PATH,
+)
 assert spec is not None and spec.loader is not None
 snapper = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = snapper
@@ -56,7 +59,8 @@ def test_snap_official_results_to_template_interpolates_and_keeps_sequence_class
     assert midpoint["Position"] == "(5,10,1)"
     assert int(midpoint["Classification"]) == 2
     assert diagnostics["valid"].all()
-    assert diagnostics.loc[diagnostics["Timestamp"] == 5.0, "method"].iloc[0] == "linear"
+    midpoint_method = diagnostics.loc[diagnostics["Timestamp"] == 5.0, "method"].iloc[0]
+    assert midpoint_method == "linear"
 
 
 def test_snap_official_results_to_template_nearest_classification_policy() -> None:
@@ -72,7 +76,7 @@ def test_snap_official_results_to_template_nearest_classification_policy() -> No
     assert int(row["Classification"]) == 3
 
 
-def test_snap_official_results_to_template_raises_on_missing_sequence_when_requested() -> None:
+def test_snap_official_results_to_template_raises_on_missing_sequence() -> None:
     with pytest.raises(ValueError, match="no source results"):
         snapper.snap_official_results_to_template(
             _results(),
@@ -104,10 +108,12 @@ def test_snap_official_results_cli_writes_upload_ready_zip(tmp_path: Path) -> No
     assert (output_dir / "mmaud_results.csv").exists()
     assert (output_dir / "ug2_submission.zip").exists()
     assert (output_dir / "mmuad_template_snap_diagnostics.csv").exists()
-    validation = json.loads((output_dir / "mmuad_template_snap_validation.json").read_text())
+    validation_path = output_dir / "mmuad_template_snap_validation.json"
+    validation = json.loads(validation_path.read_text())
     assert validation["leaderboard_ready"] is True
     assert validation["codabench_upload_ready"] is True
-    manifest = json.loads((output_dir / "mmuad_template_snap_manifest.json").read_text())
+    manifest_path = output_dir / "mmuad_template_snap_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
     assert manifest["row_count"] == 4
     assert manifest["source_result_rows"] == 4
     with ZipFile(output_dir / "ug2_submission.zip") as archive:
