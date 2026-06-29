@@ -36,6 +36,7 @@ VALIDATION_JSON = "mmuad_track5_ensemble_validation.json"
 VALIDATION_ROWS_CSV = "mmuad_track5_ensemble_validation_rows.csv"
 OFFICIAL_RESULTS_CSV = "mmaud_results.csv"
 OFFICIAL_ZIP = "ug2_submission.zip"
+ENSEMBLE_POLICIES = ("weighted-mean", "weighted-median", "trimmed-mean")
 
 
 @dataclass(frozen=True)
@@ -67,15 +68,23 @@ def build_track5_estimate_ensemble(
     template: pd.DataFrame,
     *,
     max_nearest_time_delta_s: float | None = None,
+    aggregation_policy: str = "weighted-mean",
+    trim_fraction: float = 0.2,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return weighted-mean estimates and per-template-row diagnostics.
+    """Return ensembled estimates and per-template-row diagnostics.
 
     Each estimate input is first interpolated to the template with
     :func:`resample_estimates_to_track5_template`.  The final position is a
-    row-wise weighted average over finite, valid resampled trajectories.  Missing
-    sequences or invalid rows are ignored for that row; diagnostics report which
-    labels contributed.
+    row-wise aggregate over finite, valid resampled trajectories.  ``weighted-mean``
+    keeps the original behavior, while ``weighted-median`` and ``trimmed-mean``
+    provide leaderboard-safe robust alternatives for ensembling partially
+    independent pose pipelines with occasional outlier trajectories.
     """
+
+    if aggregation_policy not in ENSEMBLE_POLICIES:
+        raise ValueError(f"unsupported aggregation_policy: {aggregation_policy}")
+    if not 0.0 <= float(trim_fraction) < 0.5:
+        raise ValueError("trim_fraction must be in [0, 0.5)")
 
     template_rows = _normalize_template_rows(template)
     if template_rows.empty:
@@ -136,12 +145,19 @@ def build_track5_estimate_ensemble(
             xyz = np.asarray([np.nan, np.nan, np.nan], dtype=float)
             total_weight = 0.0
             labels = ""
+            spread = np.nan
         else:
             weights = valid["ensemble_weight"].to_numpy(float)
             xyz_values = valid[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
             total_weight = float(np.sum(weights))
-            xyz = np.sum(weights[:, None] * xyz_values, axis=0) / total_weight
+            xyz = _aggregate_xyz(
+                xyz_values,
+                weights,
+                policy=aggregation_policy,
+                trim_fraction=float(trim_fraction),
+            )
             labels = ";".join(valid["ensemble_label"].astype(str).tolist())
+            spread = _weighted_spread_m(xyz_values, weights, xyz)
         records.append(
             {
                 "sequence_id": sequence_id,
@@ -153,6 +169,8 @@ def build_track5_estimate_ensemble(
                 "ensemble_source_count": int(len(valid)),
                 "ensemble_weight_sum": total_weight,
                 "ensemble_labels": labels,
+                "ensemble_policy": aggregation_policy,
+                "ensemble_position_spread_m": spread,
             }
         )
         diagnostics_records.append(
@@ -163,6 +181,8 @@ def build_track5_estimate_ensemble(
                 "valid_input_count": int(len(valid)),
                 "weight_sum": total_weight,
                 "labels": labels,
+                "ensemble_policy": aggregation_policy,
+                "position_spread_m": spread,
             }
         )
     ensemble = pd.DataFrame.from_records(records)
@@ -179,6 +199,8 @@ def write_track5_estimate_ensemble_outputs(
     class_map: dict[str, str] | None = None,
     default_classification: int | str = 0,
     max_nearest_time_delta_s: float | None = None,
+    aggregation_policy: str = "weighted-mean",
+    trim_fraction: float = 0.2,
 ) -> dict[str, Path]:
     """Write ensemble estimates, official CSV/ZIP, validation, and manifest."""
 
@@ -191,6 +213,8 @@ def write_track5_estimate_ensemble_outputs(
         loaded_inputs,
         template,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
+        aggregation_policy=aggregation_policy,
+        trim_fraction=trim_fraction,
     )
     paths = {
         "ensemble_estimates_csv": output / ENSEMBLED_ESTIMATES_CSV,
@@ -238,6 +262,13 @@ def write_track5_estimate_ensemble_outputs(
         "row_count": int(len(ensemble)),
         "valid_ensemble_rows": int(_finite_xyz(ensemble).sum()),
         "max_nearest_time_delta_s": max_nearest_time_delta_s,
+        "aggregation_policy": aggregation_policy,
+        "trim_fraction": float(trim_fraction),
+        "mean_position_spread_m": _safe_mean(diagnostics.get("position_spread_m", pd.Series(dtype=float))),
+        "p95_position_spread_m": _safe_percentile(
+            diagnostics.get("position_spread_m", pd.Series(dtype=float)),
+            95,
+        ),
         "leaderboard_ready": bool(validation.summary.get("leaderboard_ready", False)),
         "codabench_upload_ready": bool(validation.summary.get("codabench_upload_ready", False)),
         "paths": {name: str(path) for name, path in paths.items() if name != "manifest_json"},
@@ -263,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--class-map", type=Path)
     parser.add_argument("--default-classification", default="0")
     parser.add_argument("--max-nearest-time-delta-s", type=float)
+    parser.add_argument("--aggregation-policy", choices=ENSEMBLE_POLICIES, default="weighted-mean")
+    parser.add_argument("--trim-fraction", type=float, default=0.2)
     parser.add_argument("--require-leaderboard-ready", action="store_true")
     args = parser.parse_args(argv)
 
@@ -278,6 +311,8 @@ def main(argv: list[str] | None = None) -> int:
         class_map=class_map,
         default_classification=args.default_classification,
         max_nearest_time_delta_s=args.max_nearest_time_delta_s,
+        aggregation_policy=args.aggregation_policy,
+        trim_fraction=float(args.trim_fraction),
     )
     summary = json.loads(paths["validation_json"].read_text(encoding="utf-8"))
     print("mmuad_track5_estimate_ensemble=ok")
@@ -289,6 +324,44 @@ def main(argv: list[str] | None = None) -> int:
         reasons = ", ".join(summary.get("leaderboard_blocking_reasons", [])) or "unknown"
         raise SystemExit(f"ensemble upload is not leaderboard-ready: {reasons}")
     return 0
+
+
+def _aggregate_xyz(
+    xyz: np.ndarray,
+    weights: np.ndarray,
+    *,
+    policy: str,
+    trim_fraction: float,
+) -> np.ndarray:
+    if policy == "weighted-mean":
+        return np.sum(weights[:, None] * xyz, axis=0) / float(np.sum(weights))
+    if policy == "weighted-median":
+        return np.asarray([_weighted_median(xyz[:, axis], weights) for axis in range(3)])
+    if policy == "trimmed-mean":
+        return np.asarray([_trimmed_weighted_mean(xyz[:, axis], weights, trim_fraction) for axis in range(3)])
+    raise ValueError(f"unsupported aggregation policy: {policy}")
+
+
+def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
+    order = np.argsort(values)
+    sorted_values = values[order]
+    sorted_weights = weights[order]
+    cumulative = np.cumsum(sorted_weights)
+    cutoff = 0.5 * float(np.sum(sorted_weights))
+    return float(sorted_values[int(np.searchsorted(cumulative, cutoff, side="left"))])
+
+
+def _trimmed_weighted_mean(values: np.ndarray, weights: np.ndarray, trim_fraction: float) -> float:
+    if len(values) <= 2 or trim_fraction <= 0.0:
+        return float(np.sum(weights * values) / np.sum(weights))
+    order = np.argsort(values)
+    sorted_values = values[order]
+    sorted_weights = weights[order]
+    trim = int(np.floor(float(trim_fraction) * len(values)))
+    if trim > 0 and len(values) - 2 * trim > 0:
+        sorted_values = sorted_values[trim:-trim]
+        sorted_weights = sorted_weights[trim:-trim]
+    return float(np.sum(sorted_weights * sorted_values) / np.sum(sorted_weights))
 
 
 def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
@@ -320,6 +393,29 @@ def _safe_mean_abs(values: pd.Series) -> float | None:
     if numeric.empty:
         return None
     return float(np.mean(np.abs(numeric.to_numpy(float))))
+
+
+def _safe_mean(values: pd.Series) -> float | None:
+    numeric = pd.to_numeric(values, errors="coerce")
+    numeric = numeric[np.isfinite(numeric.to_numpy(float))]
+    if numeric.empty:
+        return None
+    return float(np.mean(numeric.to_numpy(float)))
+
+
+def _safe_percentile(values: pd.Series, percentile: float) -> float | None:
+    numeric = pd.to_numeric(values, errors="coerce")
+    numeric = numeric[np.isfinite(numeric.to_numpy(float))]
+    if numeric.empty:
+        return None
+    return float(np.percentile(numeric.to_numpy(float), percentile))
+
+
+def _weighted_spread_m(xyz: np.ndarray, weights: np.ndarray, center: np.ndarray) -> float:
+    if len(xyz) == 0:
+        return np.nan
+    distances = np.linalg.norm(xyz - center[None, :], axis=1)
+    return float(np.sum(weights * distances) / np.sum(weights))
 
 
 def _first_present(rows: pd.DataFrame, names: tuple[str, ...]) -> str | None:
