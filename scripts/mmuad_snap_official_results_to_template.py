@@ -137,7 +137,10 @@ def snap_official_results_to_template(
         )
         diagnostic_records.append(diagnostic)
 
-    output = pd.DataFrame.from_records(output_records, columns=list(OFFICIAL_UG2_RESULT_COLUMNS))
+    output = pd.DataFrame.from_records(
+        output_records,
+        columns=list(OFFICIAL_UG2_RESULT_COLUMNS),
+    )
     diagnostics = pd.DataFrame.from_records(diagnostic_records)
     return output, diagnostics
 
@@ -210,12 +213,25 @@ def write_template_snapped_submission(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results", type=Path, required=True, help="official CSV/ZIP to snap")
-    parser.add_argument("--template", type=Path, required=True, help="official Track 5 template CSV/ZIP")
+    parser.add_argument(
+        "--template",
+        type=Path,
+        required=True,
+        help="official Track 5 template CSV/ZIP",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--resample-method", choices=RESAMPLE_METHODS, default="linear")
     parser.add_argument("--max-interpolation-gap-s", type=float)
-    parser.add_argument("--classification-policy", choices=CLASSIFICATION_POLICIES, default="sequence-mode")
-    parser.add_argument("--missing-position-policy", choices=MISSING_POSITION_POLICIES, default="zero")
+    parser.add_argument(
+        "--classification-policy",
+        choices=CLASSIFICATION_POLICIES,
+        default="sequence-mode",
+    )
+    parser.add_argument(
+        "--missing-position-policy",
+        choices=MISSING_POSITION_POLICIES,
+        default="zero",
+    )
     parser.add_argument("--require-leaderboard-ready", action="store_true")
     args = parser.parse_args(argv)
 
@@ -244,7 +260,10 @@ def main(argv: list[str] | None = None) -> int:
 
 def _normalize_results_rows(results: pd.DataFrame) -> pd.DataFrame:
     rows = load_official_track5_results_frame_from_frame(results)
-    positions = np.asarray([parse_official_position_cell(value) for value in rows["Position"]], dtype=float)
+    positions = np.asarray(
+        [parse_official_position_cell(value) for value in rows["Position"]],
+        dtype=float,
+    )
     rows = rows.copy()
     rows["x"] = positions[:, 0]
     rows["y"] = positions[:, 1]
@@ -269,7 +288,9 @@ def load_official_track5_results_frame_from_frame(frame: pd.DataFrame) -> pd.Dat
             "Classification": pd.to_numeric(frame[lower["classification"]], errors="coerce"),
         }
     )
-    finite = rows["Sequence"].ne("") & rows["Timestamp"].notna() & rows["Classification"].notna()
+    finite = rows["Sequence"].ne("")
+    finite &= rows["Timestamp"].notna()
+    finite &= rows["Classification"].notna()
     rows = rows.loc[finite].copy()
     rows["Timestamp"] = rows["Timestamp"].astype(float)
     rows["Classification"] = rows["Classification"].astype(int)
