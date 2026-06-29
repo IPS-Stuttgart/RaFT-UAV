@@ -36,8 +36,10 @@ def _smooth_official_submission() -> pd.DataFrame:
     )
 
 
-def test_temporal_repair_replaces_isolated_speed_spike() -> None:
-    submission = load_track5_submission(_write_frame_to_tmp(_official_submission_with_spike()))
+def test_temporal_repair_replaces_isolated_speed_spike(tmp_path: Path) -> None:
+    submission = load_track5_submission(
+        _write_frame_to_tmp(_official_submission_with_spike(), tmp_path)
+    )
     repaired, diagnostics = repair_track5_temporal_spikes(
         submission,
         max_speed_mps=20.0,
@@ -53,8 +55,8 @@ def test_temporal_repair_replaces_isolated_speed_spike() -> None:
     assert repaired_row["repair_displacement_m"] == pytest.approx(99.0)
 
 
-def test_temporal_repair_leaves_smooth_trajectory_unchanged() -> None:
-    submission = load_track5_submission(_write_frame_to_tmp(_smooth_official_submission()))
+def test_temporal_repair_leaves_smooth_trajectory_unchanged(tmp_path: Path) -> None:
+    submission = load_track5_submission(_write_frame_to_tmp(_smooth_official_submission(), tmp_path))
     repaired, diagnostics = repair_track5_temporal_spikes(
         submission,
         max_speed_mps=20.0,
@@ -127,8 +129,7 @@ def test_temporal_repair_entrypoint_is_exposed() -> None:
     )
 
 
-def _write_frame_to_tmp(frame: pd.DataFrame) -> Path:
-    path = Path(".pytest-tmp") / "track5_temporal_repair_input.csv"
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _write_frame_to_tmp(frame: pd.DataFrame, tmp_path: Path) -> Path:
+    path = tmp_path / "track5_temporal_repair_input.csv"
     frame.to_csv(path, index=False)
     return path
