@@ -229,9 +229,15 @@ def _repair_sequence(
         diagnostics["repair_candidate"] = repair_mask
         if not repair_mask.any():
             break
-        xyz = work[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
+        xyz = work[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(
+            dtype=float,
+            copy=True,
+        )
         for idx in np.flatnonzero(repair_mask):
-            interpolated = diagnostics.loc[idx, ["interp_x_m", "interp_y_m", "interp_z_m"]].to_numpy(float)
+            interpolated = diagnostics.loc[
+                idx,
+                ["interp_x_m", "interp_y_m", "interp_z_m"],
+            ].to_numpy(float)
             displacement = float(np.linalg.norm(xyz[idx] - interpolated))
             xyz[idx] = interpolated
             work.loc[idx, ["state_x_m", "state_y_m", "state_z_m"]] = interpolated
