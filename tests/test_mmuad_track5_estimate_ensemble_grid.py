@@ -62,6 +62,18 @@ def _estimate_bad() -> pd.DataFrame:
     )
 
 
+def _estimate_outlier() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "sequence_id": ["seq0001", "seq0001", "seq0002"],
+            "time_s": [0.0, 10.0, 0.0],
+            "state_x_m": [100.0, 110.0, 104.0],
+            "state_y_m": [100.0, 100.0, 104.0],
+            "state_z_m": [100.0, 100.0, 104.0],
+        }
+    )
+
+
 def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
     good = tmp_path / "good.csv"
     bad = tmp_path / "bad.csv"
@@ -101,8 +113,35 @@ def test_estimate_ensemble_weight_grid_selects_best_weight(tmp_path: Path) -> No
 
     assert best_weights == (1.0, 0.0)
     assert summary.iloc[0]["weight_good"] == pytest.approx(1.0)
+    assert summary.iloc[0]["aggregation_policy"] == "weighted-mean"
     assert summary.iloc[0]["pose_mse"] == pytest.approx(0.0)
     assert set(by_sequence["sequence_id"]) == {"seq0001", "seq0002"}
+
+
+def test_estimate_ensemble_policy_grid_can_choose_robust_policy(tmp_path: Path) -> None:
+    good = tmp_path / "good.csv"
+    bad = tmp_path / "bad.csv"
+    outlier = tmp_path / "outlier.csv"
+    _estimate_good().to_csv(good, index=False)
+    _estimate_bad().to_csv(bad, index=False)
+    _estimate_outlier().to_csv(outlier, index=False)
+
+    summary, _, best_weights = evaluate_estimate_ensemble_weight_grid(
+        [
+            parse_estimate_spec(f"good={good}"),
+            parse_estimate_spec(f"bad={bad}"),
+            parse_estimate_spec(f"outlier={outlier}"),
+        ],
+        template=_template(),
+        truth=_truth(),
+        weight_grid=[(1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0)],
+        default_classification=2,
+        aggregation_policies=("weighted-mean", "weighted-median"),
+    )
+
+    assert best_weights == (pytest.approx(1.0 / 3.0),) * 3
+    assert summary.iloc[0]["aggregation_policy"] == "weighted-median"
+    assert summary.iloc[0]["pose_mse"] < summary.iloc[-1]["pose_mse"]
 
 
 def test_estimate_ensemble_weight_grid_writes_best_artifacts(tmp_path: Path) -> None:
@@ -122,6 +161,7 @@ def test_estimate_ensemble_weight_grid_writes_best_artifacts(tmp_path: Path) -> 
     assert paths["best_official_zip"].exists()
     manifest = json.loads(paths["manifest_json"].read_text(encoding="utf-8"))
     assert manifest["best_weights"] == [1.0, 0.0]
+    assert manifest["best_aggregation_policy"] == "weighted-mean"
     assert manifest["best"]["pose_mse"] == pytest.approx(0.0)
 
 
@@ -144,12 +184,16 @@ def test_estimate_ensemble_weight_grid_cli_writes_outputs(tmp_path: Path) -> Non
             str(output_dir),
             "--step",
             "0.5",
+            "--aggregation-policy",
+            "grid",
         ]
     )
 
     assert status == 0
     assert (output_dir / "mmuad_track5_estimate_ensemble_weight_grid.csv").exists()
     assert (output_dir / "best_ensemble" / "ug2_submission.zip").exists()
+    manifest = json.loads((output_dir / "mmuad_track5_estimate_ensemble_weight_grid_manifest.json").read_text())
+    assert manifest["best_aggregation_policy"] in {"weighted-mean", "weighted-median", "trimmed-mean"}
 
 
 def test_estimate_ensemble_weight_grid_entrypoint_is_exposed() -> None:
