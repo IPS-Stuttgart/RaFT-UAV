@@ -49,6 +49,18 @@ def _estimate_b() -> pd.DataFrame:
     )
 
 
+def _estimate_outlier() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "sequence_id": ["seq0001", "seq0001", "seq0002"],
+            "time_s": [0.0, 10.0, 0.0],
+            "state_x_m": [1000.0, 1010.0, 1000.0],
+            "state_y_m": [1000.0, 1000.0, 1000.0],
+            "state_z_m": [1000.0, 1000.0, 1000.0],
+        }
+    )
+
+
 def test_parse_estimate_spec_accepts_label_path_and_weight() -> None:
     item = parse_estimate_spec("robust=/tmp/estimates.csv@0.25")
     assert item.label == "robust"
@@ -77,6 +89,56 @@ def test_track5_estimate_ensemble_weighted_average_after_template_resample() -> 
     assert diagnostics["valid_input_count"].tolist() == [2, 2, 2]
 
 
+def test_track5_estimate_ensemble_weighted_median_rejects_outlier() -> None:
+    mean_ensemble, _ = build_track5_estimate_ensemble(
+        [
+            ("a", _estimate_a(), 1.0),
+            ("b", _estimate_b(), 1.0),
+            ("outlier", _estimate_outlier(), 1.0),
+        ],
+        _template(),
+    )
+    robust_ensemble, diagnostics = build_track5_estimate_ensemble(
+        [
+            ("a", _estimate_a(), 1.0),
+            ("b", _estimate_b(), 1.0),
+            ("outlier", _estimate_outlier(), 1.0),
+        ],
+        _template(),
+        aggregation_policy="weighted-median",
+    )
+
+    midpoint_mean = mean_ensemble.loc[
+        (mean_ensemble["sequence_id"] == "seq0001") & (mean_ensemble["time_s"] == 5.0)
+    ].iloc[0]
+    midpoint_robust = robust_ensemble.loc[
+        (robust_ensemble["sequence_id"] == "seq0001") & (robust_ensemble["time_s"] == 5.0)
+    ].iloc[0]
+    assert midpoint_mean["state_x_m"] > 300.0
+    assert midpoint_robust["state_x_m"] == pytest.approx(7.0)
+    assert midpoint_robust["state_y_m"] == pytest.approx(2.0)
+    assert midpoint_robust["ensemble_policy"] == "weighted-median"
+    assert diagnostics["position_spread_m"].notna().all()
+
+
+def test_track5_estimate_ensemble_trimmed_mean_rejects_single_low_high_outliers() -> None:
+    robust_ensemble, _ = build_track5_estimate_ensemble(
+        [
+            ("a", _estimate_a(), 1.0),
+            ("b", _estimate_b(), 1.0),
+            ("outlier", _estimate_outlier(), 1.0),
+            ("low_outlier", _estimate_a().assign(state_x_m=-1000.0), 1.0),
+        ],
+        _template(),
+        aggregation_policy="trimmed-mean",
+        trim_fraction=0.25,
+    )
+    midpoint = robust_ensemble.loc[
+        (robust_ensemble["sequence_id"] == "seq0001") & (robust_ensemble["time_s"] == 5.0)
+    ].iloc[0]
+    assert midpoint["state_x_m"] == pytest.approx(6.0)
+
+
 def test_track5_estimate_ensemble_writes_leaderboard_ready_artifacts(tmp_path: Path) -> None:
     a_csv = tmp_path / "a.csv"
     b_csv = tmp_path / "b.csv"
@@ -90,6 +152,7 @@ def test_track5_estimate_ensemble_writes_leaderboard_ready_artifacts(tmp_path: P
         template=_template(),
         output_dir=tmp_path / "out",
         class_map={"seq0001": "2", "seq0002": "1"},
+        aggregation_policy="weighted-median",
     )
 
     assert paths["official_zip"].exists()
@@ -98,6 +161,7 @@ def test_track5_estimate_ensemble_writes_leaderboard_ready_artifacts(tmp_path: P
     assert validation["leaderboard_ready"] is True
     assert validation["codabench_upload_ready"] is True
     assert manifest["valid_ensemble_rows"] == 3
+    assert manifest["aggregation_policy"] == "weighted-median"
     with ZipFile(paths["official_zip"]) as archive:
         assert archive.namelist() == ["mmaud_results.csv"]
     official = pd.read_csv(paths["official_results_csv"])
@@ -130,6 +194,8 @@ def test_track5_estimate_ensemble_cli_writes_outputs(tmp_path: Path) -> None:
             str(class_map_csv),
             "--output-dir",
             str(output_dir),
+            "--aggregation-policy",
+            "weighted-median",
             "--require-leaderboard-ready",
         ]
     )
@@ -137,6 +203,8 @@ def test_track5_estimate_ensemble_cli_writes_outputs(tmp_path: Path) -> None:
     assert status == 0
     assert (output_dir / "ug2_submission.zip").exists()
     assert (output_dir / "mmuad_track5_ensemble_manifest.json").exists()
+    manifest = json.loads((output_dir / "mmuad_track5_ensemble_manifest.json").read_text())
+    assert manifest["aggregation_policy"] == "weighted-median"
 
 
 def test_track5_estimate_ensemble_entrypoint_is_exposed() -> None:
