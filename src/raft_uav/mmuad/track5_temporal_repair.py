@@ -125,8 +125,10 @@ def write_track5_temporal_repair_outputs(
         validation.rows.to_csv(paths["validation_rows_csv"], index=False)
         validation_summary = _jsonable(validation.summary)
         if require_leaderboard_ready and not validation.summary.get("leaderboard_ready", False):
-            reasons = ", ".join(validation.summary.get("leaderboard_blocking_reasons", [])) or "unknown"
-            raise SystemExit(f"temporal-repaired submission is not leaderboard-ready: {reasons}")
+            reasons = ", ".join(validation.summary.get("leaderboard_blocking_reasons", []))
+            raise SystemExit(
+                f"temporal-repaired submission is not leaderboard-ready: {reasons or 'unknown'}"
+            )
     payload = dict(manifest or {})
     repaired_count = int(diagnostics["repaired"].astype(bool).sum()) if not diagnostics.empty else 0
     payload.update(
@@ -217,10 +219,14 @@ def _repair_sequence(
     work["temporal_repair_applied"] = False
     work["temporal_repair_iteration"] = 0
     work["temporal_repair_displacement_m"] = 0.0
-    diagnostics: pd.DataFrame | None = None
     for iteration in range(1, max(1, int(iterations)) + 1):
         diagnostics = _sequence_diagnostics(work, iteration=iteration)
-        repair_mask = diagnostics["repair_candidate"].to_numpy(bool)
+        repair_mask = _repair_candidate_mask(
+            diagnostics,
+            max_speed_mps=max_speed_mps,
+            max_interpolation_residual_m=max_interpolation_residual_m,
+        )
+        diagnostics["repair_candidate"] = repair_mask
         if not repair_mask.any():
             break
         xyz = work[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
@@ -233,12 +239,39 @@ def _repair_sequence(
             work.loc[idx, "temporal_repair_iteration"] = iteration
             work.loc[idx, "temporal_repair_displacement_m"] = displacement
     final_diagnostics = _sequence_diagnostics(work, iteration=max(1, int(iterations)) + 1)
+    final_diagnostics["repair_candidate"] = _repair_candidate_mask(
+        final_diagnostics,
+        max_speed_mps=max_speed_mps,
+        max_interpolation_residual_m=max_interpolation_residual_m,
+    )
     final_diagnostics["repaired"] = work["temporal_repair_applied"].to_numpy(bool)
     final_diagnostics["repair_iteration"] = work["temporal_repair_iteration"].to_numpy(int)
     final_diagnostics["repair_displacement_m"] = work["temporal_repair_displacement_m"].to_numpy(float)
     final_diagnostics["max_speed_mps"] = float(max_speed_mps)
     final_diagnostics["max_interpolation_residual_m"] = float(max_interpolation_residual_m)
     return work, final_diagnostics
+
+
+def _repair_candidate_mask(
+    diagnostics: pd.DataFrame,
+    *,
+    max_speed_mps: float,
+    max_interpolation_residual_m: float,
+) -> np.ndarray:
+    incoming = pd.to_numeric(diagnostics["incoming_speed_mps"], errors="coerce").to_numpy(float)
+    outgoing = pd.to_numeric(diagnostics["outgoing_speed_mps"], errors="coerce").to_numpy(float)
+    direct = pd.to_numeric(diagnostics["neighbor_direct_speed_mps"], errors="coerce").to_numpy(float)
+    residual = pd.to_numeric(diagnostics["interpolation_residual_m"], errors="coerce").to_numpy(float)
+    return (
+        np.isfinite(incoming)
+        & np.isfinite(outgoing)
+        & np.isfinite(direct)
+        & np.isfinite(residual)
+        & (incoming > float(max_speed_mps))
+        & (outgoing > float(max_speed_mps))
+        & (direct <= float(max_speed_mps))
+        & (residual > float(max_interpolation_residual_m))
+    )
 
 
 def _sequence_diagnostics(group: pd.DataFrame, *, iteration: int) -> pd.DataFrame:
@@ -280,12 +313,10 @@ def _sequence_diagnostics(group: pd.DataFrame, *, iteration: int) -> pd.DataFram
                         "interp_x_m": float(interpolated[0]),
                         "interp_y_m": float(interpolated[1]),
                         "interp_z_m": float(interpolated[2]),
-                        "repair_candidate": False,
                     }
                 )
         records.append(record)
-    diagnostics = pd.DataFrame.from_records(records)
-    return diagnostics
+    return pd.DataFrame.from_records(records)
 
 
 def _diagnostic_columns() -> list[str]:
