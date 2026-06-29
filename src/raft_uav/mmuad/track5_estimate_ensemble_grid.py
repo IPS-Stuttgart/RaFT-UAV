@@ -1,8 +1,9 @@
-"""Train/validation weight search for MMUAD Track 5 estimate ensembles.
+"""Train/validation weight and policy search for MMUAD Track 5 estimate ensembles.
 
-The upload-time estimate ensemble accepts explicit weights.  This companion
-module evaluates a small simplex grid against a supplied truth/template file so
-weights can be selected upstream on train folds before a hidden-test submission.
+The upload-time estimate ensemble accepts explicit weights and several robust
+aggregation policies.  This companion module evaluates a small simplex grid
+against a supplied truth/template file so weights and, optionally, the ensemble
+policy can be selected upstream on train folds before a hidden-test submission.
 It is a development/selection utility: it uses truth only for scoring the grid,
 then writes the best upload-ready ensemble artifact for the same template.
 """
@@ -21,6 +22,7 @@ import pandas as pd
 
 from raft_uav.mmuad.evaluator import evaluate_mmaud_results, load_evaluation_truth_file
 from raft_uav.mmuad.submission import load_official_track5_template_file, load_sequence_class_map
+from raft_uav.mmuad.track5_estimate_ensemble import ENSEMBLE_POLICIES
 from raft_uav.mmuad.track5_estimate_ensemble import EstimateInput
 from raft_uav.mmuad.track5_estimate_ensemble import build_track5_estimate_ensemble
 from raft_uav.mmuad.track5_estimate_ensemble import parse_estimate_spec
@@ -34,9 +36,11 @@ BEST_OUTPUT_DIR = "best_ensemble"
 
 @dataclass(frozen=True)
 class EnsembleGridRow:
-    """One candidate set of ensemble weights and its score."""
+    """One candidate set of ensemble weights/policy and its score."""
 
     weights: tuple[float, ...]
+    aggregation_policy: str
+    trim_fraction: float
     pose_mse: float
     rmse_m: float
     mean_error_m: float
@@ -80,54 +84,65 @@ def evaluate_estimate_ensemble_weight_grid(
     class_map_path: Path | None = None,
     default_classification: int | str = 0,
     max_nearest_time_delta_s: float | None = None,
+    aggregation_policies: Iterable[str] = ("weighted-mean",),
+    trim_fraction: float = 0.2,
 ) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float, ...]]:
-    """Score each weight vector and return summary, by-sequence rows, and best weights."""
+    """Score weight/policy grid and return summary, by-sequence rows, and best weights."""
 
     inputs = tuple(estimate_inputs)
     if not inputs:
         raise ValueError("at least one estimate input is required")
+    policies = _normalize_aggregation_policies(aggregation_policies)
     loaded = [(item.label, pd.read_csv(item.path), 1.0) for item in inputs]
     class_map = load_sequence_class_map(class_map_path) if class_map_path is not None else {}
     summary_records: list[dict[str, Any]] = []
     sequence_records: list[dict[str, Any]] = []
     best_row: EnsembleGridRow | None = None
-    for weights in weight_grid:
-        if len(weights) != len(inputs):
-            raise ValueError(
-                f"weight vector length {len(weights)} does not match inputs {len(inputs)}"
+    for policy in policies:
+        for weights in weight_grid:
+            if len(weights) != len(inputs):
+                raise ValueError(
+                    f"weight vector length {len(weights)} does not match inputs {len(inputs)}"
+                )
+            weighted_loaded = [
+                (label, estimates, float(weight))
+                for (label, estimates, _), weight in zip(loaded, weights, strict=True)
+            ]
+            ensemble, _ = build_track5_estimate_ensemble(
+                weighted_loaded,
+                template,
+                max_nearest_time_delta_s=max_nearest_time_delta_s,
+                aggregation_policy=policy,
+                trim_fraction=float(trim_fraction),
             )
-        weighted_loaded = [
-            (label, estimates, float(weight))
-            for (label, estimates, _), weight in zip(loaded, weights, strict=True)
-        ]
-        ensemble, _ = build_track5_estimate_ensemble(
-            weighted_loaded,
-            template,
-            max_nearest_time_delta_s=max_nearest_time_delta_s,
-        )
-        results = _ensemble_results_frame(
-            ensemble,
-            class_map=class_map,
-            default_classification=default_classification,
-        )
-        evaluation = evaluate_mmaud_results(
-            results,
-            truth,
-            metric_protocol="public-track5",
-            class_map_path=class_map_path,
-        )
-        row = _grid_row(weights, evaluation)
-        summary_records.append(_summary_record(inputs, row))
-        sequence_records.extend(_sequence_records(inputs, row.weights, evaluation))
-        if best_row is None or _row_sort_key(row) < _row_sort_key(best_row):
-            best_row = row
+            results = _ensemble_results_frame(
+                ensemble,
+                class_map=class_map,
+                default_classification=default_classification,
+            )
+            evaluation = evaluate_mmaud_results(
+                results,
+                truth,
+                metric_protocol="public-track5",
+                class_map_path=class_map_path,
+            )
+            row = _grid_row(
+                weights,
+                evaluation,
+                aggregation_policy=policy,
+                trim_fraction=float(trim_fraction),
+            )
+            summary_records.append(_summary_record(inputs, row))
+            sequence_records.extend(_sequence_records(inputs, row.weights, evaluation, row))
+            if best_row is None or _row_sort_key(row) < _row_sort_key(best_row):
+                best_row = row
     summary = pd.DataFrame.from_records(summary_records).sort_values(
         ["pose_mse", "p95_error_m", "max_error_m"],
         na_position="last",
     )
     by_sequence = pd.DataFrame.from_records(sequence_records)
     if best_row is None:
-        raise ValueError("weight grid produced no rows")
+        raise ValueError("weight/policy grid produced no rows")
     return summary.reset_index(drop=True), by_sequence, best_row.weights
 
 
@@ -141,6 +156,8 @@ def write_estimate_ensemble_weight_grid_outputs(
     class_map_path: Path | None = None,
     default_classification: int | str = 0,
     max_nearest_time_delta_s: float | None = None,
+    aggregation_policies: Iterable[str] = ("weighted-mean",),
+    trim_fraction: float = 0.2,
 ) -> dict[str, Path]:
     """Score a grid and write the best leaderboard-ready ensemble artifact."""
 
@@ -155,12 +172,17 @@ def write_estimate_ensemble_weight_grid_outputs(
         class_map_path=class_map_path,
         default_classification=default_classification,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
+        aggregation_policies=aggregation_policies,
+        trim_fraction=trim_fraction,
     )
     summary_csv = output / GRID_SUMMARY_CSV
     by_sequence_csv = output / GRID_BY_SEQUENCE_CSV
     manifest_json = output / GRID_MANIFEST_JSON
     summary.to_csv(summary_csv, index=False)
     by_sequence.to_csv(by_sequence_csv, index=False)
+    best_summary = summary.iloc[0].to_dict() if not summary.empty else {}
+    best_policy = str(best_summary.get("aggregation_policy", "weighted-mean"))
+    best_trim_fraction = float(best_summary.get("trim_fraction", trim_fraction))
     best_inputs = [
         EstimateInput(label=item.label, path=item.path, weight=float(weight))
         for item, weight in zip(inputs, best_weights, strict=True)
@@ -173,18 +195,24 @@ def write_estimate_ensemble_weight_grid_outputs(
         class_map=class_map,
         default_classification=default_classification,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
+        aggregation_policy=best_policy,
+        trim_fraction=best_trim_fraction,
     )
     manifest = {
-        "schema": "raft-uav-mmuad-track5-estimate-ensemble-weight-grid-v1",
+        "schema": "raft-uav-mmuad-track5-estimate-ensemble-weight-grid-v2",
         "estimate_inputs": [
             {"label": item.label, "path": str(item.path)} for item in inputs
         ],
         "class_map_path": str(class_map_path) if class_map_path is not None else None,
         "default_classification": str(default_classification),
         "max_nearest_time_delta_s": max_nearest_time_delta_s,
+        "aggregation_policies": list(_normalize_aggregation_policies(aggregation_policies)),
+        "trim_fraction": float(trim_fraction),
         "grid_row_count": int(len(summary)),
         "best_weights": list(best_weights),
-        "best": summary.iloc[0].to_dict() if not summary.empty else {},
+        "best_aggregation_policy": best_policy,
+        "best_trim_fraction": best_trim_fraction,
+        "best": best_summary,
         "paths": {
             "summary_csv": str(summary_csv),
             "by_sequence_csv": str(by_sequence_csv),
@@ -204,7 +232,7 @@ def write_estimate_ensemble_weight_grid_outputs(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="raft-uav-mmuad-track5-estimate-ensemble-grid",
-        description="select Track 5 estimate-ensemble weights on a scored template",
+        description="select Track 5 estimate-ensemble weights/policy on a scored template",
     )
     parser.add_argument(
         "--estimate-csv",
@@ -221,6 +249,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--step", type=float, default=0.25)
     parser.add_argument("--exclude-singletons", action="store_true")
     parser.add_argument("--max-nearest-time-delta-s", type=float)
+    parser.add_argument(
+        "--aggregation-policy",
+        choices=(*ENSEMBLE_POLICIES, "grid"),
+        default="weighted-mean",
+        help="ensemble aggregation policy to score; use grid to score all available policies",
+    )
+    parser.add_argument("--trim-fraction", type=float, default=0.2)
     args = parser.parse_args(argv)
 
     if not args.estimate_csv:
@@ -233,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
         step=float(args.step),
         include_singletons=not bool(args.exclude_singletons),
     )
+    aggregation_policies = ENSEMBLE_POLICIES if args.aggregation_policy == "grid" else (args.aggregation_policy,)
     paths = write_estimate_ensemble_weight_grid_outputs(
         estimate_inputs=inputs,
         template=template,
@@ -242,11 +278,14 @@ def main(argv: list[str] | None = None) -> int:
         class_map_path=args.class_map,
         default_classification=args.default_classification,
         max_nearest_time_delta_s=args.max_nearest_time_delta_s,
+        aggregation_policies=aggregation_policies,
+        trim_fraction=float(args.trim_fraction),
     )
     manifest = json.loads(paths["manifest_json"].read_text(encoding="utf-8"))
     print("mmuad_track5_estimate_ensemble_grid=ok")
     print(f"grid_row_count={manifest['grid_row_count']}")
     print(f"best_weights={manifest['best_weights']}")
+    print(f"best_aggregation_policy={manifest['best_aggregation_policy']}")
     print(f"summary_csv={paths['summary_csv']}")
     print(f"manifest_json={paths['manifest_json']}")
     print(f"best_official_zip={paths['best_official_zip']}")
@@ -270,11 +309,19 @@ def _ensemble_results_frame(
     return rows[["sequence_id", "timestamp", "x", "y", "z", "uav_type", "score"]]
 
 
-def _grid_row(weights: tuple[float, ...], evaluation: dict[str, Any]) -> EnsembleGridRow:
+def _grid_row(
+    weights: tuple[float, ...],
+    evaluation: dict[str, Any],
+    *,
+    aggregation_policy: str,
+    trim_fraction: float,
+) -> EnsembleGridRow:
     summary = evaluation.get("summary", evaluation)
     pooled = summary.get("pooled", summary)
     return EnsembleGridRow(
         weights=tuple(float(weight) for weight in weights),
+        aggregation_policy=str(aggregation_policy),
+        trim_fraction=float(trim_fraction),
         pose_mse=float(
             pooled.get("pose_mse_loss_m2", pooled.get("mean_square_loss_m2", np.nan))
         ),
@@ -290,6 +337,8 @@ def _grid_row(weights: tuple[float, ...], evaluation: dict[str, Any]) -> Ensembl
 def _summary_record(inputs: tuple[EstimateInput, ...], row: EnsembleGridRow) -> dict[str, Any]:
     record: dict[str, Any] = {
         "weights": ";".join(str(weight) for weight in row.weights),
+        "aggregation_policy": row.aggregation_policy,
+        "trim_fraction": row.trim_fraction,
         "pose_mse": row.pose_mse,
         "rmse_m": row.rmse_m,
         "mean_error_m": row.mean_error_m,
@@ -307,6 +356,7 @@ def _sequence_records(
     inputs: tuple[EstimateInput, ...],
     weights: tuple[float, ...],
     evaluation: dict[str, Any],
+    row: EnsembleGridRow,
 ) -> list[dict[str, Any]]:
     rows = pd.DataFrame(evaluation.get("rows", pd.DataFrame()))
     if rows.empty or "sequence_id" not in rows.columns:
@@ -321,6 +371,8 @@ def _sequence_records(
         record: dict[str, Any] = {
             "sequence_id": str(sequence_id),
             "weights": ";".join(str(weight) for weight in weights),
+            "aggregation_policy": row.aggregation_policy,
+            "trim_fraction": row.trim_fraction,
             "pose_mse": float(np.mean(errors.to_numpy(float) ** 2)),
             "rmse_m": float(np.sqrt(np.mean(errors.to_numpy(float) ** 2))),
             "mean_error_m": float(errors.mean()),
@@ -336,6 +388,16 @@ def _sequence_records(
 
 def _row_sort_key(row: EnsembleGridRow) -> tuple[float, float, float]:
     return (row.pose_mse, row.p95_error_m, row.max_error_m)
+
+
+def _normalize_aggregation_policies(values: Iterable[str]) -> tuple[str, ...]:
+    policies = tuple(dict.fromkeys(str(value) for value in values))
+    if not policies:
+        raise ValueError("at least one aggregation policy is required")
+    unsupported = [policy for policy in policies if policy not in ENSEMBLE_POLICIES]
+    if unsupported:
+        raise ValueError(f"unsupported aggregation policies: {unsupported}")
+    return policies
 
 
 def _optional_float(value: Any) -> float | None:
