@@ -14,7 +14,7 @@ def optional_float(value: object) -> float | None:
         return None
     if isinstance(value, bool | np.bool_):
         return None
-    if isinstance(value, np.ndarray) and value.ndim > 0:
+    if _is_non_scalar_array_like(value):
         return None
     try:
         number = float(value)
@@ -32,3 +32,15 @@ def optional_int(value: object) -> int | None:
     if not number.is_integer():
         return None
     return int(number)
+
+
+def _is_non_scalar_array_like(value: object) -> bool:
+    """Return whether ``value`` advertises array-like, non-scalar dimensionality."""
+
+    ndim = getattr(value, "ndim", None)
+    if ndim is None:
+        return False
+    try:
+        return int(ndim) > 0
+    except (TypeError, ValueError):
+        return False
