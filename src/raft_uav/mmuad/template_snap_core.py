@@ -44,6 +44,7 @@ def snap_official_results_to_template(
     missing_policy = _normalize_choice(
         missing_position_policy, MISSING_POSITION_POLICIES, "missing_position_policy"
     )
+    max_gap_s = _normalize_max_interpolation_gap_s(max_interpolation_gap_s)
     result_by_sequence = {
         seq: group.sort_values("Timestamp").reset_index(drop=True)
         for seq, group in _normalize_results_rows(results).groupby("Sequence", sort=True)
@@ -78,7 +79,7 @@ def snap_official_results_to_template(
                 source,
                 timestamp,
                 resample_method=method,
-                max_interpolation_gap_s=max_interpolation_gap_s,
+                max_interpolation_gap_s=max_gap_s,
             )
             classification = _resampled_classification(
                 source, timestamp, classification_policy=class_policy
@@ -110,3 +111,12 @@ def snap_official_results_to_template(
         pd.DataFrame.from_records(outputs, columns=list(OFFICIAL_UG2_RESULT_COLUMNS)),
         pd.DataFrame.from_records(diagnostics, columns=list(DIAGNOSTIC_COLUMNS)),
     )
+
+
+def _normalize_max_interpolation_gap_s(value: float | None) -> float | None:
+    if value is None:
+        return None
+    gap_s = float(value)
+    if not np.isfinite(gap_s) or gap_s < 0.0:
+        raise ValueError("max_interpolation_gap_s must be a finite non-negative number")
+    return gap_s
