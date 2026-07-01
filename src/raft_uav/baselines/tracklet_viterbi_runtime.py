@@ -89,6 +89,8 @@ def _config_from_environment() -> _TrackletConfigOverlay:
         "RAFT_UAV_TRACKLET_RANGE_GATE_M",
         0.0 if defaults.range_gate_m is None else float(defaults.range_gate_m),
     )
+    if range_gate < 0.0:
+        raise ValueError("RAFT_UAV_TRACKLET_RANGE_GATE_M must be nonnegative")
     base = TrackletViterbiAssociationConfig(
         max_candidates_per_frame=int(
             _env_float_any(
@@ -193,9 +195,12 @@ def _env_float_any(names: tuple[str, ...], default: float) -> float:
         if value is None:
             continue
         try:
-            return float(value)
+            number = float(value)
         except ValueError as exc:
             raise ValueError(f"{name} must be numeric") from exc
+        if not _is_finite(number):
+            raise ValueError(f"{name} must be finite")
+        return number
     return float(default)
 
 
@@ -211,3 +216,7 @@ def _env_bool(name: str, default: bool) -> bool:
     if value is None:
         return bool(default)
     return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _is_finite(value: float) -> bool:
+    return value == value and abs(value) != float("inf")
