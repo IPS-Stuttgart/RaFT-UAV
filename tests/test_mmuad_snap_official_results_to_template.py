@@ -71,6 +71,14 @@ def test_snap_official_results_to_template_rejects_fractional_classification_lab
         snapper.snap_official_results_to_template(results, _template())
 
 
+def test_snap_official_results_to_template_rejects_logical_classification_labels() -> None:
+    results = _results()
+    results.loc[0, "Classification"] = True
+
+    with pytest.raises(ValueError, match="integer ids"):
+        snapper.snap_official_results_to_template(results, _template())
+
+
 def test_snap_official_results_to_template_handles_empty_source_results() -> None:
     snapped, diagnostics = snapper.snap_official_results_to_template(
         pd.DataFrame(columns=["Sequence", "Timestamp", "Position", "Classification"]),
