@@ -90,11 +90,17 @@ def leaderboard_entries_from_config(
     raw_methods = payload.get("methods", payload.get("entries", payload.get("rows", [])))
     if not isinstance(raw_methods, list):
         raise ValueError("leaderboard config must contain a list under methods/entries/rows")
-    default_truth = payload.get("default_truth", payload.get("truth", payload.get("truth_csv")))
-    default_protocol = str(payload.get("default_metric_protocol", "public-track5"))
-    default_class_map = payload.get("default_class_map", payload.get("class_map"))
-    default_time_delta = float(payload.get("default_max_time_delta_s", 0.5))
-    default_tolerance = float(payload.get("default_timestamp_tolerance_s", 1.0e-6))
+    default_truth = _first_config_value(payload, ("default_truth", "truth", "truth_csv"))
+    default_protocol = str(
+        _first_config_value(payload, ("default_metric_protocol",), "public-track5")
+    )
+    default_class_map = _first_config_value(payload, ("default_class_map", "class_map"))
+    default_time_delta = float(
+        _first_config_value(payload, ("default_max_time_delta_s",), 0.5)
+    )
+    default_tolerance = float(
+        _first_config_value(payload, ("default_timestamp_tolerance_s",), 1.0e-6)
+    )
 
     entries: list[LeaderboardEntry] = []
     for index, raw in enumerate(raw_methods):
