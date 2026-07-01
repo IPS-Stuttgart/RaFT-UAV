@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.completion import (
     complete_results_to_truth_timestamps,
@@ -18,6 +19,20 @@ def _truth_template() -> pd.DataFrame:
             "x_m": [0.0, 1.0],
             "y_m": [0.0, 0.0],
             "z_m": [2.0, 2.0],
+        }
+    )
+
+
+def _interpolation_results() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "sequence_id": ["seq1", "seq1"],
+            "timestamp": [0.0, 10.0],
+            "x": [0.0, 10.0],
+            "y": [0.0, 0.0],
+            "z": [2.0, 2.0],
+            "uav_type": ["2", "2"],
+            "score": [1.0, 1.0],
         }
     )
 
@@ -66,6 +81,31 @@ def test_completion_treats_all_nonfinite_result_rows_as_missing_predictions() ->
         "missing_sequence_prediction",
         "missing_sequence_prediction",
     ]
+
+
+@pytest.mark.parametrize("bad_gap", [-1.0, float("nan"), float("inf"), float("-inf")])
+def test_completion_rejects_invalid_interpolation_gap_threshold(bad_gap: float) -> None:
+    template = pd.DataFrame({"sequence_id": ["seq1"], "time_s": [5.0]})
+
+    with pytest.raises(ValueError, match="max_interpolation_gap_s"):
+        complete_results_to_truth_timestamps(
+            _interpolation_results(),
+            template,
+            max_interpolation_gap_s=bad_gap,
+        )
+
+
+def test_completion_accepts_zero_interpolation_gap_threshold() -> None:
+    template = pd.DataFrame({"sequence_id": ["seq1"], "time_s": [5.0]})
+
+    completed = complete_results_to_truth_timestamps(
+        _interpolation_results(),
+        template,
+        max_interpolation_gap_s=0.0,
+    )
+
+    assert completed.rows.iloc[0]["x"] == 0.0
+    assert completed.diagnostics["completion_method"].tolist() == ["hold_before"]
 
 
 def test_completion_summary_reports_sequence_readiness() -> None:
