@@ -42,7 +42,7 @@ def test_do_no_harm_uses_soft_path_entropy_as_effective_candidate_count() -> Non
     assert plan.action == "soften"
     assert plan.entropy == math.log(3.2)
     assert plan.effective_candidates is not None
-    assert plan.effective_candidates == pytest_approx(3.2)
+    assert plan.effective_candidates == pytest.approx(3.2)
     assert "effective_candidates>=2" in plan.reason
 
 
@@ -112,10 +112,3 @@ def test_policy_from_environment_rejects_fractional_recovery_streak(monkeypatch)
 
     with pytest.raises(ValueError, match=ENV_DNH_RECOVERY_MISS_STREAK):
         policy_from_environment()
-
-
-def pytest_approx(value: float):
-    # Local helper avoids importing pytest at module import time in CLI smoke contexts.
-    import pytest
-
-    return pytest.approx(value)
