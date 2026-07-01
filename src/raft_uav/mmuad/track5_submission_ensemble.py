@@ -184,19 +184,19 @@ def write_track5_submission_ensemble_outputs(
     }
     estimates.to_csv(paths["estimates_csv"], index=False)
     diagnostics.to_csv(paths["diagnostics_csv"], index=False)
-    class_map = {str(row.sequence_id): int(row.Classification) for row in estimates.itertuples()}
+    official_rows = estimates.copy()
+    # Preserve row-level official labels; class_map is a sequence-level override.
+    official_rows["classification"] = official_rows["Classification"]
     write_official_mmaud_results_csv(
-        estimates,
+        official_rows,
         paths["results_csv"],
         classification=0,
-        class_map=class_map,
         invalid_row_policy="raise",
     )
     write_official_ug2_codabench_zip(
-        estimates,
+        official_rows,
         paths["zip"],
         classification=0,
-        class_map=class_map,
         invalid_row_policy="raise",
     )
     validation_summary: dict[str, Any] | None = None
