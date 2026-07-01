@@ -58,6 +58,42 @@ def test_leaderboard_config_uses_later_alias_when_earlier_alias_is_nan(tmp_path)
     assert entry.timestamp_tolerance_s == 1.0e-6
 
 
+def test_leaderboard_config_uses_top_level_truth_alias_when_earlier_alias_is_nan(tmp_path):
+    entries = leaderboard_entries_from_config(
+        {
+            "truth": float("nan"),
+            "truth_csv": "truth.csv",
+            "methods": [{"method": "baseline", "results_csv": "results.csv"}],
+        },
+        base_dir=tmp_path,
+    )
+
+    entry = entries[0]
+    assert entry.results_path == tmp_path / "results.csv"
+    assert entry.truth_path == tmp_path / "truth.csv"
+
+
+def test_leaderboard_config_ignores_missing_top_level_defaults(tmp_path):
+    entries = leaderboard_entries_from_config(
+        {
+            "default_truth": "truth.csv",
+            "default_metric_protocol": float("nan"),
+            "default_class_map": float("nan"),
+            "default_max_time_delta_s": float("nan"),
+            "default_timestamp_tolerance_s": "",
+            "methods": [{"method": "baseline", "results_csv": "results.csv"}],
+        },
+        base_dir=tmp_path,
+    )
+
+    entry = entries[0]
+    assert entry.truth_path == tmp_path / "truth.csv"
+    assert entry.metric_protocol == "public-track5"
+    assert entry.class_map_path is None
+    assert entry.max_time_delta_s == 0.5
+    assert entry.timestamp_tolerance_s == 1.0e-6
+
+
 def test_leaderboard_config_rejects_missing_results_aliases():
     with pytest.raises(ValueError, match="missing results/results_csv"):
         leaderboard_entries_from_config(
