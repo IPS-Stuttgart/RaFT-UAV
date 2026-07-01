@@ -193,7 +193,7 @@ def _probability_rows(class_probabilities: pd.DataFrame) -> pd.DataFrame:
             rows[predicted_column], errors="coerce"
         )
     out = out.groupby("sequence_id", as_index=False).mean(numeric_only=True)
-    return _normalize_probability_mass(out)
+    return _normalize_probability_weights(out)
 
 
 def _predicted_class_labels(values: pd.Series) -> pd.Series:
@@ -227,16 +227,20 @@ def _probability_column(rows: pd.DataFrame, label: str) -> str | None:
     return _first_present(rows, candidates)
 
 
-def _normalize_probability_mass(rows: pd.DataFrame) -> pd.DataFrame:
+def _normalize_probability_weights(rows: pd.DataFrame) -> pd.DataFrame:
     out = rows.copy()
     prob_columns = [f"image_class_prob_{label}" for label in OFFICIAL_CLASS_LABELS]
     for column in prob_columns:
         if column not in out.columns:
             out[column] = 0.0
-        out[column] = pd.to_numeric(out[column], errors="coerce").clip(lower=0.0)
+        numeric = pd.to_numeric(out[column], errors="coerce")
+        finite = np.isfinite(numeric.to_numpy(dtype=float))
+        out[column] = numeric.where(finite, 0.0).clip(lower=0.0)
     totals = out[prob_columns].sum(axis=1)
+    has_probability = totals > 0.0
+    safe_totals = totals.where(has_probability, 1.0)
     for column in prob_columns:
-        out[column] = np.where(totals > 0.0, out[column] / totals, 0.0)
+        out[column] = np.where(has_probability, out[column] / safe_totals, np.nan)
     return out
 
 
