@@ -22,7 +22,11 @@ def optional_float(value: object) -> float | None:
 
 
 def optional_int(value: object) -> int | None:
-    """Return an integer converted from a finite numeric value, if available."""
+    """Return an integer-like finite value as an int, or ``None`` otherwise."""
 
     number = optional_float(value)
-    return None if number is None else int(number)
+    if number is None:
+        return None
+    if not number.is_integer():
+        return None
+    return int(number)
