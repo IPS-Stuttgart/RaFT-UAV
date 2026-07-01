@@ -61,6 +61,11 @@ def test_optional_int_rejects_absent_malformed_nonfinite_and_boolean_values(valu
     assert optional_int(value) is None
 
 
-@pytest.mark.parametrize(("value", "expected"), [("4", 4), (4.9, 4), (-2.1, -2)])
-def test_optional_int_accepts_finite_values(value: object, expected: int) -> None:
+@pytest.mark.parametrize("value", ["3.5", 4.9, -2.1])
+def test_optional_int_rejects_non_integer_finite_values(value: object) -> None:
+    assert optional_int(value) is None
+
+
+@pytest.mark.parametrize(("value", "expected"), [("4", 4), (4.0, 4), (-2.0, -2)])
+def test_optional_int_accepts_integer_like_finite_values(value: object, expected: int) -> None:
     assert optional_int(value) == expected
