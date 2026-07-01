@@ -70,6 +70,33 @@ def test_resample_estimates_to_track5_template_supports_nearest_mode() -> None:
     assert diagnostics.loc[diagnostics["time_s"] == 5.0, "resample_method"].iloc[0] == "nearest"
 
 
+def test_resample_estimates_to_track5_template_normalizes_sequence_ids() -> None:
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": [" seq0001 ", None, "nan", " seq0001 "],
+            "time_s": [0.0, 2.0, 4.0, 10.0],
+            "state_x_m": [0.0, 100.0, 200.0, 10.0],
+            "state_y_m": [0.0, 100.0, 200.0, 20.0],
+            "state_z_m": [1.0, 100.0, 200.0, 3.0],
+        }
+    )
+    template = pd.DataFrame(
+        {
+            "Sequence": [" seq0001 ", None, "nan", "   "],
+            "Timestamp": [5.0, 1.0, 2.0, 3.0],
+        }
+    )
+
+    resampled, diagnostics = resample_estimates_to_track5_template(estimates, template)
+
+    assert resampled["sequence_id"].tolist() == ["seq0001"]
+    row = resampled.iloc[0]
+    assert row["state_x_m"] == pytest.approx(5.0)
+    assert row["state_y_m"] == pytest.approx(10.0)
+    assert row["state_z_m"] == pytest.approx(2.0)
+    assert diagnostics["valid"].tolist() == [True]
+
+
 def test_large_interpolation_gap_falls_back_to_nearest() -> None:
     resampled, diagnostics = resample_estimates_to_track5_template(
         _estimates(),
