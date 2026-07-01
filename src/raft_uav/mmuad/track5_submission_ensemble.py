@@ -299,7 +299,7 @@ def _normalize_submission_rows(rows: pd.DataFrame, *, source_path: Path) -> pd.D
         rows.itertuples(index=False), normalized_classifications, strict=True
     ):
         sequence = str(getattr(row, SEQUENCE_COLUMN))
-        timestamp = float(getattr(row, TIME_COLUMN))
+        timestamp = _parse_timestamp_cell(getattr(row, TIME_COLUMN))
         xyz = _parse_position_cell(getattr(row, POSITION_COLUMN))
         try:
             classification = int(classification_label)
@@ -316,6 +316,16 @@ def _normalize_submission_rows(rows: pd.DataFrame, *, source_path: Path) -> pd.D
             }
         )
     return pd.DataFrame.from_records(out_records).sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+
+
+def _parse_timestamp_cell(value: Any) -> float:
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid Track 5 Timestamp cell: {value!r}") from exc
+    if not np.isfinite(timestamp):
+        raise ValueError(f"invalid Track 5 Timestamp cell: {value!r}")
+    return timestamp
 
 
 def _parse_position_cell(value: Any) -> np.ndarray:
