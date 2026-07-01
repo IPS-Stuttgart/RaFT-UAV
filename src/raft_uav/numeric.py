@@ -16,7 +16,15 @@ def optional_float(value: object) -> float | None:
         return None
     if isinstance(value, complex | np.complexfloating):
         return None
-    if _is_non_scalar_array_like(value):
+    if isinstance(value, np.ndarray):
+        if value.ndim > 0:
+            return None
+        value = value.item()
+        if isinstance(value, bool | np.bool_):
+            return None
+        if isinstance(value, complex | np.complexfloating):
+            return None
+    elif _is_non_scalar_array_like(value):
         return None
     try:
         number = float(value)
