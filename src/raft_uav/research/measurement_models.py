@@ -37,9 +37,18 @@ def enu_covariance_from_range_az_el(
     cos(az), up = r sin(el), with azimuth measured clockwise from north.
     """
 
-    r = float(range_m)
+    r = _validate_finite_nonnegative(range_m, "range_m")
     az = float(azimuth_rad)
     el = float(elevation_rad)
+    if not np.isfinite(az):
+        raise ValueError("azimuth_rad must be finite")
+    if not np.isfinite(el):
+        raise ValueError("elevation_rad must be finite")
+    range_std = _validate_finite_nonnegative(range_std_m, "range_std_m")
+    azimuth_std = _validate_finite_nonnegative(azimuth_std_rad, "azimuth_std_rad")
+    elevation_std = _validate_finite_nonnegative(elevation_std_rad, "elevation_std_rad")
+    min_std = _validate_finite_nonnegative(min_std_m, "min_std_m")
+
     ce = float(np.cos(el))
     se = float(np.sin(el))
     ca = float(np.cos(az))
@@ -52,12 +61,10 @@ def enu_covariance_from_range_az_el(
         ],
         dtype=float,
     )
-    native = np.diag(
-        [float(range_std_m) ** 2, float(azimuth_std_rad) ** 2, float(elevation_std_rad) ** 2]
-    )
+    native = np.diag([range_std**2, azimuth_std**2, elevation_std**2])
     covariance = jacobian @ native @ jacobian.T
-    if min_std_m > 0.0:
-        covariance = covariance + np.eye(3) * float(min_std_m) ** 2
+    if min_std > 0.0:
+        covariance = covariance + np.eye(3) * min_std**2
     return 0.5 * (covariance + covariance.T)
 
 
@@ -189,3 +196,13 @@ def _numeric(frame: pd.DataFrame, column: str) -> np.ndarray:
     if column not in frame.columns:
         return np.full(len(frame), np.nan)
     return pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+
+
+def _validate_finite_nonnegative(value: float, name: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be finite and non-negative") from exc
+    if not np.isfinite(number) or number < 0.0:
+        raise ValueError(f"{name} must be finite and non-negative")
+    return number
