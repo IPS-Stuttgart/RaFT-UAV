@@ -8,11 +8,13 @@ import numpy as np
 
 
 def optional_float(value: object) -> float | None:
-    """Return a finite float or ``None`` for absent/malformed values."""
+    """Return a finite scalar float or ``None`` for absent/malformed values."""
 
     if value is None:
         return None
     if isinstance(value, bool | np.bool_):
+        return None
+    if isinstance(value, np.ndarray) and value.ndim > 0:
         return None
     try:
         number = float(value)
@@ -22,7 +24,7 @@ def optional_float(value: object) -> float | None:
 
 
 def optional_int(value: object) -> int | None:
-    """Return an integer-like finite value as an int, or ``None`` otherwise."""
+    """Return an integer-like finite scalar value as an int, or ``None`` otherwise."""
 
     number = optional_float(value)
     if number is None:
