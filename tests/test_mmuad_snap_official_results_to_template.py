@@ -76,6 +76,19 @@ def test_snap_official_results_to_template_nearest_classification_policy() -> No
     assert int(row["Classification"]) == 3
 
 
+def test_snap_official_results_to_template_handles_empty_results_with_zero_placeholders() -> None:
+    results = pd.DataFrame(columns=["Sequence", "Timestamp", "Position", "Classification"])
+    template = pd.DataFrame({"Sequence": ["seq001", "seq002"], "Timestamp": [0.0, 1.0]})
+
+    snapped, diagnostics = snapper.snap_official_results_to_template(results, template)
+
+    assert snapped["Sequence"].tolist() == ["seq001", "seq002"]
+    assert snapped["Position"].tolist() == ["(0,0,0)", "(0,0,0)"]
+    assert snapped["Classification"].tolist() == [0, 0]
+    assert diagnostics["method"].tolist() == ["missing-zero", "missing-zero"]
+    assert diagnostics["valid"].tolist() == [False, False]
+
+
 def test_snap_official_results_to_template_raises_on_missing_sequence() -> None:
     with pytest.raises(ValueError, match="no source results"):
         snapper.snap_official_results_to_template(
