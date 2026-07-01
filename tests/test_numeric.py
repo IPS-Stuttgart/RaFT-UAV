@@ -29,9 +29,12 @@ class _FloatableArrayLike:
         False,
         np.bool_(True),
         np.bool_(False),
+        np.array(True),
+        np.array(False),
         1 + 0j,
         np.complex64(1 + 0j),
         np.complex128(1 + 2j),
+        np.array(1 + 0j),
     ],
 )
 def test_optional_float_rejects_absent_malformed_nonfinite_boolean_and_complex_values(
@@ -71,10 +74,13 @@ def test_optional_float_accepts_finite_scalar_values(value: object, expected: fl
         False,
         np.bool_(True),
         np.bool_(False),
+        np.array(True),
+        np.array(False),
         4.9,
         -2.1,
         4 + 0j,
         np.complex128(4 + 0j),
+        np.array(4 + 0j),
     ],
 )
 def test_optional_int_rejects_absent_malformed_nonfinite_boolean_fractional_and_complex_values(
