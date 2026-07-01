@@ -332,18 +332,26 @@ def _normalize_optional_id_values(values: pd.Series) -> pd.Series:
     return out
 
 
+def _normalized_key(value: Any) -> str:
+    return str(value).strip().lower()
+
+
+def _normalized_column_lookup(frame: pd.DataFrame) -> dict[str, Any]:
+    return {_normalized_key(column): column for column in frame.columns}
+
+
 def _rename_aliases(frame: pd.DataFrame) -> pd.DataFrame:
-    lower_to_original = {str(col).lower(): col for col in frame.columns}
+    lower_to_original = _normalized_column_lookup(frame)
     rename: dict[Any, str] = {}
     for canonical, aliases in _COLUMN_ALIASES.items():
         if canonical in frame.columns:
             continue
-        original = lower_to_original.get(canonical.lower())
+        original = lower_to_original.get(_normalized_key(canonical))
         if original is not None:
             rename[original] = canonical
             continue
         for alias in aliases:
-            original = lower_to_original.get(alias.lower())
+            original = lower_to_original.get(_normalized_key(alias))
             if original is not None:
                 rename[original] = canonical
                 break
@@ -360,10 +368,10 @@ def normalize_time_column_aliases(
     out = frame.copy()
     if target in out.columns:
         return out
-    lower_to_original = {str(col).lower(): col for col in out.columns}
+    lower_to_original = _normalized_column_lookup(out)
     for seconds_alias, nanoseconds_alias in _TIME_SECOND_NANOSECOND_PAIRS:
-        seconds_col = lower_to_original.get(seconds_alias)
-        nanoseconds_col = lower_to_original.get(nanoseconds_alias)
+        seconds_col = lower_to_original.get(_normalized_key(seconds_alias))
+        nanoseconds_col = lower_to_original.get(_normalized_key(nanoseconds_alias))
         if seconds_col is None or nanoseconds_col is None:
             continue
         out[target] = pd.to_numeric(out[seconds_col], errors="coerce") + (
@@ -371,17 +379,17 @@ def normalize_time_column_aliases(
         )
         return out
     for alias, scale in _TIME_UNIT_ALIASES.items():
-        original = lower_to_original.get(alias)
+        original = lower_to_original.get(_normalized_key(alias))
         if original is not None:
             out[target] = pd.to_numeric(out[original], errors="coerce") * scale
             return out
     for alias in _TIME_SECOND_ALIASES:
-        original = lower_to_original.get(alias)
+        original = lower_to_original.get(_normalized_key(alias))
         if original is not None:
             out[target] = _seconds_or_stamp_dict_series(out[original])
             return out
     for alias in ("header.stamp", "header"):
-        original = lower_to_original.get(alias)
+        original = lower_to_original.get(_normalized_key(alias))
         if original is None:
             continue
         parsed = _seconds_or_stamp_dict_series(out[original])
@@ -442,8 +450,9 @@ def _stamp_dict_to_seconds(value: Any) -> float | None:
 
 
 def _mapping_get_case_insensitive(mapping: dict[Any, Any], key: str) -> Any | None:
+    normalized_key = _normalized_key(key)
     for candidate, value in mapping.items():
-        if str(candidate).lower() == key.lower():
+        if _normalized_key(candidate) == normalized_key:
             return value
     return None
 
