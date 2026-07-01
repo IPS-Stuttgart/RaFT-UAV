@@ -84,6 +84,7 @@ def test_load_track5_submission_rejects_invalid_timestamps(
 ) -> None:
     path = tmp_path / "submission.csv"
     rows = _submission_rows()
+    rows["Timestamp"] = rows["Timestamp"].astype(object)
     rows.loc[0, "Timestamp"] = timestamp
     rows.to_csv(path, index=False)
 
