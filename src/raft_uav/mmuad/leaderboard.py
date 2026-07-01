@@ -100,29 +100,27 @@ def leaderboard_entries_from_config(
     for index, raw in enumerate(raw_methods):
         if not isinstance(raw, dict):
             raise ValueError(f"leaderboard method entry {index} must be an object")
-        method = str(raw.get("method", raw.get("name", raw.get("label", f"method_{index}"))))
-        result_value = raw.get("results", raw.get("results_csv", raw.get("results_zip")))
-        if result_value is None:
+        method = str(_first_config_value(raw, ("method", "name", "label"), f"method_{index}"))
+        result_value = _first_config_value(raw, ("results", "results_csv", "results_zip"))
+        if _is_missing_config_value(result_value):
             raise ValueError(f"leaderboard entry {method!r} is missing results/results_csv")
-        truth_value = raw.get("truth", raw.get("truth_csv", raw.get("truth_file", default_truth)))
-        if truth_value is None:
+        truth_value = _first_config_value(raw, ("truth", "truth_csv", "truth_file"), default_truth)
+        if _is_missing_config_value(truth_value):
             raise ValueError(f"leaderboard entry {method!r} is missing truth/default_truth")
-        class_map_value = raw.get("class_map", raw.get("class_map_csv", default_class_map))
+        class_map_value = _first_config_value(raw, ("class_map", "class_map_csv"), default_class_map)
         entries.append(
             LeaderboardEntry(
                 method=method,
                 results_path=_resolve_config_path(base, result_value),
                 truth_path=_resolve_config_path(base, truth_value),
-                metric_protocol=str(raw.get("metric_protocol", default_protocol)),
-                source_note=str(raw.get("source_note", raw.get("note", ""))),
-                class_map_path=(
-                    _resolve_config_path(base, class_map_value)
-                    if class_map_value not in {None, ""}
-                    else None
+                metric_protocol=str(_first_config_value(raw, ("metric_protocol",), default_protocol)),
+                source_note=str(_first_config_value(raw, ("source_note", "note"), "")),
+                class_map_path=_optional_config_path(base, class_map_value),
+                max_time_delta_s=float(
+                    _first_config_value(raw, ("max_time_delta_s",), default_time_delta)
                 ),
-                max_time_delta_s=float(raw.get("max_time_delta_s", default_time_delta)),
                 timestamp_tolerance_s=float(
-                    raw.get("timestamp_tolerance_s", default_tolerance)
+                    _first_config_value(raw, ("timestamp_tolerance_s",), default_tolerance)
                 ),
             )
         )
@@ -340,6 +338,40 @@ def _load_mapping_file(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("leaderboard config must be a mapping/object")
     return payload
+
+
+def _first_config_value(
+    mapping: dict[str, Any],
+    keys: tuple[str, ...],
+    default: Any = None,
+) -> Any:
+    for key in keys:
+        if key not in mapping:
+            continue
+        value = mapping[key]
+        if not _is_missing_config_value(value):
+            return value
+    return default
+
+
+def _optional_config_path(base: Path, value: Any) -> Path | None:
+    if _is_missing_config_value(value):
+        return None
+    return _resolve_config_path(base, value)
+
+
+def _is_missing_config_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return False
+    if isinstance(missing, bool | np.bool_):
+        return bool(missing)
+    return False
 
 
 def _resolve_config_path(base: Path, value: Any) -> Path:
