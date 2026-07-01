@@ -84,14 +84,23 @@ def load_official_track5_results_frame_from_frame(frame: pd.DataFrame) -> pd.Dat
 
 
 def _integer_classification_values(values: pd.Series) -> pd.Series:
-    numbers = pd.to_numeric(values, errors="coerce")
+    raw = pd.Series(values)
+    boolean_mask = raw.map(lambda value: isinstance(value, (bool, np.bool_)))
+    if boolean_mask.any():
+        row_index = int(np.flatnonzero(boolean_mask.to_numpy())[0])
+        bad_value = raw.iloc[row_index]
+        raise ValueError(
+            "official MMUAD Classification values must be integer ids, not booleans; "
+            f"got {bad_value!r}"
+        )
+    numbers = pd.to_numeric(raw, errors="coerce")
     numeric = numbers.to_numpy(dtype=float)
     finite = np.isfinite(numeric)
     integer_like = finite & np.isclose(numeric, np.rint(numeric))
     fractional = finite & ~integer_like
     if fractional.any():
         row_index = int(np.flatnonzero(fractional)[0])
-        bad_value = pd.Series(values).iloc[row_index]
+        bad_value = raw.iloc[row_index]
         raise ValueError(
             "official MMUAD Classification values must be integer ids; "
             f"got {bad_value!r}"
