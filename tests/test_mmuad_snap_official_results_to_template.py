@@ -63,6 +63,14 @@ def test_snap_official_results_to_template_interpolates_and_keeps_sequence_class
     assert midpoint_method == "linear"
 
 
+def test_snap_official_results_to_template_rejects_fractional_classification_labels() -> None:
+    results = _results()
+    results.loc[0, "Classification"] = "1.5"
+
+    with pytest.raises(ValueError, match="Classification"):
+        snapper.snap_official_results_to_template(results, _template())
+
+
 def test_snap_official_results_to_template_handles_empty_source_results() -> None:
     snapped, diagnostics = snapper.snap_official_results_to_template(
         pd.DataFrame(columns=["Sequence", "Timestamp", "Position", "Classification"]),
