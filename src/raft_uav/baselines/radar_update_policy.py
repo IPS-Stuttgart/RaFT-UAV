@@ -48,20 +48,52 @@ class RadarUpdatePolicy:
     max_covariance_scale: float = 25.0
 
     def __post_init__(self) -> None:
-        if self.soften_nis <= 0.0 or self.skip_nis <= self.soften_nis:
+        soften_nis = _strict_finite_float("soften_nis", self.soften_nis)
+        skip_nis = _strict_finite_float("skip_nis", self.skip_nis)
+        anchor_soften_nis = _strict_finite_float("anchor_soften_nis", self.anchor_soften_nis)
+        anchor_skip_nis = _strict_finite_float("anchor_skip_nis", self.anchor_skip_nis)
+        entropy_soften = _strict_finite_float("entropy_soften", self.entropy_soften)
+        entropy_defer = _strict_finite_float("entropy_defer", self.entropy_defer)
+        effective_candidates_soften = _strict_finite_float(
+            "effective_candidates_soften",
+            self.effective_candidates_soften,
+        )
+        effective_candidates_defer = _strict_finite_float(
+            "effective_candidates_defer",
+            self.effective_candidates_defer,
+        )
+        recovery_miss_streak = _strict_positive_int(
+            "recovery_miss_streak",
+            self.recovery_miss_streak,
+        )
+        max_covariance_scale = _strict_finite_float(
+            "max_covariance_scale",
+            self.max_covariance_scale,
+        )
+
+        if soften_nis <= 0.0 or skip_nis <= soften_nis:
             raise ValueError("skip_nis must be greater than positive soften_nis")
-        if self.anchor_soften_nis <= 0.0 or self.anchor_skip_nis <= self.anchor_soften_nis:
+        if anchor_soften_nis <= 0.0 or anchor_skip_nis <= anchor_soften_nis:
             raise ValueError("anchor_skip_nis must be greater than positive anchor_soften_nis")
-        if self.entropy_soften < 0.0 or self.entropy_defer < self.entropy_soften:
+        if entropy_soften < 0.0 or entropy_defer < entropy_soften:
             raise ValueError("entropy_defer must be >= entropy_soften >= 0")
-        if self.effective_candidates_soften < 1.0:
+        if effective_candidates_soften < 1.0:
             raise ValueError("effective_candidates_soften must be >= 1")
-        if self.effective_candidates_defer < self.effective_candidates_soften:
+        if effective_candidates_defer < effective_candidates_soften:
             raise ValueError("effective_candidates_defer must be >= effective_candidates_soften")
-        if self.recovery_miss_streak < 1:
-            raise ValueError("recovery_miss_streak must be positive")
-        if self.max_covariance_scale < 1.0:
+        if max_covariance_scale < 1.0:
             raise ValueError("max_covariance_scale must be >= 1")
+
+        object.__setattr__(self, "soften_nis", soften_nis)
+        object.__setattr__(self, "skip_nis", skip_nis)
+        object.__setattr__(self, "anchor_soften_nis", anchor_soften_nis)
+        object.__setattr__(self, "anchor_skip_nis", anchor_skip_nis)
+        object.__setattr__(self, "entropy_soften", entropy_soften)
+        object.__setattr__(self, "entropy_defer", entropy_defer)
+        object.__setattr__(self, "effective_candidates_soften", effective_candidates_soften)
+        object.__setattr__(self, "effective_candidates_defer", effective_candidates_defer)
+        object.__setattr__(self, "recovery_miss_streak", recovery_miss_streak)
+        object.__setattr__(self, "max_covariance_scale", max_covariance_scale)
 
 
 @dataclass(frozen=True)
@@ -306,8 +338,12 @@ def _finite_float(value: Any) -> float | None:
 
 
 def _finite_int(value: Any) -> int | None:
+    if isinstance(value, bool | np.bool_):
+        return None
     number = _finite_float(value)
-    return None if number is None else int(number)
+    if number is None or not float(number).is_integer():
+        return None
+    return int(number)
 
 
 def _is_missing(value: Any) -> bool:
@@ -317,6 +353,30 @@ def _is_missing(value: Any) -> bool:
         return False
 
 
+def _strict_finite_float(name: str, value: Any) -> float:
+    if isinstance(value, bool | np.bool_):
+        raise ValueError(f"{name} must be a finite number, not a boolean")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
+    if not np.isfinite(number):
+        raise ValueError(f"{name} must be a finite number")
+    return number
+
+
+def _strict_positive_int(name: str, value: Any) -> int:
+    if isinstance(value, bool | np.bool_):
+        raise ValueError(f"{name} must be a positive integer, not a boolean")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if not np.isfinite(number) or not number.is_integer() or number < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return int(number)
+
+
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -324,12 +384,12 @@ def _env_flag(name: str) -> bool:
 def _env_float(name: str, default: float) -> float:
     value = os.environ.get(name)
     if value is None or value.strip() == "":
-        return float(default)
-    return float(value)
+        return _strict_finite_float(name, default)
+    return _strict_finite_float(name, value)
 
 
 def _env_int(name: str, default: int) -> int:
     value = os.environ.get(name)
     if value is None or value.strip() == "":
-        return int(default)
-    return int(float(value))
+        return _strict_positive_int(name, default)
+    return _strict_positive_int(name, value)
