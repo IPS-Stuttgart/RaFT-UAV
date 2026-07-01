@@ -185,7 +185,7 @@ def _probability_rows(class_probabilities: pd.DataFrame) -> pd.DataFrame:
     if not found_probability:
         if predicted_column is None:
             raise ValueError("class probability table has neither probabilities nor predicted_class")
-        predicted = rows[predicted_column].astype(str)
+        predicted = _predicted_class_labels(rows[predicted_column])
         for label in OFFICIAL_CLASS_LABELS:
             out[f"image_class_prob_{label}"] = (predicted == label).astype(float)
     elif predicted_column is not None:
@@ -194,6 +194,25 @@ def _probability_rows(class_probabilities: pd.DataFrame) -> pd.DataFrame:
         )
     out = out.groupby("sequence_id", as_index=False).mean(numeric_only=True)
     return _normalize_probability_mass(out)
+
+
+def _predicted_class_labels(values: pd.Series) -> pd.Series:
+    """Return canonical Track 5 class id strings from classifier labels."""
+
+    raw = pd.Series(values)
+    text = raw.where(raw.notna(), "").astype(str).str.strip()
+    numeric = pd.to_numeric(raw, errors="coerce")
+    numeric_array = numeric.to_numpy(dtype=float)
+    boolean_values = raw.map(lambda value: isinstance(value, bool | np.bool_)).to_numpy(bool)
+    integer_like = (
+        np.isfinite(numeric_array)
+        & np.isclose(numeric_array, np.rint(numeric_array))
+        & ~boolean_values
+    )
+    if integer_like.any():
+        positions = np.flatnonzero(integer_like)
+        text.iloc[positions] = np.rint(numeric_array[positions]).astype(int).astype(str)
+    return text
 
 
 def _probability_column(rows: pd.DataFrame, label: str) -> str | None:
