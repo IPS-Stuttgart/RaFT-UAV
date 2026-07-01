@@ -136,7 +136,7 @@ def pointcloud2_to_candidates(
 
     points = pointcloud2_to_dataframe(message)
     points["sequence_id"] = str(sequence_id)
-    points["time_s"] = float(time_s)
+    points["time_s"] = _finite_timestamp_seconds(time_s)
     return point_rows_to_candidates(
         points,
         source=source,
@@ -149,6 +149,18 @@ def pointcloud2_to_candidates(
         dynamic_background_min_frames=dynamic_background_min_frames,
         dynamic_background_neighbor_radius_voxels=dynamic_background_neighbor_radius_voxels,
     )
+
+
+def _finite_timestamp_seconds(value: Any) -> float:
+    if isinstance(value, bool | np.bool_):
+        raise ValueError("PointCloud2 time_s must be a finite numeric timestamp")
+    try:
+        timestamp_s = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("PointCloud2 time_s must be a finite numeric timestamp") from exc
+    if not np.isfinite(timestamp_s):
+        raise ValueError("PointCloud2 time_s must be a finite numeric timestamp")
+    return timestamp_s
 
 
 def _normalize_field_name(value: Any) -> str:
