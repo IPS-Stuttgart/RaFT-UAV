@@ -36,3 +36,29 @@ def test_mot_accepts_minimal_valid_candidate_frame_without_optional_columns() ->
         "mot_1",
         "mot_1",
     ]
+
+
+def test_mot_normalizes_confidence_before_sorting_and_thresholding() -> None:
+    candidates = CandidateFrame(
+        pd.DataFrame(
+            {
+                "sequence_id": ["s1", "s1"],
+                "time_s": [0.0, 0.0],
+                "source": ["radar", "radar"],
+                "x_m": [0.0, 1.0],
+                "y_m": [0.0, 0.0],
+                "z_m": [2.0, 2.0],
+                "confidence": ["not-a-number", "0.7"],
+            }
+        )
+    )
+
+    output = run_mmuad_multi_object_tracker(
+        candidates,
+        config=MultiObjectTrackerConfig(min_new_track_confidence=0.05),
+    )
+
+    assert output.estimates["time_s"].tolist() == [0.0]
+    assert output.estimates["state_x_m"].tolist() == [1.0]
+    assert output.estimates["output_track_id"].tolist() == ["mot_1"]
+    assert output.metrics["pooled"] == {"count": 1, "track_count": 1}
