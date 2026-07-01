@@ -104,6 +104,28 @@ def test_trajectory_smoothing_writes_leaderboard_ready_artifacts(tmp_path: Path)
         assert archive.namelist() == ["mmaud_results.csv"]
 
 
+def test_trajectory_smoothing_preserves_row_level_classes_in_outputs(tmp_path: Path) -> None:
+    rows = _normalized_rows().copy()
+    rows["Classification"] = [0, 1, 2, 3, 1]
+
+    paths = write_track5_trajectory_smooth_outputs(
+        rows=rows,
+        output_dir=tmp_path,
+        template=None,
+        window_s=2.0,
+        bandwidth_s=1.0,
+        blend=0.5,
+        max_correction_m=5.0,
+    )
+
+    written = pd.read_csv(paths["results_csv"])
+    assert written["Classification"].tolist() == [0, 1, 2, 3, 1]
+    with ZipFile(paths["zip"]) as archive:
+        with archive.open("mmaud_results.csv") as handle:
+            zipped = pd.read_csv(handle)
+    assert zipped["Classification"].tolist() == [0, 1, 2, 3, 1]
+
+
 def test_trajectory_smoothing_cli_writes_outputs(tmp_path: Path) -> None:
     submission_csv = tmp_path / "mmaud_results.csv"
     template_csv = tmp_path / "template.csv"
