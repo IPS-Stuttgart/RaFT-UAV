@@ -68,6 +68,18 @@ def test_parse_estimate_spec_accepts_label_path_and_weight() -> None:
     assert item.weight == pytest.approx(0.25)
 
 
+@pytest.mark.parametrize("weight", ["nan", "inf", "-0.1"])
+def test_parse_estimate_spec_rejects_invalid_weights(weight: str) -> None:
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        parse_estimate_spec(f"bad=/tmp/estimates.csv@{weight}")
+
+
+@pytest.mark.parametrize("weight", [float("nan"), float("inf"), -1.0])
+def test_track5_estimate_ensemble_rejects_invalid_runtime_weights(weight: float) -> None:
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        build_track5_estimate_ensemble([("bad", _estimate_a(), weight)], _template())
+
+
 def test_track5_estimate_ensemble_weighted_average_after_template_resample() -> None:
     ensemble, diagnostics = build_track5_estimate_ensemble(
         [
