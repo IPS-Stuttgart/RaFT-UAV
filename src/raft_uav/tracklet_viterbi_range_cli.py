@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping
 from contextlib import contextmanager
+import math
 import os
 import sys
 
@@ -108,9 +109,12 @@ def _bool_value(value: str) -> bool:
 
 
 def _nonnegative_float(value: str) -> float:
-    parsed = float(value)
-    if parsed < 0.0:
-        raise argparse.ArgumentTypeError("must be >= 0")
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be numeric") from exc
+    if not math.isfinite(parsed) or parsed < 0.0:
+        raise argparse.ArgumentTypeError("must be finite and >= 0")
     return parsed
 
 
