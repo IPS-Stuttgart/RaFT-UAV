@@ -77,6 +77,20 @@ def test_load_track5_submission_accepts_integer_like_classification_labels(tmp_p
     assert loaded["Classification"].tolist() == [1, 1, 2]
 
 
+@pytest.mark.parametrize("timestamp", [float("nan"), float("inf"), "-inf", "not-a-time"])
+def test_load_track5_submission_rejects_invalid_timestamps(
+    tmp_path: Path,
+    timestamp: object,
+) -> None:
+    path = tmp_path / "submission.csv"
+    rows = _submission_rows()
+    rows.loc[0, "Timestamp"] = timestamp
+    rows.to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="invalid Track 5 Timestamp"):
+        load_track5_submission(path)
+
+
 def test_load_track5_submission_rejects_fractional_classification_labels(tmp_path: Path) -> None:
     path = tmp_path / "submission.csv"
     rows = _submission_rows()
