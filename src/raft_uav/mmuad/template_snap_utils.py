@@ -57,7 +57,11 @@ def load_official_track5_results_frame_from_frame(frame: pd.DataFrame) -> pd.Dat
             "Classification": pd.to_numeric(frame[lower["classification"]], errors="coerce"),
         }
     )
-    finite = rows["Sequence"].ne("") & rows["Timestamp"].notna() & rows["Classification"].notna()
+    finite = (
+        rows["Sequence"].ne("")
+        & rows["Timestamp"].notna()
+        & rows["Classification"].notna()
+    )
     rows = rows.loc[finite].copy()
     rows["Timestamp"] = rows["Timestamp"].astype(float)
     rows["Classification"] = rows["Classification"].astype(int)
@@ -107,7 +111,9 @@ def _resampled_position(
             "interpolation_gap_s": gap_s,
             "large_gap_fallback": bool(fallback),
         }
-    position = np.asarray([np.interp(float(timestamp), times, xyz[:, axis]) for axis in range(3)])
+    position = np.asarray(
+        [np.interp(float(timestamp), times, xyz[:, axis]) for axis in range(3)]
+    )
     return position, {
         "nearest_time_delta_s": nearest_delta,
         "extrapolated": extrapolated,
@@ -128,7 +134,8 @@ def _resampled_classification(
         if not mode.empty:
             return int(mode.sort_values().iloc[0])
     times = sequence_results["Timestamp"].to_numpy(float)
-    return int(sequence_results["Classification"].iloc[int(np.argmin(np.abs(times - timestamp)))])
+    nearest_index = int(np.argmin(np.abs(times - timestamp)))
+    return int(sequence_results["Classification"].iloc[nearest_index])
 
 
 def _diagnostic_record(**items: Any) -> dict[str, Any]:
