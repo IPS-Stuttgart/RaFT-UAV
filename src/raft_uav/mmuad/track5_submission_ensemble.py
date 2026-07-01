@@ -23,6 +23,7 @@ import pandas as pd
 
 from raft_uav.mmuad.class_probability_context import _predicted_class_labels
 from raft_uav.mmuad.submission import (
+    parse_official_position_cell,
     validate_official_track5_submission,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
@@ -313,6 +314,10 @@ def _normalize_submission_rows(rows: pd.DataFrame, *, source_path: Path) -> pd.D
 
 
 def _parse_position_cell(value: Any) -> np.ndarray:
+    try:
+        return np.asarray(parse_official_position_cell(value), dtype=float)
+    except ValueError:
+        pass
     if isinstance(value, str):
         text = value.strip()
         try:
