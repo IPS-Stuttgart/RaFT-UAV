@@ -147,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--per-branch-top-n", type=int, default=3)
     parser.add_argument("--max-candidates-per-frame", type=int, default=40)
     parser.add_argument("--score-floor-quantile", type=float)
-    parser.add_argument("--top-k", action="append", type=int, default=list(_DEFAULT_TOP_K))
+    parser.add_argument("--top-k", action="append", type=int, default=None)
     parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
     parser.add_argument("--selection-metric", default=_DEFAULT_SELECTION_METRIC)
     parser.add_argument("--write-best-reservoir", action="store_true")
@@ -171,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         per_branch_top_n=args.per_branch_top_n,
         max_candidates_per_frame=args.max_candidates_per_frame,
         score_floor_quantile=args.score_floor_quantile,
-        top_k_values=tuple(args.top_k),
+        top_k_values=tuple(args.top_k or _DEFAULT_TOP_K),
         max_truth_time_delta_s=args.max_truth_time_delta_s,
         selection_metric=args.selection_metric,
         write_best_reservoir=args.write_best_reservoir,

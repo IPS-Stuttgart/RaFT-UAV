@@ -99,4 +99,5 @@ def test_candidate_reservoir_offset_grid_cli_writes_summary_and_best(tmp_path) -
     best = pd.read_csv(output_dir / "best_candidate_reservoir.csv")
     assert summary.iloc[0]["grid_label"] == "branch_raw_1"
     assert summary.iloc[0]["oracle_top1_3d_m_mse"] == 0.0
+    assert "oracle_top3_3d_m_mse" not in summary.columns
     assert set(best["track_id"]) == {"raw-good-0", "raw-good-1"}
