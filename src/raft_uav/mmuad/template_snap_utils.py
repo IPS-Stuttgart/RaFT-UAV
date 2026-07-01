@@ -48,7 +48,7 @@ def _normalize_results_rows(results: pd.DataFrame) -> pd.DataFrame:
     rows["x"] = positions[:, 0]
     rows["y"] = positions[:, 1]
     rows["z"] = positions[:, 2]
-    rows["Classification"] = pd.to_numeric(rows["Classification"], errors="coerce").astype(int)
+    rows["Classification"] = _integer_classification_values(rows["Classification"]).astype(int)
     return rows.sort_values(["Sequence", "Timestamp"]).reset_index(drop=True)
 
 
@@ -63,12 +63,13 @@ def load_official_track5_results_frame_from_frame(frame: pd.DataFrame) -> pd.Dat
     ]
     if missing:
         raise ValueError(f"official Track 5 results missing columns: {missing}")
+    classification = _integer_classification_values(frame[lower["classification"]])
     rows = pd.DataFrame(
         {
             "Sequence": frame[lower["sequence"]].astype(str).str.strip(),
             "Timestamp": pd.to_numeric(frame[lower["timestamp"]], errors="coerce"),
             "Position": frame[lower["position"]],
-            "Classification": pd.to_numeric(frame[lower["classification"]], errors="coerce"),
+            "Classification": classification,
         }
     )
     finite = (
@@ -80,6 +81,22 @@ def load_official_track5_results_frame_from_frame(frame: pd.DataFrame) -> pd.Dat
     rows["Timestamp"] = rows["Timestamp"].astype(float)
     rows["Classification"] = rows["Classification"].astype(int)
     return rows.sort_values(["Sequence", "Timestamp"]).reset_index(drop=True)
+
+
+def _integer_classification_values(values: pd.Series) -> pd.Series:
+    numbers = pd.to_numeric(values, errors="coerce")
+    numeric = numbers.to_numpy(dtype=float)
+    finite = np.isfinite(numeric)
+    integer_like = finite & np.isclose(numeric, np.rint(numeric))
+    fractional = finite & ~integer_like
+    if fractional.any():
+        row_index = int(np.flatnonzero(fractional)[0])
+        bad_value = pd.Series(values).iloc[row_index]
+        raise ValueError(
+            "official MMUAD Classification values must be integer ids; "
+            f"got {bad_value!r}"
+        )
+    return numbers
 
 
 def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
