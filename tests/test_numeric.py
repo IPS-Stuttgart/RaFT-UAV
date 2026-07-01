@@ -22,9 +22,12 @@ from raft_uav.numeric import optional_float, optional_int
         False,
         np.bool_(True),
         np.bool_(False),
+        1 + 0j,
+        np.complex64(1 + 0j),
+        np.complex128(1 + 2j),
     ],
 )
-def test_optional_float_rejects_absent_malformed_nonfinite_and_boolean_values(
+def test_optional_float_rejects_absent_malformed_nonfinite_boolean_and_complex_values(
     value: object,
 ) -> None:
     assert optional_float(value) is None
@@ -57,9 +60,11 @@ def test_optional_float_accepts_finite_values(value: object, expected: float) ->
         np.bool_(False),
         4.9,
         -2.1,
+        4 + 0j,
+        np.complex128(4 + 0j),
     ],
 )
-def test_optional_int_rejects_absent_malformed_nonfinite_boolean_and_fractional_values(
+def test_optional_int_rejects_absent_malformed_nonfinite_boolean_fractional_and_complex_values(
     value: object,
 ) -> None:
     assert optional_int(value) is None
