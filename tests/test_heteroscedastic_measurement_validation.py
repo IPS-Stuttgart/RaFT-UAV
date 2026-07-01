@@ -44,6 +44,34 @@ def test_radar_converter_rejects_invalid_default_stds() -> None:
             radar_measurements_to_enu_with_uncertainty(radar, **kwargs)
 
 
+def test_converters_reject_boolean_default_stds() -> None:
+    rf = pd.DataFrame({"time_s": [1.0], "east_m": [10.0], "north_m": [20.0]})
+    radar = pd.DataFrame(
+        {"time_s": [2.0], "east_m": [10.0], "north_m": [20.0], "up_m": [30.0]}
+    )
+
+    for value in (True, np.bool_(True)):
+        with pytest.raises(ValueError, match="default_std_m"):
+            rf_measurements_to_enu_with_uncertainty(rf, default_std_m=value)
+        with pytest.raises(ValueError, match="default_xy_std_m"):
+            radar_measurements_to_enu_with_uncertainty(radar, default_xy_std_m=value)
+
+
+def test_rf_converter_ignores_boolean_row_std_fallback() -> None:
+    rf = pd.DataFrame(
+        {
+            "time_s": [1.0],
+            "east_m": [10.0],
+            "north_m": [20.0],
+            "std_m": [True],
+        }
+    )
+
+    [measurement] = rf_measurements_to_enu_with_uncertainty(rf, default_std_m=4.0)
+
+    assert np.allclose(measurement.covariance, np.diag([16.0, 16.0]))
+
+
 def test_valid_default_stds_still_fallback_to_positive_covariance() -> None:
     rf = pd.DataFrame({"time_s": [1.0], "east_m": [10.0], "north_m": [20.0]})
     radar = pd.DataFrame(

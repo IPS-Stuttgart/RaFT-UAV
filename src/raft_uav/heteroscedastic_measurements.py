@@ -111,6 +111,8 @@ def _require_positive_float(value: object, *, name: str) -> float:
 
 
 def _positive_float(value: object) -> float | None:
+    if isinstance(value, bool | np.bool_):
+        return None
     try:
         number = float(value)
     except (TypeError, ValueError):
