@@ -9,6 +9,8 @@ from zipfile import ZipFile
 import pandas as pd
 import pytest
 
+from raft_uav.mmuad.template_snap_utils import load_official_track5_results_frame_from_frame
+
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 MODULE_PATH = SCRIPTS_DIR / "mmuad_snap_official_results_to_template.py"
@@ -115,6 +117,28 @@ def test_snap_official_results_to_template_drops_missing_template_sequences() ->
 
     assert snapped["Sequence"].tolist() == ["seq001"]
     assert diagnostics["Sequence"].tolist() == ["seq001"]
+
+
+def test_template_snap_results_normalizer_drops_missing_source_sequences() -> None:
+    results = pd.concat(
+        [
+            _results(),
+            pd.DataFrame(
+                {
+                    "Sequence": [None, float("nan"), "   ", "nan", "None", "<NA>"],
+                    "Timestamp": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                    "Position": ["(1,1,1)"] * 6,
+                    "Classification": [1] * 6,
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    normalized = load_official_track5_results_frame_from_frame(results)
+
+    assert len(normalized) == 4
+    assert normalized["Sequence"].tolist() == ["seq001", "seq001", "seq001", "seq002"]
 
 
 def test_snap_official_results_to_template_nearest_classification_policy() -> None:
