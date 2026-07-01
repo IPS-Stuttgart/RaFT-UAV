@@ -369,6 +369,10 @@ def _positive(value: object) -> float | None:
 
 
 def _finite(value: object) -> float | None:
+    if isinstance(value, bool | np.bool_):
+        return None
+    if isinstance(value, complex | np.complexfloating):
+        return None
     try:
         out = float(value)
     except (TypeError, ValueError):
