@@ -1,0 +1,176 @@
+"""Utility functions for MMUAD Track 5 template snapping."""
+
+from __future__ import annotations
+
+from typing import Any, Literal
+
+import numpy as np
+import pandas as pd
+
+from raft_uav.mmuad.submission import parse_official_position_cell
+
+RESAMPLE_METHODS = ("linear", "nearest")
+CLASSIFICATION_POLICIES = ("sequence-mode", "nearest")
+MISSING_POSITION_POLICIES = ("zero", "raise")
+ResampleMethod = Literal["linear", "nearest"]
+ClassificationPolicy = Literal["sequence-mode", "nearest"]
+MissingPositionPolicy = Literal["zero", "raise"]
+
+RESULTS_CSV = "mmaud_results.csv"
+OFFICIAL_ZIP = "ug2_submission.zip"
+DIAGNOSTICS_CSV = "mmuad_template_snap_diagnostics.csv"
+VALIDATION_JSON = "mmuad_template_snap_validation.json"
+VALIDATION_ROWS_CSV = "mmuad_template_snap_validation_rows.csv"
+MANIFEST_JSON = "mmuad_template_snap_manifest.json"
+
+
+def _normalize_results_rows(results: pd.DataFrame) -> pd.DataFrame:
+    rows = load_official_track5_results_frame_from_frame(results)
+    positions = np.asarray(
+        [parse_official_position_cell(value) for value in rows["Position"]],
+        dtype=float,
+    ).reshape((-1, 3))
+    rows = rows.copy()
+    rows["x"] = positions[:, 0]
+    rows["y"] = positions[:, 1]
+    rows["z"] = positions[:, 2]
+    rows["Classification"] = pd.to_numeric(rows["Classification"], errors="coerce").astype(int)
+    return rows.sort_values(["Sequence", "Timestamp"]).reset_index(drop=True)
+
+
+def load_official_track5_results_frame_from_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize an in-memory official Track 5 result-like frame."""
+
+    lower = {str(column).strip().lower(): column for column in frame.columns}
+    missing = [
+        column
+        for column in ("sequence", "timestamp", "position", "classification")
+        if column not in lower
+    ]
+    if missing:
+        raise ValueError(f"official Track 5 results missing columns: {missing}")
+    rows = pd.DataFrame(
+        {
+            "Sequence": frame[lower["sequence"]].astype(str).str.strip(),
+            "Timestamp": pd.to_numeric(frame[lower["timestamp"]], errors="coerce"),
+            "Position": frame[lower["position"]],
+            "Classification": pd.to_numeric(frame[lower["classification"]], errors="coerce"),
+        }
+    )
+    finite = rows["Sequence"].ne("") & rows["Timestamp"].notna() & rows["Classification"].notna()
+    rows = rows.loc[finite].copy()
+    rows["Timestamp"] = rows["Timestamp"].astype(float)
+    rows["Classification"] = rows["Classification"].astype(int)
+    return rows.sort_values(["Sequence", "Timestamp"]).reset_index(drop=True)
+
+
+def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
+    lower = {str(column).strip().lower(): column for column in template.columns}
+    sequence_col = lower.get("sequence") or lower.get("sequence_id")
+    timestamp_col = lower.get("timestamp") or lower.get("time_s")
+    if sequence_col is None or timestamp_col is None:
+        raise ValueError("template must contain Sequence/Timestamp or sequence_id/time_s")
+    rows = pd.DataFrame(
+        {
+            "Sequence": template[sequence_col].astype(str).str.strip(),
+            "Timestamp": pd.to_numeric(template[timestamp_col], errors="coerce"),
+        }
+    )
+    rows = rows.loc[rows["Sequence"].ne("") & rows["Timestamp"].notna()]
+    return rows.sort_values(["Sequence", "Timestamp"]).reset_index(drop=True)
+
+
+def _resampled_position(
+    sequence_results: pd.DataFrame,
+    timestamp: float,
+    *,
+    resample_method: ResampleMethod,
+    max_interpolation_gap_s: float | None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    work = sequence_results.sort_values("Timestamp").drop_duplicates("Timestamp", keep="last")
+    times = work["Timestamp"].to_numpy(float)
+    xyz = work[["x", "y", "z"]].to_numpy(float)
+    nearest_index = int(np.argmin(np.abs(times - float(timestamp))))
+    nearest_delta = float(float(timestamp) - times[nearest_index])
+    extrapolated = bool(timestamp < times[0] or timestamp > times[-1])
+    gap_s = _bracketing_gap_s(times, float(timestamp))
+    fallback = (
+        max_interpolation_gap_s is not None
+        and np.isfinite(gap_s)
+        and gap_s > float(max_interpolation_gap_s)
+    )
+    if len(times) == 1 or resample_method == "nearest" or fallback:
+        return xyz[nearest_index].astype(float), {
+            "nearest_time_delta_s": nearest_delta,
+            "extrapolated": extrapolated,
+            "method": "nearest" if not fallback else "nearest-large-gap-fallback",
+            "interpolation_gap_s": gap_s,
+            "large_gap_fallback": bool(fallback),
+        }
+    position = np.asarray([np.interp(float(timestamp), times, xyz[:, axis]) for axis in range(3)])
+    return position, {
+        "nearest_time_delta_s": nearest_delta,
+        "extrapolated": extrapolated,
+        "method": "linear",
+        "interpolation_gap_s": gap_s,
+        "large_gap_fallback": False,
+    }
+
+
+def _resampled_classification(
+    sequence_results: pd.DataFrame,
+    timestamp: float,
+    *,
+    classification_policy: ClassificationPolicy,
+) -> int:
+    if classification_policy == "sequence-mode":
+        mode = sequence_results["Classification"].mode(dropna=True)
+        if not mode.empty:
+            return int(mode.sort_values().iloc[0])
+    times = sequence_results["Timestamp"].to_numpy(float)
+    return int(sequence_results["Classification"].iloc[int(np.argmin(np.abs(times - timestamp)))])
+
+
+def _diagnostic_record(**items: Any) -> dict[str, Any]:
+    nearest_delta = items["nearest_time_delta_s"]
+    return {
+        "template_row_index": int(items["template_index"]),
+        "Sequence": str(items["sequence_id"]),
+        "Timestamp": float(items["timestamp"]),
+        "source_row_count": int(items["source_row_count"]),
+        "nearest_time_delta_s": nearest_delta,
+        "abs_nearest_time_delta_s": (
+            abs(float(nearest_delta)) if np.isfinite(nearest_delta) else np.nan
+        ),
+        "extrapolated": bool(items["extrapolated"]),
+        "method": str(items["method"]),
+        "interpolation_gap_s": items["interpolation_gap_s"],
+        "large_gap_fallback": bool(items["large_gap_fallback"]),
+        "classification_policy": str(items["classification_policy"]),
+        "valid": bool(items["valid"]),
+    }
+
+
+def _bracketing_gap_s(times: np.ndarray, timestamp: float) -> float:
+    if len(times) < 2 or timestamp <= times[0] or timestamp >= times[-1]:
+        return np.nan
+    right = int(np.searchsorted(times, timestamp, side="right"))
+    if right >= len(times):
+        return np.nan
+    return float(times[right] - times[max(0, right - 1)])
+
+
+def _format_position(position: np.ndarray) -> str:
+    x, y, z = [_format_float(value) for value in position]
+    return f"({x},{y},{z})"
+
+
+def _format_float(value: float) -> str:
+    return f"{float(value):.12g}"
+
+
+def _normalize_choice(value: str, choices: tuple[str, ...], name: str) -> str:
+    normalized = str(value).strip().lower()
+    if normalized not in choices:
+        raise ValueError(f"{name} must be one of {choices}; got {value!r}")
+    return normalized
