@@ -108,13 +108,15 @@ def _run_multi_sequence(
         for filt in active.values():
             filt.predict(time_s)
         unmatched_tracks = set(active)
-        detections = group.sort_values("confidence", ascending=False).copy()
+        detections = group.copy()
+        detections["_mot_confidence"] = _mot_confidence_values(detections)
+        detections = detections.sort_values("_mot_confidence", ascending=False)
         for _, detection in detections.iterrows():
             z = detection[["x_m", "y_m", "z_m"]].to_numpy(float)
             output_track_id = _nearest_track_id(z, active, unmatched_tracks, config)
             action = "matched_update"
             if output_track_id is None:
-                confidence = float(detection.get("confidence", 1.0))
+                confidence = float(detection["_mot_confidence"])
                 if confidence < config.min_new_track_confidence:
                     continue
                 output_track_id = next_track_id
@@ -156,6 +158,13 @@ def _run_multi_sequence(
     if sequence_truth is not None and not sequence_truth.empty and "track_id" not in sequence_truth.columns:
         estimates = add_truth_errors(estimates, sequence_truth)
     return estimates
+
+
+def _mot_confidence_values(frame: pd.DataFrame) -> np.ndarray:
+    if "confidence" not in frame.columns:
+        return np.ones(len(frame), dtype=float)
+    confidence = pd.to_numeric(frame["confidence"], errors="coerce").to_numpy(float)
+    return np.where(np.isfinite(confidence), confidence, 0.0)
 
 
 def _nearest_track_id(
