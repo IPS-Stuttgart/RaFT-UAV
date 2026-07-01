@@ -92,6 +92,21 @@ def test_snap_official_results_to_template_handles_empty_source_results() -> Non
     assert bool(row["valid"]) is False
 
 
+def test_snap_official_results_to_template_drops_missing_template_sequences() -> None:
+    snapped, diagnostics = snapper.snap_official_results_to_template(
+        _results(),
+        pd.DataFrame(
+            {
+                "Sequence": ["seq001", None, float("nan"), "   "],
+                "Timestamp": [0.0, 1.0, 2.0, 3.0],
+            }
+        ),
+    )
+
+    assert snapped["Sequence"].tolist() == ["seq001"]
+    assert diagnostics["Sequence"].tolist() == ["seq001"]
+
+
 def test_snap_official_results_to_template_nearest_classification_policy() -> None:
     snapped, _ = snapper.snap_official_results_to_template(
         _results(),
