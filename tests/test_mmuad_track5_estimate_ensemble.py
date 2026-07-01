@@ -168,6 +168,29 @@ def test_track5_estimate_ensemble_writes_leaderboard_ready_artifacts(tmp_path: P
     assert official["Classification"].tolist() == [2, 2, 1]
 
 
+def test_track5_estimate_ensemble_manifest_preserves_generator_inputs(tmp_path: Path) -> None:
+    a_csv = tmp_path / "a.csv"
+    b_csv = tmp_path / "b.csv"
+    _estimate_a().to_csv(a_csv, index=False)
+    _estimate_b().to_csv(b_csv, index=False)
+    estimate_inputs = (
+        parse_estimate_spec(spec)
+        for spec in (f"a={a_csv}@0.75", f"b={b_csv}@0.25")
+    )
+
+    paths = write_track5_estimate_ensemble_outputs(
+        estimate_inputs=estimate_inputs,
+        template=_template(),
+        output_dir=tmp_path / "out",
+        class_map={"seq0001": "2", "seq0002": "1"},
+    )
+
+    manifest = json.loads(paths["manifest_json"].read_text(encoding="utf-8"))
+    assert [item["label"] for item in manifest["estimate_inputs"]] == ["a", "b"]
+    assert [item["weight"] for item in manifest["estimate_inputs"]] == pytest.approx([0.75, 0.25])
+    assert [item["label"] for item in manifest["input_summaries"]] == ["a", "b"]
+
+
 def test_track5_estimate_ensemble_cli_writes_outputs(tmp_path: Path) -> None:
     a_csv = tmp_path / "a.csv"
     b_csv = tmp_path / "b.csv"
