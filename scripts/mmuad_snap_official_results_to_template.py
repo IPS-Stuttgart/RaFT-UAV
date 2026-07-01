@@ -11,6 +11,7 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from raft_uav.mmuad.submission import OFFICIAL_UG2_RESULT_COLUMNS  # noqa: E402
 from raft_uav.mmuad.template_snap_cli import main  # noqa: E402
 from raft_uav.mmuad.template_snap_core import (  # noqa: E402
     snap_official_results_to_template,
@@ -25,6 +26,9 @@ from raft_uav.mmuad.template_snap_utils import (  # noqa: E402
     RESAMPLE_METHODS,
     VALIDATION_JSON,
     VALIDATION_ROWS_CSV,
+    ClassificationPolicy,
+    MissingPositionPolicy,
+    ResampleMethod,
     _bracketing_gap_s,
     _diagnostic_record,
     _format_float,
@@ -43,12 +47,16 @@ from raft_uav.mmuad.template_snap_write import (  # noqa: E402
 
 __all__ = [
     "CLASSIFICATION_POLICIES",
+    "ClassificationPolicy",
     "DIAGNOSTICS_CSV",
     "MANIFEST_JSON",
     "MISSING_POSITION_POLICIES",
+    "MissingPositionPolicy",
+    "OFFICIAL_UG2_RESULT_COLUMNS",
     "OFFICIAL_ZIP",
     "RESULTS_CSV",
     "RESAMPLE_METHODS",
+    "ResampleMethod",
     "VALIDATION_JSON",
     "VALIDATION_ROWS_CSV",
     "_bracketing_gap_s",
