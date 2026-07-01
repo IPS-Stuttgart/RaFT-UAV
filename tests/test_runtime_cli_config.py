@@ -338,6 +338,11 @@ def test_apply_runtime_environment_sets_expected_variables(monkeypatch):
     ],
 )
 def test_tracklet_runtime_environment_rejects_invalid_values(monkeypatch, name, value, message):
+    for alias in (
+        "RAFT_UAV_TRACKLET_MAX_CANDIDATES",
+        "RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME",
+    ):
+        monkeypatch.delenv(alias, raising=False)
     monkeypatch.setenv(name, value)
 
     with pytest.raises(ValueError, match=message):

@@ -292,14 +292,20 @@ def _normalize_submission_rows(rows: pd.DataFrame, *, source_path: Path) -> pd.D
     if missing:
         raise ValueError(f"{source_path} missing official columns: {missing}")
     out_records: list[dict[str, Any]] = []
-    normalized_classifications = _predicted_class_labels(rows[CLASSIFICATION_COLUMN])
+    try:
+        normalized_classifications = _predicted_class_labels(rows[CLASSIFICATION_COLUMN])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid Track 5 Classification values") from exc
     for row, classification_label in zip(
         rows.itertuples(index=False), normalized_classifications, strict=True
     ):
         sequence = str(getattr(row, SEQUENCE_COLUMN))
         timestamp = float(getattr(row, TIME_COLUMN))
         xyz = _parse_position_cell(getattr(row, POSITION_COLUMN))
-        classification = int(classification_label)
+        try:
+            classification = int(classification_label)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid Track 5 Classification values") from exc
         out_records.append(
             {
                 "sequence_id": sequence,

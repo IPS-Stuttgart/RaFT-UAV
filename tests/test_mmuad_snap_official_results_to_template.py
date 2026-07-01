@@ -65,6 +65,7 @@ def test_snap_official_results_to_template_interpolates_and_keeps_sequence_class
 
 def test_snap_official_results_to_template_rejects_fractional_classification_labels() -> None:
     results = _results()
+    results["Classification"] = results["Classification"].astype(object)
     results.loc[0, "Classification"] = "1.5"
 
     with pytest.raises(ValueError, match="Classification"):
@@ -73,6 +74,7 @@ def test_snap_official_results_to_template_rejects_fractional_classification_lab
 
 def test_snap_official_results_to_template_rejects_logical_classification_labels() -> None:
     results = _results()
+    results["Classification"] = results["Classification"].astype(object)
     results.loc[0, "Classification"] = True
 
     with pytest.raises(ValueError, match="integer ids"):

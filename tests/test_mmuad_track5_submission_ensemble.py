@@ -80,6 +80,7 @@ def test_load_track5_submission_accepts_integer_like_classification_labels(tmp_p
 def test_load_track5_submission_rejects_fractional_classification_labels(tmp_path: Path) -> None:
     path = tmp_path / "submission.csv"
     rows = _submission_rows()
+    rows["Classification"] = rows["Classification"].astype(object)
     rows.loc[0, "Classification"] = "1.5"
     rows.to_csv(path, index=False)
 
