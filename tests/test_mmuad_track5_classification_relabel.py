@@ -101,6 +101,29 @@ def test_track5_classification_relabel_accepts_sequence_prediction_probabilities
     ).all()
 
 
+def test_track5_classification_relabel_accepts_legacy_bare_probability_columns() -> None:
+    predictions = pd.DataFrame(
+        {
+            "heldout_sequence": ["seq0001", "seq0002"],
+            0: [0.05, 0.10],
+            1: [0.80, 0.15],
+            2: [0.10, 0.70],
+            3: [0.05, 0.05],
+        }
+    )
+
+    result = relabel_track5_classification_from_sequence_predictions(
+        _pose_rows(),
+        predictions,
+    )
+
+    assert result.rows["Classification"].tolist() == [1, 1, 2]
+    assert result.manifest["source_probability_min"] == 0.70
+    assert result.diagnostics["source_sequence_label_method"].eq(
+        "probability-argmax",
+    ).all()
+
+
 def test_track5_classification_relabel_accepts_sequence_predicted_classes() -> None:
     predictions = pd.DataFrame(
         {
