@@ -63,6 +63,27 @@ def test_snap_official_results_to_template_interpolates_and_keeps_sequence_class
     assert midpoint_method == "linear"
 
 
+def test_snap_official_results_to_template_handles_empty_source_results() -> None:
+    snapped, diagnostics = snapper.snap_official_results_to_template(
+        pd.DataFrame(columns=["Sequence", "Timestamp", "Position", "Classification"]),
+        pd.DataFrame({"Sequence": ["seq-missing"], "Timestamp": [1.0]}),
+        missing_position_policy="zero",
+    )
+
+    assert snapped.to_dict("records") == [
+        {
+            "Sequence": "seq-missing",
+            "Timestamp": 1.0,
+            "Position": "(0,0,0)",
+            "Classification": 0,
+        }
+    ]
+    row = diagnostics.iloc[0]
+    assert int(row["source_row_count"]) == 0
+    assert row["method"] == "missing-zero"
+    assert bool(row["valid"]) is False
+
+
 def test_snap_official_results_to_template_nearest_classification_policy() -> None:
     snapped, _ = snapper.snap_official_results_to_template(
         _results(),
