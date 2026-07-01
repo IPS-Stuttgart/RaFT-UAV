@@ -151,19 +151,29 @@ def _inside_truth_window(frame: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFra
 
 
 def _optional_threshold(value: str) -> float | None:
-    parsed = float(value)
+    parsed = _finite_float_argument(value)
     return None if parsed < 0.0 else parsed
 
 
 def _optional_positive_float(value: str) -> float | None:
-    parsed = float(value)
+    parsed = _finite_float_argument(value)
     return None if parsed <= 0.0 else parsed
 
 
 def _positive_float(value: str) -> float:
-    parsed = float(value)
+    parsed = _finite_float_argument(value)
     if parsed <= 0.0:
         raise argparse.ArgumentTypeError("must be > 0")
+    return parsed
+
+
+def _finite_float_argument(value: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("must be numeric") from exc
+    if not np.isfinite(parsed):
+        raise argparse.ArgumentTypeError("must be finite")
     return parsed
 
 
