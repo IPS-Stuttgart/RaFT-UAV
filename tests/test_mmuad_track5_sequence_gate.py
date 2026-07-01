@@ -88,7 +88,9 @@ def test_sequence_gate_rejects_out_of_range_weights(tmp_path: Path) -> None:
 def test_sequence_gate_writes_leaderboard_ready_zip(tmp_path: Path) -> None:
     base_path = tmp_path / "base.csv"
     alternate_path = tmp_path / "alternate.csv"
-    _submission_rows(offset=0.0, classification=1).to_csv(base_path, index=False)
+    base_rows = _submission_rows(offset=0.0, classification=1)
+    base_rows.loc[1, "Classification"] = 2
+    base_rows.to_csv(base_path, index=False)
     _submission_rows(offset=2.0, classification=3).to_csv(alternate_path, index=False)
     result = blend_track5_sequence_gate(
         base_submission=load_track5_submission(base_path),
@@ -113,7 +115,7 @@ def test_sequence_gate_writes_leaderboard_ready_zip(tmp_path: Path) -> None:
     with ZipFile(paths["zip"]) as archive:
         assert archive.namelist() == ["mmaud_results.csv"]
     results = pd.read_csv(paths["results_csv"])
-    assert results["Classification"].tolist() == [1, 1, 2]
+    assert results["Classification"].tolist() == [1, 2, 2]
 
 
 def test_sequence_gate_cli_writes_manifest(tmp_path: Path) -> None:
