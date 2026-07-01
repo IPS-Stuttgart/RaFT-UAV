@@ -44,6 +44,7 @@ def complete_results_to_truth_timestamps(
 
     if extrapolation not in {"hold", "nan"}:
         raise ValueError("extrapolation must be 'hold' or 'nan'")
+    max_gap_s = _normalize_max_interpolation_gap_s(max_interpolation_gap_s)
     result_rows = _completion_result_rows(results)
     template = _completion_template_rows(truth_or_template)
     if template.empty:
@@ -82,7 +83,7 @@ def complete_results_to_truth_timestamps(
                 times,
                 xyz,
                 scores,
-                max_interpolation_gap_s=max_interpolation_gap_s,
+                max_interpolation_gap_s=max_gap_s,
                 extrapolation=extrapolation,
             )
             if completed is None:
@@ -257,6 +258,16 @@ def _rows_for_sequence(frame: pd.DataFrame, sequence_id: str) -> pd.DataFrame:
     if frame.empty or "sequence_id" not in frame.columns:
         return pd.DataFrame()
     return frame.loc[frame["sequence_id"].astype(str) == sequence_id].copy()
+
+
+def _normalize_max_interpolation_gap_s(value: float) -> float:
+    try:
+        gap_s = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("max_interpolation_gap_s must be a finite non-negative number") from exc
+    if not np.isfinite(gap_s) or gap_s < 0.0:
+        raise ValueError("max_interpolation_gap_s must be a finite non-negative number")
+    return gap_s
 
 
 def _complete_one(
