@@ -121,6 +121,49 @@ def test_class_probability_context_fills_missing_sequences_uniformly() -> None:
     assert seq_b["image_class_prob_3"] == pytest.approx(0.25)
 
 
+def test_class_probability_context_treats_empty_probability_rows_as_missing() -> None:
+    probabilities = pd.DataFrame(
+        {
+            "sequence_id": ["seqA"],
+            "predicted_probability_0": [0.0],
+            "predicted_probability_1": [0.0],
+            "predicted_probability_2": [0.0],
+            "predicted_probability_3": [0.0],
+        }
+    )
+
+    augmented = attach_class_probability_context(
+        CandidateFrame(_candidate_rows()),
+        probabilities,
+        interaction_columns=(),
+    )
+    rows = augmented.rows.sort_values(["sequence_id", "track_id"]).reset_index(drop=True)
+    seq_a = rows.loc[rows["sequence_id"].eq("seqA")].iloc[0]
+    seq_b = rows.loc[rows["sequence_id"].eq("seqB")].iloc[0]
+
+    assert seq_a["image_class_probability_available"] == pytest.approx(0.0)
+    assert seq_a["image_class_prob_0"] == pytest.approx(0.25)
+    assert seq_a["image_class_prob_3"] == pytest.approx(0.25)
+    assert seq_b["image_class_probability_available"] == pytest.approx(0.0)
+
+
+def test_class_probability_context_rejects_empty_probability_rows_when_requested() -> None:
+    probabilities = pd.DataFrame(
+        {
+            "sequence_id": ["seqA"],
+            "predicted_class": [4],
+        }
+    )
+
+    with pytest.raises(ValueError, match="missing class probabilities"):
+        attach_class_probability_context(
+            CandidateFrame(_candidate_rows()),
+            probabilities,
+            fill_missing="error",
+            interaction_columns=(),
+        )
+
+
 def test_class_probability_context_can_reject_missing_sequences() -> None:
     probabilities = _probability_rows().loc[lambda frame: frame["sequence_id"] == "seqA"]
     with pytest.raises(ValueError, match="missing class probabilities"):
