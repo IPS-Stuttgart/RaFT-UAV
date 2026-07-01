@@ -296,7 +296,8 @@ def fortem_tracklet_paths_to_rows(
 
 def _fortem_node_cost(config: FortemTrackletGraphConfig):
     def node_cost(tracklet: Tracklet) -> float:
-        rows = float(tracklet.metadata.get("rows", tracklet.metadata.get("row_count", 1.0)) or 1.0)
+        metadata = tracklet.metadata if tracklet.metadata is not None else {}
+        rows = float(metadata.get("rows", metadata.get("row_count", 1.0)) or 1.0)
         return float(tracklet.cost) - float(config.coverage_reward_per_row) * rows
 
     return node_cost
