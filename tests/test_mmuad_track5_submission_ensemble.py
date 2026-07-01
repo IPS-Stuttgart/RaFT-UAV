@@ -104,8 +104,12 @@ def test_track5_submission_ensemble_rejects_template_mismatch(tmp_path: Path) ->
 def test_track5_submission_ensemble_writes_zip_and_validation(tmp_path: Path) -> None:
     first = tmp_path / "first.csv"
     second = tmp_path / "second.csv"
-    _submission_rows(offset=0.0, classification=1).to_csv(first, index=False)
-    _submission_rows(offset=2.0, classification=1).to_csv(second, index=False)
+    first_rows = _submission_rows(offset=0.0, classification=1)
+    first_rows.loc[1, "Classification"] = 2
+    first_rows.to_csv(first, index=False)
+    second_rows = _submission_rows(offset=2.0, classification=1)
+    second_rows.loc[1, "Classification"] = 2
+    second_rows.to_csv(second, index=False)
     estimates, diagnostics = ensemble_track5_submissions(
         [parse_submission_input(f"a={first}"), parse_submission_input(f"b={second}")],
     )
@@ -123,6 +127,8 @@ def test_track5_submission_ensemble_writes_zip_and_validation(tmp_path: Path) ->
     assert validation["leaderboard_ready"] is True
     with ZipFile(paths["zip"]) as archive:
         assert archive.namelist() == ["mmaud_results.csv"]
+    results = pd.read_csv(paths["results_csv"])
+    assert results["Classification"].tolist() == [1, 2, 2]
 
 
 def test_track5_submission_ensemble_cli_writes_manifest(tmp_path: Path) -> None:
