@@ -82,6 +82,31 @@ def test_class_probability_context_adds_ranker_consumable_features() -> None:
     assert "image_class_prob_2_x_image_candidate_branch_dynamic_flag" in model.feature_columns
 
 
+def test_class_probability_context_normalizes_integer_like_predicted_labels() -> None:
+    probabilities = pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqB"],
+            "predicted_class": [2.0, "3.0"],
+        }
+    )
+
+    augmented = attach_class_probability_context(
+        CandidateFrame(_candidate_rows()),
+        probabilities,
+        interaction_columns=(),
+    )
+    rows = augmented.rows.sort_values(["sequence_id", "track_id"]).reset_index(drop=True)
+    seq_a = rows.loc[rows["sequence_id"].eq("seqA")].iloc[0]
+    seq_b = rows.loc[rows["sequence_id"].eq("seqB")].iloc[0]
+
+    assert seq_a["image_class_probability_available"] == pytest.approx(1.0)
+    assert seq_a["image_class_prob_0"] == pytest.approx(0.0)
+    assert seq_a["image_class_prob_2"] == pytest.approx(1.0)
+    assert seq_a["image_predicted_class_id"] == pytest.approx(2.0)
+    assert seq_b["image_class_prob_3"] == pytest.approx(1.0)
+    assert seq_b["image_predicted_class_id"] == pytest.approx(3.0)
+
+
 def test_class_probability_context_fills_missing_sequences_uniformly() -> None:
     probabilities = _probability_rows().loc[lambda frame: frame["sequence_id"] == "seqA"]
     augmented = attach_class_probability_context(
