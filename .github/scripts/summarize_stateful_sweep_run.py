@@ -104,10 +104,31 @@ def single_target_mot_summary(
     dist = np.linalg.norm(est_pos - truth_pos[nearest], axis=1)
     finite = np.isfinite(dt) & np.isfinite(dist)
     matched = finite & (dt <= float(max_time_delta_s)) & (dist <= float(distance_threshold_m))
-    matched_truth = nearest[matched]
-    matched_tracks = track_ids(estimates, len(estimates))[matched]
+    matched_indices = np.flatnonzero(matched)
+    accepted_match_indices: list[int] = []
+    if matched_indices.size:
+        # Single-target MOT still needs one-to-one assignment: duplicate estimates
+        # close to the same truth sample are false positives, not extra TPs.
+        seen_truth: set[int] = set()
+        for estimate_index in sorted(
+            matched_indices.tolist(),
+            key=lambda index: (
+                int(nearest[index]),
+                float(dist[index]),
+                float(dt[index]),
+                int(index),
+            ),
+        ):
+            truth_index = int(nearest[estimate_index])
+            if truth_index in seen_truth:
+                continue
+            seen_truth.add(truth_index)
+            accepted_match_indices.append(int(estimate_index))
+    accepted = np.asarray(accepted_match_indices, dtype=int)
+    matched_truth = nearest[accepted]
+    matched_tracks = track_ids(estimates, len(estimates))[accepted]
 
-    tp = int(np.count_nonzero(matched))
+    tp = int(accepted.size)
     fp = int(len(estimates) - tp)
     matched_truth_unique = set(int(index) for index in matched_truth.tolist())
     fn = int(len(truth) - len(matched_truth_unique))
