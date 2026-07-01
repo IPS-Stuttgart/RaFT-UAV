@@ -21,6 +21,7 @@ from zipfile import ZipFile
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.class_probability_context import _predicted_class_labels
 from raft_uav.mmuad.submission import (
     validate_official_track5_submission,
     write_official_mmaud_results_csv,
@@ -290,11 +291,14 @@ def _normalize_submission_rows(rows: pd.DataFrame, *, source_path: Path) -> pd.D
     if missing:
         raise ValueError(f"{source_path} missing official columns: {missing}")
     out_records: list[dict[str, Any]] = []
-    for row in rows.itertuples(index=False):
+    normalized_classifications = _predicted_class_labels(rows[CLASSIFICATION_COLUMN])
+    for row, classification_label in zip(
+        rows.itertuples(index=False), normalized_classifications, strict=True
+    ):
         sequence = str(getattr(row, SEQUENCE_COLUMN))
         timestamp = float(getattr(row, TIME_COLUMN))
         xyz = _parse_position_cell(getattr(row, POSITION_COLUMN))
-        classification = int(getattr(row, CLASSIFICATION_COLUMN))
+        classification = int(classification_label)
         out_records.append(
             {
                 "sequence_id": sequence,
