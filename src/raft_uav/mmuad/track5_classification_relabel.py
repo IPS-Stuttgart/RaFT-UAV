@@ -187,7 +187,8 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help=(
             "sequence-level classifier predictions CSV; accepts sequence_id/Sequence and either "
-            "predicted_class/Classification or predicted_probability_0..4"
+            "predicted_class/Classification, predicted_probability_0..4, or bare 0..3/0..4 "
+            "probability columns"
         ),
     )
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -337,8 +338,8 @@ def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFr
         class_column = _first_present(rows, PREDICTED_CLASS_ALIASES)
         if class_column is None:
             raise ValueError(
-                "sequence prediction table needs a complete predicted_probability_0..3 "
-                "or predicted_probability_0..4 group, or predicted_class"
+                "sequence prediction table needs a complete predicted_probability_0..3, "
+                "predicted_probability_0..4, bare 0..3/0..4 group, or predicted_class"
             )
         labels = rows[["Sequence", class_column]].copy()
         labels[class_column] = pd.to_numeric(labels[class_column], errors="coerce")
@@ -388,15 +389,16 @@ def _first_present(frame: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
     return None
 
 
-def _probability_columns(frame: pd.DataFrame) -> list[tuple[int, str]]:
-    columns: list[tuple[int, str]] = []
-    lower_to_column = {str(column).lower(): str(column) for column in frame.columns}
+def _probability_columns(frame: pd.DataFrame) -> list[tuple[int, Any]]:
+    columns: list[tuple[int, Any]] = []
+    lower_to_column = {str(column).lower(): column for column in frame.columns}
     for class_id in VALID_CLASS_IDS:
-        found = None
-        for prefix in PROBABILITY_PREFIXES:
-            found = lower_to_column.get(f"{prefix}{class_id}".lower())
-            if found is not None:
-                break
+        found = lower_to_column.get(str(class_id))
+        if found is None:
+            for prefix in PROBABILITY_PREFIXES:
+                found = lower_to_column.get(f"{prefix}{class_id}".lower())
+                if found is not None:
+                    break
         if found is not None:
             columns.append((int(class_id), found))
     return columns
