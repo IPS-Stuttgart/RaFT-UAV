@@ -95,22 +95,19 @@ def write_track5_temporal_repair_outputs(
     }
     repaired.to_csv(paths["estimates_csv"], index=False)
     diagnostics.to_csv(paths["diagnostics_csv"], index=False)
-    class_map = {
-        str(row.sequence_id): int(row.Classification)
-        for row in repaired.drop_duplicates("sequence_id").itertuples(index=False)
-    }
+    official_rows = repaired.copy()
+    # Preserve row-level official labels; class_map is a sequence-level override.
+    official_rows["classification"] = official_rows["Classification"]
     write_official_mmaud_results_csv(
-        repaired,
+        official_rows,
         paths["results_csv"],
         classification=0,
-        class_map=class_map,
         invalid_row_policy="raise",
     )
     write_official_ug2_codabench_zip(
-        repaired,
+        official_rows,
         paths["zip"],
         classification=0,
-        class_map=class_map,
         invalid_row_policy="raise",
     )
     validation_summary: dict[str, Any] | None = None
