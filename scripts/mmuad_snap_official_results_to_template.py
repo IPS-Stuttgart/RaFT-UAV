@@ -18,6 +18,7 @@ from raft_uav.mmuad.template_snap_core import (  # noqa: E402
 )
 from raft_uav.mmuad.template_snap_utils import (  # noqa: E402
     CLASSIFICATION_POLICIES,
+    DIAGNOSTIC_COLUMNS,
     DIAGNOSTICS_CSV,
     MANIFEST_JSON,
     MISSING_POSITION_POLICIES,
@@ -48,6 +49,7 @@ from raft_uav.mmuad.template_snap_write import (  # noqa: E402
 __all__ = [
     "CLASSIFICATION_POLICIES",
     "ClassificationPolicy",
+    "DIAGNOSTIC_COLUMNS",
     "DIAGNOSTICS_CSV",
     "MANIFEST_JSON",
     "MISSING_POSITION_POLICIES",

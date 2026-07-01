@@ -22,6 +22,20 @@ DIAGNOSTICS_CSV = "mmuad_template_snap_diagnostics.csv"
 VALIDATION_JSON = "mmuad_template_snap_validation.json"
 VALIDATION_ROWS_CSV = "mmuad_template_snap_validation_rows.csv"
 MANIFEST_JSON = "mmuad_template_snap_manifest.json"
+DIAGNOSTIC_COLUMNS = (
+    "template_row_index",
+    "Sequence",
+    "Timestamp",
+    "source_row_count",
+    "nearest_time_delta_s",
+    "abs_nearest_time_delta_s",
+    "extrapolated",
+    "method",
+    "interpolation_gap_s",
+    "large_gap_fallback",
+    "classification_policy",
+    "valid",
+)
 
 
 def _normalize_results_rows(results: pd.DataFrame) -> pd.DataFrame:

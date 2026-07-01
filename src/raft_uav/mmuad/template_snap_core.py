@@ -10,6 +10,7 @@ import pandas as pd
 from raft_uav.mmuad.submission import OFFICIAL_UG2_RESULT_COLUMNS
 from raft_uav.mmuad.template_snap_utils import (
     CLASSIFICATION_POLICIES,
+    DIAGNOSTIC_COLUMNS,
     MISSING_POSITION_POLICIES,
     RESAMPLE_METHODS,
     ClassificationPolicy,
@@ -107,5 +108,5 @@ def snap_official_results_to_template(
 
     return (
         pd.DataFrame.from_records(outputs, columns=list(OFFICIAL_UG2_RESULT_COLUMNS)),
-        pd.DataFrame.from_records(diagnostics),
+        pd.DataFrame.from_records(diagnostics, columns=list(DIAGNOSTIC_COLUMNS)),
     )
