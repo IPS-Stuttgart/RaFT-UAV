@@ -23,9 +23,10 @@ def rf_measurements_to_enu_with_uncertainty(
     are present, and otherwise uses the historical CEP/default-std covariance.
     """
 
+    default_std = _require_positive_float(default_std_m, name="default_std_m")
     measurements: list[TrackingMeasurement] = []
     for _, row in rf.iterrows():
-        std_m = _positive_float(row.get("std_m")) or float(default_std_m)
+        std_m = _positive_float(row.get("std_m")) or default_std
         fallback = np.diag([std_m**2, std_m**2])
         measurements.append(
             TrackingMeasurement(
@@ -53,9 +54,13 @@ def radar_measurements_to_enu_with_uncertainty(
     block.
     """
 
-    position_fallback = np.diag(
-        [float(default_xy_std_m) ** 2, float(default_xy_std_m) ** 2, float(default_z_std_m) ** 2]
+    default_xy_std = _require_positive_float(default_xy_std_m, name="default_xy_std_m")
+    default_z_std = _require_positive_float(default_z_std_m, name="default_z_std_m")
+    default_velocity_std = _require_positive_float(
+        default_velocity_std_mps,
+        name="default_velocity_std_mps",
     )
+    position_fallback = np.diag([default_xy_std**2, default_xy_std**2, default_z_std**2])
     measurements: list[TrackingMeasurement] = []
     for _, row in radar.iterrows():
         position = np.array([float(row["east_m"]), float(row["north_m"]), float(row["up_m"])])
@@ -68,7 +73,7 @@ def radar_measurements_to_enu_with_uncertainty(
             vector = np.concatenate([position, velocity])
             covariance = np.zeros((6, 6), dtype=float)
             covariance[:3, :3] = position_covariance
-            covariance[3:, 3:] = np.diag([float(default_velocity_std_mps) ** 2] * 3)
+            covariance[3:, 3:] = np.diag([default_velocity_std**2] * 3)
         measurements.append(
             TrackingMeasurement(
                 time_s=float(row["time_s"]),
@@ -96,6 +101,13 @@ def _radar_velocity_vector_enu(row: pd.Series) -> np.ndarray | None:
     except (TypeError, ValueError):
         return None
     return velocity if np.isfinite(velocity).all() else None
+
+
+def _require_positive_float(value: object, *, name: str) -> float:
+    number = _positive_float(value)
+    if number is None:
+        raise ValueError(f"{name} must be finite and positive, got {value!r}")
+    return number
 
 
 def _positive_float(value: object) -> float | None:
