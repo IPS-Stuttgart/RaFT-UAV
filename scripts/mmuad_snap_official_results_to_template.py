@@ -47,6 +47,20 @@ DIAGNOSTICS_CSV = "mmuad_template_snap_diagnostics.csv"
 VALIDATION_JSON = "mmuad_template_snap_validation.json"
 VALIDATION_ROWS_CSV = "mmuad_template_snap_validation_rows.csv"
 MANIFEST_JSON = "mmuad_template_snap_manifest.json"
+DIAGNOSTIC_COLUMNS = (
+    "template_row_index",
+    "Sequence",
+    "Timestamp",
+    "source_row_count",
+    "nearest_time_delta_s",
+    "abs_nearest_time_delta_s",
+    "extrapolated",
+    "method",
+    "interpolation_gap_s",
+    "large_gap_fallback",
+    "classification_policy",
+    "valid",
+)
 
 
 def snap_official_results_to_template(
@@ -141,7 +155,7 @@ def snap_official_results_to_template(
         output_records,
         columns=list(OFFICIAL_UG2_RESULT_COLUMNS),
     )
-    diagnostics = pd.DataFrame.from_records(diagnostic_records)
+    diagnostics = pd.DataFrame.from_records(diagnostic_records, columns=list(DIAGNOSTIC_COLUMNS))
     return output, diagnostics
 
 
@@ -260,10 +274,13 @@ def main(argv: list[str] | None = None) -> int:
 
 def _normalize_results_rows(results: pd.DataFrame) -> pd.DataFrame:
     rows = load_official_track5_results_frame_from_frame(results)
-    positions = np.asarray(
-        [parse_official_position_cell(value) for value in rows["Position"]],
-        dtype=float,
-    )
+    if rows.empty:
+        positions = np.empty((0, 3), dtype=float)
+    else:
+        positions = np.asarray(
+            [parse_official_position_cell(value) for value in rows["Position"]],
+            dtype=float,
+        )
     rows = rows.copy()
     rows["x"] = positions[:, 0]
     rows["y"] = positions[:, 1]
