@@ -66,14 +66,14 @@ def load_official_track5_results_frame_from_frame(frame: pd.DataFrame) -> pd.Dat
     classification = _integer_classification_values(frame[lower["classification"]])
     rows = pd.DataFrame(
         {
-            "Sequence": frame[lower["sequence"]].astype(str).str.strip(),
+            "Sequence": frame[lower["sequence"]].map(_template_sequence_value),
             "Timestamp": pd.to_numeric(frame[lower["timestamp"]], errors="coerce"),
             "Position": frame[lower["position"]],
             "Classification": classification,
         }
     )
     finite = (
-        rows["Sequence"].ne("")
+        rows["Sequence"].notna()
         & rows["Timestamp"].notna()
         & rows["Classification"].notna()
     )
