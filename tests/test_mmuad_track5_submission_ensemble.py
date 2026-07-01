@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from raft_uav.mmuad.track5_submission_ensemble import ensemble_track5_submissions
+from raft_uav.mmuad.track5_submission_ensemble import load_track5_submission
 from raft_uav.mmuad.track5_submission_ensemble import main as ensemble_main
 from raft_uav.mmuad.track5_submission_ensemble import parse_submission_input
 from raft_uav.mmuad.track5_submission_ensemble import write_track5_submission_ensemble_outputs
@@ -63,6 +64,27 @@ def test_track5_submission_ensemble_averages_positions_and_votes_classes(tmp_pat
     assert row["Classification"] == 3
     assert diagnostics.loc[0, "input_count"] == 2
     assert diagnostics.loc[0, "position_spread_m"] > 0.0
+
+
+def test_load_track5_submission_accepts_integer_like_classification_labels(tmp_path: Path) -> None:
+    path = tmp_path / "submission.csv"
+    rows = _submission_rows()
+    rows["Classification"] = ["1.0", 1.0, "2"]
+    rows.to_csv(path, index=False)
+
+    loaded = load_track5_submission(path)
+
+    assert loaded["Classification"].tolist() == [1, 1, 2]
+
+
+def test_load_track5_submission_rejects_fractional_classification_labels(tmp_path: Path) -> None:
+    path = tmp_path / "submission.csv"
+    rows = _submission_rows()
+    rows.loc[0, "Classification"] = "1.5"
+    rows.to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="invalid Track 5 Classification"):
+        load_track5_submission(path)
 
 
 def test_track5_submission_ensemble_rejects_template_mismatch(tmp_path: Path) -> None:

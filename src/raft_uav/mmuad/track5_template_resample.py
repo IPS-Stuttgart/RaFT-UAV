@@ -171,17 +171,16 @@ def summarize_template_resample_diagnostics(diagnostics: pd.DataFrame) -> pd.Dat
     rows["valid"] = _bool_column(rows, "valid")
     rows["extrapolated"] = _bool_column(rows, "extrapolated")
     rows["large_gap_fallback"] = _bool_column(rows, "large_gap_fallback")
-    rows["resample_method"] = rows.get("resample_method", "linear").astype(str)
+    rows["resample_method"] = (
+        _series_or_default(rows, "resample_method", "linear").fillna("linear").astype(str)
+    )
     rows["source_row_count"] = pd.to_numeric(
-        rows.get("source_row_count", 0),
+        _series_or_default(rows, "source_row_count", 0),
         errors="coerce",
     ).fillna(0)
-    rows["abs_nearest_time_delta_s"] = pd.to_numeric(
-        rows.get("abs_nearest_time_delta_s"),
-        errors="coerce",
-    )
+    rows["abs_nearest_time_delta_s"] = _nearest_delta_abs_series(rows)
     rows["interpolation_gap_s"] = pd.to_numeric(
-        rows.get("interpolation_gap_s"),
+        _series_or_default(rows, "interpolation_gap_s", np.nan),
         errors="coerce",
     )
     records: list[dict[str, Any]] = []
@@ -361,7 +360,9 @@ def main(argv: list[str] | None = None) -> int:
 def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
     rows = pd.DataFrame(estimates).copy()
     if rows.empty:
-        return pd.DataFrame(columns=["sequence_id", "time_s", "state_x_m", "state_y_m", "state_z_m"])
+        return pd.DataFrame(
+            columns=["sequence_id", "time_s", "state_x_m", "state_y_m", "state_z_m"]
+        )
     sequence_column = _first_present(rows, SEQUENCE_ALIASES)
     time_column = _first_present(rows, TIME_ALIASES)
     coord_columns = _coordinate_columns(rows)
@@ -377,7 +378,9 @@ def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
         }
     )
     finite = out["sequence_id"].notna()
-    finite &= np.isfinite(out[["time_s", "state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)).all(axis=1)
+    finite &= np.isfinite(
+        out[["time_s", "state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
+    ).all(axis=1)
     return out.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
@@ -498,7 +501,11 @@ def _bracketing_gap_s(times: np.ndarray, time_s: float) -> float:
     return float(times[right] - times[left])
 
 
-def _missing_estimate_record(sequence_id: str, time_s: float, resample_method: str) -> dict[str, Any]:
+def _missing_estimate_record(
+    sequence_id: str,
+    time_s: float,
+    resample_method: str,
+) -> dict[str, Any]:
     return {
         "sequence_id": sequence_id,
         "time_s": time_s,
@@ -531,7 +538,11 @@ def _diagnostic_record(
         "sequence_id": sequence_id,
         "time_s": time_s,
         "nearest_time_delta_s": nearest_time_delta_s,
-        "abs_nearest_time_delta_s": abs(float(nearest_time_delta_s)) if np.isfinite(nearest_time_delta_s) else np.nan,
+        "abs_nearest_time_delta_s": (
+            abs(float(nearest_time_delta_s))
+            if np.isfinite(nearest_time_delta_s)
+            else np.nan
+        ),
         "extrapolated": bool(extrapolated),
         "source_row_count": int(source_row_count),
         "valid": bool(valid),
@@ -548,6 +559,22 @@ def _bool_column(rows: pd.DataFrame, column: str) -> pd.Series:
     if value.dtype == bool:
         return value.fillna(False).astype(bool)
     return value.fillna(False).map(lambda item: str(item).lower() in {"1", "true", "yes"})
+
+
+def _series_or_default(rows: pd.DataFrame, column: str, default: Any) -> pd.Series:
+    if column in rows.columns:
+        return rows[column]
+    return pd.Series(default, index=rows.index)
+
+
+def _nearest_delta_abs_series(rows: pd.DataFrame) -> pd.Series:
+    if "abs_nearest_time_delta_s" in rows.columns:
+        return pd.to_numeric(rows["abs_nearest_time_delta_s"], errors="coerce")
+    nearest_delta = pd.to_numeric(
+        _series_or_default(rows, "nearest_time_delta_s", np.nan),
+        errors="coerce",
+    )
+    return nearest_delta.abs()
 
 
 def _fraction(numerator: int, denominator: int) -> float:

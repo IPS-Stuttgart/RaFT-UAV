@@ -24,7 +24,8 @@ RELABEL_DIAGNOSTICS_CSV = "mmuad_track5_classification_relabel_diagnostics.csv"
 RELABEL_MANIFEST_JSON = "mmuad_track5_classification_relabel_manifest.json"
 RELABEL_VALIDATION_JSON = "mmuad_track5_classification_relabel_validation.json"
 RelabelMode = Literal["by-key", "by-sequence-majority"]
-VALID_CLASS_IDS = (0, 1, 2, 3)
+VALID_CLASS_IDS = (0, 1, 2, 3, 4)
+PROBABILITY_CLASS_ID_SETS = (VALID_CLASS_IDS[:-1], VALID_CLASS_IDS)
 SEQUENCE_ALIASES = ("Sequence", "sequence_id", "sequence", "heldout_sequence", "seq")
 PREDICTED_CLASS_ALIASES = (
     "predicted_class",
@@ -101,10 +102,11 @@ def relabel_track5_classification_from_sequence_predictions(
 
     The prediction table may contain one predicted class per sequence, official
     ``Classification`` labels, or probability columns such as
-    ``predicted_probability_0`` ... ``predicted_probability_3``.  Probability
-    rows are averaged per sequence before taking argmax.  This makes it easy to
-    combine a strong pose submission with a non-image/image-fused sequence
-    classifier without first fabricating an official-style submission.
+    ``predicted_probability_0`` ... ``predicted_probability_4``.  The legacy
+    four-column ``0`` ... ``3`` probability layout is still accepted.
+    Probability rows are averaged per sequence before taking argmax.  This makes
+    it easy to combine a strong pose submission with a non-image/image-fused
+    sequence classifier without first fabricating an official-style submission.
     """
 
     pose = _normalize_frame(pose_submission, name="pose_submission")
@@ -185,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help=(
             "sequence-level classifier predictions CSV; accepts sequence_id/Sequence and either "
-            "predicted_class/Classification or predicted_probability_0..3"
+            "predicted_class/Classification or predicted_probability_0..4"
         ),
     )
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -302,8 +304,10 @@ def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFr
     if sequence_column is None:
         raise ValueError("sequence prediction table missing Sequence/sequence_id column")
     rows["Sequence"] = rows[sequence_column].astype(str)
-    probability_columns = _probability_columns(rows)
-    if len(probability_columns) == len(VALID_CLASS_IDS):
+    probability_items = _probability_columns(rows)
+    probability_class_ids = tuple(class_id for class_id, _column in probability_items)
+    if probability_class_ids in PROBABILITY_CLASS_ID_SETS:
+        probability_columns = [column for _class_id, column in probability_items]
         probability_rows = rows[["Sequence", *probability_columns]].copy()
         for column in probability_columns:
             probability_rows[column] = pd.to_numeric(probability_rows[column], errors="coerce")
@@ -315,10 +319,11 @@ def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFr
         probs = np.divide(
             probs,
             totals,
-            out=np.full_like(probs, 1.0 / len(VALID_CLASS_IDS), dtype=float),
+            out=np.full_like(probs, 1.0 / len(probability_class_ids), dtype=float),
             where=totals > 0.0,
         )
-        predicted = np.argmax(probs, axis=1)
+        class_ids = np.asarray(probability_class_ids, dtype=int)
+        predicted = class_ids[np.argmax(probs, axis=1)]
         probability = np.max(probs, axis=1)
         out = pd.DataFrame(
             {
@@ -332,7 +337,8 @@ def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFr
         class_column = _first_present(rows, PREDICTED_CLASS_ALIASES)
         if class_column is None:
             raise ValueError(
-                "sequence prediction table needs predicted_probability_0..3 or predicted_class"
+                "sequence prediction table needs a complete predicted_probability_0..3 "
+                "or predicted_probability_0..4 group, or predicted_class"
             )
         labels = rows[["Sequence", class_column]].copy()
         labels[class_column] = pd.to_numeric(labels[class_column], errors="coerce")
@@ -382,8 +388,8 @@ def _first_present(frame: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
     return None
 
 
-def _probability_columns(frame: pd.DataFrame) -> list[str]:
-    columns: list[str] = []
+def _probability_columns(frame: pd.DataFrame) -> list[tuple[int, str]]:
+    columns: list[tuple[int, str]] = []
     lower_to_column = {str(column).lower(): str(column) for column in frame.columns}
     for class_id in VALID_CLASS_IDS:
         found = None
@@ -392,7 +398,7 @@ def _probability_columns(frame: pd.DataFrame) -> list[str]:
             if found is not None:
                 break
         if found is not None:
-            columns.append(found)
+            columns.append((int(class_id), found))
     return columns
 
 
@@ -405,7 +411,7 @@ def _validate_class_series(values: pd.Series, *, name: str) -> None:
         raise ValueError(f"{name} contains non-integer class labels")
     bad = sorted(set(rounded.loc[~rounded.isin(VALID_CLASS_IDS)].astype(int).tolist()))
     if bad:
-        raise ValueError(f"{name} contains class labels outside 0..3: {bad}")
+        raise ValueError(f"{name} contains class labels outside 0..4: {bad}")
 
 
 def _finite_mean(values: pd.Series) -> float | None:
