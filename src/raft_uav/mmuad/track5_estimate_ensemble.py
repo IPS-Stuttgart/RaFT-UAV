@@ -53,14 +53,33 @@ def parse_estimate_spec(value: str) -> EstimateInput:
 
     if "=" not in value:
         path = Path(value)
-        return EstimateInput(label=_safe_label(path.stem), path=path, weight=1.0)
-    label, path_weight = value.split("=", 1)
+        label = _safe_label(path.stem)
+        return EstimateInput(
+            label=label,
+            path=path,
+            weight=_validate_ensemble_weight(1.0, label=label),
+        )
+    label_text, path_weight = value.split("=", 1)
+    label = _safe_label(label_text)
     weight = 1.0
     path_text = path_weight
     if "@" in path_weight:
         path_text, weight_text = path_weight.rsplit("@", 1)
         weight = float(weight_text)
-    return EstimateInput(label=_safe_label(label), path=Path(path_text), weight=float(weight))
+    return EstimateInput(
+        label=label,
+        path=Path(path_text),
+        weight=_validate_ensemble_weight(weight, label=label),
+    )
+
+
+def _validate_ensemble_weight(weight: float, *, label: str) -> float:
+    weight = float(weight)
+    if not np.isfinite(weight) or weight < 0.0:
+        raise ValueError(
+            f"estimate weight must be finite and non-negative for {label}: {weight}"
+        )
+    return weight
 
 
 def build_track5_estimate_ensemble(
@@ -95,9 +114,7 @@ def build_track5_estimate_ensemble(
     input_summaries: list[dict[str, Any]] = []
     for label, estimates, weight in estimate_inputs:
         label = _safe_label(label)
-        weight = float(weight)
-        if weight < 0.0:
-            raise ValueError(f"estimate weight must be non-negative for {label}: {weight}")
+        weight = _validate_ensemble_weight(weight, label=label)
         resampled, diagnostics = resample_estimates_to_track5_template(
             estimates,
             template_rows,
