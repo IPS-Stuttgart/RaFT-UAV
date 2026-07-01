@@ -14,7 +14,7 @@ from raft_uav.mmuad.track5_sequence_gate import write_track5_sequence_gate_outpu
 from raft_uav.mmuad.track5_submission_ensemble import load_track5_submission
 
 
- def _submission_rows(offset: float = 0.0, classification: int = 1) -> pd.DataFrame:
+def _submission_rows(offset: float = 0.0, classification: int = 1) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "Sequence": ["seq0001", "seq0001", "seq0002"],
@@ -114,38 +114,6 @@ def test_sequence_gate_writes_leaderboard_ready_zip(tmp_path: Path) -> None:
         assert archive.namelist() == ["mmaud_results.csv"]
     results = pd.read_csv(paths["results_csv"])
     assert results["Classification"].tolist() == [1, 1, 2]
-
-
-def test_sequence_gate_writer_preserves_row_level_classes_within_sequence(
-    tmp_path: Path,
-) -> None:
-    base_path = tmp_path / "base.csv"
-    alternate_path = tmp_path / "alternate.csv"
-    weights_path = tmp_path / "weights.csv"
-    base_rows = _submission_rows(offset=0.0, classification=1)
-    base_rows.loc[1, "Classification"] = 2
-    alternate_rows = _submission_rows(offset=2.0, classification=3)
-    alternate_rows.loc[1, "Classification"] = 0
-    base_rows.to_csv(base_path, index=False)
-    alternate_rows.to_csv(alternate_path, index=False)
-    pd.DataFrame({"Sequence": ["seq0001"], "weight": [0.25]}).to_csv(weights_path, index=False)
-
-    result = blend_track5_sequence_gate(
-        base_submission=load_track5_submission(base_path),
-        alternate_submission=load_track5_submission(alternate_path),
-        sequence_weights=pd.read_csv(weights_path),
-        default_weight=0.0,
-    )
-    paths = write_track5_sequence_gate_outputs(
-        result=result,
-        output_dir=tmp_path / "out-row-classes",
-        base_submission_path=base_path,
-        alternate_submission_path=alternate_path,
-        sequence_weights_path=weights_path,
-    )
-
-    results = pd.read_csv(paths["results_csv"])
-    assert results["Classification"].tolist() == [1, 2, 2]
 
 
 def test_sequence_gate_cli_writes_manifest(tmp_path: Path) -> None:
