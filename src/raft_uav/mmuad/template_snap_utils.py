@@ -7,7 +7,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from raft_uav.mmuad.submission import parse_official_position_cell
+from raft_uav.mmuad.submission import parse_official_position_cell, parse_official_sequence_cell
 
 RESAMPLE_METHODS = ("linear", "nearest")
 CLASSIFICATION_POLICIES = ("sequence-mode", "nearest")
@@ -108,6 +108,13 @@ def _integer_classification_values(values: pd.Series) -> pd.Series:
     return numbers
 
 
+def _template_sequence_value(value: Any) -> str | None:
+    try:
+        return parse_official_sequence_cell(value)
+    except ValueError:
+        return None
+
+
 def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     lower = {str(column).strip().lower(): column for column in template.columns}
     sequence_col = lower.get("sequence") or lower.get("sequence_id")
@@ -116,11 +123,11 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("template must contain Sequence/Timestamp or sequence_id/time_s")
     rows = pd.DataFrame(
         {
-            "Sequence": template[sequence_col].astype(str).str.strip(),
+            "Sequence": template[sequence_col].map(_template_sequence_value),
             "Timestamp": pd.to_numeric(template[timestamp_col], errors="coerce"),
         }
     )
-    rows = rows.loc[rows["Sequence"].ne("") & rows["Timestamp"].notna()]
+    rows = rows.loc[rows["Sequence"].notna() & rows["Timestamp"].notna()]
     return rows.sort_values(["Sequence", "Timestamp"]).reset_index(drop=True)
 
 
