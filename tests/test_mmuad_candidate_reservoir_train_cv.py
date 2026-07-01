@@ -122,7 +122,10 @@ def test_train_cv_cli_writes_config_and_fold_summary(tmp_path) -> None:
         ),
     )
     folds = pd.read_csv(output_dir / "mmuad_candidate_reservoir_train_cv_folds.csv")
+    final_grid = pd.read_csv(output_dir / "mmuad_candidate_reservoir_train_final_grid_summary.csv")
     reservoir = pd.read_csv(output_dir / "mmuad_candidate_reservoir_train_selected.csv")
     assert config["selected_grid_label"] == "branch_raw_1"
+    assert config["top_k_values"] == [1]
+    assert "oracle_top3_3d_m_mse" not in final_grid.columns
     assert len(folds) == 3
     assert set(reservoir["candidate_branch"]) == {"raw"}

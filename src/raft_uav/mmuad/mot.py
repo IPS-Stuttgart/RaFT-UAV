@@ -35,6 +35,40 @@ class MultiObjectTrackerConfig:
     min_new_track_confidence: float = 0.05
     covariance_scale: float = 1.0
 
+    def __post_init__(self) -> None:
+        for name in (
+            "acceleration_std_mps2",
+            "max_association_distance_m",
+            "max_track_age_s",
+            "min_new_track_confidence",
+        ):
+            _require_nonnegative_config(name, getattr(self, name))
+        _require_positive_config("covariance_scale", self.covariance_scale)
+
+
+def _finite_config_float(name: str, value: object) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be finite") from exc
+    if not np.isfinite(number):
+        raise ValueError(f"{name} must be finite")
+    return number
+
+
+def _require_nonnegative_config(name: str, value: object) -> float:
+    number = _finite_config_float(name, value)
+    if number < 0.0:
+        raise ValueError(f"{name} must be nonnegative")
+    return number
+
+
+def _require_positive_config(name: str, value: object) -> float:
+    number = _finite_config_float(name, value)
+    if number <= 0.0:
+        raise ValueError(f"{name} must be positive")
+    return number
+
 
 def run_mmuad_multi_object_tracker(
     candidates: CandidateFrame,
