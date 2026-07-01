@@ -1,7 +1,10 @@
 import struct
 from types import SimpleNamespace
+from typing import Any
 
-from raft_uav.mmuad.pointcloud2 import pointcloud2_to_dataframe
+import pytest
+
+from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates, pointcloud2_to_dataframe
 
 
 _FLOAT32 = 7
@@ -19,6 +22,17 @@ def _message(*fields: SimpleNamespace) -> SimpleNamespace:
         height=1,
         point_step=12,
         row_step=12,
+        is_bigendian=False,
+    )
+
+
+def _empty_message(*fields: SimpleNamespace) -> SimpleNamespace:
+    return SimpleNamespace(
+        fields=list(fields),
+        data=b"",
+        width=0,
+        height=1,
+        point_step=12,
         is_bigendian=False,
     )
 
@@ -45,3 +59,16 @@ def test_pointcloud2_decoder_strips_nul_padding_after_whitespace():
     )
 
     assert frame.loc[0, ["x_m", "y_m", "z_m"]].tolist() == [1.0, 2.0, 3.0]
+
+
+@pytest.mark.parametrize(
+    "time_s",
+    [float("nan"), float("inf"), -float("inf"), True, False, "bad"],
+)
+def test_pointcloud2_to_candidates_rejects_malformed_timestamps(time_s: Any) -> None:
+    with pytest.raises(ValueError, match="time_s must be a finite numeric timestamp"):
+        pointcloud2_to_candidates(
+            _empty_message(_field("x", 0), _field("y", 4), _field("z", 8)),
+            sequence_id="seq0",
+            time_s=time_s,
+        )
