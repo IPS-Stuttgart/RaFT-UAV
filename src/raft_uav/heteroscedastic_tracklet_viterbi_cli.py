@@ -17,6 +17,9 @@ from raft_uav.heteroscedastic_cli import (
     heteroscedastic_covariance_hooks,
 )
 
+_TRACKLET_ASSOCIATION_FLAG = "--radar-association"
+_TRACKLET_ASSOCIATION_MODE = "tracklet-viterbi"
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run ``run-baseline`` with learned covariance and tracklet-Viterbi enabled."""
@@ -33,8 +36,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--radar-association tracklet-viterbi --tracklet-variant "
             "range-covariance"
         )
+    delegated_argv = _ensure_tracklet_viterbi_association(delegated_argv)
     with heteroscedastic_covariance_hooks(uncertainty_model_path):
         return tracklet_viterbi_cli.main(list(delegated_argv))
+
+
+def _ensure_tracklet_viterbi_association(argv: list[str]) -> list[str]:
+    """Default the dedicated wrapper to tracklet-Viterbi association.
+
+    The base ``run-baseline`` parser defaults to ``catprob``.  For this wrapper,
+    that is surprising because the command name promises tracklet-Viterbi; still,
+    preserve an explicit ``--radar-association`` so callers can run intentional
+    comparison rows through the same learned-covariance hooks.
+    """
+
+    for arg in argv:
+        if arg == "--":
+            break
+        if arg == _TRACKLET_ASSOCIATION_FLAG or arg.startswith(
+            f"{_TRACKLET_ASSOCIATION_FLAG}="
+        ):
+            return argv
+    return [*argv, _TRACKLET_ASSOCIATION_FLAG, _TRACKLET_ASSOCIATION_MODE]
 
 
 if __name__ == "__main__":
