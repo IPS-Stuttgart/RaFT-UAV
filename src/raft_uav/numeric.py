@@ -14,6 +14,8 @@ def optional_float(value: object) -> float | None:
         return None
     if isinstance(value, bool | np.bool_):
         return None
+    if isinstance(value, complex | np.complexfloating):
+        return None
     if isinstance(value, np.ndarray) and value.ndim > 0:
         return None
     try:
