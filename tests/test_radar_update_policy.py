@@ -5,8 +5,11 @@ from __future__ import annotations
 import math
 
 import pandas as pd
+import pytest
 
 from raft_uav.baselines.radar_update_policy import (
+    ENV_DNH_RECOVERY_MISS_STREAK,
+    ENV_DNH_SOFTEN_NIS,
     ENV_DO_NO_HARM_RADAR_UPDATE_POLICY,
     ENV_DO_NO_HARM_RADAR_UPDATES,
     RadarUpdatePolicy,
@@ -86,6 +89,29 @@ def test_policy_from_environment_accepts_compatibility_enable_alias(monkeypatch)
     policy = policy_from_environment()
 
     assert isinstance(policy, RadarUpdatePolicy)
+
+
+def test_radar_update_policy_rejects_nonfinite_thresholds() -> None:
+    with pytest.raises(ValueError, match="soften_nis must be a finite number"):
+        RadarUpdatePolicy(soften_nis=float("nan"))
+    with pytest.raises(ValueError, match="max_covariance_scale must be a finite number"):
+        RadarUpdatePolicy(max_covariance_scale=float("inf"))
+
+
+def test_policy_from_environment_rejects_nonfinite_thresholds(monkeypatch) -> None:
+    monkeypatch.setenv(ENV_DO_NO_HARM_RADAR_UPDATE_POLICY, "1")
+    monkeypatch.setenv(ENV_DNH_SOFTEN_NIS, "nan")
+
+    with pytest.raises(ValueError, match=ENV_DNH_SOFTEN_NIS):
+        policy_from_environment()
+
+
+def test_policy_from_environment_rejects_fractional_recovery_streak(monkeypatch) -> None:
+    monkeypatch.setenv(ENV_DO_NO_HARM_RADAR_UPDATE_POLICY, "1")
+    monkeypatch.setenv(ENV_DNH_RECOVERY_MISS_STREAK, "2.5")
+
+    with pytest.raises(ValueError, match=ENV_DNH_RECOVERY_MISS_STREAK):
+        policy_from_environment()
 
 
 def pytest_approx(value: float):
