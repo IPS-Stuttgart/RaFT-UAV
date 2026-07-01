@@ -64,10 +64,17 @@ def run_mmuad_multi_object_tracker(
         estimates = _run_multi_sequence(sequence_candidates, sequence_truth, config=config)
         estimates["sequence_id"] = sequence_id
         estimate_frames.append(estimates)
-        metrics_by_sequence[str(sequence_id)] = compute_multi_object_metrics(estimates, sequence_truth)
+        metrics_by_sequence[str(sequence_id)] = compute_multi_object_metrics(
+            estimates,
+            sequence_truth,
+        )
     for sequence_id, metrics in _truth_only_sequence_metrics(truth_rows).items():
         metrics_by_sequence.setdefault(sequence_id, metrics)
-    estimates_all = pd.concat(estimate_frames, ignore_index=True) if estimate_frames else pd.DataFrame()
+    estimates_all = (
+        pd.concat(estimate_frames, ignore_index=True)
+        if estimate_frames
+        else pd.DataFrame()
+    )
     metrics = {
         "sequences": metrics_by_sequence,
         "pooled": compute_multi_object_metrics(estimates_all, truth_rows),
@@ -153,7 +160,11 @@ def _run_multi_sequence(
     estimates = pd.DataFrame.from_records(records)
     if estimates.empty:
         return estimates
-    if sequence_truth is not None and not sequence_truth.empty and "track_id" not in sequence_truth.columns:
+    if (
+        sequence_truth is not None
+        and not sequence_truth.empty
+        and not _truth_has_track_ids(sequence_truth)
+    ):
         estimates = add_truth_errors(estimates, sequence_truth)
     return estimates
 
@@ -193,7 +204,7 @@ def compute_multi_object_metrics(
     if truth is None or truth.empty:
         estimates = _finite_mot_estimates(estimates)
         return {"count": int(len(estimates)), "track_count": _track_count(estimates)}
-    if "track_id" not in truth.columns:
+    if not _truth_has_track_ids(truth):
         if estimates.empty:
             return compute_metrics(estimates.copy(), truth)
         return compute_metrics(add_truth_errors(estimates.copy(), truth), truth)
@@ -284,6 +295,20 @@ def _finite_mot_truth(truth: pd.DataFrame) -> pd.DataFrame:
     if "track_id" in truth.columns:
         finite &= truth["track_id"].notna().to_numpy(dtype=bool)
     return truth.loc[finite].copy()
+
+
+def _truth_has_track_ids(truth: pd.DataFrame) -> bool:
+    if "track_id" not in truth.columns:
+        return False
+    values = truth["track_id"]
+    if values.empty:
+        return False
+    present = values.notna()
+    if not present.any():
+        return False
+    text = values.loc[present].astype(str).str.strip().str.lower()
+    missing_like = text.eq("") | text.isin({"nan", "none", "<na>"})
+    return bool((~missing_like).any())
 
 
 def _metric_frame_pairs(
