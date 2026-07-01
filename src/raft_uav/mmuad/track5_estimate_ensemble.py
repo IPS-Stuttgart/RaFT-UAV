@@ -204,8 +204,9 @@ def write_track5_estimate_ensemble_outputs(
 ) -> dict[str, Path]:
     """Write ensemble estimates, official CSV/ZIP, validation, and manifest."""
 
+    estimate_input_list = list(estimate_inputs)
     loaded_inputs = [
-        (item.label, pd.read_csv(item.path), float(item.weight)) for item in estimate_inputs
+        (item.label, pd.read_csv(item.path), float(item.weight)) for item in estimate_input_list
     ]
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -256,7 +257,7 @@ def write_track5_estimate_ensemble_outputs(
         "schema": "raft-uav-mmuad-track5-estimate-ensemble-v1",
         "estimate_inputs": [
             {"label": item.label, "path": str(item.path), "weight": float(item.weight)}
-            for item in estimate_inputs
+            for item in estimate_input_list
         ],
         "input_summaries": diagnostics.attrs.get("input_summaries", []),
         "row_count": int(len(ensemble)),
