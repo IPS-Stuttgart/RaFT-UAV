@@ -20,6 +20,7 @@ import pandas as pd
 from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
     load_sequence_class_map,
+    parse_official_sequence_cell,
     validate_official_track5_submission,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
@@ -368,14 +369,15 @@ def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("estimates must contain sequence and time columns")
     out = pd.DataFrame(
         {
-            "sequence_id": rows[sequence_column].astype(str),
+            "sequence_id": _normalized_sequence_values(rows[sequence_column]),
             "time_s": pd.to_numeric(rows[time_column], errors="coerce"),
             "state_x_m": pd.to_numeric(rows[coord_columns[0]], errors="coerce"),
             "state_y_m": pd.to_numeric(rows[coord_columns[1]], errors="coerce"),
             "state_z_m": pd.to_numeric(rows[coord_columns[2]], errors="coerce"),
         }
     )
-    finite = np.isfinite(out[["time_s", "state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)).all(axis=1)
+    finite = out["sequence_id"].notna()
+    finite &= np.isfinite(out[["time_s", "state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)).all(axis=1)
     return out.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
@@ -389,11 +391,11 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("template must contain sequence and timestamp columns")
     out = pd.DataFrame(
         {
-            "sequence_id": rows[sequence_column].astype(str),
+            "sequence_id": _normalized_sequence_values(rows[sequence_column]),
             "time_s": pd.to_numeric(rows[time_column], errors="coerce"),
         }
     )
-    finite = np.isfinite(out["time_s"].to_numpy(float))
+    finite = out["sequence_id"].notna() & np.isfinite(out["time_s"].to_numpy(float))
     return out.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
@@ -582,6 +584,17 @@ def _empty_diagnostics() -> pd.DataFrame:
             "large_gap_fallback",
         ]
     )
+
+
+def _normalized_sequence_values(values: pd.Series) -> pd.Series:
+    return values.map(_sequence_text_or_none)
+
+
+def _sequence_text_or_none(value: Any) -> str | None:
+    try:
+        return parse_official_sequence_cell(value)
+    except ValueError:
+        return None
 
 
 def _first_present(rows: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
