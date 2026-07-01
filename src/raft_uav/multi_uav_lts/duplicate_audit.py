@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from raft_uav.multi_uav_lts.cli import _parse_int_like, _prediction_texts
+from raft_uav.multi_uav_lts.cli import SUBMISSION_COLUMNS, _parse_int_like, _prediction_texts
 
 
 @dataclass(frozen=True)
@@ -150,7 +150,7 @@ def _audit_prediction_text(
             continue
         row_count += 1
         parts = [part.strip() for part in line.split(",")]
-        if len(parts) < 2:
+        if len(parts) != len(SUBMISSION_COLUMNS):
             parse_errors += 1
             continue
         try:
