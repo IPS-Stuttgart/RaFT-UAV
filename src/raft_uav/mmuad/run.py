@@ -8,148 +8,17 @@ import sys
 from raft_uav.mmuad.cli import main as track_main
 
 _HELP_FLAGS = {"-h", "--help"}
-# Options from ``raft_uav.mmuad.cli`` that consume the following argv token.  The
-# sequence-root convenience wrapper has to skip these values before it can safely
-# identify the first positional sequence root.
-_VALUE_FLAGS = {
-    "--acceleration-std-mps2",
-    "--calibration-file",
-    "--calibration-json",
-    "--camera-calibration-file",
-    "--camera-detections-csv",
-    "--camera-detections-file",
-    "--camera-fixed-depth-m",
-    "--camera-source",
-    "--camera-std-xy-m",
-    "--camera-std-z-m",
-    "--candidate-csv",
-    "--candidate-file",
-    "--class-map-csv",
-    "--classification-min-confidence",
-    "--cluster-ranker-cross-sensor-distance-gate-m",
-    "--cluster-ranker-cross-sensor-time-window-s",
-    "--cluster-ranker-image-evidence-csv",
-    "--cluster-ranker-merged-candidates-csv",
-    "--cluster-ranker-model-json",
-    "--cluster-ranker-previous-states-csv",
-    "--cluster-ranker-score-features-csv",
-    "--cluster-ranker-scored-candidates-csv",
-    "--complete-results-to-truth-csv",
-    "--complete-results-to-truth-file",
-    "--completed-results-csv",
-    "--completed-results-diagnostics-csv",
-    "--completed-ug2-codabench-zip",
-    "--completion-extrapolation",
-    "--completion-max-interpolation-gap-s",
-    "--dynamic-background-min-frame-fraction",
-    "--dynamic-background-min-frames",
-    "--dynamic-background-neighbor-radius-voxels",
-    "--dynamic-background-voxel-size-m",
-    "--evaluate-results-csv",
-    "--evaluate-results-zip",
-    "--evaluate-submission-csv",
-    "--evaluate-truth-csv",
-    "--evaluate-truth-file",
-    "--evaluation-class-map-csv",
-    "--evaluation-class-map-file",
-    "--evaluation-json",
-    "--evaluation-max-time-delta-s",
-    "--evaluation-protocol",
-    "--evaluation-rows-csv",
-    "--evaluation-timestamp-tolerance-s",
-    "--inferred-class-map-csv",
-    "--inspect-root",
-    "--layout-report-csv",
-    "--layout-report-json",
-    "--min-cluster-points",
-    "--mmuad-selection-mode",
-    "--mmuad-source-calibrated-candidates-csv",
-    "--mmuad-source-calibration-json",
-    "--mmuad-source-calibration-mode",
-    "--mmuad-viterbi-gap-penalty",
-    "--mmuad-viterbi-max-speed-mps",
-    "--mmuad-viterbi-motion-weight",
-    "--mmuad-viterbi-ranker-weight",
-    "--mmuad-viterbi-source-switch-penalty",
-    "--mot-max-association-distance-m",
-    "--mot-max-track-age-s",
-    "--native-ros-auto-topic-map-dir",
-    "--native-ros-extract-output-dir",
-    "--normalize-ug2-official-submission",
-    "--normalized-ug2-official-codabench-zip",
-    "--normalized-ug2-official-results-csv",
-    "--official-normalization-json",
-    "--official-upload-manifest-json",
-    "--official-upload-manifest-verification-json",
-    "--official-validation-json",
-    "--official-validation-rows-csv",
-    "--official-validation-template-csv",
-    "--official-validation-template-file",
-    "--official-validation-timestamp-tolerance-s",
-    "--output-dir",
-    "--point-cloud-csv",
-    "--point-cloud-file",
-    "--point-extraction-mode",
-    "--point-source",
-    "--radar-angle-unit",
-    "--radar-azimuth-convention",
-    "--radar-polar-angle-std-deg",
-    "--radar-polar-csv",
-    "--radar-polar-file",
-    "--radar-polar-range-std-m",
-    "--radar-polar-source",
-    "--radar-polar-z-std-m",
-    "--rosbag-path",
-    "--rosbag-report-json",
-    "--secondary-covariance-scale",
-    "--selection-confidence-weight",
-    "--selection-mobility-weight",
-    "--selection-motion-weight",
-    "--selection-source-priority-weight",
-    "--selection-speed-scale-mps",
-    "--sequence-classifier",
-    "--sequence-classifier-feature-report",
-    "--sequence-classifier-predictions-csv",
-    "--sequence-classifier-provenance-json",
-    "--sequence-glob",
-    "--sequence-root",
-    "--sequence-root-archive-extract-dir",
-    "--soft-anchor-cap-m",
-    "--split-file",
-    "--split-name",
-    "--submission-csv",
-    "--submission-json",
-    "--submission-track-id",
-    "--submission-zip",
-    "--topic-map-base-dir",
-    "--topic-map-file",
-    "--topic-map-json",
-    "--topic-map-template-json",
-    "--topic-map-template-mode",
-    "--tracker-mode",
-    "--trajectory-completion-max-gap-s",
-    "--trajectory-completion-mode",
-    "--trajectory-outlier-replacement",
-    "--trajectory-outlier-replacement-max-gap-s",
-    "--trajectory-smoothing-blend",
-    "--trajectory-smoothing-lag-s",
-    "--trajectory-speed-gate-mps",
-    "--truth-csv",
-    "--truth-file",
-    "--ug2-class-map-csv",
-    "--ug2-class-map-file",
-    "--ug2-class-name",
-    "--ug2-codabench-zip",
-    "--ug2-official-classification",
-    "--ug2-official-codabench-zip",
-    "--ug2-official-invalid-row-policy",
-    "--ug2-official-results-csv",
-    "--ug2-official-timestamp-source",
-    "--ug2-results-csv",
-    "--validate-ug2-official-codabench-zip",
-    "--verify-official-upload-manifest",
-    "--voxel-size-m",
-}
+_FLAG_ONLY_SUFFIXES = (
+    "-auto-topic-map",
+    "-from-candidates",
+    "-keep-confidence",
+    "-no-infer-grid",
+    "-no-truth-timestamps",
+    "-on-write",
+    "-only",
+    "-require-complete-track5",
+    "-to-sequence-timestamps",
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -196,10 +65,8 @@ def _sequence_root_index(args: list[str]) -> int | None:
             continue
         if arg == "--":
             return index + 1 if index + 1 < len(args) else None
-        if arg in _VALUE_FLAGS:
+        if _option_consumes_next(arg):
             skip_next = True
-            continue
-        if _is_value_flag_assignment(arg):
             continue
         if arg.startswith("-"):
             continue
@@ -207,11 +74,14 @@ def _sequence_root_index(args: list[str]) -> int | None:
     return None
 
 
-def _is_value_flag_assignment(arg: str) -> bool:
-    if "=" not in arg:
+def _option_consumes_next(arg: str) -> bool:
+    if arg in _HELP_FLAGS or not arg.startswith("-") or arg == "--":
         return False
-    flag, _value = arg.split("=", 1)
-    return flag in _VALUE_FLAGS
+    if "=" in arg:
+        return False
+    if arg.startswith("--no-"):
+        return False
+    return not any(arg.endswith(suffix) for suffix in _FLAG_ONLY_SUFFIXES)
 
 
 if __name__ == "__main__":  # pragma: no cover
