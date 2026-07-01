@@ -1,4 +1,4 @@
-"""Command-line entry point for oracle candidate-retention diagnostics."""
+"""Oracle candidate-retention CLI."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from raft_uav.baselines.tracklet_viterbi import TrackletViterbiAssociationConfig
+from raft_uav.baselines.tracklet_viterbi import TrackletViterbiAssociationConfig as Config
 from raft_uav.evaluation.oracle_coverage import build_oracle_candidate_coverage
 from raft_uav.io.aerpaw import (
     normalize_radar,
@@ -41,7 +41,6 @@ def main(argv: list[str] | None = None) -> int:
         help="nearest truth support tolerance; pass <=0 to disable the tolerance",
     )
     args = parser.parse_args(argv)
-
     result = _run_one(
         dataset_root=args.dataset_root,
         flight_name=args.flight,
@@ -84,32 +83,26 @@ def _run_one(
         raise FileNotFoundError(f"{flight.name} has no radar JSON file")
 
     truth_raw = read_truth(flight.truth_txt)
-    truth, projector, truth_origin_time = normalize_truth(truth_raw)
-    radar = _inside_truth_window(
-        normalize_radar(read_radar_tracks_json(flight.radar_json), projector, truth_origin_time),
-        truth,
-    )
+    truth, projector, origin_time = normalize_truth(truth_raw)
+    radar_raw = read_radar_tracks_json(flight.radar_json)
+    radar = _inside_truth_window(normalize_radar(radar_raw, projector, origin_time), truth)
+
     rf = pd.DataFrame()
     if flight.rf_csv is not None:
-        rf = _inside_truth_window(
-            normalize_rf(read_rf_csv(flight.rf_csv), projector, truth_origin_time),
-            truth,
-        )
+        rf_raw = read_rf_csv(flight.rf_csv)
+        rf = _inside_truth_window(normalize_rf(rf_raw, projector, origin_time), truth)
 
     result = build_oracle_candidate_coverage(
         radar=radar,
         truth=truth,
         rf_measurements=rf_measurements_to_enu(rf),
         candidate_catprob_threshold=radar_catprob_threshold,
-        config=TrackletViterbiAssociationConfig(
-            max_candidates_per_frame=int(max_candidates_per_frame),
-        ),
+        config=Config(max_candidates_per_frame=int(max_candidates_per_frame)),
         acceleration_std_mps2=acceleration_std,
         radar_xy_std_m=radar_xy_std_m,
         radar_z_std_m=radar_z_std_m,
         truth_time_gate_s=truth_time_gate_s,
     )
-
     flight_output = output_dir / flight.name
     flight_output.mkdir(parents=True, exist_ok=True)
     frame_path = flight_output / "oracle_candidate_coverage.csv"
@@ -145,14 +138,18 @@ def _run_one(
 def _inside_truth_window(frame: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
     if frame.empty or "time_s" not in frame.columns:
         return frame
-    truth_min = float(truth["time_s"].min())
-    truth_max = float(truth["time_s"].max())
-    return frame.loc[(frame["time_s"] >= truth_min) & (frame["time_s"] <= truth_max)].copy()
+    t_min = float(truth["time_s"].min())
+    t_max = float(truth["time_s"].max())
+    return frame.loc[(frame["time_s"] >= t_min) & (frame["time_s"] <= t_max)].copy()
 
 
 def _optional_threshold(value: str) -> float | None:
     parsed = _finite_float_argument(value)
-    return None if parsed < 0.0 else parsed
+    if parsed < 0.0:
+        return None
+    if parsed > 1.0:
+        raise argparse.ArgumentTypeError("must be between 0 and 1, or negative to disable")
+    return parsed
 
 
 def _optional_positive_float(value: str) -> float | None:
