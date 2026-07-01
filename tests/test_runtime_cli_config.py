@@ -322,6 +322,40 @@ def test_apply_runtime_environment_sets_expected_variables(monkeypatch):
     assert parsed.max_candidates_per_track_id == 2
 
 
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_FRAME", "0", "positive"),
+        ("RAFT_UAV_TRACKLET_MAX_CANDIDATES", "2.5", "integer"),
+        ("RAFT_UAV_TRACKLET_MISSED_DETECTION_COST", "0", "positive"),
+        ("RAFT_UAV_TRACKLET_CATPROB_WEIGHT", "-0.1", "nonnegative"),
+        ("RAFT_UAV_TRACKLET_TRANSITION_POSITION_STD_M", "0", "positive"),
+        ("RAFT_UAV_TRACKLET_RANGE_GATE_M", "-1", "nonnegative"),
+        ("RAFT_UAV_TRACKLET_CATPROB_RETENTION_MODE", "maybe", "must be one of"),
+        ("RAFT_UAV_TRACKLET_USE_RF_ANCHOR", "maybe", "must be boolean"),
+        ("RAFT_UAV_TRACKLET_MAX_CANDIDATE_POOL_PER_FRAME", "0", "positive"),
+        ("RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_TRACK_ID", "-1", "nonnegative"),
+    ],
+)
+def test_tracklet_runtime_environment_rejects_invalid_values(monkeypatch, name, value, message):
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValueError, match=message):
+        _config_from_environment()
+
+
+def test_tracklet_runtime_environment_accepts_zero_range_gate_and_zero_per_track_limit(
+    monkeypatch,
+):
+    monkeypatch.setenv("RAFT_UAV_TRACKLET_RANGE_GATE_M", "0")
+    monkeypatch.setenv("RAFT_UAV_TRACKLET_MAX_CANDIDATES_PER_TRACK_ID", "0")
+
+    parsed = _config_from_environment()
+
+    assert parsed.range_gate_m is None
+    assert parsed.max_candidates_per_track_id == 0
+
+
 def test_runtime_config_rejects_invalid_radar_covariance_range():
     args = _parse_args(
         [
