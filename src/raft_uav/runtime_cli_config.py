@@ -460,7 +460,9 @@ def _positive_float(value: object, name: str) -> float:
 
 def _optional_positive_float(value: object, name: str) -> float | None:
     number = _finite_float(value, name)
-    if number <= 0.0:
+    if number < 0.0:
+        raise ValueError(f"{name} must be nonnegative")
+    if number == 0.0:
         return None
     return number
 
