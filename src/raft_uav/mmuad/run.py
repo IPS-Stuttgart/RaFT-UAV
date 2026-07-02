@@ -24,13 +24,13 @@ _FLAG_ONLY_OPTIONS = {
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if any(arg in _HELP_FLAGS for arg in args):
+        return track_main(args)
     if _has_explicit_sequence_root(args):
         return track_main(args)
 
     sequence_root_index = _sequence_root_index(args)
     if sequence_root_index is None:
-        if any(arg in _HELP_FLAGS for arg in args):
-            return track_main(args)
         parser = argparse.ArgumentParser(
             prog="raft-uav-mmuad-run",
             description="run the MMUAD tracker on a sequence root",
