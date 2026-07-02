@@ -10,12 +10,14 @@ import pandas as pd
 
 from raft_uav.baselines.kalman import AsyncConstantVelocityKalmanTracker, TrackingMeasurement
 from raft_uav.baselines.tracklet_viterbi import (
+    RadarCovarianceFn,
     TrackletViterbiAssociationConfig,
     _build_rf_anchor_states,
     _first_rf_bootstrap_index,
     _nodes_for_radar_frame,
     _optional_float,
     _optional_track_id,
+    _radar_covariance_for_row,
     _radar_event_key,
     _select_tracklet_viterbi_path,
     _selected_row_event_key,
@@ -48,6 +50,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_result(
     max_residual_norms_by_source: Mapping[str, float | None] | None = None,
     candidate_catprob_threshold: float | None = 0.4,
     config: TrackletViterbiAssociationConfig | None = None,
+    radar_covariance_fn: RadarCovarianceFn | None = None,
 ) -> TrackletViterbiResult:
     """Run CV fusion and return accepted plus all non-miss Viterbi choices.
 
@@ -96,6 +99,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_result(
         truth=None,
         truth_gate_m=150.0,
         truth_time_gate_s=1.0,
+        radar_covariance_fn=radar_covariance_fn,
     )
     if initial is None:
         empty = _empty_selected_radar(radar)
@@ -123,6 +127,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_result(
         covariance=covariance,
         candidate_catprob_threshold=candidate_catprob_threshold,
         config=cfg,
+        radar_covariance_fn=radar_covariance_fn,
     )
     candidate_ledger = _tracklet_candidate_ledger(
         events=events,
@@ -131,6 +136,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_result(
         candidate_catprob_threshold=candidate_catprob_threshold,
         config=cfg,
         selected_rows=selected,
+        radar_covariance_fn=radar_covariance_fn,
     )
     records, accepted, replayed = _replay_selected_tracklet_path_with_replay(
         events=events,
@@ -145,6 +151,7 @@ def run_async_cv_baseline_with_tracklet_viterbi_result(
         robust_update_by_source=robust_update_by_source,
         inflation_alpha_by_source=inflation_alpha_by_source,
         max_residual_norms_by_source=max_residual_norms_by_source,
+        radar_covariance_fn=radar_covariance_fn,
     )
     accepted_frame = _selected_rows_frame(radar, accepted)
     replayed_frame = _selected_rows_frame(radar, replayed)
@@ -159,6 +166,7 @@ def _tracklet_candidate_ledger(
     candidate_catprob_threshold: float | None,
     config: TrackletViterbiAssociationConfig,
     selected_rows: list[pd.Series],
+    radar_covariance_fn: RadarCovarianceFn | None = None,
 ) -> pd.DataFrame:
     """Return the scored top candidate pool used by tracklet Viterbi."""
 
@@ -183,6 +191,7 @@ def _tracklet_candidate_ledger(
                 covariance=covariance,
                 candidate_catprob_threshold=candidate_catprob_threshold,
                 config=config,
+                radar_covariance_fn=radar_covariance_fn,
             )
             if not node.is_miss and node.row is not None
         ]
@@ -241,6 +250,7 @@ def _replay_selected_tracklet_path_with_replay(
     robust_update_by_source: Mapping[str, str | None] | None,
     inflation_alpha_by_source: Mapping[str, float] | None,
     max_residual_norms_by_source: Mapping[str, float | None] | None,
+    radar_covariance_fn: RadarCovarianceFn | None = None,
 ) -> tuple[list[dict[str, object]], list[pd.Series], list[pd.Series]]:
     from raft_uav.baselines.radar_association import (
         _gate_threshold_for_measurement,
@@ -301,7 +311,12 @@ def _replay_selected_tracklet_path_with_replay(
         selected = selected_by_key.get(_radar_event_key(candidates))
         if selected is None:
             continue
-        measurement = _radar_row_to_measurement(selected, covariance)
+        measurement_covariance = _radar_covariance_for_row(
+            selected,
+            covariance,
+            radar_covariance_fn,
+        )
+        measurement = _radar_row_to_measurement(selected, measurement_covariance)
         selected, measurement, policy_diagnostics = apply_radar_update_policy(
             selected,
             measurement,
