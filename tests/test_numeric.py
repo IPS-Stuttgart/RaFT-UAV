@@ -97,7 +97,16 @@ def test_optional_int_rejects_non_scalar_array_like_values(value: object) -> Non
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [("4", 4), (4, 4), (4.0, 4), (-2.0, -2), (np.int64(7), 7), (np.array(8), 8)],
+    [
+        ("4", 4),
+        ("4.0", 4),
+        ("4e0", 4),
+        (4, 4),
+        (4.0, 4),
+        (-2.0, -2),
+        (np.int64(7), 7),
+        (np.array(8), 8),
+    ],
 )
 def test_optional_int_accepts_integer_like_finite_scalar_values(value: object, expected: int) -> None:
     assert optional_int(value) == expected
@@ -107,6 +116,8 @@ def test_optional_int_accepts_integer_like_finite_scalar_values(value: object, e
     ("value", "expected"),
     [
         ("9007199254740993", 9007199254740993),
+        ("9007199254740993.0", 9007199254740993),
+        ("9007199254740993e0", 9007199254740993),
         (9007199254740993, 9007199254740993),
         (np.int64(9007199254740993), 9007199254740993),
         (np.array(9007199254740993, dtype=np.int64), 9007199254740993),
