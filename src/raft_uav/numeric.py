@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 import math
 
 import numpy as np
@@ -71,14 +72,28 @@ def _optional_exact_int(value: object) -> int | None:
     if isinstance(value, int | np.integer):
         return int(value)
     if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
-        try:
-            return int(text, 10)
-        except ValueError:
-            return None
+        return _optional_exact_int_string(value)
     return None
+
+
+def _optional_exact_int_string(value: str) -> int | None:
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return int(text, 10)
+    except ValueError:
+        pass
+    try:
+        decimal_value = Decimal(text)
+    except InvalidOperation:
+        return None
+    if not decimal_value.is_finite():
+        return None
+    integral = decimal_value.to_integral_value()
+    if decimal_value != integral:
+        return None
+    return int(integral)
 
 
 def _is_non_scalar_array_like(value: object) -> bool:
