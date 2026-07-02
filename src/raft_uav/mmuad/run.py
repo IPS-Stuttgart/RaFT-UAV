@@ -8,17 +8,17 @@ import sys
 from raft_uav.mmuad.cli import main as track_main
 
 _HELP_FLAGS = {"-h", "--help"}
-_FLAG_ONLY_SUFFIXES = (
-    "-auto-topic-map",
-    "-from-candidates",
-    "-keep-confidence",
-    "-no-infer-grid",
-    "-no-truth-timestamps",
-    "-on-write",
-    "-only",
-    "-require-complete-track5",
-    "-to-sequence-timestamps",
-)
+_FLAG_ONLY_OPTIONS = {
+    "--evaluation-require-complete-track5",
+    "--infer-ug2-class-map-from-candidates",
+    "--inspect-layout-only",
+    "--native-ros-auto-topic-map",
+    "--cluster-ranker-keep-confidence",
+    "--trajectory-completion-no-infer-grid",
+    "--trajectory-completion-no-truth-timestamps",
+    "--ug2-official-complete-to-sequence-timestamps",
+    "--ug2-official-validate-on-write",
+}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -81,7 +81,7 @@ def _option_consumes_next(arg: str) -> bool:
         return False
     if arg.startswith("--no-"):
         return False
-    return not any(arg.endswith(suffix) for suffix in _FLAG_ONLY_SUFFIXES)
+    return arg not in _FLAG_ONLY_OPTIONS
 
 
 if __name__ == "__main__":  # pragma: no cover
