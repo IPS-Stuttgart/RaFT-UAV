@@ -30,3 +30,23 @@ def test_mmuad_run_entrypoint_preserves_calibration_disable_flag(monkeypatch) ->
         "--output-dir",
         "outputs/mmuad",
     ]
+
+
+def test_mmuad_run_entrypoint_respects_delimiter_for_dash_prefixed_root(monkeypatch) -> None:
+    from raft_uav.mmuad import run
+
+    forwarded: list[str] = []
+
+    def fake_track_main(argv: list[str] | None = None) -> int:
+        forwarded.extend(argv or [])
+        return 0
+
+    monkeypatch.setattr(run, "track_main", fake_track_main)
+
+    assert run.main(["--", "--sequence-root", "--output-dir", "outputs/mmuad"]) == 0
+    assert forwarded == [
+        "--sequence-root",
+        "--sequence-root",
+        "--output-dir",
+        "outputs/mmuad",
+    ]
