@@ -33,7 +33,11 @@ def _install_image_row_guard() -> None:
             records.append({"image_path": str(path), "image_time_s": float(value)})
         if not records:
             return _pd.DataFrame(columns=["image_path", "image_time_s"])
-        return _pd.DataFrame.from_records(records).sort_values("image_time_s").reset_index(drop=True)
+        return (
+            _pd.DataFrame.from_records(records)
+            .sort_values("image_time_s")
+            .reset_index(drop=True)
+        )
 
     _image_evidence._image_file_rows = _image_file_rows
 
