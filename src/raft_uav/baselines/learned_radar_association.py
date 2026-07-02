@@ -75,6 +75,7 @@ def run_async_cv_baseline_with_learned_radar_association(
         truth=None,
         truth_gate_m=150.0,
         truth_time_gate_s=1.0,
+        candidate_catprob_threshold=candidate_catprob_threshold,
     )
     if initial_measurement is None:
         return [], _empty_selected_radar(radar)
@@ -87,8 +88,38 @@ def run_async_cv_baseline_with_learned_radar_association(
     records: list[dict[str, object]] = []
     selected_rows: list[pd.Series] = []
     current_track_id: int | None = None
+    start_index = 0
 
-    for event in events:
+    if events[0]["kind"] == "rf":
+        diagnostics = tracker.update(
+            initial_measurement,
+            gate_threshold=_gate_threshold_for_measurement(
+                initial_measurement,
+                gate_probabilities_by_source=gate_probabilities_by_source,
+                gate_thresholds_by_source=gate_thresholds_by_source,
+            ),
+            safety_gate_threshold=_gate_threshold_for_measurement(
+                initial_measurement,
+                gate_probabilities_by_source=safety_gate_probabilities_by_source,
+                gate_thresholds_by_source=safety_gate_thresholds_by_source,
+            ),
+            max_residual_norm=_max_residual_norm_for_measurement(
+                initial_measurement,
+                max_residual_norms_by_source=max_residual_norms_by_source,
+            ),
+            robust_update=_robust_update_for_measurement(
+                initial_measurement,
+                robust_update_by_source=robust_update_by_source,
+            ),
+            inflation_alpha=_inflation_alpha_for_measurement(
+                initial_measurement,
+                inflation_alpha_by_source=inflation_alpha_by_source,
+            ),
+        )
+        records.append(_record(initial_measurement, tracker, diagnostics))
+        start_index = 1
+
+    for event in events[start_index:]:
         if event["kind"] == "rf":
             measurement = event["measurement"]
             assert isinstance(measurement, TrackingMeasurement)
