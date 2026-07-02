@@ -196,6 +196,9 @@ def _audit_prediction_text(
         except ValueError:
             parse_errors += 1
             continue
+        if frame_id <= 0 or object_id <= 0:
+            parse_errors += 1
+            continue
         keys[(frame_id, object_id)] += 1
     duplicate_rows = sum(count - 1 for count in keys.values() if count > 1)
     duplicate_key_rows = [
