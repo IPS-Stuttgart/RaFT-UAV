@@ -155,9 +155,15 @@ def _prediction_texts_for_duplicate_audit(prediction_path: Path) -> dict[str, st
                 errors="replace",
             )
             for info in archive.infolist()
-            if not info.is_dir()
-            and PurePosixPath(_normalized_zip_member_name(info.filename)).suffix.lower() == ".txt"
+            if _is_zip_text_prediction_member(info)
         }
+
+
+def _is_zip_text_prediction_member(info: zipfile.ZipInfo) -> bool:
+    if info.is_dir():
+        return False
+    member = PurePosixPath(_normalized_zip_member_name(info.filename))
+    return member.suffix.lower() == ".txt"
 
 
 def _relative_posix_path(path: Path, base: Path) -> str:
