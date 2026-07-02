@@ -64,9 +64,12 @@ def drop_radar_frames(frame: pd.DataFrame, *, rate: float, rng: np.random.Genera
     if frame.empty or rate <= 0.0:
         return frame.copy()
     group_column = "frame_index" if "frame_index" in frame.columns else "time_s"
-    groups = pd.Series(frame[group_column].dropna().unique())
+    group_values = frame[group_column]
+    valid_group_mask = group_values.notna()
+    groups = pd.Series(group_values.loc[valid_group_mask].unique())
     keep_groups = set(groups.loc[rng.random(len(groups)) >= min(max(rate, 0.0), 1.0)].tolist())
-    return frame.loc[frame[group_column].isin(keep_groups)].copy()
+    keep_mask = (~valid_group_mask) | group_values.isin(keep_groups)
+    return frame.loc[keep_mask].copy()
 
 
 def drop_rf_bursts(frame: pd.DataFrame, *, rate: float, rng: np.random.Generator) -> pd.DataFrame:
@@ -75,10 +78,18 @@ def drop_rf_bursts(frame: pd.DataFrame, *, rate: float, rng: np.random.Generator
     times = pd.to_numeric(frame["time_s"], errors="coerce").to_numpy(dtype=float)
     if times.size == 0:
         return frame.copy()
-    bins = np.floor((times - np.nanmin(times)) / 5.0).astype(int)
+    valid_time_mask = np.isfinite(times)
+    if not np.any(valid_time_mask):
+        return frame.copy()
+
+    finite_times = times[valid_time_mask]
+    bins = np.floor((finite_times - np.min(finite_times)) / 5.0).astype(int)
     unique = np.unique(bins)
     dropped = set(unique[rng.random(unique.size) < min(max(rate, 0.0), 1.0)].tolist())
-    return frame.loc[[int(bin_id) not in dropped for bin_id in bins]].copy()
+
+    keep_mask = np.ones(times.shape, dtype=bool)
+    keep_mask[valid_time_mask] = [int(bin_id) not in dropped for bin_id in bins]
+    return frame.loc[keep_mask].copy()
 
 
 def jitter_timestamps(frame: pd.DataFrame, *, std_s: float, rng: np.random.Generator) -> pd.DataFrame:
