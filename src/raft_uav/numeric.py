@@ -43,6 +43,8 @@ def optional_int(value: object) -> int | None:
     exact = _optional_exact_int(value)
     if exact is not None:
         return exact
+    if isinstance(value, str) and _looks_like_decimal_integer_text(value.strip()):
+        return None
     number = optional_float(value)
     if number is None:
         return None
@@ -79,6 +81,17 @@ def _optional_exact_int(value: object) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def _looks_like_decimal_integer_text(text: str) -> bool:
+    if not text:
+        return False
+    if text[0] in "+-":
+        text = text[1:]
+    if "." not in text:
+        return False
+    left, right = text.split(".", 1)
+    return bool(right) and (left == "" or left.isdecimal()) and right.isdecimal()
 
 
 def _is_non_scalar_array_like(value: object) -> bool:
