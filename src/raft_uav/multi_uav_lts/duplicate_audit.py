@@ -13,7 +13,7 @@ import csv
 from collections import Counter
 from dataclasses import asdict, dataclass
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 import zipfile
 
@@ -142,16 +142,30 @@ def _prediction_texts_for_duplicate_audit(prediction_path: Path) -> dict[str, st
     """Return all .txt prediction payloads that duplicate auditing should inspect."""
 
     if prediction_path.is_dir():
+        base = prediction_path.resolve()
         return {
-            path.name: path.read_text(encoding="utf-8")
-            for path in sorted(prediction_path.glob("*.txt"))
+            _relative_posix_path(path, base): path.read_text(encoding="utf-8")
+            for path in sorted(prediction_path.rglob("*.txt"))
+            if path.is_file()
         }
     with zipfile.ZipFile(prediction_path) as archive:
         return {
-            name: archive.read(name).decode("utf-8", errors="replace")
-            for name in archive.namelist()
-            if name.endswith(".txt")
+            _normalized_zip_member_name(info.filename): archive.read(info).decode(
+                "utf-8",
+                errors="replace",
+            )
+            for info in archive.infolist()
+            if not info.is_dir()
+            and PurePosixPath(_normalized_zip_member_name(info.filename)).suffix.lower() == ".txt"
         }
+
+
+def _relative_posix_path(path: Path, base: Path) -> str:
+    return path.resolve().relative_to(base).as_posix()
+
+
+def _normalized_zip_member_name(name: str) -> str:
+    return str(name).replace("\\", "/")
 
 
 def _audit_prediction_text(
