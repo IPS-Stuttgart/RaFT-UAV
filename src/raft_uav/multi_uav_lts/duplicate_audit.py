@@ -17,7 +17,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 import zipfile
 
-from raft_uav.multi_uav_lts.cli import SUBMISSION_COLUMNS, _parse_int_like
+from raft_uav.multi_uav_lts.cli import SUBMISSION_COLUMNS
+from raft_uav.numeric import optional_int
 
 
 @dataclass(frozen=True)
@@ -191,8 +192,8 @@ def _audit_prediction_text(
             parse_errors += 1
             continue
         try:
-            frame_id = _parse_int_like(parts[0])
-            object_id = _parse_int_like(parts[1])
+            frame_id = _parse_lts_key_int(parts[0])
+            object_id = _parse_lts_key_int(parts[1])
         except ValueError:
             parse_errors += 1
             continue
@@ -220,6 +221,13 @@ def _audit_prediction_text(
         duplicate_rows=duplicate_rows,
     )
     return summary, duplicate_key_rows
+
+
+def _parse_lts_key_int(value: str) -> int:
+    parsed = optional_int(value)
+    if parsed is None:
+        raise ValueError(f"expected integer-like value, got {value!r}")
+    return parsed
 
 
 def _write_dataclass_csv(path: Path, row_type: type[Any], rows: list[Any]) -> None:
