@@ -55,7 +55,12 @@ def _forwarding_remainder(args: list[str], *, sequence_root_index: int) -> list[
 
 
 def _has_explicit_sequence_root(args: list[str]) -> bool:
-    return "--sequence-root" in args or any(arg.startswith("--sequence-root=") for arg in args)
+    for arg in args:
+        if arg == "--":
+            return False
+        if arg == "--sequence-root" or arg.startswith("--sequence-root="):
+            return True
+    return False
 
 
 def _sequence_root_index(args: list[str]) -> int | None:
