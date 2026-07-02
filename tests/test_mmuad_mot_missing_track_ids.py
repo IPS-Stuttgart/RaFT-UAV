@@ -75,3 +75,38 @@ def test_multi_object_tracker_attaches_errors_for_blank_truth_track_id_column() 
 
     assert "error_3d_m" in output.estimates.columns
     assert output.metrics["pooled"]["mean_3d_m"] == pytest.approx(0.0)
+
+
+def test_multi_object_tracker_config_normalizes_numeric_strings() -> None:
+    config = MultiObjectTrackerConfig(
+        acceleration_std_mps2="8.0",
+        max_association_distance_m="5.0",
+        max_track_age_s="1.0",
+        min_new_track_confidence="0.1",
+        covariance_scale="2.0",
+    )
+
+    assert config.acceleration_std_mps2 == pytest.approx(8.0)
+    assert config.max_association_distance_m == pytest.approx(5.0)
+    assert config.max_track_age_s == pytest.approx(1.0)
+    assert config.min_new_track_confidence == pytest.approx(0.1)
+    assert config.covariance_scale == pytest.approx(2.0)
+
+    candidates = CandidateFrame(
+        pd.DataFrame(
+            {
+                "sequence_id": ["seq0", "seq0"],
+                "time_s": [0.0, 0.5],
+                "source": ["detector", "detector"],
+                "x_m": [0.0, 0.5],
+                "y_m": [0.0, 0.0],
+                "z_m": [5.0, 5.0],
+                "confidence": [1.0, 1.0],
+            }
+        )
+    )
+
+    output = run_mmuad_multi_object_tracker(candidates, config=config)
+
+    assert len(output.estimates) == 2
+    assert output.estimates["output_track_id"].nunique() == 1
