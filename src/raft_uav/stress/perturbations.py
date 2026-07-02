@@ -112,11 +112,14 @@ def corrupt_velocity(frame: pd.DataFrame, *, std_mps: float, rng: np.random.Gene
 
 def scale_covariance_columns(frame: pd.DataFrame, *, scale: float) -> pd.DataFrame:
     out = frame.copy()
-    if scale == 1.0:
+    scale_value = float(scale)
+    if not np.isfinite(scale_value) or scale_value <= 0.0:
+        raise ValueError("covariance scale must be finite and positive")
+    if scale_value == 1.0:
         return out
     for column in out.columns:
         if column.startswith("cov_") or column.startswith("association_cov_"):
-            out[column] = pd.to_numeric(out[column], errors="coerce") * float(scale)
+            out[column] = pd.to_numeric(out[column], errors="coerce") * scale_value
     return out
 
 
