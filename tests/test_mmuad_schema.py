@@ -1,11 +1,27 @@
+import json
+
 import pandas as pd
 import pytest
 
 from raft_uav.mmuad.schema import (
+    load_jsonable,
     normalize_candidate_columns,
     normalize_time_column_aliases,
     normalize_truth_columns,
 )
+
+
+def test_load_jsonable_converts_pandas_missing_scalars_to_json_null():
+    payload = load_jsonable(
+        {
+            "missing": pd.NA,
+            "timestamp": pd.NaT,
+            "rows": [1.0, pd.NA],
+        }
+    )
+
+    assert payload == {"missing": None, "timestamp": None, "rows": [1.0, None]}
+    assert json.loads(json.dumps(payload)) == payload
 
 
 def test_candidate_normalizer_accepts_case_insensitive_canonical_columns():
