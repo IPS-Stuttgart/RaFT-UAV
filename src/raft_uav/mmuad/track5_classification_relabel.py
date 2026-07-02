@@ -25,7 +25,7 @@ RELABEL_MANIFEST_JSON = "mmuad_track5_classification_relabel_manifest.json"
 RELABEL_VALIDATION_JSON = "mmuad_track5_classification_relabel_validation.json"
 RelabelMode = Literal["by-key", "by-sequence-majority"]
 VALID_CLASS_IDS = (0, 1, 2, 3, 4)
-PROBABILITY_CLASS_ID_SETS = (VALID_CLASS_IDS[:-1], VALID_CLASS_IDS)
+MIN_PROBABILITY_CLASS_COUNT = 2
 SEQUENCE_ALIASES = ("Sequence", "sequence_id", "sequence", "heldout_sequence", "seq")
 PREDICTED_CLASS_ALIASES = (
     "predicted_class",
@@ -102,7 +102,9 @@ def relabel_track5_classification_from_sequence_predictions(
 
     The prediction table may contain one predicted class per sequence, official
     ``Classification`` labels, or probability columns such as
-    ``predicted_probability_0`` ... ``predicted_probability_4``.  The legacy
+    ``predicted_probability_0`` ... ``predicted_probability_4``.  Probability
+    files may include all classes or any subset of at least two official class
+    IDs; missing classes are treated as unavailable candidates.  The legacy
     four-column ``0`` ... ``3`` probability layout is still accepted.
     Probability rows are averaged per sequence before taking argmax.  This makes
     it easy to combine a strong pose submission with a non-image/image-fused
@@ -187,8 +189,8 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help=(
             "sequence-level classifier predictions CSV; accepts sequence_id/Sequence and either "
-            "predicted_class/Classification, predicted_probability_0..4, or bare 0..3/0..4 "
-            "probability columns"
+            "predicted_class/Classification, probability columns for at least two official classes "
+            "(for example predicted_probability_0..4), or bare 0..4 probability columns"
         ),
     )
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -307,7 +309,7 @@ def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFr
     rows["Sequence"] = rows[sequence_column].astype(str)
     probability_items = _probability_columns(rows)
     probability_class_ids = tuple(class_id for class_id, _column in probability_items)
-    if probability_class_ids in PROBABILITY_CLASS_ID_SETS:
+    if _valid_probability_class_ids(probability_class_ids):
         probability_columns = [column for _class_id, column in probability_items]
         probability_rows = rows[["Sequence", *probability_columns]].copy()
         for column in probability_columns:
@@ -338,8 +340,8 @@ def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFr
         class_column = _first_present(rows, PREDICTED_CLASS_ALIASES)
         if class_column is None:
             raise ValueError(
-                "sequence prediction table needs a complete predicted_probability_0..3, "
-                "predicted_probability_0..4, bare 0..3/0..4 group, or predicted_class"
+                "sequence prediction table needs at least two official-class probability "
+                "columns or a predicted_class/Classification column"
             )
         labels = rows[["Sequence", class_column]].copy()
         labels[class_column] = pd.to_numeric(labels[class_column], errors="coerce")
@@ -402,6 +404,13 @@ def _probability_columns(frame: pd.DataFrame) -> list[tuple[int, Any]]:
         if found is not None:
             columns.append((int(class_id), found))
     return columns
+
+
+def _valid_probability_class_ids(class_ids: tuple[int, ...]) -> bool:
+    return (
+        len(class_ids) >= MIN_PROBABILITY_CLASS_COUNT
+        and all(class_id in VALID_CLASS_IDS for class_id in class_ids)
+    )
 
 
 def _validate_class_series(values: pd.Series, *, name: str) -> None:
