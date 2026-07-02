@@ -8,6 +8,9 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_float as _optional_float
+from raft_uav.numeric import optional_int as _optional_int
+
 
 @dataclass(frozen=True)
 class InitialHypothesis:
@@ -166,16 +169,3 @@ def _track_support_score(row: pd.Series, radar: pd.DataFrame) -> float:
 
 def _initial_covariance(position_std_m: float, velocity_std_mps: float) -> np.ndarray:
     return np.diag([position_std_m**2] * 3 + [velocity_std_mps**2] * 3)
-
-
-def _optional_float(value: object) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if np.isfinite(number) else None
-
-
-def _optional_int(value: object) -> int | None:
-    number = _optional_float(value)
-    return None if number is None else int(number)
