@@ -150,9 +150,13 @@ def _manifest_from_mapping(mapping: Mapping[str, Any]) -> dict[str, tuple[str, .
         if str(split).lower() in _SPLIT_VALUE_METADATA_KEYS:
             continue
         ids = _split_values_to_sequence_ids(values)
-        if ids:
+        if ids or _is_explicit_split_container(values):
             out[str(split)] = list(ids)
     return {split: tuple(values) for split, values in out.items()}
+
+
+def _is_explicit_split_container(values: Any) -> bool:
+    return isinstance(values, dict | list | tuple | set)
 
 
 def _manifest_from_rows(rows: Iterable[Any]) -> dict[str, tuple[str, ...]]:
@@ -178,9 +182,14 @@ def _split_values_to_sequence_ids(values: Any) -> tuple[str, ...]:
             nested = _mapping_value_case_insensitive(values, key)
             if nested is not None:
                 return _split_values_to_sequence_ids(nested)
-        for key in values:
+        for key, item in values.items():
             if str(key).lower() in _SPLIT_VALUE_METADATA_KEYS:
                 continue
+            if isinstance(item, dict):
+                sequence_id = _entry_value(item, _SEQUENCE_ID_ALIASES)
+                if sequence_id is not None:
+                    _append_unique_value(out, sequence_id)
+                    continue
             sequence_id = _scalar_to_text(key)
             if sequence_id is not None:
                 _append_unique_value(out, sequence_id)
