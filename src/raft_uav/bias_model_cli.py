@@ -41,16 +41,23 @@ def _extract_bias_model(argv: list[str]) -> tuple[Path | None, list[str]]:
         if value == "--bias-model":
             if index + 1 >= len(argv):
                 raise SystemExit("--bias-model requires a path")
-            bias_model = Path(argv[index + 1])
+            bias_model = _bias_model_path(argv[index + 1])
             index += 2
             continue
         if value.startswith("--bias-model="):
-            bias_model = Path(value.split("=", 1)[1])
+            bias_model = _bias_model_path(value.split("=", 1)[1])
             index += 1
             continue
         remaining.append(value)
         index += 1
     return bias_model, remaining
+
+
+def _bias_model_path(value: str) -> Path:
+    text = str(value)
+    if not text.strip():
+        raise SystemExit("--bias-model requires a non-empty path")
+    return Path(text)
 
 
 if __name__ == "__main__":
