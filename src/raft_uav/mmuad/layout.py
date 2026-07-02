@@ -516,7 +516,10 @@ def _layout_recommendations(
             "Some candidate/point sequences have no calibration file; verify coordinates "
             "are already in a shared/world frame or add calibration exports."
         )
-    if not category_counts.get("truth_or_label", 0):
+    has_truth_or_labels = bool(category_counts.get("truth_or_label", 0)) or any(
+        bool(row.get("has_truth_or_labels", False)) for row in sequence_candidates
+    )
+    if not has_truth_or_labels:
         recommendations.append(
             "No obvious truth/label files found; tracking can run, but metrics will be absent."
         )
