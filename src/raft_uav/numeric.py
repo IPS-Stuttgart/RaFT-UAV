@@ -12,6 +12,8 @@ def optional_float(value: object) -> float | None:
 
     if value is None:
         return None
+    if _is_masked_value(value):
+        return None
     if isinstance(value, bool | np.bool_):
         return None
     if isinstance(value, complex | np.complexfloating):
@@ -20,6 +22,8 @@ def optional_float(value: object) -> float | None:
         if value.ndim > 0:
             return None
         value = value.item()
+        if _is_masked_value(value):
+            return None
         if isinstance(value, bool | np.bool_):
             return None
         if isinstance(value, complex | np.complexfloating):
@@ -52,5 +56,14 @@ def _is_non_scalar_array_like(value: object) -> bool:
         return False
     try:
         return int(ndim) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_masked_value(value: object) -> bool:
+    """Return whether ``value`` is a masked NumPy scalar or masked array."""
+
+    try:
+        return bool(np.ma.is_masked(value))
     except (TypeError, ValueError):
         return False
