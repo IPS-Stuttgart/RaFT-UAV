@@ -15,8 +15,9 @@ from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 from typing import Any
+import zipfile
 
-from raft_uav.multi_uav_lts.cli import SUBMISSION_COLUMNS, _parse_int_like, _prediction_texts
+from raft_uav.multi_uav_lts.cli import SUBMISSION_COLUMNS, _parse_int_like
 
 
 @dataclass(frozen=True)
@@ -60,7 +61,7 @@ class DuplicatePredictionAudit:
 def audit_duplicate_predictions(prediction_path: Path) -> DuplicatePredictionAudit:
     """Audit duplicate ``(frame_id, object_id)`` keys in every prediction file."""
 
-    prediction_texts = _prediction_texts(prediction_path)
+    prediction_texts = _prediction_texts_for_duplicate_audit(prediction_path)
     file_summaries: list[DuplicatePredictionFileSummary] = []
     duplicate_keys: list[DuplicatePredictionKeyRow] = []
     for name, text in sorted(prediction_texts.items()):
@@ -135,6 +136,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.require_clean and not audit.clean:
         raise SystemExit(1)
     return 0
+
+
+def _prediction_texts_for_duplicate_audit(prediction_path: Path) -> dict[str, str]:
+    """Return all .txt prediction payloads that duplicate auditing should inspect."""
+
+    if prediction_path.is_dir():
+        return {
+            path.name: path.read_text(encoding="utf-8")
+            for path in sorted(prediction_path.glob("*.txt"))
+        }
+    with zipfile.ZipFile(prediction_path) as archive:
+        return {
+            name: archive.read(name).decode("utf-8", errors="replace")
+            for name in archive.namelist()
+            if name.endswith(".txt")
+        }
 
 
 def _audit_prediction_text(
