@@ -268,7 +268,7 @@ def _expected_frame_counts(sequence_root: Path | None) -> dict[str, int]:
         if not sequence_dir.is_dir():
             continue
         counts[f"{sequence_dir.name}.txt"] = sum(
-            1 for path in sequence_dir.iterdir() if path.suffix.lower() in IMAGE_SUFFIXES
+            1 for path in sequence_dir.rglob("*") if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
         )
     return counts
 
