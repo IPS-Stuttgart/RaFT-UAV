@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.bias_model_cli import _extract_bias_model
 from raft_uav.calibration.bias import BiasCorrectionBank, SensorBiasCorrectionModel
@@ -67,3 +68,9 @@ def test_bias_wrapper_supports_equals_form():
 
     assert path == Path("model.json")
     assert remaining == ["run-baseline", "data", "--flight", "Opt1"]
+
+
+def test_bias_wrapper_rejects_empty_model_path():
+    for argv in (["--bias-model", ""], ["--bias-model=   "]):
+        with pytest.raises(SystemExit, match="non-empty path"):
+            _extract_bias_model(argv)
