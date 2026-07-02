@@ -23,6 +23,7 @@ import pandas as pd
 
 from raft_uav.mmuad.class_probability_context import _predicted_class_labels
 from raft_uav.mmuad.submission import (
+    normalize_official_track5_results_frame,
     parse_official_position_cell,
     validate_official_track5_submission,
     write_official_mmaud_results_csv,
@@ -93,7 +94,26 @@ def load_track5_submission(path: Path) -> pd.DataFrame:
                 rows = pd.read_csv(handle)
     else:
         rows = pd.read_csv(path)
+    rows = _normalize_official_submission_frame(rows, source_path=path)
     return _normalize_submission_rows(rows, source_path=path)
+
+
+def _normalize_official_submission_frame(rows: pd.DataFrame, *, source_path: Path) -> pd.DataFrame:
+    try:
+        return normalize_official_track5_results_frame(rows)
+    except ValueError as exc:
+        message = str(exc)
+        if "Timestamp" in message:
+            prefix = "invalid Track 5 Timestamp"
+        elif "Classification" in message:
+            prefix = "invalid Track 5 Classification"
+        elif "Position" in message:
+            prefix = "invalid Track 5 Position"
+        elif "Sequence" in message:
+            prefix = "invalid Track 5 Sequence"
+        else:
+            prefix = "invalid Track 5 submission"
+        raise ValueError(f"{prefix} in {source_path}: {message}") from exc
 
 
 def ensemble_track5_submissions(
@@ -201,7 +221,11 @@ def write_track5_submission_ensemble_outputs(
     )
     validation_summary: dict[str, Any] | None = None
     if template is not None:
-        validation = validate_official_track5_submission(paths["zip"], template=template, require_zip=True)
+        validation = validate_official_track5_submission(
+            paths["zip"],
+            template=template,
+            require_zip=True,
+        )
         paths["validation_json"] = output / VALIDATION_JSON
         paths["validation_rows_csv"] = output / VALIDATION_ROWS_CSV
         paths["validation_json"].write_text(
@@ -243,7 +267,11 @@ def main(argv: list[str] | None = None) -> int:
         help="official CSV/ZIP submission; may be repeated",
     )
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--template", type=Path, help="optional official template for preflight validation")
+    parser.add_argument(
+        "--template",
+        type=Path,
+        help="optional official template for preflight validation",
+    )
     parser.add_argument(
         "--class-policy",
         choices=("weighted-vote", "first"),
@@ -279,7 +307,11 @@ def main(argv: list[str] | None = None) -> int:
     if validation:
         print(f"leaderboard_ready={validation.get('leaderboard_ready')}")
         print(f"codabench_upload_ready={validation.get('codabench_upload_ready')}")
-    if args.require_leaderboard_ready and validation and not validation.get("leaderboard_ready", False):
+    if (
+        args.require_leaderboard_ready
+        and validation
+        and not validation.get("leaderboard_ready", False)
+    ):
         reasons = ", ".join(validation.get("leaderboard_blocking_reasons", [])) or "unknown"
         raise SystemExit(f"ensemble is not leaderboard-ready: {reasons}")
     return 0
@@ -315,7 +347,11 @@ def _normalize_submission_rows(rows: pd.DataFrame, *, source_path: Path) -> pd.D
                 "Classification": classification,
             }
         )
-    return pd.DataFrame.from_records(out_records).sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+    return (
+        pd.DataFrame.from_records(out_records)
+        .sort_values(["sequence_id", "time_s"])
+        .reset_index(drop=True)
+    )
 
 
 def _parse_timestamp_cell(value: Any) -> float:
