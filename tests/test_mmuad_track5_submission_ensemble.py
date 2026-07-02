@@ -59,7 +59,9 @@ def test_track5_submission_ensemble_averages_positions_and_votes_classes(tmp_pat
         [parse_submission_input(f"a=1:{first}"), parse_submission_input(f"b=3:{second}")],
     )
 
-    row = estimates.loc[(estimates["sequence_id"] == "seq0001") & (estimates["time_s"] == 0.0)].iloc[0]
+    row = estimates.loc[
+        (estimates["sequence_id"] == "seq0001") & (estimates["time_s"] == 0.0)
+    ].iloc[0]
     assert row["state_x_m"] == pytest.approx(1.5)
     assert row["Classification"] == 3
     assert diagnostics.loc[0, "input_count"] == 2
@@ -74,6 +76,26 @@ def test_load_track5_submission_accepts_integer_like_classification_labels(tmp_p
 
     loaded = load_track5_submission(path)
 
+    assert loaded["Classification"].tolist() == [1, 1, 2]
+
+
+def test_load_track5_submission_accepts_case_insensitive_official_columns(tmp_path: Path) -> None:
+    path = tmp_path / "submission.csv"
+    rows = _submission_rows().rename(
+        columns={
+            "Sequence": "sequence",
+            "Timestamp": "timestamp",
+            "Position": "position",
+            "Classification": "classification",
+        }
+    )
+    rows.to_csv(path, index=False)
+
+    loaded = load_track5_submission(path)
+
+    assert loaded["sequence_id"].tolist() == ["seq0001", "seq0001", "seq0002"]
+    assert loaded["time_s"].tolist() == [0.0, 1.0, 0.0]
+    assert loaded["state_x_m"].tolist() == [0.0, 2.0, 10.0]
     assert loaded["Classification"].tolist() == [1, 1, 2]
 
 
