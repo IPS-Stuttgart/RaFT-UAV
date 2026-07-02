@@ -24,6 +24,21 @@ from raft_uav.baselines.tracklet_viterbi import (
 )
 
 
+_ASSOCIATION_COVARIANCE_COLUMNS = (
+    "association_cov_ee",
+    "association_cov_nn",
+    "association_cov_uu",
+    "association_cov_en",
+    "association_cov_eu",
+    "association_cov_nu",
+    "association_covariance_mode",
+    "association_cov_range_m",
+    "association_cov_trace_m2",
+    "association_cov_includes_bias_residual",
+)
+_RUNTIME_ASSOCIATION_COVARIANCE_MODES = {"fixed", "radar-geometry", "range-angle"}
+
+
 @dataclass(frozen=True)
 class TrackletViterbiResult:
     """Outputs from tracklet-Viterbi association and Kalman replay."""
@@ -200,6 +215,13 @@ def _tracklet_candidate_ledger(
             assert node.row is not None
             row = node.row.copy()
             selected_here = selected is not None and _same_radar_candidate(row, selected)
+            if radar_covariance_fn is not None:
+                row_covariance = _result_radar_covariance_for_row(
+                    row,
+                    covariance,
+                    radar_covariance_fn,
+                )
+                _write_radar_covariance_diagnostics(row, row_covariance, covariance)
             row["association_mode"] = "tracklet-viterbi"
             row["association_action"] = "candidate_ledger"
             row["association_event_index"] = int(event_index)
@@ -311,11 +333,14 @@ def _replay_selected_tracklet_path_with_replay(
         selected = selected_by_key.get(_radar_event_key(candidates))
         if selected is None:
             continue
-        measurement_covariance = _radar_covariance_for_row(
-            selected,
+        selected = selected.copy()
+        covariance_row = _raw_candidate_row_for_selected(selected, candidates)
+        measurement_covariance = _result_radar_covariance_for_row(
+            covariance_row,
             covariance,
             radar_covariance_fn,
         )
+        _write_radar_covariance_diagnostics(selected, measurement_covariance, covariance)
         measurement = _radar_row_to_measurement(selected, measurement_covariance)
         selected, measurement, policy_diagnostics = apply_radar_update_policy(
             selected,
@@ -414,6 +439,57 @@ def _empty_candidate_ledger(frame: pd.DataFrame) -> pd.DataFrame:
         if column not in ledger.columns:
             ledger[column] = []
     return ledger
+
+
+def _raw_candidate_row_for_selected(selected: pd.Series, candidates: pd.DataFrame) -> pd.Series:
+    """Return the input candidate row matching a replay-selected Viterbi row."""
+
+    for _, candidate in candidates.iterrows():
+        if _same_radar_candidate(candidate, selected):
+            return candidate.copy()
+    return selected.copy()
+
+
+def _result_radar_covariance_for_row(
+    row: pd.Series,
+    covariance: np.ndarray,
+    radar_covariance_fn: RadarCovarianceFn | None,
+) -> np.ndarray:
+    """Return callback covariance without replaying runtime-generated annotations."""
+
+    if radar_covariance_fn is None:
+        return _radar_covariance_for_row(row, covariance, radar_covariance_fn)
+    return _radar_covariance_for_row(
+        _drop_runtime_association_covariance(row),
+        covariance,
+        radar_covariance_fn,
+    )
+
+
+def _drop_runtime_association_covariance(row: pd.Series) -> pd.Series:
+    mode = str(row.get("association_covariance_mode", "")).strip().lower()
+    if mode not in _RUNTIME_ASSOCIATION_COVARIANCE_MODES:
+        return row.copy()
+    labels = [column for column in _ASSOCIATION_COVARIANCE_COLUMNS if column in row.index]
+    if not labels:
+        return row.copy()
+    return row.drop(labels=labels)
+
+
+def _write_radar_covariance_diagnostics(
+    row: pd.Series,
+    row_covariance: np.ndarray,
+    default_covariance: np.ndarray,
+) -> None:
+    """Attach the covariance actually used by result replay."""
+
+    row_covariance = np.asarray(row_covariance, dtype=float)
+    default_covariance = np.asarray(default_covariance, dtype=float)
+    row["association_radar_xy_std_m"] = float(np.sqrt(max(row_covariance[0, 0], 0.0)))
+    row["association_radar_z_std_m"] = float(np.sqrt(max(row_covariance[2, 2], 0.0)))
+    row["association_radar_covariance_adaptive"] = bool(
+        not np.allclose(row_covariance, default_covariance)
+    )
 
 
 def _same_radar_candidate(left: pd.Series, right: pd.Series) -> bool:
