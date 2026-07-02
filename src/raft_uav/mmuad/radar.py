@@ -138,9 +138,11 @@ def polar_to_cartesian(
             f"unsupported azimuth convention {azimuth_convention!r}; "
             f"choices={RADAR_AZIMUTH_CONVENTIONS}"
         )
-    r = np.asarray(range_m, dtype=float)
-    az = np.asarray(azimuth_rad, dtype=float)
-    el = np.asarray(elevation_rad, dtype=float)
+    r, az, el = np.broadcast_arrays(
+        np.asarray(range_m, dtype=float),
+        np.asarray(azimuth_rad, dtype=float),
+        np.asarray(elevation_rad, dtype=float),
+    )
     horizontal = r * np.cos(el)
     z = r * np.sin(el)
     if azimuth_convention == "north-clockwise":
@@ -155,7 +157,7 @@ def polar_to_cartesian(
     else:  # x-forward-left-positive
         x = horizontal * np.cos(az)
         y = horizontal * np.sin(az)
-    return np.column_stack([x, y, z])
+    return np.column_stack([x.ravel(), y.ravel(), z.ravel()])
 
 
 def _normalize_radar_columns(frame: pd.DataFrame) -> pd.DataFrame:
