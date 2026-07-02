@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
-import os
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -15,6 +14,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
+import ablation_common as common
 
 
 DEFAULT_LEGACY_BASELINE_SCRIPT = Path("scripts/run_tracklet_viterbi_baseline.py")
@@ -220,7 +221,7 @@ def _run_baseline(
     if args.skip_existing and metrics_path.exists():
         return metrics_path
     command = _baseline_command(args, flight=flight, output_dir=output_dir)
-    env = os.environ.copy()
+    env = common.subprocess_env()
     env.update(candidate.environment())
     if args.dry_run:
         print(" ".join(command))
