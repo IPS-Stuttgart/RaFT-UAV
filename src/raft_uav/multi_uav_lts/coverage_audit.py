@@ -171,6 +171,7 @@ def audit_prediction_coverage(
         and parse_errors == 0
         and invalid_geometry_rows == 0
         and invalid_confidence_rows == 0
+        and unsorted_rows == 0
         and out_of_range_frame_rows == 0
     )
     return PredictionCoverageAudit(
