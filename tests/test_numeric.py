@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from raft_uav.mmuad.radar import polar_to_cartesian
 from raft_uav.numeric import optional_float, optional_int
 
 
@@ -125,3 +126,33 @@ def test_optional_int_accepts_integer_like_finite_scalar_values(value: object, e
 )
 def test_optional_int_preserves_large_integer_precision(value: object, expected: int) -> None:
     assert optional_int(value) == expected
+
+
+def test_polar_to_cartesian_broadcasts_scalar_elevation() -> None:
+    xyz = polar_to_cartesian(
+        np.array([10.0, 20.0]),
+        np.array([0.0, np.pi / 2.0]),
+        0.0,
+        azimuth_convention="north-clockwise",
+    )
+
+    np.testing.assert_allclose(
+        xyz,
+        np.array([[0.0, 10.0, 0.0], [20.0, 0.0, 0.0]]),
+        atol=1e-12,
+    )
+
+
+def test_polar_to_cartesian_broadcasts_scalar_azimuth_and_elevation() -> None:
+    xyz = polar_to_cartesian(
+        np.array([10.0, 20.0]),
+        0.0,
+        0.0,
+        azimuth_convention="east-counterclockwise",
+    )
+
+    np.testing.assert_allclose(
+        xyz,
+        np.array([[10.0, 0.0, 0.0], [20.0, 0.0, 0.0]]),
+        atol=1e-12,
+    )
