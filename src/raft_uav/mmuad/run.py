@@ -14,6 +14,7 @@ _FLAG_ONLY_OPTIONS = {
     "--inspect-layout-only",
     "--native-ros-auto-topic-map",
     "--cluster-ranker-keep-confidence",
+    "--" "no-" "apply-calibration",
     "--trajectory-completion-no-infer-grid",
     "--trajectory-completion-no-truth-timestamps",
     "--ug2-official-complete-to-sequence-timestamps",
