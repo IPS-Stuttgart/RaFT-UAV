@@ -374,7 +374,10 @@ def _parse_position_cell(value: Any) -> np.ndarray:
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError:
-            parsed = ast.literal_eval(text)
+            try:
+                parsed = ast.literal_eval(text)
+            except (SyntaxError, ValueError) as exc:
+                raise ValueError(f"invalid Track 5 Position cell: {value!r}") from exc
     else:
         parsed = value
     if isinstance(parsed, dict):
@@ -382,7 +385,10 @@ def _parse_position_cell(value: Any) -> np.ndarray:
             if all(key in parsed for key in keys):
                 return np.asarray([parsed[key] for key in keys], dtype=float)
         raise ValueError(f"unsupported Position object keys: {sorted(parsed)}")
-    array = np.asarray(parsed, dtype=float).reshape(-1)
+    try:
+        array = np.asarray(parsed, dtype=float).reshape(-1)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid Track 5 Position cell: {value!r}") from exc
     if len(array) != 3 or not np.isfinite(array).all():
         raise ValueError(f"invalid Track 5 Position cell: {value!r}")
     return array.astype(float)
