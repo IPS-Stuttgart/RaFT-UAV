@@ -125,6 +125,21 @@ def test_load_track5_submission_rejects_fractional_classification_labels(tmp_pat
         load_track5_submission(path)
 
 
+@pytest.mark.parametrize("position", ["(", "not-a-position"])
+def test_load_track5_submission_rejects_malformed_position_literals(
+    tmp_path: Path,
+    position: object,
+) -> None:
+    path = tmp_path / "submission.csv"
+    rows = _submission_rows()
+    rows["Position"] = rows["Position"].astype(object)
+    rows.loc[0, "Position"] = position
+    rows.to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="invalid Track 5 Position"):
+        load_track5_submission(path)
+
+
 def test_track5_submission_ensemble_rejects_template_mismatch(tmp_path: Path) -> None:
     first = tmp_path / "first.csv"
     second = tmp_path / "second.csv"
