@@ -6,8 +6,9 @@ import argparse
 from pathlib import Path
 
 from raft_uav.mmuad.classification import (
-    SEQUENCE_CLASSIFIER_METHODS,
     SEQUENCE_CLASSIFIER_LOSO_PREDICTION_COLUMNS,
+    SEQUENCE_CLASSIFIER_METHODS,
+    _normalize_sequence_classifier_method,
     apply_sequence_loso_labels_to_submission,
     build_sequence_classifier_loso_predictions,
     classify_sequences_from_features,
@@ -50,8 +51,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--method",
-        choices=SEQUENCE_CLASSIFIER_METHODS,
         default="nearest-neighbor",
+        help=(
+            "classifier method or alias; canonical methods: "
+            f"{', '.join(SEQUENCE_CLASSIFIER_METHODS)}"
+        ),
     )
     parser.add_argument("--k", type=int, default=1, help="nearest-neighbor vote count")
     parser.add_argument("--output-class-map", type=Path)
@@ -87,6 +91,10 @@ def main(argv: list[str] | None = None) -> int:
         help="optional relabeled results CSV/ZIP that preserves pose columns",
     )
     args = parser.parse_args(argv)
+    try:
+        args.method = _normalize_sequence_classifier_method(args.method)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     if args.loso_eval:
         return _run_loso_eval(args, parser)
@@ -104,7 +112,9 @@ def main(argv: list[str] | None = None) -> int:
     train_features = sequence_features_from_files(args.train_feature_table)
     predict_features = sequence_features_from_files(args.predict_feature_table)
     train_labels = load_sequence_class_labels(args.train_labels)
-    eval_labels = load_sequence_class_labels(args.eval_labels) if args.eval_labels is not None else None
+    eval_labels = (
+        load_sequence_class_labels(args.eval_labels) if args.eval_labels is not None else None
+    )
     result = classify_sequences_from_features(
         train_features=train_features,
         train_labels=train_labels,
