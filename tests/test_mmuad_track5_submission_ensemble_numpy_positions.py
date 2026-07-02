@@ -25,3 +25,5 @@ def test_track5_submission_ensemble_accepts_numpy_array_position_repr(tmp_path: 
         2.5,
         3.5,
     ]
+
+# placeholder
