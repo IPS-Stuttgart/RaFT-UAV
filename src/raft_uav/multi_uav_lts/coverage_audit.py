@@ -167,6 +167,7 @@ def audit_prediction_coverage(
     ready = (
         not missing_files
         and not extra_files
+        and not empty_expected_files
         and parse_errors == 0
         and invalid_geometry_rows == 0
         and invalid_confidence_rows == 0
