@@ -27,6 +27,7 @@ _TRACKLET_RUNNER_KEYS = {
     "inflation_alpha_by_source",
     "max_residual_norms_by_source",
     "candidate_catprob_threshold",
+    "radar_covariance_fn",
 }
 
 _TRACKLET_CATPROB_RETENTION_MODES = ("hard", "soft")
