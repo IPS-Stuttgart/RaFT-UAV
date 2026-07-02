@@ -182,8 +182,20 @@ def _prepare_scorecard_sequence_root(
 
     sequence_root = args.sequence_root
     if sequence_root is None:
+        if args.sequence_root_archive_extract_dir is not None:
+            raise ValueError("--sequence-root-archive-extract-dir requires --sequence-root")
+        if args.sequence_root_archive_manifest_json is not None:
+            raise ValueError("--sequence-root-archive-manifest-json requires --sequence-root")
         return None, None
     if not is_supported_archive(sequence_root):
+        if args.sequence_root_archive_extract_dir is not None:
+            raise ValueError(
+                "--sequence-root-archive-extract-dir requires an archive --sequence-root"
+            )
+        if args.sequence_root_archive_manifest_json is not None:
+            raise ValueError(
+                "--sequence-root-archive-manifest-json requires an archive --sequence-root"
+            )
         return sequence_root, None
 
     extract_dir = args.sequence_root_archive_extract_dir or (
