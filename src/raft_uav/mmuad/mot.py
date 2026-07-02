@@ -42,8 +42,16 @@ class MultiObjectTrackerConfig:
             "max_track_age_s",
             "min_new_track_confidence",
         ):
-            _require_nonnegative_config(name, getattr(self, name))
-        _require_positive_config("covariance_scale", self.covariance_scale)
+            object.__setattr__(
+                self,
+                name,
+                _require_nonnegative_config(name, getattr(self, name)),
+            )
+        object.__setattr__(
+            self,
+            "covariance_scale",
+            _require_positive_config("covariance_scale", self.covariance_scale),
+        )
 
 
 def _finite_config_float(name: str, value: object) -> float:
