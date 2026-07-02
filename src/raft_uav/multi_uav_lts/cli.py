@@ -149,6 +149,7 @@ def validate_submission_zip(
         and parse_errors == 0
         and invalid_geometry_rows == 0
         and invalid_confidence_rows == 0
+        and unsorted_rows == 0
     )
     return SubmissionValidation(
         zip_path=str(zip_path),
