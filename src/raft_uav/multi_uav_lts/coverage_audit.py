@@ -254,7 +254,7 @@ def _expected_prediction_names(
     if template_zip is not None:
         names.update(expected_names_from_template(template_zip) or [])
     if sequence_root is not None:
-        names.update(f"{path.name}.txt" for path in sorted(sequence_root.iterdir()) if path.is_dir())
+        names.update(f"{path.name}.txt" for path in _sequence_image_roots(sequence_root))
     if not names:
         raise ValueError("provide --template-zip and/or --sequence-root for coverage auditing")
     return sorted(names)
@@ -264,13 +264,20 @@ def _expected_frame_counts(sequence_root: Path | None) -> dict[str, int]:
     if sequence_root is None:
         return {}
     counts: dict[str, int] = {}
-    for sequence_dir in sorted(sequence_root.iterdir()):
-        if not sequence_dir.is_dir():
-            continue
+    for sequence_dir in _sequence_image_roots(sequence_root):
         counts[f"{sequence_dir.name}.txt"] = sum(
             1 for path in sequence_dir.rglob("*") if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
         )
     return counts
+
+
+def _sequence_image_roots(sequence_root: Path) -> list[Path]:
+    """Return sequence directories, including a flat image root as one sequence."""
+
+    roots = [path for path in sorted(sequence_root.iterdir()) if path.is_dir()]
+    if any(path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES for path in sequence_root.iterdir()):
+        roots.append(sequence_root)
+    return roots
 
 
 def _count_out_of_range_frame_rows(text: str, *, expected_frame_count: int | None) -> int:
