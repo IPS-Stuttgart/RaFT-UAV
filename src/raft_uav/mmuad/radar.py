@@ -27,6 +27,8 @@ RADAR_AZIMUTH_CONVENTIONS = (
     "east-clockwise",
     "x-forward-left-positive",
 )
+_AZIMUTH_COLUMN_CANDIDATES = ("azimuth_rad", "azimuth_deg", "azimuth")
+_ELEVATION_COLUMN_CANDIDATES = ("elevation_rad", "elevation_deg", "elevation")
 
 
 def load_radar_polar_csv_as_candidates(
@@ -43,11 +45,13 @@ def load_radar_polar_csv_as_candidates(
     """Load exported polar radar detections and convert them to candidates.
 
     Accepted aliases include ``range_m``/``range``/``r``,
-    ``azimuth_deg``/``azimuth``/``az``, and
-    ``elevation_deg``/``elevation``/``el``.  Missing elevation defaults to
-    zero.  The output coordinates are in the radar/export frame unless a later
-    calibration transform is applied. CSV/TSV/TXT and JSON row/table exports
-    are supported.
+    ``azimuth_rad``/``azimuth_deg``/``azimuth``/``az``/``bearing``, and
+    ``elevation_rad``/``elevation_deg``/``elevation``/``el``/``pitch``.
+    Explicit ``*_rad`` and ``*_deg`` columns are interpreted in their declared
+    units regardless of the fallback ``angle_unit`` setting.  Missing elevation
+    defaults to zero.  The output coordinates are in the radar/export frame
+    unless a later calibration transform is applied. CSV/TSV/TXT and JSON
+    row/table exports are supported.
     """
 
     return radar_polar_frame_to_candidates(
@@ -85,8 +89,13 @@ def radar_polar_frame_to_candidates(
         normalized["sequence_id"] = str(default_sequence_id)
     if "time_s" not in normalized.columns:
         raise ValueError("radar polar table requires time_s/timestamp_s/time column")
-    azimuth = _angle_to_rad(normalized["azimuth"].to_numpy(float), angle_unit=angle_unit)
-    elevation = _angle_to_rad(normalized.get("elevation", 0.0), angle_unit=angle_unit)
+    azimuth = _angle_column_to_rad(normalized, "azimuth", angle_unit=angle_unit)
+    elevation = _angle_column_to_rad(
+        normalized,
+        "elevation",
+        angle_unit=angle_unit,
+        default=0.0,
+    )
     range_m = pd.to_numeric(normalized["range_m"], errors="coerce").to_numpy(float)
     xyz = polar_to_cartesian(
         range_m,
@@ -166,8 +175,12 @@ def _normalize_radar_columns(frame: pd.DataFrame) -> pd.DataFrame:
     aliases = {
         "time_s": ("time_s", "timestamp_s", "timestamp", "time", "t", "sec"),
         "range_m": ("range_m", "range", "r", "rho", "distance_m"),
-        "azimuth": ("azimuth_deg", "azimuth", "az", "bearing", "bearing_deg"),
-        "elevation": ("elevation_deg", "elevation", "el", "pitch", "pitch_deg"),
+        "azimuth_rad": ("azimuth_rad", "bearing_rad"),
+        "azimuth_deg": ("azimuth_deg", "bearing_deg"),
+        "azimuth": ("azimuth", "az", "bearing"),
+        "elevation_rad": ("elevation_rad", "pitch_rad"),
+        "elevation_deg": ("elevation_deg", "pitch_deg"),
+        "elevation": ("elevation", "el", "pitch"),
         "track_id": ("track_id", "track", "id", "object_id"),
         "confidence": ("confidence", "score", "probability", "catprob", "cat_prob"),
         "sequence_id": ("sequence_id", "sequence", "seq", "scene_id"),
@@ -182,12 +195,44 @@ def _normalize_radar_columns(frame: pd.DataFrame) -> pd.DataFrame:
                 rename[original] = canonical
                 break
     out = frame.rename(columns=rename).copy()
-    missing = {"range_m", "azimuth"}.difference(out.columns)
+    missing: list[str] = []
+    if "range_m" not in out.columns:
+        missing.append("range_m")
+    if not _has_any_column(out, _AZIMUTH_COLUMN_CANDIDATES):
+        missing.append("azimuth")
     if missing:
         raise ValueError(f"radar polar table missing columns: {sorted(missing)}")
-    if "elevation" not in out.columns:
+    if not _has_any_column(out, _ELEVATION_COLUMN_CANDIDATES):
         out["elevation"] = 0.0
     return out
+
+
+def _has_any_column(frame: pd.DataFrame, choices: tuple[str, ...]) -> bool:
+    return any(choice in frame.columns for choice in choices)
+
+
+def _angle_column_to_rad(
+    frame: pd.DataFrame,
+    base_name: str,
+    *,
+    angle_unit: str,
+    default: float | None = None,
+) -> np.ndarray:
+    rad_column = f"{base_name}_rad"
+    if rad_column in frame.columns:
+        return _angle_to_rad(frame[rad_column].to_numpy(float), angle_unit="rad")
+
+    deg_column = f"{base_name}_deg"
+    if deg_column in frame.columns:
+        return _angle_to_rad(frame[deg_column].to_numpy(float), angle_unit="deg")
+
+    if base_name in frame.columns:
+        return _angle_to_rad(frame[base_name].to_numpy(float), angle_unit=angle_unit)
+
+    if default is not None:
+        return _angle_to_rad(default, angle_unit=angle_unit)
+
+    raise ValueError(f"radar polar table missing {base_name!r} angle column")
 
 
 def _angle_to_rad(values, *, angle_unit: str) -> np.ndarray:
@@ -274,7 +319,10 @@ def _json_radar_parent_defaults(parent: dict[Any, Any]) -> dict[str, Any]:
     return defaults
 
 
-def _merge_radar_parent_defaults(defaults: dict[str, Any], record: dict[Any, Any]) -> dict[Any, Any]:
+def _merge_radar_parent_defaults(
+    defaults: dict[str, Any],
+    record: dict[Any, Any],
+) -> dict[Any, Any]:
     row: dict[Any, Any] = {}
     record_has_time = _has_any_key(record, _RADAR_TIME_KEYS)
     record_has_sequence = _has_any_key(record, _RADAR_SEQUENCE_KEYS)
@@ -372,14 +420,20 @@ _RADAR_HINT_KEYS = {
     "r",
     "rho",
     "distance_m",
+    "azimuth_rad",
     "azimuth_deg",
     "azimuth",
     "az",
-    "bearing",
+    "bearing_rad",
     "bearing_deg",
+    "bearing",
+    "elevation_rad",
     "elevation_deg",
     "elevation",
     "el",
+    "pitch_rad",
+    "pitch_deg",
+    "pitch",
 }
 
 
