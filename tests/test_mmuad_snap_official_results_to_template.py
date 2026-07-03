@@ -74,6 +74,15 @@ def test_snap_official_results_to_template_rejects_fractional_classification_lab
         snapper.snap_official_results_to_template(results, _template())
 
 
+def test_snap_official_results_to_template_rejects_out_of_range_classification_labels() -> None:
+    results = _results()
+    results["Classification"] = results["Classification"].astype(object)
+    results.loc[0, "Classification"] = 4
+
+    with pytest.raises(ValueError, match="must be one of"):
+        snapper.snap_official_results_to_template(results, _template())
+
+
 def test_snap_official_results_to_template_rejects_logical_classification_labels() -> None:
     results = _results()
     results["Classification"] = results["Classification"].astype(object)

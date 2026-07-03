@@ -7,7 +7,11 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from raft_uav.mmuad.submission import parse_official_position_cell, parse_official_sequence_cell
+from raft_uav.mmuad.submission import (
+    OFFICIAL_TRACK5_CLASS_IDS,
+    parse_official_position_cell,
+    parse_official_sequence_cell,
+)
 
 RESAMPLE_METHODS = ("linear", "nearest")
 CLASSIFICATION_POLICIES = ("sequence-mode", "nearest")
@@ -104,6 +108,21 @@ def _integer_classification_values(values: pd.Series) -> pd.Series:
         raise ValueError(
             "official MMUAD Classification values must be integer ids; "
             f"got {bad_value!r}"
+        )
+    invalid_domain = np.zeros_like(finite, dtype=bool)
+    if integer_like.any():
+        integer_values = np.rint(numeric[integer_like]).astype(int)
+        invalid_domain[integer_like] = ~np.isin(
+            integer_values,
+            list(OFFICIAL_TRACK5_CLASS_IDS),
+        )
+    if invalid_domain.any():
+        row_index = int(np.flatnonzero(invalid_domain)[0])
+        class_id = int(np.rint(numeric[row_index]))
+        allowed = ", ".join(str(item) for item in sorted(OFFICIAL_TRACK5_CLASS_IDS))
+        raise ValueError(
+            "official MMUAD Classification values must be one of "
+            f"{{{allowed}}}; got {class_id!r}"
         )
     return numbers
 
