@@ -8,7 +8,7 @@ import pytest
 from raft_uav.mmuad.splits import load_split_manifest
 
 
-def test_split_manifest_ignores_stringified_missing_ids(tmp_path):
+def test_split_manifest_skips_string_placeholder_ids(tmp_path):
     path = tmp_path / "splits.csv"
     pd.DataFrame(
         {
@@ -20,7 +20,7 @@ def test_split_manifest_ignores_stringified_missing_ids(tmp_path):
     assert load_split_manifest(path) == {"train": ("seq1",)}
 
 
-def test_split_manifest_ignores_missing_split_labels(tmp_path):
+def test_split_manifest_skips_placeholder_split_labels(tmp_path):
     path = tmp_path / "splits.json"
     path.write_text(
         json.dumps(
@@ -39,7 +39,7 @@ def test_split_manifest_ignores_missing_split_labels(tmp_path):
     assert load_split_manifest(path) == {"train": ("seq1",)}
 
 
-def test_split_manifest_rejects_boolean_sequence_ids(tmp_path):
+def test_split_manifest_skips_boolean_sequence_ids(tmp_path):
     path = tmp_path / "splits.json"
     path.write_text(
         json.dumps(
@@ -57,7 +57,7 @@ def test_split_manifest_rejects_boolean_sequence_ids(tmp_path):
     assert load_split_manifest(path) == {"train": ("seq1",)}
 
 
-def test_split_manifest_all_missing_csv_still_raises(tmp_path):
+def test_split_manifest_all_placeholder_csv_still_raises(tmp_path):
     path = tmp_path / "splits.csv"
     pd.DataFrame({"sequence_id": ["nan", "None"], "split": ["train", "val"]}).to_csv(
         path,
