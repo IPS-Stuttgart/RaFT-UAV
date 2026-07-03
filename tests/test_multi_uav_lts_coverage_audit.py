@@ -122,6 +122,27 @@ def test_prediction_coverage_audit_detects_frame_ids_beyond_sequence_length(
     assert row.out_of_range_frame_rows == 1
 
 
+def test_prediction_coverage_audit_ignores_nested_images_for_sequence_length(
+    tmp_path: Path,
+) -> None:
+    sequence_root = _sequence_root(tmp_path, names=("A_00",))
+    nested_dir = sequence_root / "A_00" / "diagnostics"
+    nested_dir.mkdir()
+    nested_dir.joinpath("debug_overlay.jpg").write_text("", encoding="utf-8")
+    prediction_dir = tmp_path / "predictions"
+    prediction_dir.mkdir()
+    prediction_dir.joinpath("A_00.txt").write_text(_row(frame=4), encoding="utf-8")
+
+    audit = audit_prediction_coverage(prediction_dir, sequence_root=sequence_root)
+    row = audit.rows[0]
+
+    assert not audit.ready
+    assert row.expected_frame_count == 3
+    assert audit.out_of_range_frame_rows == 1
+    assert audit.out_of_range_frame_files == ["A_00.txt"]
+    assert row.status == "invalid"
+
+
 def test_prediction_coverage_audit_cli_writes_json_and_rows(tmp_path: Path) -> None:
     template_zip = tmp_path / "template.zip"
     prediction_dir = tmp_path / "predictions"
