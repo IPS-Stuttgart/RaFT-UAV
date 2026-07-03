@@ -491,6 +491,8 @@ def load_jsonable(value: Any) -> Any:
         return [load_jsonable(item) for item in value]
     if isinstance(value, np.ndarray):
         return value.tolist()
+    if _is_json_missing_scalar(value):
+        return None
     if hasattr(value, "item") and callable(value.item):
         try:
             return load_jsonable(value.item())
@@ -499,3 +501,13 @@ def load_jsonable(value: Any) -> Any:
     if isinstance(value, float) and not np.isfinite(value):
         return None
     return value
+
+
+def _is_json_missing_scalar(value: Any) -> bool:
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return False
+    if isinstance(missing, bool | np.bool_):
+        return bool(missing)
+    return False
