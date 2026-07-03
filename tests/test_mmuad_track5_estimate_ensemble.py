@@ -101,6 +101,38 @@ def test_track5_estimate_ensemble_weighted_average_after_template_resample() -> 
     assert diagnostics["valid_input_count"].tolist() == [2, 2, 2]
 
 
+def test_track5_estimate_ensemble_epoch_timestamps_do_not_cross_match() -> None:
+    base_time = 1_706_255_054.386069
+    template = pd.DataFrame(
+        {
+            "Sequence": ["seq_epoch", "seq_epoch"],
+            "Timestamp": [base_time, base_time + 1.0],
+            "Position": ["(0,0,0)", "(0,0,0)"],
+            "Classification": [1, 1],
+        }
+    )
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq_epoch", "seq_epoch"],
+            "time_s": [base_time, base_time + 1.0],
+            "state_x_m": [0.0, 100.0],
+            "state_y_m": [0.0, 0.0],
+            "state_z_m": [1.0, 1.0],
+        }
+    )
+
+    ensemble, diagnostics = build_track5_estimate_ensemble(
+        [("epoch", estimates, 1.0)],
+        template,
+        max_nearest_time_delta_s=0.0,
+    )
+
+    assert ensemble["state_x_m"].tolist() == pytest.approx([0.0, 100.0])
+    assert ensemble["ensemble_source_count"].tolist() == [1, 1]
+    assert diagnostics["candidate_input_count"].tolist() == [1, 1]
+    assert diagnostics["valid_input_count"].tolist() == [1, 1]
+
+
 def test_track5_estimate_ensemble_weighted_median_rejects_outlier() -> None:
     mean_ensemble, _ = build_track5_estimate_ensemble(
         [
