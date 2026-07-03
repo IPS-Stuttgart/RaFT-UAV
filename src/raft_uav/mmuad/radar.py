@@ -42,12 +42,12 @@ def load_radar_polar_csv_as_candidates(
 ) -> CandidateFrame:
     """Load exported polar radar detections and convert them to candidates.
 
-    Accepted aliases include ``range_m``/``range``/``r``,
-    ``azimuth_deg``/``azimuth``/``az``, and
-    ``elevation_deg``/``elevation``/``el``.  Missing elevation defaults to
-    zero.  The output coordinates are in the radar/export frame unless a later
-    calibration transform is applied. CSV/TSV/TXT and JSON row/table exports
-    are supported.
+    Accepted aliases include ``range_m``/``range``/``r`` plus explicit
+    angle-unit columns such as ``azimuth_rad``/``bearing_rad`` and
+    ``azimuth_deg``/``bearing_deg``. Generic angle columns use ``angle_unit``.
+    Missing elevation defaults to zero. The output coordinates are in the
+    radar/export frame unless a later calibration transform is applied.
+    CSV/TSV/TXT and JSON row/table exports are supported.
     """
 
     return radar_polar_frame_to_candidates(
@@ -78,15 +78,15 @@ def radar_polar_frame_to_candidates(
     """Convert an exported polar-radar table frame into candidates."""
 
     frame = normalize_time_column_aliases(frame, target="time_s")
-    normalized = _normalize_radar_columns(frame)
+    normalized = _normalize_radar_columns(frame, angle_unit=angle_unit)
     if sequence_id is not None:
         normalized["sequence_id"] = str(sequence_id)
     elif "sequence_id" not in normalized.columns:
         normalized["sequence_id"] = str(default_sequence_id)
     if "time_s" not in normalized.columns:
         raise ValueError("radar polar table requires time_s/timestamp_s/time column")
-    azimuth = _angle_to_rad(normalized["azimuth"].to_numpy(float), angle_unit=angle_unit)
-    elevation = _angle_to_rad(normalized.get("elevation", 0.0), angle_unit=angle_unit)
+    azimuth = normalized["azimuth"].to_numpy(float)
+    elevation = normalized["elevation"].to_numpy(float)
     range_m = pd.to_numeric(normalized["range_m"], errors="coerce").to_numpy(float)
     xyz = polar_to_cartesian(
         range_m,
@@ -160,14 +160,12 @@ def polar_to_cartesian(
     return np.column_stack([x.ravel(), y.ravel(), z.ravel()])
 
 
-def _normalize_radar_columns(frame: pd.DataFrame) -> pd.DataFrame:
+def _normalize_radar_columns(frame: pd.DataFrame, *, angle_unit: str = "deg") -> pd.DataFrame:
     lower = {str(col).lower(): col for col in frame.columns}
     rename: dict[object, str] = {}
     aliases = {
         "time_s": ("time_s", "timestamp_s", "timestamp", "time", "t", "sec"),
         "range_m": ("range_m", "range", "r", "rho", "distance_m"),
-        "azimuth": ("azimuth_deg", "azimuth", "az", "bearing", "bearing_deg"),
-        "elevation": ("elevation_deg", "elevation", "el", "pitch", "pitch_deg"),
         "track_id": ("track_id", "track", "id", "object_id"),
         "confidence": ("confidence", "score", "probability", "catprob", "cat_prob"),
         "sequence_id": ("sequence_id", "sequence", "seq", "scene_id"),
@@ -182,12 +180,68 @@ def _normalize_radar_columns(frame: pd.DataFrame) -> pd.DataFrame:
                 rename[original] = canonical
                 break
     out = frame.rename(columns=rename).copy()
-    missing = {"range_m", "azimuth"}.difference(out.columns)
+    missing = {"range_m"}.difference(out.columns)
     if missing:
         raise ValueError(f"radar polar table missing columns: {sorted(missing)}")
-    if "elevation" not in out.columns:
-        out["elevation"] = 0.0
+    out["azimuth"] = _resolve_angle_column(
+        frame,
+        column_name="azimuth",
+        rad_aliases=_RADAR_AZIMUTH_RAD_ALIASES,
+        deg_aliases=_RADAR_AZIMUTH_DEG_ALIASES,
+        generic_aliases=_RADAR_AZIMUTH_GENERIC_ALIASES,
+        default_angle_unit=angle_unit,
+        required=True,
+    )
+    elevation = _resolve_angle_column(
+        frame,
+        column_name="elevation",
+        rad_aliases=_RADAR_ELEVATION_RAD_ALIASES,
+        deg_aliases=_RADAR_ELEVATION_DEG_ALIASES,
+        generic_aliases=_RADAR_ELEVATION_GENERIC_ALIASES,
+        default_angle_unit=angle_unit,
+        required=False,
+    )
+    out["elevation"] = 0.0 if elevation is None else elevation
     return out
+
+
+def _resolve_angle_column(
+    frame: pd.DataFrame,
+    *,
+    column_name: str,
+    rad_aliases: tuple[str, ...],
+    deg_aliases: tuple[str, ...],
+    generic_aliases: tuple[str, ...],
+    default_angle_unit: str,
+    required: bool,
+) -> np.ndarray | None:
+    if default_angle_unit not in {"deg", "rad"}:
+        raise ValueError("angle_unit must be 'deg' or 'rad'")
+    lower = {str(col).lower(): col for col in frame.columns}
+    for unit, aliases in (
+        ("rad", rad_aliases),
+        ("deg", deg_aliases),
+        (default_angle_unit, generic_aliases),
+    ):
+        original = _first_present_column(lower, aliases)
+        if original is None:
+            continue
+        values = pd.to_numeric(frame[original], errors="coerce").to_numpy(float)
+        return _angle_to_rad(values, angle_unit=unit)
+    if required:
+        raise ValueError(f"radar polar table missing columns: {sorted({column_name})}")
+    return None
+
+
+def _first_present_column(
+    lower_columns: dict[str, object],
+    aliases: tuple[str, ...],
+) -> object | None:
+    for alias in aliases:
+        original = lower_columns.get(alias.lower())
+        if original is not None:
+            return original
+    return None
 
 
 def _angle_to_rad(values, *, angle_unit: str) -> np.ndarray:
@@ -274,7 +328,9 @@ def _json_radar_parent_defaults(parent: dict[Any, Any]) -> dict[str, Any]:
     return defaults
 
 
-def _merge_radar_parent_defaults(defaults: dict[str, Any], record: dict[Any, Any]) -> dict[Any, Any]:
+def _merge_radar_parent_defaults(
+    defaults: dict[str, Any], record: dict[Any, Any]
+) -> dict[Any, Any]:
     row: dict[Any, Any] = {}
     record_has_time = _has_any_key(record, _RADAR_TIME_KEYS)
     record_has_sequence = _has_any_key(record, _RADAR_SEQUENCE_KEYS)
@@ -364,22 +420,29 @@ _RADAR_TIME_KEYS = (
     "nsec",
     "nsecs",
 )
+_RADAR_AZIMUTH_RAD_ALIASES = ("azimuth_rad", "az_rad", "bearing_rad")
+_RADAR_AZIMUTH_DEG_ALIASES = ("azimuth_deg", "az_deg", "bearing_deg")
+_RADAR_AZIMUTH_GENERIC_ALIASES = ("azimuth", "az", "bearing")
+_RADAR_ELEVATION_RAD_ALIASES = ("elevation_rad", "el_rad", "pitch_rad")
+_RADAR_ELEVATION_DEG_ALIASES = ("elevation_deg", "el_deg", "pitch_deg")
+_RADAR_ELEVATION_GENERIC_ALIASES = ("elevation", "el", "pitch")
+_RADAR_ANGLE_HINT_KEYS = {
+    *_RADAR_AZIMUTH_RAD_ALIASES,
+    *_RADAR_AZIMUTH_DEG_ALIASES,
+    *_RADAR_AZIMUTH_GENERIC_ALIASES,
+    *_RADAR_ELEVATION_RAD_ALIASES,
+    *_RADAR_ELEVATION_DEG_ALIASES,
+    *_RADAR_ELEVATION_GENERIC_ALIASES,
+}
 _RADAR_PARENT_DEFAULT_KEYS = _RADAR_SEQUENCE_KEYS + _RADAR_TIME_KEYS
 _RADAR_HINT_KEYS = {
     *_RADAR_TIME_KEYS,
+    *_RADAR_ANGLE_HINT_KEYS,
     "range_m",
     "range",
     "r",
     "rho",
     "distance_m",
-    "azimuth_deg",
-    "azimuth",
-    "az",
-    "bearing",
-    "bearing_deg",
-    "elevation_deg",
-    "elevation",
-    "el",
 }
 
 
