@@ -8,6 +8,8 @@ import pandas as pd
 import pytest
 
 from raft_uav.mmuad.track5_estimate_ensemble import parse_estimate_spec
+from raft_uav.mmuad.track5_estimate_ensemble_grid import EnsembleGridRow
+from raft_uav.mmuad.track5_estimate_ensemble_grid import _row_sort_key
 from raft_uav.mmuad.track5_estimate_ensemble_grid import evaluate_estimate_ensemble_weight_grid
 from raft_uav.mmuad.track5_estimate_ensemble_grid import generate_simplex_weight_grid
 from raft_uav.mmuad.track5_estimate_ensemble_grid import main as grid_main
@@ -142,6 +144,35 @@ def test_estimate_ensemble_policy_grid_can_choose_robust_policy(tmp_path: Path) 
     assert best_weights == (pytest.approx(1.0 / 3.0),) * 3
     assert summary.iloc[0]["aggregation_policy"] == "weighted-median"
     assert summary.iloc[0]["pose_mse"] < summary.iloc[-1]["pose_mse"]
+
+
+def test_estimate_ensemble_grid_sort_key_demotes_nonfinite_rows() -> None:
+    nonfinite = EnsembleGridRow(
+        weights=(1.0, 0.0),
+        aggregation_policy="weighted-mean",
+        trim_fraction=0.2,
+        pose_mse=float("nan"),
+        rmse_m=float("nan"),
+        mean_error_m=float("nan"),
+        p95_error_m=float("nan"),
+        max_error_m=float("nan"),
+        class_accuracy=None,
+        matched_count=0,
+    )
+    finite = EnsembleGridRow(
+        weights=(0.0, 1.0),
+        aggregation_policy="weighted-mean",
+        trim_fraction=0.2,
+        pose_mse=1.0,
+        rmse_m=1.0,
+        mean_error_m=1.0,
+        p95_error_m=2.0,
+        max_error_m=3.0,
+        class_accuracy=None,
+        matched_count=3,
+    )
+
+    assert _row_sort_key(finite) < _row_sort_key(nonfinite)
 
 
 def test_estimate_ensemble_weight_grid_writes_best_artifacts(tmp_path: Path) -> None:
