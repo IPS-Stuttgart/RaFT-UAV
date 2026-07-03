@@ -24,6 +24,7 @@ _SEQUENCE_ID_ALIASES = (
 _SPLIT_ALIASES = ("split", "subset", "partition", "fold", "set")
 _SEQUENCE_LIST_KEYS = ("sequence_ids", "sequences", "ids", "items", "sequence_names")
 _SPLIT_VALUE_METADATA_KEYS = ("schema", "version", "description", "metadata", "meta")
+_MISSING_TEXT_VALUES = frozenset({"", "nan", "none", "<na>", "nat"})
 
 
 class _CaseInsensitiveSplitSummary(dict[str, Any]):
@@ -73,7 +74,7 @@ def _load_manifest_payload(path: Path) -> Any:
     if Path(path).suffix.lower() == ".json":
         return json.loads(text)
     try:
-        import yaml  # type: ignore[import-not-found]
+        import yaml
     except Exception:
         return json.loads(text)
     return yaml.safe_load(text)
@@ -220,7 +221,7 @@ def _entry_value(entry: Mapping[str, Any], aliases: tuple[str, ...]) -> str | No
 
 
 def _scalar_to_text(value: Any) -> str | None:
-    if value is None:
+    if value is None or isinstance(value, bool):
         return None
     try:
         missing = pd.isna(value)
@@ -231,7 +232,9 @@ def _scalar_to_text(value: Any) -> str | None:
     if not isinstance(value, str | int | float):
         return None
     text = str(value).strip()
-    return text or None
+    if text.lower() in _MISSING_TEXT_VALUES:
+        return None
+    return text
 
 
 def _append_unique(mapping: dict[str, list[str]], key: str, value: str) -> None:
