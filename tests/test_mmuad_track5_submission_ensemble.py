@@ -207,6 +207,31 @@ def test_track5_submission_ensemble_cli_writes_manifest(tmp_path: Path) -> None:
     assert manifest["validation"]["leaderboard_ready"] is True
 
 
+def test_track5_submission_ensemble_cli_requires_template_for_leaderboard_guard(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.csv"
+    second = tmp_path / "second.csv"
+    _submission_rows(offset=0.0, classification=1).to_csv(first, index=False)
+    _submission_rows(offset=2.0, classification=1).to_csv(second, index=False)
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(SystemExit, match="requires --template"):
+        ensemble_main(
+            [
+                "--submission",
+                f"a=1:{first}",
+                "--submission",
+                f"b=1:{second}",
+                "--output-dir",
+                str(output_dir),
+                "--require-leaderboard-ready",
+            ]
+        )
+
+    assert not output_dir.exists()
+
+
 def test_track5_submission_ensemble_entrypoint_is_exposed() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert (
