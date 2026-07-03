@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
@@ -231,12 +231,7 @@ def normalize_candidate_columns(
     default_sequence_id: str = "default",
     default_source: str = "candidate",
 ) -> pd.DataFrame:
-    """Return a normalized candidate table with canonical column names.
-
-    The official MMUAD archive layout may evolve.  This helper accepts a small
-    set of common aliases so exported detector/cluster files can be used
-    without rewriting the tracker.
-    """
+    """Return a normalized candidate table with canonical column names."""
 
     out = normalize_time_column_aliases(frame.copy(), target="time_s")
     out = _rename_aliases(out)
@@ -357,40 +352,55 @@ def normalize_time_column_aliases(
     *,
     target: str = "time_s",
 ) -> pd.DataFrame:
-    """Populate ``target`` from common exported timestamp-unit columns."""
+    """Populate ``target`` from common exported timestamp-unit columns.
+
+    When the target column already exists, missing/non-numeric target values are
+    filled row-wise from aliases instead of returning early. This prevents valid
+    detections or truth rows from being dropped merely because an export included
+    a sparse canonical ``time_s`` column next to a complete timestamp alias.
+    """
 
     out = frame.copy()
-    if target in out.columns:
-        return out
+    existing = pd.to_numeric(out[target], errors="coerce") if target in out.columns else None
     lower_to_original = {str(col).lower(): col for col in out.columns}
+
+    alias_series = _time_alias_series(out, lower_to_original)
+    if existing is not None:
+        out[target] = existing if alias_series is None else existing.fillna(alias_series)
+        return out
+    if alias_series is not None:
+        out[target] = alias_series
+    return out
+
+
+def _time_alias_series(
+    frame: pd.DataFrame,
+    lower_to_original: dict[str, object],
+) -> pd.Series | None:
     for seconds_alias, nanoseconds_alias in _TIME_SECOND_NANOSECOND_PAIRS:
         seconds_col = lower_to_original.get(seconds_alias)
         nanoseconds_col = lower_to_original.get(nanoseconds_alias)
         if seconds_col is None or nanoseconds_col is None:
             continue
-        out[target] = pd.to_numeric(out[seconds_col], errors="coerce") + (
-            pd.to_numeric(out[nanoseconds_col], errors="coerce") * 1.0e-9
+        return pd.to_numeric(frame[seconds_col], errors="coerce") + (
+            pd.to_numeric(frame[nanoseconds_col], errors="coerce") * 1.0e-9
         )
-        return out
     for alias, scale in _TIME_UNIT_ALIASES.items():
         original = lower_to_original.get(alias)
         if original is not None:
-            out[target] = pd.to_numeric(out[original], errors="coerce") * scale
-            return out
+            return pd.to_numeric(frame[original], errors="coerce") * scale
     for alias in _TIME_SECOND_ALIASES:
         original = lower_to_original.get(alias)
-        if original is not None:
-            out[target] = _seconds_or_stamp_dict_series(out[original])
-            return out
+        if original is not None and str(original) != "time_s":
+            return _seconds_or_stamp_dict_series(frame[original])
     for alias in ("header.stamp", "header"):
         original = lower_to_original.get(alias)
         if original is None:
             continue
-        parsed = _seconds_or_stamp_dict_series(out[original])
+        parsed = _seconds_or_stamp_dict_series(frame[original])
         if parsed.notna().any():
-            out[target] = parsed
-            return out
-    return out
+            return parsed
+    return None
 
 
 def _seconds_or_stamp_dict_series(values: pd.Series) -> pd.Series:
@@ -457,7 +467,7 @@ def _coerce_stamp_mapping(value: Any) -> dict[Any, Any] | None:
     for parser in (json.loads, ast.literal_eval):
         try:
             parsed = parser(text)
-        except (SyntaxError, TypeError, ValueError):
+        except (SyntaxError, TypeError, ValueError, json.JSONDecodeError):
             continue
         if isinstance(parsed, dict):
             return parsed
@@ -473,7 +483,7 @@ def _mapping_get_case_insensitive(mapping: dict[Any, Any], key: str) -> Any | No
 
 def _first_mapping_value_case_insensitive(
     mapping: dict[Any, Any],
-    keys: tuple[str, ...],
+    keys: Iterable[str],
 ) -> Any | None:
     for key in keys:
         value = _mapping_get_case_insensitive(mapping, key)
@@ -508,6 +518,6 @@ def _is_json_missing_scalar(value: Any) -> bool:
         missing = pd.isna(value)
     except (TypeError, ValueError):
         return False
-    if isinstance(missing, bool | np.bool_):
+    if isinstance(missing, (bool, np.bool_)):
         return bool(missing)
     return False
