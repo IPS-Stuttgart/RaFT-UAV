@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -402,6 +404,7 @@ def _seconds_or_stamp_dict_series(values: pd.Series) -> pd.Series:
 def _stamp_dict_to_seconds(value: Any) -> float | None:
     if isinstance(value, np.generic):
         value = value.item()
+    value = _maybe_parse_stringified_mapping(value)
     if not isinstance(value, dict):
         return None
 
@@ -439,6 +442,25 @@ def _stamp_dict_to_seconds(value: Any) -> float | None:
         return None if scalar is None else float(scalar)
     except (TypeError, ValueError):
         return None
+
+
+def _maybe_parse_stringified_mapping(value: Any) -> Any:
+    """Decode JSON/Python-literal mapping strings used by some CSV exports."""
+
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text.startswith("{") or not text.endswith("}"):
+        return value
+
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            parsed = parser(text)
+        except (SyntaxError, TypeError, ValueError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return value
 
 
 def _mapping_get_case_insensitive(mapping: dict[Any, Any], key: str) -> Any | None:
