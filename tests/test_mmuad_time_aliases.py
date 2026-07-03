@@ -54,6 +54,19 @@ def test_header_stamp_dict_unit_timestamp_aliases_are_scaled_to_seconds() -> Non
     assert normalized["time_s"].tolist() == [1.5, 2.5, 3.0]
 
 
+def test_existing_time_s_is_filled_rowwise_from_timestamp_aliases() -> None:
+    frame = pd.DataFrame(
+        {
+            "time_s": [1.0, None, "bad", 4.0],
+            "timestamp_us": [100_000, 2_000_000, 3_000_000, 400_000],
+        }
+    )
+
+    normalized = normalize_time_column_aliases(frame)
+
+    assert normalized["time_s"].tolist() == [1.0, 2.0, 3.0, 4.0]
+
+
 def test_run_option_classifier_defaults_unlisted_long_options_to_value_taking() -> None:
     assert run._option_consumes_next("--new-value-option")
     assert not run._option_consumes_next("--new-value-option=configured-value")
