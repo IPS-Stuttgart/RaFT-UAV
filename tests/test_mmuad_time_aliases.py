@@ -22,6 +22,22 @@ def test_stamp_dict_unit_timestamp_aliases_are_scaled_to_seconds() -> None:
     assert normalized["time_s"].tolist() == [1.25, 2.5, 3.0]
 
 
+def test_stringified_stamp_dict_timestamp_aliases_are_scaled_to_seconds() -> None:
+    frame = pd.DataFrame(
+        {
+            "stamp": [
+                "{'sec': 8, 'nanosec': 250000000}",
+                '{"timestamp_us": 1250000}',
+                "{'stamp': {'time_ms': 2500}}",
+            ]
+        }
+    )
+
+    normalized = normalize_time_column_aliases(frame)
+
+    assert normalized["time_s"].tolist() == [8.25, 1.25, 2.5]
+
+
 def test_header_stamp_dict_unit_timestamp_aliases_are_scaled_to_seconds() -> None:
     frame = pd.DataFrame(
         {
