@@ -82,3 +82,42 @@ def test_radar_polar_frame_fills_missing_sequence_ids_from_call_default() -> Non
         "seq-from-folder",
         "seq-from-folder",
     ]
+
+
+def test_radar_polar_frame_prefers_explicit_radian_angle_columns() -> None:
+    frame = pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "range_m": [10.0],
+            "azimuth": [0.0],
+            "azimuth_deg": [0.0],
+            "bearing_rad": [np.pi / 2.0],
+            "pitch_rad": [0.0],
+        }
+    )
+
+    candidates = radar_polar_frame_to_candidates(frame, angle_unit="deg")
+
+    xyz = candidates.rows[["x_m", "y_m", "z_m"]].to_numpy(dtype=float)
+    assert np.allclose(xyz, [[10.0, 0.0, 0.0]], atol=1.0e-9)
+
+
+def test_radar_polar_frame_accepts_explicit_degree_angle_aliases() -> None:
+    frame = pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "range_m": [10.0],
+            "azimuth": [0.0],
+            "azimuth_deg": [90.0],
+            "pitch_deg": [30.0],
+        }
+    )
+
+    candidates = radar_polar_frame_to_candidates(frame, angle_unit="rad")
+
+    xyz = candidates.rows[["x_m", "y_m", "z_m"]].to_numpy(dtype=float)
+    assert np.allclose(
+        xyz,
+        [[10.0 * np.cos(np.deg2rad(30.0)), 0.0, 10.0 * np.sin(np.deg2rad(30.0))]],
+        atol=1.0e-9,
+    )
