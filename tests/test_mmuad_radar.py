@@ -9,6 +9,44 @@ import pandas as pd
 from raft_uav.mmuad.radar import load_radar_polar_csv_as_candidates, radar_polar_frame_to_candidates
 
 
+def test_radar_polar_frame_honors_explicit_radian_angle_columns() -> None:
+    frame = pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "range_m": [10.0],
+            "azimuth_rad": [np.pi / 2.0],
+            "elevation_rad": [0.0],
+        }
+    )
+
+    candidates = radar_polar_frame_to_candidates(frame)
+
+    np.testing.assert_allclose(
+        candidates.rows[["x_m", "y_m", "z_m"]].to_numpy(dtype=float),
+        [[10.0, 0.0, 0.0]],
+        atol=1.0e-9,
+    )
+
+
+def test_radar_polar_frame_honors_explicit_degree_angle_columns() -> None:
+    frame = pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "range_m": [10.0],
+            "bearing_deg": [90.0],
+            "pitch_deg": [0.0],
+        }
+    )
+
+    candidates = radar_polar_frame_to_candidates(frame, angle_unit="rad")
+
+    np.testing.assert_allclose(
+        candidates.rows[["x_m", "y_m", "z_m"]].to_numpy(dtype=float),
+        [[10.0, 0.0, 0.0]],
+        atol=1.0e-9,
+    )
+
+
 def test_nested_radar_json_detections_inherit_parent_metadata(tmp_path: Path) -> None:
     path = tmp_path / "radar.json"
     path.write_text(
