@@ -200,6 +200,42 @@ def test_track5_classification_relabel_cli_writes_zip_and_validation(tmp_path: P
     assert manifest["validation"]["leaderboard_ready"] is True
 
 
+def test_track5_classification_relabel_cli_accepts_zipped_template_with_extra_members(
+    tmp_path: Path,
+) -> None:
+    pose_csv = tmp_path / "pose.csv"
+    class_csv = tmp_path / "class.csv"
+    template_zip = tmp_path / "template.zip"
+    output_dir = tmp_path / "out"
+    _pose_rows().to_csv(pose_csv, index=False)
+    _classification_rows().to_csv(class_csv, index=False)
+    with ZipFile(template_zip, "w") as archive:
+        archive.writestr("mmaud_results.csv", _template_rows().to_csv(index=False))
+        archive.writestr("README.txt", "template metadata")
+
+    status = relabel_main(
+        [
+            "--pose-submission",
+            str(pose_csv),
+            "--classification-submission",
+            str(class_csv),
+            "--template",
+            str(template_zip),
+            "--output-dir",
+            str(output_dir),
+            "--require-leaderboard-ready",
+        ]
+    )
+
+    assert status == 0
+    manifest = json.loads(
+        (output_dir / "mmuad_track5_classification_relabel_manifest.json").read_text(
+            encoding="utf-8",
+        )
+    )
+    assert manifest["validation"]["leaderboard_ready"] is True
+
+
 def test_track5_classification_relabel_cli_accepts_sequence_prediction_csv(
     tmp_path: Path,
 ) -> None:
