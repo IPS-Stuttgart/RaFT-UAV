@@ -14,6 +14,7 @@ import pandas as pd
 
 from raft_uav.mmuad.submission import (
     load_official_track5_results_frame,
+    load_official_track5_template_file,
     validate_official_track5_submission,
 )
 
@@ -225,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
             mode=args.mode,
         )
         source_kind = "official-submission"
-    template = None if args.template is None else pd.read_csv(args.template)
+    template = None if args.template is None else load_official_track5_template_file(args.template)
     paths = write_track5_classification_relabel_outputs(
         result=result,
         output_dir=args.output_dir,
