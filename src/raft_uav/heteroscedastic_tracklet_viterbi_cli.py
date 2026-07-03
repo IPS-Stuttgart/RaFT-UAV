@@ -50,9 +50,14 @@ def _ensure_tracklet_viterbi_association(argv: list[str]) -> list[str]:
     comparison rows through the same learned-covariance hooks.
     """
 
-    for arg in argv:
+    for index, arg in enumerate(argv):
         if arg == "--":
-            break
+            return [
+                *argv[:index],
+                _TRACKLET_ASSOCIATION_FLAG,
+                _TRACKLET_ASSOCIATION_MODE,
+                *argv[index:],
+            ]
         if arg == _TRACKLET_ASSOCIATION_FLAG or arg.startswith(
             f"{_TRACKLET_ASSOCIATION_FLAG}="
         ):
