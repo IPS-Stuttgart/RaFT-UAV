@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -400,9 +402,8 @@ def _seconds_or_stamp_dict_series(values: pd.Series) -> pd.Series:
 
 
 def _stamp_dict_to_seconds(value: Any) -> float | None:
-    if isinstance(value, np.generic):
-        value = value.item()
-    if not isinstance(value, dict):
+    value = _coerce_stamp_mapping(value)
+    if value is None:
         return None
 
     nested = _mapping_get_case_insensitive(value, "stamp")
@@ -439,6 +440,28 @@ def _stamp_dict_to_seconds(value: Any) -> float | None:
         return None if scalar is None else float(scalar)
     except (TypeError, ValueError):
         return None
+
+
+def _coerce_stamp_mapping(value: Any) -> dict[Any, Any] | None:
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return None
+
+    text = value.strip()
+    if not (text.startswith("{") and text.endswith("}")):
+        return None
+
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            parsed = parser(text)
+        except (SyntaxError, TypeError, ValueError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 
 def _mapping_get_case_insensitive(mapping: dict[Any, Any], key: str) -> Any | None:
