@@ -387,7 +387,16 @@ def _sequence_records(
 
 
 def _row_sort_key(row: EnsembleGridRow) -> tuple[float, float, float]:
-    return (row.pose_mse, row.p95_error_m, row.max_error_m)
+    return (
+        _finite_sort_metric(row.pose_mse),
+        _finite_sort_metric(row.p95_error_m),
+        _finite_sort_metric(row.max_error_m),
+    )
+
+
+def _finite_sort_metric(value: float) -> float:
+    value = float(value)
+    return value if np.isfinite(value) else float("inf")
 
 
 def _normalize_aggregation_policies(values: Iterable[str]) -> tuple[str, ...]:
