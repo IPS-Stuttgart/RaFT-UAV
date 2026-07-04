@@ -66,3 +66,13 @@ def test_split_manifest_all_placeholder_csv_still_raises(tmp_path):
 
     with pytest.raises(ValueError, match="CSV split manifest"):
         load_split_manifest(path)
+
+
+def test_split_manifest_csv_preserves_leading_zero_sequence_ids(tmp_path):
+    path = tmp_path / "splits.csv"
+    path.write_text(
+        "sequence_id,split\n001,train\n002,val\n",
+        encoding="utf-8",
+    )
+
+    assert load_split_manifest(path) == {"train": ("001",), "val": ("002",)}
