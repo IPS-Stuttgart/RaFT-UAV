@@ -42,7 +42,18 @@ def _install_image_row_guard() -> None:
     _image_evidence._image_file_rows = _image_file_rows
 
 
+def _install_candidate_pool_compare_cli_guard() -> None:
+    try:
+        from raft_uav.mmuad import candidate_pool_compare as _candidate_pool_compare
+        from raft_uav.mmuad import candidate_pool_compare_cli as _candidate_pool_compare_cli
+    except Exception:
+        return
+
+    _candidate_pool_compare.main = _candidate_pool_compare_cli.main
+
+
 _install_image_row_guard()
+_install_candidate_pool_compare_cli_guard()
 
 
 __all__ = [
