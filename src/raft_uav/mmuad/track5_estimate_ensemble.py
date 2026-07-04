@@ -37,6 +37,10 @@ VALIDATION_ROWS_CSV = "mmuad_track5_ensemble_validation_rows.csv"
 OFFICIAL_RESULTS_CSV = "mmaud_results.csv"
 OFFICIAL_ZIP = "ug2_submission.zip"
 ENSEMBLE_POLICIES = ("weighted-mean", "weighted-median", "trimmed-mean")
+# Resampling copies requested template timestamps into each candidate row. Match those
+# rows with an absolute tolerance only; NumPy's default relative tolerance is unsafe
+# for epoch-style timestamps because seconds-scale differences can compare close.
+TEMPLATE_TIME_MATCH_ATOL_S = 1.0e-9
 
 
 @dataclass(frozen=True)
@@ -155,7 +159,7 @@ def build_track5_estimate_ensemble(
         time_s = float(template_row["time_s"])
         rows = stacked.loc[
             (stacked["sequence_id"].astype(str) == sequence_id)
-            & np.isclose(pd.to_numeric(stacked["time_s"], errors="coerce"), time_s)
+            & _template_time_matches(stacked["time_s"], time_s)
         ]
         valid = rows.loc[rows["ensemble_valid"].astype(bool) & (rows["ensemble_weight"] > 0.0)]
         if valid.empty:
@@ -396,6 +400,11 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     )
     finite = np.isfinite(out["time_s"].to_numpy(float))
     return out.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+
+
+def _template_time_matches(values: pd.Series, target: float) -> np.ndarray:
+    numeric = pd.to_numeric(values, errors="coerce").to_numpy(float)
+    return np.isclose(numeric, float(target), rtol=0.0, atol=TEMPLATE_TIME_MATCH_ATOL_S)
 
 
 def _finite_xyz(rows: pd.DataFrame) -> pd.Series:
