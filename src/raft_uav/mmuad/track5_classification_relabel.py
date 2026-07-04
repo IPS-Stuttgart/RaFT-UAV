@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.submission import (
+    OFFICIAL_TRACK5_CLASS_IDS,
     load_official_track5_results_frame,
     load_official_track5_template_file,
     validate_official_track5_submission,
@@ -25,7 +26,7 @@ RELABEL_DIAGNOSTICS_CSV = "mmuad_track5_classification_relabel_diagnostics.csv"
 RELABEL_MANIFEST_JSON = "mmuad_track5_classification_relabel_manifest.json"
 RELABEL_VALIDATION_JSON = "mmuad_track5_classification_relabel_validation.json"
 RelabelMode = Literal["by-key", "by-sequence-majority"]
-VALID_CLASS_IDS = (0, 1, 2, 3, 4)
+VALID_CLASS_IDS = tuple(sorted(OFFICIAL_TRACK5_CLASS_IDS))
 MIN_PROBABILITY_CLASS_COUNT = 2
 SEQUENCE_ALIASES = ("Sequence", "sequence_id", "sequence", "heldout_sequence", "seq")
 PREDICTED_CLASS_ALIASES = (
@@ -103,7 +104,7 @@ def relabel_track5_classification_from_sequence_predictions(
 
     The prediction table may contain one predicted class per sequence, official
     ``Classification`` labels, or probability columns such as
-    ``predicted_probability_0`` ... ``predicted_probability_4``.  Probability
+    ``predicted_probability_0`` ... ``predicted_probability_3``.  Probability
     files may include all classes or any subset of at least two official class
     IDs; missing classes are treated as unavailable candidates.  The legacy
     four-column ``0`` ... ``3`` probability layout is still accepted.
@@ -191,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "sequence-level classifier predictions CSV; accepts sequence_id/Sequence and either "
             "predicted_class/Classification, probability columns for at least two official classes "
-            "(for example predicted_probability_0..4), or bare 0..4 probability columns"
+            "(for example predicted_probability_0..3), or bare 0..3 probability columns"
         ),
     )
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -423,7 +424,8 @@ def _validate_class_series(values: pd.Series, *, name: str) -> None:
         raise ValueError(f"{name} contains non-integer class labels")
     bad = sorted(set(rounded.loc[~rounded.isin(VALID_CLASS_IDS)].astype(int).tolist()))
     if bad:
-        raise ValueError(f"{name} contains class labels outside 0..4: {bad}")
+        allowed = ", ".join(str(class_id) for class_id in VALID_CLASS_IDS)
+        raise ValueError(f"{name} contains class labels outside {{{allowed}}}: {bad}")
 
 
 def _finite_mean(values: pd.Series) -> float | None:
