@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -80,6 +81,23 @@ def test_class_probability_context_adds_ranker_consumable_features() -> None:
     assert "image_class_prob_2" in model.feature_columns
     assert "image_class_prob_2_x_cluster_point_count" in model.feature_columns
     assert "image_class_prob_2_x_image_candidate_branch_dynamic_flag" in model.feature_columns
+
+
+def test_class_probability_context_fills_nan_interaction_inputs_with_zero() -> None:
+    candidates = _candidate_rows()
+    candidates.loc[0, "cluster_point_count"] = np.nan
+
+    augmented = attach_class_probability_context(
+        CandidateFrame(candidates),
+        _probability_rows(),
+        interaction_columns=("cluster_point_count",),
+    )
+    rows = augmented.rows.sort_values(["sequence_id", "track_id"]).reset_index(drop=True)
+
+    interaction = "image_class_prob_2_x_cluster_point_count"
+    assert rows.loc[0, interaction] == pytest.approx(0.0)
+    assert rows.loc[1, interaction] == pytest.approx(12.0)
+    assert np.isfinite(rows[interaction]).all()
 
 
 def test_class_probability_context_normalizes_integer_like_predicted_labels() -> None:
