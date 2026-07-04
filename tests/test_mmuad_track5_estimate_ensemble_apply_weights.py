@@ -11,6 +11,7 @@ from raft_uav.mmuad.track5_estimate_ensemble import EstimateInput
 from raft_uav.mmuad.track5_estimate_ensemble_apply_weights import apply_ensemble_weight_config
 from raft_uav.mmuad.track5_estimate_ensemble_apply_weights import load_ensemble_weight_config
 from raft_uav.mmuad.track5_estimate_ensemble_apply_weights import main as apply_weights_main
+from raft_uav.mmuad.track5_estimate_ensemble_apply_weights import write_apply_weights_outputs
 
 
 def _template() -> pd.DataFrame:
@@ -89,6 +90,31 @@ def test_apply_ensemble_weight_config_rejects_missing_label(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match="missing selected ensemble weight"):
         apply_ensemble_weight_config([f"missing={a_csv}"], _weights_payload())
+
+
+def test_write_apply_weights_outputs_manifest_preserves_generator_inputs(tmp_path: Path) -> None:
+    a_csv = tmp_path / "a.csv"
+    b_csv = tmp_path / "b.csv"
+    template_csv = tmp_path / "template.csv"
+    output_dir = tmp_path / "out"
+    _estimate_a().to_csv(a_csv, index=False)
+    _estimate_b().to_csv(b_csv, index=False)
+    _template().to_csv(template_csv, index=False)
+    estimate_inputs = (
+        EstimateInput(label, path, weight)
+        for label, path, weight in (("a", a_csv, 0.75), ("b", b_csv, 0.25))
+    )
+
+    paths = write_apply_weights_outputs(
+        estimate_inputs=estimate_inputs,
+        weight_config=_weights_payload(),
+        template_path=template_csv,
+        output_dir=output_dir,
+        class_map={"seq0001": "2", "seq0002": "1"},
+    )
+
+    manifest = json.loads(paths["apply_manifest_json"].read_text(encoding="utf-8"))
+    assert manifest["applied_weights"] == {"a": 0.75, "b": 0.25}
 
 
 def test_apply_ensemble_weights_cli_writes_leaderboard_ready_outputs(tmp_path: Path) -> None:
