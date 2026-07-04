@@ -109,10 +109,11 @@ def _estimate_files(args: argparse.Namespace) -> list[Path]:
     files = [Path(path) for path in args.base_estimates_csv]
     if args.ranker_output_dir is not None:
         root = Path(args.ranker_output_dir)
+        output_dir = Path(args.output_dir)
         files.extend(
             path
             for path in root.glob("**/mmuad_estimates.csv")
-            if path.is_file() and args.output_dir not in path.parents
+            if path.is_file() and not _is_relative_to(path, output_dir)
         )
     return sorted(dict.fromkeys(files))
 
@@ -120,12 +121,24 @@ def _estimate_files(args: argparse.Namespace) -> list[Path]:
 def _ranker_run_name(path: Path, root: Path | None) -> str:
     if root is not None:
         try:
-            relative = path.relative_to(root)
+            relative = _resolved_path(path).relative_to(_resolved_path(root))
             if len(relative.parts) > 1:
                 return str(relative.parts[0])
         except ValueError:
             pass
     return path.parent.name or "direct"
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        _resolved_path(path).relative_to(_resolved_path(root))
+    except ValueError:
+        return False
+    return True
+
+
+def _resolved_path(path: Path) -> Path:
+    return Path(path).expanduser().resolve()
 
 
 def _load_template_rows(path: Path | None, truth) -> pd.DataFrame | None:
