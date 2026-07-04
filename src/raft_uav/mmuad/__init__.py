@@ -5,6 +5,7 @@ from raft_uav.mmuad.mot import MultiObjectTrackerConfig, run_mmuad_multi_object_
 from raft_uav.mmuad.schema import CandidateFrame, TruthFrame
 from raft_uav.mmuad.evaluate import evaluate_submission_csv
 from raft_uav.mmuad.inspect import inspect_sequence_root
+from raft_uav.mmuad import submission as _submission
 from raft_uav.mmuad.submission import estimates_to_submission_frame
 from raft_uav.mmuad.submission import load_official_track5_results_frame
 from raft_uav.mmuad.submission import load_official_track5_template_file
@@ -14,6 +15,7 @@ from raft_uav.mmuad.submission import write_normalized_official_track5_submissio
 from raft_uav.mmuad.tracker import TrackerConfig, TrackerOutput, run_mmuad_tracker
 
 
+
 def _install_image_row_guard() -> None:
     try:
         import pandas as _pd
@@ -21,7 +23,6 @@ def _install_image_row_guard() -> None:
         from raft_uav.mmuad import image_evidence as _image_evidence
     except Exception:
         return
-
     parser = getattr(_image_evidence, "_time" + "stamp_from_filename")
 
     def _image_file_rows(image_files):
@@ -42,140 +43,33 @@ def _install_image_row_guard() -> None:
     _image_evidence._image_file_rows = _image_file_rows
 
 
-def _install_candidate_pool_compare_cli_guard() -> None:
-    try:
-        from raft_uav.mmuad import candidate_pool_compare as _candidate_pool_compare
-        from raft_uav.mmuad import candidate_pool_compare_cli as _candidate_pool_compare_cli
-    except Exception:
-        return
 
-    _candidate_pool_compare.main = _candidate_pool_compare_cli.main
+def _install_track5_validation_class_domain_guard() -> None:
+    original = _submission._official_track5_row_diagnostics
+    allowed = set(_submission.OFFICIAL_TRACK5_CLASS_IDS)
 
-
-def _install_temporal_consensus_train_cv_cli_guard() -> None:
-    try:
-        from raft_uav.mmuad import candidate_temporal_consensus_train_cv as _temporal_train_cv
-        from raft_uav.mmuad import candidate_temporal_consensus_train_cv_cli as _temporal_train_cv_cli
-    except Exception:
-        return
-
-    _temporal_train_cv.main = _temporal_train_cv_cli.main
-
-
-def _install_candidate_reservoir_topk_guard() -> None:
-    try:
-        import argparse as _argparse
-        import pandas as _pd
-        from pathlib import Path as _Path
-
-        from raft_uav.mmuad import candidate_reservoir as _candidate_reservoir
-        from raft_uav.mmuad.schema import normalize_truth_columns as _normalize_truth_columns
-    except Exception:
-        return
-
-    default_top_k = (1, 3, 5, 10, 20)
-
-    def _main(argv: list[str] | None = None) -> int:
-        parser = _argparse.ArgumentParser(
-            prog="raft-uav-mmuad-candidate-reservoir",
-            description="build branch-preserving MMUAD candidate reservoirs",
+    def _official_track5_row_diagnostics(frame):
+        diagnostics, normalized = original(frame)
+        if normalized.empty or "classification" not in normalized.columns:
+            return diagnostics, normalized
+        invalid = ~normalized["classification"].isin(allowed)
+        if not invalid.any():
+            return diagnostics, normalized
+        invalid_indices = normalized.loc[invalid, "row_index"].astype(int).tolist()
+        mask = diagnostics["row_index"].isin(invalid_indices) & diagnostics["row_type"].eq("prediction")
+        diagnostics = diagnostics.copy()
+        diagnostics.loc[mask, "status"] = "invalid_classification"
+        diagnostics.loc[mask, "reason"] = (
+            "official MMUAD Classification values must be one of {0, 1, 2, 3}"
         )
-        parser.add_argument(
-            "--candidate",
-            action="append",
-            default=[],
-            help="candidate CSV as BRANCH=path; may be repeated",
-        )
-        parser.add_argument(
-            "--candidate-csv",
-            action="append",
-            default=[],
-            help="alias for --candidate",
-        )
-        parser.add_argument("--output-csv", type=_Path, required=True)
-        parser.add_argument("--summary-json", type=_Path)
-        parser.add_argument("--truth-csv", type=_Path)
-        parser.add_argument("--oracle-frame-csv", type=_Path)
-        parser.add_argument("--oracle-summary-csv", type=_Path)
-        parser.add_argument("--oracle-by-sequence-csv", type=_Path)
-        parser.add_argument("--global-top-n", type=int, default=20)
-        parser.add_argument("--per-source-top-n", type=int, default=3)
-        parser.add_argument("--per-branch-top-n", type=int, default=3)
-        parser.add_argument("--top-per-source", type=int)
-        parser.add_argument("--top-per-branch", type=int)
-        parser.add_argument("--max-candidates-per-frame", type=int, default=40)
-        parser.add_argument("--score-column", default="ranker_score")
-        parser.add_argument("--fallback-score-column", default="confidence")
-        parser.add_argument("--score-floor-quantile", type=float)
-        parser.add_argument(
-            "--cap-reason-bonus",
-            type=float,
-            default=0.0,
-            help="bonus added during final frame cap for each independent reservoir selection reason",
-        )
-        parser.add_argument("--top-k", type=int, action="append", default=None)
-        parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
-        args = parser.parse_args(argv)
+        normalized = normalized.loc[~invalid].reset_index(drop=True)
+        return diagnostics, normalized
 
-        top_k_values = tuple(args.top_k) if args.top_k is not None else default_top_k
-        candidate_specs = [*args.candidate, *args.candidate_csv]
-        candidates = _candidate_reservoir._load_candidate_specs(list(candidate_specs))
-        per_source_top_n = args.per_source_top_n if args.top_per_source is None else args.top_per_source
-        per_branch_top_n = args.per_branch_top_n if args.top_per_branch is None else args.top_per_branch
-        reservoir = _candidate_reservoir.build_candidate_reservoir(
-            candidates,
-            config=_candidate_reservoir.ReservoirConfig(
-                global_top_n=args.global_top_n,
-                per_source_top_n=per_source_top_n,
-                per_branch_top_n=per_branch_top_n,
-                max_candidates_per_frame=args.max_candidates_per_frame,
-                score_column=args.score_column,
-                fallback_score_column=args.fallback_score_column,
-                score_floor_quantile=args.score_floor_quantile,
-                cap_reason_bonus=args.cap_reason_bonus,
-            ),
-        )
-        _candidate_reservoir.write_reservoir_outputs(
-            reservoir,
-            output_csv=args.output_csv,
-            summary_json=args.summary_json,
-            input_candidates=candidates,
-        )
-        print("mmuad_candidate_reservoir=ok")
-        print(f"candidate_rows={len(candidates)}")
-        print(f"reservoir_rows={len(reservoir)}")
-        print(f"output_csv={args.output_csv}")
-
-        if args.truth_csv is not None:
-            truth = _normalize_truth_columns(_pd.read_csv(args.truth_csv))
-            frame_rows, pooled, by_sequence = _candidate_reservoir.build_oracle_recall_tables(
-                reservoir,
-                truth,
-                top_k_values=top_k_values,
-                max_truth_time_delta_s=args.max_truth_time_delta_s,
-            )
-            if args.oracle_frame_csv is not None:
-                args.oracle_frame_csv.parent.mkdir(parents=True, exist_ok=True)
-                frame_rows.to_csv(args.oracle_frame_csv, index=False)
-            if args.oracle_summary_csv is not None:
-                args.oracle_summary_csv.parent.mkdir(parents=True, exist_ok=True)
-                pooled.to_csv(args.oracle_summary_csv, index=False)
-            if args.oracle_by_sequence_csv is not None:
-                args.oracle_by_sequence_csv.parent.mkdir(parents=True, exist_ok=True)
-                by_sequence.to_csv(args.oracle_by_sequence_csv, index=False)
-            print(f"oracle_frames={len(frame_rows)}")
-            if not pooled.empty:
-                print(f"oracle_all_mse={pooled.loc[0, 'oracle_all_3d_m_mse']}")
-        return 0
-
-    _candidate_reservoir.main = _main
+    _submission._official_track5_row_diagnostics = _official_track5_row_diagnostics
 
 
 _install_image_row_guard()
-_install_candidate_pool_compare_cli_guard()
-_install_temporal_consensus_train_cv_cli_guard()
-_install_candidate_reservoir_topk_guard()
-
+_install_track5_validation_class_domain_guard()
 
 __all__ = [
     "CalibrationSet",
