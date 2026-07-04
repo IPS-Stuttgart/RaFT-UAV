@@ -1,1 +1,2 @@
-np.nan
+if measurement.source != 'rf':
+    pass
