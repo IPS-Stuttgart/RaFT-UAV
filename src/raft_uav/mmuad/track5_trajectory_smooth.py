@@ -225,6 +225,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-leaderboard-ready", action="store_true")
     args = parser.parse_args(argv)
 
+    if args.require_leaderboard_ready and args.template is None:
+        raise SystemExit("--require-leaderboard-ready requires --template for validation")
+
     rows = load_track5_submission(args.submission)
     template = None if args.template is None else pd.read_csv(args.template)
     paths = write_track5_trajectory_smooth_outputs(
