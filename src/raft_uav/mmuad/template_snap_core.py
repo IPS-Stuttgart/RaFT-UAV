@@ -7,7 +7,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from raft_uav.mmuad.submission import OFFICIAL_TRACK5_CLASS_IDS, OFFICIAL_UG2_RESULT_COLUMNS
+from raft_uav.mmuad.submission import (
+    OFFICIAL_TRACK5_CLASS_IDS,
+    OFFICIAL_UG2_RESULT_COLUMNS,
+    parse_official_classification_cell,
+)
 from raft_uav.mmuad.template_snap_utils import (
     CLASSIFICATION_POLICIES,
     DIAGNOSTIC_COLUMNS,
@@ -134,22 +138,31 @@ def _template_classification_by_key(template: pd.DataFrame) -> dict[tuple[str, f
 
     rows = pd.DataFrame(
         {
-            "Sequence": frame[sequence_column].astype(str).str.strip(),
+            "Sequence": frame[sequence_column].map(_template_sequence_value),
             "Timestamp": pd.to_numeric(frame[timestamp_column], errors="coerce"),
-            "Classification": pd.to_numeric(frame[classification_column], errors="coerce"),
+            "Classification": frame[classification_column].map(_template_classification_value),
         }
     )
     finite = (
-        rows["Sequence"].ne("")
+        rows["Sequence"].notna()
         & np.isfinite(rows["Timestamp"].to_numpy(float))
-        & np.isfinite(rows["Classification"].to_numpy(float))
+        & rows["Classification"].notna()
     )
     rows = rows.loc[finite]
-    rows = rows.loc[rows["Classification"].isin(OFFICIAL_TRACK5_CLASS_IDS)]
     return {
         (str(row["Sequence"]), float(row["Timestamp"])): int(row["Classification"])
         for _, row in rows.iterrows()
     }
+
+
+def _template_classification_value(value: Any) -> int | None:
+    try:
+        class_id = parse_official_classification_cell(value)
+    except ValueError:
+        return None
+    if class_id not in OFFICIAL_TRACK5_CLASS_IDS:
+        return None
+    return class_id
 
 
 def _validate_official_classification_ids(rows: pd.DataFrame) -> None:
