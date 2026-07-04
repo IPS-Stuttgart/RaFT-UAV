@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
+import math
 import os
 
 import pandas as pd
@@ -219,9 +220,12 @@ def _fixed_lag_s_from_env() -> float:
     value = os.environ.get(_FIXED_LAG_ENV)
     if value is None or value.strip() == "":
         return _DEFAULT_FIXED_LAG_S
-    lag_s = float(value)
-    if lag_s <= 0.0:
-        raise ValueError(f"{_FIXED_LAG_ENV} must be positive")
+    try:
+        lag_s = float(value)
+    except ValueError as exc:
+        raise ValueError(f"{_FIXED_LAG_ENV} must be finite and positive") from exc
+    if not math.isfinite(lag_s) or lag_s <= 0.0:
+        raise ValueError(f"{_FIXED_LAG_ENV} must be finite and positive")
     return lag_s
 
 
