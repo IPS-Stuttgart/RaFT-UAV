@@ -251,13 +251,17 @@ def _expected_prediction_names(
     sequence_root: Path | None,
 ) -> list[str]:
     names: set[str] = set()
-    if template_zip is not None:
-        names.update(expected_names_from_template(template_zip) or [])
+    names.update(_template_prediction_names(template_zip))
     if sequence_root is not None:
         names.update(f"{path.name}.txt" for path in sorted(sequence_root.iterdir()) if path.is_dir())
     if not names:
         raise ValueError("provide --template-zip and/or --sequence-root for coverage auditing")
     return sorted(names)
+
+
+def _template_prediction_names(template_zip: Path | None) -> list[str]:
+    names = expected_names_from_template(template_zip) or []
+    return sorted(name for name in names if name.endswith(".txt") and "/" not in name.rstrip("/"))
 
 
 def _expected_frame_counts(sequence_root: Path | None) -> dict[str, int]:
