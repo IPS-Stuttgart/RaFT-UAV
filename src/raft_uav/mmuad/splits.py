@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.sequence import SequencePaths
@@ -75,7 +76,7 @@ def _load_manifest_payload(path: Path) -> Any:
         return json.loads(text)
     try:
         import yaml
-    except Exception:
+    except ImportError:
         return json.loads(text)
     return yaml.safe_load(text)
 
@@ -221,13 +222,17 @@ def _entry_value(entry: Mapping[str, Any], aliases: tuple[str, ...]) -> str | No
 
 
 def _scalar_to_text(value: Any) -> str | None:
-    if value is None or isinstance(value, bool):
+    if value is None or isinstance(value, bool | np.bool_):
         return None
+    if isinstance(value, np.generic):
+        value = value.item()
+        if value is None or isinstance(value, bool):
+            return None
     try:
         missing = pd.isna(value)
     except TypeError:
         missing = False
-    if isinstance(missing, bool) and missing:
+    if isinstance(missing, bool | np.bool_) and bool(missing):
         return None
     if not isinstance(value, str | int | float):
         return None
