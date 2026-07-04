@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 
@@ -47,3 +48,29 @@ def test_find_dataset_accepts_persistent_cache_dir(tmp_path: Path) -> None:
     rf_root.mkdir(parents=True)
 
     assert module.find_rf_root(tmp_path, max_depth=8) == rf_root
+
+
+def test_find_dataset_main_creates_nested_output_dirs(tmp_path: Path, monkeypatch) -> None:
+    module = load_find_dataset_module()
+    rf_root = tmp_path / "AADM2025Dryad" / "RF Sensor and Radar"
+    rf_root.mkdir(parents=True)
+    dataset_root_file = tmp_path / "nested" / "outputs" / "dataset_root.txt"
+    rf_root_file = tmp_path / "nested" / "outputs" / "rf_root.txt"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "find_dataset.py",
+            "--root",
+            str(tmp_path),
+            "--resolved-dataset-root-file",
+            str(dataset_root_file),
+            "--resolved-rf-root-file",
+            str(rf_root_file),
+        ],
+    )
+
+    assert module.main() == 0
+    assert dataset_root_file.read_text(encoding="utf-8") == str(rf_root.parent)
+    assert rf_root_file.read_text(encoding="utf-8") == str(rf_root)
