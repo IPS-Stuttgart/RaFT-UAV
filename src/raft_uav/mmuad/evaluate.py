@@ -34,6 +34,7 @@ _SUBMISSION_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "score": ("confidence", "probability"),
 }
+_MISSING_TRACK_ID_TOKENS = {"", "nan", "none", "<na>", "nat"}
 
 
 def load_submission_csv(path: Path) -> pd.DataFrame:
@@ -209,11 +210,13 @@ def match_submission_to_truth(
         for _, pred in pred_seq.iterrows():
             candidate_truth = truth_seq
             if restrict_to_track_id:
-                pred_track_id = str(pred.get("track_id", ""))
-                if pred_track_id not in truth_track_ids:
+                pred_track_id = _valid_track_id_text(pred.get("track_id", ""))
+                if pred_track_id is None or pred_track_id not in truth_track_ids:
                     rows.append(_unmatched_prediction_row(pred, reason="track_id_mismatch"))
                     continue
-                candidate_truth = truth_seq.loc[truth_seq["track_id"] == pred_track_id]
+                candidate_truth = truth_seq.loc[
+                    truth_seq["track_id"].map(_valid_track_id_text) == pred_track_id
+                ]
             if candidate_truth.empty:
                 rows.append(_unmatched_prediction_row(pred, reason="missing_track_truth"))
                 continue
@@ -339,7 +342,27 @@ def metrics_from_matches(
 
 
 def _track_ids(frame: pd.DataFrame) -> set[str]:
-    return set(frame["track_id"].dropna().astype(str))
+    track_ids: set[str] = set()
+    for value in frame["track_id"]:
+        track_id = _valid_track_id_text(value)
+        if track_id is not None:
+            track_ids.add(track_id)
+    return track_ids
+
+
+def _valid_track_id_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        missing = pd.isna(value)
+    except TypeError:
+        missing = False
+    if isinstance(missing, bool) and missing:
+        return None
+    text = str(value).strip()
+    if text.lower() in _MISSING_TRACK_ID_TOKENS:
+        return None
+    return text
 
 
 def _metric_sequence_ids(
@@ -371,8 +394,9 @@ def _covered_truth_count(matched: pd.DataFrame, truth: pd.DataFrame) -> int:
         return 0
     key_columns = ["sequence_id", "truth_time_s"]
     if "track_id" in truth.columns and "truth_track_id" in matched.columns:
-        truth_track_ids = set(truth["track_id"].dropna().astype(str))
-        if truth_track_ids and matched["truth_track_id"].astype(str).isin(truth_track_ids).any():
+        truth_track_ids = _track_ids(truth)
+        matched_truth_track_ids = matched["truth_track_id"].map(_valid_track_id_text)
+        if truth_track_ids and matched_truth_track_ids.isin(truth_track_ids).any():
             key_columns.append("truth_track_id")
     if any(column not in matched.columns for column in key_columns):
         return int(len(matched))
@@ -421,9 +445,9 @@ def _final_error(frame: pd.DataFrame, column: str) -> float | None:
 
 
 def _truth_track_id(row: pd.Series) -> str:
-    if "track_id" not in row.index or pd.isna(row["track_id"]):
+    if "track_id" not in row.index:
         return ""
-    return str(row["track_id"])
+    return _valid_track_id_text(row["track_id"]) or ""
 
 
 def _unmatched_prediction_row(pred: pd.Series, *, reason: str) -> dict[str, Any]:
