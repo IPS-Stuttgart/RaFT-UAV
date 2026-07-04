@@ -98,6 +98,14 @@ def _integer_classification_values(values: pd.Series) -> pd.Series:
             f"got {bad_value!r}"
         )
     numbers = pd.to_numeric(raw, errors="coerce")
+    bad_text_mask = numbers.isna() & raw.notna()
+    if bad_text_mask.any():
+        row_index = int(np.flatnonzero(bad_text_mask.to_numpy())[0])
+        bad_value = raw.iloc[row_index]
+        raise ValueError(
+            "official MMUAD Classification values must be integer ids; "
+            f"got {bad_value!r}"
+        )
     numeric = numbers.to_numpy(dtype=float)
     finite = np.isfinite(numeric)
     integer_like = finite & np.isclose(numeric, np.rint(numeric))
