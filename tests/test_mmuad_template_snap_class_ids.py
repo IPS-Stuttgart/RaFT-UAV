@@ -36,3 +36,26 @@ def test_template_snap_rejects_non_numeric_class_labels() -> None:
 
     with pytest.raises(ValueError, match="integer ids"):
         snap_official_results_to_template(results, template)
+
+
+def test_missing_template_classification_ignores_bool_values() -> None:
+    results = pd.DataFrame(
+        {
+            "Sequence": ["source-seq"],
+            "Timestamp": [0.0],
+            "Position": ["(1,2,3)"],
+            "Classification": [2],
+        }
+    )
+    template = pd.DataFrame(
+        {
+            "Sequence": ["seq001"],
+            "Timestamp": [0.0],
+            "Classification": [bool(1)],
+        }
+    )
+
+    snapped, diagnostics = snap_official_results_to_template(results, template)
+
+    assert snapped["Classification"].tolist() == [0]
+    assert diagnostics["method"].tolist() == ["missing-zero"]
