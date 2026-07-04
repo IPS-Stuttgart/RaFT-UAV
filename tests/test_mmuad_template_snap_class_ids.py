@@ -21,3 +21,18 @@ def test_template_snap_rejects_unofficial_class_labels() -> None:
 
     with pytest.raises(ValueError, match="must be one of"):
         snap_official_results_to_template(results, template)
+
+
+def test_template_snap_rejects_non_numeric_class_labels() -> None:
+    results = pd.DataFrame(
+        {
+            "Sequence": ["seq001"],
+            "Timestamp": [0.0],
+            "Position": ["(0,0,0)"],
+            "Classification": ["Mavic 3"],
+        }
+    )
+    template = pd.DataFrame({"Sequence": ["seq001"], "Timestamp": [0.0]})
+
+    with pytest.raises(ValueError, match="integer ids"):
+        snap_official_results_to_template(results, template)
