@@ -108,7 +108,12 @@ def _integer_classification_values(values: pd.Series) -> pd.Series:
         )
     numeric = numbers.to_numpy(dtype=float)
     finite = np.isfinite(numeric)
-    integer_like = finite & np.isclose(numeric, np.rint(numeric))
+    integer_like = finite & np.isclose(
+        numeric,
+        np.rint(numeric),
+        rtol=0.0,
+        atol=1.0e-12,
+    )
     fractional = finite & ~integer_like
     if fractional.any():
         row_index = int(np.flatnonzero(fractional)[0])
