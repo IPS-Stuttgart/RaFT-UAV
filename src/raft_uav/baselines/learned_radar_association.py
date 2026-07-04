@@ -22,7 +22,7 @@ from raft_uav.baselines.radar_association import (
     _empty_selected_radar,
     _events,
     _gate_threshold_for_measurement,
-    _initial_measurement,
+    _initial_measurement_and_row,
     _inflation_alpha_for_measurement,
     _max_residual_norm_for_measurement,
     _nis_scored_candidates,
@@ -68,17 +68,20 @@ def run_async_cv_baseline_with_learned_radar_association(
     if not events:
         return [], _empty_selected_radar(radar)
 
-    initial_measurement = _initial_measurement(
+    initial = _initial_measurement_and_row(
         events[0],
         association="prediction-nis",
         covariance=covariance,
+        covariance_config=None,
+        stable_anchor_by_key=None,
+        candidate_catprob_threshold=candidate_catprob_threshold,
         truth=None,
         truth_gate_m=150.0,
         truth_time_gate_s=1.0,
-        candidate_catprob_threshold=candidate_catprob_threshold,
     )
-    if initial_measurement is None:
+    if initial is None:
         return [], _empty_selected_radar(radar)
+    initial_measurement, initial_selected_row = initial
 
     tracker = AsyncConstantVelocityKalmanTracker(
         initial_position=initial_measurement.vector,
@@ -88,38 +91,48 @@ def run_async_cv_baseline_with_learned_radar_association(
     records: list[dict[str, object]] = []
     selected_rows: list[pd.Series] = []
     current_track_id: int | None = None
-    start_index = 0
 
-    if events[0]["kind"] == "rf":
-        diagnostics = tracker.update(
+    initial_diagnostics = tracker.update(
+        initial_measurement,
+        gate_threshold=_gate_threshold_for_measurement(
             initial_measurement,
-            gate_threshold=_gate_threshold_for_measurement(
-                initial_measurement,
-                gate_probabilities_by_source=gate_probabilities_by_source,
-                gate_thresholds_by_source=gate_thresholds_by_source,
-            ),
-            safety_gate_threshold=_gate_threshold_for_measurement(
-                initial_measurement,
-                gate_probabilities_by_source=safety_gate_probabilities_by_source,
-                gate_thresholds_by_source=safety_gate_thresholds_by_source,
-            ),
-            max_residual_norm=_max_residual_norm_for_measurement(
-                initial_measurement,
-                max_residual_norms_by_source=max_residual_norms_by_source,
-            ),
-            robust_update=_robust_update_for_measurement(
-                initial_measurement,
-                robust_update_by_source=robust_update_by_source,
-            ),
-            inflation_alpha=_inflation_alpha_for_measurement(
-                initial_measurement,
-                inflation_alpha_by_source=inflation_alpha_by_source,
-            ),
-        )
-        records.append(_record(initial_measurement, tracker, diagnostics))
-        start_index = 1
+            gate_probabilities_by_source=gate_probabilities_by_source,
+            gate_thresholds_by_source=gate_thresholds_by_source,
+        ),
+        safety_gate_threshold=_gate_threshold_for_measurement(
+            initial_measurement,
+            gate_probabilities_by_source=safety_gate_probabilities_by_source,
+            gate_thresholds_by_source=safety_gate_thresholds_by_source,
+        ),
+        max_residual_norm=_max_residual_norm_for_measurement(
+            initial_measurement,
+            max_residual_norms_by_source=max_residual_norms_by_source,
+        ),
+        robust_update=_robust_update_for_measurement(
+            initial_measurement,
+            robust_update_by_source=robust_update_by_source,
+        ),
+        inflation_alpha=_inflation_alpha_for_measurement(
+            initial_measurement,
+            inflation_alpha_by_source=inflation_alpha_by_source,
+        ),
+    )
+    initial_record_kwargs: dict[str, object] = {}
+    if initial_selected_row is not None and initial_diagnostics.accepted:
+        current_track_id = _optional_track_id(initial_selected_row)
+        selected_rows.append(initial_selected_row)
+        initial_record_kwargs = {
+            "track_id": current_track_id,
+            "association_nis": _optional_float(initial_selected_row.get("association_nis")),
+            "association_score": _optional_float(initial_selected_row.get("association_score")),
+            "association_mode": str(initial_selected_row.get("association_mode", "bootstrap-catprob")),
+        }
+    records.append(_record(initial_measurement, tracker, initial_diagnostics, **initial_record_kwargs))
 
-    for event in events[start_index:]:
+    # The first event initialized the tracker and has already been recorded above.
+    # Replaying a radar bootstrap frame here would run learned scoring on the same
+    # timestamp and could select a different candidate before any time propagation.
+    for event in events[1:]:
         if event["kind"] == "rf":
             measurement = event["measurement"]
             assert isinstance(measurement, TrackingMeasurement)
