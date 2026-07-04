@@ -2,10 +2,21 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from raft_uav.mmuad.splits import load_split_manifest
+from raft_uav.mmuad.splits import _manifest_from_rows, load_split_manifest
+
+
+def test_split_manifest_accepts_numpy_scalar_sequence_ids() -> None:
+    rows = [
+        {"sequence_id": np.int64(42), "split": np.str_("train")},
+        {"sequence_id": np.float64(7.5), "split": np.str_("val")},
+        {"sequence_id": np.bool_(True), "split": "train"},
+    ]
+
+    assert _manifest_from_rows(rows) == {"train": ("42",), "val": ("7.5",)}
 
 
 def test_split_manifest_skips_string_placeholder_ids(tmp_path):
