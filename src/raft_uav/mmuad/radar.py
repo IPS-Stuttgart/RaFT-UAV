@@ -176,7 +176,7 @@ def _normalize_radar_columns(frame: pd.DataFrame) -> pd.DataFrame:
     rename: dict[object, str] = {}
     aliases = {
         "time_s": ("time_s", "timestamp_s", "timestamp", "time", "t", "sec"),
-        "range_m": ("range_m", "range", "r", "rho", "distance_m"),
+        "range_m": ("range_m", "range", "r", "rho", "distance_m", "distance"),
         "azimuth_rad": ("azimuth_rad", "az_rad", "bearing_rad"),
         "azimuth_deg": ("azimuth_deg", "az_deg", "bearing_deg"),
         "azimuth": ("azimuth", "az", "bearing"),
@@ -410,6 +410,7 @@ _RADAR_HINT_KEYS = {
     "r",
     "rho",
     "distance_m",
+    "distance",
     "azimuth_rad",
     "az_rad",
     "bearing_rad",
