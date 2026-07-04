@@ -6,6 +6,7 @@ import tomllib
 from zipfile import ZipFile
 
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.track5_classification_relabel import main as relabel_main
 from raft_uav.mmuad.track5_classification_relabel import relabel_track5_classification
@@ -106,7 +107,7 @@ def test_track5_classification_relabel_accepts_subset_probability_columns() -> N
         {
             "heldout_sequence": ["seq0001", "seq0002"],
             "predicted_probability_1": [0.20, 0.90],
-            "predicted_probability_4": [0.80, 0.10],
+            "predicted_probability_3": [0.80, 0.10],
         }
     )
 
@@ -115,11 +116,27 @@ def test_track5_classification_relabel_accepts_subset_probability_columns() -> N
         predictions,
     )
 
-    assert result.rows["Classification"].tolist() == [4, 4, 1]
+    assert result.rows["Classification"].tolist() == [3, 3, 1]
     assert result.manifest["source_probability_min"] == 0.80
     assert result.diagnostics["source_sequence_label_method"].eq(
         "probability-argmax",
     ).all()
+
+
+def test_track5_classification_relabel_rejects_out_of_domain_class_four() -> None:
+    predictions = pd.DataFrame(
+        {
+            "heldout_sequence": ["seq0001", "seq0002"],
+            "predicted_probability_1": [0.20, 0.90],
+            "predicted_probability_4": [0.80, 0.10],
+        }
+    )
+
+    with pytest.raises(ValueError, match="official-class probability"):
+        relabel_track5_classification_from_sequence_predictions(
+            _pose_rows(),
+            predictions,
+        )
 
 
 def test_track5_classification_relabel_accepts_legacy_bare_probability_columns() -> None:
