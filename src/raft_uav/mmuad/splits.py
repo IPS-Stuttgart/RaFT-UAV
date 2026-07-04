@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.sequence import SequencePaths
@@ -221,6 +222,8 @@ def _entry_value(entry: Mapping[str, Any], aliases: tuple[str, ...]) -> str | No
 
 
 def _scalar_to_text(value: Any) -> str | None:
+    if isinstance(value, np.generic):
+        value = value.item()
     if value is None or isinstance(value, bool):
         return None
     try:
