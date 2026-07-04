@@ -1,22 +1,16 @@
-"""Apply train-selected Track 5 estimate-ensemble weights to new splits.
-
-``track5_estimate_ensemble_weight_search`` writes a JSON file with selected
-weights.  This module consumes that JSON on validation or hidden-test estimate
-CSVs, then delegates to the upload-ready estimate ensemble writer.  The command
-is inference-safe: it reads fixed weights and a timestamp template only; it does
-not consume truth labels.
-"""
-
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import json
+from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
 
-from raft_uav.mmuad.submission import load_official_track5_template_file, load_sequence_class_map
+from raft_uav.mmuad.submission import (
+    load_official_track5_template_file,
+    load_sequence_class_map,
+)
 from raft_uav.mmuad.track5_estimate_ensemble import EstimateInput
 from raft_uav.mmuad.track5_estimate_ensemble import parse_estimate_spec
 from raft_uav.mmuad.track5_estimate_ensemble import write_track5_estimate_ensemble_outputs
@@ -25,8 +19,6 @@ APPLY_MANIFEST_JSON = "mmuad_track5_ensemble_applied_weights_manifest.json"
 
 
 def load_ensemble_weight_config(path: Path) -> dict[str, Any]:
-    """Load and validate an ensemble-weight-search JSON config."""
-
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     weights = payload.get("weights")
     if not isinstance(weights, dict) or not weights:
@@ -36,7 +28,10 @@ def load_ensemble_weight_config(path: Path) -> dict[str, Any]:
         weight = float(value)
         if not np.isfinite(weight) or weight < 0.0:
             raise ValueError(f"weight for {label!r} must be finite and non-negative")
-        parsed_weights[_safe_label(str(label))] = weight
+        safe_label = _safe_label(str(label))
+        if safe_label in parsed_weights:
+            raise ValueError(f"duplicate normalized weight label: {safe_label!r}")
+        parsed_weights[safe_label] = weight
     total = sum(parsed_weights.values())
     if total <= 0.0:
         raise ValueError("weight config sum must be positive")
@@ -51,8 +46,6 @@ def apply_ensemble_weight_config(
     missing_weight_policy: str = "error",
     default_missing_weight: float = 0.0,
 ) -> list[EstimateInput]:
-    """Return estimate inputs with weights from a selected-weight JSON config."""
-
     if missing_weight_policy not in {"error", "zero", "default"}:
         raise ValueError("missing_weight_policy must be one of: error, zero, default")
     weights = {str(key): float(value) for key, value in weight_config.get("weights", {}).items()}
@@ -86,8 +79,6 @@ def write_apply_weights_outputs(
     trim_fraction: float | None = None,
     max_nearest_time_delta_s: float | None = None,
 ) -> dict[str, Path]:
-    """Write weighted ensemble outputs plus an application manifest."""
-
     estimate_input_list = list(estimate_inputs)
     template = load_official_track5_template_file(template_path)
     selected_aggregation = str(
