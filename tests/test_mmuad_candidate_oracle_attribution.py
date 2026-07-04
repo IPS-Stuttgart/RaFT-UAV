@@ -16,7 +16,7 @@ def _candidate_rows() -> pd.DataFrame:
             "sequence_id": ["seqA", "seqA", "seqA", "seqA"],
             "time_s": [0.0, 0.0, 1.0, 1.0],
             "source": ["lidar_360", "livox_avia", "lidar_360", "livox_avia"],
-            "track_id": ["raw-good-0", "translated-bad-0", "raw-good-1", "translated-bad-1"],
+            "track_id": ["raw-0", "translated-0", "raw-1", "translated-1"],
             "candidate_branch": ["raw", "translated", "raw", "translated"],
             "x_m": [0.0, 20.0, 1.0, 18.0],
             "y_m": [0.0, 0.0, 0.0, 0.0],
@@ -105,4 +105,6 @@ def test_oracle_attribution_cli_writes_tables(tmp_path) -> None:
     )
     assert set(frame_rows["oracle_all_candidate_branch"]) == {"raw"}
     assert pooled.loc[0, "oracle_top2_3d_m_mse"] == 0.0
+    assert "oracle_top3_3d_m" not in frame_rows.columns
+    assert "oracle_top3_3d_m_mse" not in pooled.columns
     assert summary["by_branch"][0]["candidate_branch"] == "raw"
