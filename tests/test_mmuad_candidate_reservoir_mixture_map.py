@@ -101,6 +101,11 @@ def test_reservoir_mixture_cli_writes_oracle_diagnostics(tmp_path: Path) -> None
     summary = pd.read_csv(oracle_summary)
     assert summary.loc[0, "oracle_all_3d_m_mse"] == 0.0
     assert summary.loc[0, "oracle_top2_3d_m_mse"] == 0.0
+    assert "oracle_top3_3d_m_mse" not in summary.columns
+    assert "oracle_top5_3d_m_mse" not in summary.columns
+    assert "oracle_top10_3d_m_mse" not in summary.columns
+    assert "oracle_top20_3d_m_mse" not in summary.columns
     payload = json.loads(combined_summary.read_text(encoding="utf-8"))
+    assert payload["reservoir_oracle"]["top_k_values"] == [1, 2]
     assert payload["reservoir_oracle"]["frame_count"] == 3
     assert payload["reservoir_oracle"]["pooled"]["oracle_all_3d_m_mse"] == 0.0
