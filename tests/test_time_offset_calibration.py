@@ -35,6 +35,17 @@ def test_apply_time_offset_preserves_uncorrected_time():
     np.testing.assert_allclose(shifted["time_offset_correction_s"], [0.25, 0.25])
 
 
+def test_apply_time_offset_reuses_preserved_uncorrected_time():
+    frame = pd.DataFrame({"time_s": [1.0, 2.0], "east_m": [0.0, 1.0]})
+
+    shifted = apply_time_offset(frame, 0.25)
+    recalibrated = apply_time_offset(shifted, -0.5)
+
+    np.testing.assert_allclose(recalibrated["time_s"], [0.5, 1.5])
+    np.testing.assert_allclose(recalibrated["time_s_uncorrected"], [1.0, 2.0])
+    np.testing.assert_allclose(recalibrated["time_offset_correction_s"], [-0.5, -0.5])
+
+
 def test_radar_aggregate_offset_sweep_recovers_positive_offset():
     radar = pd.DataFrame(
         [
