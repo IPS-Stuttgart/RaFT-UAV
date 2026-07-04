@@ -58,19 +58,21 @@ def pareto_front(
     """Return a Boolean mask indicating Pareto-front rows."""
 
     if rows.empty:
-        return pd.Series(dtype=bool)
+        return pd.Series(dtype=bool, index=rows.index)
     values = []
     for column in minimize_columns:
         values.append(pd.to_numeric(rows[column], errors="coerce").to_numpy(dtype=float))
     for column in maximize_columns:
         values.append(-pd.to_numeric(rows[column], errors="coerce").to_numpy(dtype=float))
+    if not values:
+        return pd.Series(True, index=rows.index, dtype=bool)
     matrix = np.column_stack(values)
-    front = np.ones(len(rows), dtype=bool)
+    finite = np.isfinite(matrix).all(axis=1)
+    front = finite.copy()
     for i in range(len(rows)):
-        if not np.isfinite(matrix[i]).all():
-            front[i] = False
+        if not finite[i]:
             continue
-        dominates = np.all(matrix <= matrix[i], axis=1) & np.any(matrix < matrix[i], axis=1)
+        dominates = finite & np.all(matrix <= matrix[i], axis=1) & np.any(matrix < matrix[i], axis=1)
         dominates[i] = False
         if np.any(dominates):
             front[i] = False
