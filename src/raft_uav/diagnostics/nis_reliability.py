@@ -204,11 +204,15 @@ def _normalized_nis_frame(
     for column in group_columns:
         if column not in work.columns:
             work[column] = "missing"
+    nis_values = work["nis"].to_numpy(dtype=float)
+    dim_values = work["measurement_dim"].to_numpy(dtype=float)
+    integer_dim = np.isclose(dim_values, np.rint(dim_values))
     finite = (
-        np.isfinite(work["nis"].to_numpy(dtype=float))
-        & (work["nis"].to_numpy(dtype=float) >= 0.0)
-        & np.isfinite(work["measurement_dim"].to_numpy(dtype=float))
-        & (work["measurement_dim"].to_numpy(dtype=float) > 0.0)
+        np.isfinite(nis_values)
+        & (nis_values >= 0.0)
+        & np.isfinite(dim_values)
+        & (dim_values > 0.0)
+        & integer_dim
     )
     return work.loc[finite].copy()
 
@@ -275,10 +279,17 @@ def _group_key_record(group_columns: Sequence[str], group_key: object) -> dict[s
 
 
 def _single_int_or_nan(series: pd.Series) -> int | None:
-    values = pd.to_numeric(series, errors="coerce").dropna().astype(int).unique()
-    if len(values) != 1:
+    numeric = pd.to_numeric(series, errors="coerce").dropna()
+    if numeric.empty:
         return None
-    return int(values[0])
+    values = numeric.to_numpy(dtype=float)
+    integer_like = np.isfinite(values) & np.isclose(values, np.rint(values))
+    if not integer_like.all():
+        return None
+    unique = np.unique(np.rint(values).astype(int))
+    if len(unique) != 1:
+        return None
+    return int(unique[0])
 
 
 def _validate_probability(value: float) -> float:
