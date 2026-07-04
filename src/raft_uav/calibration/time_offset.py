@@ -80,10 +80,12 @@ def apply_time_offset(
     out = frame.copy()
     if time_column not in out.columns:
         raise KeyError(f"frame is missing time column {time_column!r}")
-    raw_time = pd.to_numeric(out[time_column], errors="coerce")
-    if copy_uncorrected:
-        raw_column = f"{time_column}_uncorrected"
-        if raw_column not in out.columns:
+    raw_column = f"{time_column}_uncorrected"
+    if copy_uncorrected and raw_column in out.columns:
+        raw_time = pd.to_numeric(out[raw_column], errors="coerce")
+    else:
+        raw_time = pd.to_numeric(out[time_column], errors="coerce")
+        if copy_uncorrected:
             out[raw_column] = raw_time
     out[time_column] = _pyrecest_apply_time_offset(
         raw_time.to_numpy(dtype=float),
@@ -229,7 +231,11 @@ def aggregate_measurement_time_offset_sweep(
                 errors_2d.append(np.linalg.norm(residual[:, :2], axis=1))
         e2 = _concat(errors_2d)
         e3 = _concat(errors_3d) if dimensions == 3 else np.array([], dtype=float)
-        row = {"time_offset_s": float(offset), "count": float(e2.size), "coverage": _coverage(e2.size, total_rows)}
+        row = {
+            "time_offset_s": float(offset),
+            "count": float(e2.size),
+            "coverage": _coverage(e2.size, total_rows),
+        }
         row.update(_stats(e3, "3d"))
         row.update(_stats(e2, "2d"))
         rows.append(row)
@@ -245,7 +251,11 @@ def _radar_selected_errors_from_summary(summary: dict[str, float]) -> pd.DataFra
 
 def _aggregate_error_frames(offset: float, frames: list[pd.DataFrame], frame_count: int) -> dict[str, float]:
     if not frames:
-        row = {"time_offset_s": float(offset), "count": 0.0, "coverage": 0.0 if frame_count else float("nan")}
+        row = {
+            "time_offset_s": float(offset),
+            "count": 0.0,
+            "coverage": 0.0 if frame_count else float("nan"),
+        }
         row.update(_stats(np.array([], dtype=float), "3d"))
         row.update(_stats(np.array([], dtype=float), "2d"))
         return row
@@ -256,9 +266,16 @@ def _aggregate_error_frames(offset: float, frames: list[pd.DataFrame], frame_cou
     row = {"time_offset_s": float(offset), "count": total, "coverage": _coverage(total, coverage_den)}
     for dims in ("3d", "2d"):
         mean = _weighted(summary[f"mean_{dims}_error_m"], counts)
-        rmse = np.sqrt(_weighted(np.square(pd.to_numeric(summary[f"rmse_{dims}_error_m"], errors="coerce")), counts))
+        rmse = np.sqrt(
+            _weighted(
+                np.square(pd.to_numeric(summary[f"rmse_{dims}_error_m"], errors="coerce")),
+                counts,
+            )
+        )
         p95 = _weighted(summary[f"p95_{dims}_error_m"], counts)
-        max_value = np.nanmax(pd.to_numeric(summary[f"max_{dims}_error_m"], errors="coerce").to_numpy(dtype=float))
+        max_value = np.nanmax(
+            pd.to_numeric(summary[f"max_{dims}_error_m"], errors="coerce").to_numpy(dtype=float)
+        )
         std = _weighted(summary[f"std_{dims}_error_m"], counts)
         row[f"mean_{dims}_error_m"] = float(mean)
         row[f"std_{dims}_error_m"] = float(std)
@@ -298,7 +315,10 @@ def _concat(parts: list[np.ndarray]) -> np.ndarray:
 
 
 def _weighted(values: pd.Series | np.ndarray, weights: np.ndarray) -> float:
-    values_array = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float) if isinstance(values, pd.Series) else np.asarray(values, dtype=float)
+    if isinstance(values, pd.Series):
+        values_array = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+    else:
+        values_array = np.asarray(values, dtype=float)
     valid = np.isfinite(values_array) & np.isfinite(weights) & (weights > 0.0)
     if not valid.any():
         return float("nan")
