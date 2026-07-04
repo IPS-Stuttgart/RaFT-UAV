@@ -171,10 +171,60 @@ def _install_candidate_reservoir_topk_guard() -> None:
     _candidate_reservoir.main = _main
 
 
+def _install_official_track5_class_guard() -> None:
+    try:
+        from raft_uav.mmuad import submission as _submission
+    except Exception:
+        return
+
+    row_diagnostics = getattr(_submission, "_official_track5_row_diagnostics", None)
+    if row_diagnostics is None:
+        return
+
+    allowed_ids = set(_submission.OFFICIAL_TRACK5_CLASS_IDS)
+    allowed_text = ", ".join(str(item) for item in sorted(allowed_ids))
+
+    def _official_track5_row_diagnostics(frame):
+        diagnostics, normalized = row_diagnostics(frame)
+        if diagnostics.empty or "classification" not in diagnostics.columns:
+            return diagnostics, normalized
+        invalid_mask = (
+            diagnostics["status"].eq("ok")
+            & diagnostics["classification"].notna()
+            & ~diagnostics["classification"].isin(allowed_ids)
+        )
+        if not invalid_mask.any():
+            return diagnostics, normalized
+        invalid_indices = set(
+            diagnostics.loc[invalid_mask, "row_index"].dropna().astype(int).tolist()
+        )
+        diagnostics = diagnostics.copy()
+        for row_index in invalid_indices:
+            class_id = diagnostics.loc[
+                diagnostics["row_index"].eq(row_index),
+                "classification",
+            ].iloc[0]
+            diagnostics.loc[diagnostics["row_index"].eq(row_index), "status"] = (
+                "invalid_classification"
+            )
+            diagnostics.loc[diagnostics["row_index"].eq(row_index), "reason"] = (
+                "official MMUAD Classification values must be one of "
+                f"{{{allowed_text}}}; got {int(class_id)!r}"
+            )
+        if not normalized.empty and "row_index" in normalized.columns:
+            normalized = normalized.loc[
+                ~normalized["row_index"].isin(invalid_indices)
+            ].copy()
+        return diagnostics, normalized
+
+    _submission._official_track5_row_diagnostics = _official_track5_row_diagnostics
+
+
 _install_image_row_guard()
 _install_candidate_pool_compare_cli_guard()
 _install_temporal_consensus_train_cv_cli_guard()
 _install_candidate_reservoir_topk_guard()
+_install_official_track5_class_guard()
 
 
 __all__ = [
