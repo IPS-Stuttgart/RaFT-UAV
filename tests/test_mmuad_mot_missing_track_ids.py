@@ -40,6 +40,36 @@ def test_multi_object_metrics_falls_back_for_missing_like_truth_track_ids() -> N
     assert "gt_count" not in metrics
 
 
+def test_multi_object_metrics_drops_missing_like_ids_when_real_ids_exist() -> None:
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seq0", "seq0"],
+            "time_s": [0.0, 0.0],
+            "x_m": [0.0, 100.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [5.0, 5.0],
+            "track_id": ["uav_1", "   "],
+        }
+    )
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq0"],
+            "time_s": [0.0],
+            "state_x_m": [0.0],
+            "state_y_m": [0.0],
+            "state_z_m": [5.0],
+            "output_track_id": ["mot_1"],
+        }
+    )
+
+    metrics = compute_multi_object_metrics(estimates, truth, match_distance_m=1.0)
+
+    assert metrics["gt_count"] == 1
+    assert metrics["matches"] == 1
+    assert metrics["false_negative"] == 0
+    assert metrics["recall"] == pytest.approx(1.0)
+
+
 def test_multi_object_tracker_attaches_errors_for_blank_truth_track_id_column() -> None:
     candidates = CandidateFrame(
         pd.DataFrame(
