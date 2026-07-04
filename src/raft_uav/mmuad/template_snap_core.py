@@ -11,6 +11,7 @@ from raft_uav.mmuad.submission import (
     OFFICIAL_TRACK5_CLASS_IDS,
     OFFICIAL_UG2_RESULT_COLUMNS,
     parse_official_classification_cell,
+    parse_official_sequence_cell,
 )
 from raft_uav.mmuad.template_snap_utils import (
     CLASSIFICATION_POLICIES,
@@ -138,7 +139,7 @@ def _template_classification_by_key(template: pd.DataFrame) -> dict[tuple[str, f
 
     rows = pd.DataFrame(
         {
-            "Sequence": frame[sequence_column].map(_template_sequence_value),
+            "Sequence": frame[sequence_column].map(_template_sequence_key),
             "Timestamp": pd.to_numeric(frame[timestamp_column], errors="coerce"),
             "Classification": frame[classification_column].map(_template_classification_value),
         }
@@ -153,6 +154,13 @@ def _template_classification_by_key(template: pd.DataFrame) -> dict[tuple[str, f
         (str(row["Sequence"]), float(row["Timestamp"])): int(row["Classification"])
         for _, row in rows.iterrows()
     }
+
+
+def _template_sequence_key(value: Any) -> str | None:
+    try:
+        return parse_official_sequence_cell(value)
+    except ValueError:
+        return None
 
 
 def _template_classification_value(value: Any) -> int | None:
