@@ -324,7 +324,7 @@ def _add_probability_interactions(
     out = rows.copy()
     available = [column for column in interaction_columns if column in out.columns]
     for base_column in available:
-        values = pd.to_numeric(out[base_column], errors="coerce")
+        values = pd.to_numeric(out[base_column], errors="coerce").fillna(0.0)
         safe_name = _safe_feature_name(base_column)
         for label in OFFICIAL_CLASS_LABELS:
             probability = pd.to_numeric(out[f"image_class_prob_{label}"], errors="coerce").fillna(0.0)
