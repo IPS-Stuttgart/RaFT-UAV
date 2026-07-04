@@ -270,6 +270,48 @@ def test_sequence_classifier_cli_writes_outputs(tmp_path) -> None:
     assert pd.read_csv(tmp_path / "out_class_map.csv")["uav_type"].tolist() == [1]
 
 
+def test_sequence_classifier_loso_cli_respects_nearest_neighbor_k(tmp_path) -> None:
+    feature_table = tmp_path / "sequence_features.csv"
+    reference = tmp_path / "sequence_labels.csv"
+    predictions_csv = tmp_path / "loso_predictions.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["target", "near_1", "near_0a", "near_0b", "far_1"],
+            "signal": [0.0, 0.20, 0.21, 0.22, 10.0],
+        }
+    ).to_csv(feature_table, index=False)
+    pd.DataFrame(
+        {
+            "sequence_id": ["target", "near_1", "near_0a", "near_0b", "far_1"],
+            "uav_type": [0, 1, 0, 0, 1],
+        }
+    ).to_csv(reference, index=False)
+
+    assert (
+        sequence_classifier_main(
+            [
+                "--loso-eval",
+                "--method",
+                "nearest-neighbor",
+                "--k",
+                "3",
+                "--reference",
+                str(reference),
+                "--selected-tracklets",
+                str(feature_table),
+                "--loso-predictions-csv",
+                str(predictions_csv),
+            ]
+        )
+        == 0
+    )
+
+    predictions = pd.read_csv(predictions_csv)
+    target_row = predictions.loc[predictions["heldout_sequence"].astype(str).eq("target")].iloc[0]
+    assert str(target_row["predicted_class"]) == "0"
+    assert bool(target_row["correct"])
+
+
 def test_sequence_classifier_cli_loso_relabels_official_submission(tmp_path) -> None:
     pytest.importorskip("sklearn")
     selected_tracklets = tmp_path / "mmuad_selected_tracklets.csv"
