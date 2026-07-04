@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import numpy as np
+import pandas as pd
 import pytest
 
-from raft_uav.mmuad.leaderboard import leaderboard_entries_from_config, load_leaderboard_config
+from raft_uav.mmuad.leaderboard import (
+    leaderboard_entries_from_config,
+    load_leaderboard_config,
+    rank_leaderboard_frame,
+)
 
 
 def test_leaderboard_csv_config_ignores_blank_optional_class_map_and_note(tmp_path):
@@ -99,3 +105,19 @@ def test_leaderboard_config_rejects_missing_results_aliases():
         leaderboard_entries_from_config(
             {"methods": [{"method": "broken", "results_csv": float("nan"), "truth_csv": "truth.csv"}]}
         )
+
+
+def test_leaderboard_rank_falls_back_when_requested_metric_is_all_missing() -> None:
+    frame = pd.DataFrame(
+        {
+            "method": ["worse", "better"],
+            "pose_mse_loss_m2": [np.nan, None],
+            "rmse_3d_m": [5.0, 2.0],
+            "p95_3d_m": [7.0, 3.0],
+        }
+    )
+
+    ranked = rank_leaderboard_frame(frame)
+
+    assert ranked["method"].tolist() == ["better", "worse"]
+    assert ranked["rank_metric"].tolist() == ["rmse_3d_m", "rmse_3d_m"]

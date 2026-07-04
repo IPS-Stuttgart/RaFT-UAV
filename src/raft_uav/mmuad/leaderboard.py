@@ -170,7 +170,7 @@ def rank_leaderboard_frame(
     if frame.empty:
         return frame.assign(rank=[])
     work = frame.copy()
-    metric = rank_metric if rank_metric in work.columns else _fallback_rank_metric(work)
+    metric = rank_metric if _column_has_finite_values(work, rank_metric) else _fallback_rank_metric(work)
     sort_columns = [metric]
     ascending = [True]
     for candidate, asc in (
@@ -325,9 +325,16 @@ def _format_markdown_cell(value: Any) -> str:
 
 def _fallback_rank_metric(frame: pd.DataFrame) -> str:
     for candidate in ("mean_3d_m", "rmse_3d_m", "max_3d_m"):
-        if candidate in frame.columns:
+        if _column_has_finite_values(frame, candidate):
             return candidate
-    raise ValueError("leaderboard rows do not contain a supported rank metric")
+    raise ValueError("leaderboard rows do not contain a supported finite rank metric")
+
+
+def _column_has_finite_values(frame: pd.DataFrame, column: str) -> bool:
+    if column not in frame.columns:
+        return False
+    values = pd.to_numeric(frame[column], errors="coerce")
+    return bool(np.isfinite(values.to_numpy(dtype=float)).any())
 
 
 def _load_mapping_file(path: Path) -> dict[str, Any]:
