@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from raft_uav.mmuad.completion import (
+    CompletionResult,
     complete_results_to_truth_timestamps,
     completion_summary,
 )
@@ -59,6 +60,19 @@ def test_completion_reports_missing_predictions_for_empty_result_table() -> None
         "completion_coverage_fraction": 0.0,
         "all_requested_timestamps_completed": False,
     }
+
+
+def test_completion_summary_honors_explicit_requested_count_for_drop_count() -> None:
+    completed = CompletionResult(
+        rows=pd.DataFrame(columns=UG2_RESULT_COLUMNS),
+        diagnostics=pd.DataFrame(),
+    )
+
+    summary = completion_summary(completed, requested_count=3)
+
+    assert summary["requested_count"] == 3
+    assert summary["completed_count"] == 0
+    assert summary["dropped_count"] == 3
 
 
 def test_completion_treats_all_nonfinite_result_rows_as_missing_predictions() -> None:
