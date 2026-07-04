@@ -124,6 +124,10 @@ def _manifest_from_payload(payload: Any) -> dict[str, tuple[str, ...]]:
     if not isinstance(payload, dict):
         raise ValueError("split manifest must be an object or a list of sequence rows")
 
+    single_row_manifest = _manifest_from_rows([payload])
+    if single_row_manifest:
+        return single_row_manifest
+
     splits = _mapping_value_case_insensitive(payload, "splits")
     if isinstance(splits, dict):
         manifest = _manifest_from_mapping(splits)
