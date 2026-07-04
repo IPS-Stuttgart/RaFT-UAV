@@ -262,12 +262,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fallback-score-column", default="confidence")
     parser.add_argument("--source-diversity-bonus", type=float, default=0.25)
     parser.add_argument("--branch-diversity-bonus", type=float, default=0.25)
-    parser.add_argument("--top-k", type=int, action="append", default=list(_DEFAULT_TOP_K))
+    parser.add_argument("--top-k", type=int, action="append", default=None)
     parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
     parser.add_argument("--selection-metric", default=_DEFAULT_SELECTION_METRIC)
     parser.add_argument("--write-selected-candidates", action="store_true")
     args = parser.parse_args(argv)
 
+    top_k_values = tuple(args.top_k) if args.top_k is not None else _DEFAULT_TOP_K
     candidates = load_candidate_file(args.candidate_csv).rows
     truth = pd.read_csv(args.truth_csv)
     selected, folds, grid, selected_candidates = (
@@ -287,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
             fallback_score_column=args.fallback_score_column,
             source_diversity_bonus=args.source_diversity_bonus,
             branch_diversity_bonus=args.branch_diversity_bonus,
-            top_k_values=tuple(args.top_k),
+            top_k_values=top_k_values,
             max_truth_time_delta_s=args.max_truth_time_delta_s,
             selection_metric=args.selection_metric,
         )
