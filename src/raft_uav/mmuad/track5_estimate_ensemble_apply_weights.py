@@ -1,3 +1,5 @@
+"""Apply selected Track 5 estimate-ensemble weights."""
+
 from __future__ import annotations
 
 import argparse
@@ -19,6 +21,8 @@ APPLY_MANIFEST_JSON = "mmuad_track5_ensemble_applied_weights_manifest.json"
 
 
 def load_ensemble_weight_config(path: Path) -> dict[str, Any]:
+    """Load and validate an ensemble-weight-search JSON config."""
+
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     weights = payload.get("weights")
     if not isinstance(weights, dict) or not weights:
@@ -46,6 +50,8 @@ def apply_ensemble_weight_config(
     missing_weight_policy: str = "error",
     default_missing_weight: float = 0.0,
 ) -> list[EstimateInput]:
+    """Return estimate inputs with weights from a selected-weight JSON config."""
+
     if missing_weight_policy not in {"error", "zero", "default"}:
         raise ValueError("missing_weight_policy must be one of: error, zero, default")
     weights = {str(key): float(value) for key, value in weight_config.get("weights", {}).items()}
@@ -79,6 +85,8 @@ def write_apply_weights_outputs(
     trim_fraction: float | None = None,
     max_nearest_time_delta_s: float | None = None,
 ) -> dict[str, Path]:
+    """Write weighted ensemble outputs plus an application manifest."""
+
     estimate_input_list = list(estimate_inputs)
     template = load_official_track5_template_file(template_path)
     selected_aggregation = str(
