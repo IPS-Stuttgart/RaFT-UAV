@@ -43,6 +43,7 @@ class PredictionCoverageRow:
     invalid_confidence_rows: int
     unsorted_rows: int
     out_of_range_frame_rows: int
+    duplicate_frame_object_rows: int
 
 
 @dataclass(frozen=True)
@@ -63,10 +64,12 @@ class PredictionCoverageAudit:
     invalid_confidence_rows: int
     unsorted_rows: int
     out_of_range_frame_rows: int
+    duplicate_frame_object_rows: int
     missing_files: list[str]
     extra_files: list[str]
     empty_expected_files: list[str]
     out_of_range_frame_files: list[str]
+    duplicate_frame_object_files: list[str]
     rows: list[PredictionCoverageRow]
 
 
@@ -91,6 +94,7 @@ def audit_prediction_coverage(
     extra_files: list[str] = []
     empty_expected_files: list[str] = []
     out_of_range_frame_files: list[str] = []
+    duplicate_frame_object_files: list[str] = []
     for name in all_names:
         expected = name in expected_set
         present = name in present_set
@@ -113,6 +117,7 @@ def audit_prediction_coverage(
                 invalid_confidence_rows=0,
                 unsorted_rows=0,
                 out_of_range_frame_rows=0,
+                duplicate_frame_object_rows=0,
             )
             rows.append(row)
             continue
@@ -121,8 +126,11 @@ def audit_prediction_coverage(
             predictions[name],
             expected_frame_count=expected_frame_count,
         )
+        duplicate_frame_object_rows = _count_duplicate_frame_object_rows(predictions[name])
         if out_of_range_frame_rows:
             out_of_range_frame_files.append(name)
+        if duplicate_frame_object_rows:
+            duplicate_frame_object_files.append(name)
         if not expected:
             status = "extra"
             extra_files.append(name)
@@ -134,6 +142,7 @@ def audit_prediction_coverage(
             or summary.invalid_geometry_rows
             or summary.invalid_confidence_rows
             or out_of_range_frame_rows
+            or duplicate_frame_object_rows
         ):
             status = "invalid"
         elif summary.unsorted_rows:
@@ -156,6 +165,7 @@ def audit_prediction_coverage(
                 invalid_confidence_rows=summary.invalid_confidence_rows,
                 unsorted_rows=summary.unsorted_rows,
                 out_of_range_frame_rows=out_of_range_frame_rows,
+                duplicate_frame_object_rows=duplicate_frame_object_rows,
             )
         )
 
@@ -164,6 +174,7 @@ def audit_prediction_coverage(
     invalid_confidence_rows = sum(row.invalid_confidence_rows for row in rows)
     unsorted_rows = sum(row.unsorted_rows for row in rows)
     out_of_range_frame_rows = sum(row.out_of_range_frame_rows for row in rows)
+    duplicate_frame_object_rows = sum(row.duplicate_frame_object_rows for row in rows)
     ready = (
         not missing_files
         and not extra_files
@@ -173,6 +184,7 @@ def audit_prediction_coverage(
         and invalid_confidence_rows == 0
         and unsorted_rows == 0
         and out_of_range_frame_rows == 0
+        and duplicate_frame_object_rows == 0
     )
     return PredictionCoverageAudit(
         prediction_path=str(prediction_path),
@@ -189,10 +201,12 @@ def audit_prediction_coverage(
         invalid_confidence_rows=invalid_confidence_rows,
         unsorted_rows=unsorted_rows,
         out_of_range_frame_rows=out_of_range_frame_rows,
+        duplicate_frame_object_rows=duplicate_frame_object_rows,
         missing_files=missing_files,
         extra_files=extra_files,
         empty_expected_files=empty_expected_files,
         out_of_range_frame_files=sorted(set(out_of_range_frame_files)),
+        duplicate_frame_object_files=sorted(set(duplicate_frame_object_files)),
         rows=rows,
     )
 
@@ -297,6 +311,29 @@ def _count_out_of_range_frame_rows(text: str, *, expected_frame_count: int | Non
         if frame_id < 1 or frame_id > expected_frame_count:
             count += 1
     return count
+
+
+def _count_duplicate_frame_object_rows(text: str) -> int:
+    seen: set[tuple[int, int]] = set()
+    duplicates = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 2:
+            continue
+        try:
+            frame_id = _parse_int_like(parts[0])
+            object_id = _parse_int_like(parts[1])
+        except ValueError:
+            continue
+        key = (frame_id, object_id)
+        if key in seen:
+            duplicates += 1
+            continue
+        seen.add(key)
+    return duplicates
 
 
 if __name__ == "__main__":  # pragma: no cover
