@@ -280,6 +280,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-leaderboard-ready", action="store_true")
     args = parser.parse_args(argv)
 
+    if args.require_leaderboard_ready and args.template is None:
+        parser.error(
+            "--require-leaderboard-ready requires --template so leaderboard readiness can be validated"
+        )
     if not args.submission:
         parser.error("provide at least one --submission")
     inputs = tuple(parse_submission_input(value) for value in args.submission)
