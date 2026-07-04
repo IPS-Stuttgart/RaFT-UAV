@@ -54,7 +54,7 @@ def test_learned_radar_association_records_rf_bootstrap_event_once():
     assert selected["frame_index"].tolist() == [0]
 
 
-def test_learned_radar_association_skips_learned_scoring_for_radar_bootstrap(monkeypatch):
+def test_learned_radar_association_scores_radar_bootstrap_once(monkeypatch):
     scored_times: list[float] = []
 
     def fake_score_radar_candidates(scored: pd.DataFrame, **kwargs) -> pd.DataFrame:
@@ -102,7 +102,7 @@ def test_learned_radar_association_skips_learned_scoring_for_radar_bootstrap(mon
     assert [record["time_s"] for record in records] == [0.0, 1.0]
     assert records[0]["source"] == "radar"
     assert records[0]["update_action"] == "initialized"
-    assert scored_times == [1.0]
+    assert scored_times == [0.0, 1.0]
     assert selected["frame_index"].tolist() == [0, 1]
 
 

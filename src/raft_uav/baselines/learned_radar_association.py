@@ -59,7 +59,9 @@ def run_async_cv_baseline_with_learned_radar_association(
     """
 
     learned_model = (
-        model if isinstance(model, LearnedRadarAssociationModel) else LearnedRadarAssociationModel.load(model)
+        model
+        if isinstance(model, LearnedRadarAssociationModel)
+        else LearnedRadarAssociationModel.load(model)
     )
     covariance = np.diag(
         [float(radar_xy_std_m) ** 2, float(radar_xy_std_m) ** 2, float(radar_z_std_m) ** 2]
@@ -68,16 +70,12 @@ def run_async_cv_baseline_with_learned_radar_association(
     if not events:
         return [], _empty_selected_radar(radar)
 
-    initial = _initial_measurement_and_row(
+    initial = _learned_initial_measurement_and_row(
         events[0],
-        association="prediction-nis",
         covariance=covariance,
-        covariance_config=None,
-        stable_anchor_by_key=None,
         candidate_catprob_threshold=candidate_catprob_threshold,
-        truth=None,
-        truth_gate_m=150.0,
-        truth_time_gate_s=1.0,
+        learned_model=learned_model,
+        acceleration_std_mps2=acceleration_std_mps2,
     )
     if initial is None:
         return [], _empty_selected_radar(radar)
@@ -125,9 +123,13 @@ def run_async_cv_baseline_with_learned_radar_association(
             "track_id": current_track_id,
             "association_nis": _optional_float(initial_selected_row.get("association_nis")),
             "association_score": _optional_float(initial_selected_row.get("association_score")),
-            "association_mode": str(initial_selected_row.get("association_mode", "bootstrap-catprob")),
+            "association_mode": str(
+                initial_selected_row.get("association_mode", "bootstrap-catprob")
+            ),
         }
-    records.append(_record(initial_measurement, tracker, initial_diagnostics, **initial_record_kwargs))
+    records.append(
+        _record(initial_measurement, tracker, initial_diagnostics, **initial_record_kwargs)
+    )
 
     # The first event initialized the tracker and has already been recorded above.
     # Replaying a radar bootstrap frame here would run learned scoring on the same
@@ -229,3 +231,52 @@ def run_async_cv_baseline_with_learned_radar_association(
         records.append(record)
 
     return records, _selected_rows_frame(radar, selected_rows)
+
+
+def _learned_initial_measurement_and_row(
+    event: dict[str, object],
+    *,
+    covariance: np.ndarray,
+    candidate_catprob_threshold: float | None,
+    learned_model: LearnedRadarAssociationModel,
+    acceleration_std_mps2: float,
+) -> tuple[TrackingMeasurement, pd.Series | None] | None:
+    """Return the initial measurement, using learned scoring for radar bootstraps."""
+
+    initial = _initial_measurement_and_row(
+        event,
+        association="prediction-nis",
+        covariance=covariance,
+        covariance_config=None,
+        stable_anchor_by_key=None,
+        candidate_catprob_threshold=candidate_catprob_threshold,
+        truth=None,
+        truth_gate_m=150.0,
+        truth_time_gate_s=1.0,
+    )
+    if initial is None or event["kind"] != "radar":
+        return initial
+
+    bootstrap_measurement, _bootstrap_row = initial
+    candidates = event["candidates"]
+    assert isinstance(candidates, pd.DataFrame)
+    candidates = _catprob_candidate_pool(candidates, candidate_catprob_threshold)
+    if candidates.empty:
+        return initial
+
+    bootstrap_tracker = AsyncConstantVelocityKalmanTracker(
+        initial_position=bootstrap_measurement.vector,
+        initial_time_s=bootstrap_measurement.time_s,
+        acceleration_std_mps2=acceleration_std_mps2,
+    )
+    scored = _nis_scored_candidates(candidates, bootstrap_tracker, covariance)
+    if scored.empty:
+        return initial
+    learned_scored = score_radar_candidates_with_learned_likelihood(
+        scored,
+        model=learned_model,
+        tracker_state=bootstrap_tracker.state,
+        current_track_id=None,
+    )
+    selected = learned_scored.loc[learned_scored["association_score"].idxmin()].copy()
+    return _radar_row_to_measurement(selected, covariance), selected

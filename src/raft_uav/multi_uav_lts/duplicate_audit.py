@@ -150,14 +150,30 @@ def _prediction_texts_for_duplicate_audit(prediction_path: Path) -> dict[str, st
             if path.is_file()
         }
     with zipfile.ZipFile(prediction_path) as archive:
-        return {
-            _normalized_zip_member_name(info.filename): archive.read(info).decode(
-                "utf-8",
-                errors="replace",
+        chunks_by_name: dict[str, list[str]] = {}
+        for info in archive.infolist():
+            if not _is_zip_text_prediction_member(info):
+                continue
+            name = _normalized_zip_member_name(info.filename)
+            chunks_by_name.setdefault(name, []).append(
+                archive.read(info).decode("utf-8", errors="replace")
             )
-            for info in archive.infolist()
-            if _is_zip_text_prediction_member(info)
-        }
+    return {
+        name: _join_duplicate_zip_member_payloads(chunks)
+        for name, chunks in chunks_by_name.items()
+    }
+
+
+def _join_duplicate_zip_member_payloads(chunks: list[str]) -> str:
+    """Combine repeated ZIP members with the same logical prediction filename."""
+
+    if len(chunks) == 1:
+        return chunks[0]
+    normalized_chunks = [
+        chunk if not chunk or chunk.endswith("\n") else f"{chunk}\n"
+        for chunk in chunks
+    ]
+    return "".join(normalized_chunks)
 
 
 def _is_zip_text_prediction_member(info: zipfile.ZipInfo) -> bool:

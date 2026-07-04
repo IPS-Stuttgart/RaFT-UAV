@@ -197,14 +197,18 @@ def _with_adjusted_scores(
     fallback_score_column: str,
 ) -> pd.DataFrame:
     rows = candidates.copy()
+    branch_values = _text_column(rows, "candidate_branch", default="candidate")
+    source_values = _text_column(rows, "source", default="candidate")
+    rows["candidate_branch"] = branch_values
+    rows["source"] = source_values
     base = _numeric_column(rows, score_column, default=np.nan)
     fallback = _numeric_column(rows, fallback_score_column, default=1.0)
     rows["candidate_reservoir_grid_base_score"] = base.fillna(fallback).fillna(0.0)
     rows["candidate_reservoir_grid_branch_offset"] = (
-        rows.get("candidate_branch", "").astype(str).map(branch_offsets).fillna(0.0).astype(float)
+        branch_values.map(branch_offsets).fillna(0.0).astype(float)
     )
     rows["candidate_reservoir_grid_source_offset"] = (
-        rows.get("source", "").astype(str).map(source_offsets).fillna(0.0).astype(float)
+        source_values.map(source_offsets).fillna(0.0).astype(float)
     )
     rows["candidate_reservoir_grid_score"] = (
         rows["candidate_reservoir_grid_base_score"]
@@ -278,6 +282,14 @@ def _numeric_column(rows: pd.DataFrame, column: str, *, default: float) -> pd.Se
     if column in rows.columns:
         return pd.to_numeric(rows[column], errors="coerce")
     return pd.Series(default, index=rows.index, dtype=float)
+
+
+def _text_column(rows: pd.DataFrame, column: str, *, default: str) -> pd.Series:
+    if column not in rows.columns:
+        return pd.Series(default, index=rows.index, dtype=str)
+    text = rows[column].where(rows[column].notna(), default).astype(str).str.strip()
+    missing = text.eq("") | text.str.lower().isin({"nan", "none", "<na>"})
+    return text.where(~missing, str(default))
 
 
 def _sort_summary(summary: pd.DataFrame, *, selection_metric: str) -> pd.DataFrame:

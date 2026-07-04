@@ -25,6 +25,9 @@ from raft_uav.mmuad.tracker import (
 )
 
 
+_MISSING_TRACK_ID_STRINGS = {"", "nan", "none", "<na>"}
+
+
 @dataclass(frozen=True)
 class MultiObjectTrackerConfig:
     """Configuration for the simple greedy multi-object tracker."""
@@ -344,22 +347,24 @@ def _finite_mot_truth(truth: pd.DataFrame) -> pd.DataFrame:
     numeric = truth.loc[:, required].apply(pd.to_numeric, errors="coerce")
     finite = np.isfinite(numeric.to_numpy(dtype=float)).all(axis=1)
     if "track_id" in truth.columns:
-        finite &= truth["track_id"].notna().to_numpy(dtype=bool)
+        finite &= _track_id_present_mask(truth["track_id"]).to_numpy(dtype=bool)
     return truth.loc[finite].copy()
+
+
+def _track_id_present_mask(values: pd.Series) -> pd.Series:
+    present = values.notna()
+    valid = pd.Series(False, index=values.index, dtype=bool)
+    if not present.any():
+        return valid
+    text = values.loc[present].astype(str).str.strip().str.lower()
+    valid.loc[present] = ~text.isin(_MISSING_TRACK_ID_STRINGS)
+    return valid
 
 
 def _truth_has_track_ids(truth: pd.DataFrame) -> bool:
     if "track_id" not in truth.columns:
         return False
-    values = truth["track_id"]
-    if values.empty:
-        return False
-    present = values.notna()
-    if not present.any():
-        return False
-    text = values.loc[present].astype(str).str.strip().str.lower()
-    missing_like = text.eq("") | text.isin({"nan", "none", "<na>"})
-    return bool((~missing_like).any())
+    return bool(_track_id_present_mask(truth["track_id"]).any())
 
 
 def _metric_frame_pairs(

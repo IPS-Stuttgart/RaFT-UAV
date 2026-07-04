@@ -158,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--score-column", default="candidate_reservoir_score")
     parser.add_argument("--fallback-score-column", default="ranker_score")
-    parser.add_argument("--top-k", action="append", type=int, default=list(_DEFAULT_TOP_K))
+    parser.add_argument("--top-k", action="append", type=int, default=None)
     parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
     args = parser.parse_args(argv)
 
@@ -170,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
     frame_rows, pooled, branch_summary, source_summary = build_candidate_oracle_attribution_tables(
         candidates,
         truth,
-        top_k_values=tuple(args.top_k),
+        top_k_values=tuple(args.top_k) if args.top_k is not None else _DEFAULT_TOP_K,
         score_column=args.score_column,
         fallback_score_column=args.fallback_score_column,
         max_truth_time_delta_s=args.max_truth_time_delta_s,

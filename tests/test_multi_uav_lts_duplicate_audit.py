@@ -65,6 +65,25 @@ def test_duplicate_prediction_audit_handles_zip_inputs(tmp_path: Path) -> None:
     assert audit.duplicate_rows == 1
 
 
+def test_duplicate_prediction_audit_combines_repeated_zip_member_names(
+    tmp_path: Path,
+) -> None:
+    submission = tmp_path / "submission.zip"
+    with zipfile.ZipFile(submission, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("S_00.txt", _row(1, 1))
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            archive.writestr("S_00.txt", _row(1, 1))
+
+    audit = audit_duplicate_predictions(submission)
+
+    assert not audit.clean
+    assert audit.file_count == 1
+    assert audit.total_rows == 2
+    assert audit.duplicate_key_count == 1
+    assert audit.duplicate_rows == 1
+    assert audit.duplicate_files == ["S_00.txt"]
+
+
 def test_duplicate_prediction_audit_cli_writes_outputs(tmp_path: Path) -> None:
     prediction_dir = tmp_path / "predictions"
     output_json = tmp_path / "duplicate_audit.json"

@@ -101,3 +101,25 @@ def test_candidate_reservoir_offset_grid_cli_writes_summary_and_best(tmp_path) -
     assert summary.iloc[0]["oracle_top1_3d_m_mse"] == 0.0
     assert "oracle_top3_3d_m_mse" not in summary.columns
     assert set(best["track_id"]) == {"raw-good-0", "raw-good-1"}
+
+
+def test_score_offset_grid_accepts_candidates_without_source_or_branch() -> None:
+    rows = _candidate_rows().drop(columns=["source", "candidate_branch"])
+
+    summary, best = run_candidate_reservoir_offset_grid(
+        rows,
+        branch_offset_grid=["candidate=0.25"],
+        source_offset_grid=["candidate=0.5"],
+        global_top_n=1,
+        per_source_top_n=1,
+        per_branch_top_n=1,
+        max_candidates_per_frame=2,
+        write_best_reservoir=True,
+    )
+
+    assert summary.iloc[0]["grid_label"] == "branch_candidate_0p25__source_candidate_0p5"
+    assert best is not None
+    assert set(best["source"]) == {"candidate"}
+    assert set(best["candidate_branch"]) == {"candidate"}
+    assert set(best["candidate_reservoir_grid_branch_offset"]) == {0.25}
+    assert set(best["candidate_reservoir_grid_source_offset"]) == {0.5}

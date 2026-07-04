@@ -94,8 +94,8 @@ def pointcloud2_to_dataframe(message: Any) -> pd.DataFrame:
 
 def _point_offsets(message: Any, *, point_step: int, data_length: int) -> list[int]:
     width = int(getattr(message, "width", 0))
-    height = max(1, int(getattr(message, "height", 1)))
-    if width <= 0:
+    height = int(getattr(message, "height", 1))
+    if width <= 0 or height <= 0:
         return [index * point_step for index in range(data_length // point_step)]
 
     row_step = getattr(message, "row_step", None)

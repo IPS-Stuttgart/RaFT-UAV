@@ -136,7 +136,22 @@ def test_learned_radar_association_coasts_skipped_policy_updates(monkeypatch):
             self.predict_to(time_s)
 
         def update(self, measurement: TrackingMeasurement, **kwargs: object):
-            del measurement, kwargs
+            del kwargs
+            if measurement.source == "rf":
+                return TrackingUpdateDiagnostics(
+                    time_s=float(measurement.time_s),
+                    source="rf",
+                    measurement_dim=2,
+                    accepted=True,
+                    update_action="updated",
+                    nis=0.0,
+                    gate_threshold=None,
+                    safety_gate_threshold=None,
+                    residual_gate_threshold_m=None,
+                    covariance_scale=1.0,
+                    inflation_alpha=None,
+                    residual_norm_m=0.0,
+                )
             raise AssertionError("skipped radar policy should not run a Kalman update")
 
     candidates = pd.DataFrame(
@@ -158,6 +173,12 @@ def test_learned_radar_association_coasts_skipped_policy_updates(monkeypatch):
         covariance=np.eye(3),
         source="radar",
     )
+    initial_measurement = TrackingMeasurement(
+        time_s=0.0,
+        vector=np.array([0.0, 0.0]),
+        covariance=np.eye(2),
+        source="rf",
+    )
     skipped = TrackingUpdateDiagnostics(
         time_s=1.0,
         source="radar",
@@ -178,10 +199,15 @@ def test_learned_radar_association_coasts_skipped_policy_updates(monkeypatch):
         learned_assoc,
         "_events",
         lambda rf_measurements, radar: [
-            {"kind": "radar", "time_s": 1.0, "candidates": candidates}
+            {"kind": "rf", "time_s": 0.0, "measurement": initial_measurement},
+            {"kind": "radar", "time_s": 1.0, "candidates": candidates},
         ],
     )
-    monkeypatch.setattr(learned_assoc, "_initial_measurement", lambda *args, **kwargs: measurement)
+    monkeypatch.setattr(
+        learned_assoc,
+        "_learned_initial_measurement_and_row",
+        lambda *args, **kwargs: (initial_measurement, None),
+    )
     monkeypatch.setattr(learned_assoc, "_catprob_candidate_pool", lambda frame, threshold: frame)
     monkeypatch.setattr(
         learned_assoc,
@@ -234,7 +260,7 @@ def test_learned_radar_association_coasts_skipped_policy_updates(monkeypatch):
 
     assert selected.empty
     assert tracker_instances[0].coast_times == [1.0]
-    assert records[0]["coast_times"] == (1.0,)
+    assert records[-1]["coast_times"] == (1.0,)
 
 
 def test_model_scores_candidate_features_without_sklearn():
