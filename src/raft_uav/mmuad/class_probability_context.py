@@ -186,6 +186,7 @@ def _probability_rows(class_probabilities: pd.DataFrame) -> pd.DataFrame:
         if predicted_column is None:
             raise ValueError("class probability table has neither probabilities nor predicted_class")
         predicted = _predicted_class_labels(rows[predicted_column])
+        _validate_predicted_class_labels(predicted)
         for label in OFFICIAL_CLASS_LABELS:
             out[f"image_class_prob_{label}"] = (predicted == label).astype(float)
     elif predicted_column is not None:
@@ -213,6 +214,22 @@ def _predicted_class_labels(values: pd.Series) -> pd.Series:
         positions = np.flatnonzero(integer_like)
         text.iloc[positions] = np.rint(numeric_array[positions]).astype(int).astype(str)
     return text
+
+
+def _validate_predicted_class_labels(labels: pd.Series) -> None:
+    """Reject non-empty fallback class labels outside the official Track 5 ids."""
+
+    text = pd.Series(labels).fillna("").astype(str).str.strip()
+    present = text.ne("")
+    invalid = present & ~text.isin(OFFICIAL_CLASS_LABELS)
+    if not invalid.any():
+        return
+    examples = sorted(text.loc[invalid].unique())
+    allowed = ", ".join(OFFICIAL_CLASS_LABELS)
+    raise ValueError(
+        "missing class probabilities because predicted_class values must be official "
+        f"Track 5 class IDs {{{allowed}}}; got {examples}"
+    )
 
 
 def _probability_column(rows: pd.DataFrame, label: str) -> str | None:
@@ -307,7 +324,7 @@ def _add_probability_interactions(
     out = rows.copy()
     available = [column for column in interaction_columns if column in out.columns]
     for base_column in available:
-        values = pd.to_numeric(out[base_column], errors="coerce")
+        values = pd.to_numeric(out[base_column], errors="coerce").fillna(0.0)
         safe_name = _safe_feature_name(base_column)
         for label in OFFICIAL_CLASS_LABELS:
             probability = pd.to_numeric(out[f"image_class_prob_{label}"], errors="coerce").fillna(0.0)
