@@ -19,14 +19,17 @@ from raft_uav.heteroscedastic_cli import (
 
 _TRACKLET_ASSOCIATION_FLAG = "--radar-association"
 _TRACKLET_ASSOCIATION_MODE = "tracklet-viterbi"
+_HELP_FLAGS = {"-h", "--help"}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run ``run-baseline`` with learned covariance and tracklet-Viterbi enabled."""
 
-    uncertainty_model_path, delegated_argv = _extract_uncertainty_model_arg(
-        sys.argv[1:] if argv is None else argv
-    )
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if _is_help_request(raw_argv):
+        return tracklet_viterbi_cli.main(_ensure_tracklet_viterbi_association(raw_argv))
+
+    uncertainty_model_path, delegated_argv = _extract_uncertainty_model_arg(raw_argv)
     if not delegated_argv or delegated_argv[0] != "run-baseline":
         raise SystemExit(
             "raft-uav-heteroscedastic-tracklet-viterbi wraps only the "
@@ -39,6 +42,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     delegated_argv = _ensure_tracklet_viterbi_association(delegated_argv)
     with heteroscedastic_covariance_hooks(uncertainty_model_path):
         return tracklet_viterbi_cli.main(list(delegated_argv))
+
+
+def _is_help_request(argv: Sequence[str]) -> bool:
+    """Return whether the invocation only needs parser help, not a model file."""
+
+    return any(arg in _HELP_FLAGS for arg in argv)
 
 
 def _ensure_tracklet_viterbi_association(argv: list[str]) -> list[str]:
