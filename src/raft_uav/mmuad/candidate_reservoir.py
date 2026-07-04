@@ -22,6 +22,7 @@ import pandas as pd
 from raft_uav.mmuad.schema import normalize_candidate_columns, normalize_truth_columns
 
 _REQUIRED_COLUMNS = ("sequence_id", "time_s", "x_m", "y_m", "z_m")
+_DEFAULT_TOP_K = (1, 3, 5, 10, 20)
 
 
 @dataclass(frozen=True)
@@ -182,7 +183,7 @@ def build_oracle_recall_tables(
     reservoir: pd.DataFrame,
     truth: pd.DataFrame,
     *,
-    top_k_values: tuple[int, ...] = (1, 3, 5, 10, 20),
+    top_k_values: tuple[int, ...] = _DEFAULT_TOP_K,
     max_truth_time_delta_s: float = 0.5,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Return frame rows plus pooled and per-sequence oracle recall tables."""
@@ -491,10 +492,11 @@ def main(argv: list[str] | None = None) -> int:
         default=0.0,
         help="bonus added during final frame cap for each independent reservoir selection reason",
     )
-    parser.add_argument("--top-k", type=int, action="append", default=[1, 3, 5, 10, 20])
+    parser.add_argument("--top-k", type=int, action="append", default=None)
     parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
     args = parser.parse_args(argv)
 
+    top_k_values = tuple(args.top_k) if args.top_k is not None else _DEFAULT_TOP_K
     candidate_specs = [*args.candidate, *args.candidate_csv]
     candidates = _load_candidate_specs(list(candidate_specs))
     per_source_top_n = args.per_source_top_n if args.top_per_source is None else args.top_per_source
@@ -528,7 +530,7 @@ def main(argv: list[str] | None = None) -> int:
         frame_rows, pooled, by_sequence = build_oracle_recall_tables(
             reservoir,
             truth,
-            top_k_values=tuple(args.top_k),
+            top_k_values=top_k_values,
             max_truth_time_delta_s=args.max_truth_time_delta_s,
         )
         if args.oracle_frame_csv is not None:
