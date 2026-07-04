@@ -1,0 +1,4 @@
+[project]
+dependencies = [
+    "pyrecest @ git+https://github.com/FlorianPfaff/PyRecEst.git@main",
+]
