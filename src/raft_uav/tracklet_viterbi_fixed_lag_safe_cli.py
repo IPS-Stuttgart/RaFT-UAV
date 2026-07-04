@@ -1,6 +1,6 @@
 """Safe CLI shim for fixed-lag tracklet Viterbi.
 
-This wrapper rejects non-finite lag values before dispatching to the existing
+This wrapper rejects invalid lag values before dispatching to the existing
 fixed-lag CLI implementation.  Without this guard, values such as ``nan`` or
 ``inf`` pass the old positive-only check and can reach the fixed-lag replay
 window logic.
@@ -20,7 +20,10 @@ def _validated_fixed_lag_s_from_env() -> float:
     value = os.environ.get(_FIXED_LAG_ENV)
     if value is None or value.strip() == "":
         return _impl._DEFAULT_FIXED_LAG_S
-    lag_s = float(value)
+    try:
+        lag_s = float(value)
+    except ValueError as exc:
+        raise ValueError(f"{_FIXED_LAG_ENV} must be finite and positive") from exc
     if not math.isfinite(lag_s) or lag_s <= 0.0:
         raise ValueError(f"{_FIXED_LAG_ENV} must be finite and positive")
     return lag_s
