@@ -28,6 +28,11 @@ def unique_paths(paths: list[Path]) -> list[Path]:
     return out
 
 
+def write_resolved_path(path: Path, resolved_path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(resolved_path), encoding="utf-8")
+
+
 def find_rf_root(root: Path, max_depth: int, *, allow_transient: bool = False) -> Path | None:
     if not allow_transient and is_transient_dataset_path(root):
         return None
@@ -59,8 +64,8 @@ def find_rf_root(root: Path, max_depth: int, *, allow_transient: bool = False) -
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--resolved-dataset-root-file", required=True)
-    parser.add_argument("--resolved-rf-root-file", required=True)
+    parser.add_argument("--resolved-dataset-root-file", required=True, type=Path)
+    parser.add_argument("--resolved-rf-root-file", required=True, type=Path)
     parser.add_argument("--max-depth", type=int, default=8)
     parser.add_argument("--root", action="append", default=[])
     parser.add_argument("--allow-transient", action="store_true")
@@ -75,8 +80,8 @@ def main() -> int:
             continue
 
         dataset_root = rf_root.parent
-        Path(args.resolved_dataset_root_file).write_text(str(dataset_root), encoding="utf-8")
-        Path(args.resolved_rf_root_file).write_text(str(rf_root), encoding="utf-8")
+        write_resolved_path(args.resolved_dataset_root_file, dataset_root)
+        write_resolved_path(args.resolved_rf_root_file, rf_root)
         print(f"Resolved dataset_root={dataset_root}")
         print(f"Resolved RF Sensor and Radar root={rf_root}")
         return 0
