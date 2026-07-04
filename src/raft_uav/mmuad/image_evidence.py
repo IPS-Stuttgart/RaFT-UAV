@@ -24,6 +24,7 @@ IMAGE_FEATURE_BACKENDS = (
     "torchvision-resnet18",
     "torchvision-efficientnet-b0",
 )
+IMAGE_FILE_ROW_COLUMNS = ["image_path", "image_time_s"]
 
 
 @dataclass(frozen=True)
@@ -165,7 +166,11 @@ def _image_file_rows(image_files: list[Path]) -> pd.DataFrame:
         if timestamp is None:
             continue
         records.append({"image_path": str(path), "image_time_s": float(timestamp)})
-    return pd.DataFrame.from_records(records).sort_values("image_time_s").reset_index(drop=True)
+    return (
+        pd.DataFrame.from_records(records, columns=IMAGE_FILE_ROW_COLUMNS)
+        .sort_values("image_time_s")
+        .reset_index(drop=True)
+    )
 
 
 def _sample_nearest_image_rows(
