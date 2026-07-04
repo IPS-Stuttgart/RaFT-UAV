@@ -39,6 +39,7 @@ COMBINED_SUMMARY_JSON = "mmuad_reservoir_mixture_summary.json"
 RESERVOIR_ORACLE_FRAME_CSV = "mmuad_reservoir_mixture_oracle_frames.csv"
 RESERVOIR_ORACLE_SUMMARY_CSV = "mmuad_reservoir_mixture_oracle_summary.csv"
 RESERVOIR_ORACLE_BY_SEQUENCE_CSV = "mmuad_reservoir_mixture_oracle_by_sequence.csv"
+_DEFAULT_ORACLE_TOP_K = (1, 3, 5, 10, 20)
 
 
 def run_reservoir_mixture_map(
@@ -184,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="optional per-sequence reservoir oracle recall summary",
     )
-    parser.add_argument("--oracle-top-k", type=int, action="append", default=[1, 3, 5, 10, 20])
+    parser.add_argument("--oracle-top-k", type=int, action="append", default=None)
     parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
     args = parser.parse_args(argv)
 
@@ -234,7 +235,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     oracle_paths: dict[str, Path] = {}
     if truth is not None:
-        top_k_values = tuple(args.oracle_top_k)
+        top_k_values = (
+            tuple(args.oracle_top_k) if args.oracle_top_k is not None else _DEFAULT_ORACLE_TOP_K
+        )
         frame_rows, pooled, by_sequence = build_oracle_recall_tables(
             reservoir,
             truth,
