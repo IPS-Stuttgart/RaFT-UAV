@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from raft_uav.mmuad.submission import OFFICIAL_UG2_RESULT_COLUMNS
+from raft_uav.mmuad.submission import OFFICIAL_TRACK5_CLASS_IDS, OFFICIAL_UG2_RESULT_COLUMNS
 from raft_uav.mmuad.template_snap_utils import (
     CLASSIFICATION_POLICIES,
     DIAGNOSTIC_COLUMNS,
@@ -45,9 +45,11 @@ def snap_official_results_to_template(
         missing_position_policy, MISSING_POSITION_POLICIES, "missing_position_policy"
     )
     max_gap_s = _normalize_max_interpolation_gap_s(max_interpolation_gap_s)
+    normalized_results = _normalize_results_rows(results)
+    _validate_official_classification_ids(normalized_results)
     result_by_sequence = {
         seq: group.sort_values("Timestamp").reset_index(drop=True)
-        for seq, group in _normalize_results_rows(results).groupby("Sequence", sort=True)
+        for seq, group in normalized_results.groupby("Sequence", sort=True)
     }
 
     outputs: list[dict[str, Any]] = []
@@ -110,6 +112,18 @@ def snap_official_results_to_template(
     return (
         pd.DataFrame.from_records(outputs, columns=list(OFFICIAL_UG2_RESULT_COLUMNS)),
         pd.DataFrame.from_records(diagnostics, columns=list(DIAGNOSTIC_COLUMNS)),
+    )
+
+
+def _validate_official_classification_ids(rows: pd.DataFrame) -> None:
+    invalid = ~rows["Classification"].isin(OFFICIAL_TRACK5_CLASS_IDS)
+    if not invalid.any():
+        return
+    bad_value = rows.loc[invalid, "Classification"].iloc[0]
+    allowed = ", ".join(str(item) for item in sorted(OFFICIAL_TRACK5_CLASS_IDS))
+    raise ValueError(
+        "official MMUAD Classification values must be one of "
+        f"{{{allowed}}}; got {bad_value!r}"
     )
 
 
