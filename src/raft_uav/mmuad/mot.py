@@ -92,7 +92,12 @@ def run_mmuad_multi_object_tracker(
     config = config or MultiObjectTrackerConfig()
     candidates.validate()
     rows = _candidate_rows_with_optional_defaults(candidates.rows)
-    truth_rows = truth.rows if truth is not None else None
+    if "sequence_id" in rows.columns:
+        rows = rows.copy()
+        rows["sequence_id"] = rows["sequence_id"].astype(str)
+    truth_rows = truth.rows.copy() if truth is not None else None
+    if truth_rows is not None and "sequence_id" in truth_rows.columns:
+        truth_rows["sequence_id"] = truth_rows["sequence_id"].astype(str)
     if rows.empty:
         empty = pd.DataFrame()
         metrics = {
@@ -105,9 +110,9 @@ def run_mmuad_multi_object_tracker(
     for sequence_id, sequence_candidates in rows.groupby("sequence_id", sort=True):
         sequence_truth = None
         if truth_rows is not None:
-            sequence_truth = truth_rows.loc[truth_rows["sequence_id"] == sequence_id]
+            sequence_truth = truth_rows.loc[truth_rows["sequence_id"] == str(sequence_id)]
         estimates = _run_multi_sequence(sequence_candidates, sequence_truth, config=config)
-        estimates["sequence_id"] = sequence_id
+        estimates["sequence_id"] = str(sequence_id)
         estimate_frames.append(estimates)
         metrics_by_sequence[str(sequence_id)] = compute_multi_object_metrics(
             estimates,
