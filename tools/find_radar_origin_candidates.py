@@ -33,24 +33,93 @@ import re
 from typing import Iterable, Iterator
 
 TEXT_EXTENSIONS = {
-    ".m", ".mlx", ".txt", ".csv", ".json", ".geojson", ".kml", ".xml",
-    ".toml", ".yaml", ".yml", ".ini", ".cfg", ".md", ".py", ".js", ".ts",
-    ".matlab", ".dat", ".log",
+    ".m",
+    ".mlx",
+    ".txt",
+    ".csv",
+    ".json",
+    ".geojson",
+    ".kml",
+    ".xml",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".ini",
+    ".cfg",
+    ".md",
+    ".py",
+    ".js",
+    ".ts",
+    ".matlab",
+    ".dat",
+    ".log",
 }
 SKIP_DIRS = {
-    ".git", ".hg", ".svn", ".venv", "venv", "__pycache__", ".pytest_cache",
-    "node_modules", "dist", "build",
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    "node_modules",
+    "dist",
+    "build",
 }
 
 CONTEXT_TERMS = [
-    "radar", "fortem", "range", "azimuth", "elevation", "geodetic2enu",
-    "enu2geodetic", "lla", "lw1", "origin", "sensor", "tower", "mount",
-    "antenna", "site", "latitude", "longitude", "altitude", "lat", "lon",
-    "gps", "wgs84", "ellipsoid", "msl", "agl",
+    "radar",
+    "fortem",
+    "range",
+    "azimuth",
+    "elevation",
+    "geodetic2enu",
+    "enu2geodetic",
+    "lla",
+    "lw1",
+    "origin",
+    "sensor",
+    "tower",
+    "mount",
+    "antenna",
+    "site",
+    "latitude",
+    "longitude",
+    "altitude",
+    "lat",
+    "lon",
+    "gps",
+    "wgs84",
+    "ellipsoid",
+    "msl",
+    "agl",
 ]
 HIGH_VALUE_TERMS = [
-    "radar", "fortem", "geodetic2enu", "enu2geodetic", "origin", "sensor",
-    "mount", "antenna",
+    "radar",
+    "fortem",
+    "geodetic2enu",
+    "enu2geodetic",
+    "origin",
+    "sensor",
+    "mount",
+    "antenna",
+]
+
+MATCH_FIELDS = ["score", "path", "line_number", "matched_terms", "line", "context"]
+COORDINATE_FIELDS = [
+    "score",
+    "path",
+    "line_number",
+    "source",
+    "name",
+    "ordering",
+    "latitude",
+    "longitude",
+    "altitude",
+    "distance_to_reference_km",
+    "near_reference",
+    "line",
+    "context",
 ]
 
 # Assignment-like coordinates. Handles:
@@ -75,6 +144,7 @@ TRIPLE_RE = re.compile(
     r"(?:\s*[,;\s]\s*(?P<c>[-+]?\d+(?:\.\d+)?))?"
 )
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("roots", nargs="+", type=Path, help="Files or directories to scan")
@@ -87,7 +157,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--context-radius", type=int, default=2, help="Lines before/after match")
     return parser.parse_args()
 
-def iter_files(roots: Iterable[Path], *, max_file_size_mb: float, extra_exts: Iterable[str]) -> Iterator[Path]:
+
+def iter_files(
+    roots: Iterable[Path],
+    *,
+    max_file_size_mb: float,
+    extra_exts: Iterable[str],
+) -> Iterator[Path]:
     extensions = set(TEXT_EXTENSIONS)
     extensions.update(ext.lower() if ext.startswith(".") else f".{ext.lower()}" for ext in extra_exts)
     max_bytes = int(max_file_size_mb * 1024 * 1024)
@@ -106,6 +182,7 @@ def iter_files(roots: Iterable[Path], *, max_file_size_mb: float, extra_exts: It
                 if _is_text_candidate(path, extensions, max_bytes):
                     yield path
 
+
 def _is_text_candidate(path: Path, extensions: set[str], max_bytes: int) -> bool:
     try:
         if path.stat().st_size > max_bytes:
@@ -113,6 +190,7 @@ def _is_text_candidate(path: Path, extensions: set[str], max_bytes: int) -> bool
     except OSError:
         return False
     return path.suffix.lower() in extensions or path.name.lower() in {"readme", "metadata"}
+
 
 def read_text(path: Path) -> str | None:
     for encoding in ("utf-8", "utf-16", "latin-1"):
@@ -122,18 +200,22 @@ def read_text(path: Path) -> str | None:
             continue
     return None
 
+
 def term_score(text: str) -> int:
     lower = text.lower()
     return sum(lower.count(term) for term in CONTEXT_TERMS)
+
 
 def high_value_score(text: str) -> int:
     lower = text.lower()
     return sum(3 * lower.count(term) for term in HIGH_VALUE_TERMS)
 
+
 def snippet(lines: list[str], index: int, radius: int) -> str:
     start = max(0, index - radius)
     end = min(len(lines), index + radius + 1)
-    return "\n".join(f"{i+1}: {lines[i].rstrip()}" for i in range(start, end))
+    return "\n".join(f"{i + 1}: {lines[i].rstrip()}" for i in range(start, end))
+
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0088
@@ -143,11 +225,14 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
     return 2 * r * math.asin(math.sqrt(a))
 
+
 def extract_numeric_values(raw: str) -> list[float]:
     return [float(match.group(0)) for match in NUMBER_RE.finditer(raw)]
 
+
 def plausible_lat_lon(a: float, b: float) -> bool:
     return -90.0 <= a <= 90.0 and -180.0 <= b <= 180.0
+
 
 def coordinate_candidates_from_line(
     *,
@@ -166,35 +251,40 @@ def coordinate_candidates_from_line(
         nums = [float(v) for v in (match.group("a"), match.group("b")) if v is not None]
         if match.group("c") is not None:
             nums.append(float(match.group("c")))
-        candidates.extend(_make_coordinate_records(
-            path=path,
-            line_number=line_number,
-            source="numeric-sequence",
-            name=None,
-            values=nums,
-            line=line,
-            context=context,
-            reference_lat=reference_lat,
-            reference_lon=reference_lon,
-            max_distance_km=max_distance_km,
-        ))
+        candidates.extend(
+            _make_coordinate_records(
+                path=path,
+                line_number=line_number,
+                source="numeric-sequence",
+                name=None,
+                values=nums,
+                line=line,
+                context=context,
+                reference_lat=reference_lat,
+                reference_lon=reference_lon,
+                max_distance_km=max_distance_km,
+            )
+        )
 
     # Assignment-like records.
     for match in ASSIGNMENT_RE.finditer(line):
         values = extract_numeric_values(match.group("value"))
-        candidates.extend(_make_coordinate_records(
-            path=path,
-            line_number=line_number,
-            source="assignment",
-            name=match.group("name").strip(),
-            values=values,
-            line=line,
-            context=context,
-            reference_lat=reference_lat,
-            reference_lon=reference_lon,
-            max_distance_km=max_distance_km,
-        ))
+        candidates.extend(
+            _make_coordinate_records(
+                path=path,
+                line_number=line_number,
+                source="assignment",
+                name=match.group("name").strip(),
+                values=values,
+                line=line,
+                context=context,
+                reference_lat=reference_lat,
+                reference_lon=reference_lon,
+                max_distance_km=max_distance_km,
+            )
+        )
     return candidates
+
 
 def _make_coordinate_records(
     *,
@@ -236,22 +326,25 @@ def _make_coordinate_records(
         if name and any(term in name.lower() for term in ("radar", "fortem", "sensor", "origin", "lla")):
             score += 20
 
-        records.append({
-            "score": score,
-            "path": str(path),
-            "line_number": line_number,
-            "source": source,
-            "name": name or "",
-            "ordering": ordering,
-            "latitude": lat,
-            "longitude": lon,
-            "altitude": alt,
-            "distance_to_reference_km": distance_km,
-            "near_reference": near_reference,
-            "line": line.strip(),
-            "context": context,
-        })
+        records.append(
+            {
+                "score": score,
+                "path": str(path),
+                "line_number": line_number,
+                "source": source,
+                "name": name or "",
+                "ordering": ordering,
+                "latitude": lat,
+                "longitude": lon,
+                "altitude": alt,
+                "distance_to_reference_km": distance_km,
+                "near_reference": near_reference,
+                "line": line.strip(),
+                "context": context,
+            }
+        )
     return records
+
 
 def main() -> int:
     args = parse_args()
@@ -261,7 +354,11 @@ def main() -> int:
     coord_candidates: list[dict[str, object]] = []
     files_scanned = 0
 
-    for path in iter_files(args.roots, max_file_size_mb=args.max_file_size_mb, extra_exts=args.include_extension):
+    for path in iter_files(
+        args.roots,
+        max_file_size_mb=args.max_file_size_mb,
+        extra_exts=args.include_extension,
+    ):
         text = read_text(path)
         if text is None:
             continue
@@ -272,32 +369,38 @@ def main() -> int:
             matched_terms = [term for term in CONTEXT_TERMS if term in lower]
             if matched_terms:
                 ctx = snippet(lines, idx, args.context_radius)
-                matches.append({
-                    "score": term_score(ctx) + high_value_score(ctx),
-                    "path": str(path),
-                    "line_number": idx + 1,
-                    "matched_terms": ",".join(matched_terms),
-                    "line": line.strip(),
-                    "context": ctx,
-                })
+                matches.append(
+                    {
+                        "score": term_score(ctx) + high_value_score(ctx),
+                        "path": str(path),
+                        "line_number": idx + 1,
+                        "matched_terms": ",".join(matched_terms),
+                        "line": line.strip(),
+                        "context": ctx,
+                    }
+                )
 
             if any(ch.isdigit() for ch in line):
                 ctx = snippet(lines, idx, args.context_radius)
-                coord_candidates.extend(coordinate_candidates_from_line(
-                    path=path,
-                    line_number=idx + 1,
-                    line=line,
-                    context=ctx,
-                    reference_lat=args.reference_lat,
-                    reference_lon=args.reference_lon,
-                    max_distance_km=args.max_distance_km,
-                ))
+                coord_candidates.extend(
+                    coordinate_candidates_from_line(
+                        path=path,
+                        line_number=idx + 1,
+                        line=line,
+                        context=ctx,
+                        reference_lat=args.reference_lat,
+                        reference_lon=args.reference_lon,
+                        max_distance_km=args.max_distance_km,
+                    )
+                )
 
     matches.sort(key=lambda row: (-int(row["score"]), str(row["path"]), int(row["line_number"])))
     coord_candidates.sort(
         key=lambda row: (
             -int(row["score"]),
-            float("inf") if row["distance_to_reference_km"] is None else float(row["distance_to_reference_km"]),
+            float("inf")
+            if row["distance_to_reference_km"] is None
+            else float(row["distance_to_reference_km"]),
             str(row["path"]),
             int(row["line_number"]),
         )
@@ -307,8 +410,8 @@ def main() -> int:
     candidates_csv = args.output_dir / "radar_origin_coordinate_candidates.csv"
     report_json = args.output_dir / "radar_origin_search_report.json"
 
-    write_csv(matches_csv, matches)
-    write_csv(candidates_csv, coord_candidates)
+    write_csv(matches_csv, matches, fieldnames=MATCH_FIELDS)
+    write_csv(candidates_csv, coord_candidates, fieldnames=COORDINATE_FIELDS)
 
     report = {
         "roots": [str(path) for path in args.roots],
@@ -340,8 +443,14 @@ def main() -> int:
             )
     return 0
 
-def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
-    if rows:
+
+def write_csv(
+    path: Path,
+    rows: list[dict[str, object]],
+    *,
+    fieldnames: Iterable[str] | None = None,
+) -> None:
+    if fieldnames is None:
         fields: list[str] = []
         seen = set()
         for row in rows:
@@ -349,12 +458,23 @@ def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
                 if key not in seen:
                     fields.append(key)
                     seen.add(key)
+        if not fields:
+            fields = ["score", "path", "line_number", "line", "context"]
     else:
-        fields = ["score", "path", "line_number", "line", "context"]
+        fields = list(fieldnames)
+        if rows:
+            seen = set(fields)
+            for row in rows:
+                for key in row:
+                    if key not in seen:
+                        fields.append(key)
+                        seen.add(key)
+
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
