@@ -51,6 +51,7 @@ def snap_official_results_to_template(
         seq: group.sort_values("Timestamp").reset_index(drop=True)
         for seq, group in normalized_results.groupby("Sequence", sort=True)
     }
+    template_classes = _template_classification_by_key(template)
 
     outputs: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
@@ -62,7 +63,7 @@ def snap_official_results_to_template(
             if missing_policy == "raise":
                 raise ValueError(f"no source results for template sequence {sequence_id!r}")
             position = np.zeros(3, dtype=float)
-            classification = 0
+            classification = template_classes.get((sequence_id, timestamp), 0)
             diagnostic = _diagnostic_record(
                 template_index=template_index,
                 sequence_id=sequence_id,
@@ -113,6 +114,42 @@ def snap_official_results_to_template(
         pd.DataFrame.from_records(outputs, columns=list(OFFICIAL_UG2_RESULT_COLUMNS)),
         pd.DataFrame.from_records(diagnostics, columns=list(DIAGNOSTIC_COLUMNS)),
     )
+
+
+def _template_classification_by_key(template: pd.DataFrame) -> dict[tuple[str, float], int]:
+    """Return optional template classifications keyed by normalized sequence/time."""
+
+    frame = pd.DataFrame(template)
+    lower = {str(column).strip().lower(): column for column in frame.columns}
+    sequence_column = lower.get("sequence") or lower.get("sequence_id")
+    timestamp_column = lower.get("timestamp") or lower.get("time_s")
+    classification_column = lower.get("classification") or lower.get("class_id")
+    if (
+        frame.empty
+        or sequence_column is None
+        or timestamp_column is None
+        or classification_column is None
+    ):
+        return {}
+
+    rows = pd.DataFrame(
+        {
+            "Sequence": frame[sequence_column].astype(str).str.strip(),
+            "Timestamp": pd.to_numeric(frame[timestamp_column], errors="coerce"),
+            "Classification": pd.to_numeric(frame[classification_column], errors="coerce"),
+        }
+    )
+    finite = (
+        rows["Sequence"].ne("")
+        & np.isfinite(rows["Timestamp"].to_numpy(float))
+        & np.isfinite(rows["Classification"].to_numpy(float))
+    )
+    rows = rows.loc[finite]
+    rows = rows.loc[rows["Classification"].isin(OFFICIAL_TRACK5_CLASS_IDS)]
+    return {
+        (str(row["Sequence"]), float(row["Timestamp"])): int(row["Classification"])
+        for _, row in rows.iterrows()
+    }
 
 
 def _validate_official_classification_ids(rows: pd.DataFrame) -> None:

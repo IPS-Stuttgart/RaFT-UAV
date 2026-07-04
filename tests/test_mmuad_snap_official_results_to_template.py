@@ -95,7 +95,9 @@ def test_snap_official_results_to_template_rejects_logical_classification_labels
 def test_snap_official_results_to_template_handles_empty_source_results() -> None:
     snapped, diagnostics = snapper.snap_official_results_to_template(
         pd.DataFrame(columns=["Sequence", "Timestamp", "Position", "Classification"]),
-        pd.DataFrame({"Sequence": ["seq-missing"], "Timestamp": [1.0]}),
+        pd.DataFrame(
+            {"Sequence": ["seq-missing"], "Timestamp": [1.0], "Classification": [3]}
+        ),
         missing_position_policy="zero",
     )
 
@@ -104,7 +106,7 @@ def test_snap_official_results_to_template_handles_empty_source_results() -> Non
             "Sequence": "seq-missing",
             "Timestamp": 1.0,
             "Position": "(0,0,0)",
-            "Classification": 0,
+            "Classification": 3,
         }
     ]
     row = diagnostics.iloc[0]
