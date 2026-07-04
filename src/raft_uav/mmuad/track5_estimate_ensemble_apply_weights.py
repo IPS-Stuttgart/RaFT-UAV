@@ -88,6 +88,7 @@ def write_apply_weights_outputs(
 ) -> dict[str, Path]:
     """Write weighted ensemble outputs plus an application manifest."""
 
+    estimate_input_list = list(estimate_inputs)
     template = load_official_track5_template_file(template_path)
     selected_aggregation = str(
         aggregation_policy
@@ -105,7 +106,7 @@ def write_apply_weights_outputs(
     if selected_max_delta is not None:
         selected_max_delta = float(selected_max_delta)
     paths = write_track5_estimate_ensemble_outputs(
-        estimate_inputs=list(estimate_inputs),
+        estimate_inputs=estimate_input_list,
         template=template,
         output_dir=output_dir,
         class_map=class_map or {},
@@ -118,7 +119,7 @@ def write_apply_weights_outputs(
     manifest = {
         "schema": "raft-uav-mmuad-track5-estimate-ensemble-apply-weights-v1",
         "weight_config_schema": weight_config.get("schema"),
-        "applied_weights": {item.label: float(item.weight) for item in estimate_inputs},
+        "applied_weights": {item.label: float(item.weight) for item in estimate_input_list},
         "aggregation_policy": selected_aggregation,
         "trim_fraction": selected_trim,
         "max_nearest_time_delta_s": selected_max_delta,
