@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import types
 
 
 def test_mmuad_import_does_not_require_optional_pyrecest_runtime_hook():
@@ -32,3 +33,14 @@ assert parse_official_position_cell("[1,2,3]") == (1.0, 2.0, 3.0)
     src_path = str(repo_root / "src")
     env["PYTHONPATH"] = src_path + os.pathsep + env.get("PYTHONPATH", "")
     subprocess.run([sys.executable, "-c", script], check=True, env=env)
+
+
+def test_mmuad_image_row_guard_skips_modules_without_private_timestamp_parser(monkeypatch):
+    import raft_uav.mmuad as mmuad
+
+    replacement = types.SimpleNamespace()
+    monkeypatch.setattr(mmuad, "image_evidence", replacement, raising=False)
+
+    mmuad._install_image_row_guard()
+
+    assert not hasattr(replacement, "_image_file_rows")
