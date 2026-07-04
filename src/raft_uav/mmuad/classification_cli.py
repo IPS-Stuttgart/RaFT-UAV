@@ -5,7 +5,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import pandas as pd
+
 from raft_uav.mmuad.classification import (
+    OFFICIAL_SEQUENCE_CLASS_LABELS,
     SEQUENCE_CLASSIFIER_LOSO_PREDICTION_COLUMNS,
     SEQUENCE_CLASSIFIER_METHODS,
     _normalize_sequence_classifier_method,
@@ -160,10 +163,11 @@ def _run_loso_eval(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         parser.error("--submission-in and --submission-out must be provided together")
     features = sequence_features_from_files(args.selected_tracklets)
     labels = load_sequence_class_labels(args.reference)
-    predictions = build_sequence_classifier_loso_predictions(
+    predictions = _build_loso_predictions(
         features=features,
         labels=labels,
         method=args.method,
+        k=args.k,
     )
     predictions_csv = args.loso_predictions_csv
     if predictions_csv is None:
@@ -187,6 +191,88 @@ def _run_loso_eval(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         )
         print(f"submission_out={output}")
     return 0
+
+
+def _build_loso_predictions(
+    *,
+    features: pd.DataFrame,
+    labels: dict[str, str],
+    method: str,
+    k: int,
+) -> pd.DataFrame:
+    """Build LOSO predictions while honoring nearest-neighbor CLI options."""
+
+    method = _normalize_sequence_classifier_method(method)
+    k = max(1, int(k))
+    if method != "nearest-neighbor" or k == 1:
+        return build_sequence_classifier_loso_predictions(
+            features=features,
+            labels=labels,
+            method=method,
+        )
+    return _build_k_nearest_neighbor_loso_predictions(features=features, labels=labels, k=k)
+
+
+def _build_k_nearest_neighbor_loso_predictions(
+    *,
+    features: pd.DataFrame,
+    labels: dict[str, str],
+    k: int,
+) -> pd.DataFrame:
+    """Return LOSO nearest-neighbor predictions for the requested vote count."""
+
+    if features.empty:
+        raise ValueError("no sequence feature rows were provided")
+    if "sequence_id" not in features.columns:
+        raise ValueError("sequence features must contain a sequence_id column")
+
+    feature_rows = features.copy()
+    feature_rows["sequence_id"] = feature_rows["sequence_id"].astype(str)
+    label_map = {str(key): str(value) for key, value in labels.items()}
+    heldout_sequences = sorted(
+        set(feature_rows["sequence_id"].astype(str)).intersection(label_map)
+    )
+    if len(heldout_sequences) < 2:
+        raise ValueError("LOSO sequence classification needs at least two labeled sequences")
+
+    records: list[dict[str, object]] = []
+    for heldout_sequence in heldout_sequences:
+        train_sequences = [sequence for sequence in heldout_sequences if sequence != heldout_sequence]
+        fold_train_features = feature_rows.loc[
+            feature_rows["sequence_id"].isin(train_sequences)
+        ].reset_index(drop=True)
+        fold_predict_features = feature_rows.loc[
+            feature_rows["sequence_id"].eq(heldout_sequence)
+        ].reset_index(drop=True)
+        fold_labels = {sequence: label_map[sequence] for sequence in train_sequences}
+        fold_result = classify_sequences_from_features(
+            train_features=fold_train_features,
+            train_labels=fold_labels,
+            predict_features=fold_predict_features,
+            method="nearest-neighbor",
+            k=k,
+        )
+        prediction = fold_result.predictions.iloc[0]
+        truth_class = str(label_map[heldout_sequence])
+        predicted_class = str(prediction["predicted_class"])
+        record: dict[str, object] = {
+            "sequence": heldout_sequence,
+            "heldout_sequence": heldout_sequence,
+            "method": "nearest-neighbor",
+            "truth_class": truth_class,
+            "predicted_class": predicted_class,
+            "correct": bool(predicted_class == truth_class),
+            "train_sequences": ";".join(train_sequences),
+            "feature_columns": ";".join(
+                str(value) for value in fold_result.metrics.get("feature_columns", [])
+            ),
+        }
+        for class_label in OFFICIAL_SEQUENCE_CLASS_LABELS:
+            column = f"predicted_probability_{class_label}"
+            record[column] = float(predicted_class == str(class_label))
+        records.append(record)
+
+    return pd.DataFrame.from_records(records, columns=SEQUENCE_CLASSIFIER_LOSO_PREDICTION_COLUMNS)
 
 
 def _require_args(
