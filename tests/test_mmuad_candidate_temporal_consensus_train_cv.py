@@ -144,6 +144,8 @@ def test_fit_and_apply_clis_write_truth_free_outputs(tmp_path: Path) -> None:
                 "1.1",
                 "--max-speed-mps",
                 "10",
+                "--top-k",
+                "1",
                 "--selection-metric",
                 "oracle_top1_3d_m_mse",
             ]
@@ -151,6 +153,12 @@ def test_fit_and_apply_clis_write_truth_free_outputs(tmp_path: Path) -> None:
         == 0
     )
     config_json = fit_dir / "mmuad_temporal_consensus_train_selected_config.json"
+    selected_config = json.loads(config_json.read_text(encoding="utf-8"))
+    grid = pd.read_csv(fit_dir / "mmuad_temporal_consensus_train_grid_summary.csv")
+    assert selected_config["top_k_values"] == [1]
+    assert "oracle_top1_3d_m_mse" in grid.columns
+    assert "oracle_top3_3d_m_mse" not in grid.columns
+
     output_csv = tmp_path / "applied.csv"
     summary_json = tmp_path / "summary.json"
     assert (

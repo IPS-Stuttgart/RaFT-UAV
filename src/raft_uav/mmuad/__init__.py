@@ -52,8 +52,19 @@ def _install_candidate_pool_compare_cli_guard() -> None:
     _candidate_pool_compare.main = _candidate_pool_compare_cli.main
 
 
+def _install_temporal_consensus_train_cv_cli_guard() -> None:
+    try:
+        from raft_uav.mmuad import candidate_temporal_consensus_train_cv as _temporal_train_cv
+        from raft_uav.mmuad import candidate_temporal_consensus_train_cv_cli as _temporal_train_cv_cli
+    except Exception:
+        return
+
+    _temporal_train_cv.main = _temporal_train_cv_cli.main
+
+
 _install_image_row_guard()
 _install_candidate_pool_compare_cli_guard()
+_install_temporal_consensus_train_cv_cli_guard()
 
 
 __all__ = [
