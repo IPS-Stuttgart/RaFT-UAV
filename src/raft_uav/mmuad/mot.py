@@ -332,9 +332,43 @@ def _finite_mot_estimates(estimates: pd.DataFrame) -> pd.DataFrame:
         return estimates.iloc[0:0].copy()
     numeric = estimates.loc[:, required].apply(pd.to_numeric, errors="coerce")
     finite = np.isfinite(numeric.to_numpy(dtype=float)).all(axis=1)
+    estimate_ids = _estimate_track_ids_for_metrics(estimates)
+    finite &= estimate_ids.notna().to_numpy(dtype=bool)
+    out = estimates.loc[finite].copy()
+    out["output_track_id"] = estimate_ids.loc[finite].astype(str).to_numpy()
+    return out
+
+
+def _estimate_track_ids_for_metrics(estimates: pd.DataFrame) -> pd.Series:
+    """Return a metric-safe prediction track-id column.
+
+    Public metric callers may pass exported estimate tables that carry a normal
+    ``track_id`` but not the tracker-internal ``output_track_id``.  Normalize both
+    spellings to ``output_track_id`` so ID-switch accounting can run without a
+    KeyError while preserving every finite prediction as a prediction row.
+    """
+
     if "output_track_id" in estimates.columns:
-        finite &= estimates["output_track_id"].notna().to_numpy(dtype=bool)
-    return estimates.loc[finite].copy()
+        return _normalized_metric_id_series(estimates["output_track_id"], prefix="estimate")
+    if "track_id" in estimates.columns:
+        return _normalized_metric_id_series(estimates["track_id"], prefix="estimate")
+    return pd.Series(
+        [f"estimate_{index}" for index in estimates.index],
+        index=estimates.index,
+        dtype=object,
+    )
+
+
+def _normalized_metric_id_series(values: pd.Series, *, prefix: str) -> pd.Series:
+    ids = values.astype(object).copy()
+    present = _track_id_present_mask(values)
+    fallback = pd.Series(
+        [f"{prefix}_{index}" for index in values.index],
+        index=values.index,
+        dtype=object,
+    )
+    ids.loc[~present] = fallback.loc[~present]
+    return ids
 
 
 def _track_count(estimates: pd.DataFrame) -> int:
