@@ -233,7 +233,11 @@ def _diagnostic_record(**items: Any) -> dict[str, Any]:
 
 
 def _bracketing_gap_s(times: np.ndarray, timestamp: float) -> float:
-    if len(times) < 2 or timestamp <= times[0] or timestamp >= times[-1]:
+    if len(times) < 2 or timestamp < times[0] or timestamp > times[-1]:
+        return np.nan
+    if np.any(times == float(timestamp)):
+        return 0.0
+    if timestamp == times[0] or timestamp == times[-1]:
         return np.nan
     right = int(np.searchsorted(times, timestamp, side="right"))
     if right >= len(times):
