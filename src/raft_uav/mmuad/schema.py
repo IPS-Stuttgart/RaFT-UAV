@@ -282,6 +282,8 @@ def normalize_truth_columns(
 
     out = normalize_time_column_aliases(frame.copy(), target="time_s")
     out = _rename_aliases(out)
+    if out.empty:
+        return pd.DataFrame(columns=CANONICAL_TRUTH_COLUMNS)
     if "sequence_id" not in out.columns:
         out["sequence_id"] = default_sequence_id
     for col in ("time_s", "x_m", "y_m", "z_m"):
