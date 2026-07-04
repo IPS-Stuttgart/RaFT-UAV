@@ -280,7 +280,7 @@ def _expected_frame_counts(sequence_root: Path | None) -> dict[str, int]:
 
 
 def _count_out_of_range_frame_rows(text: str, *, expected_frame_count: int | None) -> int:
-    if expected_frame_count is None or expected_frame_count <= 0:
+    if expected_frame_count is None:
         return 0
     count = 0
     for raw in text.splitlines():
