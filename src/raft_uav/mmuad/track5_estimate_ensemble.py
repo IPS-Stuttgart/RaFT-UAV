@@ -22,6 +22,7 @@ import pandas as pd
 from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
     load_sequence_class_map,
+    parse_official_sequence_cell,
     validate_official_track5_submission,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
@@ -394,12 +395,19 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("template must contain sequence and timestamp columns")
     out = pd.DataFrame(
         {
-            "sequence_id": rows[sequence_column].astype(str),
+            "sequence_id": rows[sequence_column].map(_template_sequence_or_none),
             "time_s": pd.to_numeric(rows[time_column], errors="coerce"),
         }
     )
-    finite = np.isfinite(out["time_s"].to_numpy(float))
+    finite = out["sequence_id"].notna() & np.isfinite(out["time_s"].to_numpy(float))
     return out.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+
+
+def _template_sequence_or_none(value: Any) -> str | None:
+    try:
+        return parse_official_sequence_cell(value)
+    except ValueError:
+        return None
 
 
 def _template_time_matches(values: pd.Series, target: float) -> np.ndarray:
