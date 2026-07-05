@@ -46,7 +46,7 @@ def _load_sequence_class_map_with_official_sequences(path: Path | str | None) ->
     class_map: dict[str, str] = {}
     for _, row in frame.iterrows():
         sequence_id = _class_map_sequence_key(row["sequence_id"])
-        uav_type = _impl._scalar_to_text(row["uav_type"])
+        uav_type = _class_map_uav_type(row["uav_type"])
         if sequence_id is not None and uav_type is not None:
             class_map[sequence_id] = uav_type
     return class_map
@@ -57,6 +57,12 @@ def _class_map_sequence_key(value: Any) -> str | None:
         return _impl.parse_official_sequence_cell(value)
     except ValueError:
         return None
+
+
+def _class_map_uav_type(value: Any) -> str | None:
+    if isinstance(value, _impl.np.generic):
+        value = value.item()
+    return _impl._scalar_to_text(value)
 
 
 _impl.parse_official_classification_cell = _parse_official_classification_cell_with_domain
