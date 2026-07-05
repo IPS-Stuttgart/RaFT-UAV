@@ -84,7 +84,13 @@ def search_track5_uncertainty_ensemble_weights(
     grid = pd.DataFrame.from_records(records)
     if grid.empty:
         raise ValueError("weight grid produced no rows")
-    best_row = grid.sort_values(
+    scored_grid = _scored_weight_grid_rows(grid)
+    if scored_grid.empty:
+        raise ValueError(
+            "no weight candidate had finite matched truth rows; check truth/template "
+            "sequence ids and timestamps before selecting ensemble weights"
+        )
+    best_row = scored_grid.sort_values(
         ["pose_mse_m2", "pose_p95_m", "pose_max_m"],
         na_position="last",
     ).iloc[0]
@@ -286,6 +292,14 @@ def _score_template_estimates(estimates: pd.DataFrame, truth: pd.DataFrame) -> d
         "pose_p95_m": float(np.percentile(errors, 95)),
         "pose_max_m": float(np.max(errors)),
     }
+
+
+def _scored_weight_grid_rows(grid: pd.DataFrame) -> pd.DataFrame:
+    metric_columns = ["pose_mse_m2", "pose_p95_m", "pose_max_m"]
+    matched_rows = pd.to_numeric(grid.get("matched_rows", pd.Series(dtype=float)), errors="coerce")
+    metric_values = grid[metric_columns].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+    scored = (matched_rows.fillna(0).to_numpy(float) > 0.0) & np.isfinite(metric_values).all(axis=1)
+    return grid.loc[scored].copy()
 
 
 def _empty_metrics() -> dict[str, Any]:

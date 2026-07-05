@@ -88,6 +88,21 @@ def test_uncertainty_weight_search_can_override_bad_overconfidence(tmp_path: Pat
     assert best["metrics"]["pose_mse_m2"] == pytest.approx(0.0)
 
 
+def test_uncertainty_weight_search_rejects_unscored_grid(tmp_path: Path) -> None:
+    good_csv = tmp_path / "good.csv"
+    _good_uncertain_estimate().to_csv(good_csv, index=False)
+    unmatched_truth = _truth().assign(sequence_id="unmatched-sequence")
+
+    with pytest.raises(ValueError, match="no weight candidate had finite matched truth rows"):
+        search_track5_uncertainty_ensemble_weights(
+            [EstimateInput("good", good_csv)],
+            template=_template(),
+            truth=unmatched_truth,
+            uncertainty_column="predicted_sigma_m",
+            weight_step=1.0,
+        )
+
+
 def test_uncertainty_weight_search_writes_best_submission(tmp_path: Path) -> None:
     good_csv = tmp_path / "good.csv"
     bad_csv = tmp_path / "bad.csv"
