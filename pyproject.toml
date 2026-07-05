@@ -110,6 +110,7 @@ raft-uav-mmuad-grouped-candidate-mixture-map = "raft_uav.mmuad.candidate_mixture
 raft-uav-mmuad-diversity-cap-reservoir = "raft_uav.mmuad.candidate_reservoir_diversity:main"
 raft-uav-mmuad-spatial-diversity-reservoir = "raft_uav.mmuad.candidate_reservoir_spatial:main"
 raft-uav-mmuad-candidate-reservoir-grid = "raft_uav.mmuad.candidate_reservoir_grid:main"
+raft-uav-mmuad-candidate-reservoir-offset-recommendations = "raft_uav.mmuad.candidate_reservoir_offset_recommendations:main"
 raft-uav-mmuad-candidate-reservoir-train-cv = "raft_uav.mmuad.candidate_reservoir_train_cv:main"
 raft-uav-mmuad-apply-candidate-reservoir-config = "raft_uav.mmuad.candidate_reservoir_apply:main"
 raft-uav-mmuad-candidate-pool-compare = "raft_uav.mmuad.candidate_pool_compare_cli:main"
