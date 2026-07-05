@@ -113,9 +113,16 @@ def build_candidate_reservoir(
             candidate_reservoir_cap_score=pd.Series(dtype=float),
         )
     rows = rows.copy().reset_index(drop=True)
+    if "source" not in rows.columns:
+        rows["source"] = "unknown"
+    else:
+        rows["source"] = rows["source"].fillna("unknown").astype(str)
+        rows.loc[rows["source"].str.len() == 0, "source"] = "unknown"
     if "candidate_branch" not in rows.columns:
-        rows["candidate_branch"] = rows["source"].fillna("candidate").astype(str)
-    rows["candidate_branch"] = rows["candidate_branch"].fillna("candidate").astype(str)
+        rows["candidate_branch"] = rows["source"]
+    else:
+        rows["candidate_branch"] = rows["candidate_branch"].fillna("candidate").astype(str)
+        rows.loc[rows["candidate_branch"].str.len() == 0, "candidate_branch"] = "candidate"
     rows["_candidate_original_row"] = np.arange(len(rows), dtype=int)
     rows["candidate_reservoir_score"] = _candidate_score(rows, config=config)
 
