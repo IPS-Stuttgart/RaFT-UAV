@@ -27,6 +27,12 @@ def _estimates() -> pd.DataFrame:
     )
 
 
+def _classified_estimates() -> pd.DataFrame:
+    rows = _estimates()
+    rows["classification"] = [3, 3, 1]
+    return rows
+
+
 def _template() -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -68,6 +74,40 @@ def test_resample_estimates_to_track5_template_supports_nearest_mode() -> None:
     assert midpoint["state_z_m"] == pytest.approx(1.0)
     assert midpoint["template_resample_method"] == "nearest"
     assert diagnostics.loc[diagnostics["time_s"] == 5.0, "resample_method"].iloc[0] == "nearest"
+
+
+def test_resample_estimates_to_track5_template_preserves_sequence_classification() -> None:
+    resampled, diagnostics = resample_estimates_to_track5_template(
+        _classified_estimates(),
+        _template(),
+    )
+
+    assert resampled["classification"].tolist() == [3, 3, 3, 1]
+    assert set(resampled["template_classification_source"]) == {"sequence-mode"}
+    assert set(diagnostics["classification_source"]) == {"sequence-mode"}
+
+
+def test_resample_estimates_to_track5_template_supports_nearest_classification() -> None:
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq0001", "seq0001"],
+            "time_s": [0.0, 10.0],
+            "state_x_m": [0.0, 10.0],
+            "state_y_m": [0.0, 0.0],
+            "state_z_m": [0.0, 0.0],
+            "classification": [2, 3],
+        }
+    )
+    template = pd.DataFrame({"Sequence": ["seq0001", "seq0001"], "Timestamp": [1.0, 9.0]})
+
+    resampled, diagnostics = resample_estimates_to_track5_template(
+        estimates,
+        template,
+        classification_policy="nearest",
+    )
+
+    assert resampled["classification"].tolist() == [2, 3]
+    assert set(diagnostics["classification_source"]) == {"nearest"}
 
 
 def test_resample_estimates_to_track5_template_normalizes_sequence_ids() -> None:
@@ -142,6 +182,7 @@ def test_sequence_diagnostics_summarize_invalid_and_extrapolated_rows() -> None:
     assert summary.loc["seq0001", "nearest_time_delta_abs_max_s"] == pytest.approx(10.0)
     assert summary.loc["seq0003", "source_row_count_max"] == 0
     assert summary.loc["seq0003", "invalid_row_count"] == 1
+    assert "classification_missing_row_count" in summary.columns
 
 
 def test_write_track5_template_resample_outputs_produces_upload_ready_zip(
@@ -168,6 +209,26 @@ def test_write_track5_template_resample_outputs_produces_upload_ready_zip(
     assert set(sequence_diagnostics["sequence_id"]) == {"seq0001", "seq0002"}
 
 
+def test_write_track5_template_resample_outputs_preserves_estimate_classification(
+    tmp_path: Path,
+) -> None:
+    paths = write_track5_template_resample_outputs(
+        estimates=_classified_estimates(),
+        template=_template(),
+        output_dir=tmp_path,
+    )
+
+    official_rows = pd.read_csv(paths["official_results_csv"])
+    assert official_rows["Classification"].tolist() == [3, 3, 3, 1]
+    resampled = pd.read_csv(paths["resampled_estimates_csv"])
+    assert resampled["classification"].tolist() == [3, 3, 3, 1]
+    manifest = json.loads(paths["manifest_json"].read_text(encoding="utf-8"))
+    assert manifest["schema"] == "raft-uav-mmuad-track5-template-resample-v3"
+    assert manifest["classification_policy"] == "sequence-mode"
+    assert manifest["classification_from_estimates"] is True
+    assert manifest["resampled_classification_rows"] == 4
+
+
 def test_write_track5_template_resample_outputs_records_resampling_policy(
     tmp_path: Path,
 ) -> None:
@@ -183,7 +244,7 @@ def test_write_track5_template_resample_outputs_records_resampling_policy(
     manifest = json.loads(paths["manifest_json"].read_text(encoding="utf-8"))
     assert manifest["resample_method"] == "nearest"
     assert manifest["max_interpolation_gap_s"] == 4.0
-    assert manifest["schema"] == "raft-uav-mmuad-track5-template-resample-v2"
+    assert manifest["schema"] == "raft-uav-mmuad-track5-template-resample-v3"
 
 
 def test_template_resample_cli_writes_artifacts(tmp_path: Path) -> None:
@@ -212,6 +273,8 @@ def test_template_resample_cli_writes_artifacts(tmp_path: Path) -> None:
             "nearest",
             "--max-interpolation-gap-s",
             "4.0",
+            "--classification-policy",
+            "nearest",
             "--require-leaderboard-ready",
         ]
     )
@@ -226,3 +289,4 @@ def test_template_resample_cli_writes_artifacts(tmp_path: Path) -> None:
     assert manifest["invalid_sequence_count"] == 0
     assert manifest["leaderboard_ready"] is True
     assert manifest["resample_method"] == "nearest"
+    assert manifest["classification_policy"] == "nearest"
