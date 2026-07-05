@@ -41,9 +41,7 @@ def load_ensemble_weight_config(path: Path) -> dict[str, Any]:
                 "weight config labels must be unique after normalization; "
                 f"{previous!r} and {str(label)!r} both map to {safe_label!r}"
             )
-        weight = float(value)
-        if not np.isfinite(weight) or weight < 0.0:
-            raise ValueError(f"weight for {label!r} must be finite and non-negative")
+        weight = _validate_weight_value(value, label=safe_label)
         parsed_weights[safe_label] = weight
         original_labels[safe_label] = str(label)
     total = sum(parsed_weights.values())
@@ -64,9 +62,17 @@ def apply_ensemble_weight_config(
 
     if missing_weight_policy not in {"error", "zero", "default"}:
         raise ValueError("missing_weight_policy must be one of: error, zero, default")
-    weights = {str(key): float(value) for key, value in weight_config.get("weights", {}).items()}
+    raw_weights = weight_config.get("weights", {})
+    if not isinstance(raw_weights, dict):
+        raise ValueError("weight config weights must be a mapping")
+    weights = {
+        _safe_label(str(key)): _validate_weight_value(value, label=_safe_label(str(key)))
+        for key, value in raw_weights.items()
+    }
     if not weights:
         raise ValueError("weight config has no weights")
+    if missing_weight_policy == "default":
+        default_missing_weight = _validate_weight_value(default_missing_weight, label="default")
     estimate_inputs: list[EstimateInput] = []
     seen_labels: set[str] = set()
     for spec in estimate_specs:
@@ -209,6 +215,16 @@ def main(argv: list[str] | None = None) -> int:
 def _safe_label(value: str) -> str:
     label = str(value).strip().replace(" ", "_").replace("/", "_").replace("\\", "_")
     return label or "estimate"
+
+
+def _validate_weight_value(value: Any, *, label: str) -> float:
+    try:
+        weight = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"weight for {label!r} must be finite and non-negative") from exc
+    if not np.isfinite(weight) or weight < 0.0:
+        raise ValueError(f"weight for {label!r} must be finite and non-negative")
+    return weight
 
 
 def _jsonable(value: Any) -> Any:
