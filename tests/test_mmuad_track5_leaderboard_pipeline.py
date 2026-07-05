@@ -76,12 +76,22 @@ def test_track5_leaderboard_pipeline_packages_template_ready_zip(tmp_path: Path)
         output_dir=tmp_path,
         truth=_truth(),
         class_map={"seqA": "2"},
+        submission_resample_method="nearest",
+        submission_max_interpolation_gap_s=1.5,
     )
 
     manifest = result["manifest"]
+    assert manifest["schema"] == "raft-uav-mmuad-track5-leaderboard-pipeline-v2"
     assert manifest["reservoir_rows"] == 10
     assert manifest["mixture_estimate_rows"] == 5
     assert manifest["template_row_count"] == 3
+    assert manifest["submission_resample_method"] == "nearest"
+    assert manifest["submission_max_interpolation_gap_s"] == 1.5
+    submission_manifest = json.loads(
+        Path(result["submission_paths"]["manifest_json"]).read_text(encoding="utf-8")
+    )
+    assert submission_manifest["resample_method"] == "nearest"
+    assert submission_manifest["max_interpolation_gap_s"] == 1.5
     validation = json.loads(
         Path(result["submission_paths"]["validation_json"]).read_text(encoding="utf-8")
     )
@@ -136,6 +146,10 @@ def test_track5_leaderboard_pipeline_cli_writes_manifest_and_zip(tmp_path: Path)
             "100",
             "--iterations",
             "5",
+            "--submission-resample-method",
+            "nearest",
+            "--submission-max-interpolation-gap-s",
+            "2.0",
             "--require-leaderboard-ready",
         ]
     )
@@ -145,6 +159,8 @@ def test_track5_leaderboard_pipeline_cli_writes_manifest_and_zip(tmp_path: Path)
     assert manifest_path.exists()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["submission_paths"]["official_zip"].endswith("ug2_submission.zip")
+    assert manifest["submission_resample_method"] == "nearest"
+    assert manifest["submission_max_interpolation_gap_s"] == 2.0
     assert (output_dir / "track5_submission" / "ug2_submission.zip").exists()
     assert (output_dir / "reservoir_mixture" / "mmuad_candidate_mixture_estimates.csv").exists()
 
