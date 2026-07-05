@@ -22,7 +22,9 @@ def _install_image_row_guard() -> None:
     except Exception:
         return
 
-    parser = getattr(_image_evidence, "_time" + "stamp_from_filename")
+    parser = getattr(_image_evidence, "_time" + "stamp_from_filename", None)
+    if parser is None:
+        return
 
     def _image_file_rows(image_files):
         records = []
