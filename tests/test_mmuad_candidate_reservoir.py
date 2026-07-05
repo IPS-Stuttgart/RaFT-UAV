@@ -85,6 +85,21 @@ def test_candidate_reservoir_keeps_per_branch_candidates() -> None:
     assert reservoir["candidate_reservoir_rank"].min() == 1
 
 
+def test_candidate_reservoir_direct_call_defaults_missing_source() -> None:
+    rows = _candidate_rows().drop(columns=["source", "candidate_branch"])
+
+    reservoir = build_candidate_reservoir(
+        rows,
+        top_per_source=1,
+        top_per_branch=1,
+        global_top_n=1,
+    )
+
+    assert set(reservoir["source"]) == {"unknown"}
+    assert set(reservoir["candidate_branch"]) == {"unknown"}
+    assert len(reservoir) == 2
+
+
 def test_cap_reason_bonus_keeps_multi_reason_candidate_under_tight_cap() -> None:
     rows = pd.DataFrame(
         {
