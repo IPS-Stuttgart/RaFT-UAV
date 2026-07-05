@@ -62,6 +62,10 @@ class PredictionCoverageAudit:
     missing_file_count: int
     extra_file_count: int
     empty_expected_file_count: int
+    ok_file_count: int
+    not_ready_file_count: int
+    invalid_file_count: int
+    unsorted_file_count: int
     parse_errors: int
     invalid_geometry_rows: int
     invalid_confidence_rows: int
@@ -70,6 +74,7 @@ class PredictionCoverageAudit:
     unsorted_rows: int
     out_of_range_frame_rows: int
     duplicate_frame_object_rows: int
+    status_counts: dict[str, int]
     missing_files: list[str]
     extra_files: list[str]
     empty_expected_files: list[str]
@@ -199,6 +204,7 @@ def audit_prediction_coverage(
     unsorted_rows = sum(row.unsorted_rows for row in rows)
     out_of_range_frame_rows = sum(row.out_of_range_frame_rows for row in rows)
     duplicate_frame_object_rows = sum(row.duplicate_frame_object_rows for row in rows)
+    status_counts = _status_counts(rows)
     blocking_reasons = _blocking_reasons(
         missing_files=missing_files,
         extra_files=extra_files,
@@ -223,6 +229,10 @@ def audit_prediction_coverage(
         missing_file_count=len(missing_files),
         extra_file_count=len(extra_files),
         empty_expected_file_count=len(empty_expected_files),
+        ok_file_count=status_counts.get("ok", 0),
+        not_ready_file_count=len(rows) - status_counts.get("ok", 0),
+        invalid_file_count=status_counts.get("invalid", 0),
+        unsorted_file_count=status_counts.get("unsorted", 0),
         parse_errors=parse_errors,
         invalid_geometry_rows=invalid_geometry_rows,
         invalid_confidence_rows=invalid_confidence_rows,
@@ -231,6 +241,7 @@ def audit_prediction_coverage(
         unsorted_rows=unsorted_rows,
         out_of_range_frame_rows=out_of_range_frame_rows,
         duplicate_frame_object_rows=duplicate_frame_object_rows,
+        status_counts=status_counts,
         missing_files=missing_files,
         extra_files=extra_files,
         empty_expected_files=empty_expected_files,
@@ -387,6 +398,13 @@ def _count_invalid_class_visibility_rows(text: str) -> tuple[int, int]:
         if not 0.0 <= visibility <= 1.0:
             invalid_visibility_rows += 1
     return invalid_class_rows, invalid_visibility_rows
+
+
+def _status_counts(rows: list[PredictionCoverageRow]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row.status] = counts.get(row.status, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _blocking_reasons(

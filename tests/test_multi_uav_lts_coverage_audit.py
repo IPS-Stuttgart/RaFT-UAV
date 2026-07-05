@@ -57,6 +57,9 @@ def test_prediction_coverage_audit_detects_missing_extra_and_empty_files(tmp_pat
     assert audit.extra_files == ["EXTRA_00.txt"]
     assert audit.empty_expected_files == ["B_00.txt"]
     assert audit.blocking_reasons == ["missing_files", "extra_files", "empty_expected_files"]
+    assert audit.status_counts == {"empty_expected": 1, "extra": 1, "missing": 1, "ok": 1}
+    assert audit.ok_file_count == 1
+    assert audit.not_ready_file_count == 3
     assert rows_by_name["A_00.txt"].status == "ok"
     assert rows_by_name["B_00.txt"].status == "empty_expected"
     assert rows_by_name["C_00.txt"].status == "missing"
@@ -78,6 +81,9 @@ def test_prediction_coverage_audit_empty_expected_file_is_not_ready(tmp_path: Pa
     assert audit.empty_expected_file_count == 1
     assert audit.empty_expected_files == ["A_00.txt"]
     assert audit.blocking_reasons == ["empty_expected_files"]
+    assert audit.status_counts == {"empty_expected": 1}
+    assert audit.ok_file_count == 0
+    assert audit.not_ready_file_count == 1
     assert audit.rows[0].status == "empty_expected"
 
     with pytest.raises(SystemExit) as exc_info:
@@ -127,6 +133,8 @@ def test_prediction_coverage_audit_detects_frame_ids_beyond_sequence_length(
     assert audit.out_of_range_frame_rows == 1
     assert audit.out_of_range_frame_files == ["A_00.txt"]
     assert audit.blocking_reasons == ["out_of_range_frame_rows"]
+    assert audit.status_counts == {"invalid": 1}
+    assert audit.invalid_file_count == 1
     assert row.status == "invalid"
     assert row.expected_frame_count == 3
     assert row.out_of_range_frame_rows == 1
@@ -173,6 +181,7 @@ def test_prediction_coverage_audit_detects_duplicate_frame_object_rows(tmp_path:
     assert audit.duplicate_frame_object_rows == 1
     assert audit.duplicate_frame_object_files == ["A_00.txt"]
     assert audit.blocking_reasons == ["duplicate_frame_object_rows"]
+    assert audit.invalid_file_count == 1
     assert row.status == "invalid"
     assert row.duplicate_frame_object_rows == 1
 
@@ -235,6 +244,9 @@ def test_prediction_coverage_audit_cli_writes_json_and_rows(tmp_path: Path) -> N
     assert payload["duplicate_frame_object_rows"] == 0
     assert payload["invalid_class_rows"] == 0
     assert payload["invalid_visibility_rows"] == 0
+    assert payload["status_counts"] == {"ok": 1}
+    assert payload["ok_file_count"] == 1
+    assert payload["not_ready_file_count"] == 0
     row_text = row_csv.read_text(encoding="utf-8")
     assert "expected_frame_count" in row_text
     assert "duplicate_frame_object_rows" in row_text
