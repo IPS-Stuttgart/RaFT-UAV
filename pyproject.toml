@@ -97,6 +97,7 @@ raft-uav-mmuad-candidate-oracle-attribution = "raft_uav.mmuad.candidate_oracle_a
 raft-uav-mmuad-candidate-oracle-blocks = "raft_uav.mmuad.candidate_oracle_blocks:main"
 raft-uav-mmuad-candidate-mixture-map = "raft_uav.mmuad.candidate_mixture_map:main"
 raft-uav-mmuad-candidate-assignment-diagnostics = "raft_uav.mmuad.candidate_assignment_diagnostics:main"
+raft-uav-mmuad-candidate-assignment-blocks = "raft_uav.mmuad.candidate_assignment_blocks:main"
 raft-uav-mmuad-reservoir-mixture-map = "raft_uav.mmuad.candidate_reservoir_mixture_map:main"
 raft-uav-mmuad-track5-leaderboard-pipeline = "raft_uav.mmuad.track5_leaderboard_pipeline:main"
 raft-uav-mmuad-grouped-candidate-mixture-map = "raft_uav.mmuad.candidate_mixture_map_grouped:main"
