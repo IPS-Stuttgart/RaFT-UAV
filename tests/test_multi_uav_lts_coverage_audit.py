@@ -18,8 +18,14 @@ def _write_zip(path: Path, files: dict[str, str]) -> None:
             archive.writestr(name, text)
 
 
-def _row(frame: int = 1, object_id: int = 1) -> str:
-    return f"{frame},{object_id},10,20,5,6,0.9,1,1\n"
+def _row(
+    frame: int = 1,
+    object_id: int = 1,
+    *,
+    class_id: int = 1,
+    visibility: float = 1.0,
+) -> str:
+    return f"{frame},{object_id},10,20,5,6,0.9,{class_id},{visibility}\n"
 
 
 def _sequence_root(tmp_path: Path, names: tuple[str, ...] = ("A_00",)) -> Path:
@@ -165,6 +171,32 @@ def test_prediction_coverage_audit_detects_duplicate_frame_object_rows(tmp_path:
     assert row.duplicate_frame_object_rows == 1
 
 
+def test_prediction_coverage_audit_detects_invalid_class_and_visibility_rows(
+    tmp_path: Path,
+) -> None:
+    template_zip = tmp_path / "template.zip"
+    prediction_dir = tmp_path / "predictions"
+    prediction_dir.mkdir()
+    _write_zip(template_zip, {"A_00.txt": ""})
+    prediction_dir.joinpath("A_00.txt").write_text(
+        _row(frame=1, object_id=1, class_id=0, visibility=1.0)
+        + _row(frame=2, object_id=2, class_id=1, visibility=1.5),
+        encoding="utf-8",
+    )
+
+    audit = audit_prediction_coverage(prediction_dir, template_zip=template_zip)
+    row = audit.rows[0]
+
+    assert not audit.ready
+    assert audit.invalid_class_rows == 1
+    assert audit.invalid_visibility_rows == 1
+    assert audit.invalid_class_files == ["A_00.txt"]
+    assert audit.invalid_visibility_files == ["A_00.txt"]
+    assert row.status == "invalid"
+    assert row.invalid_class_rows == 1
+    assert row.invalid_visibility_rows == 1
+
+
 def test_prediction_coverage_audit_cli_writes_json_and_rows(tmp_path: Path) -> None:
     template_zip = tmp_path / "template.zip"
     prediction_dir = tmp_path / "predictions"
@@ -193,9 +225,13 @@ def test_prediction_coverage_audit_cli_writes_json_and_rows(tmp_path: Path) -> N
     assert payload["missing_file_count"] == 0
     assert payload["out_of_range_frame_rows"] == 0
     assert payload["duplicate_frame_object_rows"] == 0
+    assert payload["invalid_class_rows"] == 0
+    assert payload["invalid_visibility_rows"] == 0
     row_text = row_csv.read_text(encoding="utf-8")
     assert "expected_frame_count" in row_text
     assert "duplicate_frame_object_rows" in row_text
+    assert "invalid_class_rows" in row_text
+    assert "invalid_visibility_rows" in row_text
     assert "A_00.txt" in row_text
 
 
