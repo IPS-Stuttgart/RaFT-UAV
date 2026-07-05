@@ -7,8 +7,16 @@ from typing import Any
 
 from raft_uav.mmuad import _submission_impl as _impl
 
-_parse_original = _impl.parse_official_classification_cell
-_load_sequence_class_map_original = _impl.load_sequence_class_map
+_ORIGINAL_PARSE_ATTR = "_raft_uav_original_parse_official_classification_cell"
+_ORIGINAL_LOAD_ATTR = "_raft_uav_original_load_sequence_class_map"
+
+if not hasattr(_impl, _ORIGINAL_PARSE_ATTR):
+    setattr(_impl, _ORIGINAL_PARSE_ATTR, _impl.parse_official_classification_cell)
+if not hasattr(_impl, _ORIGINAL_LOAD_ATTR):
+    setattr(_impl, _ORIGINAL_LOAD_ATTR, _impl.load_sequence_class_map)
+
+_parse_original = getattr(_impl, _ORIGINAL_PARSE_ATTR)
+_load_sequence_class_map_original = getattr(_impl, _ORIGINAL_LOAD_ATTR)
 
 
 def _parse_official_classification_cell_with_domain(value: Any) -> int:
