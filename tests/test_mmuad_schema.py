@@ -98,6 +98,34 @@ def test_time_normalizer_combines_seconds_and_nanoseconds_columns():
     assert float(rows.loc[0, "time_s"]) == pytest.approx(12.345)
 
 
+def test_time_normalizer_falls_back_when_first_alias_is_all_missing():
+    raw = pd.DataFrame(
+        {
+            "header.stamp.sec": [None, None],
+            "header.stamp.nanosec": [None, None],
+            "timestamp": [10.0, 11.5],
+        }
+    )
+
+    rows = normalize_time_column_aliases(raw)
+
+    assert rows["time_s"].tolist() == [10.0, 11.5]
+
+
+def test_time_normalizer_fills_sparse_higher_priority_alias_from_later_alias():
+    raw = pd.DataFrame(
+        {
+            "header.stamp.sec": [1, None],
+            "header.stamp.nanosec": [250_000_000, None],
+            "timestamp": [99.0, 2.5],
+        }
+    )
+
+    rows = normalize_time_column_aliases(raw)
+
+    assert rows["time_s"].tolist() == pytest.approx([1.25, 2.5])
+
+
 @pytest.mark.parametrize("stamp_column", ("timestamp", "stamp", "time"))
 def test_time_normalizer_accepts_ros_stamp_dict_columns(stamp_column: str):
     raw = pd.DataFrame(
