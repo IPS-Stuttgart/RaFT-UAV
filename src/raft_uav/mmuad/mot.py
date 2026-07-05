@@ -26,6 +26,7 @@ from raft_uav.mmuad.tracker import (
 
 
 _MISSING_TRACK_ID_STRINGS = {"", "nan", "none", "<na>"}
+_MOT_TIME_MATCH_ATOL_S = 1.0e-9
 
 
 @dataclass(frozen=True)
@@ -401,19 +402,24 @@ def _metric_frame_pairs(
         for sequence_id, time_s in sorted(estimate_keys | truth_keys):
             pred = estimates.loc[
                 (estimates["_metric_sequence_id"] == sequence_id)
-                & np.isclose(estimates["time_s"], time_s)
+                & _same_metric_time(estimates["time_s"], time_s)
             ].copy()
             gt = truth.loc[
                 (truth["_metric_sequence_id"] == sequence_id)
-                & np.isclose(truth["time_s"], time_s)
+                & _same_metric_time(truth["time_s"], time_s)
             ].copy()
             yield pred, gt
         return
 
     for time_s in sorted(set(estimates["time_s"]).union(set(truth["time_s"]))):
-        pred = estimates.loc[np.isclose(estimates["time_s"], time_s)].copy()
-        gt = truth.loc[np.isclose(truth["time_s"], time_s)].copy()
+        pred = estimates.loc[_same_metric_time(estimates["time_s"], time_s)].copy()
+        gt = truth.loc[_same_metric_time(truth["time_s"], time_s)].copy()
         yield pred, gt
+
+
+def _same_metric_time(values: pd.Series, target: float) -> np.ndarray:
+    numeric = pd.to_numeric(values, errors="coerce").to_numpy(float)
+    return np.isclose(numeric, float(target), rtol=0.0, atol=_MOT_TIME_MATCH_ATOL_S)
 
 
 def _greedy_truth_matches(
