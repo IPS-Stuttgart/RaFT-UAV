@@ -22,7 +22,11 @@ _load_sequence_class_map_original = getattr(_impl, _ORIGINAL_LOAD_ATTR)
 def _parse_official_classification_cell_with_domain(value: Any) -> int:
     class_id = _parse_original(value)
     if class_id not in _impl.OFFICIAL_TRACK5_CLASS_IDS:
-        raise ValueError(f"invalid official Track 5 class id: {class_id!r}")
+        allowed = ", ".join(str(item) for item in sorted(_impl.OFFICIAL_TRACK5_CLASS_IDS))
+        raise ValueError(
+            "official Track 5 classification must be one of "
+            f"{{{allowed}}}; got {class_id!r}"
+        )
     return class_id
 
 

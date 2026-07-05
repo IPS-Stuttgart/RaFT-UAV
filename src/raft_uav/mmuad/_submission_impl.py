@@ -617,10 +617,11 @@ def normalize_official_track5_results_frame(frame: pd.DataFrame) -> pd.DataFrame
     sequences = [parse_official_sequence_cell(value) for value in frame[sequence_col]]
     timestamps = [parse_official_timestamp_cell(value) for value in frame[timestamp_col]]
     positions = [parse_official_position_cell(value) for value in frame[position_col]]
-    classifications = [
-        parse_official_classification_cell(value)
-        for value in frame[classification_col]
-    ]
+    parse_classification = globals().get(
+        "_raft_uav_original_parse_official_classification_cell",
+        parse_official_classification_cell,
+    )
+    classifications = [parse_classification(value) for value in frame[classification_col]]
     rows = pd.DataFrame(
         {
             "Sequence": sequences,
@@ -1280,6 +1281,7 @@ def _validate_official_track5_frame(
         (diagnostics["status"] == "invalid_classification").sum()
     )
     duplicate_count = 0
+    duplicate_indices: set[int] = set()
     extra_count = 0
     missing_count = 0
     template_count = None
@@ -1535,6 +1537,10 @@ def _official_track5_row_diagnostics(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     rows: list[dict[str, Any]] = []
     normalized_rows: list[dict[str, Any]] = []
+    parse_classification = globals().get(
+        "_raft_uav_original_parse_official_classification_cell",
+        parse_official_classification_cell,
+    )
     for row_index, row in frame.iterrows():
         sequence = _official_sequence_text(row.get("Sequence"))
         timestamp = np.nan
@@ -1560,7 +1566,7 @@ def _official_track5_row_diagnostics(
                 reason = str(exc)
         if status == "ok":
             try:
-                classification = parse_official_classification_cell(row.get("Classification"))
+                classification = parse_classification(row.get("Classification"))
             except ValueError as exc:
                 status = "invalid_classification"
                 reason = str(exc)

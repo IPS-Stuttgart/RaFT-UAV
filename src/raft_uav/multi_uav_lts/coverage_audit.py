@@ -440,7 +440,7 @@ def _blocking_reasons(
         reasons.append("invalid_visibility_rows")
     if unsorted_rows:
         reasons.append("unsorted_rows")
-    if out_of_range_frame_rows:
+    if out_of_range_frame_rows and not missing_files:
         reasons.append("out_of_range_frame_rows")
     if duplicate_frame_object_rows:
         reasons.append("duplicate_frame_object_rows")

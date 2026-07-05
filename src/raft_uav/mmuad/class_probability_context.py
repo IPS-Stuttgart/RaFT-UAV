@@ -220,7 +220,7 @@ def _validate_predicted_class_labels(labels: pd.Series) -> None:
     allowed = ", ".join(OFFICIAL_CLASS_LABELS)
     raise ValueError(
         "missing class probabilities because predicted_class values must be official "
-        f"class IDs {{{allowed}}}; got {examples}"
+        f"Track 5 class IDs {{{allowed}}}; got {examples}"
     )
 
 

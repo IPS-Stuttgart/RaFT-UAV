@@ -15,7 +15,11 @@ def install() -> None:
     def parse_with_domain(value: Any) -> int:
         class_id = original(value)
         if class_id not in _submission.OFFICIAL_TRACK5_CLASS_IDS:
-            raise ValueError(f"invalid official Track 5 class id: {class_id!r}")
+            allowed = ", ".join(str(item) for item in sorted(_submission.OFFICIAL_TRACK5_CLASS_IDS))
+            raise ValueError(
+                "official Track 5 classification must be one of "
+                f"{{{allowed}}}; got {class_id!r}"
+            )
         return class_id
 
     setattr(parse_with_domain, "_raft_uav_class_domain", True)

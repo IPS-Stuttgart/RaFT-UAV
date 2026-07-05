@@ -20,6 +20,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.submission import normalize_official_track5_results_frame
+from raft_uav.mmuad.submission import parse_official_position_cell
+
 from raft_uav.mmuad.submission import (
     validate_official_track5_submission,
     write_official_mmaud_results_csv,
@@ -193,6 +196,21 @@ def main(argv: list[str] | None = None) -> int:
 
 def _normalized_submission(submission: pd.DataFrame) -> pd.DataFrame:
     rows = pd.DataFrame(submission).copy()
+    lower = {str(column).strip().lower() for column in rows.columns}
+    if {"sequence", "timestamp", "position", "classification"}.issubset(lower):
+        official = normalize_official_track5_results_frame(rows)
+        positions = [parse_official_position_cell(value) for value in official["Position"]]
+        xyz = pd.DataFrame(positions, columns=["state_x_m", "state_y_m", "state_z_m"], index=official.index)
+        rows = pd.DataFrame(
+            {
+                "sequence_id": official["Sequence"].astype(str),
+                "time_s": pd.to_numeric(official["Timestamp"], errors="coerce"),
+                "state_x_m": xyz["state_x_m"],
+                "state_y_m": xyz["state_y_m"],
+                "state_z_m": xyz["state_z_m"],
+                "Classification": official["Classification"],
+            }
+        )
     required = {"sequence_id", "time_s", "state_x_m", "state_y_m", "state_z_m", "Classification"}
     missing = required.difference(rows.columns)
     if missing:

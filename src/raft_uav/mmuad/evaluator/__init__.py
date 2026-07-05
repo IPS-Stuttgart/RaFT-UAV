@@ -15,6 +15,7 @@ from typing import Any
 
 import pandas as pd
 
+from raft_uav.mmuad import _submission_impl
 from raft_uav.mmuad.submission import OFFICIAL_TRACK5_CLASS_IDS
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "evaluator.py"
@@ -40,6 +41,15 @@ def _parse_official_result_classification_cell(value: Any) -> int:
     return class_id
 
 
+def _parse_official_truth_classification_cell(value: Any) -> int:
+    parser = getattr(
+        _submission_impl,
+        "_raft_uav_original_parse_official_classification_cell",
+        _submission_impl.parse_official_classification_cell,
+    )
+    return parser(value)
+
+
 def _official_track5_results_to_local_frame(
     frame: pd.DataFrame,
     *,
@@ -56,7 +66,7 @@ def _official_track5_results_to_local_frame(
     class_parser = (
         _parse_official_result_classification_cell
         if enforce_class_domain
-        else _IMPL.parse_official_classification_cell
+        else _parse_official_truth_classification_cell
     )
     classifications = [class_parser(value) for value in frame[classification_col]]
     xyz = pd.DataFrame(positions, columns=["x", "y", "z"], index=frame.index)
@@ -95,5 +105,6 @@ for _name in dir(_IMPL):
         globals()[_name] = getattr(_IMPL, _name)
 
 globals()["_parse_official_result_classification_cell"] = _parse_official_result_classification_cell
+globals()["_parse_official_truth_classification_cell"] = _parse_official_truth_classification_cell
 __doc__ = _IMPL.__doc__
 __all__ = [_name for _name in dir(_IMPL) if not _name.startswith("__")]
