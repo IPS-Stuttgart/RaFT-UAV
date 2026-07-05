@@ -1,15 +1,90 @@
 from __future__ import annotations
 
+import runpy
+import sys
+import warnings
+
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.candidate_pool_compare import main as pool_compare_main
 
 
 def test_candidate_pool_compare_cli_explicit_top_k_replaces_defaults(tmp_path) -> None:
+    reference_csv, pruned_csv, truth_csv = _write_candidate_pool_compare_inputs(tmp_path)
+    output_dir = tmp_path / "out"
+
+    assert (
+        pool_compare_main(
+            [
+                "--reference-candidate",
+                f"full={reference_csv}",
+                "--candidate",
+                f"pruned={pruned_csv}",
+                "--truth-csv",
+                str(truth_csv),
+                "--output-dir",
+                str(output_dir),
+                "--top-k",
+                "1",
+                "--top-k",
+                "2",
+                "--max-truth-time-delta-s",
+                "0.1",
+            ]
+        )
+        == 0
+    )
+
+    _assert_explicit_top_k_outputs(output_dir)
+
+
+def test_candidate_pool_compare_module_entry_explicit_top_k_replaces_defaults(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference_csv, pruned_csv, truth_csv = _write_candidate_pool_compare_inputs(tmp_path)
+    output_dir = tmp_path / "out_module"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "python -m raft_uav.mmuad.candidate_pool_compare",
+            "--reference-candidate",
+            f"full={reference_csv}",
+            "--candidate",
+            f"pruned={pruned_csv}",
+            "--truth-csv",
+            str(truth_csv),
+            "--output-dir",
+            str(output_dir),
+            "--top-k",
+            "1",
+            "--top-k",
+            "2",
+            "--max-truth-time-delta-s",
+            "0.1",
+        ],
+    )
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=".*found in sys.modules.*",
+            category=RuntimeWarning,
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            runpy.run_module("raft_uav.mmuad.candidate_pool_compare", run_name="__main__")
+    assert exc_info.value.code == 0
+
+    _assert_explicit_top_k_outputs(output_dir)
+
+
+def _write_candidate_pool_compare_inputs(tmp_path):
     reference_csv = tmp_path / "reference.csv"
     pruned_csv = tmp_path / "pruned.csv"
     truth_csv = tmp_path / "truth.csv"
-    output_dir = tmp_path / "out"
 
     pd.DataFrame(
         {
@@ -49,28 +124,10 @@ def test_candidate_pool_compare_cli_explicit_top_k_replaces_defaults(tmp_path) -
         }
     ).to_csv(truth_csv, index=False)
 
-    assert (
-        pool_compare_main(
-            [
-                "--reference-candidate",
-                f"full={reference_csv}",
-                "--candidate",
-                f"pruned={pruned_csv}",
-                "--truth-csv",
-                str(truth_csv),
-                "--output-dir",
-                str(output_dir),
-                "--top-k",
-                "1",
-                "--top-k",
-                "2",
-                "--max-truth-time-delta-s",
-                "0.1",
-            ]
-        )
-        == 0
-    )
+    return reference_csv, pruned_csv, truth_csv
 
+
+def _assert_explicit_top_k_outputs(output_dir) -> None:
     pooled = pd.read_csv(output_dir / "mmuad_candidate_pool_compare_pooled.csv")
     frame_rows = pd.read_csv(output_dir / "mmuad_candidate_pool_compare_frames.csv")
     assert "reference_oracle_top2_3d_m" in frame_rows.columns
