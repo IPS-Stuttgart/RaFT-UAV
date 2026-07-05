@@ -29,6 +29,7 @@ from raft_uav.mmuad.submission import (  # noqa: E402
     OFFICIAL_TRACK5_CLASS_IDS,
     load_official_track5_results_frame,
     parse_official_classification_cell,
+    parse_official_sequence_cell,
 )
 
 SEQUENCE_ALIASES = ("Sequence", "sequence_id", "sequence", "seq", "scene", "scene_id")
@@ -211,7 +212,7 @@ def _normalize_prediction_rows(
     )
     out = pd.DataFrame(
         {
-            "sequence_id": rows[sequence_column].astype(str).str.strip(),
+            "sequence_id": [_parse_sequence_id(value) for value in rows[sequence_column]],
             "classification": [
                 _parse_class_id(value, allow_non_track5_class_ids=allow_non_track5_class_ids)
                 for value in rows[class_column]
@@ -250,6 +251,13 @@ def _select_sequence_class(group: pd.DataFrame, *, policy: ClassMapPolicy) -> pd
         means = tied.groupby("classification", sort=True)["confidence"].mean()
         class_id = int(means.sort_values(ascending=False).index[0])
     return group.loc[group["classification"] == class_id].iloc[0]
+
+
+def _parse_sequence_id(value: Any) -> str:
+    try:
+        return parse_official_sequence_cell(value)
+    except ValueError:
+        return ""
 
 
 def _parse_class_id(value: Any, *, allow_non_track5_class_ids: bool) -> int:
