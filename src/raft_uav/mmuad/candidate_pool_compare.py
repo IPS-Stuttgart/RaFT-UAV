@@ -154,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--score-column", default=_DEFAULT_SCORE_COLUMN)
     parser.add_argument("--fallback-score-column", default=_DEFAULT_FALLBACK_SCORE_COLUMN)
-    parser.add_argument("--top-k", action="append", type=int, default=list(_DEFAULT_TOP_K))
+    parser.add_argument("--top-k", action="append", type=int, default=None)
     parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
     parser.add_argument("--good-candidate-threshold-m", type=float, default=5.0)
     parser.add_argument("--loss-tolerance-m", type=float, default=1.0e-6)
@@ -164,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("at least one --reference-candidate BRANCH=PATH entry is required")
     if not args.candidate:
         raise ValueError("at least one --candidate LABEL=PATH entry is required")
+    top_k_values = tuple(args.top_k) if args.top_k is not None else _DEFAULT_TOP_K
     reference_candidates = load_candidate_inputs(args.reference_candidate)
     if reference_candidates.empty:
         raise ValueError("reference candidate pool is empty")
@@ -173,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
         reference_candidates,
         candidate_pools,
         truth,
-        top_k_values=tuple(args.top_k),
+        top_k_values=top_k_values,
         score_column=args.score_column,
         fallback_score_column=args.fallback_score_column,
         max_truth_time_delta_s=args.max_truth_time_delta_s,
@@ -217,233 +218,3 @@ def _split_label_path(spec: str) -> tuple[str, str]:
     label, path_text = str(spec).split("=", 1)
     label = label.strip().replace(" ", "_") or Path(path_text).stem
     return label, path_text
-
-
-def _reference_frame_subset(
-    reference_frames: pd.DataFrame,
-    *,
-    top_k_values: tuple[int, ...],
-) -> pd.DataFrame:
-    columns = [
-        "sequence_id",
-        "time_s",
-        "truth_time_delta_s",
-        "candidate_count",
-        "oracle_all_3d_m",
-        "oracle_all_rank",
-        "oracle_all_candidate_source",
-        "oracle_all_candidate_branch",
-        "oracle_all_candidate_track_id",
-    ]
-    columns.extend([f"oracle_top{top_k}_3d_m" for top_k in top_k_values])
-    columns.extend([f"oracle_in_top{top_k}" for top_k in top_k_values])
-    subset = reference_frames[[column for column in columns if column in reference_frames.columns]].copy()
-    return subset.rename(
-        columns={
-            column: f"reference_{column}"
-            for column in subset.columns
-            if column not in {"sequence_id", "time_s"}
-        },
-    )
-
-
-def _candidate_frame_subset(
-    candidate_frames: pd.DataFrame,
-    *,
-    top_k_values: tuple[int, ...],
-) -> pd.DataFrame:
-    columns = [
-        "sequence_id",
-        "time_s",
-        "candidate_count",
-        "oracle_all_3d_m",
-        "oracle_all_rank",
-        "oracle_all_candidate_source",
-        "oracle_all_candidate_branch",
-        "oracle_all_candidate_track_id",
-    ]
-    columns.extend([f"oracle_top{top_k}_3d_m" for top_k in top_k_values])
-    columns.extend([f"oracle_in_top{top_k}" for top_k in top_k_values])
-    subset = candidate_frames[[column for column in columns if column in candidate_frames.columns]].copy()
-    return subset.rename(
-        columns={
-            column: f"candidate_{column}"
-            for column in subset.columns
-            if column not in {"sequence_id", "time_s"}
-        },
-    )
-
-
-def _fill_missing_candidate_columns(rows: pd.DataFrame, *, top_k_values: tuple[int, ...]) -> None:
-    candidate_columns = [
-        "candidate_candidate_count",
-        "candidate_oracle_all_3d_m",
-        "candidate_oracle_all_rank",
-        "candidate_oracle_all_candidate_source",
-        "candidate_oracle_all_candidate_branch",
-        "candidate_oracle_all_candidate_track_id",
-    ]
-    candidate_columns.extend([f"candidate_oracle_top{top_k}_3d_m" for top_k in top_k_values])
-    candidate_columns.extend([f"candidate_oracle_in_top{top_k}" for top_k in top_k_values])
-    for column in candidate_columns:
-        if column not in rows.columns:
-            rows[column] = np.nan
-
-
-def _add_delta_columns(
-    rows: pd.DataFrame,
-    *,
-    top_k_values: tuple[int, ...],
-    good_candidate_threshold_m: float,
-    loss_tolerance_m: float,
-) -> None:
-    rows["reference_has_good_candidate"] = (
-        pd.to_numeric(rows["reference_oracle_all_3d_m"], errors="coerce")
-        <= float(good_candidate_threshold_m)
-    )
-    rows["candidate_has_good_candidate"] = (
-        pd.to_numeric(rows["candidate_oracle_all_3d_m"], errors="coerce")
-        <= float(good_candidate_threshold_m)
-    )
-    rows["good_candidate_lost"] = rows["reference_has_good_candidate"] & (~rows["candidate_has_good_candidate"])
-    rows["oracle_all_delta_m"] = (
-        pd.to_numeric(rows["candidate_oracle_all_3d_m"], errors="coerce")
-        - pd.to_numeric(rows["reference_oracle_all_3d_m"], errors="coerce")
-    )
-    rows["oracle_all_mse_delta_per_frame"] = (
-        pd.to_numeric(rows["candidate_oracle_all_3d_m"], errors="coerce") ** 2
-        - pd.to_numeric(rows["reference_oracle_all_3d_m"], errors="coerce") ** 2
-    )
-    rows["oracle_ceiling_worse"] = rows["oracle_all_delta_m"] > float(loss_tolerance_m)
-    for top_k in top_k_values:
-        ref_col = f"reference_oracle_top{top_k}_3d_m"
-        cand_col = f"candidate_oracle_top{top_k}_3d_m"
-        if ref_col in rows.columns and cand_col in rows.columns:
-            rows[f"oracle_top{top_k}_delta_m"] = (
-                pd.to_numeric(rows[cand_col], errors="coerce")
-                - pd.to_numeric(rows[ref_col], errors="coerce")
-            )
-            rows[f"oracle_top{top_k}_mse_delta_per_frame"] = (
-                pd.to_numeric(rows[cand_col], errors="coerce") ** 2
-                - pd.to_numeric(rows[ref_col], errors="coerce") ** 2
-            )
-            rows[f"oracle_top{top_k}_worse"] = rows[f"oracle_top{top_k}_delta_m"] > float(
-                loss_tolerance_m,
-            )
-
-
-def _pooled_summary(frame_rows: pd.DataFrame, *, top_k_values: tuple[int, ...]) -> pd.DataFrame:
-    records = [
-        _summarize_group(group, pool_label=str(pool_label), top_k_values=top_k_values)
-        for pool_label, group in frame_rows.groupby("pool_label", sort=True)
-    ]
-    return pd.DataFrame.from_records(records).sort_values("oracle_all_mse_delta").reset_index(drop=True)
-
-
-def _by_sequence_summary(frame_rows: pd.DataFrame, *, top_k_values: tuple[int, ...]) -> pd.DataFrame:
-    records = []
-    for (pool_label, sequence_id), group in frame_rows.groupby(["pool_label", "sequence_id"], sort=True):
-        record = _summarize_group(group, pool_label=str(pool_label), top_k_values=top_k_values)
-        record["sequence_id"] = str(sequence_id)
-        records.append(record)
-    return pd.DataFrame.from_records(records).sort_values(
-        ["oracle_all_mse_delta", "pool_label", "sequence_id"],
-    ).reset_index(drop=True)
-
-
-def _by_reference_branch_summary(
-    frame_rows: pd.DataFrame,
-    *,
-    top_k_values: tuple[int, ...],
-) -> pd.DataFrame:
-    branch_col = "reference_oracle_all_candidate_branch"
-    if branch_col not in frame_rows.columns:
-        return pd.DataFrame()
-    records = []
-    for (pool_label, branch), group in frame_rows.groupby(["pool_label", branch_col], sort=True):
-        record = _summarize_group(group, pool_label=str(pool_label), top_k_values=top_k_values)
-        record["reference_candidate_branch"] = str(branch)
-        records.append(record)
-    return pd.DataFrame.from_records(records).sort_values(
-        ["oracle_all_mse_delta", "pool_label", "reference_candidate_branch"],
-    ).reset_index(drop=True)
-
-
-def _summarize_group(
-    group: pd.DataFrame,
-    *,
-    pool_label: str,
-    top_k_values: tuple[int, ...],
-) -> dict[str, Any]:
-    record: dict[str, Any] = {
-        "pool_label": pool_label,
-        "frame_count": int(len(group)),
-        "pool_frame_present_fraction": _mean_bool(group.get("pool_frame_present")),
-        "reference_good_candidate_fraction": _mean_bool(group.get("reference_has_good_candidate")),
-        "candidate_good_candidate_fraction": _mean_bool(group.get("candidate_has_good_candidate")),
-        "good_candidate_lost_fraction": _mean_bool(group.get("good_candidate_lost")),
-        "oracle_ceiling_worse_fraction": _mean_bool(group.get("oracle_ceiling_worse")),
-        "reference_candidate_count_mean": _mean_numeric(group.get("reference_candidate_count")),
-        "candidate_candidate_count_mean": _mean_numeric(group.get("candidate_candidate_count")),
-    }
-    _add_mse_pair(record, group, reference="reference_oracle_all_3d_m", candidate="candidate_oracle_all_3d_m", prefix="oracle_all")
-    record["oracle_all_delta_m_mean"] = _mean_numeric(group.get("oracle_all_delta_m"))
-    record["oracle_all_delta_m_p95"] = _quantile_numeric(group.get("oracle_all_delta_m"), 0.95)
-    for top_k in top_k_values:
-        _add_mse_pair(
-            record,
-            group,
-            reference=f"reference_oracle_top{top_k}_3d_m",
-            candidate=f"candidate_oracle_top{top_k}_3d_m",
-            prefix=f"oracle_top{top_k}",
-        )
-        record[f"oracle_top{top_k}_worse_fraction"] = _mean_bool(
-            group.get(f"oracle_top{top_k}_worse"),
-        )
-    return record
-
-
-def _add_mse_pair(
-    record: dict[str, Any],
-    group: pd.DataFrame,
-    *,
-    reference: str,
-    candidate: str,
-    prefix: str,
-) -> None:
-    ref = pd.to_numeric(group.get(reference), errors="coerce") if reference in group else pd.Series(dtype=float)
-    cand = pd.to_numeric(group.get(candidate), errors="coerce") if candidate in group else pd.Series(dtype=float)
-    record[f"reference_{prefix}_mse"] = _mse(ref)
-    record[f"candidate_{prefix}_mse"] = _mse(cand)
-    record[f"{prefix}_mse_delta"] = record[f"candidate_{prefix}_mse"] - record[f"reference_{prefix}_mse"]
-
-
-def _mse(values: pd.Series) -> float:
-    numeric = pd.to_numeric(values, errors="coerce").dropna()
-    return float(np.mean(numeric.to_numpy(float) ** 2)) if not numeric.empty else float("nan")
-
-
-def _mean_numeric(values: pd.Series | None) -> float:
-    if values is None:
-        return float("nan")
-    numeric = pd.to_numeric(values, errors="coerce").dropna()
-    return float(numeric.mean()) if not numeric.empty else float("nan")
-
-
-def _quantile_numeric(values: pd.Series | None, quantile: float) -> float:
-    if values is None:
-        return float("nan")
-    numeric = pd.to_numeric(values, errors="coerce").dropna()
-    return float(numeric.quantile(quantile)) if not numeric.empty else float("nan")
-
-
-def _mean_bool(values: pd.Series | None) -> float:
-    if values is None:
-        return float("nan")
-    if values.empty:
-        return float("nan")
-    return float(values.fillna(False).astype(bool).mean())
-
-
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
