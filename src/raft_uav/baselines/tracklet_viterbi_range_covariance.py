@@ -153,16 +153,28 @@ def _radar_row_covariance(
 
 
 def _has_row_position_covariance(row: pd.Series) -> bool:
-    """Return whether a row carries a complete positive 3-D covariance diagonal."""
+    """Return whether a row carries a complete positive-definite 3-D covariance."""
 
     for prefix in ("association_cov", "cov"):
-        has_diagonal = all(
-            _positive_float(row.get(f"{prefix}_{suffix}")) is not None
-            for suffix in ("ee", "nn", "uu")
-        )
-        if has_diagonal:
+        if _has_positive_definite_row_covariance(row, prefix):
             return True
     return False
+
+
+def _has_positive_definite_row_covariance(row: pd.Series, prefix: str) -> bool:
+    diagonal = [_positive_float(row.get(f"{prefix}_{suffix}")) for suffix in ("ee", "nn", "uu")]
+    if any(value is None for value in diagonal):
+        return False
+    covariance = np.diag([float(value) for value in diagonal])
+    for i, j, suffix in ((0, 1, "en"), (0, 2, "eu"), (1, 2, "nu")):
+        value = _finite_float(row.get(f"{prefix}_{suffix}"))
+        if value is not None:
+            covariance[i, j] = covariance[j, i] = value
+    try:
+        eigenvalues = np.linalg.eigvalsh(0.5 * (covariance + covariance.T))
+    except np.linalg.LinAlgError:
+        return False
+    return bool(eigenvalues.size == 3 and float(np.min(eigenvalues)) > 0.0)
 
 
 def _radar_range_angle_covariance(
@@ -233,11 +245,16 @@ def _optional_row_float(row: pd.Series, *names: str) -> float | None:
 
 
 def _positive_float(value: object) -> float | None:
+    value = _finite_float(value)
+    return value if value is not None and value > 0.0 else None
+
+
+def _finite_float(value: object) -> float | None:
     try:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if np.isfinite(number) and number > 0.0 else None
+    return number if np.isfinite(number) else None
 
 
 def _write_radar_covariance_diagnostics(
