@@ -322,6 +322,12 @@ def _fit_pairs(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
         estimate_rows[column] = pd.to_numeric(estimate_rows[column], errors="coerce")
     for column in ("time_s", "x_m", "y_m", "z_m"):
         truth_rows[column] = pd.to_numeric(truth_rows[column], errors="coerce")
+    estimate_time_finite = np.isfinite(estimate_rows["time_s"].to_numpy(float))
+    truth_time_finite = np.isfinite(truth_rows["time_s"].to_numpy(float))
+    estimate_rows = estimate_rows.loc[estimate_time_finite].copy()
+    truth_rows = truth_rows.loc[truth_time_finite].copy()
+    if estimate_rows.empty or truth_rows.empty:
+        return pd.DataFrame()
     estimate_rows["_time_key"] = _time_key(estimate_rows["time_s"])
     truth_rows["_time_key"] = _time_key(truth_rows["time_s"])
     pairs = estimate_rows.merge(
