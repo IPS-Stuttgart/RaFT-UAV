@@ -154,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--score-column", default=_DEFAULT_SCORE_COLUMN)
     parser.add_argument("--fallback-score-column", default=_DEFAULT_FALLBACK_SCORE_COLUMN)
-    parser.add_argument("--top-k", action="append", type=int, default=list(_DEFAULT_TOP_K))
+    parser.add_argument("--top-k", action="append", type=int, default=None)
     parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
     parser.add_argument("--good-candidate-threshold-m", type=float, default=5.0)
     parser.add_argument("--loss-tolerance-m", type=float, default=1.0e-6)
@@ -164,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("at least one --reference-candidate BRANCH=PATH entry is required")
     if not args.candidate:
         raise ValueError("at least one --candidate LABEL=PATH entry is required")
+    top_k_values = tuple(args.top_k) if args.top_k is not None else _DEFAULT_TOP_K
     reference_candidates = load_candidate_inputs(args.reference_candidate)
     if reference_candidates.empty:
         raise ValueError("reference candidate pool is empty")
@@ -173,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
         reference_candidates,
         candidate_pools,
         truth,
-        top_k_values=tuple(args.top_k),
+        top_k_values=top_k_values,
         score_column=args.score_column,
         fallback_score_column=args.fallback_score_column,
         max_truth_time_delta_s=args.max_truth_time_delta_s,
