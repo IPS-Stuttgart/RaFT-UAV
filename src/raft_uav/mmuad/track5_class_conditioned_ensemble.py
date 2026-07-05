@@ -257,6 +257,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--default-classification", default="0")
     parser.add_argument("--require-leaderboard-ready", action="store_true")
     args = parser.parse_args(argv)
+    should_write_submission = (
+        bool(args.write_submission)
+        or args.weights_json is not None
+        or bool(args.require_leaderboard_ready)
+    )
 
     if not args.estimate_csv:
         parser.error("provide at least one --estimate-csv LABEL=PATH")
@@ -290,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         parser.error("provide --truth-csv to search weights or --weights-json to apply")
 
-    if args.write_submission or args.weights_json is not None:
+    if should_write_submission:
         paths.update(
             write_class_conditioned_ensemble_outputs(
                 estimate_inputs=estimates,
@@ -305,7 +310,9 @@ def main(argv: list[str] | None = None) -> int:
     print("mmuad_track5_class_ensemble=ok")
     for name, path in paths.items():
         print(f"{name}={path}")
-    if args.require_leaderboard_ready and "validation_json" in paths:
+    if args.require_leaderboard_ready:
+        if "validation_json" not in paths:
+            raise SystemExit("class-conditioned ensemble readiness check produced no validation output")
         validation = json.loads(paths["validation_json"].read_text(encoding="utf-8"))
         if not validation.get("leaderboard_ready", False):
             reasons = ", ".join(validation.get("leaderboard_blocking_reasons", [])) or "unknown"
