@@ -8,6 +8,7 @@ from typing import Any
 from raft_uav.mmuad import _submission_impl as _impl
 
 _parse_original = _impl.parse_official_classification_cell
+_parse_sequence_original = _impl.parse_official_sequence_cell
 _load_sequence_class_map_original = _impl.load_sequence_class_map
 
 
@@ -16,6 +17,12 @@ def _parse_official_classification_cell_with_domain(value: Any) -> int:
     if class_id not in _impl.OFFICIAL_TRACK5_CLASS_IDS:
         raise ValueError(f"invalid official Track 5 class id: {class_id!r}")
     return class_id
+
+
+def _parse_official_sequence_cell_with_numpy_scalars(value: Any) -> str:
+    if isinstance(value, _impl.np.generic):
+        value = value.item()
+    return _parse_sequence_original(value)
 
 
 def _load_sequence_class_map_with_official_sequences(path: Path | str | None) -> dict[str, str]:
@@ -59,6 +66,7 @@ def _class_map_sequence_key(value: Any) -> str | None:
         return None
 
 
+_impl.parse_official_sequence_cell = _parse_official_sequence_cell_with_numpy_scalars
 _impl.parse_official_classification_cell = _parse_official_classification_cell_with_domain
 _impl.load_sequence_class_map = _load_sequence_class_map_with_official_sequences
 
@@ -69,5 +77,6 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+parse_official_sequence_cell = _parse_official_sequence_cell_with_numpy_scalars
 parse_official_classification_cell = _parse_official_classification_cell_with_domain
 load_sequence_class_map = _load_sequence_class_map_with_official_sequences
