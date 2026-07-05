@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.submission import (
+    parse_official_sequence_cell,
     validate_official_track5_submission,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
@@ -79,8 +80,9 @@ def blend_track5_sequence_gate(
 
     base = base.reset_index(drop=True)
     alternate = alternate.reset_index(drop=True)
+    sequence_keys = [_sequence_weight_key(sequence_id) for sequence_id in base["sequence_id"]]
     weights = np.asarray(
-        [weight_map.get(str(sequence_id), default) for sequence_id in base["sequence_id"]],
+        [weight_map.get(sequence_id, default) for sequence_id in sequence_keys],
         dtype=float,
     )
     base_xyz = base[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
@@ -111,8 +113,8 @@ def blend_track5_sequence_gate(
             "time_s": base["time_s"].astype(float),
             "sequence_gate_weight": weights.astype(float),
             "weight_source": [
-                "sequence_weights" if str(sequence_id) in weight_map else "default"
-                for sequence_id in base["sequence_id"]
+                "sequence_weights" if sequence_id in weight_map else "default"
+                for sequence_id in sequence_keys
             ],
             "base_x_m": base_xyz[:, 0],
             "base_y_m": base_xyz[:, 1],
@@ -136,10 +138,10 @@ def blend_track5_sequence_gate(
         }
     )
     weights_df["sequence_gate_weight"] = weights_df["sequence_id"].map(
-        lambda sequence: float(weight_map.get(sequence, default))
+        lambda sequence: float(weight_map.get(_sequence_weight_key(sequence), default))
     )
     weights_df["weight_source"] = weights_df["sequence_id"].map(
-        lambda sequence: "sequence_weights" if sequence in weight_map else "default"
+        lambda sequence: "sequence_weights" if _sequence_weight_key(sequence) in weight_map else "default"
     )
     return SequenceGateResult(
         estimates=estimates.reset_index(drop=True),
@@ -314,14 +316,27 @@ def _sequence_weight_map(weights: pd.DataFrame) -> dict[str, float]:
         raise ValueError(f"sequence weights missing one of columns: {SEQUENCE_ALIASES}")
     if weight_column is None:
         raise ValueError(f"sequence weights missing one of columns: {WEIGHT_ALIASES}")
+
+    rows["__sequence_id"] = rows[sequence_column].map(_sequence_weight_key)
+    rows = rows.loc[rows["__sequence_id"].notna()].copy()
+    if rows.empty:
+        return {}
+
     out: dict[str, float] = {}
-    for sequence, group in rows.groupby(sequence_column, sort=True):
+    for sequence, group in rows.groupby("__sequence_id", sort=True):
         numeric = pd.to_numeric(group[weight_column], errors="coerce")
         if not np.isfinite(numeric.to_numpy(float)).all():
             raise ValueError(f"non-finite sequence weight for {sequence!r}")
         value = float(numeric.mean())
         out[str(sequence)] = _validate_weight(value, name=f"sequence weight for {sequence}")
     return out
+
+
+def _sequence_weight_key(value: object) -> str | None:
+    try:
+        return parse_official_sequence_cell(value)
+    except ValueError:
+        return None
 
 
 def _validate_weight(value: float, *, name: str) -> float:

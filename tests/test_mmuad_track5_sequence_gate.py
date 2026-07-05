@@ -71,6 +71,37 @@ def test_sequence_gate_blends_positions_by_sequence_and_preserves_base_classes(
     ]
 
 
+def test_sequence_gate_normalizes_sequence_weight_ids(tmp_path: Path) -> None:
+    base_path = tmp_path / "base.csv"
+    alternate_path = tmp_path / "alternate.csv"
+    _submission_rows(offset=0.0, classification=1).to_csv(base_path, index=False)
+    _submission_rows(offset=4.0, classification=3).to_csv(alternate_path, index=False)
+    weights = pd.DataFrame(
+        {
+            "Sequence": [" seq0002 ", None, "nan"],
+            "weight": [1.0, 0.25, 0.75],
+        }
+    )
+
+    result = blend_track5_sequence_gate(
+        base_submission=load_track5_submission(base_path),
+        alternate_submission=load_track5_submission(alternate_path),
+        sequence_weights=weights,
+        default_weight=0.0,
+    )
+
+    seq2 = result.estimates.loc[result.estimates["sequence_id"] == "seq0002"].iloc[0]
+    assert seq2["state_x_m"] == pytest.approx(14.0)
+    assert seq2["sequence_gate_weight"] == pytest.approx(1.0)
+    assert result.diagnostics["weight_source"].tolist() == [
+        "default",
+        "default",
+        "sequence_weights",
+    ]
+    assert result.sequence_weights["sequence_id"].tolist() == ["seq0001", "seq0002"]
+    assert result.sequence_weights["weight_source"].tolist() == ["default", "sequence_weights"]
+
+
 def test_sequence_gate_rejects_out_of_range_weights(tmp_path: Path) -> None:
     base_path = tmp_path / "base.csv"
     alternate_path = tmp_path / "alternate.csv"
