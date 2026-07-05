@@ -25,6 +25,7 @@ from raft_uav.mmuad.track5_estimate_ensemble import parse_estimate_spec
 from raft_uav.mmuad.track5_estimate_ensemble import write_track5_estimate_ensemble_outputs
 
 WEIGHT_GRID_CSV = "mmuad_track5_ensemble_weight_grid.csv"
+WEIGHT_GRID_BY_SEQUENCE_CSV = "mmuad_track5_ensemble_weight_grid_by_sequence.csv"
 BEST_WEIGHTS_JSON = "mmuad_track5_ensemble_best_weights.json"
 BEST_OUTPUT_DIR = "best_weighted_ensemble"
 
@@ -39,7 +40,12 @@ def search_track5_estimate_ensemble_weights(
     trim_fraction: float = 0.2,
     max_nearest_time_delta_s: float | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Evaluate simplex weight grid and return grid rows plus best config."""
+    """Evaluate simplex weight grid and return grid rows plus best config.
+
+    The returned grid carries a ``by_sequence`` attribute containing the same
+    weight grid expanded by sequence.  The attribute keeps the public API stable
+    while making train-fold failure modes auditable in writer/CLI outputs.
+    """
 
     inputs = tuple(estimate_inputs)
     if not inputs:
@@ -49,7 +55,8 @@ def search_track5_estimate_ensemble_weights(
     loaded = [(item.label, pd.read_csv(item.path), 1.0) for item in inputs]
     truth_rows = _normalize_truth_for_exact_template(truth)
     records: list[dict[str, Any]] = []
-    for weights in _simplex_weight_grid(len(inputs), step=float(weight_step)):
+    by_sequence_records: list[dict[str, Any]] = []
+    for weight_index, weights in enumerate(_simplex_weight_grid(len(inputs), step=float(weight_step))):
         weighted_inputs = [
             (label, rows, float(weight))
             for (label, rows, _), weight in zip(loaded, weights, strict=True)
@@ -63,33 +70,63 @@ def search_track5_estimate_ensemble_weights(
         )
         metrics = _score_template_estimates(estimates, truth_rows)
         record: dict[str, Any] = {
+            "weight_grid_index": int(weight_index),
             "aggregation_policy": aggregation_policy,
             "trim_fraction": float(trim_fraction),
             "weight_step": float(weight_step),
-            "valid_input_count_mean": _safe_mean(diagnostics.get("valid_input_count", pd.Series(dtype=float))),
+            "valid_input_count_mean": _safe_mean(
+                diagnostics.get("valid_input_count", pd.Series(dtype=float))
+            ),
             **metrics,
         }
-        for item, weight in zip(inputs, weights, strict=True):
-            record[f"weight_{item.label}"] = float(weight)
+        weights_payload = {f"weight_{item.label}": float(weight) for item, weight in zip(inputs, weights, strict=True)}
+        record.update(weights_payload)
         records.append(record)
+        by_sequence = _score_template_estimates_by_sequence(estimates, truth_rows)
+        for _, sequence_row in by_sequence.iterrows():
+            by_sequence_records.append(
+                {
+                    "weight_grid_index": int(weight_index),
+                    "aggregation_policy": aggregation_policy,
+                    "trim_fraction": float(trim_fraction),
+                    "weight_step": float(weight_step),
+                    **weights_payload,
+                    **sequence_row.to_dict(),
+                }
+            )
     grid = pd.DataFrame.from_records(records)
     if grid.empty:
         raise ValueError("weight grid produced no rows")
+    by_sequence_grid = pd.DataFrame.from_records(by_sequence_records)
     best_row = grid.sort_values(["pose_mse_m2", "pose_p95_m", "pose_max_m"], na_position="last").iloc[0]
     best_weights = {item.label: float(best_row[f"weight_{item.label}"]) for item in inputs}
+    best_index = int(best_row["weight_grid_index"])
+    best_by_sequence = by_sequence_grid.loc[
+        by_sequence_grid.get("weight_grid_index", pd.Series(dtype=int)) == best_index
+    ]
     best = {
         "schema": "raft-uav-mmuad-track5-estimate-ensemble-weight-search-v1",
         "aggregation_policy": aggregation_policy,
         "trim_fraction": float(trim_fraction),
         "weight_step": float(weight_step),
+        "best_weight_grid_index": best_index,
         "weights": best_weights,
         "metrics": {
             key: _jsonable(best_row[key])
-            for key in ("pose_mse_m2", "pose_rmse_m", "pose_mean_m", "pose_p95_m", "pose_max_m", "matched_rows")
+            for key in (
+                "pose_mse_m2",
+                "pose_rmse_m",
+                "pose_mean_m",
+                "pose_p95_m",
+                "pose_max_m",
+                "matched_rows",
+            )
             if key in best_row.index
         },
+        "by_sequence_metrics": _jsonable(best_by_sequence.to_dict(orient="records")),
         "estimate_inputs": [asdict(item) | {"path": str(item.path)} for item in inputs],
     }
+    grid.attrs["by_sequence"] = by_sequence_grid
     return grid, _jsonable(best)
 
 
@@ -107,7 +144,7 @@ def write_weight_search_outputs(
     class_map: dict[str, str] | None = None,
     default_classification: int | str = 0,
 ) -> dict[str, Path]:
-    """Run weight search and write grid, best config, and optional best ZIP."""
+    """Run weight search and write grid, best config, by-sequence metrics, and optional ZIP."""
 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -121,11 +158,14 @@ def write_weight_search_outputs(
         trim_fraction=trim_fraction,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
     )
+    by_sequence = pd.DataFrame(grid.attrs.get("by_sequence", pd.DataFrame()))
     paths = {
         "weight_grid_csv": output / WEIGHT_GRID_CSV,
+        "weight_grid_by_sequence_csv": output / WEIGHT_GRID_BY_SEQUENCE_CSV,
         "best_weights_json": output / BEST_WEIGHTS_JSON,
     }
     grid.to_csv(paths["weight_grid_csv"], index=False)
+    by_sequence.to_csv(paths["weight_grid_by_sequence_csv"], index=False)
     paths["best_weights_json"].write_text(json.dumps(_jsonable(best), indent=2), encoding="utf-8")
     if write_best_submission:
         best_weight_map = best["weights"]
@@ -231,20 +271,44 @@ def _normalize_truth_for_exact_template(truth: pd.DataFrame) -> pd.DataFrame:
 
 
 def _score_template_estimates(estimates: pd.DataFrame, truth: pd.DataFrame) -> dict[str, Any]:
-    rows = pd.DataFrame(estimates).copy()
-    if rows.empty or truth.empty:
+    rows = _merge_template_estimates_to_truth(estimates, truth)
+    if rows.empty:
         return _empty_metrics()
-    rows["sequence_id"] = rows["sequence_id"].astype(str)
-    rows["_time_key"] = _time_key(pd.to_numeric(rows["time_s"], errors="coerce"))
-    merged = rows.merge(truth, on=["sequence_id", "_time_key"], how="inner", suffixes=("", "_truth"))
-    if merged.empty:
-        return _empty_metrics()
-    estimated_xyz = merged[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
-    truth_xyz = merged[["x_m", "y_m", "z_m"]].to_numpy(float)
+    estimated_xyz = rows[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
+    truth_xyz = rows[["x_m", "y_m", "z_m"]].to_numpy(float)
     finite = np.isfinite(estimated_xyz).all(axis=1) & np.isfinite(truth_xyz).all(axis=1)
     if not finite.any():
         return _empty_metrics()
-    errors = np.linalg.norm(estimated_xyz[finite] - truth_xyz[finite], axis=1)
+    return _metrics_from_errors(np.linalg.norm(estimated_xyz[finite] - truth_xyz[finite], axis=1))
+
+
+def _score_template_estimates_by_sequence(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
+    rows = _merge_template_estimates_to_truth(estimates, truth)
+    if rows.empty:
+        return pd.DataFrame(columns=["sequence_id", *list(_empty_metrics().keys())])
+    records: list[dict[str, Any]] = []
+    for sequence_id, group in rows.groupby("sequence_id", sort=True):
+        estimated_xyz = group[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
+        truth_xyz = group[["x_m", "y_m", "z_m"]].to_numpy(float)
+        finite = np.isfinite(estimated_xyz).all(axis=1) & np.isfinite(truth_xyz).all(axis=1)
+        if not finite.any():
+            metrics = _empty_metrics()
+        else:
+            metrics = _metrics_from_errors(np.linalg.norm(estimated_xyz[finite] - truth_xyz[finite], axis=1))
+        records.append({"sequence_id": str(sequence_id), **metrics})
+    return pd.DataFrame.from_records(records)
+
+
+def _merge_template_estimates_to_truth(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
+    rows = pd.DataFrame(estimates).copy()
+    if rows.empty or truth.empty:
+        return pd.DataFrame()
+    rows["sequence_id"] = rows["sequence_id"].astype(str)
+    rows["_time_key"] = _time_key(pd.to_numeric(rows["time_s"], errors="coerce"))
+    return rows.merge(truth, on=["sequence_id", "_time_key"], how="inner", suffixes=("", "_truth"))
+
+
+def _metrics_from_errors(errors: np.ndarray) -> dict[str, Any]:
     squared = errors**2
     return {
         "matched_rows": int(len(errors)),
