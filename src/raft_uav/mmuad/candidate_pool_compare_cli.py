@@ -14,6 +14,35 @@ _DEFAULT_SCORE_COLUMN = _compare._DEFAULT_SCORE_COLUMN
 _DEFAULT_TOP_K = _compare._DEFAULT_TOP_K
 
 
+def load_candidate_inputs(specs: list[str]) -> pd.DataFrame:
+    """Compatibility hook for tests and callers that patch the CLI module."""
+
+    return _compare.load_candidate_inputs(specs)
+
+
+def _load_labeled_candidate_pools(specs: list[str]) -> dict[str, pd.DataFrame]:
+    """Compatibility hook for tests and callers that patch the CLI module."""
+
+    return _compare._load_labeled_candidate_pools(specs)
+
+
+def build_candidate_pool_compare_tables(*args: object, **kwargs: object) -> tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+]:
+    """Compatibility hook for tests and callers that patch the CLI module."""
+
+    return _compare.build_candidate_pool_compare_tables(*args, **kwargs)
+
+
+def write_candidate_pool_compare_outputs(**kwargs: object) -> dict[str, Path]:
+    """Compatibility hook for tests and callers that patch the CLI module."""
+
+    return _compare.write_candidate_pool_compare_outputs(**kwargs)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run candidate-pool comparison with explicit top-k replacement semantics."""
 
@@ -48,12 +77,12 @@ def main(argv: list[str] | None = None) -> int:
     if not args.candidate:
         raise ValueError("at least one --candidate LABEL=PATH entry is required")
     top_k_values = tuple(args.top_k) if args.top_k is not None else _DEFAULT_TOP_K
-    reference_candidates = _compare.load_candidate_inputs(args.reference_candidate)
+    reference_candidates = load_candidate_inputs(args.reference_candidate)
     if reference_candidates.empty:
         raise ValueError("reference candidate pool is empty")
-    candidate_pools = _compare._load_labeled_candidate_pools(args.candidate)
+    candidate_pools = _load_labeled_candidate_pools(args.candidate)
     truth = pd.read_csv(args.truth_csv)
-    frame_rows, pooled, by_sequence, by_branch = _compare.build_candidate_pool_compare_tables(
+    frame_rows, pooled, by_sequence, by_branch = build_candidate_pool_compare_tables(
         reference_candidates,
         candidate_pools,
         truth,
@@ -64,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
         good_candidate_threshold_m=args.good_candidate_threshold_m,
         loss_tolerance_m=args.loss_tolerance_m,
     )
-    paths = _compare.write_candidate_pool_compare_outputs(
+    paths = write_candidate_pool_compare_outputs(
         output_dir=args.output_dir,
         frame_rows=frame_rows,
         pooled_summary=pooled,

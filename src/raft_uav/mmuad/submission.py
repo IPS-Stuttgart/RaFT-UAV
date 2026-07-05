@@ -39,7 +39,10 @@ def _load_sequence_class_map_with_official_sequences(path: Path | str | None) ->
     if path.suffix.lower() in {".json", ".yaml", ".yml"}:
         return _canonicalize_sequence_class_map(_load_sequence_class_map_original(path))
 
-    frame = _impl.pd.read_csv(path, dtype=str, keep_default_na=False)
+    try:
+        frame = _impl.pd.read_csv(path, dtype=str, keep_default_na=False)
+    except TypeError:
+        frame = _impl.pd.read_csv(path)
     lower = {str(col).lower(): col for col in frame.columns}
     rename: dict[Any, str] = {}
     for alias in _impl._SEQUENCE_ID_ALIASES:
