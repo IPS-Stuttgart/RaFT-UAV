@@ -164,6 +164,36 @@ def test_class_conditioned_ensemble_cli_search_and_write(tmp_path: Path) -> None
     assert (tmp_path / "out" / "class_conditioned_submission" / "ug2_submission.zip").exists()
 
 
+def test_class_conditioned_ensemble_cli_rejects_readiness_without_submission(
+    tmp_path: Path,
+) -> None:
+    a_csv, b_csv, template_csv, truth_csv, class_map_csv = _write_inputs(tmp_path)
+
+    with pytest.raises(SystemExit) as exc_info:
+        class_ensemble_main(
+            [
+                "--estimate-csv",
+                f"a={a_csv}",
+                "--estimate-csv",
+                f"b={b_csv}",
+                "--template",
+                str(template_csv),
+                "--truth-csv",
+                str(truth_csv),
+                "--class-map",
+                str(class_map_csv),
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--weight-step",
+                "0.5",
+                "--require-leaderboard-ready",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert not (tmp_path / "out").exists()
+
+
 def test_class_conditioned_ensemble_entrypoint_is_exposed() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert (
