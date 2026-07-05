@@ -98,6 +98,61 @@ def test_class_conditioned_weight_search_selects_different_weights_by_class(tmp_
     assert config["metrics"]["1"]["pose_mse_m2"] == pytest.approx(0.0)
 
 
+def test_class_conditioned_weight_search_preserves_opaque_sequence_ids(
+    tmp_path: Path,
+) -> None:
+    template = pd.DataFrame(
+        {
+            "Sequence": ["seq/A", "seq/A", "seq A", "seq A"],
+            "Timestamp": [0.0, 1.0, 0.0, 1.0],
+            "Position": ["(0,0,0)"] * 4,
+            "Classification": [0, 0, 1, 1],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seq/A", "seq/A", "seq A", "seq A"],
+            "time_s": [0.0, 1.0, 0.0, 1.0],
+            "x_m": [0.0, 1.0, 10.0, 11.0],
+            "y_m": [0.0, 0.0, 0.0, 0.0],
+            "z_m": [0.0, 0.0, 0.0, 0.0],
+        }
+    )
+    estimate_a = pd.DataFrame(
+        {
+            "sequence_id": ["seq/A", "seq/A", "seq A", "seq A"],
+            "time_s": [0.0, 1.0, 0.0, 1.0],
+            "state_x_m": [0.0, 1.0, 20.0, 21.0],
+            "state_y_m": [0.0, 0.0, 0.0, 0.0],
+            "state_z_m": [0.0, 0.0, 0.0, 0.0],
+        }
+    )
+    estimate_b = pd.DataFrame(
+        {
+            "sequence_id": ["seq/A", "seq/A", "seq A", "seq A"],
+            "time_s": [0.0, 1.0, 0.0, 1.0],
+            "state_x_m": [8.0, 9.0, 10.0, 11.0],
+            "state_y_m": [0.0, 0.0, 0.0, 0.0],
+            "state_z_m": [0.0, 0.0, 0.0, 0.0],
+        }
+    )
+    a_csv = tmp_path / "opaque_a.csv"
+    b_csv = tmp_path / "opaque_b.csv"
+    estimate_a.to_csv(a_csv, index=False)
+    estimate_b.to_csv(b_csv, index=False)
+
+    _, config = search_class_conditioned_ensemble_weights(
+        [EstimateInput("a", a_csv), EstimateInput("b", b_csv)],
+        template=template,
+        truth=truth,
+        class_map={"seq/A": "0", "seq A": "1"},
+        weight_step=0.5,
+    )
+
+    assert config["class_weights"]["0"] == {"a": 1.0, "b": 0.0}
+    assert config["class_weights"]["1"] == {"a": 0.0, "b": 1.0}
+
+
 def test_class_conditioned_ensemble_applies_per_class_weights(tmp_path: Path) -> None:
     a_csv, b_csv, _, _, _ = _write_inputs(tmp_path)
     config = {
