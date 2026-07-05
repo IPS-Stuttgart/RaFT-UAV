@@ -32,11 +32,20 @@ def load_ensemble_weight_config(path: Path) -> dict[str, Any]:
     if not isinstance(weights, dict) or not weights:
         raise ValueError("weight config must contain a non-empty 'weights' object")
     parsed_weights: dict[str, float] = {}
+    original_labels: dict[str, str] = {}
     for label, value in weights.items():
+        safe_label = _safe_label(str(label))
+        if safe_label in parsed_weights:
+            previous = original_labels[safe_label]
+            raise ValueError(
+                "weight config labels must be unique after normalization; "
+                f"{previous!r} and {str(label)!r} both map to {safe_label!r}"
+            )
         weight = float(value)
         if not np.isfinite(weight) or weight < 0.0:
             raise ValueError(f"weight for {label!r} must be finite and non-negative")
-        parsed_weights[_safe_label(str(label))] = weight
+        parsed_weights[safe_label] = weight
+        original_labels[safe_label] = str(label)
     total = sum(parsed_weights.values())
     if total <= 0.0:
         raise ValueError("weight config sum must be positive")
@@ -59,9 +68,13 @@ def apply_ensemble_weight_config(
     if not weights:
         raise ValueError("weight config has no weights")
     estimate_inputs: list[EstimateInput] = []
+    seen_labels: set[str] = set()
     for spec in estimate_specs:
         item = spec if isinstance(spec, EstimateInput) else parse_estimate_spec(str(spec))
         label = _safe_label(item.label)
+        if label in seen_labels:
+            raise ValueError(f"duplicate estimate label after normalization: {label}")
+        seen_labels.add(label)
         if label in weights:
             weight = weights[label]
         elif missing_weight_policy == "error":
