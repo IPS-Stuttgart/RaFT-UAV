@@ -251,18 +251,30 @@ def _summarize_block_group(group: pd.DataFrame, *, sequence_id: str, mode: str) 
     }
 
 
-def _mean(values: pd.Series) -> float:
-    values = pd.to_numeric(values, errors="coerce").dropna()
+def _numeric_values(values: Any) -> pd.Series:
+    if values is None:
+        return pd.Series(dtype=float)
+    if isinstance(values, pd.Series):
+        raw = values
+    elif np.isscalar(values):
+        raw = pd.Series([values])
+    else:
+        raw = pd.Series(values)
+    return pd.to_numeric(raw, errors="coerce").dropna()
+
+
+def _mean(values: Any) -> float:
+    values = _numeric_values(values)
     return float(values.mean()) if not values.empty else float("nan")
 
 
-def _quantile(values: pd.Series, quantile: float) -> float:
-    values = pd.to_numeric(values, errors="coerce").dropna()
+def _quantile(values: Any, quantile: float) -> float:
+    values = _numeric_values(values)
     return float(values.quantile(quantile)) if not values.empty else float("nan")
 
 
-def _max(values: pd.Series) -> float:
-    values = pd.to_numeric(values, errors="coerce").dropna()
+def _max(values: Any) -> float:
+    values = _numeric_values(values)
     return float(values.max()) if not values.empty else float("nan")
 
 
