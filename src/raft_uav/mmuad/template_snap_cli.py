@@ -57,3 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         reasons = ", ".join(summary.get("leaderboard_blocking_reasons", [])) or "unknown"
         raise SystemExit(f"template-snapped upload is not leaderboard-ready: {reasons}")
     return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
