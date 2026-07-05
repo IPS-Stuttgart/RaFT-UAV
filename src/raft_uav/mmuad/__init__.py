@@ -73,6 +73,16 @@ def _install_candidate_reservoir_topk_guard() -> None:
     except Exception:
         return
 
+    original_build_candidate_reservoir = _candidate_reservoir.build_candidate_reservoir
+
+    def _build_candidate_reservoir_with_source_default(candidates, *args, **kwargs):
+        rows = _pd.DataFrame(candidates).copy()
+        if not rows.empty and "source" not in rows.columns:
+            rows["source"] = "unknown"
+        return original_build_candidate_reservoir(rows, *args, **kwargs)
+
+    _candidate_reservoir.build_candidate_reservoir = _build_candidate_reservoir_with_source_default
+
     default_top_k = (1, 3, 5, 10, 20)
 
     def _main(argv: list[str] | None = None) -> int:
