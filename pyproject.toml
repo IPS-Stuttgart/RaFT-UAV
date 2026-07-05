@@ -79,6 +79,7 @@ raft-uav-mmuad-track5-uncertainty-ensemble = "raft_uav.mmuad.track5_uncertainty_
 raft-uav-mmuad-track5-uncertainty-ensemble-weight-search = "raft_uav.mmuad.track5_uncertainty_ensemble_weight_search:main"
 raft-uav-mmuad-track5-apply-ensemble-weights = "raft_uav.mmuad.track5_estimate_ensemble_apply_weights:main"
 raft-uav-mmuad-track5-spread-guard-ensemble = "raft_uav.mmuad.track5_estimate_ensemble_spread_guard:main"
+raft-uav-mmuad-track5-spread-guard-search = "raft_uav.mmuad.track5_spread_guard_search:main"
 raft-uav-mmuad-track5-classification-relabel = "raft_uav.mmuad.track5_classification_relabel:main"
 raft-uav-mmuad-track5-sequence-gate = "raft_uav.mmuad.track5_sequence_gate:main"
 raft-uav-mmuad-track5-estimate-sequence-gate = "raft_uav.mmuad.track5_estimate_sequence_gate:main"
