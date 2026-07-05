@@ -41,6 +41,8 @@ class PredictionCoverageRow:
     parse_errors: int
     invalid_geometry_rows: int
     invalid_confidence_rows: int
+    invalid_class_rows: int
+    invalid_visibility_rows: int
     unsorted_rows: int
     out_of_range_frame_rows: int
     duplicate_frame_object_rows: int
@@ -62,6 +64,8 @@ class PredictionCoverageAudit:
     parse_errors: int
     invalid_geometry_rows: int
     invalid_confidence_rows: int
+    invalid_class_rows: int
+    invalid_visibility_rows: int
     unsorted_rows: int
     out_of_range_frame_rows: int
     duplicate_frame_object_rows: int
@@ -70,6 +74,8 @@ class PredictionCoverageAudit:
     empty_expected_files: list[str]
     out_of_range_frame_files: list[str]
     duplicate_frame_object_files: list[str]
+    invalid_class_files: list[str]
+    invalid_visibility_files: list[str]
     rows: list[PredictionCoverageRow]
 
 
@@ -95,6 +101,8 @@ def audit_prediction_coverage(
     empty_expected_files: list[str] = []
     out_of_range_frame_files: list[str] = []
     duplicate_frame_object_files: list[str] = []
+    invalid_class_files: list[str] = []
+    invalid_visibility_files: list[str] = []
     for name in all_names:
         expected = name in expected_set
         present = name in present_set
@@ -115,6 +123,8 @@ def audit_prediction_coverage(
                 parse_errors=0,
                 invalid_geometry_rows=0,
                 invalid_confidence_rows=0,
+                invalid_class_rows=0,
+                invalid_visibility_rows=0,
                 unsorted_rows=0,
                 out_of_range_frame_rows=0,
                 duplicate_frame_object_rows=0,
@@ -127,10 +137,17 @@ def audit_prediction_coverage(
             expected_frame_count=expected_frame_count,
         )
         duplicate_frame_object_rows = _count_duplicate_frame_object_rows(predictions[name])
+        invalid_class_rows, invalid_visibility_rows = _count_invalid_class_visibility_rows(
+            predictions[name]
+        )
         if out_of_range_frame_rows:
             out_of_range_frame_files.append(name)
         if duplicate_frame_object_rows:
             duplicate_frame_object_files.append(name)
+        if invalid_class_rows:
+            invalid_class_files.append(name)
+        if invalid_visibility_rows:
+            invalid_visibility_files.append(name)
         if not expected:
             status = "extra"
             extra_files.append(name)
@@ -141,6 +158,8 @@ def audit_prediction_coverage(
             summary.parse_errors
             or summary.invalid_geometry_rows
             or summary.invalid_confidence_rows
+            or invalid_class_rows
+            or invalid_visibility_rows
             or out_of_range_frame_rows
             or duplicate_frame_object_rows
         ):
@@ -163,6 +182,8 @@ def audit_prediction_coverage(
                 parse_errors=summary.parse_errors,
                 invalid_geometry_rows=summary.invalid_geometry_rows,
                 invalid_confidence_rows=summary.invalid_confidence_rows,
+                invalid_class_rows=invalid_class_rows,
+                invalid_visibility_rows=invalid_visibility_rows,
                 unsorted_rows=summary.unsorted_rows,
                 out_of_range_frame_rows=out_of_range_frame_rows,
                 duplicate_frame_object_rows=duplicate_frame_object_rows,
@@ -172,6 +193,8 @@ def audit_prediction_coverage(
     parse_errors = sum(row.parse_errors for row in rows)
     invalid_geometry_rows = sum(row.invalid_geometry_rows for row in rows)
     invalid_confidence_rows = sum(row.invalid_confidence_rows for row in rows)
+    invalid_class_rows = sum(row.invalid_class_rows for row in rows)
+    invalid_visibility_rows = sum(row.invalid_visibility_rows for row in rows)
     unsorted_rows = sum(row.unsorted_rows for row in rows)
     out_of_range_frame_rows = sum(row.out_of_range_frame_rows for row in rows)
     duplicate_frame_object_rows = sum(row.duplicate_frame_object_rows for row in rows)
@@ -182,6 +205,8 @@ def audit_prediction_coverage(
         and parse_errors == 0
         and invalid_geometry_rows == 0
         and invalid_confidence_rows == 0
+        and invalid_class_rows == 0
+        and invalid_visibility_rows == 0
         and unsorted_rows == 0
         and out_of_range_frame_rows == 0
         and duplicate_frame_object_rows == 0
@@ -199,6 +224,8 @@ def audit_prediction_coverage(
         parse_errors=parse_errors,
         invalid_geometry_rows=invalid_geometry_rows,
         invalid_confidence_rows=invalid_confidence_rows,
+        invalid_class_rows=invalid_class_rows,
+        invalid_visibility_rows=invalid_visibility_rows,
         unsorted_rows=unsorted_rows,
         out_of_range_frame_rows=out_of_range_frame_rows,
         duplicate_frame_object_rows=duplicate_frame_object_rows,
@@ -207,6 +234,8 @@ def audit_prediction_coverage(
         empty_expected_files=empty_expected_files,
         out_of_range_frame_files=sorted(set(out_of_range_frame_files)),
         duplicate_frame_object_files=sorted(set(duplicate_frame_object_files)),
+        invalid_class_files=sorted(set(invalid_class_files)),
+        invalid_visibility_files=sorted(set(invalid_visibility_files)),
         rows=rows,
     )
 
@@ -334,6 +363,28 @@ def _count_duplicate_frame_object_rows(text: str) -> int:
             continue
         seen.add(key)
     return duplicates
+
+
+def _count_invalid_class_visibility_rows(text: str) -> tuple[int, int]:
+    invalid_class_rows = 0
+    invalid_visibility_rows = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) != 9:
+            continue
+        try:
+            class_id = _parse_int_like(parts[7])
+            visibility = float(parts[8])
+        except ValueError:
+            continue
+        if class_id <= 0:
+            invalid_class_rows += 1
+        if not 0.0 <= visibility <= 1.0:
+            invalid_visibility_rows += 1
+    return invalid_class_rows, invalid_visibility_rows
 
 
 if __name__ == "__main__":  # pragma: no cover
