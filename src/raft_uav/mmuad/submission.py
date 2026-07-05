@@ -27,13 +27,13 @@ def _parse_official_classification_cell_with_domain(value: Any) -> int:
 
 
 def _load_sequence_class_map_with_official_sequences(path: Path | str | None) -> dict[str, str]:
-    """Load class maps while canonicalizing CSV sequence ids like official rows."""
+    """Load class maps while canonicalizing CSV/JSON/YAML sequence ids like official rows."""
 
     if path is None:
         return {}
     path = Path(path)
     if path.suffix.lower() in {".json", ".yaml", ".yml"}:
-        return _load_sequence_class_map_original(path)
+        return _canonicalize_sequence_class_map(_load_sequence_class_map_original(path))
 
     frame = _impl.pd.read_csv(path)
     lower = {str(col).lower(): col for col in frame.columns}
@@ -58,6 +58,18 @@ def _load_sequence_class_map_with_official_sequences(path: Path | str | None) ->
         if sequence_id is not None and uav_type is not None:
             class_map[sequence_id] = uav_type
     return class_map
+
+
+def _canonicalize_sequence_class_map(class_map: dict[Any, Any]) -> dict[str, str]:
+    """Drop missing-like sequence IDs from non-CSV class-map formats."""
+
+    normalized: dict[str, str] = {}
+    for sequence_id, uav_type in class_map.items():
+        normalized_sequence_id = _class_map_sequence_key(sequence_id)
+        normalized_uav_type = _class_map_uav_type(uav_type)
+        if normalized_sequence_id is not None and normalized_uav_type is not None:
+            normalized[normalized_sequence_id] = normalized_uav_type
+    return normalized
 
 
 def _class_map_sequence_key(value: Any) -> str | None:
