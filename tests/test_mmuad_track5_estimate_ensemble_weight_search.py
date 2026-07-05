@@ -76,10 +76,14 @@ def test_weight_search_selects_best_single_estimate(tmp_path: Path) -> None:
         weight_step=0.5,
     )
 
+    by_sequence = grid.attrs["by_sequence"]
     assert len(grid) == 3
+    assert len(by_sequence) == 6
+    assert set(by_sequence["sequence_id"]) == {"seq0001", "seq0002"}
     assert best["weights"]["good"] == pytest.approx(1.0)
     assert best["weights"]["bad"] == pytest.approx(0.0)
     assert best["metrics"]["pose_mse_m2"] == pytest.approx(0.0)
+    assert len(best["by_sequence_metrics"]) == 2
 
 
 def test_weight_search_writes_grid_best_and_submission(tmp_path: Path) -> None:
@@ -102,12 +106,17 @@ def test_weight_search_writes_grid_best_and_submission(tmp_path: Path) -> None:
     )
 
     assert paths["weight_grid_csv"].exists()
+    assert paths["weight_grid_by_sequence_csv"].exists()
     assert paths["best_weights_json"].exists()
     assert paths["best_official_zip"].exists()
     best = json.loads(paths["best_weights_json"].read_text(encoding="utf-8"))
     assert best["weights"] == {"good": 1.0, "bad": 0.0}
     grid = pd.read_csv(paths["weight_grid_csv"])
+    by_sequence = pd.read_csv(paths["weight_grid_by_sequence_csv"])
     assert set(grid.columns).issuperset({"weight_good", "weight_bad", "pose_mse_m2"})
+    assert set(by_sequence.columns).issuperset(
+        {"weight_grid_index", "sequence_id", "weight_good", "weight_bad", "pose_mse_m2"}
+    )
 
 
 def test_weight_search_cli_writes_best_config(tmp_path: Path) -> None:
@@ -140,6 +149,7 @@ def test_weight_search_cli_writes_best_config(tmp_path: Path) -> None:
 
     assert status == 0
     assert (output_dir / "mmuad_track5_ensemble_weight_grid.csv").exists()
+    assert (output_dir / "mmuad_track5_ensemble_weight_grid_by_sequence.csv").exists()
     assert (output_dir / "mmuad_track5_ensemble_best_weights.json").exists()
 
 
