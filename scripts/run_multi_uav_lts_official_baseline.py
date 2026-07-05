@@ -82,7 +82,11 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--shard-index must satisfy 0 <= index < shard-count")
 
     paths = _resolve_paths(args)
-    _validate_inputs(paths, require_botsort=not args.package_only)
+    _validate_inputs(
+        paths,
+        require_inference_inputs=not args.package_only,
+        require_botsort=not args.package_only,
+    )
     paths["output_dir"].mkdir(parents=True, exist_ok=True)
     paths["predictions_dir"].mkdir(parents=True, exist_ok=True)
     (paths["output_dir"] / "logs").mkdir(exist_ok=True)
@@ -156,10 +160,16 @@ def _resolve_paths(args: argparse.Namespace) -> dict[str, Path]:
     }
 
 
-def _validate_inputs(paths: dict[str, Path], *, require_botsort: bool) -> None:
-    for key in ("sequence_root", "first_frame_label_dir"):
-        if not paths[key].exists():
-            raise FileNotFoundError(f"{key} does not exist: {paths[key]}")
+def _validate_inputs(
+    paths: dict[str, Path],
+    *,
+    require_inference_inputs: bool,
+    require_botsort: bool,
+) -> None:
+    if require_inference_inputs:
+        for key in ("sequence_root", "first_frame_label_dir"):
+            if not paths[key].exists():
+                raise FileNotFoundError(f"{key} does not exist: {paths[key]}")
     if paths["template_zip"] is not None and not paths["template_zip"].exists():
         raise FileNotFoundError(f"template_zip does not exist: {paths['template_zip']}")
     if require_botsort and not (paths["botsort_root"] / "tools/inference.py").exists():
