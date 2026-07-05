@@ -137,6 +137,9 @@ def test_class_probability_context_fills_missing_sequences_uniformly() -> None:
     assert seq_b["image_class_probability_available"] == pytest.approx(0.0)
     assert seq_b["image_class_prob_0"] == pytest.approx(0.25)
     assert seq_b["image_class_prob_3"] == pytest.approx(0.25)
+    assert pd.isna(seq_b["image_predicted_class_id"])
+    for label in ("0", "1", "2", "3"):
+        assert seq_b[f"image_predicted_class_{label}"] == pytest.approx(0.0)
 
 
 def test_class_probability_context_treats_empty_probability_rows_as_missing() -> None:
@@ -162,7 +165,11 @@ def test_class_probability_context_treats_empty_probability_rows_as_missing() ->
     assert seq_a["image_class_probability_available"] == pytest.approx(0.0)
     assert seq_a["image_class_prob_0"] == pytest.approx(0.25)
     assert seq_a["image_class_prob_3"] == pytest.approx(0.25)
+    assert pd.isna(seq_a["image_predicted_class_id"])
+    assert seq_a["image_predicted_class_0"] == pytest.approx(0.0)
     assert seq_b["image_class_probability_available"] == pytest.approx(0.0)
+    assert pd.isna(seq_b["image_predicted_class_id"])
+    assert seq_b["image_predicted_class_0"] == pytest.approx(0.0)
 
 
 def test_class_probability_context_rejects_empty_probability_rows_when_requested() -> None:

@@ -1,11 +1,4 @@
-"""Attach sequence-level class probabilities as candidate-ranking context.
-
-The MMUAD sequence classifier can produce one probability vector per sequence.
-This module joins those probabilities onto candidate rows and emits ``image_*``
-feature columns that are already consumed by the cluster ranker. It is intended
-for pose experiments where type classification should inform candidate
-reliability without hard-branching on a possibly wrong class label.
-"""
+"""Attach sequence-level class probabilities as candidate-ranking context."""
 
 from __future__ import annotations
 
@@ -57,8 +50,7 @@ def attach_class_probability_context(
     ``class_probabilities`` may use classifier output columns such as
     ``predicted_probability_0`` or already-normalized ``class_prob_0`` columns.
     The emitted probability/context columns are prefixed with ``image_`` so that
-    existing MMUAD cluster-ranker feature selection consumes them without a new
-    model schema.
+    existing cluster-ranker feature selection consumes them without a new model schema.
     """
 
     candidate_rows = _candidate_rows(candidates)
@@ -112,7 +104,7 @@ def write_class_probability_context(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="raft-uav-mmuad-class-prob-context",
-        description="attach sequence-level class probabilities to MMUAD candidates",
+        description="attach sequence-level class probabilities to candidates",
     )
     parser.add_argument("--candidate-csv", type=Path, required=True)
     parser.add_argument("--class-probabilities-csv", type=Path, required=True)
@@ -198,7 +190,7 @@ def _probability_rows(class_probabilities: pd.DataFrame) -> pd.DataFrame:
 
 
 def _predicted_class_labels(values: pd.Series) -> pd.Series:
-    """Return canonical Track 5 class id strings from classifier labels."""
+    """Return canonical class id strings from classifier labels."""
 
     raw = pd.Series(values)
     text = raw.where(raw.notna(), "").astype(str).str.strip()
@@ -217,7 +209,7 @@ def _predicted_class_labels(values: pd.Series) -> pd.Series:
 
 
 def _validate_predicted_class_labels(labels: pd.Series) -> None:
-    """Reject non-empty fallback class labels outside the official Track 5 ids."""
+    """Reject non-empty fallback class labels outside the official ids."""
 
     text = pd.Series(labels).fillna("").astype(str).str.strip()
     present = text.ne("")
@@ -228,7 +220,7 @@ def _validate_predicted_class_labels(labels: pd.Series) -> None:
     allowed = ", ".join(OFFICIAL_CLASS_LABELS)
     raise ValueError(
         "missing class probabilities because predicted_class values must be official "
-        f"Track 5 class IDs {{{allowed}}}; got {examples}"
+        f"class IDs {{{allowed}}}; got {examples}"
     )
 
 
@@ -286,9 +278,18 @@ def _add_probability_summaries(rows: pd.DataFrame) -> pd.DataFrame:
     out["image_class_entropy"] = -np.sum(clipped * np.log(clipped), axis=1)
     out["image_class_confidence"] = np.max(probs, axis=1)
     predicted = np.argmax(probs, axis=1)
-    out["image_predicted_class_id"] = predicted.astype(float)
+    if "image_class_probability_available" in out.columns:
+        available = (
+            pd.to_numeric(out["image_class_probability_available"], errors="coerce")
+            .fillna(0.0)
+            .to_numpy(float)
+            > 0.0
+        )
+    else:
+        available = np.ones(len(out), dtype=bool)
+    out["image_predicted_class_id"] = np.where(available, predicted.astype(float), np.nan)
     for index, label in enumerate(OFFICIAL_CLASS_LABELS):
-        out[f"image_predicted_class_{label}"] = (predicted == index).astype(float)
+        out[f"image_predicted_class_{label}"] = ((predicted == index) & available).astype(float)
     return out
 
 
