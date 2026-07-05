@@ -15,7 +15,10 @@ from typing import Any
 
 import pandas as pd
 
-from raft_uav.mmuad.submission import OFFICIAL_TRACK5_CLASS_IDS
+from raft_uav.mmuad.submission import (
+    OFFICIAL_TRACK5_CLASS_IDS,
+    parse_official_classification_cell_raw,
+)
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "evaluator.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -30,7 +33,7 @@ _SPEC.loader.exec_module(_IMPL)
 
 
 def _parse_official_result_classification_cell(value: Any) -> int:
-    class_id = _IMPL.parse_official_classification_cell(value)
+    class_id = parse_official_classification_cell_raw(value)
     if class_id not in OFFICIAL_TRACK5_CLASS_IDS:
         allowed = ", ".join(str(item) for item in sorted(OFFICIAL_TRACK5_CLASS_IDS))
         raise ValueError(
@@ -56,7 +59,7 @@ def _official_track5_results_to_local_frame(
     class_parser = (
         _parse_official_result_classification_cell
         if enforce_class_domain
-        else _IMPL.parse_official_classification_cell
+        else parse_official_classification_cell_raw
     )
     classifications = [class_parser(value) for value in frame[classification_col]]
     xyz = pd.DataFrame(positions, columns=["x", "y", "z"], index=frame.index)
