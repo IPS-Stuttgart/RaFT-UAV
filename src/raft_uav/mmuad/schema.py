@@ -377,30 +377,38 @@ def _time_alias_series(
     frame: pd.DataFrame,
     lower_to_original: dict[str, object],
 ) -> pd.Series | None:
+    candidates: list[pd.Series] = []
     for seconds_alias, nanoseconds_alias in _TIME_SECOND_NANOSECOND_PAIRS:
         seconds_col = lower_to_original.get(seconds_alias)
         nanoseconds_col = lower_to_original.get(nanoseconds_alias)
         if seconds_col is None or nanoseconds_col is None:
             continue
-        return pd.to_numeric(frame[seconds_col], errors="coerce") + (
-            pd.to_numeric(frame[nanoseconds_col], errors="coerce") * 1.0e-9
+        candidates.append(
+            pd.to_numeric(frame[seconds_col], errors="coerce")
+            + pd.to_numeric(frame[nanoseconds_col], errors="coerce") * 1.0e-9
         )
     for alias, scale in _TIME_UNIT_ALIASES.items():
         original = lower_to_original.get(alias)
         if original is not None:
-            return pd.to_numeric(frame[original], errors="coerce") * scale
+            candidates.append(pd.to_numeric(frame[original], errors="coerce") * scale)
     for alias in _TIME_SECOND_ALIASES:
         original = lower_to_original.get(alias)
         if original is not None and str(original) != "time_s":
-            return _seconds_or_stamp_dict_series(frame[original])
+            candidates.append(_seconds_or_stamp_dict_series(frame[original]))
     for alias in ("header.stamp", "header"):
         original = lower_to_original.get(alias)
-        if original is None:
+        if original is not None:
+            candidates.append(_seconds_or_stamp_dict_series(frame[original]))
+    return _combine_time_alias_series(candidates)
+
+
+def _combine_time_alias_series(candidates: Iterable[pd.Series]) -> pd.Series | None:
+    combined: pd.Series | None = None
+    for candidate in candidates:
+        if not candidate.notna().any():
             continue
-        parsed = _seconds_or_stamp_dict_series(frame[original])
-        if parsed.notna().any():
-            return parsed
-    return None
+        combined = candidate if combined is None else combined.fillna(candidate)
+    return combined
 
 
 def _seconds_or_stamp_dict_series(values: pd.Series) -> pd.Series:
