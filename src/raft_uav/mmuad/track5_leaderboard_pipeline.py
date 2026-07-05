@@ -23,11 +23,13 @@ import pandas as pd
 
 from raft_uav.mmuad.candidate_mixture_map import CandidateMixtureMapConfig
 from raft_uav.mmuad.candidate_reservoir import ReservoirConfig
+from raft_uav.mmuad.candidate_reservoir import load_candidate_inputs
 from raft_uav.mmuad.candidate_reservoir_mixture_map import run_reservoir_mixture_map
 from raft_uav.mmuad.candidate_reservoir_mixture_map import write_reservoir_mixture_map_outputs
-from raft_uav.mmuad.candidate_reservoir import load_candidate_inputs
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 from raft_uav.mmuad.submission import load_official_track5_template_file, load_sequence_class_map
+from raft_uav.mmuad.track5_template_resample import RESAMPLE_METHODS
+from raft_uav.mmuad.track5_template_resample import ResampleMethod
 from raft_uav.mmuad.track5_template_resample import write_track5_template_resample_outputs
 
 PIPELINE_MANIFEST_JSON = "mmuad_track5_leaderboard_pipeline_manifest.json"
@@ -47,8 +49,16 @@ def run_track5_leaderboard_pipeline(
     class_map: dict[str, str] | None = None,
     default_classification: int | str = 2,
     max_template_nearest_time_delta_s: float | None = None,
+    submission_resample_method: ResampleMethod = "linear",
+    submission_max_interpolation_gap_s: float | None = None,
 ) -> dict[str, Any]:
-    """Run reservoir mixture-MAP and package it against a Track 5 template."""
+    """Run reservoir mixture-MAP and package it against a Track 5 template.
+
+    ``submission_resample_method`` and ``submission_max_interpolation_gap_s``
+    control the final Codabench-template projection.  Exposing them here avoids
+    an error-prone extra post-processing step when dense sensor-time trajectories
+    need nearest-only or large-gap-safe template packaging.
+    """
 
     output = Path(output_dir)
     mixture_dir = output / MIXTURE_DIR
@@ -75,17 +85,23 @@ def run_track5_leaderboard_pipeline(
         class_map=class_map,
         default_classification=default_classification,
         max_nearest_time_delta_s=max_template_nearest_time_delta_s,
+        resample_method=submission_resample_method,
+        max_interpolation_gap_s=submission_max_interpolation_gap_s,
     )
     manifest = {
-        "schema": "raft-uav-mmuad-track5-leaderboard-pipeline-v1",
+        "schema": "raft-uav-mmuad-track5-leaderboard-pipeline-v2",
         "reservoir_config": asdict(reservoir_config or ReservoirConfig()),
-        "mixture_config": asdict(_with_reservoir_top_k_zero(mixture_config or CandidateMixtureMapConfig())),
+        "mixture_config": asdict(
+            _with_reservoir_top_k_zero(mixture_config or CandidateMixtureMapConfig()),
+        ),
         "candidate_rows": int(len(candidates)),
         "reservoir_rows": int(len(reservoir)),
         "mixture_estimate_rows": int(len(mixture_result.estimates)),
         "template_row_count": int(len(template)),
         "default_classification": str(default_classification),
         "max_template_nearest_time_delta_s": max_template_nearest_time_delta_s,
+        "submission_resample_method": str(submission_resample_method),
+        "submission_max_interpolation_gap_s": submission_max_interpolation_gap_s,
         "mixture_summary": mixture_summary,
         "mixture_paths": {name: str(path) for name, path in mixture_paths.items()},
         "submission_paths": {name: str(path) for name, path in submission_paths.items()},
@@ -123,6 +139,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--default-classification", default="2")
     parser.add_argument("--require-leaderboard-ready", action="store_true")
     parser.add_argument("--max-template-nearest-time-delta-s", type=float)
+    parser.add_argument(
+        "--submission-resample-method",
+        choices=RESAMPLE_METHODS,
+        default="linear",
+        help="coordinate resampling mode for official-template submission rows",
+    )
+    parser.add_argument(
+        "--submission-max-interpolation-gap-s",
+        type=float,
+        help="fallback to nearest when template interpolation spans a larger source-time gap",
+    )
     parser.add_argument("--global-top-n", type=int, default=20)
     parser.add_argument("--per-source-top-n", type=int, default=3)
     parser.add_argument("--per-branch-top-n", type=int, default=3)
@@ -198,6 +225,8 @@ def main(argv: list[str] | None = None) -> int:
         class_map=class_map,
         default_classification=args.default_classification,
         max_template_nearest_time_delta_s=args.max_template_nearest_time_delta_s,
+        submission_resample_method=args.submission_resample_method,
+        submission_max_interpolation_gap_s=args.submission_max_interpolation_gap_s,
     )
     validation_json = result["submission_paths"]["validation_json"]
     validation_summary = json.loads(Path(validation_json).read_text(encoding="utf-8"))
