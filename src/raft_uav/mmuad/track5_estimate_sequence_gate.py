@@ -22,6 +22,7 @@ import pandas as pd
 from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
     load_sequence_class_map,
+    parse_official_sequence_cell,
     validate_official_track5_submission,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
@@ -285,8 +286,18 @@ def _sequence_weight_map(rows: pd.DataFrame) -> dict[str, float]:
         raise ValueError("sequence weight table must contain sequence_id and weight columns")
     result: dict[str, float] = {}
     for _, row in frame.iterrows():
-        result[str(row[sequence_column])] = _validate_weight(row[weight_column], name="sequence_weight")
+        sequence_id = _official_sequence_id_or_none(row[sequence_column])
+        if sequence_id is None:
+            continue
+        result[sequence_id] = _validate_weight(row[weight_column], name="sequence_weight")
     return result
+
+
+def _official_sequence_id_or_none(value: Any) -> str | None:
+    try:
+        return parse_official_sequence_cell(value)
+    except ValueError:
+        return None
 
 
 def _validate_weight(value: object, *, name: str) -> float:
@@ -304,11 +315,11 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("template must contain sequence and timestamp columns")
     rows = pd.DataFrame(
         {
-            "sequence_id": frame[sequence_column].astype(str),
+            "sequence_id": frame[sequence_column].map(_official_sequence_id_or_none),
             "time_s": pd.to_numeric(frame[time_column], errors="coerce"),
         }
     )
-    finite = np.isfinite(rows["time_s"].to_numpy(float))
+    finite = rows["sequence_id"].notna() & np.isfinite(rows["time_s"].to_numpy(float))
     return rows.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
