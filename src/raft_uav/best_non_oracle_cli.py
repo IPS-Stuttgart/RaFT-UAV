@@ -13,6 +13,7 @@ single reproducible entry point:
 from __future__ import annotations
 
 import argparse
+import math
 import shlex
 import sys
 from pathlib import Path
@@ -203,8 +204,18 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(sys.argv[1:] if argv is None else argv)
 
 
+def _finite_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be numeric") from exc
+    if not math.isfinite(parsed):
+        raise argparse.ArgumentTypeError("must be finite")
+    return parsed
+
+
 def _positive_float(value: str) -> float:
-    parsed = float(value)
+    parsed = _finite_float(value)
     if parsed <= 0.0:
         raise argparse.ArgumentTypeError("must be > 0")
     return parsed
@@ -218,7 +229,7 @@ def _positive_int(value: str) -> int:
 
 
 def _nonnegative_float(value: str) -> float:
-    parsed = float(value)
+    parsed = _finite_float(value)
     if parsed < 0.0:
         raise argparse.ArgumentTypeError("must be >= 0")
     return parsed
@@ -232,7 +243,7 @@ def _nonnegative_int(value: str) -> int:
 
 
 def _probability(value: str) -> float:
-    parsed = float(value)
+    parsed = _finite_float(value)
     if not 0.0 < parsed < 1.0:
         raise argparse.ArgumentTypeError("must satisfy 0 < p < 1")
     return parsed
