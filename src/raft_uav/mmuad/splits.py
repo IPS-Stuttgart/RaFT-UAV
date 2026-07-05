@@ -60,7 +60,7 @@ def load_split_manifest(path: Path) -> dict[str, tuple[str, ...]]:
     if path.suffix.lower() in {".json", ".yaml", ".yml"}:
         payload = _load_manifest_payload(path)
         return _manifest_from_payload(payload)
-    frame = pd.read_csv(path)
+    frame = pd.read_csv(path, dtype=str, keep_default_na=False)
     manifest = _manifest_from_rows(frame.to_dict("records"))
     if not manifest:
         raise ValueError(
