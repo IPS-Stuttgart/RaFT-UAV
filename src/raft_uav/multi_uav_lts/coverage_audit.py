@@ -56,6 +56,7 @@ class PredictionCoverageAudit:
     template_zip: str | None
     sequence_root: str | None
     ready: bool
+    blocking_reasons: list[str]
     expected_file_count: int
     present_file_count: int
     missing_file_count: int
@@ -198,24 +199,25 @@ def audit_prediction_coverage(
     unsorted_rows = sum(row.unsorted_rows for row in rows)
     out_of_range_frame_rows = sum(row.out_of_range_frame_rows for row in rows)
     duplicate_frame_object_rows = sum(row.duplicate_frame_object_rows for row in rows)
-    ready = (
-        not missing_files
-        and not extra_files
-        and not empty_expected_files
-        and parse_errors == 0
-        and invalid_geometry_rows == 0
-        and invalid_confidence_rows == 0
-        and invalid_class_rows == 0
-        and invalid_visibility_rows == 0
-        and unsorted_rows == 0
-        and out_of_range_frame_rows == 0
-        and duplicate_frame_object_rows == 0
+    blocking_reasons = _blocking_reasons(
+        missing_files=missing_files,
+        extra_files=extra_files,
+        empty_expected_files=empty_expected_files,
+        parse_errors=parse_errors,
+        invalid_geometry_rows=invalid_geometry_rows,
+        invalid_confidence_rows=invalid_confidence_rows,
+        invalid_class_rows=invalid_class_rows,
+        invalid_visibility_rows=invalid_visibility_rows,
+        unsorted_rows=unsorted_rows,
+        out_of_range_frame_rows=out_of_range_frame_rows,
+        duplicate_frame_object_rows=duplicate_frame_object_rows,
     )
     return PredictionCoverageAudit(
         prediction_path=str(prediction_path),
         template_zip=str(template_zip) if template_zip is not None else None,
         sequence_root=str(sequence_root) if sequence_root is not None else None,
-        ready=ready,
+        ready=not blocking_reasons,
+        blocking_reasons=blocking_reasons,
         expected_file_count=len(expected_names),
         present_file_count=len(present_names),
         missing_file_count=len(missing_files),
@@ -385,6 +387,46 @@ def _count_invalid_class_visibility_rows(text: str) -> tuple[int, int]:
         if not 0.0 <= visibility <= 1.0:
             invalid_visibility_rows += 1
     return invalid_class_rows, invalid_visibility_rows
+
+
+def _blocking_reasons(
+    *,
+    missing_files: list[str],
+    extra_files: list[str],
+    empty_expected_files: list[str],
+    parse_errors: int,
+    invalid_geometry_rows: int,
+    invalid_confidence_rows: int,
+    invalid_class_rows: int,
+    invalid_visibility_rows: int,
+    unsorted_rows: int,
+    out_of_range_frame_rows: int,
+    duplicate_frame_object_rows: int,
+) -> list[str]:
+    reasons: list[str] = []
+    if missing_files:
+        reasons.append("missing_files")
+    if extra_files:
+        reasons.append("extra_files")
+    if empty_expected_files:
+        reasons.append("empty_expected_files")
+    if parse_errors:
+        reasons.append("parse_errors")
+    if invalid_geometry_rows:
+        reasons.append("invalid_geometry_rows")
+    if invalid_confidence_rows:
+        reasons.append("invalid_confidence_rows")
+    if invalid_class_rows:
+        reasons.append("invalid_class_rows")
+    if invalid_visibility_rows:
+        reasons.append("invalid_visibility_rows")
+    if unsorted_rows:
+        reasons.append("unsorted_rows")
+    if out_of_range_frame_rows:
+        reasons.append("out_of_range_frame_rows")
+    if duplicate_frame_object_rows:
+        reasons.append("duplicate_frame_object_rows")
+    return reasons
 
 
 if __name__ == "__main__":  # pragma: no cover
