@@ -257,6 +257,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--default-classification", default="0")
     parser.add_argument("--require-leaderboard-ready", action="store_true")
     args = parser.parse_args(argv)
+
     if not args.estimate_csv:
         parser.error("provide at least one --estimate-csv LABEL=PATH")
     output = Path(args.output_dir)
