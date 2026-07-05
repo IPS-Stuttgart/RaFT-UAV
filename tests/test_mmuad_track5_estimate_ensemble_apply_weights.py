@@ -142,6 +142,24 @@ def test_write_apply_weights_outputs_manifest_preserves_generator_inputs(tmp_pat
     assert manifest["applied_weights"] == {"a": 0.75, "b": 0.25}
 
 
+def test_write_apply_weights_outputs_rejects_negative_time_delta_limit(tmp_path: Path) -> None:
+    a_csv = tmp_path / "a.csv"
+    template_csv = tmp_path / "template.csv"
+    _estimate_a().to_csv(a_csv, index=False)
+    _template().to_csv(template_csv, index=False)
+
+    payload = _weights_payload()
+    payload["max_nearest_time_delta_s"] = -1.0
+
+    with pytest.raises(ValueError, match="max_nearest_time_delta_s"):
+        write_apply_weights_outputs(
+            estimate_inputs=[EstimateInput("a", a_csv, 1.0)],
+            weight_config=payload,
+            template_path=template_csv,
+            output_dir=tmp_path / "out",
+        )
+
+
 def test_apply_ensemble_weights_cli_writes_leaderboard_ready_outputs(tmp_path: Path) -> None:
     a_csv = tmp_path / "a.csv"
     b_csv = tmp_path / "b.csv"
