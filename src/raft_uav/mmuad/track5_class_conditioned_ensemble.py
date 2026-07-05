@@ -24,6 +24,7 @@ from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
     load_sequence_class_map,
+    parse_official_sequence_cell,
     validate_official_track5_submission,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
@@ -65,7 +66,7 @@ def search_class_conditioned_ensemble_weights(
     loaded = [(item.label, pd.read_csv(item.path), 1.0) for item in inputs]
     template_rows = _normalize_template_rows(template)
     truth_rows = _normalize_truth_rows(truth)
-    class_map = {_safe_label(key): str(value) for key, value in class_map.items()}
+    class_map = _normalize_sequence_class_map(class_map)
 
     records: list[dict[str, Any]] = []
     global_grid, global_best = _search_weights_for_template(
@@ -132,7 +133,7 @@ def build_class_conditioned_estimate_ensemble(
         raise ValueError("at least one estimate input is required")
     loaded = {item.label: pd.read_csv(item.path) for item in inputs}
     template_rows = _normalize_template_rows(template)
-    class_map = {_safe_label(key): str(value) for key, value in class_map.items()}
+    class_map = _normalize_sequence_class_map(class_map)
     global_weights = _normalized_weight_map(weight_config.get("global_weights", {}), inputs)
     class_weights_raw = weight_config.get("class_weights", {})
     if not isinstance(class_weights_raw, dict):
@@ -415,27 +416,29 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("template must contain sequence and timestamp columns")
     out = pd.DataFrame(
         {
-            "sequence_id": rows[sequence_column].astype(str),
+            "sequence_id": rows[sequence_column].map(_sequence_id_or_none),
             "time_s": pd.to_numeric(rows[time_column], errors="coerce"),
         }
     )
-    finite = np.isfinite(out["time_s"].to_numpy(float))
+    finite = out["sequence_id"].notna() & np.isfinite(out["time_s"].to_numpy(float))
     return out.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
 def _normalize_truth_rows(truth: pd.DataFrame) -> pd.DataFrame:
     rows = pd.DataFrame(truth).copy()
-    rows["sequence_id"] = rows["sequence_id"].astype(str)
+    rows["sequence_id"] = rows["sequence_id"].map(_sequence_id_or_none)
     for column in ("time_s", "x_m", "y_m", "z_m"):
         rows[column] = pd.to_numeric(rows[column], errors="coerce")
     rows["_time_key"] = _time_key(rows["time_s"])
-    finite = np.isfinite(rows[["time_s", "x_m", "y_m", "z_m"]].to_numpy(float)).all(axis=1)
+    finite = rows["sequence_id"].notna() & np.isfinite(
+        rows[["time_s", "x_m", "y_m", "z_m"]].to_numpy(float)
+    ).all(axis=1)
     return rows.loc[finite, ["sequence_id", "_time_key", "x_m", "y_m", "z_m"]].copy()
 
 
 def _score_template_estimates(estimates: pd.DataFrame, truth: pd.DataFrame) -> dict[str, Any]:
     rows = pd.DataFrame(estimates).copy()
-    rows["sequence_id"] = rows["sequence_id"].astype(str)
+    rows["sequence_id"] = rows["sequence_id"].map(_sequence_id_or_none)
     rows["_time_key"] = _time_key(pd.to_numeric(rows["time_s"], errors="coerce"))
     merged = rows.merge(truth, on=["sequence_id", "_time_key"], how="inner")
     if merged.empty:
@@ -491,6 +494,22 @@ def _first_present(rows: pd.DataFrame, names: tuple[str, ...]) -> str | None:
         if found is not None:
             return found
     return None
+
+
+def _normalize_sequence_class_map(class_map: dict[str, str]) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for key, value in class_map.items():
+        sequence_id = _sequence_id_or_none(key)
+        if sequence_id is not None:
+            normalized[sequence_id] = str(value)
+    return normalized
+
+
+def _sequence_id_or_none(value: object) -> str | None:
+    try:
+        return parse_official_sequence_cell(value)
+    except ValueError:
+        return None
 
 
 def _safe_label(value: object) -> str:
