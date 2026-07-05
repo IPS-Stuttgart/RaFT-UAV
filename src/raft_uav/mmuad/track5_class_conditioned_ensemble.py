@@ -257,7 +257,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--default-classification", default="0")
     parser.add_argument("--require-leaderboard-ready", action="store_true")
     args = parser.parse_args(argv)
-
     if not args.estimate_csv:
         parser.error("provide at least one --estimate-csv LABEL=PATH")
     output = Path(args.output_dir)
@@ -487,7 +486,9 @@ def _first_present(rows: pd.DataFrame, names: tuple[str, ...]) -> str | None:
 
 
 def _safe_label(value: object) -> str:
-    text = str(value).strip().replace(" ", "_").replace("/", "_").replace("\\", "_")
+    # Class maps are keyed by official sequence ids, not by filenames. Preserve
+    # internal spaces and path-like separators so they continue to match template rows.
+    text = str(value).strip()
     return text or "sequence"
 
 
