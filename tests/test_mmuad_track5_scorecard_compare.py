@@ -47,9 +47,9 @@ def test_compare_track5_scorecards_ranks_by_pose_then_p95(tmp_path: Path) -> Non
 
     assert comparison["rank"].tolist() == [1, 2, 3]
     assert comparison.loc[0, "scorecard_label"] == "low"
-    assert comparison.loc[0, "beats_pose_reference"] is True
-    assert comparison.loc[0, "beats_top3_pose_reference"] is False
-    assert comparison.loc[1, "beats_class_reference"] is True
+    assert bool(comparison.loc[0, "beats_pose_reference"])
+    assert not bool(comparison.loc[0, "beats_top3_pose_reference"])
+    assert bool(comparison.loc[1, "beats_class_reference"])
     assert comparison.loc[2, "pose_mse_delta_to_best"] == 2.0
 
 
