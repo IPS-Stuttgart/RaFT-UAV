@@ -122,8 +122,7 @@ def write_apply_weights_outputs(
         if max_nearest_time_delta_s is not None
         else weight_config.get("max_nearest_time_delta_s")
     )
-    if selected_max_delta is not None:
-        selected_max_delta = float(selected_max_delta)
+    selected_max_delta = _validate_max_nearest_time_delta_s(selected_max_delta)
     paths = write_track5_estimate_ensemble_outputs(
         estimate_inputs=estimate_input_list,
         template=template,
@@ -225,6 +224,18 @@ def _validate_weight_value(value: Any, *, label: str) -> float:
     if not np.isfinite(weight) or weight < 0.0:
         raise ValueError(f"weight for {label!r} must be finite and non-negative")
     return weight
+
+
+def _validate_max_nearest_time_delta_s(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        delta = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("max_nearest_time_delta_s must be finite and non-negative") from exc
+    if not np.isfinite(delta) or delta < 0.0:
+        raise ValueError("max_nearest_time_delta_s must be finite and non-negative")
+    return delta
 
 
 def _jsonable(value: Any) -> Any:
