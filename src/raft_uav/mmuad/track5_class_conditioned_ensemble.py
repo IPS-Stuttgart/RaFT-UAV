@@ -513,7 +513,9 @@ def _sequence_id_or_none(value: object) -> str | None:
 
 
 def _safe_label(value: object) -> str:
-    text = str(value).strip().replace(" ", "_").replace("/", "_").replace("\\", "_")
+    # Class maps are keyed by official sequence ids, not by filenames. Preserve
+    # internal spaces and path-like separators so they continue to match template rows.
+    text = str(value).strip()
     return text or "sequence"
 
 
