@@ -11,8 +11,14 @@ _parse_original = _impl.parse_official_classification_cell
 _load_sequence_class_map_original = _impl.load_sequence_class_map
 
 
+def parse_official_classification_cell_raw(value: Any) -> int:
+    """Parse a Track 5 classification cell without applying public upload bounds."""
+
+    return _parse_original(value)
+
+
 def _parse_official_classification_cell_with_domain(value: Any) -> int:
-    class_id = _parse_original(value)
+    class_id = parse_official_classification_cell_raw(value)
     if class_id not in _impl.OFFICIAL_TRACK5_CLASS_IDS:
         raise ValueError(f"invalid official Track 5 class id: {class_id!r}")
     return class_id
@@ -58,9 +64,6 @@ def _class_map_sequence_key(value: Any) -> str | None:
     except ValueError:
         return None
 
-
-_impl.parse_official_classification_cell = _parse_official_classification_cell_with_domain
-_impl.load_sequence_class_map = _load_sequence_class_map_with_official_sequences
 
 globals().update(
     {
