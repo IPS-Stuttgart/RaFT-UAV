@@ -99,7 +99,9 @@ def _read_official_track5_zip_for_validation_preserving_sequences(
         result_info = root_result_infos[0]
         with archive.open(result_info) as handle:
             result_bytes = handle.read()
-        summary.update(_impl._official_track5_zip_member_fingerprint(result_info, result_bytes))
+        summary.update(
+            _impl._official_track5_zip_member_fingerprint(result_info, result_bytes)
+        )
         frame = _read_official_track5_csv(BytesIO(result_bytes))
     return frame, members, summary
 
@@ -131,11 +133,15 @@ def _read_official_track5_results_input_preserving_sequences(
         csv_members = [
             info
             for info in infos
-            if PurePosixPath(_impl._normalized_zip_member_name(info.filename)).suffix.lower()
+            if PurePosixPath(
+                _impl._normalized_zip_member_name(info.filename)
+            ).suffix.lower()
             == ".csv"
         ]
         if len(root_results) > 1:
-            raise ValueError("official Track 5 ZIP has duplicate root mmaud_results.csv members")
+            raise ValueError(
+                "official Track 5 ZIP has duplicate root mmaud_results.csv members"
+            )
         if root_results:
             selected = root_results[0]
             selection = "root_mmaud_results_csv"
@@ -229,10 +235,18 @@ def _validate_official_track5_submission_preserving_sequences(
         and int(summary.get("invalid_position_count", 0)) == 0
         and int(summary.get("invalid_classification_count", 0)) == 0
         and int(summary.get("duplicate_prediction_count", 0)) == 0
-        and (not template_checked or int(summary.get("missing_template_timestamp_count", 0)) == 0)
-        and (not template_checked or int(summary.get("extra_prediction_count", 0)) == 0)
+        and (
+            not template_checked
+            or int(summary.get("missing_template_timestamp_count", 0)) == 0
+        )
+        and (
+            not template_checked
+            or int(summary.get("extra_prediction_count", 0)) == 0
+        )
     )
-    blocking_reasons = _impl._official_track5_validation_leaderboard_blocking_reasons(summary)
+    blocking_reasons = _impl._official_track5_validation_leaderboard_blocking_reasons(
+        summary
+    )
     summary["score_valid_for_leaderboard"] = bool(not blocking_reasons)
     summary["leaderboard_ready"] = bool(not blocking_reasons)
     summary["codabench_upload_ready"] = bool(
@@ -273,7 +287,9 @@ _impl._read_official_track5_zip_for_validation = (  # type: ignore[attr-defined]
 _impl._read_official_track5_results_input = (  # type: ignore[attr-defined]
     _read_official_track5_results_input_preserving_sequences
 )
-_impl.validate_official_track5_submission = _validate_official_track5_submission_preserving_sequences
+_impl.validate_official_track5_submission = (
+    _validate_official_track5_submission_preserving_sequences
+)
 _impl.inspect_submission_zip = _inspect_submission_zip_preserving_sequences
 
 globals().update(
