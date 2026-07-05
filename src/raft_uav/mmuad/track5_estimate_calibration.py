@@ -1,12 +1,12 @@
 """Train-fitted pose calibration for MMUAD Track 5 estimate trajectories.
 
 This module fits a light-weight correction from a labeled split and applies the
-fixed correction to validation or hidden-test estimates.  It is intended for
+fixed correction to validation or hidden-test estimates. It is intended for
 Codabench / UG2+ Track 5 pose pipelines whose final trajectories have residual
 systematic bias after source calibration, mixture smoothing, or ensembling.
 
 The fit path is truth-aware and must be used only on train folds or local public
-validation diagnostics.  The apply path is inference-safe: it uses only estimate
+validation diagnostics. The apply path is inference-safe: it uses only estimate
 rows, an official timestamp template, and a previously fitted calibration JSON.
 """
 
@@ -15,7 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import pandas as pd
@@ -31,6 +31,7 @@ from raft_uav.mmuad.submission import (
 from raft_uav.mmuad.track5_template_resample import resample_estimates_to_track5_template
 
 CalibrationMode = Literal["identity", "translation", "diagonal-affine", "affine"]
+CALIBRATION_MODES = ("identity", "translation", "diagonal-affine", "affine")
 CALIBRATED_ESTIMATES_CSV = "mmuad_track5_calibrated_estimates.csv"
 CALIBRATION_FIT_PAIRS_CSV = "mmuad_track5_estimate_calibration_fit_pairs.csv"
 CALIBRATION_JSON = "mmuad_track5_estimate_calibration.json"
@@ -40,7 +41,6 @@ VALIDATION_JSON = "mmuad_track5_estimate_calibration_validation.json"
 VALIDATION_ROWS_CSV = "mmuad_track5_estimate_calibration_validation_rows.csv"
 OFFICIAL_RESULTS_CSV = "mmaud_results.csv"
 OFFICIAL_ZIP = "ug2_submission.zip"
-TEMPLATE_TIME_MATCH_ATOL_S = 1.0e-9
 
 
 def fit_track5_estimate_calibration(
@@ -83,19 +83,7 @@ def fit_track5_estimate_calibration(
         "ridge_lambda": float(ridge_lambda),
         "max_nearest_time_delta_s": max_nearest_time_delta_s,
         "transform": transform,
-        "fit_summary": {
-            "fit_pair_count": int(len(pairs)),
-            "before_mse_m2": float(np.mean(before_error**2)),
-            "before_rmse_m": float(np.sqrt(np.mean(before_error**2))),
-            "before_mean_m": float(np.mean(before_error)),
-            "before_p95_m": float(np.percentile(before_error, 95)),
-            "after_mse_m2": float(np.mean(after_error**2)),
-            "after_rmse_m": float(np.sqrt(np.mean(after_error**2))),
-            "after_mean_m": float(np.mean(after_error)),
-            "after_p95_m": float(np.percentile(after_error, 95)),
-            "mean_delta_m": float(np.mean(after_error) - np.mean(before_error)),
-            "mse_delta_m2": float(np.mean(after_error**2) - np.mean(before_error**2)),
-        },
+        "fit_summary": _error_summary(before_error, after_error, len(pairs)),
     }
     pairs = pairs.copy()
     pairs["before_error_m"] = before_error
@@ -112,15 +100,22 @@ def apply_track5_estimate_calibration(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Apply a fitted calibration JSON to estimates after template resampling."""
 
+    calibration_time_gate = calibration.get("max_nearest_time_delta_s")
     resampled, diagnostics = resample_estimates_to_track5_template(
         estimates,
         template,
-        max_nearest_time_delta_s=max_nearest_time_delta_s
-        if max_nearest_time_delta_s is not None
-        else calibration.get("max_nearest_time_delta_s"),
+        max_nearest_time_delta_s=(
+            max_nearest_time_delta_s
+            if max_nearest_time_delta_s is not None
+            else calibration_time_gate
+        ),
     )
     out = resampled.copy()
-    xyz = out[["state_x_m", "state_y_m", "state_z_m"]].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+    xyz = (
+        out[["state_x_m", "state_y_m", "state_z_m"]]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(float)
+    )
     finite = np.isfinite(xyz).all(axis=1)
     calibrated = np.full_like(xyz, np.nan, dtype=float)
     if finite.any():
@@ -233,7 +228,9 @@ def write_track5_estimate_calibration_apply_outputs(
         "valid_calibrated_rows": int(_finite_xyz(calibrated).sum()),
         "leaderboard_ready": bool(validation.summary.get("leaderboard_ready", False)),
         "codabench_upload_ready": bool(validation.summary.get("codabench_upload_ready", False)),
-        "paths": {name: str(path) for name, path in paths.items() if name != "manifest_json"},
+        "paths": {
+            name: str(path) for name, path in paths.items() if name != "manifest_json"
+        },
     }
     paths["manifest_json"].write_text(json.dumps(_jsonable(manifest), indent=2), encoding="utf-8")
     return paths
@@ -250,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--truth-csv", type=Path)
     parser.add_argument("--calibration-json", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--mode", choices=("identity", "translation", "diagonal-affine", "affine"), default="translation")
+    parser.add_argument("--mode", choices=CALIBRATION_MODES, default="translation")
     parser.add_argument("--no-robust", action="store_true")
     parser.add_argument("--ridge-lambda", type=float, default=1.0e-6)
     parser.add_argument("--max-nearest-time-delta-s", type=float)
@@ -278,7 +275,11 @@ def main(argv: list[str] | None = None) -> int:
                 max_nearest_time_delta_s=args.max_nearest_time_delta_s,
             )
         )
-        paths["calibration_json"].replace(args.calibration_json)
+        args.calibration_json.parent.mkdir(parents=True, exist_ok=True)
+        args.calibration_json.write_text(
+            paths["calibration_json"].read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
         paths["calibration_json"] = args.calibration_json
     if args.apply_estimates_csv is not None:
         calibration = json.loads(args.calibration_json.read_text(encoding="utf-8"))
@@ -305,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit("leaderboard readiness requires --apply-estimates-csv")
         validation = json.loads(validation_path.read_text(encoding="utf-8"))
         if not validation.get("leaderboard_ready", False):
-            reasons = ", ".join(validation.get("leaderboard_blocking_reasons", [])) or "unknown"
+            reasons = ", ".join(validation.get("leaderboard_blocking_reasons", []))
             raise SystemExit(f"calibrated upload is not leaderboard-ready: {reasons}")
     return 0
 
@@ -328,10 +329,18 @@ def _fit_pairs(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
         on=["sequence_id", "_time_key"],
         how="inner",
     )
-    pairs = pairs.rename(columns={"x_m": "truth_x_m", "y_m": "truth_y_m", "z_m": "truth_z_m"})
-    finite = np.isfinite(
-        pairs[["state_x_m", "state_y_m", "state_z_m", "truth_x_m", "truth_y_m", "truth_z_m"]].to_numpy(float)
-    ).all(axis=1)
+    pairs = pairs.rename(
+        columns={"x_m": "truth_x_m", "y_m": "truth_y_m", "z_m": "truth_z_m"}
+    )
+    value_columns = [
+        "state_x_m",
+        "state_y_m",
+        "state_z_m",
+        "truth_x_m",
+        "truth_y_m",
+        "truth_z_m",
+    ]
+    finite = np.isfinite(pairs[value_columns].to_numpy(float)).all(axis=1)
     return pairs.loc[finite].reset_index(drop=True)
 
 
@@ -391,18 +400,38 @@ def _ridge_solve(design: np.ndarray, target: np.ndarray, *, ridge_lambda: float)
     return np.linalg.solve(lhs + penalty, rhs)
 
 
+def _error_summary(before_error: np.ndarray, after_error: np.ndarray, count: int) -> dict[str, Any]:
+    return {
+        "fit_pair_count": int(count),
+        "before_mse_m2": float(np.mean(before_error**2)),
+        "before_rmse_m": float(np.sqrt(np.mean(before_error**2))),
+        "before_mean_m": float(np.mean(before_error)),
+        "before_p95_m": float(np.percentile(before_error, 95)),
+        "after_mse_m2": float(np.mean(after_error**2)),
+        "after_rmse_m": float(np.sqrt(np.mean(after_error**2))),
+        "after_mean_m": float(np.mean(after_error)),
+        "after_p95_m": float(np.percentile(after_error, 95)),
+        "mean_delta_m": float(np.mean(after_error) - np.mean(before_error)),
+        "mse_delta_m2": float(np.mean(after_error**2) - np.mean(before_error**2)),
+    }
+
+
 def _normalize_mode(mode: str) -> CalibrationMode:
     mode = str(mode)
-    if mode not in {"identity", "translation", "diagonal-affine", "affine"}:
+    if mode not in set(CALIBRATION_MODES):
         raise ValueError(f"unsupported calibration mode: {mode}")
-    return mode  # type: ignore[return-value]
+    return cast(CalibrationMode, mode)
 
 
 def _finite_xyz(rows: pd.DataFrame) -> pd.Series:
     if rows.empty:
         return pd.Series(dtype=bool)
-    xyz = rows[["state_x_m", "state_y_m", "state_z_m"]].apply(pd.to_numeric, errors="coerce")
-    return pd.Series(np.isfinite(xyz.to_numpy(float)).all(axis=1), index=rows.index)
+    xyz = (
+        rows[["state_x_m", "state_y_m", "state_z_m"]]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(float)
+    )
+    return pd.Series(np.isfinite(xyz).all(axis=1), index=rows.index)
 
 
 def _time_key(values: pd.Series) -> pd.Series:
