@@ -19,10 +19,18 @@ _parse_original = getattr(_impl, _ORIGINAL_PARSE_ATTR)
 _load_sequence_class_map_original = getattr(_impl, _ORIGINAL_LOAD_ATTR)
 
 
+def _official_class_domain_error(class_id: int) -> ValueError:
+    allowed = ", ".join(str(item) for item in sorted(_impl.OFFICIAL_TRACK5_CLASS_IDS))
+    return ValueError(
+        "official MMUAD Classification values must be one of "
+        f"{{{allowed}}}; got {class_id!r}"
+    )
+
+
 def _parse_official_classification_cell_with_domain(value: Any) -> int:
     class_id = _parse_original(value)
     if class_id not in _impl.OFFICIAL_TRACK5_CLASS_IDS:
-        raise ValueError(f"invalid official Track 5 class id: {class_id!r}")
+        raise _official_class_domain_error(class_id)
     return class_id
 
 
