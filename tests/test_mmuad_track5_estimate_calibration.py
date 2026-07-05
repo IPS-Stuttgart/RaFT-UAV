@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from raft_uav.mmuad.track5_estimate_calibration import (
+    _fit_pairs,
     apply_track5_estimate_calibration,
     fit_track5_estimate_calibration,
     main as calibration_main,
@@ -50,6 +51,33 @@ def _biased_estimates() -> pd.DataFrame:
             "classification": [2, 2, 1],
         }
     )
+
+
+def test_fit_pairs_rejects_nonfinite_timestamp_matches() -> None:
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq0001", "seq0001"],
+            "time_s": [0.0, float("nan")],
+            "state_x_m": [1.5, 9.0],
+            "state_y_m": [-2.0, 9.0],
+            "state_z_m": [0.5, 9.0],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seq0001", "seq0001"],
+            "time_s": [0.0, float("nan")],
+            "x_m": [0.0, -9.0],
+            "y_m": [0.0, -9.0],
+            "z_m": [0.0, -9.0],
+        }
+    )
+
+    pairs = _fit_pairs(estimates, truth)
+
+    assert len(pairs) == 1
+    assert pairs["time_s"].tolist() == [0.0]
+    assert pairs["truth_x_m"].tolist() == [0.0]
 
 
 def test_fit_translation_calibration_removes_global_bias() -> None:
