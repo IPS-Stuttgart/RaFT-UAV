@@ -67,6 +67,18 @@ def test_load_ensemble_weight_config_validates_weights(tmp_path: Path) -> None:
     assert payload["weights"] == {"a": 0.75, "b": 0.25}
 
 
+def test_load_ensemble_weight_config_rejects_normalized_label_collisions(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "weights.json"
+    payload = _weights_payload()
+    payload["weights"] = {"model a": 0.6, "model/a": 0.4}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unique after normalization"):
+        load_ensemble_weight_config(path)
+
+
 def test_apply_ensemble_weight_config_maps_labels_to_estimates(tmp_path: Path) -> None:
     a_csv = tmp_path / "a.csv"
     b_csv = tmp_path / "b.csv"
@@ -90,6 +102,19 @@ def test_apply_ensemble_weight_config_rejects_missing_label(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match="missing selected ensemble weight"):
         apply_ensemble_weight_config([f"missing={a_csv}"], _weights_payload())
+
+
+def test_apply_ensemble_weight_config_rejects_duplicate_normalized_estimate_labels(
+    tmp_path: Path,
+) -> None:
+    a_csv = tmp_path / "a.csv"
+    _estimate_a().to_csv(a_csv, index=False)
+
+    with pytest.raises(ValueError, match="duplicate estimate label"):
+        apply_ensemble_weight_config(
+            [f"model a={a_csv}", f"model/a={a_csv}"],
+            {"weights": {"model_a": 1.0}},
+        )
 
 
 def test_write_apply_weights_outputs_manifest_preserves_generator_inputs(tmp_path: Path) -> None:
