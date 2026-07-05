@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import tomllib
 from zipfile import ZipFile
 
 import pandas as pd
@@ -135,3 +136,11 @@ def test_uncertainty_ensemble_cli_writes_outputs(tmp_path: Path) -> None:
     assert status == 0
     assert (output / "ug2_submission.zip").exists()
     assert (output / "mmuad_track5_uncertainty_ensemble_manifest.json").exists()
+
+
+def test_uncertainty_ensemble_entrypoint_is_exposed() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    assert (
+        pyproject["project"]["scripts"]["raft-uav-mmuad-track5-uncertainty-ensemble"]
+        == "raft_uav.mmuad.track5_uncertainty_ensemble:main"
+    )
