@@ -161,6 +161,12 @@ def write_track5_sequence_gate_outputs(
 ) -> dict[str, Path]:
     """Write sequence-gated estimates, official CSV/ZIP, diagnostics, and manifest."""
 
+    if require_leaderboard_ready and template is None:
+        raise SystemExit(
+            "sequence-gated leaderboard readiness requires an official template; "
+            "pass template=... or --template so timestamp coverage can be checked"
+        )
+
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     paths = {
@@ -189,7 +195,11 @@ def write_track5_sequence_gate_outputs(
     )
     validation_summary: dict[str, Any] | None = None
     if template is not None:
-        validation = validate_official_track5_submission(paths["zip"], template=template, require_zip=True)
+        validation = validate_official_track5_submission(
+            paths["zip"],
+            template=template,
+            require_zip=True,
+        )
         paths["validation_json"] = output / SEQUENCE_GATE_VALIDATION_JSON
         paths["validation_rows_csv"] = output / SEQUENCE_GATE_VALIDATION_ROWS_CSV
         paths["validation_json"].write_text(
@@ -199,7 +209,9 @@ def write_track5_sequence_gate_outputs(
         validation.rows.to_csv(paths["validation_rows_csv"], index=False)
         validation_summary = _jsonable(validation.summary)
         if require_leaderboard_ready and not validation.summary.get("leaderboard_ready", False):
-            reasons = ", ".join(validation.summary.get("leaderboard_blocking_reasons", [])) or "unknown"
+            reasons = (
+                ", ".join(validation.summary.get("leaderboard_blocking_reasons", [])) or "unknown"
+            )
             raise SystemExit(f"sequence-gated submission is not leaderboard-ready: {reasons}")
     payload = dict(manifest or {})
     diagnostics = result.diagnostics
@@ -216,7 +228,9 @@ def write_track5_sequence_gate_outputs(
             "defaulted_sequence_count": int(
                 result.sequence_weights["weight_source"].eq("default").sum()
             ),
-            "mean_sequence_gate_weight": float(result.sequence_weights["sequence_gate_weight"].mean())
+            "mean_sequence_gate_weight": float(
+                result.sequence_weights["sequence_gate_weight"].mean()
+            )
             if not result.sequence_weights.empty
             else None,
             "mean_applied_displacement_m": float(diagnostics["applied_displacement_m"].mean())
@@ -244,11 +258,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--alternate-submission", type=Path, required=True)
     parser.add_argument("--sequence-weights", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--template", type=Path, help="optional official template for preflight validation")
+    parser.add_argument(
+        "--template",
+        type=Path,
+        help="optional official template for preflight validation",
+    )
     parser.add_argument("--default-weight", type=float, default=0.0)
     parser.add_argument("--class-policy", choices=("base", "alternate"), default="base")
     parser.add_argument("--require-leaderboard-ready", action="store_true")
     args = parser.parse_args(argv)
+
+    if args.require_leaderboard_ready and args.template is None:
+        parser.error("--require-leaderboard-ready requires --template")
 
     result = blend_track5_sequence_gate(
         base_submission=load_track5_submission(args.base_submission),
