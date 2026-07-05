@@ -260,6 +260,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.estimate_csv:
         parser.error("provide at least one --estimate-csv LABEL=PATH")
+    if args.require_leaderboard_ready and not (args.write_submission or args.weights_json is not None):
+        parser.error(
+            "--require-leaderboard-ready requires --write-submission when searching weights "
+            "so an official Track 5 submission is generated and validated"
+        )
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     estimates = [parse_estimate_spec(value) for value in args.estimate_csv]
