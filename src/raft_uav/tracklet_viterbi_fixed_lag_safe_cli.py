@@ -1,9 +1,9 @@
 """Safe CLI shim for fixed-lag tracklet Viterbi.
 
-This wrapper rejects invalid lag values before dispatching to the existing
-fixed-lag CLI implementation.  Without this guard, values such as ``nan`` or
-``inf`` pass the old positive-only check and can reach the fixed-lag replay
-window logic.
+This module remains the installed console-script target. The fixed-lag duration
+is validated by the canonical implementation when a fixed-lag run actually reads
+it, so argument-only commands such as ``--help`` are not rejected because of an
+unrelated fixed-lag environment variable.
 """
 
 from __future__ import annotations
@@ -30,9 +30,8 @@ def _validated_fixed_lag_s_from_env() -> float:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Validate fixed-lag configuration, then run the original CLI."""
+    """Run the canonical fixed-lag CLI."""
 
-    _validated_fixed_lag_s_from_env()
     return _impl.main(argv)
 
 
