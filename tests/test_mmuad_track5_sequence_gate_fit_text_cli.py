@@ -43,6 +43,16 @@ def test_sequence_gate_fit_wrapper_accepts_scalar_dtype(tmp_path: Path) -> None:
     assert rows.loc[0, "time_s"] == "0.0"
 
 
+def test_sequence_gate_fit_wrapper_overrides_sequence_dtype_mapping(tmp_path: Path) -> None:
+    csv_path = tmp_path / "normalized.csv"
+    pd.DataFrame({"Sequence": ["001"], "value": [4]}).to_csv(csv_path, index=False)
+
+    rows = _read_csv_preserving_sequence_id(csv_path, dtype={"Sequence": int, "value": int})
+
+    assert str(rows.loc[0, "Sequence"]) == "001"
+    assert rows.loc[0, "value"] == 4
+
+
 def test_sequence_gate_fit_console_script_uses_text_id_wrapper() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
