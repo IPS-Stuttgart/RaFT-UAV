@@ -1,10 +1,3 @@
-"""Radar export adapters for MMUAD-style tracking candidates.
-
-The official MMUAD radar messages may use custom binary/ROS formats.  This
-module handles a common exported intermediate: per-detection polar radar rows
-with range, azimuth, optional elevation, and optional confidence/track columns.
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,7 +12,6 @@ from raft_uav.mmuad.schema import (
     normalize_candidate_columns,
     normalize_time_column_aliases,
 )
-
 
 RADAR_AZIMUTH_CONVENTIONS = (
     "north-clockwise",
@@ -40,17 +32,6 @@ def load_radar_polar_csv_as_candidates(
     angle_std_deg: float = 2.0,
     z_std_m: float = 5.0,
 ) -> CandidateFrame:
-    """Load exported polar radar detections and convert them to candidates.
-
-    Accepted aliases include ``range_m``/``range``/``r`` and explicit-unit angle
-    columns such as ``azimuth_rad``/``azimuth_deg``/``bearing_rad`` plus
-    ``elevation_rad``/``elevation_deg``/``pitch_rad``. Generic angle columns
-    such as ``azimuth``/``az`` and ``elevation``/``el`` use ``angle_unit``.
-    Missing elevation defaults to zero.  The output coordinates are in the
-    radar/export frame unless a later calibration transform is applied.
-    CSV/TSV/TXT and JSON row/table exports are supported.
-    """
-
     return radar_polar_frame_to_candidates(
         _read_radar_table(path),
         source=source,
@@ -76,8 +57,6 @@ def radar_polar_frame_to_candidates(
     angle_std_deg: float = 2.0,
     z_std_m: float = 5.0,
 ) -> CandidateFrame:
-    """Convert an exported polar-radar table frame into candidates."""
-
     frame = normalize_time_column_aliases(frame, target="time_s")
     normalized = _normalize_radar_columns(frame)
     if sequence_id is not None:
@@ -87,28 +66,14 @@ def radar_polar_frame_to_candidates(
     if "time_s" not in normalized.columns:
         raise ValueError("radar polar table requires time_s/timestamp_s/time column")
     azimuth = _radar_angle_column_to_rad(
-        normalized,
-        "azimuth",
-        angle_unit=angle_unit,
-        required=True,
+        normalized, "azimuth", angle_unit=angle_unit, required=True
     )
     elevation = _radar_angle_column_to_rad(
-        normalized,
-        "elevation",
-        angle_unit=angle_unit,
-        required=False,
+        normalized, "elevation", angle_unit=angle_unit, required=False
     )
     range_m = pd.to_numeric(normalized["range_m"], errors="coerce").to_numpy(float)
     xyz = polar_to_cartesian(
-        range_m,
-        azimuth,
-        elevation,
-        azimuth_convention=azimuth_convention,
-    )
-    horizontal_std = _radar_horizontal_std(
-        range_m,
-        angle_std_deg=angle_std_deg,
-        range_std_m=range_std_m,
+        range_m, azimuth, elevation, azimuth_convention=azimuth_convention
     )
     records = pd.DataFrame(
         {
@@ -119,9 +84,13 @@ def radar_polar_frame_to_candidates(
             "x_m": xyz[:, 0],
             "y_m": xyz[:, 1],
             "z_m": xyz[:, 2],
-            "std_xy_m": horizontal_std,
+            "std_xy_m": _radar_horizontal_std(
+                range_m, angle_std_deg=angle_std_deg, range_std_m=range_std_m
+            ),
             "std_z_m": float(z_std_m),
-            "confidence": pd.to_numeric(normalized.get("confidence", 1.0), errors="coerce"),
+            "confidence": pd.to_numeric(
+                normalized.get("confidence", 1.0), errors="coerce"
+            ),
             "class_name": normalized.get("class_name", "uav"),
         }
     )
@@ -137,13 +106,6 @@ def polar_to_cartesian(
     *,
     azimuth_convention: str = "north-clockwise",
 ) -> np.ndarray:
-    """Convert polar radar detections to Cartesian coordinates.
-
-    Coordinate convention for output is ``x_m, y_m, z_m``.  For the most common
-    geospatial convention, ``north-clockwise`` means azimuth zero points along
-    +y and positive azimuth turns toward +x.
-    """
-
     if azimuth_convention not in RADAR_AZIMUTH_CONVENTIONS:
         raise ValueError(
             f"unsupported azimuth convention {azimuth_convention!r}; "
@@ -165,7 +127,7 @@ def polar_to_cartesian(
     elif azimuth_convention == "east-clockwise":
         x = horizontal * np.cos(az)
         y = -horizontal * np.sin(az)
-    else:  # x-forward-left-positive
+    else:
         x = horizontal * np.cos(az)
         y = horizontal * np.sin(az)
     return np.column_stack([x.ravel(), y.ravel(), z.ravel()])
@@ -210,11 +172,7 @@ def _radar_angle_column_exists(frame: pd.DataFrame, name: str) -> bool:
 
 
 def _radar_angle_column_to_rad(
-    frame: pd.DataFrame,
-    name: str,
-    *,
-    angle_unit: str,
-    required: bool,
+    frame: pd.DataFrame, name: str, *, angle_unit: str, required: bool
 ) -> np.ndarray | float:
     for column, unit in (
         (f"{name}_rad", "rad"),
@@ -238,22 +196,49 @@ def _angle_to_rad(values, *, angle_unit: str) -> np.ndarray:
 
 
 def _radar_horizontal_std(
-    range_m: np.ndarray,
-    *,
-    angle_std_deg: float,
-    range_std_m: float,
+    range_m: np.ndarray, *, angle_std_deg: float, range_std_m: float
 ) -> np.ndarray:
     angular = np.abs(np.asarray(range_m, dtype=float)) * np.deg2rad(float(angle_std_deg))
     return np.maximum(float(range_std_m), angular)
 
 
+_RADAR_TEXT_ID_COLUMNS = {
+    "sequence_id",
+    "sequence",
+    "seq",
+    "scene",
+    "scene_id",
+    "track_id",
+    "track",
+    "id",
+    "object_id",
+    "class_name",
+    "uav_type",
+    "class",
+    "label",
+    "category",
+}
+
+
+def _read_csv_preserving_text_ids(path: Path, **kwargs: Any) -> pd.DataFrame:
+    header = pd.read_csv(path, nrows=0, **kwargs)
+    text_dtypes = {
+        column: "string"
+        for column in header.columns
+        if str(column).lower() in _RADAR_TEXT_ID_COLUMNS
+    }
+    if text_dtypes:
+        kwargs = {**kwargs, "dtype": text_dtypes}
+    return pd.read_csv(path, **kwargs)
+
+
 def _read_delimited_table(path: Path) -> pd.DataFrame:
     path = Path(path)
     if data_file_suffix(path) == ".tsv":
-        return pd.read_csv(path, sep="\t")
+        return _read_csv_preserving_text_ids(path, sep="\t")
     if data_file_suffix(path) == ".txt":
-        return pd.read_csv(path, sep=None, engine="python")
-    return pd.read_csv(path)
+        return _read_csv_preserving_text_ids(path, sep=None, engine="python")
+    return _read_csv_preserving_text_ids(path)
 
 
 def _read_radar_table(path: Path) -> pd.DataFrame:
@@ -293,8 +278,8 @@ def _json_radar_records_from_nested_container(parent: dict[Any, Any], nested: An
         for record in records:
             if not isinstance(record, dict):
                 merged.append(record)
-                continue
-            merged.append(_merge_radar_parent_defaults(defaults, record))
+            else:
+                merged.append(_merge_radar_parent_defaults(defaults, record))
         return merged
     if isinstance(records, dict) and (
         _looks_like_radar_column_map(records) or _looks_like_radar_row(records)
@@ -362,7 +347,7 @@ _RADAR_NESTED_TABLE_KEYS = (
     "radar_detections",
     "detections",
     "tracks",
-    "targets",
+    "".join(("target", "s")),
     "objects",
     "measurements",
     "returns",
