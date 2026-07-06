@@ -114,9 +114,7 @@ def write_apply_weights_outputs(
         if aggregation_policy is not None
         else weight_config.get("aggregation_policy", "weighted-mean")
     )
-    selected_trim = float(
-        trim_fraction if trim_fraction is not None else weight_config.get("trim_fraction", 0.2)
-    )
+    selected_trim = _select_trim_fraction(trim_fraction, weight_config)
     selected_max_delta = (
         max_nearest_time_delta_s
         if max_nearest_time_delta_s is not None
@@ -224,6 +222,24 @@ def _validate_weight_value(value: Any, *, label: str) -> float:
     if not np.isfinite(weight) or weight < 0.0:
         raise ValueError(f"weight for {label!r} must be finite and non-negative")
     return weight
+
+
+def _select_trim_fraction(
+    override: float | None,
+    weight_config: dict[str, Any],
+    *,
+    default: float = 0.2,
+) -> float:
+    raw_value = override if override is not None else weight_config.get("trim_fraction", default)
+    if raw_value is None:
+        raw_value = default
+    try:
+        selected = float(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("trim_fraction must be finite and in [0, 0.5)") from exc
+    if not np.isfinite(selected) or not 0.0 <= selected < 0.5:
+        raise ValueError("trim_fraction must be finite and in [0, 0.5)")
+    return selected
 
 
 def _validate_max_nearest_time_delta_s(value: Any) -> float | None:
