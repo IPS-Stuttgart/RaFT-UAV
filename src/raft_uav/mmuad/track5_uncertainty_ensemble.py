@@ -58,6 +58,11 @@ def build_track5_uncertainty_ensemble(
         raise ValueError("at least one estimate input is required")
     if template_rows.empty:
         return _empty_estimates(), _empty_diagnostics()
+    fallback_sigma_m, sigma_min_m, sigma_max_m = _validate_sigma_parameters(
+        fallback_sigma_m=fallback_sigma_m,
+        sigma_min_m=sigma_min_m,
+        sigma_max_m=sigma_max_m,
+    )
     stacked_parts: list[pd.DataFrame] = []
     input_summary: list[dict[str, Any]] = []
     for item in inputs:
@@ -71,9 +76,9 @@ def build_track5_uncertainty_ensemble(
             rows,
             template_rows,
             column=uncertainty_column,
-            fallback_sigma_m=float(fallback_sigma_m),
-            sigma_min_m=float(sigma_min_m),
-            sigma_max_m=float(sigma_max_m),
+            fallback_sigma_m=fallback_sigma_m,
+            sigma_min_m=sigma_min_m,
+            sigma_max_m=sigma_max_m,
         )
         part = resampled[["sequence_id", "time_s", "state_x_m", "state_y_m", "state_z_m"]].copy()
         part["ensemble_label"] = item.label
@@ -113,7 +118,9 @@ def build_track5_uncertainty_ensemble(
             (stacked["sequence_id"].astype(str) == sequence_id)
             & _template_time_matches(stacked["time_s"], time_s)
         ]
-        valid = rows.loc[rows["ensemble_valid"].astype(bool) & (rows["inverse_variance_weight"] > 0.0)]
+        valid = rows.loc[
+            rows["ensemble_valid"].astype(bool) & (rows["inverse_variance_weight"] > 0.0)
+        ]
         if valid.empty:
             xyz = np.asarray([np.nan, np.nan, np.nan], dtype=float)
             weight_sum = 0.0
@@ -240,8 +247,12 @@ def write_track5_uncertainty_ensemble_outputs(
         "input_summary": diagnostics.attrs.get("input_summary", []),
         "row_count": int(len(estimates)),
         "valid_ensemble_rows": int(_finite_xyz(estimates).sum()),
-        "mean_effective_sigma_m": _safe_mean(diagnostics.get("effective_sigma_m", pd.Series(dtype=float))),
-        "mean_position_spread_m": _safe_mean(diagnostics.get("position_spread_m", pd.Series(dtype=float))),
+        "mean_effective_sigma_m": _safe_mean(
+            diagnostics.get("effective_sigma_m", pd.Series(dtype=float))
+        ),
+        "mean_position_spread_m": _safe_mean(
+            diagnostics.get("position_spread_m", pd.Series(dtype=float))
+        ),
         "leaderboard_ready": bool(validation.summary.get("leaderboard_ready", False)),
         "codabench_upload_ready": bool(validation.summary.get("codabench_upload_ready", False)),
         "paths": {name: str(path) for name, path in paths.items() if name != "manifest_json"},
@@ -301,6 +312,30 @@ def main(argv: list[str] | None = None) -> int:
         reasons = ", ".join(validation.get("leaderboard_blocking_reasons", [])) or "unknown"
         raise SystemExit(f"uncertainty ensemble is not leaderboard-ready: {reasons}")
     return 0
+
+
+def _validate_sigma_parameters(
+    *,
+    fallback_sigma_m: float,
+    sigma_min_m: float,
+    sigma_max_m: float,
+) -> tuple[float, float, float]:
+    fallback = _positive_finite(fallback_sigma_m, name="fallback_sigma_m")
+    sigma_min = _positive_finite(sigma_min_m, name="sigma_min_m")
+    sigma_max = _positive_finite(sigma_max_m, name="sigma_max_m")
+    if sigma_max < sigma_min:
+        raise ValueError("sigma_max_m must be greater than or equal to sigma_min_m")
+    return fallback, sigma_min, sigma_max
+
+
+def _positive_finite(value: float, *, name: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be finite and positive") from exc
+    if not np.isfinite(parsed) or parsed <= 0.0:
+        raise ValueError(f"{name} must be finite and positive")
+    return parsed
 
 
 def _resample_uncertainty_column(

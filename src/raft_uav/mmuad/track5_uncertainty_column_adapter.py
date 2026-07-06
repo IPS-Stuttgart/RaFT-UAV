@@ -48,8 +48,7 @@ def normalize_uncertainty_estimate_inputs(
     inputs = list(estimate_inputs)
     if not inputs:
         raise ValueError("at least one estimate input is required")
-    if fallback_sigma_m <= 0.0:
-        raise ValueError("fallback_sigma_m must be positive")
+    fallback_sigma_m = _positive_finite(fallback_sigma_m, name="fallback_sigma_m")
     column_map = dict(uncertainty_columns or {})
     normalized_dir = Path(output_dir) / NORMALIZED_DIR
     normalized_dir.mkdir(parents=True, exist_ok=True)
@@ -75,7 +74,9 @@ def normalize_uncertainty_estimate_inputs(
             source = source_column
         output_csv = normalized_dir / f"{_safe_label(item.label)}.csv"
         out.to_csv(output_csv, index=False)
-        normalized_inputs.append(EstimateInput(label=item.label, path=output_csv, weight=item.weight))
+        normalized_inputs.append(
+            EstimateInput(label=item.label, path=output_csv, weight=item.weight)
+        )
         sigma = pd.to_numeric(out[output_uncertainty_column], errors="coerce")
         records.append(
             {
@@ -200,7 +201,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--template is required with --run-ensemble")
     inputs = [parse_estimate_spec(value) for value in args.estimate_csv]
     columns = _parse_uncertainty_column_map(args.uncertainty_column)
-    template = load_official_track5_template_file(args.template) if args.template is not None else None
+    template = (
+        load_official_track5_template_file(args.template) if args.template is not None else None
+    )
     class_map = load_sequence_class_map(args.class_map) if args.class_map is not None else {}
     paths = write_uncertainty_column_adapter_outputs(
         estimate_inputs=inputs,
@@ -267,6 +270,16 @@ def _select_uncertainty_column(
 def _safe_label(value: str) -> str:
     label = str(value).strip().replace(" ", "_").replace("/", "_").replace(chr(92), "_")
     return label or "estimate"
+
+
+def _positive_finite(value: float, *, name: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be finite and positive") from exc
+    if not np.isfinite(parsed) or parsed <= 0.0:
+        raise ValueError(f"{name} must be finite and positive")
+    return parsed
 
 
 def _safe_mean(values: pd.Series) -> float | None:
