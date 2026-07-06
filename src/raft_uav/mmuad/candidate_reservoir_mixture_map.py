@@ -41,6 +41,7 @@ RESERVOIR_ORACLE_FRAME_CSV = "mmuad_reservoir_mixture_oracle_frames.csv"
 RESERVOIR_ORACLE_SUMMARY_CSV = "mmuad_reservoir_mixture_oracle_summary.csv"
 RESERVOIR_ORACLE_BY_SEQUENCE_CSV = "mmuad_reservoir_mixture_oracle_by_sequence.csv"
 RESERVOIR_MIXTURE_GAP_SUMMARY_CSV = "mmuad_reservoir_mixture_gap_summary.csv"
+RESERVOIR_MIXTURE_GAP_BY_SEQUENCE_CSV = "mmuad_reservoir_mixture_gap_by_sequence.csv"
 _DEFAULT_ORACLE_TOP_K = (1, 3, 5, 10, 20)
 
 
@@ -138,6 +139,66 @@ def build_reservoir_mixture_gap_summary(
                 best_mse,
             )
     return _jsonable(record)
+
+
+def build_reservoir_mixture_gap_by_sequence(
+    *,
+    mixture_summary: dict[str, Any],
+    reservoir_oracle_by_sequence: pd.DataFrame,
+) -> pd.DataFrame:
+    """Compare mixture-vs-oracle gaps for each sequence.
+
+    The pooled gap can hide whether one sequence has a damaged reservoir ceiling
+    or whether the mixture assignment is weak across many sequences.  This table
+    makes the same assignment/oracle gap diagnostic available at sequence level.
+    """
+
+    if reservoir_oracle_by_sequence.empty:
+        return pd.DataFrame()
+    sequence_metrics = mixture_summary.get("metrics", {}).get("sequences", {})
+    records: list[dict[str, Any]] = []
+    for _, oracle_row in reservoir_oracle_by_sequence.iterrows():
+        sequence_id = str(oracle_row.get("sequence_id"))
+        metrics = sequence_metrics.get(sequence_id, {})
+        mixture_rmse = _optional_float(metrics.get("rmse_3d_m"))
+        mixture_mse = _optional_float(metrics.get("mse_3d_m2"))
+        if mixture_mse is None and mixture_rmse is not None:
+            mixture_mse = mixture_rmse * mixture_rmse
+        record: dict[str, Any] = {
+            "sequence_id": sequence_id,
+            "mixture_mse_3d_m2": mixture_mse,
+            "mixture_rmse_3d_m": mixture_rmse,
+        }
+        topk_mse_columns: list[tuple[str, float]] = []
+        for column, value in oracle_row.to_dict().items():
+            if not str(column).endswith("_mse"):
+                continue
+            oracle_mse = _optional_float(value)
+            if oracle_mse is None:
+                continue
+            label = _oracle_label_from_mse_column(str(column))
+            record[f"reservoir_oracle_{label}_mse_3d_m2"] = oracle_mse
+            if mixture_mse is not None:
+                record[f"gap_to_oracle_{label}_mse_3d_m2"] = mixture_mse - oracle_mse
+                record[f"ratio_to_oracle_{label}_mse"] = _safe_ratio(mixture_mse, oracle_mse)
+            if label.startswith("top"):
+                topk_mse_columns.append((label, oracle_mse))
+        all_mse = _optional_float(record.get("reservoir_oracle_all_mse_3d_m2"))
+        if mixture_mse is not None and all_mse is not None:
+            record["assignment_gap_mse_3d_m2"] = mixture_mse - all_mse
+            record["assignment_gap_ratio"] = _safe_ratio(mixture_mse, all_mse)
+        if topk_mse_columns:
+            best_label, best_mse = min(topk_mse_columns, key=lambda item: item[1])
+            record["best_reservoir_oracle_topk"] = best_label
+            record["best_reservoir_oracle_topk_mse_3d_m2"] = best_mse
+            if mixture_mse is not None:
+                record["gap_to_best_reservoir_oracle_topk_mse_3d_m2"] = mixture_mse - best_mse
+                record["ratio_to_best_reservoir_oracle_topk_mse"] = _safe_ratio(
+                    mixture_mse,
+                    best_mse,
+                )
+        records.append(_jsonable(record))
+    return pd.DataFrame.from_records(records)
 
 
 def write_reservoir_mixture_map_outputs(
@@ -260,6 +321,11 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="optional mixture-vs-reservoir-oracle gap summary",
     )
+    parser.add_argument(
+        "--reservoir-mixture-gap-by-sequence-csv",
+        type=Path,
+        help="optional per-sequence mixture-vs-reservoir-oracle gap summary",
+    )
     parser.add_argument("--oracle-top-k", type=int, action="append", default=None)
     parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
     args = parser.parse_args(argv)
@@ -330,7 +396,18 @@ def main(argv: list[str] | None = None) -> int:
             mixture_summary=result.summary,
             reservoir_oracle_summary=pooled,
         )
+        gap_by_sequence = build_reservoir_mixture_gap_by_sequence(
+            mixture_summary=result.summary,
+            reservoir_oracle_by_sequence=by_sequence,
+        )
         summary["reservoir_mixture_gap"] = gap_summary
+        summary["reservoir_mixture_gap_by_sequence"] = {
+            "sequence_count": int(len(gap_by_sequence)),
+            "worst_assignment_gap": _max_record(
+                gap_by_sequence,
+                "assignment_gap_mse_3d_m2",
+            ),
+        }
         frame_path = args.reservoir_oracle_frame_csv or args.output_dir / RESERVOIR_ORACLE_FRAME_CSV
         pooled_path = args.reservoir_oracle_summary_csv or args.output_dir / RESERVOIR_ORACLE_SUMMARY_CSV
         by_sequence_path = (
@@ -341,15 +418,21 @@ def main(argv: list[str] | None = None) -> int:
             args.reservoir_mixture_gap_summary_csv
             or args.output_dir / RESERVOIR_MIXTURE_GAP_SUMMARY_CSV
         )
+        gap_by_sequence_path = (
+            args.reservoir_mixture_gap_by_sequence_csv
+            or args.output_dir / RESERVOIR_MIXTURE_GAP_BY_SEQUENCE_CSV
+        )
         _write_frame(frame_rows, frame_path)
         _write_frame(pooled, pooled_path)
         _write_frame(by_sequence, by_sequence_path)
         _write_frame(pd.DataFrame.from_records([gap_summary]), gap_path)
+        _write_frame(gap_by_sequence, gap_by_sequence_path)
         diagnostic_paths = {
             "reservoir_oracle_frame_csv": frame_path,
             "reservoir_oracle_summary_csv": pooled_path,
             "reservoir_oracle_by_sequence_csv": by_sequence_path,
             "reservoir_mixture_gap_summary_csv": gap_path,
+            "reservoir_mixture_gap_by_sequence_csv": gap_by_sequence_path,
         }
     class_map = load_sequence_class_map(args.class_map) if args.class_map is not None else {}
     paths = write_reservoir_mixture_map_outputs(
@@ -383,6 +466,15 @@ def _first_record(frame: pd.DataFrame) -> dict[str, Any]:
     if frame.empty:
         return {}
     return _jsonable(frame.iloc[0].to_dict())
+
+
+def _max_record(frame: pd.DataFrame, column: str) -> dict[str, Any]:
+    if frame.empty or column not in frame.columns:
+        return {}
+    values = pd.to_numeric(frame[column], errors="coerce")
+    if values.dropna().empty:
+        return {}
+    return _jsonable(frame.loc[int(values.idxmax())].to_dict())
 
 
 def _oracle_label_from_mse_column(column: str) -> str:
