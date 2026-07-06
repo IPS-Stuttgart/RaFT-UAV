@@ -302,7 +302,25 @@ def _numeric_column(rows: pd.DataFrame, column: str) -> pd.Series:
 def _bool_column(rows: pd.DataFrame, column: str) -> pd.Series:
     if column not in rows.columns:
         return pd.Series([False] * len(rows), index=rows.index, dtype=bool)
-    return pd.Series(rows[column]).fillna(False).astype(bool)
+    values = pd.Series(rows[column], index=rows.index)
+    if values.dtype == bool:
+        return values.fillna(False).astype(bool)
+    if pd.api.types.is_numeric_dtype(values):
+        return values.fillna(0).astype(float).ne(0.0)
+    return values.fillna(False).map(_bool_value)
+
+
+def _bool_value(value: Any) -> bool:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    try:
+        missing = pd.isna(value)
+    except TypeError:
+        missing = False
+    if isinstance(missing, bool) and missing:
+        return False
+    text = str(value).strip().lower()
+    return text in {"1", "true", "yes", "y"}
 
 
 def _parse_text_list(values: list[str]) -> tuple[str, ...]:
@@ -325,8 +343,24 @@ def _parse_optional_float_list(values: list[str]) -> tuple[float | None, ...]:
             if text in {"none", "null", "off", "inf"}:
                 parsed.append(None)
             else:
-                parsed.append(float(text))
+                parsed.append(_parse_nonnegative_finite_gap(text))
     return tuple(parsed or [None])
+
+
+def _parse_nonnegative_finite_gap(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise ValueError(
+            "max_interpolation_gap_s values must be finite non-negative numbers "
+            "or one of none/null/off/inf"
+        ) from exc
+    if not np.isfinite(value) or value < 0.0:
+        raise ValueError(
+            "max_interpolation_gap_s values must be finite non-negative numbers "
+            "or one of none/null/off/inf"
+        )
+    return value
 
 
 def _normalized_choices(
