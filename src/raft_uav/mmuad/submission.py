@@ -342,6 +342,66 @@ def _normalize_official_track5_results_frame_with_domain(frame: Any) -> Any:
     return normalized
 
 
+def _estimates_to_official_mmaud_results_frame_without_drop_alignment_bug(
+    estimates: Any,
+    *,
+    classification: int | str = 0,
+    class_map: dict[str, str] | None = None,
+    invalid_row_policy: str = "raise",
+) -> Any:
+    """Convert estimates while preserving row alignment after dropping non-finite rows."""
+
+    policy = _impl._normalize_official_invalid_row_policy(invalid_row_policy)
+    if estimates.empty:
+        return _impl.pd.DataFrame(columns=_impl.OFFICIAL_UG2_RESULT_COLUMNS)
+    x_column, y_column, z_column = _impl._estimate_coordinate_columns(estimates)
+    time_values = _impl._estimate_time_values(estimates)
+    sequence_values = _impl._estimate_sequence_values(estimates)
+    classification_values = _impl._estimate_classification_values(
+        estimates,
+        sequence_values=sequence_values,
+        default_classification=classification,
+        class_map=class_map,
+    )
+    numeric = _impl.pd.DataFrame(
+        {
+            "Timestamp": time_values,
+            "x": _impl.pd.to_numeric(estimates[x_column], errors="coerce"),
+            "y": _impl.pd.to_numeric(estimates[y_column], errors="coerce"),
+            "z": _impl.pd.to_numeric(estimates[z_column], errors="coerce"),
+            "Classification": classification_values,
+        },
+        index=estimates.index,
+    )
+    finite = _impl.np.isfinite(
+        numeric[["Timestamp", "x", "y", "z"]].to_numpy(dtype=float)
+    ).all(axis=1)
+    if not finite.all() and policy == "raise":
+        _impl._raise_nonfinite_official_estimate_rows(numeric, finite)
+    work_sequences = sequence_values.loc[finite]
+    numeric = numeric.loc[finite]
+    rows = _impl.pd.DataFrame(
+        {
+            "Sequence": work_sequences.astype(str),
+            "Timestamp": numeric["Timestamp"].astype(float),
+            "Position": [
+                _impl._format_official_position(x, y, z)
+                for x, y, z in zip(
+                    numeric["x"],
+                    numeric["y"],
+                    numeric["z"],
+                    strict=False,
+                )
+            ],
+            "Classification": numeric["Classification"].astype(int),
+        },
+        index=numeric.index,
+    )
+    return rows[list(_impl.OFFICIAL_UG2_RESULT_COLUMNS)].sort_values(
+        ["Sequence", "Timestamp"]
+    ).reset_index(drop=True)
+
+
 def _official_track5_row_diagnostics_with_domain(frame: Any) -> tuple[Any, Any]:
     """Mark out-of-domain Track 5 classifications invalid during validation."""
 
@@ -396,6 +456,9 @@ _impl._read_official_track5_results_input = (
 _impl.normalize_official_track5_results_frame = (
     _normalize_official_track5_results_frame_with_domain
 )
+_impl.estimates_to_official_mmaud_results_frame = (
+    _estimates_to_official_mmaud_results_frame_without_drop_alignment_bug
+)
 _impl._official_track5_row_diagnostics = _official_track5_row_diagnostics_with_domain
 _impl.validate_official_track5_submission = (
     _validate_official_track5_submission_with_text_sequences
@@ -413,6 +476,9 @@ load_sequence_class_map = _load_sequence_class_map_with_official_sequences
 load_official_track5_template_file = _load_official_track5_template_file_with_text_sequences
 normalize_official_track5_results_frame = (
     _normalize_official_track5_results_frame_with_domain
+)
+estimates_to_official_mmaud_results_frame = (
+    _estimates_to_official_mmaud_results_frame_without_drop_alignment_bug
 )
 validate_official_track5_submission = (
     _validate_official_track5_submission_with_text_sequences
