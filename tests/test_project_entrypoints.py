@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import importlib
 import re
-import sys
 import tomllib
 from pathlib import Path
 
@@ -14,8 +14,7 @@ def _project_scripts() -> dict[str, str]:
 def _assert_entrypoint_target_imports(script_name: str) -> None:
     module_name, function_name = _project_scripts()[script_name].split(":", 1)
 
-    __import__(module_name)
-    module = sys.modules[module_name]
+    module = importlib.import_module(module_name)
 
     assert callable(getattr(module, function_name))
 
