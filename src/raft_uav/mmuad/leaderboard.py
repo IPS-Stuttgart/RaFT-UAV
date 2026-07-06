@@ -95,11 +95,13 @@ def leaderboard_entries_from_config(
         _first_config_value(payload, ("default_metric_protocol",), "public-track5")
     )
     default_class_map = _first_config_value(payload, ("default_class_map", "class_map"))
-    default_time_delta = float(
-        _first_config_value(payload, ("default_max_time_delta_s",), 0.5)
+    default_time_delta = _nonnegative_finite_config_float(
+        _first_config_value(payload, ("default_max_time_delta_s",), 0.5),
+        "default_max_time_delta_s",
     )
-    default_tolerance = float(
-        _first_config_value(payload, ("default_timestamp_tolerance_s",), 1.0e-6)
+    default_tolerance = _nonnegative_finite_config_float(
+        _first_config_value(payload, ("default_timestamp_tolerance_s",), 1.0e-6),
+        "default_timestamp_tolerance_s",
     )
 
     entries: list[LeaderboardEntry] = []
@@ -113,20 +115,28 @@ def leaderboard_entries_from_config(
         truth_value = _first_config_value(raw, ("truth", "truth_csv", "truth_file"), default_truth)
         if _is_missing_config_value(truth_value):
             raise ValueError(f"leaderboard entry {method!r} is missing truth/default_truth")
-        class_map_value = _first_config_value(raw, ("class_map", "class_map_csv"), default_class_map)
+        class_map_value = _first_config_value(
+            raw,
+            ("class_map", "class_map_csv"),
+            default_class_map,
+        )
         entries.append(
             LeaderboardEntry(
                 method=method,
                 results_path=_resolve_config_path(base, result_value),
                 truth_path=_resolve_config_path(base, truth_value),
-                metric_protocol=str(_first_config_value(raw, ("metric_protocol",), default_protocol)),
+                metric_protocol=str(
+                    _first_config_value(raw, ("metric_protocol",), default_protocol)
+                ),
                 source_note=str(_first_config_value(raw, ("source_note", "note"), "")),
                 class_map_path=_optional_config_path(base, class_map_value),
-                max_time_delta_s=float(
-                    _first_config_value(raw, ("max_time_delta_s",), default_time_delta)
+                max_time_delta_s=_nonnegative_finite_config_float(
+                    _first_config_value(raw, ("max_time_delta_s",), default_time_delta),
+                    f"entry {method!r} max_time_delta_s",
                 ),
-                timestamp_tolerance_s=float(
-                    _first_config_value(raw, ("timestamp_tolerance_s",), default_tolerance)
+                timestamp_tolerance_s=_nonnegative_finite_config_float(
+                    _first_config_value(raw, ("timestamp_tolerance_s",), default_tolerance),
+                    f"entry {method!r} timestamp_tolerance_s",
                 ),
             )
         )
@@ -170,7 +180,11 @@ def rank_leaderboard_frame(
     if frame.empty:
         return frame.assign(rank=[])
     work = frame.copy()
-    metric = rank_metric if _column_has_finite_values(work, rank_metric) else _fallback_rank_metric(work)
+    metric = (
+        rank_metric
+        if _column_has_finite_values(work, rank_metric)
+        else _fallback_rank_metric(work)
+    )
     sort_columns = [metric]
     ascending = [True]
     for candidate, asc in (
@@ -371,6 +385,20 @@ def _optional_config_path(base: Path, value: Any) -> Path | None:
     if _is_missing_config_value(value):
         return None
     return _resolve_config_path(base, value)
+
+
+def _nonnegative_finite_config_float(value: Any, field: str) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"leaderboard config {field} must be a finite non-negative number"
+        ) from exc
+    if not np.isfinite(numeric) or numeric < 0.0:
+        raise ValueError(
+            f"leaderboard config {field} must be a finite non-negative number"
+        )
+    return numeric
 
 
 def _is_missing_config_value(value: Any) -> bool:
