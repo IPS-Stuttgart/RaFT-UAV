@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -24,6 +25,8 @@ def main() -> int:
     parser.add_argument("--atol", type=float, default=1.0e-9)
     parser.add_argument("--fail-on-difference", action="store_true")
     args = parser.parse_args()
+    if not math.isfinite(args.atol) or args.atol < 0.0:
+        parser.error("--atol must be finite and non-negative")
 
     estimates_a = pd.read_csv(args.run_a / "estimates.csv")
     estimates_b = pd.read_csv(args.run_b / "estimates.csv")
