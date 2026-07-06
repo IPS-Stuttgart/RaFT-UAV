@@ -6,8 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-import pandas as pd
-
+from raft_uav.mmuad.csv_text import read_csv_preserving_sequence_ids
 from raft_uav.mmuad.submission import load_official_track5_template_file, load_sequence_class_map
 from raft_uav.mmuad.track5_template_resample import (
     CLASSIFICATION_POLICIES,
@@ -41,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-leaderboard-ready", action="store_true")
     args = parser.parse_args(argv)
 
-    estimates = pd.read_csv(args.estimates_csv, dtype=str, keep_default_na=False)
+    estimates = read_csv_preserving_sequence_ids(args.estimates_csv, keep_default_na=False)
     template = load_official_track5_template_file(args.template)
     class_map = load_sequence_class_map(args.class_map) if args.class_map is not None else {}
     paths = write_track5_template_resample_outputs(
