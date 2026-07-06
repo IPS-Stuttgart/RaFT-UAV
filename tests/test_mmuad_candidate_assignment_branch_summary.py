@@ -49,6 +49,10 @@ def test_branch_summary_groups_by_oracle_and_dominant_branch() -> None:
     ].iloc[0]
     assert pooled["frame_count"] == 4
     assert pooled["dominant_matches_oracle_rate"] == 0.5
+    assert pooled["state_vs_oracle_mse_gap"] > 0.0
+    assert pooled["dominant_vs_oracle_mse_gap"] > 0.0
+    assert pooled["oracle_weight_deficit_mean"] == 1.0 - pooled["oracle_mixture_weight_mean"]
+    assert pooled["assignment_priority_score"] > 0.0
     buried = summary.loc[
         (summary["sequence_id"] == "__pooled__")
         & (summary["assignment_failure_mode"] == "good_candidate_buried")
@@ -57,6 +61,9 @@ def test_branch_summary_groups_by_oracle_and_dominant_branch() -> None:
     ].iloc[0]
     assert buried["frame_count"] == 1
     assert buried["oracle_mixture_weight_mean"] == 0.02
+    assert buried["oracle_weight_deficit_mean"] == 0.98
+    assert buried["state_vs_oracle_mse_gap"] > 90.0
+    assert buried["assignment_priority_score"] > 0.0
     assert buried["dominant_source"] == "radar"
 
 
@@ -79,6 +86,9 @@ def test_branch_summary_cli_writes_artifacts(tmp_path: Path) -> None:
     summary_json = output_dir / "mmuad_candidate_assignment_branch_summary.json"
     assert summary_csv.exists()
     assert summary_json.exists()
+    written = pd.read_csv(summary_csv)
+    assert "assignment_priority_score" in written.columns
+    assert "state_vs_oracle_mse_gap" in written.columns
     payload = json.loads(summary_json.read_text(encoding="utf-8"))
     assert payload["schema"] == "raft-uav-mmuad-candidate-assignment-branch-summary-v1"
-    assert payload["row_count"] == len(pd.read_csv(summary_csv))
+    assert payload["row_count"] == len(written)
