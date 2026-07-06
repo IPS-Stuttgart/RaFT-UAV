@@ -90,7 +90,9 @@ def snap_official_results_to_template(
                 max_interpolation_gap_s=max_gap_s,
             )
             classification = _resampled_classification(
-                source, timestamp, classification_policy=class_policy
+                _template_time_sampling_rows(source),
+                timestamp,
+                classification_policy=class_policy,
             )
             diagnostic = _diagnostic_record(
                 template_index=template_index,
@@ -119,6 +121,12 @@ def snap_official_results_to_template(
         pd.DataFrame.from_records(outputs, columns=list(OFFICIAL_UG2_RESULT_COLUMNS)),
         pd.DataFrame.from_records(diagnostics, columns=list(DIAGNOSTIC_COLUMNS)),
     )
+
+
+def _template_time_sampling_rows(rows: pd.DataFrame) -> pd.DataFrame:
+    """Return the source-row view used for template-time nearest sampling."""
+
+    return rows.sort_values("Timestamp").drop_duplicates("Timestamp", keep="last")
 
 
 def _template_classification_by_key(template: pd.DataFrame) -> dict[tuple[str, float], int]:
