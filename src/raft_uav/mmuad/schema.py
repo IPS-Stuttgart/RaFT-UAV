@@ -385,10 +385,9 @@ def _time_alias_series(
         nanoseconds_col = lower_to_original.get(nanoseconds_alias)
         if seconds_col is None or nanoseconds_col is None:
             continue
-        candidates.append(
-            pd.to_numeric(frame[seconds_col], errors="coerce")
-            + pd.to_numeric(frame[nanoseconds_col], errors="coerce") * 1.0e-9
-        )
+        seconds = pd.to_numeric(frame[seconds_col], errors="coerce")
+        nanoseconds = pd.to_numeric(frame[nanoseconds_col], errors="coerce").fillna(0.0)
+        candidates.append(seconds + nanoseconds * 1.0e-9)
     for alias, scale in _TIME_UNIT_ALIASES.items():
         original = lower_to_original.get(alias)
         if original is not None:
@@ -439,7 +438,8 @@ def _stamp_dict_to_seconds(value: Any) -> float | None:
     )
     if seconds is not None:
         try:
-            return float(seconds) + float(nanoseconds or 0.0) * 1.0e-9
+            nanosecond_value = 0.0 if _is_json_missing_scalar(nanoseconds) else float(nanoseconds)
+            return float(seconds) + nanosecond_value * 1.0e-9
         except (TypeError, ValueError):
             return None
 

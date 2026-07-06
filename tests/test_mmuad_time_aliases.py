@@ -54,6 +54,35 @@ def test_header_stamp_dict_unit_timestamp_aliases_are_scaled_to_seconds() -> Non
     assert normalized["time_s"].tolist() == [1.5, 2.5, 3.0]
 
 
+def test_second_fraction_pair_aliases_keep_valid_integer_seconds() -> None:
+    frame = pd.DataFrame(
+        {
+            "timestamp_sec": [10, 11, None],
+            "timestamp_nanosec": [pd.NA, pd.NA, 500_000_000],
+        }
+    )
+
+    normalized = normalize_time_column_aliases(frame)
+
+    assert normalized["time_s"].iloc[:2].tolist() == [10.0, 11.0]
+    assert pd.isna(normalized["time_s"].iloc[2])
+
+
+def test_stamp_dict_aliases_keep_valid_integer_seconds() -> None:
+    frame = pd.DataFrame(
+        {
+            "stamp": [
+                {"sec": 12, "nanosec": pd.NA},
+                {"stamp": {"secs": 13, "nsecs": pd.NA}},
+            ]
+        }
+    )
+
+    normalized = normalize_time_column_aliases(frame)
+
+    assert normalized["time_s"].tolist() == [12.0, 13.0]
+
+
 def test_existing_time_s_is_filled_rowwise_from_timestamp_aliases() -> None:
     frame = pd.DataFrame(
         {
