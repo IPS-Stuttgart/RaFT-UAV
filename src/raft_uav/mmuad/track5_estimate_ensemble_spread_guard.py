@@ -52,13 +52,17 @@ def build_spread_guarded_estimate_ensemble(
     spread_threshold_m: float,
     fallback_policy: str = "max-weight",
     fallback_label: str | None = None,
+    fallback_blend: float = 0.0,
     max_nearest_time_delta_s: float | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return spread-guarded Track 5 estimates and diagnostics.
 
     The normal output is the weighted mean over valid inputs.  If the weighted
     mean spread exceeds ``spread_threshold_m``, the output falls back to one
-    resampled input selected by ``fallback_policy``.
+    resampled input selected by ``fallback_policy``.  ``fallback_blend`` can keep
+    a controlled fraction of the weighted mean on guarded rows, which is useful
+    when the fallback branch is trusted but the ensemble mean still contains
+    small corrective signal.
     """
 
     threshold = float(spread_threshold_m)
@@ -68,6 +72,7 @@ def build_spread_guarded_estimate_ensemble(
         raise ValueError(f"fallback_policy must be one of: {', '.join(FALLBACK_POLICIES)}")
     if fallback_policy == "label" and not fallback_label:
         raise ValueError("fallback_label is required when fallback_policy='label'")
+    fallback_blend = _validate_blend(fallback_blend)
     template_rows = _normalize_template_rows(template)
     loaded_inputs = tuple(estimate_inputs)
     if not loaded_inputs:
@@ -106,6 +111,7 @@ def build_spread_guarded_estimate_ensemble(
             & _template_time_matches(stacked["time_s"], time_s)
         ]
         valid = rows.loc[rows["input_valid"].astype(bool) & (rows["input_weight"] > 0.0)]
+        fallback_xyz = np.asarray([np.nan, np.nan, np.nan], dtype=float)
         if valid.empty:
             xyz = np.asarray([np.nan, np.nan, np.nan], dtype=float)
             weighted_xyz = xyz.copy()
@@ -125,7 +131,12 @@ def build_spread_guarded_estimate_ensemble(
                     fallback_label=fallback_label,
                     input_order=input_order,
                 )
-                xyz = chosen[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
+                fallback_xyz = chosen[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
+                xyz = fallback_xyz
+                if fallback_blend > 0.0:
+                    xyz = ((1.0 - fallback_blend) * fallback_xyz) + (
+                        fallback_blend * weighted_xyz
+                    )
                 chosen_label = str(chosen["input_label"])
             else:
                 xyz = weighted_xyz
@@ -141,6 +152,7 @@ def build_spread_guarded_estimate_ensemble(
                 "state_z_m": float(xyz[2]) if np.isfinite(xyz[2]) else np.nan,
                 "spread_guard_applied": bool(guard_applied),
                 "spread_guard_threshold_m": threshold,
+                "spread_guard_fallback_blend": fallback_blend,
                 "ensemble_position_spread_m": spread,
                 "spread_guard_chosen_label": chosen_label,
             }
@@ -156,9 +168,13 @@ def build_spread_guarded_estimate_ensemble(
                 "weighted_x_m": float(weighted_xyz[0]) if np.isfinite(weighted_xyz[0]) else np.nan,
                 "weighted_y_m": float(weighted_xyz[1]) if np.isfinite(weighted_xyz[1]) else np.nan,
                 "weighted_z_m": float(weighted_xyz[2]) if np.isfinite(weighted_xyz[2]) else np.nan,
+                "fallback_x_m": float(fallback_xyz[0]) if np.isfinite(fallback_xyz[0]) else np.nan,
+                "fallback_y_m": float(fallback_xyz[1]) if np.isfinite(fallback_xyz[1]) else np.nan,
+                "fallback_z_m": float(fallback_xyz[2]) if np.isfinite(fallback_xyz[2]) else np.nan,
                 "position_spread_m": spread,
                 "spread_guard_applied": bool(guard_applied),
                 "spread_guard_policy": fallback_policy,
+                "spread_guard_fallback_blend": fallback_blend,
                 "spread_guard_chosen_label": chosen_label,
             }
         )
@@ -175,6 +191,7 @@ def write_spread_guard_outputs(
     spread_threshold_m: float,
     fallback_policy: str = "max-weight",
     fallback_label: str | None = None,
+    fallback_blend: float = 0.0,
     max_nearest_time_delta_s: float | None = None,
     class_map: dict[str, str] | None = None,
     default_classification: int | str = 0,
@@ -193,6 +210,7 @@ def write_spread_guard_outputs(
         spread_threshold_m=spread_threshold_m,
         fallback_policy=fallback_policy,
         fallback_label=fallback_label,
+        fallback_blend=fallback_blend,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
     )
     paths = {
@@ -237,6 +255,7 @@ def write_spread_guard_outputs(
         "spread_threshold_m": float(spread_threshold_m),
         "fallback_policy": fallback_policy,
         "fallback_label": fallback_label,
+        "fallback_blend": _validate_blend(fallback_blend),
         "max_nearest_time_delta_s": max_nearest_time_delta_s,
         "row_count": int(len(estimates)),
         "guard_applied_rows": int(estimates["spread_guard_applied"].astype(bool).sum()),
@@ -271,6 +290,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--spread-threshold-m", type=float, required=True)
     parser.add_argument("--fallback-policy", choices=FALLBACK_POLICIES, default="max-weight")
     parser.add_argument("--fallback-label")
+    parser.add_argument(
+        "--fallback-blend",
+        type=float,
+        default=0.0,
+        help="fraction of weighted-mean position retained on guarded fallback rows",
+    )
     parser.add_argument("--max-nearest-time-delta-s", type=float)
     parser.add_argument("--class-map", type=Path)
     parser.add_argument("--default-classification", default="0")
@@ -288,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
         spread_threshold_m=float(args.spread_threshold_m),
         fallback_policy=args.fallback_policy,
         fallback_label=args.fallback_label,
+        fallback_blend=float(args.fallback_blend),
         max_nearest_time_delta_s=args.max_nearest_time_delta_s,
         class_map=class_map,
         default_classification=args.default_classification,
@@ -375,6 +401,13 @@ def _validate_weight(weight: float, *, label: str) -> float:
     if not np.isfinite(value) or value < 0.0:
         raise ValueError(f"estimate weight for {label} must be finite and non-negative")
     return value
+
+
+def _validate_blend(value: float) -> float:
+    blend = float(value)
+    if not np.isfinite(blend) or not 0.0 <= blend <= 1.0:
+        raise ValueError("fallback_blend must be finite and within [0, 1]")
+    return blend
 
 
 def _weighted_spread_m(xyz: np.ndarray, weights: np.ndarray, center: np.ndarray) -> float:
