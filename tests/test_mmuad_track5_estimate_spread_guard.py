@@ -90,6 +90,42 @@ def test_spread_guard_uses_weighted_mean_below_threshold() -> None:
     assert first["state_x_m"] == pytest.approx(20.0)
 
 
+def test_spread_guard_fallback_blend_keeps_controlled_weighted_mean_fraction() -> None:
+    estimates, diagnostics = build_spread_guarded_estimate_ensemble(
+        [
+            ("trusted", _trusted_estimate(), 0.6),
+            ("outlier", _outlier_estimate(), 0.4),
+        ],
+        _template(),
+        spread_threshold_m=5.0,
+        fallback_policy="max-weight",
+        fallback_blend=0.25,
+    )
+
+    first = estimates.loc[
+        (estimates["sequence_id"] == "seq0001") & (estimates["time_s"] == 0.0)
+    ].iloc[0]
+    first_diag = diagnostics.loc[
+        (diagnostics["sequence_id"] == "seq0001") & (diagnostics["time_s"] == 0.0)
+    ].iloc[0]
+    # Weighted mean is 20 m and fallback is 0 m, so a 25% blend outputs 5 m.
+    assert bool(first["spread_guard_applied"])
+    assert first["state_x_m"] == pytest.approx(5.0)
+    assert first["spread_guard_fallback_blend"] == pytest.approx(0.25)
+    assert first_diag["fallback_x_m"] == pytest.approx(0.0)
+    assert first_diag["weighted_x_m"] == pytest.approx(20.0)
+
+
+def test_spread_guard_rejects_invalid_fallback_blend() -> None:
+    with pytest.raises(ValueError, match="fallback_blend"):
+        build_spread_guarded_estimate_ensemble(
+            [("trusted", _trusted_estimate(), 1.0)],
+            _template(),
+            spread_threshold_m=5.0,
+            fallback_blend=1.5,
+        )
+
+
 def test_spread_guard_writes_leaderboard_ready_artifacts(tmp_path: Path) -> None:
     trusted_csv = tmp_path / "trusted.csv"
     outlier_csv = tmp_path / "outlier.csv"
@@ -103,6 +139,7 @@ def test_spread_guard_writes_leaderboard_ready_artifacts(tmp_path: Path) -> None
         template=_template(),
         output_dir=tmp_path / "out",
         spread_threshold_m=5.0,
+        fallback_blend=0.25,
         class_map={"seq0001": "2", "seq0002": "1"},
     )
 
@@ -112,6 +149,7 @@ def test_spread_guard_writes_leaderboard_ready_artifacts(tmp_path: Path) -> None
     assert validation["leaderboard_ready"] is True
     assert validation["codabench_upload_ready"] is True
     assert manifest["guard_applied_rows"] == 3
+    assert manifest["fallback_blend"] == pytest.approx(0.25)
     with ZipFile(paths["official_zip"]) as archive:
         assert archive.namelist() == ["mmaud_results.csv"]
     official = pd.read_csv(paths["official_results_csv"])
@@ -146,6 +184,8 @@ def test_spread_guard_cli_writes_outputs(tmp_path: Path) -> None:
             str(output_dir),
             "--spread-threshold-m",
             "5",
+            "--fallback-blend",
+            "0.25",
             "--require-leaderboard-ready",
         ]
     )
@@ -153,6 +193,8 @@ def test_spread_guard_cli_writes_outputs(tmp_path: Path) -> None:
     assert status == 0
     assert (output_dir / "ug2_submission.zip").exists()
     assert (output_dir / "mmuad_track5_spread_guard_manifest.json").exists()
+    diagnostics = pd.read_csv(output_dir / "mmuad_track5_spread_guard_diagnostics.csv")
+    assert diagnostics["spread_guard_fallback_blend"].eq(0.25).all()
 
 
 def test_spread_guard_entrypoint_is_exposed() -> None:
