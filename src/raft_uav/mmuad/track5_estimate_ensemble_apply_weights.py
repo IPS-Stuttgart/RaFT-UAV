@@ -28,22 +28,10 @@ def load_ensemble_weight_config(path: Path) -> dict[str, Any]:
     """Load and validate an ensemble-weight-search JSON config."""
 
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    weights = payload.get("weights")
-    if not isinstance(weights, dict) or not weights:
+    raw_weights = payload.get("weights")
+    if not isinstance(raw_weights, dict) or not raw_weights:
         raise ValueError("weight config must contain a non-empty 'weights' object")
-    parsed_weights: dict[str, float] = {}
-    original_labels: dict[str, str] = {}
-    for label, value in weights.items():
-        safe_label = _safe_label(str(label))
-        if safe_label in parsed_weights:
-            previous = original_labels[safe_label]
-            raise ValueError(
-                "weight config labels must be unique after normalization; "
-                f"{previous!r} and {str(label)!r} both map to {safe_label!r}"
-            )
-        weight = _validate_weight_value(value, label=safe_label)
-        parsed_weights[safe_label] = weight
-        original_labels[safe_label] = str(label)
+    parsed_weights = _normalize_weight_mapping(raw_weights)
     total = sum(parsed_weights.values())
     if total <= 0.0:
         raise ValueError("weight config sum must be positive")
@@ -65,10 +53,7 @@ def apply_ensemble_weight_config(
     raw_weights = weight_config.get("weights", {})
     if not isinstance(raw_weights, dict):
         raise ValueError("weight config weights must be a mapping")
-    weights = {
-        _safe_label(str(key)): _validate_weight_value(value, label=_safe_label(str(key)))
-        for key, value in raw_weights.items()
-    }
+    weights = _normalize_weight_mapping(raw_weights)
     if not weights:
         raise ValueError("weight config has no weights")
     if missing_weight_policy == "default":
@@ -212,6 +197,22 @@ def main(argv: list[str] | None = None) -> int:
 def _safe_label(value: str) -> str:
     label = str(value).strip().replace(" ", "_").replace("/", "_").replace("\\", "_")
     return label or "estimate"
+
+
+def _normalize_weight_mapping(raw_weights: dict[str, Any]) -> dict[str, float]:
+    parsed_weights: dict[str, float] = {}
+    original_labels: dict[str, str] = {}
+    for label, value in raw_weights.items():
+        safe_label = _safe_label(str(label))
+        if safe_label in parsed_weights:
+            previous = original_labels[safe_label]
+            raise ValueError(
+                "weight config labels must be unique after normalization; "
+                f"{previous!r} and {str(label)!r} both map to {safe_label!r}"
+            )
+        parsed_weights[safe_label] = _validate_weight_value(value, label=safe_label)
+        original_labels[safe_label] = str(label)
+    return parsed_weights
 
 
 def _validate_weight_value(value: Any, *, label: str) -> float:
