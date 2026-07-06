@@ -178,11 +178,13 @@ def match_submission_to_truth(
 ) -> pd.DataFrame:
     """Nearest-time match submission rows to truth rows within each sequence.
 
-    When truth has a ``track_id`` column and the submitted track IDs overlap, the
-    match is restricted to the same track ID.  Otherwise a single-UAV style
-    sequence-level nearest-time match is used.  Each truth row can be consumed at
-    most once so duplicate predictions are counted as unmatched predictions
-    instead of inflating the matched trajectory count.
+    When truth has valid ``track_id`` values and the submitted track IDs overlap,
+    the match is restricted to the same track ID.  Multi-track sequences also
+    require valid submitted IDs even if no submitted ID overlaps, so all-wrong
+    multi-target IDs cannot be credited via sequence-level nearest-time matching.
+    Single-target rows with non-overlapping IDs retain the legacy fallback.  Each
+    truth row can be consumed at most once so duplicate predictions are counted
+    as unmatched predictions instead of inflating the matched trajectory count.
     """
 
     if truth.empty or submission.empty:
@@ -206,8 +208,9 @@ def match_submission_to_truth(
             continue
         truth_track_ids = _track_ids(truth_seq) if "track_id" in truth_seq.columns else set()
         submitted_track_ids = _track_ids(pred_seq) if "track_id" in pred_seq.columns else set()
-        restrict_to_track_id = bool(
-            truth_track_ids and truth_track_ids.intersection(submitted_track_ids)
+        restrict_to_track_id = _should_restrict_to_track_id(
+            truth_track_ids,
+            submitted_track_ids,
         )
         used_truth_indices: set[Any] = set()
         for _, pred in pred_seq.iterrows():
@@ -351,6 +354,19 @@ def _track_ids(frame: pd.DataFrame) -> set[str]:
         if track_id is not None:
             track_ids.add(track_id)
     return track_ids
+
+
+def _should_restrict_to_track_id(
+    truth_track_ids: set[str],
+    submitted_track_ids: set[str],
+) -> bool:
+    """Return whether track IDs should gate matching for one sequence."""
+
+    if not truth_track_ids or not submitted_track_ids:
+        return False
+    if truth_track_ids.intersection(submitted_track_ids):
+        return True
+    return len(truth_track_ids) > 1 or len(submitted_track_ids) > 1
 
 
 def _valid_track_id_text(value: Any) -> str | None:

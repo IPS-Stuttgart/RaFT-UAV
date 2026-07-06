@@ -39,3 +39,38 @@ def test_submission_evaluator_rejects_wrong_track_id_when_ids_overlap() -> None:
     assert metrics["pooled"]["matched_count"] == 1
     assert metrics["pooled"]["unmatched_prediction_count"] == 1
     assert metrics["pooled"]["covered_truth_count"] == 1
+
+
+def test_submission_evaluator_rejects_nonmatching_track_ids_for_multi_track_truth() -> None:
+    submission = pd.DataFrame(
+        {
+            "sequence_id": ["s1", "s1"],
+            "time_s": [0.0, 0.0],
+            "track_id": ["pred_a", "pred_b"],
+            "x_m": [0.0, 10.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [2.0, 2.0],
+            "score": [1.0, 1.0],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["s1", "s1"],
+            "time_s": [0.0, 0.0],
+            "track_id": ["uav_a", "uav_b"],
+            "x_m": [0.0, 10.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [2.0, 2.0],
+        }
+    )
+
+    matches = match_submission_to_truth(submission, truth)
+
+    assert len(matches) == 2
+    assert not matches["matched"].astype(bool).any()
+    assert set(matches["unmatched_reason"]) == {"track_id_mismatch"}
+
+    metrics = metrics_from_matches(matches, submission=submission, truth=truth)
+    assert metrics["pooled"]["matched_count"] == 0
+    assert metrics["pooled"]["unmatched_prediction_count"] == 2
+    assert metrics["pooled"]["covered_truth_count"] == 0

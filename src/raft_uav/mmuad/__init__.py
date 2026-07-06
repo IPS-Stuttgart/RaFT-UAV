@@ -183,10 +183,30 @@ def _install_candidate_reservoir_topk_guard() -> None:
     _candidate_reservoir.main = _main
 
 
+def _install_submission_eval_track_id_guard() -> None:
+    try:
+        from raft_uav.mmuad import evaluate as _evaluate
+    except Exception:
+        return
+
+    def _should_restrict_to_track_id(
+        truth_track_ids: set[str],
+        submitted_track_ids: set[str],
+    ) -> bool:
+        if not truth_track_ids or not submitted_track_ids:
+            return False
+        if truth_track_ids.intersection(submitted_track_ids):
+            return True
+        return len(truth_track_ids) > 1
+
+    _evaluate._should_restrict_to_track_id = _should_restrict_to_track_id
+
+
 _install_image_row_guard()
 _install_candidate_pool_compare_cli_guard()
 _install_temporal_consensus_train_cv_cli_guard()
 _install_candidate_reservoir_topk_guard()
+_install_submission_eval_track_id_guard()
 
 
 __all__ = [
