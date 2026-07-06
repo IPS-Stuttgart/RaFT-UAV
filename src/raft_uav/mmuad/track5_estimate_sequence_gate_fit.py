@@ -28,6 +28,7 @@ LOSO_WEIGHTS_CSV = "mmuad_track5_estimate_sequence_gate_loso_weights.csv"
 APPLY_FEATURES_CSV = "mmuad_track5_estimate_sequence_gate_apply_features.csv"
 APPLY_WEIGHTS_CSV = "mmuad_track5_estimate_sequence_gate_apply_weights.csv"
 SUMMARY_JSON = "mmuad_track5_estimate_sequence_gate_fit_summary.json"
+SEQUENCE_ALIASES = ("sequence_id", "Sequence", "sequence", "seq")
 FEATURE_COLUMNS = (
     "row_count",
     "valid_pair_fraction",
@@ -91,10 +92,15 @@ def fit_estimate_sequence_gate_weights(
         "loso_weights": loso_weights.sort_values("sequence_id").reset_index(drop=True),
     }
     if apply_base_estimates is not None and apply_alternate_estimates is not None:
+        apply_template = _template_for_apply_estimates(
+            template,
+            apply_base_estimates,
+            apply_alternate_estimates,
+        )
         apply_base, apply_alt = _resampled_pair(
             apply_base_estimates,
             apply_alternate_estimates,
-            template,
+            apply_template,
             max_nearest_time_delta_s=max_nearest_time_delta_s,
         )
         apply_features = _sequence_features(apply_base, apply_alt)
@@ -103,6 +109,44 @@ def fit_estimate_sequence_gate_weights(
             "sequence_id"
         ).reset_index(drop=True)
     return result
+
+
+def _template_for_apply_estimates(
+    template: pd.DataFrame,
+    apply_base_estimates: pd.DataFrame,
+    apply_alternate_estimates: pd.DataFrame,
+) -> pd.DataFrame:
+    base_sequences = _estimate_sequence_ids(apply_base_estimates, label="apply base estimates")
+    alternate_sequences = _estimate_sequence_ids(
+        apply_alternate_estimates,
+        label="apply alternate estimates",
+    )
+    common_sequences = base_sequences.intersection(alternate_sequences)
+    if not common_sequences:
+        raise ValueError("apply base/alternate estimates must share at least one sequence")
+    rows = pd.DataFrame(template).copy()
+    sequence_column = _first_present(rows, SEQUENCE_ALIASES)
+    if sequence_column is None:
+        raise ValueError("template must contain a sequence column")
+    filtered = rows.loc[rows[sequence_column].astype(str).isin(common_sequences)].copy()
+    if filtered.empty:
+        raise ValueError("template has no rows for apply estimate sequences")
+    return filtered
+
+
+def _estimate_sequence_ids(estimates: pd.DataFrame, *, label: str) -> set[str]:
+    rows = pd.DataFrame(estimates)
+    sequence_column = _first_present(rows, SEQUENCE_ALIASES)
+    if sequence_column is None:
+        raise ValueError(f"{label} must contain a sequence column")
+    return set(rows[sequence_column].dropna().astype(str))
+
+
+def _first_present(rows: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
+    for alias in aliases:
+        if alias in rows.columns:
+            return alias
+    return None
 
 
 def write_estimate_sequence_gate_fit_outputs(
