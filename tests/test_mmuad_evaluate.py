@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
+
 from raft_uav.mmuad.evaluate import load_submission_csv
 from raft_uav.mmuad.evaluator import load_mmaud_results_csv
 
@@ -29,12 +31,14 @@ def test_load_submission_csv_preserves_zero_padded_sequence_ids(tmp_path: Path) 
 
 def test_official_track5_loader_accepts_whitespace_padded_headers(tmp_path: Path) -> None:
     results_path = tmp_path / "mmaud_results.csv"
-    header = " Sequence , Timestamp , Position , Classification "
-    position = "(" + ",".join(["1", "2", "3"]) + ")"
-    results_path.write_text(
-        header + "\n" + ",".join(["seq0", "1.0", repr(position), "2"]) + "\n",
-        encoding="utf-8",
-    )
+    pd.DataFrame(
+        {
+            " Sequence ": ["seq0"],
+            " Timestamp ": ["1.0"],
+            " Position ": [(1.0, 2.0, 3.0)],
+            " Classification ": ["2"],
+        }
+    ).to_csv(results_path, index=False)
 
     rows = load_mmaud_results_csv(results_path).rows
 
