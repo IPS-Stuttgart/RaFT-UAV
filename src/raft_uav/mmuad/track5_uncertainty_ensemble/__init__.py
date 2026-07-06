@@ -30,6 +30,24 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 
+class _PandasCsvProxy:
+    """Pandas proxy whose CSV reader preserves opaque sequence-id text."""
+
+    def __init__(self, pandas_module: Any) -> None:
+        self._pandas = pandas_module
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._pandas, name)
+
+    def read_csv(self, *args: Any, **kwargs: Any) -> pd.DataFrame:
+        kwargs.setdefault("dtype", str)
+        kwargs.setdefault("keep_default_na", False)
+        return self._pandas.read_csv(*args, **kwargs)
+
+
+_IMPL.pd = _PandasCsvProxy(pd)
+
+
 def _normalized_sequence_values(values: pd.Series) -> pd.Series:
     return values.map(_sequence_text_or_none)
 
