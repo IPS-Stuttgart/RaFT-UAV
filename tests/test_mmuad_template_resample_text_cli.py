@@ -20,7 +20,7 @@ def test_template_resample_cli_keeps_zero_padded_sequence_ids(tmp_path: Path) ->
             "state_x_m": ["1.0", "11.0"],
             "state_y_m": ["2.0", "12.0"],
             "state_z_m": ["3.0", "13.0"],
-                "Classification": ["3", "3"],
+            "Classification": ["3", "3"],
         }
     ).to_csv(estimates_csv, index=False)
     pd.DataFrame(
@@ -28,7 +28,7 @@ def test_template_resample_cli_keeps_zero_padded_sequence_ids(tmp_path: Path) ->
             "Sequence": ["001", "001"],
             "Timestamp": ["0.0", "10.0"],
             "Position": ["(0,0,0)", "(0,0,0)"],
-                "Classification": ["3", "3"],
+            "Classification": ["3", "3"],
         }
     ).to_csv(template_csv, index=False)
 
