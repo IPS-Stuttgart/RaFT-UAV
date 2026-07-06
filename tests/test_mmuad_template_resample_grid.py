@@ -7,6 +7,7 @@ import sys
 from zipfile import ZipFile
 
 import pandas as pd
+import pytest
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
@@ -43,6 +44,52 @@ def _template() -> pd.DataFrame:
             "Classification": [0, 0, 0, 0],
         }
     )
+
+
+def test_parse_optional_float_list_accepts_none_and_nonnegative_values() -> None:
+    assert resample_grid._parse_optional_float_list(["none,0,4.5", "inf"]) == (
+        None,
+        0.0,
+        4.5,
+        None,
+    )
+
+
+@pytest.mark.parametrize("bad_gap", ["-1", "nan", "-inf", "1,nan", "abc"])
+def test_parse_optional_float_list_rejects_invalid_gap_values(bad_gap: str) -> None:
+    with pytest.raises(ValueError, match="max_interpolation_gap_s"):
+        resample_grid._parse_optional_float_list([bad_gap])
+
+
+def test_summary_bool_helpers_do_not_treat_false_strings_as_ready() -> None:
+    summary = pd.DataFrame(
+        [
+            {
+                "variant": "false_but_fewer_invalid_rows",
+                "codabench_upload_ready": "False",
+                "invalid_resampled_rows": 0,
+            },
+            {
+                "variant": "ready_but_more_invalid_rows",
+                "codabench_upload_ready": "true",
+                "invalid_resampled_rows": 1,
+            },
+        ]
+    )
+
+    sorted_summary = resample_grid._sort_summary(summary)
+
+    assert sorted_summary["variant"].tolist() == [
+        "ready_but_more_invalid_rows",
+        "false_but_fewer_invalid_rows",
+    ]
+    assert (
+        resample_grid._has_ready_row(
+            pd.DataFrame({"leaderboard_ready": ["False", "0", "no"]})
+        )
+        is False
+    )
+    assert resample_grid._has_ready_row(pd.DataFrame({"leaderboard_ready": ["true"]})) is True
 
 
 def test_template_resample_grid_writes_variants_and_preserves_classification(
