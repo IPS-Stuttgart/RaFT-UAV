@@ -7,6 +7,7 @@ import tomllib
 import pandas as pd
 import pytest
 
+from raft_uav.mmuad.track5_estimate_ensemble import load_estimate_weight_config
 from raft_uav.mmuad.track5_estimate_ensemble import parse_estimate_spec
 from raft_uav.mmuad.track5_estimate_ensemble_grid import EnsembleGridRow
 from raft_uav.mmuad.track5_estimate_ensemble_grid import _row_sort_key
@@ -189,11 +190,17 @@ def test_estimate_ensemble_weight_grid_writes_best_artifacts(tmp_path: Path) -> 
 
     assert paths["summary_csv"].exists()
     assert paths["manifest_json"].exists()
+    assert paths["best_config_json"].exists()
     assert paths["best_official_zip"].exists()
     manifest = json.loads(paths["manifest_json"].read_text(encoding="utf-8"))
+    best_config = json.loads(paths["best_config_json"].read_text(encoding="utf-8"))
     assert manifest["best_weights"] == [1.0, 0.0]
+    assert manifest["best_weight_config_json"] == str(paths["best_config_json"])
     assert manifest["best_aggregation_policy"] == "weighted-mean"
     assert manifest["best"]["pose_mse"] == pytest.approx(0.0)
+    assert best_config["weights"] == {"good": 1.0, "bad": 0.0}
+    assert best_config["aggregation_policy"] == "weighted-mean"
+    assert load_estimate_weight_config(paths["best_config_json"]) == {"good": 1.0, "bad": 0.0}
 
 
 def test_estimate_ensemble_weight_grid_cli_writes_outputs(tmp_path: Path) -> None:
@@ -222,6 +229,7 @@ def test_estimate_ensemble_weight_grid_cli_writes_outputs(tmp_path: Path) -> Non
 
     assert status == 0
     assert (output_dir / "mmuad_track5_estimate_ensemble_weight_grid.csv").exists()
+    assert (output_dir / "mmuad_track5_estimate_ensemble_best_config.json").exists()
     assert (output_dir / "best_ensemble" / "ug2_submission.zip").exists()
     manifest = json.loads((output_dir / "mmuad_track5_estimate_ensemble_weight_grid_manifest.json").read_text())
     assert manifest["best_aggregation_policy"] in {"weighted-mean", "weighted-median", "trimmed-mean"}
