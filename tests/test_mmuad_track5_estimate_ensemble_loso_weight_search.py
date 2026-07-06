@@ -85,6 +85,27 @@ def test_loso_weight_search_selects_weight_without_held_out_sequence(tmp_path: P
     assert len(predictions) == 4
 
 
+def test_loso_weight_search_matches_integer_truth_and_decimal_estimates(
+    tmp_path: Path,
+) -> None:
+    good_csv = tmp_path / "good.csv"
+    _good_estimate().to_csv(good_csv, index=False)
+    truth = _truth()
+    truth["time_s"] = pd.Series([0, 1, 0, 1], dtype="int64")
+
+    folds, predictions, summary, _ = run_track5_estimate_ensemble_loso_weight_search(
+        [EstimateInput("good", good_csv)],
+        template=_template(),
+        truth=truth,
+        weight_step=1.0,
+    )
+
+    assert int(folds["matched_rows"].sum()) == 4
+    assert summary["loso_metrics"]["matched_rows"] == 4
+    assert summary["loso_metrics"]["pose_mse_m2"] == pytest.approx(0.0)
+    assert len(predictions) == 4
+
+
 def test_loso_weight_search_writes_outputs_and_best_submission(tmp_path: Path) -> None:
     good_csv = tmp_path / "good.csv"
     bad_csv = tmp_path / "bad.csv"
