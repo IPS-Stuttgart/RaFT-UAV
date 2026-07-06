@@ -222,14 +222,14 @@ def _radar_angle_column_to_rad(
         (name, angle_unit),
     ):
         if column in frame.columns:
-            return _angle_to_rad(frame[column].to_numpy(float), angle_unit=unit)
+            return _angle_to_rad(frame[column], angle_unit=unit)
     if required:
         raise ValueError(f"radar polar table missing columns: ['{name}']")
     return 0.0
 
 
 def _angle_to_rad(values, *, angle_unit: str) -> np.ndarray:
-    arr = np.asarray(values, dtype=float)
+    arr = np.asarray(pd.to_numeric(values, errors="coerce"), dtype=float)
     if angle_unit == "deg":
         return np.deg2rad(arr)
     if angle_unit == "rad":
