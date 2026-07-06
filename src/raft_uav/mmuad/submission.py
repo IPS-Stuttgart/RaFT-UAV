@@ -9,17 +9,30 @@ from raft_uav.mmuad import _submission_impl as _impl
 
 _ORIGINAL_PARSE_ATTR = "_raft_uav_original_parse_official_classification_cell"
 _ORIGINAL_LOAD_ATTR = "_raft_uav_original_load_sequence_class_map"
+_ORIGINAL_NORMALIZE_ATTR = "_raft_uav_original_normalize_official_track5_results_frame"
+_ORIGINAL_ROW_DIAGNOSTICS_ATTR = "_raft_uav_original_official_track5_row_diagnostics"
 
 if not hasattr(_impl, _ORIGINAL_PARSE_ATTR):
     setattr(_impl, _ORIGINAL_PARSE_ATTR, _impl.parse_official_classification_cell)
 if not hasattr(_impl, _ORIGINAL_LOAD_ATTR):
     setattr(_impl, _ORIGINAL_LOAD_ATTR, _impl.load_sequence_class_map)
+if not hasattr(_impl, _ORIGINAL_NORMALIZE_ATTR):
+    setattr(_impl, _ORIGINAL_NORMALIZE_ATTR, _impl.normalize_official_track5_results_frame)
+if not hasattr(_impl, _ORIGINAL_ROW_DIAGNOSTICS_ATTR):
+    setattr(_impl, _ORIGINAL_ROW_DIAGNOSTICS_ATTR, _impl._official_track5_row_diagnostics)
 
 _parse_original = getattr(_impl, _ORIGINAL_PARSE_ATTR)
+setattr(_impl, "_raft_uav_permissive_parse_official_classification_cell", _parse_original)
 _load_sequence_class_map_original = getattr(_impl, _ORIGINAL_LOAD_ATTR)
+_normalize_official_track5_results_frame_original = getattr(_impl, _ORIGINAL_NORMALIZE_ATTR)
+_official_track5_row_diagnostics_original = getattr(_impl, _ORIGINAL_ROW_DIAGNOSTICS_ATTR)
 
 
 def _parse_official_classification_cell_with_domain(value: Any) -> int:
+    if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+        raise ValueError(
+            "official MMUAD Classification values must be integer ids, not booleans"
+        )
     class_id = _parse_original(value)
     if class_id not in _impl.OFFICIAL_TRACK5_CLASS_IDS:
         allowed = ", ".join(str(item) for item in sorted(_impl.OFFICIAL_TRACK5_CLASS_IDS))
@@ -320,6 +333,32 @@ def _validate_official_track5_submission_with_text_sequences(
     return _impl.OfficialTrack5Validation(summary=summary, rows=row_diagnostics)
 
 
+def _normalize_official_track5_results_frame_with_domain(frame: Any) -> Any:
+    """Normalize Track 5 rows while preserving official truth class IDs."""
+
+    return _normalize_official_track5_results_frame_original(frame)
+
+
+def _official_track5_row_diagnostics_with_domain(frame: Any) -> tuple[Any, Any]:
+    """Mark boolean Track 5 classifications invalid during validation."""
+
+    diagnostics, normalized = _official_track5_row_diagnostics_original(frame)
+    if not diagnostics.empty and "Classification" in frame.columns:
+        bool_mask = frame["Classification"].astype(str).str.strip().str.lower().isin(
+            {"true", "false"}
+        )
+        if bool_mask.any():
+            diagnostics = diagnostics.copy()
+            invalid_indices = set(frame.index[bool_mask].astype(int).tolist())
+            mask = diagnostics["row_index"].isin(invalid_indices)
+            diagnostics.loc[mask, "status"] = "invalid_classification"
+            diagnostics.loc[
+                mask,
+                "reason",
+            ] = "official MMUAD Classification values must be integer ids, not booleans"
+    return diagnostics, normalized
+
+
 _impl.parse_official_classification_cell = _parse_official_classification_cell_with_domain
 _impl.load_sequence_class_map = _load_sequence_class_map_with_official_sequences
 _impl.load_official_track5_template_file = (
@@ -331,6 +370,10 @@ _impl._read_official_track5_zip_for_validation = (
 _impl._read_official_track5_results_input = (
     _read_official_track5_results_input_with_text_sequences
 )
+_impl.normalize_official_track5_results_frame = (
+    _normalize_official_track5_results_frame_with_domain
+)
+_impl._official_track5_row_diagnostics = _official_track5_row_diagnostics_with_domain
 _impl.validate_official_track5_submission = (
     _validate_official_track5_submission_with_text_sequences
 )
@@ -345,6 +388,9 @@ globals().update(
 parse_official_classification_cell = _parse_official_classification_cell_with_domain
 load_sequence_class_map = _load_sequence_class_map_with_official_sequences
 load_official_track5_template_file = _load_official_track5_template_file_with_text_sequences
+normalize_official_track5_results_frame = (
+    _normalize_official_track5_results_frame_with_domain
+)
 validate_official_track5_submission = (
     _validate_official_track5_submission_with_text_sequences
 )

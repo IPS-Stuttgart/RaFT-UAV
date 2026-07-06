@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
+import sys
 
 import pandas as pd
 
@@ -23,7 +25,9 @@ def main() -> int:
     parser.add_argument("--output-json", type=Path, default=Path("outputs/determinism_check.json"))
     parser.add_argument("--atol", type=float, default=1.0e-9)
     parser.add_argument("--fail-on-difference", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(_normalize_negative_option_values(sys.argv[1:]))
+    if not math.isfinite(args.atol) or args.atol < 0.0:
+        parser.error("--atol must be finite and non-negative")
 
     estimates_a = pd.read_csv(args.run_a / "estimates.csv")
     estimates_b = pd.read_csv(args.run_b / "estimates.csv")
@@ -45,6 +49,26 @@ def main() -> int:
         if "selected_rows_equal" in summary and not bool(summary["selected_rows_equal"]):
             return 1
     return 0
+
+
+def _normalize_negative_option_values(argv: list[str]) -> list[str]:
+    normalized: list[str] = []
+    index = 0
+    while index < len(argv):
+        item = argv[index]
+        if item == "--atol" and index + 1 < len(argv):
+            value = argv[index + 1]
+            try:
+                float(value)
+            except ValueError:
+                pass
+            else:
+                normalized.append(f"--atol={value}")
+                index += 2
+                continue
+        normalized.append(item)
+        index += 1
+    return normalized
 
 
 if __name__ == "__main__":

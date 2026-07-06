@@ -111,20 +111,21 @@ def forward_backward_summary(
             "frame_count": 0,
             "score_column": score_column,
         }
-    score = _numeric_column(rows, score_column)
-    entropy = _numeric_column(rows, "candidate_forward_backward_frame_entropy")
+    score = _numeric_column(rows, score_column).reindex(rows.index)
+    entropy = _numeric_column(
+        rows,
+        "candidate_forward_backward_frame_entropy",
+    ).reindex(rows.index)
     effective = _numeric_column(
         rows,
         "candidate_forward_backward_effective_candidate_count",
-    )
+    ).reindex(rows.index)
     max_by_frame = (
         rows.assign(_posterior=score)
         .groupby(["sequence_id", "time_s"], sort=False)["_posterior"]
         .max()
     )
-    top_rows = rows.loc[
-        rows.groupby(["sequence_id", "time_s"], sort=False)[score_column].idxmax()
-    ]
+    top_rows = _top_scored_rows(rows, score, score_column)
     return {
         "row_count": int(len(rows)),
         "sequence_count": int(rows["sequence_id"].astype(str).nunique()),
@@ -698,6 +699,26 @@ def _numeric_column(rows: pd.DataFrame, column: str) -> pd.Series:
     if column not in rows.columns:
         return pd.Series(dtype=float)
     return pd.to_numeric(rows[column], errors="coerce")
+
+
+def _top_scored_rows(
+    rows: pd.DataFrame,
+    score: pd.Series,
+    score_column: str,
+) -> pd.DataFrame:
+    if score_column not in rows.columns:
+        return rows.iloc[0:0]
+    numeric_score = pd.to_numeric(score, errors="coerce").reindex(rows.index)
+    finite = np.isfinite(numeric_score.to_numpy(float))
+    if not finite.any():
+        return rows.iloc[0:0]
+    scored = rows.loc[finite].assign(
+        _summary_score=numeric_score.loc[finite].to_numpy(float)
+    )
+    indices = scored.groupby(["sequence_id", "time_s"], sort=False)["_summary_score"].idxmax()
+    if indices.empty:
+        return rows.iloc[0:0]
+    return rows.loc[indices.to_numpy()]
 
 
 def _posterior_sum_error(rows: pd.DataFrame, score_column: str) -> float:
