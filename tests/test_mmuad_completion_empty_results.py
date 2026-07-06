@@ -163,3 +163,22 @@ def test_completion_summary_reports_sequence_readiness() -> None:
         "completion_coverage_fraction": 0.0,
         "all_requested_timestamps_completed": False,
     }
+
+
+def test_completion_missing_uav_type_falls_back_to_unknown() -> None:
+    results = pd.DataFrame(
+        {
+            "sequence_id": ["seq1"],
+            "timestamp": [0.0],
+            "x": [1.0],
+            "y": [0.0],
+            "z": [2.0],
+            "uav_type": [np.nan],
+            "score": [1.0],
+        }
+    )
+    template = pd.DataFrame({"sequence_id": ["seq1"], "time_s": [0.0]})
+
+    completed = complete_results_to_truth_timestamps(results, template)
+
+    assert completed.rows["uav_type"].tolist() == ["unknown"]

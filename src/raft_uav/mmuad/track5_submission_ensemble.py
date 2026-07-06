@@ -77,6 +77,15 @@ def parse_submission_input(value: str) -> SubmissionInput:
     return SubmissionInput(label=_safe_label(label), path=path, weight=float(weight))
 
 
+def _read_track5_submission_csv(source: Any) -> pd.DataFrame:
+    """Read official submission CSV data without coercing opaque identifiers."""
+
+    try:
+        return pd.read_csv(source, dtype=str, keep_default_na=False)
+    except TypeError:
+        return pd.read_csv(source)
+
+
 def load_track5_submission(path: Path) -> pd.DataFrame:
     """Load an official Track 5 CSV or ZIP submission into normalized columns."""
 
@@ -91,9 +100,9 @@ def load_track5_submission(path: Path) -> pd.DataFrame:
             else:
                 raise ValueError(f"cannot choose Track 5 CSV inside {path}: {names}")
             with archive.open(member) as handle:
-                rows = pd.read_csv(handle)
+                rows = _read_track5_submission_csv(handle)
     else:
-        rows = pd.read_csv(path)
+        rows = _read_track5_submission_csv(path)
     rows = _normalize_official_submission_frame(rows, source_path=path)
     return _normalize_submission_rows(rows, source_path=path)
 
