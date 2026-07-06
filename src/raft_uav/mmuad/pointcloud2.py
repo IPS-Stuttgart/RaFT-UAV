@@ -98,10 +98,7 @@ def _point_offsets(message: Any, *, point_step: int, data_length: int) -> list[i
     if width <= 0 or height <= 0:
         return [index * point_step for index in range(data_length // point_step)]
 
-    row_step = getattr(message, "row_step", None)
-    row_step = int(row_step) if row_step is not None else point_step * width
-    if row_step <= 0:
-        raise ValueError("PointCloud2 row_step must be positive")
+    row_step = _normalized_row_step(message, point_step=point_step, width=width, data_length=data_length)
     if row_step < point_step * width:
         raise ValueError("PointCloud2 row_step is smaller than width * point_step")
 
@@ -116,6 +113,21 @@ def _point_offsets(message: Any, *, point_step: int, data_length: int) -> list[i
                 break
             offsets.append(base)
     return offsets
+
+
+def _normalized_row_step(message: Any, *, point_step: int, width: int, data_length: int) -> int:
+    """Return a usable PointCloud2 row step, accepting contiguous zero-row-step exports."""
+
+    contiguous_row_step = point_step * width
+    row_step = getattr(message, "row_step", None)
+    if row_step is None:
+        return contiguous_row_step
+    row_step = int(row_step)
+    if row_step == 0 and data_length >= contiguous_row_step:
+        return contiguous_row_step
+    if row_step <= 0:
+        raise ValueError("PointCloud2 row_step must be positive")
+    return row_step
 
 
 def pointcloud2_to_candidates(

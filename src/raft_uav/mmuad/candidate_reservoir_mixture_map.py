@@ -19,6 +19,7 @@ from typing import Any
 import pandas as pd
 
 from raft_uav.mmuad.candidate_mixture_map import CandidateMixtureMapConfig
+from raft_uav.mmuad.candidate_mixture_map import LOSS_CHOICES
 from raft_uav.mmuad.candidate_mixture_map import run_candidate_mixture_map
 from raft_uav.mmuad.candidate_mixture_map import write_candidate_mixture_map_outputs
 from raft_uav.mmuad.candidate_reservoir import ReservoirConfig
@@ -209,6 +210,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reservoir-score-column", default="candidate_reservoir_grid_score")
     parser.add_argument("--reservoir-fallback-score-column", default="confidence")
     parser.add_argument("--score-floor-quantile", type=float)
+    parser.add_argument(
+        "--reservoir-cap-reason-bonus",
+        type=float,
+        default=0.0,
+        help=(
+            "bonus added during the final reservoir cap for candidates selected by "
+            "multiple independent rules"
+        ),
+    )
     parser.add_argument("--mixture-score-column", default="candidate_reservoir_score")
     parser.add_argument("--mixture-fallback-score-column", action="append", default=[])
     parser.add_argument("--sigma-column", default="predicted_sigma_m")
@@ -218,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--score-weight", type=float, default=1.0)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--sigma-log-weight", type=float, default=3.0)
+    parser.add_argument("--loss", choices=LOSS_CHOICES, default="huber")
     parser.add_argument("--huber-delta", type=float, default=1.0)
     parser.add_argument("--smoothness-weight", type=float, default=7200.0)
     parser.add_argument("--iterations", type=int, default=5)
@@ -268,6 +279,7 @@ def main(argv: list[str] | None = None) -> int:
         score_column=str(args.reservoir_score_column),
         fallback_score_column=str(args.reservoir_fallback_score_column),
         score_floor_quantile=args.score_floor_quantile,
+        cap_reason_bonus=float(args.reservoir_cap_reason_bonus),
     )
     mixture_config = CandidateMixtureMapConfig(
         top_k=0,
@@ -281,7 +293,7 @@ def main(argv: list[str] | None = None) -> int:
         score_weight=float(args.score_weight),
         temperature=float(args.temperature),
         sigma_log_weight=float(args.sigma_log_weight),
-        loss="huber",
+        loss=str(args.loss),
         huber_delta=float(args.huber_delta),
         smoothness_weight=float(args.smoothness_weight),
         iterations=int(args.iterations),
