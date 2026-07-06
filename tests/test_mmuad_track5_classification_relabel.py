@@ -86,6 +86,38 @@ def test_track5_classification_relabel_sequence_majority_mode() -> None:
     ].tolist() == [2]
 
 
+def test_track5_classification_relabel_nearest_time_mode() -> None:
+    source = _classification_rows().copy()
+    source["Timestamp"] = [0.04, 1.05, 0.20]
+
+    result = relabel_track5_classification(
+        _pose_rows(),
+        source,
+        mode="by-nearest-time",
+        max_nearest_time_delta_s=0.25,
+    )
+
+    assert result.rows["Classification"].tolist() == [1, 1, 2]
+    assert result.diagnostics["source_abs_time_delta_s"].tolist() == pytest.approx(
+        [0.04, 0.05, 0.20],
+    )
+    assert result.manifest["source_time_delta_abs_max_s"] == pytest.approx(0.20)
+    assert result.manifest["max_nearest_time_delta_s"] == 0.25
+
+
+def test_track5_classification_relabel_nearest_time_respects_delta_gate() -> None:
+    source = _classification_rows().copy()
+    source.loc[source["Sequence"] == "seq0002", "Timestamp"] = 5.0
+
+    with pytest.raises(ValueError, match="classification source is missing"):
+        relabel_track5_classification(
+            _pose_rows(),
+            source,
+            mode="by-nearest-time",
+            max_nearest_time_delta_s=0.25,
+        )
+
+
 def test_track5_classification_relabel_accepts_sequence_prediction_probabilities() -> None:
     result = relabel_track5_classification_from_sequence_predictions(
         _pose_rows(),
@@ -214,6 +246,47 @@ def test_track5_classification_relabel_cli_writes_zip_and_validation(tmp_path: P
     assert results["Position"].tolist() == ["(0,0,1)", "(1,0,1)", "(5,0,2)"]
     assert results["Classification"].tolist() == [1, 1, 2]
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["validation"]["leaderboard_ready"] is True
+
+
+def test_track5_classification_relabel_cli_accepts_nearest_time_mode(tmp_path: Path) -> None:
+    pose_csv = tmp_path / "pose.csv"
+    class_csv = tmp_path / "class.csv"
+    template_csv = tmp_path / "template.csv"
+    output_dir = tmp_path / "out"
+    _pose_rows().to_csv(pose_csv, index=False)
+    source = _classification_rows().copy()
+    source["Timestamp"] = [0.04, 1.05, 0.20]
+    source.to_csv(class_csv, index=False)
+    _template_rows().to_csv(template_csv, index=False)
+
+    status = relabel_main(
+        [
+            "--pose-submission",
+            str(pose_csv),
+            "--classification-submission",
+            str(class_csv),
+            "--mode",
+            "by-nearest-time",
+            "--max-nearest-time-delta-s",
+            "0.25",
+            "--template",
+            str(template_csv),
+            "--output-dir",
+            str(output_dir),
+            "--require-leaderboard-ready",
+        ]
+    )
+
+    assert status == 0
+    diagnostics = pd.read_csv(output_dir / "mmuad_track5_classification_relabel_diagnostics.csv")
+    manifest = json.loads(
+        (output_dir / "mmuad_track5_classification_relabel_manifest.json").read_text(
+            encoding="utf-8",
+        )
+    )
+    assert diagnostics["source_abs_time_delta_s"].tolist() == pytest.approx([0.04, 0.05, 0.20])
+    assert manifest["max_nearest_time_delta_s"] == 0.25
     assert manifest["validation"]["leaderboard_ready"] is True
 
 
