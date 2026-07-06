@@ -47,6 +47,26 @@ def test_radar_polar_frame_honors_explicit_degree_angle_columns() -> None:
     )
 
 
+def test_radar_polar_frame_drops_rows_with_malformed_angle_values() -> None:
+    frame = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0],
+            "range_m": [10.0, 20.0],
+            "azimuth_deg": ["not-an-angle", "90.0"],
+            "elevation_deg": [0.0, 0.0],
+        }
+    )
+
+    candidates = radar_polar_frame_to_candidates(frame)
+
+    assert candidates.rows["time_s"].tolist() == [1.0]
+    np.testing.assert_allclose(
+        candidates.rows[["x_m", "y_m", "z_m"]].to_numpy(dtype=float),
+        [[20.0, 0.0, 0.0]],
+        atol=1.0e-9,
+    )
+
+
 def test_nested_radar_json_detections_inherit_parent_metadata(tmp_path: Path) -> None:
     path = tmp_path / "radar.json"
     path.write_text(
