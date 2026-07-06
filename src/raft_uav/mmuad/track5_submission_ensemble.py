@@ -23,6 +23,7 @@ import pandas as pd
 
 from raft_uav.mmuad.class_probability_context import _predicted_class_labels
 from raft_uav.mmuad.submission import (
+    load_official_track5_template_file,
     normalize_official_track5_results_frame,
     parse_official_position_cell,
     validate_official_track5_submission,
@@ -91,11 +92,20 @@ def load_track5_submission(path: Path) -> pd.DataFrame:
             else:
                 raise ValueError(f"cannot choose Track 5 CSV inside {path}: {names}")
             with archive.open(member) as handle:
-                rows = pd.read_csv(handle)
+                rows = _read_track5_csv(handle)
     else:
-        rows = pd.read_csv(path)
+        rows = _read_track5_csv(path)
     rows = _normalize_official_submission_frame(rows, source_path=path)
     return _normalize_submission_rows(rows, source_path=path)
+
+
+def _read_track5_csv(source: Any) -> pd.DataFrame:
+    """Read Track 5 CSV input without coercing opaque sequence identifiers."""
+
+    try:
+        return pd.read_csv(source, dtype=str, keep_default_na=False)
+    except TypeError:
+        return pd.read_csv(source)
 
 
 def _normalize_official_submission_frame(rows: pd.DataFrame, *, source_path: Path) -> pd.DataFrame:
@@ -282,13 +292,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.require_leaderboard_ready and args.template is None:
         parser.error(
-            "--require-leaderboard-ready requires --template so leaderboard readiness can be validated"
+            "--require-leaderboard-ready requires --template so leaderboard readiness "
+            "can be validated"
         )
     if not args.submission:
         parser.error("provide at least one --submission")
     inputs = tuple(parse_submission_input(value) for value in args.submission)
     estimates, diagnostics = ensemble_track5_submissions(inputs, class_policy=args.class_policy)
-    template = None if args.template is None else pd.read_csv(args.template)
+    template = None if args.template is None else load_official_track5_template_file(args.template)
     paths = write_track5_submission_ensemble_outputs(
         estimates=estimates,
         diagnostics=diagnostics,
