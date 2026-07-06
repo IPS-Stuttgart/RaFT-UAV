@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from raft_uav.mmuad.track5_estimate_ensemble import build_track5_estimate_ensemble
+from raft_uav.mmuad.track5_estimate_ensemble import load_track5_estimate_csv
 from raft_uav.mmuad.track5_estimate_ensemble import main as ensemble_main
 from raft_uav.mmuad.track5_estimate_ensemble import parse_estimate_spec
 from raft_uav.mmuad.track5_estimate_ensemble import write_track5_estimate_ensemble_outputs
@@ -78,6 +79,40 @@ def test_parse_estimate_spec_rejects_invalid_weights(weight: str) -> None:
 def test_track5_estimate_ensemble_rejects_invalid_runtime_weights(weight: float) -> None:
     with pytest.raises(ValueError, match="finite and non-negative"):
         build_track5_estimate_ensemble([("bad", _estimate_a(), weight)], _template())
+
+
+def test_track5_estimate_csv_loader_preserves_zero_padded_sequence_ids(tmp_path: Path) -> None:
+    estimate_csv = tmp_path / "estimate.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["001"],
+            "time_s": [0.0],
+            "state_x_m": [42.0],
+            "state_y_m": [3.0],
+            "state_z_m": [7.0],
+        }
+    ).to_csv(estimate_csv, index=False)
+    template = pd.DataFrame(
+        {
+            "Sequence": ["001"],
+            "Timestamp": [0.0],
+            "Position": ["(0,0,0)"],
+            "Classification": [1],
+        }
+    )
+
+    loaded = load_track5_estimate_csv(estimate_csv)
+    ensemble, diagnostics = build_track5_estimate_ensemble(
+        [("zero_padded", loaded, 1.0)],
+        template,
+        max_nearest_time_delta_s=0.0,
+    )
+
+    assert loaded["sequence_id"].tolist() == ["001"]
+    assert ensemble.loc[0, "sequence_id"] == "001"
+    assert ensemble.loc[0, "ensemble_source_count"] == 1
+    assert ensemble.loc[0, "state_x_m"] == pytest.approx(42.0)
+    assert diagnostics.loc[0, "valid_input_count"] == 1
 
 
 def test_track5_estimate_ensemble_weighted_average_after_template_resample() -> None:
