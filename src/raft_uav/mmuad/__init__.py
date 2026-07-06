@@ -170,6 +170,20 @@ def _install_candidate_reservoir_topk_guard() -> None:
             default=0.0,
             help="bonus added during final frame cap for each independent reservoir selection reason",
         )
+        parser.add_argument(
+            "--preserve-reason-prefix",
+            action="append",
+            default=None,
+            help=(
+                "reason prefix protected during final frame cap; default protects branch: and source:; "
+                "repeat to override"
+            ),
+        )
+        parser.add_argument(
+            "--disable-preserved-reason-prefixes",
+            action="store_true",
+            help="disable branch/source quota protection during the final per-frame cap",
+        )
         parser.add_argument("--top-k", type=int, action="append", default=None)
         parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
         args = parser.parse_args(argv)
@@ -179,6 +193,12 @@ def _install_candidate_reservoir_topk_guard() -> None:
         candidates = _candidate_reservoir._load_candidate_specs(list(candidate_specs))
         per_source_top_n = args.per_source_top_n if args.top_per_source is None else args.top_per_source
         per_branch_top_n = args.per_branch_top_n if args.top_per_branch is None else args.top_per_branch
+        if args.disable_preserved_reason_prefixes:
+            preserve_reason_prefixes: tuple[str, ...] = ()
+        elif args.preserve_reason_prefix is None:
+            preserve_reason_prefixes = ("branch:", "source:")
+        else:
+            preserve_reason_prefixes = tuple(args.preserve_reason_prefix)
         reservoir = _candidate_reservoir.build_candidate_reservoir(
             candidates,
             config=_candidate_reservoir.ReservoirConfig(
@@ -190,6 +210,7 @@ def _install_candidate_reservoir_topk_guard() -> None:
                 fallback_score_column=args.fallback_score_column,
                 score_floor_quantile=args.score_floor_quantile,
                 cap_reason_bonus=args.cap_reason_bonus,
+                preserve_reason_prefixes=preserve_reason_prefixes,
             ),
         )
         _candidate_reservoir.write_reservoir_outputs(
