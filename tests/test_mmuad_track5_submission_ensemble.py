@@ -99,6 +99,17 @@ def test_load_track5_submission_accepts_case_insensitive_official_columns(tmp_pa
     assert loaded["Classification"].tolist() == [1, 1, 2]
 
 
+def test_load_track5_submission_preserves_zero_padded_sequence_ids(tmp_path: Path) -> None:
+    path = tmp_path / "submission.csv"
+    rows = _submission_rows()
+    rows["Sequence"] = ["000001", "000001", "000002"]
+    rows.to_csv(path, index=False)
+
+    loaded = load_track5_submission(path)
+
+    assert loaded["sequence_id"].tolist() == ["000001", "000001", "000002"]
+
+
 @pytest.mark.parametrize("timestamp", [float("nan"), float("inf"), "-inf", "not-a-time"])
 def test_load_track5_submission_rejects_invalid_timestamps(
     tmp_path: Path,
