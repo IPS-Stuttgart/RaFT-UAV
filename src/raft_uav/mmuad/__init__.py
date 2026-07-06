@@ -14,6 +14,30 @@ from raft_uav.mmuad.submission import write_normalized_official_track5_submissio
 from raft_uav.mmuad.tracker import TrackerConfig, TrackerOutput, run_mmuad_tracker
 
 
+def _install_schema_timestamp_guard() -> None:
+    try:
+        import pandas as _pd
+
+        from raft_uav.mmuad import schema as _schema
+    except Exception:
+        return
+
+    original = _schema.normalize_time_column_aliases
+
+    def _normalize_time_column_aliases(frame, *, target: str = "time_s"):
+        parsed_target = None
+        if target in frame.columns:
+            parsed_target = _schema._seconds_or_stamp_dict_series(frame[target])
+        out = original(frame, target=target)
+        if target in out.columns and parsed_target is not None and parsed_target.notna().any():
+            out = out.copy()
+            alias_or_numeric = _pd.to_numeric(out[target], errors="coerce")
+            out[target] = parsed_target.fillna(alias_or_numeric)
+        return out
+
+    _schema.normalize_time_column_aliases = _normalize_time_column_aliases
+
+
 def _install_image_row_guard() -> None:
     try:
         import pandas as _pd
@@ -236,6 +260,7 @@ def _install_track5_scorecard_bool_guard() -> None:
     _track5_scorecard._bool_series = _bool_series
 
 
+_install_schema_timestamp_guard()
 _install_image_row_guard()
 _install_candidate_pool_compare_cli_guard()
 _install_temporal_consensus_train_cv_cli_guard()
