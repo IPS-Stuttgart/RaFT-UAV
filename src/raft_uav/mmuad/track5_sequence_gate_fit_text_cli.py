@@ -8,26 +8,41 @@ from typing import Any
 from raft_uav.mmuad import track5_sequence_gate_fit as _impl
 
 _ORIGINAL_READ_CSV = _impl.pd.read_csv
+_SEQUENCE_ID_ALIASES = (
+    "sequence_id",
+    "Sequence",
+    "sequence",
+    "seq",
+    "scene",
+    "scene_id",
+    "heldout_sequence",
+)
 
 
 def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
     dtype_arg = kwargs.pop("dtype", None)
+    converters = dict(kwargs.pop("converters", {}) or {})
     if dtype_arg is None:
-        dtype = {"sequence_id": "string"}
+        dtype = {alias: "string" for alias in _SEQUENCE_ID_ALIASES}
+        _drop_sequence_converters(converters)
     elif isinstance(dtype_arg, Mapping):
         dtype = dict(dtype_arg)
-        dtype.setdefault("sequence_id", "string")
+        for alias in _SEQUENCE_ID_ALIASES:
+            dtype[alias] = "string"
+        _drop_sequence_converters(converters)
     else:
-        # pandas accepts scalar dtype arguments such as ``str``.  Do not try to
-        # coerce those into a dict; instead keep the caller's scalar dtype and
-        # override only sequence_id through a converter so numeric-looking IDs
-        # such as ``001`` stay textual.
         dtype = dtype_arg
-        converters = dict(kwargs.pop("converters", {}) or {})
-        converters.setdefault("sequence_id", _sequence_id_text)
-        kwargs["converters"] = converters
+        for alias in _SEQUENCE_ID_ALIASES:
+            converters[alias] = _sequence_id_text
     kwargs["dtype"] = dtype
+    if converters:
+        kwargs["converters"] = converters
     return _ORIGINAL_READ_CSV(path, *args, **kwargs)
+
+
+def _drop_sequence_converters(converters: dict[Any, Any]) -> None:
+    for alias in _SEQUENCE_ID_ALIASES:
+        converters.pop(alias, None)
 
 
 def _sequence_id_text(value: Any) -> str:
