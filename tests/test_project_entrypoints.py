@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import importlib
 import re
-import sys
 import tomllib
 from pathlib import Path
 
@@ -14,8 +14,7 @@ def _project_scripts() -> dict[str, str]:
 def _assert_entrypoint_target_imports(script_name: str) -> None:
     module_name, function_name = _project_scripts()[script_name].split(":", 1)
 
-    __import__(module_name)
-    module = sys.modules[module_name]
+    module = importlib.import_module(module_name)
 
     assert callable(getattr(module, function_name))
 
@@ -208,7 +207,7 @@ def test_mmuad_track5_scorecard_entrypoint_target_imports() -> None:
 def test_mmuad_track5_sequence_gate_fit_entrypoint_is_exposed() -> None:
     assert (
         _project_scripts()["raft-uav-mmuad-track5-sequence-gate-fit"]
-        == "raft_uav.mmuad.track5_sequence_gate_fit:main"
+        == "raft_uav.mmuad.track5_sequence_gate_fit_text_cli:main"
     )
 
 
