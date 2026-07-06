@@ -329,7 +329,11 @@ def _parse_optional_float_list(values: list[str]) -> tuple[float | None, ...]:
     return tuple(parsed or [None])
 
 
-def _normalized_choices(values: tuple[str, ...], allowed: tuple[str, ...], name: str) -> tuple[str, ...]:
+def _normalized_choices(
+    values: tuple[str, ...],
+    allowed: tuple[str, ...],
+    name: str,
+) -> tuple[str, ...]:
     normalized = tuple(str(value).strip().lower() for value in values if str(value).strip())
     bad = [value for value in normalized if value not in allowed]
     if bad:
