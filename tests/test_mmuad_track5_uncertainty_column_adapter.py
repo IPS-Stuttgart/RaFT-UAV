@@ -50,6 +50,30 @@ def _high_sigma_estimate() -> pd.DataFrame:
     )
 
 
+def _zero_padded_estimate() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "sequence_id": ["001"],
+            "time_s": [0.0],
+            "state_x_m": [1.0],
+            "state_y_m": [2.0],
+            "state_z_m": [3.0],
+            "model_sigma": [2.0],
+        }
+    )
+
+
+def _zero_padded_template() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Sequence": ["001"],
+            "Timestamp": [0.0],
+            "Position": ["(0,0,0)"],
+            "Classification": [2],
+        }
+    )
+
+
 def test_uncertainty_adapter_normalizes_per_input_columns(tmp_path: Path) -> None:
     low_csv = tmp_path / "low.csv"
     high_csv = tmp_path / "high.csv"
@@ -116,6 +140,51 @@ def test_uncertainty_adapter_can_run_upload_ready_ensemble(tmp_path: Path) -> No
     assert ensemble.loc[0, "state_y_m"] == pytest.approx(0.03998400639744103)
     manifest = json.loads(paths["manifest_json"].read_text(encoding="utf-8"))
     assert manifest["run_ensemble"] is True
+
+
+def test_uncertainty_adapter_preserves_zero_padded_sequence_ids(tmp_path: Path) -> None:
+    estimate_csv = tmp_path / "estimate.csv"
+    _zero_padded_estimate().to_csv(estimate_csv, index=False)
+
+    normalized, _ = normalize_uncertainty_estimate_inputs(
+        [EstimateInput("model", estimate_csv, 1.0)],
+        output_dir=tmp_path / "out",
+        uncertainty_columns={"model": "model_sigma"},
+        output_uncertainty_column="predicted_sigma_m",
+    )
+
+    rows = pd.read_csv(normalized[0].path, dtype=str, keep_default_na=False)
+    assert rows.loc[0, "sequence_id"] == "001"
+
+
+def test_uncertainty_adapter_run_ensemble_matches_zero_padded_template(
+    tmp_path: Path,
+) -> None:
+    estimate_csv = tmp_path / "estimate.csv"
+    _zero_padded_estimate().to_csv(estimate_csv, index=False)
+
+    paths = write_uncertainty_column_adapter_outputs(
+        estimate_inputs=[EstimateInput("model", estimate_csv, 1.0)],
+        output_dir=tmp_path / "out",
+        uncertainty_columns={"model": "model_sigma"},
+        template=_zero_padded_template(),
+        class_map={"001": "2"},
+        run_ensemble=True,
+    )
+
+    ensemble = pd.read_csv(
+        paths["ensemble_ensemble_estimates_csv"],
+        dtype=str,
+        keep_default_na=False,
+    )
+    assert ensemble.loc[0, "sequence_id"] == "001"
+    assert float(ensemble.loc[0, "state_x_m"]) == pytest.approx(1.0)
+    assert float(ensemble.loc[0, "state_y_m"]) == pytest.approx(2.0)
+    assert float(ensemble.loc[0, "state_z_m"]) == pytest.approx(3.0)
+    assert int(float(ensemble.loc[0, "ensemble_source_count"])) == 1
+
+    validation = json.loads(paths["ensemble_validation_json"].read_text(encoding="utf-8"))
+    assert validation["leaderboard_ready"] is True
 
 
 def test_uncertainty_adapter_cli_writes_outputs(tmp_path: Path) -> None:

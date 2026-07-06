@@ -56,7 +56,7 @@ def normalize_uncertainty_estimate_inputs(
     normalized_inputs: list[EstimateInput] = []
     records: list[dict[str, Any]] = []
     for item in inputs:
-        rows = pd.read_csv(item.path)
+        rows = pd.read_csv(item.path, dtype=str, keep_default_na=False)
         source_column = _select_uncertainty_column(
             rows,
             label=item.label,
