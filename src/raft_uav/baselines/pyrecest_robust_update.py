@@ -129,6 +129,12 @@ def _raft_update_action(action: str) -> str:
     return action
 
 
+def _as_symmetric_float_matrix(matrix: np.ndarray) -> np.ndarray:
+    """Return a float covariance matrix with numerical asymmetry removed."""
+
+    return symmetrized(np.asarray(matrix, dtype=float))
+
+
 def plan_linear_measurement_update(
     *,
     mean: np.ndarray,
@@ -148,9 +154,9 @@ def plan_linear_measurement_update(
 
     plan = _pyrecest_plan_linear_measurement_update(
         mean=mean,
-        covariance_matrix=covariance_matrix,
+        covariance_matrix=_as_symmetric_float_matrix(covariance_matrix),
         measurement_vector=measurement_vector,
-        measurement_covariance=measurement_covariance,
+        measurement_covariance=_as_symmetric_float_matrix(measurement_covariance),
         observation_matrix=observation_matrix,
         gate_threshold=gate_threshold,
         safety_gate_threshold=safety_gate_threshold,
@@ -162,10 +168,10 @@ def plan_linear_measurement_update(
     )
     return LinearUpdatePlan(
         vector=np.asarray(plan.vector, dtype=float),
-        covariance=np.asarray(plan.covariance, dtype=float),
+        covariance=_as_symmetric_float_matrix(plan.covariance),
         observation=np.asarray(plan.observation, dtype=float),
         residual=np.asarray(plan.residual, dtype=float),
-        innovation_covariance=np.asarray(plan.innovation_covariance, dtype=float),
+        innovation_covariance=_as_symmetric_float_matrix(plan.innovation_covariance),
         nis=float(plan.nis),
         residual_norm=float(plan.residual_norm),
         threshold=plan.gate_threshold,

@@ -31,6 +31,11 @@ predictions. The sample `submission.zip` is used as the file-name template.
 
 ## RaFT-UAV utilities
 
+For a concise pre-upload QA sequence, see
+[`multi_uav_lts_upload_checklist.md`](multi_uav_lts_upload_checklist.md). The
+checklist records the intended order: inventory, coverage audit, package,
+re-validate the final ZIP, and store provenance next to the upload artifact.
+
 Inventory data or template archives:
 
 ```bash

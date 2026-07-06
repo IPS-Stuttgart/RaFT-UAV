@@ -328,7 +328,7 @@ def _parse_text_list(values: list[str]) -> tuple[str, ...]:
     for value in values:
         for item in str(value).replace(";", ",").split(","):
             item = item.strip()
-            if item:
+            if item and item not in parsed:
                 parsed.append(item)
     return tuple(parsed)
 
@@ -341,9 +341,11 @@ def _parse_optional_float_list(values: list[str]) -> tuple[float | None, ...]:
             if not text:
                 continue
             if text in {"none", "null", "off", "inf"}:
-                parsed.append(None)
+                item = None
             else:
-                parsed.append(_parse_nonnegative_finite_gap(text))
+                item = _parse_nonnegative_finite_gap(text)
+            if item not in parsed:
+                parsed.append(item)
     return tuple(parsed or [None])
 
 
@@ -372,7 +374,7 @@ def _normalized_choices(
     bad = [value for value in normalized if value not in allowed]
     if bad:
         raise ValueError(f"{name} values must be in {allowed}; got {bad}")
-    return normalized
+    return tuple(dict.fromkeys(normalized))
 
 
 def _variant_label(method: str, gap_s: float | None, class_policy: str) -> str:
