@@ -196,10 +196,12 @@ def match_submission_to_truth(
     else:
         submission["sequence_id"] = _normalize_submission_sequence_ids(submission["sequence_id"])
     if "track_id" in submission.columns:
-        submission["track_id"] = submission["track_id"].astype(str)
+        submission["track_id"] = submission["track_id"].map(
+            lambda value: _valid_track_id_text(value) or ""
+        )
     truth = normalize_truth_columns(truth)
     if "track_id" in truth.columns:
-        truth["track_id"] = truth["track_id"].astype(str)
+        truth["track_id"] = truth["track_id"].map(lambda value: _valid_track_id_text(value) or "")
     rows: list[dict[str, Any]] = []
     for sequence_id, pred_seq in submission.groupby("sequence_id", sort=True):
         truth_seq = truth.loc[truth["sequence_id"] == sequence_id].copy()
@@ -274,7 +276,7 @@ def match_submission_to_truth(
                 {
                     "sequence_id": sequence_id,
                     "time_s": float(pred["time_s"]),
-                    "track_id": str(pred.get("track_id", "uav0")),
+                    "track_id": _valid_track_id_text(pred.get("track_id", "uav0")) or "uav0",
                     "truth_time_s": float(gt["time_s"]),
                     "truth_track_id": _truth_track_id(gt),
                     "time_delta_s": dt,
@@ -392,10 +394,30 @@ def _valid_track_id_text(value: Any) -> str | None:
         missing = False
     if isinstance(missing, bool) and missing:
         return None
+    numeric_text = _numeric_track_id_text(value)
+    if numeric_text is not None:
+        return numeric_text
     text = str(value).strip()
     if text.lower() in _MISSING_TRACK_ID_TOKENS:
         return None
     return text
+
+
+def _numeric_track_id_text(value: Any) -> str | None:
+    """Return stable text for numeric track IDs without turning ``1`` into ``1.0``."""
+
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if not np.isfinite(value):
+            return None
+        if value.is_integer():
+            return str(int(value))
+    return None
 
 
 def _metric_sequence_ids(
@@ -410,7 +432,9 @@ def _metric_sequence_ids(
     for frame in (truth, submission, matches):
         if frame.empty or "sequence_id" not in frame.columns:
             continue
-        sequence_ids.update(_normalize_submission_sequence_ids(frame["sequence_id"]).dropna().astype(str))
+        sequence_ids.update(
+            _normalize_submission_sequence_ids(frame["sequence_id"]).dropna().astype(str)
+        )
     return sorted(sequence_ids)
 
 
@@ -490,7 +514,7 @@ def _unmatched_prediction_row(pred: pd.Series, *, reason: str) -> dict[str, Any]
             pd.Series([pred.get("sequence_id", "default")])
         ).iloc[0],
         "time_s": float(pred.get("time_s", np.nan)),
-        "track_id": str(pred.get("track_id", "uav0")),
+        "track_id": _valid_track_id_text(pred.get("track_id", "uav0")) or "uav0",
         "truth_time_s": np.nan,
         "truth_track_id": "",
         "time_delta_s": np.nan,
