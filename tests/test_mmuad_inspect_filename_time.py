@@ -13,8 +13,8 @@ def test_explicit_leading_negative_timestamp_is_preserved() -> None:
 
 
 def test_classify_mmuad_file_uses_separator_safe_timestamp() -> None:
-    category, modality, time_s = classify_mmuad_file(Path("sequence/lidar/frame-042.pdc"))
+    category, modality, time_s = classify_mmuad_file(Path("sequence/lidar/frame-042.pcd"))
 
-    assert category == "other"
+    assert category == "point_cloud"
     assert modality == "lidar"
     assert time_s == 42.0
