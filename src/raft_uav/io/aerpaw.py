@@ -835,7 +835,9 @@ def _catprob_threshold_rows(radar: pd.DataFrame, catprob_threshold: float) -> pd
     keep = cat_prob >= float(catprob_threshold)
     records = [row for row, keep_row in zip(radar.to_dict("records"), keep, strict=True) if keep_row]
     index = radar.index[np.flatnonzero(keep)]
-    return pd.DataFrame.from_records(records, columns=radar.columns, index=index)
+    selected = pd.DataFrame.from_records(records, columns=radar.columns, index=index)
+    selected["cat_prob_uav"] = cat_prob[keep]
+    return selected
 
 
 def _catprob_best_per_frame_rows(

@@ -156,6 +156,7 @@ def apply_train_selected_reservoir_config(
             score_column="candidate_reservoir_train_adjusted_score",
             fallback_score_column=str(config["fallback_score_column"]),
             score_floor_quantile=_optional_float(config.get("score_floor_quantile")),
+            preserve_reason_prefixes=() if cap_mode == "score" else ("branch:", "source:"),
         ),
     )
     if cap_mode == "diversity":
