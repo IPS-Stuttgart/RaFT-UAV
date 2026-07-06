@@ -370,7 +370,10 @@ def _nearest_time_relabel_merge(
         record = row.to_dict()
         record["source_classification"] = source_classification
         record["source_time_delta_s"] = source_time_delta_s
-        record["source_abs_time_delta_s"] = abs(source_time_delta_s) if np.isfinite(source_time_delta_s) else np.nan
+        if np.isfinite(source_time_delta_s):
+            record["source_abs_time_delta_s"] = abs(source_time_delta_s)
+        else:
+            record["source_abs_time_delta_s"] = np.nan
         records.append(record)
     return pd.DataFrame.from_records(records)
 
