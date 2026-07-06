@@ -161,6 +161,56 @@ def test_trajectory_smoothing_cli_writes_outputs(tmp_path: Path) -> None:
     assert (output_dir / "mmuad_track5_trajectory_smooth_manifest.json").exists()
 
 
+def test_trajectory_smoothing_cli_preserves_zero_padded_template_sequences(
+    tmp_path: Path,
+) -> None:
+    submission_csv = tmp_path / "mmaud_results.csv"
+    template_csv = tmp_path / "template.csv"
+    output_dir = tmp_path / "out"
+    rows = _normalized_rows().copy()
+    rows["sequence_id"] = "001"
+    template = _template().copy()
+    template["Sequence"] = "001"
+    write_official_mmaud_results_csv(
+        rows,
+        submission_csv,
+        classification=2,
+        invalid_row_policy="raise",
+    )
+    template.to_csv(template_csv, index=False)
+
+    status = smooth_main(
+        [
+            "--submission",
+            str(submission_csv),
+            "--template",
+            str(template_csv),
+            "--output-dir",
+            str(output_dir),
+            "--window-s",
+            "2",
+            "--bandwidth-s",
+            "1",
+            "--blend",
+            "0.5",
+            "--require-leaderboard-ready",
+        ]
+    )
+
+    validation = json.loads(
+        (output_dir / "mmuad_track5_trajectory_smooth_validation.json").read_text(
+            encoding="utf-8",
+        )
+    )
+    written = pd.read_csv(output_dir / "mmaud_results_smoothed.csv", dtype=str)
+
+    assert status == 0
+    assert set(written["Sequence"]) == {"001"}
+    assert validation["leaderboard_ready"] is True
+    assert validation["missing_template_timestamp_count"] == 0
+    assert validation["extra_prediction_count"] == 0
+
+
 def test_trajectory_smoothing_entrypoint_is_exposed() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert (
