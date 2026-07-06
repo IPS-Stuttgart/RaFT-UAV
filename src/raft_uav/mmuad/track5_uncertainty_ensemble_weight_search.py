@@ -259,13 +259,13 @@ def _simplex_integer_grid(count: int, total: int) -> list[tuple[int, ...]]:
 def _normalize_truth_for_exact_template(truth: pd.DataFrame) -> pd.DataFrame:
     rows = pd.DataFrame(truth).copy()
     if rows.empty:
-        return pd.DataFrame(columns=["sequence_id", "time_s", "x_m", "y_m", "z_m"])
+        return pd.DataFrame(columns=["sequence_id", "_time_token", "x_m", "y_m", "z_m"])
     rows["sequence_id"] = rows["sequence_id"].astype(str)
     for column in ("time_s", "x_m", "y_m", "z_m"):
         rows[column] = pd.to_numeric(rows[column], errors="coerce")
-    rows["_time_key"] = _time_key(rows["time_s"])
+    rows["_time_token"] = _time_token(rows["time_s"])
     finite = np.isfinite(rows[["time_s", "x_m", "y_m", "z_m"]].to_numpy(float)).all(axis=1)
-    return rows.loc[finite, ["sequence_id", "_time_key", "x_m", "y_m", "z_m"]].copy()
+    return rows.loc[finite, ["sequence_id", "_time_token", "x_m", "y_m", "z_m"]].copy()
 
 
 def _score_template_estimates(estimates: pd.DataFrame, truth: pd.DataFrame) -> dict[str, Any]:
@@ -273,8 +273,13 @@ def _score_template_estimates(estimates: pd.DataFrame, truth: pd.DataFrame) -> d
     if rows.empty or truth.empty:
         return _empty_metrics()
     rows["sequence_id"] = rows["sequence_id"].astype(str)
-    rows["_time_key"] = _time_key(pd.to_numeric(rows["time_s"], errors="coerce"))
-    merged = rows.merge(truth, on=["sequence_id", "_time_key"], how="inner", suffixes=("", "_truth"))
+    rows["_time_token"] = _time_token(pd.to_numeric(rows["time_s"], errors="coerce"))
+    merged = rows.merge(
+        truth,
+        on=["sequence_id", "_time_token"],
+        how="inner",
+        suffixes=("", "_truth"),
+    )
     if merged.empty:
         return _empty_metrics()
     estimated_xyz = merged[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
@@ -313,8 +318,12 @@ def _empty_metrics() -> dict[str, Any]:
     }
 
 
-def _time_key(values: pd.Series) -> pd.Series:
-    return pd.to_numeric(values, errors="coerce").round(9).astype(str)
+def _time_token(values: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce")
+    rounded = np.round(numeric.to_numpy(dtype=float, na_value=np.nan), 9)
+    rounded[np.isfinite(rounded) & (rounded == 0.0)] = 0.0
+    tokens = [f"{value:.9f}" if np.isfinite(value) else "" for value in rounded]
+    return pd.Series(tokens, index=values.index, dtype="object")
 
 
 def _safe_mean(values: pd.Series) -> float | None:
