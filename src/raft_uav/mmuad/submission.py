@@ -29,7 +29,9 @@ _official_track5_row_diagnostics_original = getattr(_impl, _ORIGINAL_ROW_DIAGNOS
 
 
 def _parse_official_classification_cell_with_domain(value: Any) -> int:
-    if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+    if isinstance(value, (bool, _impl.np.bool_)) or (
+        isinstance(value, str) and value.strip().lower() in {"true", "false"}
+    ):
         raise ValueError(
             "official MMUAD Classification values must be integer ids, not booleans"
         )
