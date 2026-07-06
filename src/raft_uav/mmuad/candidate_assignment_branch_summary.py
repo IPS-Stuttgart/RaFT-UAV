@@ -1,11 +1,4 @@
-"""Summarize MMUAD candidate-mixture assignment diagnostics by branch/source.
-
-``raft-uav-mmuad-candidate-assignment-diagnostics`` identifies whether a frame
-failed because the good candidate was missing, buried, or assigned too little
-responsibility.  This helper aggregates those frame rows by oracle/dominant
-branch and source so branch-reservoir experiments can see which candidate stream
-should be promoted or protected next.
-"""
+"""Summarize MMUAD candidate-mixture assignment diagnostics by branch/source."""
 
 from __future__ import annotations
 
@@ -29,8 +22,6 @@ _GROUP_COLUMNS = (
 
 
 def build_candidate_assignment_branch_summary(frame_rows: pd.DataFrame) -> pd.DataFrame:
-    """Return pooled and per-sequence assignment summaries by branch/source."""
-
     rows = _normalized_frame_rows(frame_rows)
     if rows.empty:
         return pd.DataFrame()
@@ -50,8 +41,6 @@ def write_candidate_assignment_branch_summary(
     summary: pd.DataFrame,
     provenance: dict[str, Any] | None = None,
 ) -> dict[str, str]:
-    """Write branch/source assignment summary artifacts."""
-
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     paths = {
@@ -131,16 +120,14 @@ def _normalized_frame_rows(frame_rows: pd.DataFrame) -> pd.DataFrame:
 
 
 def _group_records(rows: pd.DataFrame, *, sequence_id: str) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    records.append(_summary_record(rows, sequence_id=sequence_id, group_label="__all__"))
+    records = [_summary_record(rows, sequence_id=sequence_id, group_label="__all__")]
     for keys, group in rows.groupby(list(_GROUP_COLUMNS), sort=True, dropna=False):
-        key_values = dict(zip(_GROUP_COLUMNS, keys, strict=False))
         records.append(
             _summary_record(
                 group,
                 sequence_id=sequence_id,
                 group_label="branch_source_failure",
-                group_values=key_values,
+                group_values=dict(zip(_GROUP_COLUMNS, keys, strict=False)),
             )
         )
     return records
@@ -201,17 +188,24 @@ def _clean_text(values: pd.Series) -> pd.Series:
 
 
 def _bool_series(values: pd.Series) -> pd.Series:
-    if values.dtype == bool:
-        return values.fillna(False)
-    text = values.fillna(False).astype(str).str.strip().str.lower()
-    return text.isin({"true", "1", "yes", "y"})
+    series = pd.Series(values)
+    if series.empty:
+        return pd.Series(dtype=bool, index=series.index)
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return series.fillna(False).astype(bool)
+    numeric = pd.to_numeric(series, errors="coerce")
+    numeric_truthy = numeric.notna() & (numeric != 0.0)
+    text = series.where(series.notna(), "").astype(str).str.strip().str.lower()
+    truthy_text = text.isin({"true", "t", "yes", "y", "1", "1.0"})
+    falsy_text = text.isin(
+        {"false", "f", "no", "n", "0", "0.0", "", "nan", "none", "<na>", "nat"}
+    )
+    return (truthy_text | (numeric_truthy & ~falsy_text)).astype(bool)
 
 
 def _mse(values: pd.Series) -> float:
     series = pd.to_numeric(values, errors="coerce").dropna()
-    if series.empty:
-        return float("nan")
-    return float(np.mean(np.square(series.to_numpy(float))))
+    return float(np.mean(np.square(series.to_numpy(float)))) if not series.empty else float("nan")
 
 
 def _mean(values: pd.Series) -> float:
@@ -259,7 +253,7 @@ def _assignment_priority_score(
 def _jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, list | tuple):
+    if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
     if hasattr(value, "item"):
         try:
