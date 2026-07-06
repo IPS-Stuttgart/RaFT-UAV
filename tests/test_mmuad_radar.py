@@ -72,6 +72,54 @@ def test_radar_polar_csv_preserves_zero_padded_sequence_and_track_ids(
     )
 
 
+def test_radar_polar_csv_accepts_padded_headers_and_preserves_text_ids(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "radar_padded.csv"
+    pd.DataFrame(
+        {
+            " Sequence ": ["001"],
+            " Time_S ": [0.0],
+            " Range_M ": [10.0],
+            " Azimuth_Deg ": [90.0],
+            " Elevation_Deg ": [0.0],
+            " Track ": ["0007"],
+            " Confidence ": ["0.9"],
+        }
+    ).to_csv(path, index=False)
+
+    frame = load_radar_polar_csv_as_candidates(path)
+
+    assert frame.rows["sequence_id"].tolist() == ["001"]
+    assert frame.rows["track_id"].tolist() == ["0007"]
+    assert frame.rows["confidence"].tolist() == [0.9]
+    np.testing.assert_allclose(
+        frame.rows[["x_m", "y_m", "z_m"]].to_numpy(dtype=float),
+        [[10.0, 0.0, 0.0]],
+        atol=1.0e-9,
+    )
+
+
+def test_radar_polar_frame_filters_malformed_angle_rows() -> None:
+    frame = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0],
+            "range_m": [10.0, 20.0],
+            "azimuth_deg": [90.0, "not-a-number"],
+            "elevation_deg": [0.0, 0.0],
+        }
+    )
+
+    candidates = radar_polar_frame_to_candidates(frame)
+
+    assert candidates.rows["time_s"].tolist() == [0.0]
+    np.testing.assert_allclose(
+        candidates.rows[["x_m", "y_m", "z_m"]].to_numpy(dtype=float),
+        [[10.0, 0.0, 0.0]],
+        atol=1.0e-9,
+    )
+
+
 def test_nested_radar_json_detections_inherit_parent_metadata(tmp_path: Path) -> None:
     path = tmp_path / "radar.json"
     path.write_text(
