@@ -38,6 +38,7 @@ VALIDATION_ROWS_CSV = "mmuad_track5_ensemble_validation_rows.csv"
 OFFICIAL_RESULTS_CSV = "mmaud_results.csv"
 OFFICIAL_ZIP = "ug2_submission.zip"
 ENSEMBLE_POLICIES = ("weighted-mean", "weighted-median", "trimmed-mean")
+ESTIMATE_SEQUENCE_COLUMNS = ("sequence_id", "Sequence", "sequence", "seq")
 # Resampling copies requested template timestamps into each candidate row. Match those
 # rows with an absolute tolerance only; NumPy's default relative tolerance is unsafe
 # for epoch-style timestamps because seconds-scale differences can compare close.
@@ -76,6 +77,22 @@ def parse_estimate_spec(value: str) -> EstimateInput:
         path=Path(path_text),
         weight=_validate_ensemble_weight(weight, label=label),
     )
+
+
+def load_track5_estimate_csv(path: Path) -> pd.DataFrame:
+    """Load an estimate CSV without coercing opaque Track 5 sequence IDs.
+
+    Pandas' default dtype inference turns numeric-looking identifiers such as
+    ``001`` into integer ``1``.  Track 5 sequence identifiers are opaque, so
+    losing leading zeros prevents matching against official templates and class
+    maps that preserve the original text.
+    """
+
+    header = pd.read_csv(path, nrows=0)
+    sequence_dtypes = {column: str for column in ESTIMATE_SEQUENCE_COLUMNS if column in header.columns}
+    if not sequence_dtypes:
+        return pd.read_csv(path)
+    return pd.read_csv(path, dtype=sequence_dtypes, keep_default_na=False)
 
 
 def _validate_ensemble_weight(weight: float, *, label: str) -> float:
@@ -228,7 +245,8 @@ def write_track5_estimate_ensemble_outputs(
 
     estimate_input_list = list(estimate_inputs)
     loaded_inputs = [
-        (item.label, pd.read_csv(item.path), float(item.weight)) for item in estimate_input_list
+        (item.label, load_track5_estimate_csv(item.path), float(item.weight))
+        for item in estimate_input_list
     ]
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
