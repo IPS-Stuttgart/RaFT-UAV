@@ -16,7 +16,7 @@ from typing import Any
 import pandas as pd
 
 from raft_uav.mmuad import _submission_impl
-from raft_uav.mmuad.submission import OFFICIAL_TRACK5_CLASS_IDS
+from raft_uav.mmuad.submission import OFFICIAL_TRACK5_CLASS_IDS, OFFICIAL_UG2_RESULT_COLUMNS
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "evaluator.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -50,12 +50,21 @@ def _parse_official_truth_classification_cell(value: Any) -> int:
     return parser(value)
 
 
+def _official_track5_column_lookup(frame: pd.DataFrame) -> dict[str, Any]:
+    return {str(column).strip().lower(): column for column in frame.columns}
+
+
+def _has_official_track5_columns(frame: pd.DataFrame) -> bool:
+    lower = set(_official_track5_column_lookup(frame))
+    return {column.lower() for column in OFFICIAL_UG2_RESULT_COLUMNS}.issubset(lower)
+
+
 def _official_track5_results_to_local_frame(
     frame: pd.DataFrame,
     *,
     enforce_class_domain: bool = True,
 ) -> pd.DataFrame:
-    lower_to_original = {str(column).lower(): column for column in frame.columns}
+    lower_to_original = _official_track5_column_lookup(frame)
     sequence_col = lower_to_original["sequence"]
     timestamp_col = lower_to_original["timestamp"]
     position_col = lower_to_original["position"]
@@ -117,6 +126,7 @@ def _read_results_zip_csv(path: Path, *, member_name: str) -> pd.DataFrame:
             return _read_results_csv_preserving_text(_IMPL.BytesIO(handle.read()))
 
 
+_IMPL._has_official_track5_columns = _has_official_track5_columns
 _IMPL._official_track5_results_to_local_frame = _official_track5_results_to_local_frame
 _IMPL._official_track5_truth_to_rows = _official_track5_truth_to_rows
 _IMPL.load_mmaud_results_csv = load_mmaud_results_csv
@@ -128,6 +138,8 @@ for _name in dir(_IMPL):
 
 globals()["_parse_official_result_classification_cell"] = _parse_official_result_classification_cell
 globals()["_parse_official_truth_classification_cell"] = _parse_official_truth_classification_cell
+globals()["_official_track5_column_lookup"] = _official_track5_column_lookup
+globals()["_has_official_track5_columns"] = _has_official_track5_columns
 globals()["_read_results_csv_preserving_text"] = _read_results_csv_preserving_text
 __doc__ = _IMPL.__doc__
 __all__ = [_name for _name in dir(_IMPL) if not _name.startswith("__")]
