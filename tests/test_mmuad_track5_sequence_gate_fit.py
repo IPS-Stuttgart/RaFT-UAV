@@ -314,5 +314,5 @@ def test_sequence_gate_fit_entrypoint_is_exposed() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert (
         pyproject["project"]["scripts"]["raft-uav-mmuad-track5-sequence-gate-fit"]
-        == "raft_uav.mmuad.track5_sequence_gate_fit:main"
+        == "raft_uav.mmuad.track5_sequence_gate_fit_text_cli:main"
     )

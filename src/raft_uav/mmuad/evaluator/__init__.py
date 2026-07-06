@@ -50,12 +50,25 @@ def _parse_official_truth_classification_cell(value: Any) -> int:
     return parser(value)
 
 
+def _official_track5_column_map(frame: pd.DataFrame) -> dict[str, Any]:
+    """Map official Track 5 columns after trimming common CSV header whitespace."""
+
+    return {str(column).strip().lower(): column for column in frame.columns}
+
+
+def _has_official_track5_columns(frame: pd.DataFrame) -> bool:
+    lower = set(_official_track5_column_map(frame))
+    return {column.lower() for column in _submission_impl.OFFICIAL_UG2_RESULT_COLUMNS}.issubset(
+        lower
+    )
+
+
 def _official_track5_results_to_local_frame(
     frame: pd.DataFrame,
     *,
     enforce_class_domain: bool = True,
 ) -> pd.DataFrame:
-    lower_to_original = {str(column).lower(): column for column in frame.columns}
+    lower_to_original = _official_track5_column_map(frame)
     sequence_col = lower_to_original["sequence"]
     timestamp_col = lower_to_original["timestamp"]
     position_col = lower_to_original["position"]
@@ -117,6 +130,7 @@ def _read_results_zip_csv(path: Path, *, member_name: str) -> pd.DataFrame:
             return _read_results_csv_preserving_text(_IMPL.BytesIO(handle.read()))
 
 
+_IMPL._has_official_track5_columns = _has_official_track5_columns
 _IMPL._official_track5_results_to_local_frame = _official_track5_results_to_local_frame
 _IMPL._official_track5_truth_to_rows = _official_track5_truth_to_rows
 _IMPL.load_mmaud_results_csv = load_mmaud_results_csv
@@ -128,6 +142,7 @@ for _name in dir(_IMPL):
 
 globals()["_parse_official_result_classification_cell"] = _parse_official_result_classification_cell
 globals()["_parse_official_truth_classification_cell"] = _parse_official_truth_classification_cell
+globals()["_official_track5_column_map"] = _official_track5_column_map
 globals()["_read_results_csv_preserving_text"] = _read_results_csv_preserving_text
 __doc__ = _IMPL.__doc__
 __all__ = [_name for _name in dir(_IMPL) if not _name.startswith("__")]
