@@ -279,13 +279,17 @@ def test_track5_classification_relabel_cli_accepts_nearest_time_mode(tmp_path: P
     )
 
     assert status == 0
-    diagnostics = pd.read_csv(output_dir / "mmuad_track5_classification_relabel_diagnostics.csv")
+    diagnostics = pd.read_csv(
+        output_dir / "mmuad_track5_classification_relabel_diagnostics.csv",
+    )
     manifest = json.loads(
         (output_dir / "mmuad_track5_classification_relabel_manifest.json").read_text(
             encoding="utf-8",
         )
     )
-    assert diagnostics["source_abs_time_delta_s"].tolist() == pytest.approx([0.04, 0.05, 0.20])
+    assert diagnostics["source_abs_time_delta_s"].tolist() == pytest.approx(
+        [0.04, 0.05, 0.20],
+    )
     assert manifest["max_nearest_time_delta_s"] == 0.25
     assert manifest["validation"]["leaderboard_ready"] is True
 
