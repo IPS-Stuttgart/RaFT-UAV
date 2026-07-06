@@ -22,12 +22,17 @@ if not hasattr(_impl, _ORIGINAL_ROW_DIAGNOSTICS_ATTR):
     setattr(_impl, _ORIGINAL_ROW_DIAGNOSTICS_ATTR, _impl._official_track5_row_diagnostics)
 
 _parse_original = getattr(_impl, _ORIGINAL_PARSE_ATTR)
+setattr(_impl, "_raft_uav_permissive_parse_official_classification_cell", _parse_original)
 _load_sequence_class_map_original = getattr(_impl, _ORIGINAL_LOAD_ATTR)
 _normalize_official_track5_results_frame_original = getattr(_impl, _ORIGINAL_NORMALIZE_ATTR)
 _official_track5_row_diagnostics_original = getattr(_impl, _ORIGINAL_ROW_DIAGNOSTICS_ATTR)
 
 
 def _parse_official_classification_cell_with_domain(value: Any) -> int:
+    if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+        raise ValueError(
+            "official MMUAD Classification values must be integer ids, not booleans"
+        )
     class_id = _parse_original(value)
     if class_id not in _impl.OFFICIAL_TRACK5_CLASS_IDS:
         allowed = ", ".join(str(item) for item in sorted(_impl.OFFICIAL_TRACK5_CLASS_IDS))
@@ -329,45 +334,28 @@ def _validate_official_track5_submission_with_text_sequences(
 
 
 def _normalize_official_track5_results_frame_with_domain(frame: Any) -> Any:
-    """Normalize Track 5 rows while preserving the public class-ID domain check."""
+    """Normalize Track 5 rows while preserving official truth class IDs."""
 
-    normalized = _normalize_official_track5_results_frame_original(frame)
-    for value in normalized["Classification"]:
-        _parse_official_classification_cell_with_domain(value)
-    return normalized
+    return _normalize_official_track5_results_frame_original(frame)
 
 
 def _official_track5_row_diagnostics_with_domain(frame: Any) -> tuple[Any, Any]:
-    """Mark out-of-domain Track 5 classifications invalid during validation."""
+    """Mark boolean Track 5 classifications invalid during validation."""
 
     diagnostics, normalized = _official_track5_row_diagnostics_original(frame)
-    if normalized.empty or "classification" not in normalized.columns:
-        return diagnostics, normalized
-
-    invalid_reasons: dict[int, str] = {}
-    for _, row in normalized.iterrows():
-        row_index = int(row["row_index"])
-        try:
-            _parse_official_classification_cell_with_domain(row["classification"])
-        except ValueError as exc:
-            invalid_reasons[row_index] = str(exc)
-    if not invalid_reasons:
-        return diagnostics, normalized
-
-    diagnostics = diagnostics.copy()
-    normalized = normalized.copy()
-    invalid_indices = set(invalid_reasons)
-    invalid_mask = (
-        diagnostics["row_index"].isin(invalid_indices)
-        & diagnostics["status"].eq("ok")
-    )
-    diagnostics.loc[invalid_mask, "status"] = "invalid_classification"
-    diagnostics.loc[invalid_mask, "reason"] = diagnostics.loc[
-        invalid_mask, "row_index"
-    ].map(invalid_reasons)
-    normalized = normalized.loc[
-        ~normalized["row_index"].isin(invalid_indices)
-    ].reset_index(drop=True)
+    if not diagnostics.empty and "Classification" in frame.columns:
+        bool_mask = frame["Classification"].astype(str).str.strip().str.lower().isin(
+            {"true", "false"}
+        )
+        if bool_mask.any():
+            diagnostics = diagnostics.copy()
+            invalid_indices = set(frame.index[bool_mask].astype(int).tolist())
+            mask = diagnostics["row_index"].isin(invalid_indices)
+            diagnostics.loc[mask, "status"] = "invalid_classification"
+            diagnostics.loc[
+                mask,
+                "reason",
+            ] = "official MMUAD Classification values must be integer ids, not booleans"
     return diagnostics, normalized
 
 

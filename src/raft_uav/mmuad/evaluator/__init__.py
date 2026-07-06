@@ -44,7 +44,7 @@ def _parse_official_result_classification_cell(value: Any) -> int:
 def _parse_official_truth_classification_cell(value: Any) -> int:
     parser = getattr(
         _submission_impl,
-        "_raft_uav_original_parse_official_classification_cell",
+        "_raft_uav_permissive_parse_official_classification_cell",
         _submission_impl.parse_official_classification_cell,
     )
     return parser(value)
