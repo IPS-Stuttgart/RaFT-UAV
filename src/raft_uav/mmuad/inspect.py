@@ -12,6 +12,7 @@ from collections import Counter
 from dataclasses import dataclass
 import json
 from pathlib import Path, PurePosixPath
+import re
 import tarfile
 from typing import Any
 import zipfile
@@ -22,7 +23,6 @@ from raft_uav.mmuad.io import (
     DELIMITED_TABLE_SUFFIXES,
     JSON_TABLE_SUFFIXES,
     data_file_suffix,
-    infer_time_s_from_filename,
 )
 from raft_uav.mmuad.rosbag_bridge import load_topic_map_payload, load_topic_map_payload_text
 
@@ -108,6 +108,9 @@ MODALITY_DIR_HINTS = (
     "truth",
     "uav_type",
 )
+_FILENAME_NUMBER_TOKEN_RE = re.compile(
+    r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+)
 
 
 @dataclass(frozen=True)
@@ -189,6 +192,21 @@ def classify_mmuad_file(path: Path) -> tuple[str, str, float | None]:
     return _classify_logical_file(path)
 
 
+def _infer_time_s_from_filename(path: Path) -> float:
+    """Infer a frame timestamp from the last numeric filename token."""
+
+    stem = Path(path).stem
+    tokens: list[str] = []
+    for match in _FILENAME_NUMBER_TOKEN_RE.finditer(stem):
+        token = match.group(0)
+        if token[0] in "+-" and match.start() > 0 and stem[match.start() - 1].isalnum():
+            token = token[1:]
+        tokens.append(token)
+    if not tokens:
+        return 0.0
+    return float(tokens[-1])
+
+
 def _classify_logical_file(
     path: Path,
     *,
@@ -205,7 +223,7 @@ def _classify_logical_file(
         suffix in IMAGE_SUFFIXES | AUDIO_SUFFIXES | POINT_SUFFIXES | NUMPY_SUFFIXES
         or modality in {"radar", "lidar", "camera", "audio"}
     ):
-        inferred_time_s = infer_time_s_from_filename(path)
+        inferred_time_s = _infer_time_s_from_filename(path)
     if name in CALIBRATION_NAMES:
         return "calibration", modality, None
     if suffix in {".json", ".yaml", ".yml"} and "topic_map" in name:
