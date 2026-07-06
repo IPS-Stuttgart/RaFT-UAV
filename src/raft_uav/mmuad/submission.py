@@ -9,14 +9,22 @@ from raft_uav.mmuad import _submission_impl as _impl
 
 _ORIGINAL_PARSE_ATTR = "_raft_uav_original_parse_official_classification_cell"
 _ORIGINAL_LOAD_ATTR = "_raft_uav_original_load_sequence_class_map"
+_ORIGINAL_NORMALIZE_ATTR = "_raft_uav_original_normalize_official_track5_results_frame"
+_ORIGINAL_ROW_DIAGNOSTICS_ATTR = "_raft_uav_original_official_track5_row_diagnostics"
 
 if not hasattr(_impl, _ORIGINAL_PARSE_ATTR):
     setattr(_impl, _ORIGINAL_PARSE_ATTR, _impl.parse_official_classification_cell)
 if not hasattr(_impl, _ORIGINAL_LOAD_ATTR):
     setattr(_impl, _ORIGINAL_LOAD_ATTR, _impl.load_sequence_class_map)
+if not hasattr(_impl, _ORIGINAL_NORMALIZE_ATTR):
+    setattr(_impl, _ORIGINAL_NORMALIZE_ATTR, _impl.normalize_official_track5_results_frame)
+if not hasattr(_impl, _ORIGINAL_ROW_DIAGNOSTICS_ATTR):
+    setattr(_impl, _ORIGINAL_ROW_DIAGNOSTICS_ATTR, _impl._official_track5_row_diagnostics)
 
 _parse_original = getattr(_impl, _ORIGINAL_PARSE_ATTR)
 _load_sequence_class_map_original = getattr(_impl, _ORIGINAL_LOAD_ATTR)
+_normalize_official_track5_results_frame_original = getattr(_impl, _ORIGINAL_NORMALIZE_ATTR)
+_official_track5_row_diagnostics_original = getattr(_impl, _ORIGINAL_ROW_DIAGNOSTICS_ATTR)
 
 
 def _parse_official_classification_cell_with_domain(value: Any) -> int:
@@ -320,6 +328,49 @@ def _validate_official_track5_submission_with_text_sequences(
     return _impl.OfficialTrack5Validation(summary=summary, rows=row_diagnostics)
 
 
+def _normalize_official_track5_results_frame_with_domain(frame: Any) -> Any:
+    """Normalize Track 5 rows while preserving the public class-ID domain check."""
+
+    normalized = _normalize_official_track5_results_frame_original(frame)
+    for value in normalized["Classification"]:
+        _parse_official_classification_cell_with_domain(value)
+    return normalized
+
+
+def _official_track5_row_diagnostics_with_domain(frame: Any) -> tuple[Any, Any]:
+    """Mark out-of-domain Track 5 classifications invalid during validation."""
+
+    diagnostics, normalized = _official_track5_row_diagnostics_original(frame)
+    if normalized.empty or "classification" not in normalized.columns:
+        return diagnostics, normalized
+
+    invalid_reasons: dict[int, str] = {}
+    for _, row in normalized.iterrows():
+        row_index = int(row["row_index"])
+        try:
+            _parse_official_classification_cell_with_domain(row["classification"])
+        except ValueError as exc:
+            invalid_reasons[row_index] = str(exc)
+    if not invalid_reasons:
+        return diagnostics, normalized
+
+    diagnostics = diagnostics.copy()
+    normalized = normalized.copy()
+    invalid_indices = set(invalid_reasons)
+    invalid_mask = (
+        diagnostics["row_index"].isin(invalid_indices)
+        & diagnostics["status"].eq("ok")
+    )
+    diagnostics.loc[invalid_mask, "status"] = "invalid_classification"
+    diagnostics.loc[invalid_mask, "reason"] = diagnostics.loc[
+        invalid_mask, "row_index"
+    ].map(invalid_reasons)
+    normalized = normalized.loc[
+        ~normalized["row_index"].isin(invalid_indices)
+    ].reset_index(drop=True)
+    return diagnostics, normalized
+
+
 _impl.parse_official_classification_cell = _parse_official_classification_cell_with_domain
 _impl.load_sequence_class_map = _load_sequence_class_map_with_official_sequences
 _impl.load_official_track5_template_file = (
@@ -331,6 +382,10 @@ _impl._read_official_track5_zip_for_validation = (
 _impl._read_official_track5_results_input = (
     _read_official_track5_results_input_with_text_sequences
 )
+_impl.normalize_official_track5_results_frame = (
+    _normalize_official_track5_results_frame_with_domain
+)
+_impl._official_track5_row_diagnostics = _official_track5_row_diagnostics_with_domain
 _impl.validate_official_track5_submission = (
     _validate_official_track5_submission_with_text_sequences
 )
@@ -345,6 +400,9 @@ globals().update(
 parse_official_classification_cell = _parse_official_classification_cell_with_domain
 load_sequence_class_map = _load_sequence_class_map_with_official_sequences
 load_official_track5_template_file = _load_official_track5_template_file_with_text_sequences
+normalize_official_track5_results_frame = (
+    _normalize_official_track5_results_frame_with_domain
+)
 validate_official_track5_submission = (
     _validate_official_track5_submission_with_text_sequences
 )
