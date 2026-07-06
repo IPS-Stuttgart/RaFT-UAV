@@ -86,6 +86,24 @@ def test_weight_search_selects_best_single_estimate(tmp_path: Path) -> None:
     assert len(best["by_sequence_metrics"]) == 2
 
 
+def test_weight_search_matches_integer_and_decimal_timestamps(tmp_path: Path) -> None:
+    good_csv = tmp_path / "good.csv"
+    _good_estimate().to_csv(good_csv, index=False)
+    truth = _truth()
+    truth["time_s"] = pd.Series([0, 1, 0], dtype="int64")
+
+    grid, best = search_track5_estimate_ensemble_weights(
+        [EstimateInput("good", good_csv)],
+        template=_template(),
+        truth=truth,
+        weight_step=1.0,
+    )
+
+    assert int(grid.loc[0, "matched_rows"]) == 3
+    assert best["metrics"]["matched_rows"] == 3
+    assert best["metrics"]["pose_mse_m2"] == pytest.approx(0.0)
+
+
 def test_weight_search_writes_grid_best_and_submission(tmp_path: Path) -> None:
     good_csv = tmp_path / "good.csv"
     bad_csv = tmp_path / "bad.csv"

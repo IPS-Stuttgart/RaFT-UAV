@@ -77,6 +77,8 @@ def test_reservoir_mixture_cli_writes_oracle_diagnostics(tmp_path: Path) -> None
             "0",
             "--max-candidates-per-frame",
             "2",
+            "--reservoir-cap-reason-bonus",
+            "0.5",
             "--oracle-top-k",
             "1",
             "--oracle-top-k",
@@ -85,6 +87,8 @@ def test_reservoir_mixture_cli_writes_oracle_diagnostics(tmp_path: Path) -> None
             "0",
             "--sigma-log-weight",
             "0",
+            "--loss",
+            "squared",
             "--smoothness-weight",
             "100",
         ]
@@ -112,6 +116,8 @@ def test_reservoir_mixture_cli_writes_oracle_diagnostics(tmp_path: Path) -> None
     assert "mixture_mse_3d_m2" in gap.columns
     assert "gap_to_oracle_all_mse_3d_m2" in gap.columns
     payload = json.loads(combined_summary.read_text(encoding="utf-8"))
+    assert payload["reservoir_config"]["cap_reason_bonus"] == 0.5
+    assert payload["mixture_config"]["loss"] == "squared"
     assert payload["reservoir_oracle"]["top_k_values"] == [1, 2]
     assert payload["reservoir_oracle"]["frame_count"] == 3
     assert payload["reservoir_oracle"]["pooled"]["oracle_all_3d_m_mse"] == 0.0
