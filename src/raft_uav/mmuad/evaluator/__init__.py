@@ -97,8 +97,30 @@ def _official_track5_truth_to_rows(frame: pd.DataFrame) -> pd.DataFrame:
     return _IMPL.normalize_truth_columns(rows)
 
 
+def _read_results_csv_preserving_text(source: Any) -> pd.DataFrame:
+    try:
+        return pd.read_csv(source, dtype=str, keep_default_na=False)
+    except TypeError:
+        return pd.read_csv(source)
+
+
+def load_mmaud_results_csv(path: Path) -> Any:
+    frame = _read_results_csv_preserving_text(path)
+    return _IMPL.ResultsFrame(_IMPL.validate_mmaud_results_frame(frame))
+
+
+def _read_results_zip_csv(path: Path, *, member_name: str) -> pd.DataFrame:
+    with _IMPL.ZipFile(path) as archive:
+        infos = [info for info in archive.infolist() if not info.is_dir()]
+        selected = _IMPL._select_results_zip_member(infos, member_name=member_name)
+        with archive.open(selected) as handle:
+            return _read_results_csv_preserving_text(_IMPL.BytesIO(handle.read()))
+
+
 _IMPL._official_track5_results_to_local_frame = _official_track5_results_to_local_frame
 _IMPL._official_track5_truth_to_rows = _official_track5_truth_to_rows
+_IMPL.load_mmaud_results_csv = load_mmaud_results_csv
+_IMPL._read_results_zip_csv = _read_results_zip_csv
 
 for _name in dir(_IMPL):
     if not _name.startswith("__"):
@@ -106,5 +128,6 @@ for _name in dir(_IMPL):
 
 globals()["_parse_official_result_classification_cell"] = _parse_official_result_classification_cell
 globals()["_parse_official_truth_classification_cell"] = _parse_official_truth_classification_cell
+globals()["_read_results_csv_preserving_text"] = _read_results_csv_preserving_text
 __doc__ = _IMPL.__doc__
 __all__ = [_name for _name in dir(_IMPL) if not _name.startswith("__")]
