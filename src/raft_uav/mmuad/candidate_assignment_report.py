@@ -15,13 +15,27 @@ from typing import Any
 
 import pandas as pd
 
-from raft_uav.mmuad.candidate_assignment_blocks import build_candidate_assignment_block_tables
-from raft_uav.mmuad.candidate_assignment_blocks import write_candidate_assignment_block_outputs
-from raft_uav.mmuad.candidate_assignment_branch_summary import build_candidate_assignment_branch_summary
-from raft_uav.mmuad.candidate_assignment_branch_summary import write_candidate_assignment_branch_summary
-from raft_uav.mmuad.candidate_assignment_diagnostics import CandidateAssignmentDiagnosticsConfig
-from raft_uav.mmuad.candidate_assignment_diagnostics import build_candidate_assignment_diagnostics
-from raft_uav.mmuad.candidate_assignment_diagnostics import write_candidate_assignment_diagnostics
+from raft_uav.mmuad.candidate_assignment_blocks import (
+    build_candidate_assignment_block_tables,
+)
+from raft_uav.mmuad.candidate_assignment_blocks import (
+    write_candidate_assignment_block_outputs,
+)
+from raft_uav.mmuad.candidate_assignment_branch_summary import (
+    build_candidate_assignment_branch_summary,
+)
+from raft_uav.mmuad.candidate_assignment_branch_summary import (
+    write_candidate_assignment_branch_summary,
+)
+from raft_uav.mmuad.candidate_assignment_diagnostics import (
+    CandidateAssignmentDiagnosticsConfig,
+)
+from raft_uav.mmuad.candidate_assignment_diagnostics import (
+    build_candidate_assignment_diagnostics,
+)
+from raft_uav.mmuad.candidate_assignment_diagnostics import (
+    write_candidate_assignment_diagnostics,
+)
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 
 REPORT_JSON = "mmuad_candidate_assignment_report.json"
@@ -41,7 +55,11 @@ def run_candidate_assignment_report(
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
-    frame_rows, summary = build_candidate_assignment_diagnostics(assignments, truth, config=config)
+    frame_rows, summary = build_candidate_assignment_diagnostics(
+        assignments,
+        truth,
+        config=config,
+    )
     diagnostic_paths = write_candidate_assignment_diagnostics(
         frame_rows=frame_rows,
         summary=summary,
@@ -71,6 +89,7 @@ def run_candidate_assignment_report(
     )
 
     report_path = output / REPORT_JSON
+    path_bundle = {**diagnostic_paths, **branch_paths, **block_paths, "report_json": report_path}
     report = {
         "schema": "raft-uav-mmuad-candidate-assignment-report-v1",
         "config": asdict(config),
@@ -80,18 +99,19 @@ def run_candidate_assignment_report(
         "branch_summary_row_count": int(len(branch_summary)),
         "block_count": int(len(blocks)),
         "block_summary_row_count": int(len(block_summary)),
-        "paths": _string_paths({**diagnostic_paths, **branch_paths, **block_paths}),
+        "paths": _string_paths(path_bundle),
         "pooled": _pooled_summary(summary),
     }
     report_path.write_text(json.dumps(_jsonable(report), indent=2), encoding="utf-8")
-    report["paths"]["report_json"] = str(report_path)
     return report
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="raft-uav-mmuad-candidate-assignment-report",
-        description="write MMUAD candidate-assignment frame, branch, and block diagnostics",
+        description=(
+            "write MMUAD candidate-assignment frame, branch, and block diagnostics"
+        ),
     )
     parser.add_argument("--assignments-csv", type=Path, required=True)
     parser.add_argument("--truth-csv", type=Path, required=True)
