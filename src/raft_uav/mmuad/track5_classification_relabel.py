@@ -25,7 +25,7 @@ RELABEL_ZIP = "ug2_submission_relabelled.zip"
 RELABEL_DIAGNOSTICS_CSV = "mmuad_track5_classification_relabel_diagnostics.csv"
 RELABEL_MANIFEST_JSON = "mmuad_track5_classification_relabel_manifest.json"
 RELABEL_VALIDATION_JSON = "mmuad_track5_classification_relabel_validation.json"
-RelabelMode = Literal["by-key", "by-sequence-majority"]
+RelabelMode = Literal["by-key", "by-sequence-majority", "by-nearest-time"]
 VALID_CLASS_IDS = tuple(sorted(OFFICIAL_TRACK5_CLASS_IDS))
 MIN_PROBABILITY_CLASS_COUNT = 2
 SEQUENCE_ALIASES = ("Sequence", "sequence_id", "sequence", "heldout_sequence", "seq")
@@ -61,8 +61,17 @@ def relabel_track5_classification(
     classification_submission: pd.DataFrame,
     *,
     mode: RelabelMode = "by-key",
+    max_nearest_time_delta_s: float | None = None,
 ) -> ClassificationRelabelResult:
-    """Return pose rows with labels copied from another official submission."""
+    """Return pose rows with labels copied from another official submission.
+
+    ``by-key`` requires exactly matching ``Sequence``/``Timestamp`` rows.
+    ``by-sequence-majority`` copies one majority label per sequence.  The
+    ``by-nearest-time`` mode is useful when the classifier submission was
+    generated on a dense sensor-time grid rather than the final Codabench
+    template; it copies the closest same-sequence label and records the time
+    offset in the diagnostics.
+    """
 
     pose = _normalize_frame(pose_submission, name="pose_submission")
     source = _normalize_frame(classification_submission, name="classification_submission")
@@ -84,16 +93,26 @@ def relabel_track5_classification(
             .reset_index()
         )
         merged = pose.merge(labels, on="Sequence", how="left", validate="many_to_one")
+    elif mode == "by-nearest-time":
+        merged = _nearest_time_relabel_merge(
+            pose,
+            source,
+            max_nearest_time_delta_s=max_nearest_time_delta_s,
+        )
     else:
         raise ValueError(
-            "classification relabel mode must be 'by-key' or 'by-sequence-majority'",
+            "classification relabel mode must be 'by-key', 'by-sequence-majority', "
+            "or 'by-nearest-time'",
         )
-    return _build_relabel_result(
+    result = _build_relabel_result(
         pose,
         merged,
         mode=str(mode),
         source_kind="official-submission",
     )
+    if mode == "by-nearest-time":
+        result.manifest["max_nearest_time_delta_s"] = max_nearest_time_delta_s
+    return result
 
 
 def relabel_track5_classification_from_sequence_predictions(
@@ -198,8 +217,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--mode",
-        choices=("by-key", "by-sequence-majority"),
+        choices=("by-key", "by-sequence-majority", "by-nearest-time"),
         default="by-key",
+    )
+    parser.add_argument(
+        "--max-nearest-time-delta-s",
+        type=float,
+        help="maximum same-sequence time offset allowed in by-nearest-time mode",
     )
     parser.add_argument("--template", type=Path)
     parser.add_argument("--require-leaderboard-ready", action="store_true")
@@ -209,6 +233,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(
             "provide exactly one of --classification-submission or --classification-predictions",
         )
+    if args.max_nearest_time_delta_s is not None and args.mode != "by-nearest-time":
+        parser.error("--max-nearest-time-delta-s is only valid with --mode by-nearest-time")
 
     pose_rows = load_official_track5_results_frame(args.pose_submission)
     if args.classification_predictions is not None:
@@ -225,6 +251,7 @@ def main(argv: list[str] | None = None) -> int:
             pose_rows,
             load_official_track5_results_frame(source_path),
             mode=args.mode,
+            max_nearest_time_delta_s=args.max_nearest_time_delta_s,
         )
         source_kind = "official-submission"
     template = None if args.template is None else load_official_track5_template_file(args.template)
@@ -268,6 +295,9 @@ def _build_relabel_result(
         diagnostics["pose_classification"].astype(int)
         != diagnostics["relabelled_classification"].astype(int)
     )
+    if "source_time_delta_s" in merged.columns:
+        diagnostics["source_time_delta_s"] = merged["source_time_delta_s"]
+        diagnostics["source_abs_time_delta_s"] = merged["source_abs_time_delta_s"]
     if "source_classification_probability" in merged.columns:
         diagnostics["source_classification_probability"] = merged[
             "source_classification_probability"
@@ -287,6 +317,10 @@ def _build_relabel_result(
             diagnostics.loc[diagnostics["classification_changed"], "Sequence"].nunique()
         ),
     }
+    if "source_time_delta_s" in diagnostics.columns:
+        abs_delta = pd.to_numeric(diagnostics["source_abs_time_delta_s"], errors="coerce")
+        manifest["source_time_delta_abs_mean_s"] = _finite_mean(abs_delta)
+        manifest["source_time_delta_abs_max_s"] = _finite_max(abs_delta)
     if "source_classification_probability" in diagnostics.columns:
         probability = pd.to_numeric(
             diagnostics["source_classification_probability"],
@@ -299,6 +333,46 @@ def _build_relabel_result(
         diagnostics=diagnostics,
         manifest=manifest,
     )
+
+
+def _nearest_time_relabel_merge(
+    pose: pd.DataFrame,
+    source: pd.DataFrame,
+    *,
+    max_nearest_time_delta_s: float | None,
+) -> pd.DataFrame:
+    if max_nearest_time_delta_s is not None and max_nearest_time_delta_s < 0.0:
+        raise ValueError("max_nearest_time_delta_s must be non-negative")
+    source_by_sequence = {
+        sequence_id: group.sort_values("Timestamp").reset_index(drop=True)
+        for sequence_id, group in source.groupby("Sequence", sort=True)
+    }
+    records: list[dict[str, Any]] = []
+    for _, row in pose.iterrows():
+        sequence = str(row["Sequence"])
+        timestamp = float(row["Timestamp"])
+        group = source_by_sequence.get(sequence)
+        if group is None or group.empty:
+            source_classification = np.nan
+            source_time_delta_s = np.nan
+        else:
+            deltas = pd.to_numeric(group["Timestamp"], errors="coerce") - timestamp
+            abs_deltas = deltas.abs()
+            nearest_index = int(abs_deltas.idxmin())
+            source_time_delta_s = float(deltas.loc[nearest_index])
+            if (
+                max_nearest_time_delta_s is not None
+                and abs(source_time_delta_s) > max_nearest_time_delta_s
+            ):
+                source_classification = np.nan
+            else:
+                source_classification = int(group.loc[nearest_index, "Classification"])
+        record = row.to_dict()
+        record["source_classification"] = source_classification
+        record["source_time_delta_s"] = source_time_delta_s
+        record["source_abs_time_delta_s"] = abs(source_time_delta_s) if np.isfinite(source_time_delta_s) else np.nan
+        records.append(record)
+    return pd.DataFrame.from_records(records)
 
 
 def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFrame:
@@ -436,6 +510,11 @@ def _finite_mean(values: pd.Series) -> float | None:
 def _finite_min(values: pd.Series) -> float | None:
     finite = pd.to_numeric(values, errors="coerce").dropna()
     return float(finite.min()) if not finite.empty else None
+
+
+def _finite_max(values: pd.Series) -> float | None:
+    finite = pd.to_numeric(values, errors="coerce").dropna()
+    return float(finite.max()) if not finite.empty else None
 
 
 def _jsonable(value: Any) -> Any:
