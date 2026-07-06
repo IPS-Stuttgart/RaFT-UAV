@@ -134,7 +134,7 @@ def polar_to_cartesian(
 
 
 def _normalize_radar_columns(frame: pd.DataFrame) -> pd.DataFrame:
-    lower = {str(col).lower(): col for col in frame.columns}
+    lower = {str(col).strip().lower(): col for col in frame.columns}
     rename: dict[object, str] = {}
     aliases = {
         "time_s": ("time_s", "timestamp_s", "timestamp", "time", "t", "sec"),
@@ -180,7 +180,8 @@ def _radar_angle_column_to_rad(
         (name, angle_unit),
     ):
         if column in frame.columns:
-            return _angle_to_rad(frame[column].to_numpy(float), angle_unit=unit)
+            values = pd.to_numeric(frame[column], errors="coerce").to_numpy(float)
+            return _angle_to_rad(values, angle_unit=unit)
     if required:
         raise ValueError(f"radar polar table missing columns: ['{name}']")
     return 0.0
@@ -225,7 +226,7 @@ def _read_csv_preserving_text_ids(path: Path, **kwargs: Any) -> pd.DataFrame:
     text_dtypes = {
         column: "string"
         for column in header.columns
-        if str(column).lower() in _RADAR_TEXT_ID_COLUMNS
+        if str(column).strip().lower() in _RADAR_TEXT_ID_COLUMNS
     }
     if text_dtypes:
         kwargs = {**kwargs, "dtype": text_dtypes}
@@ -332,13 +333,13 @@ def _json_radar_records_to_frame(records: Any, *, path: Path | None = None) -> p
 
 def _mapping_get_case_insensitive(mapping: dict[Any, Any], key: str) -> Any | None:
     for candidate, value in mapping.items():
-        if str(candidate).lower() == key.lower():
+        if str(candidate).strip().lower() == key.lower():
             return value
     return None
 
 
 def _has_any_key(mapping: dict[Any, Any], keys: tuple[str, ...]) -> bool:
-    present = {str(key).lower() for key in mapping}
+    present = {str(key).strip().lower() for key in mapping}
     return any(key.lower() in present for key in keys)
 
 
@@ -418,16 +419,16 @@ _RADAR_HINT_KEYS = {
 
 
 def _looks_like_radar_row(payload: dict[Any, Any]) -> bool:
-    keys = {str(key).lower() for key in payload}
+    keys = {str(key).strip().lower() for key in payload}
     return bool(keys.intersection(_RADAR_HINT_KEYS))
 
 
 def _looks_like_radar_column_map(payload: dict[Any, Any]) -> bool:
-    keys = {str(key).lower() for key in payload}
+    keys = {str(key).strip().lower() for key in payload}
     if not keys.intersection(_RADAR_HINT_KEYS):
         return False
     return any(
         isinstance(value, (list, tuple))
         for key, value in payload.items()
-        if str(key).lower() in _RADAR_HINT_KEYS
+        if str(key).strip().lower() in _RADAR_HINT_KEYS
     )
