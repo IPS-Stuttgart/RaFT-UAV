@@ -76,6 +76,25 @@ def test_estimate_sequence_gate_blends_after_template_resample() -> None:
     assert weights.set_index("sequence_id").loc["seq0002", "sequence_gate_weight"] == 1.0
 
 
+def test_estimate_sequence_gate_accepts_padded_weight_and_template_headers() -> None:
+    template = _template().rename(columns={"Sequence": " Sequence ", "Timestamp": " Timestamp "})
+    sequence_weights = _weights().rename(columns={"sequence_id": " Sequence ", "weight": " Weight "})
+
+    estimates, diagnostics, weights = blend_track5_estimate_sequence_gate(
+        base_estimates=_base_estimates(),
+        alternate_estimates=_alternate_estimates(),
+        template=template,
+        sequence_weights=sequence_weights,
+    )
+
+    midpoint = estimates.loc[
+        (estimates["sequence_id"] == "seq0001") & (estimates["time_s"] == 5.0)
+    ].iloc[0]
+    assert midpoint["state_x_m"] == pytest.approx(5.5)
+    assert diagnostics["weight_source"].tolist() == ["sequence_weights"] * 3
+    assert weights.set_index("sequence_id").loc["seq0002", "sequence_gate_weight"] == 1.0
+
+
 def test_estimate_sequence_gate_writes_leaderboard_ready_outputs(tmp_path: Path) -> None:
     estimates, diagnostics, weights = blend_track5_estimate_sequence_gate(
         base_estimates=_base_estimates(),
