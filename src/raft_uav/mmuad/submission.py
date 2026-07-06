@@ -399,6 +399,7 @@ globals().update(
 )
 parse_official_classification_cell = _parse_official_classification_cell_with_domain
 load_sequence_class_map = _load_sequence_class_map_with_official_sequences
+load_official_track5_template_file = _load_official_track5_template_file_with_text_sequences
 normalize_official_track5_results_frame = (
     _normalize_official_track5_results_frame_with_domain
 )
