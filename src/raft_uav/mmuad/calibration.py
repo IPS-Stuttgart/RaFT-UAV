@@ -37,6 +37,10 @@ class RigidTransform:
         translation = np.asarray(self.translation_m, dtype=float).reshape(3)
         if rotation.shape != (3, 3):
             raise ValueError(f"rotation must be 3x3, got {rotation.shape}")
+        if not np.isfinite(rotation).all():
+            raise ValueError("rotation must contain finite values")
+        if not np.isfinite(translation).all():
+            raise ValueError("translation_m must contain finite values")
         object.__setattr__(self, "rotation", rotation)
         object.__setattr__(self, "translation_m", translation)
 
@@ -63,6 +67,12 @@ class SensorCalibration:
     source: str
     transform_sensor_to_world: RigidTransform
     time_offset_s: float = 0.0
+
+    def __post_init__(self) -> None:
+        time_offset_s = float(self.time_offset_s)
+        if not np.isfinite(time_offset_s):
+            raise ValueError("time_offset_s must be finite")
+        object.__setattr__(self, "time_offset_s", time_offset_s)
 
 
 @dataclass(frozen=True)
@@ -266,8 +276,10 @@ def _transform_from_entry(entry: dict[str, Any]) -> RigidTransform:
 
 def _rotation_from_quaternion_wxyz(q: np.ndarray) -> np.ndarray:
     q = np.asarray(q, dtype=float).reshape(4)
+    if not np.isfinite(q).all():
+        raise ValueError("quaternion must contain finite values")
     norm = np.linalg.norm(q)
-    if norm <= 0:
+    if not np.isfinite(norm) or norm <= 0:
         raise ValueError("quaternion must be nonzero")
     w, x, y, z = q / norm
     return np.array(
@@ -281,7 +293,10 @@ def _rotation_from_quaternion_wxyz(q: np.ndarray) -> np.ndarray:
 
 
 def _rotation_from_rpy_deg(rpy_deg: np.ndarray) -> np.ndarray:
-    roll, pitch, yaw = np.deg2rad(np.asarray(rpy_deg, dtype=float).reshape(3))
+    rpy = np.asarray(rpy_deg, dtype=float).reshape(3)
+    if not np.isfinite(rpy).all():
+        raise ValueError("rpy_deg must contain finite values")
+    roll, pitch, yaw = np.deg2rad(rpy)
     cr, sr = np.cos(roll), np.sin(roll)
     cp, sp = np.cos(pitch), np.sin(pitch)
     cy, sy = np.cos(yaw), np.sin(yaw)
