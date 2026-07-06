@@ -87,6 +87,26 @@ def test_load_prediction_class_rows_reads_official_zip(tmp_path: Path) -> None:
     assert class_map.set_index("sequence_id").loc["seq002", "uav_type"] == 0
 
 
+def test_load_prediction_class_rows_preserves_zero_padded_generic_sequences(
+    tmp_path: Path,
+) -> None:
+    predictions = tmp_path / "predictions.csv"
+    predictions.write_text(
+        "sequence_id,time_s,classification\n"
+        "001,0.0,2\n"
+        "001,1.0,2\n"
+        "010,0.0,3\n",
+        encoding="utf-8",
+    )
+
+    rows = class_map_tool.load_prediction_class_rows(predictions)
+    class_map, _ = class_map_tool.build_sequence_class_map_from_predictions(rows)
+
+    assert rows["sequence_id"].tolist() == ["001", "001", "010"]
+    assert class_map.set_index("sequence_id").loc["001", "uav_type"] == 2
+    assert class_map.set_index("sequence_id").loc["010", "uav_type"] == 3
+
+
 def test_sequence_class_map_cli_writes_artifacts(tmp_path: Path) -> None:
     predictions = tmp_path / "predictions.csv"
     output_csv = tmp_path / "class_map.csv"
