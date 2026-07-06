@@ -60,7 +60,7 @@ def normalize_uncertainty_estimate_inputs(
         source_column = _select_uncertainty_column(
             rows,
             label=item.label,
-            requested=column_map.get(item.label),
+            requested=_lookup_requested_uncertainty_column(column_map, item.label),
             require_uncertainty=require_uncertainty,
         )
         out = rows.copy()
@@ -238,6 +238,14 @@ def _parse_uncertainty_column_map(values: list[str]) -> dict[str, str]:
     return mapping
 
 
+def _lookup_requested_uncertainty_column(mapping: dict[str, str], label: str) -> str | None:
+    """Return an explicitly requested column for raw or filesystem-safe labels."""
+
+    if label in mapping:
+        return mapping[label]
+    return mapping.get(_safe_label(label))
+
+
 def _select_uncertainty_column(
     rows: pd.DataFrame,
     *,
@@ -258,7 +266,7 @@ def _select_uncertainty_column(
 
 
 def _safe_label(value: str) -> str:
-    label = str(value).strip().replace(" ", "_").replace("/", "_").replace("\\", "_")
+    label = str(value).strip().replace(" ", "_").replace("/", "_").replace(chr(92), "_")
     return label or "estimate"
 
 
