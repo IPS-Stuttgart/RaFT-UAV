@@ -44,6 +44,7 @@ def run_candidate_reservoir_offset_grid(
     per_branch_top_n: int = 3,
     max_candidates_per_frame: int = 40,
     score_floor_quantile: float | None = None,
+    cap_reason_bonus: float = 0.0,
     top_k_values: Sequence[int] = _DEFAULT_TOP_K,
     max_truth_time_delta_s: float = 0.5,
     selection_metric: str = _DEFAULT_SELECTION_METRIC,
@@ -79,6 +80,7 @@ def run_candidate_reservoir_offset_grid(
                 score_column="candidate_reservoir_grid_score",
                 fallback_score_column=fallback_score_column,
                 score_floor_quantile=score_floor_quantile,
+                cap_reason_bonus=float(cap_reason_bonus),
             ),
         )
         summary: dict[str, Any] = {
@@ -86,6 +88,7 @@ def run_candidate_reservoir_offset_grid(
             "grid_label": label,
             "branch_score_offsets_json": json.dumps(branch_offsets, sort_keys=True),
             "source_score_offsets_json": json.dumps(source_offsets, sort_keys=True),
+            "cap_reason_bonus": float(cap_reason_bonus),
         }
         summary |= build_reservoir_summary(rows, reservoir)
         if truth_rows is not None:
@@ -147,6 +150,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--per-branch-top-n", type=int, default=3)
     parser.add_argument("--max-candidates-per-frame", type=int, default=40)
     parser.add_argument("--score-floor-quantile", type=float)
+    parser.add_argument(
+        "--cap-reason-bonus",
+        type=float,
+        default=0.0,
+        help="bonus added during final frame cap for each independent reservoir selection reason",
+    )
     parser.add_argument("--top-k", action="append", type=int, default=None)
     parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
     parser.add_argument("--selection-metric", default=_DEFAULT_SELECTION_METRIC)
@@ -172,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
         per_branch_top_n=args.per_branch_top_n,
         max_candidates_per_frame=args.max_candidates_per_frame,
         score_floor_quantile=args.score_floor_quantile,
+        cap_reason_bonus=args.cap_reason_bonus,
         top_k_values=top_k_values,
         max_truth_time_delta_s=args.max_truth_time_delta_s,
         selection_metric=args.selection_metric,
@@ -319,7 +329,9 @@ def _write_outputs(
     summary_csv = output_dir / "mmuad_candidate_reservoir_offset_grid_summary.csv"
     summary_json = output_dir / "mmuad_candidate_reservoir_offset_grid_summary.json"
     summary_frame.to_csv(summary_csv, index=False)
-    summary_json.write_text(json.dumps(summary_frame.to_dict(orient="records"), indent=2), encoding="utf-8")
+    summary_json.write_text(
+        json.dumps(summary_frame.to_dict(orient="records"), indent=2), encoding="utf-8"
+    )
     if best_reservoir is not None:
         best_reservoir.to_csv(output_dir / "best_candidate_reservoir.csv", index=False)
     for label, frame_rows in frame_tables.items():
