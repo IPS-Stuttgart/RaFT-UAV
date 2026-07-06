@@ -31,6 +31,7 @@ from raft_uav.mmuad.track5_estimate_ensemble import write_track5_estimate_ensemb
 GRID_SUMMARY_CSV = "mmuad_track5_estimate_ensemble_weight_grid.csv"
 GRID_BY_SEQUENCE_CSV = "mmuad_track5_estimate_ensemble_weight_grid_by_sequence.csv"
 GRID_MANIFEST_JSON = "mmuad_track5_estimate_ensemble_weight_grid_manifest.json"
+BEST_CONFIG_JSON = "mmuad_track5_estimate_ensemble_best_config.json"
 BEST_OUTPUT_DIR = "best_ensemble"
 
 
@@ -178,11 +179,23 @@ def write_estimate_ensemble_weight_grid_outputs(
     summary_csv = output / GRID_SUMMARY_CSV
     by_sequence_csv = output / GRID_BY_SEQUENCE_CSV
     manifest_json = output / GRID_MANIFEST_JSON
+    best_config_json = output / BEST_CONFIG_JSON
     summary.to_csv(summary_csv, index=False)
     by_sequence.to_csv(by_sequence_csv, index=False)
     best_summary = summary.iloc[0].to_dict() if not summary.empty else {}
     best_policy = str(best_summary.get("aggregation_policy", "weighted-mean"))
     best_trim_fraction = float(best_summary.get("trim_fraction", trim_fraction))
+    best_config = _best_weight_config(
+        inputs,
+        best_weights,
+        aggregation_policy=best_policy,
+        trim_fraction=best_trim_fraction,
+        best_summary=best_summary,
+        class_map_path=class_map_path,
+        default_classification=default_classification,
+        max_nearest_time_delta_s=max_nearest_time_delta_s,
+    )
+    best_config_json.write_text(json.dumps(_jsonable(best_config), indent=2), encoding="utf-8")
     best_inputs = [
         EstimateInput(label=item.label, path=item.path, weight=float(weight))
         for item, weight in zip(inputs, best_weights, strict=True)
@@ -199,7 +212,7 @@ def write_estimate_ensemble_weight_grid_outputs(
         trim_fraction=best_trim_fraction,
     )
     manifest = {
-        "schema": "raft-uav-mmuad-track5-estimate-ensemble-weight-grid-v2",
+        "schema": "raft-uav-mmuad-track5-estimate-ensemble-weight-grid-v3",
         "estimate_inputs": [
             {"label": item.label, "path": str(item.path)} for item in inputs
         ],
@@ -210,12 +223,14 @@ def write_estimate_ensemble_weight_grid_outputs(
         "trim_fraction": float(trim_fraction),
         "grid_row_count": int(len(summary)),
         "best_weights": list(best_weights),
+        "best_weight_config_json": str(best_config_json),
         "best_aggregation_policy": best_policy,
         "best_trim_fraction": best_trim_fraction,
         "best": best_summary,
         "paths": {
             "summary_csv": str(summary_csv),
             "by_sequence_csv": str(by_sequence_csv),
+            "best_config_json": str(best_config_json),
             "best_output_dir": str(output / BEST_OUTPUT_DIR),
             **{f"best_{name}": str(path) for name, path in best_paths.items()},
         },
@@ -225,6 +240,7 @@ def write_estimate_ensemble_weight_grid_outputs(
         "summary_csv": summary_csv,
         "by_sequence_csv": by_sequence_csv,
         "manifest_json": manifest_json,
+        "best_config_json": best_config_json,
         **{f"best_{name}": path for name, path in best_paths.items()},
     }
 
@@ -288,6 +304,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"best_aggregation_policy={manifest['best_aggregation_policy']}")
     print(f"summary_csv={paths['summary_csv']}")
     print(f"manifest_json={paths['manifest_json']}")
+    print(f"best_config_json={paths['best_config_json']}")
     print(f"best_official_zip={paths['best_official_zip']}")
     return 0
 
@@ -384,6 +401,35 @@ def _sequence_records(
             record[f"weight_{item.label}"] = float(weight)
         records.append(record)
     return records
+
+
+def _best_weight_config(
+    inputs: tuple[EstimateInput, ...],
+    weights: tuple[float, ...],
+    *,
+    aggregation_policy: str,
+    trim_fraction: float,
+    best_summary: dict[str, Any],
+    class_map_path: Path | None,
+    default_classification: int | str,
+    max_nearest_time_delta_s: float | None,
+) -> dict[str, Any]:
+    return {
+        "schema": "raft-uav-mmuad-track5-estimate-ensemble-config-v1",
+        "weights": {
+            item.label: float(weight) for item, weight in zip(inputs, weights, strict=True)
+        },
+        "aggregation_policy": aggregation_policy,
+        "trim_fraction": float(trim_fraction),
+        "class_map_path": str(class_map_path) if class_map_path is not None else None,
+        "default_classification": str(default_classification),
+        "max_nearest_time_delta_s": max_nearest_time_delta_s,
+        "estimate_inputs": [
+            {"label": item.label, "path": str(item.path)} for item in inputs
+        ],
+        "selection_metric": "pose_mse,p95_error_m,max_error_m",
+        "best": best_summary,
+    }
 
 
 def _row_sort_key(row: EnsembleGridRow) -> tuple[float, float, float]:
