@@ -11,7 +11,10 @@ import pandas as pd
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 MODULE_PATH = SCRIPTS_DIR / "mmuad_template_resample_grid.py"
-spec = importlib.util.spec_from_file_location("mmuad_template_resample_grid", MODULE_PATH)
+spec = importlib.util.spec_from_file_location(
+    "mmuad_template_resample_grid",
+    MODULE_PATH,
+)
 assert spec is not None and spec.loader is not None
 resample_grid = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = resample_grid
@@ -42,7 +45,9 @@ def _template() -> pd.DataFrame:
     )
 
 
-def test_template_resample_grid_writes_variants_and_preserves_classification(tmp_path: Path) -> None:
+def test_template_resample_grid_writes_variants_and_preserves_classification(
+    tmp_path: Path,
+) -> None:
     summary = resample_grid.run_template_resample_grid(
         estimates=_estimates(),
         template=_template(),
@@ -94,5 +99,6 @@ def test_template_resample_grid_cli_writes_summary(tmp_path: Path) -> None:
     assert len(summary) == 4
     assert set(summary["classification_policy"]) == {"sequence-mode"}
     assert summary["codabench_upload_ready"].all()
-    payload = json.loads((output_dir / "mmuad_template_resample_grid_summary.json").read_text())
+    summary_json = output_dir / "mmuad_template_resample_grid_summary.json"
+    payload = json.loads(summary_json.read_text())
     assert len(payload["rows"]) == 4
