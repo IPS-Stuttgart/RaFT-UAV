@@ -266,7 +266,8 @@ def _sort_summary(summary: pd.DataFrame) -> pd.DataFrame:
     if summary.empty:
         return summary
     rows = summary.copy()
-    if "pose_mse_loss_m2" in rows.columns and rows["pose_mse_loss_m2"].notna().any():
+    has_pose = "pose_mse_loss_m2" in rows.columns and rows["pose_mse_loss_m2"].notna().any()
+    if has_pose:
         rows["_sort_pose_mse"] = _numeric_column(rows, "pose_mse_loss_m2").fillna(np.inf)
         rows["_sort_p95"] = _numeric_column(rows, "public_p95_3d_m").fillna(np.inf)
         rows = rows.sort_values(["_sort_pose_mse", "_sort_p95", "variant"]).drop(
@@ -285,7 +286,10 @@ def _sort_summary(summary: pd.DataFrame) -> pd.DataFrame:
 def _has_ready_row(summary: pd.DataFrame) -> bool:
     if summary.empty:
         return False
-    column = "scorecard_leaderboard_ready" if "scorecard_leaderboard_ready" in summary.columns else "leaderboard_ready"
+    if "scorecard_leaderboard_ready" in summary.columns:
+        column = "scorecard_leaderboard_ready"
+    else:
+        column = "leaderboard_ready"
     return bool(_bool_column(summary, column).any())
 
 
