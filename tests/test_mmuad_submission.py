@@ -497,7 +497,7 @@ def test_official_track5_results_normalizer_repackages_nested_zip(tmp_path):
                 "Sequence": ["seq1", "seq1"],
                 "Timestamp": [1.0, 0.0],
                 "Position": ["array([1, 0, 0])", "(0,0,0)"],
-                "Classification": [4, 4],
+                "Classification": [3, 3],
             }
         ).to_csv(index=False))
         archive.writestr("notes.txt", "extra member should not survive")
@@ -523,7 +523,7 @@ def test_official_track5_results_normalizer_repackages_nested_zip(tmp_path):
             "Sequence": ["seq1", "seq1"],
             "Timestamp": [0.0, 1.0],
             "Position": ["(0,0,0)", "(1,0,0)"],
-            "Classification": [4, 4],
+            "Classification": [3, 3],
         }
     )
     validation = validate_official_track5_submission(output_zip, template=template)

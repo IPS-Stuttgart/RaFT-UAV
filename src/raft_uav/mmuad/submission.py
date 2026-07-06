@@ -334,28 +334,51 @@ def _validate_official_track5_submission_with_text_sequences(
 
 
 def _normalize_official_track5_results_frame_with_domain(frame: Any) -> Any:
-    """Normalize Track 5 rows while preserving official truth class IDs."""
+    """Normalize Track 5 submission rows with the public class-ID domain check."""
 
-    return _normalize_official_track5_results_frame_original(frame)
+    normalized = _normalize_official_track5_results_frame_original(frame)
+    for value in normalized["Classification"]:
+        _parse_official_classification_cell_with_domain(value)
+    return normalized
 
 
 def _official_track5_row_diagnostics_with_domain(frame: Any) -> tuple[Any, Any]:
-    """Mark boolean Track 5 classifications invalid during validation."""
+    """Mark out-of-domain Track 5 classifications invalid during validation."""
 
     diagnostics, normalized = _official_track5_row_diagnostics_original(frame)
+    invalid_reasons: dict[int, str] = {}
     if not diagnostics.empty and "Classification" in frame.columns:
         bool_mask = frame["Classification"].astype(str).str.strip().str.lower().isin(
             {"true", "false"}
         )
         if bool_mask.any():
-            diagnostics = diagnostics.copy()
-            invalid_indices = set(frame.index[bool_mask].astype(int).tolist())
-            mask = diagnostics["row_index"].isin(invalid_indices)
-            diagnostics.loc[mask, "status"] = "invalid_classification"
-            diagnostics.loc[
-                mask,
-                "reason",
-            ] = "official MMUAD Classification values must be integer ids, not booleans"
+            for row_index in frame.index[bool_mask].astype(int).tolist():
+                invalid_reasons[row_index] = (
+                    "official MMUAD Classification values must be integer ids, not booleans"
+                )
+    if not normalized.empty and "classification" in normalized.columns:
+        for _, row in normalized.iterrows():
+            row_index = int(row["row_index"])
+            if row_index in invalid_reasons:
+                continue
+            try:
+                _parse_official_classification_cell_with_domain(row["classification"])
+            except ValueError as exc:
+                invalid_reasons[row_index] = str(exc)
+    if not invalid_reasons:
+        return diagnostics, normalized
+
+    diagnostics = diagnostics.copy()
+    invalid_indices = set(invalid_reasons)
+    mask = diagnostics["row_index"].isin(invalid_indices)
+    diagnostics.loc[mask, "status"] = "invalid_classification"
+    diagnostics.loc[mask, "reason"] = diagnostics.loc[mask, "row_index"].map(
+        invalid_reasons
+    )
+    if not normalized.empty:
+        normalized = normalized.loc[
+            ~normalized["row_index"].isin(invalid_indices)
+        ].reset_index(drop=True)
     return diagnostics, normalized
 
 

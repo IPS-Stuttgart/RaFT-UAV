@@ -25,10 +25,10 @@ from raft_uav.mmuad.schema import (
     normalize_time_column_aliases,
     normalize_truth_columns,
 )
+from raft_uav.mmuad import _submission_impl
 from raft_uav.mmuad.submission import (
     OFFICIAL_UG2_RESULT_COLUMNS,
     UG2_RESULT_COLUMNS,
-    load_official_track5_results_frame,
     load_sequence_class_map,
     parse_official_classification_cell,
     parse_official_position_cell,
@@ -183,7 +183,13 @@ def _official_track5_results_to_local_frame(frame: pd.DataFrame) -> pd.DataFrame
 
 
 def _load_official_track5_truth_file(path: Path) -> pd.DataFrame:
-    frame = load_official_track5_results_frame(Path(path))
+    frame, _ = _submission_impl._read_official_track5_results_input(Path(path))
+    normalizer = getattr(
+        _submission_impl,
+        "_raft_uav_original_normalize_official_track5_results_frame",
+        _submission_impl.normalize_official_track5_results_frame,
+    )
+    frame = normalizer(frame)
     return _official_track5_truth_to_rows(frame)
 
 

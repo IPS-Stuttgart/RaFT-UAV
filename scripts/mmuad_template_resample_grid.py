@@ -163,7 +163,9 @@ def main(argv: list[str] | None = None) -> int:
         class_map=class_map,
         default_classification=args.default_classification,
         resample_methods=_parse_text_list(args.resample_method),
-        max_interpolation_gaps_s=_parse_optional_float_list(args.max_interpolation_gap_s),
+        max_interpolation_gaps_s=tuple(
+            dict.fromkeys(_parse_optional_float_list(args.max_interpolation_gap_s))
+        ),
         classification_policies=_parse_text_list(args.classification_policy),
         max_nearest_time_delta_s=args.max_nearest_time_delta_s,
         require_leaderboard_ready=args.require_leaderboard_ready,
@@ -344,8 +346,7 @@ def _parse_optional_float_list(values: list[str]) -> tuple[float | None, ...]:
                 item = None
             else:
                 item = _parse_nonnegative_finite_gap(text)
-            if item not in parsed:
-                parsed.append(item)
+            parsed.append(item)
     return tuple(parsed or [None])
 
 
