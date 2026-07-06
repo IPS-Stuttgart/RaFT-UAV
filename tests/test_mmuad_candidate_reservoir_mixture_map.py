@@ -94,10 +94,12 @@ def test_reservoir_mixture_cli_writes_oracle_diagnostics(tmp_path: Path) -> None
     oracle_summary = output_dir / "mmuad_reservoir_mixture_oracle_summary.csv"
     oracle_by_sequence = output_dir / "mmuad_reservoir_mixture_oracle_by_sequence.csv"
     oracle_frames = output_dir / "mmuad_reservoir_mixture_oracle_frames.csv"
+    gap_summary = output_dir / "mmuad_reservoir_mixture_gap_summary.csv"
     combined_summary = output_dir / "mmuad_reservoir_mixture_summary.json"
     assert oracle_summary.exists()
     assert oracle_by_sequence.exists()
     assert oracle_frames.exists()
+    assert gap_summary.exists()
     summary = pd.read_csv(oracle_summary)
     assert summary.loc[0, "oracle_all_3d_m_mse"] == 0.0
     assert summary.loc[0, "oracle_top2_3d_m_mse"] == 0.0
@@ -105,7 +107,12 @@ def test_reservoir_mixture_cli_writes_oracle_diagnostics(tmp_path: Path) -> None
     assert "oracle_top5_3d_m_mse" not in summary.columns
     assert "oracle_top10_3d_m_mse" not in summary.columns
     assert "oracle_top20_3d_m_mse" not in summary.columns
+    gap = pd.read_csv(gap_summary)
+    assert gap.loc[0, "reservoir_oracle_all_mse_3d_m2"] == 0.0
+    assert "mixture_mse_3d_m2" in gap.columns
+    assert "gap_to_oracle_all_mse_3d_m2" in gap.columns
     payload = json.loads(combined_summary.read_text(encoding="utf-8"))
     assert payload["reservoir_oracle"]["top_k_values"] == [1, 2]
     assert payload["reservoir_oracle"]["frame_count"] == 3
     assert payload["reservoir_oracle"]["pooled"]["oracle_all_3d_m_mse"] == 0.0
+    assert payload["reservoir_mixture_gap"]["reservoir_oracle_all_mse_3d_m2"] == 0.0

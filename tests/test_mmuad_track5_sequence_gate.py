@@ -185,6 +185,53 @@ def test_sequence_gate_cli_writes_manifest(tmp_path: Path) -> None:
     assert manifest["validation"]["leaderboard_ready"] is True
 
 
+def test_sequence_gate_cli_preserves_zero_padded_sequence_ids(tmp_path: Path) -> None:
+    base_path = tmp_path / "base.csv"
+    alternate_path = tmp_path / "alternate.csv"
+    weights_path = tmp_path / "weights.csv"
+    output_dir = tmp_path / "out"
+    base_rows = pd.DataFrame(
+        {
+            "Sequence": ["001"],
+            "Timestamp": [0.0],
+            "Position": ["(0.0, 0.0, 0.0)"],
+            "Classification": [1],
+        }
+    )
+    alternate_rows = base_rows.copy()
+    alternate_rows["Position"] = ["(4.0, 0.0, 0.0)"]
+    base_rows.to_csv(base_path, index=False)
+    alternate_rows.to_csv(alternate_path, index=False)
+    pd.DataFrame({"Sequence": ["001"], "weight": [1.0]}).to_csv(weights_path, index=False)
+
+    status = sequence_gate_main(
+        [
+            "--base-submission",
+            str(base_path),
+            "--alternate-submission",
+            str(alternate_path),
+            "--sequence-weights",
+            str(weights_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert status == 0
+    estimates = pd.read_csv(output_dir / "mmuad_track5_sequence_gate_estimates.csv", dtype={"sequence_id": "string"})
+    diagnostics = pd.read_csv(
+        output_dir / "mmuad_track5_sequence_gate_diagnostics.csv",
+        dtype={"sequence_id": "string"},
+    )
+    manifest = json.loads(
+        (output_dir / "mmuad_track5_sequence_gate_manifest.json").read_text(encoding="utf-8")
+    )
+    assert estimates.loc[0, "sequence_id"] == "001"
+    assert estimates.loc[0, "state_x_m"] == pytest.approx(4.0)
+    assert diagnostics.loc[0, "weight_source"] == "sequence_weights"
+    assert manifest["defaulted_sequence_count"] == 0
+
+
 def test_sequence_gate_entrypoint_is_exposed() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert (

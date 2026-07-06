@@ -42,6 +42,13 @@ def test_apply_weight_config_normalizes_valid_in_memory_weights() -> None:
     assert [(item.label, item.weight) for item in result] == [("model_a", 0.25), ("model_b", 0.75)]
 
 
+def test_apply_weight_config_rejects_colliding_in_memory_weight_labels() -> None:
+    config = {"weights": {"model a": 0.25, "model/a": 0.75}}
+
+    with pytest.raises(ValueError, match="unique after normalization"):
+        apply_ensemble_weight_config(["model a=estimate.csv"], config)
+
+
 def test_load_weight_config_rejects_non_numeric_weight(tmp_path: Path) -> None:
     path = tmp_path / "weights.json"
     path.write_text('{"weights": {"a": "bad"}}', encoding="utf-8")
