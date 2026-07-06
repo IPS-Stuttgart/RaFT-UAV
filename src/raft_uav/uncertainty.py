@@ -264,9 +264,11 @@ def _feature_frame(frame: pd.DataFrame, source: str) -> pd.DataFrame:
         rho = _num(frame, ("RHO", "rho"), 0.0)
         total = _num(frame, ("TotalSensors", "Total Sensors", "total_sensors"), 0.0)
         valid = _num(frame, ("ValidSensors", "Valid Sensors", "valid_sensors"), 0.0)
+        denominator = np.maximum(total, 1.0)
+        fraction = np.divide(valid, denominator)
         out["log1p_cep"] = np.log1p(np.maximum(cep, 0.0))
         out["log1p_rho"] = np.log1p(np.maximum(rho, 0.0))
-        out["valid_sensor_fraction"] = np.divide(valid, np.maximum(total, 1.0))
+        out["valid_sensor_fraction"] = np.clip(fraction, 0.0, 1.0)
         return out
     if source == "radar":
         range_m = _num(frame, ("range_m", "range", "Range"), 0.0)
