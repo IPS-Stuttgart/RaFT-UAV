@@ -276,11 +276,11 @@ def main(argv: list[str] | None = None) -> int:
     result = blend_track5_sequence_gate(
         base_submission=load_track5_submission(args.base_submission),
         alternate_submission=load_track5_submission(args.alternate_submission),
-        sequence_weights=pd.read_csv(args.sequence_weights),
+        sequence_weights=_read_sequence_preserving_csv(args.sequence_weights),
         default_weight=float(args.default_weight),
         class_policy=args.class_policy,
     )
-    template = None if args.template is None else pd.read_csv(args.template)
+    template = None if args.template is None else _read_sequence_preserving_csv(args.template)
     paths = write_track5_sequence_gate_outputs(
         result=result,
         output_dir=args.output_dir,
@@ -304,6 +304,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"leaderboard_ready={validation.get('leaderboard_ready')}")
         print(f"codabench_upload_ready={validation.get('codabench_upload_ready')}")
     return 0
+
+
+def _read_sequence_preserving_csv(path: Path) -> pd.DataFrame:
+    """Read a CSV without letting pandas coerce official sequence IDs to numbers."""
+
+    sequence_dtypes = {alias: "string" for alias in SEQUENCE_ALIASES}
+    return pd.read_csv(path, dtype=sequence_dtypes)
 
 
 def _sequence_weight_map(weights: pd.DataFrame) -> dict[str, float]:
