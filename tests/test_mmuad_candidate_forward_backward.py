@@ -99,6 +99,21 @@ def test_forward_backward_probabilities_sum_to_one() -> None:
     assert summary["posterior_sum_error_max"] == pytest.approx(0.0, abs=1.0e-12)
 
 
+def test_forward_backward_summary_handles_missing_score_column() -> None:
+    summary = forward_backward_summary(
+        _outlier_candidates(),
+        score_column="missing_forward_backward_score",
+    )
+
+    assert summary["row_count"] == 4
+    assert summary["frame_count"] == 3
+    assert summary["score_column"] == "missing_forward_backward_score"
+    assert summary["posterior_sum_error_max"] == pytest.approx(0.0)
+    assert summary["top_posterior_mean"] is None
+    assert summary["top_candidate_source_counts"] == {}
+    assert summary["top_candidate_branch_counts"] == {}
+
+
 def test_forward_backward_cli_writes_prior_and_mixture_outputs(tmp_path: Path) -> None:
     candidates_csv = tmp_path / "candidates.csv"
     output_csv = tmp_path / "forward_backward_candidates.csv"
