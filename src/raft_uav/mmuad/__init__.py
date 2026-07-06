@@ -24,11 +24,32 @@ def _install_schema_timestamp_guard() -> None:
 
     original = _schema.normalize_time_column_aliases
 
+    def _flattened_stamp_pair_seconds(frame):
+        lower_to_original = {str(col).lower(): col for col in frame.columns}
+        candidates = []
+        for seconds_alias, nanoseconds_alias in _schema._TIME_SECOND_NANOSECOND_PAIRS:
+            seconds_col = lower_to_original.get(seconds_alias)
+            nanoseconds_col = lower_to_original.get(nanoseconds_alias)
+            if seconds_col is None or nanoseconds_col is None:
+                continue
+            seconds = _pd.to_numeric(frame[seconds_col], errors="coerce")
+            nanoseconds = _pd.to_numeric(frame[nanoseconds_col], errors="coerce").fillna(0.0)
+            candidates.append(seconds + nanoseconds * 1.0e-9)
+        return _schema._combine_time_alias_series(candidates)
+
     def _normalize_time_column_aliases(frame, *, target: str = "time_s"):
         parsed_target = None
         if target in frame.columns:
             parsed_target = _schema._seconds_or_stamp_dict_series(frame[target])
         out = original(frame, target=target)
+        flattened = _flattened_stamp_pair_seconds(frame)
+        if flattened is not None and flattened.notna().any():
+            out = out.copy()
+            if target in out.columns:
+                target_values = _pd.to_numeric(out[target], errors="coerce")
+                out[target] = target_values.fillna(flattened)
+            else:
+                out[target] = flattened
         if target in out.columns and parsed_target is not None and parsed_target.notna().any():
             out = out.copy()
             alias_or_numeric = _pd.to_numeric(out[target], errors="coerce")
