@@ -34,6 +34,7 @@ _SUBMISSION_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "score": ("confidence", "probability"),
 }
+_MISSING_SEQUENCE_ID_TOKENS = {"", "nan", "none", "<na>", "nat"}
 _MISSING_TRACK_ID_TOKENS = {"", "nan", "none", "<na>", "nat"}
 
 
@@ -54,8 +55,8 @@ def load_submission_csv(path: Path) -> pd.DataFrame:
         frame["score"] = 1.0
     for col in ("time_s", "x_m", "y_m", "z_m", "score"):
         frame[col] = pd.to_numeric(frame[col], errors="coerce")
-    frame["sequence_id"] = frame["sequence_id"].astype(str)
-    frame["track_id"] = frame["track_id"].astype(str)
+    frame["sequence_id"] = _normalize_submission_sequence_ids(frame["sequence_id"])
+    frame["track_id"] = frame["track_id"].map(lambda value: _valid_track_id_text(value) or "uav0")
     if "uav_type" in frame.columns:
         frame["uav_type"] = frame["uav_type"].astype(str)
     return frame.loc[np.isfinite(frame[["time_s", "x_m", "y_m", "z_m"]]).all(axis=1)].copy()
@@ -134,7 +135,7 @@ def _normalize_submission_metric_protocol(value: str) -> str:
 def _submission_to_results_frame(submission: pd.DataFrame) -> pd.DataFrame:
     rows = pd.DataFrame(
         {
-            "sequence_id": submission["sequence_id"].astype(str),
+            "sequence_id": _normalize_submission_sequence_ids(submission["sequence_id"]),
             "timestamp": pd.to_numeric(submission["time_s"], errors="coerce"),
             "x": pd.to_numeric(submission["x_m"], errors="coerce"),
             "y": pd.to_numeric(submission["y_m"], errors="coerce"),
@@ -193,7 +194,7 @@ def match_submission_to_truth(
     if "sequence_id" not in submission.columns:
         submission["sequence_id"] = "default"
     else:
-        submission["sequence_id"] = submission["sequence_id"].astype(str)
+        submission["sequence_id"] = _normalize_submission_sequence_ids(submission["sequence_id"])
     if "track_id" in submission.columns:
         submission["track_id"] = submission["track_id"].astype(str)
     truth = normalize_truth_columns(truth)
@@ -347,6 +348,19 @@ def metrics_from_matches(
     }
 
 
+def _normalize_submission_sequence_ids(
+    values: pd.Series,
+    *,
+    default_sequence_id: str = "default",
+) -> pd.Series:
+    """Return stripped sequence IDs while preserving opaque text such as ``001``."""
+
+    default = str(default_sequence_id)
+    text = values.where(values.notna(), default).astype(str).str.strip()
+    missing = text.eq("") | text.str.lower().isin(_MISSING_SEQUENCE_ID_TOKENS)
+    return text.where(~missing, default)
+
+
 def _track_ids(frame: pd.DataFrame) -> set[str]:
     track_ids: set[str] = set()
     for value in frame["track_id"]:
@@ -396,14 +410,15 @@ def _metric_sequence_ids(
     for frame in (truth, submission, matches):
         if frame.empty or "sequence_id" not in frame.columns:
             continue
-        sequence_ids.update(frame["sequence_id"].dropna().astype(str))
+        sequence_ids.update(_normalize_submission_sequence_ids(frame["sequence_id"]).dropna().astype(str))
     return sorted(sequence_ids)
 
 
 def _rows_for_sequence(frame: pd.DataFrame, sequence_id: str) -> pd.DataFrame:
     if frame.empty or "sequence_id" not in frame.columns:
         return frame.iloc[0:0].copy()
-    return frame.loc[frame["sequence_id"].astype(str) == str(sequence_id)].copy()
+    normalized = _normalize_submission_sequence_ids(frame["sequence_id"])
+    return frame.loc[normalized == str(sequence_id).strip()].copy()
 
 
 def _covered_truth_count(matched: pd.DataFrame, truth: pd.DataFrame) -> int:
@@ -471,7 +486,9 @@ def _truth_track_id(row: pd.Series) -> str:
 
 def _unmatched_prediction_row(pred: pd.Series, *, reason: str) -> dict[str, Any]:
     return {
-        "sequence_id": str(pred.get("sequence_id", "default")),
+        "sequence_id": _normalize_submission_sequence_ids(
+            pd.Series([pred.get("sequence_id", "default")])
+        ).iloc[0],
         "time_s": float(pred.get("time_s", np.nan)),
         "track_id": str(pred.get("track_id", "uav0")),
         "truth_time_s": np.nan,
