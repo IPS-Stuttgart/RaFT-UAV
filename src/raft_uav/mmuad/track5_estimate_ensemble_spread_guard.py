@@ -37,6 +37,12 @@ OFFICIAL_RESULTS_CSV = "mmaud_results.csv"
 OFFICIAL_ZIP = "ug2_submission.zip"
 FALLBACK_POLICIES = ("max-weight", "first", "label")
 TEMPLATE_TIME_MATCH_ATOL_S = 1.0e-9
+_ESTIMATE_SEQUENCE_TEXT_DTYPES = {
+    "sequence_id": str,
+    "Sequence": str,
+    "sequence": str,
+    "seq": str,
+}
 
 
 def build_spread_guarded_estimate_ensemble(
@@ -144,7 +150,9 @@ def build_spread_guarded_estimate_ensemble(
                 "sequence_id": sequence_id,
                 "time_s": time_s,
                 "valid_input_count": int(len(valid)),
-                "input_labels": ";".join(valid["input_label"].astype(str)) if not valid.empty else "",
+                "input_labels": (
+                    ";".join(valid["input_label"].astype(str)) if not valid.empty else ""
+                ),
                 "weighted_x_m": float(weighted_xyz[0]) if np.isfinite(weighted_xyz[0]) else np.nan,
                 "weighted_y_m": float(weighted_xyz[1]) if np.isfinite(weighted_xyz[1]) else np.nan,
                 "weighted_z_m": float(weighted_xyz[2]) if np.isfinite(weighted_xyz[2]) else np.nan,
@@ -175,7 +183,7 @@ def write_spread_guard_outputs(
 
     input_list = list(estimate_inputs)
     loaded_inputs = [
-        (item.label, pd.read_csv(item.path), float(item.weight)) for item in input_list
+        (item.label, _read_estimate_csv(item.path), float(item.weight)) for item in input_list
     ]
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -212,7 +220,9 @@ def write_spread_guard_outputs(
         class_map=class_map or {},
         invalid_row_policy="raise",
     )
-    validation = validate_official_track5_submission(paths["official_zip"], template=template, require_zip=True)
+    validation = validate_official_track5_submission(
+        paths["official_zip"], template=template, require_zip=True
+    )
     paths["validation_json"].write_text(
         json.dumps(_jsonable(validation.summary), indent=2),
         encoding="utf-8",
@@ -230,8 +240,12 @@ def write_spread_guard_outputs(
         "max_nearest_time_delta_s": max_nearest_time_delta_s,
         "row_count": int(len(estimates)),
         "guard_applied_rows": int(estimates["spread_guard_applied"].astype(bool).sum()),
-        "mean_position_spread_m": _safe_mean(diagnostics.get("position_spread_m", pd.Series(dtype=float))),
-        "p95_position_spread_m": _safe_percentile(diagnostics.get("position_spread_m", pd.Series(dtype=float)), 95),
+        "mean_position_spread_m": _safe_mean(
+            diagnostics.get("position_spread_m", pd.Series(dtype=float))
+        ),
+        "p95_position_spread_m": _safe_percentile(
+            diagnostics.get("position_spread_m", pd.Series(dtype=float)), 95
+        ),
         "leaderboard_ready": bool(validation.summary.get("leaderboard_ready", False)),
         "codabench_upload_ready": bool(validation.summary.get("codabench_upload_ready", False)),
         "paths": {name: str(path) for name, path in paths.items() if name != "manifest_json"},
@@ -290,6 +304,16 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _read_estimate_csv(path: Path) -> pd.DataFrame:
+    """Read estimate CSVs without coercing opaque sequence identifiers."""
+
+    return pd.read_csv(
+        path,
+        dtype=_ESTIMATE_SEQUENCE_TEXT_DTYPES,
+        keep_default_na=False,
+    )
+
+
 def _fallback_row(
     valid: pd.DataFrame,
     *,
@@ -304,7 +328,9 @@ def _fallback_row(
     if policy == "first":
         order_map = {label: index for index, label in enumerate(input_order)}
         work = valid.copy()
-        work["_fallback_order"] = work["input_label"].map(lambda label: order_map.get(str(label), 10**9))
+        work["_fallback_order"] = work["input_label"].map(
+            lambda label: order_map.get(str(label), 10**9)
+        )
         return work.sort_values(["_fallback_order", "input_order"]).iloc[0]
     return valid.sort_values(["input_weight", "input_order"], ascending=[False, True]).iloc[0]
 
