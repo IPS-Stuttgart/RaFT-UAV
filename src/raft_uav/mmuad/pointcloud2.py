@@ -98,7 +98,12 @@ def _point_offsets(message: Any, *, point_step: int, data_length: int) -> list[i
     if width <= 0 or height <= 0:
         return [index * point_step for index in range(data_length // point_step)]
 
-    row_step = _normalized_row_step(message, point_step=point_step, width=width, data_length=data_length)
+    row_step = _normalized_row_step(
+        message,
+        point_step=point_step,
+        width=width,
+        data_length=data_length,
+    )
     if row_step < point_step * width:
         raise ValueError("PointCloud2 row_step is smaller than width * point_step")
 
@@ -178,7 +183,7 @@ def _finite_timestamp_seconds(value: Any) -> float:
 def _normalize_field_name(value: Any) -> str:
     if isinstance(value, bytes):
         value = value.decode("utf-8", errors="replace")
-    return str(value).replace("\x00", "").strip()
+    return str(value).replace(chr(0), "").strip().lower()
 
 
 def _normalize_fields(fields: Iterable[Any]) -> list[PointFieldSpec]:
