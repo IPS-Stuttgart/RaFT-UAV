@@ -65,6 +65,24 @@ def test_duplicate_prediction_audit_handles_zip_inputs(tmp_path: Path) -> None:
     assert audit.duplicate_rows == 1
 
 
+def test_duplicate_prediction_audit_directory_matches_txt_suffix_case_insensitively(
+    tmp_path: Path,
+) -> None:
+    prediction_dir = tmp_path / "predictions"
+    prediction_dir.mkdir()
+    prediction_dir.joinpath("S_00.TXT").write_text(
+        _row(1, 7) + _row(1, 7),
+        encoding="utf-8",
+    )
+
+    audit = audit_duplicate_predictions(prediction_dir)
+
+    assert not audit.clean
+    assert audit.file_count == 1
+    assert audit.duplicate_files == ["S_00.TXT"]
+    assert audit.duplicate_rows == 1
+
+
 def test_duplicate_prediction_audit_combines_repeated_zip_member_names(
     tmp_path: Path,
 ) -> None:
