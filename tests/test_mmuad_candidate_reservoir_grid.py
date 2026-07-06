@@ -59,6 +59,26 @@ def test_score_offset_grid_can_promote_low_score_raw_branch() -> None:
     assert "candidate_reservoir_grid_branch_offset" in best.columns
 
 
+def test_cap_reason_bonus_is_forwarded_to_reservoir_selection() -> None:
+    rows = _candidate_rows()
+    summary, best = run_candidate_reservoir_offset_grid(
+        rows,
+        global_top_n=1,
+        per_source_top_n=1,
+        per_branch_top_n=1,
+        max_candidates_per_frame=1,
+        cap_reason_bonus=0.5,
+        write_best_reservoir=True,
+    )
+
+    assert summary.iloc[0]["cap_reason_bonus"] == 0.5
+    assert best is not None
+    assert "candidate_reservoir_cap_score" in best.columns
+    assert (best["candidate_reservoir_reason_count"] >= 1).all()
+    expected = best["candidate_reservoir_score"] + 0.5 * best["candidate_reservoir_reason_count"]
+    assert best["candidate_reservoir_cap_score"].tolist() == expected.tolist()
+
+
 def test_candidate_reservoir_offset_grid_cli_writes_summary_and_best(tmp_path) -> None:
     candidate_csv = tmp_path / "candidates.csv"
     truth_csv = tmp_path / "truth.csv"
@@ -90,6 +110,8 @@ def test_candidate_reservoir_offset_grid_cli_writes_summary_and_best(tmp_path) -
             "0.1",
             "--selection-metric",
             "oracle_top1_3d_m_mse",
+            "--cap-reason-bonus",
+            "0.25",
             "--write-best-reservoir",
         ]
     )
@@ -99,6 +121,7 @@ def test_candidate_reservoir_offset_grid_cli_writes_summary_and_best(tmp_path) -
     best = pd.read_csv(output_dir / "best_candidate_reservoir.csv")
     assert summary.iloc[0]["grid_label"] == "branch_raw_1"
     assert summary.iloc[0]["oracle_top1_3d_m_mse"] == 0.0
+    assert summary.iloc[0]["cap_reason_bonus"] == 0.25
     assert "oracle_top3_3d_m_mse" not in summary.columns
     assert set(best["track_id"]) == {"raw-good-0", "raw-good-1"}
 
