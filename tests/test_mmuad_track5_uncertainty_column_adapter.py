@@ -74,6 +74,22 @@ def test_uncertainty_adapter_normalizes_per_input_columns(tmp_path: Path) -> Non
     assert high_rows["predicted_sigma_m"].tolist() == [50.0, 50.0]
 
 
+def test_uncertainty_adapter_matches_sanitized_cli_labels(tmp_path: Path) -> None:
+    low_csv = tmp_path / "low.csv"
+    _low_sigma_estimate().to_csv(low_csv, index=False)
+
+    normalized, summary = normalize_uncertainty_estimate_inputs(
+        [EstimateInput("sensor/low estimate", low_csv, 1.0)],
+        output_dir=tmp_path / "out",
+        uncertainty_columns={"sensor_low_estimate": "low_sigma"},
+    )
+
+    rows = pd.read_csv(normalized[0].path)
+    assert normalized[0].path.name == "sensor_low_estimate.csv"
+    assert summary["source_uncertainty_column"].tolist() == ["low_sigma"]
+    assert rows["predicted_sigma_m"].tolist() == [1.0, 1.0]
+
+
 def test_uncertainty_adapter_can_run_upload_ready_ensemble(tmp_path: Path) -> None:
     low_csv = tmp_path / "low.csv"
     high_csv = tmp_path / "high.csv"
