@@ -89,7 +89,9 @@ class CalibrationSet:
         ``radar_enhance_pcl_clusters`` should match ``radar_enhance_pcl``.
         When both a generic key (``radar``) and a specific key match, prefer the
         longest key; otherwise JSON insertion order could make the generic entry
-        shadow the specific calibration.
+        shadow the specific calibration.  The prefix match is intentionally
+        one-way: a calibration fitted for ``radar_enhance_pcl`` must not be
+        applied backward to a broader ``radar`` candidate source.
         """
 
         source_l = str(source).lower()
@@ -99,7 +101,7 @@ class CalibrationSet:
         matches: list[tuple[int, SensorCalibration]] = []
         for key, value in self.sensors.items():
             key_l = str(key).lower()
-            if source_l.startswith(key_l) or key_l.startswith(source_l):
+            if source_l.startswith(key_l):
                 matches.append((len(key_l), value))
         if not matches:
             return None
