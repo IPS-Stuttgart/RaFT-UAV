@@ -1,0 +1,161 @@
+diff --git a/src/raft_uav/mmuad/track5_uncertainty_ensemble.py b/src/raft_uav/mmuad/track5_uncertainty_ensemble.py
+index a7324d4..b9f2c18 100644
+--- a/src/raft_uav/mmuad/track5_uncertainty_ensemble.py
++++ b/src/raft_uav/mmuad/track5_uncertainty_ensemble.py
+@@ -60,6 +60,10 @@ def build_track5_uncertainty_ensemble(
+         raise ValueError("at least one estimate input is required")
+     if template_rows.empty:
+         return _empty_estimates(), _empty_diagnostics()
++    fallback_sigma_m, sigma_min_m, sigma_max_m = _validate_sigma_parameters(
++        fallback_sigma_m=fallback_sigma_m,
++        sigma_min_m=sigma_min_m,
++        sigma_max_m=sigma_max_m,
++    )
+     stacked_parts: list[pd.DataFrame] = []
+     input_summary: list[dict[str, Any]] = []
+     for item in inputs:
+@@ -73,9 +77,9 @@ def build_track5_uncertainty_ensemble(
+             template_rows,
+             column=uncertainty_column,
+-            fallback_sigma_m=float(fallback_sigma_m),
+-            sigma_min_m=float(sigma_min_m),
+-            sigma_max_m=float(sigma_max_m),
++            fallback_sigma_m=fallback_sigma_m,
++            sigma_min_m=sigma_min_m,
++            sigma_max_m=sigma_max_m,
+         )
+         part = resampled[["sequence_id", "time_s", "state_x_m", "state_y_m", "state_z_m"]].copy()
+         part["ensemble_label"] = item.label
+@@ -301,6 +305,29 @@ def main(argv: list[str] | None = None) -> int:
+         raise SystemExit(f"uncertainty ensemble is not leaderboard-ready: {reasons}")
+     return 0
+ 
+ 
++def _validate_sigma_parameters(
++    *,
++    fallback_sigma_m: float,
++    sigma_min_m: float,
++    sigma_max_m: float,
++) -> tuple[float, float, float]:
++    fallback = _positive_finite(fallback_sigma_m, name="fallback_sigma_m")
++    sigma_min = _positive_finite(sigma_min_m, name="sigma_min_m")
++    sigma_max = _positive_finite(sigma_max_m, name="sigma_max_m")
++    if sigma_max < sigma_min:
++        raise ValueError("sigma_max_m must be greater than or equal to sigma_min_m")
++    return fallback, sigma_min, sigma_max
++
++
++def _positive_finite(value: float, *, name: str) -> float:
++    try:
++        parsed = float(value)
++    except (TypeError, ValueError) as exc:
++        raise ValueError(f"{name} must be finite and positive") from exc
++    if not np.isfinite(parsed) or parsed <= 0.0:
++        raise ValueError(f"{name} must be finite and positive")
++    return parsed
++
++
+ def _resample_uncertainty_column(
+     estimates: pd.DataFrame,
+     template: pd.DataFrame,
+diff --git a/src/raft_uav/mmuad/track5_uncertainty_column_adapter.py b/src/raft_uav/mmuad/track5_uncertainty_column_adapter.py
+index f77e92a..54b4d12 100644
+--- a/src/raft_uav/mmuad/track5_uncertainty_column_adapter.py
++++ b/src/raft_uav/mmuad/track5_uncertainty_column_adapter.py
+@@ -50,8 +50,7 @@ def normalize_uncertainty_estimate_inputs(
+     inputs = list(estimate_inputs)
+     if not inputs:
+         raise ValueError("at least one estimate input is required")
+-    if fallback_sigma_m <= 0.0:
+-        raise ValueError("fallback_sigma_m must be positive")
++    fallback_sigma_m = _positive_finite(fallback_sigma_m, name="fallback_sigma_m")
+     column_map = dict(uncertainty_columns or {})
+     normalized_dir = Path(output_dir) / NORMALIZED_DIR
+     normalized_dir.mkdir(parents=True, exist_ok=True)
+@@ -265,6 +264,17 @@ def _safe_label(value: str) -> str:
+     return label or "estimate"
+ 
+ 
++def _positive_finite(value: float, *, name: str) -> float:
++    try:
++        parsed = float(value)
++    except (TypeError, ValueError) as exc:
++        raise ValueError(f"{name} must be finite and positive") from exc
++    if not np.isfinite(parsed) or parsed <= 0.0:
++        raise ValueError(f"{name} must be finite and positive")
++    return parsed
++
++
+ def _safe_mean(values: pd.Series) -> float | None:
+     numeric = pd.to_numeric(values, errors="coerce")
+     numeric = numeric[np.isfinite(numeric.to_numpy(float))]
+diff --git a/tests/test_mmuad_track5_uncertainty_ensemble.py b/tests/test_mmuad_track5_uncertainty_ensemble.py
+index 0e1abef..70b9df1 100644
+--- a/tests/test_mmuad_track5_uncertainty_ensemble.py
++++ b/tests/test_mmuad_track5_uncertainty_ensemble.py
+@@ -6,6 +6,7 @@ from pathlib import Path
+ from zipfile import ZipFile
+ 
++import numpy as np
+ import pandas as pd
+ import pytest
+ 
+@@ -77,6 +78,28 @@ def test_uncertainty_ensemble_downweights_high_sigma_estimate(tmp_path: Path) ->
+     assert diagnostics["valid_input_count"].tolist() == [2, 2, 2]
+ 
+ 
++def test_uncertainty_ensemble_rejects_nonfinite_or_inverted_sigma_knobs(tmp_path: Path) -> None:
++    low = tmp_path / "low.csv"
++    _low_sigma_estimate().to_csv(low, index=False)
++    inputs = [EstimateInput("low", low, 1.0)]
++
++    with pytest.raises(ValueError, match="fallback_sigma_m"):
++        build_track5_uncertainty_ensemble(
++            inputs,
++            template=_template(),
++            fallback_sigma_m=np.nan,
++        )
++
++    with pytest.raises(ValueError, match="sigma_max_m"):
++        build_track5_uncertainty_ensemble(
++            inputs,
++            template=_template(),
++            sigma_min_m=10.0,
++            sigma_max_m=1.0,
++        )
++
++
+ def test_uncertainty_ensemble_writes_upload_ready_artifacts(tmp_path: Path) -> None:
+     low = tmp_path / "low.csv"
+     high = tmp_path / "high.csv"
+diff --git a/tests/test_mmuad_track5_uncertainty_column_adapter.py b/tests/test_mmuad_track5_uncertainty_column_adapter.py
+index 4fc5390..125a0e0 100644
+--- a/tests/test_mmuad_track5_uncertainty_column_adapter.py
++++ b/tests/test_mmuad_track5_uncertainty_column_adapter.py
+@@ -6,6 +6,7 @@ from pathlib import Path
+ import tomllib
+ 
++import numpy as np
+ import pandas as pd
+ import pytest
+ 
+@@ -77,6 +78,20 @@ def test_uncertainty_adapter_normalizes_per_input_columns(tmp_path: Path) -> Non
+     assert high_rows["predicted_sigma_m"].tolist() == [50.0, 50.0]
+ 
+ 
++def test_uncertainty_adapter_rejects_nonfinite_fallback_sigma(tmp_path: Path) -> None:
++    low_csv = tmp_path / "low.csv"
++    _low_sigma_estimate().drop(columns=["low_sigma"]).to_csv(low_csv, index=False)
++
++    with pytest.raises(ValueError, match="fallback_sigma_m"):
++        normalize_uncertainty_estimate_inputs(
++            [EstimateInput("low", low_csv, 1.0)],
++            output_dir=tmp_path / "out",
++            fallback_sigma_m=np.inf,
++            require_uncertainty=False,
++        )
++
++
+ def test_uncertainty_adapter_matches_sanitized_cli_labels(tmp_path: Path) -> None:
+     low_csv = tmp_path / "low.csv"
+     _low_sigma_estimate().to_csv(low_csv, index=False)
