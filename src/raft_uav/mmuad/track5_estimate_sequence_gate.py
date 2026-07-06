@@ -331,11 +331,13 @@ def _template_keys(rows: pd.DataFrame) -> list[tuple[str, float]]:
 
 
 def _first_present(rows: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
-    lower = {str(column).lower(): str(column) for column in rows.columns}
+    normalized: dict[str, str] = {}
+    for column in rows.columns:
+        normalized.setdefault(str(column).strip().lower(), str(column))
     for candidate in candidates:
         if candidate in rows.columns:
             return candidate
-        found = lower.get(candidate.lower())
+        found = normalized.get(str(candidate).strip().lower())
         if found is not None:
             return found
     return None
