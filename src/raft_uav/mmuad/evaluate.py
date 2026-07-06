@@ -40,7 +40,10 @@ _MISSING_TRACK_ID_TOKENS = {"", "nan", "none", "<na>", "nat"}
 def load_submission_csv(path: Path) -> pd.DataFrame:
     """Load the stable RaFT-UAV MMUAD trajectory CSV export."""
 
-    frame = normalize_time_column_aliases(pd.read_csv(path), target="time_s")
+    frame = normalize_time_column_aliases(
+        pd.read_csv(path, dtype=str, keep_default_na=False),
+        target="time_s",
+    )
     frame = _rename_submission_aliases(frame)
     missing = {"sequence_id", "time_s", "x_m", "y_m", "z_m"}.difference(frame.columns)
     if missing:
