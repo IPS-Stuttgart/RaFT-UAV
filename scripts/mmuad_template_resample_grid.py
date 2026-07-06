@@ -2,7 +2,7 @@
 """Sweep MMUAD Track 5 template-resampling packaging settings.
 
 The Codabench Track 5 upload must contain exactly one row for each official
-``Sequence``/``Timestamp``.  The single-run template-resample helper already
+``Sequence``/``Timestamp``. The single-run template-resample helper already
 creates upload-ready artifacts; this script runs a small truth-free or
 truth-scored grid over resampling method, interpolation-gap fallback, and
 classification preservation policy so the final packaging choice can be frozen
@@ -64,14 +64,16 @@ def run_template_resample_grid(
 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
+    methods = _normalized_choices(resample_methods, RESAMPLE_METHODS, "resample_method")
+    class_policies = _normalized_choices(
+        classification_policies,
+        CLASSIFICATION_POLICIES,
+        "classification_policy",
+    )
     rows: list[dict[str, Any]] = []
-    for method in _normalized_choices(resample_methods, RESAMPLE_METHODS, "resample_method"):
+    for method in methods:
         for gap_s in max_interpolation_gaps_s:
-            for class_policy in _normalized_choices(
-                classification_policies,
-                CLASSIFICATION_POLICIES,
-                "classification_policy",
-            ):
+            for class_policy in class_policies:
                 variant = _variant_label(method, gap_s, class_policy)
                 variant_dir = output / variant
                 paths = write_track5_template_resample_outputs(
@@ -97,28 +99,17 @@ def run_template_resample_grid(
                     validation_summary=validation_summary,
                 )
                 if truth_path is not None and template_path is not None:
-                    scorecard = build_track5_scorecard(
-                        results_path=paths["official_zip"],
-                        truth_path=truth_path,
-                        template_path=template_path,
-                        class_map_path=class_map_path,
-                        require_zip=True,
+                    record.update(
+                        _write_variant_scorecard(
+                            variant_dir=variant_dir,
+                            results_path=paths["official_zip"],
+                            truth_path=truth_path,
+                            template_path=template_path,
+                            class_map_path=class_map_path,
+                        ),
                     )
-                    scorecard_paths = write_track5_scorecard(
-                        scorecard,
-                        summary_json=variant_dir / "track5_scorecard.json",
-                        summary_csv=variant_dir / "track5_scorecard.csv",
-                        validation_rows_csv=variant_dir / "track5_scorecard_validation_rows.csv",
-                        public_evaluation_rows_csv=variant_dir
-                        / "track5_scorecard_public_rows.csv",
-                        nearest_time_rows_csv=variant_dir / "track5_scorecard_nearest_rows.csv",
-                        pose_by_sequence_csv=variant_dir / "mmuad_pose_by_sequence.csv",
-                    )
-                    record.update(_scorecard_summary_values(scorecard.summary))
-                    record.update({f"scorecard_{key}": value for key, value in scorecard_paths.items()})
                 rows.append(record)
-    summary = pd.DataFrame.from_records(rows)
-    summary = _sort_summary(summary)
+    summary = _sort_summary(pd.DataFrame.from_records(rows))
     summary.to_csv(output / SUMMARY_CSV, index=False)
     (output / SUMMARY_JSON).write_text(
         json.dumps({"rows": _jsonable(summary.to_dict(orient="records"))}, indent=2),
@@ -189,6 +180,35 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _write_variant_scorecard(
+    *,
+    variant_dir: Path,
+    results_path: Path,
+    truth_path: Path,
+    template_path: Path,
+    class_map_path: Path | None,
+) -> dict[str, Any]:
+    scorecard = build_track5_scorecard(
+        results_path=results_path,
+        truth_path=truth_path,
+        template_path=template_path,
+        class_map_path=class_map_path,
+        require_zip=True,
+    )
+    scorecard_paths = write_track5_scorecard(
+        scorecard,
+        summary_json=variant_dir / "track5_scorecard.json",
+        summary_csv=variant_dir / "track5_scorecard.csv",
+        validation_rows_csv=variant_dir / "track5_scorecard_validation_rows.csv",
+        public_evaluation_rows_csv=variant_dir / "track5_scorecard_public_rows.csv",
+        nearest_time_rows_csv=variant_dir / "track5_scorecard_nearest_rows.csv",
+        pose_by_sequence_csv=variant_dir / "mmuad_pose_by_sequence.csv",
+    )
+    values = _scorecard_summary_values(scorecard.summary)
+    values.update({f"scorecard_{key}": value for key, value in scorecard_paths.items()})
+    return values
+
+
 def _base_summary_record(
     *,
     variant: str,
@@ -247,23 +267,18 @@ def _sort_summary(summary: pd.DataFrame) -> pd.DataFrame:
         return summary
     rows = summary.copy()
     if "pose_mse_loss_m2" in rows.columns and rows["pose_mse_loss_m2"].notna().any():
-        rows["_sort_pose_mse"] = pd.to_numeric(rows["pose_mse_loss_m2"], errors="coerce").fillna(
-            np.inf
-        )
-        rows["_sort_p95"] = pd.to_numeric(rows.get("public_p95_3d_m"), errors="coerce").fillna(
-            np.inf
-        )
+        rows["_sort_pose_mse"] = _numeric_column(rows, "pose_mse_loss_m2").fillna(np.inf)
+        rows["_sort_p95"] = _numeric_column(rows, "public_p95_3d_m").fillna(np.inf)
         rows = rows.sort_values(["_sort_pose_mse", "_sort_p95", "variant"]).drop(
             columns=["_sort_pose_mse", "_sort_p95"]
         )
     else:
-        rows["_ready"] = rows.get("codabench_upload_ready", False).astype(bool)
-        rows["_invalid"] = pd.to_numeric(rows.get("invalid_resampled_rows"), errors="coerce").fillna(
-            np.inf
-        )
-        rows = rows.sort_values(["_ready", "_invalid", "variant"], ascending=[False, True, True]).drop(
-            columns=["_ready", "_invalid"]
-        )
+        rows["_ready"] = _bool_column(rows, "codabench_upload_ready")
+        rows["_invalid"] = _numeric_column(rows, "invalid_resampled_rows").fillna(np.inf)
+        rows = rows.sort_values(
+            ["_ready", "_invalid", "variant"],
+            ascending=[False, True, True],
+        ).drop(columns=["_ready", "_invalid"])
     return rows.reset_index(drop=True)
 
 
@@ -271,7 +286,19 @@ def _has_ready_row(summary: pd.DataFrame) -> bool:
     if summary.empty:
         return False
     column = "scorecard_leaderboard_ready" if "scorecard_leaderboard_ready" in summary.columns else "leaderboard_ready"
-    return bool(pd.Series(summary.get(column, False)).fillna(False).astype(bool).any())
+    return bool(_bool_column(summary, column).any())
+
+
+def _numeric_column(rows: pd.DataFrame, column: str) -> pd.Series:
+    if column not in rows.columns:
+        return pd.Series([np.nan] * len(rows), index=rows.index, dtype=float)
+    return pd.to_numeric(rows[column], errors="coerce")
+
+
+def _bool_column(rows: pd.DataFrame, column: str) -> pd.Series:
+    if column not in rows.columns:
+        return pd.Series([False] * len(rows), index=rows.index, dtype=bool)
+    return pd.Series(rows[column]).fillna(False).astype(bool)
 
 
 def _parse_text_list(values: list[str]) -> tuple[str, ...]:
