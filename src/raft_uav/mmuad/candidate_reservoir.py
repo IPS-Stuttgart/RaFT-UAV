@@ -23,6 +23,7 @@ from raft_uav.mmuad.schema import normalize_candidate_columns, normalize_truth_c
 
 _REQUIRED_COLUMNS = ("sequence_id", "time_s", "x_m", "y_m", "z_m")
 _DEFAULT_TOP_K = (1, 3, 5, 10, 20)
+_DEFAULT_PRESERVE_REASON_PREFIXES = ("branch:", "source:")
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class ReservoirConfig:
     fallback_score_column: str = "confidence"
     score_floor_quantile: float | None = None
     cap_reason_bonus: float = 0.0
+    preserve_reason_prefixes: tuple[str, ...] = _DEFAULT_PRESERVE_REASON_PREFIXES
 
 
 def load_candidate_inputs(specs: Sequence[str]) -> pd.DataFrame:
@@ -92,12 +94,16 @@ def build_candidate_reservoir(
 
     if config is None:
         score_column = score_columns[0] if score_columns else "ranker_score"
-        fallback_score_column = score_columns[1] if score_columns and len(score_columns) > 1 else "confidence"
+        fallback_score_column = (
+            score_columns[1] if score_columns and len(score_columns) > 1 else "confidence"
+        )
         config = ReservoirConfig(
             global_top_n=40 if global_top_n is None else int(global_top_n),
             per_source_top_n=3 if top_per_source is None else int(top_per_source),
             per_branch_top_n=3 if top_per_branch is None else int(top_per_branch),
-            max_candidates_per_frame=40 if max_candidates_per_frame is None else int(max_candidates_per_frame),
+            max_candidates_per_frame=40
+            if max_candidates_per_frame is None
+            else int(max_candidates_per_frame),
             score_column=score_column,
             fallback_score_column=fallback_score_column,
             score_floor_quantile=score_floor_quantile,
@@ -111,6 +117,7 @@ def build_candidate_reservoir(
             candidate_reservoir_reason=pd.Series(dtype=str),
             candidate_reservoir_reason_count=pd.Series(dtype=int),
             candidate_reservoir_cap_score=pd.Series(dtype=float),
+            candidate_reservoir_protected=pd.Series(dtype=bool),
         )
     rows = rows.copy().reset_index(drop=True)
     if "source" not in rows.columns:
@@ -179,6 +186,7 @@ def build_candidate_reservoir(
         out,
         max_candidates_per_frame=config.max_candidates_per_frame,
         cap_reason_bonus=config.cap_reason_bonus,
+        preserve_reason_prefixes=config.preserve_reason_prefixes,
     )
     out = out.sort_values(
         ["sequence_id", "time_s", "candidate_reservoir_rank", "source"],
@@ -260,6 +268,8 @@ def build_reservoir_summary(candidates: pd.DataFrame, reservoir: pd.DataFrame) -
     input_counts = _frame_counts(candidates)
     reservoir_counts = _frame_counts(reservoir)
     reason_counts = _reservoir_reason_count_series(reservoir)
+    protected_column = reservoir.get("candidate_reservoir_protected", pd.Series(dtype=bool))
+    protected_count = int(pd.Series(protected_column).fillna(False).astype(bool).sum())
     return {
         "input_candidate_rows": int(len(candidates)),
         "reservoir_candidate_rows": int(len(reservoir)),
@@ -272,6 +282,7 @@ def build_reservoir_summary(candidates: pd.DataFrame, reservoir: pd.DataFrame) -
         "reservoir_reason_count_mean": _safe_mean(reason_counts),
         "reservoir_reason_count_p95": _safe_quantile(reason_counts, 0.95),
         "reservoir_reason_count_max": _safe_max(reason_counts),
+        "reservoir_protected_count": protected_count,
         "source_counts": _value_counts(reservoir, "source"),
         "candidate_branch_counts": _value_counts(reservoir, "candidate_branch"),
         "reservoir_reason_counts": _reason_counts(reservoir),
@@ -331,18 +342,40 @@ def _cap_per_frame(
     *,
     max_candidates_per_frame: int,
     cap_reason_bonus: float = 0.0,
+    preserve_reason_prefixes: Sequence[str] = _DEFAULT_PRESERVE_REASON_PREFIXES,
 ) -> pd.DataFrame:
     rows = _with_cap_score(rows, cap_reason_bonus=cap_reason_bonus)
+    prefixes = tuple(str(prefix) for prefix in preserve_reason_prefixes if str(prefix))
+    rows["candidate_reservoir_protected"] = rows["candidate_reservoir_reason"].map(
+        lambda value: _has_preserved_reason(value, prefixes),
+    )
     if max_candidates_per_frame <= 0 or rows.empty:
         out = rows.copy()
         out["candidate_reservoir_rank"] = 1.0
         return out
     parts: list[pd.DataFrame] = []
     for _, group in rows.groupby(["sequence_id", "time_s"], sort=False):
-        capped = group.sort_values(
+        protected = group.loc[group["candidate_reservoir_protected"]].copy()
+        protected = protected.sort_values(
             ["candidate_reservoir_cap_score", "candidate_reservoir_score"],
             ascending=[False, False],
-        ).head(int(max_candidates_per_frame)).copy()
+        )
+        if len(protected) >= int(max_candidates_per_frame):
+            capped = protected.head(int(max_candidates_per_frame)).copy()
+        else:
+            remaining_slots = int(max_candidates_per_frame) - len(protected)
+            unprotected = group.drop(index=protected.index).sort_values(
+                ["candidate_reservoir_cap_score", "candidate_reservoir_score"],
+                ascending=[False, False],
+            )
+            capped = pd.concat(
+                [protected, unprotected.head(remaining_slots)],
+                ignore_index=False,
+            )
+        capped = capped.sort_values(
+            ["candidate_reservoir_cap_score", "candidate_reservoir_score"],
+            ascending=[False, False],
+        ).copy()
         capped["candidate_reservoir_rank"] = np.arange(1, len(capped) + 1, dtype=float)
         parts.append(capped)
     return pd.concat(parts, ignore_index=True) if parts else rows.iloc[0:0].copy()
@@ -351,11 +384,23 @@ def _cap_per_frame(
 def _with_cap_score(rows: pd.DataFrame, *, cap_reason_bonus: float) -> pd.DataFrame:
     out = rows.copy()
     out["candidate_reservoir_reason_count"] = _reservoir_reason_count_series(out)
-    base_score = pd.to_numeric(out["candidate_reservoir_score"], errors="coerce").fillna(float("-inf"))
+    base_score = pd.to_numeric(out["candidate_reservoir_score"], errors="coerce").fillna(
+        float("-inf"),
+    )
     out["candidate_reservoir_cap_score"] = base_score + (
         float(cap_reason_bonus) * out["candidate_reservoir_reason_count"].astype(float)
     )
     return out
+
+
+def _has_preserved_reason(value: Any, prefixes: tuple[str, ...]) -> bool:
+    if not prefixes:
+        return False
+    for token in str(value).replace(",", ";").split(";"):
+        reason = token.strip()
+        if reason and any(reason.startswith(prefix) for prefix in prefixes):
+            return True
+    return False
 
 
 def _reservoir_reason_count_series(rows: pd.DataFrame) -> pd.Series:
@@ -499,6 +544,20 @@ def main(argv: list[str] | None = None) -> int:
         default=0.0,
         help="bonus added during final frame cap for each independent reservoir selection reason",
     )
+    parser.add_argument(
+        "--preserve-reason-prefix",
+        action="append",
+        default=None,
+        help=(
+            "reason prefix protected during final frame cap; default protects branch: and source:; "
+            "repeat to override"
+        ),
+    )
+    parser.add_argument(
+        "--disable-preserved-reason-prefixes",
+        action="store_true",
+        help="disable branch/source quota protection during the final per-frame cap",
+    )
     parser.add_argument("--top-k", type=int, action="append", default=None)
     parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
     args = parser.parse_args(argv)
@@ -508,6 +567,12 @@ def main(argv: list[str] | None = None) -> int:
     candidates = _load_candidate_specs(list(candidate_specs))
     per_source_top_n = args.per_source_top_n if args.top_per_source is None else args.top_per_source
     per_branch_top_n = args.per_branch_top_n if args.top_per_branch is None else args.top_per_branch
+    if args.disable_preserved_reason_prefixes:
+        preserve_reason_prefixes: tuple[str, ...] = ()
+    elif args.preserve_reason_prefix is None:
+        preserve_reason_prefixes = _DEFAULT_PRESERVE_REASON_PREFIXES
+    else:
+        preserve_reason_prefixes = tuple(args.preserve_reason_prefix)
     reservoir = build_candidate_reservoir(
         candidates,
         config=ReservoirConfig(
@@ -519,6 +584,7 @@ def main(argv: list[str] | None = None) -> int:
             fallback_score_column=args.fallback_score_column,
             score_floor_quantile=args.score_floor_quantile,
             cap_reason_bonus=args.cap_reason_bonus,
+            preserve_reason_prefixes=preserve_reason_prefixes,
         ),
     )
     write_reservoir_outputs(
