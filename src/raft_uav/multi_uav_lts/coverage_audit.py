@@ -37,6 +37,8 @@ class PredictionCoverageRow:
     first_frame: int | None
     last_frame: int | None
     expected_frame_count: int | None
+    detected_frame_count: int
+    detection_frame_fraction: float | None
     unique_object_ids: int
     parse_errors: int
     invalid_geometry_rows: int
@@ -55,6 +57,7 @@ class PredictionCoverageAudit:
     prediction_path: str
     template_zip: str | None
     sequence_root: str | None
+    min_detection_frame_fraction: float | None
     ready: bool
     blocking_reasons: list[str]
     expected_file_count: int
@@ -62,6 +65,7 @@ class PredictionCoverageAudit:
     missing_file_count: int
     extra_file_count: int
     empty_expected_file_count: int
+    low_detection_coverage_file_count: int
     ok_file_count: int
     not_ready_file_count: int
     invalid_file_count: int
@@ -74,10 +78,13 @@ class PredictionCoverageAudit:
     unsorted_rows: int
     out_of_range_frame_rows: int
     duplicate_frame_object_rows: int
+    detection_frame_fraction_min: float | None
+    detection_frame_fraction_mean: float | None
     status_counts: dict[str, int]
     missing_files: list[str]
     extra_files: list[str]
     empty_expected_files: list[str]
+    low_detection_coverage_files: list[str]
     out_of_range_frame_files: list[str]
     duplicate_frame_object_files: list[str]
     invalid_class_files: list[str]
@@ -90,6 +97,7 @@ def audit_prediction_coverage(
     *,
     template_zip: Path | None = None,
     sequence_root: Path | None = None,
+    min_detection_frame_fraction: float | None = None,
 ) -> PredictionCoverageAudit:
     """Audit prediction files against expected template/sequence names."""
 
@@ -100,11 +108,15 @@ def audit_prediction_coverage(
     expected_set = set(expected_names)
     present_set = set(present_names)
     all_names = sorted(expected_set | present_set)
+    min_detection_frame_fraction = _normalized_min_detection_fraction(
+        min_detection_frame_fraction,
+    )
 
     rows: list[PredictionCoverageRow] = []
     missing_files: list[str] = []
     extra_files: list[str] = []
     empty_expected_files: list[str] = []
+    low_detection_coverage_files: list[str] = []
     out_of_range_frame_files: list[str] = []
     duplicate_frame_object_files: list[str] = []
     invalid_class_files: list[str] = []
@@ -125,6 +137,8 @@ def audit_prediction_coverage(
                 first_frame=None,
                 last_frame=None,
                 expected_frame_count=expected_frame_count,
+                detected_frame_count=0,
+                detection_frame_fraction=None,
                 unique_object_ids=0,
                 parse_errors=0,
                 invalid_geometry_rows=0,
@@ -138,6 +152,17 @@ def audit_prediction_coverage(
             rows.append(row)
             continue
         summary = _summarize_prediction_text(name, predictions[name])
+        detected_frame_count = _count_detected_frames(predictions[name])
+        detection_frame_fraction = _detection_frame_fraction(
+            detected_frame_count=detected_frame_count,
+            expected_frame_count=expected_frame_count,
+        )
+        low_detection_coverage = _is_low_detection_coverage(
+            detection_frame_fraction=detection_frame_fraction,
+            min_detection_frame_fraction=min_detection_frame_fraction,
+            expected=expected,
+            row_count=summary.row_count,
+        )
         out_of_range_frame_rows = _count_out_of_range_frame_rows(
             predictions[name],
             expected_frame_count=expected_frame_count,
@@ -146,6 +171,8 @@ def audit_prediction_coverage(
         invalid_class_rows, invalid_visibility_rows = _count_invalid_class_visibility_rows(
             predictions[name]
         )
+        if low_detection_coverage:
+            low_detection_coverage_files.append(name)
         if out_of_range_frame_rows:
             out_of_range_frame_files.append(name)
         if duplicate_frame_object_rows:
@@ -170,6 +197,8 @@ def audit_prediction_coverage(
             or duplicate_frame_object_rows
         ):
             status = "invalid"
+        elif low_detection_coverage:
+            status = "low_coverage"
         elif summary.unsorted_rows:
             status = "unsorted"
         else:
@@ -184,6 +213,8 @@ def audit_prediction_coverage(
                 first_frame=summary.first_frame,
                 last_frame=summary.last_frame,
                 expected_frame_count=expected_frame_count,
+                detected_frame_count=detected_frame_count,
+                detection_frame_fraction=detection_frame_fraction,
                 unique_object_ids=summary.unique_object_ids,
                 parse_errors=summary.parse_errors,
                 invalid_geometry_rows=summary.invalid_geometry_rows,
@@ -209,6 +240,7 @@ def audit_prediction_coverage(
         missing_files=missing_files,
         extra_files=extra_files,
         empty_expected_files=empty_expected_files,
+        low_detection_coverage_files=low_detection_coverage_files,
         parse_errors=parse_errors,
         invalid_geometry_rows=invalid_geometry_rows,
         invalid_confidence_rows=invalid_confidence_rows,
@@ -222,6 +254,7 @@ def audit_prediction_coverage(
         prediction_path=str(prediction_path),
         template_zip=str(template_zip) if template_zip is not None else None,
         sequence_root=str(sequence_root) if sequence_root is not None else None,
+        min_detection_frame_fraction=min_detection_frame_fraction,
         ready=not blocking_reasons,
         blocking_reasons=blocking_reasons,
         expected_file_count=len(expected_names),
@@ -229,6 +262,7 @@ def audit_prediction_coverage(
         missing_file_count=len(missing_files),
         extra_file_count=len(extra_files),
         empty_expected_file_count=len(empty_expected_files),
+        low_detection_coverage_file_count=len(low_detection_coverage_files),
         ok_file_count=status_counts.get("ok", 0),
         not_ready_file_count=len(rows) - status_counts.get("ok", 0),
         invalid_file_count=status_counts.get("invalid", 0),
@@ -241,10 +275,13 @@ def audit_prediction_coverage(
         unsorted_rows=unsorted_rows,
         out_of_range_frame_rows=out_of_range_frame_rows,
         duplicate_frame_object_rows=duplicate_frame_object_rows,
+        detection_frame_fraction_min=_fraction_min(rows),
+        detection_frame_fraction_mean=_fraction_mean(rows),
         status_counts=status_counts,
         missing_files=missing_files,
         extra_files=extra_files,
         empty_expected_files=empty_expected_files,
+        low_detection_coverage_files=sorted(set(low_detection_coverage_files)),
         out_of_range_frame_files=sorted(set(out_of_range_frame_files)),
         duplicate_frame_object_files=sorted(set(duplicate_frame_object_files)),
         invalid_class_files=sorted(set(invalid_class_files)),
@@ -285,6 +322,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sequence-root", type=Path)
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--row-csv", type=Path)
+    parser.add_argument(
+        "--min-detection-frame-fraction",
+        type=float,
+        help=(
+            "optional per-sequence detection-frame coverage gate; when supplied, "
+            "expected files with detections in fewer than this fraction of image "
+            "frames are marked low_coverage"
+        ),
+    )
     parser.add_argument("--require-ready", action="store_true")
     args = parser.parse_args(argv)
 
@@ -292,6 +338,7 @@ def main(argv: list[str] | None = None) -> int:
         args.prediction_path,
         template_zip=args.template_zip,
         sequence_root=args.sequence_root,
+        min_detection_frame_fraction=args.min_detection_frame_fraction,
     )
     write_prediction_coverage_artifacts(audit, output_json=args.output_json, row_csv=args.row_csv)
     payload: dict[str, Any] = asdict(audit)
@@ -339,6 +386,18 @@ def _count_out_of_range_frame_rows(text: str, *, expected_frame_count: int | Non
     if expected_frame_count is None:
         return 0
     count = 0
+    for frame_id in _frame_ids(text):
+        if frame_id < 1 or frame_id > expected_frame_count:
+            count += 1
+    return count
+
+
+def _count_detected_frames(text: str) -> int:
+    return len(set(_frame_ids(text)))
+
+
+def _frame_ids(text: str) -> list[int]:
+    frame_ids: list[int] = []
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
@@ -347,12 +406,10 @@ def _count_out_of_range_frame_rows(text: str, *, expected_frame_count: int | Non
         if len(parts) < 1:
             continue
         try:
-            frame_id = _parse_int_like(parts[0])
+            frame_ids.append(_parse_int_like(parts[0]))
         except ValueError:
             continue
-        if frame_id < 1 or frame_id > expected_frame_count:
-            count += 1
-    return count
+    return frame_ids
 
 
 def _count_duplicate_frame_object_rows(text: str) -> int:
@@ -400,6 +457,50 @@ def _count_invalid_class_visibility_rows(text: str) -> tuple[int, int]:
     return invalid_class_rows, invalid_visibility_rows
 
 
+def _detection_frame_fraction(
+    *,
+    detected_frame_count: int,
+    expected_frame_count: int | None,
+) -> float | None:
+    if expected_frame_count is None or expected_frame_count <= 0:
+        return None
+    return float(detected_frame_count / expected_frame_count)
+
+
+def _normalized_min_detection_fraction(value: float | None) -> float | None:
+    if value is None:
+        return None
+    if not 0.0 <= float(value) <= 1.0:
+        raise ValueError("--min-detection-frame-fraction must be in [0, 1]")
+    return float(value)
+
+
+def _is_low_detection_coverage(
+    *,
+    detection_frame_fraction: float | None,
+    min_detection_frame_fraction: float | None,
+    expected: bool,
+    row_count: int,
+) -> bool:
+    return (
+        expected
+        and row_count > 0
+        and detection_frame_fraction is not None
+        and min_detection_frame_fraction is not None
+        and detection_frame_fraction < min_detection_frame_fraction
+    )
+
+
+def _fraction_min(rows: list[PredictionCoverageRow]) -> float | None:
+    values = [row.detection_frame_fraction for row in rows if row.detection_frame_fraction is not None]
+    return min(values) if values else None
+
+
+def _fraction_mean(rows: list[PredictionCoverageRow]) -> float | None:
+    values = [row.detection_frame_fraction for row in rows if row.detection_frame_fraction is not None]
+    return float(sum(values) / len(values)) if values else None
+
+
 def _status_counts(rows: list[PredictionCoverageRow]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for row in rows:
@@ -412,6 +513,7 @@ def _blocking_reasons(
     missing_files: list[str],
     extra_files: list[str],
     empty_expected_files: list[str],
+    low_detection_coverage_files: list[str],
     parse_errors: int,
     invalid_geometry_rows: int,
     invalid_confidence_rows: int,
@@ -428,6 +530,8 @@ def _blocking_reasons(
         reasons.append("extra_files")
     if empty_expected_files:
         reasons.append("empty_expected_files")
+    if low_detection_coverage_files:
+        reasons.append("low_detection_coverage_files")
     if parse_errors:
         reasons.append("parse_errors")
     if invalid_geometry_rows:
