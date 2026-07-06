@@ -112,8 +112,8 @@ def search_track5_estimate_ensemble_weights(
         "best_weight_grid_index": best_index,
         "weights": best_weights,
         "metrics": {
-            key: _jsonable(best_row[key])
-            for key in (
+            name: _jsonable(best_row[name])
+            for name in (
                 "pose_mse_m2",
                 "pose_rmse_m",
                 "pose_mean_m",
@@ -121,7 +121,7 @@ def search_track5_estimate_ensemble_weights(
                 "pose_max_m",
                 "matched_rows",
             )
-            if key in best_row.index
+            if name in best_row.index
         },
         "by_sequence_metrics": _jsonable(best_by_sequence.to_dict(orient="records")),
         "estimate_inputs": [asdict(item) | {"path": str(item.path)} for item in inputs],
@@ -265,9 +265,9 @@ def _normalize_truth_for_exact_template(truth: pd.DataFrame) -> pd.DataFrame:
     rows["sequence_id"] = rows["sequence_id"].astype(str)
     for column in ("time_s", "x_m", "y_m", "z_m"):
         rows[column] = pd.to_numeric(rows[column], errors="coerce")
-    rows["_time_key"] = _time_key(rows["time_s"])
+    rows["_time_token"] = _time_token(rows["time_s"])
     finite = np.isfinite(rows[["time_s", "x_m", "y_m", "z_m"]].to_numpy(float)).all(axis=1)
-    return rows.loc[finite, ["sequence_id", "_time_key", "x_m", "y_m", "z_m"]].copy()
+    return rows.loc[finite, ["sequence_id", "_time_token", "x_m", "y_m", "z_m"]].copy()
 
 
 def _score_template_estimates(estimates: pd.DataFrame, truth: pd.DataFrame) -> dict[str, Any]:
@@ -285,7 +285,7 @@ def _score_template_estimates(estimates: pd.DataFrame, truth: pd.DataFrame) -> d
 def _score_template_estimates_by_sequence(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
     rows = _merge_template_estimates_to_truth(estimates, truth)
     if rows.empty:
-        return pd.DataFrame(columns=["sequence_id", *list(_empty_metrics().keys())])
+        return pd.DataFrame(columns=["sequence_id", *list(_empty_metrics())])
     records: list[dict[str, Any]] = []
     for sequence_id, group in rows.groupby("sequence_id", sort=True):
         estimated_xyz = group[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
@@ -304,8 +304,8 @@ def _merge_template_estimates_to_truth(estimates: pd.DataFrame, truth: pd.DataFr
     if rows.empty or truth.empty:
         return pd.DataFrame()
     rows["sequence_id"] = rows["sequence_id"].astype(str)
-    rows["_time_key"] = _time_key(pd.to_numeric(rows["time_s"], errors="coerce"))
-    return rows.merge(truth, on=["sequence_id", "_time_key"], how="inner", suffixes=("", "_truth"))
+    rows["_time_token"] = _time_token(pd.to_numeric(rows["time_s"], errors="coerce"))
+    return rows.merge(truth, on=["sequence_id", "_time_token"], how="inner", suffixes=("", "_truth"))
 
 
 def _metrics_from_errors(errors: np.ndarray) -> dict[str, Any]:
@@ -331,8 +331,12 @@ def _empty_metrics() -> dict[str, Any]:
     }
 
 
-def _time_key(values: pd.Series) -> pd.Series:
-    return pd.to_numeric(values, errors="coerce").round(9).astype(str)
+def _time_token(values: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce")
+    rounded = np.round(numeric.to_numpy(dtype=float, na_value=np.nan), 9)
+    rounded[np.isfinite(rounded) & (rounded == 0.0)] = 0.0
+    tokens = [f"{value:.9f}" if np.isfinite(value) else "" for value in rounded]
+    return pd.Series(tokens, index=values.index, dtype="object")
 
 
 def _safe_mean(values: pd.Series) -> float | None:
@@ -345,7 +349,7 @@ def _safe_mean(values: pd.Series) -> float | None:
 
 def _jsonable(value: Any) -> Any:
     if isinstance(value, dict):
-        return {str(key): _jsonable(item) for key, item in value.items()}
+        return {str(name): _jsonable(item) for name, item in value.items()}
     if isinstance(value, list | tuple):
         return [_jsonable(item) for item in value]
     if isinstance(value, Path):

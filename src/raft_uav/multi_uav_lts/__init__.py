@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 
 def _install_zero_frame_coverage_guard() -> None:
     try:
@@ -32,4 +34,67 @@ def _install_zero_frame_coverage_guard() -> None:
     _coverage_audit._count_out_of_range_frame_rows = _count_out_of_range_frame_rows
 
 
+def _install_lts_submission_domain_guard() -> None:
+    try:
+        from raft_uav.multi_uav_lts import cli as _cli
+        from raft_uav.multi_uav_lts.cli import _parse_int_like as _parse_int_like
+    except Exception:
+        return
+
+    original_attr = "_raft_uav_original_summarize_prediction_text"
+    if not hasattr(_cli, original_attr):
+        setattr(_cli, original_attr, _cli._summarize_prediction_text)
+    original = getattr(_cli, original_attr)
+
+    def _summarize_prediction_text(name: str, text: str):
+        summary = original(name, text)
+        invalid_domain_rows = _count_invalid_class_visibility_rows(
+            text,
+            parse_int_like=_parse_int_like,
+        )
+        if invalid_domain_rows == 0:
+            return summary
+        return _cli.SubmissionFileSummary(
+            name=summary.name,
+            row_count=summary.row_count,
+            first_frame=summary.first_frame,
+            last_frame=summary.last_frame,
+            unique_object_ids=summary.unique_object_ids,
+            parse_errors=summary.parse_errors + invalid_domain_rows,
+            invalid_geometry_rows=summary.invalid_geometry_rows,
+            invalid_confidence_rows=summary.invalid_confidence_rows,
+            unsorted_rows=summary.unsorted_rows,
+        )
+
+    _cli._summarize_prediction_text = _summarize_prediction_text
+
+
+def _count_invalid_class_visibility_rows(text: str, *, parse_int_like) -> int:
+    count = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) != 9:
+            continue
+        try:
+            frame_id = parse_int_like(parts[0])
+            object_id = parse_int_like(parts[1])
+            x1, y1, w, h, confidence = (float(part) for part in parts[2:7])
+            class_id = parse_int_like(parts[7])
+            visibility = float(parts[8])
+        except ValueError:
+            continue
+
+        if frame_id <= 0 or object_id <= 0:
+            continue
+        if not all(math.isfinite(value) for value in (x1, y1, w, h, confidence, visibility)):
+            continue
+        if class_id <= 0 or not 0.0 <= visibility <= 1.0:
+            count += 1
+    return count
+
+
 _install_zero_frame_coverage_guard()
+_install_lts_submission_domain_guard()

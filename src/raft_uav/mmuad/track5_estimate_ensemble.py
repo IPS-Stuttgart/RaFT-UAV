@@ -38,6 +38,7 @@ VALIDATION_ROWS_CSV = "mmuad_track5_ensemble_validation_rows.csv"
 OFFICIAL_RESULTS_CSV = "mmaud_results.csv"
 OFFICIAL_ZIP = "ug2_submission.zip"
 ENSEMBLE_POLICIES = ("weighted-mean", "weighted-median", "trimmed-mean")
+WEIGHT_MISSING_POLICIES = ("error", "keep", "zero")
 # Resampling copies requested template timestamps into each candidate row. Match those
 # rows with an absolute tolerance only; NumPy's default relative tolerance is unsafe
 # for epoch-style timestamps because seconds-scale differences can compare close.
@@ -76,6 +77,64 @@ def parse_estimate_spec(value: str) -> EstimateInput:
         path=Path(path_text),
         weight=_validate_ensemble_weight(weight, label=label),
     )
+
+
+def load_estimate_weight_config(path: Path) -> dict[str, float]:
+    """Load a train-selected ensemble-weight mapping from JSON.
+
+    The preferred schema is ``{"weights": {"label": weight, ...}}``, matching
+    the output of the Track 5 weight-search helper.  A direct ``{"label":
+    weight}`` mapping is accepted for small hand-authored configs.
+    """
+
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("ensemble weight config must be a JSON object")
+    raw_weights = payload.get("weights", payload)
+    if not isinstance(raw_weights, dict):
+        raise ValueError("ensemble weight config must contain a weights object")
+    weights: dict[str, float] = {}
+    for label, value in raw_weights.items():
+        safe_label = _safe_label(str(label))
+        weights[safe_label] = _validate_ensemble_weight(float(value), label=safe_label)
+    if not weights:
+        raise ValueError("ensemble weight config contains no weights")
+    return weights
+
+
+def apply_estimate_weight_config(
+    estimate_inputs: Iterable[EstimateInput],
+    weights: dict[str, float],
+    *,
+    missing_policy: str = "error",
+) -> list[EstimateInput]:
+    """Return estimate inputs with weights replaced by a config mapping."""
+
+    if missing_policy not in WEIGHT_MISSING_POLICIES:
+        raise ValueError(f"unsupported weight missing policy: {missing_policy}")
+    safe_weights = {_safe_label(label): float(weight) for label, weight in weights.items()}
+    out: list[EstimateInput] = []
+    missing: list[str] = []
+    for item in estimate_inputs:
+        label = _safe_label(item.label)
+        if label in safe_weights:
+            weight = _validate_ensemble_weight(safe_weights[label], label=label)
+        elif missing_policy == "keep":
+            weight = item.weight
+            missing.append(label)
+        elif missing_policy == "zero":
+            weight = 0.0
+            missing.append(label)
+        else:
+            missing.append(label)
+            continue
+        out.append(EstimateInput(label=label, path=item.path, weight=weight))
+    if missing and missing_policy == "error":
+        raise ValueError(f"missing ensemble weights for labels: {sorted(missing)}")
+    unused = sorted(set(safe_weights).difference(_safe_label(item.label) for item in estimate_inputs))
+    if unused:
+        raise ValueError(f"ensemble weight config has unused labels: {unused}")
+    return out
 
 
 def _validate_ensemble_weight(weight: float, *, label: str) -> float:
@@ -319,12 +378,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-nearest-time-delta-s", type=float)
     parser.add_argument("--aggregation-policy", choices=ENSEMBLE_POLICIES, default="weighted-mean")
     parser.add_argument("--trim-fraction", type=float, default=0.2)
+    parser.add_argument(
+        "--weights-json",
+        type=Path,
+        help="JSON config with a weights mapping, e.g. output from train-fold weight search",
+    )
+    parser.add_argument(
+        "--weight-missing-policy",
+        choices=WEIGHT_MISSING_POLICIES,
+        default="error",
+        help="how to handle estimate labels missing from --weights-json",
+    )
     parser.add_argument("--require-leaderboard-ready", action="store_true")
     args = parser.parse_args(argv)
 
     if not args.estimate_csv:
         parser.error("provide at least one --estimate-csv LABEL=PATH[@WEIGHT]")
     estimate_inputs = [parse_estimate_spec(spec) for spec in args.estimate_csv]
+    if args.weights_json is not None:
+        estimate_inputs = apply_estimate_weight_config(
+            estimate_inputs,
+            load_estimate_weight_config(args.weights_json),
+            missing_policy=args.weight_missing_policy,
+        )
     template = load_official_track5_template_file(args.template)
     class_map = load_sequence_class_map(args.class_map) if args.class_map is not None else {}
     paths = write_track5_estimate_ensemble_outputs(

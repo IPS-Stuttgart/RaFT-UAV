@@ -14,6 +14,51 @@ from raft_uav.mmuad.submission import write_normalized_official_track5_submissio
 from raft_uav.mmuad.tracker import TrackerConfig, TrackerOutput, run_mmuad_tracker
 
 
+def _install_schema_timestamp_guard() -> None:
+    try:
+        import pandas as _pd
+
+        from raft_uav.mmuad import schema as _schema
+    except Exception:
+        return
+
+    original = _schema.normalize_time_column_aliases
+
+    def _flattened_stamp_pair_seconds(frame):
+        lower_to_original = {str(col).lower(): col for col in frame.columns}
+        candidates = []
+        for seconds_alias, nanoseconds_alias in _schema._TIME_SECOND_NANOSECOND_PAIRS:
+            seconds_col = lower_to_original.get(seconds_alias)
+            nanoseconds_col = lower_to_original.get(nanoseconds_alias)
+            if seconds_col is None or nanoseconds_col is None:
+                continue
+            seconds = _pd.to_numeric(frame[seconds_col], errors="coerce")
+            nanoseconds = _pd.to_numeric(frame[nanoseconds_col], errors="coerce").fillna(0.0)
+            candidates.append(seconds + nanoseconds * 1.0e-9)
+        return _schema._combine_time_alias_series(candidates)
+
+    def _normalize_time_column_aliases(frame, *, target: str = "time_s"):
+        parsed_target = None
+        if target in frame.columns:
+            parsed_target = _schema._seconds_or_stamp_dict_series(frame[target])
+        out = original(frame, target=target)
+        flattened = _flattened_stamp_pair_seconds(frame)
+        if flattened is not None and flattened.notna().any():
+            out = out.copy()
+            if target in out.columns:
+                target_values = _pd.to_numeric(out[target], errors="coerce")
+                out[target] = target_values.fillna(flattened)
+            else:
+                out[target] = flattened
+        if target in out.columns and parsed_target is not None and parsed_target.notna().any():
+            out = out.copy()
+            alias_or_numeric = _pd.to_numeric(out[target], errors="coerce")
+            out[target] = parsed_target.fillna(alias_or_numeric)
+        return out
+
+    _schema.normalize_time_column_aliases = _normalize_time_column_aliases
+
+
 def _install_image_row_guard() -> None:
     try:
         import pandas as _pd
@@ -125,6 +170,20 @@ def _install_candidate_reservoir_topk_guard() -> None:
             default=0.0,
             help="bonus added during final frame cap for each independent reservoir selection reason",
         )
+        parser.add_argument(
+            "--preserve-reason-prefix",
+            action="append",
+            default=None,
+            help=(
+                "reason prefix protected during final frame cap; default protects branch: and source:; "
+                "repeat to override"
+            ),
+        )
+        parser.add_argument(
+            "--disable-preserved-reason-prefixes",
+            action="store_true",
+            help="disable branch/source quota protection during the final per-frame cap",
+        )
         parser.add_argument("--top-k", type=int, action="append", default=None)
         parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
         args = parser.parse_args(argv)
@@ -134,6 +193,12 @@ def _install_candidate_reservoir_topk_guard() -> None:
         candidates = _candidate_reservoir._load_candidate_specs(list(candidate_specs))
         per_source_top_n = args.per_source_top_n if args.top_per_source is None else args.top_per_source
         per_branch_top_n = args.per_branch_top_n if args.top_per_branch is None else args.top_per_branch
+        if args.disable_preserved_reason_prefixes:
+            preserve_reason_prefixes: tuple[str, ...] = ()
+        elif args.preserve_reason_prefix is None:
+            preserve_reason_prefixes = ("branch:", "source:")
+        else:
+            preserve_reason_prefixes = tuple(args.preserve_reason_prefix)
         reservoir = _candidate_reservoir.build_candidate_reservoir(
             candidates,
             config=_candidate_reservoir.ReservoirConfig(
@@ -145,6 +210,7 @@ def _install_candidate_reservoir_topk_guard() -> None:
                 fallback_score_column=args.fallback_score_column,
                 score_floor_quantile=args.score_floor_quantile,
                 cap_reason_bonus=args.cap_reason_bonus,
+                preserve_reason_prefixes=preserve_reason_prefixes,
             ),
         )
         _candidate_reservoir.write_reservoir_outputs(
@@ -202,11 +268,47 @@ def _install_submission_eval_track_id_guard() -> None:
     _evaluate._should_restrict_to_track_id = _should_restrict_to_track_id
 
 
+def _install_track5_scorecard_bool_guard() -> None:
+    try:
+        import numpy as _np
+        import pandas as _pd
+
+        from raft_uav.mmuad import track5_scorecard as _track5_scorecard
+    except Exception:
+        return
+
+    def _bool_series(values):
+        if values is None:
+            return _pd.Series(dtype=bool)
+        series = _pd.Series(values)
+        if series.empty:
+            return _pd.Series(dtype=bool)
+        if _pd.api.types.is_bool_dtype(series.dtype):
+            return series.fillna(False).astype(bool)
+
+        numeric = _pd.to_numeric(series, errors="coerce")
+        numeric_values = numeric.to_numpy(dtype=float)
+        numeric_truthy = _pd.Series(
+            _np.isfinite(numeric_values) & (numeric_values != 0.0),
+            index=series.index,
+        )
+        text = series.where(series.notna(), "").astype(str).str.strip().str.lower()
+        truthy_text = text.isin({"1", "1.0", "true", "t", "yes", "y"})
+        falsy_text = text.isin(
+            {"0", "0.0", "false", "f", "no", "n", "", "nan", "none", "<na>", "nat"}
+        )
+        return truthy_text | (numeric_truthy & ~falsy_text)
+
+    _track5_scorecard._bool_series = _bool_series
+
+
+_install_schema_timestamp_guard()
 _install_image_row_guard()
 _install_candidate_pool_compare_cli_guard()
 _install_temporal_consensus_train_cv_cli_guard()
 _install_candidate_reservoir_topk_guard()
 _install_submission_eval_track_id_guard()
+_install_track5_scorecard_bool_guard()
 
 
 __all__ = [
