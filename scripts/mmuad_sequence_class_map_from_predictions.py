@@ -184,7 +184,7 @@ def load_prediction_class_rows(path: Path) -> pd.DataFrame:
     try:
         official = load_official_track5_results_frame(path)
     except Exception:
-        return pd.read_csv(path)
+        return pd.read_csv(path, dtype=str, keep_default_na=False)
     return official.rename(columns={"Sequence": "sequence_id", "Classification": "classification"})
 
 
