@@ -202,6 +202,86 @@ def _install_submission_eval_track_id_guard() -> None:
     _evaluate._should_restrict_to_track_id = _should_restrict_to_track_id
 
 
+def _install_numpy_gzip_export_guard() -> None:
+    try:
+        import io as _stdlib_io
+        from pathlib import Path as _Path
+
+        import numpy as _np
+        import pandas as _pd
+
+        from raft_uav.mmuad import io as _mmuad_io
+    except Exception:
+        return
+
+    def _load_numpy_export_array(path, *, preferred: tuple[str, ...]):
+        source_path = _Path(path)
+        if source_path.suffix.lower() == _mmuad_io.COMPRESSED_TABLE_SUFFIX:
+            payload = _np.load(
+                _stdlib_io.BytesIO(_mmuad_io.read_binary_export(source_path)),
+                allow_pickle=False,
+            )
+        else:
+            payload = _np.load(source_path, allow_pickle=False)
+        try:
+            if isinstance(payload, _np.lib.npyio.NpzFile):
+                key = _mmuad_io._first_npz_key(payload, preferred=preferred)
+                return _np.asarray(payload[key])
+            return _np.asarray(payload)
+        finally:
+            close = getattr(payload, "close", None)
+            if close is not None:
+                close()
+
+    def _read_numpy_point_cloud(path):
+        arr = _load_numpy_export_array(
+            path,
+            preferred=("points", "point_cloud", "pointcloud", "cloud", "data"),
+        )
+        if arr.size == 0:
+            return _pd.DataFrame(
+                {
+                    "x_m": _pd.Series(dtype=float),
+                    "y_m": _pd.Series(dtype=float),
+                    "z_m": _pd.Series(dtype=float),
+                }
+            )
+        if arr.ndim != 2 or arr.shape[1] < 3:
+            raise ValueError(f"NumPy point cloud must be shape (N, >=3), got {arr.shape}")
+        frame = _pd.DataFrame({"x_m": arr[:, 0], "y_m": arr[:, 1], "z_m": arr[:, 2]})
+        if arr.shape[1] >= 4:
+            frame["time_s"] = arr[:, 3]
+        return _mmuad_io._normalize_point_frame(frame, path=_Path(path))
+
+    def _read_numpy_trajectory_table(path):
+        arr = _load_numpy_export_array(
+            path,
+            preferred=(
+                "trajectory",
+                "trajectories",
+                "truth",
+                "candidates",
+                "detections",
+                "poses",
+                "data",
+            ),
+        )
+        if arr.dtype.names:
+            return _pd.DataFrame.from_records(arr)
+        compact_vector = _mmuad_io._compact_numpy_coordinate_vector(arr)
+        if compact_vector is not None:
+            return _mmuad_io._compact_vector_trajectory_frame(compact_vector, path=_Path(path))
+        if arr.ndim != 2 or arr.shape[1] < 4:
+            raise ValueError(f"NumPy trajectory table must be shape (N, >=4), got {arr.shape}")
+        columns = ["time_s", "x_m", "y_m", "z_m"]
+        if arr.shape[1] >= 5:
+            columns.append("confidence")
+        return _pd.DataFrame(arr[:, : len(columns)], columns=columns)
+
+    _mmuad_io._read_numpy_point_cloud = _read_numpy_point_cloud
+    _mmuad_io._read_numpy_trajectory_table = _read_numpy_trajectory_table
+
+
 def _install_track5_scorecard_bool_guard() -> None:
     try:
         import numpy as _np
@@ -241,6 +321,7 @@ _install_candidate_pool_compare_cli_guard()
 _install_temporal_consensus_train_cv_cli_guard()
 _install_candidate_reservoir_topk_guard()
 _install_submission_eval_track_id_guard()
+_install_numpy_gzip_export_guard()
 _install_track5_scorecard_bool_guard()
 
 
