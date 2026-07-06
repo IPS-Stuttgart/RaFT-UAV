@@ -246,11 +246,11 @@ def _score_estimates(estimates: pd.DataFrame, truth: pd.DataFrame) -> dict[str, 
     ref = _normalize_truth(truth).copy()
     if estimates.empty or ref.empty:
         return _empty_metrics()
-    ref["_time_key"] = _time_key(ref["time_s"])
+    ref["_time_token"] = _time_token(ref["time_s"])
     rows = pd.DataFrame(estimates).copy()
     rows["sequence_id"] = rows["sequence_id"].astype(str)
-    rows["_time_key"] = _time_key(pd.to_numeric(rows["time_s"], errors="coerce"))
-    merged = rows.merge(ref, on=["sequence_id", "_time_key"], how="inner")
+    rows["_time_token"] = _time_token(pd.to_numeric(rows["time_s"], errors="coerce"))
+    merged = rows.merge(ref, on=["sequence_id", "_time_token"], how="inner")
     if merged.empty:
         return _empty_metrics()
     est_xyz = merged[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
@@ -274,8 +274,12 @@ def _empty_metrics() -> dict[str, Any]:
     return {"matched_rows": 0, "pose_mse_m2": np.nan, "pose_rmse_m": np.nan, "pose_mean_m": np.nan, "pose_p95_m": np.nan, "pose_max_m": np.nan}
 
 
-def _time_key(values: pd.Series) -> pd.Series:
-    return pd.to_numeric(values, errors="coerce").round(9).astype(str)
+def _time_token(values: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce")
+    rounded = np.round(numeric.to_numpy(dtype=float, na_value=np.nan), 9)
+    rounded[np.isfinite(rounded) & (rounded == 0.0)] = 0.0
+    tokens = [f"{value:.9f}" if np.isfinite(value) else "" for value in rounded]
+    return pd.Series(tokens, index=values.index, dtype="object")
 
 
 def _first_present(rows: pd.DataFrame, names: tuple[str, ...]) -> str | None:
