@@ -172,7 +172,7 @@ def polar_to_cartesian(
 
 
 def _normalize_radar_columns(frame: pd.DataFrame) -> pd.DataFrame:
-    lower = {str(col).lower(): col for col in frame.columns}
+    lower = {str(col).strip().lower(): col for col in frame.columns}
     rename: dict[object, str] = {}
     aliases = {
         "time_s": ("time_s", "timestamp_s", "timestamp", "time", "t", "sec"),
