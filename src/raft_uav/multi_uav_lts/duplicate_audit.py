@@ -146,8 +146,8 @@ def _prediction_texts_for_duplicate_audit(prediction_path: Path) -> dict[str, st
         base = prediction_path.resolve()
         return {
             _relative_posix_path(path, base): path.read_text(encoding="utf-8")
-            for path in sorted(prediction_path.rglob("*.txt"))
-            if path.is_file()
+            for path in sorted(prediction_path.rglob("*"))
+            if path.is_file() and path.suffix.lower() == ".txt"
         }
     with zipfile.ZipFile(prediction_path) as archive:
         chunks_by_name: dict[str, list[str]] = {}
