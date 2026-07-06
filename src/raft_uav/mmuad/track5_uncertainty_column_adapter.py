@@ -69,10 +69,9 @@ def normalize_uncertainty_estimate_inputs(
             source = "fallback"
         else:
             values = pd.to_numeric(out[source_column], errors="coerce")
-            fallback_count = int((~np.isfinite(values.to_numpy(float)) | (values <= 0.0)).sum())
-            out[output_uncertainty_column] = values.where(values > 0.0, float(fallback_sigma_m)).fillna(
-                float(fallback_sigma_m)
-            )
+            finite_positive = np.isfinite(values.to_numpy(float)) & (values > 0.0).to_numpy(bool)
+            fallback_count = int((~finite_positive).sum())
+            out[output_uncertainty_column] = values.where(finite_positive, float(fallback_sigma_m))
             source = source_column
         output_csv = normalized_dir / f"{_safe_label(item.label)}.csv"
         out.to_csv(output_csv, index=False)
