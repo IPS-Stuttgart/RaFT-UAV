@@ -1,11 +1,4 @@
-"""Apply train-selected Track 5 estimate-ensemble weights to new splits.
-
-``track5_estimate_ensemble_weight_search`` writes a JSON file with selected
-weights.  This module consumes that JSON on validation or hidden-test estimate
-CSVs, then delegates to the upload-ready estimate ensemble writer.  The command
-is inference-safe: it reads fixed weights and a timestamp template only; it does
-not consume truth labels.
-"""
+"""Apply train-selected Track 5 estimate-ensemble weights to new splits."""
 
 from __future__ import annotations
 
@@ -75,6 +68,9 @@ def apply_ensemble_weight_config(
         else:
             weight = float(default_missing_weight)
         estimate_inputs.append(EstimateInput(label=label, path=item.path, weight=weight))
+    extra_labels = sorted(set(weights).difference(seen_labels))
+    if extra_labels:
+        raise ValueError(f"weight config has labels not present in estimate inputs: {extra_labels}")
     return estimate_inputs
 
 
@@ -137,23 +133,13 @@ def main(argv: list[str] | None = None) -> int:
         prog="raft-uav-mmuad-track5-apply-ensemble-weights",
         description="apply train-selected estimate ensemble weights to Track 5 estimates",
     )
-    parser.add_argument(
-        "--estimate-csv",
-        action="append",
-        default=[],
-        metavar="LABEL=PATH",
-        help="estimate trajectory to include; labels must match the weight config",
-    )
+    parser.add_argument("--estimate-csv", action="append", default=[], metavar="LABEL=PATH")
     parser.add_argument("--weights-json", type=Path, required=True)
     parser.add_argument("--template", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--class-map", type=Path)
     parser.add_argument("--default-classification", default="0")
-    parser.add_argument(
-        "--missing-weight-policy",
-        choices=("error", "zero", "default"),
-        default="error",
-    )
+    parser.add_argument("--missing-weight-policy", choices=("error", "zero", "default"), default="error")
     parser.add_argument("--default-missing-weight", type=float, default=0.0)
     parser.add_argument("--aggregation-policy")
     parser.add_argument("--trim-fraction", type=float)
@@ -225,12 +211,7 @@ def _validate_weight_value(value: Any, *, label: str) -> float:
     return weight
 
 
-def _select_trim_fraction(
-    override: float | None,
-    weight_config: dict[str, Any],
-    *,
-    default: float = 0.2,
-) -> float:
+def _select_trim_fraction(override: float | None, weight_config: dict[str, Any], *, default: float = 0.2) -> float:
     raw_value = override if override is not None else weight_config.get("trim_fraction", default)
     if raw_value is None:
         raw_value = default
@@ -271,5 +252,5 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     raise SystemExit(main())

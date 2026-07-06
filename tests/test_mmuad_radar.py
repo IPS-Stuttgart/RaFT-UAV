@@ -47,6 +47,31 @@ def test_radar_polar_frame_honors_explicit_degree_angle_columns() -> None:
     )
 
 
+def test_radar_polar_csv_preserves_zero_padded_sequence_and_track_ids(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "radar.csv"
+    pd.DataFrame(
+        {
+            "Sequence": ["001"],
+            "time_s": [0.0],
+            "range_m": [10.0],
+            "azimuth_deg": [90.0],
+            "track": ["0007"],
+        }
+    ).to_csv(path, index=False)
+
+    frame = load_radar_polar_csv_as_candidates(path)
+
+    assert frame.rows["sequence_id"].tolist() == ["001"]
+    assert frame.rows["track_id"].tolist() == ["0007"]
+    np.testing.assert_allclose(
+        frame.rows[["x_m", "y_m", "z_m"]].to_numpy(dtype=float),
+        [[10.0, 0.0, 0.0]],
+        atol=1.0e-9,
+    )
+
+
 def test_nested_radar_json_detections_inherit_parent_metadata(tmp_path: Path) -> None:
     path = tmp_path / "radar.json"
     path.write_text(

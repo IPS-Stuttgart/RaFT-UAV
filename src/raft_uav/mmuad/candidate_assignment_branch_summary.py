@@ -30,8 +30,8 @@ def build_candidate_assignment_branch_summary(frame_rows: pd.DataFrame) -> pd.Da
     for sequence_id, group in rows.groupby("sequence_id", sort=True):
         records.extend(_group_records(group, sequence_id=str(sequence_id)))
     return pd.DataFrame.from_records(records).sort_values(
-        ["sequence_id", "frame_count"],
-        ascending=[True, False],
+        ["sequence_id", "assignment_priority_score", "frame_count"],
+        ascending=[True, False, False],
     )
 
 
@@ -141,21 +141,40 @@ def _summary_record(
     group_values: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     group_values = group_values or {}
+    state_mse = _mse(rows["state_error_3d_m"])
+    oracle_mse = _mse(rows["oracle_error_3d_m"])
+    dominant_mse = _mse(rows["dominant_error_3d_m"])
+    state_regret_mean = _mean(rows["state_regret_m"])
+    dominant_regret_mean = _mean(rows["dominant_regret_m"])
+    oracle_weight_mean = _mean(rows["oracle_mixture_weight"])
+    oracle_weight_deficit = _safe_difference(1.0, oracle_weight_mean)
+    state_oracle_gap = _safe_difference(state_mse, oracle_mse)
+    dominant_oracle_gap = _safe_difference(dominant_mse, oracle_mse)
+    priority = _assignment_priority_score(
+        frame_count=len(rows),
+        state_regret_mean=state_regret_mean,
+        oracle_weight_deficit=oracle_weight_deficit,
+        state_oracle_mse_gap=state_oracle_gap,
+    )
     record: dict[str, Any] = {
         "sequence_id": sequence_id,
         "group_label": group_label,
         "frame_count": int(len(rows)),
-        "state_error_3d_m_mse": _mse(rows["state_error_3d_m"]),
-        "oracle_error_3d_m_mse": _mse(rows["oracle_error_3d_m"]),
-        "dominant_error_3d_m_mse": _mse(rows["dominant_error_3d_m"]),
-        "state_regret_m_mean": _mean(rows["state_regret_m"]),
-        "dominant_regret_m_mean": _mean(rows["dominant_regret_m"]),
+        "state_error_3d_m_mse": state_mse,
+        "oracle_error_3d_m_mse": oracle_mse,
+        "dominant_error_3d_m_mse": dominant_mse,
+        "state_vs_oracle_mse_gap": state_oracle_gap,
+        "dominant_vs_oracle_mse_gap": dominant_oracle_gap,
+        "state_regret_m_mean": state_regret_mean,
+        "dominant_regret_m_mean": dominant_regret_mean,
         "state_error_3d_m_p95": _quantile(rows["state_error_3d_m"], 0.95),
-        "oracle_mixture_weight_mean": _mean(rows["oracle_mixture_weight"]),
+        "oracle_mixture_weight_mean": oracle_weight_mean,
+        "oracle_weight_deficit_mean": oracle_weight_deficit,
         "oracle_weight_rank_p50": _quantile(rows["oracle_weight_rank"], 0.50),
         "candidate_count_mean": _mean(rows["candidate_count"]),
         "dominant_matches_oracle_rate": _mean(rows["dominant_is_oracle"].astype(float)),
         "oracle_in_topk_by_weight_rate": _mean(rows["oracle_in_topk_by_weight"].astype(float)),
+        "assignment_priority_score": priority,
     }
     for column in _GROUP_COLUMNS:
         record[column] = str(group_values.get(column, "__all__"))
@@ -197,6 +216,38 @@ def _mean(values: pd.Series) -> float:
 def _quantile(values: pd.Series, quantile: float) -> float:
     series = pd.to_numeric(values, errors="coerce").dropna()
     return float(series.quantile(quantile)) if not series.empty else float("nan")
+
+
+def _safe_difference(left: float, right: float) -> float:
+    if not np.isfinite(left) or not np.isfinite(right):
+        return float("nan")
+    return float(left - right)
+
+
+def _positive_or_zero(value: float) -> float:
+    if not np.isfinite(value):
+        return 0.0
+    return float(max(value, 0.0))
+
+
+def _assignment_priority_score(
+    *,
+    frame_count: int,
+    state_regret_mean: float,
+    oracle_weight_deficit: float,
+    state_oracle_mse_gap: float,
+) -> float:
+    """Return an actionable ranking score for branch/source failure groups.
+
+    The score favors persistent groups that have high state regret, low oracle
+    assignment mass, and a large state-vs-oracle MSE gap.  It is diagnostic only:
+    it helps choose the next branch/source reservoir experiment, not inference.
+    """
+
+    regret = _positive_or_zero(state_regret_mean)
+    weight_deficit = _positive_or_zero(oracle_weight_deficit)
+    mse_gap = _positive_or_zero(state_oracle_mse_gap)
+    return float(frame_count) * regret * (1.0 + weight_deficit) * np.sqrt(1.0 + mse_gap)
 
 
 def _jsonable(value: Any) -> Any:

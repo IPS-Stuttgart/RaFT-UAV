@@ -363,7 +363,7 @@ def normalize_time_column_aliases(
     """
 
     out = frame.copy()
-    existing = pd.to_numeric(out[target], errors="coerce") if target in out.columns else None
+    existing = _seconds_or_stamp_dict_series(out[target]) if target in out.columns else None
     lower_to_original = {str(col).lower(): col for col in out.columns}
 
     alias_series = _time_alias_series(out, lower_to_original)
