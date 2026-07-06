@@ -12,6 +12,9 @@ from raft_uav.mmuad.schema import TruthFrame, normalize_time_column_aliases, nor
 from raft_uav.mmuad.submission import UG2_RESULT_COLUMNS
 
 
+_MISSING_TEXT_STRINGS = {"", "nan", "none", "<na>", "nat"}
+
+
 @dataclass(frozen=True)
 class CompletionResult:
     rows: pd.DataFrame
@@ -41,12 +44,20 @@ def complete_results_to_truth_timestamps(
         seq_results = result_rows.loc[result_rows["sequence_id"] == seq].sort_values("timestamp")
         if seq_results.empty:
             for _, row in template_group.sort_values("time_s").iterrows():
-                diag_rows.append(_diagnostic_row(seq, float(row["time_s"]), "missing_sequence_prediction", np.nan, np.nan))
+                diag_rows.append(
+                    _diagnostic_row(
+                        seq,
+                        float(row["time_s"]),
+                        "missing_sequence_prediction",
+                        np.nan,
+                        np.nan,
+                    )
+                )
             continue
         times = seq_results["timestamp"].to_numpy(float)
         xyz = seq_results[["x", "y", "z"]].to_numpy(float)
         scores = seq_results["score"].to_numpy(float)
-        uav_type = _mode_string(seq_results["uav_type"].astype(str))
+        uav_type = _mode_string(seq_results["uav_type"])
         for _, row in template_group.sort_values("time_s").iterrows():
             timestamp = float(row["time_s"])
             completed = _complete_one(timestamp, times, xyz, scores, max_gap_s, extrapolation)
@@ -54,15 +65,17 @@ def complete_results_to_truth_timestamps(
                 diag_rows.append(_diagnostic_row(seq, timestamp, "dropped_unfillable", np.nan, np.nan))
                 continue
             point, score, method, left_t, right_t = completed
-            out_rows.append({
-                "sequence_id": seq,
-                "timestamp": timestamp,
-                "x": float(point[0]),
-                "y": float(point[1]),
-                "z": float(point[2]),
-                "uav_type": uav_type,
-                "score": float(score) if np.isfinite(score) else float(default_score),
-            })
+            out_rows.append(
+                {
+                    "sequence_id": seq,
+                    "timestamp": timestamp,
+                    "x": float(point[0]),
+                    "y": float(point[1]),
+                    "z": float(point[2]),
+                    "uav_type": uav_type,
+                    "score": float(score) if np.isfinite(score) else float(default_score),
+                }
+            )
             diag_rows.append(_diagnostic_row(seq, timestamp, method, left_t, right_t))
     rows = pd.DataFrame.from_records(out_rows, columns=UG2_RESULT_COLUMNS)
     if not rows.empty:
@@ -95,7 +108,12 @@ def _completion_template_rows(truth_or_template: TruthFrame | pd.DataFrame) -> p
     rows = template[["sequence_id", "time_s"]].copy()
     rows["sequence_id"] = rows["sequence_id"].fillna("default").astype(str).str.strip().replace("", "default")
     rows["time_s"] = pd.to_numeric(rows["time_s"], errors="coerce")
-    return rows.loc[np.isfinite(rows["time_s"].to_numpy(float))].drop_duplicates().sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+    return (
+        rows.loc[np.isfinite(rows["time_s"].to_numpy(float))]
+        .drop_duplicates()
+        .sort_values(["sequence_id", "time_s"])
+        .reset_index(drop=True)
+    )
 
 
 def _timestamp_only_template_rows(truth_or_template: pd.DataFrame, cause: ValueError) -> pd.DataFrame:
@@ -117,7 +135,11 @@ def _timestamp_only_template_rows(truth_or_template: pd.DataFrame, cause: ValueE
 
 def completion_summary(result: CompletionResult, *, requested_count: int | None = None) -> dict[str, Any]:
     diagnostics = result.diagnostics
-    counts = diagnostics["completion_method"].value_counts().to_dict() if not diagnostics.empty and "completion_method" in diagnostics.columns else {}
+    counts = (
+        diagnostics["completion_method"].value_counts().to_dict()
+        if not diagnostics.empty and "completion_method" in diagnostics.columns
+        else {}
+    )
     requested = int(requested_count if requested_count is not None else len(diagnostics))
     completed = int(len(result.rows))
     return {
@@ -139,7 +161,11 @@ def _completion_sequence_summaries(result: CompletionResult) -> dict[str, dict[s
     for sequence_id in sorted(ids):
         diag = _rows_for_sequence(result.diagnostics, sequence_id)
         rows = _rows_for_sequence(result.rows, sequence_id)
-        counts = diag["completion_method"].value_counts().to_dict() if not diag.empty and "completion_method" in diag.columns else {}
+        counts = (
+            diag["completion_method"].value_counts().to_dict()
+            if not diag.empty and "completion_method" in diag.columns
+            else {}
+        )
         requested, completed = int(len(diag)), int(len(rows))
         summaries[sequence_id] = {
             "requested_count": requested,
@@ -168,7 +194,14 @@ def _normalize_max_interpolation_gap_s(value: float) -> float:
     return gap
 
 
-def _complete_one(timestamp: float, times: np.ndarray, xyz: np.ndarray, scores: np.ndarray, max_gap: float, extrapolation: str):
+def _complete_one(
+    timestamp: float,
+    times: np.ndarray,
+    xyz: np.ndarray,
+    scores: np.ndarray,
+    max_gap: float,
+    extrapolation: str,
+):
     if len(times) == 1:
         t = float(times[0])
         if abs(t - timestamp) < 1e-9:
@@ -183,7 +216,13 @@ def _complete_one(timestamp: float, times: np.ndarray, xyz: np.ndarray, scores: 
         gap = right_t - left_t
         if 0.0 < gap <= max_gap:
             alpha = (timestamp - left_t) / gap
-            return (1.0 - alpha) * xyz[left] + alpha * xyz[right], float((1.0 - alpha) * scores[left] + alpha * scores[right]), "interpolated", left_t, right_t
+            return (
+                (1.0 - alpha) * xyz[left] + alpha * xyz[right],
+                float((1.0 - alpha) * scores[left] + alpha * scores[right]),
+                "interpolated",
+                left_t,
+                right_t,
+            )
     if extrapolation != "hold":
         return None
     nearest = int(np.argmin(np.abs(times - timestamp)))
@@ -194,11 +233,21 @@ def _complete_one(timestamp: float, times: np.ndarray, xyz: np.ndarray, scores: 
 def _mode_string(values: pd.Series) -> str:
     if values.empty:
         return "unknown"
-    mode = values.mode(dropna=True)
-    return str(mode.iloc[0]) if not mode.empty else str(values.iloc[0])
+    text = values.where(values.notna(), "").astype(str).str.strip()
+    valid = text.loc[~text.str.lower().isin(_MISSING_TEXT_STRINGS)]
+    if valid.empty:
+        return "unknown"
+    mode = valid.mode(dropna=True)
+    return str(mode.iloc[0]) if not mode.empty else str(valid.iloc[0])
 
 
-def _diagnostic_row(sequence_id: str, timestamp: float, method: str, source_left_time_s: float, source_right_time_s: float) -> dict[str, Any]:
+def _diagnostic_row(
+    sequence_id: str,
+    timestamp: float,
+    method: str,
+    source_left_time_s: float,
+    source_right_time_s: float,
+) -> dict[str, Any]:
     return {
         "sequence_id": sequence_id,
         "timestamp": float(timestamp),

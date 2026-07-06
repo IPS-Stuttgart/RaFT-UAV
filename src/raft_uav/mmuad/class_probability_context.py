@@ -36,6 +36,7 @@ DEFAULT_INTERACTION_COLUMNS = (
 )
 SEQUENCE_ALIASES = ("sequence_id", "Sequence", "sequence", "seq", "scene_id")
 PREDICTED_CLASS_ALIASES = ("predicted_class", "Classification", "uav_type", "class_id")
+FILL_MISSING_POLICIES = ("uniform", "zero", "error")
 
 
 def attach_class_probability_context(
@@ -118,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--fill-missing",
-        choices=("uniform", "zero", "error"),
+        choices=FILL_MISSING_POLICIES,
         default="uniform",
         help="how to handle sequences missing from the probability table",
     )
@@ -254,6 +255,10 @@ def _normalize_probability_weights(rows: pd.DataFrame) -> pd.DataFrame:
 
 
 def _fill_missing_probabilities(rows: pd.DataFrame, *, fill_missing: str) -> pd.DataFrame:
+    if fill_missing not in FILL_MISSING_POLICIES:
+        allowed = ", ".join(FILL_MISSING_POLICIES)
+        raise ValueError(f"fill_missing must be one of: {allowed}")
+
     out = rows.copy()
     prob_columns = [f"image_class_prob_{label}" for label in OFFICIAL_CLASS_LABELS]
     missing = out[prob_columns].isna().all(axis=1)
