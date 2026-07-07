@@ -76,13 +76,14 @@ def _read_numpy_trajectory_table(path: Path) -> pd.DataFrame:
                 "z_m": pd.Series(dtype=float),
             }
         )
-    if arr.ndim >= 1 and arr.size >= 3 and (arr.ndim == 1 or 1 in arr.shape):
+    if arr.ndim == 1 or (arr.ndim == 2 and arr.shape[1] == 1):
         compact = arr.reshape(-1)
-        frame = pd.DataFrame([compact[:3]], columns=["x_m", "y_m", "z_m"])
-        frame.insert(0, "time_s", _impl.infer_time_s_from_filename(path))
-        if compact.shape[0] >= 4:
-            frame["confidence"] = compact[3]
-        return frame
+        if compact.size >= 3:
+            frame = pd.DataFrame([compact[:3]], columns=["x_m", "y_m", "z_m"])
+            frame.insert(0, "time_s", _impl.infer_time_s_from_filename(path))
+            if compact.shape[0] >= 4:
+                frame["confidence"] = compact[3]
+            return frame
     if arr.ndim == 1:
         arr = arr.reshape(1, -1)
     if arr.ndim != 2 or arr.shape[1] < 3:
