@@ -114,6 +114,55 @@ def test_uncertainty_adapter_matches_sanitized_cli_labels(tmp_path: Path) -> Non
     assert rows["predicted_sigma_m"].tolist() == [1.0, 1.0]
 
 
+def test_uncertainty_adapter_matches_padded_requested_columns(tmp_path: Path) -> None:
+    estimate_csv = tmp_path / "estimate.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["001"],
+            "time_s": [0.0],
+            "state_x_m": [1.0],
+            "state_y_m": [2.0],
+            "state_z_m": [3.0],
+            " model_sigma ": [2.5],
+        }
+    ).to_csv(estimate_csv, index=False)
+
+    normalized, summary = normalize_uncertainty_estimate_inputs(
+        [EstimateInput("model", estimate_csv, 1.0)],
+        output_dir=tmp_path / "out",
+        uncertainty_columns={"model": "model_sigma"},
+    )
+
+    rows = pd.read_csv(normalized[0].path)
+    assert summary["source_uncertainty_column"].tolist() == [" model_sigma "]
+    assert rows["predicted_sigma_m"].tolist() == [2.5]
+
+
+def test_uncertainty_adapter_auto_detects_padded_default_uncertainty_column(
+    tmp_path: Path,
+) -> None:
+    estimate_csv = tmp_path / "estimate.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["001"],
+            "time_s": [0.0],
+            "state_x_m": [1.0],
+            "state_y_m": [2.0],
+            "state_z_m": [3.0],
+            " predicted_sigma_m ": [4.0],
+        }
+    ).to_csv(estimate_csv, index=False)
+
+    normalized, summary = normalize_uncertainty_estimate_inputs(
+        [EstimateInput("model", estimate_csv, 1.0)],
+        output_dir=tmp_path / "out",
+    )
+
+    rows = pd.read_csv(normalized[0].path)
+    assert summary["source_uncertainty_column"].tolist() == [" predicted_sigma_m "]
+    assert rows["predicted_sigma_m"].tolist() == [4.0]
+
+
 def test_uncertainty_adapter_can_run_upload_ready_ensemble(tmp_path: Path) -> None:
     low_csv = tmp_path / "low.csv"
     high_csv = tmp_path / "high.csv"
