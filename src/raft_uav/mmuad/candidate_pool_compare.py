@@ -365,6 +365,8 @@ def _by_reference_branch_summary(
         record = _summarize_group(group, pool_label=str(pool_label), top_k_values=top_k_values)
         record["reference_candidate_branch"] = str(branch)
         records.append(record)
+    if not records:
+        return pd.DataFrame()
     return pd.DataFrame.from_records(records).sort_values(
         ["oracle_all_mse_delta", "pool_label", "reference_candidate_branch"],
     ).reset_index(drop=True)

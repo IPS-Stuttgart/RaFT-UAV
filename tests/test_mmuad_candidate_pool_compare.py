@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.candidate_pool_compare import (
+    _by_reference_branch_summary,
     build_candidate_pool_compare_tables,
     main as pool_compare_main,
 )
@@ -61,6 +63,27 @@ def test_candidate_pool_compare_reports_lost_oracle_candidates() -> None:
     assert pooled.loc[0, "good_candidate_lost_fraction"] == 1.0
     assert by_sequence.loc[0, "sequence_id"] == "seqA"
     assert by_branch.loc[0, "reference_candidate_branch"] == "raw"
+
+
+def test_candidate_pool_compare_handles_all_missing_reference_branches() -> None:
+    frame_rows = pd.DataFrame(
+        {
+            "pool_label": ["pruned", "pruned"],
+            "sequence_id": ["seqA", "seqA"],
+            "reference_oracle_all_candidate_branch": [np.nan, np.nan],
+            "reference_oracle_all_3d_m": [1.0, 2.0],
+            "candidate_oracle_all_3d_m": [1.5, 2.5],
+            "pool_frame_present": [True, True],
+            "reference_has_good_candidate": [True, True],
+            "candidate_has_good_candidate": [True, True],
+            "good_candidate_lost": [False, False],
+            "oracle_ceiling_worse": [True, True],
+        }
+    )
+
+    by_branch = _by_reference_branch_summary(frame_rows, top_k_values=(1, 2))
+
+    assert by_branch.empty
 
 
 def test_candidate_pool_compare_cli_writes_artifacts(tmp_path) -> None:
