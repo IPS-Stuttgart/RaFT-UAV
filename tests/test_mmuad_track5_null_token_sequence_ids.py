@@ -4,8 +4,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from raft_uav.mmuad.track5_estimate_text_cli import _read_csv_preserving_sequence_id as read_estimate_csv
-from raft_uav.mmuad.track5_sequence_gate_fit_text_cli import _read_csv_preserving_sequence_id as read_gate_csv
+from raft_uav.mmuad.track5_estimate_text_cli import (
+    _read_csv_preserving_sequence_id as read_estimate_csv,
+)
+from raft_uav.mmuad.track5_sequence_gate_fit_text_cli import (
+    _read_csv_preserving_sequence_id as read_gate_csv,
+)
 
 
 def _write_normalized_rows(path: Path) -> None:
