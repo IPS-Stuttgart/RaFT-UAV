@@ -14,12 +14,58 @@ _FLAG_ONLY_OPTIONS = {
     "--inspect-layout-only",
     "--native-ros-auto-topic-map",
     "--cluster-ranker-keep-confidence",
-    "--" "no-" "apply-calibration",
+    "--no-apply-calibration",
     "--trajectory-completion-no-infer-grid",
     "--trajectory-completion-no-truth-timestamps",
     "--ug2-official-complete-to-sequence-timestamps",
     "--ug2-official-validate-on-write",
 }
+_LONG_VALUE_OPTION_SUFFIXES = (
+    "-age-s",
+    "-blend",
+    "-classification",
+    "-classifier",
+    "-confidence",
+    "-convention",
+    "-csv",
+    "-deg",
+    "-delta-s",
+    "-dir",
+    "-extrapolation",
+    "-file",
+    "-fraction",
+    "-frames",
+    "-gap-s",
+    "-gate-m",
+    "-glob",
+    "-id",
+    "-json",
+    "-m",
+    "-manifest",
+    "-mode",
+    "-mps",
+    "-mps2",
+    "-name",
+    "-path",
+    "-penalty",
+    "-points",
+    "-policy",
+    "-protocol",
+    "-replacement",
+    "-root",
+    "-s",
+    "-scale",
+    "-source",
+    "-std-deg",
+    "-std-m",
+    "-submission",
+    "-tolerance-s",
+    "-unit",
+    "-voxels",
+    "-weight",
+    "-window-s",
+    "-zip",
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -87,7 +133,11 @@ def _option_consumes_next(arg: str) -> bool:
         return False
     if arg.startswith("--no-"):
         return False
-    return arg not in _FLAG_ONLY_OPTIONS
+    if arg in _FLAG_ONLY_OPTIONS:
+        return False
+    if arg.startswith("--"):
+        return arg.endswith(_LONG_VALUE_OPTION_SUFFIXES)
+    return True
 
 
 if __name__ == "__main__":  # pragma: no cover
