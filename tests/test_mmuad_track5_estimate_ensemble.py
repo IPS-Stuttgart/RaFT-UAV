@@ -278,5 +278,5 @@ def test_track5_estimate_ensemble_entrypoint_is_exposed() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert (
         pyproject["project"]["scripts"]["raft-uav-mmuad-track5-estimate-ensemble"]
-        == "raft_uav.mmuad.track5_estimate_ensemble:main"
+        == "raft_uav.mmuad.track5_estimate_ensemble_text_cli:main"
     )
