@@ -96,7 +96,7 @@ def build_source_calibration_branch_union(
         if applied is None:
             calibrated = calibrated.iloc[0:0].copy()
         else:
-            calibrated = calibrated.loc[pd.Series(applied, index=calibrated.index).fillna(False)]
+            calibrated = calibrated.loc[_boolean_series(applied, calibrated.index)]
 
     combined = pd.concat([raw_rows, calibrated], ignore_index=True, sort=False)
     return CandidateFrame(normalize_candidate_columns(combined))
@@ -111,14 +111,14 @@ def source_calibration_branch_summary(rows: pd.DataFrame) -> dict[str, Any]:
         errors="coerce",
     )
     finite_displacement = displacement[np.isfinite(displacement.to_numpy(float))]
-    calibrated = pd.Series(
+    calibrated = _boolean_series(
         frame.get("mmuad_candidate_branch_is_calibrated", False),
-        index=frame.index,
-    ).fillna(False).astype(bool)
-    applied = pd.Series(
+        frame.index,
+    )
+    applied = _boolean_series(
         frame.get("mmuad_source_calibration_applied", False),
-        index=frame.index,
-    ).fillna(False).astype(bool)
+        frame.index,
+    )
     return {
         "row_count": int(len(frame)),
         "raw_branch_row_count": int((~calibrated).sum()),
@@ -222,7 +222,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _candidate_rows(candidates: CandidateFrame | pd.DataFrame) -> pd.DataFrame:
-    rows = candidates.rows.copy() if isinstance(candidates, CandidateFrame) else pd.DataFrame(candidates)
+    rows = (
+        candidates.rows.copy()
+        if isinstance(candidates, CandidateFrame)
+        else pd.DataFrame(candidates)
+    )
     return normalize_candidate_columns(rows)
 
 
@@ -273,6 +277,25 @@ def _branch_label(value: str) -> str:
     if not label:
         raise ValueError("candidate branch label must not be empty")
     return label
+
+
+def _boolean_series(values: Any, index: pd.Index) -> pd.Series:
+    """Parse boolean-like columns without treating the string ``"False"`` as true."""
+
+    series = pd.Series(values, index=index)
+    if series.empty:
+        return pd.Series(False, index=index, dtype=bool)
+    if pd.api.types.is_bool_dtype(series):
+        return series.fillna(False).astype(bool)
+    if pd.api.types.is_numeric_dtype(series):
+        numeric = pd.to_numeric(series, errors="coerce").fillna(0.0)
+        return numeric.ne(0.0)
+
+    text = series.astype("string").str.strip().str.lower()
+    truthy = text.isin({"1", "true", "t", "yes", "y"})
+    falsey = text.isin({"0", "false", "f", "no", "n", "", "none", "null", "nan"})
+    numeric = pd.to_numeric(text, errors="coerce").fillna(0.0).ne(0.0)
+    return (truthy | (~falsey & numeric)).fillna(False).astype(bool)
 
 
 def _value_counts(rows: pd.DataFrame, column: str) -> dict[str, int]:
