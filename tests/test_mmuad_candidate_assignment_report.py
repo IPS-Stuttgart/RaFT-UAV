@@ -82,6 +82,8 @@ def test_candidate_assignment_report_writes_full_bundle(tmp_path: Path) -> None:
             str(output_dir),
             "--block-max-gap-s",
             "2.0",
+            "--action-top-n-blocks",
+            "5",
         ]
     )
 
@@ -90,13 +92,19 @@ def test_candidate_assignment_report_writes_full_bundle(tmp_path: Path) -> None:
     assert (output_dir / "mmuad_candidate_assignment_summary.csv").exists()
     assert (output_dir / "mmuad_candidate_assignment_branch_summary.csv").exists()
     assert (output_dir / "mmuad_candidate_assignment_blocks.csv").exists()
+    assert (output_dir / "mmuad_candidate_assignment_action_plan.csv").exists()
+    assert (output_dir / "mmuad_candidate_assignment_action_summary.csv").exists()
     report_json = output_dir / "mmuad_candidate_assignment_report.json"
     payload = json.loads(report_json.read_text(encoding="utf-8"))
+    assert payload["schema"] == "raft-uav-mmuad-candidate-assignment-report-v2"
     assert payload["frame_count"] == 3
     assert payload["block_count"] >= 1
+    assert payload["action_count"] >= 1
     assert payload["pooled"]["state_error_3d_m_mse"] == 0.0
     assert "branch_summary_csv" in payload["paths"]
     assert "blocks_csv" in payload["paths"]
+    assert "action_rows_csv" in payload["paths"]
+    assert payload["top_action"]["recommended_action"]
 
 
 def test_candidate_assignment_report_entrypoint_is_exposed() -> None:
