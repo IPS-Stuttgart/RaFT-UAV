@@ -40,6 +40,7 @@ def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
     kwargs["dtype"] = dtype
     if converters:
         kwargs["converters"] = converters
+    kwargs.setdefault("keep_default_na", False)
     return _ORIGINAL_READ_CSV(path, *args, **kwargs)
 
 

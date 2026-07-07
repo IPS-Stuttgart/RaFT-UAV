@@ -55,10 +55,12 @@ def project_track5_speed_limit(
     each full iteration; use zero for a strict projection.
     """
 
-    if max_speed_mps <= 0.0:
-        raise ValueError("max_speed_mps must be positive")
-    if not 0.0 <= float(anchor_blend) < 1.0:
-        raise ValueError("anchor_blend must be in [0, 1)")
+    max_speed_mps = float(max_speed_mps)
+    if not np.isfinite(max_speed_mps) or max_speed_mps <= 0.0:
+        raise ValueError("max_speed_mps must be positive and finite")
+    anchor_blend = float(anchor_blend)
+    if not np.isfinite(anchor_blend) or not 0.0 <= anchor_blend < 1.0:
+        raise ValueError("anchor_blend must be finite and in [0, 1)")
     normalized = _normalized_submission(submission)
     if normalized.empty:
         return normalized, pd.DataFrame(columns=_diagnostic_columns())
@@ -68,9 +70,9 @@ def project_track5_speed_limit(
     for sequence_id, group in normalized.groupby("sequence_id", sort=True):
         limited, diagnostics = _project_sequence(
             group.sort_values("time_s").reset_index(drop=True),
-            max_speed_mps=float(max_speed_mps),
+            max_speed_mps=max_speed_mps,
             iterations=max(1, int(iterations)),
-            anchor_blend=float(anchor_blend),
+            anchor_blend=anchor_blend,
         )
         limited_parts.append(limited)
         diagnostic_parts.append(diagnostics.assign(sequence_id=str(sequence_id)))
@@ -169,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.require_leaderboard_ready and args.template is None:
         raise SystemExit("--require-leaderboard-ready requires --template")
-    submission = load_track5_submission(args.submission)
+    submission = _load_speed_limit_submission(args.submission)
     limited, diagnostics = project_track5_speed_limit(
         submission,
         max_speed_mps=float(args.max_speed_mps),
@@ -233,14 +235,24 @@ def _project_sequence(
 def _forward_speed_pass(xyz: np.ndarray, times: np.ndarray, *, max_speed_mps: float) -> np.ndarray:
     out = xyz.copy()
     for index in range(1, len(out)):
-        out[index] = _clip_to_speed_ball(out[index], out[index - 1], times[index] - times[index - 1], max_speed_mps)
+        out[index] = _clip_to_speed_ball(
+            out[index],
+            out[index - 1],
+            times[index] - times[index - 1],
+            max_speed_mps,
+        )
     return out
 
 
 def _backward_speed_pass(xyz: np.ndarray, times: np.ndarray, *, max_speed_mps: float) -> np.ndarray:
     out = xyz.copy()
     for index in range(len(out) - 2, -1, -1):
-        out[index] = _clip_to_speed_ball(out[index], out[index + 1], times[index + 1] - times[index], max_speed_mps)
+        out[index] = _clip_to_speed_ball(
+            out[index],
+            out[index + 1],
+            times[index + 1] - times[index],
+            max_speed_mps,
+        )
     return out
 
 
@@ -299,6 +311,17 @@ def _normalized_submission(submission: pd.DataFrame) -> pd.DataFrame:
         rows[column] = pd.to_numeric(rows[column], errors="coerce")
     finite = np.isfinite(rows[["time_s", "state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)).all(axis=1)
     return rows.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+
+
+def _load_speed_limit_submission(path: Path) -> pd.DataFrame:
+    try:
+        return load_track5_submission(path)
+    except ValueError as exc:
+        rows = pd.read_csv(path)
+        required = {"sequence_id", "time_s", "state_x_m", "state_y_m", "state_z_m", "Classification"}
+        if required <= set(rows.columns):
+            return rows
+        raise exc
 
 
 def _diagnostic_columns() -> list[str]:

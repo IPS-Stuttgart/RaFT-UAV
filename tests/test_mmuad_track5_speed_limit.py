@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 import tomllib
 from zipfile import ZipFile
@@ -49,6 +50,16 @@ def test_speed_limit_projection_caps_consecutive_motion() -> None:
     assert seq["Classification"].tolist() == [2, 2, 2]
     assert diagnostics["speed_limit_applied"].sum() == 2
     assert diagnostics.loc[diagnostics["sequence_id"] == "seq0001", "output_speed_prev_mps"].max() <= 10.0
+
+
+@pytest.mark.parametrize("max_speed_mps", [math.nan, math.inf])
+def test_speed_limit_rejects_non_finite_max_speed(max_speed_mps: float) -> None:
+    with pytest.raises(ValueError, match="max_speed_mps must be positive and finite"):
+        project_track5_speed_limit(
+            _submission_rows(),
+            max_speed_mps=max_speed_mps,
+            iterations=2,
+        )
 
 
 def test_speed_limit_outputs_write_leaderboard_ready_artifacts(tmp_path: Path) -> None:

@@ -17,6 +17,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.estimate_csv import read_estimate_csv
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 from raft_uav.mmuad.submission import load_official_track5_template_file, load_sequence_class_map
 from raft_uav.mmuad.track5_estimate_ensemble import EstimateInput
@@ -67,7 +68,7 @@ def search_track5_estimate_ensemble_weights(
         raise ValueError("at least one estimate input is required")
     if weight_step <= 0.0 or weight_step > 1.0:
         raise ValueError("weight_step must be in (0, 1]")
-    loaded = [(item.label, pd.read_csv(item.path), 1.0) for item in inputs]
+    loaded = [(item.label, read_estimate_csv(item.path), 1.0) for item in inputs]
     truth_rows = _normalize_truth_for_exact_template(truth)
     records: list[dict[str, Any]] = []
     by_sequence_records: list[dict[str, Any]] = []

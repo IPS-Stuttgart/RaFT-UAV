@@ -241,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
         source_path = args.classification_predictions
         result = relabel_track5_classification_from_sequence_predictions(
             pose_rows,
-            pd.read_csv(args.classification_predictions),
+            _read_sequence_predictions_csv(args.classification_predictions),
         )
         source_kind = "sequence-predictions"
     else:
@@ -378,6 +378,15 @@ def _nearest_time_relabel_merge(
     return pd.DataFrame.from_records(records)
 
 
+def _read_sequence_predictions_csv(path: Path | str) -> pd.DataFrame:
+    """Read sequence predictions without coercing opaque sequence identifiers."""
+
+    try:
+        return pd.read_csv(path, dtype=str, keep_default_na=False)
+    except TypeError:
+        return pd.read_csv(path)
+
+
 def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFrame:
     rows = pd.DataFrame(sequence_predictions).copy()
     if rows.empty:
@@ -385,7 +394,7 @@ def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFr
     sequence_column = _first_present(rows, SEQUENCE_ALIASES)
     if sequence_column is None:
         raise ValueError("sequence prediction table missing Sequence/sequence_id column")
-    rows["Sequence"] = rows[sequence_column].astype(str)
+    rows["Sequence"] = rows[sequence_column].astype(str).str.strip()
     probability_items = _probability_columns(rows)
     probability_class_ids = tuple(class_id for class_id, _column in probability_items)
     if _valid_probability_class_ids(probability_class_ids):
@@ -459,12 +468,12 @@ def _majority_class(values: pd.Series) -> int:
     return int(counts.loc[counts == max_count].sort_index().index[0])
 
 
-def _first_present(frame: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
-    lower_to_column = {str(column).lower(): str(column) for column in frame.columns}
+def _first_present(frame: pd.DataFrame, aliases: tuple[str, ...]) -> Any | None:
+    lower_to_column = {str(column).strip().lower(): column for column in frame.columns}
     for alias in aliases:
         if alias in frame.columns:
             return alias
-        column = lower_to_column.get(alias.lower())
+        column = lower_to_column.get(alias.strip().lower())
         if column is not None:
             return column
     return None
@@ -472,7 +481,7 @@ def _first_present(frame: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
 
 def _probability_columns(frame: pd.DataFrame) -> list[tuple[int, Any]]:
     columns: list[tuple[int, Any]] = []
-    lower_to_column = {str(column).lower(): column for column in frame.columns}
+    lower_to_column = {str(column).strip().lower(): column for column in frame.columns}
     for class_id in VALID_CLASS_IDS:
         found = lower_to_column.get(str(class_id))
         if found is None:
@@ -523,14 +532,18 @@ def _finite_max(values: pd.Series) -> float | None:
 def _jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, list | tuple):
+    if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, float) and not np.isfinite(value):
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        if np.isfinite(value):
+            return float(value)
         return None
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
     return value
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
