@@ -17,19 +17,22 @@ _SEQUENCE_ID_ALIASES = (
     "scene_id",
     "heldout_sequence",
 )
+_SEQUENCE_ID_ALIAS_KEYS = frozenset(alias.strip().lower() for alias in _SEQUENCE_ID_ALIASES)
 
 
 def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
     dtype_arg = kwargs.pop("dtype", None)
     converters = dict(kwargs.pop("converters", {}) or {})
+    _drop_sequence_converters(converters)
     if dtype_arg is None:
-        dtype = {alias: "string" for alias in _SEQUENCE_ID_ALIASES}
-        _drop_sequence_converters(converters)
+        dtype = "string"
     elif isinstance(dtype_arg, Mapping):
         dtype = dict(dtype_arg)
+        for column in list(dtype):
+            if _is_sequence_column(column):
+                dtype[column] = "string"
         for alias in _SEQUENCE_ID_ALIASES:
             dtype[alias] = "string"
-        _drop_sequence_converters(converters)
     else:
         dtype = dtype_arg
         for alias in _SEQUENCE_ID_ALIASES:
@@ -41,8 +44,13 @@ def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
 
 
 def _drop_sequence_converters(converters: dict[Any, Any]) -> None:
-    for alias in _SEQUENCE_ID_ALIASES:
-        converters.pop(alias, None)
+    for column in list(converters):
+        if _is_sequence_column(column):
+            converters.pop(column, None)
+
+
+def _is_sequence_column(column: Any) -> bool:
+    return str(column).strip().lower() in _SEQUENCE_ID_ALIAS_KEYS
 
 
 def _sequence_id_text(value: Any) -> str:
