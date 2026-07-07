@@ -38,6 +38,8 @@ SPEED_LIMIT_MANIFEST_JSON = "mmuad_track5_speed_limit_manifest.json"
 SPEED_LIMIT_VALIDATION_JSON = "mmuad_track5_speed_limit_validation.json"
 SPEED_LIMIT_VALIDATION_ROWS_CSV = "mmuad_track5_speed_limit_validation_rows.csv"
 
+_NORMALIZED_SEQUENCE_ID_COLUMNS = ("sequence_id", "Sequence", "sequence", "seq")
+
 
 def project_track5_speed_limit(
     submission: pd.DataFrame,
@@ -317,11 +319,21 @@ def _load_speed_limit_submission(path: Path) -> pd.DataFrame:
     try:
         return load_track5_submission(path)
     except ValueError as exc:
-        rows = pd.read_csv(path)
+        rows = _read_normalized_submission_csv(path)
         required = {"sequence_id", "time_s", "state_x_m", "state_y_m", "state_z_m", "Classification"}
         if required <= set(rows.columns):
             return rows
         raise exc
+
+
+def _read_normalized_submission_csv(path: Path) -> pd.DataFrame:
+    """Read normalized estimate CSVs without coercing opaque sequence identifiers."""
+
+    sequence_dtypes = {column: "string" for column in _NORMALIZED_SEQUENCE_ID_COLUMNS}
+    try:
+        return pd.read_csv(path, dtype=sequence_dtypes, keep_default_na=False)
+    except TypeError:
+        return pd.read_csv(path)
 
 
 def _diagnostic_columns() -> list[str]:
