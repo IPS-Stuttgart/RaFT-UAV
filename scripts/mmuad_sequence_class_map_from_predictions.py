@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 import sys
 from typing import Any, Literal
+from zipfile import ZipFile
 
 import numpy as np
 import pandas as pd
@@ -184,8 +185,28 @@ def load_prediction_class_rows(path: Path) -> pd.DataFrame:
     try:
         official = load_official_track5_results_frame(path)
     except Exception:
-        return pd.read_csv(path, dtype=str, keep_default_na=False)
+        return _read_generic_prediction_csv(path)
     return official.rename(columns={"Sequence": "sequence_id", "Classification": "classification"})
+
+
+def _read_generic_prediction_csv(path: Path) -> pd.DataFrame:
+    """Read generic prediction CSVs, including ZIPs with one CSV member."""
+
+    if path.suffix.lower() != ".zip":
+        return pd.read_csv(path, dtype=str, keep_default_na=False)
+    with ZipFile(path) as archive:
+        csv_members = [
+            info
+            for info in archive.infolist()
+            if not info.is_dir() and Path(info.filename).suffix.lower() == ".csv"
+        ]
+        if len(csv_members) != 1:
+            raise ValueError(
+                "generic prediction ZIP must contain exactly one CSV member; "
+                f"found {len(csv_members)}"
+            )
+        with archive.open(csv_members[0]) as handle:
+            return pd.read_csv(handle, dtype=str, keep_default_na=False)
 
 
 def _normalize_prediction_rows(
