@@ -5,10 +5,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from raft_uav.mmuad.track5_estimate_ensemble import EstimateInput
 from raft_uav.mmuad.track5_estimate_ensemble import parse_estimate_spec
 from raft_uav.mmuad.track5_estimate_ensemble import write_track5_estimate_ensemble_outputs
 from raft_uav.mmuad.track5_estimate_ensemble_weight_search import search_track5_estimate_ensemble_weights
-from raft_uav.mmuad.track5_estimate_ensemble import EstimateInput
 
 
 def _padded_template() -> pd.DataFrame:
@@ -60,7 +60,7 @@ def test_track5_estimate_ensemble_preserves_padded_sequence_ids_from_csv(tmp_pat
 
     official = pd.read_csv(paths["official_results_csv"], dtype=str, keep_default_na=False)
     assert official.loc[0, "Sequence"] == "001"
-    assert official.loc[0, "Position"] == "(1.000,2.000,3.000)"
+    assert official.loc[0, "Position"] == "(1,2,3)"
 
 
 def test_weight_search_preserves_padded_estimate_sequence_ids_from_csv(tmp_path: Path) -> None:
