@@ -26,6 +26,8 @@ FRAME_CSV = "mmuad_mixture_assignment_oracle_frames.csv"
 SUMMARY_CSV = "mmuad_mixture_assignment_oracle_summary.csv"
 BY_SEQUENCE_CSV = "mmuad_mixture_assignment_oracle_by_sequence.csv"
 SUMMARY_JSON = "mmuad_mixture_assignment_oracle_summary.json"
+_TRUE_TEXT = {"1", "true", "t", "yes", "y"}
+_FALSE_TEXT = {"", "0", "false", "f", "no", "n", "nan", "none", "null"}
 
 
 def build_mixture_assignment_oracle_audit(
@@ -188,10 +190,26 @@ def _ensure_assignment_columns(rows: pd.DataFrame) -> None:
 
 def _dominant_position(group: pd.DataFrame, weights: pd.Series) -> int:
     if "mixture_dominant" in group.columns:
-        dominant = group["mixture_dominant"].fillna(False).astype(bool)
+        dominant = group["mixture_dominant"].map(_parse_bool_flag)
         if dominant.any():
-            return int(np.flatnonzero(dominant.to_numpy())[0])
+            return int(np.flatnonzero(dominant.to_numpy(dtype=bool))[0])
     return int(np.argmax(weights.to_numpy(float)))
+
+
+def _parse_bool_flag(value: Any) -> bool:
+    if pd.isna(value):
+        return False
+    if isinstance(value, bool | np.bool_):
+        return bool(value)
+    if isinstance(value, int | float | np.integer | np.floating):
+        number = float(value)
+        return bool(np.isfinite(number) and number != 0.0)
+    text = str(value).strip().lower()
+    if text in _TRUE_TEXT:
+        return True
+    if text in _FALSE_TEXT:
+        return False
+    return False
 
 
 def _weight_rank(weights: np.ndarray, index: int) -> int:
@@ -219,7 +237,9 @@ def _summarize_assignment_oracle(frame_rows: pd.DataFrame, sequence_id: str) -> 
         "oracle_dominant_fraction": float(frame_rows["oracle_is_dominant"].mean()),
         "oracle_weight_mean": float(pd.to_numeric(frame_rows["oracle_mixture_weight"]).mean()),
         "oracle_weight_rank_mean": float(pd.to_numeric(frame_rows["oracle_weight_rank"]).mean()),
-        "oracle_weight_rank_p95": float(pd.to_numeric(frame_rows["oracle_weight_rank"]).quantile(0.95)),
+        "oracle_weight_rank_p95": float(
+            pd.to_numeric(frame_rows["oracle_weight_rank"]).quantile(0.95)
+        ),
     }
     for column in [
         "state_error_3d_m",
