@@ -198,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.estimate_csv:
         parser.error("provide at least one --estimate-csv LABEL=PATH[@WEIGHT]")
     if args.run_ensemble and args.template is None:
-        parser.error("--template is required with --run-ensemble")
+        parser.error("--template is required with --run_ensemble")
     inputs = [parse_estimate_spec(value) for value in args.estimate_csv]
     columns = _parse_uncertainty_column_map(args.uncertainty_column)
     template = (
@@ -255,16 +255,34 @@ def _select_uncertainty_column(
     requested: str | None,
     require_uncertainty: bool,
 ) -> str | None:
+    column_lookup = _column_name_lookup(rows.columns)
     if requested is not None:
-        if requested not in rows.columns:
+        column = _lookup_column_name(column_lookup, requested)
+        if column is None:
             raise ValueError(f"requested uncertainty column for {label} not found: {requested}")
-        return requested
+        return column
     for column in DEFAULT_UNCERTAINTY_COLUMNS:
-        if column in rows.columns:
-            return column
+        matched = _lookup_column_name(column_lookup, column)
+        if matched is not None:
+            return matched
     if require_uncertainty:
         raise ValueError(f"no uncertainty column found for {label}")
     return None
+
+
+def _column_name_lookup(columns: Iterable[Any]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for column in columns:
+        lookup.setdefault(_column_name_key(column), str(column))
+    return lookup
+
+
+def _lookup_column_name(lookup: dict[str, str], name: str) -> str | None:
+    return lookup.get(_column_name_key(name))
+
+
+def _column_name_key(value: Any) -> str:
+    return str(value).strip().lower()
 
 
 def _safe_label(value: str) -> str:
