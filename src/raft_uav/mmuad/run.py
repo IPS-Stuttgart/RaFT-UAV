@@ -136,7 +136,7 @@ def _option_consumes_next(arg: str) -> bool:
     if arg in _FLAG_ONLY_OPTIONS:
         return False
     if arg.startswith("--"):
-        return arg.endswith(_LONG_VALUE_OPTION_SUFFIXES)
+        return True
     return True
 
 
