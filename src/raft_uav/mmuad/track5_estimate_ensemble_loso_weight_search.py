@@ -1,10 +1,4 @@
-"""Leave-one-sequence-out weight search for Track 5 estimate ensembles.
-
-This train-fold helper avoids selecting ensemble weights on the same sequence used
-for evaluation.  For each labeled sequence it searches weights on all other
-sequences, evaluates the held-out sequence, and also writes a full-split weight
-configuration for downstream validation or hidden-test application.
-"""
+"""Leave-one-sequence-out weight search for Track 5 estimate ensembles."""
 
 from __future__ import annotations
 
@@ -17,6 +11,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.estimate_csv import read_estimate_csv
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 from raft_uav.mmuad.submission import load_official_track5_template_file, load_sequence_class_map
 from raft_uav.mmuad.track5_estimate_ensemble import EstimateInput
@@ -44,14 +39,16 @@ def run_track5_estimate_ensemble_loso_weight_search(
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any], dict[str, Any]]:
     """Run LOSO ensemble-weight selection and return fold artifacts."""
 
-    if not estimate_inputs:
+    inputs = list(estimate_inputs)
+    if not inputs:
         raise ValueError("at least one estimate input is required")
     template_rows = _normalize_template(template)
     truth_rows = _normalize_truth(truth)
     sequences = sorted(truth_rows["sequence_id"].astype(str).unique())
     if len(sequences) < 2:
         raise ValueError("LOSO weight search requires at least two labeled sequences")
-    loaded = {item.label: pd.read_csv(item.path) for item in estimate_inputs}
+
+    loaded = {item.label: read_estimate_csv(item.path) for item in inputs}
     fold_records: list[dict[str, Any]] = []
     prediction_parts: list[pd.DataFrame] = []
     for held_out in sequences:
@@ -60,7 +57,7 @@ def run_track5_estimate_ensemble_loso_weight_search(
         holdout_template = template_rows.loc[template_rows["sequence_id"] == held_out]
         holdout_truth = truth_rows.loc[truth_rows["sequence_id"] == held_out]
         _, fold_best = search_track5_estimate_ensemble_weights(
-            estimate_inputs,
+            inputs,
             template=train_template,
             truth=train_truth,
             weight_step=float(weight_step),
@@ -69,7 +66,7 @@ def run_track5_estimate_ensemble_loso_weight_search(
             max_nearest_time_delta_s=max_nearest_time_delta_s,
         )
         weights = {str(label): float(value) for label, value in fold_best["weights"].items()}
-        weighted_inputs = [(item.label, loaded[item.label], weights[item.label]) for item in estimate_inputs]
+        weighted_inputs = [(item.label, loaded[item.label], weights[item.label]) for item in inputs]
         estimates, diagnostics = build_track5_estimate_ensemble(
             weighted_inputs,
             holdout_template,
@@ -83,7 +80,7 @@ def run_track5_estimate_ensemble_loso_weight_search(
         for label, weight in weights.items():
             predictions[f"loso_weight_{label}"] = weight
         prediction_parts.append(predictions)
-        fold_record = {
+        record = {
             "held_out_sequence": held_out,
             "train_sequence_count": int(train_truth["sequence_id"].nunique()),
             "holdout_row_count": int(len(holdout_template)),
@@ -96,13 +93,14 @@ def run_track5_estimate_ensemble_loso_weight_search(
             **metrics,
         }
         for label, weight in weights.items():
-            fold_record[f"weight_{label}"] = weight
-        fold_records.append(fold_record)
+            record[f"weight_{label}"] = weight
+        fold_records.append(record)
+
     fold_summary = pd.DataFrame.from_records(fold_records)
     loso_predictions = pd.concat(prediction_parts, ignore_index=True, sort=False)
     loso_metrics = _score_estimates(loso_predictions, truth_rows)
     _, full_weights = search_track5_estimate_ensemble_weights(
-        estimate_inputs,
+        inputs,
         template=template_rows,
         truth=truth_rows,
         weight_step=float(weight_step),
@@ -121,7 +119,7 @@ def run_track5_estimate_ensemble_loso_weight_search(
         "loso_metrics": loso_metrics,
         "mean_fold_mse_m2": _safe_mean(fold_summary["pose_mse_m2"]),
         "full_train_weights": full_weights.get("weights", {}),
-        "estimate_inputs": [asdict(item) | {"path": str(item.path)} for item in estimate_inputs],
+        "estimate_inputs": [asdict(item) | {"path": str(item.path)} for item in inputs],
     }
     return fold_summary, loso_predictions, _jsonable(summary), _jsonable(full_weights)
 
@@ -229,7 +227,9 @@ def _normalize_template(template: pd.DataFrame) -> pd.DataFrame:
     time = _first_present(rows, ("time_s", "Timestamp", "timestamp", "timestamp_s", "time"))
     if seq is None or time is None:
         raise ValueError("template must contain sequence and timestamp columns")
-    out = pd.DataFrame({"sequence_id": rows[seq].astype(str), "time_s": pd.to_numeric(rows[time], errors="coerce")})
+    out = pd.DataFrame(
+        {"sequence_id": rows[seq].astype(str), "time_s": pd.to_numeric(rows[time], errors="coerce")}
+    )
     return out.loc[np.isfinite(out["time_s"].to_numpy(float))].reset_index(drop=True)
 
 
@@ -239,7 +239,9 @@ def _normalize_truth(truth: pd.DataFrame) -> pd.DataFrame:
     for column in ("time_s", "x_m", "y_m", "z_m"):
         rows[column] = pd.to_numeric(rows[column], errors="coerce")
     finite = np.isfinite(rows[["time_s", "x_m", "y_m", "z_m"]].to_numpy(float)).all(axis=1)
-    return rows.loc[finite, ["sequence_id", "time_s", "x_m", "y_m", "z_m"]].reset_index(drop=True)
+    return rows.loc[finite, ["sequence_id", "time_s", "x_m", "y_m", "z_m"]].reset_index(
+        drop=True
+    )
 
 
 def _score_estimates(estimates: pd.DataFrame, truth: pd.DataFrame) -> dict[str, Any]:
@@ -271,7 +273,14 @@ def _score_estimates(estimates: pd.DataFrame, truth: pd.DataFrame) -> dict[str, 
 
 
 def _empty_metrics() -> dict[str, Any]:
-    return {"matched_rows": 0, "pose_mse_m2": np.nan, "pose_rmse_m": np.nan, "pose_mean_m": np.nan, "pose_p95_m": np.nan, "pose_max_m": np.nan}
+    return {
+        "matched_rows": 0,
+        "pose_mse_m2": np.nan,
+        "pose_rmse_m": np.nan,
+        "pose_mean_m": np.nan,
+        "pose_p95_m": np.nan,
+        "pose_max_m": np.nan,
+    }
 
 
 def _time_token(values: pd.Series) -> pd.Series:
