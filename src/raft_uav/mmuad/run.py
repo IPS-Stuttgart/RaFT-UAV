@@ -110,6 +110,20 @@ def _has_explicit_sequence_root(args: list[str]) -> bool:
 
 
 def _sequence_root_index(args: list[str]) -> int | None:
+    sequence_root_index = _sequence_root_index_once(
+        args,
+        unknown_long_options_consume=True,
+    )
+    if sequence_root_index is not None:
+        return sequence_root_index
+    return _sequence_root_index_once(args, unknown_long_options_consume=False)
+
+
+def _sequence_root_index_once(
+    args: list[str],
+    *,
+    unknown_long_options_consume: bool,
+) -> int | None:
     skip_next = False
     for index, arg in enumerate(args):
         if skip_next:
@@ -117,13 +131,28 @@ def _sequence_root_index(args: list[str]) -> int | None:
             continue
         if arg == "--":
             return index + 1 if index + 1 < len(args) else None
-        if _option_consumes_next(arg):
+        if _option_consumes_next_for_root_scan(
+            arg,
+            unknown_long_options_consume=unknown_long_options_consume,
+        ):
             skip_next = True
             continue
         if arg.startswith("-"):
             continue
         return index
     return None
+
+
+def _option_consumes_next_for_root_scan(
+    arg: str,
+    *,
+    unknown_long_options_consume: bool,
+) -> bool:
+    if not _option_consumes_next(arg):
+        return False
+    if unknown_long_options_consume or not arg.startswith("--"):
+        return True
+    return arg.endswith(_LONG_VALUE_OPTION_SUFFIXES)
 
 
 def _option_consumes_next(arg: str) -> bool:
