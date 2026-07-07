@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import importlib
 from typing import Any
 
@@ -11,11 +12,33 @@ _SEQUENCE_COLUMNS = ("sequence_id", "Sequence", "sequence", "seq")
 
 
 def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
-    dtype = dict(kwargs.pop("dtype", {}) or {})
-    for column in _SEQUENCE_COLUMNS:
-        dtype.setdefault(column, "string")
+    dtype_arg = kwargs.pop("dtype", None)
+    converters = dict(kwargs.pop("converters", {}) or {})
+    if dtype_arg is None:
+        dtype = {column: "string" for column in _SEQUENCE_COLUMNS}
+        _drop_sequence_converters(converters)
+    elif isinstance(dtype_arg, Mapping):
+        dtype = dict(dtype_arg)
+        for column in _SEQUENCE_COLUMNS:
+            dtype[column] = "string"
+        _drop_sequence_converters(converters)
+    else:
+        dtype = dtype_arg
+        for column in _SEQUENCE_COLUMNS:
+            converters[column] = _sequence_id_text
     kwargs["dtype"] = dtype
+    if converters:
+        kwargs["converters"] = converters
     return _ORIGINAL_READ_CSV(path, *args, **kwargs)
+
+
+def _drop_sequence_converters(converters: dict[Any, Any]) -> None:
+    for column in _SEQUENCE_COLUMNS:
+        converters.pop(column, None)
+
+
+def _sequence_id_text(value: Any) -> str:
+    return "" if value is None else str(value)
 
 
 def main(argv: list[str] | None = None) -> int:
