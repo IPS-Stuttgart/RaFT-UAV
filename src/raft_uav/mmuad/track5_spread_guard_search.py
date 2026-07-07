@@ -302,7 +302,13 @@ def _empty_metrics() -> dict[str, Any]:
 
 
 def _time_key(values: pd.Series) -> pd.Series:
-    return pd.to_numeric(values, errors="coerce").round(9).astype(str)
+    numeric = pd.to_numeric(values, errors="coerce")
+    rounded = np.round(numeric.to_numpy(float), 9)
+    return pd.Series(
+        [f"{value:.9f}" if np.isfinite(value) else "" for value in rounded],
+        index=values.index,
+        dtype="string",
+    )
 
 
 def _safe_mean(values: pd.Series) -> float | None:
