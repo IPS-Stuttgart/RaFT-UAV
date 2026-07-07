@@ -19,6 +19,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.estimate_csv import read_estimate_csv
 from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
     load_sequence_class_map,
@@ -287,7 +288,7 @@ def write_track5_estimate_ensemble_outputs(
 
     estimate_input_list = list(estimate_inputs)
     loaded_inputs = [
-        (item.label, pd.read_csv(item.path), float(item.weight)) for item in estimate_input_list
+        (item.label, read_estimate_csv(item.path), float(item.weight)) for item in estimate_input_list
     ]
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
