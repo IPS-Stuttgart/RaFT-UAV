@@ -23,6 +23,7 @@ from raft_uav.mmuad.submission import load_official_track5_template_file, load_s
 from raft_uav.mmuad.track5_estimate_ensemble import EstimateInput, parse_estimate_spec
 from raft_uav.mmuad.track5_estimate_ensemble_spread_guard import FALLBACK_POLICIES
 from raft_uav.mmuad.track5_estimate_ensemble_spread_guard import (
+    _read_estimate_csv,
     build_spread_guarded_estimate_ensemble,
 )
 from raft_uav.mmuad.track5_estimate_ensemble_spread_guard import write_spread_guard_outputs
@@ -47,7 +48,7 @@ def search_track5_spread_guard_settings(
     input_list = tuple(estimate_inputs)
     if not input_list:
         raise ValueError("at least one estimate input is required")
-    loaded = [(item.label, pd.read_csv(item.path), float(item.weight)) for item in input_list]
+    loaded = [(item.label, _read_estimate_csv(item.path), float(item.weight)) for item in input_list]
     thresholds = tuple(float(value) for value in spread_thresholds_m)
     if not thresholds:
         raise ValueError("at least one spread threshold is required")
