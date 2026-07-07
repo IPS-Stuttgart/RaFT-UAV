@@ -92,6 +92,11 @@ class CalibrationSet:
         shadow the specific calibration.  The prefix match is intentionally
         one-way: a calibration fitted for ``radar_enhance_pcl`` must not be
         applied backward to a broader ``radar`` candidate source.
+
+        A ``default`` calibration entry acts as a catch-all only after exact and
+        prefix matches fail.  This is how single-matrix TXT/CSV calibration files
+        are applied to ordinary candidate sources such as ``radar`` or
+        ``camera`` instead of being silently ignored.
         """
 
         source_l = str(source).lower()
@@ -99,13 +104,17 @@ class CalibrationSet:
             if source_l == str(key).lower():
                 return value
         matches: list[tuple[int, SensorCalibration]] = []
+        default: SensorCalibration | None = None
         for key, value in self.sensors.items():
             key_l = str(key).lower()
+            if key_l == "default":
+                default = value
+                continue
             if source_l.startswith(key_l):
                 matches.append((len(key_l), value))
-        if not matches:
-            return None
-        return max(matches, key=lambda item: item[0])[1]
+        if matches:
+            return max(matches, key=lambda item: item[0])[1]
+        return default
 
 
 def load_calibration_auto(path: Path) -> CalibrationSet:
