@@ -80,6 +80,7 @@ raft-uav-mmuad-template-resample = "raft_uav.mmuad.track5_template_resample_cli:
 raft-uav-mmuad-ensemble-track5-submissions = "raft_uav.mmuad.track5_submission_ensemble:main"
 raft-uav-mmuad-track5-submission-ensemble-grid = "raft_uav.mmuad.track5_submission_ensemble_grid:main"
 raft-uav-mmuad-track5-estimate-ensemble = "raft_uav.mmuad.track5_estimate_ensemble:main"
+raft-uav-mmuad-track5-agreement-gated-ensemble = "raft_uav.mmuad.track5_agreement_gated_ensemble:main"
 raft-uav-mmuad-track5-estimate-calibration = "raft_uav.mmuad.track5_estimate_calibration:main"
 raft-uav-mmuad-track5-calibration-shrinkage = "raft_uav.mmuad.track5_estimate_calibration_shrinkage:main"
 raft-uav-mmuad-track5-estimate-ensemble-grid = "raft_uav.mmuad.track5_estimate_ensemble_grid:main"
