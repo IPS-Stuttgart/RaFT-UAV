@@ -6,6 +6,7 @@ import pandas as pd
 
 from raft_uav.mmuad.candidate_reservoir_train_cv import (
     main as train_cv_main,
+    select_candidate_reservoir_offsets_by_cv_aggregate,
     select_candidate_reservoir_offsets_by_sequence_cv,
 )
 
@@ -80,6 +81,34 @@ def test_train_cv_selector_writes_train_selected_raw_offset() -> None:
     assert set(best["candidate_branch"]) == {"raw"}
 
 
+def test_aggregate_cv_selector_uses_mean_holdout_grid_metric() -> None:
+    config, fold_grid, aggregate, best = select_candidate_reservoir_offsets_by_cv_aggregate(
+        _candidate_rows(),
+        _truth_rows(),
+        branch_offset_grid=["raw=0,1"],
+        global_top_n=1,
+        per_source_top_n=0,
+        per_branch_top_n=0,
+        max_candidates_per_frame=1,
+        top_k_values=(1,),
+        max_truth_time_delta_s=0.1,
+        selection_metric="oracle_top1_3d_m_mse",
+        write_best_reservoir=True,
+    )
+
+    assert config["selection_protocol"] == (
+        "leave-one-sequence-out-cv-aggregate__final-apply-selected-offsets"
+    )
+    assert config["selected_grid_label"] == "branch_raw_1"
+    assert config["selected_metric_fold_count"] == 3
+    assert config["branch_score_offsets"] == {"raw": 1.0}
+    assert fold_grid["holdout_sequence_id"].nunique() == 3
+    assert set(fold_grid["grid_label"]) == {"identity", "branch_raw_1"}
+    assert aggregate.iloc[0]["oracle_top1_3d_m_mse_mean"] == 0.0
+    assert best is not None
+    assert set(best["candidate_branch"]) == {"raw"}
+
+
 def test_train_cv_cli_writes_config_and_fold_summary(tmp_path) -> None:
     candidate_csv = tmp_path / "candidates.csv"
     truth_csv = tmp_path / "truth.csv"
@@ -129,3 +158,56 @@ def test_train_cv_cli_writes_config_and_fold_summary(tmp_path) -> None:
     assert "oracle_top3_3d_m_mse" not in final_grid.columns
     assert len(folds) == 3
     assert set(reservoir["candidate_branch"]) == {"raw"}
+
+
+def test_train_cv_cli_supports_aggregate_selection_mode(tmp_path) -> None:
+    candidate_csv = tmp_path / "candidates.csv"
+    truth_csv = tmp_path / "truth.csv"
+    output_dir = tmp_path / "out"
+    _candidate_rows().to_csv(candidate_csv, index=False)
+    _truth_rows().to_csv(truth_csv, index=False)
+
+    rc = train_cv_main(
+        [
+            "--candidate",
+            f"mixed={candidate_csv}",
+            "--truth-csv",
+            str(truth_csv),
+            "--output-dir",
+            str(output_dir),
+            "--selection-mode",
+            "cv-aggregate",
+            "--branch-score-offset-grid",
+            "raw=0,1",
+            "--global-top-n",
+            "1",
+            "--per-source-top-n",
+            "0",
+            "--per-branch-top-n",
+            "0",
+            "--max-candidates-per-frame",
+            "1",
+            "--top-k",
+            "1",
+            "--max-truth-time-delta-s",
+            "0.1",
+            "--selection-metric",
+            "oracle_top1_3d_m_mse",
+            "--write-best-reservoir",
+        ]
+    )
+
+    assert rc == 0
+    config = json.loads(
+        (output_dir / "mmuad_candidate_reservoir_train_selected_config.json").read_text(
+            encoding="utf-8",
+        ),
+    )
+    folds = pd.read_csv(output_dir / "mmuad_candidate_reservoir_train_cv_folds.csv")
+    aggregate = pd.read_csv(output_dir / "mmuad_candidate_reservoir_train_final_grid_summary.csv")
+    assert config["selection_protocol"] == (
+        "leave-one-sequence-out-cv-aggregate__final-apply-selected-offsets"
+    )
+    assert config["selected_grid_label"] == "branch_raw_1"
+    assert folds["holdout_sequence_id"].nunique() == 3
+    assert aggregate.iloc[0]["grid_label"] == "branch_raw_1"
