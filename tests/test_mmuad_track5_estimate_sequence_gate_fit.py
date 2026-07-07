@@ -7,8 +7,9 @@ import tomllib
 import pandas as pd
 import pytest
 
+from raft_uav.mmuad.track5_estimate_text_cli import _read_estimate_csv
+from raft_uav.mmuad.track5_estimate_text_cli import main as sequence_gate_fit_main
 from raft_uav.mmuad.track5_estimate_sequence_gate_fit import fit_estimate_sequence_gate_weights
-from raft_uav.mmuad.track5_estimate_sequence_gate_fit import main as sequence_gate_fit_main
 from raft_uav.mmuad.track5_estimate_sequence_gate_fit import write_estimate_sequence_gate_fit_outputs
 
 
@@ -57,6 +58,23 @@ def _alternate_estimates() -> pd.DataFrame:
             "state_z_m": [0.0, 0.0, 0.0, 0.0],
         }
     )
+
+
+def test_estimate_sequence_gate_fit_csv_reader_preserves_opaque_sequence_ids(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "estimates.csv"
+    path.write_text(
+        " sequence_id ,time_s,state_x_m,state_y_m,state_z_m\n"
+        "001,0.0,0.0,0.0,0.0\n"
+        "NA,1.0,1.0,0.0,0.0\n",
+        encoding="utf-8",
+    )
+
+    rows = _read_estimate_csv(path)
+
+    assert "sequence_id" in rows.columns
+    assert rows["sequence_id"].tolist() == ["001", "NA"]
 
 
 def test_estimate_sequence_gate_fit_finds_sequence_oracle_weights() -> None:
