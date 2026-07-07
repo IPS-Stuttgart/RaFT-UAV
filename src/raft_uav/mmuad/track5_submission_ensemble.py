@@ -23,6 +23,7 @@ import pandas as pd
 
 from raft_uav.mmuad.class_probability_context import _predicted_class_labels
 from raft_uav.mmuad.submission import (
+    load_official_track5_template_file,
     normalize_official_track5_results_frame,
     parse_official_position_cell,
     validate_official_track5_submission,
@@ -297,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("provide at least one --submission")
     inputs = tuple(parse_submission_input(value) for value in args.submission)
     estimates, diagnostics = ensemble_track5_submissions(inputs, class_policy=args.class_policy)
-    template = None if args.template is None else pd.read_csv(args.template)
+    template = None if args.template is None else load_official_track5_template_file(args.template)
     paths = write_track5_submission_ensemble_outputs(
         estimates=estimates,
         diagnostics=diagnostics,

@@ -46,6 +46,32 @@ def test_do_no_harm_uses_soft_path_entropy_as_effective_candidate_count() -> Non
     assert "effective_candidates>=2" in plan.reason
 
 
+def test_do_no_harm_caps_huge_entropy_effective_candidate_count() -> None:
+    row = pd.Series(
+        {
+            "association_nis": 1.0,
+            "association_anchor_nis": 1.0,
+            "association_soft_path_weight_entropy": 1.0e6,
+            "association_preceding_miss_streak": 0,
+        }
+    )
+
+    plan = classify_radar_update_row(
+        row,
+        RadarUpdatePolicy(
+            entropy_soften=2.0e6,
+            entropy_defer=3.0e6,
+            effective_candidates_soften=2.0,
+            effective_candidates_defer=4.0,
+        ),
+    )
+
+    assert plan.action == "skip"
+    assert plan.effective_candidates is not None
+    assert math.isfinite(plan.effective_candidates)
+    assert "effective_candidates>=4" in plan.reason
+
+
 def test_do_no_harm_defers_severe_soft_path_entropy_after_recovery_streak() -> None:
     row = pd.Series(
         {

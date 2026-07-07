@@ -20,6 +20,7 @@ import pandas as pd
 from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
     load_sequence_class_map,
+    parse_official_sequence_cell,
     validate_official_track5_submission,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
@@ -66,7 +67,7 @@ def build_track5_uncertainty_ensemble(
     stacked_parts: list[pd.DataFrame] = []
     input_summary: list[dict[str, Any]] = []
     for item in inputs:
-        rows = pd.read_csv(item.path)
+        rows = _read_estimate_csv_preserving_sequence_id(item.path)
         resampled, resample_diag = resample_estimates_to_track5_template(
             rows,
             template_rows,
@@ -338,6 +339,16 @@ def _positive_finite(value: float, *, name: str) -> float:
     return parsed
 
 
+def _read_estimate_csv_preserving_sequence_id(path: Path) -> pd.DataFrame:
+    """Read estimate CSVs without coercing opaque Track 5 sequence identifiers."""
+
+    sequence_dtypes = {column: "string" for column in SEQUENCE_ALIASES}
+    try:
+        return pd.read_csv(path, dtype=sequence_dtypes, keep_default_na=False)
+    except TypeError:
+        return pd.read_csv(path, dtype=sequence_dtypes)
+
+
 def _resample_uncertainty_column(
     estimates: pd.DataFrame,
     template: pd.DataFrame,
@@ -374,12 +385,13 @@ def _normalize_uncertainty_rows(estimates: pd.DataFrame, *, column: str) -> pd.D
         return pd.DataFrame(columns=["sequence_id", "time_s", "sigma_m"])
     out = pd.DataFrame(
         {
-            "sequence_id": rows[sequence_column].astype(str),
+            "sequence_id": _normalized_sequence_values(rows[sequence_column]),
             "time_s": pd.to_numeric(rows[time_column], errors="coerce"),
             "sigma_m": pd.to_numeric(rows[column], errors="coerce"),
         }
     )
-    finite = np.isfinite(out[["time_s", "sigma_m"]].to_numpy(float)).all(axis=1)
+    finite = out["sequence_id"].notna()
+    finite &= np.isfinite(out[["time_s", "sigma_m"]].to_numpy(float)).all(axis=1)
     out = out.loc[finite & (out["sigma_m"] > 0.0)].copy()
     return out.drop_duplicates(["sequence_id", "time_s"], keep="last").reset_index(drop=True)
 
@@ -392,12 +404,23 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("template must contain sequence and timestamp columns")
     out = pd.DataFrame(
         {
-            "sequence_id": rows[sequence_column].astype(str),
+            "sequence_id": _normalized_sequence_values(rows[sequence_column]),
             "time_s": pd.to_numeric(rows[time_column], errors="coerce"),
         }
     )
-    finite = np.isfinite(out["time_s"].to_numpy(float))
+    finite = out["sequence_id"].notna() & np.isfinite(out["time_s"].to_numpy(float))
     return out.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+
+
+def _normalized_sequence_values(values: pd.Series) -> pd.Series:
+    return values.map(_sequence_text_or_none)
+
+
+def _sequence_text_or_none(value: Any) -> str | None:
+    try:
+        return parse_official_sequence_cell(value)
+    except ValueError:
+        return None
 
 
 def _template_time_matches(values: pd.Series, target: float) -> np.ndarray:
@@ -459,8 +482,6 @@ def _jsonable(value: Any) -> Any:
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, list | tuple):
         return [_jsonable(item) for item in value]
-    if isinstance(value, Path):
-        return str(value)
     if isinstance(value, np.ndarray):
         return value.tolist()
     if isinstance(value, np.generic):
@@ -468,7 +489,3 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, float) and not np.isfinite(value):
         return None
     return value
-
-
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
