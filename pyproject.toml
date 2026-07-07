@@ -86,6 +86,7 @@ raft-uav-mmuad-track5-estimate-ensemble-grid = "raft_uav.mmuad.track5_estimate_e
 raft-uav-mmuad-track5-ensemble-grid-config = "raft_uav.mmuad.track5_estimate_ensemble_grid_config:main"
 raft-uav-mmuad-track5-ensemble-weight-search = "raft_uav.mmuad.track5_estimate_ensemble_weight_search:main"
 raft-uav-mmuad-track5-estimate-ensemble-weight-search = "raft_uav.mmuad.track5_estimate_ensemble_weight_search:main"
+raft-uav-mmuad-track5-soft-class-ensemble = "raft_uav.mmuad.track5_soft_class_ensemble:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
