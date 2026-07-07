@@ -79,6 +79,7 @@ raft-uav-mmuad-candidate-assignment-branch-summary = "raft_uav.mmuad.candidate_a
 raft-uav-mmuad-candidate-assignment-report = "raft_uav.mmuad.candidate_assignment_report:main"
 raft-uav-mmuad-template-resample = "raft_uav.mmuad.track5_template_resample_cli:main"
 raft-uav-mmuad-track5-speed-limit = "raft_uav.mmuad.track5_speed_limit:main"
+raft-uav-mmuad-track5-acceleration-limit = "raft_uav.mmuad.track5_acceleration_limit:main"
 raft-uav-mmuad-ensemble-track5-submissions = "raft_uav.mmuad.track5_submission_ensemble:main"
 raft-uav-mmuad-track5-submission-ensemble-grid = "raft_uav.mmuad.track5_submission_ensemble_grid:main"
 raft-uav-mmuad-track5-estimate-ensemble = "raft_uav.mmuad.track5_estimate_ensemble:main"
