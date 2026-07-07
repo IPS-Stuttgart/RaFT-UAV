@@ -10,6 +10,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.class_probability_csv import read_class_probability_csv
 from raft_uav.mmuad.io import load_candidate_file
 from raft_uav.mmuad.schema import CandidateFrame, normalize_candidate_columns
 
@@ -126,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     candidates = load_candidate_file(args.candidate_csv)
-    probabilities = pd.read_csv(args.class_probabilities_csv)
+    probabilities = read_class_probability_csv(args.class_probabilities_csv)
     interaction_columns = tuple(args.interaction_column) or DEFAULT_INTERACTION_COLUMNS
     augmented = attach_class_probability_context(
         candidates,
