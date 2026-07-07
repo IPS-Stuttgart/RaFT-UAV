@@ -186,7 +186,9 @@ def write_track5_consensus_ensemble_outputs(
     """Write consensus estimates, official CSV/ZIP, validation, and manifest."""
 
     input_list = list(estimate_inputs)
-    loaded = [(item.label, pd.read_csv(item.path), float(item.weight)) for item in input_list]
+    loaded = [
+        (item.label, _read_estimate_csv(item.path), float(item.weight)) for item in input_list
+    ]
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     estimates, diagnostics = build_track5_consensus_estimate_ensemble(
@@ -319,6 +321,13 @@ def _best_consensus_indices(xyz: np.ndarray, weights: np.ndarray, radius: float)
 def _weighted_spread_m(xyz: np.ndarray, weights: np.ndarray, center: np.ndarray) -> float:
     distances = np.linalg.norm(xyz - center[None, :], axis=1)
     return float(np.sum(weights * distances) / np.sum(weights))
+
+
+def _read_estimate_csv(path: Path) -> pd.DataFrame:
+    rows = pd.read_csv(path, dtype=str, keep_default_na=False)
+    out = rows.copy()
+    out.columns = [str(column).strip() for column in out.columns]
+    return out
 
 
 def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
