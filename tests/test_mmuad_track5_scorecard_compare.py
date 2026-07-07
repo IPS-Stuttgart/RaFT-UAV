@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from raft_uav.mmuad.track5_scorecard_compare import compare_track5_scorecards, main as compare_main
+from raft_uav.mmuad.track5_scorecard_compare import (
+    _bool_or_none,
+    compare_track5_scorecards,
+    main as compare_main,
+)
 
 
 def _scorecard(path: Path, *, name: str, mse: float, p95: float, acc: float) -> Path:
@@ -69,3 +73,13 @@ def test_scorecard_compare_cli_writes_outputs(tmp_path: Path) -> None:
     assert table.loc[0, "pose_mse_loss_m2"] == 9.0
     assert summary["scorecard_count"] == 2
     assert summary["best_label"] == "b"
+
+
+def test_scorecard_compare_bool_flags_accept_numeric_export_encodings() -> None:
+    assert _bool_or_none(1.0) is True
+    assert _bool_or_none("1.0") is True
+    assert _bool_or_none(2) is True
+    assert _bool_or_none(0.0) is False
+    assert _bool_or_none("0.0") is False
+    assert _bool_or_none("false") is False
+    assert _bool_or_none("not-a-boolean") is None
