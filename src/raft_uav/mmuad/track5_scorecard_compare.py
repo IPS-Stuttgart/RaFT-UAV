@@ -220,7 +220,22 @@ def _bool_or_none(value: Any) -> bool | None:
         return bool(value)
     if value is None:
         return None
-    return str(value).strip().lower() in {"1", "true", "yes"}
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.notna(numeric) and np.isfinite(float(numeric)):
+        return bool(float(numeric) != 0.0)
+
+    text = str(value).strip().lower()
+    if text in {"1", "1.0", "true", "t", "yes", "y"}:
+        return True
+    if text in {"0", "0.0", "false", "f", "no", "n", "", "nan", "none", "<na>", "nat"}:
+        return False
+    return None
 
 
 def _pairwise_columns() -> list[str]:
