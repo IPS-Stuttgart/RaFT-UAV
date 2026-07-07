@@ -102,7 +102,7 @@ def _sequence_balanced_estimate() -> pd.DataFrame:
         {
             "sequence_id": ["long"] * 4 + ["short"],
             "time_s": [0.0, 1.0, 2.0, 3.0, 0.0],
-            "state_x_m": [3.0, 4.0, 5.0, 6.0, 3.0],
+            "state_x_m": [6.0, 7.0, 8.0, 9.0, 6.0],
             "state_y_m": [0.0] * 5,
             "state_z_m": [0.0] * 5,
         }
