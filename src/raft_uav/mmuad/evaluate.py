@@ -18,6 +18,7 @@ from raft_uav.mmuad.schema import normalize_time_column_aliases, normalize_truth
 
 _SUBMISSION_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "sequence_id": ("sequence", "seq", "scene", "scene_id", "clip", "clip_id"),
+    "time_s": ("timestamp_s", "timestamp", "t", "time", "sec", "seconds"),
     "track_id": ("track", "id", "object_id", "cluster_id", "instance_id"),
     "x_m": ("x", "east_m", "pos_x", "center_x", "cx"),
     "y_m": ("y", "north_m", "pos_y", "center_y", "cy"),
@@ -65,7 +66,7 @@ def load_submission_csv(path: Path) -> pd.DataFrame:
 def _rename_submission_aliases(frame: pd.DataFrame) -> pd.DataFrame:
     """Normalize submission CSV columns using case-insensitive canonical names and aliases."""
 
-    lower_to_original = {str(col).lower(): col for col in frame.columns}
+    lower_to_original = {str(col).strip().lower(): col for col in frame.columns}
     rename: dict[Any, str] = {}
     for canonical, aliases in _SUBMISSION_COLUMN_ALIASES.items():
         if canonical in frame.columns:
