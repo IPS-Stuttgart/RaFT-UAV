@@ -122,18 +122,28 @@ def evaluate_estimate_ensemble_weight_grid(
                 class_map=class_map,
                 default_classification=default_classification,
             )
-            evaluation = evaluate_mmaud_results(
-                results,
-                truth,
-                metric_protocol="public-track5",
-                class_map_path=class_map_path,
-            )
-            row = _grid_row(
-                weights,
-                evaluation,
-                aggregation_policy=policy,
-                trim_fraction=float(trim_fraction),
-            )
+            try:
+                evaluation = evaluate_mmaud_results(
+                    results,
+                    truth,
+                    metric_protocol="public-track5",
+                    class_map_path=class_map_path,
+                )
+                row = _grid_row(
+                    weights,
+                    evaluation,
+                    aggregation_policy=policy,
+                    trim_fraction=float(trim_fraction),
+                )
+            except ValueError as exc:
+                if "contains no finite trajectory rows" not in str(exc):
+                    raise
+                evaluation = {}
+                row = _failed_grid_row(
+                    weights,
+                    aggregation_policy=policy,
+                    trim_fraction=float(trim_fraction),
+                )
             summary_records.append(_summary_record(inputs, row))
             sequence_records.extend(_sequence_records(inputs, row.weights, evaluation, row))
             if best_row is None or _row_sort_key(row) < _row_sort_key(best_row):
@@ -349,6 +359,26 @@ def _grid_row(
         max_error_m=float(pooled.get("max_3d_m", np.nan)),
         class_accuracy=_optional_float(pooled.get("uav_type_accuracy")),
         matched_count=int(summary.get("matched_count", pooled.get("count", 0)) or 0),
+    )
+
+
+def _failed_grid_row(
+    weights: tuple[float, ...],
+    *,
+    aggregation_policy: str,
+    trim_fraction: float,
+) -> EnsembleGridRow:
+    return EnsembleGridRow(
+        weights=tuple(float(weight) for weight in weights),
+        aggregation_policy=str(aggregation_policy),
+        trim_fraction=float(trim_fraction),
+        pose_mse=float("inf"),
+        rmse_m=float("inf"),
+        mean_error_m=float("inf"),
+        p95_error_m=float("inf"),
+        max_error_m=float("inf"),
+        class_accuracy=None,
+        matched_count=0,
     )
 
 
