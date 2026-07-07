@@ -311,8 +311,16 @@ def _effective_candidate_count(row: pd.Series | dict[str, Any], entropy: float |
     if explicit is not None:
         return explicit
     if entropy is not None:
-        return float(np.exp(float(entropy)))
+        return _safe_exp_effective_count(entropy)
     return _first_finite(row, "association_soft_path_count")
+
+
+def _safe_exp_effective_count(entropy: float) -> float:
+    """Exponentiate entropy without leaking infinities into diagnostics."""
+
+    if entropy >= float(np.log(np.finfo(float).max)):
+        return float(np.finfo(float).max)
+    return float(np.exp(float(entropy)))
 
 
 def _first_finite(row: pd.Series | dict[str, Any], *names: str) -> float | None:
