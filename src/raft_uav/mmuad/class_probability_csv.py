@@ -1,4 +1,4 @@
-"""CSV readers for MMUAD class-probability tables."""
+"""CSV readers for MMUAD class probability tables."""
 
 from __future__ import annotations
 
@@ -8,9 +8,12 @@ import pandas as pd
 
 
 def read_class_probability_csv(path: Path) -> pd.DataFrame:
-    """Read classifier CSV output without coercing opaque sequence identifiers."""
+    """Read classifier CSV output while preserving sequence ids as text."""
 
     try:
-        return pd.read_csv(path, dtype=str, keep_default_na=False)
+        rows = pd.read_csv(path, dtype=str, keep_default_na=False)
     except TypeError:
-        return pd.read_csv(path)
+        rows = pd.read_csv(path)
+    out = rows.copy()
+    out.columns = [str(column).strip() for column in out.columns]
+    return out
