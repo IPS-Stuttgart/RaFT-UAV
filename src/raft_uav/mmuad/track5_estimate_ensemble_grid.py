@@ -20,6 +20,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.estimate_csv import read_estimate_csv
 from raft_uav.mmuad.evaluator import evaluate_mmaud_results, load_evaluation_truth_file
 from raft_uav.mmuad.submission import load_official_track5_template_file, load_sequence_class_map
 from raft_uav.mmuad.track5_estimate_ensemble import ENSEMBLE_POLICIES
@@ -94,7 +95,7 @@ def evaluate_estimate_ensemble_weight_grid(
     if not inputs:
         raise ValueError("at least one estimate input is required")
     policies = _normalize_aggregation_policies(aggregation_policies)
-    loaded = [(item.label, pd.read_csv(item.path), 1.0) for item in inputs]
+    loaded = [(item.label, read_estimate_csv(item.path), 1.0) for item in inputs]
     class_map = load_sequence_class_map(class_map_path) if class_map_path is not None else {}
     summary_records: list[dict[str, Any]] = []
     sequence_records: list[dict[str, Any]] = []
