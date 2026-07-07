@@ -57,11 +57,11 @@ def test_frame_gap_summary_reports_pooled_and_by_sequence_mse() -> None:
     by_sequence = summarize_frame_gap(gap, group_column="sequence_id")
 
     assert pooled.loc[0, "mixture_mse_3d_m2"] == pytest.approx((1.0 + 9.0 + 4.0) / 3.0)
-    assert pooled.loc[0, "oracle_all_3d_m_mse_3d_m2"] == pytest.approx((0.0 + 1.0 + 4.0) / 3.0)
-    assert "frames_gap_to_oracle_all_3d_m_gt_1m" in pooled.columns
+    assert pooled.loc[0, "oracle_all_mse_3d_m2"] == pytest.approx((0.0 + 1.0 + 4.0) / 3.0)
+    assert "frames_gap_to_oracle_all_gt_1m" in pooled.columns
     seq_a = by_sequence.loc[by_sequence["sequence_id"] == "seqA"].iloc[0]
     assert seq_a["frame_count"] == 2
-    assert seq_a["gap_to_oracle_all_3d_m_mean_3d_m"] == pytest.approx(1.5)
+    assert seq_a["gap_to_oracle_all_mean_3d_m"] == pytest.approx(1.5)
 
 
 def test_gap_cli_writes_artifacts(tmp_path: Path) -> None:
