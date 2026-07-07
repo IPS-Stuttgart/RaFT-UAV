@@ -288,7 +288,7 @@ def _read_csv_preserve_text(path: Path) -> pd.DataFrame:
     text-preserving read is the safer CLI boundary.
     """
 
-    rows = pd.read_csv(path, dtype=str)
+    rows = pd.read_csv(path, dtype=str, keep_default_na=False)
     rows.columns = [str(column).strip() for column in rows.columns]
     return rows
 
