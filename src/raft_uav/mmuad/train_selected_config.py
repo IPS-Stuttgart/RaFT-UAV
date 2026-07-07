@@ -15,11 +15,12 @@ import pandas as pd
 from raft_uav.mmuad.source_calibration import SOURCE_CALIBRATION_MODES
 
 
-TRAIN_SELECTED_CONFIG_SCHEMA = "raft-uav-mmuad-train-selected-config-v1"
+TRAIN_SELECTED_CONFIG_SCHEMA = "raft-uav-mmuad-train-selected-config-v2"
 
 CONFIG_FIELDS = (
     "source_calibration_mode",
     "source_translation_alpha",
+    "point_extraction_mode",
     "ranker_model_type",
     "ranker_target_column",
     "mmuad_selection_mode",
@@ -28,6 +29,26 @@ CONFIG_FIELDS = (
     "viterbi_source_switch_penalty",
     "viterbi_max_speed_mps",
     "viterbi_gap_penalty",
+    "candidate_reservoir_global_top_n",
+    "candidate_reservoir_per_source_top_n",
+    "candidate_reservoir_per_branch_top_n",
+    "candidate_reservoir_max_candidates_per_frame",
+    "candidate_reservoir_score_column",
+    "candidate_reservoir_score_floor_quantile",
+    "candidate_reservoir_cap_reason_bonus",
+    "candidate_mixture_score_column",
+    "candidate_mixture_sigma_column",
+    "candidate_mixture_score_weight",
+    "candidate_mixture_temperature",
+    "candidate_mixture_sigma_log_weight",
+    "candidate_mixture_huber_delta",
+    "candidate_mixture_smoothness_weight",
+    "candidate_mixture_uniform_weight_floor",
+    "candidate_mixture_branch_balance",
+    "candidate_mixture_source_balance",
+    "candidate_mixture_responsibility_floor",
+    "candidate_mixture_sigma_min_m",
+    "candidate_mixture_sigma_max_m",
     "smoothing_mode",
     "smoothing_speed_gate_mps",
     "smoothing_blend",
@@ -38,6 +59,7 @@ CONFIG_FIELDS = (
 DEFAULT_CONFIG: dict[str, Any] = {
     "source_calibration_mode": "identity",
     "source_translation_alpha": 1.0,
+    "point_extraction_mode": "static",
     "ranker_model_type": "random-forest-classifier",
     "ranker_target_column": "good_cluster_5m",
     "mmuad_selection_mode": "greedy",
@@ -46,6 +68,26 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "viterbi_source_switch_penalty": 0.0,
     "viterbi_max_speed_mps": 60.0,
     "viterbi_gap_penalty": 0.0,
+    "candidate_reservoir_global_top_n": 20,
+    "candidate_reservoir_per_source_top_n": 3,
+    "candidate_reservoir_per_branch_top_n": 3,
+    "candidate_reservoir_max_candidates_per_frame": 40,
+    "candidate_reservoir_score_column": "candidate_reservoir_grid_score",
+    "candidate_reservoir_score_floor_quantile": None,
+    "candidate_reservoir_cap_reason_bonus": 0.0,
+    "candidate_mixture_score_column": "candidate_reservoir_score",
+    "candidate_mixture_sigma_column": "predicted_sigma_m",
+    "candidate_mixture_score_weight": 1.0,
+    "candidate_mixture_temperature": 1.0,
+    "candidate_mixture_sigma_log_weight": 3.0,
+    "candidate_mixture_huber_delta": 1.0,
+    "candidate_mixture_smoothness_weight": 7200.0,
+    "candidate_mixture_uniform_weight_floor": 0.0,
+    "candidate_mixture_branch_balance": 0.0,
+    "candidate_mixture_source_balance": 0.0,
+    "candidate_mixture_responsibility_floor": 0.0,
+    "candidate_mixture_sigma_min_m": 1.0,
+    "candidate_mixture_sigma_max_m": 30.0,
     "smoothing_mode": "none",
     "smoothing_speed_gate_mps": 0.0,
     "smoothing_blend": 1.0,
@@ -57,6 +99,7 @@ LOWER_IS_BETTER_COLUMNS = (
     "train_cv_pose_mse_loss_m2",
     "loso_pose_mse_loss_m2",
     "pose_mse_loss_m2",
+    "pose_mse",
     "mse",
     "weighted_mse",
     "cv_mse",
@@ -71,6 +114,13 @@ HIGHER_IS_BETTER_COLUMNS = (
     "timestamp_accuracy",
     "sequence_accuracy",
     "accuracy",
+)
+POINT_EXTRACTION_MODES = (
+    "static",
+    "dynamic",
+    "dynamic-object",
+    "static-plus-dynamic",
+    "static_dynamic_union",
 )
 
 
@@ -100,8 +150,12 @@ def validate_train_selected_config(config: dict[str, Any]) -> dict[str, Any]:
         SOURCE_CALIBRATION_MODES,
         "source_calibration_mode",
     )
-    out["source_translation_alpha"] = _float(out["source_translation_alpha"])
-    out["source_translation_alpha"] = float(np.clip(out["source_translation_alpha"], 0.0, 1.0))
+    out["source_translation_alpha"] = float(np.clip(_float(out["source_translation_alpha"]), 0.0, 1.0))
+    out["point_extraction_mode"] = _choice(
+        out["point_extraction_mode"],
+        POINT_EXTRACTION_MODES,
+        "point_extraction_mode",
+    )
     out["mmuad_selection_mode"] = _choice(
         out["mmuad_selection_mode"],
         ("greedy", "viterbi"),
@@ -113,18 +167,62 @@ def validate_train_selected_config(config: dict[str, Any]) -> dict[str, Any]:
         "smoothing_mode",
     )
     for field in (
+        "candidate_reservoir_global_top_n",
+        "candidate_reservoir_per_source_top_n",
+        "candidate_reservoir_per_branch_top_n",
+        "candidate_reservoir_max_candidates_per_frame",
+    ):
+        out[field] = _nonnegative_int(out[field], field)
+    for field in (
         "viterbi_motion_weight",
         "viterbi_ranker_weight",
         "viterbi_source_switch_penalty",
         "viterbi_max_speed_mps",
         "viterbi_gap_penalty",
+        "candidate_reservoir_cap_reason_bonus",
+        "candidate_mixture_score_weight",
+        "candidate_mixture_temperature",
+        "candidate_mixture_sigma_log_weight",
+        "candidate_mixture_huber_delta",
+        "candidate_mixture_smoothness_weight",
+        "candidate_mixture_uniform_weight_floor",
+        "candidate_mixture_branch_balance",
+        "candidate_mixture_source_balance",
+        "candidate_mixture_responsibility_floor",
+        "candidate_mixture_sigma_min_m",
+        "candidate_mixture_sigma_max_m",
         "smoothing_speed_gate_mps",
         "smoothing_blend",
         "image_nonimage_fusion_weight",
     ):
         out[field] = _float(out[field])
+    out["candidate_reservoir_score_floor_quantile"] = _optional_quantile(
+        out["candidate_reservoir_score_floor_quantile"],
+        "candidate_reservoir_score_floor_quantile",
+    )
+    for field in (
+        "candidate_mixture_uniform_weight_floor",
+        "candidate_mixture_branch_balance",
+        "candidate_mixture_source_balance",
+        "candidate_mixture_responsibility_floor",
+    ):
+        if not 0.0 <= float(out[field]) <= 1.0:
+            raise ValueError(f"{field} must be within [0, 1]")
+    if not 0.0 <= float(out["candidate_mixture_uniform_weight_floor"]) < 1.0:
+        raise ValueError("candidate_mixture_uniform_weight_floor must be in [0, 1)")
+    if out["candidate_mixture_temperature"] <= 0.0:
+        raise ValueError("candidate_mixture_temperature must be positive")
+    if out["candidate_mixture_huber_delta"] <= 0.0:
+        raise ValueError("candidate_mixture_huber_delta must be positive")
+    if out["candidate_mixture_sigma_min_m"] <= 0.0:
+        raise ValueError("candidate_mixture_sigma_min_m must be positive")
+    if out["candidate_mixture_sigma_min_m"] > out["candidate_mixture_sigma_max_m"]:
+        raise ValueError("candidate mixture sigma bounds must satisfy min <= max")
     out["ranker_model_type"] = str(out["ranker_model_type"])
     out["ranker_target_column"] = str(out["ranker_target_column"])
+    out["candidate_reservoir_score_column"] = str(out["candidate_reservoir_score_column"])
+    out["candidate_mixture_score_column"] = str(out["candidate_mixture_score_column"])
+    out["candidate_mixture_sigma_column"] = str(out["candidate_mixture_sigma_column"])
     out["classifier_method"] = str(out["classifier_method"])
     return out
 
@@ -133,6 +231,8 @@ def build_train_selected_config(
     *,
     source_calibration_summary_csv: Path | None = None,
     ranker_summary_csv: Path | None = None,
+    reservoir_summary_csv: Path | None = None,
+    mixture_summary_csv: Path | None = None,
     viterbi_summary_csv: Path | None = None,
     smoothing_summary_csv: Path | None = None,
     classifier_summary_csv: Path | None = None,
@@ -162,6 +262,71 @@ def build_train_selected_config(
         mappings={
             "ranker_model_type": ("ranker_model_type", "model_type"),
             "ranker_target_column": ("ranker_target_column", "target_column"),
+            "point_extraction_mode": ("point_extraction_mode", "extraction_mode"),
+        },
+        metric_columns=LOWER_IS_BETTER_COLUMNS,
+        maximize=False,
+    )
+    _select_component(
+        config,
+        records,
+        component="candidate_reservoir",
+        csv_path=reservoir_summary_csv,
+        mappings={
+            "candidate_reservoir_global_top_n": ("global_top_n", "reservoir_global_top_n"),
+            "candidate_reservoir_per_source_top_n": (
+                "per_source_top_n",
+                "reservoir_per_source_top_n",
+            ),
+            "candidate_reservoir_per_branch_top_n": (
+                "per_branch_top_n",
+                "reservoir_per_branch_top_n",
+            ),
+            "candidate_reservoir_max_candidates_per_frame": (
+                "max_candidates_per_frame",
+                "reservoir_max_candidates_per_frame",
+            ),
+            "candidate_reservoir_score_floor_quantile": (
+                "score_floor_quantile",
+                "reservoir_score_floor_quantile",
+            ),
+            "candidate_reservoir_cap_reason_bonus": (
+                "cap_reason_bonus",
+                "reservoir_cap_reason_bonus",
+            ),
+        },
+        metric_columns=LOWER_IS_BETTER_COLUMNS,
+        maximize=False,
+    )
+    _select_component(
+        config,
+        records,
+        component="candidate_mixture",
+        csv_path=mixture_summary_csv,
+        mappings={
+            "candidate_mixture_score_weight": ("score_weight", "mixture_score_weight"),
+            "candidate_mixture_temperature": ("temperature", "mixture_temperature"),
+            "candidate_mixture_sigma_log_weight": (
+                "sigma_log_weight",
+                "mixture_sigma_log_weight",
+            ),
+            "candidate_mixture_huber_delta": ("huber_delta", "loss_scale_m"),
+            "candidate_mixture_smoothness_weight": (
+                "smoothness_weight",
+                "mixture_smoothness_weight",
+            ),
+            "candidate_mixture_uniform_weight_floor": (
+                "uniform_weight_floor",
+                "mixture_uniform_weight_floor",
+            ),
+            "candidate_mixture_branch_balance": ("branch_balance", "mixture_branch_balance"),
+            "candidate_mixture_source_balance": ("source_balance", "mixture_source_balance"),
+            "candidate_mixture_responsibility_floor": (
+                "responsibility_floor",
+                "mixture_responsibility_floor",
+            ),
+            "candidate_mixture_sigma_min_m": ("sigma_min_m", "mixture_sigma_min_m"),
+            "candidate_mixture_sigma_max_m": ("sigma_max_m", "mixture_sigma_max_m"),
         },
         metric_columns=LOWER_IS_BETTER_COLUMNS,
         maximize=False,
@@ -270,11 +435,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--summary-csv", type=Path)
     parser.add_argument("--source-calibration-summary-csv", type=Path)
     parser.add_argument("--ranker-summary-csv", type=Path)
+    parser.add_argument("--reservoir-summary-csv", type=Path)
+    parser.add_argument("--mixture-summary-csv", type=Path)
     parser.add_argument("--viterbi-summary-csv", type=Path)
     parser.add_argument("--smoothing-summary-csv", type=Path)
     parser.add_argument("--classifier-summary-csv", type=Path)
     parser.add_argument("--source-calibration-mode", choices=SOURCE_CALIBRATION_MODES)
     parser.add_argument("--source-translation-alpha", type=float)
+    parser.add_argument("--point-extraction-mode", choices=POINT_EXTRACTION_MODES)
     parser.add_argument("--ranker-model-type")
     parser.add_argument("--ranker-target-column")
     parser.add_argument("--mmuad-selection-mode", choices=("greedy", "viterbi"))
@@ -283,6 +451,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--viterbi-source-switch-penalty", type=float)
     parser.add_argument("--viterbi-max-speed-mps", type=float)
     parser.add_argument("--viterbi-gap-penalty", type=float)
+    parser.add_argument("--candidate-reservoir-global-top-n", type=int)
+    parser.add_argument("--candidate-reservoir-per-source-top-n", type=int)
+    parser.add_argument("--candidate-reservoir-per-branch-top-n", type=int)
+    parser.add_argument("--candidate-reservoir-max-candidates-per-frame", type=int)
+    parser.add_argument("--candidate-reservoir-score-column")
+    parser.add_argument("--candidate-reservoir-score-floor-quantile", type=float)
+    parser.add_argument("--candidate-reservoir-cap-reason-bonus", type=float)
+    parser.add_argument("--candidate-mixture-score-column")
+    parser.add_argument("--candidate-mixture-sigma-column")
+    parser.add_argument("--candidate-mixture-score-weight", type=float)
+    parser.add_argument("--candidate-mixture-temperature", type=float)
+    parser.add_argument("--candidate-mixture-sigma-log-weight", type=float)
+    parser.add_argument("--candidate-mixture-huber-delta", type=float)
+    parser.add_argument("--candidate-mixture-smoothness-weight", type=float)
+    parser.add_argument("--candidate-mixture-uniform-weight-floor", type=float)
+    parser.add_argument("--candidate-mixture-branch-balance", type=float)
+    parser.add_argument("--candidate-mixture-source-balance", type=float)
+    parser.add_argument("--candidate-mixture-responsibility-floor", type=float)
+    parser.add_argument("--candidate-mixture-sigma-min-m", type=float)
+    parser.add_argument("--candidate-mixture-sigma-max-m", type=float)
     parser.add_argument(
         "--smoothing-mode",
         choices=("none", "gap-interpolation", "fixed-lag", "constant-velocity", "constant-acceleration"),
@@ -298,6 +486,8 @@ def main(argv: list[str] | None = None) -> int:
     inputs = {
         "source_calibration_summary_csv": _path_or_none(args.source_calibration_summary_csv),
         "ranker_summary_csv": _path_or_none(args.ranker_summary_csv),
+        "reservoir_summary_csv": _path_or_none(args.reservoir_summary_csv),
+        "mixture_summary_csv": _path_or_none(args.mixture_summary_csv),
         "viterbi_summary_csv": _path_or_none(args.viterbi_summary_csv),
         "smoothing_summary_csv": _path_or_none(args.smoothing_summary_csv),
         "classifier_summary_csv": _path_or_none(args.classifier_summary_csv),
@@ -305,6 +495,8 @@ def main(argv: list[str] | None = None) -> int:
     config, records = build_train_selected_config(
         source_calibration_summary_csv=args.source_calibration_summary_csv,
         ranker_summary_csv=args.ranker_summary_csv,
+        reservoir_summary_csv=args.reservoir_summary_csv,
+        mixture_summary_csv=args.mixture_summary_csv,
         viterbi_summary_csv=args.viterbi_summary_csv,
         smoothing_summary_csv=args.smoothing_summary_csv,
         classifier_summary_csv=args.classifier_summary_csv,
@@ -395,6 +587,22 @@ def _float(value: Any) -> float:
     number = float(value)
     if not np.isfinite(number):
         raise ValueError(f"expected finite float, got {value!r}")
+    return number
+
+
+def _nonnegative_int(value: Any, field: str) -> int:
+    number = int(value)
+    if number < 0:
+        raise ValueError(f"{field} must be non-negative")
+    return number
+
+
+def _optional_quantile(value: Any, field: str) -> float | None:
+    if value is None or _is_nan(value):
+        return None
+    number = _float(value)
+    if not 0.0 <= number <= 1.0:
+        raise ValueError(f"{field} must be within [0, 1]")
     return number
 
 
