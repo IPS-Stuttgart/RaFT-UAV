@@ -28,6 +28,12 @@ WEIGHT_GRID_CSV = "mmuad_track5_ensemble_weight_grid.csv"
 WEIGHT_GRID_BY_SEQUENCE_CSV = "mmuad_track5_ensemble_weight_grid_by_sequence.csv"
 BEST_WEIGHTS_JSON = "mmuad_track5_ensemble_best_weights.json"
 BEST_OUTPUT_DIR = "best_weighted_ensemble"
+SELECTION_OBJECTIVES = (
+    "pooled-mse",
+    "mean-sequence-mse",
+    "max-sequence-mse",
+    "pooled-plus-max-sequence-mse",
+)
 
 
 def search_track5_estimate_ensemble_weights(
@@ -39,14 +45,23 @@ def search_track5_estimate_ensemble_weights(
     aggregation_policy: str = "weighted-mean",
     trim_fraction: float = 0.2,
     max_nearest_time_delta_s: float | None = None,
+    selection_objective: str = "pooled-mse",
+    sequence_objective_weight: float = 0.25,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Evaluate simplex weight grid and return grid rows plus best config.
 
     The returned grid carries a ``by_sequence`` attribute containing the same
-    weight grid expanded by sequence.  The attribute keeps the public API stable
-    while making train-fold failure modes auditable in writer/CLI outputs.
+    weight grid expanded by sequence.  ``selection_objective`` chooses the row
+    that is written to the reusable best-weight config.  Sequence-balanced
+    objectives are useful for leaderboard work because they avoid selecting a
+    weight vector that wins pooled MSE by sacrificing one hard sequence.
     """
 
+    if selection_objective not in SELECTION_OBJECTIVES:
+        raise ValueError(
+            f"unsupported selection_objective {selection_objective!r}; "
+            f"allowed={SELECTION_OBJECTIVES}"
+        )
     inputs = tuple(estimate_inputs)
     if not inputs:
         raise ValueError("at least one estimate input is required")
@@ -69,20 +84,31 @@ def search_track5_estimate_ensemble_weights(
             trim_fraction=trim_fraction,
         )
         metrics = _score_template_estimates(estimates, truth_rows)
+        by_sequence = _score_template_estimates_by_sequence(estimates, truth_rows)
+        objective_metrics = _sequence_objective_metrics(by_sequence)
+        selection_value = _selection_objective_value(
+            metrics,
+            objective_metrics,
+            selection_objective=selection_objective,
+            sequence_objective_weight=float(sequence_objective_weight),
+        )
         record: dict[str, Any] = {
             "weight_grid_index": int(weight_index),
             "aggregation_policy": aggregation_policy,
             "trim_fraction": float(trim_fraction),
             "weight_step": float(weight_step),
+            "selection_objective": selection_objective,
+            "selection_objective_value": selection_value,
+            "sequence_objective_weight": float(sequence_objective_weight),
             "valid_input_count_mean": _safe_mean(
                 diagnostics.get("valid_input_count", pd.Series(dtype=float))
             ),
             **metrics,
+            **objective_metrics,
         }
         weights_payload = {f"weight_{item.label}": float(weight) for item, weight in zip(inputs, weights, strict=True)}
         record.update(weights_payload)
         records.append(record)
-        by_sequence = _score_template_estimates_by_sequence(estimates, truth_rows)
         for _, sequence_row in by_sequence.iterrows():
             by_sequence_records.append(
                 {
@@ -90,6 +116,7 @@ def search_track5_estimate_ensemble_weights(
                     "aggregation_policy": aggregation_policy,
                     "trim_fraction": float(trim_fraction),
                     "weight_step": float(weight_step),
+                    "selection_objective": selection_objective,
                     **weights_payload,
                     **sequence_row.to_dict(),
                 }
@@ -98,7 +125,10 @@ def search_track5_estimate_ensemble_weights(
     if grid.empty:
         raise ValueError("weight grid produced no rows")
     by_sequence_grid = pd.DataFrame.from_records(by_sequence_records)
-    best_row = grid.sort_values(["pose_mse_m2", "pose_p95_m", "pose_max_m"], na_position="last").iloc[0]
+    best_row = grid.sort_values(
+        ["selection_objective_value", "pose_mse_m2", "pose_p95_m", "pose_max_m"],
+        na_position="last",
+    ).iloc[0]
     best_weights = {item.label: float(best_row[f"weight_{item.label}"]) for item in inputs}
     best_index = int(best_row["weight_grid_index"])
     best_by_sequence = by_sequence_grid.loc[
@@ -109,6 +139,9 @@ def search_track5_estimate_ensemble_weights(
         "aggregation_policy": aggregation_policy,
         "trim_fraction": float(trim_fraction),
         "weight_step": float(weight_step),
+        "selection_objective": selection_objective,
+        "sequence_objective_weight": float(sequence_objective_weight),
+        "selection_objective_value": _jsonable(best_row["selection_objective_value"]),
         "best_weight_grid_index": best_index,
         "weights": best_weights,
         "metrics": {
@@ -120,6 +153,8 @@ def search_track5_estimate_ensemble_weights(
                 "pose_p95_m",
                 "pose_max_m",
                 "matched_rows",
+                "mean_sequence_mse_m2",
+                "max_sequence_mse_m2",
             )
             if name in best_row.index
         },
@@ -143,6 +178,8 @@ def write_weight_search_outputs(
     write_best_submission: bool = False,
     class_map: dict[str, str] | None = None,
     default_classification: int | str = 0,
+    selection_objective: str = "pooled-mse",
+    sequence_objective_weight: float = 0.25,
 ) -> dict[str, Path]:
     """Run weight search and write grid, best config, by-sequence metrics, and optional ZIP."""
 
@@ -157,6 +194,8 @@ def write_weight_search_outputs(
         aggregation_policy=aggregation_policy,
         trim_fraction=trim_fraction,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
+        selection_objective=selection_objective,
+        sequence_objective_weight=sequence_objective_weight,
     )
     by_sequence = pd.DataFrame(grid.attrs.get("by_sequence", pd.DataFrame()))
     paths = {
@@ -206,6 +245,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--aggregation-policy", default="weighted-mean")
     parser.add_argument("--trim-fraction", type=float, default=0.2)
     parser.add_argument("--max-nearest-time-delta-s", type=float)
+    parser.add_argument(
+        "--selection-objective",
+        choices=SELECTION_OBJECTIVES,
+        default="pooled-mse",
+        help="objective used to choose the best weight row written to JSON",
+    )
+    parser.add_argument(
+        "--sequence-objective-weight",
+        type=float,
+        default=0.25,
+        help="weight for the max-sequence term in pooled-plus-max-sequence-mse",
+    )
     parser.add_argument("--write-best-submission", action="store_true")
     parser.add_argument("--class-map", type=Path)
     parser.add_argument("--default-classification", default="0")
@@ -229,6 +280,8 @@ def main(argv: list[str] | None = None) -> int:
         write_best_submission=args.write_best_submission,
         class_map=class_map,
         default_classification=args.default_classification,
+        selection_objective=args.selection_objective,
+        sequence_objective_weight=args.sequence_objective_weight,
     )
     print("mmuad_track5_ensemble_weight_search=ok")
     for name, path in paths.items():
@@ -306,6 +359,50 @@ def _merge_template_estimates_to_truth(estimates: pd.DataFrame, truth: pd.DataFr
     rows["sequence_id"] = rows["sequence_id"].astype(str)
     rows["_time_token"] = _time_token(pd.to_numeric(rows["time_s"], errors="coerce"))
     return rows.merge(truth, on=["sequence_id", "_time_token"], how="inner", suffixes=("", "_truth"))
+
+
+def _sequence_objective_metrics(by_sequence: pd.DataFrame) -> dict[str, Any]:
+    if by_sequence.empty or "pose_mse_m2" not in by_sequence.columns:
+        return {
+            "mean_sequence_mse_m2": np.nan,
+            "max_sequence_mse_m2": np.nan,
+            "p95_sequence_mse_m2": np.nan,
+        }
+    sequence_mse = pd.to_numeric(by_sequence["pose_mse_m2"], errors="coerce")
+    sequence_mse = sequence_mse[np.isfinite(sequence_mse.to_numpy(float))]
+    if sequence_mse.empty:
+        return {
+            "mean_sequence_mse_m2": np.nan,
+            "max_sequence_mse_m2": np.nan,
+            "p95_sequence_mse_m2": np.nan,
+        }
+    values = sequence_mse.to_numpy(float)
+    return {
+        "mean_sequence_mse_m2": float(np.mean(values)),
+        "max_sequence_mse_m2": float(np.max(values)),
+        "p95_sequence_mse_m2": float(np.percentile(values, 95)),
+    }
+
+
+def _selection_objective_value(
+    pooled_metrics: dict[str, Any],
+    sequence_metrics: dict[str, Any],
+    *,
+    selection_objective: str,
+    sequence_objective_weight: float,
+) -> float:
+    pooled_mse = float(pooled_metrics.get("pose_mse_m2", np.nan))
+    mean_sequence = float(sequence_metrics.get("mean_sequence_mse_m2", np.nan))
+    max_sequence = float(sequence_metrics.get("max_sequence_mse_m2", np.nan))
+    if selection_objective == "pooled-mse":
+        return pooled_mse
+    if selection_objective == "mean-sequence-mse":
+        return mean_sequence
+    if selection_objective == "max-sequence-mse":
+        return max_sequence
+    if selection_objective == "pooled-plus-max-sequence-mse":
+        return pooled_mse + float(sequence_objective_weight) * max_sequence
+    raise ValueError(f"unsupported selection_objective: {selection_objective}")
 
 
 def _metrics_from_errors(errors: np.ndarray) -> dict[str, Any]:
