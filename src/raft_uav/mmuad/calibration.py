@@ -99,14 +99,14 @@ class CalibrationSet:
         ``camera`` instead of being silently ignored.
         """
 
-        source_l = str(source).lower()
+        source_l = str(source).strip().lower()
         for key, value in self.sensors.items():
-            if source_l == str(key).lower():
+            if source_l == str(key).strip().lower():
                 return value
         matches: list[tuple[int, SensorCalibration]] = []
         default: SensorCalibration | None = None
         for key, value in self.sensors.items():
-            key_l = str(key).lower()
+            key_l = str(key).strip().lower()
             if key_l == "default":
                 default = value
                 continue
