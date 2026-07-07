@@ -169,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.require_leaderboard_ready and args.template is None:
         raise SystemExit("--require-leaderboard-ready requires --template")
-    submission = load_track5_submission(args.submission)
+    submission = _load_speed_limit_submission(args.submission)
     limited, diagnostics = project_track5_speed_limit(
         submission,
         max_speed_mps=float(args.max_speed_mps),
@@ -299,6 +299,17 @@ def _normalized_submission(submission: pd.DataFrame) -> pd.DataFrame:
         rows[column] = pd.to_numeric(rows[column], errors="coerce")
     finite = np.isfinite(rows[["time_s", "state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)).all(axis=1)
     return rows.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+
+
+def _load_speed_limit_submission(path: Path) -> pd.DataFrame:
+    try:
+        return load_track5_submission(path)
+    except ValueError as exc:
+        rows = pd.read_csv(path)
+        required = {"sequence_id", "time_s", "state_x_m", "state_y_m", "state_z_m", "Classification"}
+        if required <= set(rows.columns):
+            return rows
+        raise exc
 
 
 def _diagnostic_columns() -> list[str]:
