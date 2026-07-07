@@ -17,6 +17,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.class_probability_csv import read_class_probability_csv, read_sequence_text_csv
 from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
     load_sequence_class_map,
@@ -64,7 +65,7 @@ def build_soft_class_conditioned_estimate_ensemble(
     if not isinstance(class_weight_config, dict):
         raise ValueError("weight config class_weights must be an object")
     class_labels = _class_labels(probability_rows, class_weight_config)
-    loaded = {item.label: pd.read_csv(item.path) for item in inputs}
+    loaded = {item.label: read_sequence_text_csv(item.path) for item in inputs}
     policy = str(aggregation_policy or weight_config.get("aggregation_policy", "weighted-mean"))
     trim = _select_trim_fraction(trim_fraction, weight_config)
 
@@ -255,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("provide at least one --estimate-csv LABEL=PATH")
     estimate_inputs = [parse_estimate_spec(value) for value in args.estimate_csv]
     template = load_official_track5_template_file(args.template)
-    probabilities = pd.read_csv(args.class_probabilities_csv)
+    probabilities = read_class_probability_csv(args.class_probabilities_csv)
     weight_config = json.loads(args.weight_config_json.read_text(encoding="utf-8"))
     class_map = load_sequence_class_map(args.class_map) if args.class_map is not None else {}
     paths = write_soft_class_conditioned_ensemble_outputs(
