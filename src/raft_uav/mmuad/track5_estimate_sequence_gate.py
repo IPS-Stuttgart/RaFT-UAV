@@ -248,10 +248,10 @@ def main(argv: list[str] | None = None) -> int:
 
     template = load_official_track5_template_file(args.template)
     estimates, diagnostics, weights = blend_track5_estimate_sequence_gate(
-        base_estimates=pd.read_csv(args.base_estimates),
-        alternate_estimates=pd.read_csv(args.alternate_estimates),
+        base_estimates=_read_csv_preserve_text(args.base_estimates),
+        alternate_estimates=_read_csv_preserve_text(args.alternate_estimates),
         template=template,
-        sequence_weights=pd.read_csv(args.sequence_weights),
+        sequence_weights=_read_csv_preserve_text(args.sequence_weights),
         default_weight=float(args.default_weight),
         max_nearest_time_delta_s=args.max_nearest_time_delta_s,
     )
@@ -276,6 +276,21 @@ def main(argv: list[str] | None = None) -> int:
     print(f"leaderboard_ready={validation.get('leaderboard_ready')}")
     print(f"codabench_upload_ready={validation.get('codabench_upload_ready')}")
     return 0
+
+
+def _read_csv_preserve_text(path: Path) -> pd.DataFrame:
+    """Read Track 5 helper CSVs without numeric coercion of opaque sequence ids.
+
+    Public Track 5 exports often use ids that look numeric (for example ``001``).
+    Plain ``pd.read_csv`` can coerce those to integers before the normalizers see
+    them, which breaks per-sequence joins and gate-weight lookup. Downstream code
+    already converts coordinate, timestamp, and weight columns explicitly, so a
+    text-preserving read is the safer CLI boundary.
+    """
+
+    rows = pd.read_csv(path, dtype=str)
+    rows.columns = [str(column).strip() for column in rows.columns]
+    return rows
 
 
 def _sequence_weight_map(rows: pd.DataFrame) -> dict[str, float]:
