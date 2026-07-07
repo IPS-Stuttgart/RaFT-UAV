@@ -198,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.estimate_csv:
         parser.error("provide at least one --estimate-csv LABEL=PATH[@WEIGHT]")
     if args.run_ensemble and args.template is None:
-        parser.error("--template is required with --run_ensemble")
+        parser.error("--template is required with --run-ensemble")
     inputs = [parse_estimate_spec(value) for value in args.estimate_csv]
     columns = _parse_uncertainty_column_map(args.uncertainty_column)
     template = (
