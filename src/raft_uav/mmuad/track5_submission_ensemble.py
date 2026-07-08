@@ -43,6 +43,8 @@ SEQUENCE_COLUMN = "Sequence"
 TIME_COLUMN = "Timestamp"
 POSITION_COLUMN = "Position"
 CLASSIFICATION_COLUMN = "Classification"
+_NORMALIZED_REQUIRED_COLUMNS = ("sequence_id", "time_s", "state_x_m", "state_y_m", "state_z_m")
+_NORMALIZED_CLASSIFICATION_ALIASES = ("Classification", "classification")
 
 
 @dataclass(frozen=True)
@@ -374,28 +376,26 @@ def _normalize_submission_rows(rows: pd.DataFrame, *, source_path: Path) -> pd.D
 
 
 def _has_normalized_submission_columns(rows: pd.DataFrame) -> bool:
-    normalized = {str(column).strip() for column in rows.columns}
-    return {
-        "sequence_id",
-        "time_s",
-        "state_x_m",
-        "state_y_m",
-        "state_z_m",
-        "Classification",
-    }.issubset(normalized)
+    lookup = _normalized_column_lookup(rows)
+    return all(column in lookup for column in _NORMALIZED_REQUIRED_COLUMNS) and (
+        _normalized_classification_column(lookup) is not None
+    )
 
 
 def _normalize_internal_submission_rows(rows: pd.DataFrame, *, source_path: Path) -> pd.DataFrame:
     frame = pd.DataFrame(rows).copy()
-    frame.columns = [str(column).strip() for column in frame.columns]
+    lookup = _normalized_column_lookup(frame)
+    classification_column = _normalized_classification_column(lookup)
+    if classification_column is None:
+        raise ValueError(f"{source_path} missing normalized Classification/classification column")
     out = pd.DataFrame(
         {
-            "sequence_id": frame["sequence_id"].astype(str),
-            "time_s": pd.to_numeric(frame["time_s"], errors="coerce"),
-            "state_x_m": pd.to_numeric(frame["state_x_m"], errors="coerce"),
-            "state_y_m": pd.to_numeric(frame["state_y_m"], errors="coerce"),
-            "state_z_m": pd.to_numeric(frame["state_z_m"], errors="coerce"),
-            "Classification": pd.to_numeric(frame["Classification"], errors="coerce"),
+            "sequence_id": frame[lookup["sequence_id"]].astype(str),
+            "time_s": pd.to_numeric(frame[lookup["time_s"]], errors="coerce"),
+            "state_x_m": pd.to_numeric(frame[lookup["state_x_m"]], errors="coerce"),
+            "state_y_m": pd.to_numeric(frame[lookup["state_y_m"]], errors="coerce"),
+            "state_z_m": pd.to_numeric(frame[lookup["state_z_m"]], errors="coerce"),
+            "Classification": pd.to_numeric(frame[classification_column], errors="coerce"),
         }
     )
     finite = np.isfinite(
@@ -406,6 +406,18 @@ def _normalize_internal_submission_rows(rows: pd.DataFrame, *, source_path: Path
         raise ValueError(f"{source_path} contains no finite normalized submission rows")
     out["Classification"] = out["Classification"].astype(int)
     return out.sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+
+
+def _normalized_column_lookup(rows: pd.DataFrame) -> dict[str, Any]:
+    return {str(column).strip().lower(): column for column in rows.columns}
+
+
+def _normalized_classification_column(lookup: dict[str, Any]) -> Any | None:
+    for alias in _NORMALIZED_CLASSIFICATION_ALIASES:
+        column = lookup.get(alias.strip().lower())
+        if column is not None:
+            return column
+    return None
 
 
 def _parse_timestamp_cell(value: Any) -> float:

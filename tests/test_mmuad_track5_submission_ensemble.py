@@ -99,6 +99,29 @@ def test_load_track5_submission_accepts_case_insensitive_official_columns(tmp_pa
     assert loaded["Classification"].tolist() == [1, 1, 2]
 
 
+def test_load_track5_submission_accepts_normalized_lowercase_classification_column(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "normalized_submission.csv"
+    pd.DataFrame(
+        {
+            "sequence_id": ["001", "001", "002"],
+            "time_s": [0.0, 1.0, 0.0],
+            "state_x_m": [0.0, 2.0, 10.0],
+            "state_y_m": [0.0, 0.0, 1.0],
+            "state_z_m": [1.0, 1.0, 2.0],
+            "classification": [1, "1", "2.0"],
+        }
+    ).to_csv(path, index=False)
+
+    loaded = load_track5_submission(path)
+
+    assert loaded["sequence_id"].tolist() == ["001", "001", "002"]
+    assert loaded["time_s"].tolist() == [0.0, 1.0, 0.0]
+    assert loaded["state_x_m"].tolist() == [0.0, 2.0, 10.0]
+    assert loaded["Classification"].tolist() == [1, 1, 2]
+
+
 @pytest.mark.parametrize("timestamp", [float("nan"), float("inf"), "-inf", "not-a-time"])
 def test_load_track5_submission_rejects_invalid_timestamps(
     tmp_path: Path,
