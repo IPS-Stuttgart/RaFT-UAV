@@ -46,9 +46,32 @@ def test_frame_gap_table_computes_assignment_gap_columns() -> None:
     assert len(gap) == 3
     assert "gap_to_oracle_all_3d_m" in gap.columns
     assert "gap_to_oracle_all_mse_contribution_m2" in gap.columns
-    seq_a_time_1 = gap.loc[(gap["sequence_id"] == "seqA") & (gap["time_s"] == 1.0)].iloc[0]
+    seq_a_time_1 = gap.loc[
+        (gap["sequence_id"] == "seqA") & (gap["time_s"] == 1.0)
+    ].iloc[0]
     assert seq_a_time_1["gap_to_oracle_all_3d_m"] == pytest.approx(2.0)
     assert seq_a_time_1["gap_to_oracle_all_mse_contribution_m2"] == pytest.approx(8.0)
+
+
+def test_frame_gap_table_supports_nearest_time_join_tolerance() -> None:
+    estimates = _estimates()
+    estimates.loc[1, "time_s"] = 1.04
+
+    exact = build_frame_gap_table(estimates, _oracle_frames())
+    assert len(exact) == 2
+
+    nearest = build_frame_gap_table(
+        estimates,
+        _oracle_frames(),
+        time_join_tolerance_s=0.05,
+    )
+    assert len(nearest) == 3
+    seq_a_time_1 = nearest.loc[
+        (nearest["sequence_id"] == "seqA") & (nearest["time_s"] == 1.0)
+    ].iloc[0]
+    assert seq_a_time_1["mixture_time_s"] == pytest.approx(1.04)
+    assert seq_a_time_1["time_delta_s"] == pytest.approx(0.04)
+    assert seq_a_time_1["gap_to_oracle_all_3d_m"] == pytest.approx(2.0)
 
 
 def test_frame_gap_summary_reports_pooled_and_by_sequence_mse() -> None:
@@ -56,8 +79,12 @@ def test_frame_gap_summary_reports_pooled_and_by_sequence_mse() -> None:
     pooled = summarize_frame_gap(gap)
     by_sequence = summarize_frame_gap(gap, group_column="sequence_id")
 
-    assert pooled.loc[0, "mixture_mse_3d_m2"] == pytest.approx((1.0 + 9.0 + 4.0) / 3.0)
-    assert pooled.loc[0, "oracle_all_mse_3d_m2"] == pytest.approx((0.0 + 1.0 + 4.0) / 3.0)
+    assert pooled.loc[0, "mixture_mse_3d_m2"] == pytest.approx(
+        (1.0 + 9.0 + 4.0) / 3.0,
+    )
+    assert pooled.loc[0, "oracle_all_mse_3d_m2"] == pytest.approx(
+        (0.0 + 1.0 + 4.0) / 3.0,
+    )
     assert "frames_gap_to_oracle_all_gt_1m" in pooled.columns
     seq_a = by_sequence.loc[by_sequence["sequence_id"] == "seqA"].iloc[0]
     assert seq_a["frame_count"] == 2
@@ -97,7 +124,50 @@ def test_gap_cli_writes_artifacts(tmp_path: Path) -> None:
     assert by_sequence_csv.exists()
     payload = json.loads(summary_json.read_text(encoding="utf-8"))
     assert payload["frame_count"] == 3
-    assert payload["pooled"][0]["mixture_mse_3d_m2"] == pytest.approx((1.0 + 9.0 + 4.0) / 3.0)
+    assert payload["pooled"][0]["mixture_mse_3d_m2"] == pytest.approx(
+        (1.0 + 9.0 + 4.0) / 3.0,
+    )
+
+
+def test_gap_cli_nearest_time_join_tolerance_keeps_shifted_frames(tmp_path: Path) -> None:
+    estimates = _estimates()
+    estimates.loc[1, "time_s"] = 1.04
+    estimates_csv = tmp_path / "estimates.csv"
+    oracle_csv = tmp_path / "oracle.csv"
+    frame_csv = tmp_path / "gap_frames.csv"
+    summary_csv = tmp_path / "gap_summary.csv"
+    by_sequence_csv = tmp_path / "gap_by_sequence.csv"
+    summary_json = tmp_path / "gap_summary.json"
+    estimates.to_csv(estimates_csv, index=False)
+    _oracle_frames().to_csv(oracle_csv, index=False)
+
+    status = gap_main(
+        [
+            "--estimates-csv",
+            str(estimates_csv),
+            "--oracle-frame-csv",
+            str(oracle_csv),
+            "--output-frame-csv",
+            str(frame_csv),
+            "--output-summary-csv",
+            str(summary_csv),
+            "--output-by-sequence-csv",
+            str(by_sequence_csv),
+            "--output-json",
+            str(summary_json),
+            "--time-join-tolerance-s",
+            "0.05",
+        ]
+    )
+
+    assert status == 0
+    payload = json.loads(summary_json.read_text(encoding="utf-8"))
+    assert payload["frame_count"] == 3
+    frame_gap = pd.read_csv(frame_csv)
+    shifted = frame_gap.loc[
+        (frame_gap["sequence_id"] == "seqA") & (frame_gap["time_s"] == 1.0)
+    ].iloc[0]
+    assert shifted["time_delta_s"] == pytest.approx(0.04)
 
 
 def test_gap_cli_preserves_numeric_looking_sequence_ids(tmp_path: Path) -> None:
