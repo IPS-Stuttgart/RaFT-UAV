@@ -20,9 +20,11 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.estimate_csv import read_estimate_csv
 from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
     load_sequence_class_map,
+    parse_official_sequence_cell,
     validate_official_track5_submission,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
@@ -37,6 +39,9 @@ RTS_VALIDATION_JSON = "mmuad_track5_rts_ensemble_validation.json"
 RTS_VALIDATION_ROWS_CSV = "mmuad_track5_rts_ensemble_validation_rows.csv"
 OFFICIAL_RESULTS_CSV = "mmaud_results.csv"
 OFFICIAL_ZIP = "ug2_submission.zip"
+# Resampling copies requested template timestamps into each candidate row. Match those
+# rows with an absolute tolerance only; NumPy's default relative tolerance is unsafe
+# for epoch-style timestamps because seconds-scale differences can compare close.
 TEMPLATE_TIME_ATOL_S = 1.0e-9
 
 
@@ -184,7 +189,7 @@ def write_track5_rts_ensemble_outputs(
     """Write RTS ensemble estimates, official artifacts, validation, and manifest."""
 
     input_list = list(estimate_inputs)
-    loaded = [(item.label, pd.read_csv(item.path), float(item.weight)) for item in input_list]
+    loaded = [(item.label, read_estimate_csv(item.path), float(item.weight)) for item in input_list]
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     estimates, diagnostics = build_track5_rts_ensemble(
@@ -405,18 +410,27 @@ def _cv_process_noise(dt: float, accel_std: float) -> np.ndarray:
 
 def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     rows = pd.DataFrame(template).copy()
+    if rows.empty:
+        return pd.DataFrame(columns=["sequence_id", "time_s"])
     seq_col = _first_present(rows, ("sequence_id", "Sequence", "sequence", "seq"))
     time_col = _first_present(rows, ("time_s", "Timestamp", "timestamp", "timestamp_s", "time"))
     if seq_col is None or time_col is None:
         raise ValueError("template must contain sequence and timestamp columns")
     out = pd.DataFrame(
         {
-            "sequence_id": rows[seq_col].astype(str),
+            "sequence_id": rows[seq_col].map(_template_sequence_or_none),
             "time_s": pd.to_numeric(rows[time_col], errors="coerce"),
         }
     )
-    finite = np.isfinite(out["time_s"].to_numpy(float))
+    finite = out["sequence_id"].notna() & np.isfinite(out["time_s"].to_numpy(float))
     return out.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+
+
+def _template_sequence_or_none(value: Any) -> str | None:
+    try:
+        return parse_official_sequence_cell(value)
+    except ValueError:
+        return None
 
 
 def _finite_xyz(rows: pd.DataFrame) -> pd.Series:
@@ -436,12 +450,13 @@ def _weighted_spread_variance(xyz: np.ndarray, weights: np.ndarray, center: np.n
     return float(np.sum(weights * np.sum((xyz - center) ** 2, axis=1) / 3.0) / total)
 
 
-def _time_matches(values: pd.Series, time_s: float) -> pd.Series:
-    return np.isclose(pd.to_numeric(values, errors="coerce"), float(time_s), atol=TEMPLATE_TIME_ATOL_S)
+def _time_matches(values: pd.Series, time_s: float) -> np.ndarray:
+    numeric = pd.to_numeric(values, errors="coerce").to_numpy(float)
+    return np.isclose(numeric, float(time_s), rtol=0.0, atol=TEMPLATE_TIME_ATOL_S)
 
 
 def _first_present(rows: pd.DataFrame, names: tuple[str, ...]) -> str | None:
-    lower = {str(column).lower(): str(column) for column in rows.columns}
+    lower = {str(column).strip().lower(): str(column) for column in rows.columns}
     for name in names:
         if name in rows.columns:
             return name
