@@ -63,7 +63,10 @@ def search_track5_consensus_ensemble_grid(
     inputs = tuple(estimate_inputs)
     if not inputs:
         raise ValueError("at least one estimate input is required")
-    loaded = [(item.label, read_sequence_text_csv(item.path), float(item.weight)) for item in inputs]
+    loaded = [
+        (item.label, read_sequence_text_csv(item.path), float(item.weight))
+        for item in inputs
+    ]
     truth_rows = _normalize_truth_for_exact_template(truth)
     grid_records: list[dict[str, Any]] = []
     by_sequence_records: list[dict[str, Any]] = []
