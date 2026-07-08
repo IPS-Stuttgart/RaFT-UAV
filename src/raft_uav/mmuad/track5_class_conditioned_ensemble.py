@@ -159,6 +159,8 @@ def build_class_conditioned_estimate_ensemble(
         )
         diagnostics["class_conditioned_ensemble_class"] = str(class_label)
         diagnostics["class_conditioned_weights_json"] = json.dumps(weights, sort_keys=True)
+        if "candidate_input_count" in diagnostics.columns:
+            diagnostics["valid_input_count"] = diagnostics["candidate_input_count"]
         estimate_parts.append(estimates)
         diagnostic_parts.append(diagnostics)
     estimates_all = _concat(estimate_parts)
