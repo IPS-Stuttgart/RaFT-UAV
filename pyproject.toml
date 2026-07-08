@@ -113,6 +113,7 @@ raft-uav-mmuad-track5-temporal-repair = "raft_uav.mmuad.track5_temporal_repair:m
 raft-uav-mmuad-track5-temporal-repair-search = "raft_uav.mmuad.track5_temporal_repair_search:main"
 raft-uav-mmuad-track5-trajectory-smooth = "raft_uav.mmuad.track5_trajectory_smooth:main"
 raft-uav-mmuad-classification-audit = "raft_uav.mmuad.classification_audit:main"
+raft-uav-mmuad-class-prob-context = "raft_uav.mmuad.class_probability_context_cli:main"
 raft-uav-mmuad-sequence-classifier = "raft_uav.mmuad.classification_cli:main"
 raft-uav-mmuad-sequence-classifier-fusion = "raft_uav.mmuad.sequence_classifier_fusion:main"
 raft-uav-mmuad-train-sequence-classifier = "raft_uav.mmuad.train_sequence_classifier:main"
