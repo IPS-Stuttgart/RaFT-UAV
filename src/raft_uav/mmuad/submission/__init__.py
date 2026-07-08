@@ -2,8 +2,8 @@
 
 The legacy implementation lives in the sibling ``submission.py`` file. This
 wrapper preserves the public import path while accepting spreadsheet-exported
-class-map CSV files with whitespace around alias headers such as `` Sequence ``
-and `` Type ``.
+class-map and official Track 5 template CSV files with whitespace around alias
+headers such as `` Sequence `` and `` Type ``.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _LEGACY_LOAD_SEQUENCE_CLASS_MAP = _IMPL.load_sequence_class_map
+_LEGACY_NORMALIZE_TRACK5_TEMPLATE = _IMPL._impl._normalize_track5_template
 
 
 def _strip_dataframe_column_whitespace(frame: Any) -> Any:
@@ -33,6 +34,12 @@ def _strip_dataframe_column_whitespace(frame: Any) -> Any:
     out = frame.copy()
     out.columns = [str(column).strip() for column in out.columns]
     return out
+
+
+def _normalize_track5_template_with_stripped_headers(template: Any) -> Any:
+    """Normalize template rows while tolerating whitespace-padded alias headers."""
+
+    return _LEGACY_NORMALIZE_TRACK5_TEMPLATE(_strip_dataframe_column_whitespace(template))
 
 
 def _load_sequence_class_map_with_stripped_csv_headers(path: Path | str | None) -> dict[str, str]:
@@ -78,6 +85,8 @@ def _load_sequence_class_map_with_stripped_csv_headers(path: Path | str | None) 
 
 _IMPL._impl.load_sequence_class_map = _load_sequence_class_map_with_stripped_csv_headers
 _IMPL.load_sequence_class_map = _load_sequence_class_map_with_stripped_csv_headers
+_IMPL._impl._normalize_track5_template = _normalize_track5_template_with_stripped_headers
+_IMPL._normalize_track5_template = _normalize_track5_template_with_stripped_headers
 
 globals().update(
     {
@@ -88,5 +97,6 @@ globals().update(
 )
 
 load_sequence_class_map = _load_sequence_class_map_with_stripped_csv_headers
+_normalize_track5_template = _normalize_track5_template_with_stripped_headers
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
