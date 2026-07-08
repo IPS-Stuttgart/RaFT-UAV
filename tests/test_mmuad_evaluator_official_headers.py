@@ -17,7 +17,15 @@ def test_validate_mmaud_results_accepts_padded_official_track5_headers() -> None
 
     rows = validate_mmaud_results_frame(frame)
 
-    assert list(rows.columns) == ["sequence_id", "timestamp", "x", "y", "z", "uav_type", "score"]
+    assert list(rows.columns) == [
+        "sequence_id",
+        "timestamp",
+        "x",
+        "y",
+        "z",
+        "uav_type",
+        "score",
+    ]
     assert rows.loc[0, "sequence_id"] == "seq0001"
     assert rows.loc[0, "timestamp"] == 1.25
     assert rows.loc[0, "x"] == 1.0
