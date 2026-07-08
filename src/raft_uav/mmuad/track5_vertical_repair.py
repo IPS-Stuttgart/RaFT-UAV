@@ -26,7 +26,6 @@ from raft_uav.mmuad.submission import write_official_ug2_codabench_zip
 from raft_uav.mmuad.track5_submission_ensemble import _jsonable
 from raft_uav.mmuad.track5_submission_ensemble import load_track5_submission
 
-
 REPAIRED_ESTIMATES_CSV = "mmuad_track5_vertical_repair_estimates.csv"
 REPAIRED_RESULTS_CSV = "mmaud_results_vertical_repair.csv"
 REPAIRED_ZIP = "ug2_submission_vertical_repair.zip"
@@ -71,7 +70,10 @@ def repair_track5_vertical_spikes(
         diagnostics_parts.append(diagnostics)
     repaired_all = pd.concat(repaired_parts, ignore_index=True, sort=False)
     diagnostics_all = pd.concat(diagnostics_parts, ignore_index=True, sort=False)
-    return repaired_all.sort_values(["sequence_id", "time_s"]).reset_index(drop=True), diagnostics_all
+    return (
+        repaired_all.sort_values(["sequence_id", "time_s"]).reset_index(drop=True),
+        diagnostics_all,
+    )
 
 
 def write_track5_vertical_repair_outputs(
@@ -113,7 +115,11 @@ def write_track5_vertical_repair_outputs(
     )
     validation_summary: dict[str, Any] | None = None
     if template is not None:
-        validation = validate_official_track5_submission(paths["zip"], template=template, require_zip=True)
+        validation = validate_official_track5_submission(
+            paths["zip"],
+            template=template,
+            require_zip=True,
+        )
         paths["validation_json"] = output / VALIDATION_JSON
         paths["validation_rows_csv"] = output / VALIDATION_ROWS_CSV
         paths["validation_json"].write_text(
@@ -122,29 +128,43 @@ def write_track5_vertical_repair_outputs(
         )
         validation.rows.to_csv(paths["validation_rows_csv"], index=False)
         validation_summary = _jsonable(validation.summary)
-        if require_leaderboard_ready and not validation.summary.get("leaderboard_ready", False):
+        if require_leaderboard_ready and not validation.summary.get(
+            "leaderboard_ready",
+            False,
+        ):
             reasons = ", ".join(validation.summary.get("leaderboard_blocking_reasons", []))
             raise SystemExit(
                 f"vertical-repaired submission is not leaderboard-ready: {reasons or 'unknown'}"
             )
-    repaired_count = int(diagnostics["repaired"].astype(bool).sum()) if not diagnostics.empty else 0
+    repaired_count = (
+        int(diagnostics["repaired"].astype(bool).sum()) if not diagnostics.empty else 0
+    )
     payload = dict(manifest or {})
     payload.update(
         {
             "schema": "raft-uav-mmuad-track5-vertical-repair-v1",
             "input_submission": str(input_submission_path),
             "row_count": int(len(repaired)),
-            "sequence_count": int(repaired["sequence_id"].nunique()) if not repaired.empty else 0,
+            "sequence_count": int(repaired["sequence_id"].nunique())
+            if not repaired.empty
+            else 0,
             "repaired_row_count": repaired_count,
-            "repaired_fraction": float(repaired_count / len(repaired)) if len(repaired) else 0.0,
+            "repaired_fraction": float(repaired_count / len(repaired))
+            if len(repaired)
+            else 0.0,
             "max_abs_vertical_repair_m": _safe_abs_max(
                 diagnostics.get("vertical_repair_m", pd.Series(dtype=float))
             ),
             "validation": validation_summary,
-            "paths": {name: str(path) for name, path in paths.items() if name != "manifest_json"},
+            "paths": {
+                name: str(path) for name, path in paths.items() if name != "manifest_json"
+            },
         }
     )
-    paths["manifest_json"].write_text(json.dumps(_jsonable(payload), indent=2), encoding="utf-8")
+    paths["manifest_json"].write_text(
+        json.dumps(_jsonable(payload), indent=2),
+        encoding="utf-8",
+    )
     return paths
 
 
@@ -155,7 +175,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--submission", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--template", type=Path, help="optional official template for preflight validation")
+    parser.add_argument(
+        "--template",
+        type=Path,
+        help="optional official template for preflight validation",
+    )
     parser.add_argument("--max-vertical-speed-mps", type=float, default=20.0)
     parser.add_argument("--max-neighbor-vertical-speed-mps", type=float, default=10.0)
     parser.add_argument("--max-vertical-residual-m", type=float, default=15.0)
@@ -205,7 +229,14 @@ def main(argv: list[str] | None = None) -> int:
 
 def _normalize_rows(submission: pd.DataFrame) -> pd.DataFrame:
     rows = pd.DataFrame(submission).copy()
-    required = {"sequence_id", "time_s", "state_x_m", "state_y_m", "state_z_m", "Classification"}
+    required = {
+        "sequence_id",
+        "time_s",
+        "state_x_m",
+        "state_y_m",
+        "state_z_m",
+        "Classification",
+    }
     missing = required.difference(rows.columns)
     if missing:
         raise ValueError(f"submission missing normalized columns: {sorted(missing)}")
@@ -213,9 +244,12 @@ def _normalize_rows(submission: pd.DataFrame) -> pd.DataFrame:
     for column in ("time_s", "state_x_m", "state_y_m", "state_z_m", "Classification"):
         rows[column] = pd.to_numeric(rows[column], errors="coerce")
     finite = np.isfinite(
-        rows[["time_s", "state_x_m", "state_y_m", "state_z_m", "Classification"]].to_numpy(float)
+        rows[["time_s", "state_x_m", "state_y_m", "state_z_m", "Classification"]]
+        .to_numpy(float)
     ).all(axis=1)
-    return rows.loc[finite].copy().sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+    return rows.loc[finite].copy().sort_values(["sequence_id", "time_s"]).reset_index(
+        drop=True
+    )
 
 
 def _repair_sequence(
@@ -268,7 +302,10 @@ def _repair_sequence(
             )
         if not changed:
             break
-    diagnostics = pd.DataFrame.from_records(diagnostics_records, columns=_diagnostic_columns())
+    diagnostics = pd.DataFrame.from_records(
+        diagnostics_records,
+        columns=_diagnostic_columns(),
+    )
     return repaired, diagnostics
 
 
@@ -291,7 +328,10 @@ def _repair_decision(
     right_dt = max(t2 - t1, 1.0e-9)
     span_dt = max(t2 - t0, 1.0e-9)
     alpha = (t1 - t0) / span_dt
-    interpolated_z = (1.0 - alpha) * float(prev["state_z_m"]) + alpha * float(nxt["state_z_m"])
+    interpolated_z = (
+        (1.0 - alpha) * float(prev["state_z_m"])
+        + alpha * float(nxt["state_z_m"])
+    )
     residual = float(row["state_z_m"]) - interpolated_z
     left_vz = (float(row["state_z_m"]) - float(prev["state_z_m"])) / left_dt
     right_vz = (float(nxt["state_z_m"]) - float(row["state_z_m"])) / right_dt
@@ -300,7 +340,10 @@ def _repair_decision(
     right_h = _horizontal_speed(row, nxt, right_dt)
     horizontal_ok = True
     if max_horizontal_speed_mps is not None:
-        horizontal_ok = left_h <= float(max_horizontal_speed_mps) and right_h <= float(max_horizontal_speed_mps)
+        horizontal_ok = (
+            left_h <= float(max_horizontal_speed_mps)
+            and right_h <= float(max_horizontal_speed_mps)
+        )
     checks = {
         "interpolated_z_m": float(interpolated_z),
         "vertical_residual_m": float(residual),
