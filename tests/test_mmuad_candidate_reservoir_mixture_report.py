@@ -85,6 +85,53 @@ def test_reservoir_mixture_report_writes_actionable_gap_and_bottleneck(tmp_path:
     assert payload["worst_sequence_bottleneck"]["sequence_id"] == "seqA"
 
 
+def test_reservoir_mixture_report_preserves_numeric_looking_sequence_ids(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "sequence_id": "001",
+                "time_s": 0.0,
+                "state_x_m": 3.0,
+                "state_y_m": 0.0,
+                "state_z_m": 0.0,
+                "position_error_3d_m": 3.0,
+            }
+        ]
+    ).to_csv(run_dir / "mmuad_candidate_mixture_estimates.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "sequence_id": "001",
+                "time_s": 0.0,
+                "oracle_all_3d_m": 1.0,
+                "oracle_top1_3d_m": 1.0,
+                "oracle_top3_3d_m": 1.0,
+            }
+        ]
+    ).to_csv(run_dir / "mmuad_reservoir_mixture_oracle_frames.csv", index=False)
+
+    status = report_main(
+        [
+            "--run-dir",
+            str(run_dir),
+            "--target-mse-3d-m2",
+            "1.0",
+        ]
+    )
+
+    assert status == 0
+    frame_gap = pd.read_csv(
+        run_dir / "mmuad_reservoir_mixture_report_frame_gap.csv",
+        dtype=str,
+        keep_default_na=False,
+    )
+    assert frame_gap.loc[0, "sequence_id"] == "001"
+    payload = json.loads((run_dir / "mmuad_reservoir_mixture_report.json").read_text(encoding="utf-8"))
+    assert payload["worst_sequence_bottleneck"]["sequence_id"] == "001"
+
+
 def test_reservoir_mixture_report_entrypoint_is_exposed() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert (
