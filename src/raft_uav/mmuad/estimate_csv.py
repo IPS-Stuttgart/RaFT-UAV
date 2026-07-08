@@ -9,6 +9,8 @@ from typing import Any
 import pandas as pd
 
 _GRID_MODULE = "raft_uav.mmuad.track5_estimate_ensemble_grid"
+_UNCERTAINTY_ENSEMBLE_MODULE = "raft_uav.mmuad.track5_uncertainty_ensemble"
+_UNCERTAINTY_ENSEMBLE_READER = "_read_estimate_csv_preserving_sequence_id"
 _ORIGINAL_PANDAS_READ_CSV = pd.read_csv
 
 
@@ -21,6 +23,10 @@ def read_estimate_csv(path: Path) -> pd.DataFrame:
     """
 
     rows = _ORIGINAL_PANDAS_READ_CSV(path, dtype=str, keep_default_na=False)
+    return _strip_column_names(rows)
+
+
+def _strip_column_names(rows: pd.DataFrame) -> pd.DataFrame:
     out = rows.copy()
     out.columns = [str(column).strip() for column in out.columns]
     return out
@@ -29,17 +35,24 @@ def read_estimate_csv(path: Path) -> pd.DataFrame:
 def _called_from_track5_estimate_grid() -> bool:
     frame = sys._getframe(2)
     while frame is not None:
-        if frame.f_globals.get("__name__") == _GRID_MODULE:
+        module = frame.f_globals.get("__name__")
+        if module == _GRID_MODULE:
+            return True
+        if (
+            module == _UNCERTAINTY_ENSEMBLE_MODULE
+            and frame.f_code.co_name == _UNCERTAINTY_ENSEMBLE_READER
+        ):
             return True
         frame = frame.f_back
     return False
 
 
 def _read_csv_with_track5_estimate_grid_guard(*args: Any, **kwargs: Any) -> pd.DataFrame:
-    if _called_from_track5_estimate_grid() and "dtype" not in kwargs:
+    if _called_from_track5_estimate_grid():
         kwargs = dict(kwargs)
         kwargs["dtype"] = str
         kwargs.setdefault("keep_default_na", False)
+        return _strip_column_names(_ORIGINAL_PANDAS_READ_CSV(*args, **kwargs))
     return _ORIGINAL_PANDAS_READ_CSV(*args, **kwargs)
 
 
