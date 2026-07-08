@@ -22,6 +22,17 @@ def _template() -> pd.DataFrame:
     )
 
 
+def _zero_padded_template() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Sequence": ["001"],
+            "Timestamp": [0.0],
+            "Position": ["(0,0,0)"],
+            "Classification": [2],
+        }
+    )
+
+
 def _estimate() -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -33,6 +44,28 @@ def _estimate() -> pd.DataFrame:
             "predicted_sigma_m": [1.0],
         }
     )
+
+
+def test_uncertainty_ensemble_preserves_padded_sequence_id_headers(tmp_path: Path) -> None:
+    estimate_csv = tmp_path / "estimate.csv"
+    estimate_csv.write_text(
+        " sequence_id ,time_s,state_x_m,state_y_m,state_z_m,predicted_sigma_m\n"
+        "001,0.0,1.0,2.0,3.0,2.0\n",
+        encoding="utf-8",
+    )
+
+    estimates, diagnostics = build_track5_uncertainty_ensemble(
+        [EstimateInput("estimate", estimate_csv, 1.0)],
+        template=_zero_padded_template(),
+    )
+
+    assert estimates.loc[0, "sequence_id"] == "001"
+    assert estimates.loc[0, "ensemble_source_count"] == 1
+    assert estimates.loc[0, "state_x_m"] == pytest.approx(1.0)
+    assert estimates.loc[0, "state_y_m"] == pytest.approx(2.0)
+    assert estimates.loc[0, "state_z_m"] == pytest.approx(3.0)
+    assert estimates.loc[0, "ensemble_effective_sigma_m"] == pytest.approx(2.0)
+    assert diagnostics.loc[0, "valid_input_count"] == 1
 
 
 def test_uncertainty_adapter_rejects_nonfinite_fallback_sigma(tmp_path: Path) -> None:
