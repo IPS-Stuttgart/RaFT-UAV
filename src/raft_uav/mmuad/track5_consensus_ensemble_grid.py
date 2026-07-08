@@ -17,6 +17,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.class_probability_csv import read_sequence_text_csv
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 from raft_uav.mmuad.submission import load_official_track5_template_file, load_sequence_class_map
 from raft_uav.mmuad.track5_estimate_ensemble import EstimateInput, parse_estimate_spec
@@ -62,7 +63,7 @@ def search_track5_consensus_ensemble_grid(
     inputs = tuple(estimate_inputs)
     if not inputs:
         raise ValueError("at least one estimate input is required")
-    loaded = [(item.label, pd.read_csv(item.path), float(item.weight)) for item in inputs]
+    loaded = [(item.label, read_sequence_text_csv(item.path), float(item.weight)) for item in inputs]
     truth_rows = _normalize_truth_for_exact_template(truth)
     grid_records: list[dict[str, Any]] = []
     by_sequence_records: list[dict[str, Any]] = []
