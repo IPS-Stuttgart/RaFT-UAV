@@ -28,6 +28,7 @@ from raft_uav.mmuad.candidate_reservoir_mixture_map import run_reservoir_mixture
 from raft_uav.mmuad.candidate_reservoir_mixture_map import write_reservoir_mixture_map_outputs
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 from raft_uav.mmuad.submission import load_official_track5_template_file, load_sequence_class_map
+from raft_uav.mmuad.track5_scorecard import build_track5_scorecard, write_track5_scorecard
 from raft_uav.mmuad.track5_template_resample import RESAMPLE_METHODS
 from raft_uav.mmuad.track5_template_resample import ResampleMethod
 from raft_uav.mmuad.track5_template_resample import write_track5_template_resample_outputs
@@ -35,6 +36,13 @@ from raft_uav.mmuad.track5_template_resample import write_track5_template_resamp
 PIPELINE_MANIFEST_JSON = "mmuad_track5_leaderboard_pipeline_manifest.json"
 MIXTURE_DIR = "reservoir_mixture"
 SUBMISSION_DIR = "track5_submission"
+SCORECARD_DIR = "track5_scorecard"
+SCORECARD_JSON = "mmuad_track5_leaderboard_pipeline_scorecard.json"
+SCORECARD_SUMMARY_CSV = "mmuad_track5_leaderboard_pipeline_scorecard_summary.csv"
+SCORECARD_VALIDATION_ROWS_CSV = "mmuad_track5_leaderboard_pipeline_validation_rows.csv"
+SCORECARD_PUBLIC_ROWS_CSV = "mmuad_track5_leaderboard_pipeline_public_rows.csv"
+SCORECARD_NEAREST_ROWS_CSV = "mmuad_track5_leaderboard_pipeline_nearest_rows.csv"
+SCORECARD_POSE_BY_SEQUENCE_CSV = "mmuad_track5_leaderboard_pipeline_pose_by_sequence.csv"
 
 
 def run_track5_leaderboard_pipeline(
@@ -51,6 +59,11 @@ def run_track5_leaderboard_pipeline(
     max_template_nearest_time_delta_s: float | None = None,
     submission_resample_method: ResampleMethod = "linear",
     submission_max_interpolation_gap_s: float | None = None,
+    scorecard_truth_path: Path | None = None,
+    scorecard_template_path: Path | None = None,
+    scorecard_class_map_path: Path | None = None,
+    scorecard_timestamp_tolerance_s: float = 1.0e-6,
+    scorecard_nearest_time_delta_s: float = 0.5,
 ) -> dict[str, Any]:
     """Run reservoir mixture-MAP and package it against a Track 5 template.
 
@@ -58,6 +71,12 @@ def run_track5_leaderboard_pipeline(
     control the final Codabench-template projection.  Exposing them here avoids
     an error-prone extra post-processing step when dense sensor-time trajectories
     need nearest-only or large-gap-safe template packaging.
+
+    When ``scorecard_truth_path`` is supplied, the function also evaluates the
+    final official ZIP after template resampling.  This catches a common failure
+    mode where the sensor-time mixture trajectory looks strong, but final
+    template projection, extrapolation, or class-map application changes the
+    actual upload score.
     """
 
     output = Path(output_dir)
@@ -88,8 +107,31 @@ def run_track5_leaderboard_pipeline(
         resample_method=submission_resample_method,
         max_interpolation_gap_s=submission_max_interpolation_gap_s,
     )
+    scorecard_summary: dict[str, Any] | None = None
+    scorecard_paths: dict[str, str] = {}
+    if scorecard_truth_path is not None:
+        scorecard_dir = output / SCORECARD_DIR
+        scorecard = build_track5_scorecard(
+            results_path=submission_paths["official_zip"],
+            truth_path=scorecard_truth_path,
+            template_path=scorecard_template_path,
+            class_map_path=scorecard_class_map_path,
+            require_zip=True,
+            timestamp_tolerance_s=float(scorecard_timestamp_tolerance_s),
+            max_time_delta_s=float(scorecard_nearest_time_delta_s),
+        )
+        scorecard_paths = write_track5_scorecard(
+            scorecard,
+            summary_json=scorecard_dir / SCORECARD_JSON,
+            summary_csv=scorecard_dir / SCORECARD_SUMMARY_CSV,
+            validation_rows_csv=scorecard_dir / SCORECARD_VALIDATION_ROWS_CSV,
+            public_evaluation_rows_csv=scorecard_dir / SCORECARD_PUBLIC_ROWS_CSV,
+            nearest_time_rows_csv=scorecard_dir / SCORECARD_NEAREST_ROWS_CSV,
+            pose_by_sequence_csv=scorecard_dir / SCORECARD_POSE_BY_SEQUENCE_CSV,
+        )
+        scorecard_summary = scorecard.summary
     manifest = {
-        "schema": "raft-uav-mmuad-track5-leaderboard-pipeline-v2",
+        "schema": "raft-uav-mmuad-track5-leaderboard-pipeline-v3",
         "reservoir_config": asdict(reservoir_config or ReservoirConfig()),
         "mixture_config": asdict(
             _with_reservoir_top_k_zero(mixture_config or CandidateMixtureMapConfig()),
@@ -102,9 +144,17 @@ def run_track5_leaderboard_pipeline(
         "max_template_nearest_time_delta_s": max_template_nearest_time_delta_s,
         "submission_resample_method": str(submission_resample_method),
         "submission_max_interpolation_gap_s": submission_max_interpolation_gap_s,
+        "scorecard_enabled": bool(scorecard_truth_path is not None),
+        "scorecard_truth_path": str(scorecard_truth_path) if scorecard_truth_path else None,
+        "scorecard_template_path": str(scorecard_template_path) if scorecard_template_path else None,
+        "scorecard_class_map_path": str(scorecard_class_map_path) if scorecard_class_map_path else None,
+        "scorecard_timestamp_tolerance_s": float(scorecard_timestamp_tolerance_s),
+        "scorecard_nearest_time_delta_s": float(scorecard_nearest_time_delta_s),
         "mixture_summary": mixture_summary,
         "mixture_paths": {name: str(path) for name, path in mixture_paths.items()},
         "submission_paths": {name: str(path) for name, path in submission_paths.items()},
+        "scorecard_paths": scorecard_paths,
+        "scorecard_summary": scorecard_summary,
     }
     output.mkdir(parents=True, exist_ok=True)
     manifest_path = output / PIPELINE_MANIFEST_JSON
@@ -114,6 +164,8 @@ def run_track5_leaderboard_pipeline(
         "mixture_result": mixture_result,
         "mixture_paths": mixture_paths,
         "submission_paths": submission_paths,
+        "scorecard_paths": scorecard_paths,
+        "scorecard_summary": scorecard_summary,
         "manifest": manifest,
         "manifest_path": manifest_path,
     }
@@ -150,6 +202,13 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         help="fallback to nearest when template interpolation spans a larger source-time gap",
     )
+    parser.add_argument(
+        "--skip-scorecard",
+        action="store_true",
+        help="do not run the final ZIP scorecard even when --truth-csv is supplied",
+    )
+    parser.add_argument("--scorecard-timestamp-tolerance-s", type=float, default=1.0e-6)
+    parser.add_argument("--scorecard-nearest-time-delta-s", type=float, default=0.5)
     parser.add_argument("--global-top-n", type=int, default=20)
     parser.add_argument("--per-source-top-n", type=int, default=3)
     parser.add_argument("--per-branch-top-n", type=int, default=3)
@@ -214,6 +273,7 @@ def main(argv: list[str] | None = None) -> int:
         source_balance=float(args.source_balance),
         responsibility_floor=float(args.responsibility_floor),
     )
+    scorecard_truth_path = None if args.skip_scorecard else args.truth_csv
     result = run_track5_leaderboard_pipeline(
         candidates=candidates,
         template=template,
@@ -227,6 +287,11 @@ def main(argv: list[str] | None = None) -> int:
         max_template_nearest_time_delta_s=args.max_template_nearest_time_delta_s,
         submission_resample_method=args.submission_resample_method,
         submission_max_interpolation_gap_s=args.submission_max_interpolation_gap_s,
+        scorecard_truth_path=scorecard_truth_path,
+        scorecard_template_path=args.template if scorecard_truth_path is not None else None,
+        scorecard_class_map_path=args.class_map if scorecard_truth_path is not None else None,
+        scorecard_timestamp_tolerance_s=args.scorecard_timestamp_tolerance_s,
+        scorecard_nearest_time_delta_s=args.scorecard_nearest_time_delta_s,
     )
     validation_json = result["submission_paths"]["validation_json"]
     validation_summary = json.loads(Path(validation_json).read_text(encoding="utf-8"))
@@ -235,6 +300,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"ug2_submission_zip={result['submission_paths']['official_zip']}")
     print(f"leaderboard_ready={validation_summary.get('leaderboard_ready')}")
     print(f"codabench_upload_ready={validation_summary.get('codabench_upload_ready')}")
+    for name, path in result.get("scorecard_paths", {}).items():
+        print(f"{name}={path}")
+    scorecard_summary = result.get("scorecard_summary") or {}
+    public_pooled = (scorecard_summary.get("public_track5") or {}).get("pooled", {})
+    if "pose_mse_loss_m2" in public_pooled:
+        print(f"pose_mse_loss_m2={public_pooled['pose_mse_loss_m2']}")
+    if "uav_type_accuracy" in public_pooled:
+        print(f"uav_type_accuracy={public_pooled['uav_type_accuracy']}")
     if args.require_leaderboard_ready and not validation_summary.get("leaderboard_ready", False):
         reasons = ", ".join(validation_summary.get("leaderboard_blocking_reasons", [])) or "unknown"
         raise SystemExit(f"Track 5 pipeline output is not leaderboard-ready: {reasons}")
@@ -250,6 +323,8 @@ def _jsonable(value: Any) -> Any:
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, list | tuple):
         return [_jsonable(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
     if hasattr(value, "item"):
         try:
             return value.item()
