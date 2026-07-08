@@ -81,12 +81,13 @@ def test_track5_leaderboard_pipeline_packages_template_ready_zip(tmp_path: Path)
     )
 
     manifest = result["manifest"]
-    assert manifest["schema"] == "raft-uav-mmuad-track5-leaderboard-pipeline-v2"
+    assert manifest["schema"] == "raft-uav-mmuad-track5-leaderboard-pipeline-v3"
     assert manifest["reservoir_rows"] == 10
     assert manifest["mixture_estimate_rows"] == 5
     assert manifest["template_row_count"] == 3
     assert manifest["submission_resample_method"] == "nearest"
     assert manifest["submission_max_interpolation_gap_s"] == 1.5
+    assert manifest["final_regularizer_enabled"] is False
     submission_manifest = json.loads(
         Path(result["submission_paths"]["manifest_json"]).read_text(encoding="utf-8")
     )
@@ -98,6 +99,41 @@ def test_track5_leaderboard_pipeline_packages_template_ready_zip(tmp_path: Path)
     assert validation["leaderboard_ready"] is True
     official = pd.read_csv(result["submission_paths"]["official_results_csv"])
     assert official["Classification"].tolist() == [2, 2, 2]
+    with ZipFile(result["submission_paths"]["official_zip"]) as archive:
+        assert archive.namelist() == ["mmaud_results.csv"]
+
+
+def test_track5_leaderboard_pipeline_can_apply_final_regularizer(tmp_path: Path) -> None:
+    result = run_track5_leaderboard_pipeline(
+        candidates=_candidates(),
+        template=_template(),
+        output_dir=tmp_path,
+        truth=_truth(),
+        class_map={"seqA": "2"},
+        submission_resample_method="nearest",
+        apply_final_regularizer=True,
+        regularizer_smoothness_weight=0.5,
+        regularizer_huber_delta_m=10.0,
+        regularizer_iterations=2,
+        regularizer_observation_sigma_m=5.0,
+    )
+
+    manifest = result["manifest"]
+    assert manifest["final_regularizer_enabled"] is True
+    assert manifest["regularizer_smoothness_weight"] == 0.5
+    assert manifest["regularizer_huber_delta_m"] == 10.0
+    assert manifest["regularizer_iterations"] == 2
+    assert manifest["regularizer_observation_sigma_m"] == 5.0
+    assert result["submission_paths"]["regularized_estimates_csv"].exists()
+    regularizer_manifest = json.loads(
+        Path(result["submission_paths"]["manifest_json"]).read_text(encoding="utf-8")
+    )
+    assert regularizer_manifest["schema"] == "raft-uav-mmuad-track5-trajectory-regularizer-v1"
+    assert regularizer_manifest["smoothness_weight"] == 0.5
+    validation = json.loads(
+        Path(result["submission_paths"]["validation_json"]).read_text(encoding="utf-8")
+    )
+    assert validation["leaderboard_ready"] is True
     with ZipFile(result["submission_paths"]["official_zip"]) as archive:
         assert archive.namelist() == ["mmaud_results.csv"]
 
@@ -150,6 +186,11 @@ def test_track5_leaderboard_pipeline_cli_writes_manifest_and_zip(tmp_path: Path)
             "nearest",
             "--submission-max-interpolation-gap-s",
             "2.0",
+            "--final-regularizer",
+            "--regularizer-smoothness-weight",
+            "0.5",
+            "--regularizer-iterations",
+            "2",
             "--require-leaderboard-ready",
         ]
     )
@@ -161,7 +202,9 @@ def test_track5_leaderboard_pipeline_cli_writes_manifest_and_zip(tmp_path: Path)
     assert manifest["submission_paths"]["official_zip"].endswith("ug2_submission.zip")
     assert manifest["submission_resample_method"] == "nearest"
     assert manifest["submission_max_interpolation_gap_s"] == 2.0
+    assert manifest["final_regularizer_enabled"] is True
     assert (output_dir / "track5_submission" / "ug2_submission.zip").exists()
+    assert (output_dir / "track5_submission" / "mmuad_track5_regularized_estimates.csv").exists()
     assert (output_dir / "reservoir_mixture" / "mmuad_candidate_mixture_estimates.csv").exists()
 
 
