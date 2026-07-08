@@ -111,10 +111,14 @@ def _official_track5_truth_to_rows(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _read_results_csv_preserving_text(source: Any) -> pd.DataFrame:
+    """Read evaluator CSV inputs without coercing ids or keeping padded headers."""
+
     try:
-        return pd.read_csv(source, dtype=str, keep_default_na=False)
+        frame = pd.read_csv(source, dtype=str, keep_default_na=False)
     except TypeError:
-        return pd.read_csv(source)
+        frame = pd.read_csv(source)
+    frame.columns = [str(column).strip() for column in frame.columns]
+    return frame
 
 
 def load_mmaud_results_csv(path: Path) -> Any:
