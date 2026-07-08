@@ -49,6 +49,8 @@ RESERVOIR_MIXTURE_ASSIGNMENT_BY_SOURCE_CSV = (
     "mmuad_reservoir_mixture_assignment_by_source.csv"
 )
 _DEFAULT_ORACLE_TOP_K = (1, 3, 5, 10, 20)
+_TRUE_TEXT = {"1", "true", "t", "yes", "y"}
+_FALSE_TEXT = {"", "0", "false", "f", "no", "n", "nan", "none", "null"}
 
 
 def run_reservoir_mixture_map(
@@ -234,11 +236,7 @@ def build_assignment_usage_summary(assignments: pd.DataFrame, group_column: str)
         candidate_rank = _numeric_series(group, "candidate_rank", float("nan"))
         sigma = _numeric_series(group, "mixture_sigma_m", float("nan"))
         distance = _numeric_series(group, "mixture_distance_to_state_m", float("nan"))
-        dominant = (
-            group["mixture_dominant"].fillna(False).astype(bool)
-            if "mixture_dominant" in group.columns
-            else pd.Series(False, index=group.index)
-        )
+        dominant = _bool_flag_series(group, "mixture_dominant")
         dominant_count = int(dominant.sum())
         responsibility_sum = float(responsibility.sum())
         record = {
@@ -578,6 +576,30 @@ def _numeric_series(rows: pd.DataFrame, column: str, default: float) -> pd.Serie
     if column not in rows.columns:
         return pd.Series(default, index=rows.index, dtype=float)
     return pd.to_numeric(rows[column], errors="coerce")
+
+
+def _bool_flag_series(rows: pd.DataFrame, column: str) -> pd.Series:
+    if column not in rows.columns:
+        return pd.Series(False, index=rows.index, dtype=bool)
+    return rows[column].map(_parse_bool_flag).astype(bool)
+
+
+def _parse_bool_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return bool(value)
+    if value is None or pd.isna(value):
+        return False
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _TRUE_TEXT:
+            return True
+        if text in _FALSE_TEXT:
+            return False
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return bool(not pd.isna(number) and number != 0.0)
 
 
 def _series_mean(values: pd.Series) -> float | None:
