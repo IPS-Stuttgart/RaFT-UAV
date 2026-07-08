@@ -81,12 +81,13 @@ def test_track5_leaderboard_pipeline_packages_template_ready_zip(tmp_path: Path)
     )
 
     manifest = result["manifest"]
-    assert manifest["schema"] == "raft-uav-mmuad-track5-leaderboard-pipeline-v2"
+    assert manifest["schema"] == "raft-uav-mmuad-track5-leaderboard-pipeline-v3"
     assert manifest["reservoir_rows"] == 10
     assert manifest["mixture_estimate_rows"] == 5
     assert manifest["template_row_count"] == 3
     assert manifest["submission_resample_method"] == "nearest"
     assert manifest["submission_max_interpolation_gap_s"] == 1.5
+    assert manifest["scorecard_enabled"] is False
     submission_manifest = json.loads(
         Path(result["submission_paths"]["manifest_json"]).read_text(encoding="utf-8")
     )
@@ -102,7 +103,9 @@ def test_track5_leaderboard_pipeline_packages_template_ready_zip(tmp_path: Path)
         assert archive.namelist() == ["mmaud_results.csv"]
 
 
-def test_track5_leaderboard_pipeline_cli_writes_manifest_and_zip(tmp_path: Path) -> None:
+def test_track5_leaderboard_pipeline_cli_writes_manifest_zip_and_scorecard(
+    tmp_path: Path,
+) -> None:
     candidates_csv = tmp_path / "candidates.csv"
     truth_csv = tmp_path / "truth.csv"
     template_csv = tmp_path / "template.csv"
@@ -161,8 +164,21 @@ def test_track5_leaderboard_pipeline_cli_writes_manifest_and_zip(tmp_path: Path)
     assert manifest["submission_paths"]["official_zip"].endswith("ug2_submission.zip")
     assert manifest["submission_resample_method"] == "nearest"
     assert manifest["submission_max_interpolation_gap_s"] == 2.0
+    assert manifest["scorecard_enabled"] is True
+    assert manifest["scorecard_paths"]["scorecard_json"].endswith(
+        "mmuad_track5_leaderboard_pipeline_scorecard.json",
+    )
+    public_pooled = manifest["scorecard_summary"]["public_track5"]["pooled"]
+    assert public_pooled["pose_mse_loss_m2"] < 1.0e-8
+    assert public_pooled["uav_type_accuracy"] == 1.0
     assert (output_dir / "track5_submission" / "ug2_submission.zip").exists()
     assert (output_dir / "reservoir_mixture" / "mmuad_candidate_mixture_estimates.csv").exists()
+    assert (
+        output_dir / "track5_scorecard" / "mmuad_track5_leaderboard_pipeline_scorecard.json"
+    ).exists()
+    assert (
+        output_dir / "track5_scorecard" / "mmuad_track5_leaderboard_pipeline_public_rows.csv"
+    ).exists()
 
 
 def test_track5_leaderboard_pipeline_entrypoint_is_exposed() -> None:
