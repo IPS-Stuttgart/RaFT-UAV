@@ -331,18 +331,29 @@ def _normalize_optional_id_values(values: pd.Series) -> pd.Series:
     return out
 
 
+def _column_key(column: object) -> str:
+    return str(column).strip().lower()
+
+
+def _column_lookup(columns: Iterable[object]) -> dict[str, object]:
+    lookup: dict[str, object] = {}
+    for column in columns:
+        lookup.setdefault(_column_key(column), column)
+    return lookup
+
+
 def _rename_aliases(frame: pd.DataFrame) -> pd.DataFrame:
-    lower_to_original = {str(col).lower(): col for col in frame.columns}
+    lower_to_original = _column_lookup(frame.columns)
     rename: dict[Any, str] = {}
     for canonical, aliases in _COLUMN_ALIASES.items():
         if canonical in frame.columns:
             continue
-        original = lower_to_original.get(canonical.lower())
+        original = lower_to_original.get(_column_key(canonical))
         if original is not None:
             rename[original] = canonical
             continue
         for alias in aliases:
-            original = lower_to_original.get(alias.lower())
+            original = lower_to_original.get(_column_key(alias))
             if original is not None:
                 rename[original] = canonical
                 break
@@ -363,12 +374,19 @@ def normalize_time_column_aliases(
     """
 
     out = frame.copy()
-    existing = _seconds_or_stamp_dict_series(out[target]) if target in out.columns else None
-    lower_to_original = {str(col).lower(): col for col in out.columns}
+    lower_to_original = _column_lookup(out.columns)
+    target_original = lower_to_original.get(_column_key(target))
+    existing = (
+        _seconds_or_stamp_dict_series(out[target_original])
+        if target_original is not None
+        else None
+    )
 
     alias_series = _time_alias_series(out, lower_to_original)
     if existing is not None:
         out[target] = existing if alias_series is None else existing.fillna(alias_series)
+        if target_original != target and target_original in out.columns:
+            out = out.drop(columns=[target_original])
         return out
     if alias_series is not None:
         out[target] = alias_series
@@ -381,23 +399,23 @@ def _time_alias_series(
 ) -> pd.Series | None:
     candidates: list[pd.Series] = []
     for seconds_alias, nanoseconds_alias in _TIME_SECOND_NANOSECOND_PAIRS:
-        seconds_col = lower_to_original.get(seconds_alias)
-        nanoseconds_col = lower_to_original.get(nanoseconds_alias)
+        seconds_col = lower_to_original.get(_column_key(seconds_alias))
+        nanoseconds_col = lower_to_original.get(_column_key(nanoseconds_alias))
         if seconds_col is None or nanoseconds_col is None:
             continue
         seconds = pd.to_numeric(frame[seconds_col], errors="coerce")
         nanoseconds = pd.to_numeric(frame[nanoseconds_col], errors="coerce").fillna(0.0)
         candidates.append(seconds + nanoseconds * 1.0e-9)
     for alias, scale in _TIME_UNIT_ALIASES.items():
-        original = lower_to_original.get(alias)
+        original = lower_to_original.get(_column_key(alias))
         if original is not None:
             candidates.append(pd.to_numeric(frame[original], errors="coerce") * scale)
     for alias in _TIME_SECOND_ALIASES:
-        original = lower_to_original.get(alias)
-        if original is not None and str(original) != "time_s":
+        original = lower_to_original.get(_column_key(alias))
+        if original is not None and _column_key(original) != "time_s":
             candidates.append(_seconds_or_stamp_dict_series(frame[original]))
     for alias in ("header.stamp", "header"):
-        original = lower_to_original.get(alias)
+        original = lower_to_original.get(_column_key(alias))
         if original is not None:
             candidates.append(_seconds_or_stamp_dict_series(frame[original]))
     return _combine_time_alias_series(candidates)
