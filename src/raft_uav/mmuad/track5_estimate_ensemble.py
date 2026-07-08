@@ -56,7 +56,12 @@ class EstimateInput:
 
 
 def parse_estimate_spec(value: str) -> EstimateInput:
-    """Parse ``LABEL=PATH`` or ``LABEL=PATH@WEIGHT`` estimate specs."""
+    """Parse ``LABEL=PATH`` or ``LABEL=PATH@WEIGHT`` estimate specs.
+
+    The weight suffix is accepted only when the text after the final ``@`` is a
+    valid floating-point weight.  This keeps paths such as ``run@v1.csv`` usable
+    without quoting or renaming.
+    """
 
     if "=" not in value:
         path = Path(value)
@@ -71,8 +76,13 @@ def parse_estimate_spec(value: str) -> EstimateInput:
     weight = 1.0
     path_text = path_weight
     if "@" in path_weight:
-        path_text, weight_text = path_weight.rsplit("@", 1)
-        weight = float(weight_text)
+        candidate_path, weight_text = path_weight.rsplit("@", 1)
+        try:
+            weight = float(weight_text)
+        except ValueError:
+            path_text = path_weight
+        else:
+            path_text = candidate_path
     return EstimateInput(
         label=label,
         path=Path(path_text),
