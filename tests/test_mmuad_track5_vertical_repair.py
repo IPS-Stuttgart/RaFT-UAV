@@ -140,6 +140,58 @@ def test_vertical_repair_cli_writes_outputs(tmp_path: Path) -> None:
     assert (output_dir / "mmuad_track5_vertical_repair_manifest.json").exists()
 
 
+def test_vertical_repair_cli_preserves_zero_padded_template_sequence_ids(
+    tmp_path: Path,
+) -> None:
+    submission_csv = tmp_path / "submission.csv"
+    template_csv = tmp_path / "template.csv"
+    output_dir = tmp_path / "out"
+    official = pd.DataFrame(
+        {
+            "Sequence": ["001"],
+            "Timestamp": [0.0],
+            "Position": ["(1.0,2.0,3.0)"],
+            "Classification": [2],
+        }
+    )
+    template = pd.DataFrame(
+        {
+            "Sequence": ["001"],
+            "Timestamp": [0.0],
+            "Position": ["(0,0,0)"],
+            "Classification": [2],
+        }
+    )
+    official.to_csv(submission_csv, index=False)
+    template.to_csv(template_csv, index=False)
+
+    status = vertical_repair_main(
+        [
+            "--submission",
+            str(submission_csv),
+            "--template",
+            str(template_csv),
+            "--output-dir",
+            str(output_dir),
+            "--require-leaderboard-ready",
+        ]
+    )
+
+    assert status == 0
+    validation = json.loads(
+        (output_dir / "mmuad_track5_vertical_repair_validation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    estimates = pd.read_csv(
+        output_dir / "mmuad_track5_vertical_repair_estimates.csv",
+        dtype=str,
+        keep_default_na=False,
+    )
+    assert validation["leaderboard_ready"] is True
+    assert estimates.loc[0, "sequence_id"] == "001"
+
+
 def test_vertical_repair_entrypoint_is_exposed() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert (
