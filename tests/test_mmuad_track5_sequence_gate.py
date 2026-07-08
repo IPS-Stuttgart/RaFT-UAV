@@ -232,6 +232,99 @@ def test_sequence_gate_cli_preserves_zero_padded_sequence_ids(tmp_path: Path) ->
     assert manifest["defaulted_sequence_count"] == 0
 
 
+def test_sequence_gate_cli_accepts_padded_weight_headers(tmp_path: Path) -> None:
+    base_path = tmp_path / "base.csv"
+    alternate_path = tmp_path / "alternate.csv"
+    weights_path = tmp_path / "weights.csv"
+    output_dir = tmp_path / "out"
+    base_rows = pd.DataFrame(
+        {
+            "Sequence": ["001"],
+            "Timestamp": [0.0],
+            "Position": ["(0.0, 0.0, 0.0)"],
+            "Classification": [1],
+        }
+    )
+    alternate_rows = base_rows.copy()
+    alternate_rows["Position"] = ["(4.0, 0.0, 0.0)"]
+    base_rows.to_csv(base_path, index=False)
+    alternate_rows.to_csv(alternate_path, index=False)
+    weights_path.write_text(" Sequence , weight \n001,1.0\n", encoding="utf-8")
+
+    status = sequence_gate_main(
+        [
+            "--base-submission",
+            str(base_path),
+            "--alternate-submission",
+            str(alternate_path),
+            "--sequence-weights",
+            str(weights_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert status == 0
+    diagnostics = pd.read_csv(
+        output_dir / "mmuad_track5_sequence_gate_diagnostics.csv",
+        dtype={"sequence_id": "string"},
+    )
+    assert diagnostics.loc[0, "sequence_id"] == "001"
+    assert diagnostics.loc[0, "weight_source"] == "sequence_weights"
+    assert diagnostics.loc[0, "sequence_gate_weight"] == pytest.approx(1.0)
+
+
+def test_sequence_gate_cli_preserves_padded_template_sequence_ids(tmp_path: Path) -> None:
+    base_path = tmp_path / "base.csv"
+    alternate_path = tmp_path / "alternate.csv"
+    weights_path = tmp_path / "weights.csv"
+    template_path = tmp_path / "template.csv"
+    output_dir = tmp_path / "out"
+    base_rows = pd.DataFrame(
+        {
+            "Sequence": ["001"],
+            "Timestamp": [0.0],
+            "Position": ["(0.0, 0.0, 0.0)"],
+            "Classification": [1],
+        }
+    )
+    alternate_rows = base_rows.copy()
+    alternate_rows["Position"] = ["(4.0, 0.0, 0.0)"]
+    base_rows.to_csv(base_path, index=False)
+    alternate_rows.to_csv(alternate_path, index=False)
+    pd.DataFrame({"Sequence": ["001"], "weight": [1.0]}).to_csv(weights_path, index=False)
+    template_path.write_text(
+        " Sequence , Timestamp , Position , Classification \n"
+        "001,0.0,\"(0,0,0)\",1\n",
+        encoding="utf-8",
+    )
+
+    status = sequence_gate_main(
+        [
+            "--base-submission",
+            str(base_path),
+            "--alternate-submission",
+            str(alternate_path),
+            "--sequence-weights",
+            str(weights_path),
+            "--template",
+            str(template_path),
+            "--output-dir",
+            str(output_dir),
+            "--require-leaderboard-ready",
+        ]
+    )
+
+    assert status == 0
+    validation = json.loads(
+        (output_dir / "mmuad_track5_sequence_gate_validation.json").read_text(encoding="utf-8")
+    )
+    assert validation["leaderboard_ready"] is True
+    assert set(validation["sequences"]) == {"001"}
+    assert validation["sequences"]["001"]["missing_template_timestamp_count"] == 0
+    assert validation["sequences"]["001"]["extra_prediction_count"] == 0
+
+
 def test_sequence_gate_entrypoint_is_exposed() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert (

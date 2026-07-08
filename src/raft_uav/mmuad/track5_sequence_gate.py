@@ -307,10 +307,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _read_sequence_preserving_csv(path: Path) -> pd.DataFrame:
-    """Read a CSV without letting pandas coerce official sequence IDs to numbers."""
+    """Read CSV exports without coercing sequence ids and strip padded headers."""
 
-    sequence_dtypes = {alias: "string" for alias in SEQUENCE_ALIASES}
-    return pd.read_csv(path, dtype=sequence_dtypes)
+    rows = pd.read_csv(path, dtype=str, keep_default_na=False)
+    out = rows.copy()
+    out.columns = [str(column).strip() for column in out.columns]
+    return out
 
 
 def _sequence_weight_map(weights: pd.DataFrame) -> dict[str, float]:
@@ -354,11 +356,11 @@ def _validate_weight(value: float, *, name: str) -> float:
 
 
 def _first_present(frame: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
-    columns = {str(column).lower(): str(column) for column in frame.columns}
+    columns = {str(column).strip().casefold(): column for column in frame.columns}
     for candidate in candidates:
-        match = columns.get(candidate.lower())
+        match = columns.get(str(candidate).strip().casefold())
         if match is not None:
-            return match
+            return str(match)
     return None
 
 
