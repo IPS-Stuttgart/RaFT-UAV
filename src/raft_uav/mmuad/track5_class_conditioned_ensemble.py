@@ -20,6 +20,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.estimate_csv import read_estimate_csv
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
@@ -63,7 +64,7 @@ def search_class_conditioned_ensemble_weights(
     inputs = tuple(estimate_inputs)
     if not inputs:
         raise ValueError("at least one estimate input is required")
-    loaded = [(item.label, pd.read_csv(item.path), 1.0) for item in inputs]
+    loaded = [(item.label, read_estimate_csv(item.path), 1.0) for item in inputs]
     template_rows = _normalize_template_rows(template)
     truth_rows = _normalize_truth_rows(truth)
     class_map = _normalize_sequence_class_map(class_map)
@@ -131,7 +132,7 @@ def build_class_conditioned_estimate_ensemble(
     inputs = tuple(estimate_inputs)
     if not inputs:
         raise ValueError("at least one estimate input is required")
-    loaded = {item.label: pd.read_csv(item.path) for item in inputs}
+    loaded = {item.label: read_estimate_csv(item.path) for item in inputs}
     template_rows = _normalize_template_rows(template)
     class_map = _normalize_sequence_class_map(class_map)
     global_weights = _normalized_weight_map(weight_config.get("global_weights", {}), inputs)
