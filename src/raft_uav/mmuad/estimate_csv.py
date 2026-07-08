@@ -8,7 +8,11 @@ from typing import Any
 
 import pandas as pd
 
-_GRID_MODULE = "raft_uav.mmuad.track5_estimate_ensemble_grid"
+_TEXT_ESTIMATE_CSV_MODULES = {
+    "raft_uav.mmuad.track5_estimate_ensemble_grid",
+    "raft_uav.mmuad.track5_estimate_calibration_shrinkage",
+    "raft_uav.mmuad.track5_template_resample",
+}
 _ORIGINAL_PANDAS_READ_CSV = pd.read_csv
 
 
@@ -27,16 +31,22 @@ def read_estimate_csv(path: Path) -> pd.DataFrame:
 
 
 def _called_from_track5_estimate_grid() -> bool:
+    """Backward-compatible alias for the original narrow call-stack guard."""
+
+    return _called_from_text_estimate_csv_module()
+
+
+def _called_from_text_estimate_csv_module() -> bool:
     frame = sys._getframe(2)
     while frame is not None:
-        if frame.f_globals.get("__name__") == _GRID_MODULE:
+        if frame.f_globals.get("__name__") in _TEXT_ESTIMATE_CSV_MODULES:
             return True
         frame = frame.f_back
     return False
 
 
 def _read_csv_with_track5_estimate_grid_guard(*args: Any, **kwargs: Any) -> pd.DataFrame:
-    if _called_from_track5_estimate_grid() and "dtype" not in kwargs:
+    if _called_from_text_estimate_csv_module() and "dtype" not in kwargs:
         kwargs = dict(kwargs)
         kwargs["dtype"] = str
         kwargs.setdefault("keep_default_na", False)
