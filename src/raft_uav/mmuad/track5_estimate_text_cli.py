@@ -48,16 +48,44 @@ def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
 
 
 def _sequence_columns_for_csv(path: Any, *args: Any, **kwargs: Any) -> list[str]:
+    discovered = _discover_sequence_columns_for_csv(path, *args, **kwargs)
+    return list(dict.fromkeys([*_SEQUENCE_COLUMNS, *discovered]))
+
+
+def _discover_sequence_columns_for_csv(path: Any, *args: Any, **kwargs: Any) -> list[str]:
     header_kwargs = dict(kwargs)
     header_kwargs.pop("dtype", None)
     header_kwargs.pop("converters", None)
     header_kwargs["nrows"] = 0
-    header = _ORIGINAL_READ_CSV(path, *args, **header_kwargs)
+    position = _stream_position(path)
+    try:
+        header = _ORIGINAL_READ_CSV(path, *args, **header_kwargs)
+    except Exception:
+        return []
+    finally:
+        if position is not None:
+            _restore_stream_position(path, position)
     return [
         str(column)
         for column in header.columns
         if str(column).strip().lower() in _SEQUENCE_COLUMN_KEYS
     ]
+
+
+def _stream_position(path: Any) -> int | None:
+    if not (hasattr(path, "tell") and hasattr(path, "seek")):
+        return None
+    try:
+        return int(path.tell())
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _restore_stream_position(path: Any, position: int) -> None:
+    try:
+        path.seek(position)
+    except (OSError, TypeError, ValueError):
+        pass
 
 
 def _sequence_id_text(value: Any) -> str:
