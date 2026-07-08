@@ -281,11 +281,16 @@ def test_mmuad_source_calibration_entrypoints_are_exposed() -> None:
         scripts["raft-uav-mmuad-apply-source-calibration"]
         == "raft_uav.mmuad.source_calibration:apply_main"
     )
+    assert (
+        scripts["raft-uav-mmuad-source-calibration-branches"]
+        == "raft_uav.mmuad.source_calibration_branches:main"
+    )
 
 
 def test_mmuad_source_calibration_entrypoint_targets_import() -> None:
     _assert_entrypoint_target_imports("raft-uav-mmuad-fit-source-calibration")
     _assert_entrypoint_target_imports("raft-uav-mmuad-apply-source-calibration")
+    _assert_entrypoint_target_imports("raft-uav-mmuad-source-calibration-branches")
 
 
 def test_mmuad_train_selected_config_entrypoint_is_exposed() -> None:
