@@ -21,6 +21,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.estimate_csv import read_estimate_csv
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
@@ -258,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
 
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    estimates = pd.read_csv(args.estimates_csv)
+    estimates = read_estimate_csv(args.estimates_csv)
     template = load_official_track5_template_file(args.template)
     calibration = json.loads(args.calibration_json.read_text(encoding="utf-8"))
     paths: dict[str, Path] = {}
