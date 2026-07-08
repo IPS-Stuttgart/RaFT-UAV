@@ -100,12 +100,16 @@ def test_reservoir_mixture_cli_writes_oracle_diagnostics(tmp_path: Path) -> None
     oracle_frames = output_dir / "mmuad_reservoir_mixture_oracle_frames.csv"
     gap_summary = output_dir / "mmuad_reservoir_mixture_gap_summary.csv"
     gap_by_sequence = output_dir / "mmuad_reservoir_mixture_gap_by_sequence.csv"
+    assignment_by_branch = output_dir / "mmuad_reservoir_mixture_assignment_by_branch.csv"
+    assignment_by_source = output_dir / "mmuad_reservoir_mixture_assignment_by_source.csv"
     combined_summary = output_dir / "mmuad_reservoir_mixture_summary.json"
     assert oracle_summary.exists()
     assert oracle_by_sequence.exists()
     assert oracle_frames.exists()
     assert gap_summary.exists()
     assert gap_by_sequence.exists()
+    assert assignment_by_branch.exists()
+    assert assignment_by_source.exists()
     summary = pd.read_csv(oracle_summary)
     assert summary.loc[0, "oracle_all_3d_m_mse"] == 0.0
     assert summary.loc[0, "oracle_top2_3d_m_mse"] == 0.0
@@ -121,6 +125,14 @@ def test_reservoir_mixture_cli_writes_oracle_diagnostics(tmp_path: Path) -> None
     assert sequence_gap["sequence_id"].tolist() == ["seqA"]
     assert sequence_gap.loc[0, "reservoir_oracle_all_mse_3d_m2"] == 0.0
     assert "assignment_gap_mse_3d_m2" in sequence_gap.columns
+    branch_usage = pd.read_csv(assignment_by_branch)
+    assert set(branch_usage["candidate_branch"]) == {"raw", "translated"}
+    raw_usage = branch_usage.loc[branch_usage["candidate_branch"] == "raw"].iloc[0]
+    translated_usage = branch_usage.loc[branch_usage["candidate_branch"] == "translated"].iloc[0]
+    assert raw_usage["responsibility_sum"] > translated_usage["responsibility_sum"]
+    assert raw_usage["dominant_count"] == 3
+    source_usage = pd.read_csv(assignment_by_source)
+    assert set(source_usage["source"]) == {"lidar_360", "livox_avia"}
     payload = json.loads(combined_summary.read_text(encoding="utf-8"))
     assert payload["reservoir_config"]["cap_reason_bonus"] == 0.5
     assert payload["mixture_config"]["loss"] == "squared"
@@ -129,6 +141,8 @@ def test_reservoir_mixture_cli_writes_oracle_diagnostics(tmp_path: Path) -> None
     assert payload["reservoir_oracle"]["pooled"]["oracle_all_3d_m_mse"] == 0.0
     assert payload["reservoir_mixture_gap"]["reservoir_oracle_all_mse_3d_m2"] == 0.0
     assert payload["reservoir_mixture_gap_by_sequence"]["sequence_count"] == 1
+    assert payload["assignment_usage"]["branch_count"] == 2
+    assert payload["assignment_usage"]["top_branch_by_responsibility"]["candidate_branch"] == "raw"
     assert (
         payload["reservoir_mixture_gap_by_sequence"]["worst_assignment_gap"]["sequence_id"]
         == "seqA"
