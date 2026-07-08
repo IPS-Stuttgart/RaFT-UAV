@@ -47,13 +47,14 @@ def _candidates() -> pd.DataFrame:
 
 
 def _truth() -> pd.DataFrame:
+    times = np.asarray([0.0, 2.0, 4.0])
     return pd.DataFrame(
         {
-            "sequence_id": ["seqA"] * 5,
-            "time_s": np.arange(5, dtype=float),
-            "x_m": np.arange(5, dtype=float),
-            "y_m": np.zeros(5),
-            "z_m": np.ones(5),
+            "sequence_id": ["seqA"] * len(times),
+            "time_s": times,
+            "x_m": times,
+            "y_m": np.zeros(len(times)),
+            "z_m": np.ones(len(times)),
         }
     )
 
