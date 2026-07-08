@@ -28,6 +28,72 @@ _MODULE_METADATA_NAMES = {
 }
 
 
+def _read_text_csv(path: Path) -> pd.DataFrame:
+    """Read CSV exports without coercing opaque ids or keeping padded headers."""
+
+    frame = pd.read_csv(path, dtype=str, keep_default_na=False)
+    frame.columns = [str(column).strip() for column in frame.columns]
+    return frame
+
+
+def load_candidate_csv(
+    path: Path,
+    *,
+    default_sequence_id: str = "default",
+    source: str = "candidate",
+) -> _impl.CandidateFrame:
+    """Load a normalized or alias-compatible candidate CSV without coercing ids."""
+
+    raw = _read_text_csv(Path(path))
+    if _impl._should_add_default_candidate_source(raw, source=source):
+        raw["source"] = source
+    rows = _impl.normalize_candidate_columns(
+        raw,
+        default_sequence_id=default_sequence_id,
+        default_source=source,
+    )
+    frame = _impl.CandidateFrame(rows)
+    frame.validate()
+    return frame
+
+
+def load_truth_csv(path: Path, *, default_sequence_id: str = "default") -> _impl.TruthFrame:
+    """Load a normalized or alias-compatible truth CSV without coercing ids."""
+
+    rows = _impl.normalize_truth_columns(
+        _read_text_csv(Path(path)),
+        default_sequence_id=default_sequence_id,
+    )
+    frame = _impl.TruthFrame(rows)
+    frame.validate()
+    return frame
+
+
+def load_point_cloud_csv_as_points(
+    path: Path,
+    *,
+    source: str = "lidar-cluster",
+) -> pd.DataFrame:
+    """Load a point-cloud CSV row table without clustering it."""
+
+    points = _impl.normalize_truth_columns(_read_text_csv(Path(path)))
+    if "source" not in points.columns:
+        points["source"] = source
+    else:
+        points["source"] = _impl._filled_text_series(points["source"], default=source)
+    return points
+
+
+def _read_point_cloud_csv(path: Path) -> pd.DataFrame:
+    frame = _read_text_csv(Path(path))
+    try:
+        return _impl.normalize_truth_columns(frame)
+    except ValueError as exc:
+        if "time_s" not in str(exc):
+            raise
+    return _impl._normalize_point_frame(frame, path=path)
+
+
 def _numpy_array_from_export(path: Path, *, preferred_keys: Iterable[str]) -> np.ndarray:
     """Load a plain or gzip-compressed ``.npy``/``.npz`` export eagerly."""
 
@@ -139,6 +205,10 @@ def _read_numpy_point_cloud(path: Path) -> pd.DataFrame:
     return _impl._normalize_point_frame(frame, path=path)
 
 
+_impl.load_candidate_csv = load_candidate_csv
+_impl.load_truth_csv = load_truth_csv
+_impl.load_point_cloud_csv_as_points = load_point_cloud_csv_as_points
+_impl._read_point_cloud_csv = _read_point_cloud_csv
 _impl._numpy_array_from_export = _numpy_array_from_export
 _impl._read_numpy_trajectory_table = _read_numpy_trajectory_table
 _impl._read_numpy_point_cloud = _read_numpy_point_cloud
