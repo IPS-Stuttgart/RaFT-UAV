@@ -121,6 +121,46 @@ def test_temporal_repair_cli_writes_artifacts(tmp_path: Path) -> None:
     assert (output_dir / "mmuad_track5_temporal_repair_manifest.json").exists()
 
 
+def test_temporal_repair_cli_preserves_zero_padded_template_sequences(tmp_path: Path) -> None:
+    submission_path = tmp_path / "submission.csv"
+    output_dir = tmp_path / "out"
+    pd.DataFrame(
+        {
+            "Sequence": ["001", "001", "001", "001"],
+            "Timestamp": [0.0, 1.0, 2.0, 3.0],
+            "Position": ["(0, 0, 0)", "(100, 0, 0)", "(2, 0, 0)", "(3, 0, 0)"],
+            "Classification": [2, 2, 2, 2],
+        }
+    ).to_csv(submission_path, index=False)
+
+    status = temporal_repair_main(
+        [
+            "--submission",
+            str(submission_path),
+            "--template",
+            str(submission_path),
+            "--output-dir",
+            str(output_dir),
+            "--max-speed-mps",
+            "20",
+            "--max-interpolation-residual-m",
+            "10",
+            "--require-leaderboard-ready",
+        ]
+    )
+
+    validation = json.loads(
+        (output_dir / "mmuad_track5_temporal_repair_validation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert status == 0
+    assert validation["leaderboard_ready"] is True
+    assert set(validation["sequences"]) == {"001"}
+    assert validation["sequences"]["001"]["extra_prediction_count"] == 0
+    assert validation["sequences"]["001"]["missing_template_timestamp_count"] == 0
+
+
 def test_temporal_repair_entrypoint_is_exposed() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert (
