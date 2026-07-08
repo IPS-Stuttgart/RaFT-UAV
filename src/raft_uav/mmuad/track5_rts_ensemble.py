@@ -37,6 +37,9 @@ RTS_VALIDATION_JSON = "mmuad_track5_rts_ensemble_validation.json"
 RTS_VALIDATION_ROWS_CSV = "mmuad_track5_rts_ensemble_validation_rows.csv"
 OFFICIAL_RESULTS_CSV = "mmaud_results.csv"
 OFFICIAL_ZIP = "ug2_submission.zip"
+# Resampling copies requested template timestamps into each candidate row. Match with
+# an absolute tolerance only; NumPy's default relative tolerance is unsafe for
+# epoch-style timestamps because nearby seconds can compare close.
 TEMPLATE_TIME_ATOL_S = 1.0e-9
 
 
@@ -436,8 +439,9 @@ def _weighted_spread_variance(xyz: np.ndarray, weights: np.ndarray, center: np.n
     return float(np.sum(weights * np.sum((xyz - center) ** 2, axis=1) / 3.0) / total)
 
 
-def _time_matches(values: pd.Series, time_s: float) -> pd.Series:
-    return np.isclose(pd.to_numeric(values, errors="coerce"), float(time_s), atol=TEMPLATE_TIME_ATOL_S)
+def _time_matches(values: pd.Series, time_s: float) -> np.ndarray:
+    numeric = pd.to_numeric(values, errors="coerce").to_numpy(float)
+    return np.isclose(numeric, float(time_s), rtol=0.0, atol=TEMPLATE_TIME_ATOL_S)
 
 
 def _first_present(rows: pd.DataFrame, names: tuple[str, ...]) -> str | None:
