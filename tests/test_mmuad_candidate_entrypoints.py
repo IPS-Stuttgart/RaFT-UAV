@@ -8,7 +8,7 @@ import tomllib
 EXPECTED_CANDIDATE_ENTRYPOINTS = {
     "raft-uav-mmuad-candidate-reservoir": "raft_uav.mmuad.candidate_reservoir:main",
     "raft-uav-mmuad-candidate-reservoir-grid": "raft_uav.mmuad.candidate_reservoir_grid:main",
-    "raft-uav-mmuad-candidate-mixture-map": "raft_uav.mmuad.candidate_mixture_map:main",
+    "raft-uav-mmuad-candidate-mixture-map": "raft_uav.mmuad.candidate_mixture_map_text_cli:main",
     "raft-uav-mmuad-reservoir-mixture-map": "raft_uav.mmuad.candidate_reservoir_mixture_map:main",
     "raft-uav-mmuad-candidate-assignment-diagnostics": (
         "raft_uav.mmuad.candidate_assignment_diagnostics:main"

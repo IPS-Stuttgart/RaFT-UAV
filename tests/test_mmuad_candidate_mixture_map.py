@@ -385,5 +385,5 @@ def test_candidate_mixture_entrypoint_is_exposed() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert (
         pyproject["project"]["scripts"]["raft-uav-mmuad-candidate-mixture-map"]
-        == "raft_uav.mmuad.candidate_mixture_map:main"
+        == "raft_uav.mmuad.candidate_mixture_map_text_cli:main"
     )
