@@ -128,7 +128,8 @@ def test_reservoir_mixture_report_preserves_numeric_looking_sequence_ids(tmp_pat
         keep_default_na=False,
     )
     assert frame_gap.loc[0, "sequence_id"] == "001"
-    payload = json.loads((run_dir / "mmuad_reservoir_mixture_report.json").read_text(encoding="utf-8"))
+    report_json = run_dir / "mmuad_reservoir_mixture_report.json"
+    payload = json.loads(report_json.read_text(encoding="utf-8"))
     assert payload["worst_sequence_bottleneck"]["sequence_id"] == "001"
 
 
