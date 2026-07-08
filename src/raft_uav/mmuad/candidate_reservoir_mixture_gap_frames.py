@@ -31,6 +31,15 @@ ERROR_COLUMN_CANDIDATES = (
 ORACLE_PREFIX = "oracle_"
 ORACLE_SUFFIX = "_3d_m"
 DEFAULT_GAP_THRESHOLDS_M = (1.0, 2.0, 5.0, 10.0, 20.0)
+OPTIONAL_ESTIMATE_COLUMNS = (
+    "state_x_m",
+    "state_y_m",
+    "state_z_m",
+    "mixture_effective_candidate_count",
+    "mixture_assignment_entropy",
+    "mixture_dominant_weight",
+    "mixture_effective_sigma_m",
+)
 
 
 def build_frame_gap_table(
@@ -39,8 +48,16 @@ def build_frame_gap_table(
     *,
     truth: pd.DataFrame | None = None,
     time_round_decimals: int = 6,
+    time_join_tolerance_s: float | None = None,
 ) -> pd.DataFrame:
-    """Join mixture estimates to oracle rows and compute frame-level gaps."""
+    """Join mixture estimates to oracle rows and compute frame-level gaps.
+
+    By default, the join preserves the historical rounded-time exact merge.  Set
+    ``time_join_tolerance_s`` to use a nearest-neighbor per-sequence time join
+    instead.  The tolerance mode is useful when reservoir-oracle diagnostics and
+    mixture estimates were emitted by adjacent tools whose timestamps differ by
+    small floating-point or template-resampling offsets.
+    """
 
     estimate_rows = _with_mixture_error(estimates, truth=truth).copy()
     oracle_rows = pd.DataFrame(oracle_frames).copy()
@@ -48,43 +65,19 @@ def build_frame_gap_table(
         return pd.DataFrame()
     _require_columns(estimate_rows, ("sequence_id", "time_s", "mixture_error_3d_m"), "estimates")
     _require_columns(oracle_rows, ("sequence_id", "time_s"), "oracle frames")
-    estimate_rows["_join_time_s"] = _rounded_time(estimate_rows["time_s"], time_round_decimals)
-    oracle_rows["_join_time_s"] = _rounded_time(oracle_rows["time_s"], time_round_decimals)
-    keep_estimate_cols = [
-        "sequence_id",
-        "time_s",
-        "_join_time_s",
-        "mixture_error_3d_m",
-    ]
-    for column in (
-        "state_x_m",
-        "state_y_m",
-        "state_z_m",
-        "mixture_effective_candidate_count",
-        "mixture_assignment_entropy",
-        "mixture_dominant_weight",
-        "mixture_effective_sigma_m",
-    ):
-        if column in estimate_rows.columns:
-            keep_estimate_cols.append(column)
-    merged = oracle_rows.merge(
+    keep_estimate_cols = _estimate_keep_columns(estimate_rows)
+    merged = _join_estimates_to_oracle(
         estimate_rows[keep_estimate_cols],
-        on=["sequence_id", "_join_time_s"],
-        how="inner",
-        suffixes=("_oracle", "_mixture"),
+        oracle_rows,
+        time_round_decimals=int(time_round_decimals),
+        time_join_tolerance_s=time_join_tolerance_s,
     )
     if merged.empty:
-        return merged.drop(columns=["_join_time_s"], errors="ignore")
-    if "time_s_oracle" in merged.columns:
-        merged["oracle_time_s"] = pd.to_numeric(merged["time_s_oracle"], errors="coerce")
-    else:
-        merged["oracle_time_s"] = pd.to_numeric(merged["time_s"], errors="coerce")
-    if "time_s_mixture" in merged.columns:
-        merged["mixture_time_s"] = pd.to_numeric(merged["time_s_mixture"], errors="coerce")
-    else:
-        merged["mixture_time_s"] = pd.to_numeric(merged["time_s"], errors="coerce")
-    merged["time_s"] = merged["oracle_time_s"]
-    merged["time_delta_s"] = merged["mixture_time_s"] - merged["oracle_time_s"]
+        return merged.drop(
+            columns=["_join_time_s", "_oracle_time_s", "_mixture_time_s"],
+            errors="ignore",
+        )
+    merged = _with_join_time_columns(merged)
     mixture_error = pd.to_numeric(merged["mixture_error_3d_m"], errors="coerce")
     merged["mixture_mse_contribution_m2"] = mixture_error**2
     for column in _oracle_distance_columns(merged.columns):
@@ -96,7 +89,10 @@ def build_frame_gap_table(
             merged["mixture_mse_contribution_m2"] - merged[f"{label}_mse_contribution_m2"]
         )
         merged[f"ratio_to_{label}_error"] = _safe_divide(mixture_error, oracle_error)
-    return merged.drop(columns=["_join_time_s"], errors="ignore").sort_values(
+    return merged.drop(
+        columns=["_join_time_s", "_oracle_time_s", "_mixture_time_s"],
+        errors="ignore",
+    ).sort_values(
         ["sequence_id", "time_s"],
     ).reset_index(drop=True)
 
@@ -195,6 +191,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-by-sequence-csv", type=Path)
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--time-round-decimals", type=int, default=6)
+    parser.add_argument(
+        "--time-join-tolerance-s",
+        type=float,
+        help=(
+            "use nearest per-sequence estimate/oracle timestamp matching within this tolerance; "
+            "omit to keep exact rounded-time matching"
+        ),
+    )
     args = parser.parse_args(argv)
 
     estimates = read_sequence_text_csv(args.estimates_csv)
@@ -205,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
         oracle_frames,
         truth=truth,
         time_round_decimals=int(args.time_round_decimals),
+        time_join_tolerance_s=args.time_join_tolerance_s,
     )
     paths = write_gap_outputs(
         frame_gap,
@@ -239,6 +244,113 @@ def _with_mixture_error(estimates: pd.DataFrame, *, truth: pd.DataFrame | None) 
             rows["mixture_error_3d_m"] = pd.to_numeric(rows[column], errors="coerce")
             return rows
     raise ValueError("could not compute mixture_error_3d_m from estimates and truth")
+
+
+def _estimate_keep_columns(estimate_rows: pd.DataFrame) -> list[str]:
+    keep_estimate_cols = [
+        "sequence_id",
+        "time_s",
+        "mixture_error_3d_m",
+    ]
+    for column in OPTIONAL_ESTIMATE_COLUMNS:
+        if column in estimate_rows.columns:
+            keep_estimate_cols.append(column)
+    return keep_estimate_cols
+
+
+def _join_estimates_to_oracle(
+    estimate_rows: pd.DataFrame,
+    oracle_rows: pd.DataFrame,
+    *,
+    time_round_decimals: int,
+    time_join_tolerance_s: float | None,
+) -> pd.DataFrame:
+    if time_join_tolerance_s is None:
+        return _join_estimates_to_oracle_exact(
+            estimate_rows,
+            oracle_rows,
+            time_round_decimals=time_round_decimals,
+        )
+    return _join_estimates_to_oracle_nearest(
+        estimate_rows,
+        oracle_rows,
+        tolerance_s=float(time_join_tolerance_s),
+    )
+
+
+def _join_estimates_to_oracle_exact(
+    estimate_rows: pd.DataFrame,
+    oracle_rows: pd.DataFrame,
+    *,
+    time_round_decimals: int,
+) -> pd.DataFrame:
+    estimate_rows = estimate_rows.copy()
+    oracle_rows = oracle_rows.copy()
+    estimate_rows["_join_time_s"] = _rounded_time(estimate_rows["time_s"], time_round_decimals)
+    oracle_rows["_join_time_s"] = _rounded_time(oracle_rows["time_s"], time_round_decimals)
+    return oracle_rows.merge(
+        estimate_rows,
+        on=["sequence_id", "_join_time_s"],
+        how="inner",
+        suffixes=("_oracle", "_mixture"),
+    )
+
+
+def _join_estimates_to_oracle_nearest(
+    estimate_rows: pd.DataFrame,
+    oracle_rows: pd.DataFrame,
+    *,
+    tolerance_s: float,
+) -> pd.DataFrame:
+    if tolerance_s < 0.0:
+        raise ValueError("time_join_tolerance_s must be non-negative")
+    estimate_rows = estimate_rows.copy()
+    oracle_rows = oracle_rows.copy()
+    estimate_rows["time_s"] = pd.to_numeric(estimate_rows["time_s"], errors="coerce")
+    oracle_rows["time_s"] = pd.to_numeric(oracle_rows["time_s"], errors="coerce")
+    estimate_rows = estimate_rows.loc[estimate_rows["time_s"].notna()]
+    oracle_rows = oracle_rows.loc[oracle_rows["time_s"].notna()]
+    if estimate_rows.empty or oracle_rows.empty:
+        return pd.DataFrame()
+    estimate_rows["_sequence_key"] = estimate_rows["sequence_id"].astype(str)
+    oracle_rows["_sequence_key"] = oracle_rows["sequence_id"].astype(str)
+    parts: list[pd.DataFrame] = []
+    for sequence_key, oracle_group in oracle_rows.groupby("_sequence_key", sort=True):
+        estimate_group = estimate_rows.loc[estimate_rows["_sequence_key"] == str(sequence_key)]
+        if estimate_group.empty:
+            continue
+        right = estimate_group.drop(columns=["sequence_id", "_sequence_key"], errors="ignore").copy()
+        right["estimate_time_s"] = right["time_s"]
+        merged = pd.merge_asof(
+            oracle_group.sort_values("time_s"),
+            right.sort_values("time_s"),
+            on="time_s",
+            direction="nearest",
+            tolerance=float(tolerance_s),
+            suffixes=("_oracle", "_mixture"),
+        )
+        merged = merged.loc[merged["mixture_error_3d_m"].notna()]
+        parts.append(merged)
+    if not parts:
+        return pd.DataFrame()
+    return pd.concat(parts, ignore_index=True).drop(columns=["_sequence_key"], errors="ignore")
+
+
+def _with_join_time_columns(merged: pd.DataFrame) -> pd.DataFrame:
+    out = merged.copy()
+    if "time_s_oracle" in out.columns:
+        out["oracle_time_s"] = pd.to_numeric(out["time_s_oracle"], errors="coerce")
+    else:
+        out["oracle_time_s"] = pd.to_numeric(out["time_s"], errors="coerce")
+    if "time_s_mixture" in out.columns:
+        out["mixture_time_s"] = pd.to_numeric(out["time_s_mixture"], errors="coerce")
+    elif "estimate_time_s" in out.columns:
+        out["mixture_time_s"] = pd.to_numeric(out["estimate_time_s"], errors="coerce")
+    else:
+        out["mixture_time_s"] = pd.to_numeric(out["time_s"], errors="coerce")
+    out["time_s"] = out["oracle_time_s"]
+    out["time_delta_s"] = out["mixture_time_s"] - out["oracle_time_s"]
+    return out
 
 
 def _require_columns(rows: pd.DataFrame, columns: tuple[str, ...], label: str) -> None:
