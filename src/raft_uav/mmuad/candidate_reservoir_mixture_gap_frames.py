@@ -63,7 +63,11 @@ def build_frame_gap_table(
     oracle_rows = pd.DataFrame(oracle_frames).copy()
     if estimate_rows.empty or oracle_rows.empty:
         return pd.DataFrame()
-    _require_columns(estimate_rows, ("sequence_id", "time_s", "mixture_error_3d_m"), "estimates")
+    _require_columns(
+        estimate_rows,
+        ("sequence_id", "time_s", "mixture_error_3d_m"),
+        "estimates",
+    )
     _require_columns(oracle_rows, ("sequence_id", "time_s"), "oracle frames")
     keep_estimate_cols = _estimate_keep_columns(estimate_rows)
     merged = _join_estimates_to_oracle(
@@ -112,12 +116,18 @@ def summarize_frame_gap(
         groups = [("__pooled__", rows)]
         label_column = "group"
     else:
-        groups = [(str(key), group) for key, group in rows.groupby(group_column, sort=True)]
+        groups = [
+            (str(key), group)
+            for key, group in rows.groupby(group_column, sort=True)
+        ]
         label_column = group_column
     records: list[dict[str, Any]] = []
     for label, group in groups:
         record: dict[str, Any] = {label_column: label, "frame_count": int(len(group))}
-        mixture_errors = pd.to_numeric(group.get("mixture_error_3d_m"), errors="coerce").dropna()
+        mixture_errors = pd.to_numeric(
+            group.get("mixture_error_3d_m"),
+            errors="coerce",
+        ).dropna()
         record.update(_error_summary("mixture", mixture_errors))
         for column in _oracle_distance_columns(group.columns):
             oracle_label = _oracle_label(column)
@@ -129,9 +139,15 @@ def summarize_frame_gap(
                 record[f"gap_to_{oracle_label}_mse_3d_m2"] = _safe_mean(gaps)
             error_gap_column = f"gap_to_{oracle_label}_3d_m"
             if error_gap_column in group.columns:
-                error_gaps = pd.to_numeric(group[error_gap_column], errors="coerce").dropna()
+                error_gaps = pd.to_numeric(
+                    group[error_gap_column],
+                    errors="coerce",
+                ).dropna()
                 record[f"gap_to_{oracle_label}_mean_3d_m"] = _safe_mean(error_gaps)
-                record[f"gap_to_{oracle_label}_p95_3d_m"] = _safe_quantile(error_gaps, 0.95)
+                record[f"gap_to_{oracle_label}_p95_3d_m"] = _safe_quantile(
+                    error_gaps,
+                    0.95,
+                )
                 for threshold in gap_thresholds_m:
                     record[f"frames_gap_to_{oracle_label}_gt_{threshold:g}m"] = int(
                         (error_gaps > float(threshold)).sum()
@@ -195,8 +211,8 @@ def main(argv: list[str] | None = None) -> int:
         "--time-join-tolerance-s",
         type=float,
         help=(
-            "use nearest per-sequence estimate/oracle timestamp matching within this tolerance; "
-            "omit to keep exact rounded-time matching"
+            "use nearest per-sequence estimate/oracle timestamp matching within this "
+            "tolerance; omit to keep exact rounded-time matching"
         ),
     )
     args = parser.parse_args(argv)
@@ -416,7 +432,11 @@ def _safe_ratio(numerator: Any, denominator: Any) -> float | None:
         denominator_f = float(denominator)
     except (TypeError, ValueError):
         return None
-    if not np.isfinite(numerator_f) or not np.isfinite(denominator_f) or denominator_f == 0.0:
+    if (
+        not np.isfinite(numerator_f)
+        or not np.isfinite(denominator_f)
+        or denominator_f == 0.0
+    ):
         return None
     return numerator_f / denominator_f
 
