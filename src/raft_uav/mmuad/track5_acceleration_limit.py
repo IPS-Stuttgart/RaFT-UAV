@@ -93,7 +93,10 @@ def repair_track5_acceleration_kinks(
         diagnostic_parts.append(diagnostics)
     repaired_rows = pd.concat(repaired_parts, ignore_index=True, sort=False)
     diagnostics_rows = pd.concat(diagnostic_parts, ignore_index=True, sort=False)
-    return repaired_rows.sort_values(["sequence_id", "time_s"]).reset_index(drop=True), diagnostics_rows
+    return (
+        repaired_rows.sort_values(["sequence_id", "time_s"]).reset_index(drop=True),
+        diagnostics_rows,
+    )
 
 
 def write_track5_acceleration_limit_outputs(
@@ -135,7 +138,11 @@ def write_track5_acceleration_limit_outputs(
     )
     validation_summary: dict[str, Any] | None = None
     if template is not None:
-        validation = validate_official_track5_submission(paths["zip"], template=template, require_zip=True)
+        validation = validate_official_track5_submission(
+            paths["zip"],
+            template=template,
+            require_zip=True,
+        )
         paths["validation_json"] = output / ACC_LIMIT_VALIDATION_JSON
         paths["validation_rows_csv"] = output / ACC_LIMIT_VALIDATION_ROWS_CSV
         paths["validation_json"].write_text(
@@ -162,7 +169,9 @@ def write_track5_acceleration_limit_outputs(
             "row_count": int(len(repaired)),
             "sequence_count": int(repaired["sequence_id"].nunique()) if not repaired.empty else 0,
             "changed_row_count": int(changed.sum()) if not diagnostics.empty else 0,
-            "changed_fraction": float(changed.sum() / len(diagnostics)) if len(diagnostics) else 0.0,
+            "changed_fraction": (
+                float(changed.sum() / len(diagnostics)) if len(diagnostics) else 0.0
+            ),
             "max_correction_m": _safe_max(displacement),
             "mean_correction_m": _safe_mean(displacement),
             "validation": validation_summary,
@@ -180,7 +189,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--submission", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--template", type=Path, help="optional official template for preflight validation")
+    parser.add_argument(
+        "--template",
+        type=Path,
+        help="optional official template for preflight validation",
+    )
     parser.add_argument("--max-acceleration-mps2", type=float, default=20.0)
     parser.add_argument("--max-direct-speed-mps", type=float, default=80.0)
     parser.add_argument("--min-interpolation-residual-m", type=float, default=1.0)
@@ -231,7 +244,11 @@ def _normalized_submission(submission: pd.DataFrame) -> pd.DataFrame:
     if {"sequence", "timestamp", "position", "classification"}.issubset(lower):
         official = normalize_official_track5_results_frame(rows)
         positions = [parse_official_position_cell(value) for value in official["Position"]]
-        xyz = pd.DataFrame(positions, columns=["state_x_m", "state_y_m", "state_z_m"], index=official.index)
+        xyz = pd.DataFrame(
+            positions,
+            columns=["state_x_m", "state_y_m", "state_z_m"],
+            index=official.index,
+        )
         rows = pd.DataFrame(
             {
                 "sequence_id": official["Sequence"].astype(str),
@@ -249,7 +266,9 @@ def _normalized_submission(submission: pd.DataFrame) -> pd.DataFrame:
     rows["sequence_id"] = rows["sequence_id"].astype(str)
     for column in ("time_s", "state_x_m", "state_y_m", "state_z_m", "Classification"):
         rows[column] = pd.to_numeric(rows[column], errors="coerce")
-    finite = np.isfinite(rows[["time_s", "state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)).all(axis=1)
+    finite = np.isfinite(
+        rows[["time_s", "state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
+    ).all(axis=1)
     rows = rows.loc[finite].copy()
     return rows.sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
@@ -267,6 +286,8 @@ def _repair_sequence(
     work["acceleration_limit_applied"] = False
     work["acceleration_limit_iteration"] = 0
     work["acceleration_limit_displacement_m"] = 0.0
+    trigger_diagnostics: dict[int, pd.Series] = {}
+    trigger_columns = _repair_trigger_columns()
     for iteration in range(1, max(1, int(iterations)) + 1):
         diagnostics = _sequence_diagnostics(work, iteration=iteration)
         repair_mask = _repair_candidate_mask(
@@ -279,7 +300,11 @@ def _repair_sequence(
             break
         xyz = work[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float, copy=True)
         for idx in np.flatnonzero(repair_mask):
-            interpolated = diagnostics.loc[idx, ["interp_x_m", "interp_y_m", "interp_z_m"]].to_numpy(float)
+            trigger_diagnostics[idx] = diagnostics.loc[idx, trigger_columns]
+            interpolated = diagnostics.loc[
+                idx,
+                ["interp_x_m", "interp_y_m", "interp_z_m"],
+            ].to_numpy(float)
             new_xyz = ((1.0 - repair_blend) * xyz[idx]) + (repair_blend * interpolated)
             displacement = float(np.linalg.norm(xyz[idx] - new_xyz))
             xyz[idx] = new_xyz
@@ -288,15 +313,23 @@ def _repair_sequence(
             work.loc[idx, "acceleration_limit_iteration"] = iteration
             work.loc[idx, "acceleration_limit_displacement_m"] += displacement
     final = _sequence_diagnostics(work, iteration=max(1, int(iterations)) + 1)
-    final["acceleration_limit_candidate"] = _repair_candidate_mask(
+    residual_candidates = _repair_candidate_mask(
         final,
         max_acceleration_mps2=max_acceleration_mps2,
         max_direct_speed_mps=max_direct_speed_mps,
         min_interpolation_residual_m=min_interpolation_residual_m,
     )
-    final["acceleration_limit_applied"] = work["acceleration_limit_applied"].to_numpy(bool)
+    applied = work["acceleration_limit_applied"].to_numpy(bool)
+    for idx, values in trigger_diagnostics.items():
+        final.loc[idx, trigger_columns] = values
+    acceleration_limit_candidate = residual_candidates.copy()
+    acceleration_limit_candidate[applied] = True
+    final["acceleration_limit_candidate"] = acceleration_limit_candidate
+    final["acceleration_limit_applied"] = applied
     final["acceleration_limit_iteration"] = work["acceleration_limit_iteration"].to_numpy(int)
-    final["acceleration_limit_displacement_m"] = work["acceleration_limit_displacement_m"].to_numpy(float)
+    final["acceleration_limit_displacement_m"] = work[
+        "acceleration_limit_displacement_m"
+    ].to_numpy(float)
     final["max_acceleration_mps2"] = float(max_acceleration_mps2)
     final["max_direct_speed_mps"] = float(max_direct_speed_mps)
     final["min_interpolation_residual_m"] = float(min_interpolation_residual_m)
@@ -355,8 +388,14 @@ def _repair_candidate_mask(
     min_interpolation_residual_m: float,
 ) -> np.ndarray:
     accel = pd.to_numeric(diagnostics["local_acceleration_mps2"], errors="coerce").to_numpy(float)
-    residual = pd.to_numeric(diagnostics["interpolation_residual_m"], errors="coerce").to_numpy(float)
-    direct_speed = pd.to_numeric(diagnostics["neighbor_direct_speed_mps"], errors="coerce").to_numpy(float)
+    residual = pd.to_numeric(
+        diagnostics["interpolation_residual_m"],
+        errors="coerce",
+    ).to_numpy(float)
+    direct_speed = pd.to_numeric(
+        diagnostics["neighbor_direct_speed_mps"],
+        errors="coerce",
+    ).to_numpy(float)
     return (
         np.isfinite(accel)
         & np.isfinite(residual)
@@ -365,6 +404,18 @@ def _repair_candidate_mask(
         & (direct_speed <= float(max_direct_speed_mps))
         & (residual >= float(min_interpolation_residual_m))
     )
+
+
+def _repair_trigger_columns() -> list[str]:
+    return [
+        "diagnostic_iteration",
+        "local_acceleration_mps2",
+        "interpolation_residual_m",
+        "neighbor_direct_speed_mps",
+        "interp_x_m",
+        "interp_y_m",
+        "interp_z_m",
+    ]
 
 
 def _diagnostic_columns() -> list[str]:
