@@ -24,6 +24,7 @@ from raft_uav.mmuad.submission import normalize_official_track5_results_frame
 from raft_uav.mmuad.submission import parse_official_position_cell
 
 from raft_uav.mmuad.submission import (
+    load_official_track5_template_file,
     validate_official_track5_submission,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
@@ -171,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
         max_interpolation_residual_m=float(args.max_interpolation_residual_m),
         iterations=int(args.iterations),
     )
-    template = None if args.template is None else pd.read_csv(args.template)
+    template = None if args.template is None else load_official_track5_template_file(args.template)
     paths = write_track5_temporal_repair_outputs(
         repaired=repaired,
         diagnostics=diagnostics,
