@@ -42,6 +42,12 @@ RESERVOIR_ORACLE_SUMMARY_CSV = "mmuad_reservoir_mixture_oracle_summary.csv"
 RESERVOIR_ORACLE_BY_SEQUENCE_CSV = "mmuad_reservoir_mixture_oracle_by_sequence.csv"
 RESERVOIR_MIXTURE_GAP_SUMMARY_CSV = "mmuad_reservoir_mixture_gap_summary.csv"
 RESERVOIR_MIXTURE_GAP_BY_SEQUENCE_CSV = "mmuad_reservoir_mixture_gap_by_sequence.csv"
+RESERVOIR_MIXTURE_ASSIGNMENT_BY_BRANCH_CSV = (
+    "mmuad_reservoir_mixture_assignment_by_branch.csv"
+)
+RESERVOIR_MIXTURE_ASSIGNMENT_BY_SOURCE_CSV = (
+    "mmuad_reservoir_mixture_assignment_by_source.csv"
+)
 _DEFAULT_ORACLE_TOP_K = (1, 3, 5, 10, 20)
 
 
@@ -201,6 +207,63 @@ def build_reservoir_mixture_gap_by_sequence(
     return pd.DataFrame.from_records(records)
 
 
+def build_assignment_usage_summary(assignments: pd.DataFrame, group_column: str) -> pd.DataFrame:
+    """Summarize mixture responsibility and dominant assignments by branch/source.
+
+    This is inference-safe: it does not use truth. It helps diagnose whether a
+    reservoir preserved multiple candidate branches only nominally, or whether
+    the mixture objective actually assigned probability mass to them.
+    """
+
+    rows = pd.DataFrame(assignments).copy()
+    if rows.empty:
+        return pd.DataFrame()
+    if group_column not in rows.columns:
+        rows[group_column] = "unknown"
+    rows[group_column] = rows[group_column].fillna("unknown").astype(str)
+    total_frames = _frame_count(rows)
+    total_responsibility = _numeric_series(rows, "mixture_final_weight", 0.0).sum()
+    records: list[dict[str, Any]] = []
+    for value, group in rows.groupby(group_column, sort=True):
+        responsibility = _numeric_series(group, "mixture_final_weight", 0.0)
+        candidate_rank = _numeric_series(group, "candidate_rank", float("nan"))
+        sigma = _numeric_series(group, "mixture_sigma_m", float("nan"))
+        distance = _numeric_series(group, "mixture_distance_to_state_m", float("nan"))
+        dominant = (
+            group["mixture_dominant"].fillna(False).astype(bool)
+            if "mixture_dominant" in group.columns
+            else pd.Series(False, index=group.index)
+        )
+        responsibility_sum = float(responsibility.sum())
+        record = {
+            group_column: str(value),
+            "candidate_rows": int(len(group)),
+            "frame_count": int(_frame_count(group)),
+            "frame_coverage_fraction": _safe_ratio(_frame_count(group), total_frames),
+            "responsibility_sum": responsibility_sum,
+            "responsibility_fraction_of_total": _safe_ratio(
+                responsibility_sum,
+                float(total_responsibility),
+            ),
+            "responsibility_mean": _series_mean(responsibility),
+            "dominant_count": int(dominant.sum()),
+            "dominant_fraction_of_frames": _safe_ratio(int(dominant.sum()), total_frames),
+            "dominant_fraction_of_group_rows": _safe_ratio(int(dominant.sum()), len(group)),
+            "mean_candidate_rank": _series_mean(candidate_rank),
+            "p95_candidate_rank": _series_quantile(candidate_rank, 0.95),
+            "mean_sigma_m": _series_mean(sigma),
+            "mean_distance_to_state_m": _series_mean(distance),
+        }
+        records.append(_jsonable(record))
+    if not records:
+        return pd.DataFrame()
+    out = pd.DataFrame.from_records(records)
+    return out.sort_values(
+        ["responsibility_fraction_of_total", "dominant_count", group_column],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+
+
 def write_reservoir_mixture_map_outputs(
     *,
     reservoir: pd.DataFrame,
@@ -226,6 +289,26 @@ def write_reservoir_mixture_map_outputs(
         encoding="utf-8",
     )
     paths["reservoir_summary_json"] = reservoir_summary_json
+    branch_usage = build_assignment_usage_summary(result.assignments, "candidate_branch")
+    source_usage = build_assignment_usage_summary(result.assignments, "source")
+    branch_usage_csv = output / RESERVOIR_MIXTURE_ASSIGNMENT_BY_BRANCH_CSV
+    source_usage_csv = output / RESERVOIR_MIXTURE_ASSIGNMENT_BY_SOURCE_CSV
+    branch_usage.to_csv(branch_usage_csv, index=False)
+    source_usage.to_csv(source_usage_csv, index=False)
+    paths["assignment_by_branch_csv"] = branch_usage_csv
+    paths["assignment_by_source_csv"] = source_usage_csv
+    summary["assignment_usage"] = {
+        "branch_count": int(len(branch_usage)),
+        "source_count": int(len(source_usage)),
+        "top_branch_by_responsibility": _max_record(
+            branch_usage,
+            "responsibility_fraction_of_total",
+        ),
+        "top_source_by_responsibility": _max_record(
+            source_usage,
+            "responsibility_fraction_of_total",
+        ),
+    }
     combined_summary_json = output / COMBINED_SUMMARY_JSON
     combined_summary_json.write_text(json.dumps(_jsonable(summary), indent=2), encoding="utf-8")
     paths["combined_summary_json"] = combined_summary_json
@@ -475,6 +558,34 @@ def _max_record(frame: pd.DataFrame, column: str) -> dict[str, Any]:
     if values.dropna().empty:
         return {}
     return _jsonable(frame.loc[int(values.idxmax())].to_dict())
+
+
+def _frame_count(rows: pd.DataFrame) -> int:
+    if rows.empty:
+        return 0
+    if {"sequence_id", "time_s"}.issubset(rows.columns):
+        return int(len(rows[["sequence_id", "time_s"]].drop_duplicates()))
+    return 0
+
+
+def _numeric_series(rows: pd.DataFrame, column: str, default: float) -> pd.Series:
+    if column not in rows.columns:
+        return pd.Series(default, index=rows.index, dtype=float)
+    return pd.to_numeric(rows[column], errors="coerce")
+
+
+def _series_mean(values: pd.Series) -> float | None:
+    finite = values.dropna()
+    if finite.empty:
+        return None
+    return float(finite.mean())
+
+
+def _series_quantile(values: pd.Series, quantile: float) -> float | None:
+    finite = values.dropna()
+    if finite.empty:
+        return None
+    return float(finite.quantile(quantile))
 
 
 def _oracle_label_from_mse_column(column: str) -> str:
