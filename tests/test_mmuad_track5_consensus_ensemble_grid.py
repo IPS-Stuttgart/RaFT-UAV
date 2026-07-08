@@ -77,6 +77,46 @@ def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
     return good, outlier, template, truth, class_map
 
 
+def test_consensus_ensemble_grid_preserves_numeric_looking_sequence_ids(tmp_path: Path) -> None:
+    estimates = tmp_path / "numeric_ids.csv"
+    estimates.write_text(
+        "sequence_id,time_s,state_x_m,state_y_m,state_z_m\n"
+        "001,0.0,0.0,0.0,0.0\n"
+        "001,1.0,1.0,0.0,0.0\n",
+        encoding="utf-8",
+    )
+    template = pd.DataFrame(
+        {
+            "Sequence": ["001", "001"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,0)", "(0,0,0)"],
+            "Classification": [2, 2],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["001", "001"],
+            "time_s": [0.0, 1.0],
+            "x_m": [0.0, 1.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [0.0, 0.0],
+        }
+    )
+
+    grid, best = search_track5_consensus_ensemble_grid(
+        [EstimateInput("numeric", estimates, 1.0)],
+        template=template,
+        truth=truth,
+        consensus_radius_m=(1.0,),
+        min_consensus_weight_fraction=(0.0,),
+        fallback_policy=("max-weight",),
+    )
+
+    assert len(grid) == 1
+    assert best["metrics"]["matched_rows"] == 2
+    assert best["metrics"]["pose_mse_m2"] == pytest.approx(0.0)
+
+
 def test_consensus_ensemble_grid_prefers_tight_consensus(tmp_path: Path) -> None:
     good, outlier, _, _, _ = _write_inputs(tmp_path)
     grid, best = search_track5_consensus_ensemble_grid(
