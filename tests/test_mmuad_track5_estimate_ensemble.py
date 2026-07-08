@@ -68,6 +68,13 @@ def test_parse_estimate_spec_accepts_label_path_and_weight() -> None:
     assert item.weight == pytest.approx(0.25)
 
 
+def test_parse_estimate_spec_keeps_at_sign_in_unweighted_path() -> None:
+    item = parse_estimate_spec("robust=/tmp/run@v1.csv")
+    assert item.label == "robust"
+    assert str(item.path).endswith("run@v1.csv")
+    assert item.weight == pytest.approx(1.0)
+
+
 @pytest.mark.parametrize("weight", ["nan", "inf", "-0.1"])
 def test_parse_estimate_spec_rejects_invalid_weights(weight: str) -> None:
     with pytest.raises(ValueError, match="finite and non-negative"):
