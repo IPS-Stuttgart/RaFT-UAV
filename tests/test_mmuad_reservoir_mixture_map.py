@@ -10,6 +10,7 @@ import pandas as pd
 
 from raft_uav.mmuad.candidate_reservoir import ReservoirConfig
 from raft_uav.mmuad.candidate_mixture_map import CandidateMixtureMapConfig
+from raft_uav.mmuad.candidate_reservoir_mixture_map import build_assignment_usage_summary
 from raft_uav.mmuad.candidate_reservoir_mixture_map import main as reservoir_mixture_main
 from raft_uav.mmuad.candidate_reservoir_mixture_map import run_reservoir_mixture_map
 
@@ -87,6 +88,26 @@ def test_reservoir_mixture_keeps_low_score_branch_candidate() -> None:
     assert dominant["track_id"].astype(str).str.startswith("raw-good-").all()
     assert summary["reservoir"]["reservoir_candidate_rows"] == 10
     assert summary["mixture"]["config"]["top_k"] == 0
+
+
+def test_assignment_usage_summary_parses_string_boolean_dominant_flags() -> None:
+    assignments = pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA", "seqA", "seqA"],
+            "time_s": [0.0, 0.0, 1.0, 1.0],
+            "candidate_branch": ["raw", "translated", "raw", "translated"],
+            "mixture_final_weight": [0.1, 0.9, 0.8, 0.2],
+            "mixture_dominant": ["False", "True", "TRUE", "FALSE"],
+        }
+    )
+
+    summary = build_assignment_usage_summary(assignments, "candidate_branch")
+    by_branch = summary.set_index("candidate_branch")
+
+    assert int(by_branch.loc["raw", "dominant_count"]) == 1
+    assert int(by_branch.loc["translated", "dominant_count"]) == 1
+    assert by_branch.loc["raw", "dominant_fraction_of_group_rows"] == 0.5
+    assert by_branch.loc["translated", "dominant_fraction_of_group_rows"] == 0.5
 
 
 def test_reservoir_mixture_cli_writes_upload_artifacts(tmp_path: Path) -> None:
