@@ -85,6 +85,58 @@ def test_reservoir_mixture_report_writes_actionable_gap_and_bottleneck(tmp_path:
     assert payload["worst_sequence_bottleneck"]["sequence_id"] == "seqA"
 
 
+def test_reservoir_mixture_report_nearest_time_join_tolerance(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "sequence_id": "seqA",
+                "time_s": 0.04,
+                "position_error_3d_m": 5.0,
+            },
+            {
+                "sequence_id": "seqA",
+                "time_s": 1.04,
+                "position_error_3d_m": 7.0,
+            },
+        ]
+    ).to_csv(run_dir / "mmuad_candidate_mixture_estimates.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "sequence_id": "seqA",
+                "time_s": 0.0,
+                "oracle_all_3d_m": 1.0,
+                "oracle_top3_3d_m": 1.0,
+            },
+            {
+                "sequence_id": "seqA",
+                "time_s": 1.0,
+                "oracle_all_3d_m": 2.0,
+                "oracle_top3_3d_m": 2.0,
+            },
+        ]
+    ).to_csv(run_dir / "mmuad_reservoir_mixture_oracle_frames.csv", index=False)
+
+    status = report_main(
+        [
+            "--run-dir",
+            str(run_dir),
+            "--time-join-tolerance-s",
+            "0.05",
+        ]
+    )
+
+    assert status == 0
+    frame_gap = pd.read_csv(run_dir / "mmuad_reservoir_mixture_report_frame_gap.csv")
+    assert len(frame_gap) == 2
+    assert frame_gap["time_delta_s"].tolist() == [0.04, 0.04]
+    report_json = run_dir / "mmuad_reservoir_mixture_report.json"
+    payload = json.loads(report_json.read_text(encoding="utf-8"))
+    assert payload["config"]["time_join_tolerance_s"] == 0.05
+
+
 def test_reservoir_mixture_report_preserves_numeric_looking_sequence_ids(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
