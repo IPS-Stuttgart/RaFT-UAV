@@ -8,7 +8,10 @@ This module chains the current inference-safe CVPR/UG2+ Track 5 components:
 
 It exists to reduce leaderboard-submission drift: experiments can produce
 candidate/sensor-time trajectories, while Codabench requires exactly the official
-``Sequence,Timestamp`` template rows.
+``Sequence,Timestamp`` template rows.  Optionally, the final template projection
+can run through the acceleration-regularized Track 5 post-processor so the main
+leaderboard command can produce a smoothed upload artifact without an extra
+manual step.
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ from raft_uav.mmuad.submission import load_official_track5_template_file, load_s
 from raft_uav.mmuad.track5_template_resample import RESAMPLE_METHODS
 from raft_uav.mmuad.track5_template_resample import ResampleMethod
 from raft_uav.mmuad.track5_template_resample import write_track5_template_resample_outputs
+from raft_uav.mmuad.track5_trajectory_regularizer import run_track5_trajectory_regularizer
 
 PIPELINE_MANIFEST_JSON = "mmuad_track5_leaderboard_pipeline_manifest.json"
 MIXTURE_DIR = "reservoir_mixture"
@@ -51,6 +55,11 @@ def run_track5_leaderboard_pipeline(
     max_template_nearest_time_delta_s: float | None = None,
     submission_resample_method: ResampleMethod = "linear",
     submission_max_interpolation_gap_s: float | None = None,
+    apply_final_regularizer: bool = False,
+    regularizer_smoothness_weight: float = 10.0,
+    regularizer_huber_delta_m: float = 25.0,
+    regularizer_iterations: int = 5,
+    regularizer_observation_sigma_m: float = 10.0,
 ) -> dict[str, Any]:
     """Run reservoir mixture-MAP and package it against a Track 5 template.
 
@@ -58,6 +67,12 @@ def run_track5_leaderboard_pipeline(
     control the final Codabench-template projection.  Exposing them here avoids
     an error-prone extra post-processing step when dense sensor-time trajectories
     need nearest-only or large-gap-safe template packaging.
+
+    When ``apply_final_regularizer`` is true, the package step uses the Track 5
+    acceleration-regularized robust smoother instead of plain template resampling.
+    This keeps final-stage smoothing in the same provenance manifest as the
+    reservoir/mixture run and avoids submitting an unsmoothed intermediate by
+    mistake.
     """
 
     output = Path(output_dir)
@@ -78,18 +93,34 @@ def run_track5_leaderboard_pipeline(
         class_map=class_map,
         default_classification=default_classification,
     )
-    submission_paths = write_track5_template_resample_outputs(
-        estimates=mixture_result.estimates,
-        template=template,
-        output_dir=submission_dir,
-        class_map=class_map,
-        default_classification=default_classification,
-        max_nearest_time_delta_s=max_template_nearest_time_delta_s,
-        resample_method=submission_resample_method,
-        max_interpolation_gap_s=submission_max_interpolation_gap_s,
-    )
+    if apply_final_regularizer:
+        submission_paths = run_track5_trajectory_regularizer(
+            estimates=mixture_result.estimates,
+            template=template,
+            output_dir=submission_dir,
+            class_map=class_map,
+            default_classification=default_classification,
+            max_nearest_time_delta_s=max_template_nearest_time_delta_s,
+            resample_method=submission_resample_method,
+            max_interpolation_gap_s=submission_max_interpolation_gap_s,
+            smoothness_weight=float(regularizer_smoothness_weight),
+            huber_delta_m=float(regularizer_huber_delta_m),
+            iterations=int(regularizer_iterations),
+            observation_sigma_m=float(regularizer_observation_sigma_m),
+        )
+    else:
+        submission_paths = write_track5_template_resample_outputs(
+            estimates=mixture_result.estimates,
+            template=template,
+            output_dir=submission_dir,
+            class_map=class_map,
+            default_classification=default_classification,
+            max_nearest_time_delta_s=max_template_nearest_time_delta_s,
+            resample_method=submission_resample_method,
+            max_interpolation_gap_s=submission_max_interpolation_gap_s,
+        )
     manifest = {
-        "schema": "raft-uav-mmuad-track5-leaderboard-pipeline-v2",
+        "schema": "raft-uav-mmuad-track5-leaderboard-pipeline-v3",
         "reservoir_config": asdict(reservoir_config or ReservoirConfig()),
         "mixture_config": asdict(
             _with_reservoir_top_k_zero(mixture_config or CandidateMixtureMapConfig()),
@@ -102,6 +133,11 @@ def run_track5_leaderboard_pipeline(
         "max_template_nearest_time_delta_s": max_template_nearest_time_delta_s,
         "submission_resample_method": str(submission_resample_method),
         "submission_max_interpolation_gap_s": submission_max_interpolation_gap_s,
+        "final_regularizer_enabled": bool(apply_final_regularizer),
+        "regularizer_smoothness_weight": float(regularizer_smoothness_weight),
+        "regularizer_huber_delta_m": float(regularizer_huber_delta_m),
+        "regularizer_iterations": int(regularizer_iterations),
+        "regularizer_observation_sigma_m": float(regularizer_observation_sigma_m),
         "mixture_summary": mixture_summary,
         "mixture_paths": {name: str(path) for name, path in mixture_paths.items()},
         "submission_paths": {name: str(path) for name, path in submission_paths.items()},
@@ -150,6 +186,15 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         help="fallback to nearest when template interpolation spans a larger source-time gap",
     )
+    parser.add_argument(
+        "--final-regularizer",
+        action="store_true",
+        help="run the acceleration-regularized Track 5 post-processor before packaging",
+    )
+    parser.add_argument("--regularizer-smoothness-weight", type=float, default=10.0)
+    parser.add_argument("--regularizer-huber-delta-m", type=float, default=25.0)
+    parser.add_argument("--regularizer-iterations", type=int, default=5)
+    parser.add_argument("--regularizer-observation-sigma-m", type=float, default=10.0)
     parser.add_argument("--global-top-n", type=int, default=20)
     parser.add_argument("--per-source-top-n", type=int, default=3)
     parser.add_argument("--per-branch-top-n", type=int, default=3)
@@ -227,12 +272,18 @@ def main(argv: list[str] | None = None) -> int:
         max_template_nearest_time_delta_s=args.max_template_nearest_time_delta_s,
         submission_resample_method=args.submission_resample_method,
         submission_max_interpolation_gap_s=args.submission_max_interpolation_gap_s,
+        apply_final_regularizer=bool(args.final_regularizer),
+        regularizer_smoothness_weight=float(args.regularizer_smoothness_weight),
+        regularizer_huber_delta_m=float(args.regularizer_huber_delta_m),
+        regularizer_iterations=int(args.regularizer_iterations),
+        regularizer_observation_sigma_m=float(args.regularizer_observation_sigma_m),
     )
     validation_json = result["submission_paths"]["validation_json"]
     validation_summary = json.loads(Path(validation_json).read_text(encoding="utf-8"))
     print("mmuad_track5_leaderboard_pipeline=ok")
     print(f"manifest_json={result['manifest_path']}")
     print(f"ug2_submission_zip={result['submission_paths']['official_zip']}")
+    print(f"final_regularizer_enabled={result['manifest']['final_regularizer_enabled']}")
     print(f"leaderboard_ready={validation_summary.get('leaderboard_ready')}")
     print(f"codabench_upload_ready={validation_summary.get('codabench_upload_ready')}")
     if args.require_leaderboard_ready and not validation_summary.get("leaderboard_ready", False):
