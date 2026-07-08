@@ -104,10 +104,7 @@ def load_estimate_weight_config(path: Path) -> dict[str, float]:
     raw_weights = payload.get("weights", payload)
     if not isinstance(raw_weights, dict):
         raise ValueError("ensemble weight config must contain a weights object")
-    weights: dict[str, float] = {}
-    for label, value in raw_weights.items():
-        safe_label = _safe_label(str(label))
-        weights[safe_label] = _validate_ensemble_weight(float(value), label=safe_label)
+    weights = _normalize_estimate_weight_mapping(raw_weights)
     if not weights:
         raise ValueError("ensemble weight config contains no weights")
     return weights
@@ -123,11 +120,15 @@ def apply_estimate_weight_config(
 
     if missing_policy not in WEIGHT_MISSING_POLICIES:
         raise ValueError(f"unsupported weight missing policy: {missing_policy}")
-    safe_weights = {_safe_label(label): float(weight) for label, weight in weights.items()}
+    estimate_input_list = list(estimate_inputs)
+    safe_input_labels = _normalize_unique_labels(
+        (item.label for item in estimate_input_list),
+        context="estimate input",
+    )
+    safe_weights = _normalize_estimate_weight_mapping(weights)
     out: list[EstimateInput] = []
     missing: list[str] = []
-    for item in estimate_inputs:
-        label = _safe_label(item.label)
+    for item, label in zip(estimate_input_list, safe_input_labels):
         if label in safe_weights:
             weight = _validate_ensemble_weight(safe_weights[label], label=label)
         elif missing_policy == "keep":
@@ -142,7 +143,7 @@ def apply_estimate_weight_config(
         out.append(EstimateInput(label=label, path=item.path, weight=weight))
     if missing and missing_policy == "error":
         raise ValueError(f"missing ensemble weights for labels: {sorted(missing)}")
-    unused = sorted(set(safe_weights).difference(_safe_label(item.label) for item in estimate_inputs))
+    unused = sorted(set(safe_weights).difference(safe_input_labels))
     if unused:
         raise ValueError(f"ensemble weight config has unused labels: {unused}")
     return out
@@ -182,13 +183,23 @@ def build_track5_estimate_ensemble(
 
     template_rows = _normalize_template_rows(template)
     if template_rows.empty:
-        empty = pd.DataFrame(columns=["sequence_id", "time_s", "state_x_m", "state_y_m", "state_z_m"])
+        empty = pd.DataFrame(
+            columns=["sequence_id", "time_s", "state_x_m", "state_y_m", "state_z_m"]
+        )
         return empty, pd.DataFrame()
 
     resampled_parts: list[pd.DataFrame] = []
     input_summaries: list[dict[str, Any]] = []
+    seen_labels: dict[str, str] = {}
     for label, estimates, weight in estimate_inputs:
-        label = _safe_label(label)
+        raw_label = str(label)
+        label = _safe_label(raw_label)
+        _check_label_is_unique(
+            label,
+            raw_label=raw_label,
+            seen_labels=seen_labels,
+            context="estimate input",
+        )
         weight = _validate_ensemble_weight(weight, label=label)
         resampled, diagnostics = resample_estimates_to_track5_template(
             estimates,
@@ -298,7 +309,8 @@ def write_track5_estimate_ensemble_outputs(
 
     estimate_input_list = list(estimate_inputs)
     loaded_inputs = [
-        (item.label, read_estimate_csv(item.path), float(item.weight)) for item in estimate_input_list
+        (item.label, read_estimate_csv(item.path), float(item.weight))
+        for item in estimate_input_list
     ]
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -357,7 +369,9 @@ def write_track5_estimate_ensemble_outputs(
         "max_nearest_time_delta_s": max_nearest_time_delta_s,
         "aggregation_policy": aggregation_policy,
         "trim_fraction": float(trim_fraction),
-        "mean_position_spread_m": _safe_mean(diagnostics.get("position_spread_m", pd.Series(dtype=float))),
+        "mean_position_spread_m": _safe_mean(
+            diagnostics.get("position_spread_m", pd.Series(dtype=float))
+        ),
         "p95_position_spread_m": _safe_percentile(
             diagnostics.get("position_spread_m", pd.Series(dtype=float)),
             95,
@@ -448,7 +462,12 @@ def _aggregate_xyz(
     if policy == "weighted-median":
         return np.asarray([_weighted_median(xyz[:, axis], weights) for axis in range(3)])
     if policy == "trimmed-mean":
-        return np.asarray([_trimmed_weighted_mean(xyz[:, axis], weights, trim_fraction) for axis in range(3)])
+        return np.asarray(
+            [
+                _trimmed_weighted_mean(xyz[:, axis], weights, trim_fraction)
+                for axis in range(3)
+            ]
+        )
     raise ValueError(f"unsupported aggregation policy: {policy}")
 
 
@@ -551,6 +570,51 @@ def _first_present(rows: pd.DataFrame, names: tuple[str, ...]) -> str | None:
     return None
 
 
+def _normalize_estimate_weight_mapping(raw_weights: dict[Any, Any]) -> dict[str, float]:
+    safe_labels = _normalize_unique_labels(raw_weights.keys(), context="ensemble weight")
+    weights: dict[str, float] = {}
+    for raw_label, safe_label in zip(raw_weights.keys(), safe_labels):
+        weights[safe_label] = _validate_ensemble_weight(
+            float(raw_weights[raw_label]),
+            label=safe_label,
+        )
+    return weights
+
+
+def _normalize_unique_labels(raw_labels: Iterable[Any], *, context: str) -> list[str]:
+    seen_labels: dict[str, str] = {}
+    safe_labels: list[str] = []
+    for raw_label in raw_labels:
+        raw_text = str(raw_label)
+        safe_label = _safe_label(raw_text)
+        _check_label_is_unique(
+            safe_label,
+            raw_label=raw_text,
+            seen_labels=seen_labels,
+            context=context,
+        )
+        safe_labels.append(safe_label)
+    return safe_labels
+
+
+def _check_label_is_unique(
+    safe_label: str,
+    *,
+    raw_label: str,
+    seen_labels: dict[str, str],
+    context: str,
+) -> None:
+    previous = seen_labels.get(safe_label)
+    if previous is not None:
+        if previous == raw_label:
+            raise ValueError(f"{context} label {safe_label!r} is duplicated")
+        raise ValueError(
+            f"{context} labels collide after normalization: "
+            f"{previous!r} and {raw_label!r} both normalize to {safe_label!r}"
+        )
+    seen_labels[safe_label] = raw_label
+
+
 def _safe_label(value: str) -> str:
     label = str(value).strip().replace(" ", "_").replace("/", "_").replace("\\", "_")
     return label or "estimate"
@@ -558,8 +622,10 @@ def _safe_label(value: str) -> str:
 
 def _jsonable(value: Any) -> Any:
     if isinstance(value, dict):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, list | tuple):
+        return {str(key): _jsonable(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, tuple):
         return [_jsonable(item) for item in value]
     if isinstance(value, np.ndarray):
         return value.tolist()
@@ -567,6 +633,8 @@ def _jsonable(value: Any) -> Any:
         return value.item()
     if isinstance(value, float) and not np.isfinite(value):
         return None
+    if isinstance(value, Path):
+        return str(value)
     return value
 
 
