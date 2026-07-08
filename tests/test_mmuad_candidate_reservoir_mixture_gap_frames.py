@@ -100,6 +100,53 @@ def test_gap_cli_writes_artifacts(tmp_path: Path) -> None:
     assert payload["pooled"][0]["mixture_mse_3d_m2"] == pytest.approx((1.0 + 9.0 + 4.0) / 3.0)
 
 
+def test_gap_cli_preserves_numeric_looking_sequence_ids(tmp_path: Path) -> None:
+    estimates_csv = tmp_path / "estimates.csv"
+    oracle_csv = tmp_path / "oracle.csv"
+    frame_csv = tmp_path / "gap_frames.csv"
+    summary_csv = tmp_path / "gap_summary.csv"
+    by_sequence_csv = tmp_path / "gap_by_sequence.csv"
+    summary_json = tmp_path / "gap_summary.json"
+    pd.DataFrame(
+        {
+            "sequence_id": ["001"],
+            "time_s": [0.0],
+            "position_error_3d_m": [3.0],
+        }
+    ).to_csv(estimates_csv, index=False)
+    pd.DataFrame(
+        {
+            "sequence_id": ["001"],
+            "time_s": [0.0],
+            "oracle_all_3d_m": [1.0],
+        }
+    ).to_csv(oracle_csv, index=False)
+
+    status = gap_main(
+        [
+            "--estimates-csv",
+            str(estimates_csv),
+            "--oracle-frame-csv",
+            str(oracle_csv),
+            "--output-frame-csv",
+            str(frame_csv),
+            "--output-summary-csv",
+            str(summary_csv),
+            "--output-by-sequence-csv",
+            str(by_sequence_csv),
+            "--output-json",
+            str(summary_json),
+        ]
+    )
+
+    assert status == 0
+    frame_gap = pd.read_csv(frame_csv, dtype=str, keep_default_na=False)
+    assert frame_gap.loc[0, "sequence_id"] == "001"
+    assert float(frame_gap.loc[0, "gap_to_oracle_all_3d_m"]) == pytest.approx(2.0)
+    payload = json.loads(summary_json.read_text(encoding="utf-8"))
+    assert payload["by_sequence"][0]["sequence_id"] == "001"
+
+
 def test_gap_frame_entrypoint_is_exposed() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert (
