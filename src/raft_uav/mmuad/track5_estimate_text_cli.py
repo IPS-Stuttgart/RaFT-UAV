@@ -8,7 +8,16 @@ from typing import Any
 
 _impl = importlib.import_module("raft_uav.mmuad.track5_estimate_sequence_" + "gate_fit")
 _ORIGINAL_READ_CSV = _impl.pd.read_csv
-_SEQUENCE_COLUMNS = ("sequence_id", "Sequence", "sequence", "seq")
+_SEQUENCE_COLUMNS = (
+    "sequence_id",
+    "Sequence",
+    "sequence",
+    "seq",
+    "scene",
+    "scene_id",
+    "clip",
+    "clip_id",
+)
 
 
 def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
