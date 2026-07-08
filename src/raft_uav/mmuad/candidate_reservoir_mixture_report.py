@@ -27,6 +27,7 @@ from raft_uav.mmuad.candidate_reservoir_bottleneck import annotate_gap_table
 from raft_uav.mmuad.candidate_reservoir_bottleneck import build_bottleneck_summary
 from raft_uav.mmuad.candidate_reservoir_mixture_gap_frames import build_frame_gap_table
 from raft_uav.mmuad.candidate_reservoir_mixture_gap_frames import summarize_frame_gap
+from raft_uav.mmuad.class_probability_csv import read_sequence_text_csv
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 
 DEFAULT_ESTIMATES_CSV = "mmuad_candidate_mixture_estimates.csv"
@@ -149,8 +150,8 @@ def main(argv: list[str] | None = None) -> int:
     output_dir = Path(args.output_dir) if args.output_dir is not None else run_dir
     estimates_csv = args.estimates_csv or run_dir / DEFAULT_ESTIMATES_CSV
     oracle_frame_csv = args.oracle_frame_csv or run_dir / DEFAULT_ORACLE_FRAME_CSV
-    estimates = pd.read_csv(estimates_csv)
-    oracle_frames = pd.read_csv(oracle_frame_csv)
+    estimates = read_sequence_text_csv(estimates_csv)
+    oracle_frames = read_sequence_text_csv(oracle_frame_csv)
     truth = None if args.truth_csv is None else load_evaluation_truth_file(args.truth_csv).rows
     config = BottleneckConfig(
         near_oracle_ratio=float(args.near_oracle_ratio),
