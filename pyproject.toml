@@ -145,6 +145,7 @@ raft-uav-mmuad-track5-trajectory-regularizer = "raft_uav.mmuad.track5_trajectory
 raft-uav-mmuad-track5-trajectory-smooth = "raft_uav.mmuad.track5_trajectory_smooth:main"
 raft-uav-mmuad-track5-uncertainty-ensemble = "raft_uav.mmuad.track5_uncertainty_ensemble:main"
 raft-uav-mmuad-track5-uncertainty-ensemble-weight-search = "raft_uav.mmuad.track5_uncertainty_ensemble_weight_search:main"
+raft-uav-mmuad-track5-rts-ensemble = "raft_uav.mmuad.track5_rts_ensemble:main"
 raft-uav-mmuad-track5-uncertainty-column-adapter = "raft_uav.mmuad.track5_uncertainty_column_adapter:main"
 
 [tool.setuptools.packages.find]
