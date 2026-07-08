@@ -111,6 +111,7 @@ raft-uav-mmuad-class-prob-context = "raft_uav.mmuad.class_probability_context_cl
 raft-uav-mmuad-template-resample = "raft_uav.mmuad.track5_template_resample_cli:main"
 raft-uav-mmuad-track5-speed-limit = "raft_uav.mmuad.track5_speed_limit:main"
 raft-uav-mmuad-track5-acceleration-limit = "raft_uav.mmuad.track5_acceleration_limit:main"
+raft-uav-mmuad-track5-hampel-repair = "raft_uav.mmuad.track5_hampel_repair:main"
 raft-uav-mmuad-track5-vertical-repair = "raft_uav.mmuad.track5_vertical_repair:main"
 raft-uav-mmuad-track5-class-ensemble = "raft_uav.mmuad.track5_class_conditioned_ensemble:main"
 raft-uav-mmuad-track5-classification-relabel = "raft_uav.mmuad.track5_classification_relabel:main"
