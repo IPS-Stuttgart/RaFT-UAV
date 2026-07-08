@@ -69,6 +69,42 @@ def _install_lts_submission_domain_guard() -> None:
     _cli._summarize_prediction_text = _summarize_prediction_text
 
 
+def _install_lts_duplicate_key_validation_guard() -> None:
+    try:
+        from raft_uav.multi_uav_lts import cli as _cli
+        from raft_uav.numeric import optional_int as _optional_int
+    except Exception:
+        return
+
+    installed_attr = "_raft_uav_duplicate_key_validation_guard_installed"
+    if getattr(_cli, installed_attr, False):
+        return
+    original = _cli._summarize_prediction_text
+
+    def _summarize_prediction_text(name: str, text: str):
+        summary = original(name, text)
+        duplicate_rows = _count_duplicate_frame_object_rows(
+            text,
+            parse_int_like=_optional_int,
+        )
+        if duplicate_rows == 0:
+            return summary
+        return _cli.SubmissionFileSummary(
+            name=summary.name,
+            row_count=summary.row_count,
+            first_frame=summary.first_frame,
+            last_frame=summary.last_frame,
+            unique_object_ids=summary.unique_object_ids,
+            parse_errors=summary.parse_errors + duplicate_rows,
+            invalid_geometry_rows=summary.invalid_geometry_rows,
+            invalid_confidence_rows=summary.invalid_confidence_rows,
+            unsorted_rows=summary.unsorted_rows,
+        )
+
+    _cli._summarize_prediction_text = _summarize_prediction_text
+    setattr(_cli, installed_attr, True)
+
+
 def _count_invalid_class_visibility_rows(text: str, *, parse_int_like) -> int:
     count = 0
     for raw in text.splitlines():
@@ -96,5 +132,33 @@ def _count_invalid_class_visibility_rows(text: str, *, parse_int_like) -> int:
     return count
 
 
+def _count_duplicate_frame_object_rows(text: str, *, parse_int_like) -> int:
+    duplicate_rows = 0
+    seen: set[tuple[int, int]] = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) != 9:
+            continue
+        try:
+            frame_id = parse_int_like(parts[0])
+            object_id = parse_int_like(parts[1])
+        except ValueError:
+            continue
+        if frame_id is None or object_id is None:
+            continue
+        if frame_id <= 0 or object_id <= 0:
+            continue
+        key = (int(frame_id), int(object_id))
+        if key in seen:
+            duplicate_rows += 1
+        else:
+            seen.add(key)
+    return duplicate_rows
+
+
 _install_zero_frame_coverage_guard()
 _install_lts_submission_domain_guard()
+_install_lts_duplicate_key_validation_guard()
