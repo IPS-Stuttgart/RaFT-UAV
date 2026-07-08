@@ -17,6 +17,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.class_probability_csv import read_sequence_text_csv
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 from raft_uav.mmuad.schema import normalize_truth_columns
 from raft_uav.mmuad.tracker import add_truth_errors
@@ -196,8 +197,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--time-round-decimals", type=int, default=6)
     args = parser.parse_args(argv)
 
-    estimates = pd.read_csv(args.estimates_csv)
-    oracle_frames = pd.read_csv(args.oracle_frame_csv)
+    estimates = read_sequence_text_csv(args.estimates_csv)
+    oracle_frames = read_sequence_text_csv(args.oracle_frame_csv)
     truth = None if args.truth_csv is None else load_evaluation_truth_file(args.truth_csv).rows
     frame_gap = build_frame_gap_table(
         estimates,
