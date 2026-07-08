@@ -85,6 +85,7 @@ raft-uav-mmuad-candidate-reservoir-grid = "raft_uav.mmuad.candidate_reservoir_gr
 raft-uav-mmuad-apply-candidate-reservoir-config = "raft_uav.mmuad.candidate_reservoir_apply:main"
 raft-uav-mmuad-candidate-pull = "raft_uav.mmuad.candidate_pull:main"
 raft-uav-mmuad-candidate-pool-compare = "raft_uav.mmuad.candidate_pool_compare_cli:main"
+raft-uav-mmuad-candidate-pool-branch-ablation = "raft_uav.mmuad.candidate_pool_branch_ablation:main"
 raft-uav-mmuad-candidate-mixture-map = "raft_uav.mmuad.candidate_mixture_map:main"
 raft-uav-mmuad-grouped-candidate-mixture-map = "raft_uav.mmuad.candidate_mixture_map_grouped:main"
 raft-uav-mmuad-stratified-candidate-mixture-map = "raft_uav.mmuad.candidate_mixture_map_stratified:main"
@@ -138,8 +139,6 @@ raft-uav-mmuad-track5-temporal-repair = "raft_uav.mmuad.track5_temporal_repair:m
 raft-uav-mmuad-track5-temporal-repair-search = "raft_uav.mmuad.track5_temporal_repair_search:main"
 raft-uav-mmuad-track5-trajectory-smooth = "raft_uav.mmuad.track5_trajectory_smooth:main"
 raft-uav-mmuad-track5-uncertainty-column-adapter = "raft_uav.mmuad.track5_uncertainty_column_adapter:main"
-raft-uav-mmuad-track5-uncertainty-ensemble = "raft_uav.mmuad.track5_uncertainty_ensemble:main"
-raft-uav-mmuad-track5-uncertainty-ensemble-weight-search = "raft_uav.mmuad.track5_uncertainty_ensemble_weight_search:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
