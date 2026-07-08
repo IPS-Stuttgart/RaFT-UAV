@@ -66,7 +66,7 @@ def test_cv_smoother_correction_cap_limits_large_motion() -> None:
 
     assert diagnostics["cv_smoother_capped"].any()
     applied = smoothed["cv_smoother_applied_correction_m"]
-    assert applied.max() <= pytest.approx(1.0)
+    assert applied.max() <= 1.0 + 1.0e-9
 
 
 def test_cv_smoother_writes_leaderboard_ready_outputs(tmp_path: Path) -> None:
