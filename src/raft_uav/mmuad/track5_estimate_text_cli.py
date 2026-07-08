@@ -39,7 +39,10 @@ def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
     if converters:
         kwargs["converters"] = converters
     kwargs.setdefault("keep_default_na", False)
-    return _ORIGINAL_READ_CSV(path, *args, **kwargs)
+    rows = _ORIGINAL_READ_CSV(path, *args, **kwargs)
+    out = rows.copy()
+    out.columns = [str(column).strip() for column in out.columns]
+    return out
 
 
 def _drop_sequence_converters(converters: dict[Any, Any]) -> None:

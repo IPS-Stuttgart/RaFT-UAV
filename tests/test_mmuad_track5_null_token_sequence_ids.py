@@ -35,6 +35,26 @@ def test_estimate_fit_wrapper_preserves_default_null_tokens_as_sequence_ids(
     assert rows["sequence_id"].tolist() == ["NA", "N/A"]
 
 
+def test_estimate_fit_wrapper_strips_header_whitespace(tmp_path: Path) -> None:
+    csv_path = tmp_path / "normalized.csv"
+    csv_path.write_text(
+        " sequence_id , time_s , state_x_m , state_y_m , state_z_m \n"
+        "001,0.0,1.0,2.0,3.0\n",
+        encoding="utf-8",
+    )
+
+    rows = read_estimate_csv(csv_path)
+
+    assert rows.columns.tolist() == [
+        "sequence_id",
+        "time_s",
+        "state_x_m",
+        "state_y_m",
+        "state_z_m",
+    ]
+    assert rows.loc[0, "sequence_id"] == "001"
+
+
 def test_sequence_gate_fit_wrapper_preserves_default_null_tokens_as_sequence_ids(
     tmp_path: Path,
 ) -> None:
