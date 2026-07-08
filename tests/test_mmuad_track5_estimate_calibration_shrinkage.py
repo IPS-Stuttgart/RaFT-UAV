@@ -10,10 +10,10 @@ import pytest
 from raft_uav.mmuad.track5_estimate_calibration import fit_track5_estimate_calibration
 from raft_uav.mmuad.track5_estimate_calibration_shrinkage import (
     apply_track5_estimate_calibration_shrinkage,
-    main as shrinkage_main,
     search_track5_estimate_calibration_alpha,
     write_track5_estimate_calibration_shrinkage_outputs,
 )
+from raft_uav.mmuad.track5_estimate_calibration_shrinkage_cli import main as shrinkage_main
 
 
 def _template() -> pd.DataFrame:
@@ -154,9 +154,62 @@ def test_calibration_shrinkage_cli_search_and_apply_best_alpha(tmp_path: Path) -
     assert (output_dir / "apply" / "ug2_submission.zip").exists()
 
 
+def test_calibration_shrinkage_cli_preserves_numeric_looking_sequence_ids(
+    tmp_path: Path,
+) -> None:
+    estimates_csv = tmp_path / "estimates.csv"
+    template_csv = tmp_path / "template.csv"
+    calibration_json = tmp_path / "calibration.json"
+    output_dir = tmp_path / "out"
+    estimates_csv.write_text(
+        "sequence_id,time_s,state_x_m,state_y_m,state_z_m\n"
+        "001,0.0,1.0,2.0,3.0\n",
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        {
+            "Sequence": ["001"],
+            "Timestamp": [0.0],
+            "Position": ["(0,0,0)"],
+            "Classification": [2],
+        }
+    ).to_csv(template_csv, index=False)
+    calibration_json.write_text(json.dumps(_calibration()), encoding="utf-8")
+
+    status = shrinkage_main(
+        [
+            "--estimates-csv",
+            str(estimates_csv),
+            "--template",
+            str(template_csv),
+            "--calibration-json",
+            str(calibration_json),
+            "--output-dir",
+            str(output_dir),
+            "--alpha",
+            "0.0",
+            "--default-classification",
+            "2",
+            "--require-leaderboard-ready",
+        ]
+    )
+
+    assert status == 0
+    rows = pd.read_csv(
+        output_dir / "apply" / "mmuad_track5_calibration_shrunk_estimates.csv",
+        dtype=str,
+        keep_default_na=False,
+    )
+    validation_path = output_dir / "apply" / "mmuad_track5_calibration_shrinkage_validation.json"
+    validation = json.loads(validation_path.read_text(encoding="utf-8"))
+    assert rows.loc[0, "sequence_id"] == "001"
+    assert float(rows.loc[0, "state_x_m"]) == pytest.approx(1.0)
+    assert validation["leaderboard_ready"] is True
+
+
 def test_calibration_shrinkage_entrypoint_is_exposed() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert (
         pyproject["project"]["scripts"]["raft-uav-mmuad-track5-calibration-shrinkage"]
-        == "raft_uav.mmuad.track5_estimate_calibration_shrinkage:main"
+        == "raft_uav.mmuad.track5_estimate_calibration_shrinkage_cli:main"
     )
