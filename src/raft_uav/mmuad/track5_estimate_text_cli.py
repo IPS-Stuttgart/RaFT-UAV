@@ -47,12 +47,20 @@ def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
     return out
 
 
-def _sequence_columns_for_read(path: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[Any, ...]:
+def _sequence_columns_for_read(
+    path: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> tuple[Any, ...]:
     discovered = _discover_sequence_columns(path, args, kwargs)
     return tuple(dict.fromkeys((*_SEQUENCE_COLUMNS, *discovered)))
 
 
-def _discover_sequence_columns(path: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[Any, ...]:
+def _discover_sequence_columns(
+    path: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> tuple[Any, ...]:
     explicit_names = kwargs.get("names")
     if explicit_names is not None:
         return tuple(column for column in explicit_names if _is_sequence_column(column))
