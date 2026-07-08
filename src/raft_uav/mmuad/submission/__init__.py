@@ -24,8 +24,19 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR = "_raft_uav_original_normalize_track5_template"
+
 _LEGACY_LOAD_SEQUENCE_CLASS_MAP = _IMPL.load_sequence_class_map
-_LEGACY_NORMALIZE_TRACK5_TEMPLATE = _IMPL._impl._normalize_track5_template
+if not hasattr(_IMPL._impl, _ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR):
+    setattr(
+        _IMPL._impl,
+        _ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR,
+        _IMPL._impl._normalize_track5_template,
+    )
+_LEGACY_NORMALIZE_TRACK5_TEMPLATE = getattr(
+    _IMPL._impl,
+    _ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR,
+)
 
 
 def _strip_dataframe_column_whitespace(frame: Any) -> Any:
