@@ -42,7 +42,10 @@ class _PandasCsvProxy:
     def read_csv(self, *args: Any, **kwargs: Any) -> pd.DataFrame:
         kwargs.setdefault("dtype", str)
         kwargs.setdefault("keep_default_na", False)
-        return self._pandas.read_csv(*args, **kwargs)
+        rows = self._pandas.read_csv(*args, **kwargs)
+        out = rows.copy()
+        out.columns = [str(column).strip() for column in out.columns]
+        return out
 
 
 _IMPL.pd = _PandasCsvProxy(pd)
