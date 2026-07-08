@@ -135,6 +135,58 @@ def test_assignment_diagnostics_classify_buried_missing_and_covered() -> None:
     assert pooled["oracle_in_topk_by_weight_rate"] < 1.0
 
 
+def test_assignment_diagnostics_parse_string_mixture_dominant_without_weights() -> None:
+    assignments = pd.DataFrame.from_records(
+        [
+            {
+                "sequence_id": "seqA",
+                "time_s": 0.0,
+                "candidate_rank": 1,
+                "source": "lidar",
+                "track_id": "bad-string-false",
+                "candidate_branch": "raw",
+                "x_m": 10.0,
+                "y_m": 0.0,
+                "z_m": 0.0,
+                "mixture_dominant": "False",
+            },
+            {
+                "sequence_id": "seqA",
+                "time_s": 0.0,
+                "candidate_rank": 2,
+                "source": "lidar",
+                "track_id": "good-string-true",
+                "candidate_branch": "raw",
+                "x_m": 0.0,
+                "y_m": 0.0,
+                "z_m": 0.0,
+                "mixture_dominant": "True",
+            },
+        ]
+    )
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seqA"],
+            "time_s": [0.0],
+            "x_m": [0.0],
+            "y_m": [0.0],
+            "z_m": [0.0],
+        }
+    )
+
+    frames, _ = build_candidate_assignment_diagnostics(
+        assignments,
+        truth,
+        config=CandidateAssignmentDiagnosticsConfig(top_k=1),
+    )
+
+    frame = frames.iloc[0]
+    assert frame["dominant_track_id"] == "good-string-true"
+    assert frame["dominant_is_oracle"]
+    assert frame["max_mixture_weight"] == 1.0
+    assert frame["assignment_failure_mode"] == "covered"
+
+
 def test_assignment_diagnostics_cli_writes_artifacts(tmp_path: Path) -> None:
     assignments_csv = tmp_path / "assignments.csv"
     truth_csv = tmp_path / "truth.csv"
