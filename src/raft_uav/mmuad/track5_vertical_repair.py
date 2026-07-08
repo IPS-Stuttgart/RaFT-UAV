@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.submission import load_official_track5_template_file
 from raft_uav.mmuad.submission import validate_official_track5_submission
 from raft_uav.mmuad.submission import write_official_mmaud_results_csv
 from raft_uav.mmuad.submission import write_official_ug2_codabench_zip
@@ -200,7 +201,11 @@ def main(argv: list[str] | None = None) -> int:
         else float(args.max_horizontal_speed_mps),
         iterations=int(args.iterations),
     )
-    template = None if args.template is None else pd.read_csv(args.template)
+    template = (
+        None
+        if args.template is None
+        else load_official_track5_template_file(args.template)
+    )
     paths = write_track5_vertical_repair_outputs(
         repaired=repaired,
         diagnostics=diagnostics,
