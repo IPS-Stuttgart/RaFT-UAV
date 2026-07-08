@@ -598,9 +598,10 @@ def _mixture_response(
     for frame_index, frame in enumerate(frames):
         positions = np.asarray(frame["positions"], dtype=float)
         sigmas = np.asarray(frame["sigmas"], dtype=float)
+        response_sigmas = sigmas if float(config.sigma_log_weight) != 0.0 else np.ones_like(sigmas)
         scores = np.asarray(frame["normalized_scores"], dtype=float)
         distances = np.linalg.norm(positions - state[frame_index], axis=1)
-        normalized_residual = distances / sigmas
+        normalized_residual = distances / response_sigmas
         robust_cost = _robust_cost(normalized_residual, config=config)
         log_weight = (
             float(config.score_weight) * scores / float(config.temperature)
@@ -634,7 +635,7 @@ def _mixture_response(
         spread_variance = np.sum(
             weights * np.sum((positions - pseudo) ** 2, axis=1) / 3.0
         )
-        noise_variance = np.sum(weights * sigmas**2)
+        noise_variance = np.sum(weights * response_sigmas**2)
         effective_variance = max(float(noise_variance + spread_variance), 1.0e-12)
         precision = float(
             np.clip(

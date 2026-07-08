@@ -40,11 +40,14 @@ class _PandasCsvProxy:
         return getattr(self._pandas, name)
 
     def read_csv(self, *args: Any, **kwargs: Any) -> pd.DataFrame:
-        kwargs.setdefault("dtype", str)
+        kwargs["dtype"] = str
         kwargs.setdefault("keep_default_na", False)
         rows = self._pandas.read_csv(*args, **kwargs)
         out = rows.copy()
         out.columns = [str(column).strip() for column in out.columns]
+        for column in out.columns:
+            if out[column].dtype == object or str(out[column].dtype).startswith("string"):
+                out[column] = out[column].map(lambda value: value.strip() if isinstance(value, str) else value)
         return out
 
 

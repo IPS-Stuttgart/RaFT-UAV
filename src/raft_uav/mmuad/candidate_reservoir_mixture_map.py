@@ -222,10 +222,15 @@ def build_assignment_usage_summary(assignments: pd.DataFrame, group_column: str)
         rows[group_column] = "unknown"
     rows[group_column] = rows[group_column].fillna("unknown").astype(str)
     total_frames = _frame_count(rows)
-    total_responsibility = _numeric_series(rows, "mixture_final_weight", 0.0).sum()
+    responsibility_column = (
+        "mixture_responsibility"
+        if "mixture_responsibility" in rows.columns
+        else "mixture_final_weight"
+    )
+    total_responsibility = _numeric_series(rows, responsibility_column, 0.0).sum()
     records: list[dict[str, Any]] = []
     for value, group in rows.groupby(group_column, sort=True):
-        responsibility = _numeric_series(group, "mixture_final_weight", 0.0)
+        responsibility = _numeric_series(group, responsibility_column, 0.0)
         candidate_rank = _numeric_series(group, "candidate_rank", float("nan"))
         sigma = _numeric_series(group, "mixture_sigma_m", float("nan"))
         distance = _numeric_series(group, "mixture_distance_to_state_m", float("nan"))
@@ -234,6 +239,7 @@ def build_assignment_usage_summary(assignments: pd.DataFrame, group_column: str)
             if "mixture_dominant" in group.columns
             else pd.Series(False, index=group.index)
         )
+        dominant_count = int(dominant.sum())
         responsibility_sum = float(responsibility.sum())
         record = {
             group_column: str(value),
@@ -246,9 +252,9 @@ def build_assignment_usage_summary(assignments: pd.DataFrame, group_column: str)
                 float(total_responsibility),
             ),
             "responsibility_mean": _series_mean(responsibility),
-            "dominant_count": int(dominant.sum()),
-            "dominant_fraction_of_frames": _safe_ratio(int(dominant.sum()), total_frames),
-            "dominant_fraction_of_group_rows": _safe_ratio(int(dominant.sum()), len(group)),
+            "dominant_count": dominant_count,
+            "dominant_fraction_of_frames": _safe_ratio(dominant_count, total_frames),
+            "dominant_fraction_of_group_rows": _safe_ratio(dominant_count, len(group)),
             "mean_candidate_rank": _series_mean(candidate_rank),
             "p95_candidate_rank": _series_quantile(candidate_rank, 0.95),
             "mean_sigma_m": _series_mean(sigma),
