@@ -79,6 +79,7 @@ raft-uav-mmuad-candidate-assignment-blocks = "raft_uav.mmuad.candidate_assignmen
 raft-uav-mmuad-candidate-assignment-action-plan = "raft_uav.mmuad.candidate_assignment_action_plan:main"
 raft-uav-mmuad-candidate-assignment-branch-summary = "raft_uav.mmuad.candidate_assignment_branch_summary:main"
 raft-uav-mmuad-candidate-assignment-report = "raft_uav.mmuad.candidate_assignment_report:main"
+raft-uav-mmuad-candidate-oracle-targets = "raft_uav.mmuad.candidate_oracle_targets:main"
 raft-uav-mmuad-template-resample = "raft_uav.mmuad.track5_template_resample_cli:main"
 raft-uav-mmuad-track5-speed-limit = "raft_uav.mmuad.track5_speed_limit:main"
 raft-uav-mmuad-ensemble-track5-submissions = "raft_uav.mmuad.track5_submission_ensemble:main"
@@ -119,7 +120,6 @@ raft-uav-mmuad-coordinate-audit = "raft_uav.mmuad.coordinate_alignment_audit:mai
 raft-uav-mmuad-sequence-alignment-audit = "raft_uav.mmuad.sequence_alignment_audit:main"
 raft-uav-mmuad-radar-extraction-audit = "raft_uav.mmuad.radar_extraction_audit:main"
 raft-uav-mmuad-candidate-oracle-gap = "raft_uav.mmuad.candidate_oracle_gap:main"
-raft-uav-mmuad-stratified-mixture-submission = "raft_uav.mmuad.stratified_mixture_submission:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
