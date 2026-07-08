@@ -39,6 +39,22 @@ def _read_text_csv(path: Path) -> pd.DataFrame:
     return frame
 
 
+def _restore_plain_numeric_track_ids(frame: pd.DataFrame) -> pd.DataFrame:
+    """Restore simple integer ids while leaving padded or opaque text ids intact."""
+
+    out = frame.copy()
+    for column in ("track_id", "track", "id", "object_id", "cluster_id", "instance_id"):
+        if column not in out.columns:
+            continue
+        text = out[column].astype(str).str.strip()
+        present = text.ne("") & ~text.str.lower().isin({"nan", "none", "<na>"})
+        if bool(present.any()) and bool(text.loc[present].str.fullmatch(r"0|[1-9]\d*").all()):
+            out[column] = out[column].astype(object)
+            out.loc[present, column] = pd.to_numeric(text.loc[present], errors="raise")
+        return out
+    return out
+
+
 def load_candidate_csv(
     path: Path,
     *,
@@ -47,7 +63,7 @@ def load_candidate_csv(
 ) -> _impl.CandidateFrame:
     """Load a normalized or alias-compatible candidate CSV without coercing ids."""
 
-    raw = _read_text_csv(Path(path))
+    raw = _restore_plain_numeric_track_ids(_read_text_csv(Path(path)))
     if _impl._should_add_default_candidate_source(raw, source=source):
         raw["source"] = source
     rows = _impl.normalize_candidate_columns(
