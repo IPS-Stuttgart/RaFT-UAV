@@ -47,6 +47,7 @@ def build_reservoir_mixture_report(
     truth: pd.DataFrame | None = None,
     bottleneck_config: BottleneckConfig | None = None,
     time_round_decimals: int = 6,
+    time_join_tolerance_s: float | None = None,
 ) -> dict[str, pd.DataFrame | dict[str, Any]]:
     """Build frame-gap, bottleneck, and compact JSON report objects."""
 
@@ -56,6 +57,7 @@ def build_reservoir_mixture_report(
         oracle_frames,
         truth=truth,
         time_round_decimals=int(time_round_decimals),
+        time_join_tolerance_s=time_join_tolerance_s,
     )
     gap_summary = summarize_frame_gap(frame_gap)
     gap_by_sequence = summarize_frame_gap(frame_gap, group_column="sequence_id")
@@ -72,6 +74,7 @@ def build_reservoir_mixture_report(
         "config": {
             "bottleneck": asdict(config),
             "time_round_decimals": int(time_round_decimals),
+            "time_join_tolerance_s": time_join_tolerance_s,
         },
         "frame_count": int(len(frame_gap)),
         "pooled_gap": _first_record(gap_summary),
@@ -144,6 +147,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--topk-recall-ratio", type=float, default=1.50)
     parser.add_argument("--topk-recall-absolute-gap-mse", type=float, default=10.0)
     parser.add_argument("--time-round-decimals", type=int, default=6)
+    parser.add_argument(
+        "--time-join-tolerance-s",
+        type=float,
+        help=(
+            "use nearest per-sequence estimate/oracle timestamp matching within this "
+            "tolerance; omit to keep exact rounded-time matching"
+        ),
+    )
     args = parser.parse_args(argv)
 
     run_dir = Path(args.run_dir)
@@ -167,6 +178,7 @@ def main(argv: list[str] | None = None) -> int:
         truth=truth,
         bottleneck_config=config,
         time_round_decimals=int(args.time_round_decimals),
+        time_join_tolerance_s=args.time_join_tolerance_s,
     )
     paths = write_reservoir_mixture_report_outputs(report, output_dir=output_dir)
     payload = report["report"]
