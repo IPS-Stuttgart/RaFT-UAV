@@ -104,8 +104,13 @@ def load_track5_submission(path: Path) -> pd.DataFrame:
                 rows = _read_track5_submission_csv(handle)
     else:
         rows = _read_track5_submission_csv(path)
-    rows = _normalize_official_submission_frame(rows, source_path=path)
-    return _normalize_submission_rows(rows, source_path=path)
+    try:
+        rows = _normalize_official_submission_frame(rows, source_path=path)
+        return _normalize_submission_rows(rows, source_path=path)
+    except ValueError:
+        if _has_normalized_submission_columns(rows):
+            return _normalize_internal_submission_rows(rows, source_path=path)
+        raise
 
 
 def _normalize_official_submission_frame(rows: pd.DataFrame, *, source_path: Path) -> pd.DataFrame:
@@ -366,6 +371,41 @@ def _normalize_submission_rows(rows: pd.DataFrame, *, source_path: Path) -> pd.D
         .sort_values(["sequence_id", "time_s"])
         .reset_index(drop=True)
     )
+
+
+def _has_normalized_submission_columns(rows: pd.DataFrame) -> bool:
+    normalized = {str(column).strip() for column in rows.columns}
+    return {
+        "sequence_id",
+        "time_s",
+        "state_x_m",
+        "state_y_m",
+        "state_z_m",
+        "Classification",
+    }.issubset(normalized)
+
+
+def _normalize_internal_submission_rows(rows: pd.DataFrame, *, source_path: Path) -> pd.DataFrame:
+    frame = pd.DataFrame(rows).copy()
+    frame.columns = [str(column).strip() for column in frame.columns]
+    out = pd.DataFrame(
+        {
+            "sequence_id": frame["sequence_id"].astype(str),
+            "time_s": pd.to_numeric(frame["time_s"], errors="coerce"),
+            "state_x_m": pd.to_numeric(frame["state_x_m"], errors="coerce"),
+            "state_y_m": pd.to_numeric(frame["state_y_m"], errors="coerce"),
+            "state_z_m": pd.to_numeric(frame["state_z_m"], errors="coerce"),
+            "Classification": pd.to_numeric(frame["Classification"], errors="coerce"),
+        }
+    )
+    finite = np.isfinite(
+        out[["time_s", "state_x_m", "state_y_m", "state_z_m", "Classification"]].to_numpy(float)
+    ).all(axis=1)
+    out = out.loc[finite].copy()
+    if out.empty:
+        raise ValueError(f"{source_path} contains no finite normalized submission rows")
+    out["Classification"] = out["Classification"].astype(int)
+    return out.sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
 def _parse_timestamp_cell(value: Any) -> float:

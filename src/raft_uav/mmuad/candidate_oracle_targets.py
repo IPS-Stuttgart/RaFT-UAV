@@ -263,7 +263,7 @@ def _summary_record(frame_summary: pd.DataFrame, *, sequence_id: str) -> dict[st
         values = pd.to_numeric(frame_summary[column], errors="coerce").dropna().to_numpy(float)
         if len(values) == 0:
             continue
-        prefix = column[: -len("_3d_m")]
+        prefix = _summary_metric_prefix(column)
         mse = float(np.mean(values**2))
         record[f"{prefix}_mse_3d_m2"] = mse
         record[f"{prefix}_rmse_3d_m"] = float(np.sqrt(mse))
@@ -277,6 +277,13 @@ def _summary_record(frame_summary: pd.DataFrame, *, sequence_id: str) -> dict[st
             for top_k in (1, 3, 5, 10, 20):
                 record[f"oracle_in_score_top{top_k}_fraction"] = float((ranks <= top_k).mean())
     return _jsonable(record)
+
+
+def _summary_metric_prefix(column: str) -> str:
+    prefix = column[: -len("_3d_m")]
+    if prefix.endswith("_error"):
+        return prefix[: -len("_error")]
+    return prefix
 
 
 def _candidate_score(rows: pd.DataFrame, *, config: CandidateOracleTargetConfig) -> pd.Series:
