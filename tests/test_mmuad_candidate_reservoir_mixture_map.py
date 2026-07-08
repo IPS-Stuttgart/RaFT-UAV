@@ -22,7 +22,7 @@ def _candidate_rows() -> pd.DataFrame:
                     "x_m": float(time_s),
                     "y_m": 0.0,
                     "z_m": 1.0,
-                    "ranker_score": 0.1,
+                    "ranker_score": 0.9,
                     "predicted_sigma_m": 1.0,
                 },
                 {
@@ -34,7 +34,7 @@ def _candidate_rows() -> pd.DataFrame:
                     "x_m": float(time_s + 10),
                     "y_m": 0.0,
                     "z_m": 1.0,
-                    "ranker_score": 0.9,
+                    "ranker_score": 0.1,
                     "predicted_sigma_m": 5.0,
                 },
             ]
