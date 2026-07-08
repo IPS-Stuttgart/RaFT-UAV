@@ -64,6 +64,39 @@ def test_rts_ensemble_downweights_disagreement_spike_temporally() -> None:
     assert diagnostics.loc[diagnostics["time_s"] == 2.0, "input_spread_m"].iloc[0] > 5.0
 
 
+def test_rts_ensemble_matches_epoch_timestamps_with_absolute_tolerance_only() -> None:
+    base_time = 1_700_000_000.0
+    times = base_time + np.arange(3, dtype=float)
+    template = pd.DataFrame(
+        {
+            "Sequence": ["seq0001"] * 3,
+            "Timestamp": times,
+            "Position": ["(0,0,0)"] * 3,
+            "Classification": [2] * 3,
+        }
+    )
+    estimate = pd.DataFrame(
+        {
+            "sequence_id": ["seq0001"] * 3,
+            "time_s": times,
+            "state_x_m": [0.0, 10.0, 20.0],
+            "state_y_m": [1.0, 2.0, 3.0],
+            "state_z_m": [4.0, 5.0, 6.0],
+        }
+    )
+
+    _, diagnostics = build_track5_rts_ensemble(
+        [("estimate", estimate, 1.0)],
+        template,
+        measurement_sigma_m=1.0,
+        process_accel_std_mps2=10.0,
+    )
+
+    assert diagnostics["valid_input_count"].tolist() == [1, 1, 1]
+    assert diagnostics["weighted_x_m"].tolist() == pytest.approx([0.0, 10.0, 20.0])
+    assert diagnostics["weighted_y_m"].tolist() == pytest.approx([1.0, 2.0, 3.0])
+
+
 def test_rts_ensemble_writes_leaderboard_ready_artifacts(tmp_path: Path) -> None:
     good_csv = tmp_path / "good.csv"
     spiky_csv = tmp_path / "spiky.csv"
@@ -92,6 +125,43 @@ def test_rts_ensemble_writes_leaderboard_ready_artifacts(tmp_path: Path) -> None
         assert archive.namelist() == ["mmaud_results.csv"]
     official = pd.read_csv(paths["official_results_csv"])
     assert official["Classification"].tolist() == [2, 2, 2, 2, 2]
+
+
+def test_rts_ensemble_preserves_zero_padded_sequence_ids_from_input_csv(tmp_path: Path) -> None:
+    estimate_csv = tmp_path / "estimate.csv"
+    estimate = pd.DataFrame(
+        {
+            "Sequence": ["001", "001"],
+            "Timestamp": [0.0, 1.0],
+            "x": [1.0, 2.0],
+            "y": [3.0, 4.0],
+            "z": [5.0, 6.0],
+        }
+    )
+    template = pd.DataFrame(
+        {
+            "Sequence": ["001", "001"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,0)", "(0,0,0)"],
+            "Classification": [2, 2],
+        }
+    )
+    estimate.to_csv(estimate_csv, index=False)
+
+    paths = write_track5_rts_ensemble_outputs(
+        estimate_inputs=[parse_estimate_spec(f"estimate={estimate_csv}@1.0")],
+        template=template,
+        output_dir=tmp_path / "out",
+        class_map={"001": "2"},
+        measurement_sigma_m=1.0,
+        process_accel_std_mps2=0.1,
+    )
+
+    manifest = json.loads(paths["manifest_json"].read_text(encoding="utf-8"))
+    assert manifest["valid_rows"] == 2
+    official = pd.read_csv(paths["official_results_csv"], dtype=str)
+    assert official["Sequence"].tolist() == ["001", "001"]
+    assert official["Classification"].tolist() == ["2", "2"]
 
 
 def test_rts_ensemble_cli_writes_outputs(tmp_path: Path) -> None:
