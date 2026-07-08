@@ -170,6 +170,59 @@ def test_speed_limit_cli_preserves_normalized_csv_sequence_ids(tmp_path: Path) -
     assert validation["leaderboard_ready"] is True
 
 
+def test_speed_limit_cli_strips_padded_normalized_csv_headers(tmp_path: Path) -> None:
+    submission = tmp_path / "normalized_submission_padded_headers.csv"
+    template = tmp_path / "template.csv"
+    output_dir = tmp_path / "out"
+    rows = pd.DataFrame(
+        {
+            "sequence_id": ["001", "001"],
+            "time_s": [0.0, 1.0],
+            "state_x_m": [0.0, 1.0],
+            "state_y_m": [0.0, 0.0],
+            "state_z_m": [0.0, 0.0],
+            "Classification": [2, 2],
+        }
+    )
+    rows.rename(columns=lambda column: f" {column} ").to_csv(submission, index=False)
+    pd.DataFrame(
+        {
+            "Sequence": ["001", "001"],
+            "Timestamp": [0.0, 1.0],
+            "Position": ["(0,0,0)", "(0,0,0)"],
+            "Classification": [2, 2],
+        }
+    ).to_csv(template, index=False)
+
+    assert (
+        speed_limit_main(
+            [
+                "--submission",
+                str(submission),
+                "--template",
+                str(template),
+                "--output-dir",
+                str(output_dir),
+                "--max-speed-mps",
+                "10",
+                "--require-leaderboard-ready",
+            ]
+        )
+        == 0
+    )
+
+    official = pd.read_csv(
+        output_dir / "mmaud_results_speed_limited.csv",
+        dtype={"Sequence": "string"},
+        keep_default_na=False,
+    )
+    validation = json.loads(
+        (output_dir / "mmuad_track5_speed_limit_validation.json").read_text(encoding="utf-8")
+    )
+    assert official["Sequence"].tolist() == ["001", "001"]
+    assert validation["leaderboard_ready"] is True
+
+
 def test_speed_limit_entrypoint_is_exposed() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert (

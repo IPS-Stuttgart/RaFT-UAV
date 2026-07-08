@@ -303,7 +303,7 @@ def _previous_speeds(xyz: np.ndarray, times: np.ndarray) -> np.ndarray:
 
 
 def _normalized_submission(submission: pd.DataFrame) -> pd.DataFrame:
-    rows = pd.DataFrame(submission).copy()
+    rows = _strip_csv_headers(pd.DataFrame(submission).copy())
     required = {"sequence_id", "time_s", "state_x_m", "state_y_m", "state_z_m", "Classification"}
     missing = required - set(rows.columns)
     if missing:
@@ -329,11 +329,19 @@ def _load_speed_limit_submission(path: Path) -> pd.DataFrame:
 def _read_normalized_submission_csv(path: Path) -> pd.DataFrame:
     """Read normalized estimate CSVs without coercing opaque sequence identifiers."""
 
-    sequence_dtypes = {column: "string" for column in _NORMALIZED_SEQUENCE_ID_COLUMNS}
     try:
-        return pd.read_csv(path, dtype=sequence_dtypes, keep_default_na=False)
+        rows = pd.read_csv(path, dtype=str, keep_default_na=False)
     except TypeError:
-        return pd.read_csv(path)
+        rows = pd.read_csv(path, dtype=str)
+    return _strip_csv_headers(rows)
+
+
+def _strip_csv_headers(rows: pd.DataFrame) -> pd.DataFrame:
+    """Strip spreadsheet-exported whitespace from CSV column names."""
+
+    return rows.rename(
+        columns={column: column.strip() for column in rows.columns if isinstance(column, str)}
+    )
 
 
 def _diagnostic_columns() -> list[str]:
