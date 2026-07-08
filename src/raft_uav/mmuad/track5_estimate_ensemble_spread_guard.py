@@ -17,6 +17,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.estimate_csv import read_estimate_csv
 from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
     load_sequence_class_map,
@@ -37,12 +38,6 @@ OFFICIAL_RESULTS_CSV = "mmaud_results.csv"
 OFFICIAL_ZIP = "ug2_submission.zip"
 FALLBACK_POLICIES = ("max-weight", "first", "label")
 TEMPLATE_TIME_MATCH_ATOL_S = 1.0e-9
-_ESTIMATE_SEQUENCE_TEXT_DTYPES = {
-    "sequence_id": str,
-    "Sequence": str,
-    "sequence": str,
-    "seq": str,
-}
 
 
 def build_spread_guarded_estimate_ensemble(
@@ -331,13 +326,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _read_estimate_csv(path: Path) -> pd.DataFrame:
-    """Read estimate CSVs without coercing opaque sequence identifiers."""
+    """Read estimate CSVs without coercing opaque sequence identifiers or padded headers."""
 
-    return pd.read_csv(
-        path,
-        dtype=_ESTIMATE_SEQUENCE_TEXT_DTYPES,
-        keep_default_na=False,
-    )
+    return read_estimate_csv(path)
 
 
 def _fallback_row(
