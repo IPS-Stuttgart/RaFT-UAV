@@ -53,7 +53,11 @@ def test_vertical_repair_changes_only_isolated_z_spike() -> None:
     assert repaired_row["state_y_m"] == pytest.approx(0.0)
     assert repaired_row["Classification"] == 2
     assert int(diagnostics["repaired"].sum()) == 1
-    assert diagnostics.loc[diagnostics["repaired"], "vertical_repair_m"].iloc[0] == pytest.approx(-68.0)
+    repaired_delta = diagnostics.loc[
+        diagnostics["repaired"],
+        "vertical_repair_m",
+    ].iloc[0]
+    assert repaired_delta == pytest.approx(-68.0)
 
 
 def test_vertical_repair_keeps_point_when_horizontal_motion_is_implausible() -> None:
@@ -68,9 +72,14 @@ def test_vertical_repair_keeps_point_when_horizontal_motion_is_implausible() -> 
         iterations=1,
     )
 
-    assert repaired.loc[repaired["time_s"] == 2.0, "state_z_m"].iloc[0] == pytest.approx(80.0)
+    kept_z = repaired.loc[repaired["time_s"] == 2.0, "state_z_m"].iloc[0]
+    assert kept_z == pytest.approx(80.0)
     assert int(diagnostics["repaired"].sum()) == 0
-    assert not diagnostics.loc[diagnostics["time_s"] == 2.0, "horizontal_gate_ok"].iloc[0]
+    horizontal_ok = diagnostics.loc[
+        diagnostics["time_s"] == 2.0,
+        "horizontal_gate_ok",
+    ].iloc[0]
+    assert not horizontal_ok
 
 
 def test_vertical_repair_writes_leaderboard_ready_outputs(tmp_path: Path) -> None:
@@ -99,15 +108,16 @@ def test_vertical_repair_cli_writes_outputs(tmp_path: Path) -> None:
     submission_csv = tmp_path / "submission.csv"
     template_csv = tmp_path / "template.csv"
     output_dir = tmp_path / "out"
+    submission = _submission_rows()
     official = pd.DataFrame(
         {
-            "Sequence": _submission_rows()["sequence_id"],
-            "Timestamp": _submission_rows()["time_s"],
+            "Sequence": submission["sequence_id"],
+            "Timestamp": submission["time_s"],
             "Position": [
                 f"({row.state_x_m},{row.state_y_m},{row.state_z_m})"
-                for row in _submission_rows().itertuples(index=False)
+                for row in submission.itertuples(index=False)
             ],
-            "Classification": _submission_rows()["Classification"],
+            "Classification": submission["Classification"],
         }
     )
     official.to_csv(submission_csv, index=False)
