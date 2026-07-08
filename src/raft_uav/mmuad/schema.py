@@ -328,6 +328,11 @@ def _normalize_optional_id_values(values: pd.Series) -> pd.Series:
     text = values.where(values.notna(), "").astype(str).str.strip().str.lower()
     missing = values.isna() | text.eq("") | text.isin({"nan", "none", "<na>"})
     out.loc[missing] = np.nan
+    present = ~missing
+    numeric = pd.to_numeric(out.loc[present], errors="coerce")
+    if bool(present.any()) and bool(numeric.notna().all()):
+        out = out.astype(object)
+        out.loc[present] = numeric
     return out
 
 
