@@ -280,7 +280,10 @@ def _assignment_weights(group: pd.DataFrame) -> np.ndarray:
     if "mixture_final_weight" in group.columns:
         weights = pd.to_numeric(group["mixture_final_weight"], errors="coerce").fillna(0.0).to_numpy(float)
     elif "mixture_dominant" in group.columns:
-        weights = np.asarray([bool(value) for value in group["mixture_dominant"]], dtype=float)
+        weights = np.asarray(
+            [_parse_mixture_dominant_flag(value) for value in group["mixture_dominant"]],
+            dtype=float,
+        )
     else:
         weights = np.ones(len(group), dtype=float)
     weights = np.clip(weights, 0.0, None)
@@ -292,10 +295,31 @@ def _assignment_weights(group: pd.DataFrame) -> np.ndarray:
 
 def _dominant_index(group: pd.DataFrame, weights: np.ndarray) -> int:
     if "mixture_dominant" in group.columns:
-        dominant_mask = group["mixture_dominant"].astype(str).str.lower().isin({"true", "1", "yes"})
+        dominant_mask = np.asarray(
+            [_parse_mixture_dominant_flag(value) for value in group["mixture_dominant"]],
+            dtype=bool,
+        )
         if dominant_mask.any():
-            return int(np.flatnonzero(dominant_mask.to_numpy())[0])
+            return int(np.flatnonzero(dominant_mask)[0])
     return int(np.argmax(weights))
+
+
+def _parse_mixture_dominant_flag(value: Any) -> bool:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if value is None or pd.isna(value):
+        return False
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "1", "yes", "y", "t"}:
+            return True
+        if text in {"false", "0", "no", "n", "f", ""}:
+            return False
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return bool(np.isfinite(number) and number != 0.0)
 
 
 def _state_xyz(group: pd.DataFrame, fallback: np.ndarray) -> np.ndarray:
