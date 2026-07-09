@@ -15,6 +15,8 @@ _SEQUENCE_ID_ALIASES = (
     "seq",
     "scene",
     "scene_id",
+    "clip",
+    "clip_id",
     "heldout_sequence",
 )
 _SEQUENCE_ID_ALIAS_KEYS = frozenset(alias.strip().lower() for alias in _SEQUENCE_ID_ALIASES)

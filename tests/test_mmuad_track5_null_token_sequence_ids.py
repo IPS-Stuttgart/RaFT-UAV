@@ -64,3 +64,25 @@ def test_sequence_gate_fit_wrapper_preserves_default_null_tokens_as_sequence_ids
     rows = read_gate_csv(csv_path)
 
     assert rows["sequence_id"].tolist() == ["NA", "N/A"]
+
+
+def test_sequence_gate_fit_wrapper_preserves_clip_alias_ids_with_dtype_mapping(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "clip_alias.csv"
+    csv_path.write_text("clip,time_s\n001,0.0\n", encoding="utf-8")
+
+    rows = read_gate_csv(csv_path, dtype={"time_s": float})
+
+    assert rows["clip"].tolist() == ["001"]
+
+
+def test_sequence_gate_fit_wrapper_preserves_clip_id_alias_ids_with_dtype_mapping(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "clip_id_alias.csv"
+    csv_path.write_text("clip_id,time_s\n002,0.0\n", encoding="utf-8")
+
+    rows = read_gate_csv(csv_path, dtype={"time_s": float})
+
+    assert rows["clip_id"].tolist() == ["002"]
