@@ -79,6 +79,7 @@ raft-uav-mmuad-sequence-classifier-fusion = "raft_uav.mmuad.sequence_classifier_
 raft-uav-mmuad-sequence-alignment-audit = "raft_uav.mmuad.sequence_alignment_audit:main"
 raft-uav-mmuad-radar-extraction-audit = "raft_uav.mmuad.radar_extraction_audit:main"
 raft-uav-mmuad-track5-scorecard = "raft_uav.mmuad.track5_scorecard_cli:main"
+raft-uav-mmuad-track5-scorecard-compare = "raft_uav.mmuad.track5_scorecard_compare:main"
 raft-uav-mmuad-track5-sequence-gate-fit = "raft_uav.mmuad.track5_sequence_gate_fit_text_cli:main"
 raft-uav-mmuad-track5-sequence-gate-train-apply = "raft_uav.mmuad.track5_sequence_gate_train_apply:main"
 raft-uav-mmuad-candidate-reservoir = "raft_uav.mmuad.candidate_reservoir:main"
@@ -158,7 +159,3 @@ line-length = 100
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
-addopts = "--basetemp=.pytest-tmp"
-markers = [
-    "integration: tests that require the external AERPAW/Dryad dataset",
-]
