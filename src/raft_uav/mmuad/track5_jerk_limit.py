@@ -365,9 +365,10 @@ def _repair_sequence_once(
         correction_norm = np.linalg.norm(correction, axis=1)
     repaired_xyz = xyz.copy()
     repaired_xyz[applied] = xyz[applied] + float(repair_blend) * correction[applied]
+    actual_displacement = np.linalg.norm(repaired_xyz - xyz, axis=1)
     for axis, column in enumerate(("state_x_m", "state_y_m", "state_z_m")):
         work[column] = repaired_xyz[:, axis]
-    diagnostics = _diagnostics_for(work, jerk, applied, np.where(applied, correction_norm, 0.0))
+    diagnostics = _diagnostics_for(work, jerk, applied, np.where(applied, actual_displacement, 0.0))
     return work, diagnostics
 
 
