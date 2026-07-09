@@ -47,6 +47,30 @@ def test_candidate_oracle_blocks_split_missing_and_buried_modes() -> None:
     assert "good_candidate_buried" in pooled_modes
 
 
+def test_candidate_oracle_blocks_preserve_numeric_true_topk_flags() -> None:
+    rows = pd.DataFrame(
+        {
+            "sequence_id": ["seqC", "seqC", "seqC", "seqC"],
+            "time_s": [0.0, 0.5, 1.0, 1.5],
+            "oracle_all_3d_m": [0.2, 0.3, 0.4, 0.5],
+            "oracle_all_rank": [1, 2, 4, 5],
+            "oracle_in_top3": [1.0, "1.0", 0.0, "0.0"],
+        }
+    )
+
+    blocks, _ = build_candidate_oracle_block_tables(
+        rows,
+        oracle_error_threshold_m=5.0,
+        top_k=3,
+        max_gap_s=1.0,
+    )
+
+    covered = blocks.loc[blocks["oracle_failure_mode"] == "covered_in_topk"].iloc[0]
+    buried = blocks.loc[blocks["oracle_failure_mode"] == "good_candidate_buried"].iloc[0]
+    assert int(covered["frame_count"]) == 2
+    assert int(buried["frame_count"]) == 2
+
+
 def test_candidate_oracle_blocks_cli_writes_artifacts(tmp_path) -> None:
     frame_csv = tmp_path / "frames.csv"
     output_dir = tmp_path / "out"
