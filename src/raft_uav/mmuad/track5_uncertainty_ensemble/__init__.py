@@ -47,11 +47,27 @@ class _PandasCsvProxy:
         out.columns = [str(column).strip() for column in out.columns]
         for column in out.columns:
             if out[column].dtype == object or str(out[column].dtype).startswith("string"):
-                out[column] = out[column].map(lambda value: value.strip() if isinstance(value, str) else value)
+                out[column] = out[column].map(
+                    lambda value: value.strip() if isinstance(value, str) else value
+                )
         return out
 
 
 _IMPL.pd = _PandasCsvProxy(pd)
+
+
+def _first_present(rows: pd.DataFrame, names: tuple[str, ...]) -> Any | None:
+    """Return an existing column whose normalized header matches one of ``names``."""
+
+    by_normalized_name = {str(column).strip().lower(): column for column in rows.columns}
+    missing = object()
+    for name in names:
+        if name in rows.columns:
+            return name
+        found = by_normalized_name.get(str(name).strip().lower(), missing)
+        if found is not missing:
+            return found
+    return None
 
 
 def _normalized_sequence_values(values: pd.Series) -> pd.Series:
@@ -67,15 +83,16 @@ def _sequence_text_or_none(value: Any) -> str | None:
 
 def _normalize_uncertainty_rows(estimates: pd.DataFrame, *, column: str) -> pd.DataFrame:
     rows = pd.DataFrame(estimates).copy()
-    sequence_column = _IMPL._first_present(rows, _IMPL.SEQUENCE_ALIASES)
-    time_column = _IMPL._first_present(rows, _IMPL.TIME_ALIASES)
-    if sequence_column is None or time_column is None or column not in rows.columns:
+    sequence_column = _first_present(rows, _IMPL.SEQUENCE_ALIASES)
+    time_column = _first_present(rows, _IMPL.TIME_ALIASES)
+    sigma_column = _first_present(rows, (column,))
+    if sequence_column is None or time_column is None or sigma_column is None:
         return pd.DataFrame(columns=["sequence_id", "time_s", "sigma_m"])
     out = pd.DataFrame(
         {
             "sequence_id": _normalized_sequence_values(rows[sequence_column]),
             "time_s": pd.to_numeric(rows[time_column], errors="coerce"),
-            "sigma_m": pd.to_numeric(rows[column], errors="coerce"),
+            "sigma_m": pd.to_numeric(rows[sigma_column], errors="coerce"),
         }
     )
     finite = out["sequence_id"].notna()
@@ -86,8 +103,8 @@ def _normalize_uncertainty_rows(estimates: pd.DataFrame, *, column: str) -> pd.D
 
 def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     rows = pd.DataFrame(template).copy()
-    sequence_column = _IMPL._first_present(rows, _IMPL.SEQUENCE_ALIASES)
-    time_column = _IMPL._first_present(rows, _IMPL.TIME_ALIASES)
+    sequence_column = _first_present(rows, _IMPL.SEQUENCE_ALIASES)
+    time_column = _first_present(rows, _IMPL.TIME_ALIASES)
     if sequence_column is None or time_column is None:
         raise ValueError("template must contain sequence and timestamp columns")
     out = pd.DataFrame(
@@ -101,6 +118,7 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     return out.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
+_IMPL._first_present = _first_present
 _IMPL._normalized_sequence_values = _normalized_sequence_values
 _IMPL._sequence_text_or_none = _sequence_text_or_none
 _IMPL._normalize_uncertainty_rows = _normalize_uncertainty_rows
@@ -111,6 +129,7 @@ for _name in dir(_IMPL):
         globals()[_name] = getattr(_IMPL, _name)
 
 # Preserve access to the patched private helpers for tests and exploratory imports.
+globals()["_first_present"] = _first_present
 globals()["_normalized_sequence_values"] = _normalized_sequence_values
 globals()["_sequence_text_or_none"] = _sequence_text_or_none
 globals()["_normalize_uncertainty_rows"] = _normalize_uncertainty_rows
