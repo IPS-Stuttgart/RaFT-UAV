@@ -130,6 +130,7 @@ raft-uav-mmuad-track5-consensus-ensemble-grid = "raft_uav.mmuad.track5_consensus
 raft-uav-mmuad-track5-estimate-calibration = "raft_uav.mmuad.track5_estimate_calibration:main"
 raft-uav-mmuad-track5-calibration-shrinkage = "raft_uav.mmuad.track5_estimate_calibration_shrinkage_cli:main"
 raft-uav-mmuad-track5-estimate-sequence-gate = "raft_uav.mmuad.track5_estimate_sequence_gate:main"
+raft-uav-mmuad-track5-segment-source-gate = "raft_uav.mmuad.track5_segment_source_gate:main"
 raft-uav-mmuad-track5-estimate-sequence-gate-fit = "raft_uav.mmuad.track5_estimate_text_cli:main"
 raft-uav-mmuad-track5-spread-guard-ensemble = "raft_uav.mmuad.track5_estimate_ensemble_spread_guard:main"
 raft-uav-mmuad-track5-estimate-ensemble-grid = "raft_uav.mmuad.track5_estimate_ensemble_grid:main"
