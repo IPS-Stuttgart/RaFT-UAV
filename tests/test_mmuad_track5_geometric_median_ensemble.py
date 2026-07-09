@@ -102,6 +102,36 @@ def test_track5_geomedian_ensemble_is_robust_to_outlier_trajectory() -> None:
     assert diagnostics["geomedian_to_weighted_mean_m"].max() > 20.0
 
 
+def test_track5_geomedian_normalizes_template_sequence_ids_and_headers() -> None:
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["001", "001"],
+            "time_s": [0.0, 1.0],
+            "state_x_m": [1.0, 2.0],
+            "state_y_m": [3.0, 4.0],
+            "state_z_m": [5.0, 6.0],
+        }
+    )
+    template = pd.DataFrame(
+        {
+            " Sequence ": [" 001 ", "001", "nan"],
+            " Timestamp ": [0.0, 1.0, 2.0],
+            "Position": ["(0,0,0)"] * 3,
+            "Classification": [2, 2, 2],
+        }
+    )
+
+    geomedian, diagnostics = build_track5_geometric_median_ensemble(
+        [("estimate", estimates, 1.0)],
+        template,
+    )
+
+    assert geomedian["sequence_id"].tolist() == ["001", "001"]
+    assert geomedian["geomedian_source_count"].tolist() == [1, 1]
+    assert geomedian["state_x_m"].tolist() == pytest.approx([1.0, 2.0])
+    assert diagnostics["valid_input_count"].tolist() == [1, 1]
+
+
 def test_track5_geomedian_outputs_leaderboard_ready_zip(tmp_path: Path) -> None:
     near_a = tmp_path / "near_a.csv"
     near_b = tmp_path / "near_b.csv"
