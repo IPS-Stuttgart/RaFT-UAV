@@ -21,6 +21,7 @@ from raft_uav.mmuad.estimate_csv import read_estimate_csv
 from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
     load_sequence_class_map,
+    parse_official_sequence_cell,
     validate_official_track5_submission,
     write_official_mmaud_results_csv,
     write_official_ug2_codabench_zip,
@@ -307,22 +308,32 @@ def main(argv: list[str] | None = None) -> int:
 
 def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     rows = pd.DataFrame(template).copy()
+    if rows.empty:
+        return pd.DataFrame(columns=["sequence_id", "time_s"])
     sequence_column = _first_present(rows, ("sequence_id", "Sequence", "sequence", "seq"))
     time_column = _first_present(rows, ("time_s", "Timestamp", "timestamp", "timestamp_s", "time"))
     if sequence_column is None or time_column is None:
         raise ValueError("template must contain sequence and timestamp columns")
     out = pd.DataFrame(
         {
-            "sequence_id": rows[sequence_column].astype(str),
+            "sequence_id": rows[sequence_column].map(_template_sequence_or_none),
             "time_s": pd.to_numeric(rows[time_column], errors="coerce"),
         }
     )
-    finite = np.isfinite(out["time_s"].to_numpy(float))
+    finite = out["sequence_id"].notna() & np.isfinite(out["time_s"].to_numpy(float))
     return out.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
+def _template_sequence_or_none(value: Any) -> str | None:
+    try:
+        return parse_official_sequence_cell(value)
+    except ValueError:
+        return None
+
+
 def _template_time_matches(values: pd.Series, target: float) -> np.ndarray:
-    return np.isclose(pd.to_numeric(values, errors="coerce").to_numpy(float), float(target), rtol=0.0, atol=TEMPLATE_TIME_MATCH_ATOL_S)
+    numeric = pd.to_numeric(values, errors="coerce").to_numpy(float)
+    return np.isclose(numeric, float(target), rtol=0.0, atol=TEMPLATE_TIME_MATCH_ATOL_S)
 
 
 def _finite_xyz(rows: pd.DataFrame) -> pd.Series:
@@ -371,11 +382,11 @@ def _safe_percentile(values: pd.Series, percentile: float) -> float | None:
 
 
 def _first_present(rows: pd.DataFrame, names: tuple[str, ...]) -> str | None:
-    lower = {str(column).lower(): str(column) for column in rows.columns}
+    lower = {str(column).strip().lower(): str(column) for column in rows.columns}
     for name in names:
         if name in rows.columns:
             return name
-        found = lower.get(name.lower())
+        found = lower.get(name.strip().lower())
         if found is not None:
             return found
     return None
