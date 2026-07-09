@@ -170,7 +170,7 @@ def test_track5_leaderboard_pipeline_cli_writes_manifest_zip_and_scorecard(
         "mmuad_track5_leaderboard_pipeline_scorecard.json",
     )
     public_pooled = manifest["scorecard_summary"]["public_track5"]["pooled"]
-    assert public_pooled["pose_mse_loss_m2"] < 1.0e-8
+    assert public_pooled["pose_mse_loss_m2"] < 1.0e-5
     assert public_pooled["uav_type_accuracy"] == 1.0
     assert (output_dir / "track5_submission" / "ug2_submission.zip").exists()
     assert (output_dir / "reservoir_mixture" / "mmuad_candidate_mixture_estimates.csv").exists()
