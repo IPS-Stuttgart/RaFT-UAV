@@ -5,6 +5,7 @@ from pathlib import Path
 import tomllib
 from zipfile import ZipFile
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.track5_jerk_limit import main as jerk_limit_main
@@ -58,6 +59,29 @@ def test_jerk_limit_repairs_short_oscillatory_kink() -> None:
     assert spike < 15.0
     assert diagnostics.loc[diagnostics["time_s"] == 2.0, "jerk_limit_applied"].iloc[0]
     assert repaired["Classification"].tolist() == [2] * 6
+
+
+def test_jerk_limit_diagnostics_report_actual_blended_displacement() -> None:
+    original = _normalized_submission()
+    repaired, diagnostics = repair_track5_jerk_kinks(
+        original,
+        max_jerk_mps3=5.0,
+        smoothness_weight=100.0,
+        min_correction_m=1.0,
+        iterations=1,
+        repair_blend=0.5,
+    )
+
+    coordinate_columns = ["state_x_m", "state_y_m", "state_z_m"]
+    actual_displacement = np.linalg.norm(
+        repaired[coordinate_columns].to_numpy(float)
+        - original[coordinate_columns].to_numpy(float),
+        axis=1,
+    )
+    reported_displacement = diagnostics["jerk_limit_displacement_m"].to_numpy(float)
+
+    assert diagnostics["jerk_limit_applied"].any()
+    assert np.allclose(reported_displacement, actual_displacement)
 
 
 def test_jerk_limit_writes_leaderboard_ready_artifacts(tmp_path: Path) -> None:
