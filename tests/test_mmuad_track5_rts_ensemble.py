@@ -64,6 +64,35 @@ def test_rts_ensemble_downweights_disagreement_spike_temporally() -> None:
     assert diagnostics.loc[diagnostics["time_s"] == 2.0, "input_spread_m"].iloc[0] > 5.0
 
 
+def test_rts_ensemble_uses_absolute_time_match_for_large_timestamps() -> None:
+    template = pd.DataFrame(
+        {
+            "Sequence": ["seq0001", "seq0001"],
+            "Timestamp": [1_000_000.0, 1_000_000.001],
+            "Position": ["(0,0,0)", "(100,0,1)"],
+            "Classification": [2, 2],
+        }
+    )
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seq0001", "seq0001"],
+            "time_s": [1_000_000.0, 1_000_000.001],
+            "state_x_m": [0.0, 100.0],
+            "state_y_m": [0.0, 0.0],
+            "state_z_m": [1.0, 1.0],
+        }
+    )
+
+    _, diagnostics = build_track5_rts_ensemble(
+        [("exact", estimates, 1.0)],
+        template,
+        max_nearest_time_delta_s=0.0,
+    )
+
+    assert diagnostics["valid_input_count"].tolist() == [1, 1]
+    assert diagnostics["weighted_x_m"].tolist() == pytest.approx([0.0, 100.0])
+
+
 def test_rts_ensemble_writes_leaderboard_ready_artifacts(tmp_path: Path) -> None:
     good_csv = tmp_path / "good.csv"
     spiky_csv = tmp_path / "spiky.csv"
