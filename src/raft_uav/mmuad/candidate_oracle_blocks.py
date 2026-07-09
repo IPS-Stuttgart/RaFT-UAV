@@ -39,9 +39,10 @@ def build_candidate_oracle_block_tables(
     _require_columns(rows, ["sequence_id", "time_s", "oracle_all_3d_m"])
     top_k_column = f"oracle_in_top{int(top_k)}"
     if top_k_column not in rows.columns:
-        rows[top_k_column] = pd.to_numeric(rows.get("oracle_all_rank", np.inf), errors="coerce") <= int(
-            top_k,
-        )
+        rows[top_k_column] = pd.to_numeric(
+            rows.get("oracle_all_rank", np.inf),
+            errors="coerce",
+        ) <= int(top_k)
     rows["time_s"] = pd.to_numeric(rows["time_s"], errors="coerce")
     rows["oracle_all_3d_m"] = pd.to_numeric(rows["oracle_all_3d_m"], errors="coerce")
     rows["oracle_all_rank"] = pd.to_numeric(rows.get("oracle_all_rank", np.nan), errors="coerce")
@@ -166,10 +167,24 @@ def _require_columns(rows: pd.DataFrame, columns: list[str]) -> None:
 
 
 def _to_bool_series(values: pd.Series) -> pd.Series:
-    if values.dtype == bool:
-        return values.fillna(False)
-    text = values.fillna(False).astype(str).str.lower()
-    return text.isin({"true", "1", "yes", "y"})
+    series = pd.Series(values)
+    if series.empty:
+        return pd.Series(dtype=bool)
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return series.fillna(False).astype(bool)
+
+    numeric = pd.to_numeric(series, errors="coerce")
+    numeric_values = numeric.to_numpy(dtype=float)
+    numeric_truthy = pd.Series(
+        np.isfinite(numeric_values) & (numeric_values != 0.0),
+        index=series.index,
+    )
+    text = series.where(series.notna(), "").astype(str).str.strip().str.lower()
+    truthy_text = text.isin({"1", "1.0", "true", "t", "yes", "y"})
+    falsy_text = text.isin(
+        {"0", "0.0", "false", "f", "no", "n", "", "nan", "none", "<na>", "nat"}
+    )
+    return truthy_text | (numeric_truthy & ~falsy_text)
 
 
 def _failure_mode(
@@ -217,7 +232,9 @@ def _summarize_block(
         "oracle_all_rank_mean": _mean(ranks),
         "oracle_all_rank_p50": _quantile(ranks, 0.50),
         "oracle_all_rank_p95": _quantile(ranks, 0.95),
-        "candidate_count_mean": _mean(pd.to_numeric(frame.get("candidate_count", np.nan), errors="coerce")),
+        "candidate_count_mean": _mean(
+            pd.to_numeric(frame.get("candidate_count", np.nan), errors="coerce")
+        ),
         "dominant_oracle_branch": _mode(frame.get("oracle_all_candidate_branch")),
         "dominant_oracle_source": _mode(frame.get("oracle_all_candidate_source")),
     }
