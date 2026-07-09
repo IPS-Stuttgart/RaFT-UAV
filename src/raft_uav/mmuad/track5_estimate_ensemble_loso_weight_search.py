@@ -292,11 +292,11 @@ def _time_token(values: pd.Series) -> pd.Series:
 
 
 def _first_present(rows: pd.DataFrame, names: tuple[str, ...]) -> str | None:
-    lower = {str(column).lower(): str(column) for column in rows.columns}
+    lower = {str(column).strip().lower(): str(column) for column in rows.columns}
     for name in names:
         if name in rows.columns:
             return name
-        found = lower.get(name.lower())
+        found = lower.get(name.strip().lower())
         if found is not None:
             return found
     return None
