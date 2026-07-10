@@ -134,3 +134,29 @@ def test_class_probability_context_cli_preserves_zero_padded_probability_ids(
     assert augmented.loc[0, "sequence_id"] == "001"
     assert augmented.loc[0, "image_class_probability_available"] == pytest.approx(1.0)
     assert augmented.loc[0, "image_class_prob_2"] == pytest.approx(0.6)
+
+
+def test_class_probability_csv_compatibility_fallback_preserves_sequence_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probabilities_csv = tmp_path / "probabilities.csv"
+    probabilities_csv.write_text(
+        "sequence_id,predicted_probability_0\n001,0.9\n",
+        encoding="utf-8",
+    )
+    real_read_csv = pd.read_csv
+
+    def compatibility_read_csv(*args, **kwargs):
+        if "keep_default_na" in kwargs:
+            raise TypeError("unsupported compatibility keyword")
+        return real_read_csv(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "raft_uav.mmuad.class_probability_csv.pd.read_csv",
+        compatibility_read_csv,
+    )
+
+    probabilities = read_class_probability_csv(probabilities_csv)
+
+    assert probabilities["sequence_id"].tolist() == ["001"]
