@@ -1,10 +1,11 @@
 """Compatibility wrapper for the pair-state forward-backward implementation.
 
 The maintained implementation lives in the sibling
-``candidate_pair_forward_backward.py`` module.  This package keeps the public
+``candidate_pair_forward_backward.py`` module. This package keeps the public
 import path while preserving opaque sequence identifiers in optional mixture
-initialization files, applying score fallbacks row by row, and canonicalizing
-numeric tracker identifiers before track-continuation scoring.
+initialization files, applying score fallbacks row by row, canonicalizing
+numeric tracker identifiers before track-continuation scoring, and treating tied
+rank scores symmetrically.
 """
 
 from __future__ import annotations
@@ -66,6 +67,43 @@ def _candidate_score_with_rowwise_fallback(rows: pd.DataFrame, config: Any) -> p
     return resolved.fillna(fill_value).astype(float)
 
 
+def _normalize_scores_with_average_ties(values: np.ndarray, mode: str) -> np.ndarray:
+    """Normalize candidate scores without using row order to break rank ties."""
+
+    score = np.asarray(values, dtype=float)
+    score = np.nan_to_num(score, nan=0.0, posinf=0.0, neginf=0.0)
+    if mode == "none":
+        return score
+    if mode == "rank":
+        if len(score) <= 1:
+            return np.full(len(score), 0.5, dtype=float)
+        ranks = pd.Series(score).rank(method="average").to_numpy(dtype=float)
+        return (ranks - 1.0) / float(len(score) - 1)
+    minimum = float(np.min(score))
+    maximum = float(np.max(score))
+    if maximum <= minimum:
+        return np.full(len(score), 0.5, dtype=float)
+    return (score - minimum) / (maximum - minimum)
+
+
+def _descending_average_ranks(values: np.ndarray) -> np.ndarray:
+    """Return permutation-invariant descending ranks with average ranks for ties."""
+
+    array = np.asarray(values, dtype=float)
+    if array.size == 0:
+        return np.asarray([], dtype=float)
+    finite = np.isfinite(array)
+    ranks = np.full(array.shape, np.nan, dtype=float)
+    if finite.any():
+        ranks[finite] = (
+            pd.Series(array[finite])
+            .rank(method="average", ascending=False)
+            .to_numpy(dtype=float)
+        )
+        ranks[~finite] = float(np.sum(finite) + 1)
+    return ranks
+
+
 _ORIGINAL_TRANSITION_LOG_LIKELIHOOD = _IMPL._transition_log_likelihood
 
 
@@ -85,6 +123,8 @@ def _transition_log_likelihood_with_canonical_track_ids(
 
 _IMPL.pd = _PandasCsvProxy(pd)
 _IMPL._candidate_score = _candidate_score_with_rowwise_fallback
+_IMPL._normalize_scores = _normalize_scores_with_average_ties
+_IMPL._descending_ranks = _descending_average_ranks
 _IMPL._transition_log_likelihood = _transition_log_likelihood_with_canonical_track_ids
 
 globals().update(
