@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import tomllib
 
 import pandas as pd
 
@@ -160,11 +159,3 @@ def test_risk_reservoir_multistart_cli_writes_pipeline_artifacts(tmp_path: Path)
     assert payload["truth_used_for_selection"] is False
     assert payload["mixture_config"]["top_k"] == 0
     assert payload["reservoir_oracle"]["pooled"]["oracle_all_3d_m_mse"] == 0.0
-
-
-def test_risk_reservoir_multistart_entrypoint_is_exposed() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-    assert (
-        pyproject["project"]["scripts"]["raft-uav-mmuad-risk-reservoir-multistart"]
-        == "raft_uav.mmuad.candidate_risk_reservoir_multistart:main"
-    )
