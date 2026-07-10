@@ -36,19 +36,3 @@ jobs:
         with:
           name: candidate-mixture-test-log
           path: candidate_mixture_test.log
-      - name: Run concise full-suite diagnostic
-        id: full-tests
-        if: always()
-        shell: bash
-        run: |
-          set +e
-          python -m pytest -q --tb=short --maxfail=10 2>&1 | tee full_test.log
-          status=${PIPESTATUS[0]}
-          echo "status=$status" >> "$GITHUB_OUTPUT"
-          exit "$status"
-      - name: Upload full-suite diagnostic log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: full-test-log
-          path: full_test.log
