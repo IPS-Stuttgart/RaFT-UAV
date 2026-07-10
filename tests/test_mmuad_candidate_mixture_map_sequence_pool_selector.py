@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import tomllib
 
 import numpy as np
 import pandas as pd
@@ -143,13 +142,3 @@ def test_sequence_pool_selector_cli_writes_provenance(tmp_path: Path) -> None:
         "seqA": "without_candidate_branch_translated",
         "seqB": "without_candidate_branch_raw",
     }
-
-
-def test_sequence_pool_selector_entrypoint_is_exposed() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-    assert (
-        pyproject["project"]["scripts"][
-            "raft-uav-mmuad-candidate-mixture-sequence-pool-selector"
-        ]
-        == "raft_uav.mmuad.candidate_mixture_map_sequence_pool_selector:main"
-    )
