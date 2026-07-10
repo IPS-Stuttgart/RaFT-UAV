@@ -24,7 +24,7 @@ def read_sequence_text_csv(path: Path) -> pd.DataFrame:
     try:
         rows = pd.read_csv(path, dtype=str, keep_default_na=False)
     except TypeError:
-        rows = pd.read_csv(path)
+        rows = pd.read_csv(path, dtype=str)
     out = rows.copy()
     out.columns = [str(column).strip() for column in out.columns]
     return _canonicalize_sequence_id_column(out)
