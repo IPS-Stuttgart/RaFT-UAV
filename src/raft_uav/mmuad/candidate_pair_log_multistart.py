@@ -1,8 +1,8 @@
 """Run multi-start candidate-mixture MAP with pair-prior log posteriors.
 
 The pair-state forward-backward model writes both a posterior probability and a
-log posterior for every candidate.  Candidate-mixture MAP combines its score
-column additively inside a log weight.  Feeding a probability directly into
+log posterior for every candidate. Candidate-mixture MAP combines its score
+column additively inside a log weight. Feeding a probability directly into
 that expression compresses a strong posterior preference: for example, 0.9
 versus 0.1 contributes only 0.8 score units, whereas the corresponding log
 posterior contributes ``log(9)`` units.
@@ -71,8 +71,8 @@ def attach_pair_log_posterior_score(
 ) -> pd.DataFrame:
     """Attach a frame-normalized log-posterior score for mixture inference.
 
-    Existing finite log probabilities are preferred.  Missing values are
-    reconstructed from the probability column.  Every frame is renormalized in
+    Existing finite log probabilities are preferred. Missing values are
+    reconstructed from the probability column. Every frame is renormalized in
     log space, which makes the adapter robust to rounded CSV probabilities and
     preserves opaque sequence identifiers.
     """
@@ -138,9 +138,11 @@ def pair_log_posterior_summary(
         "sequence_count": int(rows["sequence_id"].astype(str).nunique()),
         "frame_count": int(len(frame_sums)),
         "output_score_column": cfg.output_score_column,
-        "posterior_sum_error_max": float(np.max(np.abs(frame_sums.to_numpy(float) - 1.0)))
-        if len(frame_sums)
-        else 0.0,
+        "posterior_sum_error_max": (
+            float(np.max(np.abs(frame_sums.to_numpy(float) - 1.0)))
+            if len(frame_sums)
+            else 0.0
+        ),
         "log_score_min": _safe_stat(finite_score, "min"),
         "log_score_p50": _safe_stat(finite_score, "median"),
         "log_score_max": _safe_stat(finite_score, "max"),
@@ -303,7 +305,11 @@ def main(argv: list[str] | None = None) -> int:
     mixture_config = core.CandidateMixtureMapConfig(
         top_k=int(args.top_k),
         score_column=pair_log_config.output_score_column,
-        fallback_score_columns=(pair_log_config.probability_column, "ranker_score", "confidence"),
+        fallback_score_columns=(
+            pair_log_config.probability_column,
+            "ranker_score",
+            "confidence",
+        ),
         sigma_column=str(args.sigma_column),
         default_sigma_m=float(args.default_sigma_m),
         sigma_min_m=float(args.sigma_min_m),
@@ -369,8 +375,7 @@ def _frame_log_posterior(
     frame: pd.DataFrame,
     config: PairLogPosteriorConfig,
 ) -> tuple[np.ndarray, str]:
-    count = len(frame)
-    if count == 0:
+    if frame.empty:
         return np.asarray([], dtype=float), "empty"
     log_values = pd.Series(np.nan, index=frame.index, dtype=float)
     if config.log_probability_column in frame.columns:
@@ -396,7 +401,7 @@ def _frame_log_posterior(
     normalized = values - _logsumexp(values)
     if bool(existing.all()):
         source = "log-probability"
-    elif bool(fallback.all()):
+    elif not bool(existing.any()) and bool(fallback.all()):
         source = "probability-fallback"
     else:
         source = "mixed"
