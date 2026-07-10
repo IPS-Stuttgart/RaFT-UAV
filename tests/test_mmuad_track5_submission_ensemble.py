@@ -177,6 +177,21 @@ def test_track5_submission_ensemble_rejects_template_mismatch(tmp_path: Path) ->
         )
 
 
+def test_track5_submission_ensemble_rejects_duplicate_keys(tmp_path: Path) -> None:
+    path = tmp_path / "duplicate.csv"
+    rows = _submission_rows()
+    rows = pd.concat([rows, rows.iloc[[0]]], ignore_index=True)
+    rows.to_csv(path, index=False)
+
+    with pytest.raises(
+        ValueError,
+        match=r"contains 1 duplicate \(sequence_id, time_s\) key",
+    ) as exc_info:
+        ensemble_track5_submissions([parse_submission_input(f"duplicate={path}")])
+
+    assert "seq0001@0" in str(exc_info.value)
+
+
 def test_track5_submission_ensemble_writes_zip_and_validation(tmp_path: Path) -> None:
     first = tmp_path / "first.csv"
     second = tmp_path / "second.csv"
