@@ -54,7 +54,7 @@ def project_track5_speed_limit(
     consecutive displacement exceeds ``max_speed_mps * dt``, the later point is
     moved onto the boundary of the feasible ball around its neighbor.  Optional
     ``anchor_blend`` softly pulls the projected path back toward the input after
-    each full iteration; use zero for a strict projection.
+    each full iteration; a final projection keeps the returned path feasible.
     """
 
     max_speed_mps = float(max_speed_mps)
@@ -219,6 +219,9 @@ def _project_sequence(
         xyz = _backward_speed_pass(xyz, times, max_speed_mps=max_speed_mps)
         if anchor_blend > 0.0:
             xyz = (1.0 - anchor_blend) * xyz + anchor_blend * original_xyz
+    if anchor_blend > 0.0:
+        xyz = _forward_speed_pass(xyz, times, max_speed_mps=max_speed_mps)
+        xyz = _backward_speed_pass(xyz, times, max_speed_mps=max_speed_mps)
     out = work.copy()
     out["input_state_x_m"] = original_xyz[:, 0]
     out["input_state_y_m"] = original_xyz[:, 1]
