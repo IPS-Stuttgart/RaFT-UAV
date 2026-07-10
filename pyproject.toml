@@ -84,6 +84,7 @@ raft-uav-mmuad-track5-sequence-gate-fit = "raft_uav.mmuad.track5_sequence_gate_f
 raft-uav-mmuad-track5-sequence-gate-train-apply = "raft_uav.mmuad.track5_sequence_gate_train_apply:main"
 raft-uav-mmuad-candidate-reservoir = "raft_uav.mmuad.candidate_reservoir:main"
 raft-uav-mmuad-candidate-reservoir-grid = "raft_uav.mmuad.candidate_reservoir_grid:main"
+raft-uav-mmuad-candidate-risk-reservoir = "raft_uav.mmuad.candidate_risk_reservoir:main"
 raft-uav-mmuad-apply-candidate-reservoir-config = "raft_uav.mmuad.candidate_reservoir_apply:main"
 raft-uav-mmuad-candidate-pull = "raft_uav.mmuad.candidate_pull:main"
 raft-uav-mmuad-candidate-pool-compare = "raft_uav.mmuad.candidate_pool_compare_cli:main"
@@ -148,8 +149,6 @@ raft-uav-mmuad-track5-trajectory-smooth = "raft_uav.mmuad.track5_trajectory_smoo
 raft-uav-mmuad-track5-uncertainty-ensemble = "raft_uav.mmuad.track5_uncertainty_ensemble:main"
 raft-uav-mmuad-track5-uncertainty-ensemble-weight-search = "raft_uav.mmuad.track5_uncertainty_ensemble_weight_search:main"
 raft-uav-mmuad-track5-rts-ensemble = "raft_uav.mmuad.track5_rts_ensemble:main"
-raft-uav-mmuad-track5-rts-ensemble-grid = "raft_uav.mmuad.track5_rts_ensemble_grid:main"
-raft-uav-mmuad-track5-uncertainty-column-adapter = "raft_uav.mmuad.track5_uncertainty_column_adapter:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -160,3 +159,7 @@ line-length = 100
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
+addopts = "--basetemp=.pytest-tmp"
+markers = [
+    "integration: tests that require the external AERPAW/Dryad dataset",
+]
