@@ -12,6 +12,7 @@ import pytest
         "raft_uav.mmuad.candidate_forward_backward",
         "raft_uav.mmuad.candidate_pair_forward_backward",
         "raft_uav.mmuad.candidate_mixture_map_multistart",
+        "raft_uav.mmuad.track5_jerk_limit",
     ],
 )
 def test_compatibility_packages_support_python_m(
