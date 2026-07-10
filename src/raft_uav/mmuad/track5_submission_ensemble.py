@@ -146,6 +146,7 @@ def ensemble_track5_submissions(
     frames: list[pd.DataFrame] = []
     for item in inputs:
         rows = load_track5_submission(item.path)
+        _validate_unique_submission_keys(rows, label=item.label, source_path=item.path)
         rows["ensemble_input_label"] = item.label
         rows["ensemble_input_path"] = str(item.path)
         rows["ensemble_weight"] = float(item.weight)
@@ -462,6 +463,32 @@ def _parse_position_cell(value: Any) -> np.ndarray:
 
 def _submission_keys(rows: pd.DataFrame) -> list[tuple[str, float]]:
     return list(zip(rows["sequence_id"].astype(str), rows["time_s"].astype(float), strict=True))
+
+
+def _validate_unique_submission_keys(
+    rows: pd.DataFrame,
+    *,
+    label: str,
+    source_path: Path,
+) -> None:
+    duplicate_mask = rows.duplicated(subset=["sequence_id", "time_s"], keep=False)
+    if not bool(duplicate_mask.any()):
+        return
+    duplicate_keys = (
+        rows.loc[duplicate_mask, ["sequence_id", "time_s"]]
+        .drop_duplicates()
+        .sort_values(["sequence_id", "time_s"])
+        .reset_index(drop=True)
+    )
+    sample = ", ".join(
+        f"{row.sequence_id}@{float(row.time_s):g}"
+        for row in duplicate_keys.head(5).itertuples(index=False)
+    )
+    suffix = ", ..." if len(duplicate_keys) > 5 else ""
+    raise ValueError(
+        f"submission {label} ({source_path}) contains {len(duplicate_keys)} duplicate "
+        f"(sequence_id, time_s) key(s): {sample}{suffix}"
+    )
 
 
 def _ensemble_classification(group: pd.DataFrame, *, policy: str) -> int:
