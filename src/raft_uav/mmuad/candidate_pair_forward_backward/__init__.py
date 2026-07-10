@@ -3,7 +3,8 @@
 The maintained implementation lives in the sibling
 ``candidate_pair_forward_backward.py`` module.  This package keeps the public
 import path while preserving opaque sequence identifiers in optional mixture
-initialization files and applying score fallbacks row by row.
+initialization files, applying score fallbacks row by row, and canonicalizing
+numeric tracker identifiers before track-continuation scoring.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.candidate_identity import canonical_track_ids
 from raft_uav.mmuad.estimate_csv import read_estimate_csv
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_pair_forward_backward.py"
@@ -64,8 +66,26 @@ def _candidate_score_with_rowwise_fallback(rows: pd.DataFrame, config: Any) -> p
     return resolved.fillna(fill_value).astype(float)
 
 
+_ORIGINAL_TRANSITION_LOG_LIKELIHOOD = _IMPL._transition_log_likelihood
+
+
+def _transition_log_likelihood_with_canonical_track_ids(
+    previous: dict[str, Any],
+    current: dict[str, Any],
+    config: Any,
+) -> Any:
+    """Apply the existing transition model after canonicalizing track identity."""
+
+    previous_rows = dict(previous)
+    current_rows = dict(current)
+    previous_rows["track_ids"] = canonical_track_ids(previous.get("track_ids", ()))
+    current_rows["track_ids"] = canonical_track_ids(current.get("track_ids", ()))
+    return _ORIGINAL_TRANSITION_LOG_LIKELIHOOD(previous_rows, current_rows, config)
+
+
 _IMPL.pd = _PandasCsvProxy(pd)
 _IMPL._candidate_score = _candidate_score_with_rowwise_fallback
+_IMPL._transition_log_likelihood = _transition_log_likelihood_with_canonical_track_ids
 
 globals().update(
     {
