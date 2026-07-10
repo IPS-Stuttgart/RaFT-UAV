@@ -8,7 +8,12 @@ from typing import Any
 
 import pandas as pd
 
-_GRID_MODULE = "raft_uav.mmuad.track5_estimate_ensemble_grid"
+_TRACK5_ESTIMATE_GRID_MODULES = frozenset(
+    {
+        "raft_uav.mmuad.track5_estimate_ensemble_grid",
+        "raft_uav.mmuad.track5_rts_ensemble_grid",
+    }
+)
 _UNCERTAINTY_ENSEMBLE_MODULE = "raft_uav.mmuad.track5_uncertainty_ensemble"
 _UNCERTAINTY_ENSEMBLE_READER = "_read_estimate_csv_preserving_sequence_id"
 _ORIGINAL_PANDAS_READ_CSV = pd.read_csv
@@ -36,7 +41,7 @@ def _called_from_track5_estimate_grid() -> bool:
     frame = sys._getframe(2)
     while frame is not None:
         module = frame.f_globals.get("__name__")
-        if module == _GRID_MODULE:
+        if module in _TRACK5_ESTIMATE_GRID_MODULES:
             return True
         if (
             module == _UNCERTAINTY_ENSEMBLE_MODULE
