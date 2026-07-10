@@ -116,9 +116,12 @@ def build_source_branch_reservoir(
         preserve_reason_prefixes=preserve_prefixes,
     )
     capped["candidate_source_branch_quota_top_n"] = int(per_source_branch_top_n)
-    capped["candidate_source_branch_quota_selected"] = capped[
-        "candidate_reservoir_reason"
-    ].fillna("").astype(str).str.contains(_DEFAULT_SOURCE_BRANCH_REASON_PREFIX, regex=False)
+    capped["candidate_source_branch_quota_selected"] = (
+        capped["candidate_reservoir_reason"]
+        .fillna("")
+        .astype(str)
+        .str.contains(_DEFAULT_SOURCE_BRANCH_REASON_PREFIX, regex=False)
+    )
     capped = capped.sort_values(
         ["sequence_id", "time_s", "candidate_reservoir_rank", "source", "candidate_branch"],
     ).reset_index(drop=True)
@@ -265,7 +268,8 @@ def _text_column(values: pd.Series, *, default: str) -> pd.Series:
 def _resolve_score(rows: pd.DataFrame, *, primary: str, fallback: str) -> pd.Series:
     primary_values = _numeric_column(rows, primary, default=np.nan)
     fallback_values = _numeric_column(rows, fallback, default=0.0)
-    return primary_values.where(np.isfinite(primary_values), fallback_values).fillna(0.0).astype(float)
+    resolved = primary_values.where(np.isfinite(primary_values), fallback_values)
+    return resolved.fillna(0.0).astype(float)
 
 
 def _numeric_column(rows: pd.DataFrame, column: str, *, default: float) -> pd.Series:
@@ -289,13 +293,8 @@ def _frame_cell_count(rows: pd.DataFrame) -> int:
     if rows.empty:
         return 0
     normalized = _normalize_source_branch_columns(rows)
-    return int(
-        len(
-            normalized[
-                ["sequence_id", "time_s", "source", "candidate_branch"]
-            ].drop_duplicates()
-        )
-    )
+    columns = ["sequence_id", "time_s", "source", "candidate_branch"]
+    return int(len(normalized[columns].drop_duplicates()))
 
 
 def _write_optional_csv(rows: pd.DataFrame, path: Path | None) -> None:
