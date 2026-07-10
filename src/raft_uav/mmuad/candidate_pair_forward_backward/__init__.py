@@ -1,9 +1,9 @@
-"""Compatibility wrapper preserving opaque IDs in pair-state initial estimates.
+"""Compatibility wrapper for the pair-state forward-backward implementation.
 
 The maintained implementation lives in the sibling
 ``candidate_pair_forward_backward.py`` module.  This package keeps the public
-import path while making the optional mixture initialization loader preserve
-numeric-looking sequence identifiers such as ``001``.
+import path while preserving opaque sequence identifiers in optional mixture
+initialization files and applying score fallbacks row by row.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.estimate_csv import read_estimate_csv
@@ -47,7 +48,24 @@ class _PandasCsvProxy:
         return read_estimate_csv(Path(path))
 
 
+def _candidate_score_with_rowwise_fallback(rows: pd.DataFrame, config: Any) -> pd.Series:
+    """Resolve configured score columns independently for every candidate row."""
+
+    resolved = pd.Series(np.nan, index=rows.index, dtype=float)
+    for column in (config.score_column, *config.fallback_score_columns):
+        if column not in rows.columns:
+            continue
+        values = pd.to_numeric(rows[column], errors="coerce")
+        values = values.where(np.isfinite(values))
+        resolved = resolved.where(resolved.notna(), values)
+
+    finite = resolved.dropna()
+    fill_value = float(finite.min()) if not finite.empty else 1.0
+    return resolved.fillna(fill_value).astype(float)
+
+
 _IMPL.pd = _PandasCsvProxy(pd)
+_IMPL._candidate_score = _candidate_score_with_rowwise_fallback
 
 globals().update(
     {
