@@ -1,24 +1,11 @@
 """Branch-seeded multi-start candidate-mixture MAP for MMUAD.
 
-Candidate-mixture MAP is non-convex because candidate responsibilities depend on
-the current trajectory.  A single score- or uncertainty-derived initialization
-can therefore lock onto the wrong raw/calibrated/dynamic branch even when the
-retained candidate reservoir contains a substantially better trajectory.
-
-This module runs the maintained robust candidate-mixture smoother from several
-inference-safe initial trajectories:
-
-* the core smoother's configured initialization;
-* per-frame score-top1 candidates;
-* per-frame coordinate medians;
-* one branch-seeded trajectory for each sufficiently represented candidate
-  branch, with uncertainty-top1 fallback when that branch is absent;
-* an optional externally supplied trajectory.
-
-The winning start is selected without truth by evaluating the final robust
-mixture negative log evidence plus the same irregular-time acceleration penalty
-used by the core smoother.  Truth remains optional and is used only to append
-local diagnostic metrics to the start table.
+Candidate-mixture MAP alternates between candidate responsibilities and a smooth
+trajectory update, so it can converge to different local solutions from
+different initial trajectories.  This module runs the maintained robust
+candidate-mixture smoother from global, median, branch-specific, and optional
+external starts, then chooses the winner without truth using the final robust
+mixture evidence plus the core acceleration regularizer.
 """
 
 from __future__ import annotations
@@ -27,20 +14,12 @@ import argparse
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
 
-from raft_uav.mmuad.candidate_mixture_map import (
-    INITIALIZATION_CHOICES,
-    LOSS_CHOICES,
-    SCORE_NORMALIZATION_CHOICES,
-    CandidateMixtureMapConfig,
-    CandidateMixtureMapResult,
-    run_candidate_mixture_map,
-    write_candidate_mixture_map_outputs,
-)
+from raft_uav.mmuad import candidate_mixture_map as core
 from raft_uav.mmuad.io import load_candidate_csv, load_truth_csv
 from raft_uav.mmuad.schema import normalize_candidate_columns
 from raft_uav.mmuad.submission import (
@@ -71,7 +50,7 @@ class CandidateMixtureMultiStartResult:
     """Selected mixture result and restart diagnostics."""
 
     selected_start: str
-    selected_result: CandidateMixtureMapResult
+    selected_result: core.CandidateMixtureMapResult
     start_summary: pd.DataFrame
     initializations: Mapping[str, pd.DataFrame | None]
     summary: dict[str, Any]
@@ -80,19 +59,13 @@ class CandidateMixtureMultiStartResult:
 def build_candidate_mixture_initializations(
     candidates: pd.DataFrame,
     *,
-    mixture_config: CandidateMixtureMapConfig | None = None,
+    mixture_config: core.CandidateMixtureMapConfig | None = None,
     multistart_config: CandidateMixtureMultiStartConfig | None = None,
     external_initial_estimates: pd.DataFrame | None = None,
 ) -> dict[str, pd.DataFrame | None]:
-    """Build global and branch-seeded initial trajectories.
+    """Build complete global and branch-specific initial trajectories."""
 
-    Branch starts use the best uncertainty-aware candidate from the requested
-    branch at each frame.  Frames where that branch is absent fall back to the
-    global uncertainty-top1 candidate, so every start remains a complete
-    trajectory rather than silently dropping timestamps.
-    """
-
-    mixture_config = mixture_config or CandidateMixtureMapConfig()
+    mixture_config = mixture_config or core.CandidateMixtureMapConfig()
     multistart_config = multistart_config or CandidateMixtureMultiStartConfig()
     _validate_multistart_config(multistart_config)
     rows = normalize_candidate_columns(pd.DataFrame(candidates).copy())
@@ -102,31 +75,24 @@ def build_candidate_mixture_initializations(
             starts["external"] = _normalize_external_initialization(external_initial_estimates)
         return starts
 
-    rows = rows.reset_index(drop=True)
-    rows["_multistart_input_row"] = np.arange(len(rows), dtype=int)
     branch_column = str(multistart_config.branch_column)
+    rows = rows.reset_index(drop=True)
     if branch_column not in rows.columns:
-        if "source" in rows.columns:
-            rows[branch_column] = rows["source"].fillna("unknown").astype(str)
-        else:
-            rows[branch_column] = "unknown"
+        rows[branch_column] = (
+            rows["source"].fillna("unknown").astype(str)
+            if "source" in rows.columns
+            else "unknown"
+        )
     rows[branch_column] = rows[branch_column].fillna("unknown").astype(str)
 
-    frame_cache: list[dict[str, Any]] = []
+    frame_cache: list[tuple[pd.DataFrame, pd.Series]] = []
     score_records: list[dict[str, Any]] = []
     median_records: list[dict[str, Any]] = []
     for (sequence_id, time_s), frame in rows.groupby(["sequence_id", "time_s"], sort=True):
-        prepared = _prepare_initialization_frame(frame, mixture_config=mixture_config)
-        uncertainty_row = prepared.iloc[int(np.argmax(prepared["_multistart_init_score"]))]
+        prepared = _prepare_initialization_frame(frame, mixture_config)
+        fallback = prepared.iloc[int(np.argmax(prepared["_multistart_init_score"]))]
         score_row = prepared.iloc[int(np.argmax(prepared["_multistart_normalized_score"]))]
-        frame_cache.append(
-            {
-                "sequence_id": str(sequence_id),
-                "time_s": float(time_s),
-                "rows": prepared,
-                "fallback": uncertainty_row,
-            }
-        )
+        frame_cache.append((prepared, fallback))
         score_records.append(_initial_estimate_record(score_row))
         median_records.append(
             {
@@ -143,22 +109,20 @@ def build_candidate_mixture_initializations(
     if multistart_config.include_frame_median:
         starts["frame-median"] = pd.DataFrame.from_records(median_records)
     if multistart_config.include_branch_starts:
-        for branch in _eligible_branches(
+        branches = _eligible_branches(
             rows,
             frame_count=len(frame_cache),
             branch_column=branch_column,
             config=multistart_config,
-        ):
-            records: list[dict[str, Any]] = []
-            for item in frame_cache:
-                frame_rows = item["rows"]
-                branch_rows = frame_rows.loc[frame_rows[branch_column].astype(str) == branch]
-                if branch_rows.empty:
-                    chosen = item["fallback"]
-                else:
-                    chosen = branch_rows.iloc[
-                        int(np.argmax(branch_rows["_multistart_init_score"].to_numpy(float)))
-                    ]
+        )
+        for branch in branches:
+            records = []
+            for prepared, fallback in frame_cache:
+                branch_rows = prepared.loc[prepared[branch_column].astype(str) == branch]
+                chosen = fallback
+                if not branch_rows.empty:
+                    index = int(np.argmax(branch_rows["_multistart_init_score"].to_numpy(float)))
+                    chosen = branch_rows.iloc[index]
                 records.append(_initial_estimate_record(chosen))
             starts[f"branch:{branch}"] = pd.DataFrame.from_records(records)
     if external_initial_estimates is not None:
@@ -169,14 +133,14 @@ def build_candidate_mixture_initializations(
 def run_multistart_candidate_mixture_map(
     candidates: pd.DataFrame,
     *,
-    mixture_config: CandidateMixtureMapConfig | None = None,
+    mixture_config: core.CandidateMixtureMapConfig | None = None,
     multistart_config: CandidateMixtureMultiStartConfig | None = None,
     external_initial_estimates: pd.DataFrame | None = None,
     truth: pd.DataFrame | None = None,
 ) -> CandidateMixtureMultiStartResult:
-    """Run candidate-mixture MAP from several starts and select by inference objective."""
+    """Run every restart and select the lowest truth-free final objective."""
 
-    mixture_config = mixture_config or CandidateMixtureMapConfig()
+    mixture_config = mixture_config or core.CandidateMixtureMapConfig()
     multistart_config = multistart_config or CandidateMixtureMultiStartConfig()
     starts = build_candidate_mixture_initializations(
         candidates,
@@ -184,10 +148,10 @@ def run_multistart_candidate_mixture_map(
         multistart_config=multistart_config,
         external_initial_estimates=external_initial_estimates,
     )
-    results: dict[str, CandidateMixtureMapResult] = {}
+    results: dict[str, core.CandidateMixtureMapResult] = {}
     records: list[dict[str, Any]] = []
     for start_name, initial_estimates in starts.items():
-        result = run_candidate_mixture_map(
+        result = core.run_candidate_mixture_map(
             candidates,
             config=mixture_config,
             initial_estimates=initial_estimates,
@@ -197,15 +161,13 @@ def run_multistart_candidate_mixture_map(
             result,
             mixture_config=mixture_config,
         )
-        results[start_name] = result
         pooled = result.summary.get("metrics", {}).get("pooled", {})
+        results[start_name] = result
         records.append(
             {
                 "start_name": start_name,
                 "start_type": start_name.split(":", 1)[0],
-                "selection_objective": objective["selection_objective"],
-                "mixture_data_nll": objective["mixture_data_nll"],
-                "smoothness_penalty": objective["smoothness_penalty"],
+                **objective,
                 "final_quadratic_surrogate": _final_quadratic_surrogate(result),
                 "estimate_rows": int(len(result.estimates)),
                 "assignment_rows": int(len(result.assignments)),
@@ -224,14 +186,13 @@ def run_multistart_candidate_mixture_map(
             }
         )
 
-    start_summary = pd.DataFrame.from_records(records)
-    if start_summary.empty:
-        raise ValueError("candidate-mixture multi-start produced no starts")
-    ranked = start_summary.sort_values(
+    ranked = pd.DataFrame.from_records(records).sort_values(
         ["selection_objective", "mixture_data_nll", "start_name"],
         ascending=[True, True, True],
         na_position="last",
     ).reset_index(drop=True)
+    if ranked.empty:
+        raise ValueError("candidate-mixture multi-start produced no starts")
     selected_start = str(ranked.iloc[0]["start_name"])
     ranked["selected"] = ranked["start_name"].astype(str) == selected_start
     summary = {
@@ -253,16 +214,11 @@ def run_multistart_candidate_mixture_map(
 
 
 def compute_candidate_mixture_selection_objective(
-    result: CandidateMixtureMapResult,
+    result: core.CandidateMixtureMapResult,
     *,
-    mixture_config: CandidateMixtureMapConfig,
+    mixture_config: core.CandidateMixtureMapConfig,
 ) -> dict[str, float]:
-    """Return the truth-free robust mixture objective used to choose a restart.
-
-    The data term is the negative log-sum-exp of the final per-candidate log
-    weights in each frame.  The trajectory term uses the same irregular-time
-    second-derivative penalty and smoothness weight as the core solver.
-    """
+    """Evaluate final robust mixture evidence plus acceleration regularization."""
 
     assignments = pd.DataFrame(result.assignments).copy()
     if assignments.empty or "mixture_log_weight" not in assignments.columns:
@@ -273,16 +229,16 @@ def compute_candidate_mixture_selection_objective(
         }
     data_nll = 0.0
     for _, frame in assignments.groupby(["sequence_id", "time_s"], sort=False):
-        log_weight = pd.to_numeric(frame["mixture_log_weight"], errors="coerce").to_numpy(float)
-        data_nll += -_logsumexp(log_weight)
-    smoothness_penalty = _trajectory_smoothness_penalty(
+        values = pd.to_numeric(frame["mixture_log_weight"], errors="coerce").to_numpy(float)
+        data_nll -= _logsumexp(values)
+    smoothness = _trajectory_smoothness_penalty(
         result.estimates,
         smoothness_weight=float(mixture_config.smoothness_weight),
     )
     return {
-        "selection_objective": float(data_nll + smoothness_penalty),
+        "selection_objective": float(data_nll + smoothness),
         "mixture_data_nll": float(data_nll),
-        "smoothness_penalty": float(smoothness_penalty),
+        "smoothness_penalty": float(smoothness),
     }
 
 
@@ -295,15 +251,15 @@ def write_multistart_candidate_mixture_outputs(
     official_results_csv: Path | None = None,
     official_zip: Path | None = None,
 ) -> dict[str, Path]:
-    """Write selected core artifacts plus restart diagnostics and optional submission."""
+    """Write the selected core run plus restart diagnostics and submissions."""
 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    paths = write_candidate_mixture_map_outputs(result.selected_result, output)
-    start_summary_csv = output / START_SUMMARY_CSV
-    result.start_summary.to_csv(start_summary_csv, index=False)
-    paths["multistart_summary_csv"] = start_summary_csv
-    initialization_parts: list[pd.DataFrame] = []
+    paths = core.write_candidate_mixture_map_outputs(result.selected_result, output)
+    summary_csv = output / START_SUMMARY_CSV
+    result.start_summary.to_csv(summary_csv, index=False)
+    paths["multistart_summary_csv"] = summary_csv
+    initialization_parts = []
     for start_name, rows in result.initializations.items():
         if rows is None or rows.empty:
             continue
@@ -315,9 +271,9 @@ def write_multistart_candidate_mixture_outputs(
         if initialization_parts
         else pd.DataFrame()
     )
-    initializations_csv = output / INITIALIZATIONS_CSV
-    initializations.to_csv(initializations_csv, index=False)
-    paths["initializations_csv"] = initializations_csv
+    initialization_csv = output / INITIALIZATIONS_CSV
+    initializations.to_csv(initialization_csv, index=False)
+    paths["initializations_csv"] = initialization_csv
     summary_json = output / START_SUMMARY_JSON
     summary_json.write_text(json.dumps(_jsonable(result.summary), indent=2), encoding="utf-8")
     paths["multistart_summary_json"] = summary_json
@@ -365,13 +321,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sigma-max-m", type=float, default=30.0)
     parser.add_argument(
         "--score-normalization",
-        choices=SCORE_NORMALIZATION_CHOICES,
+        choices=core.SCORE_NORMALIZATION_CHOICES,
         default="minmax",
     )
     parser.add_argument("--score-weight", type=float, default=1.0)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--sigma-log-weight", type=float, default=3.0)
-    parser.add_argument("--loss", choices=LOSS_CHOICES, default="huber")
+    parser.add_argument("--loss", choices=core.LOSS_CHOICES, default="huber")
     parser.add_argument("--huber-delta", type=float, default=1.0)
     parser.add_argument("--smoothness-weight", type=float, default=7200.0)
     parser.add_argument("--iterations", type=int, default=5)
@@ -382,7 +338,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--responsibility-floor", type=float, default=0.0)
     parser.add_argument(
         "--initialization",
-        choices=INITIALIZATION_CHOICES,
+        choices=core.INITIALIZATION_CHOICES,
         default="uncertainty-top1",
     )
     parser.add_argument("--class-map", type=Path)
@@ -401,11 +357,11 @@ def main(argv: list[str] | None = None) -> int:
             keep_default_na=False,
         )
         external.columns = [str(column).strip() for column in external.columns]
-    fallback_columns = tuple(args.fallback_score_column) or ("ranker_score", "confidence")
-    mixture_config = CandidateMixtureMapConfig(
+    fallback = tuple(args.fallback_score_column) or ("ranker_score", "confidence")
+    mixture_config = core.CandidateMixtureMapConfig(
         top_k=int(args.top_k),
         score_column=str(args.score_column),
-        fallback_score_columns=fallback_columns,
+        fallback_score_columns=fallback,
         sigma_column=str(args.sigma_column),
         default_sigma_m=float(args.default_sigma_m),
         sigma_min_m=float(args.sigma_min_m),
@@ -463,64 +419,18 @@ def main(argv: list[str] | None = None) -> int:
 
 def _prepare_initialization_frame(
     frame: pd.DataFrame,
-    *,
-    mixture_config: CandidateMixtureMapConfig,
+    config: core.CandidateMixtureMapConfig,
 ) -> pd.DataFrame:
     out = frame.copy().reset_index(drop=True)
-    raw_score = _candidate_scores(out, mixture_config)
-    normalized_score = _normalize_scores(
-        raw_score.to_numpy(float),
-        mode=mixture_config.score_normalization,
-    )
-    sigma = _candidate_sigmas(out, mixture_config)
-    out["_multistart_raw_score"] = raw_score.to_numpy(float)
-    out["_multistart_normalized_score"] = normalized_score
-    out["_multistart_sigma_m"] = sigma.to_numpy(float)
+    raw_score = core._candidate_scores(out, config=config)
+    normalized = core._normalize_scores(raw_score.to_numpy(float), mode=config.score_normalization)
+    sigma = core._candidate_sigmas(out, config=config)
+    out["_multistart_normalized_score"] = normalized
     out["_multistart_init_score"] = (
-        float(mixture_config.score_weight)
-        * normalized_score
-        / float(mixture_config.temperature)
-        - float(mixture_config.sigma_log_weight) * np.log(sigma.to_numpy(float))
+        float(config.score_weight) * normalized / float(config.temperature)
+        - float(config.sigma_log_weight) * np.log(sigma.to_numpy(float))
     )
     return out
-
-
-def _candidate_scores(rows: pd.DataFrame, config: CandidateMixtureMapConfig) -> pd.Series:
-    result = pd.Series(np.nan, index=rows.index, dtype=float)
-    for column in (config.score_column, *config.fallback_score_columns):
-        if column not in rows.columns:
-            continue
-        values = pd.to_numeric(rows[column], errors="coerce")
-        result = result.where(result.notna(), values)
-    return result.fillna(0.0).astype(float)
-
-
-def _candidate_sigmas(rows: pd.DataFrame, config: CandidateMixtureMapConfig) -> pd.Series:
-    if config.sigma_column in rows.columns:
-        sigma = pd.to_numeric(rows[config.sigma_column], errors="coerce")
-    else:
-        sigma = pd.Series(np.nan, index=rows.index, dtype=float)
-    if "std_xy_m" in rows.columns:
-        sigma = sigma.where(sigma.notna(), pd.to_numeric(rows["std_xy_m"], errors="coerce"))
-    sigma = sigma.fillna(float(config.default_sigma_m))
-    sigma = sigma.where(sigma > 0.0, float(config.default_sigma_m))
-    return sigma.clip(lower=float(config.sigma_min_m), upper=float(config.sigma_max_m))
-
-
-def _normalize_scores(values: np.ndarray, *, mode: str) -> np.ndarray:
-    score = np.nan_to_num(np.asarray(values, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
-    if mode == "none":
-        return score
-    if mode == "rank":
-        if len(score) <= 1:
-            return np.full(len(score), 0.5, dtype=float)
-        order = np.argsort(np.argsort(score, kind="stable"), kind="stable")
-        return order.astype(float) / float(len(score) - 1)
-    minimum = float(np.min(score))
-    maximum = float(np.max(score))
-    if maximum <= minimum:
-        return np.full(len(score), 0.5, dtype=float)
-    return (score - minimum) / (maximum - minimum)
 
 
 def _eligible_branches(
@@ -530,25 +440,17 @@ def _eligible_branches(
     branch_column: str,
     config: CandidateMixtureMultiStartConfig,
 ) -> list[str]:
-    frame_presence = (
+    presence = (
         rows[["sequence_id", "time_s", branch_column]]
         .drop_duplicates()
         .groupby(branch_column, dropna=False)
         .size()
     )
     row_count = rows.groupby(branch_column, dropna=False).size()
-    minimum_frames = max(1, int(np.ceil(float(config.min_branch_frame_fraction) * frame_count)))
-    branches = [str(branch) for branch, count in frame_presence.items() if int(count) >= minimum_frames]
-    branches.sort(
-        key=lambda branch: (
-            -int(frame_presence.get(branch, 0)),
-            -int(row_count.get(branch, 0)),
-            branch,
-        )
-    )
-    if int(config.max_branch_starts) > 0:
-        branches = branches[: int(config.max_branch_starts)]
-    return branches
+    minimum = max(1, int(np.ceil(float(config.min_branch_frame_fraction) * frame_count)))
+    branches = [str(branch) for branch, count in presence.items() if int(count) >= minimum]
+    branches.sort(key=lambda branch: (-int(presence.get(branch, 0)), -int(row_count.get(branch, 0)), branch))
+    return branches[: int(config.max_branch_starts)] if int(config.max_branch_starts) > 0 else branches
 
 
 def _initial_estimate_record(row: pd.Series) -> dict[str, Any]:
@@ -564,8 +466,7 @@ def _initial_estimate_record(row: pd.Series) -> dict[str, Any]:
 def _normalize_external_initialization(rows: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame(rows).copy()
     out.columns = [str(column).strip() for column in out.columns]
-    aliases = {"x_m": "state_x_m", "y_m": "state_y_m", "z_m": "state_z_m"}
-    for source, target in aliases.items():
+    for source, target in {"x_m": "state_x_m", "y_m": "state_y_m", "z_m": "state_z_m"}.items():
         if target not in out.columns and source in out.columns:
             out[target] = out[source]
     if "sequence_id" not in out.columns:
@@ -580,11 +481,7 @@ def _normalize_external_initialization(rows: pd.DataFrame) -> pd.DataFrame:
     return out.loc[finite, required].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
-def _trajectory_smoothness_penalty(
-    estimates: pd.DataFrame,
-    *,
-    smoothness_weight: float,
-) -> float:
+def _trajectory_smoothness_penalty(estimates: pd.DataFrame, *, smoothness_weight: float) -> float:
     if smoothness_weight <= 0.0:
         return 0.0
     rows = pd.DataFrame(estimates).copy()
@@ -599,29 +496,10 @@ def _trajectory_smoothness_penalty(
             errors="coerce",
         ).to_numpy(float)
         finite = np.isfinite(times) & np.isfinite(state).all(axis=1)
-        times = times[finite]
-        state = state[finite]
-        second_derivative = _second_derivative_matrix(times)
-        if second_derivative.size:
-            total += float(smoothness_weight) * float(
-                np.sum((second_derivative @ state) ** 2)
-            )
+        matrix = core._second_derivative_matrix(times[finite])
+        if matrix.size:
+            total += float(smoothness_weight) * float(np.sum((matrix @ state[finite]) ** 2))
     return float(total)
-
-
-def _second_derivative_matrix(times: np.ndarray) -> np.ndarray:
-    count = len(times)
-    if count < 3:
-        return np.zeros((0, count), dtype=float)
-    matrix = np.zeros((count - 2, count), dtype=float)
-    for row, center in enumerate(range(1, count - 1)):
-        left_dt = max(float(times[center] - times[center - 1]), 1.0e-6)
-        right_dt = max(float(times[center + 1] - times[center]), 1.0e-6)
-        scale = 2.0 / (left_dt + right_dt)
-        matrix[row, center - 1] = scale / left_dt
-        matrix[row, center] = -scale * (1.0 / left_dt + 1.0 / right_dt)
-        matrix[row, center + 1] = scale / right_dt
-    return matrix
 
 
 def _logsumexp(values: np.ndarray) -> float:
@@ -630,10 +508,11 @@ def _logsumexp(values: np.ndarray) -> float:
     if not finite.any():
         return float("-inf")
     maximum = float(np.max(array[finite]))
-    return maximum + float(np.log(np.sum(np.exp(np.clip(array[finite] - maximum, -700.0, 0.0)))))
+    shifted = np.clip(array[finite] - maximum, -700.0, 0.0)
+    return maximum + float(np.log(np.sum(np.exp(shifted))))
 
 
-def _final_quadratic_surrogate(result: CandidateMixtureMapResult) -> float | None:
+def _final_quadratic_surrogate(result: core.CandidateMixtureMapResult) -> float | None:
     rows = pd.DataFrame(result.iteration_summary).copy()
     if rows.empty or "quadratic_objective" not in rows.columns:
         return None
