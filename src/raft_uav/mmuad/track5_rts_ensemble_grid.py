@@ -19,6 +19,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.estimate_csv import read_estimate_csv
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
 from raft_uav.mmuad.submission import load_official_track5_template_file, load_sequence_class_map
 from raft_uav.mmuad.track5_estimate_ensemble import EstimateInput, parse_estimate_spec
@@ -52,7 +53,9 @@ def run_track5_rts_ensemble_grid_search(
     input_list = list(estimate_inputs)
     if not input_list:
         raise ValueError("at least one estimate input is required")
-    loaded_inputs = [(item.label, pd.read_csv(item.path), float(item.weight)) for item in input_list]
+    loaded_inputs = [
+        (item.label, read_estimate_csv(item.path), float(item.weight)) for item in input_list
+    ]
     truth_rows = _normalize_truth(truth)
     if truth_rows.empty:
         raise ValueError("truth contains no finite rows")
