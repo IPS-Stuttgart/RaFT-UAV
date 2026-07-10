@@ -1,8 +1,8 @@
 """Compatibility wrapper for the first-order forward-backward implementation.
 
 The maintained implementation lives in the sibling ``candidate_forward_backward.py``
-module.  This package keeps the public import path while making track-continuation
-bonuses robust to CSV scalar-type drift such as ``491`` versus ``491.0``.
+module. This package keeps the public import path while hardening candidate identity,
+row-wise score fallback, and tied-rank handling without duplicating the implementation.
 """
 
 from __future__ import annotations
@@ -11,6 +11,9 @@ import importlib.util
 from pathlib import Path
 import sys
 from typing import Any
+
+import numpy as np
+import pandas as pd
 
 from raft_uav.mmuad.candidate_identity import canonical_track_ids
 
@@ -42,7 +45,44 @@ def _transition_log_likelihood_with_canonical_track_ids(
     return _ORIGINAL_TRANSITION_LOG_LIKELIHOOD(previous_rows, current_rows, config)
 
 
+def _candidate_score_with_row_fallback(rows: pd.DataFrame, config: Any) -> pd.Series:
+    """Resolve primary and fallback scores independently for every candidate row."""
+
+    score = pd.Series(np.nan, index=rows.index, dtype=float)
+    for column in (config.score_column, *config.fallback_score_columns):
+        if column not in rows.columns:
+            continue
+        values = pd.to_numeric(rows[column], errors="coerce").astype(float)
+        values = values.where(np.isfinite(values), np.nan)
+        score = score.where(score.notna(), values)
+
+    finite = np.isfinite(score.to_numpy(float))
+    if not finite.any():
+        return pd.Series(1.0, index=rows.index, dtype=float)
+    return score.fillna(float(score.loc[finite].min())).astype(float)
+
+
+def _descending_average_ranks(values: np.ndarray) -> np.ndarray:
+    """Return permutation-invariant descending ranks with average ranks for ties."""
+
+    array = np.asarray(values, dtype=float)
+    if array.size == 0:
+        return np.asarray([], dtype=float)
+    finite = np.isfinite(array)
+    ranks = np.full(array.shape, np.nan, dtype=float)
+    if finite.any():
+        ranks[finite] = (
+            pd.Series(array[finite])
+            .rank(method="average", ascending=False)
+            .to_numpy(dtype=float)
+        )
+        ranks[~finite] = float(np.sum(finite) + 1)
+    return ranks
+
+
 _IMPL._transition_log_likelihood = _transition_log_likelihood_with_canonical_track_ids
+_IMPL._candidate_score = _candidate_score_with_row_fallback
+_IMPL._descending_ranks = _descending_average_ranks
 
 globals().update(
     {
