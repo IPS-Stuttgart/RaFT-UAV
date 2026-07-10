@@ -103,7 +103,7 @@ def build_source_branch_reservoir(
                     existing["candidate_reservoir_reason"] = merged_reason
                     existing["candidate_reservoir_reasons"] = merged_reason
 
-    union = pd.DataFrame.from_records(selected_by_id.values())
+    union = pd.DataFrame.from_records(list(selected_by_id.values()))
     if union.empty:
         return CandidateFrame(normalize_candidate_columns(union))
     preserve_prefixes = tuple(config.preserve_reason_prefixes)
