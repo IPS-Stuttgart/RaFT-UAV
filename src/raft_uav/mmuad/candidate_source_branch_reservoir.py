@@ -25,7 +25,7 @@ import pandas as pd
 
 from raft_uav.mmuad.candidate_reservoir import (
     ReservoirConfig,
-    _cap_per_frame,
+    _apply_frame_cap,
     build_candidate_reservoir,
     build_oracle_recall_tables,
     build_reservoir_summary,
@@ -141,9 +141,9 @@ def build_source_branch_reservoir(
     preserve_prefixes = tuple(config.preserve_reason_prefixes)
     if _DEFAULT_SOURCE_BRANCH_REASON_PREFIX not in preserve_prefixes:
         preserve_prefixes = (*preserve_prefixes, _DEFAULT_SOURCE_BRANCH_REASON_PREFIX)
-    capped = _cap_per_frame(
+    capped = _apply_frame_cap(
         union,
-        max_candidates_per_frame=int(config.max_candidates_per_frame),
+        max_candidates_per_frame=config.max_candidates_per_frame,
         cap_reason_bonus=float(config.cap_reason_bonus),
         preserve_reason_prefixes=preserve_prefixes,
     )

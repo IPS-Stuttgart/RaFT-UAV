@@ -381,6 +381,39 @@ def _cap_per_frame(
     return pd.concat(parts, ignore_index=True) if parts else rows.iloc[0:0].copy()
 
 
+def _apply_frame_cap(
+    rows: pd.DataFrame,
+    *,
+    max_candidates_per_frame: int | None,
+    cap_reason_bonus: float = 0.0,
+    preserve_reason_prefixes: Sequence[str] = _DEFAULT_PRESERVE_REASON_PREFIXES,
+) -> pd.DataFrame:
+    """Apply the reservoir frame cap while preserving the historical helper API."""
+
+    if max_candidates_per_frame is not None:
+        return _cap_per_frame(
+            rows,
+            max_candidates_per_frame=int(max_candidates_per_frame),
+            cap_reason_bonus=cap_reason_bonus,
+            preserve_reason_prefixes=preserve_reason_prefixes,
+        )
+
+    out = _with_cap_score(rows, cap_reason_bonus=cap_reason_bonus)
+    prefixes = tuple(str(prefix) for prefix in preserve_reason_prefixes if str(prefix))
+    out["candidate_reservoir_protected"] = out["candidate_reservoir_reason"].map(
+        lambda value: _has_preserved_reason(value, prefixes),
+    )
+    parts: list[pd.DataFrame] = []
+    for _, group in out.groupby(["sequence_id", "time_s"], sort=False):
+        ranked = group.sort_values(
+            ["candidate_reservoir_cap_score", "candidate_reservoir_score"],
+            ascending=[False, False],
+        ).copy()
+        ranked["candidate_reservoir_rank"] = np.arange(1, len(ranked) + 1, dtype=float)
+        parts.append(ranked)
+    return pd.concat(parts, ignore_index=True) if parts else out.iloc[0:0].copy()
+
+
 def _with_cap_score(rows: pd.DataFrame, *, cap_reason_bonus: float) -> pd.DataFrame:
     out = rows.copy()
     out["candidate_reservoir_reason_count"] = _reservoir_reason_count_series(out)

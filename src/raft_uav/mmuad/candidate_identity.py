@@ -17,7 +17,17 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
-_INVALID_TRACK_IDS = {"", "nan", "none", "null", "<na>", "-1", "-1.0"}
+_INVALID_TRACK_IDS = {
+    "",
+    "nan",
+    "none",
+    "null",
+    "<na>",
+    "-1",
+    "-1.0",
+    "false",
+    "true",
+}
 _CANONICAL_INTEGER_TEXT = re.compile(r"^[+-]?(?:0|[1-9][0-9]*)(?:\.0+)?$")
 
 
@@ -26,7 +36,9 @@ def canonical_track_id(value: Any) -> str | None:
 
     Integral numeric scalars and canonical integer strings are normalized to an
     integer string.  Strings with leading zeros remain opaque, so ``"001"`` is
-    not treated as the same identifier as numeric ``1``.
+    not treated as the same identifier as numeric ``1``. Boolean-like values are
+    treated as missing because schema coercion must not turn them into shared
+    temporal identities.
     """
 
     if value is None:
@@ -38,7 +50,7 @@ def canonical_track_id(value: Any) -> str | None:
         pass
 
     if isinstance(value, (bool, np.bool_)):
-        return str(bool(value))
+        return None
     if isinstance(value, numbers.Integral):
         number = int(value)
         return None if number == -1 else str(number)
