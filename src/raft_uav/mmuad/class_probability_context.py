@@ -184,6 +184,8 @@ def _probability_rows(class_probabilities: pd.DataFrame) -> pd.DataFrame:
         for label in OFFICIAL_CLASS_LABELS:
             out[f"image_class_prob_{label}"] = (predicted == label).astype(float)
     elif predicted_column is not None:
+        predicted = _predicted_class_labels(rows[predicted_column])
+        out = _fill_empty_probability_rows_from_predicted_class(out, predicted)
         out["image_input_predicted_class_id"] = pd.to_numeric(
             rows[predicted_column], errors="coerce"
         )
@@ -224,6 +226,32 @@ def _validate_predicted_class_labels(labels: pd.Series) -> None:
         "missing class probabilities because predicted_class values must be official "
         f"Track 5 class IDs {{{allowed}}}; got {examples}"
     )
+
+
+def _fill_empty_probability_rows_from_predicted_class(
+    rows: pd.DataFrame,
+    predicted: pd.Series,
+) -> pd.DataFrame:
+    """Fill empty per-row probability vectors from valid predicted classes."""
+
+    out = rows.copy()
+    prob_columns = [f"image_class_prob_{label}" for label in OFFICIAL_CLASS_LABELS]
+    for column in prob_columns:
+        if column not in out.columns:
+            out[column] = 0.0
+    numeric = out[prob_columns].apply(pd.to_numeric, errors="coerce")
+    finite_nonnegative = numeric.where(np.isfinite(numeric), 0.0).clip(lower=0.0)
+    needs_fallback = finite_nonnegative.sum(axis=1) <= 0.0
+    if not needs_fallback.any():
+        return out
+
+    fallback_labels = pd.Series(predicted, index=out.index).loc[needs_fallback]
+    _validate_predicted_class_labels(fallback_labels)
+    for label in OFFICIAL_CLASS_LABELS:
+        out.loc[needs_fallback, f"image_class_prob_{label}"] = (
+            fallback_labels == label
+        ).astype(float)
+    return out
 
 
 def _probability_column(rows: pd.DataFrame, label: str) -> str | None:
