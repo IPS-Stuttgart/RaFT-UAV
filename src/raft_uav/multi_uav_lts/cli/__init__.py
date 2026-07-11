@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling ``cli.py`` module. This
 package preserves the public import path while rejecting repeated ZIP member
-names, which can otherwise pad the expected physical entry count while omitting
-one logical prediction file.
+names and non-root member paths. Repeated names can pad the expected physical
+entry count while omitting one logical prediction file, while Windows-style
+backslash paths can otherwise bypass the root-level archive check.
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ def validate_submission_zip(
     template_zip: Path | None = None,
     expected_file_count: int | None = 98,
 ) -> SubmissionValidation:
-    """Validate one submission ZIP, rejecting repeated logical filenames."""
+    """Validate one submission ZIP, rejecting duplicate or non-root members."""
 
     expected_names = _IMPL.expected_names_from_template(template_zip)
     if expected_names is not None:
@@ -56,7 +57,11 @@ def validate_submission_zip(
         counts = Counter(physical_names)
         duplicate_entries = sorted(name for name, count in counts.items() if count > 1)
         names = sorted(counts)
-        nested_entries = [name for name in names if "/" in name.rstrip("/")]
+        nested_entries = [
+            name
+            for name in names
+            if "/" in name.rstrip("/") or "\\" in name
+        ]
         non_txt_entries = [name for name in names if not name.endswith(".txt")]
         expected_set = set(expected_names or [])
         name_set = set(names)
