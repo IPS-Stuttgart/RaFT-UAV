@@ -18,5 +18,24 @@ jobs:
           python-version: "3.11"
       - name: Install quietly
         run: python -m pip install -q -e ".[dev]"
-      - name: Run first failing test concisely
-        run: python -m pytest -q --tb=short --maxfail=1
+      - name: Capture first failing test
+        shell: bash
+        run: |
+          set +e
+          python -m pytest -q --tb=short --maxfail=1 > pytest.log 2>&1
+          status=$?
+          echo "$status" > pytest.exit
+          exit 0
+      - uses: actions/upload-artifact@v5
+        with:
+          name: spatial-group-topk-pytest-log
+          path: |
+            pytest.log
+            pytest.exit
+      - name: Fail when pytest failed
+        shell: bash
+        run: |
+          if [ "$(cat pytest.exit)" != "0" ]; then
+            tail -100 pytest.log
+            exit 1
+          fi
