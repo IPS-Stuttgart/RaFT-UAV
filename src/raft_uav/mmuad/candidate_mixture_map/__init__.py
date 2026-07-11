@@ -1,9 +1,9 @@
-"""Compatibility wrapper preserving opaque IDs in candidate-mixture CSV inputs.
+"""Compatibility fixes for candidate-mixture MAP.
 
 The maintained implementation lives in the sibling ``candidate_mixture_map.py``
-module.  This package keeps the public import path while making every CLI entry
-path read target templates and initial trajectories without coercing numeric-
-looking sequence identifiers such as ``001`` to integers.
+module. This package keeps the public import path while preserving opaque IDs in
+CSV inputs and retaining complete candidate frames when target-template times
+fall outside the configured matching tolerance.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.estimate_csv import read_estimate_csv
@@ -56,6 +57,42 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+
+
+def _target_time_candidate_groups(
+    sequence_rows: pd.DataFrame,
+    *,
+    candidate_times: np.ndarray,
+    target_times: np.ndarray,
+    tolerance_s: float,
+) -> list[tuple[float, pd.DataFrame]]:
+    """Match target times without collapsing a nearest timestamp to one row.
+
+    Candidate tables commonly contain several hypotheses at each timestamp. If
+    no timestamp lies inside the tolerance window, the legacy fallback selected
+    one row by positional index. Keep every hypothesis from the nearest timestamp
+    instead, matching the grouped behavior used when a timestamp is in tolerance.
+    """
+
+    groups: list[tuple[float, pd.DataFrame]] = []
+    if len(sequence_rows) == 0 or len(target_times) == 0:
+        return groups
+    tolerance = max(float(tolerance_s), 0.0)
+    for target_time in target_times:
+        left = int(np.searchsorted(candidate_times, target_time - tolerance, side="left"))
+        right = int(np.searchsorted(candidate_times, target_time + tolerance, side="right"))
+        if right <= left:
+            nearest = int(np.argmin(np.abs(candidate_times - target_time)))
+            nearest_time = float(candidate_times[nearest])
+            left = int(np.searchsorted(candidate_times, nearest_time, side="left"))
+            right = int(np.searchsorted(candidate_times, nearest_time, side="right"))
+        groups.append((float(target_time), sequence_rows.iloc[left:right]))
+    return groups
+
+
+# Make the legacy frame builder resolve the corrected nearest-time grouping.
+_IMPL._target_time_candidate_groups = _target_time_candidate_groups
+globals()["_target_time_candidate_groups"] = _target_time_candidate_groups
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
