@@ -17,6 +17,16 @@ except ModuleNotFoundError:  # pragma: no cover
     tomllib = None  # type: ignore[assignment]
 
 
+def _as_string_tuple(value: Any) -> tuple[str, ...]:
+    """Normalize one scalar string or an iterable of values to a string tuple."""
+
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,) if value else ()
+    return tuple(str(item) for item in value)
+
+
 @dataclass(frozen=True)
 class ExperimentConfig:
     """Serializable configuration for one experiment family."""
@@ -37,9 +47,9 @@ class ExperimentConfig:
             name=str(payload.get("name", "experiment")),
             dataset_root=str(payload.get("dataset_root", "")),
             output_dir=str(payload.get("output_dir", "outputs/experiment")),
-            flights=tuple(str(item) for item in payload.get("flights", ()) or ()),
-            methods=tuple(str(item) for item in payload.get("methods", ()) or ()),
-            options=tuple(str(item) for item in payload.get("options", ()) or ()),
+            flights=_as_string_tuple(payload.get("flights")),
+            methods=_as_string_tuple(payload.get("methods")),
+            options=_as_string_tuple(payload.get("options")),
             environment={str(k): str(v) for k, v in dict(payload.get("environment", {}) or {}).items()},
             calibration_artifacts={
                 str(k): str(v)
