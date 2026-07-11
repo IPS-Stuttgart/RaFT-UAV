@@ -41,7 +41,7 @@ def _canonicalize_sequence_id_column(rows: pd.DataFrame) -> pd.DataFrame:
 
     out = rows.copy()
     if "sequence_id" in out.columns:
-        out["sequence_id"] = out["sequence_id"].astype(str)
+        out["sequence_id"] = _sequence_id_text(out["sequence_id"])
         return out
 
     lower_to_column = {str(column).strip().lower(): column for column in out.columns}
@@ -53,5 +53,11 @@ def _canonicalize_sequence_id_column(rows: pd.DataFrame) -> pd.DataFrame:
     if source_column is None:
         return out
 
-    out.insert(0, "sequence_id", out[source_column].astype(str))
+    out.insert(0, "sequence_id", _sequence_id_text(out[source_column]))
     return out
+
+
+def _sequence_id_text(values: pd.Series) -> pd.Series:
+    """Return stripped sequence ids without changing opaque text such as ``001``."""
+
+    return values.where(values.notna(), "").astype(str).str.strip()
