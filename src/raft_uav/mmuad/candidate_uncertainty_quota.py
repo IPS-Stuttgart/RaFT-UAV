@@ -17,8 +17,11 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
-from raft_uav.mmuad.candidate_reservoir import ReservoirConfig, _apply_frame_cap
-from raft_uav.mmuad.candidate_source_branch_reservoir import build_source_branch_reservoir
+from raft_uav.mmuad.candidate_reservoir import ReservoirConfig, _cap_per_frame
+from raft_uav.mmuad.candidate_source_branch_reservoir import (
+    _DEFAULT_SOURCE_BRANCH_REASON_PREFIX,
+    build_source_branch_reservoir,
+)
 from raft_uav.mmuad.schema import CandidateFrame, normalize_candidate_columns
 
 _DEFAULT_SIGMA_COLUMNS = (
@@ -53,7 +56,9 @@ def build_uncertainty_quota_reservoir(
     rows["_uncertainty_quota_row_id"] = np.arange(len(rows), dtype=int)
     rows["candidate_uncertainty_quota_sigma_m"] = _first_finite_sigma(rows, sigma_columns)
 
-    uncapped_config = replace(config, max_candidates_per_frame=None)
+    # The source/branch builder uses zero, not None, to mean uncapped.  Keeping
+    # that convention also avoids int(None) when it applies its final cap.
+    uncapped_config = replace(config, max_candidates_per_frame=0)
     base = build_source_branch_reservoir(
         rows,
         reservoir_config=uncapped_config,
@@ -95,11 +100,15 @@ def build_uncertainty_quota_reservoir(
         columns=["candidate_reservoir_reason_count", "candidate_reservoir_cap_score"],
         errors="ignore",
     )
-    capped = _apply_frame_cap(
+    preserve_prefixes = tuple(config.preserve_reason_prefixes)
+    for prefix in (_DEFAULT_SOURCE_BRANCH_REASON_PREFIX, _REASON_PREFIX):
+        if prefix not in preserve_prefixes:
+            preserve_prefixes = (*preserve_prefixes, prefix)
+    capped = _cap_per_frame(
         union,
-        max_candidates_per_frame=config.max_candidates_per_frame,
+        max_candidates_per_frame=int(config.max_candidates_per_frame),
         cap_reason_bonus=float(config.cap_reason_bonus),
-        preserve_reason_prefixes=(_REASON_PREFIX,),
+        preserve_reason_prefixes=preserve_prefixes,
     )
     capped["candidate_uncertainty_quota_top_n"] = int(uncertainty_top_n)
     capped["candidate_uncertainty_quota_selected"] = capped.get(
@@ -136,6 +145,6 @@ def _first_finite_sigma(rows: pd.DataFrame, columns: Sequence[str]) -> pd.Series
 
 
 def _merge_reason(existing: object, new_reason: str) -> str:
-    tokens = {token.strip() for token in str(existing).split(",") if token.strip()}
+    tokens = {token.strip() for token in str(existing).replace(";", ",").split(",") if token.strip()}
     tokens.add(new_reason)
-    return ",".join(sorted(tokens))
+    return ";".join(sorted(tokens))
