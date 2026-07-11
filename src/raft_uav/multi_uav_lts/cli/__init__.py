@@ -27,6 +27,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_SUBMISSION_VALIDATION = _IMPL.SubmissionValidation
+_summarize_prediction_text = _IMPL._summarize_prediction_text
 
 
 @dataclass(frozen=True)
@@ -67,7 +68,7 @@ def validate_submission_zip(
             if name in nested_entries or not name.endswith(".txt"):
                 continue
             text = archive.read(name).decode("utf-8", errors="replace")
-            file_summaries.append(_IMPL._summarize_prediction_text(name, text))
+            file_summaries.append(_summarize_prediction_text(name, text))
 
     parse_errors = sum(summary.parse_errors for summary in file_summaries)
     invalid_geometry_rows = sum(summary.invalid_geometry_rows for summary in file_summaries)
