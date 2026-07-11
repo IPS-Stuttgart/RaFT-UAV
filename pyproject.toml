@@ -94,6 +94,7 @@ raft-uav-mmuad-candidate-pool-compare = "raft_uav.mmuad.candidate_pool_compare_c
 raft-uav-mmuad-candidate-pool-branch-ablation = "raft_uav.mmuad.candidate_pool_branch_ablation:main"
 raft-uav-mmuad-candidate-mixture-map = "raft_uav.mmuad.candidate_mixture_map_text_cli:main"
 raft-uav-mmuad-candidate-mixture-map-multistart = "raft_uav.mmuad.candidate_mixture_map_multistart:main"
+raft-uav-mmuad-candidate-mixture-sequence-pool-selector = "raft_uav.mmuad.candidate_mixture_map_sequence_pool_selector:main"
 raft-uav-mmuad-grouped-candidate-mixture-map = "raft_uav.mmuad.candidate_mixture_map_grouped:main"
 raft-uav-mmuad-stratified-candidate-mixture-map = "raft_uav.mmuad.candidate_mixture_map_stratified:main"
 raft-uav-mmuad-reservoir-mixture-map = "raft_uav.mmuad.candidate_reservoir_mixture_map:main"
