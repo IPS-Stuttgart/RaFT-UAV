@@ -33,7 +33,16 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_RUN_SEQUENCE_MULTISTART = _IMPL.run_sequence_multistart_candidate_mixture_map
-_SEQUENCE_ALIASES = ("sequence_id", "Sequence", "sequence", "seq")
+_SEQUENCE_ALIASES = (
+    "sequence_id",
+    "Sequence",
+    "sequence",
+    "seq",
+    "scene",
+    "scene_id",
+    "clip",
+    "clip_id",
+)
 
 
 globals().update(
@@ -60,8 +69,7 @@ def _expand_sequence_less_external_initialization(
 
     sequence_column = _first_present_column(rows, _SEQUENCE_ALIASES)
     if sequence_column is not None:
-        if sequence_column != "sequence_id":
-            rows["sequence_id"] = rows[sequence_column]
+        rows["sequence_id"] = _sequence_id_text(rows[sequence_column])
         return rows
 
     candidate_rows = normalize_candidate_columns(pd.DataFrame(candidates).copy())
@@ -115,6 +123,12 @@ def _first_present_column(rows: pd.DataFrame, aliases: tuple[str, ...]) -> Any |
     return None
 
 
+def _sequence_id_text(values: pd.Series) -> pd.Series:
+    """Return stripped sequence IDs while preserving opaque text such as ``001``."""
+
+    return values.where(values.notna(), "").astype(str).str.strip()
+
+
 _IMPL.run_sequence_multistart_candidate_mixture_map = (
     run_sequence_multistart_candidate_mixture_map
 )
@@ -125,5 +139,6 @@ globals()["_expand_sequence_less_external_initialization"] = (
     _expand_sequence_less_external_initialization
 )
 globals()["_first_present_column"] = _first_present_column
+globals()["_sequence_id_text"] = _sequence_id_text
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]

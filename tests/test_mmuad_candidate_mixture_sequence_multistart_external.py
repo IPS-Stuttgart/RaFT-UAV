@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad import candidate_mixture_map_sequence_multistart as sequence_multistart
 
@@ -69,6 +70,21 @@ def test_sequence_less_external_initialization_is_reused_for_every_sequence(
 
 def test_external_sequence_alias_is_canonicalized_without_replication() -> None:
     external = _external_initialization().assign(Sequence=["seqB"])
+
+    normalized = sequence_multistart._expand_sequence_less_external_initialization(
+        _candidates(),
+        external,
+    )
+
+    assert normalized is not None
+    assert normalized["sequence_id"].tolist() == ["seqB"]
+    assert len(normalized) == 1
+
+
+@pytest.mark.parametrize("alias", ["scene", "scene_id", "clip", "clip_id"])
+def test_external_schema_sequence_aliases_are_not_replicated(alias: str) -> None:
+    external = _external_initialization()
+    external[f" {alias} "] = [" seqB "]
 
     normalized = sequence_multistart._expand_sequence_less_external_initialization(
         _candidates(),
