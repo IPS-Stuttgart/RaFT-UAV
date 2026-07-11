@@ -26,6 +26,22 @@ def test_submission_validator_rejects_duplicate_members_that_pad_file_count(
     assert not validation.valid
 
 
+def test_submission_validator_rejects_windows_style_nested_member(
+    tmp_path: Path,
+) -> None:
+    submission_zip = tmp_path / "submission.zip"
+    member = r"nested\sequence_a.txt"
+    with zipfile.ZipFile(submission_zip, "w") as archive:
+        archive.writestr(member, "")
+
+    validation = validate_submission_zip(submission_zip, expected_file_count=1)
+
+    assert validation.file_count == 1
+    assert validation.nested_entries == [member]
+    assert validation.files == []
+    assert not validation.valid
+
+
 def test_submission_validator_accepts_unique_members(tmp_path: Path) -> None:
     submission_zip = tmp_path / "submission.zip"
     with zipfile.ZipFile(submission_zip, "w") as archive:
