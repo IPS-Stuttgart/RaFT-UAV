@@ -35,24 +35,25 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
-_ORIGINAL_CAP_PER_FRAME = _IMPL._cap_per_frame
+_ORIGINAL_APPLY_FRAME_CAP = _IMPL._apply_frame_cap
 _DERIVED_CAP_COLUMNS = (
     "candidate_reservoir_reason_count",
     "candidate_reservoir_cap_score",
 )
 
 
-def _cap_per_frame_with_fresh_reason_counts(
+def _apply_frame_cap_with_fresh_reason_counts(
     rows: pd.DataFrame,
     **kwargs: Any,
 ) -> pd.DataFrame:
     """Recompute reason-derived cap columns after quota reasons are merged."""
 
     refreshed = rows.drop(columns=list(_DERIVED_CAP_COLUMNS), errors="ignore")
-    return _ORIGINAL_CAP_PER_FRAME(refreshed, **kwargs)
+    return _ORIGINAL_APPLY_FRAME_CAP(refreshed, **kwargs)
 
 
-_IMPL._cap_per_frame = _cap_per_frame_with_fresh_reason_counts
+_IMPL._apply_frame_cap = _apply_frame_cap_with_fresh_reason_counts
+_IMPL._cap_per_frame = _apply_frame_cap_with_fresh_reason_counts
 
 globals().update(
     {
