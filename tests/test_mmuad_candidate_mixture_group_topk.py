@@ -116,7 +116,10 @@ def test_group_topk_can_keep_raw_and_calibrated_siblings() -> None:
     )
 
     assert selected["mmuad_calibration_origin_row"].tolist() == [1, 1]
-    assert set(selected["candidate_branch"]) == {"raw", "source_translation_calibrated"}
+    assert set(selected["candidate_branch"]) == {
+        "raw",
+        "source_translation_calibrated",
+    }
     assert selected["mixture_group_topk_sibling_rank"].tolist() == [1, 2]
 
 
@@ -133,10 +136,10 @@ def test_group_topk_run_disables_second_row_level_truncation() -> None:
 
     selected_groups = set(result.selected_candidates["mmuad_calibration_origin_row"])
     assignment_groups = set(
-        result.grouped_result.mixture_result.assignments["mmuad_calibration_origin_row"]
+        result.grouped_result.mixture_result.assignments["mixture_hypothesis_group"]
     )
     assert selected_groups == {1, 2}
-    assert assignment_groups == {1, 2}
+    assert assignment_groups == {"1", "2"}
     assert len(result.selected_candidates) == 3
 
 
