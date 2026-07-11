@@ -79,11 +79,8 @@ def fortem_tracklet_from_summary(
 ):
     """Convert a summary row while safely defaulting a missing node cost."""
 
-    normalized = dict(row)
-    if _is_missing_scalar(normalized.get(cost_key)):
-        normalized[cost_key] = 0.0
     return _ORIGINAL_FORTEM_TRACKLET_FROM_SUMMARY(
-        normalized,
+        row,
         cost_key=cost_key,
     )
 

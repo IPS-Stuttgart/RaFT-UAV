@@ -12,6 +12,11 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+
+try:
+    import pandas as pd
+except ImportError:  # pragma: no cover - pandas is available in normal RaFT-UAV runs.
+    pd = None
 try:
     from pyrecest.tracking import (
         Tracklet,
@@ -207,6 +212,7 @@ def fortem_tracklet_from_summary(
         ],
         dtype=float,
     )
+    cost_value = _optional(row, cost_key, default=0.0)
     metadata = {str(key): _jsonable(value) for key, value in row.items()}
     if track_id is not None:
         metadata["track_id"] = track_id
@@ -216,7 +222,7 @@ def fortem_tracklet_from_summary(
         end_time=float(_first_present(row, "end_time_s", "time_end_s")),
         start_state=start_state,
         end_state=end_state,
-        cost=float(row.get(cost_key, 0.0) or 0.0),
+        cost=0.0 if cost_value is None else float(cost_value),
         metadata=metadata,
     )
 
@@ -319,22 +325,43 @@ def _first_present(row: Mapping[str, Any], *names: str) -> Any:
     for name in names:
         if name in row:
             value = row[name]
-            if value is not None and value != "":
+            if not _is_missing_scalar(value):
                 return value
     raise KeyError(f"row must contain one of {names!r}")
 
 
 def _optional(row: Mapping[str, Any], name: str, *, default: Any = None) -> Any:
     value = row.get(name, default)
-    return default if value == "" else value
+    return default if _is_missing_scalar(value) else value
 
 
 def _jsonable(value: Any) -> Any:
+    if _is_missing_scalar(value):
+        return None
     if isinstance(value, np.ndarray):
         return value.tolist()
     if isinstance(value, np.generic):
         return value.item()
     return value
+
+
+def _is_missing_scalar(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if pd is not None:
+        try:
+            missing = pd.isna(value)
+        except (TypeError, ValueError):
+            return False
+        if isinstance(missing, (bool, np.bool_)):
+            return bool(missing)
+        return False
+    try:
+        return bool(value != value)
+    except (TypeError, ValueError):
+        return False
 
 
 __all__ = [
