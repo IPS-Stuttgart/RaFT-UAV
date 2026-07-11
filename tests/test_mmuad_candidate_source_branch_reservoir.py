@@ -28,12 +28,39 @@ def _candidate_rows() -> pd.DataFrame:
     )
 
 
+def _diversity_candidate_rows() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "sequence_id": ["seqA"] * 3,
+            "time_s": [0.0] * 3,
+            "source": ["lidar_360"] * 3,
+            "candidate_branch": ["raw"] * 3,
+            "track_id": ["best", "near-duplicate", "far-alternative"],
+            "x_m": [0.0, 0.1, 20.0],
+            "y_m": [0.0, 0.0, 0.0],
+            "z_m": [1.0, 1.0, 1.0],
+            "ranker_score": [1.00, 0.99, 0.98],
+        }
+    )
+
+
 def _config(*, max_candidates_per_frame: int = 8) -> ReservoirConfig:
     return ReservoirConfig(
         global_top_n=1,
         per_source_top_n=1,
         per_branch_top_n=1,
         max_candidates_per_frame=max_candidates_per_frame,
+        score_column="ranker_score",
+        fallback_score_column="confidence",
+    )
+
+
+def _source_branch_only_config() -> ReservoirConfig:
+    return ReservoirConfig(
+        global_top_n=0,
+        per_source_top_n=0,
+        per_branch_top_n=0,
+        max_candidates_per_frame=2,
         score_column="ranker_score",
         fallback_score_column="confidence",
     )
@@ -82,6 +109,35 @@ def test_source_branch_quota_respects_final_frame_cap() -> None:
     assert len(reservoir) == 3
     assert reservoir["candidate_reservoir_rank"].tolist() == [1.0, 2.0, 3.0]
     assert reservoir["candidate_reservoir_protected"].all()
+
+
+def test_source_branch_diversity_replaces_near_duplicate_with_alternative() -> None:
+    reservoir = build_source_branch_reservoir(
+        _diversity_candidate_rows(),
+        reservoir_config=_source_branch_only_config(),
+        per_source_branch_top_n=2,
+        source_branch_diversity_weight=2.0,
+        source_branch_diversity_scale_m=1.0,
+        source_branch_distance_cap_m=50.0,
+    ).rows
+
+    assert set(reservoir["track_id"]) == {"best", "far-alternative"}
+    alternative = reservoir.loc[reservoir["track_id"] == "far-alternative"].iloc[0]
+    assert alternative["candidate_source_branch_min_distance_m"] > 19.0
+    assert alternative["candidate_source_branch_diversity_term"] > 0.99
+    assert bool(alternative["candidate_source_branch_diversity_selected"])
+
+
+def test_zero_source_branch_diversity_weight_preserves_score_order() -> None:
+    reservoir = build_source_branch_reservoir(
+        _diversity_candidate_rows(),
+        reservoir_config=_source_branch_only_config(),
+        per_source_branch_top_n=2,
+        source_branch_diversity_weight=0.0,
+    ).rows
+
+    assert set(reservoir["track_id"]) == {"best", "near-duplicate"}
+    assert not reservoir["candidate_source_branch_diversity_selected"].any()
 
 
 def test_source_branch_summary_reports_cell_recall() -> None:
@@ -145,6 +201,8 @@ def test_source_branch_cli_writes_reservoir_summary_and_oracle_tables(tmp_path) 
             "1",
             "--per-source-branch-top-n",
             "1",
+            "--source-branch-diversity-weight",
+            "0.5",
         ]
     )
 
@@ -155,6 +213,7 @@ def test_source_branch_cli_writes_reservoir_summary_and_oracle_tables(tmp_path) 
     assert oracle_by_sequence_csv.exists()
     summary = json.loads(summary_json.read_text(encoding="utf-8"))
     assert summary["per_source_branch_top_n"] == 1
+    assert summary["source_branch_diversity_weight"] == 0.5
     assert summary["source_branch_cell_recall"] == 1.0
     oracle = pd.read_csv(oracle_summary_csv)
     assert oracle.loc[0, "oracle_all_3d_m_mse"] == 0.0

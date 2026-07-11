@@ -1,13 +1,15 @@
 """Build source-by-branch quota reservoirs for MMUAD candidate inference.
 
 The ordinary branch-preserving reservoir keeps top candidates per source and per
-branch independently.  That can still drop an entire source/branch intersection:
+branch independently. That can still drop an entire source/branch intersection:
 for example, the best translated Livox candidate may be neither the best Livox
-candidate nor the best translated candidate.  This module adds an optional quota
+candidate nor the best translated candidate. This module adds an optional quota
 for every ``(source, candidate_branch)`` cell before the final per-frame cap.
 
-The quota is inference-safe: it uses only candidate scores and metadata, never
-validation/test truth.  Optional truth is used only for oracle-recall diagnostics.
+When a cell quota keeps multiple rows, an optional spatial-diversity term avoids
+spending the quota on near-duplicate hypotheses. The quota remains inference-safe:
+it uses only candidate scores, geometry, and metadata. Optional truth is used only
+for oracle-recall diagnostics.
 """
 
 from __future__ import annotations
@@ -40,20 +42,31 @@ def build_source_branch_reservoir(
     *,
     reservoir_config: ReservoirConfig | None = None,
     per_source_branch_top_n: int = 1,
+    source_branch_diversity_weight: float = 0.0,
+    source_branch_diversity_scale_m: float = 10.0,
+    source_branch_distance_cap_m: float = 50.0,
 ) -> CandidateFrame:
     """Return a branch-preserving reservoir with source/branch intersection quotas.
 
-    The base reservoir is first built without its final cap.  Top candidates from
+    The base reservoir is first built without its final cap. Top candidates from
     each ``(source, candidate_branch)`` cell are then added, selection reasons are
     merged, and the configured cap is applied once to the complete union.
+
+    For quotas larger than one, ``source_branch_diversity_weight`` can trade a
+    normalized within-cell score against distance from candidates already retained
+    in the same cell. A weight of zero exactly recovers score-only selection.
     """
 
     config = reservoir_config or ReservoirConfig()
     rows = _candidate_rows(candidates)
     if rows.empty:
         return CandidateFrame(normalize_candidate_columns(rows))
-    if int(per_source_branch_top_n) < 0:
-        raise ValueError("per_source_branch_top_n must be non-negative")
+    _validate_selection_config(
+        per_source_branch_top_n=per_source_branch_top_n,
+        diversity_weight=source_branch_diversity_weight,
+        diversity_scale_m=source_branch_diversity_scale_m,
+        distance_cap_m=source_branch_distance_cap_m,
+    )
 
     rows = _normalize_source_branch_columns(rows)
     rows["_source_branch_reservoir_row_id"] = np.arange(len(rows), dtype=int)
@@ -77,16 +90,33 @@ def build_source_branch_reservoir(
     if int(per_source_branch_top_n) > 0:
         group_columns = ["sequence_id", "time_s", "source", "candidate_branch"]
         for group_key, group in rows.groupby(group_columns, sort=False, dropna=False):
-            ranked = group.sort_values(
-                ["_source_branch_base_score", "_source_branch_reservoir_row_id"],
-                ascending=[False, True],
-            ).head(int(per_source_branch_top_n))
+            selected = _select_source_branch_rows(
+                group,
+                count=int(per_source_branch_top_n),
+                diversity_weight=float(source_branch_diversity_weight),
+                diversity_scale_m=float(source_branch_diversity_scale_m),
+                distance_cap_m=float(source_branch_distance_cap_m),
+            )
             source = str(group_key[2])
             branch = str(group_key[3])
             reason = f"{_DEFAULT_SOURCE_BRANCH_REASON_PREFIX}{source}|{branch}"
-            for _, candidate in ranked.iterrows():
+            for _, candidate in selected.iterrows():
                 row_id = int(candidate["_source_branch_reservoir_row_id"])
                 existing = selected_by_id.get(row_id)
+                diagnostics = {
+                    "candidate_source_branch_selection_rank": int(
+                        candidate["_source_branch_selection_rank"]
+                    ),
+                    "candidate_source_branch_min_distance_m": float(
+                        candidate["_source_branch_min_distance_m"]
+                    ),
+                    "candidate_source_branch_diversity_term": float(
+                        candidate["_source_branch_diversity_term"]
+                    ),
+                    "candidate_source_branch_selection_utility": float(
+                        candidate["_source_branch_selection_utility"]
+                    ),
+                }
                 if existing is None:
                     existing = candidate.to_dict()
                     existing["candidate_reservoir_score"] = float(
@@ -94,6 +124,7 @@ def build_source_branch_reservoir(
                     )
                     existing["candidate_reservoir_reason"] = reason
                     existing["candidate_reservoir_reasons"] = reason
+                    existing.update(diagnostics)
                     selected_by_id[row_id] = existing
                 else:
                     merged_reason = _merge_reason_tokens(
@@ -102,6 +133,7 @@ def build_source_branch_reservoir(
                     )
                     existing["candidate_reservoir_reason"] = merged_reason
                     existing["candidate_reservoir_reasons"] = merged_reason
+                    existing.update(diagnostics)
 
     union = pd.DataFrame.from_records(list(selected_by_id.values()))
     if union.empty:
@@ -115,18 +147,32 @@ def build_source_branch_reservoir(
         cap_reason_bonus=float(config.cap_reason_bonus),
         preserve_reason_prefixes=preserve_prefixes,
     )
-    capped["candidate_source_branch_quota_top_n"] = int(per_source_branch_top_n)
-    capped["candidate_source_branch_quota_selected"] = (
+    quota_selected = (
         capped["candidate_reservoir_reason"]
         .fillna("")
         .astype(str)
         .str.contains(_DEFAULT_SOURCE_BRANCH_REASON_PREFIX, regex=False)
     )
+    capped["candidate_source_branch_quota_top_n"] = int(per_source_branch_top_n)
+    capped["candidate_source_branch_quota_selected"] = quota_selected
+    capped["candidate_source_branch_diversity_weight"] = float(
+        source_branch_diversity_weight
+    )
+    capped["candidate_source_branch_diversity_selected"] = quota_selected & (
+        float(source_branch_diversity_weight) > 0.0
+    )
     capped = capped.sort_values(
         ["sequence_id", "time_s", "candidate_reservoir_rank", "source", "candidate_branch"],
     ).reset_index(drop=True)
     capped = capped.drop(
-        columns=["_source_branch_reservoir_row_id", "_source_branch_base_score"],
+        columns=[
+            "_source_branch_reservoir_row_id",
+            "_source_branch_base_score",
+            "_source_branch_selection_rank",
+            "_source_branch_min_distance_m",
+            "_source_branch_diversity_term",
+            "_source_branch_selection_utility",
+        ],
         errors="ignore",
     )
     return CandidateFrame(normalize_candidate_columns(capped))
@@ -147,6 +193,17 @@ def source_branch_reservoir_summary(
         "candidate_source_branch_quota_selected",
         pd.Series(False, index=reservoir_rows.index, dtype=bool),
     )
+    diversity_selected = reservoir_rows.get(
+        "candidate_source_branch_diversity_selected",
+        pd.Series(False, index=reservoir_rows.index, dtype=bool),
+    )
+    selected_distances = pd.to_numeric(
+        reservoir_rows.get(
+            "candidate_source_branch_min_distance_m",
+            pd.Series(dtype=float),
+        ),
+        errors="coerce",
+    ).dropna()
     summary.update(
         {
             "input_source_branch_cells": int(input_cells),
@@ -156,6 +213,18 @@ def source_branch_reservoir_summary(
             ),
             "source_branch_quota_selected_rows": int(
                 pd.Series(quota_selected).fillna(False).astype(bool).sum()
+            ),
+            "source_branch_diversity_selected_rows": int(
+                pd.Series(diversity_selected).fillna(False).astype(bool).sum()
+            ),
+            "source_branch_selected_min_distance_mean_m": _safe_mean(selected_distances),
+            "source_branch_selected_min_distance_p50_m": _safe_quantile(
+                selected_distances,
+                0.50,
+            ),
+            "source_branch_selected_min_distance_p95_m": _safe_quantile(
+                selected_distances,
+                0.95,
             ),
         }
     )
@@ -179,6 +248,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-candidates-per-frame", type=int, default=40)
     parser.add_argument("--score-floor-quantile", type=float)
     parser.add_argument("--cap-reason-bonus", type=float, default=0.0)
+    parser.add_argument(
+        "--source-branch-diversity-weight",
+        type=float,
+        default=0.0,
+        help="within-cell score/diversity trade-off; zero preserves score-only quotas",
+    )
+    parser.add_argument("--source-branch-diversity-scale-m", type=float, default=10.0)
+    parser.add_argument("--source-branch-distance-cap-m", type=float, default=50.0)
     parser.add_argument("--truth-csv", type=Path)
     parser.add_argument("--oracle-frame-csv", type=Path)
     parser.add_argument("--oracle-summary-csv", type=Path)
@@ -202,6 +279,9 @@ def main(argv: list[str] | None = None) -> int:
         candidates,
         reservoir_config=config,
         per_source_branch_top_n=args.per_source_branch_top_n,
+        source_branch_diversity_weight=args.source_branch_diversity_weight,
+        source_branch_diversity_scale_m=args.source_branch_diversity_scale_m,
+        source_branch_distance_cap_m=args.source_branch_distance_cap_m,
     )
     args.output_reservoir_csv.parent.mkdir(parents=True, exist_ok=True)
     reservoir.rows.to_csv(args.output_reservoir_csv, index=False)
@@ -216,6 +296,13 @@ def main(argv: list[str] | None = None) -> int:
             "per_branch_top_n": int(args.per_branch_top_n),
             "per_source_branch_top_n": int(args.per_source_branch_top_n),
             "max_candidates_per_frame": int(args.max_candidates_per_frame),
+            "source_branch_diversity_weight": float(
+                args.source_branch_diversity_weight
+            ),
+            "source_branch_diversity_scale_m": float(
+                args.source_branch_diversity_scale_m
+            ),
+            "source_branch_distance_cap_m": float(args.source_branch_distance_cap_m),
         }
     )
     if args.summary_json is not None:
@@ -240,6 +327,88 @@ def main(argv: list[str] | None = None) -> int:
     print(f"reservoir_rows={len(reservoir.rows)}")
     print(f"output_reservoir_csv={args.output_reservoir_csv}")
     return 0
+
+
+def _select_source_branch_rows(
+    group: pd.DataFrame,
+    *,
+    count: int,
+    diversity_weight: float,
+    diversity_scale_m: float,
+    distance_cap_m: float,
+) -> pd.DataFrame:
+    """Greedily retain high-score, spatially distinct candidates within one cell."""
+
+    if count <= 0 or group.empty:
+        return group.iloc[0:0].copy()
+    work = group.copy()
+    work["_source_branch_score_norm"] = _normalize_score(
+        work["_source_branch_base_score"]
+    )
+    remaining_ids = set(work["_source_branch_reservoir_row_id"].astype(int).tolist())
+    selected_ids: list[int] = []
+    records: list[dict[str, float | int]] = []
+    budget = min(int(count), len(work))
+
+    while len(selected_ids) < budget and remaining_ids:
+        remaining = work.loc[
+            work["_source_branch_reservoir_row_id"].astype(int).isin(remaining_ids)
+        ].copy()
+        if not selected_ids:
+            remaining["_source_branch_min_distance_m"] = np.nan
+            remaining["_source_branch_diversity_term"] = 0.0
+        else:
+            selected_xyz = work.loc[
+                work["_source_branch_reservoir_row_id"].astype(int).isin(selected_ids),
+                ["x_m", "y_m", "z_m"],
+            ].to_numpy(float)
+            candidate_xyz = remaining[["x_m", "y_m", "z_m"]].to_numpy(float)
+            distances = np.linalg.norm(
+                candidate_xyz[:, None, :] - selected_xyz[None, :, :],
+                axis=2,
+            )
+            min_distance = np.min(distances, axis=1)
+            bounded_distance = np.minimum(min_distance, float(distance_cap_m))
+            remaining["_source_branch_min_distance_m"] = min_distance
+            remaining["_source_branch_diversity_term"] = 1.0 - np.exp(
+                -bounded_distance / float(diversity_scale_m)
+            )
+        remaining["_source_branch_selection_utility"] = (
+            remaining["_source_branch_score_norm"]
+            + float(diversity_weight) * remaining["_source_branch_diversity_term"]
+        )
+        chosen = remaining.sort_values(
+            [
+                "_source_branch_selection_utility",
+                "_source_branch_base_score",
+                "_source_branch_reservoir_row_id",
+            ],
+            ascending=[False, False, True],
+        ).iloc[0]
+        row_id = int(chosen["_source_branch_reservoir_row_id"])
+        selected_ids.append(row_id)
+        remaining_ids.remove(row_id)
+        records.append(
+            {
+                "_source_branch_reservoir_row_id": row_id,
+                "_source_branch_selection_rank": len(selected_ids),
+                "_source_branch_min_distance_m": float(
+                    chosen["_source_branch_min_distance_m"]
+                ),
+                "_source_branch_diversity_term": float(
+                    chosen["_source_branch_diversity_term"]
+                ),
+                "_source_branch_selection_utility": float(
+                    chosen["_source_branch_selection_utility"]
+                ),
+            }
+        )
+
+    diagnostics = pd.DataFrame.from_records(records)
+    selected = work.loc[
+        work["_source_branch_reservoir_row_id"].astype(int).isin(selected_ids)
+    ].merge(diagnostics, on="_source_branch_reservoir_row_id", how="inner")
+    return selected.sort_values("_source_branch_selection_rank").reset_index(drop=True)
 
 
 def _candidate_rows(candidates: CandidateFrame | pd.DataFrame) -> pd.DataFrame:
@@ -279,6 +448,15 @@ def _numeric_column(rows: pd.DataFrame, column: str, *, default: float) -> pd.Se
     return values.where(np.isfinite(values), np.nan)
 
 
+def _normalize_score(values: pd.Series) -> pd.Series:
+    score = pd.to_numeric(values, errors="coerce").fillna(0.0).astype(float)
+    minimum = float(score.min())
+    maximum = float(score.max())
+    if maximum <= minimum:
+        return pd.Series(0.5, index=score.index, dtype=float)
+    return (score - minimum) / (maximum - minimum)
+
+
 def _merge_reason_tokens(existing: Any, new_reason: str) -> str:
     tokens = {
         token.strip()
@@ -295,6 +473,31 @@ def _frame_cell_count(rows: pd.DataFrame) -> int:
     normalized = _normalize_source_branch_columns(rows)
     columns = ["sequence_id", "time_s", "source", "candidate_branch"]
     return int(len(normalized[columns].drop_duplicates()))
+
+
+def _safe_mean(values: pd.Series) -> float:
+    return float(values.mean()) if not values.empty else 0.0
+
+
+def _safe_quantile(values: pd.Series, quantile: float) -> float:
+    return float(values.quantile(quantile)) if not values.empty else 0.0
+
+
+def _validate_selection_config(
+    *,
+    per_source_branch_top_n: int,
+    diversity_weight: float,
+    diversity_scale_m: float,
+    distance_cap_m: float,
+) -> None:
+    if int(per_source_branch_top_n) < 0:
+        raise ValueError("per_source_branch_top_n must be non-negative")
+    if float(diversity_weight) < 0.0:
+        raise ValueError("source_branch_diversity_weight must be non-negative")
+    if float(diversity_scale_m) <= 0.0:
+        raise ValueError("source_branch_diversity_scale_m must be positive")
+    if float(distance_cap_m) <= 0.0:
+        raise ValueError("source_branch_distance_cap_m must be positive")
 
 
 def _write_optional_csv(rows: pd.DataFrame, path: Path | None) -> None:
