@@ -1,0 +1,38 @@
+name: Debug PR 1023 pytest
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest-log:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package with test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Capture full pytest output
+        shell: bash
+        run: |
+          set +e
+          python -m pytest -q > pytest.log 2>&1
+          status=$?
+          echo "$status" > pytest.status
+          exit 0
+      - name: Upload pytest output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr1023-pytest-log
+          path: |
+            pytest.log
+            pytest.status
+      - name: Restore pytest exit status
+        if: always()
+        shell: bash
+        run: exit "$(cat pytest.status)"
