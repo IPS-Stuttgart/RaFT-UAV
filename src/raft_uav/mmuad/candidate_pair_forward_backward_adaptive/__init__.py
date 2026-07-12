@@ -1,30 +1,59 @@
 """Compatibility fixes for entropy-adaptive pair-state candidate scoring.
 
-The implementation remains in the adjacent module.  Loading it into this package
-preserves the public API while allowing targeted compatibility fixes without
-duplicating the implementation.
+The implementation remains in the adjacent module.  This package loads that
+implementation under a private module name, re-exports its public API, and applies
+the summary-column fix without duplicating the full algorithm.
 """
 
 from __future__ import annotations
 
-from pathlib import Path as _Path
+import importlib.util
+import json
+from pathlib import Path
+import sys
+from typing import Any, Mapping
+
+import pandas as pd
+
+from raft_uav.mmuad.candidate_pair_forward_backward import (
+    CandidatePairForwardBackwardConfig,
+)
+from raft_uav.mmuad.schema import CandidateFrame
 
 _IMPLEMENTATION_PATH = (
-    _Path(__file__).resolve().parent.parent
+    Path(__file__).resolve().parent.parent
     / "candidate_pair_forward_backward_adaptive.py"
 )
-exec(
-    compile(
-        _IMPLEMENTATION_PATH.read_text(encoding="utf-8"),
-        str(_IMPLEMENTATION_PATH),
-        "exec",
-    ),
-    globals(),
-    globals(),
+_IMPLEMENTATION_NAME = f"{__name__}._implementation"
+_IMPLEMENTATION_SPEC = importlib.util.spec_from_file_location(
+    _IMPLEMENTATION_NAME,
+    _IMPLEMENTATION_PATH,
+)
+if _IMPLEMENTATION_SPEC is None or _IMPLEMENTATION_SPEC.loader is None:
+    raise ImportError(f"cannot load adaptive pair implementation from {_IMPLEMENTATION_PATH}")
+_implementation = importlib.util.module_from_spec(_IMPLEMENTATION_SPEC)
+sys.modules[_IMPLEMENTATION_NAME] = _implementation
+_IMPLEMENTATION_SPEC.loader.exec_module(_implementation)
+
+DEFAULT_OUTPUT_SCORE_COLUMN: str = _implementation.DEFAULT_OUTPUT_SCORE_COLUMN
+EntropyAdaptivePairBlendConfig = _implementation.EntropyAdaptivePairBlendConfig
+_candidate_rows = _implementation._candidate_rows
+_different_fraction = _implementation._different_fraction
+_jsonable = _implementation._jsonable
+_posterior_sum_error = _implementation._posterior_sum_error
+_safe_mean = _implementation._safe_mean
+_safe_quantile = _implementation._safe_quantile
+_top_candidate_ids = _implementation._top_candidate_ids
+_original_write_entropy_adaptive_pair_outputs = (
+    _implementation.write_entropy_adaptive_pair_outputs
 )
 
+for _public_name in dir(_implementation):
+    if not _public_name.startswith("_"):
+        globals().setdefault(_public_name, getattr(_implementation, _public_name))
+
+
 _DEFAULT_PAIR_SCORE_COLUMN = "candidate_pair_forward_backward_score"
-_original_write_entropy_adaptive_pair_outputs = write_entropy_adaptive_pair_outputs
 
 
 def entropy_adaptive_pair_summary(
@@ -121,3 +150,13 @@ def write_entropy_adaptive_pair_outputs(
         json.dumps(_jsonable(payload), indent=2),
         encoding="utf-8",
     )
+
+
+_implementation.entropy_adaptive_pair_summary = entropy_adaptive_pair_summary
+_implementation.write_entropy_adaptive_pair_outputs = (
+    write_entropy_adaptive_pair_outputs
+)
+
+__all__ = sorted(
+    name for name in dir(_implementation) if not name.startswith("_")
+)
