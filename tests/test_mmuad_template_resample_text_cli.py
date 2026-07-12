@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.track5_template_resample_cli import main as resample_main
 
@@ -54,3 +55,27 @@ def test_template_resample_cli_keeps_zero_padded_sequence_ids(tmp_path: Path) ->
     )
     assert diagnostics["sequence_id"].astype(str).tolist() == ["001"]
     assert diagnostics["valid_row_count"].tolist() == [2]
+
+
+@pytest.mark.parametrize("flag", ["--max-nearest-time-delta-s", "--max-interpolation-gap-s"])
+@pytest.mark.parametrize("value", ["nan", "inf", "-1.0"])
+def test_template_resample_cli_rejects_invalid_gate_controls(
+    tmp_path: Path,
+    flag: str,
+    value: str,
+) -> None:
+    expected_name = flag.lstrip("-").replace("-", "_")
+
+    with pytest.raises(ValueError, match=expected_name):
+        resample_main(
+            [
+                "--estimates-csv",
+                str(tmp_path / "missing_estimates.csv"),
+                "--template",
+                str(tmp_path / "missing_template.csv"),
+                "--output-dir",
+                str(tmp_path / "out"),
+                flag,
+                value,
+            ]
+        )
