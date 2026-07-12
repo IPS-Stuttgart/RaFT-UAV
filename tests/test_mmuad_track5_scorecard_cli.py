@@ -5,8 +5,10 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.track5_scorecard_cli import main as track5_scorecard_main
+
 
 
 def _write_official_results_zip(path: Path) -> None:
@@ -22,10 +24,12 @@ def _write_official_results_zip(path: Path) -> None:
         archive.writestr("mmaud_results.csv", rows.to_csv(index=False))
 
 
+
 def _write_public_sequence_root_zip(path: Path) -> None:
     with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
         archive.writestr("val/seq001/Image/0.0.png", b"")
         archive.writestr("val/seq001/Image/1.0.png", b"")
+
 
 
 def test_track5_scorecard_cli_accepts_archived_sequence_root(tmp_path: Path) -> None:
@@ -86,3 +90,62 @@ def test_track5_scorecard_cli_accepts_archived_sequence_root(tmp_path: Path) -> 
     assert summary["codabench_upload_ready"] is True
     assert manifest["archive_format"] == "zip"
     assert Path(manifest["extract_root"]).is_dir()
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_track5_scorecard_cli_rejects_nonfinite_timestamp_tolerance(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="timestamp_tolerance_s must be finite and non-negative",
+    ):
+        track5_scorecard_main(
+            [
+                "--results",
+                str(tmp_path / "missing.zip"),
+                "--output-json",
+                str(tmp_path / "scorecard.json"),
+                "--timestamp-tolerance-s",
+                value,
+            ]
+        )
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_track5_scorecard_cli_rejects_nonfinite_nearest_time_delta(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="nearest_time_delta_s must be finite and non-negative",
+    ):
+        track5_scorecard_main(
+            [
+                "--results",
+                str(tmp_path / "missing.zip"),
+                "--output-json",
+                str(tmp_path / "scorecard.json"),
+                "--nearest-time-delta-s",
+                value,
+            ]
+        )
+
+
+def test_track5_scorecard_cli_rejects_negative_time_gate(tmp_path: Path) -> None:
+    with pytest.raises(
+        ValueError,
+        match="timestamp_tolerance_s must be finite and non-negative",
+    ):
+        track5_scorecard_main(
+            [
+                "--results",
+                str(tmp_path / "missing.zip"),
+                "--output-json",
+                str(tmp_path / "scorecard.json"),
+                "--timestamp-tolerance-s",
+                "-1",
+            ]
+        )
