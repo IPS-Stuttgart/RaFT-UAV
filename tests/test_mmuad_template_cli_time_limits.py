@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from collections.abc import Callable
 
 import pytest
@@ -11,10 +12,8 @@ from raft_uav.mmuad.track5_template_resample_cli import main as template_resampl
 
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "-0.1", "not-a-number"])
 def test_nonnegative_finite_float_rejects_invalid_values(value: str) -> None:
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(argparse.ArgumentTypeError):
         nonnegative_finite_float(value)
-
-    assert exc_info.type.__name__ == "ArgumentTypeError"
 
 
 @pytest.mark.parametrize(("value", "expected"), [("0", 0.0), ("1.25", 1.25)])
