@@ -4,6 +4,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.class_probability_calibration import (
     apply_temperature_calibrator,
@@ -167,6 +168,29 @@ def test_temperature_scale_rejects_invalid_temperature() -> None:
             pass
         else:
             raise AssertionError("invalid temperature did not raise ValueError")
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"epsilon": 0.0},
+        {"epsilon": float("nan")},
+        {"min_temperature": 0.0},
+        {"min_temperature": float("nan")},
+        {"max_temperature": 0.0},
+        {"max_temperature": float("inf")},
+        {"min_temperature": 2.0, "max_temperature": 1.0},
+        {"ece_bins": 0},
+        {"ece_bins": -3},
+    ],
+)
+def test_fit_rejects_invalid_optimizer_and_metric_controls(kwargs) -> None:
+    with pytest.raises(ValueError):
+        fit_temperature_calibrator(
+            _overconfident_predictions(),
+            _labels(),
+            **kwargs,
+        )
 
 
 def test_calibrator_json_roundtrip(tmp_path) -> None:
