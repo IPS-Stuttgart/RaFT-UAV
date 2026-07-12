@@ -116,6 +116,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    timestamp_tolerance_s = _nonnegative_finite_float(
+        args.timestamp_tolerance_s,
+        "timestamp_tolerance_s",
+    )
+    nearest_time_delta_s = _nonnegative_finite_float(
+        args.nearest_time_delta_s,
+        "nearest_time_delta_s",
+    )
+
     sequence_root, archive_manifest_path = _prepare_scorecard_sequence_root(args)
     scorecard = build_track5_scorecard(
         results_path=args.results,
@@ -131,8 +140,8 @@ def main(argv: list[str] | None = None) -> int:
         selected_tracklets_path=args.selected_tracklets_csv,
         candidate_oracle_gap_path=args.candidate_oracle_gap_csv,
         require_zip=not args.allow_csv_submission,
-        timestamp_tolerance_s=args.timestamp_tolerance_s,
-        max_time_delta_s=args.nearest_time_delta_s,
+        timestamp_tolerance_s=timestamp_tolerance_s,
+        max_time_delta_s=nearest_time_delta_s,
     )
     if archive_manifest_path is not None:
         scorecard.summary["sequence_root_archive_manifest_json"] = str(archive_manifest_path)
@@ -173,6 +182,13 @@ def main(argv: list[str] | None = None) -> int:
         reasons = ", ".join(summary.get("leaderboard_blocking_reasons", [])) or "unknown"
         raise SystemExit(f"Track 5 scorecard is not leaderboard-ready: {reasons}")
     return 0
+
+
+def _nonnegative_finite_float(value: object, name: str) -> float:
+    number = float(value)
+    if number != number or abs(number) == float("inf") or number < 0.0:
+        raise ValueError(f"{name} must be finite and non-negative")
+    return number
 
 
 def _prepare_scorecard_sequence_root(
