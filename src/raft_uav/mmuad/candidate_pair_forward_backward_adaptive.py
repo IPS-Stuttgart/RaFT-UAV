@@ -158,6 +158,7 @@ def attach_entropy_adaptive_pair_prior(
 def entropy_adaptive_pair_summary(
     candidates: CandidateFrame | pd.DataFrame,
     *,
+    pair_score_column: str = "candidate_pair_forward_backward_score",
     output_score_column: str = DEFAULT_OUTPUT_SCORE_COLUMN,
 ) -> dict[str, Any]:
     """Return compact diagnostics for entropy-adaptive candidate posteriors."""
@@ -168,7 +169,8 @@ def entropy_adaptive_pair_summary(
             "row_count": 0,
             "sequence_count": 0,
             "frame_count": 0,
-            "output_score_column": output_score_column,
+            "pair_score_column": str(pair_score_column),
+            "output_score_column": str(output_score_column),
         }
     frame_columns = ["sequence_id", "time_s"]
     frame_first = rows.groupby(frame_columns, sort=False).first().reset_index()
@@ -186,11 +188,12 @@ def entropy_adaptive_pair_summary(
     )
     adaptive_top = _top_candidate_ids(rows, output_score_column)
     local_top = _top_candidate_ids(rows, "candidate_pair_forward_backward_local_posterior")
-    pair_top = _top_candidate_ids(rows, "candidate_pair_forward_backward_score")
+    pair_top = _top_candidate_ids(rows, pair_score_column)
     return {
         "row_count": int(len(rows)),
         "sequence_count": int(rows["sequence_id"].astype(str).nunique()),
         "frame_count": int(len(frame_first)),
+        "pair_score_column": str(pair_score_column),
         "output_score_column": str(output_score_column),
         "posterior_sum_error_max": _posterior_sum_error(rows, output_score_column),
         "effective_pair_weight_mean": _safe_mean(pair_weight),
@@ -237,6 +240,7 @@ def write_entropy_adaptive_pair_outputs(
         ),
         "adaptive_summary": entropy_adaptive_pair_summary(
             candidates,
+            pair_score_column=pair_cfg.output_score_column,
             output_score_column=blend_cfg.output_score_column,
         ),
         "truth_used_for_candidate_prior": False,
