@@ -56,8 +56,9 @@ def extract_mmuad_archive(archive_path: Path, output_root: Path) -> dict[str, An
     """Extract a supported archive under ``output_root`` and return a manifest.
 
     The extractor rejects absolute paths, parent-directory traversal, drive-like
-    member names, and archive links.  Existing files with the same archive hash
-    may be overwritten, but extraction is confined to the returned root.
+    member names, archive links, and duplicate normalized output paths. Existing
+    files with the same archive hash may be overwritten, but extraction is
+    confined to the returned root.
     """
 
     archive_path = Path(archive_path)
@@ -93,6 +94,7 @@ def extract_mmuad_archive(archive_path: Path, output_root: Path) -> dict[str, An
 def _extract_zip_archive(archive_path: Path, extract_root: Path) -> tuple[list[dict], list[dict]]:
     extracted: list[dict] = []
     skipped: list[dict] = []
+    seen_destinations: set[Path] = set()
     with zipfile.ZipFile(archive_path) as archive:
         for info in archive.infolist():
             if info.is_dir():
@@ -105,6 +107,10 @@ def _extract_zip_archive(archive_path: Path, extract_root: Path) -> tuple[list[d
             if destination is None:
                 skipped.append({"member": member_name, "reason": "unsafe_member_path"})
                 continue
+            if destination in seen_destinations:
+                skipped.append({"member": member_name, "reason": "duplicate_member_path"})
+                continue
+            seen_destinations.add(destination)
             destination.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(info) as source, destination.open("wb") as target:
                 shutil.copyfileobj(source, target)
@@ -121,6 +127,7 @@ def _extract_zip_archive(archive_path: Path, extract_root: Path) -> tuple[list[d
 def _extract_tar_archive(archive_path: Path, extract_root: Path) -> tuple[list[dict], list[dict]]:
     extracted: list[dict] = []
     skipped: list[dict] = []
+    seen_destinations: set[Path] = set()
     with tarfile.open(archive_path, mode="r:*") as archive:
         for info in archive.getmembers():
             if not info.isfile():
@@ -133,6 +140,10 @@ def _extract_tar_archive(archive_path: Path, extract_root: Path) -> tuple[list[d
             if destination is None:
                 skipped.append({"member": member_name, "reason": "unsafe_member_path"})
                 continue
+            if destination in seen_destinations:
+                skipped.append({"member": member_name, "reason": "duplicate_member_path"})
+                continue
+            seen_destinations.add(destination)
             source = archive.extractfile(info)
             if source is None:
                 skipped.append({"member": member_name, "reason": "unreadable_member"})
