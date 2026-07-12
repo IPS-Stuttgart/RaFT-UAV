@@ -5,7 +5,9 @@ import math
 import pandas as pd
 import pytest
 
-from raft_uav.baselines.radar_association import run_async_cv_baseline_with_radar_association
+from raft_uav.baselines.radar_association import (
+    run_async_cv_baseline_with_radar_association,
+)
 
 
 @pytest.mark.parametrize(
