@@ -46,11 +46,19 @@ def estimate_empirical_measurement_covariances(
     matrices in tiny synthetic tests or very short diagnostic slices.
     """
 
+    max_time_delta_s = _nonnegative_finite_float(
+        max_time_delta_s,
+        name="max_time_delta_s",
+    )
+    min_variance_m2 = _positive_finite_float(
+        min_variance_m2,
+        name="min_variance_m2",
+    )
     payload: dict[str, Any] = {
         "schema_version": 1,
         "model_type": "paper-empirical-measurement-covariance",
-        "max_time_delta_s": float(max_time_delta_s),
-        "min_variance_m2": float(min_variance_m2),
+        "max_time_delta_s": max_time_delta_s,
+        "min_variance_m2": min_variance_m2,
     }
     for source, frame in (("rf", rf), ("radar", radar)):
         if frame is None or frame.empty:
@@ -88,6 +96,10 @@ def aligned_residuals(
 ) -> np.ndarray:
     """Return sensor-minus-nearest-truth residuals for one source."""
 
+    max_time_delta_s = _nonnegative_finite_float(
+        max_time_delta_s,
+        name="max_time_delta_s",
+    )
     if source not in _SOURCE_COORDS:
         raise ValueError(f"unknown source {source!r}")
     required = ("time_s", *_SOURCE_COORDS[source])
@@ -109,7 +121,7 @@ def aligned_residuals(
         return np.empty((0, len(_SOURCE_COORDS[source])), dtype=float)
     truth_indices = _nearest_time_indices(truth_times, query_times)
     dt_s = np.abs(truth_times[truth_indices] - query_times)
-    keep = dt_s <= float(max_time_delta_s)
+    keep = dt_s <= max_time_delta_s
     if not keep.any():
         return np.empty((0, len(_SOURCE_COORDS[source])), dtype=float)
 
@@ -154,6 +166,10 @@ def empirical_covariance_matrix(
 ) -> np.ndarray:
     """Return a finite symmetric covariance matrix with a diagonal floor."""
 
+    floor = _positive_finite_float(
+        min_variance_m2,
+        name="min_variance_m2",
+    )
     residuals = np.asarray(residuals, dtype=float)
     if residuals.ndim != 2:
         raise ValueError("residuals must be a 2D array")
@@ -164,13 +180,12 @@ def empirical_covariance_matrix(
         raise ValueError("cannot estimate empirical covariance without finite residuals")
     dim = residuals.shape[1]
     if residuals.shape[0] == 1:
-        covariance = np.eye(dim, dtype=float) * float(min_variance_m2)
+        covariance = np.eye(dim, dtype=float) * floor
     else:
         covariance = np.asarray(np.cov(residuals, rowvar=False, bias=False), dtype=float)
         covariance = covariance.reshape((dim, dim))
     covariance = 0.5 * (covariance + covariance.T)
     covariance[~np.isfinite(covariance)] = 0.0
-    floor = float(min_variance_m2)
     for index in range(dim):
         covariance[index, index] = max(float(covariance[index, index]), floor)
     return covariance
@@ -216,3 +231,17 @@ def _nearest_time_indices(reference_times_s: np.ndarray, query_times_s: np.ndarr
     left = np.clip(insertion - 1, 0, sorted_reference.size - 1)
     use_right = np.abs(sorted_reference[right] - query) < np.abs(sorted_reference[left] - query)
     return sorted_original_indices[np.where(use_right, right, left)]
+
+
+def _positive_finite_float(value: object, *, name: str) -> float:
+    numeric = float(value)
+    if not np.isfinite(numeric) or numeric <= 0.0:
+        raise ValueError(f"{name} must be positive and finite")
+    return numeric
+
+
+def _nonnegative_finite_float(value: object, *, name: str) -> float:
+    numeric = float(value)
+    if not np.isfinite(numeric) or numeric < 0.0:
+        raise ValueError(f"{name} must be finite and non-negative")
+    return numeric
