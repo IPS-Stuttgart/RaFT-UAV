@@ -49,9 +49,17 @@ jobs:
           if [ -d scripts ]; then ruff check src scripts tests; else ruff check src tests; fi
 
       - name: Run unit tests
-        run: |
-          if ! pytest -q --tb=short > pytest-output.log 2>&1; then
-            grep -E "^(FAILED|ERROR)" pytest-output.log | head -20 || true
-            tail -n 80 pytest-output.log
-            exit 1
-          fi
+        id: pytest
+        continue-on-error: true
+        run: pytest -q --tb=short > pytest-output.log 2>&1
+
+      - name: Upload pytest failure
+        if: steps.pytest.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-failure-${{ matrix.python-version }}
+          path: pytest-output.log
+
+      - name: Fail after pytest failure
+        if: steps.pytest.outcome == 'failure'
+        run: exit 1
