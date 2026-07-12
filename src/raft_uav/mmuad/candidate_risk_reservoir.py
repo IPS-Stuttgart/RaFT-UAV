@@ -60,10 +60,11 @@ def attach_candidate_risk_score(
     mode = str(mode)
     if mode not in RISK_SCORE_MODES:
         raise ValueError(f"unsupported candidate risk score mode: {mode!r}")
-    if float(uncertainty_weight) < 0.0:
-        raise ValueError("uncertainty_weight must be non-negative")
-    if float(sigma_floor_m) <= 0.0:
-        raise ValueError("sigma_floor_m must be positive")
+    uncertainty_weight = _nonnegative_finite(
+        uncertainty_weight,
+        name="uncertainty_weight",
+    )
+    sigma_floor_m = _positive_finite(sigma_floor_m, name="sigma_floor_m")
 
     rows = _candidate_frame(candidates).rows.copy()
     if rows.empty:
@@ -79,15 +80,15 @@ def attach_candidate_risk_score(
     sigma, sigma_fallback = _candidate_sigma(
         rows,
         sigma_column=sigma_column,
-        sigma_floor_m=float(sigma_floor_m),
+        sigma_floor_m=sigma_floor_m,
     )
-    relative_sigma = np.maximum(sigma / float(sigma_floor_m), 1.0)
-    log_sigma_penalty = float(uncertainty_weight) * np.log(relative_sigma)
+    relative_sigma = np.maximum(sigma / sigma_floor_m, 1.0)
+    log_sigma_penalty = uncertainty_weight * np.log(relative_sigma)
 
     if mode == "logit-minus-log-sigma":
         risk_score = _logit(probability) - log_sigma_penalty
     elif mode == "probability-over-sigma":
-        risk_score = probability / np.power(relative_sigma, float(uncertainty_weight))
+        risk_score = probability / np.power(relative_sigma, uncertainty_weight)
     else:
         risk_score = base_score - log_sigma_penalty
 
@@ -98,8 +99,8 @@ def attach_candidate_risk_score(
     out["candidate_risk_log_sigma_penalty"] = log_sigma_penalty
     out["candidate_risk_sigma_fallback_m"] = float(sigma_fallback)
     out["candidate_risk_mode"] = mode
-    out["candidate_risk_uncertainty_weight"] = float(uncertainty_weight)
-    out["candidate_risk_sigma_floor_m"] = float(sigma_floor_m)
+    out["candidate_risk_uncertainty_weight"] = uncertainty_weight
+    out["candidate_risk_sigma_floor_m"] = sigma_floor_m
     out[output_score_column] = np.asarray(risk_score, dtype=float)
     return CandidateFrame(normalize_candidate_columns(out))
 
@@ -276,6 +277,30 @@ def _candidate_frame(candidates: CandidateFrame | pd.DataFrame) -> CandidateFram
     return CandidateFrame(normalize_candidate_columns(pd.DataFrame(candidates).copy()))
 
 
+def _nonnegative_finite(value: float, *, name: str) -> float:
+    parsed = _finite_float(value, name=name)
+    if parsed < 0.0:
+        raise ValueError(f"{name} must be finite and non-negative")
+    return parsed
+
+
+def _positive_finite(value: float, *, name: str) -> float:
+    parsed = _finite_float(value, name=name)
+    if parsed <= 0.0:
+        raise ValueError(f"{name} must be finite and positive")
+    return parsed
+
+
+def _finite_float(value: float, *, name: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be finite") from exc
+    if not np.isfinite(parsed):
+        raise ValueError(f"{name} must be finite")
+    return parsed
+
+
 def _candidate_base_score(
     rows: pd.DataFrame,
     *,
@@ -284,8 +309,10 @@ def _candidate_base_score(
 ) -> np.ndarray:
     primary = _numeric_series(rows, score_column)
     fallback = _numeric_series(rows, fallback_score_column)
-    values = primary.where(primary.notna(), fallback).fillna(0.0).to_numpy(float)
-    return np.nan_to_num(values, nan=0.0, posinf=30.0, neginf=-30.0)
+    primary = primary.where(np.isfinite(primary.to_numpy(float)), np.nan)
+    fallback = fallback.where(np.isfinite(fallback.to_numpy(float)), np.nan)
+    values = primary.where(primary.notna(), fallback).fillna(0.0)
+    return values.to_numpy(float)
 
 
 def _score_probability(score: np.ndarray) -> np.ndarray:
@@ -322,7 +349,8 @@ def _logit(probability: np.ndarray) -> np.ndarray:
 
 
 def _finite_stat(values: pd.Series, statistic: str) -> float:
-    finite = pd.to_numeric(values, errors="coerce").dropna()
+    numeric = pd.to_numeric(values, errors="coerce")
+    finite = numeric[np.isfinite(numeric.to_numpy(float))]
     if finite.empty:
         return float("nan")
     if statistic == "mean":
