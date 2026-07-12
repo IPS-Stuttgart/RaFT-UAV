@@ -53,11 +53,13 @@ def _sequence_columns_for_csv(path: Any, *args: Any, **kwargs: Any) -> list[str]
 
 
 def _discover_sequence_columns_for_csv(path: Any, *args: Any, **kwargs: Any) -> list[str]:
+    position = _stream_position(path)
+    if hasattr(path, "read") and position is None:
+        return []
     header_kwargs = dict(kwargs)
     header_kwargs.pop("dtype", None)
     header_kwargs.pop("converters", None)
     header_kwargs["nrows"] = 0
-    position = _stream_position(path)
     try:
         header = _ORIGINAL_READ_CSV(path, *args, **header_kwargs)
     except Exception:
