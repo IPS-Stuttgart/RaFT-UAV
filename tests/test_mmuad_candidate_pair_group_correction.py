@@ -115,6 +115,36 @@ def test_missing_group_policy_error_rejects_unidentified_candidates() -> None:
         )
 
 
+def test_textual_missing_group_ids_remain_unique() -> None:
+    candidates = _duplicate_group_candidates()
+    candidates["candidate_origin_row"] = ["none", "none", "<NA>"]
+
+    prepared, _, summary = prepare_group_corrected_pair_candidates(
+        candidates,
+        pair_config=_pair_config(),
+        group_config=PairGroupMultiplicityConfig(missing_group_policy="unique"),
+    )
+
+    assert prepared["candidate_pair_hypothesis_group_size"].tolist() == [1, 1, 1]
+    assert prepared["candidate_pair_hypothesis_group"].nunique() == 3
+    assert summary["duplicate_candidate_rows"] == 0
+
+
+@pytest.mark.parametrize("missing_group_id", ["none", "NONE", "NaN", "<NA>"])
+def test_missing_group_policy_error_rejects_textual_missing_ids(
+    missing_group_id: str,
+) -> None:
+    candidates = _duplicate_group_candidates().iloc[[0]].copy()
+    candidates["candidate_origin_row"] = missing_group_id
+
+    with pytest.raises(ValueError, match="has missing values at rows"):
+        prepare_group_corrected_pair_candidates(
+            candidates,
+            pair_config=_pair_config(),
+            group_config=PairGroupMultiplicityConfig(missing_group_policy="error"),
+        )
+
+
 def test_group_correction_supports_agreement_adaptive_output() -> None:
     from raft_uav.mmuad.candidate_pair_forward_backward_agreement_adaptive import (
         AgreementAdaptivePairBlendConfig,
