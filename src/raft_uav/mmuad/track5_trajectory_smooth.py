@@ -262,10 +262,17 @@ def _normalized_estimate_rows(rows: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"Track 5 rows missing normalized columns: {missing}")
     out = rows.copy()
     out["sequence_id"] = out["sequence_id"].astype(str)
-    for column in ("time_s", "state_x_m", "state_y_m", "state_z_m"):
+    numeric_columns = ["time_s", "state_x_m", "state_y_m", "state_z_m"]
+    for column in numeric_columns:
         out[column] = pd.to_numeric(out[column], errors="coerce")
-    finite = np.isfinite(out[["time_s", "state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)).all(axis=1)
-    return out.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+    finite = np.isfinite(out[numeric_columns].to_numpy(float)).all(axis=1)
+    if not bool(finite.all()):
+        bad_indices = out.index[~finite].tolist()[:10]
+        raise ValueError(
+            "Track 5 rows contain non-finite time/position values at rows "
+            f"{bad_indices}"
+        )
+    return out.sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
 def _local_linear_prediction(
