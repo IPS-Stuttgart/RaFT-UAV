@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.candidate_reservoir import ReservoirConfig
 from raft_uav.mmuad.candidate_risk_reservoir import (
@@ -52,6 +54,32 @@ def test_risk_score_prefers_lower_uncertainty_candidate() -> None:
     assert first.iloc[0]["track_id"] == "low-risk-0"
     assert first.iloc[0]["candidate_risk_sigma_m"] == 1.0
     assert first.iloc[1]["candidate_risk_log_sigma_penalty"] > 0.0
+
+
+def test_nonfinite_primary_score_uses_finite_fallback_score() -> None:
+    rows = _candidate_rows()
+    rows.loc[0, "candidate_class_calibrated_score"] = np.inf
+    rows.loc[0, "ranker_score"] = 0.25
+
+    scored = attach_candidate_risk_score(rows, uncertainty_weight=0.0)
+    first = scored.rows.loc[scored.rows["track_id"] == "low-risk-0"].iloc[0]
+
+    assert first["candidate_risk_base_score"] == 0.25
+    assert first["candidate_risk_probability"] == 0.25
+
+
+def test_risk_score_rejects_nonfinite_numeric_knobs() -> None:
+    rows = _candidate_rows()
+    cases = [
+        ({"uncertainty_weight": np.nan}, "uncertainty_weight"),
+        ({"uncertainty_weight": np.inf}, "uncertainty_weight"),
+        ({"sigma_floor_m": np.nan}, "sigma_floor_m"),
+        ({"sigma_floor_m": np.inf}, "sigma_floor_m"),
+    ]
+
+    for kwargs, message in cases:
+        with pytest.raises(ValueError, match=message):
+            attach_candidate_risk_score(rows, **kwargs)
 
 
 def test_risk_adjusted_reservoir_changes_global_top1() -> None:
