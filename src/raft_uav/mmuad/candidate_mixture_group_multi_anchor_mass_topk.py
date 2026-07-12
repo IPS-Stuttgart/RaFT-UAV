@@ -24,7 +24,6 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
-from raft_uav.mmuad import candidate_mixture_map as core
 from raft_uav.mmuad.candidate_mixture_group_anchor_mass_topk import (
     AnchorConditioningConfig,
     add_anchor_conditioned_selection_utility,
@@ -88,17 +87,21 @@ def add_multi_anchor_conditioned_selection_utility(
     anchor_config = anchor_config or AnchorConditioningConfig()
     aggregation_config = aggregation_config or MultiAnchorAggregationConfig()
     _validate_aggregation_config(aggregation_config)
-    if not anchor_estimates:
-        raise ValueError("at least one anchor trajectory is required")
 
-    rows = normalize_candidate_columns(pd.DataFrame(candidates).copy()).reset_index(drop=True)
-    labels = [str(label).strip() for label in anchor_estimates]
+    anchor_items = [
+        (str(label).strip(), pd.DataFrame(estimates).copy())
+        for label, estimates in anchor_estimates.items()
+    ]
+    if not anchor_items:
+        raise ValueError("at least one anchor trajectory is required")
+    labels = [label for label, _ in anchor_items]
     if any(not label for label in labels):
         raise ValueError("anchor labels must be non-empty")
     if len(set(labels)) != len(labels):
-        raise ValueError("anchor labels must be unique")
+        raise ValueError("anchor labels must be unique after trimming")
     slugs = _unique_anchor_slugs(labels)
 
+    rows = normalize_candidate_columns(pd.DataFrame(candidates).copy()).reset_index(drop=True)
     neutral_anchor_config = replace(
         anchor_config,
         anchor_selection_weight=0.0,
@@ -111,10 +114,10 @@ def add_multi_anchor_conditioned_selection_utility(
     anchor_summaries: dict[str, Any] = {}
     scored: pd.DataFrame | None = None
 
-    for label, slug in zip(labels, slugs, strict=True):
+    for (label, anchor_rows), slug in zip(anchor_items, slugs, strict=True):
         anchor_scored, normalized, anchor_summary = add_anchor_conditioned_selection_utility(
             rows,
-            anchor_estimates[label],
+            anchor_rows,
             mixture_config=mixture_config,
             anchor_config=neutral_anchor_config,
         )
@@ -129,24 +132,27 @@ def add_multi_anchor_conditioned_selection_utility(
             scored["mixture_multi_anchor_base_utility"] = anchor_scored[
                 "mixture_anchor_base_utility"
             ].to_numpy(float)
+
         matched = anchor_scored["mixture_anchor_matched"].astype(bool).to_numpy()
         distance = pd.to_numeric(
             anchor_scored["mixture_anchor_distance_m"], errors="coerce"
         ).to_numpy(float)
-        cost = pd.to_numeric(anchor_scored["mixture_anchor_cost"], errors="coerce").to_numpy(
-            float
-        )
-        cost = np.where(matched, cost, np.nan)
+        cost = pd.to_numeric(
+            anchor_scored["mixture_anchor_cost"], errors="coerce"
+        ).to_numpy(float)
         distance = np.where(matched, distance, np.nan)
-        cost_columns.append(cost)
-        distance_columns.append(distance)
+        cost = np.where(matched, cost, np.nan)
         matched_columns.append(matched)
+        distance_columns.append(distance)
+        cost_columns.append(cost)
+
         scored[f"mixture_multi_anchor_{slug}_matched"] = matched
         scored[f"mixture_multi_anchor_{slug}_time_delta_s"] = pd.to_numeric(
             anchor_scored["mixture_anchor_time_delta_s"], errors="coerce"
         ).to_numpy(float)
         scored[f"mixture_multi_anchor_{slug}_distance_m"] = distance
         scored[f"mixture_multi_anchor_{slug}_cost"] = cost
+
         normalized_part = normalized.copy()
         normalized_part.insert(0, "anchor_name", label)
         normalized_anchor_parts.append(normalized_part)
@@ -163,10 +169,16 @@ def add_multi_anchor_conditioned_selection_utility(
     )
     best_index = _best_anchor_indices(cost_matrix)
     best_anchor = np.asarray(
-        [labels[index] if index >= 0 else "" for index in best_index], dtype=object
+        [labels[index] if index >= 0 else "" for index in best_index],
+        dtype=object,
     )
     best_distance = np.asarray(
-        [distance_matrix[row, index] if index >= 0 else np.nan for row, index in enumerate(best_index)],
+        [
+            distance_matrix[row_index, anchor_index]
+            if anchor_index >= 0
+            else np.nan
+            for row_index, anchor_index in enumerate(best_index)
+        ],
         dtype=float,
     )
 
@@ -188,9 +200,12 @@ def add_multi_anchor_conditioned_selection_utility(
             .head(5)
             .itertuples(index=False, name=None)
         )
-        examples = ", ".join(f"{sequence}@{float(time_s):g}" for sequence, time_s in missing_frames)
+        examples = ", ".join(
+            f"{sequence}@{float(time_s):g}" for sequence, time_s in missing_frames
+        )
         raise ValueError(
-            "missing support from every anchor trajectory for candidate frames: " + examples
+            "missing support from every anchor trajectory for candidate frames: "
+            + examples
         )
 
     normalized_anchors = pd.concat(normalized_anchor_parts, ignore_index=True)
@@ -317,7 +332,8 @@ def write_multi_anchor_posterior_mass_group_topk_outputs(
     result.selected_candidates.to_csv(selected_path, index=False)
     result.normalized_anchors.to_csv(anchors_path, index=False)
     summary_path.write_text(
-        json.dumps(_jsonable(result.selection_summary), indent=2), encoding="utf-8"
+        json.dumps(_jsonable(result.selection_summary), indent=2),
+        encoding="utf-8",
     )
     paths = write_grouped_candidate_mixture_outputs(result.grouped_result, output)
     paths["multi_anchor_scored_candidates_csv"] = scored_path
@@ -328,6 +344,67 @@ def write_multi_anchor_posterior_mass_group_topk_outputs(
 
 
 def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if not args.anchor_csv:
+        parser.error("provide at least one --anchor-csv NAME=PATH")
+
+    candidates = load_candidate_file(args.candidates_csv).rows
+    anchors = _load_anchor_specs(args.anchor_csv)
+    final_initial = (
+        None
+        if args.final_initial_estimates_csv is None
+        else read_estimate_csv(args.final_initial_estimates_csv)
+    )
+    truth = (
+        None
+        if args.truth_csv is None
+        else load_evaluation_truth_file(args.truth_csv).rows
+    )
+    result = run_multi_anchor_posterior_mass_group_topk_candidate_mixture_map(
+        candidates,
+        anchor_estimates=anchors,
+        mixture_config=_mixture_config_from_args(args),
+        group_config=HypothesisGroupConfig(
+            group_column=args.hypothesis_group_column,
+            correction_strength=args.hypothesis_group_correction_strength,
+            missing_group_policy=args.missing_hypothesis_group_policy,
+        ),
+        selection_config=_selection_config_from_args(args),
+        anchor_config=AnchorConditioningConfig(
+            anchor_selection_weight=args.anchor_selection_weight,
+            anchor_scale_m=args.anchor_scale_m,
+            anchor_huber_delta=args.anchor_huber_delta,
+            anchor_cost_cap=args.anchor_cost_cap,
+            anchor_time_tolerance_s=args.anchor_time_tolerance_s,
+            missing_anchor_policy=args.missing_anchor_policy,
+        ),
+        aggregation_config=MultiAnchorAggregationConfig(
+            aggregation=args.aggregation,
+            softmin_temperature=args.softmin_temperature,
+        ),
+        final_initial_estimates=final_initial,
+        truth=truth,
+    )
+    paths = write_multi_anchor_posterior_mass_group_topk_outputs(
+        result,
+        args.output_dir,
+    )
+    print("mmuad_multi_anchor_posterior_mass_group_topk=ok")
+    print(f"input_candidate_rows={len(candidates)}")
+    print(f"anchor_count={len(anchors)}")
+    print(f"selected_candidate_rows={len(result.selected_candidates)}")
+    pooled = result.grouped_result.mixture_result.summary.get("metrics", {}).get(
+        "pooled", {}
+    )
+    if pooled.get("rmse_3d_m") is not None:
+        print(f"rmse_3d_m={pooled['rmse_3d_m']}")
+    for name, path in paths.items():
+        print(f"{name}={path}")
+    return 0
+
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m raft_uav.mmuad.candidate_mixture_group_multi_anchor_mass_topk",
         description="condition adaptive MMUAD physical-group selection on several anchors",
@@ -343,7 +420,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--final-initial-estimates-csv", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--truth-csv", type=Path)
-    parser.add_argument("--aggregation", choices=ANCHOR_AGGREGATION_CHOICES, default="minimum")
+    parser.add_argument(
+        "--aggregation",
+        choices=ANCHOR_AGGREGATION_CHOICES,
+        default="minimum",
+    )
     parser.add_argument("--softmin-temperature", type=float, default=0.5)
     parser.add_argument("--anchor-selection-weight", type=float, default=1.0)
     parser.add_argument("--anchor-scale-m", type=float, default=10.0)
@@ -351,7 +432,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--anchor-cost-cap", type=float, default=4.0)
     parser.add_argument("--anchor-time-tolerance-s", type=float, default=0.5)
     parser.add_argument(
-        "--missing-anchor-policy", choices=("neutral", "error"), default="neutral"
+        "--missing-anchor-policy",
+        choices=("neutral", "error"),
+        default="neutral",
     )
     parser.add_argument("--min-group-top-k", type=int, default=3)
     parser.add_argument("--max-group-top-k", type=int, default=20)
@@ -371,7 +454,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sigma-min-m", type=float, default=1.0)
     parser.add_argument("--sigma-max-m", type=float, default=30.0)
     parser.add_argument(
-        "--score-normalization", choices=SCORE_NORMALIZATION_CHOICES, default="minmax"
+        "--score-normalization",
+        choices=SCORE_NORMALIZATION_CHOICES,
+        default="minmax",
     )
     parser.add_argument("--score-weight", type=float, default=1.0)
     parser.add_argument("--temperature", type=float, default=1.0)
@@ -387,19 +472,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-balance", type=float, default=0.0)
     parser.add_argument("--responsibility-floor", type=float, default=0.0)
     parser.add_argument(
-        "--initialization", choices=INITIALIZATION_CHOICES, default="uncertainty-top1"
+        "--initialization",
+        choices=INITIALIZATION_CHOICES,
+        default="uncertainty-top1",
     )
     parser.add_argument("--hypothesis-group-column")
-    parser.add_argument("--hypothesis-group-correction-strength", type=float, default=1.0)
     parser.add_argument(
-        "--missing-hypothesis-group-policy", choices=("unique", "error"), default="unique"
+        "--hypothesis-group-correction-strength",
+        type=float,
+        default=1.0,
     )
-    args = parser.parse_args(argv)
-    if not args.anchor_csv:
-        parser.error("provide at least one --anchor-csv NAME=PATH")
+    parser.add_argument(
+        "--missing-hypothesis-group-policy",
+        choices=("unique", "error"),
+        default="unique",
+    )
+    return parser
 
+
+def _mixture_config_from_args(args: argparse.Namespace) -> CandidateMixtureMapConfig:
     fallback = tuple(args.fallback_score_column) or ("ranker_score", "confidence")
-    mixture_config = CandidateMixtureMapConfig(
+    return CandidateMixtureMapConfig(
         top_k=args.row_top_k_when_disabled,
         score_column=args.score_column,
         fallback_score_columns=fallback,
@@ -423,12 +516,10 @@ def main(argv: list[str] | None = None) -> int:
         responsibility_floor=args.responsibility_floor,
         initialization=args.initialization,
     )
-    group_config = HypothesisGroupConfig(
-        group_column=args.hypothesis_group_column,
-        correction_strength=args.hypothesis_group_correction_strength,
-        missing_group_policy=args.missing_hypothesis_group_policy,
-    )
-    selection_config = PosteriorMassGroupTopKConfig(
+
+
+def _selection_config_from_args(args: argparse.Namespace) -> PosteriorMassGroupTopKConfig:
+    return PosteriorMassGroupTopKConfig(
         min_group_top_k=args.min_group_top_k,
         max_group_top_k=args.max_group_top_k,
         target_posterior_mass=args.target_posterior_mass,
@@ -440,50 +531,6 @@ def main(argv: list[str] | None = None) -> int:
         diversity_scale_m=args.diversity_scale_m,
         diversity_cap_m=args.diversity_cap_m,
     )
-    anchor_config = AnchorConditioningConfig(
-        anchor_selection_weight=args.anchor_selection_weight,
-        anchor_scale_m=args.anchor_scale_m,
-        anchor_huber_delta=args.anchor_huber_delta,
-        anchor_cost_cap=args.anchor_cost_cap,
-        anchor_time_tolerance_s=args.anchor_time_tolerance_s,
-        missing_anchor_policy=args.missing_anchor_policy,
-    )
-    aggregation_config = MultiAnchorAggregationConfig(
-        aggregation=args.aggregation,
-        softmin_temperature=args.softmin_temperature,
-    )
-    candidates = load_candidate_file(args.candidates_csv).rows
-    anchors = _load_anchor_specs(args.anchor_csv)
-    final_initial = (
-        None
-        if args.final_initial_estimates_csv is None
-        else read_estimate_csv(args.final_initial_estimates_csv)
-    )
-    truth = (
-        None if args.truth_csv is None else load_evaluation_truth_file(args.truth_csv).rows
-    )
-    result = run_multi_anchor_posterior_mass_group_topk_candidate_mixture_map(
-        candidates,
-        anchor_estimates=anchors,
-        mixture_config=mixture_config,
-        group_config=group_config,
-        selection_config=selection_config,
-        anchor_config=anchor_config,
-        aggregation_config=aggregation_config,
-        final_initial_estimates=final_initial,
-        truth=truth,
-    )
-    paths = write_multi_anchor_posterior_mass_group_topk_outputs(result, args.output_dir)
-    print("mmuad_multi_anchor_posterior_mass_group_topk=ok")
-    print(f"input_candidate_rows={len(candidates)}")
-    print(f"anchor_count={len(anchors)}")
-    print(f"selected_candidate_rows={len(result.selected_candidates)}")
-    pooled = result.grouped_result.mixture_result.summary.get("metrics", {}).get("pooled", {})
-    if pooled.get("rmse_3d_m") is not None:
-        print(f"rmse_3d_m={pooled['rmse_3d_m']}")
-    for name, path in paths.items():
-        print(f"{name}={path}")
-    return 0
 
 
 def _aggregate_anchor_costs(
@@ -505,7 +552,9 @@ def _aggregate_anchor_costs(
             temperature = float(aggregation_config.softmin_temperature)
             minimum = float(np.min(values))
             shifted = np.exp(-(values - minimum) / temperature)
-            result[row_index] = minimum - temperature * float(np.log(np.mean(shifted)))
+            result[row_index] = minimum - temperature * float(
+                np.log(np.mean(shifted))
+            )
     return result
 
 
@@ -587,11 +636,11 @@ def _multi_anchor_summary(
         "matched_frame_fraction": (
             float(matched_frames / len(frame_rows)) if len(frame_rows) else 0.0
         ),
-        "mean_matched_anchor_count": float(
-            rows["mixture_multi_anchor_matched_count"].mean()
-        )
-        if len(rows)
-        else 0.0,
+        "mean_matched_anchor_count": (
+            float(rows["mixture_multi_anchor_matched_count"].mean())
+            if len(rows)
+            else 0.0
+        ),
         "aggregate_cost_mean": float(aggregate_cost.mean()) if len(rows) else None,
         "best_anchor_distance_mean_m": (
             float(best_distance.mean()) if len(best_distance) else None
