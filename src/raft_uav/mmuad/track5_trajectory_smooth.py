@@ -53,14 +53,24 @@ def smooth_track5_submission_rows(
     candidate-selection jitter.
     """
 
-    if not 0.0 <= float(blend) <= 1.0:
-        raise ValueError("blend must be in [0, 1]")
-    if window_s <= 0.0:
-        raise ValueError("window_s must be positive")
+    blend = float(blend)
+    if not np.isfinite(blend) or not 0.0 <= blend <= 1.0:
+        raise ValueError("blend must be finite and in [0, 1]")
+    window_s = float(window_s)
+    if not np.isfinite(window_s) or window_s <= 0.0:
+        raise ValueError("window_s must be positive and finite")
     if bandwidth_s is None:
-        bandwidth_s = max(float(window_s) / 2.0, 1.0e-9)
-    if bandwidth_s <= 0.0:
-        raise ValueError("bandwidth_s must be positive")
+        bandwidth_s = max(window_s / 2.0, 1.0e-9)
+    bandwidth_s = float(bandwidth_s)
+    if not np.isfinite(bandwidth_s) or bandwidth_s <= 0.0:
+        raise ValueError("bandwidth_s must be positive and finite")
+    if max_correction_m is not None:
+        max_correction_m = float(max_correction_m)
+        if not np.isfinite(max_correction_m) or max_correction_m <= 0.0:
+            raise ValueError("max_correction_m must be positive and finite when enabled")
+    min_neighbors = int(min_neighbors)
+    if min_neighbors < 1:
+        raise ValueError("min_neighbors must be at least 1")
 
     normalized = _normalized_estimate_rows(rows)
     smoothed_parts: list[pd.DataFrame] = []
@@ -78,18 +88,18 @@ def smooth_track5_submission_rows(
                 times,
                 xyz,
                 center_time=float(time_s),
-                window_s=float(window_s),
-                bandwidth_s=float(bandwidth_s),
-                min_neighbors=int(min_neighbors),
+                window_s=window_s,
+                bandwidth_s=bandwidth_s,
+                min_neighbors=min_neighbors,
             )
             counts[index] = count
             delta = candidate - xyz[index]
             raw_norm = float(np.linalg.norm(delta))
             raw_corrections[index] = raw_norm
-            if max_correction_m is not None and raw_norm > float(max_correction_m) > 0.0:
-                delta = delta * (float(max_correction_m) / raw_norm)
+            if max_correction_m is not None and raw_norm > max_correction_m:
+                delta = delta * (max_correction_m / raw_norm)
                 capped[index] = True
-            smoothed_xyz[index] = xyz[index] + float(blend) * delta
+            smoothed_xyz[index] = xyz[index] + blend * delta
         out = work.copy()
         out["input_state_x_m"] = out["state_x_m"]
         out["input_state_y_m"] = out["state_y_m"]
@@ -98,9 +108,9 @@ def smooth_track5_submission_rows(
         out["state_y_m"] = smoothed_xyz[:, 1]
         out["state_z_m"] = smoothed_xyz[:, 2]
         out["trajectory_smoothed"] = True
-        out["trajectory_smooth_window_s"] = float(window_s)
-        out["trajectory_smooth_bandwidth_s"] = float(bandwidth_s)
-        out["trajectory_smooth_blend"] = float(blend)
+        out["trajectory_smooth_window_s"] = window_s
+        out["trajectory_smooth_bandwidth_s"] = bandwidth_s
+        out["trajectory_smooth_blend"] = blend
         out["trajectory_smooth_neighbor_count"] = counts
         out["trajectory_smooth_raw_correction_m"] = raw_corrections
         out["trajectory_smooth_capped"] = capped
