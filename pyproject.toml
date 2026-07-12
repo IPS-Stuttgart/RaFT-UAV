@@ -139,3 +139,35 @@ raft-uav-mmuad-track5-estimate-ensemble-loso = "raft_uav.mmuad.track5_estimate_e
 raft-uav-mmuad-track5-ensemble-weight-search = "raft_uav.mmuad.track5_estimate_ensemble_weight_search:main"
 raft-uav-mmuad-track5-consensus-ensemble = "raft_uav.mmuad.track5_estimate_consensus_ensemble:main"
 raft-uav-mmuad-track5-consensus-ensemble-grid = "raft_uav.mmuad.track5_consensus_ensemble_grid:main"
+raft-uav-mmuad-track5-estimate-calibration = "raft_uav.mmuad.track5_estimate_calibration:main"
+raft-uav-mmuad-track5-calibration-shrinkage = "raft_uav.mmuad.track5_estimate_calibration_shrinkage_cli:main"
+raft-uav-mmuad-track5-estimate-sequence-gate = "raft_uav.mmuad.track5_estimate_sequence_gate:main"
+raft-uav-mmuad-track5-segment-source-gate = "raft_uav.mmuad.track5_segment_source_gate:main"
+raft-uav-mmuad-track5-estimate-sequence-gate-fit = "raft_uav.mmuad.track5_estimate_text_cli:main"
+raft-uav-mmuad-track5-spread-guard-ensemble = "raft_uav.mmuad.track5_estimate_ensemble_spread_guard:main"
+raft-uav-mmuad-track5-estimate-ensemble-grid = "raft_uav.mmuad.track5_estimate_ensemble_grid:main"
+raft-uav-mmuad-track5-ensemble-grid-config = "raft_uav.mmuad.track5_estimate_ensemble_grid_config:main"
+raft-uav-mmuad-track5-leaderboard-pipeline = "raft_uav.mmuad.track5_leaderboard_pipeline:main"
+raft-uav-mmuad-track5-sequence-gate = "raft_uav.mmuad.track5_sequence_gate:main"
+raft-uav-mmuad-track5-soft-class-ensemble = "raft_uav.mmuad.track5_soft_class_ensemble:main"
+raft-uav-mmuad-track5-spread-guard-blend-search = "raft_uav.mmuad.track5_spread_guard_blend_search:main"
+raft-uav-mmuad-track5-spread-guard-search = "raft_uav.mmuad.track5_spread_guard_search:main"
+raft-uav-mmuad-track5-temporal-repair = "raft_uav.mmuad.track5_temporal_repair:main"
+raft-uav-mmuad-track5-temporal-repair-search = "raft_uav.mmuad.track5_temporal_repair_search:main"
+raft-uav-mmuad-track5-trajectory-regularizer = "raft_uav.mmuad.track5_trajectory_regularizer:main"
+raft-uav-mmuad-track5-trajectory-smooth = "raft_uav.mmuad.track5_trajectory_smooth:main"
+raft-uav-mmuad-track5-uncertainty-ensemble = "raft_uav.mmuad.track5_uncertainty_ensemble:main"
+raft-uav-mmuad-track5-uncertainty-ensemble-weight-search = "raft_uav.mmuad.track5_uncertainty_ensemble_weight_search:main"
+raft-uav-mmuad-track5-rts-ensemble = "raft_uav.mmuad.track5_rts_ensemble:main"
+raft-uav-mmuad-track5-rts-ensemble-grid = "raft_uav.mmuad.track5_rts_ensemble_grid:main"
+raft-uav-mmuad-track5-uncertainty-column-adapter = "raft_uav.mmuad.track5_uncertainty_column_adapter:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
