@@ -1,0 +1,194 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from raft_uav.mmuad.candidate_pair_forward_backward import (
+    CandidatePairForwardBackwardConfig,
+)
+from raft_uav.mmuad.candidate_pair_forward_backward_adaptive import (
+    EntropyAdaptivePairBlendConfig,
+    attach_entropy_adaptive_pair_prior,
+    blend_candidate_posteriors,
+    main as adaptive_main,
+)
+
+
+def test_uniform_pair_posterior_backs_off_to_local_scores() -> None:
+    blended, diagnostics = blend_candidate_posteriors(
+        np.asarray([0.9, 0.1]),
+        np.asarray([0.5, 0.5]),
+        config=EntropyAdaptivePairBlendConfig(
+            min_pair_weight=0.0,
+            max_pair_weight=1.0,
+            confidence_power=1.0,
+        ),
+    )
+
+    assert diagnostics["pair_normalized_entropy"] == pytest.approx(1.0)
+    assert diagnostics["effective_pair_weight"] == pytest.approx(0.0)
+    assert blended == pytest.approx([0.9, 0.1])
+
+
+def test_confident_pair_posterior_can_override_local_outlier() -> None:
+    blended, diagnostics = blend_candidate_posteriors(
+        np.asarray([0.1, 0.9]),
+        np.asarray([0.999, 0.001]),
+        config=EntropyAdaptivePairBlendConfig(
+            min_pair_weight=0.0,
+            max_pair_weight=1.0,
+            confidence_power=1.0,
+        ),
+    )
+
+    assert diagnostics["pair_confidence"] > 0.9
+    assert blended[0] > blended[1]
+    assert float(np.sum(blended)) == pytest.approx(1.0)
+
+
+def _trajectory_candidates() -> pd.DataFrame:
+    return pd.DataFrame.from_records(
+        [
+            {
+                "sequence_id": "seqA",
+                "time_s": 0.0,
+                "source": "lidar_360",
+                "track_id": "good-0",
+                "candidate_branch": "raw",
+                "x_m": 0.0,
+                "y_m": 0.0,
+                "z_m": 1.0,
+                "ranker_score": 1.0,
+                "predicted_sigma_m": 1.0,
+            },
+            {
+                "sequence_id": "seqA",
+                "time_s": 1.0,
+                "source": "lidar_360",
+                "track_id": "good-1",
+                "candidate_branch": "raw",
+                "x_m": 1.0,
+                "y_m": 0.0,
+                "z_m": 1.0,
+                "ranker_score": 0.1,
+                "predicted_sigma_m": 1.0,
+            },
+            {
+                "sequence_id": "seqA",
+                "time_s": 1.0,
+                "source": "dynamic",
+                "track_id": "bad-1",
+                "candidate_branch": "dynamic",
+                "x_m": 20.0,
+                "y_m": 0.0,
+                "z_m": 1.0,
+                "ranker_score": 0.9,
+                "predicted_sigma_m": 1.0,
+            },
+            {
+                "sequence_id": "seqA",
+                "time_s": 2.0,
+                "source": "lidar_360",
+                "track_id": "good-2",
+                "candidate_branch": "raw",
+                "x_m": 2.0,
+                "y_m": 0.0,
+                "z_m": 1.0,
+                "ranker_score": 1.0,
+                "predicted_sigma_m": 1.0,
+            },
+        ]
+    )
+
+
+def _pair_config() -> CandidatePairForwardBackwardConfig:
+    return CandidatePairForwardBackwardConfig(
+        score_column="ranker_score",
+        sigma_column="predicted_sigma_m",
+        transition_distance_std_m=1.0,
+        transition_speed_std_mps=0.0,
+        max_speed_mps=5.0,
+        speed_gate_penalty=100.0,
+        acceleration_std_mps2=2.0,
+        max_acceleration_mps2=10.0,
+        acceleration_gate_penalty=100.0,
+        source_switch_penalty=0.0,
+        branch_switch_penalty=0.0,
+        track_continuation_bonus=0.0,
+    )
+
+
+def test_adaptive_pair_prior_recovers_temporally_supported_candidate() -> None:
+    augmented = attach_entropy_adaptive_pair_prior(
+        _trajectory_candidates(),
+        pair_config=_pair_config(),
+        blend_config=EntropyAdaptivePairBlendConfig(),
+    ).rows
+    middle = augmented.loc[augmented["time_s"] == 1.0].copy()
+    good = middle.loc[middle["track_id"] == "good-1"].iloc[0]
+    bad = middle.loc[middle["track_id"] == "bad-1"].iloc[0]
+
+    assert good["candidate_pair_forward_backward_local_posterior"] < bad[
+        "candidate_pair_forward_backward_local_posterior"
+    ]
+    assert good["candidate_pair_forward_backward_adaptive_score"] > bad[
+        "candidate_pair_forward_backward_adaptive_score"
+    ]
+    assert good["candidate_pair_forward_backward_adaptive_pair_weight"] > 0.5
+
+
+def test_adaptive_pair_cli_writes_candidates_and_summary(tmp_path: Path) -> None:
+    candidate_csv = tmp_path / "candidates.csv"
+    output_csv = tmp_path / "adaptive.csv"
+    summary_json = tmp_path / "adaptive.json"
+    _trajectory_candidates().to_csv(candidate_csv, index=False)
+
+    status = adaptive_main(
+        [
+            "--candidate-csv",
+            str(candidate_csv),
+            "--output-csv",
+            str(output_csv),
+            "--summary-json",
+            str(summary_json),
+            "--score-column",
+            "ranker_score",
+            "--transition-distance-std-m",
+            "1",
+            "--transition-speed-std-mps",
+            "0",
+            "--max-speed-mps",
+            "5",
+            "--speed-gate-penalty",
+            "100",
+            "--acceleration-std-mps2",
+            "2",
+            "--max-acceleration-mps2",
+            "10",
+            "--acceleration-gate-penalty",
+            "100",
+        ]
+    )
+
+    assert status == 0
+    written = pd.read_csv(output_csv)
+    assert "candidate_pair_forward_backward_adaptive_score" in written.columns
+    payload = json.loads(summary_json.read_text(encoding="utf-8"))
+    assert payload["truth_used_for_candidate_prior"] is False
+    assert payload["adaptive_summary"]["frame_count"] == 3
+
+
+def test_adaptive_pair_blend_rejects_invalid_weight_interval() -> None:
+    with pytest.raises(ValueError, match="pair weights"):
+        blend_candidate_posteriors(
+            np.asarray([0.5, 0.5]),
+            np.asarray([0.5, 0.5]),
+            config=EntropyAdaptivePairBlendConfig(
+                min_pair_weight=0.8,
+                max_pair_weight=0.2,
+            ),
+        )
