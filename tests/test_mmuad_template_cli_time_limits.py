@@ -70,6 +70,6 @@ def test_template_clis_reject_invalid_time_limits_before_io(
     value: str,
 ) -> None:
     with pytest.raises(SystemExit) as exc_info:
-        entrypoint([*base_args, option, value])
+        entrypoint([*base_args, f"{option}={value}"])
 
     assert exc_info.value.code == 2
