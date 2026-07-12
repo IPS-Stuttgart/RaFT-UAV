@@ -157,6 +157,12 @@ def test_adaptive_pair_cli_writes_candidates_and_summary(tmp_path: Path) -> None
             str(summary_json),
             "--score-column",
             "ranker_score",
+            "--pair-score-column",
+            "custom_pair_score",
+            "--min-pair-weight",
+            "0",
+            "--max-pair-weight",
+            "0",
             "--transition-distance-std-m",
             "1",
             "--transition-speed-std-mps",
@@ -177,9 +183,14 @@ def test_adaptive_pair_cli_writes_candidates_and_summary(tmp_path: Path) -> None
     assert status == 0
     written = pd.read_csv(output_csv)
     assert "candidate_pair_forward_backward_adaptive_score" in written.columns
+    assert "custom_pair_score" in written.columns
     payload = json.loads(summary_json.read_text(encoding="utf-8"))
     assert payload["truth_used_for_candidate_prior"] is False
     assert payload["adaptive_summary"]["frame_count"] == 3
+    assert payload["adaptive_summary"]["pair_score_column"] == "custom_pair_score"
+    assert payload["adaptive_summary"][
+        "adaptive_top_differs_from_pair_fraction"
+    ] == pytest.approx(1.0 / 3.0)
 
 
 def test_adaptive_pair_blend_rejects_invalid_weight_interval() -> None:
