@@ -82,7 +82,7 @@ def add_weighted_multi_anchor_conditioned_selection_utility(
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     """Attach weighted anchor utility with reliability-aware missing support."""
 
-    effective_anchor_config = anchor_config or AnchorConditioningConfig()
+    effective_anchor_config = anchor_config or _IMPL.AnchorConditioningConfig()
     scored, normalized_anchors, summary = _ORIGINAL_ADD_WEIGHTED_UTILITY(
         candidates,
         anchor_estimates,
