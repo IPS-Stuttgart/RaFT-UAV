@@ -79,7 +79,9 @@ def test_disagreement_reduces_confident_pair_weight() -> None:
     assert diagnostics["pair_confidence"] > 0.9
     assert diagnostics["normalized_js_divergence"] > 0.9
     assert diagnostics["effective_pair_weight"] < 0.1
-    assert diagnostics["effective_pair_weight"] < entropy_diagnostics["effective_pair_weight"]
+    assert diagnostics["effective_pair_weight"] < entropy_diagnostics[
+        "effective_pair_weight"
+    ]
     assert blended[0] > blended[1]
 
 
@@ -118,10 +120,14 @@ def test_attach_agreement_prior_writes_normalized_scores() -> None:
     score_column = "candidate_pair_forward_backward_agreement_score"
 
     assert score_column in rows.columns
-    assert "candidate_pair_forward_backward_agreement_normalized_js_divergence" in rows
+    assert (
+        "candidate_pair_forward_backward_agreement_normalized_js_divergence"
+        in rows
+    )
     sums = rows.groupby(["sequence_id", "time_s"])[score_column].sum()
     np.testing.assert_allclose(sums.to_numpy(float), np.ones(len(sums)))
-    assert rows["candidate_pair_forward_backward_agreement_pair_weight"].between(0, 1).all()
+    pair_weight = rows["candidate_pair_forward_backward_agreement_pair_weight"]
+    assert pair_weight.between(0, 1).all()
 
 
 def test_agreement_cli_writes_candidates_and_summary(tmp_path: Path) -> None:
