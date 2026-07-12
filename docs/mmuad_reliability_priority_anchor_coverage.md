@@ -17,7 +17,9 @@ priorities:
   `sum(weight / (1 + distance / distance_scale))` first.
 
 The final grouped learned-sigma / Huber mixture-MAP objective is unchanged.
-Ground truth is not used for candidate selection or rescue.
+Ground truth is not used for candidate selection or rescue. Anchor reliability
+weights and all rescue hyperparameters must be selected on training folds and
+then frozen before validation or hidden-test inference.
 
 ## Example
 
