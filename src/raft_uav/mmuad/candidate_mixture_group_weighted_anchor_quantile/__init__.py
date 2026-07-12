@@ -57,7 +57,7 @@ def add_weighted_quantile_multi_anchor_conditioned_selection_utility(
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     """Attach quantile anchor utility with reliability-aware missing support."""
 
-    effective_anchor_config = anchor_config or AnchorConditioningConfig()
+    effective_anchor_config = anchor_config or _IMPL.AnchorConditioningConfig()
     scored, normalized_anchors, summary = _ORIGINAL_ADD_QUANTILE_UTILITY(
         candidates,
         anchor_estimates,
