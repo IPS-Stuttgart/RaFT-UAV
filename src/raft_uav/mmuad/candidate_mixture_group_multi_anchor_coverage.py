@@ -201,9 +201,6 @@ def select_multi_anchor_coverage_hypothesis_group_topk(
             best = anchor_rows.iloc[0]
             group_value = str(best["mixture_hypothesis_group"])
             best_distance = float(best["_coverage_anchor_distance_m"])
-            if group_value in selected_groups:
-                covered_before += 1
-                continue
             if group_value in rescue_groups:
                 rescue_groups[group_value]["anchors"].append(anchor_slug)
                 rescue_groups[group_value]["distance_m"] = min(
@@ -211,6 +208,9 @@ def select_multi_anchor_coverage_hypothesis_group_topk(
                     best_distance,
                 )
                 covered_by_rescue += 1
+                continue
+            if group_value in selected_groups:
+                covered_before += 1
                 continue
             if len(rescue_groups) >= max_extra:
                 blocked_by_budget += 1
