@@ -40,7 +40,7 @@ class _PandasCsvProxy:
         return getattr(self._pandas, name)
 
     def read_csv(self, *args: Any, **kwargs: Any) -> pd.DataFrame:
-        kwargs["dtype"] = str
+        kwargs.setdefault("dtype", str)
         kwargs.setdefault("keep_default_na", False)
         rows = self._pandas.read_csv(*args, **kwargs)
         out = rows.copy()
