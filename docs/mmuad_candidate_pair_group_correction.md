@@ -23,7 +23,7 @@ hypotheses.
 ## Basic use
 
 ```bash
-raft-uav-mmuad-pair-group-correction \
+python scripts/mmuad_candidate_pair_group_correction.py \
   --candidate-csv outputs/reservoir/candidates.csv \
   --output-csv outputs/pair_group_corrected/candidates.csv \
   --summary-json outputs/pair_group_corrected/summary.json \
@@ -48,7 +48,7 @@ The corrected emissions can be passed directly through the existing
 entropy-and-agreement adaptive pair prior:
 
 ```bash
-raft-uav-mmuad-pair-group-correction \
+python scripts/mmuad_candidate_pair_group_correction.py \
   --candidate-csv outputs/reservoir/candidates.csv \
   --output-csv outputs/pair_group_corrected/candidates.csv \
   --summary-json outputs/pair_group_corrected/summary.json \
@@ -63,7 +63,7 @@ raft-uav-mmuad-pair-group-correction \
 ## Direct robust mixture-MAP handoff
 
 ```bash
-raft-uav-mmuad-pair-group-correction \
+python scripts/mmuad_candidate_pair_group_correction.py \
   --candidate-csv outputs/reservoir/candidates.csv \
   --output-csv outputs/pair_group_corrected/candidates.csv \
   --summary-json outputs/pair_group_corrected/summary.json \
