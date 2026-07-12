@@ -65,13 +65,14 @@ def attach_candidate_branch_context(
     branches = _normalized_branch_values(out, branch_name=branch_name, fallback_branch=fallback_branch)
     out["candidate_branch"] = branches
     branch_values = _selected_branch_values(branches, max_branch_values=max_branch_values)
+    resolved_interaction_columns = tuple(interaction_columns)
     out["image_candidate_branch_available"] = 1.0
     out["image_candidate_branch_count"] = float(len(branch_values))
     for branch in branch_values:
         feature = f"image_candidate_branch_{_safe_feature_name(branch)}"
         indicator = (branches == branch).astype(float)
         out[feature] = indicator
-        for column in tuple(interaction_columns):
+        for column in resolved_interaction_columns:
             if column not in out.columns:
                 continue
             values = pd.to_numeric(out[column], errors="coerce")
