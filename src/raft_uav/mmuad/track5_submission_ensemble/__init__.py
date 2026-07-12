@@ -75,7 +75,9 @@ def _parse_normalized_classification(value: Any, *, source_path: Path, row_index
         ) from exc
 
 
-_IMPL._normalize_internal_submission_rows = _normalize_internal_submission_rows_with_class_validation
+_IMPL._normalize_internal_submission_rows = (
+    _normalize_internal_submission_rows_with_class_validation
+)
 
 globals().update(
     {
