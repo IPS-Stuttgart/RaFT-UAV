@@ -12,6 +12,7 @@ import importlib.util
 import inspect
 from pathlib import Path
 import sys
+from types import ModuleType
 from typing import Any
 
 import numpy as np
@@ -45,6 +46,18 @@ _POSITIVE_FINITE_RADAR_COVARIANCE_PARAMETERS = (
 _NONNEGATIVE_FINITE_RADAR_COVARIANCE_PARAMETERS = (
     "radar_range_std_fraction",
 )
+
+
+class _RadarAssociationModule(ModuleType):
+    """Module proxy that keeps runtime monkeypatches visible to legacy globals."""
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if name == "_IMPL":
+            return
+        implementation = self.__dict__.get("_IMPL")
+        if implementation is not None and hasattr(implementation, name):
+            setattr(implementation, name, value)
 
 
 def run_async_cv_baseline_with_radar_association(*args: Any, **kwargs: Any) -> Any:
@@ -109,3 +122,4 @@ __doc__ = _IMPL.__doc__
 __all__ = [
     name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))
 ]
+sys.modules[__name__].__class__ = _RadarAssociationModule
