@@ -365,10 +365,25 @@ def load_track5_submission_frame(submission: pd.DataFrame) -> pd.DataFrame:
                     "Classification": official["Classification"],
                 }
             )
-    for column in ("time_s", "state_x_m", "state_y_m", "state_z_m", "Classification"):
+    required_numeric_columns = (
+        "time_s",
+        "state_x_m",
+        "state_y_m",
+        "state_z_m",
+        "Classification",
+    )
+    for column in required_numeric_columns:
         out[column] = pd.to_numeric(out[column], errors="coerce")
-    finite = np.isfinite(out[["time_s", "state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)).all(axis=1)
-    return out.loc[finite].copy().reset_index(drop=True)
+    finite = np.isfinite(out[list(required_numeric_columns)].to_numpy(float)).all(axis=1)
+    if not finite.all():
+        bad_indices = out.index[~finite].astype(str).tolist()
+        preview = ", ".join(bad_indices[:5])
+        suffix = "" if len(bad_indices) <= 5 else f", ... ({len(bad_indices)} total)"
+        raise ValueError(
+            "Track 5 Hampel repair input contains non-finite "
+            f"time/position/classification rows at indices: {preview}{suffix}"
+        )
+    return out.copy().reset_index(drop=True)
 
 
 def _diagnostic_columns() -> list[str]:
