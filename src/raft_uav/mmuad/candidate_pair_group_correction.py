@@ -227,6 +227,7 @@ def group_corrected_pair_summary(
     if adaptive_score_column is not None:
         summary["agreement_adaptive_summary"] = agreement_adaptive_pair_summary(
             rows,
+            pair_score_column=pair_score_column,
             output_score_column=adaptive_score_column,
         )
     return summary
