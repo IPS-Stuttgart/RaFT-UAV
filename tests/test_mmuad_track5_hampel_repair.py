@@ -55,6 +55,14 @@ def test_hampel_repair_replaces_isolated_local_outlier() -> None:
     assert int(diagnostics["hampel_repair_applied"].sum()) == 1
 
 
+def test_hampel_repair_rejects_nonfinite_rows_instead_of_dropping() -> None:
+    rows = _submission_rows()
+    rows.loc[2, "state_x_m"] = float("nan")
+
+    with pytest.raises(ValueError, match="indices: 2"):
+        repair_track5_hampel_spikes(rows)
+
+
 def test_hampel_repair_writes_leaderboard_ready_artifacts(tmp_path: Path) -> None:
     repaired, diagnostics = repair_track5_hampel_spikes(
         _submission_rows(),
