@@ -81,8 +81,20 @@ def fit_temperature_calibrator(
     if len(np.unique(fit_truth)) < 2:
         raise ValueError("temperature calibration requires at least two classes")
 
-    lower = max(float(min_temperature), 1.0e-4)
-    upper = max(float(max_temperature), lower + 1.0e-4)
+    lower = float(min_temperature)
+    upper = float(max_temperature)
+    if not np.isfinite(lower) or lower <= 0.0:
+        raise ValueError("min_temperature must be positive and finite")
+    if not np.isfinite(upper) or upper <= 0.0:
+        raise ValueError("max_temperature must be positive and finite")
+    if lower >= upper:
+        raise ValueError("min_temperature must be less than max_temperature")
+    lower = max(lower, 1.0e-4)
+    if lower >= upper:
+        raise ValueError(
+            "max_temperature must exceed the effective numerical lower bound "
+            f"{lower:g}"
+        )
 
     def objective(temperature: float) -> float:
         calibrated = temperature_scale_probabilities(
@@ -98,9 +110,10 @@ def fit_temperature_calibrator(
         method="bounded",
         options={"xatol": 1.0e-5},
     )
-    temperature = (
+    candidate_temperature = (
         float(result.x) if result.success and np.isfinite(result.x) else 1.0
     )
+    temperature = float(np.clip(candidate_temperature, lower, upper))
     calibrated = temperature_scale_probabilities(
         fit_probabilities,
         temperature=temperature,
