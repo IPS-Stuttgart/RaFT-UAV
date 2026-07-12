@@ -15,14 +15,71 @@ from raft_uav.mmuad.class_probability_calibration import (
 )
 
 
+_CLASS_PROBABILITIES = {
+    "class_prob_0": [
+        0.97,
+        0.96,
+        0.94,
+        0.96,
+        0.02,
+        0.02,
+        0.02,
+        0.02,
+        0.97,
+        0.02,
+        0.02,
+        0.02,
+    ],
+    "class_prob_1": [
+        0.01,
+        0.02,
+        0.02,
+        0.02,
+        0.96,
+        0.95,
+        0.02,
+        0.02,
+        0.01,
+        0.94,
+        0.02,
+        0.02,
+    ],
+    "class_prob_2": [
+        0.01,
+        0.01,
+        0.03,
+        0.01,
+        0.01,
+        0.02,
+        0.95,
+        0.94,
+        0.01,
+        0.02,
+        0.94,
+        0.02,
+    ],
+    "class_prob_3": [
+        0.01,
+        0.01,
+        0.01,
+        0.01,
+        0.01,
+        0.01,
+        0.01,
+        0.02,
+        0.01,
+        0.02,
+        0.02,
+        0.94,
+    ],
+}
+
+
 def _overconfident_predictions() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "sequence_id": [f"{index:04d}" for index in range(12)],
-            "class_prob_0": [0.97, 0.96, 0.94, 0.96, 0.02, 0.02, 0.02, 0.02, 0.97, 0.02, 0.02, 0.02],
-            "class_prob_1": [0.01, 0.02, 0.02, 0.02, 0.96, 0.95, 0.02, 0.02, 0.01, 0.94, 0.02, 0.02],
-            "class_prob_2": [0.01, 0.01, 0.03, 0.01, 0.01, 0.02, 0.95, 0.94, 0.01, 0.02, 0.94, 0.02],
-            "class_prob_3": [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.02, 0.01, 0.02, 0.02, 0.94],
+            **_CLASS_PROBABILITIES,
         }
     )
 
@@ -32,11 +89,11 @@ def _labels() -> dict[str, str]:
         "0000": "0",
         "0001": "0",
         "0002": "0",
-        "0003": "1",  # deliberately overconfident wrong prediction
+        "0003": "1",
         "0004": "1",
         "0005": "1",
         "0006": "2",
-        "0007": "3",  # deliberately overconfident wrong prediction
+        "0007": "3",
         "0008": "0",
         "0009": "1",
         "0010": "2",
@@ -56,22 +113,30 @@ def test_temperature_fit_softens_overconfident_probabilities_and_improves_nll() 
     assert summary["after"]["nll"] < summary["before"]["nll"]
     assert summary["after"]["accuracy"] == summary["before"]["accuracy"]
 
-    calibrated = apply_temperature_calibrator(_overconfident_predictions(), model)
-    columns = [f"calibrated_class_prob_{index}" for index in range(4)]
-    values = calibrated[columns].to_numpy(float)
+    raw = _overconfident_predictions()
+    calibrated = apply_temperature_calibrator(raw, model)
+    calibrated_columns = [
+        f"calibrated_class_prob_{index}" for index in range(4)
+    ]
+    raw_columns = [f"class_prob_{index}" for index in range(4)]
+    values = calibrated[calibrated_columns].to_numpy(float)
     assert np.allclose(values.sum(axis=1), 1.0)
     assert np.array_equal(
         np.argmax(values, axis=1),
-        np.argmax(_overconfident_predictions()[[f"class_prob_{i}" for i in range(4)]], axis=1),
+        np.argmax(raw[raw_columns].to_numpy(float), axis=1),
     )
-    assert (
+    entropy_increased = (
         calibrated["class_probability_entropy_calibrated"]
         > calibrated["class_probability_entropy_raw"]
-    ).mean() > 0.9
+    )
+    assert entropy_increased.mean() > 0.9
 
 
 def test_apply_can_replace_probabilities_while_preserving_raw_columns() -> None:
-    model, _summary = fit_temperature_calibrator(_overconfident_predictions(), _labels())
+    model, _summary = fit_temperature_calibrator(
+        _overconfident_predictions(),
+        _labels(),
+    )
 
     calibrated = apply_temperature_calibrator(
         _overconfident_predictions(),
@@ -81,10 +146,8 @@ def test_apply_can_replace_probabilities_while_preserving_raw_columns() -> None:
 
     for index in range(4):
         assert f"raw_class_prob_{index}" in calibrated.columns
-    assert np.allclose(
-        calibrated[[f"class_prob_{index}" for index in range(4)]].sum(axis=1),
-        1.0,
-    )
+    class_columns = [f"class_prob_{index}" for index in range(4)]
+    assert np.allclose(calibrated[class_columns].sum(axis=1), 1.0)
     assert not np.allclose(
         calibrated["class_prob_0"],
         calibrated["raw_class_prob_0"],
@@ -96,7 +159,10 @@ def test_temperature_scale_rejects_invalid_temperature() -> None:
 
     for temperature in (0.0, -1.0, float("nan")):
         try:
-            temperature_scale_probabilities(probabilities, temperature=temperature)
+            temperature_scale_probabilities(
+                probabilities,
+                temperature=temperature,
+            )
         except ValueError:
             pass
         else:
@@ -104,7 +170,10 @@ def test_temperature_scale_rejects_invalid_temperature() -> None:
 
 
 def test_calibrator_json_roundtrip(tmp_path) -> None:
-    model, _summary = fit_temperature_calibrator(_overconfident_predictions(), _labels())
+    model, _summary = fit_temperature_calibrator(
+        _overconfident_predictions(),
+        _labels(),
+    )
     model_path = tmp_path / "calibrator.json"
 
     save_calibrator(model, model_path)
