@@ -822,7 +822,7 @@ def _feature_rule_v2_alpha(row: object) -> tuple[float, float, str]:
 
 
 def _normalize_official_results(results: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
-    rows = pd.DataFrame(results).copy()
+    rows = pd.DataFrame(results).copy().reset_index(drop=True)
     missing = {"Sequence", "Timestamp", "Position", "Classification"}.difference(rows.columns)
     if missing:
         raise ValueError(f"official results missing required columns: {sorted(missing)}")
