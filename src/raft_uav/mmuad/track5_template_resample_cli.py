@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 from raft_uav.mmuad.estimate_csv import read_estimate_csv
@@ -40,6 +41,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-leaderboard-ready", action="store_true")
     args = parser.parse_args(argv)
 
+    max_nearest_time_delta_s = _validate_optional_nonnegative_finite(
+        args.max_nearest_time_delta_s,
+        name="max_nearest_time_delta_s",
+    )
+    max_interpolation_gap_s = _validate_optional_nonnegative_finite(
+        args.max_interpolation_gap_s,
+        name="max_interpolation_gap_s",
+    )
+
     estimates = read_estimate_csv(args.estimates_csv)
     template = load_official_track5_template_file(args.template)
     class_map = load_sequence_class_map(args.class_map) if args.class_map is not None else {}
@@ -49,9 +59,9 @@ def main(argv: list[str] | None = None) -> int:
         output_dir=args.output_dir,
         class_map=class_map,
         default_classification=args.default_classification,
-        max_nearest_time_delta_s=args.max_nearest_time_delta_s,
+        max_nearest_time_delta_s=max_nearest_time_delta_s,
         resample_method=args.resample_method,
-        max_interpolation_gap_s=args.max_interpolation_gap_s,
+        max_interpolation_gap_s=max_interpolation_gap_s,
         classification_policy=args.classification_policy,
     )
     summary = json.loads(paths["validation_json"].read_text(encoding="utf-8"))
@@ -64,6 +74,15 @@ def main(argv: list[str] | None = None) -> int:
         reasons = ", ".join(summary.get("leaderboard_blocking_reasons", [])) or "unknown"
         raise SystemExit(f"template-resampled upload is not leaderboard-ready: {reasons}")
     return 0
+
+
+def _validate_optional_nonnegative_finite(value: float | None, *, name: str) -> float | None:
+    if value is None:
+        return None
+    numeric = float(value)
+    if not math.isfinite(numeric) or numeric < 0.0:
+        raise ValueError(f"{name} must be finite and non-negative; got {value!r}")
+    return numeric
 
 
 if __name__ == "__main__":  # pragma: no cover
