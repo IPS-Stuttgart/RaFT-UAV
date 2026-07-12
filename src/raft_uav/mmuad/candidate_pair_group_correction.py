@@ -558,13 +558,15 @@ def _group_values(
     if resolved_group_column is None:
         return unique
     raw = rows[resolved_group_column]
-    missing = raw.isna() | raw.astype(str).str.strip().isin(("", "nan", "None"))
+    values = raw.where(raw.notna(), "").astype(str).str.strip()
+    missing = raw.isna() | values.eq("") | values.str.lower().isin(
+        {"nan", "none", "<na>"}
+    )
     if missing.any() and missing_group_policy == "error":
         indices = rows.index[missing].tolist()[:10]
         raise ValueError(
             f"group column {resolved_group_column!r} has missing values at rows {indices}"
         )
-    values = raw.astype(str).str.strip()
     return values.where(~missing, unique)
 
 
