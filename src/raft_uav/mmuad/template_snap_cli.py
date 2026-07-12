@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
+from raft_uav.mmuad.cli_types import nonnegative_finite_float
 from raft_uav.mmuad.submission import (
     load_official_track5_results_frame,
     load_official_track5_template_file,
@@ -24,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--template", type=Path, required=True, help="official template CSV/ZIP")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--resample-method", choices=RESAMPLE_METHODS, default="linear")
-    parser.add_argument("--max-interpolation-gap-s", type=float)
+    parser.add_argument("--max-interpolation-gap-s", type=nonnegative_finite_float)
     parser.add_argument(
         "--classification-policy",
         choices=CLASSIFICATION_POLICIES,
