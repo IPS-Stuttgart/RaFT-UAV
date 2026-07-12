@@ -96,3 +96,35 @@ def test_sequence_less_pool_initialization_is_reused_for_every_sequence(
     normalized = captured["initial"].sort_values("sequence_id").reset_index(drop=True)
     assert normalized["sequence_id"].tolist() == ["001", "seqB"]
     assert normalized["state_x_m"].tolist() == [42.0, 42.0]
+
+
+def test_aliased_initialization_changes_the_matching_sequence_only() -> None:
+    initial = _initialization()
+    initial["Sequence"] = ["001"]
+
+    result = selector.run_sequence_pool_selector(
+        _candidates().assign(
+            candidate_branch="raw",
+            ranker_score=1.0,
+            predicted_sigma_m=1.0,
+        ),
+        mixture_config=selector.core.CandidateMixtureMapConfig(
+            top_k=0,
+            score_column="ranker_score",
+            sigma_column="predicted_sigma_m",
+            score_weight=0.0,
+            sigma_log_weight=0.0,
+            smoothness_weight=0.0,
+            anchor_weight=1.0e6,
+            iterations=1,
+        ),
+        selector_config=selector.CandidatePoolSequenceSelectorConfig(
+            include_full_pool=True,
+            include_leave_one_out=False,
+        ),
+        initial_estimates=initial,
+    )
+
+    estimates = result.selected_result.estimates.set_index("sequence_id")
+    assert estimates.loc["001", "state_x_m"] > 40.0
+    assert estimates.loc["seqB", "state_x_m"] == pytest.approx(10.0)
