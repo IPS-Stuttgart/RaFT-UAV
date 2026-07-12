@@ -1,11 +1,9 @@
 """Train-only calibration for MMUAD sequence class probabilities.
 
-Classification probabilities are used by several MMUAD pose components, including
-class-conditioned candidate uncertainty and anchor reliability.  Raw classifier
-probabilities can be substantially overconfident even when sequence-level accuracy is
-high.  This module fits one scalar temperature on out-of-fold training predictions and
-applies the frozen calibration to validation or test probabilities without using pose
-or class truth at inference time.
+Several MMUAD pose components consume class probabilities rather than only the
+final hard class label. This module fits scalar temperature scaling on
+out-of-fold training predictions and applies the frozen transform without
+using validation or test labels.
 """
 
 from __future__ import annotations
@@ -24,18 +22,14 @@ from raft_uav.mmuad.classification import load_sequence_class_labels
 
 
 MODEL_SCHEMA = "raft-uav-mmuad-class-probability-calibrator-v1"
-_SEQUENCE_COLUMN_CANDIDATES = (
-    "sequence_id",
-    "sequence",
-    "Sequence",
-    "heldout_sequence",
-)
+_SEQUENCE_COLUMNS = ("sequence_id", "sequence", "Sequence", "heldout_sequence")
 _PROBABILITY_PREFIXES = (
     "class_prob_",
     "image_class_prob_",
     "predicted_probability_",
     "probability_",
 )
+_LABEL_COLUMNS = ("truth_class", "uav_type", "Classification", "class_id")
 
 
 @dataclass(frozen=True)
@@ -64,11 +58,7 @@ def fit_temperature_calibrator(
     max_temperature: float = 20.0,
     ece_bins: int = 10,
 ) -> tuple[ClassProbabilityCalibrator, dict[str, Any]]:
-    """Fit a scalar temperature from out-of-fold sequence predictions.
-
-    The caller is responsible for supplying training-only out-of-fold probabilities.
-    Ground-truth labels are used only during this fit step.
-    """
+    """Fit a scalar temperature from train-only out-of-fold predictions."""
 
     rows = pd.DataFrame(predictions).copy()
     sequence_column = resolve_sequence_column(rows, sequence_column)
@@ -82,12 +72,14 @@ def fit_temperature_calibrator(
     truth_indices = truth_labels.map(class_to_index)
     valid = truth_indices.notna() & np.isfinite(probabilities).all(axis=1)
     if not valid.any():
-        raise ValueError("no prediction rows have both finite probabilities and class labels")
+        raise ValueError(
+            "no prediction rows have both finite probabilities and class labels"
+        )
 
     fit_probabilities = probabilities[valid.to_numpy(bool)]
     fit_truth = truth_indices.loc[valid].astype(int).to_numpy()
     if len(np.unique(fit_truth)) < 2:
-        raise ValueError("temperature calibration requires at least two observed classes")
+        raise ValueError("temperature calibration requires at least two classes")
 
     lower = max(float(min_temperature), 1.0e-4)
     upper = max(float(max_temperature), lower + 1.0e-4)
@@ -106,7 +98,9 @@ def fit_temperature_calibrator(
         method="bounded",
         options={"xatol": 1.0e-5},
     )
-    temperature = float(result.x) if result.success and np.isfinite(result.x) else 1.0
+    temperature = (
+        float(result.x) if result.success and np.isfinite(result.x) else 1.0
+    )
     calibrated = temperature_scale_probabilities(
         fit_probabilities,
         temperature=temperature,
@@ -164,10 +158,15 @@ def apply_temperature_calibrator(
     """Apply a frozen calibrator without requiring labels."""
 
     if model.schema != MODEL_SCHEMA:
-        raise ValueError(f"unsupported class-probability calibrator schema: {model.schema!r}")
+        raise ValueError(
+            f"unsupported class-probability calibrator schema: {model.schema!r}"
+        )
     rows = pd.DataFrame(predictions).copy()
     explicit = probability_columns
-    if explicit is None and all(column in rows.columns for column in model.source_probability_columns):
+    source_columns_available = all(
+        column in rows.columns for column in model.source_probability_columns
+    )
+    if explicit is None and source_columns_available:
         explicit = model.source_probability_columns
     columns, labels = resolve_probability_columns(
         rows,
@@ -176,7 +175,7 @@ def apply_temperature_calibrator(
     )
     if list(labels) != list(model.class_labels):
         raise ValueError(
-            "class labels in prediction probabilities do not match the fitted calibrator: "
+            "prediction classes do not match the fitted calibrator: "
             f"expected {model.class_labels}, got {labels}"
         )
     probabilities = normalized_probabilities(rows, columns, epsilon=model.epsilon)
@@ -236,7 +235,7 @@ def classification_calibration_metrics(
     ece_bins: int = 10,
     epsilon: float = 1.0e-9,
 ) -> dict[str, float]:
-    """Return accuracy, NLL, Brier score, and expected calibration error."""
+    """Return accuracy, NLL, Brier score, and calibration error."""
 
     values = np.asarray(probabilities, dtype=float)
     truth = np.asarray(truth_indices, dtype=int)
@@ -285,11 +284,17 @@ def expected_calibration_error(
         if not mask.any():
             continue
         weight = float(np.mean(mask))
-        error += weight * abs(float(np.mean(correct[mask])) - float(np.mean(confidence[mask])))
+        bin_accuracy = float(np.mean(correct[mask]))
+        bin_confidence = float(np.mean(confidence[mask]))
+        error += weight * abs(bin_accuracy - bin_confidence)
     return float(error)
 
 
-def probability_entropy(probabilities: np.ndarray, *, epsilon: float = 1.0e-9) -> np.ndarray:
+def probability_entropy(
+    probabilities: np.ndarray,
+    *,
+    epsilon: float = 1.0e-9,
+) -> np.ndarray:
     values = np.clip(np.asarray(probabilities, dtype=float), float(epsilon), 1.0)
     return -np.sum(values * np.log(values), axis=1)
 
@@ -327,27 +332,26 @@ def resolve_probability_columns(
             raise ValueError(f"prediction table missing probability columns: {missing}")
         labels = [_probability_column_label(column) for column in columns]
     else:
-        candidates: list[tuple[int, str, list[str], list[str]]] = []
+        columns = []
+        labels = []
         for prefix in _PROBABILITY_PREFIXES:
-            matched = [str(column) for column in rows.columns if str(column).startswith(prefix)]
+            matched = [
+                str(column)
+                for column in rows.columns
+                if str(column).startswith(prefix)
+            ]
             labeled = [
-                (column, str(column)[len(prefix) :])
+                (column, column[len(prefix) :])
                 for column in matched
-                if str(column)[len(prefix) :]
+                if column[len(prefix) :]
             ]
             labeled.sort(key=lambda item: _class_label_sort_key(item[1]))
             if len(labeled) >= 2:
-                candidates.append(
-                    (
-                        len(labeled),
-                        prefix,
-                        [column for column, _ in labeled],
-                        [label for _, label in labeled],
-                    )
-                )
-        if not candidates:
+                columns = [column for column, _ in labeled]
+                labels = [label for _, label in labeled]
+                break
+        if not columns:
             raise ValueError("could not find at least two class-probability columns")
-        _count, _prefix, columns, labels = sorted(candidates, reverse=True)[0]
     if len(set(labels)) != len(labels):
         raise ValueError(f"probability columns have duplicate class labels: {labels}")
     if class_labels is not None:
@@ -361,12 +365,17 @@ def resolve_probability_columns(
     return columns, labels
 
 
-def resolve_sequence_column(rows: pd.DataFrame, sequence_column: str | None = None) -> str:
+def resolve_sequence_column(
+    rows: pd.DataFrame,
+    sequence_column: str | None = None,
+) -> str:
     if sequence_column is not None:
         if sequence_column not in rows.columns:
-            raise ValueError(f"prediction table missing sequence column {sequence_column!r}")
+            raise ValueError(
+                f"prediction table missing sequence column {sequence_column!r}"
+            )
         return str(sequence_column)
-    for column in _SEQUENCE_COLUMN_CANDIDATES:
+    for column in _SEQUENCE_COLUMNS:
         if column in rows.columns:
             return column
     raise ValueError("could not resolve a sequence identifier column")
@@ -382,15 +391,19 @@ def normalize_label_map(
     rows = pd.DataFrame(labels).copy()
     sequence_column = resolve_sequence_column(rows)
     if label_column is None:
-        for candidate in ("truth_class", "uav_type", "Classification", "class_id"):
-            if candidate in rows.columns:
-                label_column = candidate
-                break
+        label_column = next(
+            (candidate for candidate in _LABEL_COLUMNS if candidate in rows.columns),
+            None,
+        )
     if label_column is None or label_column not in rows.columns:
         raise ValueError("could not resolve a class-label column")
     return {
         str(sequence): str(label)
-        for sequence, label in zip(rows[sequence_column], rows[label_column], strict=False)
+        for sequence, label in zip(
+            rows[sequence_column],
+            rows[label_column],
+            strict=False,
+        )
     }
 
 
@@ -411,7 +424,9 @@ def load_calibrator(path: Path) -> ClassProbabilityCalibrator:
         source_probability_columns=[
             str(value) for value in payload["source_probability_columns"]
         ],
-        output_prefix=str(payload.get("output_prefix", "calibrated_class_prob_")),
+        output_prefix=str(
+            payload.get("output_prefix", "calibrated_class_prob_")
+        ),
         epsilon=float(payload.get("epsilon", 1.0e-9)),
     )
 
@@ -434,6 +449,14 @@ def _read_csv_as_strings(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, dtype=str, keep_default_na=False)
 
 
+def _load_labels_preserving_ids(path: Path) -> dict[str, str]:
+    rows = _read_csv_as_strings(path)
+    try:
+        return normalize_label_map(rows)
+    except ValueError:
+        return load_sequence_class_labels(path)
+
+
 def _write_json(payload: Mapping[str, Any], path: Path | None) -> None:
     if path is None:
         return
@@ -451,7 +474,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    fit_parser = subparsers.add_parser("fit", help="fit on train-only OOF probabilities")
+    fit_parser = subparsers.add_parser(
+        "fit",
+        help="fit on train-only OOF probabilities",
+    )
     fit_parser.add_argument("--predictions-csv", type=Path, required=True)
     fit_parser.add_argument("--labels-csv", type=Path, required=True)
     fit_parser.add_argument("--model-json", type=Path, required=True)
@@ -463,7 +489,10 @@ def main(argv: list[str] | None = None) -> int:
     fit_parser.add_argument("--ece-bins", type=int, default=10)
     _add_probability_arguments(fit_parser)
 
-    apply_parser = subparsers.add_parser("apply", help="apply a frozen calibrator")
+    apply_parser = subparsers.add_parser(
+        "apply",
+        help="apply a frozen calibrator",
+    )
     apply_parser.add_argument("--predictions-csv", type=Path, required=True)
     apply_parser.add_argument("--model-json", type=Path, required=True)
     apply_parser.add_argument("--output-csv", type=Path, required=True)
@@ -472,7 +501,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     predictions = _read_csv_as_strings(args.predictions_csv)
     if args.command == "fit":
-        label_map = load_sequence_class_labels(args.labels_csv)
+        label_map = _load_labels_preserving_ids(args.labels_csv)
         prefix = args.output_prefix or "calibrated_class_prob_"
         model, summary = fit_temperature_calibrator(
             predictions,
