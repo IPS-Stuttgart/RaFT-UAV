@@ -132,9 +132,10 @@ def attach_agreement_adaptive_pair_prior(
     for _, frame in rows.groupby(["sequence_id", "time_s"], sort=False):
         indices = frame.index
         local = _local_emission_posterior(frame, pair_cfg)
-        pair = pd.to_numeric(frame[pair_cfg.output_score_column], errors="coerce").to_numpy(
-            float
-        )
+        pair = pd.to_numeric(
+            frame[pair_cfg.output_score_column],
+            errors="coerce",
+        ).to_numpy(float)
         blended, diagnostics = blend_candidate_posteriors(
             local,
             pair,
@@ -166,6 +167,7 @@ def agreement_adaptive_pair_summary(
     candidates: CandidateFrame | pd.DataFrame,
     *,
     output_score_column: str = DEFAULT_OUTPUT_SCORE_COLUMN,
+    pair_score_column: str = "candidate_pair_forward_backward_score",
 ) -> dict[str, Any]:
     """Return compact framewise agreement-adaptive posterior diagnostics."""
 
@@ -190,7 +192,7 @@ def agreement_adaptive_pair_summary(
     )
     adaptive_top = _top_candidate_ids(rows, output_score_column)
     local_top = _top_candidate_ids(rows, "candidate_pair_forward_backward_local_posterior")
-    pair_top = _top_candidate_ids(rows, "candidate_pair_forward_backward_score")
+    pair_top = _top_candidate_ids(rows, pair_score_column)
     return {
         "row_count": int(len(rows)),
         "sequence_count": int(rows["sequence_id"].astype(str).nunique()),
@@ -243,6 +245,7 @@ def write_agreement_adaptive_pair_outputs(
         "agreement_summary": agreement_adaptive_pair_summary(
             candidates,
             output_score_column=blend_cfg.output_score_column,
+            pair_score_column=pair_cfg.output_score_column,
         ),
         "truth_used_for_candidate_prior": False,
     }
@@ -287,7 +290,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--branch-switch-penalty", type=float, default=0.25)
     parser.add_argument("--track-continuation-bonus", type=float, default=0.5)
     parser.add_argument("--time-gap-penalty", type=float, default=0.0)
-    parser.add_argument("--pair-score-column", default="candidate_pair_forward_backward_score")
+    parser.add_argument(
+        "--pair-score-column",
+        default="candidate_pair_forward_backward_score",
+    )
     parser.add_argument("--min-pair-weight", type=float, default=0.0)
     parser.add_argument("--max-pair-weight", type=float, default=1.0)
     parser.add_argument("--confidence-power", type=float, default=1.0)
@@ -350,8 +356,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.replace_confidence and not augmented.rows.empty:
         rows = augmented.rows.copy()
-        rows["raw_confidence"] = pd.to_numeric(rows.get("confidence"), errors="coerce")
-        rows["confidence"] = pd.to_numeric(rows[blend_cfg.output_score_column], errors="coerce")
+        raw_confidence = rows.get(
+            "confidence",
+            pd.Series(np.nan, index=rows.index, dtype=float),
+        )
+        rows["raw_confidence"] = pd.to_numeric(raw_confidence, errors="coerce")
+        rows["confidence"] = pd.to_numeric(
+            rows[blend_cfg.output_score_column],
+            errors="coerce",
+        )
         augmented = CandidateFrame(normalize_candidate_columns(rows))
 
     extra_summary: dict[str, Any] = {
@@ -374,7 +387,10 @@ def main(argv: list[str] | None = None) -> int:
             config=CandidateMixtureMapConfig(
                 top_k=int(args.mixture_top_k),
                 score_column=blend_cfg.output_score_column,
-                fallback_score_columns=(pair_cfg.output_score_column, pair_cfg.score_column),
+                fallback_score_columns=(
+                    pair_cfg.output_score_column,
+                    pair_cfg.score_column,
+                ),
                 sigma_column=pair_cfg.sigma_column,
                 default_sigma_m=pair_cfg.default_sigma_m,
                 sigma_min_m=pair_cfg.sigma_min_m,
@@ -425,8 +441,9 @@ def _jensen_shannon_divergence(
     epsilon: float,
 ) -> float:
     mixture = 0.5 * (left + right)
-    left_kl = np.sum(left * (np.log(np.maximum(left, epsilon)) - np.log(mixture)))
-    right_kl = np.sum(right * (np.log(np.maximum(right, epsilon)) - np.log(mixture)))
+    log_mixture = np.log(np.maximum(mixture, epsilon))
+    left_kl = np.sum(left * (np.log(np.maximum(left, epsilon)) - log_mixture))
+    right_kl = np.sum(right * (np.log(np.maximum(right, epsilon)) - log_mixture))
     return float(max(0.0, 0.5 * (left_kl + right_kl)))
 
 
@@ -538,7 +555,10 @@ def _descending_ranks(values: np.ndarray) -> np.ndarray:
 
 
 def _candidate_rows(candidates: CandidateFrame | pd.DataFrame) -> pd.DataFrame:
-    rows = candidates.rows.copy() if isinstance(candidates, CandidateFrame) else pd.DataFrame(candidates)
+    if isinstance(candidates, CandidateFrame):
+        rows = candidates.rows.copy()
+    else:
+        rows = pd.DataFrame(candidates)
     return normalize_candidate_columns(rows.copy())
 
 
