@@ -1,15 +1,11 @@
-"""Adapt the MMUAD hypothesis-group budget to framewise posterior mass.
+"""Posterior-mass adaptive hypothesis-group selection for MMUAD mixture-MAP.
 
-A fixed group top-K spends the same candidate budget on easy and ambiguous
-frames.  This module estimates a state-independent posterior over physical
-hypothesis groups from the maintained score/uncertainty unary and retains the
-smallest number of groups whose cumulative posterior reaches a configurable
-mass.  The budget is bounded by train-selectable minimum and maximum values.
-
-The selected groups are still ordered with the maintained spatial-diversity
-selector, and the resulting rows are passed to the origin-group-corrected
-robust candidate-mixture MAP smoother.  Truth is optional and is used only by
-the downstream metric reporter.
+Fixed group top-K spends the same budget on confident and ambiguous frames.
+This module forms a state-independent posterior from the maintained
+score/uncertainty unary and keeps the smallest bounded group count whose
+cumulative mass reaches a train-selectable target.  The maintained spatial
+selector then chooses that many distinct groups before grouped robust
+mixture-MAP.  Truth is optional and is only used for downstream metrics.
 """
 
 from __future__ import annotations
@@ -67,8 +63,6 @@ class PosteriorMassGroupTopKConfig:
 
 @dataclass(frozen=True)
 class PosteriorMassGroupTopKCandidateMixtureResult:
-    """Adaptive selected candidates, grouped mixture output, and diagnostics."""
-
     selected_candidates: pd.DataFrame
     grouped_result: GroupedCandidateMixtureMapResult
     selection_summary: dict[str, Any]
@@ -81,13 +75,7 @@ def select_posterior_mass_hypothesis_group_topk(
     group_config: HypothesisGroupConfig | None = None,
     selection_config: PosteriorMassGroupTopKConfig | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Select a frame-adaptive number of physical hypothesis groups.
-
-    The budget is computed before spatial diversification.  It is the smallest
-    bounded group count whose descending unary-posterior mass reaches
-    ``target_posterior_mass``.  A small uniform blend prevents a single
-    overconfident score from collapsing the budget completely.
-    """
+    """Select an adaptive number of physical hypothesis groups per frame."""
 
     mixture_config = mixture_config or CandidateMixtureMapConfig()
     group_config = group_config or HypothesisGroupConfig()
@@ -106,6 +94,7 @@ def select_posterior_mass_hypothesis_group_topk(
             selected,
             selection_config=selection_config,
             enabled=enabled,
+            frame_summaries=_empty_frame_summaries(),
         )
 
     prepared, _, grouping_summary = prepare_hypothesis_group_candidates(
@@ -118,28 +107,24 @@ def select_posterior_mass_hypothesis_group_topk(
         prepared,
         mixture_config=mixture_config,
     )
-    # Reuse the maintained spatial selector's expected utility column name.
     prepared["mixture_spatial_group_candidate_utility"] = prepared[
         "mixture_mass_group_candidate_utility"
     ]
 
     selected_frames: list[pd.DataFrame] = []
-    frame_summaries: list[dict[str, Any]] = []
+    frame_records: list[dict[str, Any]] = []
     for (sequence_id, time_s), prepared_frame in prepared.groupby(
-        ["sequence_id", "time_s"],
-        sort=True,
-        dropna=False,
+        ["sequence_id", "time_s"], sort=True, dropna=False
     ):
         groups = _build_group_table(
             prepared_frame,
             score_mode=selection_config.group_score_mode,
         )
         budget = _posterior_mass_budget(groups, selection_config=selection_config)
-        original_ids = pd.to_numeric(
-            prepared_frame["mixture_group_input_row"],
-            errors="raise",
+        input_rows = pd.to_numeric(
+            prepared_frame["mixture_group_input_row"], errors="raise"
         ).astype(int)
-        original_frame = original.iloc[original_ids.to_numpy()].copy().reset_index(drop=True)
+        original_frame = original.iloc[input_rows.to_numpy()].copy().reset_index(drop=True)
         spatial_config = SpatialHypothesisGroupTopKConfig(
             group_top_k=int(budget["selected_group_budget"]),
             max_siblings_per_group=int(selection_config.max_siblings_per_group),
@@ -154,7 +139,7 @@ def select_posterior_mass_hypothesis_group_topk(
             group_config=group_config,
             selection_config=spatial_config,
         )
-        for column, value in {
+        diagnostics = {
             "mixture_mass_group_topk_selected": True,
             "mixture_mass_group_budget": int(budget["selected_group_budget"]),
             "mixture_mass_group_available_groups": int(budget["available_groups"]),
@@ -169,10 +154,11 @@ def select_posterior_mass_hypothesis_group_topk(
                 budget["normalized_entropy"]
             ),
             "mixture_mass_group_effective_count": float(budget["effective_count"]),
-        }.items():
+        }
+        for column, value in diagnostics.items():
             selected_frame[column] = value
         selected_frames.append(selected_frame)
-        frame_summaries.append(
+        frame_records.append(
             {
                 "sequence_id": str(sequence_id),
                 "time_s": float(time_s),
@@ -182,8 +168,7 @@ def select_posterior_mass_hypothesis_group_topk(
             }
         )
 
-    selected = pd.concat(selected_frames, ignore_index=True)
-    selected = selected.sort_values(
+    selected = pd.concat(selected_frames, ignore_index=True).sort_values(
         [
             "sequence_id",
             "time_s",
@@ -192,12 +177,13 @@ def select_posterior_mass_hypothesis_group_topk(
         ],
         kind="mergesort",
     ).reset_index(drop=True)
+    frame_summaries = pd.DataFrame.from_records(frame_records)
     summary = _selection_summary(
         original,
         selected,
         selection_config=selection_config,
         enabled=True,
-        frame_summaries=pd.DataFrame.from_records(frame_summaries),
+        frame_summaries=frame_summaries,
     )
     summary["hypothesis_grouping"] = grouping_summary
     return selected, summary
@@ -212,50 +198,41 @@ def run_posterior_mass_group_topk_candidate_mixture_map(
     initial_estimates: pd.DataFrame | None = None,
     truth: pd.DataFrame | None = None,
 ) -> PosteriorMassGroupTopKCandidateMixtureResult:
-    """Run adaptive group selection followed by grouped candidate-mixture MAP."""
+    """Run adaptive group selection and grouped robust mixture-MAP."""
 
     mixture_config = mixture_config or CandidateMixtureMapConfig()
     group_config = group_config or HypothesisGroupConfig()
     selection_config = selection_config or PosteriorMassGroupTopKConfig()
-    selected, selection_summary = select_posterior_mass_hypothesis_group_topk(
+    selected, summary = select_posterior_mass_hypothesis_group_topk(
         candidates,
         mixture_config=mixture_config,
         group_config=group_config,
         selection_config=selection_config,
     )
-    effective_mixture_config = mixture_config
+    effective_config = mixture_config
     if int(selection_config.max_group_top_k) > 0:
-        # Selection has already enforced the finite group budget.  A second
-        # row-level top-K would again let sibling multiplicity crowd the pool.
-        effective_mixture_config = replace(mixture_config, top_k=0)
+        effective_config = replace(mixture_config, top_k=0)
     grouped = run_grouped_candidate_mixture_map(
         selected,
-        mixture_config=effective_mixture_config,
+        mixture_config=effective_config,
         group_config=group_config,
         initial_estimates=initial_estimates,
         truth=truth,
     )
-    return PosteriorMassGroupTopKCandidateMixtureResult(
-        selected_candidates=selected,
-        grouped_result=grouped,
-        selection_summary=selection_summary,
-    )
+    return PosteriorMassGroupTopKCandidateMixtureResult(selected, grouped, summary)
 
 
 def write_posterior_mass_group_topk_outputs(
     result: PosteriorMassGroupTopKCandidateMixtureResult,
     output_dir: Path,
 ) -> dict[str, Path]:
-    """Write adaptive group-selection and grouped-mixture artifacts."""
-
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     selected_path = output / "mmuad_posterior_mass_group_topk_candidates.csv"
     summary_path = output / "mmuad_posterior_mass_group_topk_summary.json"
     result.selected_candidates.to_csv(selected_path, index=False)
     summary_path.write_text(
-        json.dumps(_jsonable(result.selection_summary), indent=2),
-        encoding="utf-8",
+        json.dumps(_jsonable(result.selection_summary), indent=2), encoding="utf-8"
     )
     paths = write_grouped_candidate_mixture_outputs(result.grouped_result, output)
     paths["posterior_mass_group_topk_candidates_csv"] = selected_path
@@ -290,9 +267,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sigma-min-m", type=float, default=1.0)
     parser.add_argument("--sigma-max-m", type=float, default=30.0)
     parser.add_argument(
-        "--score-normalization",
-        choices=SCORE_NORMALIZATION_CHOICES,
-        default="minmax",
+        "--score-normalization", choices=SCORE_NORMALIZATION_CHOICES, default="minmax"
     )
     parser.add_argument("--score-weight", type=float, default=1.0)
     parser.add_argument("--temperature", type=float, default=1.0)
@@ -308,31 +283,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-balance", type=float, default=0.0)
     parser.add_argument("--responsibility-floor", type=float, default=0.0)
     parser.add_argument(
-        "--initialization",
-        choices=INITIALIZATION_CHOICES,
-        default="uncertainty-top1",
+        "--initialization", choices=INITIALIZATION_CHOICES, default="uncertainty-top1"
     )
     parser.add_argument("--hypothesis-group-column")
+    parser.add_argument("--hypothesis-group-correction-strength", type=float, default=1.0)
     parser.add_argument(
-        "--hypothesis-group-correction-strength",
-        type=float,
-        default=1.0,
-    )
-    parser.add_argument(
-        "--missing-hypothesis-group-policy",
-        choices=("unique", "error"),
-        default="unique",
+        "--missing-hypothesis-group-policy", choices=("unique", "error"), default="unique"
     )
     args = parser.parse_args(argv)
 
-    fallback_columns = tuple(args.fallback_score_column) or (
-        "ranker_score",
-        "confidence",
-    )
+    fallback = tuple(args.fallback_score_column) or ("ranker_score", "confidence")
     mixture_config = CandidateMixtureMapConfig(
         top_k=args.row_top_k_when_disabled,
         score_column=args.score_column,
-        fallback_score_columns=fallback_columns,
+        fallback_score_columns=fallback,
         sigma_column=args.sigma_column,
         default_sigma_m=args.default_sigma_m,
         sigma_min_m=args.sigma_min_m,
@@ -371,22 +335,20 @@ def main(argv: list[str] | None = None) -> int:
         diversity_cap_m=args.diversity_cap_m,
     )
     candidates = load_candidate_file(args.candidates_csv).rows
-    initial_estimates = (
+    initial = (
         None
         if args.initial_estimates_csv is None
         else read_estimate_csv(args.initial_estimates_csv)
     )
     truth = (
-        None
-        if args.truth_csv is None
-        else load_evaluation_truth_file(args.truth_csv).rows
+        None if args.truth_csv is None else load_evaluation_truth_file(args.truth_csv).rows
     )
     result = run_posterior_mass_group_topk_candidate_mixture_map(
         candidates,
         mixture_config=mixture_config,
         group_config=group_config,
         selection_config=selection_config,
-        initial_estimates=initial_estimates,
+        initial_estimates=initial,
         truth=truth,
     )
     paths = write_posterior_mass_group_topk_outputs(result, args.output_dir)
@@ -398,8 +360,7 @@ def main(argv: list[str] | None = None) -> int:
         f"{result.selection_summary.get('selected_group_budget_mean')}"
     )
     pooled = result.grouped_result.mixture_result.summary.get("metrics", {}).get(
-        "pooled",
-        {},
+        "pooled", {}
     )
     if pooled.get("rmse_3d_m") is not None:
         print(f"rmse_3d_m={pooled['rmse_3d_m']}")
@@ -424,39 +385,32 @@ def _posterior_mass_budget(
             "effective_count": 0.0,
         }
     logits = pd.to_numeric(
-        groups["mixture_spatial_group_score"],
-        errors="coerce",
+        groups["mixture_spatial_group_score"], errors="coerce"
     ).to_numpy(float)
     probabilities = _softmax_probabilities(
-        logits,
-        temperature=selection_config.posterior_temperature,
+        logits, temperature=selection_config.posterior_temperature
     )
-    uniform_blend = float(selection_config.uniform_posterior_blend)
-    probabilities = (1.0 - uniform_blend) * probabilities + uniform_blend / count
-    order = np.argsort(-probabilities, kind="mergesort")
-    sorted_probabilities = probabilities[order]
+    blend = float(selection_config.uniform_posterior_blend)
+    probabilities = (1.0 - blend) * probabilities + blend / count
+    sorted_probabilities = np.sort(probabilities)[::-1]
     cumulative = np.cumsum(sorted_probabilities)
     required = int(
         np.searchsorted(
-            cumulative,
-            float(selection_config.target_posterior_mass),
-            side="left",
+            cumulative, float(selection_config.target_posterior_mass), side="left"
         )
         + 1
     )
     lower = min(int(selection_config.min_group_top_k), count)
     upper = min(int(selection_config.max_group_top_k), count)
-    selected_budget = min(max(required, lower), upper)
-    retained_mass = float(cumulative[selected_budget - 1])
-    entropy = _normalized_entropy(probabilities)
-    effective_count = float(np.exp(_entropy(probabilities)))
+    budget = min(max(required, lower), upper)
+    entropy = _entropy(probabilities)
     return {
         "available_groups": count,
-        "selected_group_budget": int(selected_budget),
-        "retained_posterior_mass": retained_mass,
+        "selected_group_budget": int(budget),
+        "retained_posterior_mass": float(cumulative[budget - 1]),
         "top1_posterior": float(sorted_probabilities[0]),
-        "normalized_entropy": entropy,
-        "effective_count": effective_count,
+        "normalized_entropy": float(entropy / np.log(count)) if count > 1 else 0.0,
+        "effective_count": float(np.exp(entropy)),
     }
 
 
@@ -466,8 +420,7 @@ def _softmax_probabilities(values: np.ndarray, *, temperature: float) -> np.ndar
     if not finite.any():
         return np.full(len(logits), 1.0 / max(len(logits), 1), dtype=float)
     floor = float(np.min(logits[finite])) - 50.0
-    logits = np.where(finite, logits, floor)
-    scaled = logits / float(temperature)
+    scaled = np.where(finite, logits, floor) / float(temperature)
     scaled -= float(np.max(scaled))
     weights = np.exp(np.clip(scaled, -700.0, 0.0))
     total = float(np.sum(weights))
@@ -477,16 +430,9 @@ def _softmax_probabilities(values: np.ndarray, *, temperature: float) -> np.ndar
 
 
 def _entropy(probabilities: np.ndarray) -> float:
-    probabilities = np.asarray(probabilities, dtype=float)
-    positive = probabilities[probabilities > 0.0]
+    positive = np.asarray(probabilities, dtype=float)
+    positive = positive[positive > 0.0]
     return float(-np.sum(positive * np.log(positive))) if positive.size else 0.0
-
-
-def _normalized_entropy(probabilities: np.ndarray) -> float:
-    count = int(len(probabilities))
-    if count <= 1:
-        return 0.0
-    return float(_entropy(probabilities) / np.log(count))
 
 
 def _validate_selection_config(config: PosteriorMassGroupTopKConfig) -> None:
@@ -494,7 +440,7 @@ def _validate_selection_config(config: PosteriorMassGroupTopKConfig) -> None:
     maximum = int(config.max_group_top_k)
     if maximum == 0:
         if minimum != 0:
-            raise ValueError("min_group_top_k must be zero when adaptive selection is disabled")
+            raise ValueError("min_group_top_k must be zero when selection is disabled")
     elif minimum <= 0 or maximum < minimum:
         raise ValueError("require 1 <= min_group_top_k <= max_group_top_k")
     if not 0.0 < float(config.target_posterior_mass) <= 1.0:
@@ -515,27 +461,34 @@ def _validate_selection_config(config: PosteriorMassGroupTopKConfig) -> None:
         raise ValueError("diversity_cap_m must be non-negative")
 
 
+def _empty_frame_summaries() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "sequence_id",
+            "time_s",
+            "input_rows",
+            "selected_rows",
+            "available_groups",
+            "selected_group_budget",
+            "retained_posterior_mass",
+            "top1_posterior",
+            "normalized_entropy",
+            "effective_count",
+        ]
+    )
+
+
 def _selection_summary(
     original: pd.DataFrame,
     selected: pd.DataFrame,
     *,
     selection_config: PosteriorMassGroupTopKConfig,
     enabled: bool,
-    frame_summaries: pd.DataFrame | None = None,
+    frame_summaries: pd.DataFrame,
 ) -> dict[str, Any]:
-    frame_summaries = frame_summaries if frame_summaries is not None else pd.DataFrame()
-    budgets = pd.to_numeric(
-        frame_summaries.get("selected_group_budget"),
-        errors="coerce",
-    )
-    retained = pd.to_numeric(
-        frame_summaries.get("retained_posterior_mass"),
-        errors="coerce",
-    )
-    entropy = pd.to_numeric(
-        frame_summaries.get("normalized_entropy"),
-        errors="coerce",
-    )
+    budgets = _numeric_column(frame_summaries, "selected_group_budget")
+    retained = _numeric_column(frame_summaries, "retained_posterior_mass")
+    entropy = _numeric_column(frame_summaries, "normalized_entropy")
     return {
         "schema": "raft-uav-mmuad-posterior-mass-group-topk-v1",
         "enabled": bool(enabled),
@@ -547,40 +500,37 @@ def _selection_summary(
         )
         if not original.empty
         else 0,
-        "selected_group_budget_mean": _safe_mean(budgets),
-        "selected_group_budget_p50": _safe_quantile(budgets, 0.50),
-        "selected_group_budget_p95": _safe_quantile(budgets, 0.95),
-        "selected_group_budget_min": _safe_min(budgets),
-        "selected_group_budget_max": _safe_max(budgets),
-        "retained_posterior_mass_mean": _safe_mean(retained),
-        "normalized_entropy_mean": _safe_mean(entropy),
+        "selected_group_budget_mean": _safe_stat(budgets, "mean"),
+        "selected_group_budget_p50": _safe_stat(budgets, "quantile", 0.50),
+        "selected_group_budget_p95": _safe_stat(budgets, "quantile", 0.95),
+        "selected_group_budget_min": _safe_stat(budgets, "min"),
+        "selected_group_budget_max": _safe_stat(budgets, "max"),
+        "retained_posterior_mass_mean": _safe_stat(retained, "mean"),
+        "normalized_entropy_mean": _safe_stat(entropy, "mean"),
         "frame_summaries": frame_summaries.to_dict(orient="records"),
         "truth_used_for_group_budget": False,
     }
 
 
-def _safe_mean(values: pd.Series) -> float:
-    finite = pd.to_numeric(values, errors="coerce")
-    finite = finite.loc[np.isfinite(finite)]
-    return float(finite.mean()) if len(finite) else float("nan")
+def _numeric_column(rows: pd.DataFrame, column: str) -> pd.Series:
+    if column not in rows.columns:
+        return pd.Series(dtype=float)
+    values = pd.to_numeric(rows[column], errors="coerce")
+    return values.loc[np.isfinite(values)]
 
 
-def _safe_quantile(values: pd.Series, quantile: float) -> float:
-    finite = pd.to_numeric(values, errors="coerce")
-    finite = finite.loc[np.isfinite(finite)]
-    return float(finite.quantile(float(quantile))) if len(finite) else float("nan")
-
-
-def _safe_min(values: pd.Series) -> float:
-    finite = pd.to_numeric(values, errors="coerce")
-    finite = finite.loc[np.isfinite(finite)]
-    return float(finite.min()) if len(finite) else float("nan")
-
-
-def _safe_max(values: pd.Series) -> float:
-    finite = pd.to_numeric(values, errors="coerce")
-    finite = finite.loc[np.isfinite(finite)]
-    return float(finite.max()) if len(finite) else float("nan")
+def _safe_stat(values: pd.Series, operation: str, argument: float | None = None) -> float:
+    if values.empty:
+        return float("nan")
+    if operation == "mean":
+        return float(values.mean())
+    if operation == "quantile":
+        return float(values.quantile(float(argument)))
+    if operation == "min":
+        return float(values.min())
+    if operation == "max":
+        return float(values.max())
+    raise ValueError(f"unsupported statistic operation={operation!r}")
 
 
 def _jsonable(value: Any) -> Any:
