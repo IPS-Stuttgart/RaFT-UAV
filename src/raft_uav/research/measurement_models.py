@@ -123,7 +123,8 @@ def fit_linear_radar_bias_model(
 ) -> LinearRadarBiasModel:
     """Fit a LOFO-safe linear radar spatial-bias model."""
 
-    x = radar_geometry_feature_matrix(examples, tuple(feature_names))
+    resolved_feature_names = tuple(feature_names)
+    x = radar_geometry_feature_matrix(examples, resolved_feature_names)
     y = examples.loc[:, list(residual_columns)].to_numpy(dtype=float)
     keep = np.isfinite(x).all(axis=1) & np.isfinite(y).all(axis=1)
     if not np.any(keep):
@@ -131,9 +132,11 @@ def fit_linear_radar_bias_model(
     x = x[keep]
     y = y[keep]
     penalty = float(ridge_lambda) * np.eye(x.shape[1])
-    penalty[0, 0] = 0.0
+    for index, name in enumerate(resolved_feature_names):
+        if name == "intercept":
+            penalty[index, index] = 0.0
     coefficients = np.linalg.solve(x.T @ x + penalty, x.T @ y)
-    return LinearRadarBiasModel(tuple(feature_names), coefficients)
+    return LinearRadarBiasModel(resolved_feature_names, coefficients)
 
 
 def apply_linear_radar_bias_model(frame: pd.DataFrame, model: LinearRadarBiasModel) -> pd.DataFrame:
