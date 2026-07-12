@@ -60,6 +60,15 @@ def fit_temperature_calibrator(
 ) -> tuple[ClassProbabilityCalibrator, dict[str, Any]]:
     """Fit a scalar temperature from train-only out-of-fold predictions."""
 
+    epsilon = _positive_finite_float(epsilon, "epsilon")
+    min_temperature = _positive_finite_float(min_temperature, "min_temperature")
+    max_temperature = _positive_finite_float(max_temperature, "max_temperature")
+    ece_bins = _positive_int(ece_bins, "ece_bins")
+    lower = max(float(min_temperature), 1.0e-4)
+    upper = float(max_temperature)
+    if upper <= lower:
+        raise ValueError("max_temperature must be greater than min_temperature")
+
     rows = pd.DataFrame(predictions).copy()
     sequence_column = resolve_sequence_column(rows, sequence_column)
     columns, class_labels = resolve_probability_columns(rows, probability_columns)
@@ -80,9 +89,6 @@ def fit_temperature_calibrator(
     fit_truth = truth_indices.loc[valid].astype(int).to_numpy()
     if len(np.unique(fit_truth)) < 2:
         raise ValueError("temperature calibration requires at least two classes")
-
-    lower = max(float(min_temperature), 1.0e-4)
-    upper = max(float(max_temperature), lower + 1.0e-4)
 
     def objective(temperature: float) -> float:
         calibrated = temperature_scale_probabilities(
@@ -217,9 +223,8 @@ def temperature_scale_probabilities(
     values = np.asarray(probabilities, dtype=float)
     if values.ndim != 2 or values.shape[1] < 2:
         raise ValueError("probabilities must be a two-dimensional multi-class matrix")
-    temperature = float(temperature)
-    if not np.isfinite(temperature) or temperature <= 0.0:
-        raise ValueError("temperature must be positive and finite")
+    temperature = _positive_finite_float(temperature, "temperature")
+    epsilon = _positive_finite_float(epsilon, "epsilon")
     values = np.clip(values, float(epsilon), 1.0)
     values = values / values.sum(axis=1, keepdims=True)
     logits = np.log(values) / temperature
@@ -239,6 +244,8 @@ def classification_calibration_metrics(
 
     values = np.asarray(probabilities, dtype=float)
     truth = np.asarray(truth_indices, dtype=int)
+    ece_bins = _positive_int(ece_bins, "ece_bins")
+    epsilon = _positive_finite_float(epsilon, "epsilon")
     predictions = np.argmax(values, axis=1)
     one_hot = np.eye(values.shape[1], dtype=float)[truth]
     return {
@@ -258,6 +265,7 @@ def multiclass_nll(
 ) -> float:
     values = np.asarray(probabilities, dtype=float)
     truth = np.asarray(truth_indices, dtype=int)
+    epsilon = _positive_finite_float(epsilon, "epsilon")
     selected = values[np.arange(len(values)), truth]
     return float(-np.mean(np.log(np.clip(selected, float(epsilon), 1.0))))
 
@@ -272,7 +280,7 @@ def expected_calibration_error(
     truth = np.asarray(truth_indices, dtype=int)
     confidence = np.max(values, axis=1)
     correct = np.argmax(values, axis=1) == truth
-    edges = np.linspace(0.0, 1.0, max(int(bins), 1) + 1)
+    edges = np.linspace(0.0, 1.0, _positive_int(bins, "bins") + 1)
     error = 0.0
     for index in range(len(edges) - 1):
         lower = edges[index]
@@ -295,6 +303,7 @@ def probability_entropy(
     *,
     epsilon: float = 1.0e-9,
 ) -> np.ndarray:
+    epsilon = _positive_finite_float(epsilon, "epsilon")
     values = np.clip(np.asarray(probabilities, dtype=float), float(epsilon), 1.0)
     return -np.sum(values * np.log(values), axis=1)
 
@@ -305,6 +314,7 @@ def normalized_probabilities(
     *,
     epsilon: float = 1.0e-9,
 ) -> np.ndarray:
+    epsilon = _positive_finite_float(epsilon, "epsilon")
     values = rows[list(columns)].apply(pd.to_numeric, errors="coerce").to_numpy(float)
     finite = np.isfinite(values).all(axis=1)
     positive_sum = np.nansum(np.maximum(values, 0.0), axis=1) > 0.0
@@ -419,7 +429,7 @@ def load_calibrator(path: Path) -> ClassProbabilityCalibrator:
     return ClassProbabilityCalibrator(
         schema=str(payload["schema"]),
         method=str(payload["method"]),
-        temperature=float(payload["temperature"]),
+        temperature=_positive_finite_float(payload["temperature"], "temperature"),
         class_labels=[str(value) for value in payload["class_labels"]],
         source_probability_columns=[
             str(value) for value in payload["source_probability_columns"]
@@ -427,7 +437,7 @@ def load_calibrator(path: Path) -> ClassProbabilityCalibrator:
         output_prefix=str(
             payload.get("output_prefix", "calibrated_class_prob_")
         ),
-        epsilon=float(payload.get("epsilon", 1.0e-9)),
+        epsilon=_positive_finite_float(payload.get("epsilon", 1.0e-9), "epsilon"),
     )
 
 
@@ -443,6 +453,20 @@ def _class_label_sort_key(label: str) -> tuple[int, int | str]:
         return (0, int(label))
     except ValueError:
         return (1, str(label))
+
+
+def _positive_finite_float(value: object, name: str) -> float:
+    number = float(value)
+    if not np.isfinite(number) or number <= 0.0:
+        raise ValueError(f"{name} must be positive and finite")
+    return number
+
+
+def _positive_int(value: object, name: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise ValueError(f"{name} must be positive")
+    return number
 
 
 def _read_csv_as_strings(path: Path) -> pd.DataFrame:
