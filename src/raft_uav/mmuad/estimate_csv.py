@@ -11,7 +11,12 @@ import pandas as pd
 _GRID_MODULE = "raft_uav.mmuad.track5_estimate_ensemble_grid"
 _UNCERTAINTY_ENSEMBLE_MODULE = "raft_uav.mmuad.track5_uncertainty_ensemble"
 _UNCERTAINTY_ENSEMBLE_READER = "_read_estimate_csv_preserving_sequence_id"
-_ORIGINAL_PANDAS_READ_CSV = pd.read_csv
+_ORIGINAL_READER_ATTRIBUTE = "__raft_uav_original_read_csv__"
+_ORIGINAL_PANDAS_READ_CSV = getattr(
+    pd.read_csv,
+    _ORIGINAL_READER_ATTRIBUTE,
+    pd.read_csv,
+)
 
 
 def read_estimate_csv(path: Path) -> pd.DataFrame:
@@ -57,6 +62,11 @@ def _read_csv_with_track5_estimate_grid_guard(*args: Any, **kwargs: Any) -> pd.D
 
 
 def _install_track5_estimate_grid_guard() -> None:
+    setattr(
+        _read_csv_with_track5_estimate_grid_guard,
+        _ORIGINAL_READER_ATTRIBUTE,
+        _ORIGINAL_PANDAS_READ_CSV,
+    )
     if pd.read_csv is not _read_csv_with_track5_estimate_grid_guard:
         pd.read_csv = _read_csv_with_track5_estimate_grid_guard
 
