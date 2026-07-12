@@ -70,8 +70,11 @@ def _candidate_unary_utility(
     )
 
 
-# Export the maintained implementation, then replace the helper used by its
-# public selection functions.  Those functions resolve this global at runtime.
+# Preserve the correction before exporting the legacy implementation.  The
+# export includes a helper with the same name, so reading the global name after
+# ``globals().update(...)`` would otherwise reinstall the buggy legacy helper.
+_FIXED_CANDIDATE_UNARY_UTILITY = _candidate_unary_utility
+
 globals().update(
     {
         name: getattr(_IMPL, name)
@@ -79,7 +82,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
-_IMPL._candidate_unary_utility = _candidate_unary_utility
-globals()["_candidate_unary_utility"] = _candidate_unary_utility
+_IMPL._candidate_unary_utility = _FIXED_CANDIDATE_UNARY_UTILITY
+globals()["_candidate_unary_utility"] = _FIXED_CANDIDATE_UNARY_UTILITY
 
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
