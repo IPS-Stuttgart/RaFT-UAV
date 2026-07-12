@@ -148,8 +148,9 @@ def _initial_positions(
 ) -> np.ndarray:
     if initial is not None and not initial.empty:
         _require_columns(initial, {"time_s", *PositionColumns}, "initial")
-        init_times = initial["time_s"].to_numpy(dtype=float)
-        init_xyz = initial.loc[:, PositionColumns].to_numpy(dtype=float)
+        ordered_initial = initial.sort_values("time_s").reset_index(drop=True)
+        init_times = ordered_initial["time_s"].to_numpy(dtype=float)
+        init_xyz = ordered_initial.loc[:, PositionColumns].to_numpy(dtype=float)
         return np.column_stack([np.interp(times, init_times, init_xyz[:, axis]) for axis in range(3)])
     grouped = measurements.groupby("time_s", sort=True)[list(PositionColumns)].median()
     grouped_times = grouped.index.to_numpy(dtype=float)
