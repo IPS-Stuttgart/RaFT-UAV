@@ -26,6 +26,9 @@ jobs:
             tests/test_mmuad_candidate_mixture_map.py \
             tests/test_mmuad_candidate_mixture_map_sequence_ids.py \
             tests/test_mmuad_candidate_mixture_map_sequence_pool_selector.py \
+            tests/test_mmuad_candidate_mixture_sequence_pool_initialization.py \
+            tests/test_mmuad_candidate_mixture_group_spatial_topk.py \
+            tests/test_mmuad_spatial_group_invalid_sigma.py \
             -vv --tb=long 2>&1 | tee candidate_mixture_test.log
           status=${PIPESTATUS[0]}
           echo "status=$status" >> "$GITHUB_OUTPUT"
