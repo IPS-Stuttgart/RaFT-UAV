@@ -70,8 +70,10 @@ def _candidate_unary_utility(
     )
 
 
-# Export the maintained implementation, then replace the helper used by its
-# public selection functions.  Those functions resolve this global at runtime.
+# Patch the loaded implementation before exporting its symbols.  Exporting first
+# would overwrite this module's replacement helper with the legacy one and make
+# the compatibility fix a no-op.
+_IMPL._candidate_unary_utility = _candidate_unary_utility
 globals().update(
     {
         name: getattr(_IMPL, name)
@@ -79,7 +81,5 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
-_IMPL._candidate_unary_utility = _candidate_unary_utility
-globals()["_candidate_unary_utility"] = _candidate_unary_utility
 
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
