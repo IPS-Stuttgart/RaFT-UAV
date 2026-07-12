@@ -10,6 +10,18 @@ import pandas as pd
 from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
 
 
+_ESTIMATE_COLUMNS = (
+    "time_s",
+    "source",
+    "east_m",
+    "north_m",
+    "up_m",
+    "v_east_mps",
+    "v_north_mps",
+    "v_up_mps",
+)
+
+
 def tracking_metrics(
     *,
     flight_name: str,
@@ -71,4 +83,8 @@ def records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
                 "v_up_mps": state[5],
             }
         )
-    return pd.DataFrame.from_records(rows).sort_values("time_s").reset_index(drop=True)
+    return (
+        pd.DataFrame.from_records(rows, columns=_ESTIMATE_COLUMNS)
+        .sort_values("time_s")
+        .reset_index(drop=True)
+    )
