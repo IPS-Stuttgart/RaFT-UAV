@@ -48,6 +48,13 @@ jobs:
           name: pytest-first-failure
           path: pytest-first-failure.log
 
+      - name: Upload source snapshot
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pair-group-source
+          path: src/raft_uav/mmuad/candidate_pair_group_correction.py
+
       - name: Preserve pytest result
         if: steps.pytest.outcome == 'failure'
         run: exit 1
