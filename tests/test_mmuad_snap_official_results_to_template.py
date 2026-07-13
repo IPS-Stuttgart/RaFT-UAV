@@ -65,6 +65,55 @@ def test_snap_official_results_to_template_interpolates_and_keeps_sequence_class
     assert midpoint_method == "linear"
 
 
+def test_snap_official_results_to_template_ignores_nonfinite_source_timestamps() -> None:
+    results = pd.concat(
+        [
+            _results(),
+            pd.DataFrame(
+                {
+                    "Sequence": ["seq001", "seq001"],
+                    "Timestamp": [float("inf"), float("-inf")],
+                    "Position": ["(100,100,100)", "(-100,-100,-100)"],
+                    "Classification": [1, 1],
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    snapped, diagnostics = snapper.snap_official_results_to_template(
+        results,
+        _template(),
+        classification_policy="sequence-mode",
+    )
+
+    seq001 = snapped.loc[snapped["Sequence"] == "seq001"]
+    assert seq001["Classification"].tolist() == [2, 2, 2]
+    assert diagnostics.loc[diagnostics["Sequence"] == "seq001", "source_row_count"].tolist() == [3, 3, 3]
+
+
+def test_snap_official_results_to_template_ignores_nonfinite_template_timestamps() -> None:
+    template = pd.concat(
+        [
+            _template(),
+            pd.DataFrame(
+                {
+                    "Sequence": ["seq001", "seq002"],
+                    "Timestamp": [float("inf"), float("-inf")],
+                    "Position": ["(0,0,0)", "(0,0,0)"],
+                    "Classification": [0, 0],
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    snapped, diagnostics = snapper.snap_official_results_to_template(_results(), template)
+
+    assert snapped["Timestamp"].tolist() == [0.0, 5.0, 10.0, 2.0]
+    assert diagnostics["Timestamp"].tolist() == [0.0, 5.0, 10.0, 2.0]
+
+
 def test_snap_official_results_to_template_rejects_fractional_classification_labels() -> None:
     results = _results()
     results["Classification"] = results["Classification"].astype(object)
@@ -89,6 +138,15 @@ def test_snap_official_results_to_template_rejects_logical_classification_labels
     results.loc[0, "Classification"] = True
 
     with pytest.raises(ValueError, match="integer ids"):
+        snapper.snap_official_results_to_template(results, _template())
+
+
+def test_snap_official_results_to_template_rejects_nonfinite_classification_labels() -> None:
+    results = _results()
+    results["Classification"] = results["Classification"].astype(object)
+    results.loc[0, "Classification"] = float("inf")
+
+    with pytest.raises(ValueError, match="finite integer"):
         snapper.snap_official_results_to_template(results, _template())
 
 
