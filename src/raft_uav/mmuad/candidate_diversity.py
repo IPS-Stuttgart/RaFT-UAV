@@ -13,6 +13,22 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+_TRUE_TEXT = {"1", "true", "t", "yes", "y", "on"}
+_FALSE_TEXT = {
+    "0",
+    "false",
+    "f",
+    "no",
+    "n",
+    "off",
+    "",
+    "none",
+    "null",
+    "nan",
+    "<na>",
+    "nat",
+}
+
 
 def diversify_candidate_reservoir(
     rows: pd.DataFrame,
@@ -49,7 +65,10 @@ def diversify_candidate_reservoir(
     cap = max(int(max_candidates_per_frame), 1)
     for _, group in frame.groupby(["sequence_id", "time_s"], sort=False, dropna=False):
         group = group.copy()
-        protected = group["candidate_reservoir_protected"].fillna(False).astype(bool)
+        protected = _boolean_flags(
+            group["candidate_reservoir_protected"],
+            name="candidate_reservoir_protected",
+        )
         priority = protected if preserve_protected else pd.Series(False, index=group.index)
         order = group.assign(_protected=priority).sort_values(
             ["_protected", score_column], ascending=[False, False], kind="mergesort"
@@ -76,6 +95,44 @@ def diversify_candidate_reservoir(
         out["candidate_diversity_radius_m"] = radius
         outputs.append(out)
     return pd.concat(outputs, ignore_index=True) if outputs else frame.iloc[0:0].copy()
+
+
+def _boolean_flags(values: pd.Series, *, name: str) -> pd.Series:
+    """Parse native and serialized Boolean flags without string truthiness."""
+
+    return values.map(lambda value: _boolean_flag(value, name=name)).astype(bool)
+
+
+def _boolean_flag(value: object, *, name: str) -> bool:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if value is None:
+        return False
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return False
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _TRUE_TEXT:
+            return True
+        if text in _FALSE_TEXT:
+            return False
+        try:
+            numeric = float(text)
+        except ValueError as exc:
+            raise ValueError(f"cannot parse {name} value: {value!r}") from exc
+        if not np.isfinite(numeric):
+            raise ValueError(f"cannot parse {name} value: {value!r}")
+        return numeric != 0.0
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        numeric = float(value)
+        if not np.isfinite(numeric):
+            raise ValueError(f"cannot parse {name} value: {value!r}")
+        return numeric != 0.0
+    raise ValueError(f"cannot parse {name} value: {value!r}")
 
 
 def main(argv: list[str] | None = None) -> int:
