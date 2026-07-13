@@ -36,6 +36,10 @@ from raft_uav.io.aerpaw import (
 )
 from raft_uav.numeric import optional_float as _optional_float
 
+_TRUE_TEXT = {"1", "true", "t", "yes", "y", "on"}
+_FALSE_TEXT = {"0", "false", "f", "no", "n", "off"}
+_NULL_TEXT = {"", "none", "null", "nan", "na", "n/a"}
+
 
 def main(argv: list[str] | None = None) -> int:
     """Run a CV-or-IMM baseline on one AERPAW flight."""
@@ -368,7 +372,7 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
             "time_s": float(record["time_s"]),
             "source": str(record["source"]),
             "measurement_dim": int(record.get("measurement_dim", 0)),
-            "accepted": bool(record.get("accepted", True)),
+            "accepted": _bool_scalar(record.get("accepted", True), default=True),
             "update_action": str(record.get("update_action", "updated")),
             "nis": _optional_float(record.get("nis")),
             "gate_threshold": _optional_float(record.get("gate_threshold")),
@@ -446,7 +450,7 @@ def _metrics(
         dimensions=3,
     )
     source_counts = Counter(str(value) for value in estimate_frame["source"])
-    accepted_mask = estimate_frame["accepted"].astype(bool)
+    accepted_mask = _bool_series(estimate_frame["accepted"], default=True)
     return {
         "flight": flight_name,
         "tracker": {
@@ -499,6 +503,38 @@ def _inside_truth_window(frame: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFra
     truth_min = float(truth["time_s"].min())
     truth_max = float(truth["time_s"].max())
     return frame.loc[(frame["time_s"] >= truth_min) & (frame["time_s"] <= truth_max)].copy()
+
+
+def _bool_series(series: pd.Series, *, default: bool) -> pd.Series:
+    return series.map(lambda value: _bool_scalar(value, default=default)).astype(bool)
+
+
+def _bool_scalar(value: object, *, default: bool) -> bool:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if value is None:
+        return default
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return default
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _TRUE_TEXT:
+            return True
+        if text in _FALSE_TEXT:
+            return False
+        if text in _NULL_TEXT:
+            return default
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        try:
+            numeric = float(value)
+        except (OverflowError, TypeError, ValueError):
+            return default
+        return numeric != 0.0 if np.isfinite(numeric) else default
+    return bool(value)
 
 
 def _optional_str(value: object) -> str | None:
