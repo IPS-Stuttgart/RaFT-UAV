@@ -86,6 +86,40 @@ def test_spread_guard_search_selects_low_threshold_label_fallback(tmp_path: Path
     assert float(high_threshold["pose_mse_m2"]) > 0.0
 
 
+def test_spread_guard_search_materializes_generator_controls(tmp_path: Path) -> None:
+    trusted = tmp_path / "trusted.csv"
+    outlier = tmp_path / "outlier.csv"
+    _trusted_estimate().to_csv(trusted, index=False)
+    _outlier_estimate().to_csv(outlier, index=False)
+
+    grid, _ = search_track5_spread_guard_settings(
+        [
+            EstimateInput("trusted", trusted, 0.5),
+            EstimateInput("outlier", outlier, 0.5),
+        ],
+        template=_template(),
+        truth=_truth(),
+        spread_thresholds_m=(0.0, 100.0),
+        fallback_policies=(value for value in ("max-weight", "label")),
+        fallback_labels=(value for value in ("trusted", "outlier")),
+    )
+
+    actual = set(
+        grid[
+            ["spread_threshold_m", "fallback_policy", "fallback_label"]
+        ].itertuples(index=False, name=None)
+    )
+    expected = {
+        (0.0, "max-weight", ""),
+        (0.0, "label", "trusted"),
+        (0.0, "label", "outlier"),
+        (100.0, "max-weight", ""),
+        (100.0, "label", "trusted"),
+        (100.0, "label", "outlier"),
+    }
+    assert actual == expected
+
+
 def test_spread_guard_search_writes_best_submission(tmp_path: Path) -> None:
     trusted = tmp_path / "trusted.csv"
     outlier = tmp_path / "outlier.csv"
