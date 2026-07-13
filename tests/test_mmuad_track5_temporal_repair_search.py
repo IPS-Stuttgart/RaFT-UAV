@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from itertools import product
 import json
 from pathlib import Path
 import tomllib
@@ -50,6 +51,27 @@ def test_temporal_repair_search_selects_spike_repair_setting() -> None:
     no_repair = grid.loc[grid["max_speed_mps"] == 200.0].iloc[0]
     assert no_repair["repaired_row_count"] == 0
     assert no_repair["pose_mse_m2"] > 1000.0
+
+
+def test_temporal_repair_search_materializes_one_shot_grid_iterables() -> None:
+    max_speeds = (value for value in (50.0, 200.0))
+    interpolation_residuals = (value for value in (5.0, 10.0))
+    iterations = (value for value in (1, 2))
+
+    grid, _ = search_track5_temporal_repair_parameters(
+        _submission_rows(),
+        _truth_rows(),
+        max_speed_grid=max_speeds,
+        interpolation_residual_grid=interpolation_residuals,
+        iterations_grid=iterations,
+    )
+
+    actual = set(
+        grid[["max_speed_mps", "max_interpolation_residual_m", "iterations"]]
+        .itertuples(index=False, name=None)
+    )
+    expected = set(product((50.0, 200.0), (5.0, 10.0), (1, 2)))
+    assert actual == expected
 
 
 def test_temporal_repair_search_writes_best_artifacts(tmp_path: Path) -> None:
