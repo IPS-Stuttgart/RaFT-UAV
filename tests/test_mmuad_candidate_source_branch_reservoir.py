@@ -156,6 +156,32 @@ def test_source_branch_summary_reports_cell_recall() -> None:
     assert summary["source_branch_quota_selected_rows"] == 4
 
 
+def test_source_branch_summary_parses_csv_boolean_flags() -> None:
+    rows = _candidate_rows()
+    reservoir = build_source_branch_reservoir(
+        rows,
+        reservoir_config=_config(),
+        per_source_branch_top_n=1,
+    ).rows.copy()
+    reservoir["candidate_source_branch_quota_selected"] = [
+        "True",
+        "False",
+        "1",
+        "0",
+    ]
+    reservoir["candidate_source_branch_diversity_selected"] = [
+        "yes",
+        "no",
+        "null",
+        "2",
+    ]
+
+    summary = source_branch_reservoir_summary(rows, reservoir)
+
+    assert summary["source_branch_quota_selected_rows"] == 2
+    assert summary["source_branch_diversity_selected_rows"] == 2
+
+
 def test_source_branch_cli_writes_reservoir_summary_and_oracle_tables(tmp_path) -> None:
     candidate_csv = tmp_path / "candidates.csv"
     truth_csv = tmp_path / "truth.csv"
