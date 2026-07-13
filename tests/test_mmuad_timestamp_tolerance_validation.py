@@ -13,6 +13,7 @@ _INVALID_TIMESTAMP_TOLERANCES = (
     pytest.param(True, id="true"),
     pytest.param(False, id="false"),
     pytest.param(np.bool_(True), id="numpy-true"),
+    pytest.param(np.array(True), id="zero-dimensional-boolean-array"),
     pytest.param(np.array([0.1]), id="non-scalar-array"),
 )
 
