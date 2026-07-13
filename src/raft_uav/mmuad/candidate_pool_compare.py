@@ -414,11 +414,27 @@ def _add_mse_pair(
     candidate: str,
     prefix: str,
 ) -> None:
-    ref = pd.to_numeric(group.get(reference), errors="coerce") if reference in group else pd.Series(dtype=float)
-    cand = pd.to_numeric(group.get(candidate), errors="coerce") if candidate in group else pd.Series(dtype=float)
-    record[f"reference_{prefix}_mse"] = _mse(ref)
-    record[f"candidate_{prefix}_mse"] = _mse(cand)
-    record[f"{prefix}_mse_delta"] = record[f"candidate_{prefix}_mse"] - record[f"reference_{prefix}_mse"]
+    ref = (
+        pd.to_numeric(group.get(reference), errors="coerce")
+        if reference in group
+        else pd.Series(dtype=float)
+    )
+    cand = (
+        pd.to_numeric(group.get(candidate), errors="coerce")
+        if candidate in group
+        else pd.Series(dtype=float)
+    )
+    paired = pd.DataFrame({"reference": ref, "candidate": cand})
+    finite = np.isfinite(
+        paired[["reference", "candidate"]].to_numpy(dtype=float),
+    ).all(axis=1)
+    paired = paired.loc[finite]
+    record[f"{prefix}_paired_frame_count"] = int(len(paired))
+    record[f"reference_{prefix}_mse"] = _mse(paired["reference"])
+    record[f"candidate_{prefix}_mse"] = _mse(paired["candidate"])
+    record[f"{prefix}_mse_delta"] = (
+        record[f"candidate_{prefix}_mse"] - record[f"reference_{prefix}_mse"]
+    )
 
 
 def _mse(values: pd.Series) -> float:
