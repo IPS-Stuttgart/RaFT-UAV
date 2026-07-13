@@ -31,16 +31,16 @@ class PerturbationConfig:
 def perturb_radar(radar: pd.DataFrame, config: PerturbationConfig) -> pd.DataFrame:
     """Return a perturbed radar frame."""
 
-    rng = np.random.default_rng(int(config.seed))
+    rng = np.random.default_rng(_nonnegative_integer(config.seed, name="seed"))
     out = radar.copy()
-    out = drop_radar_frames(out, rate=float(config.radar_drop_rate), rng=rng)
-    out = jitter_timestamps(out, std_s=float(config.timestamp_jitter_std_s), rng=rng)
-    out = corrupt_velocity(out, std_mps=float(config.velocity_noise_std_mps), rng=rng)
-    out = scale_covariance_columns(out, scale=float(config.covariance_scale))
+    out = drop_radar_frames(out, rate=config.radar_drop_rate, rng=rng)
+    out = jitter_timestamps(out, std_s=config.timestamp_jitter_std_s, rng=rng)
+    out = corrupt_velocity(out, std_mps=config.velocity_noise_std_mps, rng=rng)
+    out = scale_covariance_columns(out, scale=config.covariance_scale)
     out = inject_false_tracks(
         out,
-        false_tracks_per_frame=int(config.false_tracks_per_frame),
-        position_std_m=float(config.false_track_position_std_m),
+        false_tracks_per_frame=config.false_tracks_per_frame,
+        position_std_m=config.false_track_position_std_m,
         rng=rng,
     )
     out["stress_config"] = config.name
@@ -51,29 +51,32 @@ def perturb_radar(radar: pd.DataFrame, config: PerturbationConfig) -> pd.DataFra
 def perturb_rf(rf: pd.DataFrame, config: PerturbationConfig) -> pd.DataFrame:
     """Return a perturbed RF frame."""
 
-    rng = np.random.default_rng(int(config.seed) + 17)
+    seed = _nonnegative_integer(config.seed, name="seed")
+    rng = np.random.default_rng(seed + 17)
     out = rf.copy()
-    out = drop_rf_bursts(out, rate=float(config.rf_drop_burst_rate), rng=rng)
-    out = jitter_timestamps(out, std_s=float(config.timestamp_jitter_std_s), rng=rng)
-    out = scale_covariance_columns(out, scale=float(config.covariance_scale))
+    out = drop_rf_bursts(out, rate=config.rf_drop_burst_rate, rng=rng)
+    out = jitter_timestamps(out, std_s=config.timestamp_jitter_std_s, rng=rng)
+    out = scale_covariance_columns(out, scale=config.covariance_scale)
     out["stress_config"] = config.name
     return out.sort_values("time_s") if "time_s" in out.columns else out
 
 
 def drop_radar_frames(frame: pd.DataFrame, *, rate: float, rng: np.random.Generator) -> pd.DataFrame:
-    if frame.empty or rate <= 0.0:
+    rate_value = _drop_rate(rate, name="radar_drop_rate")
+    if frame.empty or rate_value == 0.0:
         return frame.copy()
     group_column = "frame_index" if "frame_index" in frame.columns else "time_s"
     group_values = frame[group_column]
     valid_group_mask = group_values.notna()
     groups = pd.Series(group_values.loc[valid_group_mask].unique())
-    keep_groups = set(groups.loc[rng.random(len(groups)) >= min(max(rate, 0.0), 1.0)].tolist())
+    keep_groups = set(groups.loc[rng.random(len(groups)) >= rate_value].tolist())
     keep_mask = (~valid_group_mask) | group_values.isin(keep_groups)
     return frame.loc[keep_mask].copy()
 
 
 def drop_rf_bursts(frame: pd.DataFrame, *, rate: float, rng: np.random.Generator) -> pd.DataFrame:
-    if frame.empty or rate <= 0.0 or "time_s" not in frame.columns:
+    rate_value = _drop_rate(rate, name="rf_drop_burst_rate")
+    if frame.empty or rate_value == 0.0 or "time_s" not in frame.columns:
         return frame.copy()
     times = pd.to_numeric(frame["time_s"], errors="coerce").to_numpy(dtype=float)
     if times.size == 0:
@@ -85,7 +88,7 @@ def drop_rf_bursts(frame: pd.DataFrame, *, rate: float, rng: np.random.Generator
     finite_times = times[valid_time_mask]
     bins = np.floor((finite_times - np.min(finite_times)) / 5.0).astype(int)
     unique = np.unique(bins)
-    dropped = set(unique[rng.random(unique.size) < min(max(rate, 0.0), 1.0)].tolist())
+    dropped = set(unique[rng.random(unique.size) < rate_value].tolist())
 
     keep_mask = np.ones(times.shape, dtype=bool)
     keep_mask[valid_time_mask] = [int(bin_id) not in dropped for bin_id in bins]
@@ -93,20 +96,26 @@ def drop_rf_bursts(frame: pd.DataFrame, *, rate: float, rng: np.random.Generator
 
 
 def jitter_timestamps(frame: pd.DataFrame, *, std_s: float, rng: np.random.Generator) -> pd.DataFrame:
+    std_value = _nonnegative_float(std_s, name="timestamp_jitter_std_s")
     out = frame.copy()
-    if std_s <= 0.0 or "time_s" not in out.columns:
+    if std_value == 0.0 or "time_s" not in out.columns:
         return out
-    out["time_s"] = pd.to_numeric(out["time_s"], errors="coerce") + rng.normal(0.0, std_s, len(out))
+    out["time_s"] = pd.to_numeric(out["time_s"], errors="coerce") + rng.normal(
+        0.0, std_value, len(out)
+    )
     return out
 
 
 def corrupt_velocity(frame: pd.DataFrame, *, std_mps: float, rng: np.random.Generator) -> pd.DataFrame:
+    std_value = _nonnegative_float(std_mps, name="velocity_noise_std_mps")
     out = frame.copy()
-    if std_mps <= 0.0:
+    if std_value == 0.0:
         return out
     for column in ("velocity_east_mps", "velocity_north_mps", "velocity_down_mps"):
         if column in out.columns:
-            out[column] = pd.to_numeric(out[column], errors="coerce") + rng.normal(0.0, std_mps, len(out))
+            out[column] = pd.to_numeric(out[column], errors="coerce") + rng.normal(
+                0.0, std_value, len(out)
+            )
     return out
 
 
@@ -130,7 +139,14 @@ def inject_false_tracks(
     position_std_m: float,
     rng: np.random.Generator,
 ) -> pd.DataFrame:
-    if frame.empty or false_tracks_per_frame <= 0 or not {"east_m", "north_m", "up_m"}.issubset(frame.columns):
+    false_track_count = _nonnegative_integer(false_tracks_per_frame, name="false_tracks_per_frame")
+    position_std = _nonnegative_float(position_std_m, name="false_track_position_std_m")
+    required_position_columns = {"east_m", "north_m", "up_m"}
+    if (
+        frame.empty
+        or false_track_count == 0
+        or not required_position_columns.issubset(frame.columns)
+    ):
         return frame.copy()
     group_column = "frame_index" if "frame_index" in frame.columns else "time_s"
     rows: list[pd.Series] = []
@@ -138,15 +154,15 @@ def inject_false_tracks(
     for _, group in frame.groupby(group_column, sort=True):
         reference = group.iloc[0]
         center = group[["east_m", "north_m", "up_m"]].mean().to_numpy(dtype=float)
-        for index in range(false_tracks_per_frame):
+        for index in range(false_track_count):
             row = reference.copy()
-            position = center + rng.normal(0.0, position_std_m, 3)
+            position = center + rng.normal(0.0, position_std, 3)
             row["east_m"], row["north_m"], row["up_m"] = [float(value) for value in position]
             row["track_id"] = next_track_id + index
             row["cat_prob_uav"] = min(float(row.get("cat_prob_uav", 0.2)), 0.2)
             row["stress_false_track"] = True
             rows.append(row)
-        next_track_id += false_tracks_per_frame
+        next_track_id += false_track_count
     if not rows:
         return frame.copy()
     out = pd.concat([frame.copy(), pd.DataFrame(rows)], ignore_index=True)
@@ -161,3 +177,36 @@ def _next_false_track_id(frame: pd.DataFrame) -> int:
         return 10_000_000
     values = pd.to_numeric(frame["track_id"], errors="coerce").dropna()
     return 10_000_000 if values.empty else int(values.max()) + 1
+
+
+def _drop_rate(value: object, *, name: str) -> float:
+    rate = _finite_float(value, name=name)
+    if rate < 0.0 or rate > 1.0:
+        raise ValueError(f"{name} must be between 0 and 1")
+    return rate
+
+
+def _nonnegative_float(value: object, *, name: str) -> float:
+    number = _finite_float(value, name=name)
+    if number < 0.0:
+        raise ValueError(f"{name} must be non-negative")
+    return number
+
+
+def _nonnegative_integer(value: object, *, name: str) -> int:
+    number = _finite_float(value, name=name)
+    if number < 0.0 or not number.is_integer():
+        raise ValueError(f"{name} must be a non-negative integer")
+    return int(number)
+
+
+def _finite_float(value: object, *, name: str) -> float:
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be a finite number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
+    if not np.isfinite(number):
+        raise ValueError(f"{name} must be a finite number")
+    return number
