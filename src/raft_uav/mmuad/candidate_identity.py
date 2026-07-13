@@ -27,6 +27,12 @@ _INVALID_TRACK_IDS = {
     "-1.0",
     "false",
     "true",
+    "inf",
+    "+inf",
+    "-inf",
+    "infinity",
+    "+infinity",
+    "-infinity",
 }
 _CANONICAL_INTEGER_TEXT = re.compile(r"^[+-]?(?:0|[1-9][0-9]*)(?:\.0+)?$")
 
@@ -50,6 +56,8 @@ def canonical_track_id(value: Any) -> str | None:
         pass
 
     if isinstance(value, (bool, np.bool_)):
+        return None
+    if isinstance(value, Decimal) and not value.is_finite():
         return None
     if isinstance(value, numbers.Integral):
         number = int(value)
