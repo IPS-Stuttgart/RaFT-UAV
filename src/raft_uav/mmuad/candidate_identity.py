@@ -61,7 +61,7 @@ def canonical_track_id(value: Any) -> str | None:
         if number.is_integer():
             integer = int(number)
             return None if integer == -1 else str(integer)
-        return format(number, ".17g")
+        return str(value)
 
     text = str(value).strip()
     if text.lower() in _INVALID_TRACK_IDS:
