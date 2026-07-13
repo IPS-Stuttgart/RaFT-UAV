@@ -81,15 +81,21 @@ def test_submission_ensemble_grid_writes_best_upload_artifacts(tmp_path: Path) -
     paths = write_submission_ensemble_weight_grid_outputs(
         submission_inputs=[parse_submission_input(f"good={good}"), parse_submission_input(f"bad={bad}")],
         truth=_truth_rows(),
-        weight_grid=generate_simplex_weight_grid(2, step=0.5),
+        weight_grid=(weights for weights in generate_simplex_weight_grid(2, step=0.5)),
         output_dir=output_dir,
         template=pd.read_csv(template),
+        class_policies=(policy for policy in ("weighted-vote", "first")),
     )
 
     assert paths["summary_csv"].exists()
     assert paths["best_zip"].exists()
     assert paths["best_validation_json"].exists()
+    summary = pd.read_csv(paths["summary_csv"])
+    assert len(summary) == 6
+    assert set(summary["class_policy"]) == {"weighted-vote", "first"}
     manifest = json.loads(paths["manifest_json"].read_text(encoding="utf-8"))
+    assert manifest["class_policies"] == ["weighted-vote", "first"]
+    assert manifest["grid_row_count"] == 6
     assert manifest["best_weights"] == [1.0, 0.0]
     assert manifest["best"]["pose_mse"] == 0.0
 
