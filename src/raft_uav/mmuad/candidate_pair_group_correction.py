@@ -595,8 +595,8 @@ def _normalize_scores(values: np.ndarray, mode: str) -> np.ndarray:
     if mode == "rank":
         if len(score) <= 1:
             return np.full(len(score), 0.5, dtype=float)
-        order = np.argsort(np.argsort(score, kind="stable"), kind="stable")
-        return order.astype(float) / float(len(score) - 1)
+        ranks = pd.Series(score).rank(method="average").to_numpy(float) - 1.0
+        return ranks / float(len(score) - 1)
     minimum = float(np.min(score))
     maximum = float(np.max(score))
     if maximum <= minimum:
