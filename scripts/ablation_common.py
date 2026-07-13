@@ -60,9 +60,10 @@ def collect_experiment_rows(
     """Run missing config/flight jobs, then collect their metrics rows."""
 
     rows: list[dict[str, object]] = []
+    flight_names = tuple(flights)
     for config in configs:
         run_dir = output_dir / str(getattr(config, "name"))
-        for flight in flights:
+        for flight in flight_names:
             metrics_path = metrics_json_path(run_dir, flight)
             if not (skip_existing and metrics_path.exists()):
                 run_one(config, run_dir, flight)
