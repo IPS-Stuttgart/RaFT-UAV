@@ -65,6 +65,10 @@ def build_source_calibration_branch_union(
     calibrated_label = _branch_label(
         calibrated_branch or f"{selected_mode.replace('-', '_')}_calibrated"
     )
+    if raw_label == calibrated_label:
+        raise ValueError(
+            "raw and calibrated candidate branch labels must be distinct after normalization"
+        )
     prepared = rows.copy().reset_index(drop=True)
     prepared[ORIGIN_ROW_COLUMN] = np.arange(len(prepared), dtype=int)
     prepared[ORIGINAL_TRACK_ID_COLUMN] = prepared["track_id"]
