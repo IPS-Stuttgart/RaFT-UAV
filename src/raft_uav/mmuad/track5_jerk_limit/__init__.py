@@ -1,9 +1,9 @@
-"""Compatibility wrapper preserving jerk-window row support.
+"""Compatibility wrapper hardening the Track 5 jerk-limit repair.
 
 The maintained implementation lives in the sibling ``track5_jerk_limit.py``
-module. This package keeps the public import path while ensuring that jerk
-values remain attached to the actual four rows of every valid finite-difference
-window when earlier windows are skipped because of duplicate timestamps.
+module. This package keeps the public import path while preserving jerk-window
+row support and rejecting malformed ``iterations`` values instead of silently
+truncating or clamping them.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ if _SPEC is None or _SPEC.loader is None:
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+_ORIGINAL_REPAIR = _IMPL.repair_track5_jerk_kinks
 
 
 def _row_jerk_proxy_with_window_support(
@@ -46,7 +47,46 @@ def _row_jerk_proxy_with_window_support(
     return row_jerk
 
 
+def _positive_integer(value: object, *, name: str) -> int:
+    """Return a positive integer without lossy or Boolean coercion."""
+
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be a positive integer")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if not np.isfinite(numeric) or numeric <= 0.0 or not numeric.is_integer():
+        raise ValueError(f"{name} must be a positive integer")
+    return int(numeric)
+
+
+def repair_track5_jerk_kinks(
+    submission,
+    *,
+    max_jerk_mps3: float = 80.0,
+    smoothness_weight: float = 10.0,
+    min_correction_m: float = 1.0,
+    max_correction_m: float | None = None,
+    iterations: int = 1,
+    repair_blend: float = 1.0,
+):
+    """Return jerk-limited estimates after validating ``iterations``."""
+
+    validated_iterations = _positive_integer(iterations, name="iterations")
+    return _ORIGINAL_REPAIR(
+        submission,
+        max_jerk_mps3=max_jerk_mps3,
+        smoothness_weight=smoothness_weight,
+        min_correction_m=min_correction_m,
+        max_correction_m=max_correction_m,
+        iterations=validated_iterations,
+        repair_blend=repair_blend,
+    )
+
+
 _IMPL._row_jerk_proxy = _row_jerk_proxy_with_window_support
+_IMPL.repair_track5_jerk_kinks = repair_track5_jerk_kinks
 
 globals().update(
     {
@@ -55,6 +95,9 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_row_jerk_proxy_with_window_support"] = _row_jerk_proxy_with_window_support
+globals()["_positive_integer"] = _positive_integer
+globals()["repair_track5_jerk_kinks"] = repair_track5_jerk_kinks
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
