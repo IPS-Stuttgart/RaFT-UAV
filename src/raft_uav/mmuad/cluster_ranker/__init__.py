@@ -65,6 +65,26 @@ def _nonnegative_integer(value: object, *, name: str) -> int:
     return _integer_control(value, name=name, minimum=0, qualifier="nonnegative")
 
 
+def _validated_training_counts(
+    *,
+    model_type: object,
+    iterations: object,
+    n_estimators: object,
+) -> tuple[str, object, object]:
+    selected_model = str(model_type)
+    validated_iterations = (
+        _positive_integer(iterations, name="iterations")
+        if selected_model == "logistic"
+        else iterations
+    )
+    validated_n_estimators = (
+        _positive_integer(n_estimators, name="n_estimators")
+        if selected_model in _ESTIMATOR_COUNT_MODELS
+        else n_estimators
+    )
+    return selected_model, validated_iterations, validated_n_estimators
+
+
 def train_cluster_ranker(
     features: pd.DataFrame,
     *,
@@ -79,16 +99,12 @@ def train_cluster_ranker(
 ):
     """Train after validating integer controls used by the selected model."""
 
-    selected_model = str(model_type)
-    validated_iterations = (
-        _positive_integer(iterations, name="iterations")
-        if selected_model == "logistic"
-        else iterations
-    )
-    validated_n_estimators = (
-        _positive_integer(n_estimators, name="n_estimators")
-        if selected_model in _ESTIMATOR_COUNT_MODELS
-        else n_estimators
+    selected_model, validated_iterations, validated_n_estimators = (
+        _validated_training_counts(
+            model_type=model_type,
+            iterations=iterations,
+            n_estimators=n_estimators,
+        )
     )
     return _ORIGINAL_TRAIN_CLUSTER_RANKER(
         features,
@@ -116,20 +132,27 @@ def evaluate_cluster_ranker_loso(
     min_train_sequences: int = 1,
     protocol: str = "LOSO public-validation diagnostic, not submission-valid",
 ):
-    """Evaluate LOSO after validating the minimum train-sequence count."""
+    """Evaluate LOSO after validating all active integer controls."""
 
+    selected_model, validated_iterations, validated_n_estimators = (
+        _validated_training_counts(
+            model_type=model_type,
+            iterations=iterations,
+            n_estimators=n_estimators,
+        )
+    )
     validated_minimum = _nonnegative_integer(
         min_train_sequences,
         name="min_train_sequences",
     )
     return _ORIGINAL_EVALUATE_CLUSTER_RANKER_LOSO(
         features,
-        model_type=model_type,
+        model_type=selected_model,
         target_column=target_column,
         learning_rate=learning_rate,
-        iterations=iterations,
+        iterations=validated_iterations,
         random_state=random_state,
-        n_estimators=n_estimators,
+        n_estimators=validated_n_estimators,
         score_distance_scale_m=score_distance_scale_m,
         min_train_sequences=validated_minimum,
         protocol=protocol,
@@ -170,6 +193,7 @@ globals().update(
 globals()["_integer_control"] = _integer_control
 globals()["_positive_integer"] = _positive_integer
 globals()["_nonnegative_integer"] = _nonnegative_integer
+globals()["_validated_training_counts"] = _validated_training_counts
 globals()["train_cluster_ranker"] = train_cluster_ranker
 globals()["evaluate_cluster_ranker_loso"] = evaluate_cluster_ranker_loso
 globals()["_make_sklearn_estimator"] = _make_sklearn_estimator
