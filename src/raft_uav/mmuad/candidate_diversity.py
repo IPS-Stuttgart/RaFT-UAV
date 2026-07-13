@@ -30,7 +30,7 @@ def diversify_candidate_reservoir(
     the reservoir budget while keeping distinct lower-ranked hypotheses alive.
     """
 
-    frame = pd.DataFrame(rows).copy()
+    frame = pd.DataFrame(rows).copy().reset_index(drop=True)
     if frame.empty:
         return frame
     required = {"sequence_id", "time_s", "x_m", "y_m", "z_m"}
