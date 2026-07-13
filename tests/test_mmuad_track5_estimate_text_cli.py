@@ -5,6 +5,7 @@ from pathlib import Path
 import tomllib
 
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.track5_estimate_text_cli import _read_csv_preserving_sequence_id
 
@@ -53,6 +54,19 @@ def test_estimate_fit_wrapper_rewinds_file_like_csv_after_header_probe() -> None
 
     assert rows.loc[0, "sequence_id"] == "001"
     assert rows.loc[0, "time_s"] == 0.0
+
+
+def test_estimate_fit_wrapper_rejects_ambiguous_normalized_headers() -> None:
+    csv_stream = StringIO(
+        "sequence_id, sequence_id ,time_s,state_x_m,state_y_m,state_z_m\n"
+        "001,002,0.0,1.0,2.0,3.0\n"
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"ambiguous after whitespace normalization: 'sequence_id'",
+    ):
+        _read_csv_preserving_sequence_id(csv_stream)
 
 
 def test_estimate_fit_wrapper_accepts_scalar_dtype_without_coercing_sequence_ids(
