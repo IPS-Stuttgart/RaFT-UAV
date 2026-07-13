@@ -63,7 +63,10 @@ def write_template_snapped_submission(
     validation = validate_official_track5_submission(
         paths["official_zip"], template=template, require_zip=True
     )
-    paths["validation_json"].write_text(json.dumps(_jsonable(validation.summary), indent=2))
+    paths["validation_json"].write_text(
+        json.dumps(_jsonable(validation.summary), indent=2, allow_nan=False),
+        encoding="utf-8",
+    )
     validation.rows.to_csv(paths["validation_rows_csv"], index=False)
     manifest = {
         "schema": "raft-uav-mmuad-template-snap-v1",
@@ -82,7 +85,10 @@ def write_template_snapped_submission(
         "max_interpolation_gap_s": max_interpolation_gap_s,
         "paths": {name: str(path) for name, path in paths.items() if name != "manifest_json"},
     }
-    paths["manifest_json"].write_text(json.dumps(_jsonable(manifest), indent=2))
+    paths["manifest_json"].write_text(
+        json.dumps(_jsonable(manifest), indent=2, allow_nan=False),
+        encoding="utf-8",
+    )
     return paths
 
 
@@ -92,7 +98,14 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list | tuple):
         return [_jsonable(item) for item in value]
     if isinstance(value, np.generic):
-        return value.item()
+        return _jsonable(value.item())
+    if isinstance(value, float):
+        return value if np.isfinite(value) else None
     if isinstance(value, Path):
         return str(value)
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
     return value
