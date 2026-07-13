@@ -61,7 +61,12 @@ def build_source_branch_reservoir(
     rows = _candidate_rows(candidates)
     if rows.empty:
         return CandidateFrame(normalize_candidate_columns(rows))
-    _validate_selection_config(
+    (
+        per_source_branch_top_n,
+        source_branch_diversity_weight,
+        source_branch_diversity_scale_m,
+        source_branch_distance_cap_m,
+    ) = _validate_selection_config(
         per_source_branch_top_n=per_source_branch_top_n,
         diversity_weight=source_branch_diversity_weight,
         diversity_scale_m=source_branch_diversity_scale_m,
@@ -87,15 +92,15 @@ def build_source_branch_reservoir(
         )
     }
 
-    if int(per_source_branch_top_n) > 0:
+    if per_source_branch_top_n > 0:
         group_columns = ["sequence_id", "time_s", "source", "candidate_branch"]
         for group_key, group in rows.groupby(group_columns, sort=False, dropna=False):
             selected = _select_source_branch_rows(
                 group,
-                count=int(per_source_branch_top_n),
-                diversity_weight=float(source_branch_diversity_weight),
-                diversity_scale_m=float(source_branch_diversity_scale_m),
-                distance_cap_m=float(source_branch_distance_cap_m),
+                count=per_source_branch_top_n,
+                diversity_weight=source_branch_diversity_weight,
+                diversity_scale_m=source_branch_diversity_scale_m,
+                distance_cap_m=source_branch_distance_cap_m,
             )
             source = str(group_key[2])
             branch = str(group_key[3])
@@ -153,13 +158,11 @@ def build_source_branch_reservoir(
         .astype(str)
         .str.contains(_DEFAULT_SOURCE_BRANCH_REASON_PREFIX, regex=False)
     )
-    capped["candidate_source_branch_quota_top_n"] = int(per_source_branch_top_n)
+    capped["candidate_source_branch_quota_top_n"] = per_source_branch_top_n
     capped["candidate_source_branch_quota_selected"] = quota_selected
-    capped["candidate_source_branch_diversity_weight"] = float(
-        source_branch_diversity_weight
-    )
+    capped["candidate_source_branch_diversity_weight"] = source_branch_diversity_weight
     capped["candidate_source_branch_diversity_selected"] = quota_selected & (
-        float(source_branch_diversity_weight) > 0.0
+        source_branch_diversity_weight > 0.0
     )
     capped = capped.sort_values(
         ["sequence_id", "time_s", "candidate_reservoir_rank", "source", "candidate_branch"],
@@ -489,15 +492,54 @@ def _validate_selection_config(
     diversity_weight: float,
     diversity_scale_m: float,
     distance_cap_m: float,
-) -> None:
-    if int(per_source_branch_top_n) < 0:
-        raise ValueError("per_source_branch_top_n must be non-negative")
-    if float(diversity_weight) < 0.0:
-        raise ValueError("source_branch_diversity_weight must be non-negative")
-    if float(diversity_scale_m) <= 0.0:
-        raise ValueError("source_branch_diversity_scale_m must be positive")
-    if float(distance_cap_m) <= 0.0:
-        raise ValueError("source_branch_distance_cap_m must be positive")
+) -> tuple[int, float, float, float]:
+    return (
+        _nonnegative_int(per_source_branch_top_n, name="per_source_branch_top_n"),
+        _nonnegative_float(diversity_weight, name="source_branch_diversity_weight"),
+        _positive_float(diversity_scale_m, name="source_branch_diversity_scale_m"),
+        _positive_float(distance_cap_m, name="source_branch_distance_cap_m"),
+    )
+
+
+def _nonnegative_int(value: Any, *, name: str) -> int:
+    message = f"{name} must be a non-negative integer"
+    if isinstance(value, bool):
+        raise ValueError(message)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(parsed) or not parsed.is_integer() or parsed < 0:
+        raise ValueError(message)
+    return int(parsed)
+
+
+def _nonnegative_float(value: Any, *, name: str) -> float:
+    message = f"{name} must be finite and non-negative"
+    parsed = _finite_float(value, message=message)
+    if parsed < 0.0:
+        raise ValueError(message)
+    return parsed
+
+
+def _positive_float(value: Any, *, name: str) -> float:
+    message = f"{name} must be finite and positive"
+    parsed = _finite_float(value, message=message)
+    if parsed <= 0.0:
+        raise ValueError(message)
+    return parsed
+
+
+def _finite_float(value: Any, *, message: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(message)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(parsed):
+        raise ValueError(message)
+    return parsed
 
 
 def _write_optional_csv(rows: pd.DataFrame, path: Path | None) -> None:
