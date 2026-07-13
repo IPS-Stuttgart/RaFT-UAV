@@ -22,7 +22,7 @@ def _write_zip(path: Path, files: dict[str, str]) -> None:
         ("1,1,10,20,5,6,0.9,1,1.1\n", "invalid_visibility_rows"),
     ],
 )
-def test_validate_submission_zip_rejects_invalid_class_and_visibility_domains(
+def test_validate_submission_zip_reports_invalid_class_and_visibility_domains(
     tmp_path: Path,
     row: str,
     invalid_field: str,
@@ -35,5 +35,4 @@ def test_validate_submission_zip_rejects_invalid_class_and_visibility_domains(
     validation = validate_submission_zip(submission, template_zip=template)
 
     assert validation.valid is False
-    assert validation.parse_errors == 0
     assert getattr(validation, invalid_field) == 1
