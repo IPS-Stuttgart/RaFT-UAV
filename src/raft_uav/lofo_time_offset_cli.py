@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -78,6 +79,15 @@ def main(argv: list[str] | None = None) -> int:
     requested = args.flight or ["Opt1", "Opt2", "Opt3"]
     offsets = make_offset_grid(args.offset_min_s, args.offset_max_s, args.offset_step_s)
     flights = [_load_flight(args.dataset_root, name) for name in requested]
+    duplicate_names = sorted(
+        name for name, count in Counter(flight.name for flight in flights).items() if count > 1
+    )
+    if duplicate_names:
+        duplicates = ", ".join(duplicate_names)
+        raise ValueError(
+            "LOFO calibration needs distinct flights; "
+            f"duplicate resolved flight(s): {duplicates}"
+        )
     if len(flights) < 2:
         raise ValueError("LOFO calibration needs at least two flights")
 
