@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.candidate_diversity import diversify_candidate_reservoir
 
@@ -63,3 +64,21 @@ def test_diversity_does_not_expand_duplicate_input_index_labels() -> None:
 
     assert output["track_id"].tolist() == ["best", "far"]
     assert len(output) == 2
+
+
+def test_diversity_parses_serialized_protected_flags() -> None:
+    rows = _rows()
+    rows["candidate_reservoir_protected"] = ["False", "0", "true", "off"]
+
+    output = diversify_candidate_reservoir(rows, radius_m=1.0)
+
+    assert set(output["track_id"]) == {"best", "protected", "far"}
+    assert "duplicate" not in set(output["track_id"])
+
+
+def test_diversity_rejects_ambiguous_protected_flags() -> None:
+    rows = _rows()
+    rows["candidate_reservoir_protected"] = [False, "sometimes", True, False]
+
+    with pytest.raises(ValueError, match="candidate_reservoir_protected"):
+        diversify_candidate_reservoir(rows, radius_m=1.0)
