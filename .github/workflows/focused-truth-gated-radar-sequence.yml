@@ -2,9 +2,7 @@
 name: Focused truth-gated radar sequence
 
 "on":
-  push:
-    branches:
-      - agent/fix-truth-gated-sequence-boundaries
+  pull_request:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
