@@ -80,6 +80,16 @@ def test_branch_union_preserves_raw_and_calibrated_hypotheses() -> None:
     assert set(calibrated["mmuad_original_track_id"]) == {"a", "b", "c"}
 
 
+def test_branch_union_rejects_colliding_normalized_branch_labels() -> None:
+    with pytest.raises(ValueError, match="must be distinct after normalization"):
+        build_source_calibration_branch_union(
+            CandidateFrame(_candidate_rows()),
+            _calibration_payload(),
+            raw_branch="shared/branch",
+            calibrated_branch="shared_branch",
+        )
+
+
 def test_branch_union_feeds_branch_aware_reservoir() -> None:
     union = build_source_calibration_branch_union(
         CandidateFrame(_candidate_rows().iloc[[0]]),
