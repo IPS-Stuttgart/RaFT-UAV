@@ -52,17 +52,19 @@ def search_track5_spread_guard_settings(
     thresholds = tuple(float(value) for value in spread_thresholds_m)
     if not thresholds:
         raise ValueError("at least one spread threshold is required")
+    policies = tuple(str(policy) for policy in fallback_policies)
+    labels = tuple(str(label) for label in fallback_labels)
     truth_rows = _normalize_truth_for_exact_template(truth)
     records: list[dict[str, Any]] = []
     for threshold in thresholds:
         _validate_threshold(threshold)
-        for policy in fallback_policies:
+        for policy in policies:
             if policy not in FALLBACK_POLICIES:
                 raise ValueError(f"fallback_policy must be one of: {', '.join(FALLBACK_POLICIES)}")
-            labels = (None,) if policy != "label" else tuple(str(label) for label in fallback_labels)
-            if not labels:
+            policy_labels = (None,) if policy != "label" else labels
+            if not policy_labels:
                 raise ValueError("fallback_labels are required when fallback_policy='label'")
-            for fallback_label in labels:
+            for fallback_label in policy_labels:
                 estimates, diagnostics = build_spread_guarded_estimate_ensemble(
                     loaded,
                     template,
