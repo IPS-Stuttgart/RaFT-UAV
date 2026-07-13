@@ -96,7 +96,7 @@ def _finite_nonnegative(value: float, *, name: str) -> float:
 def _constant_velocity_transition_for_state_dim(dt_s: float, state_dim: int) -> np.ndarray:
     """Return a CV transition embedded in a record's state dimension.
 
-    The standard RaFT-UAV state is 6D ``[e,n,u,ve,nv,vu]``.  Experimental
+    The standard RaFT-UAV state is 6D ``[e,n,u,ve,vn,vu]``.  Experimental
     variants may append bias states; those extra dimensions are modeled as
     identity dynamics by the generic record smoother unless a specialized
     smoother is used.
