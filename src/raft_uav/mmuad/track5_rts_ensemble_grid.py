@@ -56,13 +56,16 @@ def run_track5_rts_ensemble_grid_search(
     truth_rows = _normalize_truth(truth)
     if truth_rows.empty:
         raise ValueError("truth contains no finite rows")
+    measurement_sigmas = _positive_grid(measurement_sigma_grid, "measurement_sigma_grid")
+    process_accel_stds = _nonnegative_grid(process_accel_grid, "process_accel_grid")
+    spread_variance_scales = _nonnegative_grid(
+        spread_variance_scale_grid,
+        "spread_variance_scale_grid",
+    )
     grid_records: list[dict[str, Any]] = []
-    for measurement_sigma_m in _positive_grid(measurement_sigma_grid, "measurement_sigma_grid"):
-        for process_accel_std_mps2 in _nonnegative_grid(process_accel_grid, "process_accel_grid"):
-            for spread_variance_scale in _nonnegative_grid(
-                spread_variance_scale_grid,
-                "spread_variance_scale_grid",
-            ):
+    for measurement_sigma_m in measurement_sigmas:
+        for process_accel_std_mps2 in process_accel_stds:
+            for spread_variance_scale in spread_variance_scales:
                 estimates, diagnostics = build_track5_rts_ensemble(
                     loaded_inputs,
                     template,
