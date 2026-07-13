@@ -42,6 +42,18 @@ __all__ = [
 ]
 
 
+def _finite_time_s(value: object, *, name: str) -> float:
+    """Return a finite timestamp or raise a field-specific error."""
+
+    try:
+        time_s = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be finite") from exc
+    if not np.isfinite(time_s):
+        raise ValueError(f"{name} must be finite")
+    return time_s
+
+
 @dataclass(frozen=True)
 class TrackingMeasurement:
     """Linear position or position-plus-velocity measurement in local ENU coordinates."""
@@ -53,6 +65,7 @@ class TrackingMeasurement:
     _apply_runtime_calibration: InitVar[bool] = True
 
     def __post_init__(self, _apply_runtime_calibration: bool) -> None:
+        time_s = _finite_time_s(self.time_s, name="measurement time_s")
         vector = np.asarray(self.vector, dtype=float).reshape(-1)
         covariance = np.asarray(self.covariance, dtype=float)
         source = str(self.source)
@@ -70,7 +83,7 @@ class TrackingMeasurement:
             raise ValueError("calibrated measurement covariance must match vector dimension")
         if not np.isfinite(covariance).all():
             raise ValueError("calibrated measurement covariance must be finite")
-        object.__setattr__(self, "time_s", float(self.time_s))
+        object.__setattr__(self, "time_s", time_s)
         object.__setattr__(self, "vector", vector)
         object.__setattr__(self, "covariance", covariance)
         object.__setattr__(self, "source", source)
@@ -208,7 +221,7 @@ class AsyncConstantVelocityKalmanTracker:
             ]
         )
         self.filter = KalmanFilter((self.mean.copy(), self.covariance.copy()))
-        self.current_time_s = float(initial_time_s)
+        self.current_time_s = _finite_time_s(initial_time_s, name="initial_time_s")
         self.acceleration_std_mps2 = float(acceleration_std_mps2)
         self._adaptive_process_noise = adaptive_process_noise_from_environment(
             base_acceleration_std_mps2=acceleration_std_mps2,
@@ -291,7 +304,8 @@ class AsyncConstantVelocityKalmanTracker:
     def predict_to(self, time_s: float) -> None:
         """Predict to an absolute timestamp."""
 
-        dt_s = float(time_s) - self.current_time_s
+        target_time_s = _finite_time_s(time_s, name="time_s")
+        dt_s = target_time_s - self.current_time_s
         if dt_s < -1e-9:
             raise ValueError("measurements must be processed in chronological order")
         if dt_s > 0.0:
@@ -302,7 +316,7 @@ class AsyncConstantVelocityKalmanTracker:
             process_noise = white_acceleration_process_noise(dt_s, acceleration_std)
             self.filter.predict_linear(transition, process_noise)
             self._sync_from_filter()
-            self.current_time_s = float(time_s)
+            self.current_time_s = target_time_s
 
     def coast_to(self, time_s: float) -> None:
         """Predict to an event timestamp without applying a measurement update.
