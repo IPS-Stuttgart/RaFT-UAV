@@ -189,13 +189,13 @@ def source_branch_reservoir_summary(
     summary = build_reservoir_summary(input_rows, reservoir_rows)
     input_cells = _frame_cell_count(input_rows)
     retained_cells = _frame_cell_count(reservoir_rows)
-    quota_selected = reservoir_rows.get(
-        "candidate_source_branch_quota_selected",
-        pd.Series(False, index=reservoir_rows.index, dtype=bool),
+    quota_selected = _boolean_series(
+        reservoir_rows.get("candidate_source_branch_quota_selected", False),
+        reservoir_rows.index,
     )
-    diversity_selected = reservoir_rows.get(
-        "candidate_source_branch_diversity_selected",
-        pd.Series(False, index=reservoir_rows.index, dtype=bool),
+    diversity_selected = _boolean_series(
+        reservoir_rows.get("candidate_source_branch_diversity_selected", False),
+        reservoir_rows.index,
     )
     selected_distances = pd.to_numeric(
         reservoir_rows.get(
@@ -211,12 +211,8 @@ def source_branch_reservoir_summary(
             "source_branch_cell_recall": (
                 float(retained_cells / input_cells) if input_cells > 0 else 1.0
             ),
-            "source_branch_quota_selected_rows": int(
-                pd.Series(quota_selected).fillna(False).astype(bool).sum()
-            ),
-            "source_branch_diversity_selected_rows": int(
-                pd.Series(diversity_selected).fillna(False).astype(bool).sum()
-            ),
+            "source_branch_quota_selected_rows": int(quota_selected.sum()),
+            "source_branch_diversity_selected_rows": int(diversity_selected.sum()),
             "source_branch_selected_min_distance_mean_m": _safe_mean(selected_distances),
             "source_branch_selected_min_distance_p50_m": _safe_quantile(
                 selected_distances,
@@ -432,6 +428,25 @@ def _text_column(values: pd.Series, *, default: str) -> pd.Series:
     text = values.where(values.notna(), default).astype(str).str.strip()
     missing = text.eq("") | text.str.lower().isin({"nan", "none", "<na>"})
     return text.where(~missing, default)
+
+
+def _boolean_series(values: Any, index: pd.Index) -> pd.Series:
+    """Parse boolean-like values without treating non-empty false strings as true."""
+
+    series = pd.Series(values, index=index)
+    if series.empty:
+        return pd.Series(False, index=index, dtype=bool)
+    if pd.api.types.is_bool_dtype(series):
+        return series.fillna(False).astype(bool)
+    if pd.api.types.is_numeric_dtype(series):
+        numeric = pd.to_numeric(series, errors="coerce").fillna(0.0)
+        return numeric.ne(0.0)
+
+    text = series.astype("string").str.strip().str.lower()
+    truthy = text.isin({"1", "true", "t", "yes", "y"})
+    falsey = text.isin({"0", "false", "f", "no", "n", "", "none", "null", "nan"})
+    numeric = pd.to_numeric(text, errors="coerce").fillna(0.0).ne(0.0)
+    return (truthy | (~falsey & numeric)).fillna(False).astype(bool)
 
 
 def _resolve_score(rows: pd.DataFrame, *, primary: str, fallback: str) -> pd.Series:
