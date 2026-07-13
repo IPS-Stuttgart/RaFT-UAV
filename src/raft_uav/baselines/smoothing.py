@@ -38,21 +38,29 @@ def smooth_tracking_records(
         raise ValueError(f"unknown smoother method {method!r}")
     if method == "none" or not records:
         return [copy_record(record) for record in records]
-    if method in ("fixed-lag", "fixed-lag-map") and (lag_s is None or lag_s < 0.0):
-        raise ValueError(f"{method} smoothing requires a nonnegative lag_s")
+
+    acceleration_std_mps2 = _finite_nonnegative(
+        acceleration_std_mps2,
+        name="acceleration_std_mps2",
+    )
+    validated_lag_s = None
+    if method in ("fixed-lag", "fixed-lag-map"):
+        if lag_s is None:
+            raise ValueError(f"{method} smoothing requires a nonnegative lag_s")
+        validated_lag_s = _finite_nonnegative(lag_s, name="lag_s")
     if method in ("robust-map", "fixed-lag-map"):
         return robust_map_smooth_records(
             records,
             measurements=measurements,
             acceleration_std_mps2=acceleration_std_mps2,
             config=robust_map_config,
-            lag_s=None if method == "robust-map" else float(lag_s),
+            lag_s=None if method == "robust-map" else validated_lag_s,
         )
 
     return smooth_pyrecest_records(
         records,
         method="rts" if method == "rts" else "fixed-lag",
-        lag=None if method == "rts" else float(lag_s),
+        lag=None if method == "rts" else validated_lag_s,
         transition_model=_constant_velocity_transition_for_state_dim,
         process_noise_model=lambda dt_s, state_dim: _constant_velocity_process_noise_for_state_dim(
             dt_s,
@@ -68,15 +76,27 @@ def smooth_tracking_records(
         filtered_covariance_key="filtered_covariance",
         metadata={
             "smoother_method": method,
-            "smoother_lag_s": None if method == "rts" else float(lag_s),
+            "smoother_lag_s": None if method == "rts" else validated_lag_s,
         },
     )
+
+
+def _finite_nonnegative(value: float, *, name: str) -> float:
+    """Return a finite nonnegative smoothing control."""
+
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be finite and nonnegative") from exc
+    if not np.isfinite(parsed) or parsed < 0.0:
+        raise ValueError(f"{name} must be finite and nonnegative")
+    return parsed
 
 
 def _constant_velocity_transition_for_state_dim(dt_s: float, state_dim: int) -> np.ndarray:
     """Return a CV transition embedded in a record's state dimension.
 
-    The standard RaFT-UAV state is 6D ``[e,n,u,ve,vn,vu]``.  Experimental
+    The standard RaFT-UAV state is 6D ``[e,n,u,ve,nv,vu]``.  Experimental
     variants may append bias states; those extra dimensions are modeled as
     identity dynamics by the generic record smoother unless a specialized
     smoother is used.
