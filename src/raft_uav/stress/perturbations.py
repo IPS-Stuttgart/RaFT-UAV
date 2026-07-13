@@ -8,6 +8,9 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
+_TRUE_TEXT = {"1", "true", "t", "yes", "y", "on"}
+_FALSE_TEXT = {"0", "false", "f", "no", "n", "off", "", "none", "null", "nan"}
+
 
 @dataclass(frozen=True)
 class PerturbationConfig:
@@ -152,8 +155,41 @@ def inject_false_tracks(
     out = pd.concat([frame.copy(), pd.DataFrame(rows)], ignore_index=True)
     if "stress_false_track" not in out.columns:
         out["stress_false_track"] = False
-    out["stress_false_track"] = out["stress_false_track"].fillna(False).astype(bool)
+    out["stress_false_track"] = out["stress_false_track"].map(_boolean_flag).astype(bool)
     return out
+
+
+def _boolean_flag(value: object) -> bool:
+    """Parse persisted boolean-like flag values without string truthiness."""
+
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if value is None:
+        return False
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return False
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _TRUE_TEXT:
+            return True
+        if text in _FALSE_TEXT:
+            return False
+        try:
+            numeric = float(text)
+        except ValueError:
+            return False
+        return bool(np.isfinite(numeric) and numeric != 0.0)
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return bool(np.isfinite(numeric) and numeric != 0.0)
+    return bool(value)
 
 
 def _next_false_track_id(frame: pd.DataFrame) -> int:
