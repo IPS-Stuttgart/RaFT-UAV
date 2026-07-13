@@ -38,3 +38,28 @@ def test_diversity_respects_per_frame_cap() -> None:
     output = diversify_candidate_reservoir(_rows(), radius_m=0.0, max_candidates_per_frame=2)
     assert len(output) == 2
     assert output["candidate_diversity_rank"].tolist() == [1, 2]
+
+
+def test_diversity_does_not_expand_duplicate_input_index_labels() -> None:
+    rows = pd.DataFrame(
+        {
+            "sequence_id": ["seqA"] * 3,
+            "time_s": [1.0] * 3,
+            "track_id": ["best", "duplicate", "far"],
+            "x_m": [0.0, 0.1, 5.0],
+            "y_m": [0.0, 0.0, 0.0],
+            "z_m": [0.0, 0.0, 0.0],
+            "candidate_reservoir_score": [1.0, 0.9, 0.5],
+            "candidate_reservoir_protected": [False, False, False],
+        },
+        index=[7, 7, 8],
+    )
+
+    output = diversify_candidate_reservoir(
+        rows,
+        radius_m=1.0,
+        max_candidates_per_frame=2,
+    )
+
+    assert output["track_id"].tolist() == ["best", "far"]
+    assert len(output) == 2
