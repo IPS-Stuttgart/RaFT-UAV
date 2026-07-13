@@ -1,0 +1,51 @@
+---
+name: Focused RTS grid debug
+
+"on":
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  focused-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package with test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run focused regression
+        id: focused
+        continue-on-error: true
+        run: |
+          set +e
+          pytest -vv tests/test_mmuad_track5_rts_ensemble_grid_generators.py \
+            > focused-rts.log 2>&1
+          status=$?
+          cat focused-rts.log
+          printf '%s\n' "$status" > focused-rts-status.txt
+          exit "$status"
+
+      - name: Upload focused output
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: focused-rts-grid-debug
+          path: |
+            focused-rts.log
+            focused-rts-status.txt
+
+      - name: Propagate focused result
+        if: always()
+        run: exit "$(cat focused-rts-status.txt)"
