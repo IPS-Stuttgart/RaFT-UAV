@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.candidate_reservoir import ReservoirConfig
 from raft_uav.mmuad.candidate_source_branch_reservoir import (
@@ -138,6 +139,51 @@ def test_zero_source_branch_diversity_weight_preserves_score_order() -> None:
 
     assert set(reservoir["track_id"]) == {"best", "near-duplicate"}
     assert not reservoir["candidate_source_branch_diversity_selected"].any()
+
+
+def test_source_branch_accepts_integer_equivalent_quota_control() -> None:
+    reservoir = build_source_branch_reservoir(
+        _candidate_rows(),
+        reservoir_config=_config(),
+        per_source_branch_top_n=1.0,
+    ).rows
+
+    assert reservoir["candidate_source_branch_quota_top_n"].eq(1).all()
+
+
+@pytest.mark.parametrize("value", [True, 1.5, -1, float("nan"), float("inf")])
+def test_source_branch_rejects_invalid_quota_controls(value: object) -> None:
+    with pytest.raises(ValueError, match="per_source_branch_top_n"):
+        build_source_branch_reservoir(
+            _candidate_rows(),
+            reservoir_config=_config(),
+            per_source_branch_top_n=value,
+        )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"source_branch_diversity_weight": True}, "source_branch_diversity_weight"),
+        ({"source_branch_diversity_weight": -0.1}, "source_branch_diversity_weight"),
+        ({"source_branch_diversity_weight": float("nan")}, "source_branch_diversity_weight"),
+        ({"source_branch_diversity_scale_m": 0.0}, "source_branch_diversity_scale_m"),
+        ({"source_branch_diversity_scale_m": float("inf")}, "source_branch_diversity_scale_m"),
+        ({"source_branch_distance_cap_m": 0.0}, "source_branch_distance_cap_m"),
+        ({"source_branch_distance_cap_m": float("nan")}, "source_branch_distance_cap_m"),
+    ],
+)
+def test_source_branch_rejects_invalid_diversity_controls(
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        build_source_branch_reservoir(
+            _candidate_rows(),
+            reservoir_config=_config(),
+            per_source_branch_top_n=2,
+            **kwargs,
+        )
 
 
 def test_source_branch_summary_reports_cell_recall() -> None:
