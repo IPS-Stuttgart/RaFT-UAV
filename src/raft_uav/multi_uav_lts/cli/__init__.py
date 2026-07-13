@@ -2,9 +2,8 @@
 
 The maintained implementation lives in the sibling ``cli.py`` module. This
 package preserves the public import path while rejecting repeated ZIP member
-names and non-root member paths. Repeated names can pad the expected physical
-entry count while omitting one logical prediction file, while Windows-style
-backslash paths can otherwise bypass the root-level archive check.
+names, non-root member paths, non-positive class ids, and visibility values
+outside ``[0, 1]``.
 """
 
 from __future__ import annotations
@@ -12,6 +11,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 import importlib.util
+import math
 from pathlib import Path
 import sys
 import zipfile
@@ -27,15 +27,79 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_SUBMISSION_FILE_SUMMARY = _IMPL.SubmissionFileSummary
 _ORIGINAL_SUBMISSION_VALIDATION = _IMPL.SubmissionValidation
-_summarize_prediction_text = _IMPL._summarize_prediction_text
+_ORIGINAL_SUMMARIZE_PREDICTION_TEXT = _IMPL._summarize_prediction_text
+
+
+@dataclass(frozen=True)
+class SubmissionFileSummary(_ORIGINAL_SUBMISSION_FILE_SUMMARY):
+    """Per-file validation with class and visibility domain diagnostics."""
+
+    invalid_class_rows: int = 0
+    invalid_visibility_rows: int = 0
 
 
 @dataclass(frozen=True)
 class SubmissionValidation(_ORIGINAL_SUBMISSION_VALIDATION):
-    """Submission validation with repeated archive member diagnostics."""
+    """Submission validation with strict archive and row-domain diagnostics."""
 
     duplicate_entries: list[str] = field(default_factory=list)
+    invalid_class_rows: int = 0
+    invalid_visibility_rows: int = 0
+
+
+def _summarize_prediction_text(name: str, text: str) -> SubmissionFileSummary:
+    """Summarize a prediction file and validate class/visibility domains."""
+
+    summary = _ORIGINAL_SUMMARIZE_PREDICTION_TEXT(name, text)
+    invalid_class_rows, invalid_visibility_rows = _count_invalid_class_visibility_rows(text)
+    return SubmissionFileSummary(
+        name=summary.name,
+        row_count=summary.row_count,
+        first_frame=summary.first_frame,
+        last_frame=summary.last_frame,
+        unique_object_ids=summary.unique_object_ids,
+        parse_errors=summary.parse_errors,
+        invalid_geometry_rows=summary.invalid_geometry_rows,
+        invalid_confidence_rows=summary.invalid_confidence_rows,
+        unsorted_rows=summary.unsorted_rows,
+        invalid_class_rows=invalid_class_rows,
+        invalid_visibility_rows=invalid_visibility_rows,
+    )
+
+
+def _count_invalid_class_visibility_rows(text: str) -> tuple[int, int]:
+    invalid_class_rows = 0
+    invalid_visibility_rows = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) != len(_IMPL.SUBMISSION_COLUMNS):
+            continue
+        try:
+            frame_id = _IMPL._parse_int_like(parts[0])
+            object_id = _IMPL._parse_int_like(parts[1])
+            x1, y1, width, height, confidence, _class_value, visibility = (
+                float(part) for part in parts[2:]
+            )
+            class_id = _IMPL._parse_int_like(parts[7])
+        except ValueError:
+            continue
+        if frame_id <= 0 or object_id <= 0:
+            continue
+        if not all(
+            math.isfinite(value)
+            for value in (x1, y1, width, height, confidence, visibility)
+        ):
+            continue
+        if class_id <= 0:
+            invalid_class_rows += 1
+        if not 0.0 <= visibility <= 1.0:
+            invalid_visibility_rows += 1
+    return invalid_class_rows, invalid_visibility_rows
 
 
 def validate_submission_zip(
@@ -44,7 +108,7 @@ def validate_submission_zip(
     template_zip: Path | None = None,
     expected_file_count: int | None = 98,
 ) -> SubmissionValidation:
-    """Validate one submission ZIP, rejecting duplicate or non-root members."""
+    """Validate one submission ZIP, rejecting invalid archive members and rows."""
 
     expected_names = _IMPL.expected_names_from_template(template_zip)
     if expected_names is not None:
@@ -80,6 +144,10 @@ def validate_submission_zip(
     invalid_confidence_rows = sum(
         summary.invalid_confidence_rows for summary in file_summaries
     )
+    invalid_class_rows = sum(summary.invalid_class_rows for summary in file_summaries)
+    invalid_visibility_rows = sum(
+        summary.invalid_visibility_rows for summary in file_summaries
+    )
     unsorted_rows = sum(summary.unsorted_rows for summary in file_summaries)
     total_rows = sum(summary.row_count for summary in file_summaries)
 
@@ -96,6 +164,8 @@ def validate_submission_zip(
         and parse_errors == 0
         and invalid_geometry_rows == 0
         and invalid_confidence_rows == 0
+        and invalid_class_rows == 0
+        and invalid_visibility_rows == 0
         and unsorted_rows == 0
     )
     return SubmissionValidation(
@@ -114,10 +184,14 @@ def validate_submission_zip(
         unsorted_rows=unsorted_rows,
         files=file_summaries,
         duplicate_entries=duplicate_entries,
+        invalid_class_rows=invalid_class_rows,
+        invalid_visibility_rows=invalid_visibility_rows,
     )
 
 
+_IMPL.SubmissionFileSummary = SubmissionFileSummary
 _IMPL.SubmissionValidation = SubmissionValidation
+_IMPL._summarize_prediction_text = _summarize_prediction_text
 _IMPL.validate_submission_zip = validate_submission_zip
 
 globals().update(
@@ -127,7 +201,9 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["SubmissionFileSummary"] = SubmissionFileSummary
 globals()["SubmissionValidation"] = SubmissionValidation
+globals()["_summarize_prediction_text"] = _summarize_prediction_text
 globals()["validate_submission_zip"] = validate_submission_zip
 __doc__ = _IMPL.__doc__
 __all__ = [
