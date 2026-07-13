@@ -30,11 +30,32 @@ jobs:
         shell: bash
         run: |
           set +e
+          python - <<'PY' > targeted-pytest.log 2>&1
+          import raft_uav.multi_uav_lts.cli as cli
+
+          rows = [
+              "1,1,10,20,5,6,0.9,0,1\n",
+              "1,1,10,20,5,6,0.9,1,-0.1\n",
+              "1,1,10,20,5,6,0.9,1,1.1\n",
+          ]
+          print("package_file", cli.__file__)
+          print("impl_file", cli._IMPL.__file__)
+          print("columns", cli._IMPL.SUBMISSION_COLUMNS)
+          print("parse_int_like", cli._IMPL._parse_int_like)
+          print("impl_summary_class", cli._IMPL.SubmissionFileSummary)
+          print("original_summary_class", cli._ORIGINAL_SUBMISSION_FILE_SUMMARY)
+          for row in rows:
+              print("row", repr(row))
+              print("parts", row.strip().split(","))
+              print("domain_counts", cli._count_invalid_class_visibility_rows(row))
+              print("original_summary", cli._ORIGINAL_SUMMARIZE_PREDICTION_TEXT("x.txt", row))
+              print("wrapped_summary", cli._summarize_prediction_text("x.txt", row))
+          PY
           pytest -vv \
             tests/test_multi_uav_lts.py \
             tests/test_multi_uav_lts_duplicate_zip_members.py \
             tests/test_multi_uav_lts_submission_domains.py \
-            > targeted-pytest.log 2>&1
+            >> targeted-pytest.log 2>&1
           status=$?
           cat targeted-pytest.log
           echo "status=${status}" >> "$GITHUB_OUTPUT"
