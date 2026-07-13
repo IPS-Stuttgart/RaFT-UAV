@@ -24,10 +24,11 @@ def diversify_candidate_reservoir(
 ) -> pd.DataFrame:
     """Keep spatially diverse candidates in every sequence/time frame.
 
-    Protected rows are retained first. Remaining rows are considered by score
-    and accepted only when they are at least ``radius_m`` away from every
-    already-selected row. This prevents dense duplicate clusters from consuming
-    the reservoir budget while keeping distinct lower-ranked hypotheses alive.
+    Protected rows are reserved separately. Remaining rows are considered by
+    score and accepted only when they are at least ``radius_m`` away from every
+    previously selected ordinary row. This prevents a low-score protected row
+    from suppressing a stronger nearby hypothesis while preserving explicit
+    source/branch selections under the frame cap.
     """
 
     frame = pd.DataFrame(rows).copy()
@@ -43,30 +44,61 @@ def diversify_candidate_reservoir(
     if "candidate_reservoir_protected" not in frame.columns:
         frame["candidate_reservoir_protected"] = False
 
+    try:
+        radius = float(radius_m)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("radius_m must be finite and non-negative") from exc
+    if not np.isfinite(radius) or radius < 0.0:
+        raise ValueError("radius_m must be finite and non-negative")
+
+    try:
+        cap = int(max_candidates_per_frame)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("max_candidates_per_frame must be a non-negative integer") from exc
+    if cap != max_candidates_per_frame or cap < 0:
+        raise ValueError("max_candidates_per_frame must be a non-negative integer")
+
     outputs: list[pd.DataFrame] = []
-    radius = max(float(radius_m), 0.0)
-    cap = max(int(max_candidates_per_frame), 1)
     for _, group in frame.groupby(["sequence_id", "time_s"], sort=False, dropna=False):
         group = group.copy()
         protected = group["candidate_reservoir_protected"].fillna(False).astype(bool)
-        order = group.assign(_protected=protected).sort_values(
-            ["_protected", score_column], ascending=[False, False], kind="mergesort"
+        if not preserve_protected:
+            protected = pd.Series(False, index=group.index, dtype=bool)
+
+        protected_order = group.loc[protected].sort_values(
+            score_column,
+            ascending=False,
+            kind="mergesort",
         )
-        selected: list[int] = []
-        selected_xyz: list[np.ndarray] = []
-        for idx, row in order.iterrows():
-            is_protected = bool(row["_protected"]) and preserve_protected
+        protected_indices = [
+            idx
+            for idx, row in protected_order.iterrows()
+            if np.isfinite(row[["x_m", "y_m", "z_m"]].to_numpy(float)).all()
+        ]
+
+        ordinary_order = group.loc[~protected].sort_values(
+            score_column,
+            ascending=False,
+            kind="mergesort",
+        )
+        ordinary_indices: list[int] = []
+        ordinary_xyz: list[np.ndarray] = []
+        for idx, row in ordinary_order.iterrows():
             xyz = row[["x_m", "y_m", "z_m"]].to_numpy(float)
             if not np.isfinite(xyz).all():
                 continue
-            sufficiently_distinct = not selected_xyz or min(
-                float(np.linalg.norm(xyz - prior)) for prior in selected_xyz
+            sufficiently_distinct = not ordinary_xyz or min(
+                float(np.linalg.norm(xyz - prior)) for prior in ordinary_xyz
             ) >= radius
-            if is_protected or sufficiently_distinct:
-                selected.append(idx)
-                selected_xyz.append(xyz)
-            if len(selected) >= cap:
-                break
+            if sufficiently_distinct:
+                ordinary_indices.append(idx)
+                ordinary_xyz.append(xyz)
+
+        if cap > 0:
+            selected = protected_indices[:cap]
+            selected.extend(ordinary_indices[: max(cap - len(selected), 0)])
+        else:
+            selected = [*protected_indices, *ordinary_indices]
         out = group.loc[selected].copy()
         out = out.sort_values(score_column, ascending=False, kind="mergesort")
         out["candidate_diversity_rank"] = np.arange(1, len(out) + 1)
