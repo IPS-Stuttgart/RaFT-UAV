@@ -102,10 +102,6 @@ def _load_sequence_class_map_with_stripped_csv_headers(
 def _normalize_timestamp_tolerance_s(value: Any) -> float:
     """Return a finite, non-negative Track 5 timestamp tolerance."""
 
-    if isinstance(value, (bool, np.bool_)):
-        raise ValueError(
-            "timestamp_tolerance_s must be a finite non-negative number, not a boolean"
-        )
     if isinstance(value, np.ndarray):
         if value.ndim != 0:
             raise ValueError(
@@ -114,6 +110,10 @@ def _normalize_timestamp_tolerance_s(value: Any) -> float:
         value = value.item()
     elif isinstance(value, np.generic):
         value = value.item()
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(
+            "timestamp_tolerance_s must be a finite non-negative number, not a boolean"
+        )
     try:
         tolerance = float(value)
     except (OverflowError, TypeError, ValueError) as exc:
