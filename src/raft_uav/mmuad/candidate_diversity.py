@@ -24,10 +24,11 @@ def diversify_candidate_reservoir(
 ) -> pd.DataFrame:
     """Keep spatially diverse candidates in every sequence/time frame.
 
-    Protected rows are retained first. Remaining rows are considered by score
-    and accepted only when they are at least ``radius_m`` away from every
-    already-selected row. This prevents dense duplicate clusters from consuming
-    the reservoir budget while keeping distinct lower-ranked hypotheses alive.
+    Protected rows are retained without suppressing other hypotheses. Remaining
+    rows are considered by score and accepted only when they are at least
+    ``radius_m`` away from every previously accepted non-protected row. This
+    prevents dense duplicate clusters from consuming the reservoir budget while
+    keeping distinct lower-ranked hypotheses alive.
     """
 
     frame = pd.DataFrame(rows).copy().reset_index(drop=True)
@@ -49,22 +50,24 @@ def diversify_candidate_reservoir(
     for _, group in frame.groupby(["sequence_id", "time_s"], sort=False, dropna=False):
         group = group.copy()
         protected = group["candidate_reservoir_protected"].fillna(False).astype(bool)
-        order = group.assign(_protected=protected).sort_values(
+        priority = protected if preserve_protected else pd.Series(False, index=group.index)
+        order = group.assign(_protected=priority).sort_values(
             ["_protected", score_column], ascending=[False, False], kind="mergesort"
         )
         selected: list[int] = []
-        selected_xyz: list[np.ndarray] = []
+        suppression_xyz: list[np.ndarray] = []
         for idx, row in order.iterrows():
-            is_protected = bool(row["_protected"]) and preserve_protected
+            is_protected = bool(row["_protected"])
             xyz = row[["x_m", "y_m", "z_m"]].to_numpy(float)
             if not np.isfinite(xyz).all():
                 continue
-            sufficiently_distinct = not selected_xyz or min(
-                float(np.linalg.norm(xyz - prior)) for prior in selected_xyz
+            sufficiently_distinct = not suppression_xyz or min(
+                float(np.linalg.norm(xyz - prior)) for prior in suppression_xyz
             ) >= radius
             if is_protected or sufficiently_distinct:
                 selected.append(idx)
-                selected_xyz.append(xyz)
+                if not is_protected:
+                    suppression_xyz.append(xyz)
             if len(selected) >= cap:
                 break
         out = group.loc[selected].copy()
