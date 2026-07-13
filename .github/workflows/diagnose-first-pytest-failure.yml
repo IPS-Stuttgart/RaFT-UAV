@@ -5,12 +5,11 @@ name: Diagnose first pytest failure
   pull_request:
 
 permissions:
-  contents: read
-  issues: write
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -24,42 +23,57 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Detect existing diagnostic
+        id: diagnostic
+        run: |
+          if [ -f .github/diagnostics/pytest-first-failure.txt ]; then
+            echo "run=false" >>"${GITHUB_OUTPUT}"
+          else
+            echo "run=true" >>"${GITHUB_OUTPUT}"
+          fi
+
       - name: Set up Python 3.11
+        if: steps.diagnostic.outputs.run == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
 
       - name: Install package with test dependencies
+        if: steps.diagnostic.outputs.run == 'true'
         run: |
           python -m pip install --upgrade pip >/tmp/pip-upgrade.log 2>&1
           python -m pip install -e ".[dev]" >/tmp/pip-install.log 2>&1
 
       - name: Capture first pytest failure
+        if: steps.diagnostic.outputs.run == 'true'
         id: pytest
         continue-on-error: true
         run: |
           pytest -x -q --tb=short >pytest-first-failure.txt 2>&1
 
-      - name: Post first failure to the pull request
-        if: always() && steps.pytest.outcome == 'failure'
+      - name: Commit first failure diagnostic
+        if: >-
+          always() && steps.diagnostic.outputs.run == 'true' &&
+          steps.pytest.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          {
-            echo '<!-- raft-uav-first-pytest-failure -->'
-            echo 'First failing full-suite test on the diagnostic branch head:'
-            echo
-            echo '```text'
-            tail -n 120 pytest-first-failure.txt
-            echo '```'
-          } >pytest-first-failure-comment.md
-          gh pr comment "${PR_NUMBER}" \
-            --repo "${REPOSITORY}" \
-            --body-file pytest-first-failure-comment.md
+          mkdir -p .github/diagnostics
+          tail -n 120 pytest-first-failure.txt \
+            >.github/diagnostics/pytest-first-failure.txt
+          CONTENT="$({ base64 -w0 .github/diagnostics/pytest-first-failure.txt; } 2>/dev/null)"
+          gh api \
+            --method PUT \
+            "repos/${REPOSITORY}/contents/.github/diagnostics/pytest-first-failure.txt" \
+            --field message='Capture first pytest failure' \
+            --field content="${CONTENT}" \
+            --field branch="${HEAD_REF}"
 
       - name: Preserve pytest outcome
-        if: always() && steps.pytest.outcome == 'failure'
+        if: >-
+          always() && steps.diagnostic.outputs.run == 'true' &&
+          steps.pytest.outcome == 'failure'
         run: exit 1
