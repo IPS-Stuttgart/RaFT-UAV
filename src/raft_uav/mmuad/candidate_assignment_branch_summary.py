@@ -115,7 +115,7 @@ def _normalized_frame_rows(frame_rows: pd.DataFrame) -> pd.DataFrame:
     for column in ("dominant_is_oracle", "oracle_in_topk_by_weight"):
         if column not in rows.columns:
             rows[column] = False
-        rows[column] = _bool_series(rows[column])
+        rows[column] = _bool_series(rows[column], field_name=column)
     return rows
 
 
@@ -187,20 +187,40 @@ def _clean_text(values: pd.Series) -> pd.Series:
     return text.where(~missing, "unknown")
 
 
-def _bool_series(values: pd.Series) -> pd.Series:
+def _bool_series(values: pd.Series, *, field_name: str) -> pd.Series:
+    """Normalize explicit Boolean values and reject ambiguous diagnostics."""
+
     series = pd.Series(values)
     if series.empty:
         return pd.Series(dtype=bool, index=series.index)
     if pd.api.types.is_bool_dtype(series.dtype):
         return series.fillna(False).astype(bool)
-    numeric = pd.to_numeric(series, errors="coerce")
-    numeric_truthy = numeric.notna() & (numeric != 0.0)
-    text = series.where(series.notna(), "").astype(str).str.strip().str.lower()
-    truthy_text = text.isin({"true", "t", "yes", "y", "1", "1.0"})
+
+    missing = series.isna()
+    text = series.where(~missing, "").astype(str).str.strip().str.lower()
+    truthy_text = text.isin({"true", "t", "yes", "y"})
     falsy_text = text.isin(
-        {"false", "f", "no", "n", "0", "0.0", "", "nan", "none", "<na>", "nat"}
+        {"false", "f", "no", "n", "", "nan", "none", "<na>", "nat"}
     )
-    return (truthy_text | (numeric_truthy & ~falsy_text)).astype(bool)
+    numeric = pd.to_numeric(series, errors="coerce")
+    finite_numeric = pd.Series(
+        np.isfinite(numeric.to_numpy(dtype=float, na_value=np.nan)),
+        index=series.index,
+    )
+    binary_numeric = finite_numeric & numeric.isin([0.0, 1.0])
+    recognized = missing | truthy_text | falsy_text | binary_numeric
+    if not bool(recognized.all()):
+        invalid = series.loc[~recognized]
+        examples = ", ".join(
+            f"{index!r}: {value!r}"
+            for index, value in zip(invalid.index[:5], invalid.iloc[:5], strict=False)
+        )
+        suffix = "" if len(invalid) <= 5 else f", ... ({len(invalid)} rows total)"
+        raise ValueError(
+            f"{field_name} contains non-boolean values at rows [{examples}{suffix}]"
+        )
+
+    return (truthy_text | (binary_numeric & numeric.eq(1.0))).astype(bool)
 
 
 def _mse(values: pd.Series) -> float:
