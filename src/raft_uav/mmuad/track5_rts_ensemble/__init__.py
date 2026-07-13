@@ -1,8 +1,9 @@
-"""Compatibility wrapper hardening Track 5 RTS ensemble CSV and template handling.
+"""Compatibility wrapper hardening Track 5 RTS ensemble inputs.
 
 The maintained implementation lives in the sibling ``track5_rts_ensemble.py``
-module.  This package keeps the public import path while preserving opaque
-sequence identifiers in estimate CSVs and canonicalizing template identifiers.
+module. This package keeps the public import path while preserving opaque
+sequence identifiers in estimate CSVs, canonicalizing template identifiers, and
+allowing zero-weight estimate inputs to act as explicit disable switches.
 """
 
 from __future__ import annotations
@@ -27,6 +28,8 @@ if _SPEC is None or _SPEC.loader is None:
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+
+_ORIGINAL_POSITIVE_FINITE = _IMPL._positive_finite
 
 
 class _PandasCsvProxy:
@@ -91,9 +94,18 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     return out.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
+def _positive_finite_allowing_disabled_inputs(value: float, name: str) -> float:
+    """Allow zero only for estimate weights used as explicit disable switches."""
+
+    if str(name).startswith("weight["):
+        return _IMPL._nonnegative_finite(value, name)
+    return _ORIGINAL_POSITIVE_FINITE(value, name)
+
+
 _IMPL.pd = _PandasCsvProxy(pd)
 _IMPL._first_present = _first_present
 _IMPL._normalize_template_rows = _normalize_template_rows
+_IMPL._positive_finite = _positive_finite_allowing_disabled_inputs
 
 globals().update(
     {
@@ -107,6 +119,9 @@ globals().update(
 globals()["_first_present"] = _first_present
 globals()["_sequence_text_or_none"] = _sequence_text_or_none
 globals()["_normalize_template_rows"] = _normalize_template_rows
+globals()["_positive_finite_allowing_disabled_inputs"] = (
+    _positive_finite_allowing_disabled_inputs
+)
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
