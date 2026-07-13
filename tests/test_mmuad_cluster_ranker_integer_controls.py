@@ -30,20 +30,22 @@ def _features() -> pd.DataFrame:
 def test_cluster_ranker_rejects_lossy_logistic_iteration_counts(
     iterations: object,
 ) -> None:
-    with pytest.raises(ValueError, match="iterations must be a positive integer"):
-        train_cluster_ranker(_features(), iterations=iterations)
+    for operation in (train_cluster_ranker, evaluate_cluster_ranker_loso):
+        with pytest.raises(ValueError, match="iterations must be a positive integer"):
+            operation(_features(), iterations=iterations)
 
 
 @pytest.mark.parametrize("n_estimators", [0, -1, 1.5, False, np.nan, np.inf])
 def test_cluster_ranker_rejects_lossy_estimator_counts(
     n_estimators: object,
 ) -> None:
-    with pytest.raises(ValueError, match="n_estimators must be a positive integer"):
-        train_cluster_ranker(
-            _features(),
-            model_type="random-forest-classifier",
-            n_estimators=n_estimators,
-        )
+    for operation in (train_cluster_ranker, evaluate_cluster_ranker_loso):
+        with pytest.raises(ValueError, match="n_estimators must be a positive integer"):
+            operation(
+                _features(),
+                model_type="random-forest-classifier",
+                n_estimators=n_estimators,
+            )
 
 
 @pytest.mark.parametrize("minimum", [-1, 1.5, True, np.nan, np.inf])
