@@ -233,6 +233,7 @@ def test_bridge_cli_writes_summary_and_oracle_outputs(tmp_path) -> None:
     assert len(reservoir) == 4
     assert summary["cv_bridge_quota_rows"] == 1
     assert summary["cv_bridge_supported_rows"] == 1
-    assert oracle.loc[0, "oracle_all_3d_m_mse"] == 0.0
+    expected_oracle_mse = (20.0**2 + 18.0**2) / 3.0
+    assert oracle.loc[0, "oracle_all_3d_m_mse"] == pytest.approx(expected_oracle_mse)
     assert oracle_frame_csv.exists()
     assert oracle_by_sequence_csv.exists()
