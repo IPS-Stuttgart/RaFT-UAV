@@ -30,23 +30,28 @@ def search_track5_temporal_repair_parameters(
     iterations_grid: Iterable[int] = (1, 2, 3),
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     truth_rows = _normalize_truth(truth)
+    max_speed_values = tuple(float(value) for value in max_speed_grid)
+    interpolation_residual_values = tuple(
+        float(value) for value in interpolation_residual_grid
+    )
+    iteration_values = tuple(int(value) for value in iterations_grid)
     records: list[dict[str, Any]] = []
-    for max_speed_mps in max_speed_grid:
-        for max_interpolation_residual_m in interpolation_residual_grid:
-            for iterations in iterations_grid:
+    for max_speed_mps in max_speed_values:
+        for max_interpolation_residual_m in interpolation_residual_values:
+            for iterations in iteration_values:
                 repaired, diagnostics = repair_track5_temporal_spikes(
                     submission,
-                    max_speed_mps=float(max_speed_mps),
-                    max_interpolation_residual_m=float(max_interpolation_residual_m),
-                    iterations=int(iterations),
+                    max_speed_mps=max_speed_mps,
+                    max_interpolation_residual_m=max_interpolation_residual_m,
+                    iterations=iterations,
                 )
                 metrics = _score_estimates(repaired, truth_rows)
                 repaired_count = int(diagnostics["repaired"].astype(bool).sum()) if not diagnostics.empty else 0
                 records.append(
                     {
-                        "max_speed_mps": float(max_speed_mps),
-                        "max_interpolation_residual_m": float(max_interpolation_residual_m),
-                        "iterations": int(iterations),
+                        "max_speed_mps": max_speed_mps,
+                        "max_interpolation_residual_m": max_interpolation_residual_m,
+                        "iterations": iterations,
                         "repaired_row_count": repaired_count,
                         "repaired_fraction": float(repaired_count / len(repaired)) if len(repaired) else 0.0,
                         "max_repair_displacement_m": _safe_max(diagnostics.get("repair_displacement_m", pd.Series(dtype=float))),
