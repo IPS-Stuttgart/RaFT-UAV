@@ -14,12 +14,22 @@ def add_track_level_features(radar: pd.DataFrame, *, window_frames: int = 10) ->
     if window_frames < 1:
         raise ValueError("window_frames must be positive")
     sort_columns = [c for c in ("time_s", "frame_index", "track_index") if c in radar.columns]
-    out = radar.sort_values(sort_columns).copy() if sort_columns else radar.copy()
+    input_position_column = "__raft_uav_input_position"
+    while input_position_column in radar.columns:
+        input_position_column = f"_{input_position_column}"
+    out = radar.copy()
+    out[input_position_column] = np.arange(len(out), dtype=int)
+    if sort_columns:
+        out = out.sort_values(sort_columns, kind="mergesort")
     feature_frames: list[pd.DataFrame] = []
     for _, group in out.groupby("track_id", sort=False, dropna=False):
         feature_frames.append(_features_for_track(group.copy(), window_frames=window_frames))
-    featured = pd.concat(feature_frames, ignore_index=False).sort_index()
-    return featured.loc[radar.index].copy() if set(featured.index) == set(radar.index) else featured
+    featured = pd.concat(feature_frames, ignore_index=False)
+    return (
+        featured.sort_values(input_position_column, kind="mergesort")
+        .drop(columns=[input_position_column])
+        .copy()
+    )
 
 
 def _features_for_track(group: pd.DataFrame, *, window_frames: int) -> pd.DataFrame:
