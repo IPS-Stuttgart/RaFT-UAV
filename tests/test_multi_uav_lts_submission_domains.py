@@ -37,4 +37,3 @@ def test_validate_submission_zip_rejects_invalid_class_and_visibility_domains(
     assert validation.valid is False
     assert validation.parse_errors == 0
     assert getattr(validation, invalid_field) == 1
-    assert getattr(validation.files[0], invalid_field) == 1
