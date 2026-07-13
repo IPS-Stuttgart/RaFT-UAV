@@ -502,16 +502,25 @@ def _candidate_rows(candidates: CandidateFrame | pd.DataFrame) -> pd.DataFrame:
         if isinstance(candidates, CandidateFrame)
         else pd.DataFrame(candidates).copy()
     )
+    input_order_column = "_candidate_pair_group_input_order"
+    while input_order_column in rows.columns:
+        input_order_column += "_"
+    rows[input_order_column] = np.arange(len(rows), dtype=int)
     rows = normalize_candidate_columns(rows)
     if rows.empty:
-        return rows
+        return rows.drop(columns=[input_order_column], errors="ignore")
     rows["sequence_id"] = rows["sequence_id"].astype(str)
     for column in ("time_s", "x_m", "y_m", "z_m"):
         rows[column] = pd.to_numeric(rows[column], errors="coerce")
     finite = np.isfinite(
         rows[["time_s", "x_m", "y_m", "z_m"]].to_numpy(float)
     ).all(axis=1)
-    return rows.loc[finite].copy().reset_index(drop=True)
+    return (
+        rows.loc[finite]
+        .sort_values(input_order_column, kind="stable")
+        .drop(columns=[input_order_column])
+        .reset_index(drop=True)
+    )
 
 
 def _validate_group_config(config: PairGroupMultiplicityConfig) -> None:
