@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.candidate_assignment_branch_summary import (
     build_candidate_assignment_branch_summary,
@@ -92,3 +94,32 @@ def test_branch_summary_cli_writes_artifacts(tmp_path: Path) -> None:
     payload = json.loads(summary_json.read_text(encoding="utf-8"))
     assert payload["schema"] == "raft-uav-mmuad-candidate-assignment-branch-summary-v1"
     assert payload["row_count"] == len(written)
+
+
+def test_branch_summary_parses_explicit_boolean_representations() -> None:
+    rows = _frame_rows()
+    rows["dominant_is_oracle"] = ["False", "TRUE", 0, 1]
+    rows["oracle_in_topk_by_weight"] = ["0", "1.0", "no", "yes"]
+
+    summary = build_candidate_assignment_branch_summary(rows)
+    pooled = summary.loc[
+        (summary["sequence_id"] == "__pooled__")
+        & (summary["group_label"] == "__all__")
+    ].iloc[0]
+
+    assert pooled["dominant_matches_oracle_rate"] == 0.5
+    assert pooled["oracle_in_topk_by_weight_rate"] == 0.5
+
+
+@pytest.mark.parametrize("invalid", ["maybe", 2, -1, np.inf])
+@pytest.mark.parametrize("column", ["dominant_is_oracle", "oracle_in_topk_by_weight"])
+def test_branch_summary_rejects_ambiguous_boolean_diagnostics(
+    column: str,
+    invalid: object,
+) -> None:
+    rows = _frame_rows()
+    rows[column] = rows[column].astype(object)
+    rows.loc[1, column] = invalid
+
+    with pytest.raises(ValueError, match=rf"{column}.*1"):
+        build_candidate_assignment_branch_summary(rows)
