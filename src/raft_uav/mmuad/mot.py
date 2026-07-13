@@ -411,7 +411,7 @@ def _metric_frame_pairs(
     estimates: pd.DataFrame,
     truth: pd.DataFrame,
 ) -> Iterator[tuple[pd.DataFrame, pd.DataFrame]]:
-    """Yield same-frame estimate/truth pairs without crossing sequence boundaries."""
+    """Yield each tolerance-matched estimate/truth frame exactly once."""
 
     estimates = estimates.copy()
     truth = truth.copy()
@@ -421,39 +421,45 @@ def _metric_frame_pairs(
     if "sequence_id" in estimates.columns and "sequence_id" in truth.columns:
         estimates["_metric_sequence_id"] = estimates["sequence_id"].astype(str)
         truth["_metric_sequence_id"] = truth["sequence_id"].astype(str)
-        estimate_keys = {
-            (str(sequence_id), float(time_s))
-            for sequence_id, time_s in estimates[
-                ["_metric_sequence_id", "time_s"]
-            ].itertuples(index=False, name=None)
-        }
-        truth_keys = {
-            (str(sequence_id), float(time_s))
-            for sequence_id, time_s in truth[
-                ["_metric_sequence_id", "time_s"]
-            ].itertuples(index=False, name=None)
-        }
-        for sequence_id, time_s in sorted(estimate_keys | truth_keys):
-            pred = estimates.loc[
-                (estimates["_metric_sequence_id"] == sequence_id)
-                & _same_metric_time(estimates["time_s"], time_s)
-            ].copy()
-            gt = truth.loc[
-                (truth["_metric_sequence_id"] == sequence_id)
-                & _same_metric_time(truth["time_s"], time_s)
-            ].copy()
-            yield pred, gt
+        sequence_ids = sorted(
+            set(estimates["_metric_sequence_id"]).union(truth["_metric_sequence_id"])
+        )
+        for sequence_id in sequence_ids:
+            sequence_estimates = estimates.loc[
+                estimates["_metric_sequence_id"] == sequence_id
+            ]
+            sequence_truth = truth.loc[truth["_metric_sequence_id"] == sequence_id]
+            yield from _metric_time_cluster_pairs(sequence_estimates, sequence_truth)
         return
 
-    for time_s in sorted(set(estimates["time_s"]).union(set(truth["time_s"]))):
-        pred = estimates.loc[_same_metric_time(estimates["time_s"], time_s)].copy()
-        gt = truth.loc[_same_metric_time(truth["time_s"], time_s)].copy()
+    yield from _metric_time_cluster_pairs(estimates, truth)
+
+
+def _metric_time_cluster_pairs(
+    estimates: pd.DataFrame,
+    truth: pd.DataFrame,
+) -> Iterator[tuple[pd.DataFrame, pd.DataFrame]]:
+    """Group timestamp keys within the absolute tolerance before metric matching."""
+
+    time_values = sorted(
+        set(float(value) for value in estimates["time_s"]).union(
+            float(value) for value in truth["time_s"]
+        )
+    )
+    start = 0
+    while start < len(time_values):
+        cluster_start = time_values[start]
+        stop = start + 1
+        while (
+            stop < len(time_values)
+            and time_values[stop] - cluster_start <= _MOT_TIME_MATCH_ATOL_S
+        ):
+            stop += 1
+        cluster = time_values[start:stop]
+        pred = estimates.loc[estimates["time_s"].isin(cluster)].copy()
+        gt = truth.loc[truth["time_s"].isin(cluster)].copy()
         yield pred, gt
-
-
-def _same_metric_time(values: pd.Series, target: float) -> np.ndarray:
-    numeric = pd.to_numeric(values, errors="coerce").to_numpy(float)
-    return np.isclose(numeric, float(target), rtol=0.0, atol=_MOT_TIME_MATCH_ATOL_S)
+        start = stop
 
 
 def _greedy_truth_matches(
