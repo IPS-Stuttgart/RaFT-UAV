@@ -95,3 +95,22 @@ def test_weight_search_does_not_reward_missing_truth_rows(
 
     assert best["weights"] == {"complete": 1.0, "incomplete": 0.0}
     assert best["metrics"]["matched_rows"] == 2
+
+
+def test_weight_search_rejects_grid_without_complete_support(tmp_path: Path) -> None:
+    _, incomplete_path = _write_inputs(tmp_path)
+
+    with pytest.raises(
+        ValueError,
+        match="no candidate with complete truth support; minimum unmatched rows: 1",
+    ):
+        search_track5_estimate_ensemble_weights(
+            [
+                EstimateInput("partial_a", incomplete_path),
+                EstimateInput("partial_b", incomplete_path),
+            ],
+            template=_template(),
+            truth=_truth(),
+            weight_step=1.0,
+            max_nearest_time_delta_s=0.0,
+        )
