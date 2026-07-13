@@ -13,6 +13,55 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+_TRUE_TEXT = {"1", "true", "t", "yes", "y", "on"}
+_FALSE_TEXT = {
+    "0",
+    "false",
+    "f",
+    "no",
+    "n",
+    "off",
+    "",
+    "none",
+    "null",
+    "nan",
+    "<na>",
+    "nat",
+}
+
+
+def _boolean_flag(value: object) -> bool:
+    """Parse persisted boolean-like values without non-empty string truthiness."""
+
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if value is None:
+        return False
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return False
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _TRUE_TEXT:
+            return True
+        if text in _FALSE_TEXT:
+            return False
+        try:
+            numeric = float(text)
+        except ValueError:
+            return bool(text)
+        return bool(np.isfinite(numeric) and numeric != 0.0)
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return bool(np.isfinite(numeric) and numeric != 0.0)
+    return bool(value)
+
 
 def diversify_candidate_reservoir(
     rows: pd.DataFrame,
@@ -49,7 +98,7 @@ def diversify_candidate_reservoir(
     cap = max(int(max_candidates_per_frame), 1)
     for _, group in frame.groupby(["sequence_id", "time_s"], sort=False, dropna=False):
         group = group.copy()
-        protected = group["candidate_reservoir_protected"].fillna(False).astype(bool)
+        protected = group["candidate_reservoir_protected"].map(_boolean_flag).astype(bool)
         priority = protected if preserve_protected else pd.Series(False, index=group.index)
         order = group.assign(_protected=priority).sort_values(
             ["_protected", score_column], ascending=[False, False], kind="mergesort"
