@@ -13,6 +13,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+_TRUE_TEXT = {"1", "true", "t", "yes", "y", "on"}
+_FALSE_TEXT = {"", "0", "false", "f", "no", "n", "off", "nan", "none", "null", "<na>"}
+
 
 def diversify_candidate_reservoir(
     rows: pd.DataFrame,
@@ -49,7 +52,7 @@ def diversify_candidate_reservoir(
     cap = max(int(max_candidates_per_frame), 1)
     for _, group in frame.groupby(["sequence_id", "time_s"], sort=False, dropna=False):
         group = group.copy()
-        protected = group["candidate_reservoir_protected"].fillna(False).astype(bool)
+        protected = _protected_flag_series(group["candidate_reservoir_protected"])
         priority = protected if preserve_protected else pd.Series(False, index=group.index)
         order = group.assign(_protected=priority).sort_values(
             ["_protected", score_column], ascending=[False, False], kind="mergesort"
@@ -76,6 +79,37 @@ def diversify_candidate_reservoir(
         out["candidate_diversity_radius_m"] = radius
         outputs.append(out)
     return pd.concat(outputs, ignore_index=True) if outputs else frame.iloc[0:0].copy()
+
+
+def _protected_flag_series(values: pd.Series) -> pd.Series:
+    return values.map(_parse_protected_flag).astype(bool)
+
+
+def _parse_protected_flag(value: object) -> bool:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if value is None or pd.isna(value):
+        return False
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _TRUE_TEXT:
+            return True
+        if text in _FALSE_TEXT:
+            return False
+        raise ValueError(
+            "candidate_reservoir_protected values must be boolean-like; "
+            f"got {value!r}"
+        )
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "candidate_reservoir_protected values must be boolean-like; "
+            f"got {value!r}"
+        ) from exc
+    if not np.isfinite(number):
+        return False
+    return bool(number)
 
 
 def main(argv: list[str] | None = None) -> int:
