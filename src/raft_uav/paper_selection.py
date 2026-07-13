@@ -371,11 +371,20 @@ def _candidate_ranges_m(
     if "range_m" in candidates.columns:
         ranges = pd.to_numeric(candidates["range_m"], errors="coerce").to_numpy(dtype=float)
         finite = np.isfinite(ranges)
-        if finite.any():
+        if finite.all():
             return ranges, "range_m"
         if require_range_m:
+            if finite.any():
+                return ranges, "range_m"
             raise ValueError("paper range gating found no finite Fortem range_m values")
-    elif require_range_m:
+        positions = candidates[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+        enu_ranges = np.linalg.norm(positions, axis=1)
+        if finite.any():
+            ranges = ranges.copy()
+            ranges[~finite] = enu_ranges[~finite]
+            return ranges, "range_m_with_enu_fallback"
+        return enu_ranges, "enu_norm_fallback"
+    if require_range_m:
         raise ValueError(
             "paper range gating requires Fortem range_m; falling back to ENU "
             "norm changes the 800 m gate"
