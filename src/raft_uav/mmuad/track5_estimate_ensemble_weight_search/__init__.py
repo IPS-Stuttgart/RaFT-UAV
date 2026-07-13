@@ -29,6 +29,7 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_SEARCH = _IMPL.search_track5_estimate_ensemble_weights
 _ORIGINAL_SELECTION_OBJECTIVE_VALUE = _IMPL._selection_objective_value
 
 
@@ -132,9 +133,28 @@ def _selection_objective_value(
     )
 
 
+def search_track5_estimate_ensemble_weights(
+    *args: Any,
+    **kwargs: Any,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Search weights and require at least one full-support grid point."""
+
+    grid, best = _ORIGINAL_SEARCH(*args, **kwargs)
+    unmatched = pd.to_numeric(grid.get("unmatched_rows"), errors="coerce")
+    finite = unmatched[np.isfinite(unmatched.to_numpy(dtype=float, na_value=np.nan))]
+    if finite.empty or not bool((finite == 0).any()):
+        minimum = int(finite.min()) if not finite.empty else "unknown"
+        raise ValueError(
+            "weight search found no candidate with complete truth support; "
+            f"minimum unmatched rows: {minimum}"
+        )
+    return grid, best
+
+
 _IMPL._score_template_estimates = _score_template_estimates
 _IMPL._score_template_estimates_by_sequence = _score_template_estimates_by_sequence
 _IMPL._selection_objective_value = _selection_objective_value
+_IMPL.search_track5_estimate_ensemble_weights = search_track5_estimate_ensemble_weights
 
 globals().update(
     {
@@ -147,6 +167,9 @@ globals()["_with_support_metrics"] = _with_support_metrics
 globals()["_score_template_estimates"] = _score_template_estimates
 globals()["_score_template_estimates_by_sequence"] = _score_template_estimates_by_sequence
 globals()["_selection_objective_value"] = _selection_objective_value
+globals()["search_track5_estimate_ensemble_weights"] = (
+    search_track5_estimate_ensemble_weights
+)
 
 __doc__ = _IMPL.__doc__
 __all__ = [
