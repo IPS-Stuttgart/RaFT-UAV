@@ -62,6 +62,7 @@ def pointcloud2_to_dataframe(message: Any) -> pd.DataFrame:
     data = bytes(getattr(message, "data"))
     if point_step <= 0:
         raise ValueError("PointCloud2 point_step must be positive")
+    _validate_required_xyz_fields(by_name, point_step=point_step)
     endian = ">" if bool(getattr(message, "is_bigendian", False)) else "<"
     records: list[dict[str, float]] = []
     for base in _point_offsets(message, point_step=point_step, data_length=len(data)):
@@ -90,6 +91,28 @@ def pointcloud2_to_dataframe(message: Any) -> pd.DataFrame:
         return pd.DataFrame(columns=["x_m", "y_m", "z_m"])
     frame = frame.rename(columns={"x": "x_m", "y": "y_m", "z": "z_m"})
     return frame.loc[np.isfinite(frame[["x_m", "y_m", "z_m"]]).all(axis=1)].reset_index(drop=True)
+
+
+def _validate_required_xyz_fields(
+    by_name: dict[str, PointFieldSpec], *, point_step: int
+) -> None:
+    """Reject malformed required fields before they silently empty the cloud."""
+
+    for name in ("x", "y", "z"):
+        field = by_name[name]
+        if field.count != 1:
+            raise ValueError(f"PointCloud2 field {name!r} must have count 1")
+        field_format = _POINT_FIELD_FORMATS.get(int(field.datatype))
+        if field_format is None:
+            raise ValueError(
+                f"PointCloud2 field {name!r} has unsupported datatype {field.datatype}"
+            )
+        _, width = field_format
+        offset = int(field.offset)
+        if offset < 0 or offset + width > point_step:
+            raise ValueError(
+                f"PointCloud2 field {name!r} does not fit within point_step {point_step}"
+            )
 
 
 def _point_offsets(message: Any, *, point_step: int, data_length: int) -> list[int]:
