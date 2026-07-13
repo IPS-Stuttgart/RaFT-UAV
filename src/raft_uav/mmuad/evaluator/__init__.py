@@ -1,9 +1,9 @@
-"""Package wrapper that tightens public Track 5 result Classification validation.
+"""Package wrapper that tightens public Track 5 result and tolerance validation.
 
 The legacy evaluator implementation lives in the sibling ``evaluator.py`` file.
-This wrapper preserves public imports while overriding only the official-result
-conversion used for submitted result rows.  Official truth-file loading remains
-permissive so existing local truth archives stay readable.
+This wrapper preserves public imports while overriding official-result parsing
+and timestamp-tolerance handling. Official truth-file loading remains permissive
+so existing local truth archives stay readable.
 """
 
 from __future__ import annotations
@@ -16,7 +16,10 @@ from typing import Any
 import pandas as pd
 
 from raft_uav.mmuad import _submission_impl
-from raft_uav.mmuad.submission import OFFICIAL_TRACK5_CLASS_IDS
+from raft_uav.mmuad.submission import (
+    OFFICIAL_TRACK5_CLASS_IDS,
+    _normalize_timestamp_tolerance_s,
+)
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "evaluator.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -28,6 +31,8 @@ if _SPEC is None or _SPEC.loader is None:
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+
+_LEGACY_EVALUATE_PUBLIC_TRACK5 = _IMPL._evaluate_public_track5_timestamp_aligned
 
 
 def _parse_official_result_classification_cell(value: Any) -> int:
@@ -134,19 +139,47 @@ def _read_results_zip_csv(path: Path, *, member_name: str) -> pd.DataFrame:
             return _read_results_csv_preserving_text(_IMPL.BytesIO(handle.read()))
 
 
+def _evaluate_public_track5_timestamp_aligned(
+    result_rows: pd.DataFrame,
+    truth_rows: pd.DataFrame,
+    *,
+    class_map: dict[str, str],
+    timestamp_tolerance_s: Any,
+) -> dict[str, Any]:
+    """Evaluate Track 5 rows using a finite scalar timestamp tolerance."""
+
+    tolerance = _normalize_timestamp_tolerance_s(timestamp_tolerance_s)
+    return _LEGACY_EVALUATE_PUBLIC_TRACK5(
+        result_rows,
+        truth_rows,
+        class_map=class_map,
+        timestamp_tolerance_s=tolerance,
+    )
+
+
 _IMPL._has_official_track5_columns = _has_official_track5_columns
 _IMPL._official_track5_results_to_local_frame = _official_track5_results_to_local_frame
 _IMPL._official_track5_truth_to_rows = _official_track5_truth_to_rows
 _IMPL.load_mmaud_results_csv = load_mmaud_results_csv
 _IMPL._read_results_zip_csv = _read_results_zip_csv
+_IMPL._evaluate_public_track5_timestamp_aligned = (
+    _evaluate_public_track5_timestamp_aligned
+)
 
 for _name in dir(_IMPL):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_IMPL, _name)
 
-globals()["_parse_official_result_classification_cell"] = _parse_official_result_classification_cell
-globals()["_parse_official_truth_classification_cell"] = _parse_official_truth_classification_cell
+globals()["_parse_official_result_classification_cell"] = (
+    _parse_official_result_classification_cell
+)
+globals()["_parse_official_truth_classification_cell"] = (
+    _parse_official_truth_classification_cell
+)
 globals()["_official_track5_column_map"] = _official_track5_column_map
 globals()["_read_results_csv_preserving_text"] = _read_results_csv_preserving_text
+globals()["_evaluate_public_track5_timestamp_aligned"] = (
+    _evaluate_public_track5_timestamp_aligned
+)
 __doc__ = _IMPL.__doc__
 __all__ = [_name for _name in dir(_IMPL) if not _name.startswith("__")]
