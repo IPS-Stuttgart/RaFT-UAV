@@ -12,7 +12,7 @@ name: Debug adaptive pair rank ties
       - "tests/test_mmuad_adaptive_pair_rank_ties.py"
 
 jobs:
-  focused-tests:
+  full-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -22,22 +22,17 @@ jobs:
           cache: pip
       - name: Install package
         run: python -m pip install -q -e ".[dev]"
-      - name: Capture focused pytest output
+      - name: Capture full pytest output
         run: |
           set +e
-          pytest -vv --tb=long \
-            tests/test_mmuad_candidate_pair_forward_backward_adaptive.py \
-            tests/test_mmuad_candidate_pair_forward_backward_agreement.py \
-            tests/test_mmuad_candidate_pair_forward_backward_agreement_adaptive.py \
-            tests/test_mmuad_adaptive_pair_rank_ties.py \
-            > focused-pytest.log 2>&1
-          echo "$?" > focused-pytest.status
-      - name: Upload focused pytest output
+          pytest -vv --tb=long > full-pytest.log 2>&1
+          echo "$?" > full-pytest.status
+      - name: Upload full pytest output
         uses: actions/upload-artifact@v6
         with:
-          name: adaptive-pair-rank-ties-pytest
+          name: adaptive-pair-rank-ties-full-pytest
           path: |
-            focused-pytest.log
-            focused-pytest.status
-      - name: Propagate focused pytest status
-        run: test "$(cat focused-pytest.status)" = "0"
+            full-pytest.log
+            full-pytest.status
+      - name: Propagate full pytest status
+        run: test "$(cat full-pytest.status)" = "0"
