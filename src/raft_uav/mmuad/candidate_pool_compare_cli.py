@@ -12,6 +12,9 @@ from raft_uav.mmuad import candidate_pool_compare as _compare
 _DEFAULT_FALLBACK_SCORE_COLUMN = _compare._DEFAULT_FALLBACK_SCORE_COLUMN
 _DEFAULT_SCORE_COLUMN = _compare._DEFAULT_SCORE_COLUMN
 _DEFAULT_TOP_K = _compare._DEFAULT_TOP_K
+_SEQUENCE_ID_COLUMN_KEYS = frozenset(
+    {"sequence_id", "sequence", "seq", "scene", "scene_id", "clip", "clip_id"}
+)
 
 
 def load_candidate_inputs(specs: list[str]) -> pd.DataFrame:
@@ -41,6 +44,18 @@ def write_candidate_pool_compare_outputs(**kwargs: object) -> dict[str, Path]:
     """Compatibility hook for tests and callers that patch the CLI module."""
 
     return _compare.write_candidate_pool_compare_outputs(**kwargs)
+
+
+def _read_truth_csv(path: Path) -> pd.DataFrame:
+    """Read truth rows without coercing opaque sequence identifiers."""
+
+    header = pd.read_csv(path, nrows=0)
+    sequence_columns = [
+        column
+        for column in header.columns
+        if str(column).strip().lower() in _SEQUENCE_ID_COLUMN_KEYS
+    ]
+    return pd.read_csv(path, converters={column: str for column in sequence_columns})
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -81,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     if reference_candidates.empty:
         raise ValueError("reference candidate pool is empty")
     candidate_pools = _load_labeled_candidate_pools(args.candidate)
-    truth = pd.read_csv(args.truth_csv)
+    truth = _read_truth_csv(args.truth_csv)
     frame_rows, pooled, by_sequence, by_branch = build_candidate_pool_compare_tables(
         reference_candidates,
         candidate_pools,
