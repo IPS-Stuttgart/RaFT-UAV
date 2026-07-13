@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.candidate_diversity import diversify_candidate_reservoir
 
@@ -63,3 +64,29 @@ def test_diversity_does_not_expand_duplicate_input_index_labels() -> None:
 
     assert output["track_id"].tolist() == ["best", "far"]
     assert len(output) == 2
+
+
+@pytest.mark.parametrize("serialized_false", ["False", "0", "off", "no"])
+def test_diversity_does_not_protect_serialized_false_flags(
+    serialized_false: str,
+) -> None:
+    rows = pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "time_s": [1.0, 1.0],
+            "track_id": ["serialized_false", "best"],
+            "x_m": [0.0, 10.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [0.0, 0.0],
+            "candidate_reservoir_score": [0.1, 1.0],
+            "candidate_reservoir_protected": [serialized_false, False],
+        }
+    )
+
+    output = diversify_candidate_reservoir(
+        rows,
+        radius_m=0.0,
+        max_candidates_per_frame=1,
+    )
+
+    assert output["track_id"].tolist() == ["best"]
