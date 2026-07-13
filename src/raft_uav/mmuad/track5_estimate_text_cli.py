@@ -43,8 +43,24 @@ def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
     kwargs.setdefault("keep_default_na", False)
     rows = _ORIGINAL_READ_CSV(path, *args, **kwargs)
     out = rows.copy()
-    out.columns = [str(column).strip() for column in out.columns]
+    out.columns = _normalized_column_names(out.columns)
     return out
+
+
+def _normalized_column_names(columns: Any) -> list[str]:
+    normalized = [str(column).strip() for column in columns]
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for column in normalized:
+        if column in seen and column not in duplicates:
+            duplicates.append(column)
+        seen.add(column)
+    if duplicates:
+        joined = ", ".join(repr(column) for column in duplicates)
+        raise ValueError(
+            "CSV columns are ambiguous after whitespace normalization: " + joined
+        )
+    return normalized
 
 
 def _sequence_columns_for_csv(path: Any, *args: Any, **kwargs: Any) -> list[str]:
