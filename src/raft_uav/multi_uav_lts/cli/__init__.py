@@ -27,17 +27,8 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
-_ORIGINAL_SUBMISSION_FILE_SUMMARY = _IMPL.SubmissionFileSummary
 _ORIGINAL_SUBMISSION_VALIDATION = _IMPL.SubmissionValidation
-_ORIGINAL_SUMMARIZE_PREDICTION_TEXT = _IMPL._summarize_prediction_text
-
-
-@dataclass(frozen=True)
-class SubmissionFileSummary(_ORIGINAL_SUBMISSION_FILE_SUMMARY):
-    """Per-file validation with class and visibility domain diagnostics."""
-
-    invalid_class_rows: int = 0
-    invalid_visibility_rows: int = 0
+_summarize_prediction_text = _IMPL._summarize_prediction_text
 
 
 @dataclass(frozen=True)
@@ -47,26 +38,6 @@ class SubmissionValidation(_ORIGINAL_SUBMISSION_VALIDATION):
     duplicate_entries: list[str] = field(default_factory=list)
     invalid_class_rows: int = 0
     invalid_visibility_rows: int = 0
-
-
-def _summarize_prediction_text(name: str, text: str) -> SubmissionFileSummary:
-    """Summarize a prediction file and validate class/visibility domains."""
-
-    summary = _ORIGINAL_SUMMARIZE_PREDICTION_TEXT(name, text)
-    invalid_class_rows, invalid_visibility_rows = _count_invalid_class_visibility_rows(text)
-    return SubmissionFileSummary(
-        name=summary.name,
-        row_count=summary.row_count,
-        first_frame=summary.first_frame,
-        last_frame=summary.last_frame,
-        unique_object_ids=summary.unique_object_ids,
-        parse_errors=summary.parse_errors,
-        invalid_geometry_rows=summary.invalid_geometry_rows,
-        invalid_confidence_rows=summary.invalid_confidence_rows,
-        unsorted_rows=summary.unsorted_rows,
-        invalid_class_rows=invalid_class_rows,
-        invalid_visibility_rows=invalid_visibility_rows,
-    )
 
 
 def _count_invalid_class_visibility_rows(text: str) -> tuple[int, int]:
@@ -114,6 +85,8 @@ def validate_submission_zip(
     if expected_names is not None:
         expected_file_count = len(expected_names)
 
+    invalid_class_rows = 0
+    invalid_visibility_rows = 0
     with zipfile.ZipFile(zip_path) as archive:
         physical_names = sorted(
             name for name in archive.namelist() if not name.endswith("/")
@@ -138,15 +111,14 @@ def validate_submission_zip(
                 continue
             text = archive.read(name).decode("utf-8", errors="replace")
             file_summaries.append(_summarize_prediction_text(name, text))
+            class_rows, visibility_rows = _count_invalid_class_visibility_rows(text)
+            invalid_class_rows += class_rows
+            invalid_visibility_rows += visibility_rows
 
     parse_errors = sum(summary.parse_errors for summary in file_summaries)
     invalid_geometry_rows = sum(summary.invalid_geometry_rows for summary in file_summaries)
     invalid_confidence_rows = sum(
         summary.invalid_confidence_rows for summary in file_summaries
-    )
-    invalid_class_rows = sum(summary.invalid_class_rows for summary in file_summaries)
-    invalid_visibility_rows = sum(
-        summary.invalid_visibility_rows for summary in file_summaries
     )
     unsorted_rows = sum(summary.unsorted_rows for summary in file_summaries)
     total_rows = sum(summary.row_count for summary in file_summaries)
@@ -189,9 +161,7 @@ def validate_submission_zip(
     )
 
 
-_IMPL.SubmissionFileSummary = SubmissionFileSummary
 _IMPL.SubmissionValidation = SubmissionValidation
-_IMPL._summarize_prediction_text = _summarize_prediction_text
 _IMPL.validate_submission_zip = validate_submission_zip
 
 globals().update(
@@ -201,9 +171,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
-globals()["SubmissionFileSummary"] = SubmissionFileSummary
 globals()["SubmissionValidation"] = SubmissionValidation
-globals()["_summarize_prediction_text"] = _summarize_prediction_text
 globals()["validate_submission_zip"] = validate_submission_zip
 __doc__ = _IMPL.__doc__
 __all__ = [
