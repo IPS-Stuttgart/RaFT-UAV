@@ -78,7 +78,7 @@ def load_official_track5_results_frame_from_frame(frame: pd.DataFrame) -> pd.Dat
     )
     finite = (
         rows["Sequence"].notna()
-        & rows["Timestamp"].notna()
+        & _finite_numeric_mask(rows["Timestamp"])
         & rows["Classification"].notna()
     )
     rows = rows.loc[finite].copy()
@@ -108,6 +108,14 @@ def _integer_classification_values(values: pd.Series) -> pd.Series:
         )
     numeric = numbers.to_numpy(dtype=float)
     finite = np.isfinite(numeric)
+    nonfinite_numeric = numbers.notna().to_numpy(dtype=bool) & ~finite
+    if nonfinite_numeric.any():
+        row_index = int(np.flatnonzero(nonfinite_numeric)[0])
+        bad_value = raw.iloc[row_index]
+        raise ValueError(
+            "official MMUAD Classification values must be finite integer ids; "
+            f"got {bad_value!r}"
+        )
     integer_like = finite & np.isclose(numeric, np.rint(numeric))
     fractional = finite & ~integer_like
     if fractional.any():
@@ -142,6 +150,11 @@ def _template_sequence_value(value: Any) -> str | None:
         return None
 
 
+def _finite_numeric_mask(values: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce")
+    return pd.Series(np.isfinite(numeric.to_numpy(dtype=float)), index=values.index)
+
+
 def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     lower = {str(column).strip().lower(): column for column in template.columns}
     sequence_col = lower.get("sequence") or lower.get("sequence_id")
@@ -154,7 +167,7 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
             "Timestamp": pd.to_numeric(template[timestamp_col], errors="coerce"),
         }
     )
-    rows = rows.loc[rows["Sequence"].notna() & rows["Timestamp"].notna()]
+    rows = rows.loc[rows["Sequence"].notna() & _finite_numeric_mask(rows["Timestamp"])]
     return rows.sort_values(["Sequence", "Timestamp"]).reset_index(drop=True)
 
 
