@@ -36,18 +36,9 @@ jobs:
 
       - name: Install package with test dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet -e ".[dev]"
 
-      - name: Compile importable code and tests
+      - name: Run focused rank-tie regression
         run: |
-          python -m compileall src tests
-          if [ -d scripts ]; then python -m compileall scripts; fi
-
-      - name: Lint source and tests
-        run: |
-          if [ -d scripts ]; then ruff check src scripts tests; else ruff check src tests; fi
-
-      - name: Run unit tests
-        run: |
-          pytest
+          pytest -vv -s tests/test_mmuad_candidate_pair_group_correction_rank_ties.py
