@@ -9,6 +9,7 @@ truncating or clamping them.
 from __future__ import annotations
 
 import importlib.util
+import numbers
 from pathlib import Path
 import sys
 
@@ -52,13 +53,19 @@ def _positive_integer(value: object, *, name: str) -> int:
 
     if isinstance(value, (bool, np.bool_)):
         raise ValueError(f"{name} must be a positive integer")
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{name} must be a positive integer") from exc
-    if not np.isfinite(numeric) or numeric <= 0.0 or not numeric.is_integer():
+    if isinstance(value, numbers.Integral):
+        integer = int(value)
+    else:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{name} must be a positive integer") from exc
+        if not np.isfinite(numeric) or not numeric.is_integer():
+            raise ValueError(f"{name} must be a positive integer")
+        integer = int(numeric)
+    if integer <= 0:
         raise ValueError(f"{name} must be a positive integer")
-    return int(numeric)
+    return integer
 
 
 def repair_track5_jerk_kinks(
