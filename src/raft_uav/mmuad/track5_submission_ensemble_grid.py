@@ -87,11 +87,12 @@ def evaluate_submission_ensemble_weight_grid(
     if not inputs:
         raise ValueError("at least one submission input is required")
     policies = _normalize_class_policies(class_policies)
+    weight_rows = tuple(tuple(float(weight) for weight in weights) for weights in weight_grid)
     summary_records: list[dict[str, Any]] = []
     sequence_records: list[dict[str, Any]] = []
     best_row: SubmissionGridRow | None = None
     for class_policy in policies:
-        for weights in weight_grid:
+        for weights in weight_rows:
             if len(weights) != len(inputs):
                 raise ValueError(
                     f"weight vector length {len(weights)} does not match inputs {len(inputs)}"
@@ -140,11 +141,12 @@ def write_submission_ensemble_weight_grid_outputs(
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     inputs = tuple(submission_inputs)
+    policies = _normalize_class_policies(class_policies)
     summary, by_sequence, best_weights, best_policy = evaluate_submission_ensemble_weight_grid(
         inputs,
         truth=truth,
         weight_grid=weight_grid,
-        class_policies=class_policies,
+        class_policies=policies,
         timestamp_tolerance_s=timestamp_tolerance_s,
     )
     summary_csv = output / GRID_SUMMARY_CSV
@@ -177,7 +179,7 @@ def write_submission_ensemble_weight_grid_outputs(
         "submission_inputs": [
             {"label": item.label, "path": str(item.path)} for item in inputs
         ],
-        "class_policies": list(_normalize_class_policies(class_policies)),
+        "class_policies": list(policies),
         "timestamp_tolerance_s": float(timestamp_tolerance_s),
         "grid_row_count": int(len(summary)),
         "best_weights": list(best_weights),
