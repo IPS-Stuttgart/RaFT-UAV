@@ -1,8 +1,9 @@
-"""Compatibility wrapper preserving pair-group candidate input order.
+"""Compatibility fixes for pair-group score preparation.
 
 The maintained implementation lives in the sibling
 ``candidate_pair_group_correction.py`` module. This package preserves the public
-import path while restoring the original row order after schema normalization.
+import path while restoring input order after schema normalization and resolving
+configured score fallbacks independently for every candidate row.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -54,7 +56,27 @@ def _candidate_rows(candidates):
     )
 
 
+def _candidate_scores_with_rowwise_fallback(
+    rows: pd.DataFrame,
+    config: Any,
+) -> pd.Series:
+    """Resolve configured score columns independently for each candidate row."""
+
+    resolved = pd.Series(np.nan, index=rows.index, dtype=float)
+    for column in (config.score_column, *config.fallback_score_columns):
+        if column not in rows.columns:
+            continue
+        values = pd.to_numeric(rows[column], errors="coerce")
+        values = values.where(np.isfinite(values))
+        resolved = resolved.where(resolved.notna(), values)
+
+    finite = resolved.dropna()
+    fill_value = float(finite.min()) if not finite.empty else 1.0
+    return resolved.fillna(fill_value).astype(float)
+
+
 _IMPL._candidate_rows = _candidate_rows
+_IMPL._candidate_scores = _candidate_scores_with_rowwise_fallback
 
 globals().update(
     {
@@ -64,6 +86,7 @@ globals().update(
     }
 )
 globals()["_candidate_rows"] = _candidate_rows
+globals()["_candidate_scores"] = _candidate_scores_with_rowwise_fallback
 
 __doc__ = _IMPL.__doc__
 __all__ = [
