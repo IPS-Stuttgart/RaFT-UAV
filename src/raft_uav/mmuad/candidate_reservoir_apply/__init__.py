@@ -101,10 +101,6 @@ def _normalize_train_selected_reservoir_config(config: Any) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ValueError("candidate reservoir config JSON must contain an object")
     payload = dict(config)
-    missing = [key for key in _REQUIRED_CONFIG_KEYS if key not in payload]
-    if missing:
-        raise ValueError(f"candidate reservoir config missing required keys: {missing}")
-
     schema_version = _nonnegative_integer(
         payload.get("schema_version", 1),
         name="schema_version",
@@ -112,6 +108,10 @@ def _normalize_train_selected_reservoir_config(config: Any) -> dict[str, Any]:
     if schema_version != 1:
         raise ValueError(f"unsupported candidate reservoir config schema: {schema_version}")
     payload["schema_version"] = schema_version
+
+    missing = [key for key in _REQUIRED_CONFIG_KEYS if key not in payload]
+    if missing:
+        raise ValueError(f"candidate reservoir config missing required keys: {missing}")
 
     for key in _INTEGER_CONFIG_KEYS:
         payload[key] = _nonnegative_integer(payload[key], name=key)
