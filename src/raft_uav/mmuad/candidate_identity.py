@@ -31,6 +31,35 @@ _INVALID_TRACK_IDS = {
 _CANONICAL_INTEGER_TEXT = re.compile(r"^[+-]?(?:0|[1-9][0-9]*)(?:\.0+)?$")
 
 
+def _exact_rational_text(numerator: int, denominator: int) -> str:
+    """Return an exact decimal when finite, otherwise a reduced fraction."""
+
+    if denominator <= 0:
+        raise ValueError("rational denominator must be positive")
+    factor_two = 0
+    factor_five = 0
+    remainder = denominator
+    while remainder % 2 == 0:
+        factor_two += 1
+        remainder //= 2
+    while remainder % 5 == 0:
+        factor_five += 1
+        remainder //= 5
+    if remainder != 1:
+        return f"{numerator}/{denominator}"
+
+    decimal_places = max(factor_two, factor_five)
+    scaled = abs(numerator)
+    scaled *= 2 ** (decimal_places - factor_two)
+    scaled *= 5 ** (decimal_places - factor_five)
+    digits = str(scaled).rjust(decimal_places + 1, "0")
+    if decimal_places:
+        digits = f"{digits[:-decimal_places]}.{digits[-decimal_places:]}"
+        digits = digits.rstrip("0").rstrip(".")
+    sign = "-" if numerator < 0 else ""
+    return f"{sign}{digits}"
+
+
 def canonical_track_id(value: Any) -> str | None:
     """Return a stable track identity while preserving opaque leading zeros.
 
@@ -54,6 +83,12 @@ def canonical_track_id(value: Any) -> str | None:
     if isinstance(value, numbers.Integral):
         number = int(value)
         return None if number == -1 else str(number)
+    if isinstance(value, numbers.Rational):
+        numerator = int(value.numerator)
+        denominator = int(value.denominator)
+        if denominator == 1:
+            return None if numerator == -1 else str(numerator)
+        return _exact_rational_text(numerator, denominator)
     if isinstance(value, numbers.Real):
         number = float(value)
         if not math.isfinite(number):
