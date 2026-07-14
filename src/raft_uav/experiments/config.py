@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -110,10 +111,14 @@ def write_resolved_experiment_config(
         payload["config"] = config.to_dict()
     if extra:
         payload["extra"] = dict(extra)
+    resolved = _jsonable(payload)
     path = Path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    return payload
+    path.write_text(
+        json.dumps(resolved, indent=2, sort_keys=True, allow_nan=False),
+        encoding="utf-8",
+    )
+    return resolved
 
 
 def filtered_environment(prefixes: tuple[str, ...] = ("RAFT_UAV_",)) -> dict[str, str]:
@@ -149,3 +154,23 @@ def _run_git(args: list[str], cwd: Path) -> str:
     except OSError:
         return ""
     return completed.stdout.strip() if completed.returncode == 0 else ""
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        return _jsonable(tolist())
+    item = getattr(value, "item", None)
+    if callable(item):
+        return _jsonable(item())
+    return value
