@@ -10,6 +10,7 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 
+_PANDAS = pd
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_reservoir.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.mmuad._candidate_reservoir_legacy",
@@ -23,16 +24,38 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_MAIN = _IMPL.main
 
 
-def _read_sequence_text_csv(path: Path) -> pd.DataFrame:
+def _read_csv_preserving_sequence(*args: Any, **kwargs: Any) -> pd.DataFrame:
     """Read CSV rows without coercing opaque sequence identifiers."""
 
+    kwargs.setdefault("dtype", str)
+    kwargs.setdefault("keep_default_na", False)
     try:
-        rows = pd.read_csv(path, dtype=str, keep_default_na=False)
+        rows = _PANDAS.read_csv(*args, **kwargs)
     except TypeError:
-        rows = pd.read_csv(path, dtype=str)
+        kwargs.pop("keep_default_na", None)
+        rows = _PANDAS.read_csv(*args, **kwargs)
     rows = rows.copy()
     rows.columns = [str(column).strip() for column in rows.columns]
     return rows
+
+
+class _TextPreservingPandasProxy:
+    """Delegate pandas operations while localizing sequence-safe CSV reads."""
+
+    def read_csv(self, *args: Any, **kwargs: Any) -> pd.DataFrame:
+        return _read_csv_preserving_sequence(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_PANDAS, name)
+
+
+_IMPL.pd = _TextPreservingPandasProxy()
+
+
+def _read_sequence_text_csv(path: Path) -> pd.DataFrame:
+    """Read one sequence-bearing CSV with text-preserving defaults."""
+
+    return _read_csv_preserving_sequence(path)
 
 
 def load_candidate_inputs(specs: Sequence[str]) -> pd.DataFrame:
@@ -74,22 +97,9 @@ def _load_candidate_specs(specs: list[str]) -> pd.DataFrame:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the legacy CLI with text-preserving CSV reads."""
+    """Run the legacy CLI with module-scoped text-preserving CSV reads."""
 
-    original_read_csv = pd.read_csv
-
-    def _read_csv_preserving_sequence(*args: Any, **kwargs: Any) -> pd.DataFrame:
-        kwargs.setdefault("dtype", str)
-        kwargs.setdefault("keep_default_na", False)
-        frame = original_read_csv(*args, **kwargs)
-        frame.columns = [str(column).strip() for column in frame.columns]
-        return frame
-
-    pd.read_csv = _read_csv_preserving_sequence
-    try:
-        return int(_ORIGINAL_MAIN(argv))
-    finally:
-        pd.read_csv = original_read_csv
+    return int(_ORIGINAL_MAIN(argv))
 
 
 _IMPL.load_candidate_inputs = load_candidate_inputs
@@ -103,6 +113,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["pd"] = _PANDAS
 globals()["load_candidate_inputs"] = load_candidate_inputs
 globals()["_load_candidate_specs"] = _load_candidate_specs
 globals()["_read_sequence_text_csv"] = _read_sequence_text_csv
