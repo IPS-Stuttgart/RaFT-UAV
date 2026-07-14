@@ -4,8 +4,8 @@ The maintained implementation lives in the sibling
 ``candidate_pair_forward_backward.py`` module. This package keeps the public
 import path while preserving opaque sequence identifiers in optional mixture
 initialization files, applying score fallbacks row by row, canonicalizing
-numeric tracker identifiers before track-continuation scoring, and treating tied
-rank scores symmetrically.
+numeric tracker identifiers before track-continuation scoring, treating tied
+rank scores symmetrically, and rejecting non-finite inference controls.
 """
 
 from __future__ import annotations
@@ -104,6 +104,36 @@ def _descending_average_ranks(values: np.ndarray) -> np.ndarray:
     return ranks
 
 
+_ORIGINAL_VALIDATE_CONFIG = _IMPL._validate_config
+_NUMERIC_CONFIG_FIELDS = (
+    "default_sigma_m",
+    "sigma_min_m",
+    "sigma_max_m",
+    "score_weight",
+    "sigma_log_weight",
+    "transition_distance_std_m",
+    "transition_speed_std_mps",
+    "max_speed_mps",
+    "speed_gate_penalty",
+    "acceleration_std_mps2",
+    "max_acceleration_mps2",
+    "acceleration_gate_penalty",
+    "source_switch_penalty",
+    "branch_switch_penalty",
+    "track_continuation_bonus",
+    "time_gap_penalty",
+)
+
+
+def _validate_config_with_finite_controls(config: Any) -> None:
+    """Reject NaN and infinite controls before running pair-state inference."""
+
+    for name in _NUMERIC_CONFIG_FIELDS:
+        if not np.isfinite(float(getattr(config, name))):
+            raise ValueError(f"{name} must be finite")
+    _ORIGINAL_VALIDATE_CONFIG(config)
+
+
 _ORIGINAL_TRANSITION_LOG_LIKELIHOOD = _IMPL._transition_log_likelihood
 
 
@@ -125,6 +155,7 @@ _IMPL.pd = _PandasCsvProxy(pd)
 _IMPL._candidate_score = _candidate_score_with_rowwise_fallback
 _IMPL._normalize_scores = _normalize_scores_with_average_ties
 _IMPL._descending_ranks = _descending_average_ranks
+_IMPL._validate_config = _validate_config_with_finite_controls
 _IMPL._transition_log_likelihood = _transition_log_likelihood_with_canonical_track_ids
 
 globals().update(
