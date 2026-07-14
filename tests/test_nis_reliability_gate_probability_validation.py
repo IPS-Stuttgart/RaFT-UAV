@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from raft_uav.diagnostics.nis_reliability import nis_reliability_summary
+from raft_uav.diagnostics.nis_reliability import run_nis_reliability_report
 
 
 def _nis_rows() -> pd.DataFrame:
@@ -51,3 +54,18 @@ def test_exact_duplicate_gate_probabilities_are_deduplicated() -> None:
     assert "gate_threshold_0p950" in summary.columns
     assert "gate_threshold_0p990" in summary.columns
     assert len([column for column in summary if column == "gate_threshold_0p950"]) == 1
+
+
+def test_report_metadata_uses_normalized_gate_probabilities(tmp_path) -> None:
+    diagnostics = tmp_path / "diagnostics.csv"
+    _nis_rows().to_csv(diagnostics, index=False)
+
+    result = run_nis_reliability_report(
+        inputs=[diagnostics],
+        output_dir=tmp_path / "report",
+        gate_probabilities=[0.95, 0.95, 0.99],
+    )
+    payload = json.loads((tmp_path / "report" / "nis_reliability.json").read_text())
+
+    assert result["gate_probabilities"] == [0.95, 0.99]
+    assert payload["gate_probabilities"] == [0.95, 0.99]
