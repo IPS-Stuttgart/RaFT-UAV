@@ -57,9 +57,21 @@ def diversify_candidate_reservoir(
     missing = sorted(required.difference(frame.columns))
     if missing:
         raise ValueError(f"candidate reservoir missing required columns: {missing}")
-    if score_column not in frame.columns:
-        frame[score_column] = pd.to_numeric(frame.get("confidence", 0.0), errors="coerce")
-    frame[score_column] = pd.to_numeric(frame[score_column], errors="coerce").fillna(0.0)
+    primary_scores = pd.to_numeric(
+        frame.get(score_column, pd.Series(np.nan, index=frame.index)),
+        errors="coerce",
+    )
+    fallback_scores = pd.to_numeric(
+        frame.get("confidence", pd.Series(0.0, index=frame.index)),
+        errors="coerce",
+    )
+    primary_scores = primary_scores.where(
+        np.isfinite(primary_scores.to_numpy(dtype=float))
+    )
+    fallback_scores = fallback_scores.where(
+        np.isfinite(fallback_scores.to_numpy(dtype=float))
+    )
+    frame[score_column] = primary_scores.fillna(fallback_scores).fillna(0.0)
     if "candidate_reservoir_protected" not in frame.columns:
         frame["candidate_reservoir_protected"] = False
 
