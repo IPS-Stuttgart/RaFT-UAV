@@ -11,6 +11,8 @@ import pandas as pd
 from raft_uav.numeric import optional_float as _optional_float
 from raft_uav.numeric import optional_int as _optional_int
 
+_POSITION_COLUMNS = ("east_m", "north_m", "up_m")
+
 
 @dataclass(frozen=True)
 class InitialHypothesis:
@@ -57,7 +59,10 @@ def build_delayed_initial_hypotheses(
             InitialHypothesis(
                 time_s=time_s,
                 state=state,
-                covariance=_initial_covariance(initial_position_std_m, initial_velocity_std_mps),
+                covariance=_initial_covariance(
+                    initial_position_std_m,
+                    initial_velocity_std_mps,
+                ),
                 score=_rf_support_score(time_s, state[:3], radar_window),
                 source="rf",
                 metadata={"rf_dimension": int(vector.size)},
@@ -68,13 +73,20 @@ def build_delayed_initial_hypotheses(
         if state is None:
             continue
         catprob = _optional_float(row.get("cat_prob_uav"))
-        catprob_penalty = 0.0 if catprob is None else float(-np.log(np.clip(catprob, 1e-6, 1.0)))
+        catprob_penalty = (
+            0.0
+            if catprob is None
+            else float(-np.log(np.clip(catprob, 1e-6, 1.0)))
+        )
         support = _track_support_score(row, radar_window)
         hypotheses.append(
             InitialHypothesis(
                 time_s=float(row["time_s"]),
                 state=state,
-                covariance=_initial_covariance(initial_position_std_m, initial_velocity_std_mps),
+                covariance=_initial_covariance(
+                    initial_position_std_m,
+                    initial_velocity_std_mps,
+                ),
                 score=float(catprob_penalty + support),
                 source="radar",
                 metadata={
@@ -87,7 +99,9 @@ def build_delayed_initial_hypotheses(
     return sorted(hypotheses, key=lambda item: item.score)[: int(max_hypotheses)]
 
 
-def best_initial_hypothesis(hypotheses: Iterable[InitialHypothesis]) -> InitialHypothesis | None:
+def best_initial_hypothesis(
+    hypotheses: Iterable[InitialHypothesis],
+) -> InitialHypothesis | None:
     """Return the lowest-score initial hypothesis."""
 
     items = list(hypotheses)
@@ -97,14 +111,31 @@ def best_initial_hypothesis(hypotheses: Iterable[InitialHypothesis]) -> InitialH
 def _first_radar_window(radar: pd.DataFrame, *, window_s: float) -> pd.DataFrame:
     if radar.empty or "time_s" not in radar.columns:
         return radar.iloc[0:0].copy()
-    ordered = radar.sort_values("time_s").reset_index(drop=True)
-    start = float(pd.to_numeric(ordered["time_s"], errors="coerce").min())
+    work = radar.copy()
+    times = pd.to_numeric(work["time_s"], errors="coerce")
+    finite = np.isfinite(times.to_numpy(dtype=float, na_value=np.nan))
+    work = work.loc[finite].copy()
+    if work.empty:
+        return work
+    work["time_s"] = times.loc[finite].to_numpy(dtype=float, na_value=np.nan)
+    ordered = work.sort_values("time_s").reset_index(drop=True)
+    start = float(ordered["time_s"].iloc[0])
     return ordered.loc[ordered["time_s"] <= start + float(window_s)].copy()
 
 
 def _radar_row_state(row: pd.Series, frame: pd.DataFrame) -> np.ndarray | None:
     try:
-        state = np.array([float(row["east_m"]), float(row["north_m"]), float(row["up_m"]), 0, 0, 0], dtype=float)
+        state = np.array(
+            [
+                float(row["east_m"]),
+                float(row["north_m"]),
+                float(row["up_m"]),
+                0,
+                0,
+                0,
+            ],
+            dtype=float,
+        )
     except (KeyError, TypeError, ValueError):
         return None
     if not np.isfinite(state[:3]).all():
@@ -118,12 +149,20 @@ def _radar_row_state(row: pd.Series, frame: pd.DataFrame) -> np.ndarray | None:
 
 
 def _velocity_from_row(row: pd.Series) -> np.ndarray | None:
-    required = ("velocity_east_mps", "velocity_north_mps", "velocity_down_mps")
+    required = (
+        "velocity_east_mps",
+        "velocity_north_mps",
+        "velocity_down_mps",
+    )
     if not all(column in row.index for column in required):
         return None
     try:
         velocity = np.array(
-            [float(row["velocity_east_mps"]), float(row["velocity_north_mps"]), -float(row["velocity_down_mps"])],
+            [
+                float(row["velocity_east_mps"]),
+                float(row["velocity_north_mps"]),
+                -float(row["velocity_down_mps"]),
+            ],
             dtype=float,
         )
     except (TypeError, ValueError):
@@ -133,39 +172,74 @@ def _velocity_from_row(row: pd.Series) -> np.ndarray | None:
 
 def _velocity_from_track(row: pd.Series, frame: pd.DataFrame) -> np.ndarray | None:
     track_id = _optional_int(row.get("track_id"))
-    if track_id is None or "track_id" not in frame.columns:
+    required = {*_POSITION_COLUMNS, "time_s", "track_id"}
+    if track_id is None or not required.issubset(frame.columns):
         return None
-    track = frame.loc[pd.to_numeric(frame["track_id"], errors="coerce") == track_id].sort_values("time_s")
+    track_ids = pd.to_numeric(frame["track_id"], errors="coerce")
+    track = frame.loc[track_ids == track_id].copy()
+    positions = track.loc[:, _POSITION_COLUMNS].apply(pd.to_numeric, errors="coerce")
+    times = pd.to_numeric(track["time_s"], errors="coerce")
+    finite = np.isfinite(times.to_numpy(dtype=float, na_value=np.nan))
+    finite &= np.isfinite(
+        positions.to_numpy(dtype=float, na_value=np.nan)
+    ).all(axis=1)
+    track = track.loc[finite].copy()
     if len(track) < 2:
         return None
-    positions = track[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
-    times = track["time_s"].to_numpy(dtype=float)
-    dt = float(times[-1] - times[0])
+    track["time_s"] = times.loc[finite].to_numpy(dtype=float, na_value=np.nan)
+    positions = positions.loc[finite].to_numpy(dtype=float, na_value=np.nan)
+    order = np.argsort(track["time_s"].to_numpy(dtype=float), kind="stable")
+    times_array = track["time_s"].to_numpy(dtype=float)[order]
+    positions = positions[order]
+    dt = float(times_array[-1] - times_array[0])
     if dt <= 0.0:
         return None
     velocity = (positions[-1] - positions[0]) / dt
     return velocity if np.isfinite(velocity).all() else None
 
 
-def _rf_support_score(time_s: float, position: np.ndarray, radar: pd.DataFrame) -> float:
-    if radar.empty:
+def _rf_support_score(
+    time_s: float,
+    position: np.ndarray,
+    radar: pd.DataFrame,
+) -> float:
+    required = {*_POSITION_COLUMNS, "time_s"}
+    if radar.empty or not required.issubset(radar.columns):
         return 1.0
-    dt = np.abs(pd.to_numeric(radar["time_s"], errors="coerce").to_numpy(dtype=float) - float(time_s))
-    nearby = radar.loc[dt <= 1.0]
-    if nearby.empty:
+    times = pd.to_numeric(radar["time_s"], errors="coerce")
+    positions = radar.loc[:, _POSITION_COLUMNS].apply(pd.to_numeric, errors="coerce")
+    finite = np.isfinite(times.to_numpy(dtype=float, na_value=np.nan))
+    finite &= np.isfinite(
+        positions.to_numpy(dtype=float, na_value=np.nan)
+    ).all(axis=1)
+    if not finite.any():
         return 1.0
-    positions = nearby[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
-    distances = np.linalg.norm(positions - position.reshape(1, 3), axis=1)
-    return float(np.nanmin(distances) / 100.0)
+    times_array = times.loc[finite].to_numpy(dtype=float, na_value=np.nan)
+    positions_array = positions.loc[finite].to_numpy(dtype=float, na_value=np.nan)
+    nearby = np.abs(times_array - float(time_s)) <= 1.0
+    if not nearby.any():
+        return 1.0
+    distances = np.linalg.norm(
+        positions_array[nearby] - position.reshape(1, 3),
+        axis=1,
+    )
+    return float(np.min(distances) / 100.0)
 
 
 def _track_support_score(row: pd.Series, radar: pd.DataFrame) -> float:
     track_id = _optional_int(row.get("track_id"))
     if track_id is None or "track_id" not in radar.columns:
         return 1.0
-    count = int(np.count_nonzero(pd.to_numeric(radar["track_id"], errors="coerce") == track_id))
+    count = int(
+        np.count_nonzero(
+            pd.to_numeric(radar["track_id"], errors="coerce") == track_id
+        )
+    )
     return float(1.0 / max(count, 1))
 
 
-def _initial_covariance(position_std_m: float, velocity_std_mps: float) -> np.ndarray:
+def _initial_covariance(
+    position_std_m: float,
+    velocity_std_mps: float,
+) -> np.ndarray:
     return np.diag([position_std_m**2] * 3 + [velocity_std_mps**2] * 3)
