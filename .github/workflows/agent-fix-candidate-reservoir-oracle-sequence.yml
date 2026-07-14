@@ -20,19 +20,29 @@ jobs:
           ref: agent/fix-candidate-reservoir-oracle-sequence
           fetch-depth: 0
 
-      - name: Patch truth CSV loading
+      - name: Correct truth CSV loading indentation
         run: |
           python - <<'PY'
           from pathlib import Path
 
           path = Path("src/raft_uav/mmuad/__init__.py")
           text = path.read_text(encoding="utf-8")
-          old = "            truth = _normalize_truth_columns(_pd.read_csv(args.truth_csv))"
-          new = """            truth = _normalize_truth_columns(
-              _pd.read_csv(args.truth_csv, dtype=str, keep_default_na=False)
-          )"""
+          old = "\n".join(
+              [
+                  "            truth = _normalize_truth_columns(",
+                  "    _pd.read_csv(args.truth_csv, dtype=str, keep_default_na=False)",
+                  ")",
+              ]
+          )
+          new = "\n".join(
+              [
+                  "            truth = _normalize_truth_columns(",
+                  "                _pd.read_csv(args.truth_csv, dtype=str, keep_default_na=False)",
+                  "            )",
+              ]
+          )
           if text.count(old) != 1:
-              raise SystemExit(f"expected exactly one truth CSV read, found {text.count(old)}")
+              raise SystemExit(f"expected exactly one malformed truth CSV block, found {text.count(old)}")
           path.write_text(text.replace(old, new), encoding="utf-8")
           PY
 
