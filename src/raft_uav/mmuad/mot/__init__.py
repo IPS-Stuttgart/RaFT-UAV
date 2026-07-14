@@ -2,7 +2,8 @@
 
 The maintained implementation lives in the sibling ``mot.py`` module. This
 package preserves the public import path while ensuring that pooled MOT metrics
-scope object identities by sequence and count tolerance-matched frames once.
+scope object identities by sequence, count tolerance-matched frames once,
+validate matching thresholds, and resolve exact association ties deterministically.
 """
 
 from __future__ import annotations
@@ -173,6 +174,28 @@ def _validated_match_distance_m(value: Any) -> float:
     return distance_m
 
 
+def _nearest_track_id(
+    z: np.ndarray,
+    active: dict[int, Any],
+    unmatched_tracks: set[int],
+    config: Any,
+) -> int | None:
+    """Return the nearest eligible track with a stable lowest-ID tie break."""
+
+    if not np.isfinite(z).all():
+        return None
+    best_track: int | None = None
+    best_distance = float("inf")
+    for track_id in sorted(unmatched_tracks):
+        distance = float(np.linalg.norm(active[track_id].state[:3] - z))
+        if distance < best_distance:
+            best_distance = distance
+            best_track = track_id
+    if best_distance <= config.max_association_distance_m:
+        return best_track
+    return None
+
+
 def _greedy_truth_matches(
     pred: pd.DataFrame,
     gt: pd.DataFrame,
@@ -204,6 +227,7 @@ def compute_multi_object_metrics(
 
 
 _IMPL._metric_frame_pairs = _metric_frame_pairs
+_IMPL._nearest_track_id = _nearest_track_id
 _IMPL._greedy_truth_matches = _greedy_truth_matches
 _IMPL.compute_multi_object_metrics = compute_multi_object_metrics
 
@@ -219,6 +243,7 @@ globals()["_metric_frame_pairs"] = _metric_frame_pairs
 globals()["_metric_time_cluster_pairs"] = _metric_time_cluster_pairs
 globals()["_metric_rows_in_time_cluster"] = _metric_rows_in_time_cluster
 globals()["_validated_match_distance_m"] = _validated_match_distance_m
+globals()["_nearest_track_id"] = _nearest_track_id
 globals()["_greedy_truth_matches"] = _greedy_truth_matches
 globals()["compute_multi_object_metrics"] = compute_multi_object_metrics
 
