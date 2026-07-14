@@ -109,59 +109,171 @@ def backward_repair_associations(
 
     if selected.empty or candidates.empty:
         return selected.copy()
-    selected = selected.sort_values("time_s").reset_index(drop=True)
+    selected = selected.copy()
+    scope_by_sequence = (
+        "sequence_id" in selected.columns and "sequence_id" in candidates.columns
+    )
+    frame_key_column = _frame_key_column(candidates)
     repaired = [row.copy() for _, row in selected.iterrows()]
-    candidate_groups = _frame_groups(candidates)
-    selected_keys = {_row_key(row) for _, row in selected.iterrows()}
-    for left, right in zip(selected.iloc[:-1].itertuples(index=False), selected.iloc[1:].itertuples(index=False)):
-        left_time = float(left.time_s)
-        right_time = float(right.time_s)
-        gap_s = right_time - left_time
-        if gap_s <= 0.0 or gap_s > float(max_gap_s):
-            continue
-        left_pos = np.array([left.east_m, left.north_m, left.up_m], dtype=float)
-        right_pos = np.array([right.east_m, right.north_m, right.up_m], dtype=float)
-        if not np.isfinite(left_pos).all() or not np.isfinite(right_pos).all():
-            continue
-        for key, frame in candidate_groups:
-            if key in selected_keys:
-                continue
-            time_s = float(frame["time_s"].median())
-            if not left_time < time_s < right_time:
-                continue
-            alpha = (time_s - left_time) / gap_s
-            target = (1.0 - alpha) * left_pos + alpha * right_pos
-            positions = (
-                frame.loc[:, PositionColumns]
-                .apply(pd.to_numeric, errors="coerce")
-                .to_numpy(dtype=float)
+    candidate_groups = _frame_groups(
+        candidates,
+        frame_key_column=frame_key_column,
+        include_sequence=scope_by_sequence,
+    )
+    selected_keys = {
+        key
+        for _, row in selected.iterrows()
+        if (
+            key := _row_key(
+                row,
+                frame_key_column=frame_key_column,
+                include_sequence=scope_by_sequence,
             )
-            finite = np.isfinite(positions).all(axis=1)
-            if not finite.any():
+        )
+        is not None
+    }
+    for sequence_key, positions in _selected_sequence_positions(
+        selected,
+        include_sequence=scope_by_sequence,
+    ):
+        anchors = selected.iloc[positions].sort_values("time_s").reset_index(drop=True)
+        for left, right in zip(
+            anchors.iloc[:-1].itertuples(index=False),
+            anchors.iloc[1:].itertuples(index=False),
+        ):
+            left_time = float(left.time_s)
+            right_time = float(right.time_s)
+            gap_s = right_time - left_time
+            if gap_s <= 0.0 or gap_s > float(max_gap_s):
                 continue
-            distances = np.full(len(frame), np.inf, dtype=float)
-            distances[finite] = np.linalg.norm(positions[finite] - target.reshape(1, 3), axis=1)
-            best_idx = int(np.argmin(distances))
-            if float(distances[best_idx]) <= float(max_repair_distance_m):
-                row = frame.iloc[best_idx].copy()
-                row["association_mode"] = "backward-repair"
-                row["association_score"] = float(distances[best_idx])
-                row["association_repaired"] = True
-                repaired.append(row)
-                selected_keys.add(key)
-    return pd.DataFrame(repaired).sort_values("time_s").reset_index(drop=True)
+            left_pos = np.array([left.east_m, left.north_m, left.up_m], dtype=float)
+            right_pos = np.array([right.east_m, right.north_m, right.up_m], dtype=float)
+            if not np.isfinite(left_pos).all() or not np.isfinite(right_pos).all():
+                continue
+            for key, frame in candidate_groups:
+                if key in selected_keys:
+                    continue
+                if scope_by_sequence and key[0] != sequence_key:
+                    continue
+                time_s = float(pd.to_numeric(frame["time_s"], errors="coerce").median())
+                if not np.isfinite(time_s) or not left_time < time_s < right_time:
+                    continue
+                alpha = (time_s - left_time) / gap_s
+                target = (1.0 - alpha) * left_pos + alpha * right_pos
+                positions_m = (
+                    frame.loc[:, PositionColumns]
+                    .apply(pd.to_numeric, errors="coerce")
+                    .to_numpy(dtype=float)
+                )
+                finite = np.isfinite(positions_m).all(axis=1)
+                if not finite.any():
+                    continue
+                distances = np.full(len(frame), np.inf, dtype=float)
+                distances[finite] = np.linalg.norm(
+                    positions_m[finite] - target.reshape(1, 3),
+                    axis=1,
+                )
+                best_idx = int(np.argmin(distances))
+                if float(distances[best_idx]) <= float(max_repair_distance_m):
+                    row = frame.iloc[best_idx].copy()
+                    row["association_mode"] = "backward-repair"
+                    row["association_score"] = float(distances[best_idx])
+                    row["association_repaired"] = True
+                    repaired.append(row)
+                    selected_keys.add(key)
+    sort_columns = ["time_s"]
+    if scope_by_sequence:
+        sort_columns.insert(0, "sequence_id")
+    return (
+        pd.DataFrame(repaired)
+        .sort_values(sort_columns, kind="mergesort")
+        .reset_index(drop=True)
+    )
 
 
-def _frame_groups(frame: pd.DataFrame) -> list[tuple[object, pd.DataFrame]]:
-    group = "frame_index" if "frame_index" in frame.columns else "time_s"
-    return [(key, rows.copy()) for key, rows in frame.groupby(group, sort=True)]
+def _frame_key_column(frame: pd.DataFrame) -> str:
+    if "frame_index" in frame.columns:
+        values = pd.to_numeric(frame["frame_index"], errors="coerce").to_numpy(
+            dtype=float
+        )
+        if np.isfinite(values).all():
+            return "frame_index"
+    if "time_s" in frame.columns:
+        return "time_s"
+    if "frame_index" in frame.columns:
+        return "frame_index"
+    raise KeyError("radar candidates must contain frame_index or time_s")
 
 
-def _row_key(row: pd.Series | object) -> object:
+def _frame_groups(
+    frame: pd.DataFrame,
+    *,
+    frame_key_column: str | None = None,
+    include_sequence: bool = False,
+) -> list[tuple[object, pd.DataFrame]]:
+    key_column = frame_key_column or _frame_key_column(frame)
+    positions_by_key: dict[object, list[int]] = {}
+    for position, (_, row) in enumerate(frame.iterrows()):
+        key = _row_key(
+            row,
+            frame_key_column=key_column,
+            include_sequence=include_sequence,
+        )
+        if key is not None:
+            positions_by_key.setdefault(key, []).append(position)
+    return [
+        (key, frame.iloc[positions].copy())
+        for key, positions in positions_by_key.items()
+    ]
+
+
+def _selected_sequence_positions(
+    frame: pd.DataFrame,
+    *,
+    include_sequence: bool,
+) -> list[tuple[str | None, list[int]]]:
+    if not include_sequence:
+        return [(None, list(range(len(frame))))]
+    positions_by_sequence: dict[str | None, list[int]] = {}
+    for position, value in enumerate(frame["sequence_id"]):
+        positions_by_sequence.setdefault(_sequence_key(value), []).append(position)
+    return list(positions_by_sequence.items())
+
+
+def _row_key(
+    row: pd.Series | object,
+    *,
+    frame_key_column: str | None = None,
+    include_sequence: bool = False,
+) -> object | None:
     if isinstance(row, pd.Series):
-        if "frame_index" in row.index and np.isfinite(float(row.get("frame_index", np.nan))):
-            return int(row["frame_index"])
-        return round(float(row["time_s"]), 9)
-    if hasattr(row, "frame_index") and np.isfinite(float(getattr(row, "frame_index"))):
-        return int(getattr(row, "frame_index"))
-    return round(float(getattr(row, "time_s")), 9)
+        get_value = row.get
+    else:
+        get_value = lambda name, default=None: getattr(row, name, default)
+
+    key_column = frame_key_column
+    if key_column is None:
+        frame_index = _finite_number(get_value("frame_index", np.nan))
+        key_column = "frame_index" if frame_index is not None else "time_s"
+    value = _finite_number(get_value(key_column, np.nan))
+    if value is None:
+        return None
+    local_key: object = value if key_column == "frame_index" else round(value, 9)
+    if not include_sequence:
+        return local_key
+    return (_sequence_key(get_value("sequence_id")), local_key)
+
+
+def _finite_number(value: object) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if np.isfinite(number) else None
+
+
+def _sequence_key(value: object) -> str | None:
+    if pd.isna(value):
+        return None
+    text = str(value).strip()
+    return text or None
