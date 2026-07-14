@@ -9,16 +9,10 @@ jobs:
   focused-test:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-          cache: pip
-      - name: Install package with test dependencies
+      - name: Clone branch and run focused regression
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-      - name: Run focused regression file
-        run: pytest -vv tests/test_mmuad_candidate_reservoir_sequence_text.py --maxfail=1
+          git clone --quiet --depth 1 --branch agent/scope-candidate-reservoir-csv-reader \
+            https://github.com/IPS-Stuttgart/RaFT-UAV.git repo
+          cd repo
+          python -m pip install --quiet -e ".[dev]"
+          pytest -vv tests/test_mmuad_candidate_reservoir_sequence_text.py --maxfail=1
