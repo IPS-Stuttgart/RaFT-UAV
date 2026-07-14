@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from zipfile import ZipFile
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -45,7 +46,9 @@ def test_acceleration_limit_repairs_high_acceleration_kink_without_speed_violati
         iterations=1,
     )
 
-    midpoint = repaired.loc[(repaired["sequence_id"] == "seq0001") & (repaired["time_s"] == 1.0)].iloc[0]
+    midpoint = repaired.loc[
+        (repaired["sequence_id"] == "seq0001") & (repaired["time_s"] == 1.0)
+    ].iloc[0]
     assert midpoint["state_x_m"] == pytest.approx(1.0)
     assert midpoint["state_y_m"] == pytest.approx(0.0)
     assert midpoint["Classification"] == 2
@@ -67,8 +70,33 @@ def test_acceleration_limit_blend_can_apply_partial_repair() -> None:
         repair_blend=0.5,
     )
 
-    midpoint = repaired.loc[(repaired["sequence_id"] == "seq0001") & (repaired["time_s"] == 1.0)].iloc[0]
+    midpoint = repaired.loc[
+        (repaired["sequence_id"] == "seq0001") & (repaired["time_s"] == 1.0)
+    ].iloc[0]
     assert midpoint["state_x_m"] == pytest.approx(5.5)
+
+
+@pytest.mark.parametrize(
+    "bad_iterations",
+    [0, -1, 1.5, True, np.bool_(True), np.nan, np.inf, -np.inf, pd.NA, np.array([1])],
+)
+def test_acceleration_limit_rejects_invalid_iterations(bad_iterations: object) -> None:
+    with pytest.raises(ValueError, match="iterations"):
+        repair_track5_acceleration_kinks(_kink_submission(), iterations=bad_iterations)
+
+
+@pytest.mark.parametrize("iterations", [1, 1.0, np.int64(1), np.float64(1.0), np.array(1)])
+def test_acceleration_limit_accepts_integer_equivalent_iterations(iterations: object) -> None:
+    repaired, diagnostics = repair_track5_acceleration_kinks(
+        _kink_submission(),
+        max_acceleration_mps2=5.0,
+        max_direct_speed_mps=20.0,
+        min_interpolation_residual_m=1.0,
+        iterations=iterations,
+    )
+
+    assert len(repaired) == len(_kink_submission())
+    assert diagnostics["acceleration_limit_applied"].sum() == 1
 
 
 def test_acceleration_limit_writes_leaderboard_ready_artifacts(tmp_path: Path) -> None:
