@@ -9,9 +9,40 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
+
+
+def _finite_nonnegative_float(value: Any, *, name: str) -> float:
+    """Return a finite, non-negative floating-point control."""
+
+    message = f"{name} must be a finite non-negative number"
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(message)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(parsed) or parsed < 0.0:
+        raise ValueError(message)
+    return parsed
+
+
+def _positive_integer(value: Any, *, name: str) -> int:
+    """Return a positive integer without truncating fractional controls."""
+
+    message = f"{name} must be a positive integer"
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(message)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(parsed) or not parsed.is_integer() or parsed < 1.0:
+        raise ValueError(message)
+    return int(parsed)
 
 
 def diversify_candidate_reservoir(
@@ -31,6 +62,8 @@ def diversify_candidate_reservoir(
     keeping distinct lower-ranked hypotheses alive.
     """
 
+    radius = _finite_nonnegative_float(radius_m, name="radius_m")
+    cap = _positive_integer(max_candidates_per_frame, name="max_candidates_per_frame")
     frame = pd.DataFrame(rows).copy().reset_index(drop=True)
     if frame.empty:
         return frame
@@ -45,8 +78,6 @@ def diversify_candidate_reservoir(
         frame["candidate_reservoir_protected"] = False
 
     outputs: list[pd.DataFrame] = []
-    radius = max(float(radius_m), 0.0)
-    cap = max(int(max_candidates_per_frame), 1)
     for _, group in frame.groupby(["sequence_id", "time_s"], sort=False, dropna=False):
         group = group.copy()
         protected = group["candidate_reservoir_protected"].fillna(False).astype(bool)
