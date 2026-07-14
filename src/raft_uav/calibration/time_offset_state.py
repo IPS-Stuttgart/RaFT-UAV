@@ -81,5 +81,19 @@ def apply_time_offset(frame: pd.DataFrame, *, offset_s: float, column: str = "ti
     out = frame.copy()
     if column not in out.columns:
         raise KeyError(column)
-    out[column] = pd.to_numeric(out[column], errors="coerce") + float(offset_s)
+    out[column] = pd.to_numeric(out[column], errors="coerce") + _finite_offset_seconds(offset_s)
     return out
+
+
+def _finite_offset_seconds(value: object) -> float:
+    """Return ``value`` as finite seconds, rejecting Boolean pseudo-numbers."""
+
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError("offset_s must be a finite numeric value")
+    try:
+        offset_s = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("offset_s must be a finite numeric value") from exc
+    if not np.isfinite(offset_s):
+        raise ValueError("offset_s must be a finite numeric value")
+    return offset_s
