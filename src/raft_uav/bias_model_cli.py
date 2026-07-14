@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import os
 import sys
 from pathlib import Path
@@ -15,13 +17,30 @@ def main(argv: list[str] | None = None) -> int:
 
     args = list(sys.argv[1:] if argv is None else argv)
     bias_model, remaining = _extract_bias_model(args)
-    if bias_model is not None:
-        os.environ[BIAS_MODEL_ENV] = str(bias_model)
-        bias_runtime.install()
-    _refresh_cli_normalizers()
-    from raft_uav import tracklet_viterbi_cli
+    with _temporary_bias_model_environment(bias_model):
+        if bias_runtime.bias_correction_enabled():
+            bias_runtime.install()
+        _refresh_cli_normalizers()
+        from raft_uav import tracklet_viterbi_cli
 
-    return tracklet_viterbi_cli.main(remaining)
+        return tracklet_viterbi_cli.main(remaining)
+
+
+@contextmanager
+def _temporary_bias_model_environment(path: Path | None) -> Iterator[None]:
+    """Apply an explicit CLI model only for the duration of one invocation."""
+
+    previous = os.environ.get(BIAS_MODEL_ENV)
+    if path is not None:
+        os.environ[BIAS_MODEL_ENV] = str(path)
+    try:
+        yield
+    finally:
+        if path is not None:
+            if previous is None:
+                os.environ.pop(BIAS_MODEL_ENV, None)
+            else:
+                os.environ[BIAS_MODEL_ENV] = previous
 
 
 def _refresh_cli_normalizers() -> None:
