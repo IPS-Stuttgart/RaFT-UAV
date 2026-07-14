@@ -10,6 +10,15 @@ import raft_uav.mmuad.candidate_reservoir as reservoir_module
 main_globals = reservoir_module._ORIGINAL_MAIN.__globals__
 original_normalize_truth = main_globals["normalize_truth_columns"]
 original_build_oracle = main_globals["build_oracle_recall_tables"]
+original_proxy_read_csv = reservoir_module._TextPreservingPandasProxy.read_csv
+
+
+def debug_proxy_read_csv(self, *args, **kwargs):
+    print("proxy_read_called=", args, kwargs)
+    result = original_proxy_read_csv(self, *args, **kwargs)
+    print("proxy_read_result=", result.to_dict("records"))
+    print("proxy_read_dtypes=", result.dtypes.astype(str).to_dict())
+    return result
 
 
 def debug_normalize_truth(frame, *args, **kwargs):
@@ -27,10 +36,13 @@ def debug_build_oracle(reservoir, truth, **kwargs):
     return original_build_oracle(reservoir, truth, **kwargs)
 
 
+reservoir_module._TextPreservingPandasProxy.read_csv = debug_proxy_read_csv
 main_globals["normalize_truth_columns"] = debug_normalize_truth
 main_globals["build_oracle_recall_tables"] = debug_build_oracle
 try:
     print("globals_are_impl=", main_globals is reservoir_module._IMPL.__dict__)
+    print("wrapper_is_original=", reservoir_module.main is reservoir_module._ORIGINAL_MAIN)
+    print("wrapper_code=", reservoir_module.main.__code__.co_filename, reservoir_module.main.__code__.co_firstlineno)
     print("normalize_patched=", main_globals["normalize_truth_columns"] is debug_normalize_truth)
     print("builder_patched=", main_globals["build_oracle_recall_tables"] is debug_build_oracle)
     with TemporaryDirectory() as directory:
@@ -61,5 +73,6 @@ try:
         print("oracle_csv_repr=", repr(oracle_csv.read_text(encoding="utf-8")))
         print("global_value=", pd.read_csv(candidate_csv).loc[0, "confidence"])
 finally:
+    reservoir_module._TextPreservingPandasProxy.read_csv = original_proxy_read_csv
     main_globals["normalize_truth_columns"] = original_normalize_truth
     main_globals["build_oracle_recall_tables"] = original_build_oracle
