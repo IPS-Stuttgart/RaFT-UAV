@@ -80,11 +80,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     frame = pd.read_csv(args.input_csv)
     specs = [_load_spec(raw) for raw in args.spec]
+    output_paths = _planned_output_paths(specs, args.output_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     manifest = []
-    for spec in specs:
+    for spec, path in zip(specs, output_paths):
         perturbed = perturb_measurements(frame, spec)
-        path = args.output_dir / f"{_slug(spec.name)}.csv"
         perturbed.to_csv(path, index=False)
         manifest.append({"path": str(path), "rows": int(len(perturbed)), "spec": asdict(spec)})
     manifest_path = args.output_dir / "stress_perturbation_manifest.json"
@@ -121,6 +121,29 @@ def _load_spec(raw: str) -> PerturbationSpec:
     else:
         payload = json.loads(raw)
     return PerturbationSpec(**payload)
+
+
+def _planned_output_paths(
+    specs: Sequence[PerturbationSpec],
+    output_dir: Path,
+) -> list[Path]:
+    """Return collision-free output paths for all perturbation specifications."""
+
+    output_dir = Path(output_dir)
+    paths: list[Path] = []
+    names_by_filename: dict[str, str] = {}
+    for spec in specs:
+        filename = f"{_slug(spec.name)}.csv"
+        filename_key = filename.casefold()
+        previous_name = names_by_filename.get(filename_key)
+        if previous_name is not None:
+            raise ValueError(
+                "perturbation names must map to unique output filenames; "
+                f"{previous_name!r} and {spec.name!r} both map to {filename!r}"
+            )
+        names_by_filename[filename_key] = spec.name
+        paths.append(output_dir / filename)
+    return paths
 
 
 def _slug(value: str) -> str:
