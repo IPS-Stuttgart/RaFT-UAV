@@ -98,6 +98,32 @@ def test_sequence_less_pool_initialization_is_reused_for_every_sequence(
     assert normalized["state_x_m"].tolist() == [42.0, 42.0]
 
 
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("sequence_id", ""),
+        (" Sequence ", "   "),
+        ("scene_id", None),
+    ],
+)
+def test_blank_sequence_pool_initialization_is_reused_for_every_sequence(
+    column: str,
+    value: str | None,
+) -> None:
+    initial = _initialization()
+    initial[column] = [value]
+
+    normalized = selector._normalize_sequence_pool_initialization(
+        _candidates(),
+        initial,
+    )
+
+    assert normalized is not None
+    normalized = normalized.sort_values("sequence_id").reset_index(drop=True)
+    assert normalized["sequence_id"].tolist() == ["001", "seqB"]
+    assert normalized["state_x_m"].tolist() == [42.0, 42.0]
+
+
 def test_aliased_initialization_changes_the_matching_sequence_only() -> None:
     initial = _initialization()
     initial["Sequence"] = ["001"]
