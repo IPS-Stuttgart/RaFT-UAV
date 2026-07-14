@@ -33,6 +33,10 @@ globals().update(
     }
 )
 
+build_oracle_recall_tables = _IMPL.build_oracle_recall_tables
+diversity_cap_reservoir = _IMPL.diversity_cap_reservoir
+normalize_truth_columns = _IMPL.normalize_truth_columns
+write_diversity_cap_outputs = _IMPL.write_diversity_cap_outputs
 _DEFAULT_TOP_K_VALUES = (1, 3, 5, 10, 20)
 
 
