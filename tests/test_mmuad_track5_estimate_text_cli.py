@@ -5,7 +5,9 @@ from pathlib import Path
 import tomllib
 
 import pandas as pd
+import pytest
 
+import raft_uav.mmuad.track5_estimate_text_cli as estimate_text_cli
 from raft_uav.mmuad.track5_estimate_text_cli import _read_csv_preserving_sequence_id
 
 
@@ -92,6 +94,34 @@ def test_estimate_fit_wrapper_ignores_sequence_converters_that_coerce_ids(
     rows = _read_csv_preserving_sequence_id(csv_path, converters={"sequence_id": int})
 
     assert rows.loc[0, "sequence_id"] == "001"
+
+
+def test_estimate_fit_main_scopes_text_reader_to_implementation_module(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    csv_path = tmp_path / "typed.csv"
+    csv_path.write_text("sequence_id,value\n001,1\n", encoding="utf-8")
+    original_global_reader = pd.read_csv
+    original_impl_pd = estimate_text_cli._impl.pd
+    observations: dict[str, object] = {}
+
+    def fake_main(_argv: list[str] | None = None) -> int:
+        observations["global_reader_is_original"] = pd.read_csv is original_global_reader
+        observations["global_value"] = pd.read_csv(csv_path).loc[0, "value"]
+        observations["legacy_sequence_id"] = estimate_text_cli._impl.pd.read_csv(
+            csv_path
+        ).loc[0, "sequence_id"]
+        return 0
+
+    monkeypatch.setattr(estimate_text_cli._impl, "main", fake_main)
+
+    assert estimate_text_cli.main([]) == 0
+    assert observations["global_reader_is_original"] is True
+    assert observations["global_value"] == 1
+    assert observations["legacy_sequence_id"] == "001"
+    assert pd.read_csv is original_global_reader
+    assert estimate_text_cli._impl.pd is original_impl_pd
 
 
 def test_estimate_fit_console_script_uses_text_id_wrapper() -> None:

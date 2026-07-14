@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import importlib
+import threading
 from typing import Any
 
 _impl = importlib.import_module("raft_uav.mmuad.track5_estimate_sequence_" + "gate_fit")
 _ORIGINAL_READ_CSV = _impl.pd.read_csv
+_MAIN_LOCK = threading.RLock()
 _SEQUENCE_COLUMNS = (
     "sequence_id",
     "Sequence",
@@ -19,6 +21,19 @@ _SEQUENCE_COLUMNS = (
     "clip_id",
 )
 _SEQUENCE_COLUMN_KEYS = frozenset(column.strip().lower() for column in _SEQUENCE_COLUMNS)
+
+
+class _SequencePreservingPandasProxy:
+    """Delegate pandas operations while preserving textual sequence identifiers."""
+
+    def __init__(self, pandas_module: Any) -> None:
+        self._pandas_module = pandas_module
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._pandas_module, name)
+
+    def read_csv(self, path: Any, *args: Any, **kwargs: Any):
+        return _read_csv_preserving_sequence_id(path, *args, **kwargs)
 
 
 def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
@@ -93,12 +108,13 @@ def _sequence_id_text(value: Any) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    original = _impl.pd.read_csv
-    _impl.pd.read_csv = _read_csv_preserving_sequence_id
-    try:
-        return _impl.main(argv)
-    finally:
-        _impl.pd.read_csv = original
+    with _MAIN_LOCK:
+        original_impl_pd = _impl.pd
+        _impl.pd = _SequencePreservingPandasProxy(original_impl_pd)
+        try:
+            return _impl.main(argv)
+        finally:
+            _impl.pd = original_impl_pd
 
 
 __all__ = ["main"]
