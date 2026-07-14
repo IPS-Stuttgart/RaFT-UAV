@@ -1,6 +1,9 @@
 name: Apply paper selection partial-index fix
 
 on:
+  push:
+    branches:
+      - agent/fix-paper-selection-partial-index-20260714
   pull_request:
     branches:
       - main
