@@ -97,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
 
     with _MAIN_LOCK:
         original_impl_pd = _IMPL.pd
-        _IMPL.pd = _TextPreservingPandasProxy(pd)
+        _IMPL.pd = _TextPreservingPandasProxy(original_impl_pd)
         try:
             return int(_ORIGINAL_MAIN(argv))
         finally:
