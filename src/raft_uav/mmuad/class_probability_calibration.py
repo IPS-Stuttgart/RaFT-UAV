@@ -179,6 +179,7 @@ def apply_temperature_calibrator(
             f"expected {model.class_labels}, got {labels}"
         )
     probabilities = normalized_probabilities(rows, columns, epsilon=model.epsilon)
+    calibrated_rows = np.isfinite(probabilities).all(axis=1)
     calibrated = temperature_scale_probabilities(
         probabilities,
         temperature=model.temperature,
@@ -188,7 +189,7 @@ def apply_temperature_calibrator(
     for index, label in enumerate(model.class_labels):
         rows[f"{prefix}{label}"] = calibrated[:, index]
     rows["class_probability_temperature"] = float(model.temperature)
-    rows["class_probability_calibrated"] = True
+    rows["class_probability_calibrated"] = calibrated_rows
     rows["class_probability_entropy_raw"] = probability_entropy(
         probabilities,
         epsilon=model.epsilon,
@@ -202,7 +203,7 @@ def apply_temperature_calibrator(
             raw_column = f"raw_{column}"
             if raw_column not in rows.columns:
                 rows[raw_column] = rows[column]
-            rows[column] = calibrated[:, index]
+            rows.loc[calibrated_rows, column] = calibrated[calibrated_rows, index]
     return rows
 
 
