@@ -121,6 +121,16 @@ def aligned_residuals(
     return residuals.reshape((-1, len(coords)))
 
 
+def _sequence_keys(values: pd.Series) -> pd.Series:
+    """Return trimmed sequence identifiers while preserving missing values."""
+
+    keys = pd.Series(values, index=values.index, dtype="string").str.strip()
+    missing = keys.isna() | keys.eq("") | keys.str.lower().isin(
+        {"nan", "none", "<na>", "nat"}
+    )
+    return keys.mask(missing)
+
+
 def _aligned_residuals_by_sequence(
     frame: pd.DataFrame,
     truth: pd.DataFrame,
@@ -129,9 +139,13 @@ def _aligned_residuals_by_sequence(
     max_time_delta_s: float,
 ) -> np.ndarray:
     residual_blocks: list[np.ndarray] = []
-    truth_sequence_ids = truth["sequence_id"].astype(str)
-    for sequence_id, sequence_frame in frame.groupby(frame["sequence_id"].astype(str), sort=False):
-        sequence_truth = truth.loc[truth_sequence_ids == str(sequence_id)]
+    frame_sequence_ids = _sequence_keys(frame["sequence_id"])
+    truth_sequence_ids = _sequence_keys(truth["sequence_id"])
+    for sequence_id in pd.unique(frame_sequence_ids.dropna()):
+        frame_mask = frame_sequence_ids.eq(sequence_id).fillna(False)
+        truth_mask = truth_sequence_ids.eq(sequence_id).fillna(False)
+        sequence_frame = frame.loc[frame_mask]
+        sequence_truth = truth.loc[truth_mask]
         if sequence_truth.empty:
             continue
         block = aligned_residuals(
@@ -214,5 +228,7 @@ def _nearest_time_indices(reference_times_s: np.ndarray, query_times_s: np.ndarr
     insertion = np.searchsorted(sorted_reference, query)
     right = np.clip(insertion, 0, sorted_reference.size - 1)
     left = np.clip(insertion - 1, 0, sorted_reference.size - 1)
-    use_right = np.abs(sorted_reference[right] - query) < np.abs(sorted_reference[left] - query)
+    use_right = np.abs(sorted_reference[right] - query) < np.abs(
+        sorted_reference[left] - query
+    )
     return sorted_original_indices[np.where(use_right, right, left)]
