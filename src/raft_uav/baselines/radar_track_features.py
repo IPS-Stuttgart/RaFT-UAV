@@ -13,13 +13,17 @@ def add_track_level_features(radar: pd.DataFrame, *, window_frames: int = 10) ->
         return radar.copy()
     if window_frames < 1:
         raise ValueError("window_frames must be positive")
-    sort_columns = [c for c in ("time_s", "frame_index", "track_index") if c in radar.columns]
-    out = radar.sort_values(sort_columns).copy() if sort_columns else radar.copy()
+
+    original_index = radar.index.copy()
+    out = radar.reset_index(drop=True).copy()
+    sort_columns = [c for c in ("time_s", "frame_index", "track_index") if c in out.columns]
+    out = out.sort_values(sort_columns) if sort_columns else out
     feature_frames: list[pd.DataFrame] = []
     for _, group in out.groupby("track_id", sort=False, dropna=False):
         feature_frames.append(_features_for_track(group.copy(), window_frames=window_frames))
     featured = pd.concat(feature_frames, ignore_index=False).sort_index()
-    return featured.loc[radar.index].copy() if set(featured.index) == set(radar.index) else featured
+    featured.index = original_index
+    return featured
 
 
 def _features_for_track(group: pd.DataFrame, *, window_frames: int) -> pd.DataFrame:
