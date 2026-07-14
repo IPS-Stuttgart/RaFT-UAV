@@ -1,0 +1,27 @@
+---
+name: Debug CI failure 1130
+
+"on":
+  push:
+    branches: [debug/ci-failure-1130-20260714]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  first-failure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install quietly
+        run: |
+          python -m pip install -q --upgrade pip
+          python -m pip install -q -e ".[dev]"
+      - name: Show first failing test
+        run: pytest -q --maxfail=1
