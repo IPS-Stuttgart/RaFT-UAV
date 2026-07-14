@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from raft_uav.mmuad.image_evidence import (
+    _normalize_max_frames,
     _sample_nearest_image_rows,
     build_image_evidence,
 )
@@ -112,6 +113,7 @@ def test_direct_sampler_preserves_valid_integer_equivalents_and_zero_limit() -> 
 
     assert [target_time for target_time, _row in limited] == [0.0, 2.0]
     assert [target_time for target_time, _row in unlimited] == [0.0, 1.0, 2.0]
+    assert _normalize_max_frames(2**53 + 1, name="max_frames") == 2**53 + 1
 
 
 def _image_rows() -> pd.DataFrame:
