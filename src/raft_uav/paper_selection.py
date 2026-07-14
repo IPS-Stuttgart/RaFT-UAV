@@ -320,17 +320,29 @@ def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
         return []
     segments: list[pd.DataFrame] = []
     for _, track_rows in radar.groupby("track_id", sort=True):
-        sort_columns = [
-            column
-            for column in ("frame_index", "time_s", "track_index")
-            if column in track_rows.columns
-        ]
-        ordered = track_rows.sort_values(sort_columns).reset_index(drop=True)
-        frame_values = (
-            pd.to_numeric(ordered["frame_index"], errors="coerce").to_numpy(dtype=float)
-            if "frame_index" in ordered.columns
-            else ordered["time_s"].to_numpy(dtype=float)
+        frame_index = (
+            pd.to_numeric(track_rows["frame_index"], errors="coerce")
+            if "frame_index" in track_rows.columns
+            else None
         )
+        use_frame_index = frame_index is not None and bool(
+            np.isfinite(frame_index).all()
+        )
+        sort_candidates = (
+            ("frame_index", "time_s", "track_index")
+            if use_frame_index
+            else ("time_s", "track_index")
+        )
+        sort_columns = [
+            column for column in sort_candidates if column in track_rows.columns
+        ]
+        ordered = track_rows.sort_values(
+            sort_columns, kind="mergesort"
+        ).reset_index(drop=True)
+        frame_column = "frame_index" if use_frame_index else "time_s"
+        frame_values = pd.to_numeric(
+            ordered[frame_column], errors="coerce"
+        ).to_numpy(dtype=float)
         split_points = np.r_[
             0,
             np.where(np.diff(frame_values) > _segment_gap_threshold(frame_values))[0] + 1,
