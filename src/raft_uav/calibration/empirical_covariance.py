@@ -121,6 +121,12 @@ def aligned_residuals(
     return residuals.reshape((-1, len(coords)))
 
 
+def _normalized_sequence_ids(series: pd.Series) -> pd.Series:
+    """Return comparable sequence labels for measurements and truth rows."""
+
+    return series.astype(str).str.strip()
+
+
 def _aligned_residuals_by_sequence(
     frame: pd.DataFrame,
     truth: pd.DataFrame,
@@ -129,9 +135,10 @@ def _aligned_residuals_by_sequence(
     max_time_delta_s: float,
 ) -> np.ndarray:
     residual_blocks: list[np.ndarray] = []
-    truth_sequence_ids = truth["sequence_id"].astype(str)
-    for sequence_id, sequence_frame in frame.groupby(frame["sequence_id"].astype(str), sort=False):
-        sequence_truth = truth.loc[truth_sequence_ids == str(sequence_id)]
+    truth_sequence_ids = _normalized_sequence_ids(truth["sequence_id"])
+    frame_sequence_ids = _normalized_sequence_ids(frame["sequence_id"])
+    for sequence_id, sequence_frame in frame.groupby(frame_sequence_ids, sort=False):
+        sequence_truth = truth.loc[truth_sequence_ids == sequence_id]
         if sequence_truth.empty:
             continue
         block = aligned_residuals(
