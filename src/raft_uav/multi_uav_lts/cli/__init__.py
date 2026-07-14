@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 import importlib.util
 from pathlib import Path
 import sys
@@ -29,6 +30,22 @@ _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_SUBMISSION_VALIDATION = _IMPL.SubmissionValidation
 _summarize_prediction_text = _IMPL._summarize_prediction_text
+
+
+def _parse_int_like_exact(value: str) -> int:
+    """Parse an integer-like submission ID without binary-float rounding."""
+
+    text = str(value).strip()
+    try:
+        parsed = Decimal(text)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"expected integer-like value, got {value!r}") from exc
+    if not parsed.is_finite() or parsed != parsed.to_integral_value():
+        raise ValueError(f"expected integer-like value, got {value!r}")
+    return int(parsed)
+
+
+_IMPL._parse_int_like = _parse_int_like_exact
 
 
 @dataclass(frozen=True)
@@ -119,6 +136,7 @@ def validate_submission_zip(
 
 _IMPL.SubmissionValidation = SubmissionValidation
 _IMPL.validate_submission_zip = validate_submission_zip
+
 
 globals().update(
     {
