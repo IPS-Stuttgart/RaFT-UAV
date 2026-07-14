@@ -47,7 +47,8 @@ def diversify_candidate_reservoir(
     Thus a low predicted error suppresses more local duplicates, while a high
     predicted error preserves nearby alternatives. Invalid or non-positive
     uncertainty values are imputed with the reference value and reported in the
-    output diagnostics.
+    output diagnostics. Malformed or non-finite coordinates are skipped, and
+    non-finite ranking scores are treated as missing scores.
     """
 
     frame = pd.DataFrame(rows).copy().reset_index(drop=True)
@@ -57,9 +58,12 @@ def diversify_candidate_reservoir(
     missing = sorted(required.difference(frame.columns))
     if missing:
         raise ValueError(f"candidate reservoir missing required columns: {missing}")
+    for column in ("x_m", "y_m", "z_m"):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
     if score_column not in frame.columns:
         frame[score_column] = pd.to_numeric(frame.get("confidence", 0.0), errors="coerce")
-    frame[score_column] = pd.to_numeric(frame[score_column], errors="coerce").fillna(0.0)
+    score = pd.to_numeric(frame[score_column], errors="coerce")
+    frame[score_column] = score.where(np.isfinite(score), np.nan).fillna(0.0)
     if "candidate_reservoir_protected" not in frame.columns:
         frame["candidate_reservoir_protected"] = False
 
