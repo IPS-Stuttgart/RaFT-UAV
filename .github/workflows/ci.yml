@@ -14,8 +14,8 @@ env:
   PYTHONUNBUFFERED: "1"
 
 jobs:
-  first-failure:
-    name: First failing test
+  oracle-sequence-diagnostic:
+    name: Oracle sequence diagnostic
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -29,20 +29,44 @@ jobs:
         run: |
           python -m pip install -q --upgrade pip
           python -m pip install -q -e ".[dev]"
-      - name: Capture first failing test
+      - name: Capture oracle sequence stages
         run: |
-          set +e
-          pytest -q --maxfail=1 > first-failure.log 2>&1
-          echo "$?" > first-failure.status
-          exit 0
-      - name: Upload first failure
+          python - <<'PY' > oracle-sequence-debug.txt 2>&1
+          from pathlib import Path
+          import tempfile
+          import pandas as pd
+          import raft_uav.mmuad.candidate_reservoir as cr
+
+          root = Path(tempfile.mkdtemp())
+          candidate_csv = root / "candidates.csv"
+          truth_csv = root / "truth.csv"
+          candidate_csv.write_text(
+              "sequence_id,time_s,x_m,y_m,z_m,confidence\n"
+              "001,0.0,1.0,2.0,3.0,0.9\n",
+              encoding="utf-8",
+          )
+          truth_csv.write_text(candidate_csv.read_text(encoding="utf-8"), encoding="utf-8")
+
+          candidates = cr.load_candidate_inputs([f"raw={candidate_csv}"])
+          reservoir = cr.build_candidate_reservoir(candidates)
+          truth_raw = cr._read_sequence_text_csv(truth_csv)
+          truth = cr.normalize_truth_columns(truth_raw)
+          frame_rows, pooled, by_sequence = cr.build_oracle_recall_tables(reservoir, truth)
+
+          print("candidate_raw", candidates[["sequence_id", "time_s"]].to_dict("records"))
+          print("candidate_dtypes", candidates[["sequence_id", "time_s"]].dtypes.astype(str).to_dict())
+          print("reservoir", reservoir[["sequence_id", "time_s"]].to_dict("records"))
+          print("reservoir_dtypes", reservoir[["sequence_id", "time_s"]].dtypes.astype(str).to_dict())
+          print("truth_raw", truth_raw[["sequence_id", "time_s"]].to_dict("records"))
+          print("truth_raw_dtypes", truth_raw[["sequence_id", "time_s"]].dtypes.astype(str).to_dict())
+          print("truth", truth[["sequence_id", "time_s"]].to_dict("records"))
+          print("truth_dtypes", truth[["sequence_id", "time_s"]].dtypes.astype(str).to_dict())
+          print("frames", frame_rows.to_dict("records"))
+          print("pooled", pooled.to_dict("records"))
+          print("by_sequence", by_sequence.to_dict("records"))
+          PY
+      - name: Upload oracle diagnostic
         uses: actions/upload-artifact@v7
         with:
-          name: first-failure
-          path: |
-            first-failure.log
-            first-failure.status
-      - name: Preserve failure status
-        run: |
-          cat first-failure.log
-          test "$(cat first-failure.status)" = "0"
+          name: oracle-sequence-debug
+          path: oracle-sequence-debug.txt
