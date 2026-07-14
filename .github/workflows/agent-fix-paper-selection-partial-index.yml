@@ -1,12 +1,16 @@
 name: Apply paper selection partial-index fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/fix-paper-selection-partial-index-20260714
+      - main
 
 permissions:
   contents: write
+
+concurrency:
+  group: agent-fix-paper-selection-partial-index
+  cancel-in-progress: true
 
 jobs:
   patch-and-test:
@@ -25,84 +29,97 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import textwrap
 
           source_path = Path("src/raft_uav/paper_selection.py")
           source = source_path.read_text(encoding="utf-8")
-          old = '''        sort_columns = [
-              column
-              for column in ("frame_index", "time_s", "track_index")
-              if column in track_rows.columns
-          ]
-          ordered = track_rows.sort_values(sort_columns).reset_index(drop=True)
-          frame_values = (
-              pd.to_numeric(ordered["frame_index"], errors="coerce").to_numpy(dtype=float)
-              if "frame_index" in ordered.columns
-              else ordered["time_s"].to_numpy(dtype=float)
+          old = (
+              "        sort_columns = [\n"
+              "            column\n"
+              "            for column in (\"frame_index\", \"time_s\", \"track_index\")\n"
+              "            if column in track_rows.columns\n"
+              "        ]\n"
+              "        ordered = track_rows.sort_values(sort_columns).reset_index(drop=True)\n"
+              "        frame_values = (\n"
+              "            pd.to_numeric(ordered[\"frame_index\"], errors=\"coerce\")"
+              ".to_numpy(dtype=float)\n"
+              "            if \"frame_index\" in ordered.columns\n"
+              "            else ordered[\"time_s\"].to_numpy(dtype=float)\n"
+              "        )\n"
           )
-          '''
-          new = '''        frame_index = (
-              pd.to_numeric(track_rows["frame_index"], errors="coerce")
-              if "frame_index" in track_rows.columns
-              else None
+          new = (
+              "        frame_index = (\n"
+              "            pd.to_numeric(track_rows[\"frame_index\"], errors=\"coerce\")\n"
+              "            if \"frame_index\" in track_rows.columns\n"
+              "            else None\n"
+              "        )\n"
+              "        use_frame_index = frame_index is not None and bool(\n"
+              "            np.isfinite(frame_index).all()\n"
+              "        )\n"
+              "        sort_candidates = (\n"
+              "            (\"frame_index\", \"time_s\", \"track_index\")\n"
+              "            if use_frame_index\n"
+              "            else (\"time_s\", \"track_index\")\n"
+              "        )\n"
+              "        sort_columns = [\n"
+              "            column for column in sort_candidates if column in track_rows.columns\n"
+              "        ]\n"
+              "        ordered = track_rows.sort_values(\n"
+              "            sort_columns, kind=\"mergesort\"\n"
+              "        ).reset_index(drop=True)\n"
+              "        frame_column = \"frame_index\" if use_frame_index else \"time_s\"\n"
+              "        frame_values = pd.to_numeric(\n"
+              "            ordered[frame_column], errors=\"coerce\"\n"
+              "        ).to_numpy(dtype=float)\n"
           )
-          use_frame_index = frame_index is not None and bool(np.isfinite(frame_index).all())
-          sort_candidates = (
-              ("frame_index", "time_s", "track_index")
-              if use_frame_index
-              else ("time_s", "track_index")
-          )
-          sort_columns = [column for column in sort_candidates if column in track_rows.columns]
-          ordered = track_rows.sort_values(sort_columns, kind="mergesort").reset_index(drop=True)
-          frame_column = "frame_index" if use_frame_index else "time_s"
-          frame_values = pd.to_numeric(
-              ordered[frame_column], errors="coerce"
-          ).to_numpy(dtype=float)
-          '''
           if source.count(old) != 1:
               raise SystemExit(f"expected one source block, found {source.count(old)}")
           source_path.write_text(source.replace(old, new), encoding="utf-8")
 
           test_path = Path("tests/test_paper_selection_partial_frame_index.py")
           test_path.write_text(
-              '''from __future__ import annotations
+              textwrap.dedent(
+                  """\
+                  from __future__ import annotations
 
-          import numpy as np
-          import pandas as pd
+                  import numpy as np
+                  import pandas as pd
 
-          from raft_uav.paper_selection import select_paper_strict_raw_radar_track
-
-
-          def test_partial_frame_indices_fall_back_to_time_continuity() -> None:
-              radar = pd.DataFrame(
-                  {
-                      "time_s": [0.0, 1.0, 10.0],
-                      "frame_index": [0.0, np.nan, 2.0],
-                      "track_id": [7, 7, 7],
-                      "track_index": [0, 1, 2],
-                      "cat_prob_uav": [0.5, 0.5, 0.5],
-                  }
-              )
-
-              selected = select_paper_strict_raw_radar_track(radar)
-
-              assert selected["time_s"].tolist() == [0.0, 1.0]
+                  from raft_uav.paper_selection import select_paper_strict_raw_radar_track
 
 
-          def test_complete_frame_indices_remain_authoritative() -> None:
-              radar = pd.DataFrame(
-                  {
-                      "time_s": [0.0, 100.0, 101.0],
-                      "frame_index": [0, 1, 10],
-                      "track_id": [7, 7, 7],
-                      "track_index": [0, 1, 2],
-                      "cat_prob_uav": [0.5, 0.5, 0.5],
-                  }
-              )
+                  def test_partial_frame_indices_fall_back_to_time_continuity() -> None:
+                      radar = pd.DataFrame(
+                          {
+                              "time_s": [0.0, 1.0, 10.0],
+                              "frame_index": [0.0, np.nan, 2.0],
+                              "track_id": [7, 7, 7],
+                              "track_index": [0, 1, 2],
+                              "cat_prob_uav": [0.5, 0.5, 0.5],
+                          }
+                      )
 
-              selected = select_paper_strict_raw_radar_track(radar)
+                      selected = select_paper_strict_raw_radar_track(radar)
 
-              assert selected["time_s"].tolist() == [0.0, 100.0]
-          ''',
+                      assert selected["time_s"].tolist() == [0.0, 1.0]
+
+
+                  def test_complete_frame_indices_remain_authoritative() -> None:
+                      radar = pd.DataFrame(
+                          {
+                              "time_s": [0.0, 100.0, 101.0],
+                              "frame_index": [0, 1, 10],
+                              "track_id": [7, 7, 7],
+                              "track_index": [0, 1, 2],
+                              "cat_prob_uav": [0.5, 0.5, 0.5],
+                          }
+                      )
+
+                      selected = select_paper_strict_raw_radar_track(radar)
+
+                      assert selected["time_s"].tolist() == [0.0, 100.0]
+                  """
+              ),
               encoding="utf-8",
           )
           PY
