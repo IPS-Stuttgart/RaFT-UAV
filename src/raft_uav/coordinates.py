@@ -58,13 +58,19 @@ class LocalENUProjector:
         longitude_deg: np.ndarray,
         altitude_m: np.ndarray,
     ) -> np.ndarray:
-        """Transform many WGS84 coordinates to an ``(n, 3)`` ENU array."""
+        """Transform many WGS84 coordinates to an ``(n, 3)`` ENU array.
 
-        lon = np.asarray(longitude_deg, dtype=float)
-        lat = np.asarray(latitude_deg, dtype=float)
-        alt = np.asarray(altitude_m, dtype=float)
+        Broadcast-compatible coordinate inputs are flattened in C order so every
+        broadcast coordinate contributes exactly one output row.
+        """
+
+        lat, lon, alt = np.broadcast_arrays(
+            np.asarray(latitude_deg, dtype=float),
+            np.asarray(longitude_deg, dtype=float),
+            np.asarray(altitude_m, dtype=float),
+        )
         x, y, z = _geodetic_to_ecef(lat, lon, alt)
-        ecef = np.column_stack([x, y, z])
+        ecef = np.column_stack([x.ravel(), y.ravel(), z.ravel()])
         delta = ecef - self._origin_ecef.reshape(1, 3)
         return delta @ self._ecef_to_enu_rotation.T
 
