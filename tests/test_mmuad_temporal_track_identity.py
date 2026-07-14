@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fractions import Fraction
+
 import numpy as np
 import pytest
 
@@ -40,6 +42,16 @@ def test_canonical_track_id_matches_numeric_csv_representations() -> None:
     assert canonical_track_id(" 491.000 ") == "491"
     assert canonical_track_id(-1) is None
     assert canonical_track_id("nan") is None
+
+
+def test_canonical_track_id_preserves_exact_rationals_beyond_float_precision() -> None:
+    large_integer = (2**53) + 1
+    fractional = Fraction(large_integer, 2)
+
+    assert canonical_track_id(Fraction(large_integer, 1)) == str(large_integer)
+    assert canonical_track_id(fractional) == "4503599627370496.5"
+    assert canonical_track_id(fractional) != canonical_track_id(4503599627370496)
+    assert canonical_track_id(Fraction(1, 3)) == "1/3"
 
 
 def test_canonical_track_id_preserves_opaque_leading_zeros() -> None:
