@@ -245,18 +245,24 @@ def _row_key(
     *,
     frame_key_column: str | None = None,
 ) -> object | None:
-    if isinstance(row, pd.Series):
-        get_value = row.get
-    else:
-        get_value = lambda name, default=None: getattr(row, name, default)
     key_column = frame_key_column
     if key_column is None:
-        frame_index = _finite_number(get_value("frame_index", np.nan))
+        frame_index = _finite_number(_row_value(row, "frame_index", np.nan))
         key_column = "frame_index" if frame_index is not None else "time_s"
-    value = _finite_number(get_value(key_column, np.nan))
+    value = _finite_number(_row_value(row, key_column, np.nan))
     if value is None:
         return None
     return value if key_column == "frame_index" else round(value, 9)
+
+
+def _row_value(
+    row: pd.Series | object,
+    name: str,
+    default: object = None,
+) -> object:
+    if isinstance(row, pd.Series):
+        return row.get(name, default)
+    return getattr(row, name, default)
 
 
 def _finite_number(value: object) -> float | None:
