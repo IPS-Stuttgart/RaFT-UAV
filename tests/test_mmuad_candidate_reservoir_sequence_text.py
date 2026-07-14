@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
+import raft_uav.mmuad.candidate_reservoir as candidate_reservoir
 from raft_uav.mmuad.candidate_reservoir import load_candidate_inputs, main
 
 
@@ -57,3 +58,39 @@ def test_candidate_reservoir_cli_oracle_preserves_zero_padded_sequence(
     oracle_frames = pd.read_csv(oracle_frame_csv, dtype=str, keep_default_na=False)
     assert reservoir.loc[0, "sequence_id"] == "001"
     assert oracle_frames.loc[0, "sequence_id"] == "001"
+
+
+def test_candidate_reservoir_cli_does_not_replace_global_pandas_reader(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    candidate_csv = tmp_path / "candidates.csv"
+    output_csv = tmp_path / "reservoir.csv"
+    _write_pose_csv(candidate_csv)
+    original_read_csv = pd.read_csv
+    original_build = candidate_reservoir._IMPL.build_candidate_reservoir
+    observations: list[bool] = []
+
+    def checking_build(*args, **kwargs):
+        observations.append(pd.read_csv is original_read_csv)
+        return original_build(*args, **kwargs)
+
+    monkeypatch.setattr(
+        candidate_reservoir._IMPL,
+        "build_candidate_reservoir",
+        checking_build,
+    )
+
+    assert (
+        main(
+            [
+                "--candidate",
+                f"raw={candidate_csv}",
+                "--output-csv",
+                str(output_csv),
+            ]
+        )
+        == 0
+    )
+    assert observations == [True]
+    assert pd.read_csv is original_read_csv
