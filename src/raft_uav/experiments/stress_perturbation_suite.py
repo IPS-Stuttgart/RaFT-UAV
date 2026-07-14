@@ -31,10 +31,12 @@ class PerturbationSpec:
         if self.false_track_count < 0:
             raise ValueError("false_track_count must be nonnegative")
         for name in ("time_jitter_std_s", "velocity_noise_std_mps", "position_noise_std_m"):
-            if float(getattr(self, name)) < 0.0:
-                raise ValueError(f"{name} must be nonnegative")
-        if self.catprob_scale < 0.0:
-            raise ValueError("catprob_scale must be nonnegative")
+            value = float(getattr(self, name))
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+        catprob_scale = float(self.catprob_scale)
+        if not np.isfinite(catprob_scale) or catprob_scale < 0.0:
+            raise ValueError("catprob_scale must be finite and nonnegative")
 
 
 def perturb_measurements(frame: pd.DataFrame, spec: PerturbationSpec) -> pd.DataFrame:
