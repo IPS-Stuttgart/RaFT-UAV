@@ -54,9 +54,24 @@ def _normalize_sequence_pool_initialization(
 ) -> pd.DataFrame | None:
     """Canonicalize sequence aliases or expand one shared trajectory per sequence."""
 
+    if initial_estimates is None:
+        return None
+
+    rows = pd.DataFrame(initial_estimates).copy()
+    rows.columns = [str(column).strip() for column in rows.columns]
+    if not rows.empty:
+        sequence_column = sequence_multistart._first_present_column(
+            rows,
+            sequence_multistart._SEQUENCE_ALIASES,
+        )
+        if sequence_column is not None:
+            sequence_ids = sequence_multistart._sequence_id_text(rows[sequence_column])
+            if not sequence_ids.ne("").any():
+                rows = rows.drop(columns=[sequence_column])
+
     return sequence_multistart._expand_sequence_less_external_initialization(
         candidates,
-        initial_estimates,
+        rows,
     )
 
 
