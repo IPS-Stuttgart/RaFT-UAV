@@ -11,6 +11,10 @@ import pandas as pd
 _GRID_MODULE = "raft_uav.mmuad.track5_estimate_ensemble_grid"
 _UNCERTAINTY_ENSEMBLE_MODULE = "raft_uav.mmuad.track5_uncertainty_ensemble"
 _UNCERTAINTY_ENSEMBLE_READER = "_read_estimate_csv_preserving_sequence_id"
+_CANDIDATE_RESERVOIR_MODULE = "raft_uav.mmuad"
+_CANDIDATE_RESERVOIR_MAIN_QUALNAME = (
+    "_install_candidate_reservoir_topk_guard.<locals>._main"
+)
 _ORIGINAL_PANDAS_READ_CSV = pd.read_csv
 
 
@@ -47,8 +51,20 @@ def _called_from_track5_estimate_grid() -> bool:
     return False
 
 
+def _called_from_candidate_reservoir_cli() -> bool:
+    frame = sys._getframe(2)
+    while frame is not None:
+        if (
+            frame.f_globals.get("__name__") == _CANDIDATE_RESERVOIR_MODULE
+            and frame.f_code.co_qualname == _CANDIDATE_RESERVOIR_MAIN_QUALNAME
+        ):
+            return True
+        frame = frame.f_back
+    return False
+
+
 def _read_csv_with_track5_estimate_grid_guard(*args: Any, **kwargs: Any) -> pd.DataFrame:
-    if _called_from_track5_estimate_grid():
+    if _called_from_track5_estimate_grid() or _called_from_candidate_reservoir_cli():
         kwargs = dict(kwargs)
         kwargs["dtype"] = str
         kwargs.setdefault("keep_default_na", False)
