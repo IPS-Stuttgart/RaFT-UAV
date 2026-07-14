@@ -1,8 +1,9 @@
-"""Compatibility wrapper validating vertical-repair iteration counts.
+"""Compatibility wrapper validating vertical-repair inputs.
 
 The maintained implementation lives in the sibling ``track5_vertical_repair.py``
 module. This package preserves the public import path while rejecting malformed
-``iterations`` values instead of silently truncating or clamping them.
+``iterations`` values and invalid numeric rows instead of silently coercing or
+dropping them.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from pathlib import Path
 import sys
 
 import numpy as np
+import pandas as pd
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_vertical_repair.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -24,6 +26,13 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_REPAIR = _IMPL.repair_track5_vertical_spikes
+_NUMERIC_COLUMNS = (
+    "time_s",
+    "state_x_m",
+    "state_y_m",
+    "state_z_m",
+    "Classification",
+)
 
 
 def _positive_integer(value: object, *, name: str) -> int:
@@ -40,6 +49,25 @@ def _positive_integer(value: object, *, name: str) -> int:
     return int(numeric)
 
 
+def _validate_numeric_rows(submission: object) -> None:
+    """Reject numeric rows that the legacy normalizer would silently discard."""
+
+    rows = pd.DataFrame(submission)
+    if any(column not in rows.columns for column in _NUMERIC_COLUMNS):
+        return
+    invalid: list[str] = []
+    for column in _NUMERIC_COLUMNS:
+        numeric = pd.to_numeric(rows[column], errors="coerce")
+        finite = np.isfinite(numeric.to_numpy(dtype=float))
+        if finite.all():
+            continue
+        row_positions = np.flatnonzero(~finite).tolist()
+        invalid.append(f"{column} rows {row_positions}")
+    if invalid:
+        details = "; ".join(invalid)
+        raise ValueError(f"submission contains non-finite numeric values: {details}")
+
+
 def repair_track5_vertical_spikes(
     submission,
     *,
@@ -49,9 +77,10 @@ def repair_track5_vertical_spikes(
     max_horizontal_speed_mps: float | None = 80.0,
     iterations: int = 2,
 ):
-    """Return vertically repaired estimates after validating ``iterations``."""
+    """Return vertically repaired estimates after validating public inputs."""
 
     validated_iterations = _positive_integer(iterations, name="iterations")
+    _validate_numeric_rows(submission)
     return _ORIGINAL_REPAIR(
         submission,
         max_vertical_speed_mps=max_vertical_speed_mps,
@@ -71,7 +100,9 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_NUMERIC_COLUMNS"] = _NUMERIC_COLUMNS
 globals()["_positive_integer"] = _positive_integer
+globals()["_validate_numeric_rows"] = _validate_numeric_rows
 globals()["repair_track5_vertical_spikes"] = repair_track5_vertical_spikes
 
 __doc__ = _IMPL.__doc__
