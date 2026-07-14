@@ -225,7 +225,9 @@ def _install_candidate_reservoir_topk_guard() -> None:
         print(f"output_csv={args.output_csv}")
 
         if args.truth_csv is not None:
-            truth = _normalize_truth_columns(_pd.read_csv(args.truth_csv))
+            truth = _normalize_truth_columns(
+    _pd.read_csv(args.truth_csv, dtype=str, keep_default_na=False)
+)
             frame_rows, pooled, by_sequence = _candidate_reservoir.build_oracle_recall_tables(
                 reservoir,
                 truth,
