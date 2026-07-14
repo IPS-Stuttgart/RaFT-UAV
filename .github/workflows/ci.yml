@@ -29,5 +29,20 @@ jobs:
         run: |
           python -m pip install -q --upgrade pip
           python -m pip install -q -e ".[dev]"
-      - name: Show first failing test
-        run: pytest -q --maxfail=1
+      - name: Capture first failing test
+        run: |
+          set +e
+          pytest -q --maxfail=1 > first-failure.log 2>&1
+          echo "$?" > first-failure.status
+          exit 0
+      - name: Upload first failure
+        uses: actions/upload-artifact@v7
+        with:
+          name: first-failure
+          path: |
+            first-failure.log
+            first-failure.status
+      - name: Preserve failure status
+        run: |
+          cat first-failure.log
+          test "$(cat first-failure.status)" = "0"
