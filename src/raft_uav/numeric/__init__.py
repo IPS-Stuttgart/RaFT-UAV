@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 import math
-from numbers import Integral
+from numbers import Integral, Rational
 
 import numpy as np
 
@@ -30,6 +30,8 @@ def optional_int(value: object) -> int | None:
         return None
     if isinstance(value, Integral):
         return int(value)
+    if isinstance(value, Rational):
+        return int(value.numerator) if value.denominator == 1 else None
     if isinstance(value, Decimal):
         return _optional_decimal_int(value)
     if isinstance(value, str):
