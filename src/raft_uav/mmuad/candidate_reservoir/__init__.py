@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
+import threading
+from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
@@ -21,6 +22,24 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_MAIN = _IMPL.main
+_MAIN_LOCK = threading.RLock()
+
+
+class _TextPreservingPandasProxy:
+    """Delegate pandas operations while keeping CSV identifiers as text."""
+
+    def __init__(self, pandas_module: Any) -> None:
+        self._pandas_module = pandas_module
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._pandas_module, name)
+
+    def read_csv(self, *args: Any, **kwargs: Any) -> pd.DataFrame:
+        kwargs.setdefault("dtype", str)
+        kwargs.setdefault("keep_default_na", False)
+        frame = self._pandas_module.read_csv(*args, **kwargs)
+        frame.columns = [str(column).strip() for column in frame.columns]
+        return frame
 
 
 def _read_sequence_text_csv(path: Path) -> pd.DataFrame:
@@ -74,22 +93,15 @@ def _load_candidate_specs(specs: list[str]) -> pd.DataFrame:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the legacy CLI with text-preserving CSV reads."""
+    """Run the canonical CLI with a module-local text-preserving CSV reader."""
 
-    original_read_csv = pd.read_csv
-
-    def _read_csv_preserving_sequence(*args: Any, **kwargs: Any) -> pd.DataFrame:
-        kwargs.setdefault("dtype", str)
-        kwargs.setdefault("keep_default_na", False)
-        frame = original_read_csv(*args, **kwargs)
-        frame.columns = [str(column).strip() for column in frame.columns]
-        return frame
-
-    pd.read_csv = _read_csv_preserving_sequence
-    try:
-        return int(_ORIGINAL_MAIN(argv))
-    finally:
-        pd.read_csv = original_read_csv
+    with _MAIN_LOCK:
+        original_impl_pd = _IMPL.pd
+        _IMPL.pd = _TextPreservingPandasProxy(pd)
+        try:
+            return int(_ORIGINAL_MAIN(argv))
+        finally:
+            _IMPL.pd = original_impl_pd
 
 
 _IMPL.load_candidate_inputs = load_candidate_inputs
