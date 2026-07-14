@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.candidate_diversity import diversify_candidate_reservoir
 
@@ -63,3 +65,32 @@ def test_diversity_does_not_expand_duplicate_input_index_labels() -> None:
 
     assert output["track_id"].tolist() == ["best", "far"]
     assert len(output) == 2
+
+
+@pytest.mark.parametrize(
+    "radius_m",
+    [True, np.bool_(False), -0.1, np.nan, np.inf, "not-a-number"],
+)
+def test_diversity_rejects_invalid_radius_controls(radius_m: object) -> None:
+    with pytest.raises(ValueError, match="radius_m must be a finite non-negative number"):
+        diversify_candidate_reservoir(_rows(), radius_m=radius_m)
+
+
+@pytest.mark.parametrize(
+    "cap",
+    [True, np.bool_(False), 0, -1, 1.5, np.nan, np.inf, "not-an-integer"],
+)
+def test_diversity_rejects_invalid_frame_caps(cap: object) -> None:
+    with pytest.raises(ValueError, match="max_candidates_per_frame must be a positive integer"):
+        diversify_candidate_reservoir(_rows(), max_candidates_per_frame=cap)
+
+
+def test_diversity_accepts_integer_equivalent_frame_cap() -> None:
+    output = diversify_candidate_reservoir(
+        _rows(),
+        radius_m=np.float64(0.0),
+        max_candidates_per_frame=2.0,
+    )
+
+    assert len(output) == 2
+    assert output["candidate_diversity_radius_m"].eq(0.0).all()
