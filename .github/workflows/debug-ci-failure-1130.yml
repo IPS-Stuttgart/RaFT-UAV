@@ -2,8 +2,7 @@
 name: Debug CI failure 1130
 
 "on":
-  push:
-    branches: [debug/ci-failure-1130-20260714]
+  pull_request:
   workflow_dispatch:
 
 env:
