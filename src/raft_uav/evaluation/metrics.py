@@ -52,6 +52,7 @@ def position_errors_m(
 
     if dimensions not in (2, 3):
         raise ValueError("dimensions must be 2 or 3")
+    max_time_delta_s = _validate_max_time_delta_s(max_time_delta_s)
 
     estimate_times, estimate_positions = _prepare_time_position_series(
         estimate_times_s,
@@ -117,6 +118,7 @@ def position_errors_at_estimates_m(
 
     if dimensions not in (2, 3):
         raise ValueError("dimensions must be 2 or 3")
+    max_time_delta_s = _validate_max_time_delta_s(max_time_delta_s)
 
     estimate_times, estimate_positions = _prepare_time_position_samples(
         estimate_times_s,
@@ -165,6 +167,27 @@ def sampled_position_errors_m(
         max_time_delta_s=max_time_delta_s,
         dimensions=dimensions,
     )
+
+
+def _validate_max_time_delta_s(value: float | None) -> float | None:
+    if value is None:
+        return None
+
+    array = np.asarray(value)
+    if array.ndim != 0:
+        raise ValueError("max_time_delta_s must be a finite, non-negative scalar")
+    scalar = array.item()
+    if isinstance(scalar, (bool, np.bool_)):
+        raise ValueError("max_time_delta_s must be a finite, non-negative scalar")
+    try:
+        parsed = float(scalar)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "max_time_delta_s must be a finite, non-negative scalar"
+        ) from exc
+    if not np.isfinite(parsed) or parsed < 0.0:
+        raise ValueError("max_time_delta_s must be a finite, non-negative scalar")
+    return parsed
 
 
 def _prepare_time_position_series(
@@ -316,6 +339,7 @@ def interpolate_positions_at_times(
     or sensor measurement at its own timestamp against interpolated truth.
     """
 
+    max_time_delta_s = _validate_max_time_delta_s(max_time_delta_s)
     reference_array = np.asarray(reference_positions_m, dtype=float)
     reference_dimensions = reference_array.shape[1] if reference_array.ndim == 2 else 3
     reference_times, reference_positions = _prepare_time_position_series(
@@ -356,6 +380,7 @@ def position_errors_at_times_m(
 
     if dimensions not in (2, 3):
         raise ValueError("dimensions must be 2 or 3")
+    max_time_delta_s = _validate_max_time_delta_s(max_time_delta_s)
 
     # Paper-table metrics are sample metrics: every emitted sensor/fusion row
     # contributes one error.  Do not collapse duplicate estimate timestamps here;
@@ -404,6 +429,7 @@ def empirical_position_covariance_at_times(
 
     if dimensions not in (2, 3):
         raise ValueError("dimensions must be 2 or 3")
+    max_time_delta_s = _validate_max_time_delta_s(max_time_delta_s)
     # Match the paper-table sample convention used by
     # ``position_errors_at_times_m``: every finite measurement/output row gets a
     # residual.  Only the truth trajectory is de-duplicated for interpolation.
