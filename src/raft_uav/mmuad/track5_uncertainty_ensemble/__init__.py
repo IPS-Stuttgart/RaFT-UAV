@@ -11,12 +11,16 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.submission import parse_official_sequence_cell
+from raft_uav.mmuad.track5_estimate_ensemble import (
+    EstimateInput,
+    _validate_ensemble_weight,
+)
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_uncertainty_ensemble.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -28,6 +32,7 @@ if _SPEC is None or _SPEC.loader is None:
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+_LEGACY_BUILD = _IMPL.build_track5_uncertainty_ensemble
 
 
 class _PandasCsvProxy:
@@ -118,11 +123,54 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     return out.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
+def _validated_estimate_inputs(
+    estimate_inputs: Iterable[EstimateInput],
+) -> list[EstimateInput]:
+    """Normalize global weights without consuming the iterable twice."""
+
+    validated: list[EstimateInput] = []
+    for item in estimate_inputs:
+        label = str(item.label)
+        validated.append(
+            EstimateInput(
+                label=item.label,
+                path=item.path,
+                weight=_validate_ensemble_weight(item.weight, label=label),
+            )
+        )
+    return validated
+
+
+def build_track5_uncertainty_ensemble(
+    estimate_inputs: Iterable[EstimateInput],
+    *,
+    template: pd.DataFrame,
+    uncertainty_column: str = "predicted_sigma_m",
+    fallback_sigma_m: float = 30.0,
+    sigma_min_m: float = 1.0,
+    sigma_max_m: float = 100.0,
+    max_nearest_time_delta_s: float | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return the uncertainty ensemble after validating every global weight."""
+
+    inputs = _validated_estimate_inputs(estimate_inputs)
+    return _LEGACY_BUILD(
+        inputs,
+        template=template,
+        uncertainty_column=uncertainty_column,
+        fallback_sigma_m=fallback_sigma_m,
+        sigma_min_m=sigma_min_m,
+        sigma_max_m=sigma_max_m,
+        max_nearest_time_delta_s=max_nearest_time_delta_s,
+    )
+
+
 _IMPL._first_present = _first_present
 _IMPL._normalized_sequence_values = _normalized_sequence_values
 _IMPL._sequence_text_or_none = _sequence_text_or_none
 _IMPL._normalize_uncertainty_rows = _normalize_uncertainty_rows
 _IMPL._normalize_template_rows = _normalize_template_rows
+_IMPL.build_track5_uncertainty_ensemble = build_track5_uncertainty_ensemble
 
 for _name in dir(_IMPL):
     if not _name.startswith("__"):
@@ -134,5 +182,7 @@ globals()["_normalized_sequence_values"] = _normalized_sequence_values
 globals()["_sequence_text_or_none"] = _sequence_text_or_none
 globals()["_normalize_uncertainty_rows"] = _normalize_uncertainty_rows
 globals()["_normalize_template_rows"] = _normalize_template_rows
+globals()["_validated_estimate_inputs"] = _validated_estimate_inputs
+globals()["build_track5_uncertainty_ensemble"] = build_track5_uncertainty_ensemble
 __doc__ = _IMPL.__doc__
 __all__ = [_name for _name in dir(_IMPL) if not _name.startswith("__")]
