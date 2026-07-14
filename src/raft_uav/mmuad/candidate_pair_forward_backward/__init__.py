@@ -4,8 +4,8 @@ The maintained implementation lives in the sibling
 ``candidate_pair_forward_backward.py`` module. This package keeps the public
 import path while preserving opaque sequence identifiers in optional mixture
 initialization files, applying score fallbacks row by row, canonicalizing
-numeric tracker identifiers before track-continuation scoring, and treating tied
-rank scores symmetrically.
+numeric tracker identifiers before track-continuation scoring, treating tied
+rank scores symmetrically, and rejecting non-finite numeric controls.
 """
 
 from __future__ import annotations
@@ -121,11 +121,47 @@ def _transition_log_likelihood_with_canonical_track_ids(
     return _ORIGINAL_TRANSITION_LOG_LIKELIHOOD(previous_rows, current_rows, config)
 
 
+_ORIGINAL_VALIDATE_CONFIG = _IMPL._validate_config
+_NUMERIC_CONFIG_FIELDS = (
+    "default_sigma_m",
+    "sigma_min_m",
+    "sigma_max_m",
+    "score_weight",
+    "sigma_log_weight",
+    "transition_distance_std_m",
+    "transition_speed_std_mps",
+    "max_speed_mps",
+    "speed_gate_penalty",
+    "acceleration_std_mps2",
+    "max_acceleration_mps2",
+    "acceleration_gate_penalty",
+    "source_switch_penalty",
+    "branch_switch_penalty",
+    "track_continuation_bonus",
+    "time_gap_penalty",
+)
+
+
+def _validate_config_with_finite_controls(config: Any) -> None:
+    """Reject non-finite numeric controls before applying legacy domain checks."""
+
+    for name in _NUMERIC_CONFIG_FIELDS:
+        value = getattr(config, name)
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{name} must be finite") from exc
+        if not np.isfinite(numeric):
+            raise ValueError(f"{name} must be finite")
+    _ORIGINAL_VALIDATE_CONFIG(config)
+
+
 _IMPL.pd = _PandasCsvProxy(pd)
 _IMPL._candidate_score = _candidate_score_with_rowwise_fallback
 _IMPL._normalize_scores = _normalize_scores_with_average_ties
 _IMPL._descending_ranks = _descending_average_ranks
 _IMPL._transition_log_likelihood = _transition_log_likelihood_with_canonical_track_ids
+_IMPL._validate_config = _validate_config_with_finite_controls
 
 globals().update(
     {
@@ -134,6 +170,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_validate_config"] = _validate_config_with_finite_controls
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
