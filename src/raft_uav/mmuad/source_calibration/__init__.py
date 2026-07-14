@@ -24,6 +24,8 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_PARSE_ALPHA_GRID = _IMPL._parse_alpha_grid
+
 
 def _normalize_alpha_grid(
     values: tuple[float, ...] | list[float] | None,
@@ -68,7 +70,19 @@ def _normalize_alpha_grid(
     return tuple(sorted(set(normalized)))
 
 
+def _parse_alpha_grid(value: str | float | int | None) -> tuple[float, ...]:
+    """Parse a user-facing grid without treating Boolean flags as numeric alphas."""
+
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(
+            "source_translation_alpha_grid values must be finite numbers in [0, 1]; "
+            f"invalid value: {value!r}"
+        )
+    return _ORIGINAL_PARSE_ALPHA_GRID(value)
+
+
 _IMPL._normalize_alpha_grid = _normalize_alpha_grid
+_IMPL._parse_alpha_grid = _parse_alpha_grid
 
 globals().update(
     {
@@ -78,6 +92,7 @@ globals().update(
     }
 )
 globals()["_normalize_alpha_grid"] = _normalize_alpha_grid
+globals()["_parse_alpha_grid"] = _parse_alpha_grid
 
 __doc__ = _IMPL.__doc__
 __all__ = [
