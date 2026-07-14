@@ -1,9 +1,9 @@
-"""Compatibility wrapper preserving jerk-window row support.
+"""Compatibility wrapper preserving jerk-window support and validating iterations.
 
 The maintained implementation lives in the sibling ``track5_jerk_limit.py``
 module. This package keeps the public import path while ensuring that jerk
 values remain attached to the actual four rows of every valid finite-difference
-window when earlier windows are skipped because of duplicate timestamps.
+window and malformed iteration counts cannot be silently coerced.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from typing import Any
 
 import numpy as np
 
@@ -24,6 +25,43 @@ if _SPEC is None or _SPEC.loader is None:
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+_ORIGINAL_REPAIR = _IMPL.repair_track5_jerk_kinks
+_ORIGINAL_REPAIR_SEQUENCE = _IMPL._repair_sequence
+
+
+def _normalize_iterations(value: Any) -> int:
+    """Return a positive integer iteration count or raise a stable error."""
+
+    message = "iterations must be a positive finite integer"
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(message)
+    if isinstance(value, np.ndarray):
+        if value.ndim != 0:
+            raise ValueError(message)
+        value = value.item()
+        if isinstance(value, (bool, np.bool_)):
+            raise ValueError(message)
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(numeric) or numeric <= 0.0 or not numeric.is_integer():
+        raise ValueError(message)
+    return int(numeric)
+
+
+def repair_track5_jerk_kinks(submission, **kwargs):
+    """Validate ``iterations`` before running the legacy jerk repair."""
+
+    kwargs["iterations"] = _normalize_iterations(kwargs.get("iterations", 1))
+    return _ORIGINAL_REPAIR(submission, **kwargs)
+
+
+def _repair_sequence(group, **kwargs):
+    """Validate private repair-loop iteration counts for direct callers."""
+
+    kwargs["iterations"] = _normalize_iterations(kwargs["iterations"])
+    return _ORIGINAL_REPAIR_SEQUENCE(group, **kwargs)
 
 
 def _row_jerk_proxy_with_window_support(
@@ -46,6 +84,8 @@ def _row_jerk_proxy_with_window_support(
     return row_jerk
 
 
+_IMPL.repair_track5_jerk_kinks = repair_track5_jerk_kinks
+_IMPL._repair_sequence = _repair_sequence
 _IMPL._row_jerk_proxy = _row_jerk_proxy_with_window_support
 
 globals().update(
@@ -55,6 +95,10 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["repair_track5_jerk_kinks"] = repair_track5_jerk_kinks
+globals()["_repair_sequence"] = _repair_sequence
+globals()["_normalize_iterations"] = _normalize_iterations
+globals()["_row_jerk_proxy_with_window_support"] = _row_jerk_proxy_with_window_support
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
