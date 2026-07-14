@@ -95,13 +95,14 @@ def evaluate_estimate_ensemble_weight_grid(
     if not inputs:
         raise ValueError("at least one estimate input is required")
     policies = _normalize_aggregation_policies(aggregation_policies)
+    weight_rows = tuple(tuple(float(weight) for weight in weights) for weights in weight_grid)
     loaded = [(item.label, read_estimate_csv(item.path), 1.0) for item in inputs]
     class_map = load_sequence_class_map(class_map_path) if class_map_path is not None else {}
     summary_records: list[dict[str, Any]] = []
     sequence_records: list[dict[str, Any]] = []
     best_row: EnsembleGridRow | None = None
     for policy in policies:
-        for weights in weight_grid:
+        for weights in weight_rows:
             if len(weights) != len(inputs):
                 raise ValueError(
                     f"weight vector length {len(weights)} does not match inputs {len(inputs)}"
@@ -176,6 +177,7 @@ def write_estimate_ensemble_weight_grid_outputs(
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     inputs = tuple(estimate_inputs)
+    policies = _normalize_aggregation_policies(aggregation_policies)
     summary, by_sequence, best_weights = evaluate_estimate_ensemble_weight_grid(
         inputs,
         template=template,
@@ -184,7 +186,7 @@ def write_estimate_ensemble_weight_grid_outputs(
         class_map_path=class_map_path,
         default_classification=default_classification,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
-        aggregation_policies=aggregation_policies,
+        aggregation_policies=policies,
         trim_fraction=trim_fraction,
     )
     summary_csv = output / GRID_SUMMARY_CSV
@@ -230,7 +232,7 @@ def write_estimate_ensemble_weight_grid_outputs(
         "class_map_path": str(class_map_path) if class_map_path is not None else None,
         "default_classification": str(default_classification),
         "max_nearest_time_delta_s": max_nearest_time_delta_s,
-        "aggregation_policies": list(_normalize_aggregation_policies(aggregation_policies)),
+        "aggregation_policies": list(policies),
         "trim_fraction": float(trim_fraction),
         "grid_row_count": int(len(summary)),
         "best_weights": list(best_weights),
