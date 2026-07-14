@@ -9,10 +9,70 @@ jobs:
   focused-test:
     runs-on: ubuntu-latest
     steps:
-      - name: Clone branch and run focused regression
+      - name: Clone branch and inspect oracle handoff
         run: |
           git clone --quiet --depth 1 --branch agent/scope-candidate-reservoir-csv-reader \
             https://github.com/IPS-Stuttgart/RaFT-UAV.git repo
           cd repo
           python -m pip install --quiet -e ".[dev]"
-          pytest -vv tests/test_mmuad_candidate_reservoir_sequence_text.py --maxfail=1
+          python - <<'PY'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          import pandas as pd
+
+          import raft_uav.mmuad.candidate_reservoir as reservoir_module
+
+          print(
+              "main_globals_are_impl=",
+              reservoir_module._ORIGINAL_MAIN.__globals__ is reservoir_module._IMPL.__dict__,
+          )
+          print(
+              "main_global_pd_is_impl_pd=",
+              reservoir_module._ORIGINAL_MAIN.__globals__["pd"] is reservoir_module._IMPL.pd,
+          )
+          original_builder = reservoir_module._IMPL.build_oracle_recall_tables
+
+          def debug_builder(reservoir, truth, **kwargs):
+              print(
+                  "reservoir_keys=",
+                  reservoir[["sequence_id", "time_s"]].to_dict("records"),
+              )
+              print("truth_keys=", truth[["sequence_id", "time_s"]].to_dict("records"))
+              print("reservoir_dtypes=", reservoir[["sequence_id", "time_s"]].dtypes.astype(str).to_dict())
+              print("truth_dtypes=", truth[["sequence_id", "time_s"]].dtypes.astype(str).to_dict())
+              return original_builder(reservoir, truth, **kwargs)
+
+          reservoir_module._IMPL.build_oracle_recall_tables = debug_builder
+          try:
+              with TemporaryDirectory() as directory:
+                  root = Path(directory)
+                  candidate_csv = root / "candidates.csv"
+                  truth_csv = root / "truth.csv"
+                  output_csv = root / "reservoir.csv"
+                  oracle_csv = root / "oracle.csv"
+                  text = (
+                      "sequence_id,time_s,x_m,y_m,z_m,confidence\n"
+                      "001,0.0,1.0,2.0,3.0,0.9\n"
+                  )
+                  candidate_csv.write_text(text, encoding="utf-8")
+                  truth_csv.write_text(text, encoding="utf-8")
+                  result = reservoir_module.main(
+                      [
+                          "--candidate",
+                          f"raw={candidate_csv}",
+                          "--output-csv",
+                          str(output_csv),
+                          "--truth-csv",
+                          str(truth_csv),
+                          "--oracle-frame-csv",
+                          str(oracle_csv),
+                      ]
+                  )
+                  print("result=", result)
+                  print("reservoir_csv=", output_csv.read_text(encoding="utf-8"))
+                  print("oracle_csv=", oracle_csv.read_text(encoding="utf-8"))
+                  print("global_pd_unchanged=", pd.read_csv.__module__ == "pandas.io.parsers.readers")
+          finally:
+              reservoir_module._IMPL.build_oracle_recall_tables = original_builder
+          PY
