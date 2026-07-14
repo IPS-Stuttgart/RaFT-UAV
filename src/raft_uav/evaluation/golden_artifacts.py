@@ -114,6 +114,21 @@ def _check_csv(path: Path, *, max_nan_fraction: float) -> list[dict[str, Any]]:
                 "message": "" if nan_fraction <= float(max_nan_fraction) else "too many NaNs",
             }
         )
+        numeric_values = numeric.to_numpy(dtype=float, na_value=np.nan)
+        nonfinite_fraction = float((~np.isfinite(numeric_values)).mean())
+        rows.append(
+            {
+                "check": "numeric_nonfinite_fraction",
+                "file": str(path),
+                "passed": nonfinite_fraction <= float(max_nan_fraction),
+                "value": nonfinite_fraction,
+                "message": (
+                    ""
+                    if nonfinite_fraction <= float(max_nan_fraction)
+                    else "too many non-finite values"
+                ),
+            }
+        )
     if "time_s" in frame.columns:
         times = pd.to_numeric(frame["time_s"], errors="coerce").dropna().to_numpy(dtype=float)
         monotonic = bool(np.all(np.diff(times) >= -1.0e-9)) if times.size else True
