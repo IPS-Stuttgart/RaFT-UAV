@@ -54,7 +54,9 @@ def _radar_frame_groups(
         times = pd.to_numeric(ordered["time_s"], errors="coerce")
         finite = np.isfinite(times.to_numpy(dtype=float))
         ordered = ordered.loc[finite].copy()
-        ordered["_research_diagnostic_frame_key"] = times.loc[finite].round(9)
+        ordered["_research_diagnostic_frame_key"] = times.loc[finite].to_numpy(
+            dtype=float
+        )
         key_kind = "time_s"
 
     groups: list[tuple[tuple[str, int | float], pd.DataFrame]] = []
