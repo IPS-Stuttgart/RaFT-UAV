@@ -9,6 +9,7 @@ allowed to disable timestamp gating through non-finite values.
 from __future__ import annotations
 
 import importlib.util
+import numbers
 from pathlib import Path
 import sys
 from typing import Any
@@ -49,13 +50,19 @@ def _normalize_max_frames(value: Any, *, name: str) -> int:
 
     contract = "a non-negative integer"
     item = _scalar_item(value, name=name, contract=contract)
-    try:
-        numeric = float(item)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{name} must be {contract}") from exc
-    if not np.isfinite(numeric) or numeric < 0.0 or not numeric.is_integer():
+    if isinstance(item, numbers.Integral):
+        integer = int(item)
+    else:
+        try:
+            numeric = float(item)
+            integer = int(item)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{name} must be {contract}") from exc
+        if not np.isfinite(numeric) or item != integer:
+            raise ValueError(f"{name} must be {contract}")
+    if integer < 0:
         raise ValueError(f"{name} must be {contract}")
-    return int(numeric)
+    return integer
 
 
 def _normalize_max_time_delta(value: Any, *, name: str) -> float | None:
