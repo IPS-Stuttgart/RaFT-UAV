@@ -84,6 +84,7 @@ raft-uav-mmuad-track5-sequence-gate-fit = "raft_uav.mmuad.track5_sequence_gate_f
 raft-uav-mmuad-track5-sequence-gate-train-apply = "raft_uav.mmuad.track5_sequence_gate_train_apply:main"
 raft-uav-mmuad-candidate-reservoir = "raft_uav.mmuad.candidate_reservoir:main"
 raft-uav-mmuad-candidate-reservoir-grid = "raft_uav.mmuad.candidate_reservoir_grid:main"
+raft-uav-mmuad-candidate-reservoir-risk-cv = "raft_uav.mmuad.candidate_reservoir_risk_cv:main"
 raft-uav-mmuad-candidate-risk-reservoir = "raft_uav.mmuad.candidate_risk_reservoir:main"
 raft-uav-mmuad-candidate-risk-reservoir-multistart = "raft_uav.mmuad.candidate_risk_reservoir_multistart:main"
 raft-uav-mmuad-candidate-branch-uncertainty = "raft_uav.mmuad.candidate_branch_uncertainty:main"
