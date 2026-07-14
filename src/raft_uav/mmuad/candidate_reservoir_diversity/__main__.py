@@ -1,0 +1,9 @@
+"""Module entry point for the diversity-preserving candidate reservoir cap."""
+
+from __future__ import annotations
+
+from . import main
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
