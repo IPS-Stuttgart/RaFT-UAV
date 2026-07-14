@@ -53,6 +53,4 @@ globals().update(
 globals()["find_rf_sensor_and_radar_root"] = find_rf_sensor_and_radar_root
 
 __doc__ = _IMPL.__doc__
-__all__ = [
-    name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))
-]
+__all__ = [name for name in dir(_IMPL) if not name.startswith("_")]
