@@ -197,16 +197,27 @@ def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
     if radar.empty or "track_id" not in radar.columns:
         return []
     segments: list[pd.DataFrame] = []
-    sort_key = "frame_index" if "frame_index" in radar.columns else "time_s"
     for _, track_rows in radar.groupby("track_id", sort=True):
+        sort_key = _track_continuity_key(track_rows)
         ordered = track_rows.sort_values([sort_key, "time_s"]).reset_index(drop=True)
         values = pd.to_numeric(ordered[sort_key], errors="coerce").to_numpy(dtype=float)
-        split_points = np.r_[0, np.where(np.diff(values) > _segment_gap_threshold(values))[0] + 1, len(ordered)]
+        split_points = np.r_[
+            0,
+            np.where(np.diff(values) > _segment_gap_threshold(values))[0] + 1,
+            len(ordered),
+        ]
         for start, end in zip(split_points[:-1], split_points[1:]):
             segment = ordered.iloc[int(start) : int(end)].copy()
             if not segment.empty:
                 segments.append(segment)
     return segments
+
+
+def _track_continuity_key(track_rows: pd.DataFrame) -> str:
+    if "frame_index" not in track_rows.columns:
+        return "time_s"
+    frame_indices = pd.to_numeric(track_rows["frame_index"], errors="coerce").to_numpy(dtype=float)
+    return "frame_index" if np.isfinite(frame_indices).all() else "time_s"
 
 
 def _segment_gap_threshold(values: np.ndarray) -> float:
