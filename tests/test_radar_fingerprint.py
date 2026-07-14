@@ -17,7 +17,10 @@ def test_partial_frame_indices_fall_back_to_timestamp_continuity(invalid_frame_i
 
     segments = _continuous_track_segments(radar)
 
-    assert [segment["time_s"].tolist() for segment in segments] == [[0.0, 1.0], [10.0]]
+    assert [segment["time_s"].tolist() for segment in segments] == [
+        [0.0, 1.0],
+        [10.0],
+    ]
     assert all(
         float(segment["time_s"].iloc[-1]) >= float(segment["time_s"].iloc[0])
         for segment in segments
