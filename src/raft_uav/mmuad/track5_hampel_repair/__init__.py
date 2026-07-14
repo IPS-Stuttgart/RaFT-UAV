@@ -2,7 +2,8 @@
 
 The maintained implementation lives in the sibling ``track5_hampel_repair.py``
 module. This package preserves the public import path while rejecting malformed
-grid rows and invalid integer controls before repair.
+grid rows and invalid integer controls before repair, and keeps sequence
+endpoints fixed during local-median replacement.
 """
 
 from __future__ import annotations
@@ -28,7 +29,6 @@ _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_REPAIR = _IMPL.repair_track5_hampel_spikes
 _ORIGINAL_REPAIR_SEQUENCE = _IMPL._repair_sequence
-_ORIGINAL_REPAIR_XYZ_ONCE = _IMPL._repair_xyz_once
 
 
 def _normalize_positive_integer(value: Any, *, field: str) -> int:
@@ -142,14 +142,86 @@ def _repair_sequence(group, **kwargs):
     return _ORIGINAL_REPAIR_SEQUENCE(group, **kwargs)
 
 
-def _repair_xyz_once(work, xyz, original_xyz, **kwargs):
-    """Validate the private local-window radius for direct callers."""
+def _repair_xyz_once(
+    work: pd.DataFrame,
+    xyz: np.ndarray,
+    original_xyz: np.ndarray,
+    *,
+    window_radius: int,
+    sigma_threshold: float,
+    min_scale_m: float,
+    min_residual_m: float,
+    repair_blend: float,
+    iteration: int,
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Repair eligible interior rows while leaving both endpoints unchanged."""
 
-    kwargs["window_radius"] = _normalize_positive_integer(
-        kwargs["window_radius"],
+    window_radius = _normalize_positive_integer(
+        window_radius,
         field="window_radius",
     )
-    return _ORIGINAL_REPAIR_XYZ_ONCE(work, xyz, original_xyz, **kwargs)
+    out = xyz.copy()
+    diagnostics: list[dict[str, Any]] = []
+    for index in range(len(xyz)):
+        start = max(0, index - window_radius)
+        stop = min(len(xyz), index + window_radius + 1)
+        neighbor_indices = [item for item in range(start, stop) if item != index]
+        neighbors = xyz[neighbor_indices]
+        neighbors = neighbors[np.isfinite(neighbors).all(axis=1)]
+        local_median = np.full(3, np.nan, dtype=float)
+        robust_scale_m = np.nan
+        residual_m = np.nan
+        threshold_m = np.nan
+        applied = False
+        is_interior = 0 < index < len(xyz) - 1
+        if is_interior and len(neighbors) >= 2 and np.isfinite(xyz[index]).all():
+            local_median = np.median(neighbors, axis=0)
+            neighbor_residuals = np.linalg.norm(neighbors - local_median, axis=1)
+            robust_scale_m = max(
+                float(np.median(neighbor_residuals) * 1.4826),
+                min_scale_m,
+            )
+            residual_m = float(np.linalg.norm(xyz[index] - local_median))
+            threshold_m = max(
+                float(min_residual_m),
+                float(sigma_threshold) * robust_scale_m,
+            )
+            if residual_m > threshold_m:
+                out[index] = (
+                    (1.0 - repair_blend) * xyz[index]
+                    + repair_blend * local_median
+                )
+                applied = True
+        diagnostics.append(
+            {
+                "sequence_id": work.loc[index, "sequence_id"],
+                "time_s": float(work.loc[index, "time_s"]),
+                "iteration": int(iteration),
+                "local_window_start_index": int(start),
+                "local_window_stop_index": int(stop),
+                "local_neighbor_count": int(len(neighbors)),
+                "local_median_x_m": (
+                    float(local_median[0]) if np.isfinite(local_median[0]) else np.nan
+                ),
+                "local_median_y_m": (
+                    float(local_median[1]) if np.isfinite(local_median[1]) else np.nan
+                ),
+                "local_median_z_m": (
+                    float(local_median[2]) if np.isfinite(local_median[2]) else np.nan
+                ),
+                "hampel_residual_m": residual_m,
+                "hampel_scale_m": robust_scale_m,
+                "hampel_threshold_m": threshold_m,
+                "hampel_iteration_applied": bool(applied),
+                "original_state_x_m": float(original_xyz[index, 0]),
+                "original_state_y_m": float(original_xyz[index, 1]),
+                "original_state_z_m": float(original_xyz[index, 2]),
+            }
+        )
+    return out, pd.DataFrame.from_records(
+        diagnostics,
+        columns=_IMPL._diagnostic_columns(),
+    )
 
 
 _IMPL.load_track5_submission_frame = _load_track5_submission_frame_rejecting_invalid_rows
