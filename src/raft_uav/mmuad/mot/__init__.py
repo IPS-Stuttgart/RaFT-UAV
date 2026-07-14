@@ -28,6 +28,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_COMPUTE_MULTI_OBJECT_METRICS = _IMPL.compute_multi_object_metrics
+_ORIGINAL_GREEDY_TRUTH_MATCHES = _IMPL._greedy_truth_matches
 
 
 def _scope_truth_track_ids(truth: pd.DataFrame | None) -> pd.DataFrame | None:
@@ -155,6 +156,38 @@ def _metric_rows_in_time_cluster(
     return frame.loc[mask].copy()
 
 
+def _validated_match_distance_m(value: Any) -> float:
+    """Return a finite nonnegative MOT matching radius."""
+
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError("match_distance_m must be finite and nonnegative")
+    try:
+        array = np.asarray(value)
+        if array.ndim != 0:
+            raise TypeError
+        distance_m = float(array)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("match_distance_m must be finite and nonnegative") from exc
+    if not np.isfinite(distance_m) or distance_m < 0.0:
+        raise ValueError("match_distance_m must be finite and nonnegative")
+    return distance_m
+
+
+def _greedy_truth_matches(
+    pred: pd.DataFrame,
+    gt: pd.DataFrame,
+    *,
+    max_distance_m: float,
+) -> list[tuple[int, int, float]]:
+    """Match one frame after validating the distance threshold."""
+
+    return _ORIGINAL_GREEDY_TRUTH_MATCHES(
+        pred,
+        gt,
+        max_distance_m=_validated_match_distance_m(max_distance_m),
+    )
+
+
 def compute_multi_object_metrics(
     estimates: pd.DataFrame,
     truth: pd.DataFrame | None,
@@ -166,11 +199,12 @@ def compute_multi_object_metrics(
     return _ORIGINAL_COMPUTE_MULTI_OBJECT_METRICS(
         estimates,
         _scope_truth_track_ids(truth),
-        match_distance_m=match_distance_m,
+        match_distance_m=_validated_match_distance_m(match_distance_m),
     )
 
 
 _IMPL._metric_frame_pairs = _metric_frame_pairs
+_IMPL._greedy_truth_matches = _greedy_truth_matches
 _IMPL.compute_multi_object_metrics = compute_multi_object_metrics
 
 globals().update(
@@ -184,6 +218,8 @@ globals()["_scope_truth_track_ids"] = _scope_truth_track_ids
 globals()["_metric_frame_pairs"] = _metric_frame_pairs
 globals()["_metric_time_cluster_pairs"] = _metric_time_cluster_pairs
 globals()["_metric_rows_in_time_cluster"] = _metric_rows_in_time_cluster
+globals()["_validated_match_distance_m"] = _validated_match_distance_m
+globals()["_greedy_truth_matches"] = _greedy_truth_matches
 globals()["compute_multi_object_metrics"] = compute_multi_object_metrics
 
 __doc__ = _IMPL.__doc__
