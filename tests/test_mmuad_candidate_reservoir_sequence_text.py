@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
+import pytest
 
+import raft_uav.mmuad.candidate_reservoir as candidate_reservoir
 from raft_uav.mmuad.candidate_reservoir import load_candidate_inputs, main
 
 
@@ -57,3 +60,67 @@ def test_candidate_reservoir_cli_oracle_preserves_zero_padded_sequence(
     oracle_frames = pd.read_csv(oracle_frame_csv, dtype=str, keep_default_na=False)
     assert reservoir.loc[0, "sequence_id"] == "001"
     assert oracle_frames.loc[0, "sequence_id"] == "001"
+
+
+def test_candidate_reservoir_cli_scopes_text_reader_to_legacy_module(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    csv_path = tmp_path / "typed.csv"
+    csv_path.write_text("sequence_id,value\n001,1\n", encoding="utf-8")
+    original_read_csv = pd.read_csv
+    original_impl_pd = candidate_reservoir._IMPL.pd
+    observations: dict[str, object] = {}
+
+    def fake_main(_argv: list[str] | None = None) -> int:
+        observations["global_reader_is_original"] = pd.read_csv is original_read_csv
+        observations["global_value"] = pd.read_csv(csv_path).loc[0, "value"]
+        observations["legacy_sequence_id"] = candidate_reservoir._IMPL.pd.read_csv(
+            csv_path
+        ).loc[0, "sequence_id"]
+        return 0
+
+    monkeypatch.setattr(candidate_reservoir, "_ORIGINAL_MAIN", fake_main)
+
+    assert candidate_reservoir.main([]) == 0
+    assert observations["global_reader_is_original"] is True
+    assert observations["global_value"] == 1
+    assert observations["legacy_sequence_id"] == "001"
+    assert pd.read_csv is original_read_csv
+    assert candidate_reservoir._IMPL.pd is original_impl_pd
+
+
+def test_candidate_reservoir_cli_wraps_existing_legacy_pandas_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    csv_path = tmp_path / "typed.csv"
+    csv_path.write_text("sequence_id,value\n001,1\n", encoding="utf-8")
+
+    class RecordingPandas:
+        def __init__(self) -> None:
+            self.read_csv_kwargs: dict[str, Any] | None = None
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(pd, name)
+
+        def read_csv(self, *args: Any, **kwargs: Any) -> pd.DataFrame:
+            self.read_csv_kwargs = dict(kwargs)
+            return pd.read_csv(*args, **kwargs)
+
+    recording_pd = RecordingPandas()
+    monkeypatch.setattr(candidate_reservoir._IMPL, "pd", recording_pd)
+
+    def fake_main(_argv: list[str] | None = None) -> int:
+        rows = candidate_reservoir._IMPL.pd.read_csv(csv_path)
+        assert rows.loc[0, "sequence_id"] == "001"
+        return 0
+
+    monkeypatch.setattr(candidate_reservoir, "_ORIGINAL_MAIN", fake_main)
+
+    assert candidate_reservoir.main([]) == 0
+    assert recording_pd.read_csv_kwargs == {
+        "dtype": str,
+        "keep_default_na": False,
+    }
+    assert candidate_reservoir._IMPL.pd is recording_pd
