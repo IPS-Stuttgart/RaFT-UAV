@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from raft_uav.mmuad.track5_estimate_ensemble import EstimateInput
+from raft_uav.mmuad.track5_estimate_ensemble import apply_estimate_weight_config
 from raft_uav.mmuad.track5_estimate_ensemble import build_track5_estimate_ensemble
 from raft_uav.mmuad.track5_estimate_ensemble import load_estimate_weight_config
 from raft_uav.mmuad.track5_estimate_ensemble import (
@@ -42,7 +43,17 @@ def _estimate() -> pd.DataFrame:
     )
 
 
-@pytest.mark.parametrize("weight", [True, False, np.bool_(True), np.bool_(False)])
+@pytest.mark.parametrize(
+    "weight",
+    [
+        True,
+        False,
+        np.bool_(True),
+        np.bool_(False),
+        np.array(True),
+        np.array([False]),
+    ],
+)
 def test_estimate_ensemble_rejects_boolean_runtime_weights(weight: object) -> None:
     with pytest.raises(ValueError, match="finite and non-negative"):
         build_track5_estimate_ensemble(
@@ -51,7 +62,10 @@ def test_estimate_ensemble_rejects_boolean_runtime_weights(weight: object) -> No
         )
 
 
-@pytest.mark.parametrize("weight", [True, False, np.bool_(True), np.bool_(False)])
+@pytest.mark.parametrize(
+    "weight",
+    [True, False, np.bool_(True), np.bool_(False), np.array(True)],
+)
 def test_estimate_ensemble_validates_weights_before_empty_template_return(
     weight: object,
 ) -> None:
@@ -72,6 +86,13 @@ def test_weight_config_rejects_json_booleans(tmp_path: Path, weight: bool) -> No
 
     with pytest.raises(ValueError, match="finite and non-negative"):
         load_estimate_weight_config(config)
+
+
+def test_keep_policy_rejects_boolean_inline_weight(tmp_path: Path) -> None:
+    inputs = [EstimateInput("bad", tmp_path / "missing.csv", True)]
+
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        apply_estimate_weight_config(inputs, {}, missing_policy="keep")
 
 
 def test_writer_validates_weight_before_estimate_file_access(tmp_path: Path) -> None:
