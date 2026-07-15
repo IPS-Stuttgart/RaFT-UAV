@@ -1,11 +1,11 @@
-"""Package wrapper that tightens public Track 5 result Classification validation.
+"""Package wrapper that tightens public Track 5 result validation.
 
 The legacy evaluator implementation lives in the sibling ``evaluator.py`` file.
-This wrapper preserves public imports while overriding only the official-result
-conversion used for submitted result rows.  Official truth-file loading remains
-permissive so existing local truth archives stay readable.
+This wrapper preserves public imports while overriding official-result
+classification validation and normalizing local result sequence identifiers.
+Official truth-file loading remains permissive so existing local truth archives
+stay readable.
 """
-
 from __future__ import annotations
 
 import importlib.util
@@ -28,6 +28,9 @@ if _SPEC is None or _SPEC.loader is None:
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+
+_ORIGINAL_VALIDATE_MMAUD_RESULTS_FRAME = _IMPL.validate_mmaud_results_frame
+_MISSING_SEQUENCE_ID_STRINGS = {"", "nan", "none", "<na>", "nat"}
 
 
 def _parse_official_result_classification_cell(value: Any) -> int:
@@ -110,6 +113,27 @@ def _official_track5_truth_to_rows(frame: pd.DataFrame) -> pd.DataFrame:
     return _IMPL.normalize_truth_columns(rows)
 
 
+def _normalize_local_result_sequence_ids(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize local result ids consistently with candidate and truth tables."""
+
+    if "sequence_id" not in frame.columns:
+        return frame
+    rows = frame.copy()
+    text = rows["sequence_id"].where(rows["sequence_id"].notna(), "default")
+    text = text.astype(str).str.strip()
+    missing = text.str.lower().isin(_MISSING_SEQUENCE_ID_STRINGS)
+    rows["sequence_id"] = text.where(~missing, "default")
+    return rows
+
+
+def validate_mmaud_results_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Validate results after normalizing local sequence identifiers."""
+
+    return _ORIGINAL_VALIDATE_MMAUD_RESULTS_FRAME(
+        _normalize_local_result_sequence_ids(frame)
+    )
+
+
 def _read_results_csv_preserving_text(source: Any) -> pd.DataFrame:
     """Read evaluator CSV inputs without coercing ids or keeping padded headers."""
 
@@ -137,6 +161,7 @@ def _read_results_zip_csv(path: Path, *, member_name: str) -> pd.DataFrame:
 _IMPL._has_official_track5_columns = _has_official_track5_columns
 _IMPL._official_track5_results_to_local_frame = _official_track5_results_to_local_frame
 _IMPL._official_track5_truth_to_rows = _official_track5_truth_to_rows
+_IMPL.validate_mmaud_results_frame = validate_mmaud_results_frame
 _IMPL.load_mmaud_results_csv = load_mmaud_results_csv
 _IMPL._read_results_zip_csv = _read_results_zip_csv
 
@@ -147,6 +172,7 @@ for _name in dir(_IMPL):
 globals()["_parse_official_result_classification_cell"] = _parse_official_result_classification_cell
 globals()["_parse_official_truth_classification_cell"] = _parse_official_truth_classification_cell
 globals()["_official_track5_column_map"] = _official_track5_column_map
+globals()["_normalize_local_result_sequence_ids"] = _normalize_local_result_sequence_ids
 globals()["_read_results_csv_preserving_text"] = _read_results_csv_preserving_text
 __doc__ = _IMPL.__doc__
 __all__ = [_name for _name in dir(_IMPL) if not _name.startswith("__")]
