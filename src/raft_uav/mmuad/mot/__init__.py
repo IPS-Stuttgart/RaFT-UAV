@@ -4,7 +4,8 @@ The maintained implementation lives in the sibling ``mot.py`` module. This
 package preserves the public import path while ensuring that pooled MOT metrics
 scope object identities by sequence, count tolerance-matched frames once,
 validate matching thresholds, resolve exact association ties deterministically,
-and use globally optimal frame matching for both tracking and evaluation.
+enforce timestamp tolerance on every matched row pair, and use globally optimal
+frame matching for both tracking and evaluation.
 """
 
 from __future__ import annotations
@@ -386,7 +387,7 @@ def _greedy_truth_matches(
     *,
     max_distance_m: float,
 ) -> list[tuple[int, int, float]]:
-    """Return cardinality-first optimal matches under the maintained distance gate."""
+    """Return cardinality-first optimal matches under the maintained gates."""
 
     max_distance_m = _validated_match_distance_m(max_distance_m)
     if pred.empty or gt.empty:
@@ -408,6 +409,13 @@ def _greedy_truth_matches(
         gt_xyz
     ).all(axis=1)[np.newaxis, :]
     eligible = finite & np.isfinite(distances) & (distances <= max_distance_m)
+    if "time_s" in pred.columns and "time_s" in gt.columns:
+        pred_times = pd.to_numeric(pred["time_s"], errors="coerce").to_numpy(float)
+        gt_times = pd.to_numeric(gt["time_s"], errors="coerce").to_numpy(float)
+        time_deltas = np.abs(pred_times[:, np.newaxis] - gt_times[np.newaxis, :])
+        eligible &= np.isfinite(time_deltas) & (
+            time_deltas <= _IMPL._MOT_TIME_MATCH_ATOL_S
+        )
     pred_indices, gt_indices = _cardinality_first_assignment(
         distances,
         eligible,
