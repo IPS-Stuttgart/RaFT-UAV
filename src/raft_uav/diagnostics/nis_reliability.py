@@ -252,9 +252,15 @@ def _nis_stats(
     out["chi2_mean_expected"] = float(dim)
     out["mean_covariance_scale"] = float(out["nis_mean"] / max(float(dim), 1.0e-12))
     sorted_values = np.sort(values)
-    empirical_cdf = np.arange(1, values.size + 1, dtype=float) / float(values.size)
+    empirical_cdf_upper = np.arange(1, values.size + 1, dtype=float) / float(values.size)
+    empirical_cdf_lower = np.arange(values.size, dtype=float) / float(values.size)
     theoretical_cdf = chi2.cdf(sorted_values, df=int(dim))
-    out["chi2_ks_distance"] = float(np.max(np.abs(empirical_cdf - theoretical_cdf)))
+    out["chi2_ks_distance"] = float(
+        max(
+            np.max(empirical_cdf_upper - theoretical_cdf),
+            np.max(theoretical_cdf - empirical_cdf_lower),
+        )
+    )
     for probability in gate_probabilities:
         probability = _validate_probability(probability)
         threshold = float(chi2.ppf(probability, df=int(dim)))
