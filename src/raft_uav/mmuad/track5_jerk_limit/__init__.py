@@ -1,9 +1,10 @@
-"""Compatibility wrapper preserving jerk-window support and validating iterations.
+"""Compatibility wrapper for the maintained Track 5 jerk repair.
 
 The maintained implementation lives in the sibling ``track5_jerk_limit.py``
 module. This package keeps the public import path while ensuring that jerk
 values remain attached to the actual four rows of every valid finite-difference
-window and malformed iteration counts cannot be silently coerced.
+window, malformed iteration counts cannot be silently coerced, and no-op
+repairs are not reported as applied trajectory changes.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_REPAIR = _IMPL.repair_track5_jerk_kinks
 _ORIGINAL_REPAIR_SEQUENCE = _IMPL._repair_sequence
+_ORIGINAL_REPAIR_SEQUENCE_ONCE = _IMPL._repair_sequence_once
 
 
 def _normalize_iterations(value: Any) -> int:
@@ -64,6 +66,19 @@ def _repair_sequence(group, **kwargs):
     return _ORIGINAL_REPAIR_SEQUENCE(group, **kwargs)
 
 
+def _repair_sequence_once(group, **kwargs):
+    """Report an applied repair only when the row actually moved."""
+
+    repaired, diagnostics = _ORIGINAL_REPAIR_SEQUENCE_ONCE(group, **kwargs)
+    diagnostics = diagnostics.copy()
+    displacement = diagnostics["jerk_limit_displacement_m"].to_numpy(float)
+    moved = np.isfinite(displacement) & (displacement > 0.0)
+    diagnostics["jerk_limit_applied"] = (
+        diagnostics["jerk_limit_applied"].to_numpy(bool) & moved
+    )
+    return repaired, diagnostics
+
+
 def _row_jerk_proxy_with_window_support(
     times: np.ndarray,
     xyz: np.ndarray,
@@ -86,6 +101,7 @@ def _row_jerk_proxy_with_window_support(
 
 _IMPL.repair_track5_jerk_kinks = repair_track5_jerk_kinks
 _IMPL._repair_sequence = _repair_sequence
+_IMPL._repair_sequence_once = _repair_sequence_once
 _IMPL._row_jerk_proxy = _row_jerk_proxy_with_window_support
 
 globals().update(
@@ -97,6 +113,7 @@ globals().update(
 )
 globals()["repair_track5_jerk_kinks"] = repair_track5_jerk_kinks
 globals()["_repair_sequence"] = _repair_sequence
+globals()["_repair_sequence_once"] = _repair_sequence_once
 globals()["_normalize_iterations"] = _normalize_iterations
 globals()["_row_jerk_proxy_with_window_support"] = _row_jerk_proxy_with_window_support
 
