@@ -238,7 +238,9 @@ def inject_false_tracks(
             position = center + rng.normal(0.0, false_position_std_m, 3)
             row["east_m"], row["north_m"], row["up_m"] = [float(value) for value in position]
             row["track_id"] = next_track_id + index
-            row["cat_prob_uav"] = min(float(row.get("cat_prob_uav", 0.2)), 0.2)
+            row["cat_prob_uav"] = _false_track_cat_probability(
+                row.get("cat_prob_uav", 0.2)
+            )
             row["stress_false_track"] = True
             rows.append(row)
         next_track_id += track_count
@@ -249,6 +251,18 @@ def inject_false_tracks(
         out["stress_false_track"] = False
     out["stress_false_track"] = out["stress_false_track"].fillna(False).astype(bool)
     return out
+
+
+def _false_track_cat_probability(value: object) -> float:
+    """Return a finite low-confidence probability for a synthetic false track."""
+
+    try:
+        probability = float(value)
+    except (TypeError, ValueError):
+        return 0.2
+    if not np.isfinite(probability):
+        return 0.2
+    return float(np.clip(probability, 0.0, 0.2))
 
 
 def _finite_nonnegative_float(value: object, *, name: str) -> float:
