@@ -47,5 +47,8 @@ def test_tracker_normalizes_valid_uncertainty_scales() -> None:
         acceleration_std_mps2=0,
     )
 
-    np.testing.assert_allclose(np.diag(tracker.covariance_matrix), [0.0, 0.0, 0.0, 6.25, 6.25, 6.25])
+    np.testing.assert_allclose(
+        np.diag(tracker.covariance_matrix),
+        [0.0, 0.0, 0.0, 6.25, 6.25, 6.25],
+    )
     assert tracker.acceleration_std_mps2 == 0.0
