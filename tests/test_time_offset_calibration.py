@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.calibration.time_offset import (
     aggregate_measurement_time_offset_sweep,
@@ -44,6 +45,22 @@ def test_apply_time_offset_reuses_preserved_uncorrected_time():
     np.testing.assert_allclose(recalibrated["time_s"], [0.5, 1.5])
     np.testing.assert_allclose(recalibrated["time_s_uncorrected"], [1.0, 2.0])
     np.testing.assert_allclose(recalibrated["time_offset_correction_s"], [-0.5, -0.5])
+
+
+@pytest.mark.parametrize("offset_s", [np.nan, np.inf, -np.inf, True])
+def test_apply_time_offset_rejects_invalid_offsets(offset_s):
+    frame = pd.DataFrame({"time_s": [1.0, 2.0]})
+
+    with pytest.raises(ValueError, match="offset_s must be a finite numeric value"):
+        apply_time_offset(frame, offset_s)
+
+
+@pytest.mark.parametrize("offset_s", [np.nan, np.inf, -np.inf, False])
+def test_aggregate_offset_sweeps_reject_invalid_offsets(offset_s):
+    with pytest.raises(ValueError, match="offset_s must be a finite numeric value"):
+        aggregate_radar_time_offset_sweep([], offsets_s=[offset_s])
+    with pytest.raises(ValueError, match="offset_s must be a finite numeric value"):
+        aggregate_measurement_time_offset_sweep([], offsets_s=[offset_s], dimensions=2)
 
 
 def test_radar_aggregate_offset_sweep_recovers_positive_offset():
