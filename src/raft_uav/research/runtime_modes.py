@@ -87,9 +87,20 @@ def segment_flight_phases(frame: pd.DataFrame) -> pd.Series:
     if len(phase) >= 4:
         phase[: max(1, len(phase) // 10)] = "takeoff-or-start"
         phase[-max(1, len(phase) // 10) :] = "landing-or-end"
-    headings = np.unwrap(np.arctan2(velocity[:, 1], velocity[:, 0]))
-    turn_rate = np.abs(np.diff(headings, prepend=headings[0]))
-    phase[turn_rate > np.nanpercentile(turn_rate, 90)] = "turn"
+    headings = np.arctan2(velocity[:, 1], velocity[:, 0])
+    finite_heading_indices = np.flatnonzero(np.isfinite(headings))
+    if finite_heading_indices.size:
+        first_finite = int(finite_heading_indices[0])
+        headings[:first_finite] = headings[first_finite]
+        for index in range(first_finite + 1, len(headings)):
+            if not np.isfinite(headings[index]):
+                headings[index] = headings[index - 1]
+        headings = np.unwrap(headings)
+        turn_rate = np.abs(np.diff(headings, prepend=headings[0]))
+        finite_turn_rate = turn_rate[np.isfinite(turn_rate)]
+        if finite_turn_rate.size:
+            threshold = np.percentile(finite_turn_rate, 90)
+            phase[turn_rate > threshold] = "turn"
     return pd.Series(phase, index=ordered.index).reindex(frame.index)
 
 
