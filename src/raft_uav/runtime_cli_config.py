@@ -171,7 +171,15 @@ def parse_runtime_config(argv: list[str]) -> tuple[dict[str, Any], list[str]]:
     parser = argparse.ArgumentParser(add_help=False)
     add_runtime_configuration_arguments(parser)
     args, remaining = parser.parse_known_args(argv)
-    return runtime_config_from_args(args), [*remaining, *_runtime_passthrough_arguments(argv)]
+    passthrough = _runtime_passthrough_arguments(argv)
+    if "--" not in remaining:
+        return runtime_config_from_args(args), [*remaining, *passthrough]
+    separator_index = remaining.index("--")
+    return runtime_config_from_args(args), [
+        *remaining[:separator_index],
+        *passthrough,
+        *remaining[separator_index:],
+    ]
 
 
 def _runtime_passthrough_arguments(argv: Iterable[str]) -> list[str]:
