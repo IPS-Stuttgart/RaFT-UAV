@@ -20,9 +20,25 @@ class LocalENUProjector:
     origin_altitude_m: float
 
     def __post_init__(self) -> None:
-        lon = self.origin_longitude_deg
-        lat = self.origin_latitude_deg
-        alt = self.origin_altitude_m
+        lat = _finite_real_scalar(
+            self.origin_latitude_deg,
+            name="origin_latitude_deg",
+        )
+        lon = _finite_real_scalar(
+            self.origin_longitude_deg,
+            name="origin_longitude_deg",
+        )
+        alt = _finite_real_scalar(
+            self.origin_altitude_m,
+            name="origin_altitude_m",
+        )
+        if not -90.0 <= lat <= 90.0:
+            raise ValueError("origin_latitude_deg must be between -90 and 90 degrees")
+
+        object.__setattr__(self, "origin_latitude_deg", lat)
+        object.__setattr__(self, "origin_longitude_deg", lon)
+        object.__setattr__(self, "origin_altitude_m", alt)
+
         x0, y0, z0 = _geodetic_to_ecef(lat, lon, alt)
         object.__setattr__(self, "_origin_ecef", np.array([x0, y0, z0], dtype=float))
 
@@ -73,6 +89,27 @@ class LocalENUProjector:
         ecef = np.column_stack([x.ravel(), y.ravel(), z.ravel()])
         delta = ecef - self._origin_ecef.reshape(1, 3)
         return delta @ self._ecef_to_enu_rotation.T
+
+
+def _finite_real_scalar(value: object, *, name: str) -> float:
+    """Return a finite real scalar or raise a field-specific error."""
+
+    error = f"{name} must be a finite real scalar"
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(error)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+        raise ValueError(error)
+    try:
+        number = float(scalar.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(number):
+        raise ValueError(error)
+    return number
 
 
 def _geodetic_to_ecef(latitude_deg, longitude_deg, altitude_m):
