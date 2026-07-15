@@ -2,12 +2,14 @@
 
 The maintained implementation lives in the sibling ``candidate_forward_backward.py``
 module. This package keeps the public import path while hardening candidate identity,
-row-wise score fallback, and tied-rank handling without duplicating the implementation.
+row-wise score fallback, tied-rank handling, and configuration validation without
+duplicating the implementation.
 """
 
 from __future__ import annotations
 
 import importlib.util
+from numbers import Real
 from pathlib import Path
 import sys
 from typing import Any
@@ -29,6 +31,48 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_TRANSITION_LOG_LIKELIHOOD = _IMPL._transition_log_likelihood
+_ORIGINAL_VALIDATE_CONFIG = _IMPL._validate_config
+_NUMERIC_CONFIG_FIELDS = (
+    "default_sigma_m",
+    "sigma_min_m",
+    "sigma_max_m",
+    "score_weight",
+    "sigma_log_weight",
+    "transition_distance_std_m",
+    "transition_speed_std_mps",
+    "max_speed_mps",
+    "speed_gate_penalty",
+    "source_switch_penalty",
+    "branch_switch_penalty",
+    "track_continuation_bonus",
+    "time_gap_penalty",
+)
+
+
+def _finite_config_scalar(value: Any, *, name: str) -> float:
+    """Return a finite real scalar for a forward-backward tuning field."""
+
+    message = f"{name} must be a finite scalar"
+    if isinstance(value, np.ndarray):
+        if value.ndim != 0:
+            raise ValueError(message)
+        value = value.item()
+    elif isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+        raise ValueError(message)
+    number = float(value)
+    if not np.isfinite(number):
+        raise ValueError(message)
+    return number
+
+
+def _validate_config_with_finite_controls(config: Any) -> None:
+    """Reject non-finite controls before transition or emission construction."""
+
+    for field in _NUMERIC_CONFIG_FIELDS:
+        _finite_config_scalar(getattr(config, field), name=field)
+    _ORIGINAL_VALIDATE_CONFIG(config)
 
 
 def _transition_log_likelihood_with_canonical_track_ids(
@@ -80,6 +124,7 @@ def _descending_average_ranks(values: np.ndarray) -> np.ndarray:
     return ranks
 
 
+_IMPL._validate_config = _validate_config_with_finite_controls
 _IMPL._transition_log_likelihood = _transition_log_likelihood_with_canonical_track_ids
 _IMPL._candidate_score = _candidate_score_with_row_fallback
 _IMPL._descending_ranks = _descending_average_ranks
@@ -91,6 +136,8 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_finite_config_scalar"] = _finite_config_scalar
+globals()["_validate_config"] = _validate_config_with_finite_controls
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
