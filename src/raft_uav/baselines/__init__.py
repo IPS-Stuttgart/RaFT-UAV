@@ -16,9 +16,13 @@ from raft_uav.baselines.smoothing import SMOOTHER_MODES, smooth_tracking_records
 from raft_uav.baselines._robust_map_accepted_matching_patch import (
     apply_robust_map_accepted_matching_patch,
 )
+from raft_uav.baselines._kalman_timestamp_validation_patch import (
+    apply_kalman_timestamp_validation_patch,
+)
 
 apply_radar_association_interpolation_patch()
 apply_robust_map_accepted_matching_patch()
+apply_kalman_timestamp_validation_patch()
 
 RADAR_ASSOCIATION_MODES = _radar_association.RADAR_ASSOCIATION_MODES
 run_async_cv_baseline_with_radar_association = (
