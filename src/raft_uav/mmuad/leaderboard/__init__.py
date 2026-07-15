@@ -104,7 +104,14 @@ def _leaderboard_flag_value(value: Any) -> bool:
         numeric = float(value)
         return bool(np.isfinite(numeric) and numeric == 1.0)
     if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes"}
+        text = value.strip().lower()
+        if text in {"true", "yes"}:
+            return True
+        try:
+            numeric = float(text)
+        except ValueError:
+            return False
+        return bool(np.isfinite(numeric) and numeric == 1.0)
     return False
 
 
