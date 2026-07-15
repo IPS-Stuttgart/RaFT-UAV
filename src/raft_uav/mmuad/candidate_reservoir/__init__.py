@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 import threading
+import types
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -40,6 +41,19 @@ class _TextPreservingPandasProxy:
         frame = self._pandas_module.read_csv(*args, **kwargs)
         frame.columns = [str(column).strip() for column in frame.columns]
         return frame
+
+
+class _CandidateReservoirModule(types.ModuleType):
+    """Keep the public wrapper while accepting downstream CLI replacements."""
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "main" and self.__dict__.get(
+            "_raft_uav_preserve_candidate_reservoir_main",
+            False,
+        ):
+            types.ModuleType.__setattr__(self, "_ORIGINAL_MAIN", value)
+            return
+        types.ModuleType.__setattr__(self, name, value)
 
 
 def _read_sequence_text_csv(path: Path) -> pd.DataFrame:
@@ -119,6 +133,15 @@ globals()["load_candidate_inputs"] = load_candidate_inputs
 globals()["_load_candidate_specs"] = _load_candidate_specs
 globals()["_read_sequence_text_csv"] = _read_sequence_text_csv
 globals()["main"] = main
+
+_module = sys.modules[__name__]
+if not isinstance(_module, _CandidateReservoirModule):
+    _module.__class__ = _CandidateReservoirModule
+types.ModuleType.__setattr__(
+    _module,
+    "_raft_uav_preserve_candidate_reservoir_main",
+    True,
+)
 
 __doc__ = _IMPL.__doc__
 __all__ = [

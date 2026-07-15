@@ -1,8 +1,8 @@
-"""Compatibility package preserving partially indexed backward-repair frames.
+"""Compatibility fixes for backward association repair.
 
 The maintained implementation lives in the sibling ``runtime_modes.py`` module.
 This package preserves the public import path while using timestamp grouping when
-candidate or selected frame-index metadata are incomplete.
+frame-index metadata are incomplete and scoping repair anchors by sequence.
 """
 
 from __future__ import annotations
@@ -97,18 +97,16 @@ def _row_key(
     return ("time_s", round(float(time_s), 9))
 
 
-def backward_repair_associations(
+def _backward_repair_one_sequence(
     selected: pd.DataFrame,
     candidates: pd.DataFrame,
     *,
-    max_gap_s: float = 10.0,
-    max_repair_distance_m: float = 200.0,
+    max_gap_s: float,
+    max_repair_distance_m: float,
 ) -> pd.DataFrame:
-    """Repair gaps without dropping candidates with missing frame indices."""
+    """Repair one sequence using a frame key valid for both input tables."""
 
-    if selected.empty or candidates.empty:
-        return selected.copy()
-    selected = selected.sort_values("time_s").reset_index(drop=True)
+    selected = selected.sort_values("time_s", kind="mergesort").reset_index(drop=True)
     repaired = [row.copy() for _, row in selected.iterrows()]
     use_frame_index = _has_complete_frame_index(selected) and (
         _has_complete_frame_index(candidates)
@@ -170,12 +168,79 @@ def backward_repair_associations(
                 repaired_row["association_repaired"] = True
                 repaired.append(repaired_row)
                 selected_keys.add(key)
-    return pd.DataFrame(repaired).sort_values("time_s").reset_index(drop=True)
+    return (
+        pd.DataFrame(repaired)
+        .sort_values("time_s", kind="mergesort")
+        .reset_index(drop=True)
+    )
+
+
+def backward_repair_associations(
+    selected: pd.DataFrame,
+    candidates: pd.DataFrame,
+    *,
+    max_gap_s: float = 10.0,
+    max_repair_distance_m: float = 200.0,
+) -> pd.DataFrame:
+    """Repair gaps with sequence-local anchors and complete frame-key fallback."""
+
+    if selected.empty or candidates.empty:
+        return selected.copy()
+    selected_rows = pd.DataFrame(selected).copy()
+    candidate_rows = pd.DataFrame(candidates).copy()
+    if "sequence_id" not in selected_rows.columns or "sequence_id" not in candidate_rows.columns:
+        return _backward_repair_one_sequence(
+            selected_rows,
+            candidate_rows,
+            max_gap_s=max_gap_s,
+            max_repair_distance_m=max_repair_distance_m,
+        )
+
+    sequence_key_column = "_runtime_mode_sequence_key"
+    selected_rows[sequence_key_column] = _LEGACY._sequence_keys(
+        selected_rows["sequence_id"]
+    )
+    candidate_rows[sequence_key_column] = _LEGACY._sequence_keys(
+        candidate_rows["sequence_id"]
+    )
+    repaired_parts: list[pd.DataFrame] = []
+    for sequence_key in pd.unique(selected_rows[sequence_key_column]):
+        selected_mask = _LEGACY._sequence_mask(
+            selected_rows[sequence_key_column],
+            sequence_key,
+        )
+        candidate_mask = _LEGACY._sequence_mask(
+            candidate_rows[sequence_key_column],
+            sequence_key,
+        )
+        sequence_selected = selected_rows.loc[selected_mask].drop(
+            columns=sequence_key_column
+        )
+        sequence_candidates = candidate_rows.loc[candidate_mask].drop(
+            columns=sequence_key_column
+        )
+        if sequence_candidates.empty:
+            repaired_parts.append(sequence_selected)
+            continue
+        repaired_parts.append(
+            _backward_repair_one_sequence(
+                sequence_selected,
+                sequence_candidates,
+                max_gap_s=max_gap_s,
+                max_repair_distance_m=max_repair_distance_m,
+            )
+        )
+    return (
+        pd.concat(repaired_parts, ignore_index=True, sort=False)
+        .sort_values(["sequence_id", "time_s"], kind="mergesort")
+        .reset_index(drop=True)
+    )
 
 
 _LEGACY._has_complete_frame_index = _has_complete_frame_index
 _LEGACY._frame_groups = _frame_groups
 _LEGACY._row_key = _row_key
+_LEGACY._backward_repair_one_sequence = _backward_repair_one_sequence
 _LEGACY.backward_repair_associations = backward_repair_associations
 
 for _name in dir(_LEGACY):
@@ -184,6 +249,7 @@ for _name in dir(_LEGACY):
 globals()["_has_complete_frame_index"] = _has_complete_frame_index
 globals()["_frame_groups"] = _frame_groups
 globals()["_row_key"] = _row_key
+globals()["_backward_repair_one_sequence"] = _backward_repair_one_sequence
 globals()["backward_repair_associations"] = backward_repair_associations
 
 __doc__ = _LEGACY.__doc__
