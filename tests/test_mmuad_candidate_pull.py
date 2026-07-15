@@ -5,6 +5,7 @@ from pathlib import Path
 import tomllib
 from zipfile import ZipFile
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -65,6 +66,58 @@ def test_candidate_pull_constant_policy_preserves_classes_and_pulls_position() -
     assert second_xyz.tolist() == pytest.approx([3.0, 2.0, 2.0])
     assert result.rows["Classification"].tolist() == [2, 2]
     assert result.provenance["matched_candidate_center_count"] == 2
+
+
+@pytest.mark.parametrize(
+    "nonfinite_column",
+    ["ranker_score", "confidence", "cluster_point_count"],
+)
+def test_candidate_pull_ignores_nonfinite_ranking_metadata(
+    nonfinite_column: str,
+) -> None:
+    results = _results().iloc[[0]].copy()
+    candidates = pd.DataFrame(
+        {
+            "Sequence": ["seq0001", "seq0001"],
+            "Timestamp": [0.0, 0.0],
+            "x_m": [99.0, 10.0],
+            "y_m": [99.0, 2.0],
+            "z_m": [99.0, 6.0],
+            "ranker_score": [0.8, 0.8],
+            "confidence": [0.7, 0.7],
+            "cluster_point_count": [10.0, 10.0],
+        }
+    )
+    candidates.loc[0, nonfinite_column] = np.inf
+
+    result = refine_official_results_with_candidate_pull(
+        results,
+        candidates,
+        config=CandidatePullConfig(
+            policy="constant",
+            smoother="none",
+            constant_alpha_xy=1.0,
+            constant_alpha_z=1.0,
+            top_k=1,
+        ),
+    )
+
+    assert parse_position(result.rows.iloc[0]["Position"]).tolist() == pytest.approx(
+        [10.0, 2.0, 6.0]
+    )
+    center_values = result.centers[
+        [
+            "top1_x",
+            "top1_y",
+            "top1_z",
+            "weighted5_x",
+            "weighted5_y",
+            "weighted5_z",
+            "top_score",
+            "top_score_margin",
+        ]
+    ].to_numpy(float)
+    assert np.isfinite(center_values).all()
 
 
 def test_candidate_pull_feature_rule_v2_uses_sequence_features() -> None:
