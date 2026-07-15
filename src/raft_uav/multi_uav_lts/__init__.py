@@ -41,6 +41,9 @@ def _install_lts_submission_domain_guard() -> None:
     except Exception:
         return
 
+    installed_attr = "_raft_uav_submission_domain_guard_installed"
+    if getattr(_cli, installed_attr, False):
+        return
     original_attr = "_raft_uav_original_summarize_prediction_text"
     if not hasattr(_cli, original_attr):
         setattr(_cli, original_attr, _cli._summarize_prediction_text)
@@ -67,6 +70,7 @@ def _install_lts_submission_domain_guard() -> None:
         )
 
     _cli._summarize_prediction_text = _summarize_prediction_text
+    setattr(_cli, installed_attr, True)
 
 
 def _install_lts_duplicate_key_validation_guard() -> None:
