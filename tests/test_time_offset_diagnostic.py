@@ -4,6 +4,7 @@ import pandas as pd
 from raft_uav.diagnostics.time_offset import (
     best_offset_row,
     offset_grid,
+    radar_frame_groups,
     sweep_positions_against_truth,
     truth_positions_at_times,
 )
@@ -79,3 +80,34 @@ def test_position_offset_sweep_recovers_known_shift():
 
     assert float(best["tau_s"]) == 2.0
     assert float(best["mean_error_m"]) == 0.0
+
+
+def test_radar_frame_groups_preserves_rows_when_frame_index_is_incomplete():
+    radar = pd.DataFrame(
+        {
+            "time_s": [0.0, 0.0, 1.0, 1.0],
+            "frame_index": [10.0, 10.0, np.nan, np.nan],
+            "track_id": [1, 2, 1, 2],
+        }
+    )
+
+    groups = radar_frame_groups(radar)
+
+    assert [group["time_s"].iloc[0] for group in groups] == [0.0, 1.0]
+    assert sum(len(group) for group in groups) == len(radar)
+    assert groups[1]["frame_index"].isna().all()
+
+
+def test_radar_frame_groups_keeps_complete_frame_indices_distinct():
+    radar = pd.DataFrame(
+        {
+            "time_s": [0.0, 0.0],
+            "frame_index": [10, 11],
+            "track_id": [1, 2],
+        }
+    )
+
+    groups = radar_frame_groups(radar)
+
+    assert [int(group["frame_index"].iloc[0]) for group in groups] == [10, 11]
+    assert [len(group) for group in groups] == [1, 1]
