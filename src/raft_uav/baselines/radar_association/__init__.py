@@ -1,9 +1,9 @@
-"""Compatibility validation for radar-association covariance controls.
+"""Compatibility validation for radar-association numeric controls.
 
 The maintained implementation lives in the sibling ``radar_association.py``
 module. This package preserves the public import path while rejecting non-finite
-radar covariance parameters before they can create NaN/Inf measurement
-covariances.
+numeric parameters before they can create NaN/Inf tracker state or covariance
+values.
 """
 
 from __future__ import annotations
@@ -46,6 +46,34 @@ _POSITIVE_FINITE_RADAR_COVARIANCE_PARAMETERS = (
 _NONNEGATIVE_FINITE_RADAR_COVARIANCE_PARAMETERS = (
     "radar_range_std_fraction",
 )
+_POSITIVE_FINITE_ASSOCIATION_PARAMETERS = (
+    "track_switch_nis_ratio",
+    "geometry_velocity_std_mps",
+    "rf_anchor_nis_cap",
+    "rf_anchor_gate_nis",
+    "pda_nis_temperature",
+    "track_bank_clutter_intensity",
+    "track_bank_prune_log_weight_delta",
+    "stable_segment_max_transition_speed_mps",
+    "stable_segment_interpolation_std_scale",
+    "stable_segment_rf_nis_cap",
+)
+_NONNEGATIVE_FINITE_ASSOCIATION_PARAMETERS = (
+    "geometry_velocity_weight",
+    "geometry_switch_penalty",
+    "geometry_catprob_weight",
+    "rf_anchor_weight",
+    "rf_anchor_time_gate_s",
+    "pda_catprob_exponent",
+    "stable_segment_interpolation_gap_std_mps",
+    "stable_segment_rf_score_weight",
+    "stable_segment_rf_time_gate_s",
+)
+_OPTIONAL_POSITIVE_FINITE_ASSOCIATION_PARAMETERS = (
+    "stable_segment_range_gate_m",
+    "stable_segment_interpolation_max_gap_s",
+    "stable_segment_interpolation_max_speed_mps",
+)
 
 
 class _RadarAssociationModule(ModuleType):
@@ -61,24 +89,38 @@ class _RadarAssociationModule(ModuleType):
 
 
 def run_async_cv_baseline_with_radar_association(*args: Any, **kwargs: Any) -> Any:
-    """Run radar association after validating covariance-scale inputs."""
+    """Run radar association after validating numeric controls."""
 
     bound = _RUN_SIGNATURE.bind(*args, **kwargs)
     bound.apply_defaults()
-    _validate_radar_covariance_parameters(bound.arguments)
+    _validate_radar_association_parameters(bound.arguments)
     return _ORIGINAL_RUN_ASYNC_CV_BASELINE_WITH_RADAR_ASSOCIATION(*args, **kwargs)
 
 
-def _validate_radar_covariance_parameters(arguments: dict[str, Any]) -> None:
+def _validate_radar_association_parameters(arguments: dict[str, Any]) -> None:
     for name in _POSITIVE_FINITE_RADAR_COVARIANCE_PARAMETERS:
         _require_finite_positive(name, arguments[name])
     for name in _NONNEGATIVE_FINITE_RADAR_COVARIANCE_PARAMETERS:
         _require_finite_nonnegative(name, arguments[name])
+    for name in _POSITIVE_FINITE_ASSOCIATION_PARAMETERS:
+        _require_finite_positive(name, arguments[name])
+    for name in _NONNEGATIVE_FINITE_ASSOCIATION_PARAMETERS:
+        _require_finite_nonnegative(name, arguments[name])
+    for name in _OPTIONAL_POSITIVE_FINITE_ASSOCIATION_PARAMETERS:
+        value = arguments[name]
+        if value is not None:
+            _require_finite_positive(name, value)
 
     crossrange_min = float(arguments["radar_crossrange_min_std_m"])
     crossrange_max = float(arguments["radar_crossrange_max_std_m"])
     if crossrange_max < crossrange_min:
         raise ValueError("radar_crossrange_max_std_m must be >= radar_crossrange_min_std_m")
+
+
+def _validate_radar_covariance_parameters(arguments: dict[str, Any]) -> None:
+    """Backward-compatible alias for the expanded numeric validation."""
+
+    _validate_radar_association_parameters(arguments)
 
 
 def _finite_float(name: str, value: Any) -> float:
@@ -116,6 +158,9 @@ globals().update(
 )
 globals()["run_async_cv_baseline_with_radar_association"] = (
     run_async_cv_baseline_with_radar_association
+)
+globals()["_validate_radar_association_parameters"] = (
+    _validate_radar_association_parameters
 )
 globals()["_validate_radar_covariance_parameters"] = _validate_radar_covariance_parameters
 __doc__ = _IMPL.__doc__
