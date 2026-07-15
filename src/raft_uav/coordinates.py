@@ -32,8 +32,7 @@ class LocalENUProjector:
             self.origin_altitude_m,
             name="origin_altitude_m",
         )
-        if not -90.0 <= lat <= 90.0:
-            raise ValueError("origin_latitude_deg must be between -90 and 90 degrees")
+        _validate_latitude(lat, name="origin_latitude_deg")
 
         object.__setattr__(self, "origin_latitude_deg", lat)
         object.__setattr__(self, "origin_longitude_deg", lon)
@@ -64,6 +63,11 @@ class LocalENUProjector:
     ) -> np.ndarray:
         """Transform one WGS84 coordinate to local ENU meters."""
 
+        latitude_deg = _finite_real_scalar(latitude_deg, name="latitude_deg")
+        longitude_deg = _finite_real_scalar(longitude_deg, name="longitude_deg")
+        altitude_m = _finite_real_scalar(altitude_m, name="altitude_m")
+        _validate_latitude(latitude_deg, name="latitude_deg")
+
         x, y, z = _geodetic_to_ecef(latitude_deg, longitude_deg, altitude_m)
         delta = np.array([x, y, z], dtype=float) - self._origin_ecef
         return self._ecef_to_enu_rotation @ delta
@@ -80,10 +84,10 @@ class LocalENUProjector:
         broadcast coordinate contributes exactly one output row.
         """
 
-        lat, lon, alt = np.broadcast_arrays(
-            np.asarray(latitude_deg, dtype=float),
-            np.asarray(longitude_deg, dtype=float),
-            np.asarray(altitude_m, dtype=float),
+        lat, lon, alt = _broadcast_geodetic_coordinates(
+            latitude_deg,
+            longitude_deg,
+            altitude_m,
         )
         x, y, z = _geodetic_to_ecef(lat, lon, alt)
         ecef = np.column_stack([x.ravel(), y.ravel(), z.ravel()])
@@ -110,6 +114,55 @@ def _finite_real_scalar(value: object, *, name: str) -> float:
     if not np.isfinite(number):
         raise ValueError(error)
     return number
+
+
+def _validate_latitude(value: float | np.ndarray, *, name: str) -> None:
+    """Reject latitude values outside the WGS84 geodetic interval."""
+
+    if np.any((value < -90.0) | (value > 90.0)):
+        raise ValueError(f"{name} must be between -90 and 90 degrees")
+
+
+def _finite_real_array(value: object, *, name: str) -> np.ndarray:
+    """Return finite real numeric values without coercing Boolean pseudo-numbers."""
+
+    error = f"{name} must contain finite real values"
+    try:
+        array = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if np.iscomplexobj(array) or np.issubdtype(array.dtype, np.bool_):
+        raise ValueError(error)
+    if array.dtype == object and any(
+        isinstance(item, (bool, np.bool_)) for item in array.flat
+    ):
+        raise ValueError(error)
+    try:
+        numeric = np.asarray(array, dtype=float)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(numeric).all():
+        raise ValueError(error)
+    return numeric
+
+
+def _broadcast_geodetic_coordinates(
+    latitude_deg: object,
+    longitude_deg: object,
+    altitude_m: object,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Validate and broadcast coordinate arrays for vectorized projection."""
+
+    latitude = _finite_real_array(latitude_deg, name="latitude_deg")
+    longitude = _finite_real_array(longitude_deg, name="longitude_deg")
+    altitude = _finite_real_array(altitude_m, name="altitude_m")
+    _validate_latitude(latitude, name="latitude_deg")
+    try:
+        return np.broadcast_arrays(latitude, longitude, altitude)
+    except ValueError as exc:
+        raise ValueError(
+            "latitude_deg, longitude_deg, and altitude_m must be broadcast-compatible"
+        ) from exc
 
 
 def _geodetic_to_ecef(latitude_deg, longitude_deg, altitude_m):
