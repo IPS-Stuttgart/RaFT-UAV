@@ -31,6 +31,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_COMPUTE_MULTI_OBJECT_METRICS = _IMPL.compute_multi_object_metrics
+_ORIGINAL_TRACK_COUNT = _IMPL._track_count
 
 
 def _scope_truth_track_ids(truth: pd.DataFrame | None) -> pd.DataFrame | None:
@@ -173,6 +174,20 @@ def _validated_match_distance_m(value: Any) -> float:
     if not np.isfinite(distance_m) or distance_m < 0.0:
         raise ValueError("match_distance_m must be finite and nonnegative")
     return distance_m
+
+
+def _track_count(estimates: pd.DataFrame) -> int:
+    """Count prediction identities without merging equal IDs across sequences."""
+
+    if (
+        estimates.empty
+        or "sequence_id" not in estimates.columns
+        or "output_track_id" not in estimates.columns
+    ):
+        return _ORIGINAL_TRACK_COUNT(estimates)
+
+    identities = estimates.loc[:, ["sequence_id", "output_track_id"]].astype(str)
+    return int(len(identities.drop_duplicates()))
 
 
 def _nearest_track_id(
@@ -421,6 +436,7 @@ def compute_multi_object_metrics(
 
 
 _IMPL._metric_frame_pairs = _metric_frame_pairs
+_IMPL._track_count = _track_count
 _IMPL._nearest_track_id = _nearest_track_id
 _IMPL._cardinality_first_assignment = _cardinality_first_assignment
 _IMPL._optimal_track_matches = _optimal_track_matches
@@ -440,6 +456,7 @@ globals()["_metric_frame_pairs"] = _metric_frame_pairs
 globals()["_metric_time_cluster_pairs"] = _metric_time_cluster_pairs
 globals()["_metric_rows_in_time_cluster"] = _metric_rows_in_time_cluster
 globals()["_validated_match_distance_m"] = _validated_match_distance_m
+globals()["_track_count"] = _track_count
 globals()["_nearest_track_id"] = _nearest_track_id
 globals()["_cardinality_first_assignment"] = _cardinality_first_assignment
 globals()["_optimal_track_matches"] = _optimal_track_matches
