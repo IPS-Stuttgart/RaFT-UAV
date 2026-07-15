@@ -60,15 +60,35 @@ def perturb_rf(rf: pd.DataFrame, config: PerturbationConfig) -> pd.DataFrame:
     return out.sort_values("time_s") if "time_s" in out.columns else out
 
 
-def drop_radar_frames(frame: pd.DataFrame, *, rate: float, rng: np.random.Generator) -> pd.DataFrame:
+def drop_radar_frames(
+    frame: pd.DataFrame,
+    *,
+    rate: float,
+    rng: np.random.Generator,
+) -> pd.DataFrame:
     if frame.empty or rate <= 0.0:
         return frame.copy()
-    group_column = "frame_index" if "frame_index" in frame.columns else "time_s"
-    group_values = frame[group_column]
-    valid_group_mask = group_values.notna()
-    groups = pd.Series(group_values.loc[valid_group_mask].unique())
-    keep_groups = set(groups.loc[rng.random(len(groups)) >= min(max(rate, 0.0), 1.0)].tolist())
-    keep_mask = (~valid_group_mask) | group_values.isin(keep_groups)
+
+    frame_column = "frame_index" if "frame_index" in frame.columns else "time_s"
+    group_columns = [frame_column]
+    if "sequence_id" in frame.columns:
+        group_columns.insert(0, "sequence_id")
+
+    valid_group_mask = frame[frame_column].notna().to_numpy()
+    group_ids = (
+        frame.loc[valid_group_mask, group_columns]
+        .groupby(group_columns, sort=False, dropna=False)
+        .ngroup()
+        .to_numpy()
+    )
+    groups = pd.Series(pd.unique(group_ids))
+    keep_groups = set(
+        groups.loc[
+            rng.random(len(groups)) >= min(max(rate, 0.0), 1.0)
+        ].tolist()
+    )
+    keep_mask = np.ones(len(frame), dtype=bool)
+    keep_mask[valid_group_mask] = np.isin(group_ids, list(keep_groups))
     return frame.loc[keep_mask].copy()
 
 
