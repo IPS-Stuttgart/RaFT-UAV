@@ -64,7 +64,7 @@ def test_diversity_cap_cli_custom_top_k_replaces_defaults(
         captured["top_k_values"] = top_k_values
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    monkeypatch.setattr(diversity, "build_oracle_recall_tables", fake_oracle_tables)
+    monkeypatch.setattr(diversity._IMPL, "build_oracle_recall_tables", fake_oracle_tables)
     status = diversity.main(
         [
             "--input-csv",
