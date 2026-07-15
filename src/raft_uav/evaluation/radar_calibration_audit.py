@@ -207,7 +207,7 @@ def fit_time_offset(
     max_time_delta_s: float = 2.0,
     calibration: SpatialCalibration = IDENTITY_CALIBRATION,
 ) -> tuple[float, pd.DataFrame]:
-    """Choose the offset minimizing aggregate 3D RMSE over training flights."""
+    """Choose the highest-coverage offset, breaking ties by aggregate 3D RMSE."""
 
     rows: list[dict[str, float]] = []
     for offset_s in offsets_s:
@@ -241,7 +241,12 @@ def fit_time_offset(
     valid = sweep[np.isfinite(sweep["rmse_m"].to_numpy(dtype=float))]
     if valid.empty:
         raise RuntimeError("no finite time-offset candidates")
-    best_index = valid["rmse_m"].astype(float).idxmin()
+    ranked = valid.sort_values(
+        ["matched_rows", "rmse_m"],
+        ascending=[False, True],
+        kind="mergesort",
+    )
+    best_index = ranked.index[0]
     return float(valid.loc[best_index, "time_offset_s"]), sweep
 
 

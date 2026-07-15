@@ -68,6 +68,34 @@ def test_time_offset_fit_recovers_training_shift() -> None:
     assert set(sweep["time_offset_s"]) == {-1.0, 0.0, 1.0}
 
 
+def test_time_offset_fit_prioritizes_measurement_coverage() -> None:
+    truth = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0, 2.0],
+            "east_m": [0.0, 0.0, 0.0],
+            "north_m": [0.0, 0.0, 0.0],
+            "up_m": [0.0, 0.0, 0.0],
+        }
+    )
+    measurements = truth.copy()
+    measurements["east_m"] = [0.0, 1.0, 1.0]
+
+    best, sweep = fit_time_offset(
+        {"Opt1": measurements},
+        {"Opt1": truth},
+        offsets_s=[2.0, 0.0],
+        max_time_delta_s=0.1,
+    )
+
+    partial = sweep.loc[sweep["time_offset_s"] == 2.0].iloc[0]
+    complete = sweep.loc[sweep["time_offset_s"] == 0.0].iloc[0]
+    assert partial["matched_rows"] == 1.0
+    assert partial["rmse_m"] == pytest.approx(0.0)
+    assert complete["matched_rows"] == 3.0
+    assert complete["rmse_m"] > partial["rmse_m"]
+    assert best == 0.0
+
+
 def test_time_offset_fit_skips_candidates_without_matches() -> None:
     truth = _truth_frame()
     measurements = truth.copy()
