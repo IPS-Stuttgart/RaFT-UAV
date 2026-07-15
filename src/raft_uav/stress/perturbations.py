@@ -102,13 +102,35 @@ def drop_rf_bursts(frame: pd.DataFrame, *, rate: float, rng: np.random.Generator
     if not np.any(valid_time_mask):
         return frame.copy()
 
-    finite_times = times[valid_time_mask]
-    bins = np.floor((finite_times - np.min(finite_times)) / 5.0).astype(int)
-    unique = np.unique(bins)
-    dropped = set(unique[rng.random(unique.size) < min(max(rate, 0.0), 1.0)].tolist())
+    finite_rows = frame.loc[valid_time_mask].copy()
+    finite_rows["_stress_time_s"] = times[valid_time_mask]
+    group_columns = ["_stress_burst_bin"]
+    if "sequence_id" in finite_rows.columns:
+        group_columns.insert(0, "sequence_id")
+        sequence_start = finite_rows.groupby(
+            "sequence_id",
+            sort=False,
+            dropna=False,
+        )["_stress_time_s"].transform("min")
+    else:
+        sequence_start = float(finite_rows["_stress_time_s"].min())
+    finite_rows["_stress_burst_bin"] = np.floor(
+        (finite_rows["_stress_time_s"] - sequence_start) / 5.0
+    ).astype(int)
+    group_ids = (
+        finite_rows.groupby(group_columns, sort=False, dropna=False)
+        .ngroup()
+        .to_numpy()
+    )
+    groups = pd.Series(pd.unique(group_ids))
+    dropped = set(
+        groups.loc[
+            rng.random(len(groups)) < min(max(rate, 0.0), 1.0)
+        ].tolist()
+    )
 
     keep_mask = np.ones(times.shape, dtype=bool)
-    keep_mask[valid_time_mask] = [int(bin_id) not in dropped for bin_id in bins]
+    keep_mask[valid_time_mask] = ~np.isin(group_ids, list(dropped))
     return frame.loc[keep_mask].copy()
 
 
