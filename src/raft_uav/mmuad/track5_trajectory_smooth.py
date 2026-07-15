@@ -61,6 +61,10 @@ def smooth_track5_submission_rows(
         bandwidth_s = max(float(window_s) / 2.0, 1.0e-9)
     if bandwidth_s <= 0.0:
         raise ValueError("bandwidth_s must be positive")
+    if max_correction_m is not None:
+        max_correction_m = float(max_correction_m)
+        if not np.isfinite(max_correction_m) or max_correction_m < 0.0:
+            raise ValueError("max_correction_m must be finite and non-negative")
 
     normalized = _normalized_estimate_rows(rows)
     smoothed_parts: list[pd.DataFrame] = []
@@ -86,8 +90,8 @@ def smooth_track5_submission_rows(
             delta = candidate - xyz[index]
             raw_norm = float(np.linalg.norm(delta))
             raw_corrections[index] = raw_norm
-            if max_correction_m is not None and raw_norm > float(max_correction_m) > 0.0:
-                delta = delta * (float(max_correction_m) / raw_norm)
+            if max_correction_m is not None and raw_norm > max_correction_m:
+                delta = delta * (max_correction_m / raw_norm)
                 capped[index] = True
             smoothed_xyz[index] = xyz[index] + float(blend) * delta
         out = work.copy()
