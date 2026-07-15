@@ -4,7 +4,7 @@ The maintained implementation lives in the sibling ``mot.py`` module. This
 package preserves the public import path while ensuring that pooled MOT metrics
 scope object identities by sequence, count tolerance-matched frames once,
 validate matching thresholds, resolve exact association ties deterministically,
-and use globally optimal frame matching.
+and use globally optimal frame matching for both tracking and evaluation.
 """
 
 from __future__ import annotations
@@ -197,6 +197,174 @@ def _nearest_track_id(
     return None
 
 
+def _cardinality_first_assignment(
+    distances: np.ndarray,
+    eligible: np.ndarray,
+    *,
+    max_distance: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Assign rows to eligible real columns before minimizing total distance."""
+
+    row_count, column_count = distances.shape
+    if row_count == 0 or column_count == 0 or not eligible.any():
+        return np.array([], dtype=int), np.array([], dtype=int)
+
+    max_matches = min(row_count, column_count)
+    distance_weight = 0.5 / float(max_matches + 1)
+    normalized_distances = (
+        distances / max_distance if max_distance > 0.0 else np.zeros_like(distances)
+    )
+    costs = np.full(
+        (row_count, column_count + row_count),
+        1.0,
+        dtype=float,
+    )
+    costs[:, :column_count] = np.where(
+        eligible,
+        distance_weight * np.minimum(normalized_distances, 1.0),
+        2.0,
+    )
+
+    row_indices, assignment_columns = linear_sum_assignment(costs)
+    real = (assignment_columns < column_count) & eligible[
+        row_indices,
+        np.minimum(assignment_columns, column_count - 1),
+    ]
+    return row_indices[real], assignment_columns[real]
+
+
+def _optimal_track_matches(
+    detections: pd.DataFrame,
+    active: dict[int, Any],
+    config: Any,
+) -> dict[int, int]:
+    """Return a maximum-cardinality track assignment for one detection frame."""
+
+    if detections.empty or not active:
+        return {}
+
+    track_ids = sorted(active)
+    detection_xyz = detections[["x_m", "y_m", "z_m"]].apply(
+        pd.to_numeric,
+        errors="coerce",
+    ).to_numpy(float)
+    track_xyz = np.stack(
+        [np.asarray(active[track_id].state[:3], float) for track_id in track_ids]
+    )
+    distances = np.linalg.norm(
+        detection_xyz[:, np.newaxis, :] - track_xyz[np.newaxis, :, :],
+        axis=2,
+    )
+    finite = np.isfinite(detection_xyz).all(axis=1)[:, np.newaxis] & np.isfinite(
+        track_xyz
+    ).all(axis=1)[np.newaxis, :]
+    eligible = finite & np.isfinite(distances) & (
+        distances <= config.max_association_distance_m
+    )
+    detection_indices, track_columns = _cardinality_first_assignment(
+        distances,
+        eligible,
+        max_distance=config.max_association_distance_m,
+    )
+    return {
+        int(detection_index): track_ids[int(track_column)]
+        for detection_index, track_column in zip(detection_indices, track_columns)
+    }
+
+
+def _run_multi_sequence(
+    candidates: pd.DataFrame,
+    sequence_truth: pd.DataFrame | None,
+    *,
+    config: Any,
+) -> pd.DataFrame:
+    """Run one sequence with globally optimal gated association per frame."""
+
+    candidates = candidates.loc[_IMPL._finite_position_mask(candidates)].copy()
+    if candidates.empty:
+        return pd.DataFrame()
+    next_track_id = 1
+    active: dict[int, Any] = {}
+    last_update: dict[int, float] = {}
+    records: list[dict[str, Any]] = []
+    for time_s, group in candidates.sort_values("time_s").groupby("time_s", sort=True):
+        time_s = float(time_s)
+        for track_id in list(active):
+            if time_s - last_update[track_id] > config.max_track_age_s:
+                active.pop(track_id, None)
+                last_update.pop(track_id, None)
+        for filt in active.values():
+            filt.predict(time_s)
+
+        detections = group.copy()
+        detections["_mot_confidence"] = _IMPL._mot_confidence_values(detections)
+        detections = detections.sort_values(
+            "_mot_confidence",
+            ascending=False,
+            kind="mergesort",
+        ).reset_index(drop=True)
+        matched_tracks = _optimal_track_matches(detections, active, config)
+
+        for detection_index, detection in detections.iterrows():
+            z = detection[["x_m", "y_m", "z_m"]].to_numpy(float)
+            output_track_id = matched_tracks.get(int(detection_index))
+            action = "matched_update"
+            if output_track_id is None:
+                confidence = float(detection["_mot_confidence"])
+                if confidence < config.min_new_track_confidence:
+                    continue
+                output_track_id = next_track_id
+                next_track_id += 1
+                active[output_track_id] = _IMPL._ConstantVelocityFilter(
+                    acceleration_std_mps2=config.acceleration_std_mps2,
+                    initial_time_s=time_s,
+                    initial_position=z,
+                )
+                action = "new_track"
+            filt = active[output_track_id]
+            std_xy = _IMPL._positive_float(
+                detection.get("std_xy_m", 10.0),
+                default=10.0,
+            )
+            std_z = _IMPL._positive_float(
+                detection.get("std_z_m", std_xy),
+                default=std_xy,
+            )
+            covariance = (
+                np.diag([std_xy**2, std_xy**2, std_z**2]) * config.covariance_scale
+            )
+            filt.update(z, covariance)
+            last_update[output_track_id] = time_s
+            state = filt.state.copy()
+            records.append(
+                {
+                    "time_s": time_s,
+                    "source": detection.get("source"),
+                    "track_id": detection.get("track_id"),
+                    "class_name": detection.get("class_name"),
+                    "output_track_id": f"mot_{output_track_id}",
+                    "update_action": action,
+                    "selected_path_update": True,
+                    "state_x_m": state[0],
+                    "state_y_m": state[1],
+                    "state_z_m": state[2],
+                    "v_x_mps": state[3],
+                    "v_y_mps": state[4],
+                    "v_z_mps": state[5],
+                }
+            )
+    estimates = pd.DataFrame.from_records(records)
+    if estimates.empty:
+        return estimates
+    if (
+        sequence_truth is not None
+        and not sequence_truth.empty
+        and not _IMPL._truth_has_track_ids(sequence_truth)
+    ):
+        estimates = _IMPL.add_truth_errors(estimates, sequence_truth)
+    return estimates
+
+
 def _greedy_truth_matches(
     pred: pd.DataFrame,
     gt: pd.DataFrame,
@@ -225,32 +393,14 @@ def _greedy_truth_matches(
         gt_xyz
     ).all(axis=1)[np.newaxis, :]
     eligible = finite & np.isfinite(distances) & (distances <= max_distance_m)
-    if not eligible.any():
-        return []
-
-    max_matches = min(len(pred), len(gt))
-    distance_weight = 0.5 / float(max_matches + 1)
-    normalized_distances = (
-        distances / max_distance_m
-        if max_distance_m > 0.0
-        else np.zeros_like(distances)
-    )
-    costs = np.full(
-        (len(pred), len(gt) + len(pred)),
-        1.0,
-        dtype=float,
-    )
-    costs[:, : len(gt)] = np.where(
+    pred_indices, gt_indices = _cardinality_first_assignment(
+        distances,
         eligible,
-        distance_weight * np.minimum(normalized_distances, 1.0),
-        2.0,
+        max_distance=max_distance_m,
     )
-
-    pred_indices, assignment_columns = linear_sum_assignment(costs)
     matches = [
         (int(pred_index), int(gt_index), float(distances[pred_index, gt_index]))
-        for pred_index, gt_index in zip(pred_indices, assignment_columns)
-        if gt_index < len(gt) and eligible[pred_index, gt_index]
+        for pred_index, gt_index in zip(pred_indices, gt_indices)
     ]
     return sorted(matches, key=lambda item: (item[2], item[0], item[1]))
 
@@ -272,6 +422,9 @@ def compute_multi_object_metrics(
 
 _IMPL._metric_frame_pairs = _metric_frame_pairs
 _IMPL._nearest_track_id = _nearest_track_id
+_IMPL._cardinality_first_assignment = _cardinality_first_assignment
+_IMPL._optimal_track_matches = _optimal_track_matches
+_IMPL._run_multi_sequence = _run_multi_sequence
 _IMPL._greedy_truth_matches = _greedy_truth_matches
 _IMPL.compute_multi_object_metrics = compute_multi_object_metrics
 
@@ -288,6 +441,9 @@ globals()["_metric_time_cluster_pairs"] = _metric_time_cluster_pairs
 globals()["_metric_rows_in_time_cluster"] = _metric_rows_in_time_cluster
 globals()["_validated_match_distance_m"] = _validated_match_distance_m
 globals()["_nearest_track_id"] = _nearest_track_id
+globals()["_cardinality_first_assignment"] = _cardinality_first_assignment
+globals()["_optimal_track_matches"] = _optimal_track_matches
+globals()["_run_multi_sequence"] = _run_multi_sequence
 globals()["_greedy_truth_matches"] = _greedy_truth_matches
 globals()["compute_multi_object_metrics"] = compute_multi_object_metrics
 
