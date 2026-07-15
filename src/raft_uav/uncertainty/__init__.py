@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 _LEGACY_PATH = Path(__file__).resolve().parent.parent / "uncertainty.py"
 _LEGACY_NAME = "_raft_uav_uncertainty_legacy"
@@ -20,6 +21,8 @@ VarianceHead = _legacy.VarianceHead
 HeteroscedasticUncertaintyModel = _legacy.HeteroscedasticUncertaintyModel
 _original_variance_head_init = VarianceHead.__init__
 _original_model_init = HeteroscedasticUncertaintyModel.__init__
+_original_aligned_residuals = _legacy._aligned_residuals
+_MISSING_SEQUENCE_KEYS = frozenset({"nan", "none", "<na>", "nat"})
 
 
 def _finite_scalar(value: object, field: str) -> float:
@@ -113,13 +116,72 @@ def _validated_model_init(self, heads, metadata):
         seen.add(key)
 
 
+def _sequence_keys(values: pd.Series) -> pd.Series:
+    """Return trimmed sequence identifiers while preserving missing values."""
+
+    keys = pd.Series(values, index=values.index, dtype="string").str.strip()
+    missing = keys.isna() | keys.eq("") | keys.str.lower().isin(
+        _MISSING_SEQUENCE_KEYS
+    )
+    return keys.mask(missing)
+
+
+def _aligned_residuals(
+    frame: pd.DataFrame,
+    truth: pd.DataFrame,
+    *,
+    max_time_delta_s: float,
+) -> pd.DataFrame:
+    """Align residuals within sequence boundaries before nearest-time matching."""
+
+    if "sequence_id" not in frame.columns or "sequence_id" not in truth.columns:
+        return _original_aligned_residuals(
+            frame,
+            truth,
+            max_time_delta_s=max_time_delta_s,
+        )
+
+    frame_keys = _sequence_keys(frame["sequence_id"])
+    truth_keys = _sequence_keys(truth["sequence_id"])
+    order_column = "__raft_uav_uncertainty_alignment_order__"
+    while order_column in frame.columns:
+        order_column += "_"
+
+    positioned = frame.copy()
+    positioned[order_column] = np.arange(len(positioned), dtype=int)
+    blocks: list[pd.DataFrame] = []
+    for sequence_id in pd.unique(frame_keys.dropna()):
+        frame_mask = frame_keys.eq(sequence_id).fillna(False)
+        truth_mask = truth_keys.eq(sequence_id).fillna(False)
+        sequence_truth = truth.loc[truth_mask]
+        if sequence_truth.empty:
+            continue
+        block = _original_aligned_residuals(
+            positioned.loc[frame_mask],
+            sequence_truth,
+            max_time_delta_s=max_time_delta_s,
+        )
+        if not block.empty:
+            blocks.append(block)
+
+    if not blocks:
+        return frame.iloc[0:0].copy()
+
+    aligned = pd.concat(blocks, ignore_index=False)
+    aligned = aligned.sort_values(order_column, kind="mergesort")
+    return aligned.drop(columns=order_column).reset_index(drop=True)
+
+
 VarianceHead.__init__ = _validated_variance_head_init
 HeteroscedasticUncertaintyModel.__init__ = _validated_model_init
+_legacy._aligned_residuals = _aligned_residuals
 
 for _name in dir(_legacy):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_legacy, _name)
 globals()["VarianceHead"] = VarianceHead
 globals()["HeteroscedasticUncertaintyModel"] = HeteroscedasticUncertaintyModel
+globals()["_sequence_keys"] = _sequence_keys
+globals()["_aligned_residuals"] = _aligned_residuals
 __doc__ = _legacy.__doc__
 __all__ = [_name for _name in dir(_legacy) if not _name.startswith("__")]
