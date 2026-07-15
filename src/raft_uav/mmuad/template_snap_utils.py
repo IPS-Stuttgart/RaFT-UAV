@@ -78,7 +78,7 @@ def load_official_track5_results_frame_from_frame(frame: pd.DataFrame) -> pd.Dat
     )
     finite = (
         rows["Sequence"].notna()
-        & rows["Timestamp"].notna()
+        & np.isfinite(rows["Timestamp"].to_numpy(dtype=float))
         & rows["Classification"].notna()
     )
     rows = rows.loc[finite].copy()
@@ -154,7 +154,10 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
             "Timestamp": pd.to_numeric(template[timestamp_col], errors="coerce"),
         }
     )
-    rows = rows.loc[rows["Sequence"].notna() & rows["Timestamp"].notna()]
+    finite = rows["Sequence"].notna() & np.isfinite(
+        rows["Timestamp"].to_numpy(dtype=float)
+    )
+    rows = rows.loc[finite]
     return rows.sort_values(["Sequence", "Timestamp"]).reset_index(drop=True)
 
 
