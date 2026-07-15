@@ -32,7 +32,12 @@ def rf_measurements_to_enu_with_uncertainty(
             TrackingMeasurement(
                 time_s=float(row["time_s"]),
                 vector=np.array([float(row["east_m"]), float(row["north_m"])]),
-                covariance=covariance_from_row(row, 2, fallback),
+                covariance=covariance_from_row(
+                    row,
+                    2,
+                    fallback,
+                    prefixes=("cov", "association_cov"),
+                ),
                 source="rf",
             )
         )
@@ -64,7 +69,12 @@ def radar_measurements_to_enu_with_uncertainty(
     measurements: list[TrackingMeasurement] = []
     for _, row in radar.iterrows():
         position = np.array([float(row["east_m"]), float(row["north_m"]), float(row["up_m"])])
-        position_covariance = covariance_from_row(row, 3, position_fallback)
+        position_covariance = covariance_from_row(
+            row,
+            3,
+            position_fallback,
+            prefixes=("cov", "association_cov"),
+        )
         velocity = _radar_velocity_vector_enu(row)
         if velocity is None:
             vector = position
