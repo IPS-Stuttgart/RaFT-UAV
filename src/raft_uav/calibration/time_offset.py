@@ -76,7 +76,7 @@ def apply_time_offset(
 ) -> pd.DataFrame:
     """Return a copy whose time column is shifted by ``offset_s`` seconds."""
 
-    offset = 0.0 if offset_s is None else float(offset_s)
+    offset = 0.0 if offset_s is None else _finite_offset_seconds(offset_s)
     out = frame.copy()
     if time_column not in out.columns:
         raise KeyError(f"frame is missing time column {time_column!r}")
@@ -152,7 +152,7 @@ def aggregate_radar_time_offset_sweep(
 ) -> pd.DataFrame:
     """Aggregate radar nearest-candidate oracle sweeps over training flights."""
 
-    offsets = list(float(offset) for offset in offsets_s)
+    offsets = [_finite_offset_seconds(offset) for offset in offsets_s]
     rows: list[dict[str, float]] = []
     for offset in offsets:
         selected: list[pd.DataFrame] = []
@@ -198,7 +198,8 @@ def aggregate_measurement_time_offset_sweep(
     """Aggregate direct measurement-to-truth error sweeps over training flights."""
 
     rows: list[dict[str, float]] = []
-    for offset in offsets_s:
+    for raw_offset in offsets_s:
+        offset = _finite_offset_seconds(raw_offset)
         errors_2d: list[np.ndarray] = []
         errors_3d: list[np.ndarray] = []
         total_rows = 0
@@ -214,7 +215,7 @@ def aggregate_measurement_time_offset_sweep(
             query = pd.to_numeric(measurements["time_s"], errors="coerce").to_numpy(dtype=float)
             truth_xyz, valid = interpolate_truth_positions(
                 truth,
-                query + float(offset),
+                query + offset,
                 max_time_delta_s=max_time_delta_s,
             )
             meas_cols = ["east_m", "north_m", "up_m"] if dimensions == 3 else ["east_m", "north_m"]
@@ -232,7 +233,7 @@ def aggregate_measurement_time_offset_sweep(
         e2 = _concat(errors_2d)
         e3 = _concat(errors_3d) if dimensions == 3 else np.array([], dtype=float)
         row = {
-            "time_offset_s": float(offset),
+            "time_offset_s": offset,
             "count": float(e2.size),
             "coverage": _coverage(e2.size, total_rows),
         }
@@ -333,3 +334,17 @@ def _optional_float(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return out if np.isfinite(out) else None
+
+
+def _finite_offset_seconds(value: object) -> float:
+    """Return ``value`` as finite seconds, rejecting Boolean pseudo-numbers."""
+
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError("offset_s must be a finite numeric value")
+    try:
+        offset_s = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("offset_s must be a finite numeric value") from exc
+    if not np.isfinite(offset_s):
+        raise ValueError("offset_s must be a finite numeric value")
+    return offset_s
