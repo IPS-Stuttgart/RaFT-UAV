@@ -35,6 +35,7 @@ def test_vertical_repair_rejects_rows_with_invalid_numeric_values(
     value: object,
 ) -> None:
     rows = _submission()
+    rows[column] = rows[column].astype(object)
     rows.loc[1, column] = value
 
     with pytest.raises(ValueError) as error:
