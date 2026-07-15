@@ -18,6 +18,21 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+_TRUE_PROTECTED_TEXT = {"1", "true", "t", "yes", "y", "on"}
+_FALSE_PROTECTED_TEXT = {
+    "",
+    "0",
+    "false",
+    "f",
+    "no",
+    "n",
+    "off",
+    "nan",
+    "none",
+    "null",
+    "<na>",
+}
+
 
 def diversify_candidate_reservoir(
     rows: pd.DataFrame,
@@ -94,8 +109,10 @@ def diversify_candidate_reservoir(
     outputs: list[pd.DataFrame] = []
     for _, group in frame.groupby(["sequence_id", "time_s"], sort=False, dropna=False):
         group = group.copy()
-        protected = group["candidate_reservoir_protected"].fillna(False).astype(bool)
-        priority = protected if preserve_protected else pd.Series(False, index=group.index)
+        if preserve_protected:
+            priority = _protected_flag_series(group["candidate_reservoir_protected"])
+        else:
+            priority = pd.Series(False, index=group.index, dtype=bool)
         order = group.assign(_protected=priority).sort_values(
             ["_protected", score_column],
             ascending=[False, False],
@@ -140,6 +157,43 @@ def diversify_candidate_reservoir(
             errors="ignore",
         )
     return pd.concat(outputs, ignore_index=True)
+
+
+def _protected_flag_series(values: pd.Series) -> pd.Series:
+    return values.map(_parse_protected_flag).astype(bool)
+
+
+def _parse_protected_flag(value: object) -> bool:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _TRUE_PROTECTED_TEXT:
+            return True
+        if text in _FALSE_PROTECTED_TEXT:
+            return False
+        raise ValueError(
+            "candidate_reservoir_protected values must be boolean-like; "
+            f"got {value!r}"
+        )
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return False
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "candidate_reservoir_protected values must be boolean-like; "
+            f"got {value!r}"
+        ) from exc
+    if not np.isfinite(number):
+        return False
+    return bool(number)
 
 
 def _effective_candidate_radii(
