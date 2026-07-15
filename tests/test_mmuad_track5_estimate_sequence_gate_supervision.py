@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import raft_uav.mmuad.track5_estimate_sequence_gate_fit as sequence_gate_fit
 from raft_uav.mmuad.track5_estimate_sequence_gate_fit import (
     _nearest_neighbor_predict,
     fit_estimate_sequence_gate_weights,
@@ -103,3 +104,22 @@ def test_sequence_gate_fit_excludes_unsupervised_sequence_from_loso() -> None:
     assert set(result["train_features"]["sequence_id"]) == set(sequences)
     assert set(result["loso_weights"]["sequence_id"]) == {"seqA", "seqB"}
     assert np.isfinite(result["loso_weights"]["sequence_gate_weight"]).all()
+
+
+def test_compatibility_main_forwards_active_pandas_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = object()
+    original_impl_pd = sequence_gate_fit._IMPL.pd
+    observed: dict[str, object] = {}
+
+    def fake_main(_argv: list[str] | None = None) -> int:
+        observed["impl_pd"] = sequence_gate_fit._IMPL.pd
+        return 0
+
+    monkeypatch.setattr(sequence_gate_fit, "pd", sentinel)
+    monkeypatch.setattr(sequence_gate_fit, "_ORIGINAL_MAIN", fake_main)
+
+    assert sequence_gate_fit.main([]) == 0
+    assert observed["impl_pd"] is sentinel
+    assert sequence_gate_fit._IMPL.pd is original_impl_pd
