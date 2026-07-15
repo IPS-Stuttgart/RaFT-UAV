@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling ``track5_vertical_repair.py``
 module. This package preserves the public import path while rejecting malformed
-``iterations`` values and invalid numeric rows instead of silently coercing or
-dropping them.
+``iterations`` values, invalid repair thresholds, and invalid numeric rows instead
+of silently coercing or dropping them.
 """
 
 from __future__ import annotations
@@ -49,6 +49,20 @@ def _positive_integer(value: object, *, name: str) -> int:
     return int(numeric)
 
 
+def _finite_nonnegative(value: object, *, name: str) -> float:
+    """Return a finite non-negative threshold without Boolean coercion."""
+
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be finite and non-negative")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be finite and non-negative") from exc
+    if not np.isfinite(numeric) or numeric < 0.0:
+        raise ValueError(f"{name} must be finite and non-negative")
+    return numeric
+
+
 def _validate_numeric_rows(submission: object) -> None:
     """Reject numeric rows that the legacy normalizer would silently discard."""
 
@@ -80,13 +94,33 @@ def repair_track5_vertical_spikes(
     """Return vertically repaired estimates after validating public inputs."""
 
     validated_iterations = _positive_integer(iterations, name="iterations")
+    validated_vertical_speed = _finite_nonnegative(
+        max_vertical_speed_mps,
+        name="max_vertical_speed_mps",
+    )
+    validated_neighbor_vertical_speed = _finite_nonnegative(
+        max_neighbor_vertical_speed_mps,
+        name="max_neighbor_vertical_speed_mps",
+    )
+    validated_vertical_residual = _finite_nonnegative(
+        max_vertical_residual_m,
+        name="max_vertical_residual_m",
+    )
+    validated_horizontal_speed = (
+        None
+        if max_horizontal_speed_mps is None
+        else _finite_nonnegative(
+            max_horizontal_speed_mps,
+            name="max_horizontal_speed_mps",
+        )
+    )
     _validate_numeric_rows(submission)
     return _ORIGINAL_REPAIR(
         submission,
-        max_vertical_speed_mps=max_vertical_speed_mps,
-        max_neighbor_vertical_speed_mps=max_neighbor_vertical_speed_mps,
-        max_vertical_residual_m=max_vertical_residual_m,
-        max_horizontal_speed_mps=max_horizontal_speed_mps,
+        max_vertical_speed_mps=validated_vertical_speed,
+        max_neighbor_vertical_speed_mps=validated_neighbor_vertical_speed,
+        max_vertical_residual_m=validated_vertical_residual,
+        max_horizontal_speed_mps=validated_horizontal_speed,
         iterations=validated_iterations,
     )
 
@@ -102,6 +136,7 @@ globals().update(
 )
 globals()["_NUMERIC_COLUMNS"] = _NUMERIC_COLUMNS
 globals()["_positive_integer"] = _positive_integer
+globals()["_finite_nonnegative"] = _finite_nonnegative
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
 globals()["repair_track5_vertical_spikes"] = repair_track5_vertical_spikes
 
