@@ -87,6 +87,24 @@ def test_diversity_does_not_expand_duplicate_input_index_labels() -> None:
     assert len(output) == 2
 
 
+def test_diversity_parses_serialized_protected_flags() -> None:
+    rows = _rows()
+    rows["candidate_reservoir_protected"] = ["False", "0", "true", "off"]
+
+    output = diversify_candidate_reservoir(rows, radius_m=1.0)
+
+    assert set(output["track_id"]) == {"best", "protected", "far"}
+    assert "duplicate" not in set(output["track_id"])
+
+
+def test_diversity_rejects_ambiguous_protected_flags() -> None:
+    rows = _rows()
+    rows["candidate_reservoir_protected"] = [False, "sometimes", True, False]
+
+    with pytest.raises(ValueError, match="candidate_reservoir_protected"):
+        diversify_candidate_reservoir(rows, radius_m=1.0)
+
+
 def test_uncertain_selected_candidate_preserves_nearby_alternative() -> None:
     rows = _uncertainty_rows(
         second_x_m=0.5,
