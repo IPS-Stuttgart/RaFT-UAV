@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import sys
 from typing import Any
 
 import numpy as np
@@ -24,11 +25,16 @@ _SPEC = importlib.util.spec_from_file_location(
 if _SPEC is None or _SPEC.loader is None:  # pragma: no cover - import machinery guard
     raise ImportError(f"cannot load MMUAD evaluation implementation from {_IMPL_PATH}")
 _IMPL = importlib.util.module_from_spec(_SPEC)
+sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
-for _name in dir(_IMPL):
-    if not _name.startswith("__"):
-        globals()[_name] = getattr(_IMPL, _name)
+_normalize_submission_sequence_ids = _IMPL._normalize_submission_sequence_ids
+_valid_track_id_text = _IMPL._valid_track_id_text
+normalize_truth_columns = _IMPL.normalize_truth_columns
+_unmatched_prediction_row = _IMPL._unmatched_prediction_row
+_track_ids = _IMPL._track_ids
+_should_restrict_to_track_id = _IMPL._should_restrict_to_track_id
+_truth_track_id = _IMPL._truth_track_id
 
 
 def match_submission_to_truth(
@@ -199,3 +205,19 @@ def _matched_prediction_row(
 
 
 _IMPL.match_submission_to_truth = match_submission_to_truth
+
+globals().update(
+    {
+        name: getattr(_IMPL, name)
+        for name in dir(_IMPL)
+        if not (name.startswith("__") and name.endswith("__"))
+    }
+)
+globals()["match_submission_to_truth"] = match_submission_to_truth
+globals()["_optimal_time_assignment"] = _optimal_time_assignment
+globals()["_matched_prediction_row"] = _matched_prediction_row
+
+__doc__ = _IMPL.__doc__
+__all__ = [
+    name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))
+]
