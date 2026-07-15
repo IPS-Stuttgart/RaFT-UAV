@@ -148,8 +148,19 @@ def _initial_positions(
 ) -> np.ndarray:
     if initial is not None and not initial.empty:
         _require_columns(initial, {"time_s", *PositionColumns}, "initial")
-        init_times = initial["time_s"].to_numpy(dtype=float)
-        init_xyz = initial.loc[:, PositionColumns].to_numpy(dtype=float)
+        initial_rows = initial.loc[:, ["time_s", *PositionColumns]].copy()
+        for column in ("time_s", *PositionColumns):
+            initial_rows[column] = pd.to_numeric(initial_rows[column], errors="coerce")
+        finite = np.isfinite(initial_rows.to_numpy(dtype=float)).all(axis=1)
+        if not finite.any():
+            raise ValueError("initial contains no finite time/position rows")
+        initial_rows = (
+            initial_rows.loc[finite]
+            .groupby("time_s", sort=True, as_index=False)[list(PositionColumns)]
+            .median()
+        )
+        init_times = initial_rows["time_s"].to_numpy(dtype=float)
+        init_xyz = initial_rows.loc[:, PositionColumns].to_numpy(dtype=float)
         return np.column_stack([np.interp(times, init_times, init_xyz[:, axis]) for axis in range(3)])
     grouped = measurements.groupby("time_s", sort=True)[list(PositionColumns)].median()
     grouped_times = grouped.index.to_numpy(dtype=float)
