@@ -1,4 +1,4 @@
-"""Compatibility wrapper with logical Fortem JSONL frame indexing."""
+"""Compatibility wrapper for robust Fortem JSONL radar loading."""
 
 from __future__ import annotations
 
@@ -20,6 +20,30 @@ if _SPEC is None or _SPEC.loader is None:
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+
+
+def _track_data_from_payload(
+    payload: dict[str, Any],
+    params: dict[str, Any],
+) -> Any:
+    """Return the first list-valued Fortem track-data representation.
+
+    Some JSON-RPC logs include a null or malformed top-level ``trackData``
+    placeholder while storing the actual list in ``params.trackData``. A valid
+    top-level list keeps precedence; otherwise a valid nested list is used.
+    """
+
+    top_level = payload.get("trackData")
+    if isinstance(top_level, list):
+        return top_level
+
+    nested = params.get("trackData")
+    if isinstance(nested, list):
+        return nested
+
+    if top_level is not None:
+        return top_level
+    return [] if nested is None else nested
 
 
 def read_radar_tracks_json(path: Path) -> pd.DataFrame:
@@ -52,7 +76,7 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
             if not isinstance(params, dict):
                 params = {}
 
-            track_data = _IMPL._track_data_from_payload(payload, params)
+            track_data = _track_data_from_payload(payload, params)
             if not isinstance(track_data, list):
                 continue
             for track_index, track in enumerate(track_data):
@@ -66,6 +90,7 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
     return pd.DataFrame.from_records(records)
 
 
+_IMPL._track_data_from_payload = _track_data_from_payload
 _IMPL.read_radar_tracks_json = read_radar_tracks_json
 
 globals().update(
@@ -75,6 +100,8 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_track_data_from_payload"] = _track_data_from_payload
+globals()["read_radar_tracks_json"] = read_radar_tracks_json
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
