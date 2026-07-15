@@ -132,10 +132,13 @@ def inject_false_tracks(
 ) -> pd.DataFrame:
     if frame.empty or false_tracks_per_frame <= 0 or not {"east_m", "north_m", "up_m"}.issubset(frame.columns):
         return frame.copy()
-    group_column = "frame_index" if "frame_index" in frame.columns else "time_s"
+    frame_column = "frame_index" if "frame_index" in frame.columns else "time_s"
+    group_columns = [frame_column]
+    if "sequence_id" in frame.columns:
+        group_columns.insert(0, "sequence_id")
     rows: list[pd.Series] = []
     next_track_id = _next_false_track_id(frame)
-    for _, group in frame.groupby(group_column, sort=True):
+    for _, group in frame.groupby(group_columns, sort=True, dropna=False):
         reference = group.iloc[0]
         center = group[["east_m", "north_m", "up_m"]].mean().to_numpy(dtype=float)
         for index in range(false_tracks_per_frame):
