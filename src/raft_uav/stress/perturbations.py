@@ -60,6 +60,24 @@ def perturb_rf(rf: pd.DataFrame, config: PerturbationConfig) -> pd.DataFrame:
     return out.sort_values("time_s") if "time_s" in out.columns else out
 
 
+def _radar_frame_grouping(frame: pd.DataFrame) -> tuple[str, list[str]]:
+    """Return a complete radar frame key and its sequence-scoped group columns."""
+
+    if "frame_index" in frame.columns and frame["frame_index"].notna().all():
+        frame_column = "frame_index"
+    elif "time_s" in frame.columns:
+        frame_column = "time_s"
+    elif "frame_index" in frame.columns:
+        frame_column = "frame_index"
+    else:
+        raise KeyError("radar frame must contain frame_index or time_s")
+
+    group_columns = [frame_column]
+    if "sequence_id" in frame.columns:
+        group_columns.insert(0, "sequence_id")
+    return frame_column, group_columns
+
+
 def drop_radar_frames(
     frame: pd.DataFrame,
     *,
@@ -69,10 +87,7 @@ def drop_radar_frames(
     if frame.empty or rate <= 0.0:
         return frame.copy()
 
-    frame_column = "frame_index" if "frame_index" in frame.columns else "time_s"
-    group_columns = [frame_column]
-    if "sequence_id" in frame.columns:
-        group_columns.insert(0, "sequence_id")
+    frame_column, group_columns = _radar_frame_grouping(frame)
 
     valid_group_mask = frame[frame_column].notna().to_numpy()
     group_ids = (
@@ -152,10 +167,7 @@ def inject_false_tracks(
 ) -> pd.DataFrame:
     if frame.empty or false_tracks_per_frame <= 0 or not {"east_m", "north_m", "up_m"}.issubset(frame.columns):
         return frame.copy()
-    frame_column = "frame_index" if "frame_index" in frame.columns else "time_s"
-    group_columns = [frame_column]
-    if "sequence_id" in frame.columns:
-        group_columns.insert(0, "sequence_id")
+    _, group_columns = _radar_frame_grouping(frame)
     rows: list[pd.Series] = []
     next_track_id = _next_false_track_id(frame)
     for _, group in frame.groupby(group_columns, sort=True, dropna=False):
