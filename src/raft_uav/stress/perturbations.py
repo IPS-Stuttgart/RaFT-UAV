@@ -77,11 +77,11 @@ def drop_radar_frames(
     valid_group_mask = frame[frame_column].notna().to_numpy()
     group_ids = (
         frame.loc[valid_group_mask, group_columns]
-        .groupby(group_columns, sort=False, dropna=False)
+        .groupby(group_columns, sort=True, dropna=False)
         .ngroup()
         .to_numpy()
     )
-    groups = pd.Series(pd.unique(group_ids))
+    groups = pd.Series(np.unique(group_ids))
     keep_groups = set(
         groups.loc[
             rng.random(len(groups)) >= min(max(rate, 0.0), 1.0)
@@ -118,11 +118,11 @@ def drop_rf_bursts(frame: pd.DataFrame, *, rate: float, rng: np.random.Generator
         (finite_rows["_stress_time_s"] - sequence_start) / 5.0
     ).astype(int)
     group_ids = (
-        finite_rows.groupby(group_columns, sort=False, dropna=False)
+        finite_rows.groupby(group_columns, sort=True, dropna=False)
         .ngroup()
         .to_numpy()
     )
-    groups = pd.Series(pd.unique(group_ids))
+    groups = pd.Series(np.unique(group_ids))
     dropped = set(
         groups.loc[
             rng.random(len(groups)) < min(max(rate, 0.0), 1.0)
