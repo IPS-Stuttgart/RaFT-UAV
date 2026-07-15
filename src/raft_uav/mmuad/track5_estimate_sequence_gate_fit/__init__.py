@@ -29,6 +29,7 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_MAIN = _IMPL.main
 _ORIGINAL_LOSO_WEIGHTS = _IMPL._loso_weights
 _ORIGINAL_NEAREST_NEIGHBOR_PREDICT = _IMPL._nearest_neighbor_predict
 
@@ -101,6 +102,17 @@ def _nearest_neighbor_predict(
     return _ORIGINAL_NEAREST_NEIGHBOR_PREDICT(supervised, apply)
 
 
+def main(argv: list[str] | None = None) -> int:
+    """Run the legacy CLI with this package's active pandas binding."""
+
+    original_impl_pd = _IMPL.pd
+    _IMPL.pd = pd
+    try:
+        return _ORIGINAL_MAIN(argv)
+    finally:
+        _IMPL.pd = original_impl_pd
+
+
 _IMPL._loso_weights = _loso_weights
 _IMPL._nearest_neighbor_predict = _nearest_neighbor_predict
 
@@ -114,6 +126,7 @@ globals().update(
 globals()["_supervised_training_features"] = _supervised_training_features
 globals()["_loso_weights"] = _loso_weights
 globals()["_nearest_neighbor_predict"] = _nearest_neighbor_predict
+globals()["main"] = main
 
 __doc__ = _IMPL.__doc__
 __all__ = [
