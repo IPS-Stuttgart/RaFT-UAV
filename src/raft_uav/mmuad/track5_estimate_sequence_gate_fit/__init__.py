@@ -113,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         _IMPL.pd = original_impl_pd
 
 
+_IMPL.main = main
 _IMPL._loso_weights = _loso_weights
 _IMPL._nearest_neighbor_predict = _nearest_neighbor_predict
 
@@ -126,7 +127,6 @@ globals().update(
 globals()["_supervised_training_features"] = _supervised_training_features
 globals()["_loso_weights"] = _loso_weights
 globals()["_nearest_neighbor_predict"] = _nearest_neighbor_predict
-globals()["main"] = main
 
 __doc__ = _IMPL.__doc__
 __all__ = [
