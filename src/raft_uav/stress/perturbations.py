@@ -92,7 +92,12 @@ def drop_radar_frames(
     return frame.loc[keep_mask].copy()
 
 
-def drop_rf_bursts(frame: pd.DataFrame, *, rate: float, rng: np.random.Generator) -> pd.DataFrame:
+def drop_rf_bursts(
+    frame: pd.DataFrame,
+    *,
+    rate: float,
+    rng: np.random.Generator,
+) -> pd.DataFrame:
     if frame.empty or rate <= 0.0 or "time_s" not in frame.columns:
         return frame.copy()
     times = pd.to_numeric(frame["time_s"], errors="coerce").to_numpy(dtype=float)
@@ -102,13 +107,29 @@ def drop_rf_bursts(frame: pd.DataFrame, *, rate: float, rng: np.random.Generator
     if not np.any(valid_time_mask):
         return frame.copy()
 
-    finite_times = times[valid_time_mask]
-    bins = np.floor((finite_times - np.min(finite_times)) / 5.0).astype(int)
-    unique = np.unique(bins)
-    dropped = set(unique[rng.random(unique.size) < min(max(rate, 0.0), 1.0)].tolist())
+    finite_positions = np.flatnonzero(valid_time_mask)
+    if "sequence_id" in frame.columns:
+        sequence_rows = pd.DataFrame(
+            {
+                "sequence_id": frame["sequence_id"].to_numpy()[valid_time_mask],
+                "_position": finite_positions,
+            }
+        )
+        position_groups = [
+            group["_position"].to_numpy(dtype=int)
+            for _, group in sequence_rows.groupby("sequence_id", sort=False, dropna=False)
+        ]
+    else:
+        position_groups = [finite_positions]
 
     keep_mask = np.ones(times.shape, dtype=bool)
-    keep_mask[valid_time_mask] = [int(bin_id) not in dropped for bin_id in bins]
+    drop_rate = min(max(rate, 0.0), 1.0)
+    for positions in position_groups:
+        group_times = times[positions]
+        bins = np.floor((group_times - np.min(group_times)) / 5.0).astype(int)
+        unique = np.unique(bins)
+        dropped = set(unique[rng.random(unique.size) < drop_rate].tolist())
+        keep_mask[positions] = [int(bin_id) not in dropped for bin_id in bins]
     return frame.loc[keep_mask].copy()
 
 
