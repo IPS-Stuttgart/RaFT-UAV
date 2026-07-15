@@ -12,7 +12,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-import numpy as np
+from raft_uav.numeric import optional_int
 
 _LEGACY_PATH = Path(__file__).resolve().parent.parent / "io.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -33,21 +33,10 @@ def _exact_integer_control(value: Any, *, name: str, minimum: int) -> int:
 
     qualifier = "positive" if minimum == 1 else "non-negative"
     message = f"{name} must be a {qualifier} integer"
-    if isinstance(value, np.ndarray):
-        if value.ndim != 0:
-            raise ValueError(message)
-        value = value.item()
-    elif isinstance(value, np.generic):
-        value = value.item()
-    if isinstance(value, (bool, np.bool_)):
+    normalized = optional_int(value)
+    if normalized is None or normalized < minimum:
         raise ValueError(message)
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(message) from exc
-    if not np.isfinite(numeric) or not numeric.is_integer() or numeric < minimum:
-        raise ValueError(message)
-    return int(numeric)
+    return normalized
 
 
 def _dynamic_point_residuals(
