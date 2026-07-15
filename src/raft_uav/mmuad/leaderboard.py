@@ -388,6 +388,10 @@ def _optional_config_path(base: Path, value: Any) -> Path | None:
 
 
 def _nonnegative_finite_config_float(value: Any, field: str) -> float:
+    if isinstance(value, bool | np.bool_):
+        raise ValueError(
+            f"leaderboard config {field} must be a finite non-negative number"
+        )
     try:
         numeric = float(value)
     except (TypeError, ValueError) as exc:
