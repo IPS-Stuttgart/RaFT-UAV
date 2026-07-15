@@ -5,9 +5,6 @@ from raft_uav.baselines import radar_association as _radar_association
 from raft_uav.baselines._imm_transition_validation_patch import (
     apply_imm_transition_validation_patch,
 )
-from raft_uav.baselines._kalman_timestamp_validation_patch import (
-    apply_kalman_timestamp_validation_patch,
-)
 from raft_uav.baselines._radar_association_interpolation_patch import (
     apply_radar_association_interpolation_patch,
 )
@@ -27,7 +24,6 @@ uniform_ctmc_transition_matrix = _imm.uniform_ctmc_transition_matrix
 
 apply_radar_association_interpolation_patch()
 apply_robust_map_accepted_matching_patch()
-apply_kalman_timestamp_validation_patch()
 
 RADAR_ASSOCIATION_MODES = _radar_association.RADAR_ASSOCIATION_MODES
 run_async_cv_baseline_with_radar_association = (
