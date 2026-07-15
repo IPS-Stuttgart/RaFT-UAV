@@ -28,6 +28,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 EstimateInput = _IMPL.EstimateInput
+_LEGACY_APPLY_WEIGHT_CONFIG = _IMPL.apply_estimate_weight_config
 _LEGACY_BUILD = _IMPL.build_track5_estimate_ensemble
 _LEGACY_WRITE = _IMPL.write_track5_estimate_ensemble_outputs
 
@@ -35,7 +36,11 @@ _LEGACY_WRITE = _IMPL.write_track5_estimate_ensemble_outputs
 def _validate_ensemble_weight(weight: Any, *, label: str) -> float:
     """Return a finite non-negative weight, rejecting Boolean pseudo-numbers."""
 
-    if isinstance(weight, (bool, np.bool_)):
+    is_boolean_array = isinstance(weight, np.ndarray) and np.issubdtype(
+        weight.dtype,
+        np.bool_,
+    )
+    if isinstance(weight, (bool, np.bool_)) or is_boolean_array:
         raise ValueError(
             f"estimate weight must be finite and non-negative for {label}: {weight!r}"
         )
@@ -98,6 +103,22 @@ def _validated_estimate_input_objects(
     return validated
 
 
+def apply_estimate_weight_config(
+    estimate_inputs: Iterable[EstimateInput],
+    weights: dict[str, float],
+    *,
+    missing_policy: str = "error",
+) -> list[EstimateInput]:
+    """Apply a weight config without preserving Boolean inline weights."""
+
+    updated = _LEGACY_APPLY_WEIGHT_CONFIG(
+        estimate_inputs,
+        weights,
+        missing_policy=missing_policy,
+    )
+    return _validated_estimate_input_objects(updated)
+
+
 def build_track5_estimate_ensemble(
     estimate_inputs: Iterable[tuple[str, pd.DataFrame, Any]],
     template: pd.DataFrame,
@@ -146,6 +167,7 @@ def write_track5_estimate_ensemble_outputs(
 
 _IMPL._validate_ensemble_weight = _validate_ensemble_weight
 _IMPL._normalize_estimate_weight_mapping = _normalize_estimate_weight_mapping
+_IMPL.apply_estimate_weight_config = apply_estimate_weight_config
 _IMPL.build_track5_estimate_ensemble = build_track5_estimate_ensemble
 _IMPL.write_track5_estimate_ensemble_outputs = write_track5_estimate_ensemble_outputs
 
@@ -162,6 +184,7 @@ globals()["_validate_ensemble_weight"] = _validate_ensemble_weight
 globals()["_normalize_estimate_weight_mapping"] = _normalize_estimate_weight_mapping
 globals()["_validated_runtime_inputs"] = _validated_runtime_inputs
 globals()["_validated_estimate_input_objects"] = _validated_estimate_input_objects
+globals()["apply_estimate_weight_config"] = apply_estimate_weight_config
 globals()["build_track5_estimate_ensemble"] = build_track5_estimate_ensemble
 globals()["write_track5_estimate_ensemble_outputs"] = (
     write_track5_estimate_ensemble_outputs
