@@ -3,7 +3,8 @@
 The maintained implementation lives in the sibling ``mot.py`` module. This
 package preserves the public import path while ensuring that pooled MOT metrics
 scope object identities by sequence, count tolerance-matched frames once,
-validate matching thresholds, and resolve exact association ties deterministically.
+validate matching thresholds, resolve exact association ties deterministically,
+and use globally optimal frame matching.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import linear_sum_assignment
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "mot.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -29,7 +31,6 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_COMPUTE_MULTI_OBJECT_METRICS = _IMPL.compute_multi_object_metrics
-_ORIGINAL_GREEDY_TRUTH_MATCHES = _IMPL._greedy_truth_matches
 
 
 def _scope_truth_track_ids(truth: pd.DataFrame | None) -> pd.DataFrame | None:
@@ -202,13 +203,56 @@ def _greedy_truth_matches(
     *,
     max_distance_m: float,
 ) -> list[tuple[int, int, float]]:
-    """Match one frame after validating the distance threshold."""
+    """Return cardinality-first optimal matches under the maintained distance gate."""
 
-    return _ORIGINAL_GREEDY_TRUTH_MATCHES(
-        pred,
-        gt,
-        max_distance_m=_validated_match_distance_m(max_distance_m),
+    max_distance_m = _validated_match_distance_m(max_distance_m)
+    if pred.empty or gt.empty:
+        return []
+
+    pred_xyz = pred[["state_x_m", "state_y_m", "state_z_m"]].apply(
+        pd.to_numeric,
+        errors="coerce",
+    ).to_numpy(float)
+    gt_xyz = gt[["x_m", "y_m", "z_m"]].apply(
+        pd.to_numeric,
+        errors="coerce",
+    ).to_numpy(float)
+    distances = np.linalg.norm(
+        pred_xyz[:, np.newaxis, :] - gt_xyz[np.newaxis, :, :],
+        axis=2,
     )
+    finite = np.isfinite(pred_xyz).all(axis=1)[:, np.newaxis] & np.isfinite(
+        gt_xyz
+    ).all(axis=1)[np.newaxis, :]
+    eligible = finite & np.isfinite(distances) & (distances <= max_distance_m)
+    if not eligible.any():
+        return []
+
+    max_matches = min(len(pred), len(gt))
+    distance_weight = 0.5 / float(max_matches + 1)
+    normalized_distances = (
+        distances / max_distance_m
+        if max_distance_m > 0.0
+        else np.zeros_like(distances)
+    )
+    costs = np.full(
+        (len(pred), len(gt) + len(pred)),
+        1.0,
+        dtype=float,
+    )
+    costs[:, : len(gt)] = np.where(
+        eligible,
+        distance_weight * np.minimum(normalized_distances, 1.0),
+        2.0,
+    )
+
+    pred_indices, assignment_columns = linear_sum_assignment(costs)
+    matches = [
+        (int(pred_index), int(gt_index), float(distances[pred_index, gt_index]))
+        for pred_index, gt_index in zip(pred_indices, assignment_columns)
+        if gt_index < len(gt) and eligible[pred_index, gt_index]
+    ]
+    return sorted(matches, key=lambda item: (item[2], item[0], item[1]))
 
 
 def compute_multi_object_metrics(
