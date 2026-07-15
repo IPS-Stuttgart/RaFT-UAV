@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling ``track5_speed_limit.py``
 module. This package preserves the public import path while rejecting malformed
-iteration counts and invalid fixed-grid rows instead of silently coercing or
-dropping them.
+iteration counts, Boolean pseudo-numbers, and invalid fixed-grid rows instead of
+silently coercing or dropping them.
 """
 
 from __future__ import annotations
@@ -49,23 +49,45 @@ def _positive_integer(value: object, *, name: str) -> int:
     return int(numeric)
 
 
+def _reject_boolean_scalar(value: object, *, message: str) -> object:
+    """Reject Python and NumPy Boolean pseudo-numbers."""
+
+    scalar = value
+    if isinstance(value, np.ndarray) and value.ndim == 0:
+        scalar = value.item()
+    if isinstance(scalar, (bool, np.bool_)):
+        raise ValueError(message)
+    return value
+
+
 def _validate_numeric_rows(submission: object) -> None:
-    """Reject numeric rows that the legacy normalizer would silently discard."""
+    """Reject numeric rows that the legacy normalizer would silently coerce or drop."""
 
     rows = _IMPL._strip_csv_headers(pd.DataFrame(submission).copy())
     if any(column not in rows.columns for column in _NUMERIC_COLUMNS):
         return
 
-    invalid: list[str] = []
+    boolean_invalid: list[str] = []
+    nonfinite_invalid: list[str] = []
     for column in _NUMERIC_COLUMNS:
+        boolean = rows[column].map(
+            lambda value: isinstance(value, (bool, np.bool_))
+        ).to_numpy(dtype=bool)
+        if boolean.any():
+            row_positions = np.flatnonzero(boolean).tolist()
+            boolean_invalid.append(f"{column} rows {row_positions}")
+
         numeric = pd.to_numeric(rows[column], errors="coerce")
         finite = np.isfinite(numeric.to_numpy(dtype=float))
         if finite.all():
             continue
         row_positions = np.flatnonzero(~finite).tolist()
-        invalid.append(f"{column} rows {row_positions}")
-    if invalid:
-        details = "; ".join(invalid)
+        nonfinite_invalid.append(f"{column} rows {row_positions}")
+    if boolean_invalid:
+        details = "; ".join(boolean_invalid)
+        raise ValueError(f"submission contains Boolean numeric values: {details}")
+    if nonfinite_invalid:
+        details = "; ".join(nonfinite_invalid)
         raise ValueError(f"submission contains non-finite numeric values: {details}")
 
 
@@ -76,15 +98,23 @@ def project_track5_speed_limit(
     iterations: int = 2,
     anchor_blend: float = 0.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Project a trajectory after validating iteration and fixed-grid inputs."""
+    """Project a trajectory after validating scalar controls and fixed-grid inputs."""
 
     validated_iterations = _positive_integer(iterations, name="iterations")
+    validated_max_speed_mps = _reject_boolean_scalar(
+        max_speed_mps,
+        message="max_speed_mps must be positive and finite",
+    )
+    validated_anchor_blend = _reject_boolean_scalar(
+        anchor_blend,
+        message="anchor_blend must be finite and in [0, 1)",
+    )
     _validate_numeric_rows(submission)
     return _ORIGINAL_PROJECT(
         submission,
-        max_speed_mps=max_speed_mps,
+        max_speed_mps=validated_max_speed_mps,
         iterations=validated_iterations,
-        anchor_blend=anchor_blend,
+        anchor_blend=validated_anchor_blend,
     )
 
 
@@ -99,6 +129,7 @@ globals().update(
 )
 globals()["_NUMERIC_COLUMNS"] = _NUMERIC_COLUMNS
 globals()["_positive_integer"] = _positive_integer
+globals()["_reject_boolean_scalar"] = _reject_boolean_scalar
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
 globals()["project_track5_speed_limit"] = project_track5_speed_limit
 
