@@ -89,10 +89,33 @@ def rank_leaderboard_frame(
 def _leaderboard_eligibility_mask(frame: pd.DataFrame) -> pd.Series | None:
     """Return normalized leaderboard validity, or ``None`` for legacy rows."""
 
-    for column in ("score_valid_for_leaderboard", "leaderboard_ready"):
-        if column in frame.columns:
-            return frame[column].map(_leaderboard_flag_value).astype(bool)
-    return None
+    validity_columns = [
+        column
+        for column in ("score_valid_for_leaderboard", "leaderboard_ready")
+        if column in frame.columns
+    ]
+    if not validity_columns:
+        return None
+
+    eligibility = pd.Series(pd.NA, index=frame.index, dtype="boolean")
+    for column in validity_columns:
+        parsed = frame[column].map(_optional_leaderboard_flag_value).astype("boolean")
+        eligibility = eligibility.fillna(parsed)
+    return eligibility.fillna(False).astype(bool)
+
+
+def _optional_leaderboard_flag_value(value: Any) -> bool | None:
+    """Return ``None`` for missing metadata so legacy flags can fill the row."""
+
+    if value is None or value is pd.NA:
+        return None
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
+    return _leaderboard_flag_value(value)
 
 
 def _leaderboard_flag_value(value: Any) -> bool:
@@ -126,6 +149,7 @@ globals().update(
 )
 globals()["rank_leaderboard_frame"] = rank_leaderboard_frame
 globals()["_leaderboard_eligibility_mask"] = _leaderboard_eligibility_mask
+globals()["_optional_leaderboard_flag_value"] = _optional_leaderboard_flag_value
 globals()["_leaderboard_flag_value"] = _leaderboard_flag_value
 
 __doc__ = _IMPL.__doc__
