@@ -26,7 +26,22 @@ def read_sequence_text_csv(path: Path) -> pd.DataFrame:
     except TypeError:
         rows = pd.read_csv(path, dtype=str)
     out = rows.copy()
-    out.columns = [str(column).strip() for column in out.columns]
+    normalized_columns = [str(column).strip() for column in out.columns]
+    duplicated = pd.Index(normalized_columns).duplicated(keep=False)
+    duplicate_columns = sorted(
+        {
+            column
+            for column, is_duplicate in zip(normalized_columns, duplicated)
+            if is_duplicate
+        }
+    )
+    if duplicate_columns:
+        duplicate_text = ", ".join(repr(column) for column in duplicate_columns)
+        raise ValueError(
+            "CSV has ambiguous columns after trimming whitespace: "
+            f"{duplicate_text}"
+        )
+    out.columns = normalized_columns
     return _canonicalize_sequence_id_column(out)
 
 
