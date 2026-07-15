@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import importlib
 import zipfile
 from pathlib import Path
 
 import pytest
 
+import raft_uav.multi_uav_lts as multi_uav_lts
 from raft_uav.multi_uav_lts.cli import main as lts_main
 from raft_uav.multi_uav_lts.cli import validate_submission_zip
 
@@ -15,7 +17,7 @@ def _write_zip(path: Path, files: dict[str, str]) -> None:
             archive.writestr(name, text)
 
 
-def test_validate_submission_rejects_duplicate_frame_object_keys(tmp_path: Path) -> None:
+def _duplicate_submission_paths(tmp_path: Path) -> tuple[Path, Path]:
     template = tmp_path / "template.zip"
     submission = tmp_path / "submission.zip"
     _write_zip(template, {"A_00.txt": ""})
@@ -29,6 +31,11 @@ def test_validate_submission_rejects_duplicate_frame_object_keys(tmp_path: Path)
             ),
         },
     )
+    return template, submission
+
+
+def test_validate_submission_rejects_duplicate_frame_object_keys(tmp_path: Path) -> None:
+    template, submission = _duplicate_submission_paths(tmp_path)
 
     validation = validate_submission_zip(submission, template_zip=template)
 
@@ -40,3 +47,14 @@ def test_validate_submission_rejects_duplicate_frame_object_keys(tmp_path: Path)
         lts_main(["validate-submission", str(submission), "--template-zip", str(template)])
 
     assert exc_info.value.code == 1
+
+
+def test_duplicate_key_validation_survives_package_reload(tmp_path: Path) -> None:
+    template, submission = _duplicate_submission_paths(tmp_path)
+    importlib.reload(multi_uav_lts)
+
+    validation = validate_submission_zip(submission, template_zip=template)
+
+    assert not validation.valid
+    assert validation.parse_errors == 1
+    assert validation.files[0].parse_errors == 1
