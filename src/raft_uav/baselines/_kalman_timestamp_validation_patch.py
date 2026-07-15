@@ -1,4 +1,4 @@
-"""Runtime validation for asynchronous Kalman tracker timestamps."""
+"""Runtime validation for asynchronous Kalman tracker scalar inputs."""
 
 from __future__ import annotations
 
@@ -35,6 +35,27 @@ def _finite_timestamp_seconds(value: Any, *, field_name: str) -> float:
     return timestamp_s
 
 
+def _finite_nonnegative_scale(value: Any, *, field_name: str) -> float:
+    """Return a finite nonnegative scalar uncertainty scale."""
+
+    error = f"{field_name} must be a finite nonnegative scalar"
+    if isinstance(value, bool | np.bool_):
+        raise ValueError(error)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar.ndim != 0:
+        raise ValueError(error)
+    try:
+        scale = float(scalar.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(scale) or scale < 0.0:
+        raise ValueError(error)
+    return scale
+
+
 def _tracking_measurement_post_init(
     self: Any,
     _apply_runtime_calibration: bool,
@@ -53,13 +74,25 @@ def _tracker_init(
     acceleration_std_mps2: float = 4.0,
 ) -> None:
     validated_time_s = _finite_timestamp_seconds(initial_time_s, field_name="initial_time_s")
+    validated_position_std_m = _finite_nonnegative_scale(
+        initial_position_std_m,
+        field_name="initial_position_std_m",
+    )
+    validated_velocity_std_mps = _finite_nonnegative_scale(
+        initial_velocity_std_mps,
+        field_name="initial_velocity_std_mps",
+    )
+    validated_acceleration_std_mps2 = _finite_nonnegative_scale(
+        acceleration_std_mps2,
+        field_name="acceleration_std_mps2",
+    )
     _ORIGINAL_TRACKER_INIT(
         self,
         initial_position,
         validated_time_s,
-        initial_position_std_m=initial_position_std_m,
-        initial_velocity_std_mps=initial_velocity_std_mps,
-        acceleration_std_mps2=acceleration_std_mps2,
+        initial_position_std_m=validated_position_std_m,
+        initial_velocity_std_mps=validated_velocity_std_mps,
+        acceleration_std_mps2=validated_acceleration_std_mps2,
     )
 
 
@@ -69,7 +102,7 @@ def _predict_to(self: Any, time_s: float) -> None:
 
 
 def apply_kalman_timestamp_validation_patch() -> None:
-    """Install finite scalar timestamp validation at public tracker boundaries."""
+    """Install scalar validation at public asynchronous Kalman boundaries."""
 
     if getattr(_kalman, "_timestamp_validation_patch_applied", False):
         return
