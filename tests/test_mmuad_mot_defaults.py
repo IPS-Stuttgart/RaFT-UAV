@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -85,3 +86,37 @@ def test_mot_normalizes_confidence_before_sorting_and_thresholding() -> None:
 def test_mot_config_rejects_invalid_numeric_values(kwargs, message) -> None:
     with pytest.raises(ValueError, match=message):
         MultiObjectTrackerConfig(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("acceleration_std_mps2", True),
+        ("max_association_distance_m", np.bool_(False)),
+        ("max_track_age_s", np.array(True)),
+        ("min_new_track_confidence", np.array([0.05])),
+        ("covariance_scale", 1.0 + 0.0j),
+        ("covariance_scale", np.ma.masked),
+    ],
+)
+def test_mot_config_rejects_non_real_scalar_values(field: str, value: object) -> None:
+    with pytest.raises(ValueError, match=field):
+        MultiObjectTrackerConfig(**{field: value})
+
+
+def test_mot_config_accepts_zero_dimensional_real_scalars() -> None:
+    config = MultiObjectTrackerConfig(
+        acceleration_std_mps2=np.array(8.0),
+        max_association_distance_m=np.float64(15.0),
+        max_track_age_s=np.int64(2),
+        min_new_track_confidence=np.array(0.05),
+        covariance_scale=np.array(1.0),
+    )
+
+    assert config == MultiObjectTrackerConfig(
+        acceleration_std_mps2=8.0,
+        max_association_distance_m=15.0,
+        max_track_age_s=2.0,
+        min_new_track_confidence=0.05,
+        covariance_scale=1.0,
+    )
