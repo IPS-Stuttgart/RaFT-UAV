@@ -4,8 +4,8 @@ The maintained implementation lives in the sibling ``mot.py`` module. This
 package preserves the public import path while ensuring that pooled MOT metrics
 scope object identities by sequence, count tolerance-matched frames once,
 validate matching thresholds, resolve exact association ties deterministically,
-enforce timestamp tolerance on every matched row pair, and use globally optimal
-frame matching for both tracking and evaluation.
+enforce timestamp tolerance on every matched row pair, use globally optimal
+frame matching, and validate tracker configuration scalars.
 """
 
 from __future__ import annotations
@@ -33,6 +33,28 @@ _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_COMPUTE_MULTI_OBJECT_METRICS = _IMPL.compute_multi_object_metrics
 _ORIGINAL_TRACK_COUNT = _IMPL._track_count
+
+
+def _finite_config_float(name: str, value: object) -> float:
+    """Return one finite real scalar without Boolean or array coercion."""
+
+    malformed_message = f"{name} must be a finite real scalar"
+    finite_message = f"{name} must be finite"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(malformed_message)
+    try:
+        array = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(finite_message) from exc
+    if array.ndim != 0 or array.dtype.kind in {"b", "c"}:
+        raise ValueError(malformed_message)
+    try:
+        number = float(array.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(finite_message) from exc
+    if not np.isfinite(number):
+        raise ValueError(finite_message)
+    return number
 
 
 def _scope_truth_track_ids(truth: pd.DataFrame | None) -> pd.DataFrame | None:
@@ -443,6 +465,7 @@ def compute_multi_object_metrics(
     )
 
 
+_IMPL._finite_config_float = _finite_config_float
 _IMPL._metric_frame_pairs = _metric_frame_pairs
 _IMPL._track_count = _track_count
 _IMPL._nearest_track_id = _nearest_track_id
@@ -459,6 +482,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_finite_config_float"] = _finite_config_float
 globals()["_scope_truth_track_ids"] = _scope_truth_track_ids
 globals()["_metric_frame_pairs"] = _metric_frame_pairs
 globals()["_metric_time_cluster_pairs"] = _metric_time_cluster_pairs
