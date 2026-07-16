@@ -1,8 +1,8 @@
-"""Compatibility fix preserving opaque Track 5 scorecard sequence identifiers.
+"""Compatibility fixes for Track 5 scorecard inputs.
 
 The maintained implementation lives in the sibling ``track5_scorecard.py``
-module. This package preserves the public import path while loading optional
-paper-diagnostic CSV files without numeric inference changing sequence IDs.
+module. This package preserves the public import path while retaining opaque
+sequence identifiers and normalizing serialized Boolean diagnostics.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from typing import Any
 
 import pandas as pd
 
@@ -48,7 +49,31 @@ def _load_optional_csv(path: Path | None) -> pd.DataFrame | None:
     return pd.read_csv(path, dtype=identifier_dtypes)
 
 
+def _bool_series(values: Any) -> pd.Series:
+    """Normalize Boolean diagnostics, including CSV-style ``1.0`` / ``0.0``."""
+
+    if values is None:
+        return pd.Series(dtype=bool)
+    series = pd.Series(values)
+    if series.empty:
+        return pd.Series(dtype=bool)
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return series.fillna(False).astype(bool)
+
+    numeric = pd.to_numeric(series, errors="coerce")
+    numeric_mask = numeric.notna()
+    normalized = pd.Series(False, index=series.index, dtype=bool)
+    normalized.loc[numeric_mask] = numeric.loc[numeric_mask].eq(1.0)
+
+    text = series.fillna(False).astype(str).str.strip().str.lower()
+    normalized.loc[~numeric_mask] = text.loc[~numeric_mask].isin(
+        {"1", "true", "t", "yes", "y"}
+    )
+    return normalized
+
+
 _IMPL._load_optional_csv = _load_optional_csv
+_IMPL._bool_series = _bool_series
 
 globals().update(
     {
@@ -58,6 +83,7 @@ globals().update(
     }
 )
 globals()["_load_optional_csv"] = _load_optional_csv
+globals()["_bool_series"] = _bool_series
 
 __doc__ = _IMPL.__doc__
 __all__ = [
