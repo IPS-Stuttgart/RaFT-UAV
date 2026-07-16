@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
 import importlib.util
 from pathlib import Path
 
@@ -15,6 +16,12 @@ _SPEC.loader.exec_module(_legacy)
 _original_catprob_candidate_pool = _legacy.catprob_candidate_pool
 _original_highest_catprob_candidate = _legacy.highest_catprob_candidate
 _original_nearest_candidate_to_truth = _legacy.nearest_candidate_to_truth
+_original_inside_truth_window = _legacy._inside_truth_window
+_original_run_time_offset_diagnostic = _legacy.run_time_offset_diagnostic
+_ACTIVE_SWEEP_TAU_BOUNDS: ContextVar[tuple[float, float] | None] = ContextVar(
+    "raft_uav_time_offset_sweep_tau_bounds",
+    default=None,
+)
 
 _POSITION_COLUMNS = ("east_m", "north_m", "up_m")
 
@@ -79,10 +86,66 @@ def radar_frame_groups(radar: _pd.DataFrame) -> list[_pd.DataFrame]:
     ]
 
 
+def _inside_truth_window(frame: _pd.DataFrame, truth: _pd.DataFrame) -> _pd.DataFrame:
+    """Keep rows that can overlap truth for at least one active sweep offset."""
+
+    bounds = _ACTIVE_SWEEP_TAU_BOUNDS.get()
+    if bounds is None:
+        return _original_inside_truth_window(frame, truth)
+    if frame.empty or "time_s" not in frame.columns:
+        return frame
+
+    tau_min_s, tau_max_s = bounds
+    start = float(truth["time_s"].min()) - tau_max_s
+    end = float(truth["time_s"].max()) - tau_min_s
+    return frame.loc[(frame["time_s"] >= start) & (frame["time_s"] <= end)].copy()
+
+
+def run_time_offset_diagnostic(
+    *,
+    dataset_root: Path,
+    flight_name: str,
+    source: str,
+    tau_min_s: float,
+    tau_max_s: float,
+    tau_step_s: float,
+    dimensions: str = "auto",
+    radar_selection: str = "oracle-nearest-truth",
+    radar_catprob_threshold: float = 0.4,
+    max_truth_time_delta_s: float = 2.0,
+    objective: str = "p95",
+    output_dir: Path = Path("outputs/time-offset"),
+    write_plot: bool = True,
+):
+    """Run an offset sweep without discarding rows that shift into truth support."""
+
+    token = _ACTIVE_SWEEP_TAU_BOUNDS.set((float(tau_min_s), float(tau_max_s)))
+    try:
+        return _original_run_time_offset_diagnostic(
+            dataset_root=dataset_root,
+            flight_name=flight_name,
+            source=source,
+            tau_min_s=tau_min_s,
+            tau_max_s=tau_max_s,
+            tau_step_s=tau_step_s,
+            dimensions=dimensions,
+            radar_selection=radar_selection,
+            radar_catprob_threshold=radar_catprob_threshold,
+            max_truth_time_delta_s=max_truth_time_delta_s,
+            objective=objective,
+            output_dir=output_dir,
+            write_plot=write_plot,
+        )
+    finally:
+        _ACTIVE_SWEEP_TAU_BOUNDS.reset(token)
+
+
 _legacy.catprob_candidate_pool = catprob_candidate_pool
 _legacy.highest_catprob_candidate = highest_catprob_candidate
 _legacy.nearest_candidate_to_truth = nearest_candidate_to_truth
 _legacy.radar_frame_groups = radar_frame_groups
+_legacy._inside_truth_window = _inside_truth_window
+_legacy.run_time_offset_diagnostic = run_time_offset_diagnostic
 
 for _name, _value in vars(_legacy).items():
     if not _name.startswith("_"):
@@ -91,4 +154,5 @@ globals()["catprob_candidate_pool"] = catprob_candidate_pool
 globals()["highest_catprob_candidate"] = highest_catprob_candidate
 globals()["nearest_candidate_to_truth"] = nearest_candidate_to_truth
 globals()["radar_frame_groups"] = radar_frame_groups
+globals()["run_time_offset_diagnostic"] = run_time_offset_diagnostic
 __all__ = sorted(_name for _name in globals() if not _name.startswith("_"))
