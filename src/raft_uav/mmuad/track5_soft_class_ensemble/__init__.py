@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling
 ``track5_soft_class_ensemble.py`` module. This package preserves the public
-import path while canonicalizing integer-like classifier labels such as ``0.0``
-before the legacy implementation constructs one-hot class probabilities.
+import path while canonicalizing exactly integer-equivalent classifier labels
+such as ``0.0`` before the legacy implementation constructs one-hot class
+probabilities.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ _SPEC.loader.exec_module(_IMPL)
 
 
 def _predicted_class_labels(values: pd.Series) -> pd.Series:
-    """Return canonical official class-id strings from classifier labels."""
+    """Return canonical official class-id strings from exact integer values."""
 
     raw = pd.Series(values)
     text = raw.where(raw.notna(), "").astype(str).str.strip()
@@ -37,7 +38,7 @@ def _predicted_class_labels(values: pd.Series) -> pd.Series:
     boolean_values = raw.map(lambda value: isinstance(value, bool | np.bool_)).to_numpy(bool)
     integer_like = (
         np.isfinite(numeric_array)
-        & np.isclose(numeric_array, np.rint(numeric_array))
+        & (numeric_array == np.rint(numeric_array))
         & ~boolean_values
     )
     if integer_like.any():
