@@ -43,7 +43,9 @@ def _validate_measurement_dimensions(values: pd.Series) -> None:
 
     raw = pd.Series(values)
     boolean_mask = raw.map(lambda value: isinstance(value, (bool, np.bool_)))
-    complex_mask = raw.map(lambda value: isinstance(value, (complex, np.complexfloating)))
+    complex_mask = raw.map(
+        lambda value: isinstance(value, (complex, np.complexfloating))
+    )
     invalid_scalar_type = boolean_mask | complex_mask
     if invalid_scalar_type.any():
         row_index = int(np.flatnonzero(invalid_scalar_type.to_numpy())[0])
