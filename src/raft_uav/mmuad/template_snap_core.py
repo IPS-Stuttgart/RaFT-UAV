@@ -196,7 +196,19 @@ def _validate_official_classification_ids(rows: pd.DataFrame) -> None:
 def _normalize_max_interpolation_gap_s(value: float | None) -> float | None:
     if value is None:
         return None
-    gap_s = float(value)
+    message = "max_interpolation_gap_s must be a finite non-negative real scalar"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(message)
+    try:
+        array = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if array.ndim != 0 or array.dtype.kind in {"b", "c"}:
+        raise ValueError(message)
+    try:
+        gap_s = float(array.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
     if not np.isfinite(gap_s) or gap_s < 0.0:
-        raise ValueError("max_interpolation_gap_s must be a finite non-negative number")
+        raise ValueError(message)
     return gap_s
