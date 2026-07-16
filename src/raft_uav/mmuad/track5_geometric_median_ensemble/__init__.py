@@ -1,9 +1,10 @@
-"""Compatibility fix for geometric-median Weiszfeld singularities.
+"""Compatibility fixes for the Track 5 geometric-median ensemble.
 
 The maintained implementation lives in the sibling
 ``track5_geometric_median_ensemble.py`` module. This package preserves the
 public import path while using the modified Weiszfeld update when an iterate
-coincides with one or more input points.
+coincides with an input point and validating ensemble inputs before early
+returns, file access, or artifact creation.
 """
 
 from __future__ import annotations
@@ -32,8 +33,12 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+EstimateInput = _IMPL.EstimateInput
 _ORIGINAL_BUILD_TRACK5_GEOMETRIC_MEDIAN_ENSEMBLE = (
     _IMPL.build_track5_geometric_median_ensemble
+)
+_ORIGINAL_WRITE_TRACK5_GEOMETRIC_MEDIAN_OUTPUTS = (
+    _IMPL.write_track5_geometric_median_outputs
 )
 
 
@@ -49,6 +54,54 @@ def _validate_solver_controls(
     if convergence_tolerance_m is None or convergence_tolerance_m < 0.0:
         raise ValueError("tolerance_m must be a finite non-negative scalar")
     return iteration_limit, convergence_tolerance_m
+
+
+def _validate_estimate_weight(value: object, *, label: str) -> float:
+    """Return a finite non-negative scalar estimate weight."""
+
+    weight = optional_float(value)
+    if weight is None or weight < 0.0:
+        raise ValueError(
+            "estimate weight must be finite and non-negative "
+            f"for {label}: {value!r}"
+        )
+    return weight
+
+
+def _validated_runtime_inputs(
+    estimate_inputs: Iterable[tuple[str, pd.DataFrame, object]],
+) -> list[tuple[str, pd.DataFrame, float]]:
+    """Materialize runtime inputs after validating every weight."""
+
+    validated: list[tuple[str, pd.DataFrame, float]] = []
+    for label, estimates, weight in estimate_inputs:
+        safe_label = _IMPL._safe_label(label)
+        validated.append(
+            (
+                label,
+                estimates,
+                _validate_estimate_weight(weight, label=safe_label),
+            )
+        )
+    return validated
+
+
+def _validated_estimate_input_objects(
+    estimate_inputs: Iterable[EstimateInput],
+) -> list[EstimateInput]:
+    """Materialize writer inputs after validating every weight."""
+
+    validated: list[EstimateInput] = []
+    for item in estimate_inputs:
+        safe_label = _IMPL._safe_label(item.label)
+        validated.append(
+            EstimateInput(
+                label=item.label,
+                path=item.path,
+                weight=_validate_estimate_weight(item.weight, label=safe_label),
+            )
+        )
+    return validated
 
 
 def weighted_geometric_median(
@@ -144,21 +197,22 @@ def weighted_geometric_median(
 
 
 def build_track5_geometric_median_ensemble(
-    estimate_inputs: Iterable[tuple[str, pd.DataFrame, float]],
+    estimate_inputs: Iterable[tuple[str, pd.DataFrame, object]],
     template: pd.DataFrame,
     *,
     max_nearest_time_delta_s: float | None = None,
     max_iterations: int = 64,
     tolerance_m: float = 1.0e-4,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return geometric-median estimates after validating solver controls."""
+    """Return geometric-median estimates after validating public inputs."""
 
     iteration_limit, convergence_tolerance_m = _validate_solver_controls(
         max_iterations,
         tolerance_m,
     )
+    inputs = _validated_runtime_inputs(estimate_inputs)
     return _ORIGINAL_BUILD_TRACK5_GEOMETRIC_MEDIAN_ENSEMBLE(
-        estimate_inputs,
+        inputs,
         template,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
         max_iterations=iteration_limit,
@@ -166,8 +220,40 @@ def build_track5_geometric_median_ensemble(
     )
 
 
+def write_track5_geometric_median_outputs(
+    *,
+    estimate_inputs: Iterable[EstimateInput],
+    template: pd.DataFrame,
+    output_dir: Path,
+    class_map: dict[str, str] | None = None,
+    default_classification: int | str = 0,
+    max_nearest_time_delta_s: float | None = None,
+    max_iterations: int = 64,
+    tolerance_m: float = 1.0e-4,
+) -> dict[str, Path]:
+    """Validate weights and solver controls before file or artifact access."""
+
+    iteration_limit, convergence_tolerance_m = _validate_solver_controls(
+        max_iterations,
+        tolerance_m,
+    )
+    inputs = _validated_estimate_input_objects(estimate_inputs)
+    return _ORIGINAL_WRITE_TRACK5_GEOMETRIC_MEDIAN_OUTPUTS(
+        estimate_inputs=inputs,
+        template=template,
+        output_dir=output_dir,
+        class_map=class_map,
+        default_classification=default_classification,
+        max_nearest_time_delta_s=max_nearest_time_delta_s,
+        max_iterations=iteration_limit,
+        tolerance_m=convergence_tolerance_m,
+    )
+
+
+_IMPL._validate_weight = _validate_estimate_weight
 _IMPL.weighted_geometric_median = weighted_geometric_median
 _IMPL.build_track5_geometric_median_ensemble = build_track5_geometric_median_ensemble
+_IMPL.write_track5_geometric_median_outputs = write_track5_geometric_median_outputs
 
 globals().update(
     {
@@ -176,9 +262,16 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["EstimateInput"] = EstimateInput
+globals()["_validate_estimate_weight"] = _validate_estimate_weight
+globals()["_validated_runtime_inputs"] = _validated_runtime_inputs
+globals()["_validated_estimate_input_objects"] = _validated_estimate_input_objects
 globals()["weighted_geometric_median"] = weighted_geometric_median
 globals()["build_track5_geometric_median_ensemble"] = (
     build_track5_geometric_median_ensemble
+)
+globals()["write_track5_geometric_median_outputs"] = (
+    write_track5_geometric_median_outputs
 )
 
 __doc__ = _IMPL.__doc__
