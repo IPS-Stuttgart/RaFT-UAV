@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import threading
 from typing import Any
 
 from raft_uav.mmuad import track5_sequence_gate_fit as _impl
 
-_ORIGINAL_READ_CSV = _impl.pd.read_csv
+_ORIGINAL_PANDAS = _impl.pd
+_ORIGINAL_READ_CSV = _ORIGINAL_PANDAS.read_csv
+_MAIN_LOCK = threading.RLock()
 _SEQUENCE_ID_ALIASES = (
     "sequence_id",
     "Sequence",
@@ -20,6 +23,16 @@ _SEQUENCE_ID_ALIASES = (
     "heldout_sequence",
 )
 _SEQUENCE_ID_ALIAS_KEYS = frozenset(alias.strip().lower() for alias in _SEQUENCE_ID_ALIASES)
+
+
+class _SequencePreservingPandasProxy:
+    """Delegate pandas operations while overriding only this implementation's CSV reads."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_ORIGINAL_PANDAS, name)
+
+    def read_csv(self, path: Any, *args: Any, **kwargs: Any):
+        return _read_csv_preserving_sequence_id(path, *args, **kwargs)
 
 
 def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
@@ -64,12 +77,13 @@ def _sequence_id_text(value: Any) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    original = _impl.pd.read_csv
-    _impl.pd.read_csv = _read_csv_preserving_sequence_id
-    try:
-        return _impl.main(argv)
-    finally:
-        _impl.pd.read_csv = original
+    with _MAIN_LOCK:
+        original_impl_pd = _impl.pd
+        _impl.pd = _SequencePreservingPandasProxy()
+        try:
+            return _impl.main(argv)
+        finally:
+            _impl.pd = original_impl_pd
 
 
 __all__ = ["main"]

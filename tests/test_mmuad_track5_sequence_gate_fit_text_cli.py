@@ -7,6 +7,7 @@ import pandas as pd
 
 from raft_uav.mmuad import track5_sequence_gate_fit as _impl
 from raft_uav.mmuad.track5_sequence_gate_fit_text_cli import _read_csv_preserving_sequence_id
+from raft_uav.mmuad.track5_sequence_gate_fit_text_cli import main as text_cli_main
 
 
 def test_sequence_gate_fit_wrapper_preserves_normalized_sequence_ids(tmp_path: Path) -> None:
@@ -77,6 +78,24 @@ def test_sequence_gate_fit_wrapper_strips_padded_normalized_headers(
         3.0,
     ]
     assert rows["Classification"].tolist() == [4]
+
+
+def test_sequence_gate_fit_main_does_not_patch_global_pandas(monkeypatch) -> None:
+    original_read_csv = pd.read_csv
+    observed: dict[str, object] = {}
+
+    def fake_main(argv):
+        observed["impl_read_csv"] = _impl.pd.read_csv
+        observed["global_read_csv"] = pd.read_csv
+        return 0
+
+    monkeypatch.setattr(_impl, "main", fake_main)
+
+    assert text_cli_main([]) == 0
+    assert observed["impl_read_csv"] is not original_read_csv
+    assert observed["global_read_csv"] is original_read_csv
+    assert _impl.pd is pd
+    assert pd.read_csv is original_read_csv
 
 
 def test_sequence_gate_fit_console_script_uses_text_id_wrapper() -> None:
