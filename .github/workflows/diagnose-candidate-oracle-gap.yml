@@ -34,6 +34,12 @@ jobs:
         run: |
           set -o pipefail
           pytest -vv tests/test_mmuad_candidate_oracle_gap_time_gate_validation.py --tb=long --junitxml=candidate-oracle-gap-junit.xml 2>&1 | tee candidate-oracle-gap-output.txt
+      - name: Capture first full-suite failure
+        id: full_suite
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pytest -x -vv --tb=long --junitxml=candidate-oracle-gap-full-suite-junit.xml 2>&1 | tee candidate-oracle-gap-full-suite-output.txt
       - name: Upload diagnostic report
         uses: actions/upload-artifact@v4
         with:
@@ -41,7 +47,9 @@ jobs:
           path: |
             candidate-oracle-gap-junit.xml
             candidate-oracle-gap-output.txt
+            candidate-oracle-gap-full-suite-junit.xml
+            candidate-oracle-gap-full-suite-output.txt
           if-no-files-found: error
-      - name: Fail when regression failed
-        if: steps.focused.outcome != 'success'
+      - name: Fail when tests failed
+        if: steps.focused.outcome != 'success' || steps.full_suite.outcome != 'success'
         run: exit 1
