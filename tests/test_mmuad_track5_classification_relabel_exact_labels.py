@@ -35,8 +35,8 @@ def _classification_rows() -> pd.DataFrame:
 def test_classification_relabel_rejects_approximately_integer_source_labels(
     bad_label: float,
 ) -> None:
-    source = _classification_rows().astype({"Classification": float})
-    source.loc[0, "Classification"] = bad_label
+    source = _classification_rows()
+    source["Classification"] = [bad_label, 1.0, 2.0]
 
     with pytest.raises(ValueError, match="contains non-integer class labels"):
         relabel_track5_classification(_pose_rows(), source)
@@ -61,7 +61,8 @@ def test_classification_relabel_rejects_approximately_integer_predictions(
 
 
 def test_classification_relabel_accepts_exact_integer_equivalent_labels() -> None:
-    source = _classification_rows().astype({"Classification": float})
+    source = _classification_rows()
+    source["Classification"] = [1.0, 1.0, 2.0]
     result = relabel_track5_classification(_pose_rows(), source)
 
     predictions = pd.DataFrame(
