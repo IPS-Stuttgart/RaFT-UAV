@@ -61,7 +61,11 @@ def test_soft_class_ensemble_accepts_integer_like_float_labels(tmp_path: Path) -
     assert diagnostics["effective_probability_sum"].tolist() == pytest.approx([1.0, 1.0])
 
 
-def test_soft_class_ensemble_rejects_non_integral_predicted_labels(tmp_path: Path) -> None:
+@pytest.mark.parametrize("predicted_class", [1.5, 1.000001, "1.000001", 2.999999])
+def test_soft_class_ensemble_rejects_non_integral_predicted_labels(
+    tmp_path: Path,
+    predicted_class: object,
+) -> None:
     estimate_path = tmp_path / "estimate.csv"
     pd.DataFrame(
         {
@@ -78,7 +82,7 @@ def test_soft_class_ensemble_rejects_non_integral_predicted_labels(tmp_path: Pat
             [EstimateInput("estimate", estimate_path)],
             template=pd.DataFrame({"Sequence": ["seq0001"], "Timestamp": [0.0]}),
             class_probabilities=pd.DataFrame(
-                {"sequence_id": ["seq0001"], "predicted_class": [1.5]}
+                {"sequence_id": ["seq0001"], "predicted_class": [predicted_class]}
             ),
             weight_config={
                 "global_weights": {"estimate": 1.0},
