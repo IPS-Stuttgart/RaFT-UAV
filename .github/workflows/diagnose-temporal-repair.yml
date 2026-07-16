@@ -34,6 +34,12 @@ jobs:
         run: |
           set -o pipefail
           pytest -vv tests/test_mmuad_track5_temporal_repair_iterations.py --tb=long --junitxml=temporal-repair-junit.xml 2>&1 | tee temporal-repair-output.txt
+      - name: Capture first full-suite failure
+        id: full_suite
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pytest -x -vv --tb=long --junitxml=temporal-repair-full-suite-junit.xml 2>&1 | tee temporal-repair-full-suite-output.txt
       - name: Upload diagnostic report
         uses: actions/upload-artifact@v4
         with:
@@ -41,7 +47,9 @@ jobs:
           path: |
             temporal-repair-junit.xml
             temporal-repair-output.txt
+            temporal-repair-full-suite-junit.xml
+            temporal-repair-full-suite-output.txt
           if-no-files-found: error
-      - name: Fail when regression failed
-        if: steps.focused.outcome != 'success'
+      - name: Fail when tests failed
+        if: steps.focused.outcome != 'success' || steps.full_suite.outcome != 'success'
         run: exit 1
