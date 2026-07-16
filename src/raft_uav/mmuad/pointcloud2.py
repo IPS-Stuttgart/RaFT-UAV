@@ -106,6 +106,9 @@ def _point_offsets(message: Any, *, point_step: int, data_length: int) -> list[i
     )
     if row_step < point_step * width:
         raise ValueError("PointCloud2 row_step is smaller than width * point_step")
+    required_data_length = row_step * height
+    if data_length < required_data_length:
+        raise ValueError("PointCloud2 data is shorter than height * row_step")
 
     offsets: list[int] = []
     for row in range(height):
