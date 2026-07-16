@@ -1,6 +1,9 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
+import raft_uav.diagnostics.time_offset as time_offset_module
 from raft_uav.diagnostics.time_offset import (
     best_offset_row,
     offset_grid,
@@ -80,6 +83,42 @@ def test_position_offset_sweep_recovers_known_shift():
 
     assert float(best["tau_s"]) == 2.0
     assert float(best["mean_error_m"]) == 0.0
+
+
+def test_run_time_offset_diagnostic_keeps_rows_shiftable_into_truth_window(
+    monkeypatch,
+):
+    measurements = pd.DataFrame(
+        {"time_s": [-2.0, -2.01, 0.0, 10.0, 12.0, 12.01]}
+    )
+    truth = pd.DataFrame({"time_s": [0.0, 10.0]})
+
+    def fake_run(**_kwargs):
+        filtered = time_offset_module._legacy._inside_truth_window(
+            measurements,
+            truth,
+        )
+        return {"time_s": filtered["time_s"].tolist()}
+
+    monkeypatch.setattr(
+        time_offset_module,
+        "_original_run_time_offset_diagnostic",
+        fake_run,
+    )
+
+    result = time_offset_module.run_time_offset_diagnostic(
+        dataset_root=Path("."),
+        flight_name="dummy",
+        source="rf",
+        tau_min_s=-2.0,
+        tau_max_s=2.0,
+        tau_step_s=1.0,
+        write_plot=False,
+    )
+
+    assert result["time_s"] == [-2.0, 0.0, 10.0, 12.0]
+    strict = time_offset_module._legacy._inside_truth_window(measurements, truth)
+    assert strict["time_s"].tolist() == [0.0, 10.0]
 
 
 def test_radar_frame_groups_preserves_rows_when_frame_index_is_incomplete():
