@@ -12,6 +12,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 import sys
+from threading import RLock
 from typing import Iterator, Sequence
 
 import numpy as np
@@ -25,6 +26,7 @@ from raft_uav.uncertainty import HeteroscedasticUncertaintyModel, covariance_fro
 from raft_uav.uncertainty import load_uncertainty_model
 
 _COVARIANCE_SUFFIXES_3D = ("ee", "nn", "uu", "en", "eu", "nu")
+_HOOK_LOCK = RLock()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -61,98 +63,99 @@ def heteroscedastic_covariance_hooks(
 ) -> Iterator[HeteroscedasticUncertaintyModel]:
     """Temporarily patch legacy helpers to consume learned row covariance."""
 
-    model = load_uncertainty_model(uncertainty_model_path)
+    with _HOOK_LOCK:
+        model = load_uncertainty_model(uncertainty_model_path)
 
-    original_legacy_normalize_rf = legacy_cli.normalize_rf
-    original_legacy_normalize_radar = legacy_cli.normalize_radar
-    original_legacy_rf_measurements_to_enu = legacy_cli.rf_measurements_to_enu
-    original_legacy_radar_measurements_to_enu = legacy_cli.radar_measurements_to_enu
-    original_legacy_run_association = legacy_cli.run_async_cv_baseline_with_radar_association
-    original_legacy_baseline_metrics = legacy_cli._baseline_metrics
-    original_assoc_nis_scored_candidates = radar_association._nis_scored_candidates
+        original_legacy_normalize_rf = legacy_cli.normalize_rf
+        original_legacy_normalize_radar = legacy_cli.normalize_radar
+        original_legacy_rf_measurements_to_enu = legacy_cli.rf_measurements_to_enu
+        original_legacy_radar_measurements_to_enu = legacy_cli.radar_measurements_to_enu
+        original_legacy_run_association = legacy_cli.run_async_cv_baseline_with_radar_association
+        original_legacy_baseline_metrics = legacy_cli._baseline_metrics
+        original_assoc_nis_scored_candidates = radar_association._nis_scored_candidates
 
-    def normalize_rf_hook(*args: object, **kwargs: object) -> pd.DataFrame:
-        frame = original_legacy_normalize_rf(*args, **kwargs)
-        return _apply_model_if_available(model, frame, source="rf")
+        def normalize_rf_hook(*args: object, **kwargs: object) -> pd.DataFrame:
+            frame = original_legacy_normalize_rf(*args, **kwargs)
+            return _apply_model_if_available(model, frame, source="rf")
 
-    def normalize_radar_hook(*args: object, **kwargs: object) -> pd.DataFrame:
-        frame = original_legacy_normalize_radar(*args, **kwargs)
-        return _apply_model_if_available(model, frame, source="radar")
+        def normalize_radar_hook(*args: object, **kwargs: object) -> pd.DataFrame:
+            frame = original_legacy_normalize_radar(*args, **kwargs)
+            return _apply_model_if_available(model, frame, source="radar")
 
-    def rf_measurements_to_enu_hook(*args: object, **kwargs: object) -> list[TrackingMeasurement]:
-        frame = args[0] if args else None
-        if not isinstance(frame, pd.DataFrame) or "east_m" not in frame.columns:
-            return original_legacy_rf_measurements_to_enu(*args, **kwargs)
-        frame = _apply_model_if_available(model, frame, source="rf")
-        return rf_measurements_to_enu_with_row_covariance(
-            frame,
-            default_std_m=float(kwargs.get("default_std_m", 75.0)),
-        )
+        def rf_measurements_to_enu_hook(*args: object, **kwargs: object) -> list[TrackingMeasurement]:
+            frame = args[0] if args else None
+            if not isinstance(frame, pd.DataFrame) or "east_m" not in frame.columns:
+                return original_legacy_rf_measurements_to_enu(*args, **kwargs)
+            frame = _apply_model_if_available(model, frame, source="rf")
+            return rf_measurements_to_enu_with_row_covariance(
+                frame,
+                default_std_m=float(kwargs.get("default_std_m", 75.0)),
+            )
 
-    def radar_measurements_to_enu_hook(*args: object, **kwargs: object) -> list[TrackingMeasurement]:
-        frame = args[0] if args else None
-        if not isinstance(frame, pd.DataFrame) or "east_m" not in frame.columns:
-            return original_legacy_radar_measurements_to_enu(*args, **kwargs)
-        frame = _apply_model_if_available(model, frame, source="radar")
-        return radar_measurements_to_enu_with_row_covariance(
-            frame,
-            default_xy_std_m=float(kwargs.get("default_xy_std_m", 25.0)),
-            default_z_std_m=float(kwargs.get("default_z_std_m", 35.0)),
-            default_velocity_std_mps=float(kwargs.get("default_velocity_std_mps", 12.0)),
-            include_velocity=bool(kwargs.get("include_velocity", False)),
-        )
+        def radar_measurements_to_enu_hook(*args: object, **kwargs: object) -> list[TrackingMeasurement]:
+            frame = args[0] if args else None
+            if not isinstance(frame, pd.DataFrame) or "east_m" not in frame.columns:
+                return original_legacy_radar_measurements_to_enu(*args, **kwargs)
+            frame = _apply_model_if_available(model, frame, source="radar")
+            return radar_measurements_to_enu_with_row_covariance(
+                frame,
+                default_xy_std_m=float(kwargs.get("default_xy_std_m", 25.0)),
+                default_z_std_m=float(kwargs.get("default_z_std_m", 35.0)),
+                default_velocity_std_mps=float(kwargs.get("default_velocity_std_mps", 12.0)),
+                include_velocity=bool(kwargs.get("include_velocity", False)),
+            )
 
-    def run_association_hook(*args: object, **kwargs: object) -> tuple[list[dict[str, object]], pd.DataFrame]:
-        if "radar" in kwargs and isinstance(kwargs["radar"], pd.DataFrame):
-            kwargs = dict(kwargs)
-            kwargs["radar"] = promote_covariance_columns_for_association(kwargs["radar"])
-        return original_legacy_run_association(*args, **kwargs)
+        def run_association_hook(*args: object, **kwargs: object) -> tuple[list[dict[str, object]], pd.DataFrame]:
+            if "radar" in kwargs and isinstance(kwargs["radar"], pd.DataFrame):
+                kwargs = dict(kwargs)
+                kwargs["radar"] = promote_covariance_columns_for_association(kwargs["radar"])
+            return original_legacy_run_association(*args, **kwargs)
 
-    def nis_scored_candidates_hook(
-        candidates: pd.DataFrame,
-        tracker: object,
-        covariance: np.ndarray,
-        *,
-        covariance_config: object | None = None,
-    ) -> pd.DataFrame:
-        """Preserve the original scorer API while enabling learned row covariance."""
+        def nis_scored_candidates_hook(
+            candidates: pd.DataFrame,
+            tracker: object,
+            covariance: np.ndarray,
+            *,
+            covariance_config: object | None = None,
+        ) -> pd.DataFrame:
+            """Preserve the original scorer API while enabling learned row covariance."""
 
-        if isinstance(candidates, pd.DataFrame):
-            candidates = promote_covariance_columns_for_association(candidates)
-        return original_assoc_nis_scored_candidates(
-            candidates,
-            tracker,
-            covariance,
-            covariance_config=covariance_config,
-        )
+            if isinstance(candidates, pd.DataFrame):
+                candidates = promote_covariance_columns_for_association(candidates)
+            return original_assoc_nis_scored_candidates(
+                candidates,
+                tracker,
+                covariance,
+                covariance_config=covariance_config,
+            )
 
-    def baseline_metrics_hook(*args: object, **kwargs: object) -> dict[str, object]:
-        metrics = original_legacy_baseline_metrics(*args, **kwargs)
-        metrics["uncertainty_model"] = {
-            "path": str(uncertainty_model_path),
-            "type": "heteroscedastic-loglinear-variance",
-        }
-        metrics["rf_covariance"] = "heteroscedastic learned cov_* columns; fallback CEP/default"
-        metrics["radar_covariance"] = "heteroscedastic learned cov_* columns; fallback fixed radar"
-        return metrics
+        def baseline_metrics_hook(*args: object, **kwargs: object) -> dict[str, object]:
+            metrics = original_legacy_baseline_metrics(*args, **kwargs)
+            metrics["uncertainty_model"] = {
+                "path": str(uncertainty_model_path),
+                "type": "heteroscedastic-loglinear-variance",
+            }
+            metrics["rf_covariance"] = "heteroscedastic learned cov_* columns; fallback CEP/default"
+            metrics["radar_covariance"] = "heteroscedastic learned cov_* columns; fallback fixed radar"
+            return metrics
 
-    legacy_cli.normalize_rf = normalize_rf_hook
-    legacy_cli.normalize_radar = normalize_radar_hook
-    legacy_cli.rf_measurements_to_enu = rf_measurements_to_enu_hook
-    legacy_cli.radar_measurements_to_enu = radar_measurements_to_enu_hook
-    legacy_cli.run_async_cv_baseline_with_radar_association = run_association_hook
-    legacy_cli._baseline_metrics = baseline_metrics_hook
-    radar_association._nis_scored_candidates = nis_scored_candidates_hook
-    try:
-        yield model
-    finally:
-        legacy_cli.normalize_rf = original_legacy_normalize_rf
-        legacy_cli.normalize_radar = original_legacy_normalize_radar
-        legacy_cli.rf_measurements_to_enu = original_legacy_rf_measurements_to_enu
-        legacy_cli.radar_measurements_to_enu = original_legacy_radar_measurements_to_enu
-        legacy_cli.run_async_cv_baseline_with_radar_association = original_legacy_run_association
-        legacy_cli._baseline_metrics = original_legacy_baseline_metrics
-        radar_association._nis_scored_candidates = original_assoc_nis_scored_candidates
+        legacy_cli.normalize_rf = normalize_rf_hook
+        legacy_cli.normalize_radar = normalize_radar_hook
+        legacy_cli.rf_measurements_to_enu = rf_measurements_to_enu_hook
+        legacy_cli.radar_measurements_to_enu = radar_measurements_to_enu_hook
+        legacy_cli.run_async_cv_baseline_with_radar_association = run_association_hook
+        legacy_cli._baseline_metrics = baseline_metrics_hook
+        radar_association._nis_scored_candidates = nis_scored_candidates_hook
+        try:
+            yield model
+        finally:
+            legacy_cli.normalize_rf = original_legacy_normalize_rf
+            legacy_cli.normalize_radar = original_legacy_normalize_radar
+            legacy_cli.rf_measurements_to_enu = original_legacy_rf_measurements_to_enu
+            legacy_cli.radar_measurements_to_enu = original_legacy_radar_measurements_to_enu
+            legacy_cli.run_async_cv_baseline_with_radar_association = original_legacy_run_association
+            legacy_cli._baseline_metrics = original_legacy_baseline_metrics
+            radar_association._nis_scored_candidates = original_assoc_nis_scored_candidates
 
 
 def _apply_model_if_available(
