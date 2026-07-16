@@ -11,7 +11,10 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.submission import validate_official_track5_submission
-from raft_uav.mmuad.template_snap_core import snap_official_results_to_template
+from raft_uav.mmuad.template_snap_core import (
+    _normalize_max_interpolation_gap_s,
+    snap_official_results_to_template,
+)
 from raft_uav.mmuad.template_snap_utils import (
     DIAGNOSTICS_CSV,
     MANIFEST_JSON,
@@ -38,6 +41,9 @@ def write_template_snapped_submission(
 ) -> dict[str, Path]:
     """Write snapped official CSV/ZIP, validation rows, and a manifest."""
 
+    max_interpolation_gap_s = _normalize_max_interpolation_gap_s(
+        max_interpolation_gap_s
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     snapped, diagnostics = snap_official_results_to_template(
         results,
