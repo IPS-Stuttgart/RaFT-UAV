@@ -138,7 +138,29 @@ def _leaderboard_flag_value(value: Any) -> bool:
     return False
 
 
+def _nonnegative_finite_config_float(value: Any, field: str) -> float:
+    """Return a finite non-negative real scalar without array coercion."""
+
+    message = f"leaderboard config {field} must be a finite non-negative number"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(message)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if scalar.ndim != 0 or scalar.dtype.kind in {"b", "c"}:
+        raise ValueError(message)
+    try:
+        numeric = float(scalar.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(numeric) or numeric < 0.0:
+        raise ValueError(message)
+    return numeric
+
+
 _IMPL.rank_leaderboard_frame = rank_leaderboard_frame
+_IMPL._nonnegative_finite_config_float = _nonnegative_finite_config_float
 
 globals().update(
     {
@@ -151,6 +173,7 @@ globals()["rank_leaderboard_frame"] = rank_leaderboard_frame
 globals()["_leaderboard_eligibility_mask"] = _leaderboard_eligibility_mask
 globals()["_optional_leaderboard_flag_value"] = _optional_leaderboard_flag_value
 globals()["_leaderboard_flag_value"] = _leaderboard_flag_value
+globals()["_nonnegative_finite_config_float"] = _nonnegative_finite_config_float
 
 __doc__ = _IMPL.__doc__
 __all__ = [
