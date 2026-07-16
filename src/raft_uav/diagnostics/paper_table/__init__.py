@@ -42,7 +42,7 @@ def _finite_interpolation_anchors(selected: pd.DataFrame) -> pd.DataFrame:
     for column in required:
         anchors[column] = pd.to_numeric(anchors[column], errors="coerce")
     finite = np.isfinite(
-        anchors.loc[:, required].to_numpy(dtype=float)
+        anchors.loc[:, list(required)].to_numpy(dtype=float)
     ).all(axis=1)
     return anchors.loc[finite].copy()
 
