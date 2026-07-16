@@ -38,7 +38,14 @@ def _load_optional_csv(path: Path | None) -> pd.DataFrame | None:
 
     if path is None:
         return None
-    return pd.read_csv(path, dtype=_SEQUENCE_IDENTIFIER_DTYPES)
+
+    columns = pd.read_csv(path, nrows=0).columns
+    identifier_dtypes = {
+        name: dtype
+        for name, dtype in _SEQUENCE_IDENTIFIER_DTYPES.items()
+        if name in columns
+    }
+    return pd.read_csv(path, dtype=identifier_dtypes)
 
 
 _IMPL._load_optional_csv = _load_optional_csv
