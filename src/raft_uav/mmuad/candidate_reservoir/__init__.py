@@ -1,4 +1,10 @@
-"""Compatibility wrapper preserving candidate-reservoir sequence text."""
+"""Compatibility wrapper preserving candidate-reservoir text and flags.
+
+The maintained implementation lives in the sibling ``candidate_reservoir.py``
+module. This package preserves opaque sequence identifiers while normalizing
+serialized ``candidate_reservoir_protected`` values before summary counts are
+computed.
+"""
 
 from __future__ import annotations
 
@@ -23,6 +29,7 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_MAIN = _IMPL.main
+_ORIGINAL_BUILD_RESERVOIR_SUMMARY = _IMPL.build_reservoir_summary
 _MAIN_LOCK = threading.RLock()
 
 
@@ -106,6 +113,40 @@ def _load_candidate_specs(specs: list[str]) -> pd.DataFrame:
     return candidates
 
 
+def _boolean_series(values: Any, index: pd.Index) -> pd.Series:
+    """Parse boolean-like values without making false strings truthy."""
+
+    series = pd.Series(values, index=index)
+    if series.empty:
+        return pd.Series(False, index=index, dtype=bool)
+    if pd.api.types.is_bool_dtype(series):
+        return series.fillna(False).astype(bool)
+    if pd.api.types.is_numeric_dtype(series):
+        numeric = pd.to_numeric(series, errors="coerce").fillna(0.0)
+        return numeric.ne(0.0)
+
+    text = series.astype("string").str.strip().str.lower()
+    truthy = text.isin({"1", "true", "t", "yes", "y"})
+    falsey = text.isin({"0", "false", "f", "no", "n", "", "none", "null", "nan"})
+    numeric = pd.to_numeric(text, errors="coerce").fillna(0.0).ne(0.0)
+    return (truthy | (~falsey & numeric)).fillna(False).astype(bool)
+
+
+def build_reservoir_summary(
+    candidates: pd.DataFrame,
+    reservoir: pd.DataFrame,
+) -> dict[str, Any]:
+    """Build summary counts with serialized protection flags normalized."""
+
+    normalized = pd.DataFrame(reservoir).copy()
+    if "candidate_reservoir_protected" in normalized.columns:
+        normalized["candidate_reservoir_protected"] = _boolean_series(
+            normalized["candidate_reservoir_protected"],
+            normalized.index,
+        )
+    return _ORIGINAL_BUILD_RESERVOIR_SUMMARY(candidates, normalized)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the canonical CLI with a module-local text-preserving CSV reader."""
 
@@ -120,6 +161,8 @@ def main(argv: list[str] | None = None) -> int:
 
 _IMPL.load_candidate_inputs = load_candidate_inputs
 _IMPL._load_candidate_specs = _load_candidate_specs
+_IMPL._boolean_series = _boolean_series
+_IMPL.build_reservoir_summary = build_reservoir_summary
 _IMPL.main = main
 
 globals().update(
@@ -132,6 +175,8 @@ globals().update(
 globals()["load_candidate_inputs"] = load_candidate_inputs
 globals()["_load_candidate_specs"] = _load_candidate_specs
 globals()["_read_sequence_text_csv"] = _read_sequence_text_csv
+globals()["_boolean_series"] = _boolean_series
+globals()["build_reservoir_summary"] = build_reservoir_summary
 globals()["main"] = main
 
 _module = sys.modules[__name__]
