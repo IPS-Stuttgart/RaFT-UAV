@@ -1,0 +1,47 @@
+---
+name: Diagnose temporal repair
+
+"on":
+  pull_request:
+    paths:
+      - "src/raft_uav/mmuad/track5_temporal_repair/**"
+      - "tests/test_mmuad_track5_temporal_repair_iterations.py"
+      - ".github/workflows/diagnose-temporal-repair.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Run focused regression
+        id: focused
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pytest -vv tests/test_mmuad_track5_temporal_repair_iterations.py --tb=long --junitxml=temporal-repair-junit.xml 2>&1 | tee temporal-repair-output.txt
+      - name: Upload diagnostic report
+        uses: actions/upload-artifact@v4
+        with:
+          name: temporal-repair-diagnostic
+          path: |
+            temporal-repair-junit.xml
+            temporal-repair-output.txt
+          if-no-files-found: error
+      - name: Fail when regression failed
+        if: steps.focused.outcome != 'success'
+        run: exit 1
