@@ -49,8 +49,9 @@ def smooth_position_trajectory(
     """Smooth 3D positions with measurement and constant-velocity residuals.
 
     Measurements must contain ``time_s,east_m,north_m,up_m`` and may contain
-    ``source`` plus covariance/std columns.  The state is one 3D point per unique
-    timestamp.  A second-difference prior approximates a white-acceleration
+    ``source`` plus covariance/std columns. Rows without a finite timestamp and
+    complete finite 3D position are ignored. The state is one 3D point per unique
+    usable timestamp. A second-difference prior approximates a white-acceleration
     motion model.
     """
 
@@ -58,10 +59,17 @@ def smooth_position_trajectory(
     if measurements.empty:
         return FactorGraphSmoothingResult(pd.DataFrame(columns=["time_s", *PositionColumns]), 0.0, 0.0, 0, True, "empty")
     _require_columns(measurements, {"time_s", *PositionColumns}, "measurements")
-    ordered = measurements.sort_values("time_s").reset_index(drop=True)
-    times = np.sort(ordered["time_s"].dropna().unique().astype(float))
-    if times.size == 0:
-        raise ValueError("measurements contain no finite times")
+    ordered = measurements.copy()
+    numeric_columns = ["time_s", *PositionColumns]
+    for column in numeric_columns:
+        ordered[column] = pd.to_numeric(ordered[column], errors="coerce")
+    finite_rows = np.isfinite(
+        ordered.loc[:, numeric_columns].to_numpy(dtype=float)
+    ).all(axis=1)
+    ordered = ordered.loc[finite_rows].sort_values("time_s").reset_index(drop=True)
+    if ordered.empty:
+        raise ValueError("measurements contain no finite time/position rows")
+    times = np.sort(ordered["time_s"].unique().astype(float))
     index_by_time = {float(t): i for i, t in enumerate(times)}
     x0 = _initial_positions(times, ordered, initial)
 
