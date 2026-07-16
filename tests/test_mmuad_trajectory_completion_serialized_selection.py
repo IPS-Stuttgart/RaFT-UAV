@@ -5,6 +5,7 @@ import pytest
 
 from raft_uav.mmuad.trajectory_completion import (
     TrajectoryCompletionConfig,
+    _boolean_series,
     complete_and_smooth_estimates,
 )
 
@@ -45,3 +46,15 @@ def test_trajectory_smoothing_respects_serialized_false_selection_flags(
     middle = result.estimates.loc[result.estimates["time_s"] == 1.0].iloc[0]
     assert float(middle["state_x_m"]) == pytest.approx(1.0)
     assert result.estimates["selected_path_update"].tolist() == [True, False, True]
+
+
+@pytest.mark.parametrize(
+    "true_token",
+    ["True", "TRUE", "1", "1.0", "t", "yes", "y", "2"],
+)
+def test_trajectory_selection_parser_preserves_serialized_true_flags(
+    true_token: str,
+) -> None:
+    parsed = _boolean_series([true_token], pd.RangeIndex(1))
+
+    assert parsed.tolist() == [True]
