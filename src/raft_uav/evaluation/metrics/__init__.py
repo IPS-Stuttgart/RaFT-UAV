@@ -3,7 +3,7 @@
 The maintained implementation lives in the sibling ``metrics.py`` module.  This
 package preserves the public import path while ensuring that timestamps within
 the existing 1 ns equality tolerance are accepted at either interpolation
-bracket endpoint.
+bracket endpoint, regardless of whether a maximum time-delta gate is configured.
 """
 
 from __future__ import annotations
@@ -39,19 +39,18 @@ def _truth_grid_with_symmetric_tolerance(
     supported = (truth_times >= estimate_times[0]) & (
         truth_times <= estimate_times[-1]
     )
-    if max_time_delta_s is not None:
-        supported |= np.isclose(
-            truth_times,
-            estimate_times[0],
-            rtol=0.0,
-            atol=endpoint_atol_s,
-        )
-        supported |= np.isclose(
-            truth_times,
-            estimate_times[-1],
-            rtol=0.0,
-            atol=endpoint_atol_s,
-        )
+    supported |= np.isclose(
+        truth_times,
+        estimate_times[0],
+        rtol=0.0,
+        atol=endpoint_atol_s,
+    )
+    supported |= np.isclose(
+        truth_times,
+        estimate_times[-1],
+        rtol=0.0,
+        atol=endpoint_atol_s,
+    )
     query_times = truth_times[supported]
     query_truth_positions = truth_positions[supported]
     if query_times.size == 0 or max_time_delta_s is None:
