@@ -105,12 +105,12 @@ def _normalize_finite_scalar(
 ) -> float:
     requirement = "non-negative" if allow_zero else "positive"
     message = f"{name} must be {requirement} and finite"
-    if isinstance(value, (bool, np.bool_)):
-        raise ValueError(message)
     if isinstance(value, np.ndarray):
         if value.ndim != 0:
             raise ValueError(message)
         value = value.item()
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(message)
     if isinstance(value, (complex, np.complexfloating)):
         raise ValueError(message)
     try:
