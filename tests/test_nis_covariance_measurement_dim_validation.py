@@ -20,7 +20,10 @@ def _diagnostics(measurement_dim: object) -> pd.DataFrame:
     )
 
 
-@pytest.mark.parametrize("measurement_dim", [2.9, "3.5", True, np.inf, -np.inf])
+@pytest.mark.parametrize(
+    "measurement_dim",
+    [2.9, "3.5", True, 2 + 0j, np.inf, -np.inf],
+)
 def test_nis_calibration_rejects_noninteger_measurement_dimensions(
     measurement_dim: object,
 ) -> None:
