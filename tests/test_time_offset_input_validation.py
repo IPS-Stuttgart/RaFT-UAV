@@ -10,6 +10,8 @@ from raft_uav.calibration.time_offset import (
     aggregate_measurement_time_offset_sweep,
     aggregate_radar_time_offset_sweep,
     apply_time_offset,
+    fit_measurement_time_offset,
+    fit_radar_time_offset,
 )
 
 
@@ -60,6 +62,14 @@ def test_measurement_sweep_rejects_invalid_dimensions(dimensions: object) -> Non
             offsets_s=[0.0],
             dimensions=dimensions,
         )
+
+
+def test_fit_helpers_dispatch_through_validated_public_sweeps() -> None:
+    with pytest.raises(ValueError, match="offset_s must be a finite real scalar"):
+        fit_radar_time_offset([], offsets_s=[np.nan])
+
+    with pytest.raises(ValueError, match="dimensions must be 2 or 3"):
+        fit_measurement_time_offset([], offsets_s=[0.0], dimensions=4)
 
 
 def test_time_offset_paths_accept_zero_dimensional_numeric_scalars() -> None:
