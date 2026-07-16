@@ -9,7 +9,10 @@ from raft_uav.mmuad.trajectory_completion import (
 )
 
 
-@pytest.mark.parametrize("false_token", ["False", "0", "no", "null", ""])
+@pytest.mark.parametrize(
+    "false_token",
+    ["False", "FALSE", "0", "0.0", "f", "no", "n", "none", "null", "<NA>", ""],
+)
 def test_trajectory_smoothing_respects_serialized_false_selection_flags(
     false_token: str,
 ) -> None:
