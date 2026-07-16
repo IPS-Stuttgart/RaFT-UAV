@@ -3,21 +3,20 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from raft_uav.evaluation.oracle_coverage import _optional_int
-from raft_uav.evaluation.oracle_coverage import _oracle_coverage_row
+import raft_uav.evaluation.oracle_coverage as oracle_coverage
 from raft_uav.baselines.tracklet_viterbi import TrackletViterbiAssociationConfig
 
 
 def test_optional_int_rejects_fractional_identifiers() -> None:
-    assert _optional_int(7.25) is None
-    assert _optional_int("8.5") is None
-    assert _optional_int(np.float64(-1.1)) is None
+    assert oracle_coverage._optional_int(7.25) is None
+    assert oracle_coverage._optional_int("8.5") is None
+    assert oracle_coverage._optional_int(np.float64(-1.1)) is None
 
 
 def test_optional_int_preserves_integer_equivalent_identifiers() -> None:
-    assert _optional_int(7) == 7
-    assert _optional_int(7.0) == 7
-    assert _optional_int("8.0") == 8
+    assert oracle_coverage._optional_int(7) == 7
+    assert oracle_coverage._optional_int(7.0) == 7
+    assert oracle_coverage._optional_int("8.0") == 8
 
 
 def test_oracle_coverage_does_not_truncate_fractional_candidate_ids(monkeypatch) -> None:
@@ -34,11 +33,13 @@ def test_oracle_coverage_does_not_truncate_fractional_candidate_ids(monkeypatch)
     )
 
     monkeypatch.setattr(
-        "raft_uav.evaluation.oracle_coverage._interpolated_truth_position",
+        oracle_coverage._IMPL,
+        "_interpolated_truth_position",
         lambda *_args, **_kwargs: (np.zeros(3), 0.0, 0.0),
     )
     monkeypatch.setattr(
-        "raft_uav.evaluation.oracle_coverage._catprob_candidate_pool",
+        oracle_coverage._IMPL,
+        "_catprob_candidate_pool",
         lambda frame, _threshold: frame,
     )
 
@@ -47,11 +48,12 @@ def test_oracle_coverage_does_not_truncate_fractional_candidate_ids(monkeypatch)
             self.row = row
 
     monkeypatch.setattr(
-        "raft_uav.evaluation.oracle_coverage._nodes_for_radar_frame",
+        oracle_coverage._IMPL,
+        "_nodes_for_radar_frame",
         lambda **kwargs: [_Node(kwargs["candidates"].iloc[0])],
     )
 
-    row, retained = _oracle_coverage_row(
+    row, retained = oracle_coverage._oracle_coverage_row(
         event_index=0,
         event={"time_s": 0.0},
         candidates=candidates,
