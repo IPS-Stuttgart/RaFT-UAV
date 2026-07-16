@@ -26,9 +26,13 @@ class PerturbationConfig:
     seed: int = 0
 
     def __post_init__(self) -> None:
+        for field_name in ("radar_drop_rate", "rf_drop_burst_rate"):
+            object.__setattr__(
+                self,
+                field_name,
+                _drop_rate(getattr(self, field_name), name=field_name),
+            )
         for field_name in (
-            "radar_drop_rate",
-            "rf_drop_burst_rate",
             "timestamp_jitter_std_s",
             "false_track_position_std_m",
             "velocity_noise_std_mps",
@@ -94,7 +98,7 @@ def drop_radar_frames(
     rate: float,
     rng: np.random.Generator,
 ) -> pd.DataFrame:
-    drop_rate = _finite_nonnegative_float(rate, name="rate")
+    drop_rate = _drop_rate(rate, name="rate")
     if frame.empty or drop_rate == 0.0:
         return frame.copy()
 
@@ -111,18 +115,14 @@ def drop_radar_frames(
         .to_numpy()
     )
     groups = pd.Series(np.unique(group_ids))
-    keep_groups = set(
-        groups.loc[
-            rng.random(len(groups)) >= min(drop_rate, 1.0)
-        ].tolist()
-    )
+    keep_groups = set(groups.loc[rng.random(len(groups)) >= drop_rate].tolist())
     keep_mask = np.ones(len(frame), dtype=bool)
     keep_mask[valid_group_mask] = np.isin(group_ids, list(keep_groups))
     return frame.loc[keep_mask].copy()
 
 
 def drop_rf_bursts(frame: pd.DataFrame, *, rate: float, rng: np.random.Generator) -> pd.DataFrame:
-    drop_rate = _finite_nonnegative_float(rate, name="rate")
+    drop_rate = _drop_rate(rate, name="rate")
     if frame.empty or drop_rate == 0.0 or "time_s" not in frame.columns:
         return frame.copy()
     times = pd.to_numeric(frame["time_s"], errors="coerce").to_numpy(dtype=float)
@@ -153,11 +153,7 @@ def drop_rf_bursts(frame: pd.DataFrame, *, rate: float, rng: np.random.Generator
         .to_numpy()
     )
     groups = pd.Series(np.unique(group_ids))
-    dropped = set(
-        groups.loc[
-            rng.random(len(groups)) < min(drop_rate, 1.0)
-        ].tolist()
-    )
+    dropped = set(groups.loc[rng.random(len(groups)) < drop_rate].tolist())
 
     keep_mask = np.ones(times.shape, dtype=bool)
     keep_mask[valid_time_mask] = ~np.isin(group_ids, list(dropped))
@@ -263,6 +259,15 @@ def _false_track_cat_probability(value: object) -> float:
     if not np.isfinite(probability):
         return 0.2
     return float(np.clip(probability, 0.0, 0.2))
+
+
+def _drop_rate(value: object, *, name: str) -> float:
+    """Return a finite probability without silently saturating values above one."""
+
+    rate = _finite_nonnegative_float(value, name=name)
+    if rate > 1.0:
+        raise ValueError(f"{name} must not exceed 1")
+    return rate
 
 
 def _finite_nonnegative_float(value: object, *, name: str) -> float:
