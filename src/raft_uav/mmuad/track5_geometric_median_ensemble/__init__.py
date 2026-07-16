@@ -104,6 +104,36 @@ def _validated_estimate_input_objects(
     return validated
 
 
+def _validated_solver_samples(
+    xyz: object,
+    weights: object,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return solver samples with deterministic shape and count validation."""
+
+    try:
+        points = np.asarray(xyz, dtype=float)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "xyz must be a numeric 2D array with shape (n, 3)"
+        ) from exc
+    try:
+        point_weights = np.asarray(weights, dtype=float)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("weights must be a numeric 1D array") from exc
+
+    # A plain empty sequence is the natural representation for no candidates and
+    # should reach the solver's documented empty-result branch.
+    if points.ndim == 1 and points.size == 0:
+        points = np.empty((0, 3), dtype=float)
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError("xyz must be a numeric 2D array with shape (n, 3)")
+    if point_weights.ndim != 1:
+        raise ValueError("weights must be a numeric 1D array")
+    if point_weights.shape[0] != points.shape[0]:
+        raise ValueError("xyz and weights must have the same row count")
+    return points, point_weights
+
+
 def weighted_geometric_median(
     xyz: np.ndarray,
     weights: np.ndarray,
@@ -124,8 +154,7 @@ def weighted_geometric_median(
         max_iterations,
         tolerance_m,
     )
-    points = np.asarray(xyz, dtype=float)
-    point_weights = np.asarray(weights, dtype=float)
+    points, point_weights = _validated_solver_samples(xyz, weights)
     finite = (
         np.isfinite(points).all(axis=1)
         & np.isfinite(point_weights)
@@ -266,6 +295,7 @@ globals()["EstimateInput"] = EstimateInput
 globals()["_validate_estimate_weight"] = _validate_estimate_weight
 globals()["_validated_runtime_inputs"] = _validated_runtime_inputs
 globals()["_validated_estimate_input_objects"] = _validated_estimate_input_objects
+globals()["_validated_solver_samples"] = _validated_solver_samples
 globals()["weighted_geometric_median"] = weighted_geometric_median
 globals()["build_track5_geometric_median_ensemble"] = (
     build_track5_geometric_median_ensemble
