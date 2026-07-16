@@ -37,6 +37,27 @@ _should_restrict_to_track_id = _IMPL._should_restrict_to_track_id
 _truth_track_id = _IMPL._truth_track_id
 
 
+def _validated_max_time_delta_s(value: Any) -> float:
+    """Return a finite, nonnegative, non-Boolean scalar time gate."""
+
+    error = "max_time_delta_s must be a finite nonnegative real scalar"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(error)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+        raise ValueError(error)
+    try:
+        time_delta_s = float(scalar.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(time_delta_s) or time_delta_s < 0.0:
+        raise ValueError(error)
+    return time_delta_s
+
+
 def match_submission_to_truth(
     submission: pd.DataFrame,
     truth: pd.DataFrame,
@@ -50,6 +71,7 @@ def match_submission_to_truth(
     inside the time gate and then minimizes total absolute timestamp error.
     """
 
+    max_time_delta_s = _validated_max_time_delta_s(max_time_delta_s)
     if truth.empty or submission.empty:
         return pd.DataFrame()
     submission = submission.copy()
@@ -91,7 +113,7 @@ def match_submission_to_truth(
             pred_seq,
             truth_seq,
             restrict_to_track_id=restrict_to_track_id,
-            max_time_delta_s=float(max_time_delta_s),
+            max_time_delta_s=max_time_delta_s,
         )
         truth_track_values = (
             truth_seq["track_id"].map(_valid_track_id_text).to_numpy(dtype=object)
@@ -140,6 +162,7 @@ def _optimal_time_assignment(
 ) -> tuple[dict[int, int], np.ndarray]:
     """Return a cardinality-first one-to-one assignment and eligibility mask."""
 
+    max_time_delta_s = _validated_max_time_delta_s(max_time_delta_s)
     pred_times = pd.to_numeric(predictions["time_s"], errors="coerce").to_numpy(float)
     truth_times = pd.to_numeric(truth["time_s"], errors="coerce").to_numpy(float)
     time_delta = np.abs(pred_times[:, np.newaxis] - truth_times[np.newaxis, :])
@@ -213,6 +236,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_validated_max_time_delta_s"] = _validated_max_time_delta_s
 globals()["match_submission_to_truth"] = match_submission_to_truth
 globals()["_optimal_time_assignment"] = _optimal_time_assignment
 globals()["_matched_prediction_row"] = _matched_prediction_row
