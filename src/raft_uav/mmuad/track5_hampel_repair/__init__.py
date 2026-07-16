@@ -2,7 +2,7 @@
 
 The maintained implementation lives in the sibling ``track5_hampel_repair.py``
 module. This package preserves the public import path while rejecting malformed
-grid rows and invalid integer controls before repair, and keeps sequence
+grid rows and invalid scalar controls before repair, and keeps sequence
 endpoints fixed during local-median replacement.
 """
 
@@ -50,6 +50,70 @@ def _normalize_positive_integer(value: Any, *, field: str) -> int:
     if not np.isfinite(numeric) or numeric < 1.0 or not numeric.is_integer():
         raise ValueError(message)
     return int(numeric)
+
+
+def _finite_scalar(value: object, *, message: str) -> float:
+    """Return a finite non-Boolean scalar float or raise ``ValueError``."""
+
+    scalar = value
+    if isinstance(value, np.ndarray):
+        if value.ndim != 0:
+            raise ValueError(message)
+        scalar = value.item()
+    if isinstance(scalar, (bool, np.bool_)):
+        raise ValueError(message)
+    try:
+        numeric = float(scalar)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(numeric):
+        raise ValueError(message)
+    return numeric
+
+
+def _validated_float_controls(
+    *,
+    sigma_threshold: object,
+    min_scale_m: object,
+    min_residual_m: object,
+    repair_blend: object,
+) -> dict[str, float]:
+    """Normalize and validate the scalar controls used by Hampel repair."""
+
+    sigma = _finite_scalar(
+        sigma_threshold,
+        message="sigma_threshold must be positive and finite",
+    )
+    if sigma <= 0.0:
+        raise ValueError("sigma_threshold must be positive and finite")
+
+    min_scale = _finite_scalar(
+        min_scale_m,
+        message="min_scale_m must be positive and finite",
+    )
+    if min_scale <= 0.0:
+        raise ValueError("min_scale_m must be positive and finite")
+
+    min_residual = _finite_scalar(
+        min_residual_m,
+        message="min_residual_m must be finite and non-negative",
+    )
+    if min_residual < 0.0:
+        raise ValueError("min_residual_m must be finite and non-negative")
+
+    blend = _finite_scalar(
+        repair_blend,
+        message="repair_blend must be finite and in [0, 1]",
+    )
+    if not 0.0 <= blend <= 1.0:
+        raise ValueError("repair_blend must be finite and in [0, 1]")
+
+    return {
+        "sigma_threshold": sigma,
+        "min_scale_m": min_scale,
+        "min_residual_m": min_residual,
+        "repair_blend": blend,
+    }
 
 
 def _load_track5_submission_frame_rejecting_invalid_rows(
@@ -115,7 +179,7 @@ def _load_track5_submission_frame_rejecting_invalid_rows(
 
 
 def repair_track5_hampel_spikes(submission, **kwargs):
-    """Validate integer controls before running the legacy Hampel repair."""
+    """Validate every scalar control before running the legacy Hampel repair."""
 
     kwargs["window_radius"] = _normalize_positive_integer(
         kwargs.get("window_radius", 2),
@@ -125,11 +189,19 @@ def repair_track5_hampel_spikes(submission, **kwargs):
         kwargs.get("iterations", 1),
         field="iterations",
     )
+    kwargs.update(
+        _validated_float_controls(
+            sigma_threshold=kwargs.get("sigma_threshold", 3.0),
+            min_scale_m=kwargs.get("min_scale_m", 1.0),
+            min_residual_m=kwargs.get("min_residual_m", 3.0),
+            repair_blend=kwargs.get("repair_blend", 1.0),
+        )
+    )
     return _ORIGINAL_REPAIR(submission, **kwargs)
 
 
 def _repair_sequence(group, **kwargs):
-    """Validate private sequence-loop integer controls for direct callers."""
+    """Validate direct calls to the private sequence repair loop."""
 
     kwargs["window_radius"] = _normalize_positive_integer(
         kwargs["window_radius"],
@@ -138,6 +210,14 @@ def _repair_sequence(group, **kwargs):
     kwargs["iterations"] = _normalize_positive_integer(
         kwargs["iterations"],
         field="iterations",
+    )
+    kwargs.update(
+        _validated_float_controls(
+            sigma_threshold=kwargs["sigma_threshold"],
+            min_scale_m=kwargs["min_scale_m"],
+            min_residual_m=kwargs["min_residual_m"],
+            repair_blend=kwargs["repair_blend"],
+        )
     )
     return _ORIGINAL_REPAIR_SEQUENCE(group, **kwargs)
 
@@ -160,6 +240,17 @@ def _repair_xyz_once(
         window_radius,
         field="window_radius",
     )
+    controls = _validated_float_controls(
+        sigma_threshold=sigma_threshold,
+        min_scale_m=min_scale_m,
+        min_residual_m=min_residual_m,
+        repair_blend=repair_blend,
+    )
+    sigma_threshold = controls["sigma_threshold"]
+    min_scale_m = controls["min_scale_m"]
+    min_residual_m = controls["min_residual_m"]
+    repair_blend = controls["repair_blend"]
+
     out = xyz.copy()
     diagnostics: list[dict[str, Any]] = []
     for index in range(len(xyz)):
@@ -183,8 +274,8 @@ def _repair_xyz_once(
             )
             residual_m = float(np.linalg.norm(xyz[index] - local_median))
             threshold_m = max(
-                float(min_residual_m),
-                float(sigma_threshold) * robust_scale_m,
+                min_residual_m,
+                sigma_threshold * robust_scale_m,
             )
             if residual_m > threshold_m:
                 out[index] = (
@@ -240,6 +331,8 @@ globals()["repair_track5_hampel_spikes"] = repair_track5_hampel_spikes
 globals()["_repair_sequence"] = _repair_sequence
 globals()["_repair_xyz_once"] = _repair_xyz_once
 globals()["_normalize_positive_integer"] = _normalize_positive_integer
+globals()["_finite_scalar"] = _finite_scalar
+globals()["_validated_float_controls"] = _validated_float_controls
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
