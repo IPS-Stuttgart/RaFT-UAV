@@ -35,9 +35,23 @@ def _truth_grid_with_symmetric_tolerance(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Keep tolerance-equivalent truth samples at either bracket endpoint."""
 
+    endpoint_atol_s = 1.0e-9
     supported = (truth_times >= estimate_times[0]) & (
         truth_times <= estimate_times[-1]
     )
+    if max_time_delta_s is not None:
+        supported |= np.isclose(
+            truth_times,
+            estimate_times[0],
+            rtol=0.0,
+            atol=endpoint_atol_s,
+        )
+        supported |= np.isclose(
+            truth_times,
+            estimate_times[-1],
+            rtol=0.0,
+            atol=endpoint_atol_s,
+        )
     query_times = truth_times[supported]
     query_truth_positions = truth_positions[supported]
     if query_times.size == 0 or max_time_delta_s is None:
@@ -52,13 +66,13 @@ def _truth_grid_with_symmetric_tolerance(
         estimate_times[left],
         query_times,
         rtol=0.0,
-        atol=1.0e-9,
+        atol=endpoint_atol_s,
     )
     right_exact = np.isclose(
         estimate_times[right],
         query_times,
         rtol=0.0,
-        atol=1.0e-9,
+        atol=endpoint_atol_s,
     )
     left_delta = np.abs(query_times - estimate_times[left])
     right_delta = np.abs(estimate_times[right] - query_times)
