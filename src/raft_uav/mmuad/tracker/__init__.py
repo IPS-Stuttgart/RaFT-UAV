@@ -25,6 +25,7 @@ for _name in dir(_LEGACY):
 _ORIGINAL_CANDIDATE_ROWS_WITH_OPTIONAL_DEFAULTS = (
     _LEGACY._candidate_rows_with_optional_defaults
 )
+_ORIGINAL_CANDIDATE_MOBILITY = _LEGACY._candidate_mobility
 _TRACKER_NUMERIC_COLUMNS = (
     "time_s",
     "x_m",
@@ -44,6 +45,23 @@ def _candidate_rows_with_optional_defaults(rows: pd.DataFrame) -> pd.DataFrame:
         if column in out.columns:
             out[column] = pd.to_numeric(out[column], errors="coerce")
     return out
+
+
+def _candidate_mobility(frame: pd.DataFrame, *, radius_m: float) -> np.ndarray:
+    """Ignore unusable timestamp rows when computing the spatial mobility prior."""
+
+    times = pd.to_numeric(frame["time_s"], errors="coerce").to_numpy(float)
+    finite_time = np.isfinite(times)
+    if finite_time.all():
+        return _ORIGINAL_CANDIDATE_MOBILITY(frame, radius_m=radius_m)
+
+    mobility = np.zeros(len(frame), dtype=float)
+    if finite_time.any():
+        mobility[finite_time] = _ORIGINAL_CANDIDATE_MOBILITY(
+            frame.loc[finite_time].copy(),
+            radius_m=radius_m,
+        )
+    return mobility
 
 
 def add_truth_errors(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
@@ -87,4 +105,5 @@ def add_truth_errors(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFra
 
 
 _LEGACY._candidate_rows_with_optional_defaults = _candidate_rows_with_optional_defaults
+_LEGACY._candidate_mobility = _candidate_mobility
 _LEGACY.add_truth_errors = add_truth_errors
