@@ -39,17 +39,19 @@ def _normalized_diagnostics_frame(
 
 
 def _validate_measurement_dimensions(values: pd.Series) -> None:
-    """Reject finite non-integers and booleans before legacy integer casting."""
+    """Reject non-real, non-finite, and fractional dimensions before integer casting."""
 
     raw = pd.Series(values)
     boolean_mask = raw.map(lambda value: isinstance(value, (bool, np.bool_)))
-    if boolean_mask.any():
-        row_index = int(np.flatnonzero(boolean_mask.to_numpy())[0])
+    complex_mask = raw.map(lambda value: isinstance(value, (complex, np.complexfloating)))
+    invalid_scalar_type = boolean_mask | complex_mask
+    if invalid_scalar_type.any():
+        row_index = int(np.flatnonzero(invalid_scalar_type.to_numpy())[0])
         bad_index = raw.index[row_index]
         bad_value = raw.iloc[row_index]
         raise ValueError(
-            "diagnostics measurement_dim values must be integer dimensions, "
-            f"not booleans; got {bad_value!r} at index {bad_index!r}"
+            "diagnostics measurement_dim values must be real integer dimensions; "
+            f"got {bad_value!r} at index {bad_index!r}"
         )
 
     numbers = pd.to_numeric(raw, errors="coerce")
