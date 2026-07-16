@@ -59,12 +59,23 @@ class MultiObjectTrackerConfig:
 
 
 def _finite_config_float(name: str, value: object) -> float:
+    """Return one finite real scalar without Boolean or array coercion."""
+
+    message = f"{name} must be finite"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(message)
     try:
-        number = float(value)
+        array = np.asarray(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be finite") from exc
+        raise ValueError(message) from exc
+    if array.ndim != 0 or array.dtype.kind in {"b", "c"}:
+        raise ValueError(message)
+    try:
+        number = float(array.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
     if not np.isfinite(number):
-        raise ValueError(f"{name} must be finite")
+        raise ValueError(message)
     return number
 
 
