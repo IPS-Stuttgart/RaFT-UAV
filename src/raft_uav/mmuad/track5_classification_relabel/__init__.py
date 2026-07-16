@@ -1,9 +1,9 @@
-"""Compatibility fixes for Track 5 classification relabel validation.
+"""Compatibility fix for Track 5 classification relabel validation.
 
 The maintained implementation lives in the sibling
 ``track5_classification_relabel.py`` module. This package preserves the public
-import path while requiring class labels to be exactly integer-equivalent and
-rejecting Boolean pseudo-labels before relabeling.
+import path while requiring class labels to be exactly integer-equivalent before
+relabeling.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -33,19 +32,15 @@ VALID_CLASS_IDS = _IMPL.VALID_CLASS_IDS
 
 
 def _validate_class_series(values: pd.Series, *, name: str) -> None:
-    """Require finite, non-Boolean labels exactly equal to official integers."""
+    """Require finite labels exactly equal to official integer class IDs."""
 
-    raw = pd.Series(values)
-    boolean_values = raw.map(
-        lambda value: isinstance(value, (bool, np.bool_))
-    ).to_numpy(bool)
-    numeric = pd.to_numeric(raw, errors="coerce")
+    numeric = pd.to_numeric(pd.Series(values), errors="coerce")
     numeric_values = numeric.to_numpy(float)
     if numeric.isna().any() or not np.isfinite(numeric_values).all():
         raise ValueError(f"{name} contains non-finite class labels")
 
     rounded_values = np.rint(numeric_values)
-    if boolean_values.any() or not np.equal(numeric_values, rounded_values).all():
+    if not np.equal(numeric_values, rounded_values).all():
         raise ValueError(f"{name} contains non-integer class labels")
 
     integer_values = pd.Series(
