@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import struct
 
 import pytest
@@ -54,3 +54,10 @@ def test_pointcloud2_decodes_contiguous_export_with_zero_row_step() -> None:
 def test_pointcloud2_rejects_negative_row_step() -> None:
     with pytest.raises(ValueError, match="row_step must be positive"):
         pointcloud2_to_dataframe(_xyz_message(row_step=-12))
+
+
+def test_pointcloud2_rejects_truncated_organized_cloud() -> None:
+    message = replace(_xyz_message(row_step=0), height=2)
+
+    with pytest.raises(ValueError, match=r"data is shorter than height \* row_step"):
+        pointcloud2_to_dataframe(message)
