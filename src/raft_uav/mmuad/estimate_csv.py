@@ -15,7 +15,12 @@ _CANDIDATE_RESERVOIR_MODULE = "raft_uav.mmuad"
 _CANDIDATE_RESERVOIR_MAIN_QUALNAME = (
     "_install_candidate_reservoir_topk_guard.<locals>._main"
 )
-_ORIGINAL_PANDAS_READ_CSV = pd.read_csv
+_ORIGINAL_READ_CSV_ATTRIBUTE = "_raft_uav_original_pandas_read_csv"
+_ORIGINAL_PANDAS_READ_CSV = getattr(
+    pd.read_csv,
+    _ORIGINAL_READ_CSV_ATTRIBUTE,
+    pd.read_csv,
+)
 
 
 def read_estimate_csv(path: Path) -> pd.DataFrame:
@@ -70,6 +75,13 @@ def _read_csv_with_track5_estimate_grid_guard(*args: Any, **kwargs: Any) -> pd.D
         kwargs.setdefault("keep_default_na", False)
         return _strip_column_names(_ORIGINAL_PANDAS_READ_CSV(*args, **kwargs))
     return _ORIGINAL_PANDAS_READ_CSV(*args, **kwargs)
+
+
+setattr(
+    _read_csv_with_track5_estimate_grid_guard,
+    _ORIGINAL_READ_CSV_ATTRIBUTE,
+    _ORIGINAL_PANDAS_READ_CSV,
+)
 
 
 def _install_track5_estimate_grid_guard() -> None:
