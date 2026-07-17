@@ -110,6 +110,9 @@ def _extract_zip_archive(archive_path: Path, extract_root: Path) -> tuple[list[d
             if destination in seen_destinations:
                 skipped.append({"member": member_name, "reason": "duplicate_member_path"})
                 continue
+            if _destination_path_conflicts(extract_root, destination):
+                skipped.append({"member": member_name, "reason": "conflicting_member_path"})
+                continue
             seen_destinations.add(destination)
             destination.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(info) as source, destination.open("wb") as target:
@@ -142,6 +145,9 @@ def _extract_tar_archive(archive_path: Path, extract_root: Path) -> tuple[list[d
                 continue
             if destination in seen_destinations:
                 skipped.append({"member": member_name, "reason": "duplicate_member_path"})
+                continue
+            if _destination_path_conflicts(extract_root, destination):
+                skipped.append({"member": member_name, "reason": "conflicting_member_path"})
                 continue
             seen_destinations.add(destination)
             source = archive.extractfile(info)
@@ -182,6 +188,21 @@ def _safe_destination(root: Path, member_name: str) -> Path | None:
     except ValueError:
         return None
     return destination
+
+
+def _destination_path_conflicts(root: Path, destination: Path) -> bool:
+    """Return whether a file destination conflicts with another path type."""
+
+    if destination.exists() and not destination.is_file():
+        return True
+
+    root_resolved = root.resolve()
+    for parent in destination.parents:
+        if parent == root_resolved:
+            break
+        if parent.exists() and not parent.is_dir():
+            return True
+    return False
 
 
 def _zip_member_is_link(info: zipfile.ZipInfo) -> bool:
