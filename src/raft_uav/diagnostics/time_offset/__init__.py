@@ -132,7 +132,7 @@ def run_time_offset_diagnostic(
     tau_step_s: float,
     dimensions: str = "auto",
     radar_selection: str = "oracle-nearest-truth",
-    radar_catprob_threshold: float = 0.4,
+    radar_catprob_threshold: float | None = 0.4,
     max_truth_time_delta_s: float = 2.0,
     objective: str = "p95",
     output_dir: Path = Path("outputs/time-offset"),
@@ -148,7 +148,7 @@ def run_time_offset_diagnostic(
         name="max_truth_time_delta_s",
     )
     normalized_catprob_threshold = radar_catprob_threshold
-    if source == "radar":
+    if source == "radar" and radar_catprob_threshold is not None:
         normalized_catprob_threshold = _finite_real_control(
             radar_catprob_threshold,
             name="radar_catprob_threshold",
