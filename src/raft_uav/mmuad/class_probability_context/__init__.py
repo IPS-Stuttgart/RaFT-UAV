@@ -29,6 +29,8 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_LEGACY_PROBABILITY_ROWS = _IMPL._probability_rows
+
 
 def _predicted_class_labels(values: pd.Series) -> pd.Series:
     """Return canonical labels only for exactly integer-equivalent values."""
@@ -53,7 +55,29 @@ def _predicted_class_labels(values: pd.Series) -> pd.Series:
     return text
 
 
+def _sanitize_probability_inputs(class_probabilities: pd.DataFrame) -> pd.DataFrame:
+    """Clean each probability entry before duplicate-sequence aggregation."""
+
+    rows = pd.DataFrame(class_probabilities).copy()
+    for label in _IMPL.OFFICIAL_CLASS_LABELS:
+        source = _IMPL._probability_column(rows, label)
+        if source is None:
+            continue
+        numeric = pd.to_numeric(rows[source], errors="coerce")
+        finite = np.isfinite(numeric.to_numpy(dtype=float))
+        rows[source] = numeric.where(finite, 0.0).clip(lower=0.0)
+    return rows
+
+
+def _probability_rows(class_probabilities: pd.DataFrame) -> pd.DataFrame:
+    """Normalize probability rows after sanitizing each source row."""
+
+    sanitized = _sanitize_probability_inputs(class_probabilities)
+    return _LEGACY_PROBABILITY_ROWS(sanitized)
+
+
 _IMPL._predicted_class_labels = _predicted_class_labels
+_IMPL._probability_rows = _probability_rows
 
 globals().update(
     {
@@ -63,6 +87,8 @@ globals().update(
     }
 )
 globals()["_predicted_class_labels"] = _predicted_class_labels
+globals()["_sanitize_probability_inputs"] = _sanitize_probability_inputs
+globals()["_probability_rows"] = _probability_rows
 
 __doc__ = _IMPL.__doc__
 __all__ = [
