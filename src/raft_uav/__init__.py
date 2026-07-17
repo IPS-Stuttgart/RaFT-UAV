@@ -53,4 +53,7 @@ if os.environ.get("RAFT_UAV_SKIP_RUNTIME_HOOKS") != "1":
     _optional_runtime_hook(_radar_covariance_install)
     _optional_runtime_hook(_tracklet_viterbi_install)
     _optional_runtime_hook(_runtime_cli_patch_install)
-    _optional_runtime_hook(_kalman_timestamp_validation_install)
+
+# Kalman scalar validation is a core input-safety boundary, not an optional
+# integration hook. Keep it active when optional runtime integrations are skipped.
+_optional_runtime_hook(_kalman_timestamp_validation_install)
