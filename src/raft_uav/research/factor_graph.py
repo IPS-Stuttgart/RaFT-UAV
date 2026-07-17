@@ -254,25 +254,28 @@ def _combine_measurements(radar_selected: pd.DataFrame, rf: pd.DataFrame | None)
 
 
 def _radar_frame_groups(radar: pd.DataFrame) -> list[tuple[object, pd.DataFrame]]:
-    group_column = "frame_index" if "frame_index" in radar.columns else "time_s"
     sort_cols = [c for c in ("time_s", "frame_index", "track_id") if c in radar.columns]
     ordered = radar.sort_values(sort_cols).reset_index(drop=True)
-    if group_column == "time_s":
-        return [(key, group.copy()) for key, group in ordered.groupby(group_column, sort=True)]
+    times = pd.to_numeric(ordered["time_s"], errors="coerce")
+    if "frame_index" in ordered.columns:
+        frame_indices = pd.to_numeric(ordered["frame_index"], errors="coerce")
+    else:
+        frame_indices = pd.Series(np.nan, index=ordered.index, dtype=float)
     group_keys = pd.Series(
         [
-            ("frame_index", frame_index)
-            if not pd.isna(frame_index)
-            else ("time_s", time_s)
-            for frame_index, time_s in zip(
-                ordered["frame_index"],
-                ordered["time_s"],
-                strict=True,
-            )
+            ("frame_index", float(frame_index))
+            if np.isfinite(frame_index)
+            else ("time_s", float(time_s))
+            if np.isfinite(time_s)
+            else None
+            for frame_index, time_s in zip(frame_indices, times, strict=True)
         ],
         index=ordered.index,
         dtype=object,
     )
+    usable = group_keys.notna()
+    ordered = ordered.loc[usable]
+    group_keys = group_keys.loc[usable]
     return [(key, group.copy()) for key, group in ordered.groupby(group_keys, sort=False)]
 
 
