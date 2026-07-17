@@ -26,6 +26,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_CONFIG_POST_INIT = _IMPL.TrackletViterbiAssociationConfig.__post_init__
+_ORIGINAL_REACQUISITION_COST = _IMPL._reacquisition_cost
 
 _INTEGER_CONFIG_FIELDS = (
     "max_candidates_per_frame",
@@ -82,7 +83,19 @@ def _validated_config_post_init(self: Any) -> None:
     _ORIGINAL_CONFIG_POST_INIT(self)
 
 
+def _bounded_reacquisition_cost(
+    previous_miss_streak: int,
+    current: Any,
+    config: Any,
+) -> float:
+    """Prevent a future reacquisition reward from making a missed frame profitable."""
+
+    cost = float(_ORIGINAL_REACQUISITION_COST(previous_miss_streak, current, config))
+    return max(cost, -float(config.missed_detection_cost))
+
+
 _IMPL.TrackletViterbiAssociationConfig.__post_init__ = _validated_config_post_init
+_IMPL._reacquisition_cost = _bounded_reacquisition_cost
 
 globals().update(
     {
@@ -92,6 +105,7 @@ globals().update(
     }
 )
 globals()["_validated_config_post_init"] = _validated_config_post_init
+globals()["_bounded_reacquisition_cost"] = _bounded_reacquisition_cost
 
 __doc__ = _IMPL.__doc__
 __all__ = [
