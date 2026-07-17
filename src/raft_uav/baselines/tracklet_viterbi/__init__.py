@@ -1,9 +1,8 @@
-"""Compatibility package hardening tracklet-Viterbi configuration and scoring.
+"""Compatibility package validating tracklet-Viterbi numeric controls.
 
 The maintained implementation lives in the sibling ``tracklet_viterbi.py``
 module. This package preserves the public import path while rejecting malformed
-numeric configuration and preventing leading gaps from receiving a
-reacquisition reward before any radar candidate has been acquired.
+numeric configuration before it can enter association costs and gates.
 """
 
 from __future__ import annotations
@@ -11,9 +10,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
-from typing import Any, Iterable
-
-import numpy as np
+from typing import Any
 
 from raft_uav.numeric import optional_float, optional_int
 
@@ -29,8 +26,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_CONFIG_POST_INIT = _IMPL.TrackletViterbiAssociationConfig.__post_init__
-_ORIGINAL_TRANSITION_COST = _IMPL._transition_cost
-_ORIGINAL_SELECTED_ROWS_FROM_PATH = _IMPL._selected_rows_from_viterbi_path
+_ORIGINAL_REACQUISITION_COST = _IMPL._reacquisition_cost
 
 _INTEGER_CONFIG_FIELDS = (
     "max_candidates_per_frame",
@@ -87,81 +83,19 @@ def _validated_config_post_init(self: Any) -> None:
     _ORIGINAL_CONFIG_POST_INIT(self)
 
 
-def _is_leading_miss_streak(context: Any, previous: Any) -> bool:
-    """Return whether every frame before the current transition was a gap."""
-
-    if not bool(previous.is_missed_detection):
-        return False
-    frame_position = getattr(context, "frame_index", None)
-    if frame_position is None:
-        return False
-    return int(context.previous_miss_streak) == int(frame_position)
-
-
-def _top_k_viterbi_paths_without_leading_reacquisition(
-    frames: list[list[Any]],
+def _bounded_reacquisition_cost(
+    previous_miss_streak: int,
+    current: Any,
     config: Any,
-    terminal_count: int,
-) -> list[tuple[float, list[Any]]]:
-    """Solve paths without rewarding the first-ever detection as reacquisition."""
+) -> float:
+    """Prevent reacquisition rewards from making extra misses profitable."""
 
-    sequence_frames = [
-        _IMPL._sequence_candidates_for_frame(frame_position, frame, config)
-        for frame_position, frame in enumerate(frames)
-    ]
-
-    def transition_cost(previous: Any, current: Any, context: Any) -> float:
-        previous_miss_streak = int(context.previous_miss_streak)
-        if _is_leading_miss_streak(context, previous):
-            previous_miss_streak = 0
-        return _ORIGINAL_TRANSITION_COST(
-            _IMPL._node_from_sequence_candidate(previous),
-            _IMPL._node_from_sequence_candidate(current),
-            config,
-            previous_miss_streak=previous_miss_streak,
-        )
-
-    paths = _IMPL.solve_top_k_viterbi_sequence_associations(
-        sequence_frames,
-        transition_cost,
-        top_k_terminal_paths=terminal_count,
-    )
-    return [
-        (
-            float(path.total_cost),
-            [_IMPL._node_from_sequence_candidate(node) for node in path.nodes],
-        )
-        for path in paths
-    ]
-
-
-def _selected_rows_without_leading_reacquisition(
-    path: Iterable[Any],
-    path_cost: float,
-    config: Any,
-) -> list[Any]:
-    """Keep leading-gap diagnostics distinct from genuine reacquisition."""
-
-    nodes = list(path)
-    rows = _ORIGINAL_SELECTED_ROWS_FROM_PATH(nodes, path_cost, config)
-    leading_misses = 0
-    for node in nodes:
-        if node.is_miss or node.row is None:
-            leading_misses += 1
-            continue
-        if leading_misses and rows:
-            rows[0]["association_reacquisition_active"] = False
-            rows[0]["association_reacquisition_cost"] = 0.0
-            rows[0]["association_reacquisition_gate_nis"] = np.nan
-        break
-    return rows
+    cost = float(_ORIGINAL_REACQUISITION_COST(previous_miss_streak, current, config))
+    return max(cost, -float(config.missed_detection_cost))
 
 
 _IMPL.TrackletViterbiAssociationConfig.__post_init__ = _validated_config_post_init
-_IMPL._top_k_viterbi_paths_with_pyrecest = (
-    _top_k_viterbi_paths_without_leading_reacquisition
-)
-_IMPL._selected_rows_from_viterbi_path = _selected_rows_without_leading_reacquisition
+_IMPL._reacquisition_cost = _bounded_reacquisition_cost
 
 globals().update(
     {
@@ -171,13 +105,7 @@ globals().update(
     }
 )
 globals()["_validated_config_post_init"] = _validated_config_post_init
-globals()["_is_leading_miss_streak"] = _is_leading_miss_streak
-globals()["_top_k_viterbi_paths_without_leading_reacquisition"] = (
-    _top_k_viterbi_paths_without_leading_reacquisition
-)
-globals()["_selected_rows_without_leading_reacquisition"] = (
-    _selected_rows_without_leading_reacquisition
-)
+globals()["_bounded_reacquisition_cost"] = _bounded_reacquisition_cost
 
 __doc__ = _IMPL.__doc__
 __all__ = [
