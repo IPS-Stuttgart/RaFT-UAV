@@ -1,0 +1,67 @@
+---
+name: Diagnose PR 1431 pytest
+
+"on":
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pytest-diagnostic:
+    if: github.event.pull_request.number == 1431
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip --quiet
+          python -m pip install -e ".[dev]" --quiet
+
+      - name: Run targeted and full tests
+        id: tests
+        shell: bash
+        run: |
+          set +e
+          pytest -q --tb=short \
+            tests/test_mmuad_template_snap_nearest_gap_diagnostics.py \
+            tests/test_mmuad_template_snap_gap_validation.py \
+            > targeted-pytest.log 2>&1
+          targeted_status=$?
+          printf '%s\n' "$targeted_status" > targeted-pytest.status
+
+          pytest -q --tb=short > full-pytest.log 2>&1
+          full_status=$?
+          printf '%s\n' "$full_status" > full-pytest.status
+
+          echo "targeted_status=$targeted_status" >> "$GITHUB_OUTPUT"
+          echo "full_status=$full_status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload pytest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr-1431-pytest-diagnostics
+          path: |
+            targeted-pytest.log
+            targeted-pytest.status
+            full-pytest.log
+            full-pytest.status
+          if-no-files-found: error
+
+      - name: Fail when tests failed
+        if: steps.tests.outputs.targeted_status != '0' || steps.tests.outputs.full_status != '0'
+        run: |
+          echo "targeted_status=${{ steps.tests.outputs.targeted_status }}"
+          echo "full_status=${{ steps.tests.outputs.full_status }}"
+          exit 1
