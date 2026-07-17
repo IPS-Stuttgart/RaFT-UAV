@@ -65,7 +65,7 @@ def _validate_predicted_class_labels(labels: pd.Series) -> None:
 
 
 def _normalize_probability_rows(probabilities: pd.DataFrame) -> pd.DataFrame:
-    """Normalize soft-class probabilities without losing integer-like labels."""
+    """Normalize soft probabilities and fill empty rows from hard class labels."""
 
     rows = pd.DataFrame(probabilities).copy()
     if rows.empty:
@@ -74,20 +74,37 @@ def _normalize_probability_rows(probabilities: pd.DataFrame) -> pd.DataFrame:
     if sequence_column is None:
         raise ValueError("class probabilities must contain sequence_id/Sequence")
     out = pd.DataFrame({"sequence_id": rows[sequence_column].astype(str)})
+    labels = tuple(_IMPL._official_class_labels())
     found_probability = False
-    for label in _IMPL._official_class_labels():
+    for label in labels:
         column = _IMPL._probability_column(rows, label)
         if column is not None:
             out[f"class_prob_{label}"] = pd.to_numeric(rows[column], errors="coerce")
             found_probability = True
+
+    predicted_column = _IMPL._first_present(rows, _IMPL.PREDICTED_CLASS_ALIASES)
     if not found_probability:
-        predicted_column = _IMPL._first_present(rows, _IMPL.PREDICTED_CLASS_ALIASES)
         if predicted_column is None:
             raise ValueError("class probabilities need probability columns or predicted_class")
         predicted = _predicted_class_labels(rows[predicted_column])
         _validate_predicted_class_labels(predicted)
-        for label in _IMPL._official_class_labels():
+        for label in labels:
             out[f"class_prob_{label}"] = (predicted == label).astype(float)
+    elif predicted_column is not None:
+        predicted = _predicted_class_labels(rows[predicted_column])
+        probability_columns = [f"class_prob_{label}" for label in labels]
+        for column in probability_columns:
+            if column not in out.columns:
+                out[column] = 0.0
+        usable_mass = out[probability_columns].apply(pd.to_numeric, errors="coerce")
+        usable_mass = usable_mass.where(np.isfinite(usable_mass), 0.0).clip(lower=0.0)
+        fallback = usable_mass.sum(axis=1).le(0.0) & predicted.ne("")
+        _validate_predicted_class_labels(predicted.loc[fallback])
+        for label in labels:
+            out.loc[fallback, f"class_prob_{label}"] = (
+                predicted.loc[fallback] == label
+            ).astype(float)
+
     out = out.groupby("sequence_id", as_index=False).mean(numeric_only=True)
     return _IMPL._normalize_probability_mass(out)
 
