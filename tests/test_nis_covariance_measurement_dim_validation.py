@@ -50,3 +50,42 @@ def test_nis_calibration_accepts_exact_integer_string_dimensions() -> None:
     )
 
     assert set(payload["groups"]) == {"rf:2", "radar:3"}
+
+
+def test_nis_calibration_excludes_missing_acceptance_flags() -> None:
+    diagnostics = pd.DataFrame(
+        {
+            "source": ["radar", "radar", "radar"],
+            "measurement_dim": [3, 3, 3],
+            "accepted": [True, np.nan, pd.NA],
+            "nis": [6.0, 300.0, 300.0],
+        }
+    )
+
+    payload = fit_nis_covariance_calibration_from_frame(
+        diagnostics,
+        min_samples=1,
+    )
+
+    group = payload["groups"]["radar:3"]
+    assert group["count"] == 1
+    assert group["applied_scale"] == 2.0
+
+
+def test_nis_calibration_drops_missing_and_blank_sources() -> None:
+    diagnostics = pd.DataFrame(
+        {
+            "source": ["radar", " radar ", None, np.nan, "", "   "],
+            "measurement_dim": [3] * 6,
+            "accepted": [True] * 6,
+            "nis": [3.0] * 6,
+        }
+    )
+
+    payload = fit_nis_covariance_calibration_from_frame(
+        diagnostics,
+        min_samples=1,
+    )
+
+    assert set(payload["groups"]) == {"radar:3"}
+    assert payload["groups"]["radar:3"]["count"] == 2
