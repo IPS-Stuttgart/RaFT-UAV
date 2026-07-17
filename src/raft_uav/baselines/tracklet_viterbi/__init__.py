@@ -88,7 +88,7 @@ def _bounded_reacquisition_cost(
     current: Any,
     config: Any,
 ) -> float:
-    """Prevent a future reacquisition reward from making a missed frame profitable."""
+    """Prevent reacquisition rewards from making extra misses profitable."""
 
     cost = float(_ORIGINAL_REACQUISITION_COST(previous_miss_streak, current, config))
     return max(cost, -float(config.missed_detection_cost))
