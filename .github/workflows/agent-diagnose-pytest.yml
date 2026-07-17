@@ -2,9 +2,7 @@
 name: Agent diagnose pytest
 
 "on":
-  push:
-    branches:
-      - agent/skip-archive-prefix-conflicts
+  pull_request:
 
 permissions:
   contents: read
