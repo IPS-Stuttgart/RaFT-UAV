@@ -165,7 +165,7 @@ def radar_segment_fingerprint_rows(
                 "frames": int(len(segment)),
                 "range_gate_m": float(range_gate_m),
                 "range_gated_frames": int(np.count_nonzero(np.isfinite(ranges) & (ranges <= range_gate_m))),
-                "range_source": "range_m" if "range_m" in segment.columns else "enu_norm",
+                "range_source": _segment_range_source(segment),
                 "mean_catprob": _nan_stat(catprob, np.nanmean),
                 "median_catprob": _nan_stat(catprob, np.nanmedian),
                 "min_range_m": _nan_stat(ranges, np.nanmin),
@@ -241,6 +241,14 @@ def _segment_ranges(segment: pd.DataFrame) -> np.ndarray:
         if np.isfinite(ranges).any():
             return ranges
     return np.linalg.norm(segment[["east_m", "north_m", "up_m"]].to_numpy(dtype=float), axis=1)
+
+
+def _segment_range_source(segment: pd.DataFrame) -> str:
+    if "range_m" in segment.columns:
+        ranges = pd.to_numeric(segment["range_m"], errors="coerce").to_numpy(dtype=float)
+        if np.isfinite(ranges).any():
+            return "range_m"
+    return "enu_norm"
 
 
 def _segment_errors(segment: pd.DataFrame, truth: pd.DataFrame, *, truth_time_gate_s: float) -> np.ndarray:
