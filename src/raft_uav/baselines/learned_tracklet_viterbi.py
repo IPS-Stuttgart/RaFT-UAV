@@ -212,6 +212,9 @@ def _select_learned_tracklet_viterbi_path(
                         node,
                         config,
                         previous_miss_streak=int(miss_streaks[-1][k]),
+                        has_prior_detection=(
+                            int(miss_streaks[-1][k]) < frame_index
+                        ),
                     )
                     for k, prev in enumerate(previous)
                 ]
