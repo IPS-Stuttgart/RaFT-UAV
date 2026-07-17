@@ -99,7 +99,7 @@ def _finite_real_scalar(value: object, *, name: str) -> float:
     """Return a finite real scalar or raise a field-specific error."""
 
     error = f"{name} must be a finite real scalar"
-    if isinstance(value, (bool, np.bool_)):
+    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
         raise ValueError(error)
     try:
         scalar = np.asarray(value)
@@ -108,7 +108,10 @@ def _finite_real_scalar(value: object, *, name: str) -> float:
     if scalar.ndim != 0 or np.iscomplexobj(scalar):
         raise ValueError(error)
     try:
-        number = float(scalar.item())
+        item = scalar.item()
+        if np.ma.is_masked(item):
+            raise ValueError(error)
+        number = float(item)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(error) from exc
     if not np.isfinite(number):
@@ -127,6 +130,8 @@ def _finite_real_array(value: object, *, name: str) -> np.ndarray:
     """Return finite real numeric values without coercing Boolean pseudo-numbers."""
 
     error = f"{name} must contain finite real values"
+    if np.ma.is_masked(value):
+        raise ValueError(error)
     try:
         array = np.asarray(value)
     except (TypeError, ValueError) as exc:
@@ -134,7 +139,8 @@ def _finite_real_array(value: object, *, name: str) -> np.ndarray:
     if np.iscomplexobj(array) or np.issubdtype(array.dtype, np.bool_):
         raise ValueError(error)
     if array.dtype == object and any(
-        isinstance(item, (bool, np.bool_)) for item in array.flat
+        isinstance(item, (bool, np.bool_)) or np.ma.is_masked(item)
+        for item in array.flat
     ):
         raise ValueError(error)
     try:
