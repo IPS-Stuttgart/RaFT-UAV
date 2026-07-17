@@ -257,7 +257,23 @@ def _radar_frame_groups(radar: pd.DataFrame) -> list[tuple[object, pd.DataFrame]
     group_column = "frame_index" if "frame_index" in radar.columns else "time_s"
     sort_cols = [c for c in ("time_s", "frame_index", "track_id") if c in radar.columns]
     ordered = radar.sort_values(sort_cols).reset_index(drop=True)
-    return [(key, group.copy()) for key, group in ordered.groupby(group_column, sort=True)]
+    if group_column == "time_s":
+        return [(key, group.copy()) for key, group in ordered.groupby(group_column, sort=True)]
+    group_keys = pd.Series(
+        [
+            ("frame_index", frame_index)
+            if not pd.isna(frame_index)
+            else ("time_s", time_s)
+            for frame_index, time_s in zip(
+                ordered["frame_index"],
+                ordered["time_s"],
+                strict=True,
+            )
+        ],
+        index=ordered.index,
+        dtype=object,
+    )
+    return [(key, group.copy()) for key, group in ordered.groupby(group_keys, sort=False)]
 
 
 def _require_columns(frame: pd.DataFrame, columns: set[str], name: str) -> None:
