@@ -2,7 +2,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from raft_uav.diagnostics.radar_fingerprint import _continuous_track_segments
+from raft_uav.diagnostics.radar_fingerprint import (
+    _continuous_track_segments,
+    _optional_int,
+)
 
 
 @pytest.mark.parametrize("invalid_frame_index", [np.nan, np.inf])
@@ -40,3 +43,12 @@ def test_complete_frame_indices_remain_authoritative_for_continuity():
 
     assert len(segments) == 1
     assert segments[0]["time_s"].tolist() == [0.0, 100.0, 200.0]
+
+
+def test_radar_fingerprint_preserves_large_integer_metadata_exactly():
+    assert _optional_int("9007199254740993") == 9007199254740993
+
+
+@pytest.mark.parametrize("value", [7.5, "7.5", True, np.array([7])])
+def test_radar_fingerprint_rejects_non_integer_metadata(value):
+    assert _optional_int(value) is None
