@@ -5,6 +5,7 @@ import pytest
 
 from raft_uav.mmuad.cluster_ranker import (
     _binary_auc,
+    _ranker_prediction_summary,
     predict_cluster_scores,
     train_cluster_ranker,
 )
@@ -42,3 +43,28 @@ def test_cluster_ranker_auc_parses_serialized_binary_targets() -> None:
     )
 
     assert auc == pytest.approx(1.0)
+
+
+def test_cluster_ranker_summary_parses_serialized_binary_targets() -> None:
+    rows = pd.DataFrame(
+        {
+            "sequence_id": ["seq", "seq"],
+            "time_s": [0.0, 1.0],
+            "source": ["lidar", "lidar"],
+            "track_id": ["positive", "negative"],
+            "truth_distance_3d_m": [1.0, 10.0],
+            "ranker_score": [0.9, 0.1],
+            "good_cluster": ["True", "False"],
+        }
+    )
+
+    summary = _ranker_prediction_summary(
+        rows,
+        sequence="seq",
+        split="heldout_sequence",
+        protocol="test",
+    )
+
+    assert summary["positive_candidate_rows"] == 1
+    assert summary["positive_candidate_rate"] == pytest.approx(0.5)
+    assert summary["score_auc"] == pytest.approx(1.0)
