@@ -1,0 +1,475 @@
+---
+name: Apply PR 1428 source fixes
+
+"on":
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/preserve-sequence-id-csv-semantics'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out pull-request branch
+        uses: actions/checkout@v6
+        with:
+          ref: agent/preserve-sequence-id-csv-semantics
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package with test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Apply fixes and remove temporary diagnostics
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          tracklet_path = Path("src/raft_uav/baselines/tracklet_viterbi.py")
+          tracklet = tracklet_path.read_text(encoding="utf-8")
+
+          replacements = [
+              (
+                  '''    @dataclass(frozen=True)
+              class SequenceTransitionContext:
+                  """Minimal PyRecEst-compatible transition context."""
+
+                  previous_miss_streak: int = 0
+          ''',
+                  '''    @dataclass(frozen=True)
+              class SequenceTransitionContext:
+                  """Minimal PyRecEst-compatible transition context."""
+
+                  frame_index: int
+                  previous_frame_index: int
+                  current_frame_index: int
+                  previous_node_index: int
+                  current_node_index: int
+                  previous_miss_streak: int = 0
+          ''',
+              ),
+              (
+                  '''        return _transition_cost(
+                      _node_from_sequence_candidate(previous),
+                      _node_from_sequence_candidate(current),
+                      config,
+                      previous_miss_streak=context.previous_miss_streak,
+                  )
+          ''',
+                  '''        frame_index = getattr(context, "frame_index", None)
+                  has_prior_detection = (
+                      True
+                      if frame_index is None
+                      else int(context.previous_miss_streak) < int(frame_index)
+                  )
+                  return _transition_cost(
+                      _node_from_sequence_candidate(previous),
+                      _node_from_sequence_candidate(current),
+                      config,
+                      previous_miss_streak=context.previous_miss_streak,
+                      has_prior_detection=has_prior_detection,
+                  )
+          ''',
+              ),
+              (
+                  '''    rows: list[pd.Series] = []
+              preceding_miss_streak = 0
+              for node in path:
+                  if node.is_miss or node.row is None:
+                      preceding_miss_streak += 1
+                      continue
+                  row = node.row.copy()
+                  reacquisition_active = _reacquisition_is_active(preceding_miss_streak, node, config)
+                  reacquisition_cost = _reacquisition_cost(
+                      preceding_miss_streak,
+                      node,
+                      config,
+                  )
+          ''',
+                  '''    rows: list[pd.Series] = []
+              preceding_miss_streak = 0
+              has_prior_detection = False
+              for node in path:
+                  if node.is_miss or node.row is None:
+                      preceding_miss_streak += 1
+                      continue
+                  row = node.row.copy()
+                  reacquisition_active = _reacquisition_is_active(
+                      preceding_miss_streak,
+                      node,
+                      config,
+                      has_prior_detection=has_prior_detection,
+                  )
+                  reacquisition_cost = _reacquisition_cost(
+                      preceding_miss_streak,
+                      node,
+                      config,
+                      has_prior_detection=has_prior_detection,
+                  )
+          ''',
+              ),
+              (
+                  '''        rows.append(row)
+                  preceding_miss_streak = 0
+              return rows
+          ''',
+                  '''        rows.append(row)
+                  preceding_miss_streak = 0
+                  has_prior_detection = True
+              return rows
+          ''',
+              ),
+              (
+                  '''def _transition_cost(
+              previous: _ViterbiNode,
+              current: _ViterbiNode,
+              config: TrackletViterbiAssociationConfig,
+              *,
+              previous_miss_streak: int | None = None,
+          ) -> float:
+          ''',
+                  '''def _transition_cost(
+              previous: _ViterbiNode,
+              current: _ViterbiNode,
+              config: TrackletViterbiAssociationConfig,
+              *,
+              previous_miss_streak: int | None = None,
+              has_prior_detection: bool = True,
+          ) -> float:
+          ''',
+              ),
+              (
+                  '''    if previous.is_miss or previous.position is None or current.position is None:
+                  return _reacquisition_cost(miss_streak, current, config)
+          ''',
+                  '''    if previous.is_miss or previous.position is None or current.position is None:
+                  return _reacquisition_cost(
+                      miss_streak,
+                      current,
+                      config,
+                      has_prior_detection=has_prior_detection,
+                  )
+          ''',
+              ),
+              (
+                  '''        + _track_continuity_cost(previous.track_id, current.track_id, config)
+                  + _reacquisition_cost(miss_streak, current, config)
+              )
+          ''',
+                  '''        + _track_continuity_cost(previous.track_id, current.track_id, config)
+                  + _reacquisition_cost(
+                      miss_streak,
+                      current,
+                      config,
+                      has_prior_detection=has_prior_detection,
+                  )
+              )
+          ''',
+              ),
+              (
+                  '''def _reacquisition_is_active(
+              previous_miss_streak: int,
+              current: _ViterbiNode,
+              config: TrackletViterbiAssociationConfig,
+          ) -> bool:
+              """Return whether RF-anchor reacquisition scoring applies to ``current``."""
+
+              if current.is_miss or not current.has_anchor:
+                  return False
+          ''',
+                  '''def _reacquisition_is_active(
+              previous_miss_streak: int,
+              current: _ViterbiNode,
+              config: TrackletViterbiAssociationConfig,
+              *,
+              has_prior_detection: bool = True,
+          ) -> bool:
+              """Return whether RF-anchor reacquisition scoring applies to ``current``."""
+
+              if not has_prior_detection or current.is_miss or not current.has_anchor:
+                  return False
+          ''',
+              ),
+              (
+                  '''def _reacquisition_cost(
+              previous_miss_streak: int,
+              current: _ViterbiNode,
+              config: TrackletViterbiAssociationConfig,
+          ) -> float:
+          ''',
+                  '''def _reacquisition_cost(
+              previous_miss_streak: int,
+              current: _ViterbiNode,
+              config: TrackletViterbiAssociationConfig,
+              *,
+              has_prior_detection: bool = True,
+          ) -> float:
+          ''',
+              ),
+              (
+                  '''    After a miss streak, the ordinary Viterbi objective has no previous radar
+              position to transition from.  This term uses the RF-only anchor as a search
+              tube: candidates inside a widened NIS gate receive a bounded reward, while
+              candidates outside the tube receive a smooth quadratic penalty.
+          ''',
+                  '''    After a miss streak following a selected detection, the ordinary Viterbi
+              objective has no previous radar position to transition from.  This term uses
+              the RF-only anchor as a search tube: candidates inside a widened NIS gate
+              receive a bounded reward, while candidates outside the tube receive a smooth
+              quadratic penalty.  Leading gaps are initial acquisition, not reacquisition.
+          ''',
+              ),
+              (
+                  '''    if not _reacquisition_is_active(previous_miss_streak, current, config):
+                  return 0.0
+          ''',
+                  '''    if not _reacquisition_is_active(
+                  previous_miss_streak,
+                  current,
+                  config,
+                  has_prior_detection=has_prior_detection,
+              ):
+                  return 0.0
+          ''',
+              ),
+          ]
+          for old, new in replacements:
+              if old not in tracklet:
+                  raise RuntimeError(f"tracklet replacement target not found: {old[:80]!r}")
+              tracklet = tracklet.replace(old, new, 1)
+          tracklet_path.write_text(tracklet, encoding="utf-8")
+
+          learned_path = Path("src/raft_uav/baselines/learned_tracklet_viterbi.py")
+          learned = learned_path.read_text(encoding="utf-8")
+          old = '''                    + _transition_cost(
+                                  prev,
+                                  node,
+                                  config,
+                                  previous_miss_streak=int(miss_streaks[-1][k]),
+                              )
+          '''
+          new = '''                    + _transition_cost(
+                                  prev,
+                                  node,
+                                  config,
+                                  previous_miss_streak=int(miss_streaks[-1][k]),
+                                  has_prior_detection=(
+                                      int(miss_streaks[-1][k]) < frame_index
+                                  ),
+                              )
+          '''
+          if old not in learned:
+              raise RuntimeError("learned tracklet replacement target not found")
+          learned_path.write_text(learned.replace(old, new, 1), encoding="utf-8")
+
+          test_path = Path(
+              "tests/test_learned_tracklet_viterbi_initial_acquisition.py"
+          )
+          test_path.write_text(
+              '''from __future__ import annotations
+
+          import numpy as np
+          import pandas as pd
+
+          from raft_uav.baselines.learned_tracklet_viterbi import (
+              _select_learned_tracklet_viterbi_path,
+          )
+          from raft_uav.baselines.tracklet_viterbi import (
+              TrackletViterbiAssociationConfig,
+              _ViterbiNode,
+          )
+
+
+          def _candidate(frame_index: int, *, unary_cost: float = 0.25) -> _ViterbiNode:
+              row = pd.Series(
+                  {
+                      "frame_index": frame_index,
+                      "track_id": 1,
+                      "time_s": float(frame_index),
+                      "east_m": float(frame_index * 10),
+                      "north_m": 0.0,
+                      "up_m": 0.0,
+                  }
+              )
+              return _ViterbiNode(
+                  event_index=frame_index,
+                  event_key=("frame_index", frame_index),
+                  time_s=float(frame_index),
+                  row=row,
+                  position=np.array([float(frame_index * 10), 0.0, 0.0]),
+                  velocity=None,
+                  track_id=1,
+                  unary_cost=unary_cost,
+                  anchor_nis=0.0,
+                  catprob_cost=0.0,
+                  range_cost=0.0,
+                  has_anchor=True,
+              )
+
+
+          def _miss(frame_index: int) -> _ViterbiNode:
+              return _ViterbiNode(
+                  event_index=frame_index,
+                  event_key=("frame_index", frame_index),
+                  time_s=float(frame_index),
+                  row=None,
+                  position=None,
+                  velocity=None,
+                  track_id=None,
+                  unary_cost=0.0,
+                  anchor_nis=0.0,
+                  catprob_cost=0.0,
+                  range_cost=0.0,
+                  is_miss=True,
+              )
+
+
+          def test_learned_tracklet_viterbi_does_not_reward_leading_misses(
+              monkeypatch,
+          ) -> None:
+              frames = [
+                  [_candidate(0), _miss(0)],
+                  [_miss(1)],
+                  [_candidate(2), _miss(2)],
+              ]
+
+              def nodes_for_frame(*, event_index: int, **_kwargs) -> list[_ViterbiNode]:
+                  return frames[event_index]
+
+              monkeypatch.setattr(
+                  "raft_uav.baselines.learned_tracklet_viterbi._learned_nodes_for_radar_frame",
+                  nodes_for_frame,
+              )
+              config = TrackletViterbiAssociationConfig(
+                  missed_detection_cost=1.0,
+                  consecutive_miss_cost=0.0,
+                  reacquisition_miss_streak_threshold=2,
+                  reacquisition_reward=3.0,
+                  range_gate_m=None,
+              )
+              events = [
+                  {"kind": "radar", "candidates": pd.DataFrame()}
+                  for _frame_index in range(3)
+              ]
+
+              selected = _select_learned_tracklet_viterbi_path(
+                  events=events,
+                  anchors={},
+                  covariance=np.eye(3),
+                  candidate_catprob_threshold=None,
+                  config=config,
+                  model=object(),
+                  learned_unary_weight=1.0,
+                  hand_unary_weight=1.0,
+              )
+
+              assert [int(row["frame_index"]) for row in selected] == [0, 2]
+          ''',
+              encoding="utf-8",
+          )
+
+          Path(".github/workflows/ci.yml").write_text(
+              '''---
+          name: CI
+
+          "on":
+            push:
+              branches: [main]
+            pull_request:
+            workflow_dispatch:
+
+          concurrency:
+            group: ${{ github.workflow }}-${{ github.ref }}
+            cancel-in-progress: true
+
+          env:
+            FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+            PYTHONUNBUFFERED: "1"
+
+          jobs:
+            test:
+              name: Python ${{ matrix.python-version }}
+              runs-on: ubuntu-latest
+              strategy:
+                fail-fast: false
+                matrix:
+                  python-version: ["3.11", "3.12"]
+
+              steps:
+                - name: Check out repository
+                  uses: actions/checkout@v6
+
+                - name: Set up Python ${{ matrix.python-version }}
+                  uses: actions/setup-python@v6
+                  with:
+                    python-version: ${{ matrix.python-version }}
+                    cache: pip
+
+                - name: Install package with test dependencies
+                  run: |
+                    python -m pip install --upgrade pip
+                    python -m pip install -e ".[dev]"
+
+                - name: Compile importable code and tests
+                  run: |
+                    python -m compileall src tests
+                    if [ -d scripts ]; then python -m compileall scripts; fi
+
+                - name: Lint source and tests
+                  run: |
+                    if [ -d scripts ]; then ruff check src scripts tests; else ruff check src tests; fi
+
+                - name: Run unit tests
+                  run: |
+                    pytest
+          ''',
+              encoding="utf-8",
+          )
+
+          for temporary_path in (
+              Path(".github/workflows/diagnose-pr-1428-pytest.yml"),
+              Path(".github/workflows/apply-pr-1428-source-fixes.yml"),
+          ):
+              if temporary_path.exists():
+                  temporary_path.unlink()
+          PY
+
+      - name: Validate focused regressions
+        run: |
+          python -m compileall src tests
+          ruff check \
+            src/raft_uav/baselines/tracklet_viterbi.py \
+            src/raft_uav/baselines/learned_tracklet_viterbi.py \
+            tests/test_tracklet_viterbi_association.py \
+            tests/test_tracklet_viterbi_reacquisition.py \
+            tests/test_learned_tracklet_viterbi_initial_acquisition.py \
+            tests/test_mmuad_class_probability_csv_sequence_id_validation.py
+          pytest -q \
+            tests/test_tracklet_viterbi_association.py \
+            tests/test_tracklet_viterbi_reacquisition.py \
+            tests/test_learned_tracklet_viterbi_initial_acquisition.py \
+            tests/test_mmuad_class_probability_csv.py \
+            tests/test_mmuad_class_probability_csv_duplicate_headers.py \
+            tests/test_mmuad_class_probability_csv_sequence_whitespace.py \
+            tests/test_mmuad_class_probability_csv_sequence_id_validation.py
+          git diff --check
+
+      - name: Commit and push fixes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Guard tracklet reacquisition scoring"
+          git push origin HEAD:agent/preserve-sequence-id-csv-semantics
