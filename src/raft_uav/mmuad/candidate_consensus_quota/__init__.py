@@ -76,6 +76,21 @@ def _integer_control(
     return int(number)
 
 
+def _boolean_control(value: Any, *, name: str) -> bool:
+    """Return one Boolean scalar without applying Python truthiness coercion."""
+
+    message = f"{name} must be a Boolean scalar"
+    if isinstance(value, np.ndarray):
+        if value.ndim != 0:
+            raise ValueError(message)
+        value = value.item()
+    elif isinstance(value, np.generic):
+        value = value.item()
+    if not isinstance(value, bool):
+        raise ValueError(message)
+    return value
+
+
 def _normalize_controls(
     *,
     consensus_top_n: Any,
@@ -217,6 +232,10 @@ def build_consensus_quota_reservoir(
             ("pair_advantage_weight", pair_advantage_weight),
         )
     }
+    exclude_same_origin = _boolean_control(
+        exclude_same_origin_support,
+        name="exclude_same_origin_support",
+    )
     return _ORIGINAL_BUILD(
         candidates,
         reservoir_config=reservoir_config,
@@ -237,12 +256,13 @@ def build_consensus_quota_reservoir(
         pair_advantage_weight=weights["pair_advantage_weight"],
         branch_column=branch_column,
         origin_column=origin_column,
-        exclude_same_origin_support=exclude_same_origin_support,
+        exclude_same_origin_support=exclude_same_origin,
     )
 
 
 _IMPL._finite_scalar = _finite_scalar
 _IMPL._integer_control = _integer_control
+_IMPL._boolean_control = _boolean_control
 _IMPL._normalize_controls = _normalize_controls
 _IMPL._validate_controls = _validate_controls
 _IMPL.build_consensus_quota_reservoir = build_consensus_quota_reservoir
@@ -256,6 +276,7 @@ globals().update(
 )
 globals()["_finite_scalar"] = _finite_scalar
 globals()["_integer_control"] = _integer_control
+globals()["_boolean_control"] = _boolean_control
 globals()["_normalize_controls"] = _normalize_controls
 globals()["_validate_controls"] = _validate_controls
 globals()["build_consensus_quota_reservoir"] = build_consensus_quota_reservoir
