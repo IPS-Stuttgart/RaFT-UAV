@@ -24,7 +24,7 @@ def read_sequence_text_csv(path: Path) -> pd.DataFrame:
     try:
         rows = pd.read_csv(path, dtype=str, keep_default_na=False)
     except TypeError:
-        rows = pd.read_csv(path, dtype=str)
+        rows = pd.read_csv(path, dtype=str, na_filter=False)
     out = rows.copy()
     normalized_columns = [str(column).strip() for column in out.columns]
     duplicated = pd.Index(normalized_columns).duplicated(keep=False)
@@ -59,15 +59,22 @@ def _canonicalize_sequence_id_column(rows: pd.DataFrame) -> pd.DataFrame:
         out["sequence_id"] = _sequence_id_text(out["sequence_id"])
         return out
 
-    lower_to_column = {str(column).strip().lower(): column for column in out.columns}
-    source_column = None
-    for alias in SEQUENCE_ALIASES:
-        source_column = lower_to_column.get(alias.lower())
-        if source_column is not None:
-            break
-    if source_column is None:
+    alias_keys = {alias.lower() for alias in SEQUENCE_ALIASES}
+    source_columns = [
+        column
+        for column in out.columns
+        if str(column).strip().lower() in alias_keys
+    ]
+    if len(source_columns) > 1:
+        source_text = ", ".join(repr(str(column)) for column in source_columns)
+        raise ValueError(
+            "CSV has ambiguous sequence identifier columns: "
+            f"{source_text}"
+        )
+    if not source_columns:
         return out
 
+    source_column = source_columns[0]
     out.insert(0, "sequence_id", _sequence_id_text(out[source_column]))
     return out
 
