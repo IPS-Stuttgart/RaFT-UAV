@@ -16,6 +16,7 @@ from raft_uav.diagnostics.paper_strict import (
 )
 from raft_uav.evaluation.metrics import position_errors_at_times_m
 from raft_uav.io.aerpaw import DEFAULT_RADAR_CLOCK_OFFSET_S, DEFAULT_RF_CLOCK_OFFSET_S, discover_flights
+from raft_uav.numeric import optional_int as _optional_int
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -270,14 +271,6 @@ def _percentile(values: np.ndarray, percentile: float) -> float | None:
     finite = np.asarray(values, dtype=float)
     finite = finite[np.isfinite(finite)]
     return None if finite.size == 0 else float(np.percentile(finite, percentile))
-
-
-def _optional_int(value: Any) -> int | None:
-    try:
-        scalar = float(value)
-    except (TypeError, ValueError):
-        return None
-    return int(scalar) if np.isfinite(scalar) else None
 
 
 def _none_as_inf(value: Any) -> float:
