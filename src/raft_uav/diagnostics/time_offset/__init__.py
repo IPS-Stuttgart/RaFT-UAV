@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as _np
 import pandas as _pd
 
+from raft_uav.numeric import optional_float as _optional_float
+
 _LEGACY_PATH = Path(__file__).resolve().parent.parent / "time_offset.py"
 _SPEC = importlib.util.spec_from_file_location("_raft_uav_time_offset_legacy", _LEGACY_PATH)
 if _SPEC is None or _SPEC.loader is None:  # pragma: no cover
@@ -24,6 +26,24 @@ _ACTIVE_SWEEP_TAU_BOUNDS: ContextVar[tuple[float, float] | None] = ContextVar(
 )
 
 _POSITION_COLUMNS = ("east_m", "north_m", "up_m")
+
+
+def _finite_real_control(value: object, *, name: str) -> float:
+    """Return one finite real scalar without Boolean or array coercion."""
+
+    normalized = _optional_float(value)
+    if normalized is None:
+        raise ValueError(f"{name} must be a finite real scalar")
+    return normalized
+
+
+def _positive_real_control(value: object, *, name: str) -> float:
+    """Return one finite positive real scalar."""
+
+    normalized = _finite_real_control(value, name=name)
+    if normalized <= 0.0:
+        raise ValueError(f"{name} must be a finite positive real scalar")
+    return normalized
 
 
 def _finite_position_candidates(candidates):
@@ -44,6 +64,7 @@ def _finite_position_candidates(candidates):
 def catprob_candidate_pool(candidates, threshold):
     if threshold is None:
         return candidates
+    threshold = _finite_real_control(threshold, name="threshold")
     return _original_catprob_candidate_pool(candidates, threshold)
 
 
@@ -117,21 +138,37 @@ def run_time_offset_diagnostic(
     output_dir: Path = Path("outputs/time-offset"),
     write_plot: bool = True,
 ):
-    """Run an offset sweep without discarding rows that shift into truth support."""
+    """Run an offset sweep after validating numeric controls before data access."""
 
-    token = _ACTIVE_SWEEP_TAU_BOUNDS.set((float(tau_min_s), float(tau_max_s)))
+    normalized_tau_min_s = _finite_real_control(tau_min_s, name="tau_min_s")
+    normalized_tau_max_s = _finite_real_control(tau_max_s, name="tau_max_s")
+    normalized_tau_step_s = _positive_real_control(tau_step_s, name="tau_step_s")
+    normalized_max_delta_s = _positive_real_control(
+        max_truth_time_delta_s,
+        name="max_truth_time_delta_s",
+    )
+    normalized_catprob_threshold = radar_catprob_threshold
+    if source == "radar":
+        normalized_catprob_threshold = _finite_real_control(
+            radar_catprob_threshold,
+            name="radar_catprob_threshold",
+        )
+
+    token = _ACTIVE_SWEEP_TAU_BOUNDS.set(
+        (normalized_tau_min_s, normalized_tau_max_s)
+    )
     try:
         return _original_run_time_offset_diagnostic(
             dataset_root=dataset_root,
             flight_name=flight_name,
             source=source,
-            tau_min_s=tau_min_s,
-            tau_max_s=tau_max_s,
-            tau_step_s=tau_step_s,
+            tau_min_s=normalized_tau_min_s,
+            tau_max_s=normalized_tau_max_s,
+            tau_step_s=normalized_tau_step_s,
             dimensions=dimensions,
             radar_selection=radar_selection,
-            radar_catprob_threshold=radar_catprob_threshold,
-            max_truth_time_delta_s=max_truth_time_delta_s,
+            radar_catprob_threshold=normalized_catprob_threshold,
+            max_truth_time_delta_s=normalized_max_delta_s,
             objective=objective,
             output_dir=output_dir,
             write_plot=write_plot,
