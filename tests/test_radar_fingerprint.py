@@ -5,6 +5,8 @@ import pytest
 from raft_uav.diagnostics.radar_fingerprint import (
     _continuous_track_segments,
     _optional_int,
+    _segment_range_source,
+    _segment_ranges,
 )
 
 
@@ -52,3 +54,17 @@ def test_radar_fingerprint_preserves_large_integer_metadata_exactly():
 @pytest.mark.parametrize("value", [7.5, "7.5", True, np.array([7])])
 def test_radar_fingerprint_rejects_non_integer_metadata(value):
     assert _optional_int(value) is None
+
+
+def test_range_source_matches_enu_fallback_when_sensor_ranges_are_unusable():
+    segment = pd.DataFrame(
+        {
+            "range_m": [np.nan, "not-a-range"],
+            "east_m": [3.0, 5.0],
+            "north_m": [4.0, 12.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+
+    np.testing.assert_allclose(_segment_ranges(segment), np.array([5.0, 13.0]))
+    assert _segment_range_source(segment) == "enu_norm"
