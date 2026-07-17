@@ -51,6 +51,11 @@ except ImportError:
     class SequenceTransitionContext:
         """Minimal PyRecEst-compatible transition context."""
 
+        frame_index: int
+        previous_frame_index: int
+        current_frame_index: int
+        previous_node_index: int
+        current_node_index: int
         previous_miss_streak: int = 0
 
 else:
@@ -524,11 +529,18 @@ def _top_k_viterbi_paths_with_pyrecest(
         current: SequenceAssociationNode,
         context: SequenceTransitionContext,
     ) -> float:
+        frame_index = getattr(context, "frame_index", None)
+        has_prior_detection = (
+            True
+            if frame_index is None
+            else int(context.previous_miss_streak) < int(frame_index)
+        )
         return _transition_cost(
             _node_from_sequence_candidate(previous),
             _node_from_sequence_candidate(current),
             config,
             previous_miss_streak=context.previous_miss_streak,
+            has_prior_detection=has_prior_detection,
         )
 
     paths = solve_top_k_viterbi_sequence_associations(
@@ -588,16 +600,23 @@ def _selected_rows_from_viterbi_path(
 
     rows: list[pd.Series] = []
     preceding_miss_streak = 0
+    has_prior_detection = False
     for node in path:
         if node.is_miss or node.row is None:
             preceding_miss_streak += 1
             continue
         row = node.row.copy()
-        reacquisition_active = _reacquisition_is_active(preceding_miss_streak, node, config)
+        reacquisition_active = _reacquisition_is_active(
+            preceding_miss_streak,
+            node,
+            config,
+            has_prior_detection=has_prior_detection,
+        )
         reacquisition_cost = _reacquisition_cost(
             preceding_miss_streak,
             node,
             config,
+            has_prior_detection=has_prior_detection,
         )
         if "association_mode" not in row.index or pd.isna(row.get("association_mode")):
             row["association_mode"] = "tracklet-viterbi"
@@ -631,6 +650,7 @@ def _selected_rows_from_viterbi_path(
         )
         rows.append(row)
         preceding_miss_streak = 0
+        has_prior_detection = True
     return rows
 
 
@@ -858,6 +878,7 @@ def _transition_cost(
     config: TrackletViterbiAssociationConfig,
     *,
     previous_miss_streak: int | None = None,
+    has_prior_detection: bool = True,
 ) -> float:
     """Return dynamic-programming transition cost between two radar nodes."""
 
@@ -870,7 +891,12 @@ def _transition_cost(
             float(config.consecutive_miss_cost) if previous.is_miss else 0.0
         )
     if previous.is_miss or previous.position is None or current.position is None:
-        return _reacquisition_cost(miss_streak, current, config)
+        return _reacquisition_cost(
+            miss_streak,
+            current,
+            config,
+            has_prior_detection=has_prior_detection,
+        )
     dt_s = max(float(current.time_s) - float(previous.time_s), 1.0e-3)
     predicted = previous.position if previous.velocity is None else previous.position + previous.velocity * dt_s
     position_std = float(config.transition_position_std_m) + float(config.transition_speed_std_mps) * dt_s
@@ -888,7 +914,12 @@ def _transition_cost(
         + config.velocity_nis_weight * velocity_nis
         + speed_cost
         + _track_continuity_cost(previous.track_id, current.track_id, config)
-        + _reacquisition_cost(miss_streak, current, config)
+        + _reacquisition_cost(
+            miss_streak,
+            current,
+            config,
+            has_prior_detection=has_prior_detection,
+        )
     )
 
 
@@ -896,10 +927,12 @@ def _reacquisition_is_active(
     previous_miss_streak: int,
     current: _ViterbiNode,
     config: TrackletViterbiAssociationConfig,
+    *,
+    has_prior_detection: bool = True,
 ) -> bool:
     """Return whether RF-anchor reacquisition scoring applies to ``current``."""
 
-    if current.is_miss or not current.has_anchor:
+    if not has_prior_detection or current.is_miss or not current.has_anchor:
         return False
     return int(previous_miss_streak) >= int(config.reacquisition_miss_streak_threshold)
 
@@ -921,16 +954,24 @@ def _reacquisition_cost(
     previous_miss_streak: int,
     current: _ViterbiNode,
     config: TrackletViterbiAssociationConfig,
+    *,
+    has_prior_detection: bool = True,
 ) -> float:
     """Return miss-streak adaptive reacquisition cost around the RF anchor.
 
-    After a miss streak, the ordinary Viterbi objective has no previous radar
-    position to transition from.  This term uses the RF-only anchor as a search
-    tube: candidates inside a widened NIS gate receive a bounded reward, while
-    candidates outside the tube receive a smooth quadratic penalty.
+    After a miss streak following a selected detection, the ordinary Viterbi
+    objective has no previous radar position to transition from.  This term uses
+    the RF-only anchor as a search tube: candidates inside a widened NIS gate
+    receive a bounded reward, while candidates outside the tube receive a smooth
+    quadratic penalty.  Leading gaps are initial acquisition, not reacquisition.
     """
 
-    if not _reacquisition_is_active(previous_miss_streak, current, config):
+    if not _reacquisition_is_active(
+        previous_miss_streak,
+        current,
+        config,
+        has_prior_detection=has_prior_detection,
+    ):
         return 0.0
     gate_nis = max(_reacquisition_effective_gate_nis(previous_miss_streak, config), 1.0e-9)
     anchor_nis = max(0.0, float(current.anchor_nis))
