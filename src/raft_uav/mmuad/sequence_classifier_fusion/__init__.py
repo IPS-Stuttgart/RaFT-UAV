@@ -1,10 +1,4 @@
-"""Compatibility package validating sequence-classifier fusion weights.
-
-The maintained implementation lives in the sibling
-``sequence_classifier_fusion.py`` module. This package preserves the public
-import path while rejecting malformed image fusion weights before model
-selection, prediction, or artifact writes.
-"""
+"""Compatibility package validating sequence-classifier fusion inputs."""
 
 from __future__ import annotations
 
@@ -57,6 +51,90 @@ def _validated_image_weight(value: Any, *, name: str = "image_weight") -> float:
     return weight
 
 
+def _validated_probability_frame(rows: pd.DataFrame, *, name: str) -> pd.DataFrame:
+    """Validate one per-sequence probability table before fusion."""
+
+    out = pd.DataFrame(rows).copy()
+    if "sequence_id" not in out.columns:
+        if out.empty:
+            out["sequence_id"] = pd.Series(dtype=str)
+        else:
+            raise ValueError(f"{name} must contain a sequence_id column")
+    if out.empty:
+        return out.reset_index(drop=True)
+
+    sequence = out["sequence_id"].astype("string")
+    missing_sequence = sequence.isna() | sequence.str.strip().eq("")
+    if bool(missing_sequence.any()):
+        raise ValueError(f"{name} contains missing sequence_id values")
+    sequence = sequence.astype(str)
+    duplicates = sequence.loc[sequence.duplicated(keep=False)].drop_duplicates()
+    if not duplicates.empty:
+        duplicate_text = ", ".join(repr(value) for value in duplicates.iloc[:5])
+        raise ValueError(
+            f"{name} contains duplicate sequence_id values: {duplicate_text}"
+        )
+    out["sequence_id"] = sequence
+
+    probability_columns = [
+        f"predicted_probability_{label}"
+        for label in _IMPL.OFFICIAL_SEQUENCE_CLASS_LABELS
+        if f"predicted_probability_{label}" in out.columns
+    ]
+    if not probability_columns:
+        raise ValueError(
+            f"{name} must contain at least one official predicted_probability_* column"
+        )
+
+    invalid_rows = np.zeros(len(out), dtype=bool)
+    numeric_columns: dict[str, pd.Series] = {}
+    for column in probability_columns:
+        raw = out[column]
+        invalid_scalar = raw.map(
+            lambda value: isinstance(
+                value,
+                (bool, np.bool_, complex, np.complexfloating),
+            )
+            or np.ma.is_masked(value)
+        )
+        clean = raw.astype(object).where(~invalid_scalar, np.nan)
+        numeric = pd.to_numeric(clean, errors="coerce").astype(float)
+        values = numeric.to_numpy(dtype=float)
+        invalid_rows |= invalid_scalar.to_numpy(dtype=bool)
+        invalid_rows |= ~np.isfinite(values) | (values < 0.0)
+        numeric_columns[column] = numeric
+    if bool(invalid_rows.any()):
+        bad_sequences = out.loc[invalid_rows, "sequence_id"].astype(str).drop_duplicates()
+        bad_text = ", ".join(repr(value) for value in bad_sequences.iloc[:5])
+        raise ValueError(
+            f"{name} must contain finite non-negative real probabilities; "
+            f"invalid sequence_id values: {bad_text}"
+        )
+
+    out.loc[:, probability_columns] = pd.DataFrame(
+        numeric_columns,
+        index=out.index,
+    )
+    return out.reset_index(drop=True)
+
+
+def _validate_fused_probability_mass(rows: pd.DataFrame) -> None:
+    probability_columns = [
+        f"predicted_probability_{label}"
+        for label in _IMPL.OFFICIAL_SEQUENCE_CLASS_LABELS
+    ]
+    probability_mass = rows.loc[:, probability_columns].sum(axis=1).to_numpy(float)
+    invalid = ~np.isfinite(probability_mass) | (probability_mass <= 0.0)
+    if not bool(invalid.any()):
+        return
+    sequence_ids = rows.loc[invalid, "sequence_id"].astype(str).drop_duplicates()
+    sequence_text = ", ".join(repr(value) for value in sequence_ids.iloc[:5])
+    raise ValueError(
+        "fused probabilities contain zero probability mass for sequence_id values: "
+        f"{sequence_text}"
+    )
+
+
 def fuse_sequence_probabilities(
     image_probabilities: pd.DataFrame,
     nonimage_probabilities: pd.DataFrame,
@@ -65,15 +143,27 @@ def fuse_sequence_probabilities(
     eval_labels: dict[str, str] | None = None,
     class_source: str | None = None,
 ) -> pd.DataFrame:
-    """Blend probabilities after validating the reported fusion weight."""
+    """Blend validated image and non-image probability rows by sequence."""
 
-    return _LEGACY_FUSE_SEQUENCE_PROBABILITIES(
+    image_rows = _validated_probability_frame(
         image_probabilities,
+        name="image_probabilities",
+    )
+    nonimage_rows = _validated_probability_frame(
         nonimage_probabilities,
+        name="nonimage_probabilities",
+    )
+    if image_rows.empty and nonimage_rows.empty:
+        raise ValueError("at least one probability source must contain rows")
+    fused = _LEGACY_FUSE_SEQUENCE_PROBABILITIES(
+        image_rows,
+        nonimage_rows,
         image_weight=_validated_image_weight(image_weight),
         eval_labels=eval_labels,
         class_source=class_source,
     )
+    _validate_fused_probability_mass(fused)
+    return fused
 
 
 def select_train_safe_fusion(
@@ -112,6 +202,8 @@ def select_train_safe_fusion(
 
 
 _IMPL._validated_image_weight = _validated_image_weight
+_IMPL._validated_probability_frame = _validated_probability_frame
+_IMPL._validate_fused_probability_mass = _validate_fused_probability_mass
 _IMPL.fuse_sequence_probabilities = fuse_sequence_probabilities
 _IMPL.select_train_safe_fusion = select_train_safe_fusion
 
@@ -123,6 +215,8 @@ globals().update(
     }
 )
 globals()["_validated_image_weight"] = _validated_image_weight
+globals()["_validated_probability_frame"] = _validated_probability_frame
+globals()["_validate_fused_probability_mass"] = _validate_fused_probability_mass
 globals()["fuse_sequence_probabilities"] = fuse_sequence_probabilities
 globals()["select_train_safe_fusion"] = select_train_safe_fusion
 
