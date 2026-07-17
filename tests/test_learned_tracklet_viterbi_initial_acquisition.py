@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.baselines.learned_tracklet_viterbi import (
     _select_learned_tracklet_viterbi_path,
@@ -57,7 +58,7 @@ def _miss(frame_index: int) -> _ViterbiNode:
 
 
 def test_learned_tracklet_viterbi_does_not_reward_leading_misses(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     frames = [
         [_candidate(0), _miss(0)],
