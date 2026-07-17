@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import raft_uav.diagnostics.time_offset as time_offset_module
 from raft_uav.diagnostics.time_offset import (
@@ -119,6 +120,93 @@ def test_run_time_offset_diagnostic_keeps_rows_shiftable_into_truth_window(
     assert result["time_s"] == [-2.0, 0.0, 10.0, 12.0]
     strict = time_offset_module._legacy._inside_truth_window(measurements, truth)
     assert strict["time_s"].tolist() == [0.0, 10.0]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("tau_min_s", np.nan),
+        ("tau_max_s", np.inf),
+        ("tau_step_s", True),
+        ("tau_step_s", np.array([0.5])),
+        ("max_truth_time_delta_s", np.nan),
+        ("radar_catprob_threshold", np.nan),
+    ],
+)
+def test_run_time_offset_diagnostic_rejects_malformed_numeric_controls_before_io(
+    monkeypatch,
+    field,
+    value,
+):
+    def unexpected_run(**_kwargs):
+        raise AssertionError("legacy diagnostic should not run")
+
+    monkeypatch.setattr(
+        time_offset_module,
+        "_original_run_time_offset_diagnostic",
+        unexpected_run,
+    )
+    kwargs = {
+        "dataset_root": Path("."),
+        "flight_name": "dummy",
+        "source": "radar",
+        "tau_min_s": -1.0,
+        "tau_max_s": 1.0,
+        "tau_step_s": 0.5,
+        "radar_selection": "catprob-oracle-nearest",
+        "radar_catprob_threshold": 0.4,
+        "max_truth_time_delta_s": 2.0,
+        "write_plot": False,
+    }
+    kwargs[field] = value
+
+    with pytest.raises(ValueError, match=field):
+        time_offset_module.run_time_offset_diagnostic(**kwargs)
+
+
+def test_run_time_offset_diagnostic_normalizes_valid_scalar_controls(monkeypatch):
+    def capture_run(**kwargs):
+        return kwargs
+
+    monkeypatch.setattr(
+        time_offset_module,
+        "_original_run_time_offset_diagnostic",
+        capture_run,
+    )
+
+    result = time_offset_module.run_time_offset_diagnostic(
+        dataset_root=Path("."),
+        flight_name="dummy",
+        source="radar",
+        tau_min_s=np.array(-1.0),
+        tau_max_s=np.float64(1.0),
+        tau_step_s="0.5",
+        radar_catprob_threshold=np.array(0.4),
+        max_truth_time_delta_s=np.float64(2.0),
+        write_plot=False,
+    )
+
+    for field in (
+        "tau_min_s",
+        "tau_max_s",
+        "tau_step_s",
+        "radar_catprob_threshold",
+        "max_truth_time_delta_s",
+    ):
+        assert isinstance(result[field], float)
+    assert result["tau_min_s"] == -1.0
+    assert result["tau_max_s"] == 1.0
+    assert result["tau_step_s"] == 0.5
+    assert result["radar_catprob_threshold"] == 0.4
+    assert result["max_truth_time_delta_s"] == 2.0
+
+
+@pytest.mark.parametrize("threshold", [np.nan, True, np.array([0.4])])
+def test_catprob_candidate_pool_rejects_malformed_thresholds(threshold):
+    candidates = pd.DataFrame({"cat_prob_uav": [0.2, 0.8]})
+
+    with pytest.raises(ValueError, match="threshold must be a finite real scalar"):
+        time_offset_module.catprob_candidate_pool(candidates, threshold)
 
 
 def test_radar_frame_groups_preserves_rows_when_frame_index_is_incomplete():
