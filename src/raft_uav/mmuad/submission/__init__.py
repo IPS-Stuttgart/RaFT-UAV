@@ -51,13 +51,23 @@ def _strip_dataframe_column_whitespace(frame: Any) -> Any:
 def _validated_timestamp_tolerance(value: Any) -> float:
     """Return a finite non-negative timestamp tolerance scalar."""
 
-    if isinstance(value, (bool, _IMPL._impl.np.bool_)):
+    np = _IMPL._impl.np
+    scalar = value
+    if isinstance(scalar, (bool, np.bool_)):
+        raise ValueError("timestamp_tolerance_s must be non-negative and finite")
+    if isinstance(scalar, np.ndarray):
+        if scalar.ndim != 0:
+            raise ValueError("timestamp_tolerance_s must be non-negative and finite")
+        scalar = scalar.item()
+    elif isinstance(scalar, np.generic):
+        scalar = scalar.item()
+    if isinstance(scalar, (bool, complex)):
         raise ValueError("timestamp_tolerance_s must be non-negative and finite")
     try:
-        numeric = float(value)
+        numeric = float(scalar)
     except (TypeError, ValueError) as exc:
         raise ValueError("timestamp_tolerance_s must be non-negative and finite") from exc
-    if not _IMPL._impl.np.isfinite(numeric) or numeric < 0.0:
+    if not np.isfinite(numeric) or numeric < 0.0:
         raise ValueError("timestamp_tolerance_s must be non-negative and finite")
     return numeric
 
