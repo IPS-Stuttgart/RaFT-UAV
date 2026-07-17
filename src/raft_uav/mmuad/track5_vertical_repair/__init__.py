@@ -35,31 +35,43 @@ _NUMERIC_COLUMNS = (
 )
 
 
-def _positive_integer(value: object, *, name: str) -> int:
-    """Return a positive integer without lossy or Boolean coercion."""
+def _finite_real_scalar(value: object, *, message: str) -> float:
+    """Return a finite real scalar without array, Boolean, or complex coercion."""
 
-    if isinstance(value, (bool, np.bool_)):
-        raise ValueError(f"{name} must be a positive integer")
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(message)
     try:
-        numeric = float(value)
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if scalar.ndim != 0 or scalar.dtype.kind in {"b", "c"}:
+        raise ValueError(message)
+    try:
+        numeric = float(scalar.item())
     except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{name} must be a positive integer") from exc
-    if not np.isfinite(numeric) or numeric <= 0.0 or not numeric.is_integer():
-        raise ValueError(f"{name} must be a positive integer")
+        raise ValueError(message) from exc
+    if not np.isfinite(numeric):
+        raise ValueError(message)
+    return numeric
+
+
+def _positive_integer(value: object, *, name: str) -> int:
+    """Return a positive integer without lossy or non-scalar coercion."""
+
+    message = f"{name} must be a positive integer"
+    numeric = _finite_real_scalar(value, message=message)
+    if numeric <= 0.0 or not numeric.is_integer():
+        raise ValueError(message)
     return int(numeric)
 
 
 def _finite_nonnegative(value: object, *, name: str) -> float:
-    """Return a finite non-negative threshold without Boolean coercion."""
+    """Return a finite non-negative scalar without lossy coercion."""
 
-    if isinstance(value, (bool, np.bool_)):
-        raise ValueError(f"{name} must be finite and non-negative")
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{name} must be finite and non-negative") from exc
-    if not np.isfinite(numeric) or numeric < 0.0:
-        raise ValueError(f"{name} must be finite and non-negative")
+    message = f"{name} must be finite and non-negative"
+    numeric = _finite_real_scalar(value, message=message)
+    if numeric < 0.0:
+        raise ValueError(message)
     return numeric
 
 
@@ -135,6 +147,7 @@ globals().update(
     }
 )
 globals()["_NUMERIC_COLUMNS"] = _NUMERIC_COLUMNS
+globals()["_finite_real_scalar"] = _finite_real_scalar
 globals()["_positive_integer"] = _positive_integer
 globals()["_finite_nonnegative"] = _finite_nonnegative
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
