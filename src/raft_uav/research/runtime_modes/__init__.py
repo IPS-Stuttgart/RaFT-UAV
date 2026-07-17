@@ -14,6 +14,8 @@ import sys
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_int
+
 _LEGACY_PATH = Path(__file__).resolve().parent.parent / "runtime_modes.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.research._runtime_modes_legacy",
@@ -26,15 +28,24 @@ sys.modules[_SPEC.name] = _LEGACY
 _SPEC.loader.exec_module(_LEGACY)
 
 
-def _has_complete_frame_index(frame: pd.DataFrame) -> bool:
-    """Return whether every row has a numeric finite frame index."""
+def _exact_frame_indices(frame: pd.DataFrame) -> list[int] | None:
+    """Return exact integer frame IDs, or ``None`` when any value is invalid."""
 
     if frame.empty or "frame_index" not in frame.columns:
-        return False
-    values = pd.to_numeric(frame["frame_index"], errors="coerce").to_numpy(
-        dtype=float
-    )
-    return bool(np.isfinite(values).all())
+        return None
+    values: list[int] = []
+    for value in frame["frame_index"].tolist():
+        normalized = optional_int(value)
+        if normalized is None:
+            return None
+        values.append(normalized)
+    return values
+
+
+def _has_complete_frame_index(frame: pd.DataFrame) -> bool:
+    """Return whether every row has an exact integer frame index."""
+
+    return _exact_frame_indices(frame) is not None
 
 
 def _frame_groups(
@@ -46,14 +57,23 @@ def _frame_groups(
 
     if frame.empty:
         return []
+    exact_frame_indices = _exact_frame_indices(frame)
     if use_frame_index is None:
-        use_frame_index = _has_complete_frame_index(frame)
+        use_frame_index = exact_frame_indices is not None
 
     work = frame.copy()
     key_column = "_runtime_mode_frame_key"
     if use_frame_index:
-        values = pd.to_numeric(work["frame_index"], errors="coerce")
-        work[key_column] = values.to_numpy(dtype=float)
+        if exact_frame_indices is None:
+            raise ValueError(
+                "frame_index values must be exact integers when frame-index "
+                "grouping is enabled"
+            )
+        work[key_column] = pd.Series(
+            exact_frame_indices,
+            index=work.index,
+            dtype=object,
+        )
         key_kind = "frame_index"
     else:
         values = pd.to_numeric(work["time_s"], errors="coerce")
@@ -65,7 +85,7 @@ def _frame_groups(
     groups: list[tuple[tuple[str, int | float], pd.DataFrame]] = []
     for value, rows in work.groupby(key_column, sort=True):
         key = (
-            ("frame_index", int(float(value)))
+            ("frame_index", int(value))
             if key_kind == "frame_index"
             else ("time_s", round(float(value), 9))
         )
@@ -87,13 +107,16 @@ def _row_key(
         frame_index = getattr(row, "frame_index", np.nan)
         time_s = getattr(row, "time_s")
 
+    exact_frame_index = optional_int(frame_index)
     if use_frame_index is None:
-        try:
-            use_frame_index = bool(np.isfinite(float(frame_index)))
-        except (TypeError, ValueError):
-            use_frame_index = False
+        use_frame_index = exact_frame_index is not None
     if use_frame_index:
-        return ("frame_index", int(float(frame_index)))
+        if exact_frame_index is None:
+            raise ValueError(
+                "frame_index must be an exact integer when frame-index grouping "
+                "is enabled"
+            )
+        return ("frame_index", exact_frame_index)
     return ("time_s", round(float(time_s), 9))
 
 
@@ -237,6 +260,7 @@ def backward_repair_associations(
     )
 
 
+_LEGACY._exact_frame_indices = _exact_frame_indices
 _LEGACY._has_complete_frame_index = _has_complete_frame_index
 _LEGACY._frame_groups = _frame_groups
 _LEGACY._row_key = _row_key
@@ -246,6 +270,7 @@ _LEGACY.backward_repair_associations = backward_repair_associations
 for _name in dir(_LEGACY):
     if not (_name.startswith("__") and _name.endswith("__")):
         globals()[_name] = getattr(_LEGACY, _name)
+globals()["_exact_frame_indices"] = _exact_frame_indices
 globals()["_has_complete_frame_index"] = _has_complete_frame_index
 globals()["_frame_groups"] = _frame_groups
 globals()["_row_key"] = _row_key
