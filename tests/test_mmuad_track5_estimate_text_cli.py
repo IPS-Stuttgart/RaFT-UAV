@@ -57,6 +57,24 @@ def test_estimate_fit_wrapper_rewinds_file_like_csv_after_header_probe() -> None
     assert rows.loc[0, "time_s"] == 0.0
 
 
+def test_estimate_fit_wrapper_keeps_default_na_parsing_for_data_columns(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "missing_pose.csv"
+    csv_path.write_text(
+        "sequence_id,time_s,state_x_m,state_y_m,state_z_m\n"
+        "NA,0.0,,2.0,3.0\n",
+        encoding="utf-8",
+    )
+
+    rows = _read_csv_preserving_sequence_id(csv_path)
+    coordinates = rows[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
+
+    assert rows.loc[0, "sequence_id"] == "NA"
+    assert pd.isna(coordinates[0, 0])
+    assert rows.loc[0, "time_s"] == 0.0
+
+
 def test_estimate_fit_wrapper_accepts_scalar_dtype_without_coercing_sequence_ids(
     tmp_path: Path,
 ) -> None:
