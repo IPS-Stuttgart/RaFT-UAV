@@ -1,9 +1,9 @@
-"""Compatibility package that rejects Boolean Track 5 ensemble weights.
+"""Compatibility package validating Track 5 ensemble scalar controls.
 
 The maintained implementation lives in the sibling ``track5_estimate_ensemble.py``
-file. This wrapper preserves the public import surface while making weight
-validation reject Boolean pseudo-numbers before empty-template returns, weight
-configuration normalization, or estimate-file access.
+file. This wrapper preserves the public import surface while rejecting malformed
+weights and trim fractions before empty-template returns, weight configuration
+normalization, or estimate-file access.
 """
 
 from __future__ import annotations
@@ -13,8 +13,9 @@ from pathlib import Path
 import sys
 from typing import Any, Iterable
 
-import numpy as np
 import pandas as pd
+
+from raft_uav.numeric import optional_float
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_estimate_ensemble.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -34,25 +35,23 @@ _LEGACY_WRITE = _IMPL.write_track5_estimate_ensemble_outputs
 
 
 def _validate_ensemble_weight(weight: Any, *, label: str) -> float:
-    """Return a finite non-negative weight, rejecting Boolean pseudo-numbers."""
+    """Return one finite non-negative real scalar weight."""
 
-    is_boolean_array = isinstance(weight, np.ndarray) and np.issubdtype(
-        weight.dtype,
-        np.bool_,
-    )
-    if isinstance(weight, (bool, np.bool_)) or is_boolean_array:
+    parsed = optional_float(weight)
+    if parsed is None or parsed < 0.0:
         raise ValueError(
             f"estimate weight must be finite and non-negative for {label}: {weight!r}"
         )
-    try:
-        parsed = float(weight)
-    except (TypeError, ValueError) as exc:
+    return parsed
+
+
+def _validate_trim_fraction(value: Any) -> float:
+    """Return a finite real scalar trim fraction in the supported interval."""
+
+    parsed = optional_float(value)
+    if parsed is None or not 0.0 <= parsed < 0.5:
         raise ValueError(
-            f"estimate weight must be finite and non-negative for {label}: {weight!r}"
-        ) from exc
-    if not np.isfinite(parsed) or parsed < 0.0:
-        raise ValueError(
-            f"estimate weight must be finite and non-negative for {label}: {parsed}"
+            "trim_fraction must be a finite real scalar in [0, 0.5)"
         )
     return parsed
 
@@ -109,7 +108,7 @@ def apply_estimate_weight_config(
     *,
     missing_policy: str = "error",
 ) -> list[EstimateInput]:
-    """Apply a weight config without preserving Boolean inline weights."""
+    """Apply a weight config without preserving malformed inline weights."""
 
     updated = _LEGACY_APPLY_WEIGHT_CONFIG(
         estimate_inputs,
@@ -125,10 +124,11 @@ def build_track5_estimate_ensemble(
     *,
     max_nearest_time_delta_s: float | None = None,
     aggregation_policy: str = "weighted-mean",
-    trim_fraction: float = 0.2,
+    trim_fraction: Any = 0.2,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Build an ensemble after validating all weights exactly once up front."""
+    """Build an ensemble after validating numeric controls up front."""
 
+    trim_fraction = _validate_trim_fraction(trim_fraction)
     inputs = _validated_runtime_inputs(estimate_inputs)
     return _LEGACY_BUILD(
         inputs,
@@ -148,10 +148,11 @@ def write_track5_estimate_ensemble_outputs(
     default_classification: int | str = 0,
     max_nearest_time_delta_s: float | None = None,
     aggregation_policy: str = "weighted-mean",
-    trim_fraction: float = 0.2,
+    trim_fraction: Any = 0.2,
 ) -> dict[str, Path]:
-    """Write ensemble outputs after validating weights before estimate-file I/O."""
+    """Write ensemble outputs after validation and before estimate-file I/O."""
 
+    trim_fraction = _validate_trim_fraction(trim_fraction)
     inputs = _validated_estimate_input_objects(estimate_inputs)
     return _LEGACY_WRITE(
         estimate_inputs=inputs,
@@ -166,6 +167,7 @@ def write_track5_estimate_ensemble_outputs(
 
 
 _IMPL._validate_ensemble_weight = _validate_ensemble_weight
+_IMPL._validate_trim_fraction = _validate_trim_fraction
 _IMPL._normalize_estimate_weight_mapping = _normalize_estimate_weight_mapping
 _IMPL.apply_estimate_weight_config = apply_estimate_weight_config
 _IMPL.build_track5_estimate_ensemble = build_track5_estimate_ensemble
@@ -181,6 +183,7 @@ globals().update(
 
 # Keep the patched helpers available to direct imports and dependent wrappers.
 globals()["_validate_ensemble_weight"] = _validate_ensemble_weight
+globals()["_validate_trim_fraction"] = _validate_trim_fraction
 globals()["_normalize_estimate_weight_mapping"] = _normalize_estimate_weight_mapping
 globals()["_validated_runtime_inputs"] = _validated_runtime_inputs
 globals()["_validated_estimate_input_objects"] = _validated_estimate_input_objects
