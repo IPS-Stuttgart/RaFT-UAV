@@ -28,6 +28,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Upload temporary source bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-1428-source-${{ matrix.python-version }}
+          path: |
+            src/raft_uav/baselines/tracklet_viterbi.py
+            src/raft_uav/baselines/learned_tracklet_viterbi.py
+            tests/test_tracklet_viterbi_association.py
+            tests/test_tracklet_viterbi_reacquisition.py
+          if-no-files-found: error
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
         with:
