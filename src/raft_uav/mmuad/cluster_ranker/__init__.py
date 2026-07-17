@@ -23,6 +23,7 @@ _SPEC.loader.exec_module(_IMPL)
 
 _LEGACY_TRAIN_CLUSTER_RANKER = _IMPL.train_cluster_ranker
 _LEGACY_BINARY_AUC = _IMPL._binary_auc
+_LEGACY_RANKER_PREDICTION_SUMMARY = _IMPL._ranker_prediction_summary
 _INVALID_BINARY_TARGET = object()
 _TRUE_TARGET_TOKENS = frozenset({"true", "t", "yes", "y", "on"})
 _FALSE_TARGET_TOKENS = frozenset({"false", "f", "no", "n", "off"})
@@ -84,6 +85,29 @@ def _binary_auc(scores: pd.Series, labels: pd.Series) -> float:
             score_series.loc[valid],
             normalized.loc[valid],
         )
+    )
+
+
+def _ranker_prediction_summary(
+    rows: pd.DataFrame,
+    *,
+    sequence: str,
+    split: str,
+    protocol: str,
+) -> dict[str, Any]:
+    """Summarize predictions after preserving serialized target semantics."""
+
+    normalized = pd.DataFrame(rows).copy()
+    if "good_cluster" in normalized.columns:
+        normalized["good_cluster"] = _normalize_binary_targets(
+            normalized["good_cluster"],
+            target_column="good_cluster",
+        )
+    return _LEGACY_RANKER_PREDICTION_SUMMARY(
+        normalized,
+        sequence=sequence,
+        split=split,
+        protocol=protocol,
     )
 
 
@@ -154,6 +178,7 @@ def _binary_target_value(value: object) -> object:
 
 _IMPL.train_cluster_ranker = train_cluster_ranker
 _IMPL._binary_auc = _binary_auc
+_IMPL._ranker_prediction_summary = _ranker_prediction_summary
 
 globals().update(
     {
@@ -164,6 +189,7 @@ globals().update(
 )
 globals()["train_cluster_ranker"] = train_cluster_ranker
 globals()["_binary_auc"] = _binary_auc
+globals()["_ranker_prediction_summary"] = _ranker_prediction_summary
 globals()["_normalize_binary_targets"] = _normalize_binary_targets
 globals()["_binary_target_value"] = _binary_target_value
 
