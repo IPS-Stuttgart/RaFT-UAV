@@ -40,22 +40,23 @@ def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
     dtype_arg = kwargs.pop("dtype", None)
     converters = dict(kwargs.pop("converters", {}) or {})
     sequence_columns = _sequence_columns_for_csv(path, *args, **kwargs)
+    for column in list(converters):
+        if str(column).strip().lower() in _SEQUENCE_COLUMN_KEYS:
+            converters.pop(column, None)
     for column in sequence_columns:
-        converters.pop(column, None)
-    if dtype_arg is None:
-        dtype = {column: "string" for column in sequence_columns}
-    elif isinstance(dtype_arg, Mapping):
-        dtype = dict(dtype_arg)
-        for column in sequence_columns:
-            dtype[column] = "string"
+        converters[column] = _sequence_id_text
+    if isinstance(dtype_arg, Mapping):
+        dtype = {
+            column: value
+            for column, value in dtype_arg.items()
+            if str(column).strip().lower() not in _SEQUENCE_COLUMN_KEYS
+        }
     else:
         dtype = dtype_arg
-        for column in sequence_columns:
-            converters[column] = _sequence_id_text
-    kwargs["dtype"] = dtype
+    if dtype is not None:
+        kwargs["dtype"] = dtype
     if converters:
         kwargs["converters"] = converters
-    kwargs.setdefault("keep_default_na", False)
     rows = _ORIGINAL_READ_CSV(path, *args, **kwargs)
     out = rows.copy()
     out.columns = [str(column).strip() for column in out.columns]
