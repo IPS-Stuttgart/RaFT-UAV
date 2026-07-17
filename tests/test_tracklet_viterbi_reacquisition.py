@@ -81,4 +81,5 @@ def test_tracklet_viterbi_reacquires_rf_anchor_after_miss_streak():
     reacquired = selected.iloc[-1]
     assert bool(reacquired["association_reacquisition_active"])
     assert int(reacquired["association_preceding_miss_streak"]) == 1
-    assert float(reacquired["association_reacquisition_cost"]) < 0.0
+    reacquisition_cost = float(reacquired["association_reacquisition_cost"])
+    assert -2.0 <= reacquisition_cost < 0.0
