@@ -27,6 +27,12 @@ _INVALID_TRACK_IDS = {
     "-1.0",
     "false",
     "true",
+    "inf",
+    "+inf",
+    "-inf",
+    "infinity",
+    "+infinity",
+    "-infinity",
 }
 _CANONICAL_INTEGER_TEXT = re.compile(r"^[+-]?(?:0|[1-9][0-9]*)(?:\.0+)?$")
 
@@ -72,6 +78,8 @@ def canonical_track_id(value: Any) -> str | None:
 
     if value is None:
         return None
+    if isinstance(value, Decimal) and not value.is_finite():
+        return None
     try:
         if bool(pd.isna(value)):
             return None
@@ -101,6 +109,13 @@ def canonical_track_id(value: Any) -> str | None:
     text = str(value).strip()
     if text.lower() in _INVALID_TRACK_IDS:
         return None
+    try:
+        numeric_text = Decimal(text)
+    except InvalidOperation:
+        pass
+    else:
+        if not numeric_text.is_finite():
+            return None
     if not _CANONICAL_INTEGER_TEXT.fullmatch(text):
         return text
     try:
