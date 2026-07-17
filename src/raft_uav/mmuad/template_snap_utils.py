@@ -176,7 +176,8 @@ def _resampled_position(
     extrapolated = bool(timestamp < times[0] or timestamp > times[-1])
     gap_s = _bracketing_gap_s(times, float(timestamp))
     fallback = (
-        max_interpolation_gap_s is not None
+        resample_method == "linear"
+        and max_interpolation_gap_s is not None
         and np.isfinite(gap_s)
         and gap_s > float(max_interpolation_gap_s)
     )
