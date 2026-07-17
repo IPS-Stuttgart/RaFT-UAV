@@ -42,6 +42,10 @@ def optional_int(value: object) -> int | None:
             return _optional_decimal_int(Decimal(text))
         except InvalidOperation:
             return None
+    if isinstance(value, float | np.floating):
+        if not np.isfinite(value) or not value.is_integer():
+            return None
+        return int(value)
     number = optional_float(value)
     if number is None:
         return None
