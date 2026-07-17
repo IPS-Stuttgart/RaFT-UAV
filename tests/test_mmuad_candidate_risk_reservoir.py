@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.candidate_reservoir import ReservoirConfig
 from raft_uav.mmuad.candidate_risk_reservoir import (
     attach_candidate_risk_score,
     build_risk_adjusted_reservoir,
     main as risk_reservoir_main,
+    risk_adjusted_reservoir_summary,
 )
 
 
@@ -52,6 +55,90 @@ def test_risk_score_prefers_lower_uncertainty_candidate() -> None:
     assert first.iloc[0]["track_id"] == "low-risk-0"
     assert first.iloc[0]["candidate_risk_sigma_m"] == 1.0
     assert first.iloc[1]["candidate_risk_log_sigma_penalty"] > 0.0
+
+
+def test_nonfinite_primary_score_uses_finite_fallback_score() -> None:
+    rows = _candidate_rows()
+    rows.loc[0, "candidate_class_calibrated_score"] = np.inf
+    rows.loc[0, "ranker_score"] = 0.25
+
+    scored = attach_candidate_risk_score(rows, uncertainty_weight=0.0)
+    first = scored.rows.loc[scored.rows["track_id"] == "low-risk-0"].iloc[0]
+
+    assert first["candidate_risk_base_score"] == 0.25
+    assert first["candidate_risk_probability"] == 0.25
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        np.nan,
+        np.inf,
+        -np.inf,
+        True,
+        np.bool_(False),
+        1.0 + 0.0j,
+        np.array([1.0]),
+        np.ma.masked,
+    ],
+)
+def test_risk_score_rejects_malformed_uncertainty_weight(value: object) -> None:
+    with pytest.raises(
+        ValueError,
+        match="uncertainty_weight must be a finite non-negative real scalar",
+    ):
+        attach_candidate_risk_score(pd.DataFrame(), uncertainty_weight=value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        0.0,
+        -1.0,
+        np.nan,
+        np.inf,
+        -np.inf,
+        True,
+        np.bool_(False),
+        1.0 + 0.0j,
+        np.array([1.0]),
+        np.ma.masked,
+    ],
+)
+def test_risk_score_rejects_malformed_sigma_floor(value: object) -> None:
+    with pytest.raises(
+        ValueError,
+        match="sigma_floor_m must be a finite positive real scalar",
+    ):
+        attach_candidate_risk_score(pd.DataFrame(), sigma_floor_m=value)
+
+
+def test_risk_score_accepts_zero_dimensional_real_controls() -> None:
+    scored = attach_candidate_risk_score(
+        _candidate_rows(),
+        uncertainty_weight=np.array(0.5),
+        sigma_floor_m=np.float64(1.0),
+    )
+
+    assert scored.rows["candidate_risk_uncertainty_weight"].eq(0.5).all()
+    assert scored.rows["candidate_risk_sigma_floor_m"].eq(1.0).all()
+    assert np.isfinite(scored.rows["candidate_risk_adjusted_score"]).all()
+
+
+def test_risk_summary_ignores_nonfinite_values() -> None:
+    scored = attach_candidate_risk_score(_candidate_rows())
+    scored.rows["candidate_risk_adjusted_score"] = [1.0, np.inf, -np.inf, np.nan]
+    scored.rows["candidate_risk_sigma_m"] = [2.0, np.inf, -np.inf, np.nan]
+    scored.rows["candidate_risk_probability"] = [0.5, np.inf, -np.inf, np.nan]
+
+    summary = risk_adjusted_reservoir_summary(scored, scored.rows.iloc[[0]])
+
+    assert summary["risk_score_mean"] == 1.0
+    assert summary["risk_score_p05"] == 1.0
+    assert summary["risk_score_p95"] == 1.0
+    assert summary["candidate_sigma_mean_m"] == 2.0
+    assert summary["candidate_sigma_p95_m"] == 2.0
+    assert summary["candidate_probability_mean"] == 0.5
 
 
 def test_risk_adjusted_reservoir_changes_global_top1() -> None:
