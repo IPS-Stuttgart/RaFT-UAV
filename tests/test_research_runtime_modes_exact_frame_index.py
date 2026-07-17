@@ -36,7 +36,7 @@ def _repair(selected: pd.DataFrame, candidates: pd.DataFrame) -> pd.DataFrame:
         selected,
         candidates,
         max_gap_s=4.0,
-        max_repair_distance_m=0.0,
+        max_repair_distance_m=1.0e-12,
     )
 
 
