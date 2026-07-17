@@ -16,6 +16,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.submission import parse_official_classification_cell
+from raft_uav.mmuad.submission import parse_official_sequence_cell
+
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_hampel_repair.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.mmuad._track5_hampel_repair_legacy",
@@ -116,6 +119,32 @@ def _validated_float_controls(
     }
 
 
+def _normalize_fixed_grid_values(
+    values: pd.Series,
+    *,
+    parser: Any,
+    description: str,
+) -> list[Any]:
+    """Parse fixed-grid identifiers and report zero-based invalid row positions."""
+
+    normalized: list[Any] = []
+    invalid_positions: list[int] = []
+    for position, value in enumerate(values.tolist()):
+        try:
+            normalized.append(parser(value))
+        except (TypeError, ValueError, OverflowError):
+            normalized.append(None)
+            invalid_positions.append(position)
+    if invalid_positions:
+        preview = ", ".join(str(position) for position in invalid_positions[:5])
+        suffix = ", ..." if len(invalid_positions) > 5 else ""
+        raise ValueError(
+            f"submission contains invalid {description} at row positions: "
+            f"{preview}{suffix}"
+        )
+    return normalized
+
+
 def _load_track5_submission_frame_rejecting_invalid_rows(
     submission: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -148,7 +177,7 @@ def _load_track5_submission_frame_rejecting_invalid_rows(
             )
             out = pd.DataFrame(
                 {
-                    "sequence_id": official["Sequence"].astype(str),
+                    "sequence_id": official["Sequence"],
                     "time_s": pd.to_numeric(official["Timestamp"], errors="coerce"),
                     "state_x_m": xyz["state_x_m"],
                     "state_y_m": xyz["state_y_m"],
@@ -156,12 +185,21 @@ def _load_track5_submission_frame_rejecting_invalid_rows(
                     "Classification": official["Classification"],
                 }
             )
+    out["sequence_id"] = _normalize_fixed_grid_values(
+        out["sequence_id"],
+        parser=parse_official_sequence_cell,
+        description="sequence identifiers",
+    )
+    out["Classification"] = _normalize_fixed_grid_values(
+        out["Classification"],
+        parser=parse_official_classification_cell,
+        description="Classification values",
+    )
     numeric_columns = (
         "time_s",
         "state_x_m",
         "state_y_m",
         "state_z_m",
-        "Classification",
     )
     for column in numeric_columns:
         out[column] = pd.to_numeric(out[column], errors="coerce")
@@ -333,6 +371,7 @@ globals()["_repair_xyz_once"] = _repair_xyz_once
 globals()["_normalize_positive_integer"] = _normalize_positive_integer
 globals()["_finite_scalar"] = _finite_scalar
 globals()["_validated_float_controls"] = _validated_float_controls
+globals()["_normalize_fixed_grid_values"] = _normalize_fixed_grid_values
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
