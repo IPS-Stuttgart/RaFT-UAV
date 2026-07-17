@@ -27,6 +27,7 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR = "_raft_uav_original_normalize_track5_template"
 
 _LEGACY_LOAD_SEQUENCE_CLASS_MAP = _IMPL.load_sequence_class_map
+_LEGACY_VALIDATE_OFFICIAL_TRACK5_SUBMISSION = _IMPL.validate_official_track5_submission
 if not hasattr(_IMPL._impl, _ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR):
     setattr(
         _IMPL._impl,
@@ -45,6 +46,37 @@ def _strip_dataframe_column_whitespace(frame: Any) -> Any:
     out = frame.copy()
     out.columns = [str(column).strip() for column in out.columns]
     return out
+
+
+def _validated_timestamp_tolerance(value: Any) -> float:
+    """Return a finite non-negative timestamp tolerance scalar."""
+
+    if isinstance(value, (bool, _IMPL._impl.np.bool_)):
+        raise ValueError("timestamp_tolerance_s must be non-negative and finite")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("timestamp_tolerance_s must be non-negative and finite") from exc
+    if not _IMPL._impl.np.isfinite(numeric) or numeric < 0.0:
+        raise ValueError("timestamp_tolerance_s must be non-negative and finite")
+    return numeric
+
+
+def _validate_official_track5_submission_with_finite_tolerance(
+    path: Path | str,
+    *,
+    template: Any | None = None,
+    timestamp_tolerance_s: float = 1.0e-6,
+    require_zip: bool = True,
+) -> Any:
+    """Validate Track 5 submissions with a well-defined timestamp tolerance."""
+
+    return _LEGACY_VALIDATE_OFFICIAL_TRACK5_SUBMISSION(
+        path,
+        template=template,
+        timestamp_tolerance_s=_validated_timestamp_tolerance(timestamp_tolerance_s),
+        require_zip=require_zip,
+    )
 
 
 def _normalize_track5_template_with_stripped_headers(template: Any) -> Any:
@@ -98,6 +130,12 @@ _IMPL._impl.load_sequence_class_map = _load_sequence_class_map_with_stripped_csv
 _IMPL.load_sequence_class_map = _load_sequence_class_map_with_stripped_csv_headers
 _IMPL._impl._normalize_track5_template = _normalize_track5_template_with_stripped_headers
 _IMPL._normalize_track5_template = _normalize_track5_template_with_stripped_headers
+_IMPL._impl.validate_official_track5_submission = (
+    _validate_official_track5_submission_with_finite_tolerance
+)
+_IMPL.validate_official_track5_submission = (
+    _validate_official_track5_submission_with_finite_tolerance
+)
 
 globals().update(
     {
@@ -109,5 +147,8 @@ globals().update(
 
 load_sequence_class_map = _load_sequence_class_map_with_stripped_csv_headers
 _normalize_track5_template = _normalize_track5_template_with_stripped_headers
+validate_official_track5_submission = (
+    _validate_official_track5_submission_with_finite_tolerance
+)
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
