@@ -1,4 +1,4 @@
-"""Compatibility package validating NIS calibration measurement dimensions."""
+"""Compatibility package hardening NIS diagnostics normalization."""
 
 from __future__ import annotations
 
@@ -23,18 +23,54 @@ _SPEC.loader.exec_module(_IMPL)
 _LEGACY_NORMALIZED_DIAGNOSTICS_FRAME = _IMPL._normalized_diagnostics_frame
 
 
+def _truthy(value: object) -> bool:
+    """Interpret missing or non-scalar acceptance values as not accepted."""
+
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    if value is None:
+        return False
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)):
+        if bool(missing):
+            return False
+    else:
+        return False
+    try:
+        return bool(value)
+    except (TypeError, ValueError):
+        return False
+
+
 def _normalized_diagnostics_frame(
     frame: pd.DataFrame,
     *,
     accepted_only: bool,
 ) -> pd.DataFrame:
-    """Normalize diagnostics without truncating malformed measurement dimensions."""
+    """Normalize diagnostics without inventing source groups or truncating dimensions."""
 
-    if "measurement_dim" in frame.columns:
-        _validate_measurement_dimensions(frame["measurement_dim"])
+    required = {"source", "measurement_dim", "nis"}
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise KeyError(f"diagnostics frame is missing required columns: {missing}")
+
+    _validate_measurement_dimensions(frame["measurement_dim"])
+
+    work = frame.copy()
+    if accepted_only and "accepted" in work.columns:
+        work = work.loc[work["accepted"].map(_truthy)].copy()
+
+    source = work["source"].astype("string").str.strip()
+    valid_source = source.notna() & source.ne("").fillna(False)
+    work = work.loc[valid_source].copy()
+    work["source"] = source.loc[work.index].astype(str)
+
     return _LEGACY_NORMALIZED_DIAGNOSTICS_FRAME(
-        frame,
-        accepted_only=accepted_only,
+        work,
+        accepted_only=False,
     )
 
 
@@ -72,6 +108,7 @@ def _validate_measurement_dimensions(values: pd.Series) -> None:
         )
 
 
+_IMPL._truthy = _truthy
 _IMPL._normalized_diagnostics_frame = _normalized_diagnostics_frame
 
 globals().update(
@@ -81,6 +118,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_truthy"] = _truthy
 globals()["_normalized_diagnostics_frame"] = _normalized_diagnostics_frame
 globals()["_validate_measurement_dimensions"] = _validate_measurement_dimensions
 
