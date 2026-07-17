@@ -14,6 +14,8 @@ import sys
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_int as _optional_int
+
 _LEGACY_PATH = Path(__file__).resolve().parent.parent / "runtime_modes.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.research._runtime_modes_legacy",
@@ -27,14 +29,11 @@ _SPEC.loader.exec_module(_LEGACY)
 
 
 def _has_complete_frame_index(frame: pd.DataFrame) -> bool:
-    """Return whether every row has a numeric finite frame index."""
+    """Return whether every row has an exact integer frame index."""
 
     if frame.empty or "frame_index" not in frame.columns:
         return False
-    values = pd.to_numeric(frame["frame_index"], errors="coerce").to_numpy(
-        dtype=float
-    )
-    return bool(np.isfinite(values).all())
+    return all(_optional_int(value) is not None for value in frame["frame_index"])
 
 
 def _frame_groups(
@@ -52,8 +51,17 @@ def _frame_groups(
     work = frame.copy()
     key_column = "_runtime_mode_frame_key"
     if use_frame_index:
-        values = pd.to_numeric(work["frame_index"], errors="coerce")
-        work[key_column] = values.to_numpy(dtype=float)
+        values = pd.Series(
+            [_optional_int(value) for value in work["frame_index"]],
+            index=work.index,
+            dtype=object,
+        )
+        if values.isna().any():
+            raise ValueError(
+                "frame_index must contain exact integers when frame-index grouping "
+                "is active"
+            )
+        work[key_column] = values
         key_kind = "frame_index"
     else:
         values = pd.to_numeric(work["time_s"], errors="coerce")
@@ -65,7 +73,7 @@ def _frame_groups(
     groups: list[tuple[tuple[str, int | float], pd.DataFrame]] = []
     for value, rows in work.groupby(key_column, sort=True):
         key = (
-            ("frame_index", int(float(value)))
+            ("frame_index", int(value))
             if key_kind == "frame_index"
             else ("time_s", round(float(value), 9))
         )
@@ -87,13 +95,16 @@ def _row_key(
         frame_index = getattr(row, "frame_index", np.nan)
         time_s = getattr(row, "time_s")
 
+    normalized_frame_index = _optional_int(frame_index)
     if use_frame_index is None:
-        try:
-            use_frame_index = bool(np.isfinite(float(frame_index)))
-        except (TypeError, ValueError):
-            use_frame_index = False
+        use_frame_index = normalized_frame_index is not None
     if use_frame_index:
-        return ("frame_index", int(float(frame_index)))
+        if normalized_frame_index is None:
+            raise ValueError(
+                "frame_index must be an exact integer when frame-index grouping "
+                "is active"
+            )
+        return ("frame_index", normalized_frame_index)
     return ("time_s", round(float(time_s), 9))
 
 
