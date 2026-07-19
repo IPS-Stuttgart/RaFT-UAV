@@ -26,6 +26,54 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_LEGACY_LEADERBOARD_ENTRIES_FROM_CONFIG = _IMPL.leaderboard_entries_from_config
+_LEGACY_BUILD_MMUAD_LEADERBOARD = _IMPL.build_mmuad_leaderboard
+
+
+def _validate_unique_method_labels(entries: list[Any]) -> None:
+    """Reject duplicate method labels before evaluation summaries can be overwritten."""
+
+    seen: set[Any] = set()
+    duplicates: list[Any] = []
+    for entry in entries:
+        method = entry.method
+        if method in seen and method not in duplicates:
+            duplicates.append(method)
+        seen.add(method)
+    if duplicates:
+        labels = ", ".join(repr(method) for method in duplicates)
+        raise ValueError(
+            "leaderboard method labels must be unique; "
+            f"duplicate labels: {labels}"
+        )
+
+
+def leaderboard_entries_from_config(
+    payload: dict[str, Any],
+    *,
+    base_dir: Path | None = None,
+) -> list[Any]:
+    """Build config entries while rejecting labels that would overwrite summaries."""
+
+    entries = _LEGACY_LEADERBOARD_ENTRIES_FROM_CONFIG(payload, base_dir=base_dir)
+    _validate_unique_method_labels(entries)
+    return entries
+
+
+def build_mmuad_leaderboard(
+    entries: Any,
+    *,
+    rank_metric: str = _IMPL.DEFAULT_RANK_METRIC,
+) -> Any:
+    """Evaluate entries only after confirming every method label is unique."""
+
+    entry_list = list(entries)
+    _validate_unique_method_labels(entry_list)
+    return _LEGACY_BUILD_MMUAD_LEADERBOARD(
+        entry_list,
+        rank_metric=rank_metric,
+    )
+
 
 def rank_leaderboard_frame(
     frame: pd.DataFrame,
@@ -159,6 +207,8 @@ def _nonnegative_finite_config_float(value: Any, field: str) -> float:
     return numeric
 
 
+_IMPL.leaderboard_entries_from_config = leaderboard_entries_from_config
+_IMPL.build_mmuad_leaderboard = build_mmuad_leaderboard
 _IMPL.rank_leaderboard_frame = rank_leaderboard_frame
 _IMPL._nonnegative_finite_config_float = _nonnegative_finite_config_float
 
@@ -169,7 +219,10 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["leaderboard_entries_from_config"] = leaderboard_entries_from_config
+globals()["build_mmuad_leaderboard"] = build_mmuad_leaderboard
 globals()["rank_leaderboard_frame"] = rank_leaderboard_frame
+globals()["_validate_unique_method_labels"] = _validate_unique_method_labels
 globals()["_leaderboard_eligibility_mask"] = _leaderboard_eligibility_mask
 globals()["_optional_leaderboard_flag_value"] = _optional_leaderboard_flag_value
 globals()["_leaderboard_flag_value"] = _leaderboard_flag_value
