@@ -110,16 +110,32 @@ def _row_event_key(row: pd.Series) -> tuple[str, int | float]:
     return ("time_s", round(float(row["time_s"]), 9))
 
 
+def _dense_track_id_surrogates(values: pd.Series) -> pd.Series:
+    """Map exact track IDs to small nullable integers without float coercion."""
+
+    surrogates: dict[int, int] = {}
+    dense_values: list[int | None] = []
+    for value in values:
+        track_id = _optional_int(value)
+        if track_id is None:
+            dense_values.append(None)
+            continue
+        if track_id not in surrogates:
+            surrogates[track_id] = len(surrogates)
+        dense_values.append(surrogates[track_id])
+    return pd.Series(dense_values, index=values.index, dtype="Int64")
+
+
 def track_switch_metrics(
     selected: pd.DataFrame,
     *,
     long_gap_s: float = 5.0,
 ) -> dict[str, object]:
-    """Compute switch metrics without inventing IDs from malformed values."""
+    """Compute switch metrics without inventing or merging track identities."""
 
     normalized = selected.copy()
     if "track_id" in normalized.columns:
-        normalized["track_id"] = normalized["track_id"].map(_optional_int)
+        normalized["track_id"] = _dense_track_id_surrogates(normalized["track_id"])
     return _ORIGINAL_TRACK_SWITCH_METRICS(normalized, long_gap_s=long_gap_s)
 
 

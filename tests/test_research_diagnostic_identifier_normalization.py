@@ -129,3 +129,24 @@ def test_track_switch_metrics_keep_exact_integer_like_identifiers() -> None:
 
     assert metrics["track_switch_count"] == 1
     assert metrics["unique_track_ids"] == 2
+
+
+def test_track_switch_metrics_preserve_large_ids_across_invalid_row() -> None:
+    selected = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0, 2.0],
+            "track_id": [
+                "9007199254740992",
+                "not-a-track-id",
+                "9007199254740993",
+            ],
+        }
+    )
+
+    metrics = track_switch_metrics(selected)
+
+    assert metrics["selected_radar_rows"] == 3
+    assert metrics["track_switch_count"] == 1
+    assert metrics["unique_track_ids"] == 2
+    assert np.isclose(metrics["dominant_track_fraction"], 0.5)
+    assert np.isclose(metrics["track_id_entropy"], 1.0)
