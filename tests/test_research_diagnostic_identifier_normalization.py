@@ -41,6 +41,40 @@ def test_association_regret_keeps_fractional_frame_indices_distinct() -> None:
     assert regret.loc[0, "association_regret_m"] == 0.0
 
 
+def test_association_regret_keeps_valid_indices_when_another_row_is_missing() -> None:
+    truth = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0],
+            "east_m": [0.0, 1.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+    radar = pd.DataFrame(
+        {
+            "frame_index": [10, 11, np.nan],
+            "time_s": [0.0, 0.0, 1.0],
+            "east_m": [0.0, 100.0, 1.0],
+            "north_m": [0.0, 0.0, 0.0],
+            "up_m": [0.0, 0.0, 0.0],
+            "track_id": [10, 20, 30],
+        }
+    )
+
+    regret = association_regret(
+        radar.iloc[[0]].copy(),
+        radar,
+        truth,
+        max_time_delta_s=0.1,
+    )
+
+    assert regret.loc[0, "event_key"] == "frame_index:10"
+    assert regret.loc[0, "candidate_count"] == 1
+    assert regret.loc[0, "selected_track_id"] == 10
+    assert regret.loc[0, "best_track_id"] == 10
+    assert regret.loc[0, "association_regret_m"] == 0.0
+
+
 def test_association_regret_does_not_truncate_fractional_track_ids() -> None:
     truth = pd.DataFrame(
         {

@@ -11,7 +11,6 @@ import importlib.util
 from pathlib import Path
 import sys
 
-import numpy as np
 import pandas as pd
 
 from raft_uav.numeric import optional_float as _optional_float
@@ -43,7 +42,7 @@ def _event_index_value(value: object) -> int | float | None:
 def _radar_frame_groups(
     radar: pd.DataFrame,
 ) -> list[tuple[tuple[str, int | float], pd.DataFrame]]:
-    """Group physical radar frames without dropping or merging valid indices."""
+    """Group rows by exact frame index, falling back to time per row."""
 
     if radar.empty:
         return []
@@ -53,42 +52,38 @@ def _radar_frame_groups(
         if column in radar.columns
     ]
     ordered = radar.sort_values(sort_columns, kind="mergesort").copy()
-    frame_indices = None
-    if "frame_index" in ordered.columns:
-        frame_indices = pd.Series(
-            [_event_index_value(value) for value in ordered["frame_index"]],
-            index=ordered.index,
-            dtype=object,
+    frame_values = (
+        ordered["frame_index"].tolist()
+        if "frame_index" in ordered.columns
+        else [None] * len(ordered)
+    )
+    time_values = (
+        ordered["time_s"].tolist()
+        if "time_s" in ordered.columns
+        else [None] * len(ordered)
+    )
+
+    group_keys: list[tuple[str, int | float] | None] = []
+    for frame_index, time_s in zip(frame_values, time_values, strict=True):
+        event_index = _event_index_value(frame_index)
+        if event_index is not None:
+            group_keys.append(("frame_index", event_index))
+            continue
+        event_time = _optional_float(time_s)
+        group_keys.append(
+            None if event_time is None else ("time_s", round(event_time, 9))
         )
-    use_frame_index = frame_indices is not None and bool(frame_indices.notna().all())
-    if use_frame_index:
-        ordered["_research_diagnostic_frame_key"] = frame_indices
-        key_kind = "frame_index"
-    else:
-        times = pd.to_numeric(ordered["time_s"], errors="coerce")
-        finite = np.isfinite(times.to_numpy(dtype=float))
-        ordered = ordered.loc[finite].copy()
-        ordered["_research_diagnostic_frame_key"] = times.loc[finite].to_numpy(
-            dtype=float
-        )
-        key_kind = "time_s"
+
+    key_column = "_research_diagnostic_frame_key"
+    ordered[key_column] = group_keys
+    ordered = ordered.loc[ordered[key_column].notna()].copy()
 
     groups: list[tuple[tuple[str, int | float], pd.DataFrame]] = []
-    for key, group in ordered.groupby(
-        "_research_diagnostic_frame_key",
-        sort=True,
-    ):
-        if key_kind == "frame_index":
-            event_index = _event_index_value(key)
-            if event_index is None:  # pragma: no cover - guarded above
-                continue
-            event_key = ("frame_index", event_index)
-        else:
-            event_key = ("time_s", round(float(group["time_s"].median()), 9))
+    for event_key, group in ordered.groupby(key_column, sort=False):
         groups.append(
             (
                 event_key,
-                group.drop(columns="_research_diagnostic_frame_key").copy(),
+                group.drop(columns=key_column).copy(),
             )
         )
     return groups
