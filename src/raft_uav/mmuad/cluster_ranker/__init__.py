@@ -142,13 +142,18 @@ def _binary_target_value(value: object) -> object:
         return bool(value)
     if value is None or value is pd.NA:
         return pd.NA
-    if isinstance(value, (int, np.integer, float, np.floating)):
-        numeric = float(value)
-        if not np.isfinite(numeric):
-            return pd.NA
-        if numeric == 0.0:
+    if isinstance(value, (int, np.integer)):
+        if value == 0:
             return False
-        if numeric == 1.0:
+        if value == 1:
+            return True
+        return _INVALID_BINARY_TARGET
+    if isinstance(value, (float, np.floating)):
+        if not bool(np.isfinite(value)):
+            return pd.NA
+        if value == 0.0:
+            return False
+        if value == 1.0:
             return True
         return _INVALID_BINARY_TARGET
     if isinstance(value, str):
