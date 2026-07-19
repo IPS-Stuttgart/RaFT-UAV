@@ -45,3 +45,30 @@ def test_write_resolved_config_serializes_json_safe_metadata(tmp_path: Path) -> 
         "array": [1.0, None],
         "tuple": [2.5, "artifact.csv"],
     }
+
+
+def test_write_resolved_config_serializes_extended_precision_reals(tmp_path: Path) -> None:
+    config = ExperimentConfig(
+        name="extended-precision",
+        dataset_root="dataset",
+        output_dir="outputs",
+        metadata={
+            "score": np.longdouble("1.25"),
+            "invalid_score": np.longdouble("nan"),
+        },
+    )
+    destination = tmp_path / "resolved-longdouble.json"
+
+    resolved = write_resolved_experiment_config(
+        destination,
+        config=config,
+        argv=["run-experiment"],
+        env_prefixes=(),
+    )
+
+    loaded = json.loads(destination.read_text(encoding="utf-8"))
+    assert loaded == resolved
+    assert loaded["config"]["metadata"] == {
+        "score": 1.25,
+        "invalid_score": None,
+    }
