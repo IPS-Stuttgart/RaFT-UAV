@@ -14,6 +14,9 @@ import sys
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_float as _optional_float
+from raft_uav.numeric import optional_int as _optional_int
+
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "radar_oracle_diagnostics.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.evaluation._radar_oracle_diagnostics_legacy",
@@ -35,15 +38,29 @@ def _sequence_keys(values: pd.Series) -> pd.Series:
 
 
 def _radar_frame_key_values(frame: pd.DataFrame) -> pd.Series:
-    """Choose a complete frame-index key, otherwise rounded timestamps."""
+    """Use exact frame indices when valid, falling back to time per row."""
 
-    if "frame_index" in frame.columns:
-        frame_indices = pd.to_numeric(frame["frame_index"], errors="coerce")
-        if bool(np.isfinite(frame_indices.to_numpy(dtype=float)).all()):
-            return frame_indices
-    if "time_s" not in frame.columns:
+    if "frame_index" not in frame.columns and "time_s" not in frame.columns:
         raise KeyError("radar is missing both frame_index and time_s")
-    return pd.to_numeric(frame["time_s"], errors="coerce").round(9)
+    frame_indices = (
+        frame["frame_index"].tolist()
+        if "frame_index" in frame.columns
+        else [None] * len(frame)
+    )
+    time_values = (
+        frame["time_s"].tolist()
+        if "time_s" in frame.columns
+        else [None] * len(frame)
+    )
+    keys: list[tuple[str, int | float] | None] = []
+    for frame_index, time_s in zip(frame_indices, time_values, strict=True):
+        event_index = _optional_int(frame_index)
+        if event_index is not None:
+            keys.append(("frame_index", event_index))
+            continue
+        event_time = _optional_float(time_s)
+        keys.append(None if event_time is None else ("time_s", round(event_time, 9)))
+    return pd.Series(keys, index=frame.index, dtype=object)
 
 
 def _radar_frame_groups(radar: pd.DataFrame) -> list[pd.DataFrame]:
@@ -57,6 +74,9 @@ def _radar_frame_groups(radar: pd.DataFrame) -> list[pd.DataFrame]:
         work["_sequence_key"] = _sequence_keys(work["sequence_id"])
         group_columns.append("_sequence_key")
     work["_frame_key"] = _radar_frame_key_values(work)
+    work = work.loc[work["_frame_key"].notna()].copy()
+    if work.empty:
+        return []
     group_columns.append("_frame_key")
     sort_columns = [
         *group_columns,
