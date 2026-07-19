@@ -48,8 +48,12 @@ def _restore_plain_numeric_track_ids(frame: pd.DataFrame) -> pd.DataFrame:
         text = out[column].astype(str).str.strip()
         present = text.ne("") & ~text.str.lower().isin({"nan", "none", "<na>"})
         if bool(present.any()) and bool(text.loc[present].str.fullmatch(r"0|[1-9]\d*").all()):
+            try:
+                exact_ids = text.loc[present].map(int)
+            except ValueError:
+                return out
             out[column] = out[column].astype(object)
-            out.loc[present, column] = pd.to_numeric(text.loc[present], errors="raise")
+            out.loc[present, column] = exact_ids.astype(object)
         return out
     return out
 
