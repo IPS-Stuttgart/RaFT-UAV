@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from typing import Any
 
 import numpy as np
 
@@ -20,6 +21,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _LEGACY_PARSE_GRID = _IMPL._parse_grid
+_LEGACY_RUN_OFFSET_SWEEP = _IMPL.run_offset_sweep
 
 
 def _parse_grid(spec: str) -> np.ndarray:
@@ -46,7 +48,17 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+
+
+def run_offset_sweep(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Run the legacy sweep while preserving package-level monkeypatches."""
+
+    _IMPL._evaluate_offset_pair = globals()["_evaluate_offset_pair"]
+    return _LEGACY_RUN_OFFSET_SWEEP(*args, **kwargs)
+
+
 globals()["_parse_grid"] = _parse_grid
+globals()["run_offset_sweep"] = run_offset_sweep
 
 __doc__ = _IMPL.__doc__
 __all__ = [
