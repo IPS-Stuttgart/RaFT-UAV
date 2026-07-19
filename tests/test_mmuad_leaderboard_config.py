@@ -5,6 +5,8 @@ import pandas as pd
 import pytest
 
 from raft_uav.mmuad.leaderboard import (
+    LeaderboardEntry,
+    build_mmuad_leaderboard,
     leaderboard_entries_from_config,
     load_leaderboard_config,
     rank_leaderboard_frame,
@@ -103,8 +105,61 @@ def test_leaderboard_config_ignores_missing_top_level_defaults(tmp_path):
 def test_leaderboard_config_rejects_missing_results_aliases():
     with pytest.raises(ValueError, match="missing results/results_csv"):
         leaderboard_entries_from_config(
-            {"methods": [{"method": "broken", "results_csv": float("nan"), "truth_csv": "truth.csv"}]}
+            {
+                "methods": [
+                    {
+                        "method": "broken",
+                        "results_csv": float("nan"),
+                        "truth_csv": "truth.csv",
+                    }
+                ]
+            }
         )
+
+
+def test_leaderboard_config_rejects_duplicate_method_labels(tmp_path):
+    with pytest.raises(
+        ValueError,
+        match="leaderboard method labels must be unique.*'baseline'",
+    ):
+        leaderboard_entries_from_config(
+            {
+                "methods": [
+                    {
+                        "method": "baseline",
+                        "results_csv": "first.csv",
+                        "truth_csv": "truth.csv",
+                    },
+                    {
+                        "method": "baseline",
+                        "results_csv": "second.csv",
+                        "truth_csv": "truth.csv",
+                    },
+                ]
+            },
+            base_dir=tmp_path,
+        )
+
+
+def test_build_leaderboard_rejects_duplicate_method_labels_before_io(tmp_path):
+    entries = [
+        LeaderboardEntry(
+            method="baseline",
+            results_path=tmp_path / "missing-first.csv",
+            truth_path=tmp_path / "missing-truth.csv",
+        ),
+        LeaderboardEntry(
+            method="baseline",
+            results_path=tmp_path / "missing-second.csv",
+            truth_path=tmp_path / "missing-truth.csv",
+        ),
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="leaderboard method labels must be unique.*'baseline'",
+    ):
+        build_mmuad_leaderboard(entries)
 
 
 def test_leaderboard_rank_falls_back_when_requested_metric_is_all_missing() -> None:
