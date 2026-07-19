@@ -29,12 +29,11 @@ _MODULE_METADATA_NAMES = {
 
 
 def _read_text_csv(path: Path) -> pd.DataFrame:
-    """Read CSV exports without coercing opaque ids or keeping padded headers."""
+    """Read CSV/TSV exports without coercing opaque ids or keeping padded headers."""
 
-    if path.suffix.lower() == ".tsv":
-        frame = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
-    else:
-        frame = pd.read_csv(path, dtype=str, keep_default_na=False)
+    path = Path(path)
+    separator = "\t" if _impl.data_file_suffix(path) == ".tsv" else ","
+    frame = pd.read_csv(path, sep=separator, dtype=str, keep_default_na=False)
     frame.columns = [str(column).strip() for column in frame.columns]
     return frame
 
