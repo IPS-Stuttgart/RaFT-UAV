@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 import json
 import math
+import numbers
 import os
 from pathlib import Path
 import platform
@@ -167,6 +168,11 @@ def _jsonable(value: Any) -> Any:
         return value if math.isfinite(value) else None
     if value is None or isinstance(value, (str, int, bool)):
         return value
+    if isinstance(value, numbers.Integral):
+        return int(value)
+    if isinstance(value, numbers.Real):
+        converted = float(value)
+        return converted if math.isfinite(converted) else None
     tolist = getattr(value, "tolist", None)
     if callable(tolist):
         return _jsonable(tolist())
