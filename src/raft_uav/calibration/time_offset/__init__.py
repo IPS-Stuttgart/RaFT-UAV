@@ -17,7 +17,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from raft_uav.evaluation.radar_oracle_diagnostics import nearest_candidate_oracle
+from raft_uav.evaluation.radar_oracle_diagnostics import (
+    _radar_frame_groups,
+    nearest_candidate_oracle,
+)
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "time_offset.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -126,7 +129,7 @@ def aggregate_radar_time_offset_sweep(
         for radar, truth in training_pairs:
             if radar.empty or truth.empty:
                 continue
-            frame_count += _IMPL._radar_frame_count(radar)
+            frame_count += len(_radar_frame_groups(radar))
             selected = nearest_candidate_oracle(
                 radar,
                 truth,
