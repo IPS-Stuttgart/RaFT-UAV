@@ -8,6 +8,7 @@ import numpy as _np
 import pandas as _pd
 
 from raft_uav.numeric import optional_float as _optional_float
+from raft_uav.numeric import optional_int as _optional_int
 
 _LEGACY_PATH = Path(__file__).resolve().parent.parent / "time_offset.py"
 _SPEC = importlib.util.spec_from_file_location("_raft_uav_time_offset_legacy", _LEGACY_PATH)
@@ -80,7 +81,7 @@ def nearest_candidate_to_truth(candidates, truth_position):
 
 
 def radar_frame_groups(radar: _pd.DataFrame) -> list[_pd.DataFrame]:
-    """Group every radar row even when ``frame_index`` is partly populated."""
+    """Group every radar row while preserving each usable physical frame ID."""
 
     if radar.empty:
         return []
@@ -92,18 +93,30 @@ def radar_frame_groups(radar: _pd.DataFrame) -> list[_pd.DataFrame]:
     if not sort_columns:
         raise KeyError("radar must contain time_s or frame_index")
     ordered = radar.sort_values(sort_columns).reset_index(drop=True)
-    frame_index_complete = (
-        "frame_index" in ordered.columns and ordered["frame_index"].notna().all()
-    )
-    if frame_index_complete:
-        group_column = "frame_index"
-    elif "time_s" in ordered.columns:
-        group_column = "time_s"
-    else:
-        raise KeyError("radar must contain time_s when frame_index is incomplete")
+
+    group_positions: dict[tuple[str, object], list[int]] = {}
+    for position, row in ordered.iterrows():
+        frame_index = (
+            _optional_int(row["frame_index"])
+            if "frame_index" in ordered.columns
+            else None
+        )
+        if frame_index is not None:
+            key: tuple[str, object] = ("frame_index", frame_index)
+        elif "time_s" in ordered.columns:
+            time_s = _optional_float(row["time_s"])
+            key = (
+                ("time_s", time_s)
+                if time_s is not None
+                else ("row", int(position))
+            )
+        else:
+            key = ("row", int(position))
+        group_positions.setdefault(key, []).append(int(position))
+
     return [
-        group.copy()
-        for _, group in ordered.groupby(group_column, sort=True, dropna=False)
+        ordered.iloc[positions].copy()
+        for positions in group_positions.values()
     ]
 
 
