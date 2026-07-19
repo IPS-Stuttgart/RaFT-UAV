@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -68,3 +69,17 @@ def test_cluster_ranker_summary_parses_serialized_binary_targets() -> None:
     assert summary["positive_candidate_rows"] == 1
     assert summary["positive_candidate_rate"] == pytest.approx(0.5)
     assert summary["score_auc"] == pytest.approx(1.0)
+
+
+@pytest.mark.skipif(
+    np.finfo(np.longdouble).nmant <= np.finfo(np.float64).nmant,
+    reason="np.longdouble has no extra precision on this platform",
+)
+def test_cluster_ranker_rejects_extended_precision_targets_rounded_by_float() -> None:
+    just_above_zero = np.nextafter(np.longdouble(0.0), np.longdouble(1.0))
+    just_above_one = np.nextafter(np.longdouble(1.0), np.longdouble(2.0))
+
+    with pytest.raises(ValueError, match="good_cluster"):
+        train_cluster_ranker(_features([False, True, just_above_zero, False]))
+    with pytest.raises(ValueError, match="good_cluster"):
+        train_cluster_ranker(_features([False, True, just_above_one, False]))
