@@ -43,3 +43,19 @@ def test_geometry_audit_zero_delta_for_consistent_polar_and_lla() -> None:
     assert summary["rows"] == 2
     assert summary["track_ids"] == 1
     assert np.isclose(summary["geometry_delta_3d_m"]["max"], 0.0)
+
+
+def test_geometry_summary_preserves_exact_integer_identifiers() -> None:
+    large = 2**80
+    audit = pd.DataFrame(
+        {
+            "track_id": [str(large), str(large + 1), "7.5", "8.5", "invalid", None],
+            "frame_index": [str(large + 2), str(large + 3), 4.5, 5.5, np.inf, True],
+        }
+    )
+
+    summary = summarize_radar_geometry_audit(audit)
+
+    assert summary["rows"] == 6
+    assert summary["track_ids"] == 2
+    assert summary["frames"] == 2
