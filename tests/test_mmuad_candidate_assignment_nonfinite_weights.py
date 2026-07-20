@@ -24,3 +24,15 @@ def test_assignment_weights_fall_back_to_uniform_when_all_are_invalid() -> None:
     np.testing.assert_allclose(weights, np.full(3, 1.0 / 3.0))
     assert np.isfinite(weights).all()
     assert np.isclose(weights.sum(), 1.0)
+
+
+def test_assignment_weights_normalize_large_finite_probability_mass() -> None:
+    group = pd.DataFrame(
+        {"mixture_final_weight": [1.0e308, 1.0e308, 5.0e307]}
+    )
+
+    weights = _assignment_weights(group)
+
+    np.testing.assert_allclose(weights, np.array([0.4, 0.4, 0.2]))
+    assert np.isfinite(weights).all()
+    assert np.isclose(weights.sum(), 1.0)
