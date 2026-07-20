@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.evaluation.metrics import nearest_time_indices
+from raft_uav.numeric import optional_int
 
 
 def build_diagnostic_summary(
@@ -93,30 +94,34 @@ def _track_switch_summary(frame: pd.DataFrame, *, top_n: int) -> dict[str, Any]:
     if "time_s" in work.columns:
         work["_time_s"] = pd.to_numeric(work["time_s"], errors="coerce")
         work = work.sort_values("_time_s")
-    track_ids = pd.to_numeric(work["track_id"], errors="coerce")
-    finite = track_ids[np.isfinite(track_ids)].astype(int)
-    if finite.empty:
+
+    parsed_track_ids: list[tuple[int, int]] = []
+    for position, value in enumerate(work["track_id"].tolist()):
+        track_id = optional_int(value)
+        if track_id is not None:
+            parsed_track_ids.append((position, track_id))
+    if not parsed_track_ids:
         return _empty_track_switch_summary()
 
     events: list[dict[str, Any]] = []
     transitions: Counter[tuple[int, int]] = Counter()
     previous: int | None = None
-    for index, current in finite.items():
-        current_id = int(current)
+    for position, current_id in parsed_track_ids:
         if previous is not None and current_id != previous:
             transitions[(previous, current_id)] += 1
             event: dict[str, Any] = {"from_track_id": previous, "to_track_id": current_id}
             if "time_s" in work.columns:
-                event["time_s"] = _json_value(work.loc[index, "time_s"])
+                event["time_s"] = _json_value(work.iloc[position]["time_s"])
             events.append(event)
         previous = current_id
 
+    track_ids = [track_id for _, track_id in parsed_track_ids]
     return {
         "count": int(sum(transitions.values())),
-        "updates_with_track_id": int(len(finite)),
-        "unique_track_ids": int(finite.nunique()),
-        "first_track_id": int(finite.iloc[0]),
-        "last_track_id": int(finite.iloc[-1]),
+        "updates_with_track_id": int(len(track_ids)),
+        "unique_track_ids": int(len(set(track_ids))),
+        "first_track_id": track_ids[0],
+        "last_track_id": track_ids[-1],
         "top_transitions": [
             {"from_track_id": int(src), "to_track_id": int(dst), "count": int(count)}
             for (src, dst), count in transitions.most_common(top_n)
