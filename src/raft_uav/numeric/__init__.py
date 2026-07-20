@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 import math
 from numbers import Integral, Rational
+from operator import index
 
 import numpy as np
 
@@ -91,9 +92,9 @@ def _is_non_scalar_array_like(value: object) -> bool:
     if ndim is None:
         return False
     try:
-        return int(ndim) > 0
-    except (TypeError, ValueError):
-        return False
+        return index(ndim) != 0
+    except (OverflowError, TypeError, ValueError):
+        return True
 
 
 def _is_masked_value(value: object) -> bool:
