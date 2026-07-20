@@ -80,19 +80,38 @@ def nearest_candidate_to_truth(candidates, truth_position):
     )
 
 
+def _radar_group_sort_key(values: _pd.Series) -> _pd.Series:
+    """Normalize numeric frame keys before sorting serialized radar tables."""
+
+    if values.name == "time_s":
+        return values.map(_optional_float)
+    if values.name == "frame_index":
+        return _pd.Series(
+            [_optional_int(value) for value in values],
+            index=values.index,
+            dtype=object,
+        )
+    return values
+
+
 def radar_frame_groups(radar: _pd.DataFrame) -> list[_pd.DataFrame]:
     """Group every radar row while preserving each usable physical frame ID."""
 
     if radar.empty:
         return []
+    if "time_s" not in radar.columns and "frame_index" not in radar.columns:
+        raise KeyError("radar must contain time_s or frame_index")
     sort_columns = [
         column
         for column in ("time_s", "frame_index", "track_id", "track_index")
         if column in radar.columns
     ]
-    if not sort_columns:
-        raise KeyError("radar must contain time_s or frame_index")
-    ordered = radar.sort_values(sort_columns).reset_index(drop=True)
+    ordered = radar.sort_values(
+        sort_columns,
+        key=_radar_group_sort_key,
+        kind="mergesort",
+        na_position="last",
+    ).reset_index(drop=True)
 
     group_positions: dict[tuple[str, object], list[int]] = {}
     for position, row in ordered.iterrows():
