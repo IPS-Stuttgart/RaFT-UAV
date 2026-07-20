@@ -206,7 +206,8 @@ def _score_column(
 
 def _numeric_column(rows: pd.DataFrame, column: str, *, default: float) -> pd.Series:
     if column in rows.columns:
-        return pd.to_numeric(rows[column], errors="coerce")
+        values = pd.to_numeric(rows[column], errors="coerce")
+        return values.where(np.isfinite(values))
     return pd.Series(default, index=rows.index, dtype=float)
 
 
