@@ -1,9 +1,10 @@
-"""Compatibility wrapper for strict normalized Track 5 class validation.
+"""Compatibility fixes for Track 5 submission ensembling.
 
 The maintained implementation lives in the sibling
 ``track5_submission_ensemble.py`` module. This package preserves the public
 import path while preventing malformed normalized classification values from
-being silently dropped or truncated to integers.
+being silently dropped or truncated to integers and keeping weighted ensemble
+arithmetic finite for very large non-negative weights.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from typing import Iterable
 
 import numpy as np
 import pandas as pd
@@ -34,6 +36,7 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_NORMALIZE_INTERNAL_SUBMISSION_ROWS = (
     _IMPL._normalize_internal_submission_rows
 )
+_ORIGINAL_ENSEMBLE_TRACK5_SUBMISSIONS = _IMPL.ensemble_track5_submissions
 
 
 def _normalize_internal_submission_rows(
@@ -80,7 +83,69 @@ def _normalize_internal_submission_rows(
     )
 
 
+def ensemble_track5_submissions(
+    submissions: Iterable[object],
+    *,
+    class_policy: str = "weighted-vote",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Ensemble submissions without overflowing finite non-negative weights.
+
+    Only relative weights affect the ensemble. Converting them to probabilities
+    before the legacy implementation prevents both the weight sum and weighted
+    position numerator from overflowing. Zero-weight grid entries remain valid,
+    while the complete weight vector must retain positive mass. Diagnostic sums
+    and vote margins are converted back to the original weight scale afterwards.
+    """
+
+    inputs = tuple(submissions)
+    if not inputs:
+        return _ORIGINAL_ENSEMBLE_TRACK5_SUBMISSIONS(
+            inputs,
+            class_policy=class_policy,
+        )
+
+    weights = np.asarray([float(item.weight) for item in inputs], dtype=float)
+    if not np.isfinite(weights).all() or bool(np.any(weights < 0.0)):
+        raise ValueError("submission weights must be non-negative and finite")
+
+    scale = float(np.max(weights))
+    if scale <= 0.0:
+        raise ValueError("submission weights must have positive finite mass")
+    scaled_weights = weights / scale
+    scaled_total = float(np.sum(scaled_weights))
+    if not np.isfinite(scaled_total) or scaled_total <= 0.0:
+        raise ValueError("submission weights must have positive finite mass")
+    normalized_weights = scaled_weights / scaled_total
+
+    normalized_inputs = tuple(
+        _IMPL.SubmissionInput(
+            label=item.label,
+            path=item.path,
+            weight=float(weight),
+        )
+        for item, weight in zip(inputs, normalized_weights, strict=True)
+    )
+    estimates, diagnostics = _ORIGINAL_ENSEMBLE_TRACK5_SUBMISSIONS(
+        normalized_inputs,
+        class_policy=class_policy,
+    )
+
+    raw_total = scale * scaled_total
+    if "ensemble_weight_sum" in estimates.columns:
+        estimates["ensemble_weight_sum"] = raw_total
+    if "weight_sum" in diagnostics.columns:
+        diagnostics["weight_sum"] = raw_total
+    if "classification_vote_margin" in diagnostics.columns:
+        margins = diagnostics["classification_vote_margin"].to_numpy(dtype=float)
+        with np.errstate(over="ignore", invalid="ignore"):
+            margins = (margins * scale) * scaled_total
+        diagnostics["classification_vote_margin"] = margins
+
+    return estimates, diagnostics
+
+
 _IMPL._normalize_internal_submission_rows = _normalize_internal_submission_rows
+_IMPL.ensemble_track5_submissions = ensemble_track5_submissions
 
 globals().update(
     {
@@ -92,6 +157,7 @@ globals().update(
 globals()["_normalize_internal_submission_rows"] = (
     _normalize_internal_submission_rows
 )
+globals()["ensemble_track5_submissions"] = ensemble_track5_submissions
 
 __doc__ = _IMPL.__doc__
 __all__ = [
