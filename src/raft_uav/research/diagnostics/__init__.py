@@ -30,6 +30,7 @@ _LEGACY = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _LEGACY
 _SPEC.loader.exec_module(_LEGACY)
 
+_ORIGINAL_NEAREST_TRUTH_POSITION = _LEGACY._nearest_truth_position
 _ORIGINAL_TRACK_SWITCH_METRICS = _LEGACY.track_switch_metrics
 _DOMAIN_SHIFT_COLUMNS = [
     "feature",
@@ -124,6 +125,24 @@ def _row_event_key(row: pd.Series) -> tuple[str, int | float]:
         if event_index is not None:
             return ("frame_index", event_index)
     return ("time_s", round(float(row["time_s"]), 9))
+
+
+def _nearest_truth_position(
+    truth: pd.DataFrame,
+    *,
+    time_s: float,
+    max_time_delta_s: float,
+):
+    """Reject non-finite query times instead of selecting an arbitrary truth row."""
+
+    normalized_time_s = _optional_float(time_s)
+    if normalized_time_s is None:
+        return None, float("nan")
+    return _ORIGINAL_NEAREST_TRUTH_POSITION(
+        truth,
+        time_s=normalized_time_s,
+        max_time_delta_s=max_time_delta_s,
+    )
 
 
 def _dense_track_id_surrogates(values: pd.Series) -> pd.Series:
@@ -221,6 +240,7 @@ _LEGACY._optional_int = _optional_int
 _LEGACY._radar_frame_groups = _radar_frame_groups
 _LEGACY._radar_event_key = _radar_event_key
 _LEGACY._row_event_key = _row_event_key
+_LEGACY._nearest_truth_position = _nearest_truth_position
 _LEGACY.track_switch_metrics = track_switch_metrics
 _LEGACY.domain_shift_summary = domain_shift_summary
 
@@ -231,6 +251,7 @@ globals()["_event_index_value"] = _event_index_value
 globals()["_radar_frame_groups"] = _radar_frame_groups
 globals()["_radar_event_key"] = _radar_event_key
 globals()["_row_event_key"] = _row_event_key
+globals()["_nearest_truth_position"] = _nearest_truth_position
 globals()["track_switch_metrics"] = track_switch_metrics
 globals()["domain_shift_summary"] = domain_shift_summary
 
