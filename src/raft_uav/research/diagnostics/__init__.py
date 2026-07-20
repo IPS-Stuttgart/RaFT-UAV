@@ -2,15 +2,18 @@
 
 The maintained implementation lives in the sibling ``diagnostics.py`` module.
 This package preserves the public import path while retaining partially indexed
-radar frames and preventing fractional identifiers from being truncated.
+radar frames, preventing fractional identifiers from being truncated, and
+keeping domain-shift reports well-defined for sparse or non-finite inputs.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 import importlib.util
 from pathlib import Path
 import sys
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.numeric import optional_float as _optional_float
@@ -28,6 +31,19 @@ sys.modules[_SPEC.name] = _LEGACY
 _SPEC.loader.exec_module(_LEGACY)
 
 _ORIGINAL_TRACK_SWITCH_METRICS = _LEGACY.track_switch_metrics
+_DOMAIN_SHIFT_COLUMNS = [
+    "feature",
+    "train_count",
+    "heldout_count",
+    "train_mean",
+    "heldout_mean",
+    "mean_shift_z",
+    "train_p50",
+    "heldout_p50",
+    "train_p90",
+    "heldout_p90",
+    "ks_distance",
+]
 
 
 def _event_index_value(value: object) -> int | float | None:
@@ -139,12 +155,74 @@ def track_switch_metrics(
     return _ORIGINAL_TRACK_SWITCH_METRICS(normalized, long_gap_s=long_gap_s)
 
 
+def domain_shift_summary(
+    training: Mapping[str, pd.DataFrame] | Sequence[pd.DataFrame] | pd.DataFrame,
+    heldout: pd.DataFrame,
+    *,
+    columns: Sequence[str] | None = None,
+) -> pd.DataFrame:
+    """Compare finite held-out distributions against finite training data."""
+
+    train = _LEGACY._concat_training_frames(training)
+    if columns is None:
+        columns = [
+            column
+            for column in heldout.columns
+            if column in train.columns
+            and pd.api.types.is_numeric_dtype(heldout[column])
+        ]
+
+    rows: list[dict[str, object]] = []
+    for column in columns:
+        train_values = pd.to_numeric(
+            train[column], errors="coerce"
+        ).to_numpy(dtype=float)
+        heldout_values = pd.to_numeric(
+            heldout[column], errors="coerce"
+        ).to_numpy(dtype=float)
+        train_values = train_values[np.isfinite(train_values)]
+        heldout_values = heldout_values[np.isfinite(heldout_values)]
+        if train_values.size == 0 or heldout_values.size == 0:
+            continue
+
+        train_std = float(np.std(train_values))
+        if train_std == 0.0:
+            train_std = 1.0
+        rows.append(
+            {
+                "feature": column,
+                "train_count": int(train_values.size),
+                "heldout_count": int(heldout_values.size),
+                "train_mean": float(np.mean(train_values)),
+                "heldout_mean": float(np.mean(heldout_values)),
+                "mean_shift_z": float(
+                    (np.mean(heldout_values) - np.mean(train_values)) / train_std
+                ),
+                "train_p50": float(np.percentile(train_values, 50)),
+                "heldout_p50": float(np.percentile(heldout_values, 50)),
+                "train_p90": float(np.percentile(train_values, 90)),
+                "heldout_p90": float(np.percentile(heldout_values, 90)),
+                "ks_distance": _LEGACY._ks_distance(
+                    train_values, heldout_values
+                ),
+            }
+        )
+
+    result = pd.DataFrame.from_records(rows, columns=_DOMAIN_SHIFT_COLUMNS)
+    if result.empty:
+        return result
+    return result.sort_values(
+        ["ks_distance", "feature"], ascending=[False, True]
+    ).reset_index(drop=True)
+
+
 _LEGACY._optional_float = _optional_float
 _LEGACY._optional_int = _optional_int
 _LEGACY._radar_frame_groups = _radar_frame_groups
 _LEGACY._radar_event_key = _radar_event_key
 _LEGACY._row_event_key = _row_event_key
 _LEGACY.track_switch_metrics = track_switch_metrics
+_LEGACY.domain_shift_summary = domain_shift_summary
 
 for _name in dir(_LEGACY):
     if not (_name.startswith("__") and _name.endswith("__")):
@@ -154,6 +232,7 @@ globals()["_radar_frame_groups"] = _radar_frame_groups
 globals()["_radar_event_key"] = _radar_event_key
 globals()["_row_event_key"] = _row_event_key
 globals()["track_switch_metrics"] = track_switch_metrics
+globals()["domain_shift_summary"] = domain_shift_summary
 
 __doc__ = _LEGACY.__doc__
 __all__ = [
