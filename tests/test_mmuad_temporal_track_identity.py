@@ -54,6 +54,18 @@ def test_canonical_track_id_preserves_exact_rationals_beyond_float_precision() -
     assert canonical_track_id(Fraction(1, 3)) == "1/3"
 
 
+def test_canonical_track_id_preserves_numpy_extended_precision() -> None:
+    if np.finfo(np.longdouble).nmant <= np.finfo(float).nmant:
+        pytest.skip("NumPy longdouble has no extra precision on this platform")
+
+    lower = np.longdouble("9007199254740992")
+    upper = np.longdouble("9007199254740993")
+
+    assert canonical_track_id(lower) == "9007199254740992"
+    assert canonical_track_id(upper) == "9007199254740993"
+    assert canonical_track_id(lower) != canonical_track_id(upper)
+
+
 def test_canonical_track_id_preserves_opaque_leading_zeros() -> None:
     assert canonical_track_id("001") == "001"
     assert canonical_track_id("001.0") == "001.0"
