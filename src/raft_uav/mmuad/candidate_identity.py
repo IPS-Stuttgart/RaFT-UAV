@@ -97,6 +97,15 @@ def canonical_track_id(value: Any) -> str | None:
         if denominator == 1:
             return None if numerator == -1 else str(numerator)
         return _exact_rational_text(numerator, denominator)
+    if isinstance(value, np.floating):
+        if not np.isfinite(value):
+            return None
+        if value.is_integer():
+            integer = int(value)
+            return None if integer == -1 else str(integer)
+        if np.finfo(value.dtype).nmant > np.finfo(float).nmant:
+            return str(value)
+        return format(float(value), ".17g")
     if isinstance(value, numbers.Real):
         number = float(value)
         if not math.isfinite(number):
