@@ -1,4 +1,10 @@
-"""Compatibility package excluding non-finite radar class probabilities."""
+"""Compatibility fixes for paper-style radar preselection.
+
+The maintained implementation lives in the sibling ``paper_selection.py``
+module. This package preserves the public import path while excluding non-finite
+class probabilities and preserving exact integer-like track identifiers in
+selection metadata and segment tie-breaking.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +14,8 @@ import sys
 
 import numpy as np
 import pandas as pd
+
+from raft_uav.numeric import optional_int
 
 _LEGACY_PATH = Path(__file__).resolve().parent.parent / "paper_selection.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -55,8 +63,21 @@ def _mean_catprob(frame: pd.DataFrame) -> float:
     return float(np.mean(finite)) if finite.size else 0.0
 
 
+def _track_id_from_frame(frame: pd.DataFrame) -> int:
+    """Return the first exact integer-like track ID without float round-trips."""
+
+    if "track_id" not in frame.columns:
+        return -1
+    for value in frame["track_id"].tolist():
+        track_id = optional_int(value)
+        if track_id is not None:
+            return track_id
+    return -1
+
+
 _LEGACY._catprob_candidate_pool = _catprob_candidate_pool
 _LEGACY._mean_catprob = _mean_catprob
+_LEGACY._track_id_from_frame = _track_id_from_frame
 
 globals().update(
     {
@@ -67,6 +88,7 @@ globals().update(
 )
 globals()["_catprob_candidate_pool"] = _catprob_candidate_pool
 globals()["_mean_catprob"] = _mean_catprob
+globals()["_track_id_from_frame"] = _track_id_from_frame
 
 __doc__ = _LEGACY.__doc__
 __all__ = [
