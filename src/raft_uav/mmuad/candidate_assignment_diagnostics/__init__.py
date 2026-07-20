@@ -49,10 +49,17 @@ def _assignment_weights(group: pd.DataFrame) -> np.ndarray:
 
     weights = np.where(np.isfinite(weights), weights, 0.0)
     weights = np.clip(weights, 0.0, None)
-    total = float(np.sum(weights))
-    if total <= 1.0e-12:
+    scale = float(np.max(weights, initial=0.0))
+    if scale <= 0.0:
         return np.ones(len(group), dtype=float) / max(float(len(group)), 1.0)
-    return weights / total
+
+    scaled = weights / scale
+    scaled_total = float(np.sum(scaled))
+    if not np.isfinite(scaled_total) or scaled_total <= 0.0:
+        return np.ones(len(group), dtype=float) / max(float(len(group)), 1.0)
+    if scale <= 1.0e-12 / scaled_total:
+        return np.ones(len(group), dtype=float) / max(float(len(group)), 1.0)
+    return scaled / scaled_total
 
 
 # Candidate ranks are integer identifiers. The legacy float round-trip silently
