@@ -294,5 +294,9 @@ def _nonnegative_int(value: object, *, name: str) -> int:
 def _next_false_track_id(frame: pd.DataFrame) -> int:
     if "track_id" not in frame.columns:
         return 10_000_000
-    values = pd.to_numeric(frame["track_id"], errors="coerce").dropna()
-    return 10_000_000 if values.empty else int(values.max()) + 1
+    track_ids = [
+        track_id
+        for value in frame["track_id"]
+        if (track_id := optional_int(value)) is not None
+    ]
+    return 10_000_000 if not track_ids else max(track_ids) + 1
