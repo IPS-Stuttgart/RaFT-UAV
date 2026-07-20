@@ -74,3 +74,82 @@ def test_diagnostic_summary_handles_empty_optional_columns():
     assert summary["track_switches"]["posterior_radar"]["count"] == 0
     assert summary["covariance_inflation"]["count"] == 0
     assert summary["worst_time_windows"] == []
+
+
+def test_diagnostic_summary_preserves_large_track_ids_across_invalid_rows():
+    selected_radar = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0, 2.0],
+            "track_id": [
+                "9007199254740992",
+                "not-a-track-id",
+                "9007199254740993",
+            ],
+        }
+    )
+
+    summary = build_diagnostic_summary(
+        estimate_frame=pd.DataFrame(),
+        selected_radar=selected_radar,
+        truth=pd.DataFrame(),
+        max_eval_time_delta_s=None,
+    )
+
+    switches = summary["track_switches"]["selected_radar"]
+    assert switches["count"] == 1
+    assert switches["updates_with_track_id"] == 2
+    assert switches["unique_track_ids"] == 2
+    assert switches["first_track_id"] == 9007199254740992
+    assert switches["last_track_id"] == 9007199254740993
+    assert switches["events"] == [
+        {
+            "from_track_id": 9007199254740992,
+            "to_track_id": 9007199254740993,
+            "time_s": 2.0,
+        }
+    ]
+
+
+def test_diagnostic_summary_rejects_fractional_track_ids():
+    selected_radar = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0, 2.0],
+            "track_id": [10, 10.5, 11],
+        }
+    )
+
+    summary = build_diagnostic_summary(
+        estimate_frame=pd.DataFrame(),
+        selected_radar=selected_radar,
+        truth=pd.DataFrame(),
+        max_eval_time_delta_s=None,
+    )
+
+    switches = summary["track_switches"]["selected_radar"]
+    assert switches["updates_with_track_id"] == 2
+    assert switches["unique_track_ids"] == 2
+    assert switches["count"] == 1
+    assert switches["events"][0]["time_s"] == 2.0
+
+
+def test_diagnostic_summary_handles_duplicate_dataframe_indices():
+    selected_radar = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0],
+            "track_id": [10, 11],
+        },
+        index=[7, 7],
+    )
+
+    summary = build_diagnostic_summary(
+        estimate_frame=pd.DataFrame(),
+        selected_radar=selected_radar,
+        truth=pd.DataFrame(),
+        max_eval_time_delta_s=None,
+    )
+
+    switches = summary["track_switches"]["selected_radar"]
+    assert switches["count"] == 1
+    assert switches["events"] == [
+        {"from_track_id": 10, "to_track_id": 11, "time_s": 1.0}
+    ]
