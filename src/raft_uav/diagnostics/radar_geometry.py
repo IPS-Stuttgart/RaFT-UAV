@@ -16,6 +16,8 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_int
+
 AZIMUTH_CONVENTIONS = ("north-clockwise", "east-counterclockwise", "east-clockwise")
 
 
@@ -99,6 +101,17 @@ def build_radar_geometry_audit_frame(
     return out
 
 
+def _unique_integer_count(series: pd.Series) -> int:
+    """Count distinct scalar integer identifiers without lossy float coercion."""
+
+    values: set[int] = set()
+    for value in series.tolist():
+        parsed = optional_int(value)
+        if parsed is not None:
+            values.add(parsed)
+    return len(values)
+
+
 def summarize_radar_geometry_audit(audit: pd.DataFrame) -> dict[str, Any]:
     """Return robust summary statistics for a geometry-audit frame."""
 
@@ -114,9 +127,9 @@ def summarize_radar_geometry_audit(audit: pd.DataFrame) -> dict[str, Any]:
         if column in audit.columns:
             summary[column] = _series_summary(audit[column])
     if "track_id" in audit.columns:
-        summary["track_ids"] = int(pd.to_numeric(audit["track_id"], errors="coerce").nunique())
+        summary["track_ids"] = _unique_integer_count(audit["track_id"])
     if "frame_index" in audit.columns:
-        summary["frames"] = int(pd.to_numeric(audit["frame_index"], errors="coerce").nunique())
+        summary["frames"] = _unique_integer_count(audit["frame_index"])
     if "azimuth_convention" in audit.columns and len(audit):
         summary["azimuth_convention"] = str(audit["azimuth_convention"].iloc[0])
     return summary
