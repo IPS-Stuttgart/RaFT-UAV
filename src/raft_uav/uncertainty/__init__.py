@@ -22,18 +22,35 @@ HeteroscedasticUncertaintyModel = _legacy.HeteroscedasticUncertaintyModel
 _original_variance_head_init = VarianceHead.__init__
 _original_model_init = HeteroscedasticUncertaintyModel.__init__
 _original_aligned_residuals = _legacy._aligned_residuals
+_original_fit_heteroscedastic_uncertainty_model = (
+    _legacy.fit_heteroscedastic_uncertainty_model
+)
 _MISSING_SEQUENCE_KEYS = frozenset({"nan", "none", "<na>", "nat"})
 
 
 def _finite_scalar(value: object, field: str) -> float:
-    if isinstance(value, (bool, np.bool_)):
+    scalar = value
+    if isinstance(value, np.ndarray):
+        if value.ndim != 0:
+            raise ValueError(f"{field} must be a finite number")
+        scalar = value.item()
+    if isinstance(scalar, (bool, np.bool_)):
+        raise ValueError(f"{field} must be a finite number")
+    if isinstance(scalar, (complex, np.complexfloating)):
         raise ValueError(f"{field} must be a finite number")
     try:
-        number = float(value)
-    except (TypeError, ValueError) as exc:
+        number = float(scalar)
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"{field} must be a finite number") from exc
     if not np.isfinite(number):
         raise ValueError(f"{field} must be a finite number")
+    return number
+
+
+def _nonnegative_fit_control(value: object, field: str) -> float:
+    number = _finite_scalar(value, field)
+    if number < 0.0:
+        raise ValueError(f"{field} must be nonnegative")
     return number
 
 
@@ -111,7 +128,8 @@ def _validated_model_init(self, heads, metadata):
         key = (head.source, head.dimension)
         if key in seen:
             raise ValueError(
-                f"duplicate uncertainty variance head for {head.source!r}/{head.dimension!r}"
+                "duplicate uncertainty variance head for "
+                f"{head.source!r}/{head.dimension!r}"
             )
         seen.add(key)
 
@@ -172,9 +190,45 @@ def _aligned_residuals(
     return aligned.drop(columns=order_column).reset_index(drop=True)
 
 
+def fit_heteroscedastic_uncertainty_model(
+    *,
+    rf: pd.DataFrame | None,
+    radar: pd.DataFrame | None,
+    truth: pd.DataFrame,
+    ridge_lambda: float = 1.0,
+    max_time_delta_s: float = 2.0,
+    min_std_m: Mapping[str, Mapping[str, float]] | None = None,
+    max_std_m: Mapping[str, Mapping[str, float]] | None = None,
+    metadata: Mapping[str, object] | None = None,
+) -> HeteroscedasticUncertaintyModel:
+    """Fit uncertainty heads after validating optimization controls."""
+
+    validated_ridge_lambda = _nonnegative_fit_control(
+        ridge_lambda,
+        "ridge_lambda",
+    )
+    validated_max_time_delta_s = _nonnegative_fit_control(
+        max_time_delta_s,
+        "max_time_delta_s",
+    )
+    return _original_fit_heteroscedastic_uncertainty_model(
+        rf=rf,
+        radar=radar,
+        truth=truth,
+        ridge_lambda=validated_ridge_lambda,
+        max_time_delta_s=validated_max_time_delta_s,
+        min_std_m=min_std_m,
+        max_std_m=max_std_m,
+        metadata=metadata,
+    )
+
+
 VarianceHead.__init__ = _validated_variance_head_init
 HeteroscedasticUncertaintyModel.__init__ = _validated_model_init
 _legacy._aligned_residuals = _aligned_residuals
+_legacy.fit_heteroscedastic_uncertainty_model = (
+    fit_heteroscedastic_uncertainty_model
+)
 
 for _name in dir(_legacy):
     if not _name.startswith("__"):
@@ -183,5 +237,10 @@ globals()["VarianceHead"] = VarianceHead
 globals()["HeteroscedasticUncertaintyModel"] = HeteroscedasticUncertaintyModel
 globals()["_sequence_keys"] = _sequence_keys
 globals()["_aligned_residuals"] = _aligned_residuals
+globals()["_finite_scalar"] = _finite_scalar
+globals()["_nonnegative_fit_control"] = _nonnegative_fit_control
+globals()["fit_heteroscedastic_uncertainty_model"] = (
+    fit_heteroscedastic_uncertainty_model
+)
 __doc__ = _legacy.__doc__
 __all__ = [_name for _name in dir(_legacy) if not _name.startswith("__")]
