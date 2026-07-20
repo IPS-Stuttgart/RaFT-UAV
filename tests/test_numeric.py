@@ -14,6 +14,14 @@ class _FloatableArrayLike:
         return 1.25
 
 
+class _FloatableMalformedArrayLike:
+    def __init__(self, ndim: object) -> None:
+        self.ndim = ndim
+
+    def __float__(self) -> float:
+        return 4.0
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -93,6 +101,14 @@ def test_optional_int_rejects_absent_malformed_nonfinite_boolean_fractional_and_
 
 @pytest.mark.parametrize("value", [np.array([1]), _FloatableArrayLike()])
 def test_optional_int_rejects_non_scalar_array_like_values(value: object) -> None:
+    assert optional_int(value) is None
+
+
+@pytest.mark.parametrize("ndim", [float("inf"), -1, 0.5])
+def test_optional_numeric_rejects_malformed_array_dimensionality(ndim: object) -> None:
+    value = _FloatableMalformedArrayLike(ndim)
+
+    assert optional_float(value) is None
     assert optional_int(value) is None
 
 
