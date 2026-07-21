@@ -1,19 +1,24 @@
-"""Compatibility fix for confidence-diagnostic selected-context merges.
+"""Compatibility fixes for oracle-gap and confidence diagnostics.
 
 The maintained implementation lives in the sibling
 ``oracle_gap_decomposition.py`` module. This package preserves the public import
-path while keeping estimate columns, row order, and invalid-time rows intact when
-selected-radar context is attached.
+path while keeping estimate columns, row order, and invalid-time rows intact
+when selected-radar context is attached, and while preventing non-finite frame
+times from matching arbitrary truth or estimate rows.
 """
 
 from __future__ import annotations
 
+from functools import wraps
 import importlib.util
 from pathlib import Path
 import sys
+import warnings
 
 import numpy as np
 import pandas as pd
+
+from raft_uav.numeric import optional_float
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "oracle_gap_decomposition.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -28,6 +33,9 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_DECOMPOSE_RADAR_ORACLE_GAP = _IMPL.decompose_radar_oracle_gap
+_ORIGINAL_NEAREST_POSITION = _IMPL._nearest_position
+_ORIGINAL_NEAREST_ESTIMATE_ERROR = _IMPL._nearest_estimate_error
 _CONTEXT_COLUMNS = (
     "track_id",
     "association_score",
@@ -37,6 +45,59 @@ _CONTEXT_COLUMNS = (
 )
 _ROW_ORDER_COLUMN = "__raft_uav_confidence_row_order"
 _MERGE_TIME_COLUMN = "__raft_uav_confidence_merge_time_s"
+
+
+@wraps(_ORIGINAL_DECOMPOSE_RADAR_ORACLE_GAP)
+def decompose_radar_oracle_gap(*args, **kwargs) -> pd.DataFrame:
+    """Run the maintained decomposition without warning on all-missing frame times."""
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Mean of empty slice",
+            category=RuntimeWarning,
+        )
+        return _ORIGINAL_DECOMPOSE_RADAR_ORACLE_GAP(*args, **kwargs)
+
+
+def _nearest_position(
+    frame: pd.DataFrame,
+    *,
+    time_s: float,
+    max_delta_s: float,
+) -> np.ndarray | None:
+    """Reject non-finite query times instead of selecting an arbitrary row."""
+
+    normalized_time_s = optional_float(time_s)
+    if normalized_time_s is None:
+        return None
+    return _ORIGINAL_NEAREST_POSITION(
+        frame,
+        time_s=normalized_time_s,
+        max_delta_s=max_delta_s,
+    )
+
+
+def _nearest_estimate_error(
+    estimate_times: np.ndarray,
+    estimate_positions: np.ndarray,
+    *,
+    time_s: float,
+    truth_position: np.ndarray,
+    max_delta_s: float,
+) -> float:
+    """Return no estimate error for a non-finite query timestamp."""
+
+    normalized_time_s = optional_float(time_s)
+    if normalized_time_s is None:
+        return float("nan")
+    return _ORIGINAL_NEAREST_ESTIMATE_ERROR(
+        estimate_times,
+        estimate_positions,
+        time_s=normalized_time_s,
+        truth_position=truth_position,
+        max_delta_s=max_delta_s,
+    )
 
 
 def _merge_selected_context(
@@ -98,6 +159,9 @@ def _merge_selected_context(
     return merged
 
 
+_IMPL.decompose_radar_oracle_gap = decompose_radar_oracle_gap
+_IMPL._nearest_position = _nearest_position
+_IMPL._nearest_estimate_error = _nearest_estimate_error
 _IMPL._merge_selected_context = _merge_selected_context
 
 globals().update(
@@ -107,6 +171,9 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["decompose_radar_oracle_gap"] = decompose_radar_oracle_gap
+globals()["_nearest_position"] = _nearest_position
+globals()["_nearest_estimate_error"] = _nearest_estimate_error
 globals()["_merge_selected_context"] = _merge_selected_context
 
 __doc__ = _IMPL.__doc__
