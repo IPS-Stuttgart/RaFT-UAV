@@ -35,11 +35,26 @@ jobs:
           python -m pip install --quiet -e ".[dev]"
 
       - name: Run affected tests
-        run: >-
-          pytest -q -x
-          tests/test_mmuad_submission.py
-          tests/test_mmuad_evaluator_csv_reader.py
-          tests/test_mmuad_global_timestamp_assignment.py
+        id: affected-tests
+        shell: bash
+        run: |
+          set +e
+          pytest -q -x --tb=short \
+            tests/test_mmuad_submission.py \
+            tests/test_mmuad_evaluator_csv_reader.py \
+            tests/test_mmuad_global_timestamp_assignment.py \
+            > pytest-pr1495.txt 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Upload diagnostic output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr1495-pytest-output
+          path: pytest-pr1495.txt
+          if-no-files-found: error
 
   test:
     name: Python ${{ matrix.python-version }}
