@@ -141,8 +141,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--max-time-delta-s",
         action="append",
-        default=["0.25,0.5,1.0"],
-        help="candidate/template window in seconds; may be repeated or comma separated",
+        default=None,
+        help=(
+            "candidate/template window in seconds; may be repeated or comma separated; "
+            "defaults to 0.25,0.5,1.0 when omitted"
+        ),
     )
     parser.add_argument("--per-source-top-n", type=int, default=3)
     parser.add_argument("--per-branch-top-n", type=int, default=3)
@@ -161,6 +164,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.candidate_csv:
         parser.error("provide at least one --candidate-csv BRANCH=PATH")
+    try:
+        max_time_delta_s_values = _parse_float_values(
+            args.max_time_delta_s or ("0.25,0.5,1.0",)
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     inputs = tuple(parse_candidate_input(value) for value in args.candidate_csv)
     candidates = load_branch_candidate_inputs(inputs)
     template = load_official_track5_template_file(args.template_csv)
@@ -168,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         candidates,
         template,
         output_dir=args.output_dir,
-        max_time_delta_s_values=_parse_float_values(args.max_time_delta_s),
+        max_time_delta_s_values=max_time_delta_s_values,
         per_source_top_n=int(args.per_source_top_n),
         per_branch_top_n=int(args.per_branch_top_n),
         global_top_n=int(args.global_top_n),
@@ -234,13 +243,43 @@ def _parse_float_values(values: Iterable[float | str]) -> tuple[float, ...]:
     for value in values:
         for item in str(value).replace(";", ",").split(","):
             item = item.strip()
-            if item:
-                parsed.append(max(float(item), 0.0))
+            if not item:
+                continue
+            try:
+                parsed_value = float(item)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "max_time_delta_s values must be finite, non-negative numbers; "
+                    f"got {item!r}"
+                ) from exc
+            if not np.isfinite(parsed_value) or parsed_value < 0.0:
+                raise ValueError(
+                    "max_time_delta_s values must be finite, non-negative numbers; "
+                    f"got {item!r}"
+                )
+            if parsed_value == 0.0:
+                parsed_value = 0.0
+            parsed.append(parsed_value)
+    if not parsed:
+        raise ValueError("provide at least one max_time_delta_s value")
     return tuple(sorted(set(parsed)))
 
 
 def _window_label(value: float) -> str:
-    text = f"{float(value):.6g}".replace(".", "p").replace("-", "m")
+    numeric_value = float(value)
+    if not np.isfinite(numeric_value) or numeric_value < 0.0:
+        raise ValueError(
+            "max_time_delta_s values must be finite, non-negative numbers; "
+            f"got {value!r}"
+        )
+    if numeric_value == 0.0:
+        numeric_value = 0.0
+    text = (
+        repr(numeric_value)
+        .replace(".", "p")
+        .replace("-", "m")
+        .replace("+", "p")
+    )
     return f"window_{text}s"
 
 
