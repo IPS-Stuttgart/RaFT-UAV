@@ -19,6 +19,8 @@ def optimal_timestamp_assignment(
 
     Returned keys and values are positions in the original request and prediction
     arrays. Every request and prediction appears at most once in the assignment.
+    Equal-error assignments preserve the stable chronological ordering of the
+    request and prediction arrays.
     """
 
     requests = np.asarray(list(requested_times), dtype=float)
@@ -50,11 +52,11 @@ def optimal_timestamp_assignment(
         right = int(np.searchsorted(sorted_predictions, request_time + tolerance, side="right"))
         for prediction_rank in range(left, right):
             gap = abs(float(sorted_predictions[prediction_rank] - request_time))
-            tie_break = epsilon * (
-                1.0
-                + prediction_rank / (prediction_count + 1.0)
-                + request_rank / ((request_count + 1.0) * (prediction_count + 1.0))
-            )
+            # A whole-ULP-scale order penalty makes exact error ties deterministic.
+            # Squared rank distance favors the stable monotone assignment, while
+            # remaining negligible relative to any meaningful timestamp error.
+            rank_distance = request_rank - prediction_rank
+            tie_break = epsilon * float(1 + rank_distance * rank_distance)
             rows.append(request_rank)
             columns.append(prediction_rank)
             costs.append(gap / scale + tie_break)
