@@ -46,17 +46,17 @@ def optimal_timestamp_assignment(
     columns: list[int] = []
     costs: list[float] = []
     scale = tolerance + 1.0
-    epsilon = np.finfo(float).eps
+    tie_unit = 8.0 * np.finfo(float).eps
     for request_rank, request_time in enumerate(sorted_requests):
         left = int(np.searchsorted(sorted_predictions, request_time - tolerance, side="left"))
         right = int(np.searchsorted(sorted_predictions, request_time + tolerance, side="right"))
         for prediction_rank in range(left, right):
             gap = abs(float(sorted_predictions[prediction_rank] - request_time))
-            # A whole-ULP-scale order penalty makes exact error ties deterministic.
-            # Squared rank distance favors the stable monotone assignment, while
-            # remaining negligible relative to any meaningful timestamp error.
+            # A multi-ULP order penalty makes exact error ties deterministic in
+            # SciPy's sparse matcher. Squared rank distance favors the stable
+            # monotone assignment while remaining negligible for timestamp error.
             rank_distance = request_rank - prediction_rank
-            tie_break = epsilon * float(1 + rank_distance * rank_distance)
+            tie_break = tie_unit * float(1 + rank_distance * rank_distance)
             rows.append(request_rank)
             columns.append(prediction_rank)
             costs.append(gap / scale + tie_break)
