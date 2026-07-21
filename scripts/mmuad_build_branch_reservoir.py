@@ -319,9 +319,10 @@ def _candidate_score(rows: pd.DataFrame, *, score_column: str) -> pd.Series:
     for column in (score_column, "ranker_score", "confidence", "score"):
         if column in rows.columns:
             score = pd.to_numeric(rows[column], errors="coerce")
-            finite = score[np.isfinite(score.to_numpy(float))]
+            finite_mask = np.isfinite(score.to_numpy(float))
+            finite = score[finite_mask]
             if not finite.empty:
-                return score.fillna(float(finite.min()))
+                return score.where(finite_mask, float(finite.min()))
     return pd.Series(np.ones(len(rows), dtype=float), index=rows.index)
 
 
