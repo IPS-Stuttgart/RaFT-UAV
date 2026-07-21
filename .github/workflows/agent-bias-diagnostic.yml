@@ -1,5 +1,5 @@
 ---
-name: Agent bias diagnostic
+name: Agent full-suite diagnostic
 
 "on":
   pull_request:
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  focused-bias-tests:
+  full-suite-output:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -23,24 +23,21 @@ jobs:
       - name: Install package
         run: python -m pip install -q -e ".[dev]"
 
-      - name: Capture focused pytest output
+      - name: Capture full pytest output
         shell: bash
         run: |
           set +e
-          pytest -q \
-            tests/test_bias_serialized_truth_time_sort.py \
-            tests/test_bias_correct_frame_keep_uncorrected.py \
-            > bias-pytest.txt 2>&1
+          pytest -q --tb=short > full-pytest.txt 2>&1
           status=$?
-          printf '%s\n' "$status" > bias-pytest-status.txt
-          cat bias-pytest.txt
+          printf '%s\n' "$status" > full-pytest-status.txt
+          tail -n 100 full-pytest.txt
           exit 0
 
-      - name: Upload focused pytest output
+      - name: Upload full pytest output
         uses: actions/upload-artifact@v4
         with:
-          name: bias-pytest
+          name: full-pytest
           path: |
-            bias-pytest.txt
-            bias-pytest-status.txt
+            full-pytest.txt
+            full-pytest-status.txt
           if-no-files-found: error
