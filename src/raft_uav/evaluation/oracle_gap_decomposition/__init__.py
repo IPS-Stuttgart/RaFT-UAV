@@ -9,9 +9,11 @@ times from matching arbitrary truth or estimate rows.
 
 from __future__ import annotations
 
+from functools import wraps
 import importlib.util
 from pathlib import Path
 import sys
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -31,6 +33,7 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_DECOMPOSE_RADAR_ORACLE_GAP = _IMPL.decompose_radar_oracle_gap
 _ORIGINAL_NEAREST_POSITION = _IMPL._nearest_position
 _ORIGINAL_NEAREST_ESTIMATE_ERROR = _IMPL._nearest_estimate_error
 _CONTEXT_COLUMNS = (
@@ -42,6 +45,19 @@ _CONTEXT_COLUMNS = (
 )
 _ROW_ORDER_COLUMN = "__raft_uav_confidence_row_order"
 _MERGE_TIME_COLUMN = "__raft_uav_confidence_merge_time_s"
+
+
+@wraps(_ORIGINAL_DECOMPOSE_RADAR_ORACLE_GAP)
+def decompose_radar_oracle_gap(*args, **kwargs) -> pd.DataFrame:
+    """Run the maintained decomposition without warning on all-missing frame times."""
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Mean of empty slice",
+            category=RuntimeWarning,
+        )
+        return _ORIGINAL_DECOMPOSE_RADAR_ORACLE_GAP(*args, **kwargs)
 
 
 def _nearest_position(
@@ -143,6 +159,7 @@ def _merge_selected_context(
     return merged
 
 
+_IMPL.decompose_radar_oracle_gap = decompose_radar_oracle_gap
 _IMPL._nearest_position = _nearest_position
 _IMPL._nearest_estimate_error = _nearest_estimate_error
 _IMPL._merge_selected_context = _merge_selected_context
@@ -154,6 +171,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["decompose_radar_oracle_gap"] = decompose_radar_oracle_gap
 globals()["_nearest_position"] = _nearest_position
 globals()["_nearest_estimate_error"] = _nearest_estimate_error
 globals()["_merge_selected_context"] = _merge_selected_context
