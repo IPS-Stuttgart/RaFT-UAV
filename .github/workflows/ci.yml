@@ -17,7 +17,7 @@ env:
 
 jobs:
   focused-timestamp-assignment:
-    name: Focused timestamp assignment diagnostic
+    name: First failing test diagnostic
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -34,8 +34,8 @@ jobs:
           python -m pip install --quiet --upgrade pip
           python -m pip install --quiet -e ".[dev]"
 
-      - name: Run focused tests
-        run: pytest -vv tests/test_mmuad_global_timestamp_assignment.py
+      - name: Run until first failure
+        run: pytest -q -x
 
   test:
     name: Python ${{ matrix.python-version }}
