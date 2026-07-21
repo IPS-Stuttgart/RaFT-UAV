@@ -140,7 +140,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--max-interpolation-gap-s",
         action="append",
-        default=["none"],
         help="gap value in seconds, 'none', or comma-separated list; may repeat",
     )
     parser.add_argument(
@@ -174,7 +173,9 @@ def main(argv: list[str] | None = None) -> int:
         template=template,
         output_dir=args.output_dir,
         resample_methods=tuple(args.resample_method or RESAMPLE_METHODS),
-        max_interpolation_gaps_s=_parse_gap_values(args.max_interpolation_gap_s),
+        max_interpolation_gaps_s=_parse_gap_values(
+            args.max_interpolation_gap_s or ["none"]
+        ),
         classification_policies=tuple(args.classification_policy or ("sequence-mode",)),
         missing_position_policy=args.missing_position_policy,
         truth_path=args.truth,
