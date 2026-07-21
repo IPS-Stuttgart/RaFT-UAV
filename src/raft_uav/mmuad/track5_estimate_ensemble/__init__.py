@@ -1,9 +1,10 @@
-"""Compatibility package validating Track 5 ensemble scalar controls.
+"""Compatibility package for safe Track 5 estimate ensembling.
 
 The maintained implementation lives in the sibling ``track5_estimate_ensemble.py``
 file. This wrapper preserves the public import surface while rejecting malformed
 weights and trim fractions before empty-template returns, weight configuration
-normalization, or estimate-file access.
+normalization, or estimate-file access, and while keeping weighted arithmetic
+finite for very large non-negative weights.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from pathlib import Path
 import sys
 from typing import Any, Iterable
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.numeric import optional_float
@@ -86,6 +88,51 @@ def _validated_runtime_inputs(
     return validated
 
 
+def _scaled_runtime_inputs(
+    estimate_inputs: list[tuple[str, pd.DataFrame, float]],
+) -> tuple[list[tuple[str, pd.DataFrame, float]], float]:
+    """Scale finite weights by their maximum without changing relative mass."""
+
+    if not estimate_inputs:
+        return estimate_inputs, 1.0
+    weights = np.asarray([weight for _, _, weight in estimate_inputs], dtype=float)
+    scale = float(np.max(weights))
+    if scale <= 0.0:
+        return estimate_inputs, 1.0
+    scaled = [
+        (label, estimates, float(weight / scale))
+        for label, estimates, weight in estimate_inputs
+    ]
+    return scaled, scale
+
+
+def _restore_weight_scale(
+    ensemble: pd.DataFrame,
+    diagnostics: pd.DataFrame,
+    *,
+    scale: float,
+    estimate_inputs: list[tuple[str, pd.DataFrame, float]],
+) -> None:
+    """Restore diagnostic weight units after relative-weight aggregation."""
+
+    if scale != 1.0:
+        for frame, column in (
+            (ensemble, "ensemble_weight_sum"),
+            (diagnostics, "weight_sum"),
+        ):
+            if column not in frame.columns:
+                continue
+            values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+            with np.errstate(over="ignore", invalid="ignore"):
+                frame[column] = values * scale
+
+    summaries = diagnostics.attrs.get("input_summaries")
+    if isinstance(summaries, list) and len(summaries) == len(estimate_inputs):
+        for summary, (_, _, weight) in zip(summaries, estimate_inputs, strict=True):
+            if isinstance(summary, dict):
+                summary["weight"] = float(weight)
+
+
 def _validated_estimate_input_objects(
     estimate_inputs: Iterable[EstimateInput],
 ) -> list[EstimateInput]:
@@ -126,17 +173,25 @@ def build_track5_estimate_ensemble(
     aggregation_policy: str = "weighted-mean",
     trim_fraction: Any = 0.2,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Build an ensemble after validating numeric controls up front."""
+    """Build an ensemble with validated controls and overflow-safe weights."""
 
     trim_fraction = _validate_trim_fraction(trim_fraction)
     inputs = _validated_runtime_inputs(estimate_inputs)
-    return _LEGACY_BUILD(
-        inputs,
+    scaled_inputs, weight_scale = _scaled_runtime_inputs(inputs)
+    ensemble, diagnostics = _LEGACY_BUILD(
+        scaled_inputs,
         template,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
         aggregation_policy=aggregation_policy,
         trim_fraction=trim_fraction,
     )
+    _restore_weight_scale(
+        ensemble,
+        diagnostics,
+        scale=weight_scale,
+        estimate_inputs=inputs,
+    )
+    return ensemble, diagnostics
 
 
 def write_track5_estimate_ensemble_outputs(
@@ -186,6 +241,8 @@ globals()["_validate_ensemble_weight"] = _validate_ensemble_weight
 globals()["_validate_trim_fraction"] = _validate_trim_fraction
 globals()["_normalize_estimate_weight_mapping"] = _normalize_estimate_weight_mapping
 globals()["_validated_runtime_inputs"] = _validated_runtime_inputs
+globals()["_scaled_runtime_inputs"] = _scaled_runtime_inputs
+globals()["_restore_weight_scale"] = _restore_weight_scale
 globals()["_validated_estimate_input_objects"] = _validated_estimate_input_objects
 globals()["apply_estimate_weight_config"] = apply_estimate_weight_config
 globals()["build_track5_estimate_ensemble"] = build_track5_estimate_ensemble

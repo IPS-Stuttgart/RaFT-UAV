@@ -51,10 +51,9 @@ def _restore_plain_numeric_track_ids(frame: pd.DataFrame) -> pd.DataFrame:
             try:
                 exact_ids = text.loc[present].map(int)
             except ValueError:
-                return out
+                continue
             out[column] = out[column].astype(object)
             out.loc[present, column] = exact_ids.astype(object)
-        return out
     return out
 
 
