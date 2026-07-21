@@ -141,6 +141,71 @@ def _validated_estimate_inputs(
     return validated
 
 
+def _relative_weight_inputs(
+    inputs: list[EstimateInput],
+) -> tuple[list[EstimateInput], float]:
+    """Scale global weights by a common factor before inverse-variance arithmetic."""
+
+    positive_weights = [float(item.weight) for item in inputs if float(item.weight) > 0.0]
+    if not positive_weights:
+        return inputs, 1.0
+    weight_scale = max(positive_weights)
+    relative = [
+        EstimateInput(
+            label=item.label,
+            path=item.path,
+            weight=float(item.weight) / weight_scale,
+        )
+        for item in inputs
+    ]
+    return relative, weight_scale
+
+
+def _rescale_weight_diagnostics(
+    estimates: pd.DataFrame,
+    diagnostics: pd.DataFrame,
+    *,
+    inputs: list[EstimateInput],
+    weight_scale: float,
+) -> None:
+    """Restore absolute-weight diagnostics after stable relative-weight aggregation."""
+
+    with np.errstate(over="ignore", invalid="ignore"):
+        if "ensemble_weight_sum" in estimates.columns:
+            estimates["ensemble_weight_sum"] = (
+                pd.to_numeric(estimates["ensemble_weight_sum"], errors="coerce")
+                * weight_scale
+            )
+        if "inverse_variance_weight_sum" in diagnostics.columns:
+            diagnostics["inverse_variance_weight_sum"] = (
+                pd.to_numeric(
+                    diagnostics["inverse_variance_weight_sum"],
+                    errors="coerce",
+                )
+                * weight_scale
+            )
+
+    sigma_scale = float(np.sqrt(weight_scale))
+    if "ensemble_effective_sigma_m" in estimates.columns:
+        estimates["ensemble_effective_sigma_m"] = (
+            pd.to_numeric(estimates["ensemble_effective_sigma_m"], errors="coerce")
+            / sigma_scale
+        )
+    if "effective_sigma_m" in diagnostics.columns:
+        diagnostics["effective_sigma_m"] = (
+            pd.to_numeric(diagnostics["effective_sigma_m"], errors="coerce")
+            / sigma_scale
+        )
+
+    summary = diagnostics.attrs.get("input_summary", [])
+    restored_summary: list[dict[str, Any]] = []
+    for entry, item in zip(summary, inputs):
+        restored = dict(entry)
+        restored["global_weight"] = float(item.weight)
+        restored_summary.append(restored)
+    diagnostics.attrs["input_summary"] = restored_summary
+
+
 def build_track5_uncertainty_ensemble(
     estimate_inputs: Iterable[EstimateInput],
     *,
@@ -151,11 +216,12 @@ def build_track5_uncertainty_ensemble(
     sigma_max_m: float = 100.0,
     max_nearest_time_delta_s: float | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return the uncertainty ensemble after validating every global weight."""
+    """Return the uncertainty ensemble after stable global-weight normalization."""
 
     inputs = _validated_estimate_inputs(estimate_inputs)
-    return _LEGACY_BUILD(
-        inputs,
+    relative_inputs, weight_scale = _relative_weight_inputs(inputs)
+    estimates, diagnostics = _LEGACY_BUILD(
+        relative_inputs,
         template=template,
         uncertainty_column=uncertainty_column,
         fallback_sigma_m=fallback_sigma_m,
@@ -163,6 +229,13 @@ def build_track5_uncertainty_ensemble(
         sigma_max_m=sigma_max_m,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
     )
+    _rescale_weight_diagnostics(
+        estimates,
+        diagnostics,
+        inputs=inputs,
+        weight_scale=weight_scale,
+    )
+    return estimates, diagnostics
 
 
 _IMPL._first_present = _first_present
@@ -183,6 +256,8 @@ globals()["_sequence_text_or_none"] = _sequence_text_or_none
 globals()["_normalize_uncertainty_rows"] = _normalize_uncertainty_rows
 globals()["_normalize_template_rows"] = _normalize_template_rows
 globals()["_validated_estimate_inputs"] = _validated_estimate_inputs
+globals()["_relative_weight_inputs"] = _relative_weight_inputs
+globals()["_rescale_weight_diagnostics"] = _rescale_weight_diagnostics
 globals()["build_track5_uncertainty_ensemble"] = build_track5_uncertainty_ensemble
 __doc__ = _IMPL.__doc__
 __all__ = [_name for _name in dir(_IMPL) if not _name.startswith("__")]
