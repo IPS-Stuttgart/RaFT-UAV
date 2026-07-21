@@ -5,6 +5,7 @@ import pytest
 
 from raft_uav.mmuad.evaluator import evaluate_mmaud_results
 from raft_uav.mmuad.submission import validate_official_track5_submission
+from raft_uav.mmuad.timestamp_assignment import optimal_timestamp_assignment
 
 
 def _overlapping_results() -> pd.DataFrame:
@@ -29,6 +30,16 @@ def _overlapping_truth() -> pd.DataFrame:
             "uav_type": ["1", "1"],
         }
     )
+
+
+def test_equal_error_assignment_preserves_stable_request_order() -> None:
+    assignment = optimal_timestamp_assignment(
+        [0.0, 0.04],
+        [0.02],
+        tolerance_s=0.05,
+    )
+
+    assert assignment == {0: 0}
 
 
 def test_public_track5_matching_uses_global_one_to_one_assignment() -> None:
