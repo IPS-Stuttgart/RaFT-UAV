@@ -13,7 +13,6 @@ from pathlib import Path
 import sys
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from raft_uav.numeric import optional_float
