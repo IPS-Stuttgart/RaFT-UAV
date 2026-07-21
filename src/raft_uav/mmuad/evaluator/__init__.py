@@ -2,9 +2,9 @@
 
 The legacy evaluator implementation lives in the sibling ``evaluator.py`` file.
 This wrapper preserves public imports while overriding official-result
-classification validation and normalizing local result sequence identifiers.
-Official truth-file loading remains permissive so existing local truth archives
-stay readable.
+classification validation, normalizing local result sequence identifiers, and
+using globally consistent one-to-one timestamp matching. Official truth-file
+loading remains permissive so existing local truth archives stay readable.
 """
 from __future__ import annotations
 
@@ -16,7 +16,11 @@ from typing import Any
 import pandas as pd
 
 from raft_uav.mmuad import _submission_impl
-from raft_uav.mmuad.submission import OFFICIAL_TRACK5_CLASS_IDS
+from raft_uav.mmuad.submission import (
+    OFFICIAL_TRACK5_CLASS_IDS,
+    _validated_timestamp_tolerance,
+)
+from raft_uav.mmuad.timestamp_assignment import optimal_timestamp_assignment
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "evaluator.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -158,12 +162,114 @@ def _read_results_zip_csv(path: Path, *, member_name: str) -> pd.DataFrame:
             return _read_results_csv_preserving_text(_IMPL.BytesIO(handle.read()))
 
 
+def _evaluate_public_track5_timestamp_aligned(
+    result_rows: pd.DataFrame,
+    truth_rows: pd.DataFrame,
+    *,
+    class_map: dict[str, str],
+    timestamp_tolerance_s: Any,
+) -> dict[str, Any]:
+    """Evaluate Track 5 rows with a globally optimal timestamp assignment."""
+
+    tolerance = _validated_timestamp_tolerance(timestamp_tolerance_s)
+    if truth_rows.empty:
+        return _IMPL._empty_truth_evaluation(
+            result_rows,
+            metric_protocol="public_track5_timestamp_aligned",
+            timestamp_tolerance_s=tolerance,
+        )
+
+    result_rows = result_rows.copy()
+    truth_rows = truth_rows.copy()
+    result_rows["sequence_id"] = result_rows["sequence_id"].astype(str)
+    truth_rows["sequence_id"] = truth_rows["sequence_id"].astype(str)
+    used_result_indices: set[int] = set()
+    error_records: list[dict[str, Any]] = []
+
+    for sequence_id, seq_truth in truth_rows.groupby("sequence_id", sort=True):
+        seq_truth = seq_truth.sort_values("time_s")
+        seq_results = result_rows.loc[
+            result_rows["sequence_id"] == str(sequence_id)
+        ].sort_values("timestamp")
+        assignment = optimal_timestamp_assignment(
+            seq_truth["time_s"].to_numpy(float),
+            seq_results["timestamp"].to_numpy(float),
+            tolerance_s=tolerance,
+        )
+        for truth_position, (_, truth_row) in enumerate(seq_truth.iterrows()):
+            prediction_position = assignment.get(truth_position)
+            if prediction_position is None:
+                error_records.append(_IMPL._missing_track5_prediction_row(truth_row))
+                continue
+            pred_index = int(seq_results.index[prediction_position])
+            used_result_indices.add(pred_index)
+            pred_row = seq_results.loc[pred_index]
+            error_records.append(
+                _IMPL._matched_track5_row(
+                    pred_row,
+                    truth_row,
+                    class_map=class_map,
+                )
+            )
+
+    error_records.extend(
+        _IMPL._unused_track5_prediction_rows(
+            result_rows,
+            truth_rows,
+            used_result_indices=used_result_indices,
+            timestamp_tolerance_s=tolerance,
+        )
+    )
+    errors = pd.DataFrame.from_records(error_records)
+    matched = errors.loc[errors["matched"]].copy() if not errors.empty else pd.DataFrame()
+    truth_count = int(len(truth_rows))
+    prediction_count = int(len(result_rows))
+    missing_count = _IMPL._reason_count(errors, "missing_prediction")
+    extra_count = _IMPL._reason_count(errors, "extra_prediction")
+    duplicate_count = _IMPL._reason_count(errors, "duplicate_prediction")
+    blocking_reasons = _IMPL._track5_leaderboard_blocking_reasons(
+        truth_count=truth_count,
+        matched_count=int(len(matched)),
+        missing_count=missing_count,
+        extra_count=extra_count,
+        duplicate_count=duplicate_count,
+    )
+    summary = {
+        "metric_protocol": "public_track5_timestamp_aligned",
+        "public_track5_metric": True,
+        "closed_codabench_evaluator": False,
+        "timestamp_tolerance_s": tolerance,
+        "count": int(len(errors)),
+        "truth_count": truth_count,
+        "prediction_count": prediction_count,
+        "matched_count": int(len(matched)),
+        "missing_prediction_count": missing_count,
+        "extra_prediction_count": extra_count,
+        "duplicate_prediction_count": duplicate_count,
+        "unmatched_count": int(len(errors) - len(matched)),
+        "truth_coverage_fraction": float(len(matched) / truth_count) if truth_count else 0.0,
+        "all_truth_timestamps_matched": int(len(matched)) == truth_count,
+        "leaderboard_ready": not blocking_reasons,
+        "score_valid_for_leaderboard": not blocking_reasons,
+        "leaderboard_blocking_reasons": blocking_reasons,
+        "pooled": _IMPL._error_summary(matched),
+        "sequences": {},
+    }
+    summary["sequences"] = _IMPL._public_track5_sequence_summaries(
+        errors,
+        result_rows,
+        truth_rows,
+    )
+    return {"summary": summary, "rows": errors}
+
+
 _IMPL._has_official_track5_columns = _has_official_track5_columns
 _IMPL._official_track5_results_to_local_frame = _official_track5_results_to_local_frame
 _IMPL._official_track5_truth_to_rows = _official_track5_truth_to_rows
 _IMPL.validate_mmaud_results_frame = validate_mmaud_results_frame
 _IMPL.load_mmaud_results_csv = load_mmaud_results_csv
 _IMPL._read_results_zip_csv = _read_results_zip_csv
+_IMPL._evaluate_public_track5_timestamp_aligned = _evaluate_public_track5_timestamp_aligned
 
 for _name in dir(_IMPL):
     if not _name.startswith("__"):
@@ -174,5 +280,8 @@ globals()["_parse_official_truth_classification_cell"] = _parse_official_truth_c
 globals()["_official_track5_column_map"] = _official_track5_column_map
 globals()["_normalize_local_result_sequence_ids"] = _normalize_local_result_sequence_ids
 globals()["_read_results_csv_preserving_text"] = _read_results_csv_preserving_text
+globals()["_evaluate_public_track5_timestamp_aligned"] = (
+    _evaluate_public_track5_timestamp_aligned
+)
 __doc__ = _IMPL.__doc__
 __all__ = [_name for _name in dir(_IMPL) if not _name.startswith("__")]
