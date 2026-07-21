@@ -3,7 +3,7 @@
 The maintained implementation lives in the sibling ``diagnostics.py`` module.
 This package preserves the public import path while retaining partially indexed
 radar frames, preventing fractional identifiers from being truncated, and
-keeping domain-shift reports well-defined for sparse or non-finite inputs.
+keeping sparse research summaries well-defined.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ _LEGACY = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _LEGACY
 _SPEC.loader.exec_module(_LEGACY)
 
+_ORIGINAL_LATENCY_CURVE = _LEGACY.latency_curve
 _ORIGINAL_NEAREST_TRUTH_POSITION = _LEGACY._nearest_truth_position
 _ORIGINAL_TRACK_SWITCH_METRICS = _LEGACY.track_switch_metrics
 _DOMAIN_SHIFT_COLUMNS = [
@@ -45,6 +46,24 @@ _DOMAIN_SHIFT_COLUMNS = [
     "heldout_p90",
     "ks_distance",
 ]
+_LATENCY_CURVE_COLUMNS = [
+    "latency_s",
+    "truth_rows",
+    "covered_truth_rows",
+    "truth_coverage_rate",
+    "error_3d_count",
+    "error_3d_rmse_m",
+    "error_3d_p95_m",
+]
+
+
+def _nonnegative_finite_scalar(value: object, *, name: str) -> float:
+    """Return a finite non-negative scalar or raise a field-specific error."""
+
+    normalized = _optional_float(value)
+    if normalized is None or normalized < 0.0:
+        raise ValueError(f"{name} must be a finite non-negative scalar")
+    return normalized
 
 
 def _event_index_value(value: object) -> int | float | None:
@@ -174,6 +193,32 @@ def track_switch_metrics(
     return _ORIGINAL_TRACK_SWITCH_METRICS(normalized, long_gap_s=long_gap_s)
 
 
+def latency_curve(
+    estimates_by_latency: Mapping[float | str, pd.DataFrame],
+    truth: pd.DataFrame,
+    *,
+    max_time_delta_s: float = 2.0,
+) -> pd.DataFrame:
+    """Evaluate latency tradeoffs with a stable empty-result contract."""
+
+    normalized_gate = _nonnegative_finite_scalar(
+        max_time_delta_s,
+        name="max_time_delta_s",
+    )
+    if not estimates_by_latency:
+        _LEGACY._require_columns(
+            truth,
+            {"time_s", *_LEGACY.PositionColumns},
+            "truth",
+        )
+        return pd.DataFrame(columns=_LATENCY_CURVE_COLUMNS)
+    return _ORIGINAL_LATENCY_CURVE(
+        estimates_by_latency,
+        truth,
+        max_time_delta_s=normalized_gate,
+    )
+
+
 def domain_shift_summary(
     training: Mapping[str, pd.DataFrame] | Sequence[pd.DataFrame] | pd.DataFrame,
     heldout: pd.DataFrame,
@@ -241,6 +286,7 @@ _LEGACY._radar_frame_groups = _radar_frame_groups
 _LEGACY._radar_event_key = _radar_event_key
 _LEGACY._row_event_key = _row_event_key
 _LEGACY._nearest_truth_position = _nearest_truth_position
+_LEGACY.latency_curve = latency_curve
 _LEGACY.track_switch_metrics = track_switch_metrics
 _LEGACY.domain_shift_summary = domain_shift_summary
 
@@ -252,6 +298,7 @@ globals()["_radar_frame_groups"] = _radar_frame_groups
 globals()["_radar_event_key"] = _radar_event_key
 globals()["_row_event_key"] = _row_event_key
 globals()["_nearest_truth_position"] = _nearest_truth_position
+globals()["latency_curve"] = latency_curve
 globals()["track_switch_metrics"] = track_switch_metrics
 globals()["domain_shift_summary"] = domain_shift_summary
 
