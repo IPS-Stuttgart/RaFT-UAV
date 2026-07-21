@@ -1,9 +1,10 @@
-"""Package wrapper that hardens MMUAD submission CSV header matching.
+"""Package wrapper that hardens MMUAD submission CSV and timestamp matching.
 
 The legacy implementation lives in the sibling ``submission.py`` file. This
 wrapper preserves the public import path while accepting spreadsheet-exported
 class-map and official Track 5 template CSV files with whitespace around alias
-headers such as `` Sequence `` and `` Type ``.
+headers, validating timestamp tolerances, and using globally consistent
+one-to-one template matching.
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ import importlib.util
 from pathlib import Path
 import sys
 from typing import Any
+
+from raft_uav.mmuad.timestamp_assignment import optimal_timestamp_assignment
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "submission.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -89,6 +92,77 @@ def _validate_official_track5_submission_with_finite_tolerance(
     )
 
 
+def _track5_template_coverage_rows(
+    predictions: Any,
+    template: Any,
+    *,
+    timestamp_tolerance_s: float,
+    ignored_prediction_indices: set[int] | None = None,
+) -> Any:
+    """Match template timestamps globally before classifying unused predictions."""
+
+    pd = _IMPL._impl.pd
+    np = _IMPL._impl.np
+    rows: list[dict[str, Any]] = []
+    ignored_indices = set(ignored_prediction_indices or set())
+    matched_prediction_indices = set(ignored_indices)
+    for sequence_id, group in template.groupby("sequence_id", sort=True):
+        seq_predictions = predictions.loc[
+            predictions["sequence_id"] == str(sequence_id)
+        ].copy()
+        available = seq_predictions.loc[
+            ~seq_predictions["row_index"].astype(int).isin(ignored_indices)
+        ]
+        assignment = optimal_timestamp_assignment(
+            group["time_s"].to_numpy(float),
+            available["timestamp"].to_numpy(float),
+            tolerance_s=timestamp_tolerance_s,
+        )
+        for template_position, (_, template_row) in enumerate(group.iterrows()):
+            timestamp = float(template_row["time_s"])
+            prediction_position = assignment.get(template_position)
+            if prediction_position is None:
+                rows.append(
+                    {
+                        "row_type": "template",
+                        "row_index": np.nan,
+                        "sequence_id": str(sequence_id),
+                        "timestamp": timestamp,
+                        "status": "missing_template_timestamp",
+                        "reason": "no prediction at requested timestamp",
+                    }
+                )
+                continue
+            matched_row = available.iloc[prediction_position]
+            row_index = int(matched_row["row_index"])
+            matched_prediction_indices.add(row_index)
+            rows.append(
+                {
+                    "row_type": "template",
+                    "row_index": row_index,
+                    "sequence_id": str(sequence_id),
+                    "timestamp": timestamp,
+                    "status": "covered_template_timestamp",
+                    "reason": "",
+                }
+            )
+    for _, prediction in predictions.iterrows():
+        row_index = int(prediction["row_index"])
+        if row_index in matched_prediction_indices:
+            continue
+        rows.append(
+            {
+                "row_type": "prediction",
+                "row_index": row_index,
+                "sequence_id": str(prediction["sequence_id"]),
+                "timestamp": float(prediction["timestamp"]),
+                "status": "extra_prediction",
+                "reason": "prediction does not match a requested template timestamp",
+            }
+        )
+    return pd.DataFrame.from_records(rows)
+
+
 def _normalize_track5_template_with_stripped_headers(template: Any) -> Any:
     """Normalize template rows while tolerating whitespace-padded alias headers."""
 
@@ -140,6 +214,9 @@ _IMPL._impl.load_sequence_class_map = _load_sequence_class_map_with_stripped_csv
 _IMPL.load_sequence_class_map = _load_sequence_class_map_with_stripped_csv_headers
 _IMPL._impl._normalize_track5_template = _normalize_track5_template_with_stripped_headers
 _IMPL._normalize_track5_template = _normalize_track5_template_with_stripped_headers
+_IMPL._impl._track5_template_coverage_rows = _track5_template_coverage_rows
+if hasattr(_IMPL, "_track5_template_coverage_rows"):
+    _IMPL._track5_template_coverage_rows = _track5_template_coverage_rows
 _IMPL._impl.validate_official_track5_submission = (
     _validate_official_track5_submission_with_finite_tolerance
 )
@@ -157,6 +234,7 @@ globals().update(
 
 load_sequence_class_map = _load_sequence_class_map_with_stripped_csv_headers
 _normalize_track5_template = _normalize_track5_template_with_stripped_headers
+_track5_template_coverage_rows = _track5_template_coverage_rows
 validate_official_track5_submission = (
     _validate_official_track5_submission_with_finite_tolerance
 )
