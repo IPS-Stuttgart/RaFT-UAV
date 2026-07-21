@@ -17,7 +17,7 @@ env:
 
 jobs:
   focused-timestamp-assignment:
-    name: First failing test diagnostic
+    name: MMUAD compatibility diagnostic
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -34,8 +34,12 @@ jobs:
           python -m pip install --quiet --upgrade pip
           python -m pip install --quiet -e ".[dev]"
 
-      - name: Run until first failure
-        run: pytest -q -x
+      - name: Run affected tests
+        run: >-
+          pytest -q -x
+          tests/test_mmuad_submission.py
+          tests/test_mmuad_evaluator_csv_reader.py
+          tests/test_mmuad_global_timestamp_assignment.py
 
   test:
     name: Python ${{ matrix.python-version }}
