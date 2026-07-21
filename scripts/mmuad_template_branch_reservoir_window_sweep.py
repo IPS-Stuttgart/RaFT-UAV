@@ -41,6 +41,7 @@ from mmuad_template_branch_reservoir import (  # noqa: E402
 
 SUMMARY_CSV = "mmuad_template_branch_reservoir_window_sweep_summary.csv"
 SUMMARY_JSON = "mmuad_template_branch_reservoir_window_sweep_summary.json"
+DEFAULT_MAX_TIME_DELTA_S_VALUES = ("0.25", "0.5", "1.0")
 
 
 def run_template_window_sweep(
@@ -141,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--max-time-delta-s",
         action="append",
-        default=["0.25,0.5,1.0"],
+        default=None,
         help="candidate/template window in seconds; may be repeated or comma separated",
     )
     parser.add_argument("--per-source-top-n", type=int, default=3)
@@ -164,11 +165,16 @@ def main(argv: list[str] | None = None) -> int:
     inputs = tuple(parse_candidate_input(value) for value in args.candidate_csv)
     candidates = load_branch_candidate_inputs(inputs)
     template = load_official_track5_template_file(args.template_csv)
+    max_time_delta_s_values = (
+        args.max_time_delta_s
+        if args.max_time_delta_s is not None
+        else DEFAULT_MAX_TIME_DELTA_S_VALUES
+    )
     summary = run_template_window_sweep(
         candidates,
         template,
         output_dir=args.output_dir,
-        max_time_delta_s_values=_parse_float_values(args.max_time_delta_s),
+        max_time_delta_s_values=_parse_float_values(max_time_delta_s_values),
         per_source_top_n=int(args.per_source_top_n),
         per_branch_top_n=int(args.per_branch_top_n),
         global_top_n=int(args.global_top_n),
