@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 
 import pandas as pd
+import pytest
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
@@ -104,3 +105,22 @@ def test_template_window_sweep_cli_writes_summary(tmp_path: Path) -> None:
     assert len(payload["rows"]) == 2
     for reservoir_csv in summary["reservoir_csv"]:
         assert Path(reservoir_csv).exists()
+
+
+def test_window_labels_distinguish_close_float_values() -> None:
+    left = 0.12345671
+    right = 0.12345672
+
+    assert f"{left:.6g}" == f"{right:.6g}"
+    assert window_sweep._window_label(left) != window_sweep._window_label(right)
+
+
+@pytest.mark.parametrize("value", ["-0.1", "nan", "inf", "-inf"])
+def test_parse_float_values_rejects_invalid_windows(value: str) -> None:
+    with pytest.raises(ValueError, match="finite, non-negative"):
+        window_sweep._parse_float_values((value,))
+
+
+def test_parse_float_values_requires_a_window() -> None:
+    with pytest.raises(ValueError, match="at least one"):
+        window_sweep._parse_float_values(())
