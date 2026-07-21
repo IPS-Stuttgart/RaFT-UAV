@@ -28,6 +28,7 @@ def test_bias_training_rows_sorts_serialized_truth_times_numerically() -> None:
         max_time_delta_s=0.0,
     )
 
+    assert truth["time_s"].tolist() == ["10", "2"]
     assert len(rows) == 1
     assert rows.loc[0, "bias_truth_time_delta_s"] == 0.0
     assert rows.loc[0, "target_bias_east_m"] == 3.0
