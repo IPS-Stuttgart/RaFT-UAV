@@ -141,8 +141,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--max-time-delta-s",
         action="append",
-        default=["0.25,0.5,1.0"],
-        help="candidate/template window in seconds; may be repeated or comma separated",
+        default=None,
+        help=(
+            "candidate/template window in seconds; may be repeated or comma separated; "
+            "defaults to 0.25,0.5,1.0 when omitted"
+        ),
     )
     parser.add_argument("--per-source-top-n", type=int, default=3)
     parser.add_argument("--per-branch-top-n", type=int, default=3)
@@ -168,7 +171,9 @@ def main(argv: list[str] | None = None) -> int:
         candidates,
         template,
         output_dir=args.output_dir,
-        max_time_delta_s_values=_parse_float_values(args.max_time_delta_s),
+        max_time_delta_s_values=_parse_float_values(
+            args.max_time_delta_s or ["0.25,0.5,1.0"]
+        ),
         per_source_top_n=int(args.per_source_top_n),
         per_branch_top_n=int(args.per_branch_top_n),
         global_top_n=int(args.global_top_n),
