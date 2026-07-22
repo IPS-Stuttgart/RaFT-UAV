@@ -93,10 +93,17 @@ def pointcloud2_to_dataframe(message: Any) -> pd.DataFrame:
 
 
 def _point_offsets(message: Any, *, point_step: int, data_length: int) -> list[int]:
-    width = int(getattr(message, "width", 0))
-    height = int(getattr(message, "height", 1))
-    if width <= 0 or height <= 0:
+    width_value = getattr(message, "width", None)
+    height_value = getattr(message, "height", None)
+    if width_value is None or height_value is None:
         return [index * point_step for index in range(data_length // point_step)]
+
+    width = int(width_value)
+    height = int(height_value)
+    if width < 0 or height < 0:
+        raise ValueError("PointCloud2 width and height must be nonnegative")
+    if width == 0 or height == 0:
+        return []
 
     row_step = _normalized_row_step(
         message,
