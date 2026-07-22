@@ -2,11 +2,53 @@
 
 from __future__ import annotations
 
+import math
 from typing import Iterable
 
 import numpy as np
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import min_weight_full_bipartite_matching
+
+
+def _solve_sparse_assignment(
+    rows: list[int],
+    columns: list[int],
+    costs: list[float],
+    *,
+    shape: tuple[int, int],
+    request_order: np.ndarray,
+    prediction_order: np.ndarray,
+    prediction_count: int,
+) -> dict[int, int]:
+    """Solve one sparse assignment and restore original array positions."""
+
+    graph = coo_matrix(
+        (np.asarray(costs, dtype=float), (rows, columns)),
+        shape=shape,
+    ).tocsr()
+    matched_requests, matched_columns = min_weight_full_bipartite_matching(graph)
+
+    assignment: dict[int, int] = {}
+    for request_rank, column in zip(matched_requests, matched_columns, strict=True):
+        if int(column) >= prediction_count:
+            continue
+        request_index = int(request_order[int(request_rank)])
+        prediction_index = int(prediction_order[int(column)])
+        assignment[request_index] = prediction_index
+    return assignment
+
+
+def _assignment_error(
+    assignment: dict[int, int],
+    requests: np.ndarray,
+    predictions: np.ndarray,
+) -> float:
+    """Return an accurately accumulated absolute timestamp error."""
+
+    return math.fsum(
+        abs(float(predictions[prediction_index] - requests[request_index]))
+        for request_index, prediction_index in assignment.items()
+    )
 
 
 def optimal_timestamp_assignment(
@@ -44,9 +86,11 @@ def optimal_timestamp_assignment(
 
     rows: list[int] = []
     columns: list[int] = []
-    costs: list[float] = []
+    primary_costs: list[float] = []
+    stable_costs: list[float] = []
     scale = tolerance + 1.0
     tie_unit = 8.0 * np.finfo(float).eps
+    positive_zero_guard = np.finfo(float).tiny
     for request_rank, request_time in enumerate(sorted_requests):
         # Widen the binary-search window by one representable value. Rounded
         # subtraction/addition can otherwise exclude an exact boundary match.
@@ -60,30 +104,56 @@ def optimal_timestamp_assignment(
             # so enforce the actual matching predicate explicitly.
             if gap > tolerance:
                 continue
+            primary_cost = gap / scale
             # A multi-ULP order penalty makes exact error ties deterministic in
-            # SciPy's sparse matcher. Squared rank distance favors the stable
-            # monotone assignment while remaining negligible for timestamp error.
+            # SciPy's sparse matcher. The unperturbed solve below prevents that
+            # secondary preference from ever increasing the primary time error.
             rank_distance = request_rank - prediction_rank
             tie_break = tie_unit * float(1 + rank_distance * rank_distance)
             rows.append(request_rank)
             columns.append(prediction_rank)
-            costs.append(gap / scale + tie_break)
+            # Sparse matching drops explicit zero-weight edges. Adding the smallest
+            # positive float to every real edge preserves the primary objective for
+            # a fixed cardinality while retaining exact timestamp matches.
+            primary_costs.append(primary_cost + positive_zero_guard)
+            stable_costs.append(primary_cost + tie_break)
 
         rows.append(request_rank)
         columns.append(prediction_count + request_rank)
-        costs.append(float(min(request_count, prediction_count) + 1))
+        dummy_cost = float(min(request_count, prediction_count) + 1)
+        primary_costs.append(dummy_cost)
+        stable_costs.append(dummy_cost)
 
-    graph = coo_matrix(
-        (np.asarray(costs, dtype=float), (rows, columns)),
-        shape=(request_count, prediction_count + request_count),
-    ).tocsr()
-    matched_requests, matched_columns = min_weight_full_bipartite_matching(graph)
+    shape = (request_count, prediction_count + request_count)
+    primary_assignment = _solve_sparse_assignment(
+        rows,
+        columns,
+        primary_costs,
+        shape=shape,
+        request_order=request_order,
+        prediction_order=prediction_order,
+        prediction_count=prediction_count,
+    )
+    stable_assignment = _solve_sparse_assignment(
+        rows,
+        columns,
+        stable_costs,
+        shape=shape,
+        request_order=request_order,
+        prediction_order=prediction_order,
+        prediction_count=prediction_count,
+    )
 
-    assignment: dict[int, int] = {}
-    for request_rank, column in zip(matched_requests, matched_columns, strict=True):
-        if int(column) >= prediction_count:
-            continue
-        request_index = int(request_order[int(request_rank)])
-        prediction_index = int(prediction_order[int(column)])
-        assignment[request_index] = prediction_index
-    return assignment
+    if len(stable_assignment) != len(primary_assignment):
+        return (
+            stable_assignment
+            if len(stable_assignment) > len(primary_assignment)
+            else primary_assignment
+        )
+    if _assignment_error(stable_assignment, requests, predictions) <= _assignment_error(
+        primary_assignment,
+        requests,
+        predictions,
+    ):
+        return stable_assignment
+    return primary_assignment
