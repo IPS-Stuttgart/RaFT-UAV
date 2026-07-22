@@ -1,8 +1,9 @@
-"""Compatibility fix for robust paper-table radar interpolation.
+"""Compatibility fixes for robust paper-table diagnostics.
 
 The maintained implementation lives in the sibling ``paper_table.py`` module.
 This package preserves the public import path while excluding malformed radar
-anchors before interpolation.
+anchors before interpolation and reporting invalid reference counts as failed
+checks instead of raising conversion errors.
 """
 
 from __future__ import annotations
@@ -66,10 +67,87 @@ def _interpolate_selected_radar_to_frame_times(
     )
 
 
+def paper_reference_count_check(
+    table: pd.DataFrame,
+    *,
+    tolerance: int = 0,
+) -> dict[str, object]:
+    """Compare reference counts while treating invalid values as failed checks."""
+
+    tolerance_value = int(tolerance)
+    rows: list[dict[str, object]] = []
+    passed = True
+    for method, column, expected in _IMPL.PAPER_REFERENCE_COUNT_CHECKS:
+        match = (
+            table.loc[table.get("method") == method]
+            if "method" in table
+            else pd.DataFrame()
+        )
+        if match.empty or column not in match.columns:
+            rows.append(
+                {
+                    "method": method,
+                    "column": column,
+                    "expected": int(expected),
+                    "actual": None,
+                    "delta": None,
+                    "passed": False,
+                }
+            )
+            passed = False
+            continue
+
+        try:
+            numeric = float(pd.to_numeric(match.iloc[0][column], errors="coerce"))
+        except (TypeError, ValueError):
+            numeric = float("nan")
+        if not np.isfinite(numeric):
+            rows.append(
+                {
+                    "method": method,
+                    "column": column,
+                    "expected": int(expected),
+                    "actual": None,
+                    "delta": None,
+                    "passed": False,
+                }
+            )
+            passed = False
+            continue
+
+        actual = int(numeric)
+        delta = actual - int(expected)
+        ok = abs(delta) <= tolerance_value
+        rows.append(
+            {
+                "method": method,
+                "column": column,
+                "expected": int(expected),
+                "actual": actual,
+                "delta": int(delta),
+                "passed": bool(ok),
+            }
+        )
+        passed &= bool(ok)
+
+    message = (
+        "paper reference counts matched"
+        if passed
+        else f"paper reference count mismatch: {rows}"
+    )
+    return {
+        "passed": bool(passed),
+        "tolerance": tolerance_value,
+        "checks": rows,
+        "message": message,
+    }
+
+
 _IMPL._finite_interpolation_anchors = _finite_interpolation_anchors
 _IMPL._interpolate_selected_radar_to_frame_times = (
     _interpolate_selected_radar_to_frame_times
 )
+_IMPL.paper_reference_count_check = paper_reference_count_check
 
 globals().update(
     {
@@ -82,6 +160,7 @@ globals()["_finite_interpolation_anchors"] = _finite_interpolation_anchors
 globals()["_interpolate_selected_radar_to_frame_times"] = (
     _interpolate_selected_radar_to_frame_times
 )
+globals()["paper_reference_count_check"] = paper_reference_count_check
 
 __doc__ = _IMPL.__doc__
 __all__ = [
