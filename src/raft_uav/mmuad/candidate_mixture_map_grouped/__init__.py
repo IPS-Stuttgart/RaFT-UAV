@@ -47,7 +47,42 @@ class _PandasCsvProxy:
         return read_estimate_csv(Path(path))
 
 
+def _group_values(
+    rows: pd.DataFrame,
+    *,
+    resolved_group_column: str | None,
+    missing_group_policy: str,
+) -> pd.Series:
+    """Return group labels without colliding synthetic and explicit values."""
+
+    input_rows = rows["mixture_group_input_row"].astype(int)
+    if resolved_group_column is None:
+        return pd.Series(
+            [f"row:{int(index)}" for index in input_rows],
+            index=rows.index,
+            dtype=str,
+        )
+
+    values = rows[resolved_group_column]
+    missing = values.isna() | values.astype(str).str.strip().eq("")
+    if missing.any() and missing_group_policy == "error":
+        raise ValueError(
+            f"hypothesis group column {resolved_group_column!r} contains missing values"
+        )
+
+    result = values.astype(str).copy()
+    occupied = set(result.loc[~missing].astype(str))
+    for row_index in rows.index[missing]:
+        candidate = f"row:{int(input_rows.loc[row_index])}"
+        while candidate in occupied:
+            candidate += "#"
+        occupied.add(candidate)
+        result.loc[row_index] = candidate
+    return result.astype(str)
+
+
 _IMPL.pd = _PandasCsvProxy(pd)
+_IMPL._group_values = _group_values
 
 globals().update(
     {
@@ -56,6 +91,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_group_values"] = _group_values
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
