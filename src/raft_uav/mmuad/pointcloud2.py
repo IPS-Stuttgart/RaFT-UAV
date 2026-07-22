@@ -191,10 +191,17 @@ def _normalize_field_name(value: Any) -> str:
 
 def _normalize_fields(fields: Iterable[Any]) -> list[PointFieldSpec]:
     normalized: list[PointFieldSpec] = []
+    seen_names: set[str] = set()
     for field in fields:
+        name = _normalize_field_name(getattr(field, "name"))
+        if name in seen_names:
+            raise ValueError(
+                f"PointCloud2 fields contain duplicate normalized name: {name!r}"
+            )
+        seen_names.add(name)
         normalized.append(
             PointFieldSpec(
-                name=_normalize_field_name(getattr(field, "name")),
+                name=name,
                 offset=int(getattr(field, "offset")),
                 datatype=int(getattr(field, "datatype")),
                 count=int(getattr(field, "count", 1)),
