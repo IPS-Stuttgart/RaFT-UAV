@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -138,3 +139,27 @@ def test_policy_from_environment_rejects_fractional_recovery_streak(monkeypatch)
 
     with pytest.raises(ValueError, match=ENV_DNH_RECOVERY_MISS_STREAK):
         policy_from_environment()
+
+
+@pytest.mark.parametrize(
+    "invalid_entropy",
+    [True, np.bool_(True), np.array([1.5])],
+    ids=["python-bool", "numpy-bool", "non-scalar-array"],
+)
+def test_do_no_harm_ignores_invalid_entropy_diagnostics(invalid_entropy) -> None:
+    plan = classify_radar_update_row(
+        {"association_soft_path_weight_entropy": invalid_entropy}
+    )
+
+    assert plan.action == "apply"
+    assert plan.entropy is None
+    assert plan.effective_candidates is None
+
+
+def test_do_no_harm_preserves_scalar_like_entropy_diagnostics() -> None:
+    plan = classify_radar_update_row(
+        {"association_soft_path_weight_entropy": np.array(1.5)}
+    )
+
+    assert plan.action == "skip"
+    assert plan.entropy == pytest.approx(1.5)
