@@ -115,12 +115,30 @@ def build_track5_rts_ensemble(
                 spread_m = np.nan
                 measurement_variance = np.inf
             else:
-                weights = valid["input_weight"].to_numpy(float) / (measurement_sigma_m**2)
+                input_weights = valid["input_weight"].to_numpy(float)
                 xyz = valid[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
-                weight_sum = float(np.sum(weights))
-                weighted_xyz = np.sum(weights[:, None] * xyz, axis=0) / weight_sum
-                spread_variance = _weighted_spread_variance(xyz, weights, weighted_xyz)
-                measurement_variance = (1.0 / weight_sum) + spread_variance_scale * spread_variance
+                weight_scale = float(np.max(input_weights))
+                relative_weights = input_weights / weight_scale
+                relative_weight_sum = float(np.sum(relative_weights))
+                weighted_xyz = (
+                    np.sum(relative_weights[:, None] * xyz, axis=0) / relative_weight_sum
+                )
+                spread_variance = _weighted_spread_variance(
+                    xyz,
+                    relative_weights,
+                    weighted_xyz,
+                )
+                log_weight_sum = (
+                    np.log(weight_scale)
+                    + np.log(relative_weight_sum)
+                    - 2.0 * np.log(measurement_sigma_m)
+                )
+                with np.errstate(over="ignore", under="ignore"):
+                    weight_sum = float(np.exp(log_weight_sum))
+                    base_measurement_variance = float(np.exp(-log_weight_sum))
+                measurement_variance = (
+                    base_measurement_variance + spread_variance_scale * spread_variance
+                )
                 measurements[index] = weighted_xyz
                 variances[index] = max(float(measurement_variance), 1.0e-9)
                 spread_m = float(np.sqrt(max(spread_variance, 0.0)))
