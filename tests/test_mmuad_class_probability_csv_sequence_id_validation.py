@@ -52,3 +52,20 @@ def test_class_probability_csv_rejects_multiple_sequence_alias_columns(
         match=r"ambiguous sequence identifier columns: 'scene', 'clip_id'",
     ):
         read_class_probability_csv(probabilities_csv)
+
+
+def test_class_probability_csv_rejects_canonical_sequence_id_with_alias(
+    tmp_path: Path,
+) -> None:
+    probabilities_csv = tmp_path / "probabilities.csv"
+    probabilities_csv.write_text(
+        "sequence_id,Sequence,predicted_probability_0\n"
+        "canonical-001,alias-001,0.9\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"ambiguous sequence identifier columns: 'sequence_id', 'Sequence'",
+    ):
+        read_class_probability_csv(probabilities_csv)
