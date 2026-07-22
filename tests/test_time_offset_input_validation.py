@@ -25,6 +25,8 @@ from raft_uav.calibration.time_offset import (
         -np.inf,
         np.array(True),
         np.array([0.5]),
+        np.ma.masked,
+        np.ma.array(0.5, mask=True),
     ],
 )
 def test_apply_time_offset_rejects_invalid_scalar_offsets(offset_s: object) -> None:
@@ -41,7 +43,17 @@ def test_apply_time_offset_rejects_invalid_scalar_offsets(offset_s: object) -> N
         (aggregate_measurement_time_offset_sweep, {"dimensions": 2}),
     ],
 )
-@pytest.mark.parametrize("offset_s", [True, np.bool_(False), np.nan, np.inf])
+@pytest.mark.parametrize(
+    "offset_s",
+    [
+        True,
+        np.bool_(False),
+        np.nan,
+        np.inf,
+        np.ma.masked,
+        np.ma.array(0.5, mask=True),
+    ],
+)
 def test_time_offset_sweeps_reject_invalid_offsets(
     sweep: Callable[..., pd.DataFrame],
     kwargs: dict[str, object],
@@ -53,7 +65,17 @@ def test_time_offset_sweeps_reject_invalid_offsets(
 
 @pytest.mark.parametrize(
     "dimensions",
-    [1, 4, True, np.bool_(False), 2.5, np.nan, np.array([2])],
+    [
+        1,
+        4,
+        True,
+        np.bool_(False),
+        2.5,
+        np.nan,
+        np.array([2]),
+        np.ma.masked,
+        np.ma.array(2, mask=True),
+    ],
 )
 def test_measurement_sweep_rejects_invalid_dimensions(dimensions: object) -> None:
     with pytest.raises(ValueError, match="dimensions must be 2 or 3"):
