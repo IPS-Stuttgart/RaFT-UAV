@@ -56,10 +56,19 @@ def _finite_nonnegative_scale(value: Any, *, field_name: str) -> float:
     return scale
 
 
+def _reject_masked_values(value: Any, *, field_name: str) -> None:
+    """Reject arrays whose mask would be discarded by ``np.asarray``."""
+
+    if np.ma.isMaskedArray(value) and bool(np.any(np.ma.getmaskarray(value))):
+        raise ValueError(f"{field_name} must not contain masked values")
+
+
 def _tracking_measurement_post_init(
     self: Any,
     _apply_runtime_calibration: bool,
 ) -> None:
+    _reject_masked_values(self.vector, field_name="measurement vector")
+    _reject_masked_values(self.covariance, field_name="measurement covariance")
     time_s = _finite_timestamp_seconds(self.time_s, field_name="measurement time_s")
     _ORIGINAL_TRACKING_MEASUREMENT_POST_INIT(self, _apply_runtime_calibration)
     object.__setattr__(self, "time_s", time_s)
