@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling ``track5_speed_limit.py``
 module. This package preserves the public import path while rejecting malformed
-iteration counts, Boolean pseudo-numbers, and invalid fixed-grid rows instead of
-silently coercing or dropping them.
+iteration counts, Boolean pseudo-numbers, invalid fixed-grid rows, and duplicate
+fixed-grid keys instead of silently coercing or dropping them.
 """
 
 from __future__ import annotations
@@ -91,6 +91,41 @@ def _validate_numeric_rows(submission: object) -> None:
         raise ValueError(f"submission contains non-finite numeric values: {details}")
 
 
+def _validate_unique_fixed_grid_keys(submission: object) -> None:
+    """Reject duplicate normalized sequence/timestamp keys before projection."""
+
+    rows = _IMPL._strip_csv_headers(pd.DataFrame(submission).copy())
+    required = {"sequence_id", "time_s"}
+    if not required <= set(rows.columns):
+        return
+    normalized_keys = pd.DataFrame(
+        {
+            "sequence_id": rows["sequence_id"].astype(str),
+            "time_s": pd.to_numeric(rows["time_s"], errors="coerce"),
+        }
+    )
+    duplicate_mask = normalized_keys.duplicated(
+        subset=["sequence_id", "time_s"], keep=False
+    )
+    if not bool(duplicate_mask.any()):
+        return
+    duplicate_keys = (
+        normalized_keys.loc[duplicate_mask, ["sequence_id", "time_s"]]
+        .drop_duplicates()
+        .sort_values(["sequence_id", "time_s"])
+        .reset_index(drop=True)
+    )
+    sample = ", ".join(
+        f"{row.sequence_id}@{float(row.time_s):g}"
+        for row in duplicate_keys.head(5).itertuples(index=False)
+    )
+    suffix = ", ..." if len(duplicate_keys) > 5 else ""
+    raise ValueError(
+        f"submission contains {len(duplicate_keys)} duplicate "
+        f"(sequence_id, time_s) key(s): {sample}{suffix}"
+    )
+
+
 def project_track5_speed_limit(
     submission: pd.DataFrame,
     *,
@@ -110,6 +145,7 @@ def project_track5_speed_limit(
         message="anchor_blend must be finite and in [0, 1)",
     )
     _validate_numeric_rows(submission)
+    _validate_unique_fixed_grid_keys(submission)
     return _ORIGINAL_PROJECT(
         submission,
         max_speed_mps=validated_max_speed_mps,
@@ -131,6 +167,7 @@ globals()["_NUMERIC_COLUMNS"] = _NUMERIC_COLUMNS
 globals()["_positive_integer"] = _positive_integer
 globals()["_reject_boolean_scalar"] = _reject_boolean_scalar
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
+globals()["_validate_unique_fixed_grid_keys"] = _validate_unique_fixed_grid_keys
 globals()["project_track5_speed_limit"] = project_track5_speed_limit
 
 __doc__ = _IMPL.__doc__
