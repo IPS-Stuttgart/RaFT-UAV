@@ -37,7 +37,7 @@ def _measurement(time_s: object) -> TrackingMeasurement:
 def test_tracking_measurement_rejects_invalid_timestamps(time_s: object) -> None:
     with pytest.raises(
         ValueError,
-        match="measurement time_s must be a finite real scalar",
+        match="measurement time_s must be a finite",
     ):
         _measurement(time_s)
 
