@@ -55,6 +55,18 @@ def test_sequence_gate_fit_wrapper_overrides_sequence_dtype_mapping(tmp_path: Pa
     assert rows.loc[0, "value"] == 4
 
 
+def test_sequence_gate_fit_wrapper_preserves_padded_sequence_header_with_dtype_mapping(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "normalized_padded.csv"
+    csv_path.write_text(" Sequence ,value\n001,4\n", encoding="utf-8")
+
+    rows = _read_csv_preserving_sequence_id(csv_path, dtype={"value": int})
+
+    assert rows.loc[0, "Sequence"] == "001"
+    assert rows.loc[0, "value"] == 4
+
+
 def test_sequence_gate_fit_wrapper_strips_padded_normalized_headers(
     tmp_path: Path,
     monkeypatch,
