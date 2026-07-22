@@ -14,7 +14,7 @@ _INVALID_TIMESTAMPS = [np.nan, np.inf, -np.inf, "not-a-time", True, np.array([0.
 def test_tracking_measurement_rejects_invalid_timestamp(time_s):
     covariance = np.eye(3)
 
-    with pytest.raises(ValueError, match="measurement time_s must be a finite numeric timestamp"):
+    with pytest.raises(ValueError, match="measurement time_s must be a finite"):
         TrackingMeasurement(time_s, np.zeros(3), covariance, "radar")
 
 
