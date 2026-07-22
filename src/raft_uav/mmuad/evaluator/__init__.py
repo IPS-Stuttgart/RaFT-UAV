@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad import _submission_impl
@@ -34,6 +35,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_VALIDATE_MMAUD_RESULTS_FRAME = _IMPL.validate_mmaud_results_frame
+_ORIGINAL_EVALUATE_NEAREST_TIME_RESULTS = _IMPL._evaluate_nearest_time_results
 _MISSING_SEQUENCE_ID_STRINGS = {"", "nan", "none", "<na>", "nat"}
 
 
@@ -135,6 +137,44 @@ def validate_mmaud_results_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
     return _ORIGINAL_VALIDATE_MMAUD_RESULTS_FRAME(
         _normalize_local_result_sequence_ids(frame)
+    )
+
+
+def _validated_max_time_delta_s(value: Any) -> float:
+    """Return a finite, nonnegative, non-Boolean nearest-time gate."""
+
+    error = "max_time_delta_s must be a finite nonnegative real scalar"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(error)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+        raise ValueError(error)
+    try:
+        max_delta_s = float(scalar.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(max_delta_s) or max_delta_s < 0.0:
+        raise ValueError(error)
+    return max_delta_s
+
+
+def _evaluate_nearest_time_results(
+    result_rows: pd.DataFrame,
+    truth_rows: pd.DataFrame,
+    *,
+    class_map: dict[str, str],
+    max_time_delta_s: Any,
+) -> dict[str, Any]:
+    """Evaluate nearest-time rows after validating the matching gate."""
+
+    return _ORIGINAL_EVALUATE_NEAREST_TIME_RESULTS(
+        result_rows,
+        truth_rows,
+        class_map=class_map,
+        max_time_delta_s=_validated_max_time_delta_s(max_time_delta_s),
     )
 
 
@@ -267,6 +307,8 @@ _IMPL._has_official_track5_columns = _has_official_track5_columns
 _IMPL._official_track5_results_to_local_frame = _official_track5_results_to_local_frame
 _IMPL._official_track5_truth_to_rows = _official_track5_truth_to_rows
 _IMPL.validate_mmaud_results_frame = validate_mmaud_results_frame
+_IMPL._validated_max_time_delta_s = _validated_max_time_delta_s
+_IMPL._evaluate_nearest_time_results = _evaluate_nearest_time_results
 _IMPL.load_mmaud_results_csv = load_mmaud_results_csv
 _IMPL._read_results_zip_csv = _read_results_zip_csv
 _IMPL._evaluate_public_track5_timestamp_aligned = _evaluate_public_track5_timestamp_aligned
@@ -279,6 +321,8 @@ globals()["_parse_official_result_classification_cell"] = _parse_official_result
 globals()["_parse_official_truth_classification_cell"] = _parse_official_truth_classification_cell
 globals()["_official_track5_column_map"] = _official_track5_column_map
 globals()["_normalize_local_result_sequence_ids"] = _normalize_local_result_sequence_ids
+globals()["_validated_max_time_delta_s"] = _validated_max_time_delta_s
+globals()["_evaluate_nearest_time_results"] = _evaluate_nearest_time_results
 globals()["_read_results_csv_preserving_text"] = _read_results_csv_preserving_text
 globals()["_evaluate_public_track5_timestamp_aligned"] = (
     _evaluate_public_track5_timestamp_aligned
