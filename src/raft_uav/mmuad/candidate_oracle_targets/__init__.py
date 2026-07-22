@@ -1,9 +1,10 @@
-"""Compatibility validation for candidate-oracle target time gates.
+"""Compatibility fixes for candidate-oracle target exports.
 
 The maintained implementation lives in the sibling ``candidate_oracle_targets.py``
 module. This package preserves the public import path while rejecting malformed
 truth-matching time gates before they can silently widen or empty the training
-export.
+export and while keeping distinct floating-point thresholds distinct in output
+column labels.
 """
 
 from __future__ import annotations
@@ -46,6 +47,15 @@ def _validated_config(
     return replace(resolved, max_truth_time_delta_s=max_delta)
 
 
+def _threshold_label(value: float) -> str:
+    """Return a column-safe shortest round-trip floating-point label."""
+
+    text = repr(float(value))
+    if text.endswith(".0") and "e" not in text.lower():
+        text = text[:-2]
+    return text.replace("-", "m").replace(".", "p").replace("+", "")
+
+
 def build_candidate_oracle_targets(
     candidates: pd.DataFrame,
     truth: pd.DataFrame,
@@ -61,6 +71,7 @@ def build_candidate_oracle_targets(
     )
 
 
+_IMPL._threshold_label = _threshold_label
 _IMPL.build_candidate_oracle_targets = build_candidate_oracle_targets
 
 globals().update(
@@ -71,6 +82,7 @@ globals().update(
     }
 )
 globals()["_validated_config"] = _validated_config
+globals()["_threshold_label"] = _threshold_label
 globals()["build_candidate_oracle_targets"] = build_candidate_oracle_targets
 
 __doc__ = _IMPL.__doc__
