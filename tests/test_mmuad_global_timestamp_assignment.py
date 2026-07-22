@@ -53,6 +53,17 @@ def test_assignment_rejects_roundoff_candidate_beyond_tolerance() -> None:
     assert assignment == {}
 
 
+def test_assignment_keeps_direct_gap_at_tolerance_boundary() -> None:
+    assignment = optimal_timestamp_assignment(
+        [0.66],
+        [-0.34],
+        tolerance_s=1.0,
+    )
+
+    assert abs(-0.34 - 0.66) == 1.0
+    assert assignment == {0: 0}
+
+
 def test_public_track5_matching_uses_global_one_to_one_assignment() -> None:
     evaluated = evaluate_mmaud_results(
         _overlapping_results(),
