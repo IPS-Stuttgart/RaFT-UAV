@@ -1,8 +1,9 @@
-"""Compatibility fix for safe NumPy timestamp-sidecar loading.
+"""Compatibility fixes for safe MMUAD sequence discovery and loading.
 
 The maintained implementation lives in the sibling ``sequence.py`` module. This
 package preserves the public import path while preventing timestamp sidecars from
-deserializing pickle-backed object arrays.
+deserializing pickle-backed object arrays and preventing directory symlink cycles
+from recursing indefinitely during sequence discovery.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from typing import Hashable
 
 import numpy as np
 
@@ -23,6 +25,80 @@ if _SPEC is None or _SPEC.loader is None:
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+
+
+def _directory_identity(path: Path) -> Hashable | None:
+    """Return a stable identity for one directory, following symlinks safely."""
+
+    try:
+        stat_result = path.stat()
+    except (OSError, RuntimeError):
+        return None
+    inode_identity = (stat_result.st_dev, stat_result.st_ino)
+    if inode_identity != (0, 0):
+        return inode_identity
+    try:
+        return path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+
+
+def _candidate_sequence_dirs(root: Path, *, sequence_glob: str) -> list[Path]:
+    """Discover sequence directories without revisiting aliased ancestors."""
+
+    if not root.is_dir():
+        return []
+    candidates: list[Path] = []
+    visited: set[Hashable] = set()
+    root_identity = _directory_identity(root)
+    if root_identity is not None:
+        visited.add(root_identity)
+    for child in _IMPL._non_modality_child_dirs(root):
+        _collect_sequence_dirs(
+            child,
+            root=root,
+            sequence_glob=sequence_glob,
+            candidates=candidates,
+            visited=visited,
+        )
+    return _IMPL._unique_paths(candidates)
+
+
+def _collect_sequence_dirs(
+    path: Path,
+    *,
+    root: Path,
+    sequence_glob: str,
+    candidates: list[Path],
+    visited: set[Hashable],
+) -> None:
+    """Recursively collect sequences while breaking directory-alias cycles."""
+
+    if _IMPL._is_modality_dir(path):
+        return
+    identity = _directory_identity(path)
+    if identity is None or identity in visited:
+        return
+    visited.add(identity)
+    prior_count = len(candidates)
+    for child in _IMPL._non_modality_child_dirs(path):
+        _collect_sequence_dirs(
+            child,
+            root=root,
+            sequence_glob=sequence_glob,
+            candidates=candidates,
+            visited=visited,
+        )
+    if len(candidates) > prior_count:
+        return
+    if _IMPL._is_sequence_wrapper_dir(path):
+        return
+    if _IMPL._sequence_dir_matches(
+        path,
+        root=root,
+        sequence_glob=sequence_glob,
+    ) and _IMPL._looks_like_sequence(path):
+        candidates.append(path)
 
 
 def _timestamp_map_from_numpy_sidecar(path: Path) -> dict[str, float]:
@@ -88,6 +164,8 @@ def _timestamps_from_numpy_sidecar(path: Path) -> list[float]:
             payload.close()
 
 
+_IMPL._candidate_sequence_dirs = _candidate_sequence_dirs
+_IMPL._collect_sequence_dirs = _collect_sequence_dirs
 _IMPL._timestamp_map_from_numpy_sidecar = _timestamp_map_from_numpy_sidecar
 _IMPL._timestamps_from_numpy_sidecar = _timestamps_from_numpy_sidecar
 
@@ -98,6 +176,9 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_candidate_sequence_dirs"] = _candidate_sequence_dirs
+globals()["_collect_sequence_dirs"] = _collect_sequence_dirs
+globals()["_directory_identity"] = _directory_identity
 globals()["_timestamp_map_from_numpy_sidecar"] = _timestamp_map_from_numpy_sidecar
 globals()["_timestamps_from_numpy_sidecar"] = _timestamps_from_numpy_sidecar
 
