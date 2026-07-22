@@ -1,9 +1,9 @@
-"""Compatibility validation for candidate-oracle attribution time gates.
+"""Compatibility validation for candidate-oracle attribution controls.
 
 The maintained implementation lives in the sibling
 ``candidate_oracle_attribution.py`` module. This package preserves the public
-import path while rejecting malformed truth-matching time gates before they can
-silently widen or empty the diagnostic.
+import path while rejecting malformed truth-matching time gates and top-K values
+before they can silently widen, empty, or change the diagnostic.
 """
 
 from __future__ import annotations
@@ -53,6 +53,29 @@ def _nonnegative_finite_scalar(value: object, *, name: str) -> float:
     return normalized
 
 
+def _normalize_top_k_values(values: Sequence[object]) -> tuple[int, ...]:
+    """Return sorted unique positive integer top-K values without truncation."""
+
+    message = "top_k_values must contain only positive integers"
+    if isinstance(values, (str, bytes)):
+        raise ValueError(message)
+    try:
+        raw_values = tuple(values)
+    except TypeError as exc:
+        raise ValueError(message) from exc
+
+    normalized: list[int] = []
+    for value in raw_values:
+        try:
+            number = _nonnegative_finite_scalar(value, name="top_k_values")
+        except ValueError as exc:
+            raise ValueError(message) from exc
+        if number <= 0.0 or not number.is_integer():
+            raise ValueError(message)
+        normalized.append(int(number))
+    return tuple(sorted(set(normalized)))
+
+
 def build_candidate_oracle_attribution_tables(
     candidates: pd.DataFrame,
     truth: pd.DataFrame,
@@ -62,16 +85,17 @@ def build_candidate_oracle_attribution_tables(
     fallback_score_column: str = "ranker_score",
     max_truth_time_delta_s: float = 0.5,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Return oracle-attribution tables with a validated truth-time gate."""
+    """Return oracle-attribution tables with validated scalar controls."""
 
     max_delta = _nonnegative_finite_scalar(
         max_truth_time_delta_s,
         name="max_truth_time_delta_s",
     )
+    top_k = _normalize_top_k_values(top_k_values)
     return _ORIGINAL_BUILD_TABLES(
         candidates,
         truth,
-        top_k_values=top_k_values,
+        top_k_values=top_k,
         score_column=score_column,
         fallback_score_column=fallback_score_column,
         max_truth_time_delta_s=max_delta,
@@ -81,6 +105,7 @@ def build_candidate_oracle_attribution_tables(
 _IMPL.build_candidate_oracle_attribution_tables = (
     build_candidate_oracle_attribution_tables
 )
+_IMPL._normalize_top_k_values = _normalize_top_k_values
 
 globals().update(
     {
@@ -89,6 +114,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_normalize_top_k_values"] = _normalize_top_k_values
 globals()["build_candidate_oracle_attribution_tables"] = (
     build_candidate_oracle_attribution_tables
 )
