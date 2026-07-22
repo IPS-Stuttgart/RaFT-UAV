@@ -21,6 +21,7 @@ VarianceHead = _legacy.VarianceHead
 HeteroscedasticUncertaintyModel = _legacy.HeteroscedasticUncertaintyModel
 _original_variance_head_init = VarianceHead.__init__
 _original_model_init = HeteroscedasticUncertaintyModel.__init__
+_original_model_from_dict = HeteroscedasticUncertaintyModel.from_dict.__func__
 _original_aligned_residuals = _legacy._aligned_residuals
 _original_fit_heteroscedastic_uncertainty_model = (
     _legacy.fit_heteroscedastic_uncertainty_model
@@ -52,6 +53,33 @@ def _nonnegative_fit_control(value: object, field: str) -> float:
     if number < 0.0:
         raise ValueError(f"{field} must be nonnegative")
     return number
+
+
+def _exact_integer_scalar(value: object, field: str) -> int:
+    """Return an exact integer scalar without truncation or Boolean coercion."""
+
+    error = f"{field} must be an exact integer scalar"
+    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+        raise ValueError(error)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+        raise ValueError(error)
+    try:
+        item = scalar.item()
+        if np.ma.is_masked(item) or isinstance(
+            item,
+            (bool, np.bool_, complex, np.complexfloating),
+        ):
+            raise ValueError(error)
+        number = float(item)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(number) or not number.is_integer():
+        raise ValueError(error)
+    return int(number)
 
 
 def _validate_variance_head(head) -> None:
@@ -132,6 +160,18 @@ def _validated_model_init(self, heads, metadata):
                 f"{head.source!r}/{head.dimension!r}"
             )
         seen.add(key)
+
+
+def _validated_model_from_dict(cls, payload):
+    """Load only artifacts that declare an exact supported schema version."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("uncertainty model payload must be a mapping")
+    schema_value = payload.get("schema_version", 0)
+    schema_version = _exact_integer_scalar(schema_value, "schema_version")
+    if schema_version != 1:
+        raise ValueError(f"unsupported uncertainty schema {schema_value!r}")
+    return _original_model_from_dict(cls, payload)
 
 
 def _sequence_keys(values: pd.Series) -> pd.Series:
@@ -225,6 +265,9 @@ def fit_heteroscedastic_uncertainty_model(
 
 VarianceHead.__init__ = _validated_variance_head_init
 HeteroscedasticUncertaintyModel.__init__ = _validated_model_init
+HeteroscedasticUncertaintyModel.from_dict = classmethod(
+    _validated_model_from_dict
+)
 _legacy._aligned_residuals = _aligned_residuals
 _legacy.fit_heteroscedastic_uncertainty_model = (
     fit_heteroscedastic_uncertainty_model
@@ -239,6 +282,8 @@ globals()["_sequence_keys"] = _sequence_keys
 globals()["_aligned_residuals"] = _aligned_residuals
 globals()["_finite_scalar"] = _finite_scalar
 globals()["_nonnegative_fit_control"] = _nonnegative_fit_control
+globals()["_exact_integer_scalar"] = _exact_integer_scalar
+globals()["_validated_model_from_dict"] = _validated_model_from_dict
 globals()["fit_heteroscedastic_uncertainty_model"] = (
     fit_heteroscedastic_uncertainty_model
 )
