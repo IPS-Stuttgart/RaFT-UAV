@@ -37,6 +37,7 @@ def test_paper_reference_count_check_flags_mismatch():
 def test_paper_reference_count_check_reports_nonfinite_counts():
     for invalid_count in (float("nan"), float("inf"), float("-inf")):
         table = _reference_like_table()
+        table["selected_count"] = table["selected_count"].astype(float)
         table.loc[table["method"] == "RF raw", "selected_count"] = invalid_count
 
         check = paper_reference_count_check(table)
