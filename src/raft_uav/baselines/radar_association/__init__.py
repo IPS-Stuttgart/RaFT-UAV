@@ -75,6 +75,10 @@ _OPTIONAL_POSITIVE_FINITE_ASSOCIATION_PARAMETERS = (
     "stable_segment_interpolation_max_gap_s",
     "stable_segment_interpolation_max_speed_mps",
 )
+_OPTIONAL_UNIT_INTERVAL_ASSOCIATION_PARAMETERS = (
+    "candidate_catprob_threshold",
+    "paper_compatible_catprob_threshold",
+)
 
 
 class _RadarAssociationModule(ModuleType):
@@ -156,6 +160,10 @@ def _validate_radar_association_parameters(arguments: dict[str, Any]) -> None:
         value = arguments[name]
         if value is not None:
             _require_finite_positive(name, value)
+    for name in _OPTIONAL_UNIT_INTERVAL_ASSOCIATION_PARAMETERS:
+        value = arguments[name]
+        if value is not None:
+            _require_finite_unit_interval(name, value)
 
     crossrange_min = float(arguments["radar_crossrange_min_std_m"])
     crossrange_max = float(arguments["radar_crossrange_max_std_m"])
@@ -190,6 +198,13 @@ def _require_finite_nonnegative(name: str, value: Any) -> float:
     number = _finite_float(name, value)
     if number < 0.0:
         raise ValueError(f"{name} must be nonnegative")
+    return number
+
+
+def _require_finite_unit_interval(name: str, value: Any) -> float:
+    number = _finite_float(name, value)
+    if not 0.0 <= number <= 1.0:
+        raise ValueError(f"{name} must be in [0, 1]")
     return number
 
 
