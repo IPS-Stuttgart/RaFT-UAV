@@ -9,6 +9,25 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import min_weight_full_bipartite_matching
 
 
+def _inclusive_tolerance_window(
+    request_time: float,
+    tolerance: float,
+) -> tuple[float, float, float]:
+    """Return search bounds and max gap with a small floating-point allowance."""
+
+    with np.errstate(over="ignore"):
+        lower = request_time - tolerance
+        upper = request_time + tolerance
+    if tolerance == 0.0:
+        return lower, upper, tolerance
+
+    magnitudes = [1.0, abs(request_time), abs(tolerance)]
+    magnitudes.extend(abs(bound) for bound in (lower, upper) if np.isfinite(bound))
+    slack = 4.0 * abs(float(np.spacing(max(magnitudes))))
+    with np.errstate(over="ignore"):
+        return lower - slack, upper + slack, tolerance + slack
+
+
 def optimal_timestamp_assignment(
     requested_times: Iterable[float],
     prediction_times: Iterable[float],
@@ -48,10 +67,16 @@ def optimal_timestamp_assignment(
     scale = tolerance + 1.0
     tie_unit = 8.0 * np.finfo(float).eps
     for request_rank, request_time in enumerate(sorted_requests):
-        left = int(np.searchsorted(sorted_predictions, request_time - tolerance, side="left"))
-        right = int(np.searchsorted(sorted_predictions, request_time + tolerance, side="right"))
+        lower, upper, max_gap = _inclusive_tolerance_window(
+            float(request_time),
+            tolerance,
+        )
+        left = int(np.searchsorted(sorted_predictions, lower, side="left"))
+        right = int(np.searchsorted(sorted_predictions, upper, side="right"))
         for prediction_rank in range(left, right):
             gap = abs(float(sorted_predictions[prediction_rank] - request_time))
+            if gap > max_gap:
+                continue
             # A multi-ULP order penalty makes exact error ties deterministic in
             # SciPy's sparse matcher. Squared rank distance favors the stable
             # monotone assignment while remaining negligible for timestamp error.
