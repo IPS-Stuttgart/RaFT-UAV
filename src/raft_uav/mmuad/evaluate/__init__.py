@@ -1,9 +1,9 @@
 """Maintained MMUAD submission evaluation overrides.
 
 The legacy implementation remains in the sibling ``evaluate.py`` module.  This
-package preserves the public import path while replacing nearest-time matching
-with a cardinality-first one-to-one assignment that is independent of CSV row
-order.
+package preserves the public import path while rejecting ambiguous submission
+headers and replacing nearest-time matching with a cardinality-first one-to-one
+assignment that is independent of CSV row order.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_SUBMISSION_COLUMN_ALIASES = _IMPL._SUBMISSION_COLUMN_ALIASES
 _normalize_submission_sequence_ids = _IMPL._normalize_submission_sequence_ids
 _valid_track_id_text = _IMPL._valid_track_id_text
 normalize_truth_columns = _IMPL.normalize_truth_columns
@@ -35,6 +36,37 @@ _unmatched_prediction_row = _IMPL._unmatched_prediction_row
 _track_ids = _IMPL._track_ids
 _should_restrict_to_track_id = _IMPL._should_restrict_to_track_id
 _truth_track_id = _IMPL._truth_track_id
+
+
+def _normalized_submission_header(value: Any) -> str:
+    """Return the case- and whitespace-insensitive CSV header spelling."""
+
+    return str(value).strip().lower()
+
+
+def _rename_submission_aliases(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize aliases while rejecting conflicting canonical field mappings."""
+
+    rename: dict[Any, str] = {}
+    columns = list(frame.columns)
+    for canonical, aliases in _SUBMISSION_COLUMN_ALIASES.items():
+        accepted = {
+            _normalized_submission_header(name)
+            for name in (canonical, *aliases)
+        }
+        matches = [
+            column
+            for column in columns
+            if _normalized_submission_header(column) in accepted
+        ]
+        if len(matches) > 1:
+            rendered = ", ".join(repr(str(column)) for column in matches)
+            raise ValueError(
+                f"submission has ambiguous columns for {canonical!r}: {rendered}"
+            )
+        if matches and matches[0] != canonical:
+            rename[matches[0]] = canonical
+    return frame.rename(columns=rename)
 
 
 def _validated_max_time_delta_s(value: Any) -> float:
@@ -227,6 +259,7 @@ def _matched_prediction_row(
     }
 
 
+_IMPL._rename_submission_aliases = _rename_submission_aliases
 _IMPL.match_submission_to_truth = match_submission_to_truth
 
 globals().update(
@@ -236,6 +269,8 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_normalized_submission_header"] = _normalized_submission_header
+globals()["_rename_submission_aliases"] = _rename_submission_aliases
 globals()["_validated_max_time_delta_s"] = _validated_max_time_delta_s
 globals()["match_submission_to_truth"] = match_submission_to_truth
 globals()["_optimal_time_assignment"] = _optimal_time_assignment
