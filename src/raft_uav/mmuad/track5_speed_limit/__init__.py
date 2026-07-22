@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling ``track5_speed_limit.py``
 module. This package preserves the public import path while rejecting malformed
-iteration counts, Boolean pseudo-numbers, and invalid fixed-grid rows instead of
-silently coercing or dropping them.
+iteration counts, Boolean pseudo-numbers, invalid fixed-grid rows, and duplicate
+sequence/timestamp keys instead of silently coercing or dropping them.
 """
 
 from __future__ import annotations
@@ -60,10 +60,16 @@ def _reject_boolean_scalar(value: object, *, message: str) -> object:
     return value
 
 
+def _validated_submission_rows(submission: object) -> pd.DataFrame:
+    """Return stripped submission rows for compatibility-boundary validation."""
+
+    return _IMPL._strip_csv_headers(pd.DataFrame(submission).copy()).reset_index(drop=True)
+
+
 def _validate_numeric_rows(submission: object) -> None:
     """Reject numeric rows that the legacy normalizer would silently coerce or drop."""
 
-    rows = _IMPL._strip_csv_headers(pd.DataFrame(submission).copy())
+    rows = _validated_submission_rows(submission)
     if any(column not in rows.columns for column in _NUMERIC_COLUMNS):
         return
 
@@ -91,6 +97,45 @@ def _validate_numeric_rows(submission: object) -> None:
         raise ValueError(f"submission contains non-finite numeric values: {details}")
 
 
+def _validate_unique_sequence_times(submission: object) -> None:
+    """Reject duplicate normalized sequence/timestamp keys within one trajectory."""
+
+    rows = _validated_submission_rows(submission)
+    required = {"sequence_id", "time_s"}
+    if not required <= set(rows.columns):
+        return
+
+    numeric_time = pd.to_numeric(rows["time_s"], errors="coerce")
+    finite_time = np.isfinite(numeric_time.to_numpy(dtype=float))
+    if not finite_time.all():
+        return
+
+    keys = pd.DataFrame(
+        {
+            "sequence_id": rows["sequence_id"].astype(str),
+            "time_s": numeric_time.to_numpy(dtype=float),
+            "row_position": np.arange(len(rows), dtype=int),
+        }
+    )
+    duplicate = keys.duplicated(subset=["sequence_id", "time_s"], keep=False)
+    if not duplicate.any():
+        return
+
+    details: list[str] = []
+    duplicate_keys = keys.loc[duplicate]
+    for (sequence_id, time_s), group in duplicate_keys.groupby(
+        ["sequence_id", "time_s"],
+        sort=True,
+    ):
+        positions = group["row_position"].astype(int).tolist()
+        details.append(
+            f"sequence_id={sequence_id!r}, time_s={float(time_s)!r}, rows={positions}"
+        )
+    raise ValueError(
+        "submission contains duplicate sequence/time rows: " + "; ".join(details)
+    )
+
+
 def project_track5_speed_limit(
     submission: pd.DataFrame,
     *,
@@ -110,6 +155,7 @@ def project_track5_speed_limit(
         message="anchor_blend must be finite and in [0, 1)",
     )
     _validate_numeric_rows(submission)
+    _validate_unique_sequence_times(submission)
     return _ORIGINAL_PROJECT(
         submission,
         max_speed_mps=validated_max_speed_mps,
@@ -130,7 +176,9 @@ globals().update(
 globals()["_NUMERIC_COLUMNS"] = _NUMERIC_COLUMNS
 globals()["_positive_integer"] = _positive_integer
 globals()["_reject_boolean_scalar"] = _reject_boolean_scalar
+globals()["_validated_submission_rows"] = _validated_submission_rows
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
+globals()["_validate_unique_sequence_times"] = _validate_unique_sequence_times
 globals()["project_track5_speed_limit"] = project_track5_speed_limit
 
 __doc__ = _IMPL.__doc__
