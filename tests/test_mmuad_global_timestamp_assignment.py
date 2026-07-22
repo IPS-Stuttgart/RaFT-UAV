@@ -42,6 +42,16 @@ def test_equal_error_assignment_preserves_stable_request_order() -> None:
     assert assignment == {0: 0}
 
 
+def test_stable_tie_break_never_increases_timestamp_error() -> None:
+    assignment = optimal_timestamp_assignment(
+        [0.0, 1.0e-16],
+        [-1.0e-16, 0.0, 1.0e-16],
+        tolerance_s=1.0,
+    )
+
+    assert assignment == {0: 1, 1: 2}
+
+
 def test_assignment_rejects_rounded_search_bound_outside_tolerance() -> None:
     gap = abs(0.04 - 0.03)
     assert gap > 0.01
