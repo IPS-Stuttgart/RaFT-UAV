@@ -3,7 +3,8 @@
 The maintained implementation lives in the sibling ``radar_association.py``
 module. This package preserves the public import path while rejecting non-finite
 numeric parameters before they can create NaN/Inf tracker state or covariance
-values.
+values, and initializes track-bank state from supported position-plus-velocity
+bootstrap measurements without a shape mismatch.
 """
 
 from __future__ import annotations
@@ -97,6 +98,51 @@ def run_async_cv_baseline_with_radar_association(*args: Any, **kwargs: Any) -> A
     return _ORIGINAL_RUN_ASYNC_CV_BASELINE_WITH_RADAR_ASSOCIATION(*args, **kwargs)
 
 
+def _initial_mht_tracker(
+    initial_measurement: Any,
+    *,
+    max_global_hypotheses: int,
+    max_assignments_per_hypothesis: int,
+    max_candidates_per_track: int,
+    gate_probability: float,
+    detection_probability: float,
+    clutter_intensity: float,
+    prune_log_weight_delta: float,
+) -> Any:
+    """Initialize the MHT from supported position or position/velocity samples."""
+
+    measurement = np.asarray(initial_measurement.vector, dtype=float).reshape(-1)
+    state = np.zeros(6, dtype=float)
+    if measurement.size == 2:
+        state[:2] = measurement
+    elif measurement.size == 3:
+        state[:3] = measurement
+    elif measurement.size == 6:
+        state[:] = measurement
+    else:
+        raise ValueError("initial measurement must contain 2, 3, or 6 elements")
+
+    state_covariance = np.diag(
+        [50.0**2, 50.0**2, 50.0**2, 15.0**2, 15.0**2, 15.0**2]
+    )
+    return _IMPL.MultiHypothesisTracker(
+        initial_prior=[_IMPL.KalmanFilter((state, state_covariance))],
+        association_param={
+            "gating_probability": float(gate_probability),
+            "detection_probability": float(detection_probability),
+            "clutter_intensity": float(clutter_intensity),
+            "max_global_hypotheses": int(max_global_hypotheses),
+            "max_hypotheses_per_global_hypothesis": int(
+                max_assignments_per_hypothesis
+            ),
+            "max_measurements_per_track": int(max_candidates_per_track),
+            "prune_log_weight_delta": float(prune_log_weight_delta),
+        },
+        log_prior_estimates=False,
+        log_posterior_estimates=False,
+    )
+
+
 def _validate_radar_association_parameters(arguments: dict[str, Any]) -> None:
     for name in _POSITIVE_FINITE_RADAR_COVARIANCE_PARAMETERS:
         _require_finite_positive(name, arguments[name])
@@ -147,7 +193,10 @@ def _require_finite_nonnegative(name: str, value: Any) -> float:
     return number
 
 
-_IMPL.run_async_cv_baseline_with_radar_association = run_async_cv_baseline_with_radar_association
+_IMPL.run_async_cv_baseline_with_radar_association = (
+    run_async_cv_baseline_with_radar_association
+)
+_IMPL._initial_mht_tracker = _initial_mht_tracker
 
 globals().update(
     {
@@ -159,6 +208,7 @@ globals().update(
 globals()["run_async_cv_baseline_with_radar_association"] = (
     run_async_cv_baseline_with_radar_association
 )
+globals()["_initial_mht_tracker"] = _initial_mht_tracker
 globals()["_validate_radar_association_parameters"] = (
     _validate_radar_association_parameters
 )
