@@ -42,6 +42,16 @@ def test_equal_error_assignment_preserves_stable_request_order() -> None:
     assert assignment == {0: 0}
 
 
+def test_assignment_includes_decimal_tolerance_boundary() -> None:
+    assignment = optimal_timestamp_assignment(
+        [0.1],
+        [0.8],
+        tolerance_s=0.7,
+    )
+
+    assert assignment == {0: 0}
+
+
 def test_public_track5_matching_uses_global_one_to_one_assignment() -> None:
     evaluated = evaluate_mmaud_results(
         _overlapping_results(),
