@@ -94,8 +94,13 @@ def tracklet_feature_frame(
         return pd.DataFrame()
     rows: list[dict[str, object]] = []
     group_key = "frame_index" if "frame_index" in radar.columns else "time_s"
+    sort_columns = [group_key] if group_key == "time_s" else [group_key, "time_s"]
     for track_id, track_rows in radar.groupby("track_id", sort=True):
-        ordered = track_rows.sort_values([group_key, "time_s"]).reset_index(drop=True)
+        ordered = track_rows.sort_values(
+            sort_columns,
+            key=lambda column: pd.to_numeric(column, errors="coerce"),
+            kind="mergesort",
+        ).reset_index(drop=True)
         values = pd.to_numeric(ordered[group_key], errors="coerce").to_numpy(dtype=float)
         split_indices = np.r_[0, np.where(np.diff(values) > float(max_frame_gap))[0] + 1, len(ordered)]
         for segment_index, (start, end) in enumerate(zip(split_indices[:-1], split_indices[1:])):
