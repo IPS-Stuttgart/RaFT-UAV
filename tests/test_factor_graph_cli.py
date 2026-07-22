@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pandas as pd
+import pytest
 
 from raft_uav.research.factor_graph import FactorGraphSmoothingResult
 from scripts import run_factor_graph_smoother
@@ -111,3 +112,41 @@ def test_radar_mode_reports_diagnostics_for_written_estimates(
     assert summary["optimality"] == 0.25
     assert summary["iterations"] == 7
     assert summary["message"] == "converged"
+
+
+def test_cli_rejects_ambiguous_input_modes(tmp_path) -> None:
+    output_dir = tmp_path / "output"
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_factor_graph_smoother.main(
+            [
+                "--measurements",
+                str(tmp_path / "measurements.csv"),
+                "--radar",
+                str(tmp_path / "radar.csv"),
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert not output_dir.exists()
+
+
+def test_cli_rejects_rf_without_radar(tmp_path) -> None:
+    output_dir = tmp_path / "output"
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_factor_graph_smoother.main(
+            [
+                "--measurements",
+                str(tmp_path / "measurements.csv"),
+                "--rf",
+                str(tmp_path / "rf.csv"),
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert not output_dir.exists()
