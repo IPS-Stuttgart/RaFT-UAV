@@ -27,19 +27,23 @@ def read_sequence_text_csv(path: Path) -> pd.DataFrame:
         rows = pd.read_csv(path, dtype=str, na_filter=False)
     out = rows.copy()
     normalized_columns = [str(column).strip() for column in out.columns]
-    duplicated = pd.Index(normalized_columns).duplicated(keep=False)
-    duplicate_columns = sorted(
+    groups: dict[str, list[str]] = {}
+    for column in normalized_columns:
+        groups.setdefault(column.casefold(), []).append(column)
+    ambiguous_columns = sorted(
         {
             column
-            for column, is_duplicate in zip(normalized_columns, duplicated)
-            if is_duplicate
-        }
+            for group in groups.values()
+            if len(group) > 1
+            for column in group
+        },
+        key=lambda column: (column.casefold(), column),
     )
-    if duplicate_columns:
-        duplicate_text = ", ".join(repr(column) for column in duplicate_columns)
+    if ambiguous_columns:
+        ambiguous_text = ", ".join(repr(column) for column in ambiguous_columns)
         raise ValueError(
-            "CSV has ambiguous columns after trimming whitespace: "
-            f"{duplicate_text}"
+            "CSV has ambiguous columns after trimming whitespace and ignoring case: "
+            f"{ambiguous_text}"
         )
     out.columns = normalized_columns
     return _canonicalize_sequence_id_column(out)
