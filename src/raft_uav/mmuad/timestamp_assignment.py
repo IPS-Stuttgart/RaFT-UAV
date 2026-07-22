@@ -48,14 +48,25 @@ def optimal_timestamp_assignment(
     scale = tolerance + 1.0
     tie_unit = 8.0 * np.finfo(float).eps
     for request_rank, request_time in enumerate(sorted_requests):
-        left = int(np.searchsorted(sorted_predictions, request_time - tolerance, side="left"))
-        right = int(np.searchsorted(sorted_predictions, request_time + tolerance, side="right"))
+        # Locate the insertion point and expand using the same direct gap
+        # comparison that defines eligibility. Endpoint arithmetic such as
+        # ``request_time +/- tolerance`` can otherwise round inward or outward.
+        center = int(np.searchsorted(sorted_predictions, request_time, side="left"))
+        left = center
+        while left > 0:
+            gap = abs(float(sorted_predictions[left - 1] - request_time))
+            if gap > tolerance:
+                break
+            left -= 1
+        right = center
+        while right < prediction_count:
+            gap = abs(float(sorted_predictions[right] - request_time))
+            if gap > tolerance:
+                break
+            right += 1
+
         for prediction_rank in range(left, right):
             gap = abs(float(sorted_predictions[prediction_rank] - request_time))
-            # The search window is only a candidate filter: endpoint arithmetic
-            # can round differently from the direct gap calculation.
-            if gap > tolerance:
-                continue
             # A multi-ULP order penalty makes exact error ties deterministic in
             # SciPy's sparse matcher. Squared rank distance favors the stable
             # monotone assignment while remaining negligible for timestamp error.
