@@ -28,10 +28,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     rows = pd.read_csv(args.summary_csv)
-    constraints = {}
+    constraints = []
     for item in args.constraint:
         column, op, value = item.split(":", 2)
-        constraints[column] = (op, float(value))
+        constraints.append((column, op, float(value)))
     ranked = select_constrained_configs(
         rows,
         objective=args.objective,
