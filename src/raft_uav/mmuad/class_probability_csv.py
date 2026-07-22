@@ -55,10 +55,6 @@ def _canonicalize_sequence_id_column(rows: pd.DataFrame) -> pd.DataFrame:
     """Add ``sequence_id`` when the input uses a supported sequence alias."""
 
     out = rows.copy()
-    if "sequence_id" in out.columns:
-        out["sequence_id"] = _sequence_id_text(out["sequence_id"])
-        return out
-
     alias_keys = {alias.lower() for alias in SEQUENCE_ALIASES}
     source_columns = [
         column
@@ -75,7 +71,11 @@ def _canonicalize_sequence_id_column(rows: pd.DataFrame) -> pd.DataFrame:
         return out
 
     source_column = source_columns[0]
-    out.insert(0, "sequence_id", _sequence_id_text(out[source_column]))
+    sequence_ids = _sequence_id_text(out[source_column])
+    if source_column == "sequence_id":
+        out["sequence_id"] = sequence_ids
+    else:
+        out.insert(0, "sequence_id", sequence_ids)
     return out
 
 
