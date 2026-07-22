@@ -45,6 +45,8 @@ def _finite_offset_seconds(value: Any) -> float:
     """Return a finite non-Boolean scalar time offset in seconds."""
 
     message = "offset_s must be a finite real scalar"
+    if np.ma.is_masked(value):
+        raise ValueError(message)
     scalar = value
     if isinstance(value, np.ndarray):
         if value.ndim != 0:
@@ -73,6 +75,8 @@ def _measurement_dimensions(value: Any) -> int:
     """Return a supported measurement dimension without lossy coercion."""
 
     message = "dimensions must be 2 or 3"
+    if np.ma.is_masked(value):
+        raise ValueError(message)
     scalar = value
     if isinstance(value, np.ndarray):
         if value.ndim != 0:
