@@ -54,7 +54,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     flights = [str(f) for f in args.flight]
     if len(flights) < 2:
         raise ValueError("nested LOFO needs at least two flights")
+    _require_unique(flights, label="flight")
     candidates = [_parse_candidate(spec) for spec in args.candidate]
+    _require_unique([candidate.name for candidate in candidates], label="candidate name")
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     all_rows: list[dict[str, Any]] = []
@@ -76,7 +78,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 }
                 all_rows.append(row)
                 training_rows.append(row)
-        selected = _select_candidate(training_rows, aggregate=args.aggregate)
+        selected = _select_candidate(
+            training_rows,
+            aggregate=args.aggregate,
+            expected_flights=train_flights,
+        )
         if selected is None:
             summary_rows.append(
                 {
@@ -131,6 +137,20 @@ def _parse_candidate(spec: str) -> Candidate:
     return Candidate(name=name, args=tuple(shlex.split(raw_args)))
 
 
+def _require_unique(values: Sequence[str], *, label: str) -> None:
+    """Reject duplicate experiment identifiers before they share outputs or scores."""
+
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for value in values:
+        if value in seen and value not in duplicates:
+            duplicates.append(value)
+        seen.add(value)
+    if duplicates:
+        rendered = ", ".join(repr(value) for value in duplicates)
+        raise ValueError(f"{label} values must be unique; duplicate values: {rendered}")
+
+
 def _run_candidate(args: argparse.Namespace, candidate: Candidate, flight: str, *, split: str) -> Path:
     output_dir = args.output_dir / split / candidate.name
     metrics_path = output_dir / flight / "metrics.json"
@@ -166,12 +186,40 @@ def _read_metric(path: Path, dotted_key: str) -> float:
     return number if np.isfinite(number) else float("nan")
 
 
-def _select_candidate(rows: list[dict[str, Any]], *, aggregate: str) -> dict[str, Any] | None:
-    grouped: dict[str, list[float]] = {}
-    for row in rows:
-        value = float(row.get("metric_value", float("nan")))
-        if np.isfinite(value):
-            grouped.setdefault(str(row["candidate"]), []).append(value)
+def _select_candidate(
+    rows: list[dict[str, Any]],
+    *,
+    aggregate: str,
+    expected_flights: Sequence[str] | None = None,
+) -> dict[str, Any] | None:
+    if expected_flights is None:
+        grouped: dict[str, list[float]] = {}
+        for row in rows:
+            value = float(row.get("metric_value", float("nan")))
+            if np.isfinite(value):
+                grouped.setdefault(str(row["candidate"]), []).append(value)
+    else:
+        expected = tuple(str(flight) for flight in expected_flights)
+        expected_set = set(expected)
+        grouped_by_flight: dict[str, dict[str, float]] = {}
+        duplicate_rows: set[str] = set()
+        for row in rows:
+            candidate = str(row["candidate"])
+            flight = str(row.get("flight", ""))
+            if flight not in expected_set:
+                continue
+            candidate_values = grouped_by_flight.setdefault(candidate, {})
+            if flight in candidate_values:
+                duplicate_rows.add(candidate)
+            candidate_values[flight] = float(row.get("metric_value", float("nan")))
+        grouped = {}
+        for candidate, values_by_flight in grouped_by_flight.items():
+            if candidate in duplicate_rows or set(values_by_flight) != expected_set:
+                continue
+            values = [values_by_flight[flight] for flight in expected]
+            if all(np.isfinite(value) for value in values):
+                grouped[candidate] = values
+
     scored = []
     for name, values in grouped.items():
         arr = np.asarray(values, dtype=float)
