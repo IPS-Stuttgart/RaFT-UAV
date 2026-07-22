@@ -1,4 +1,4 @@
-"""Compatibility package that normalizes serialized cluster-ranker targets."""
+"""Compatibility fixes for cluster-ranker training and truth labeling."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from raft_uav.numeric import optional_float
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "cluster_ranker.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -22,6 +24,9 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _LEGACY_TRAIN_CLUSTER_RANKER = _IMPL.train_cluster_ranker
+_LEGACY_LABEL_CLUSTER_FEATURES_AGAINST_TRUTH = (
+    _IMPL.label_cluster_features_against_truth
+)
 _LEGACY_BINARY_AUC = _IMPL._binary_auc
 _LEGACY_RANKER_PREDICTION_SUMMARY = _IMPL._ranker_prediction_summary
 _INVALID_BINARY_TARGET = object()
@@ -69,6 +74,40 @@ def train_cluster_ranker(
         n_estimators=n_estimators,
         score_distance_scale_m=score_distance_scale_m,
     )
+
+
+def label_cluster_features_against_truth(
+    features: pd.DataFrame,
+    truth: pd.DataFrame,
+    *,
+    good_threshold_m: float = 5.0,
+    max_truth_time_delta_s: float = 0.5,
+) -> pd.DataFrame:
+    """Attach truth labels after validating matching gates."""
+
+    distance_gate = _validated_nonnegative_gate(
+        good_threshold_m,
+        name="good_threshold_m",
+    )
+    time_gate = _validated_nonnegative_gate(
+        max_truth_time_delta_s,
+        name="max_truth_time_delta_s",
+    )
+    return _LEGACY_LABEL_CLUSTER_FEATURES_AGAINST_TRUTH(
+        features,
+        truth,
+        good_threshold_m=distance_gate,
+        max_truth_time_delta_s=time_gate,
+    )
+
+
+def _validated_nonnegative_gate(value: object, *, name: str) -> float:
+    """Return a finite non-negative scalar gate or raise a stable error."""
+
+    normalized = optional_float(value)
+    if normalized is None or normalized < 0.0:
+        raise ValueError(f"{name} must be a finite non-negative real scalar")
+    return normalized
 
 
 def _binary_auc(scores: pd.Series, labels: pd.Series) -> float:
@@ -182,6 +221,7 @@ def _binary_target_value(value: object) -> object:
 
 
 _IMPL.train_cluster_ranker = train_cluster_ranker
+_IMPL.label_cluster_features_against_truth = label_cluster_features_against_truth
 _IMPL._binary_auc = _binary_auc
 _IMPL._ranker_prediction_summary = _ranker_prediction_summary
 
@@ -193,6 +233,10 @@ globals().update(
     }
 )
 globals()["train_cluster_ranker"] = train_cluster_ranker
+globals()["label_cluster_features_against_truth"] = (
+    label_cluster_features_against_truth
+)
+globals()["_validated_nonnegative_gate"] = _validated_nonnegative_gate
 globals()["_binary_auc"] = _binary_auc
 globals()["_ranker_prediction_summary"] = _ranker_prediction_summary
 globals()["_normalize_binary_targets"] = _normalize_binary_targets
