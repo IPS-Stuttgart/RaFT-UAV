@@ -61,3 +61,22 @@ def test_pointcloud2_rejects_truncated_organized_cloud() -> None:
 
     with pytest.raises(ValueError, match=r"data is shorter than height \* row_step"):
         pointcloud2_to_dataframe(message)
+
+
+def test_pointcloud2_rejects_duplicate_normalized_field_names() -> None:
+    message = Message(
+        fields=[
+            Field("x", 0),
+            Field("y", 4),
+            Field("z", 8),
+            Field(" X\x00 ", 12),
+        ],
+        data=struct.pack("<ffff", 1.0, 2.0, 3.0, 99.0),
+        width=1,
+        height=1,
+        point_step=16,
+        row_step=16,
+    )
+
+    with pytest.raises(ValueError, match="duplicate normalized name: 'x'"):
+        pointcloud2_to_dataframe(message)
