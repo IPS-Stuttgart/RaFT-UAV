@@ -40,8 +40,9 @@ def _selected_measurements(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--measurements", type=Path, default=None)
-    parser.add_argument("--radar", type=Path, default=None)
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument("--measurements", type=Path, default=None)
+    input_group.add_argument("--radar", type=Path, default=None)
     parser.add_argument("--rf", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--iterations", type=int, default=3)
@@ -49,6 +50,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--measurement-std-m", type=float, default=25.0)
     parser.add_argument("--rf-std-m", type=float, default=50.0)
     args = parser.parse_args(argv)
+    if args.rf is not None and args.radar is None:
+        parser.error("--rf requires --radar")
 
     config = LeastSquaresSmoothingConfig(
         motion_std_mps2=args.motion_std_mps2,
@@ -62,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
         )
         selected = None
-    elif args.radar is not None:
+    else:
         rf = pd.read_csv(args.rf) if args.rf is not None else None
         estimates, selected = coordinate_descent_association_and_smoothing(
             pd.read_csv(args.radar),
@@ -75,8 +78,6 @@ def main(argv: list[str] | None = None) -> int:
             initial=estimates,
             config=config,
         )
-    else:
-        raise ValueError("provide either --measurements or --radar")
     estimates_path = args.output_dir / "factor_graph_estimates.csv"
     result.estimates.to_csv(estimates_path, index=False)
     if selected is not None:
