@@ -3,8 +3,9 @@
 The maintained implementation lives in the sibling
 ``track5_geometric_median_ensemble.py`` module. This package preserves the
 public import path while using the modified Weiszfeld update when an iterate
-coincides with an input point and validating ensemble inputs before early
-returns, file access, or artifact creation.
+coincides with an input point, scaling relative weights before weighted sums,
+and validating ensemble inputs before early returns, file access, or artifact
+creation.
 """
 
 from __future__ import annotations
@@ -68,10 +69,26 @@ def _validate_estimate_weight(value: object, *, label: str) -> float:
     return weight
 
 
+def _normalize_relative_weights(weights: np.ndarray) -> np.ndarray:
+    """Scale finite non-negative weights without changing their ratios.
+
+    Absolute weight scale does not affect a weighted geometric median. Scaling
+    by the largest positive weight keeps later weighted sums finite even when
+    valid user-supplied weights are close to the floating-point limit.
+    """
+
+    values = np.asarray(weights, dtype=float)
+    positive = values > 0.0
+    if not positive.any():
+        return values.copy()
+    scale = float(np.max(values[positive]))
+    return values / scale
+
+
 def _validated_runtime_inputs(
     estimate_inputs: Iterable[tuple[str, pd.DataFrame, object]],
 ) -> list[tuple[str, pd.DataFrame, float]]:
-    """Materialize runtime inputs after validating every weight."""
+    """Materialize runtime inputs with validated, overflow-safe weights."""
 
     validated: list[tuple[str, pd.DataFrame, float]] = []
     for label, estimates, weight in estimate_inputs:
@@ -83,7 +100,15 @@ def _validated_runtime_inputs(
                 _validate_estimate_weight(weight, label=safe_label),
             )
         )
-    return validated
+    if not validated:
+        return validated
+    normalized = _normalize_relative_weights(
+        np.asarray([weight for _, _, weight in validated], dtype=float)
+    )
+    return [
+        (label, estimates, float(weight))
+        for (label, estimates, _), weight in zip(validated, normalized, strict=True)
+    ]
 
 
 def _validated_estimate_input_objects(
@@ -147,7 +172,9 @@ def weighted_geometric_median(
     with an input point. Replacing the zero distance by a small epsilon can make
     that point dominate the next update even when it is not a minimizer. The
     modified update checks the geometric-median subgradient condition and, when
-    necessary, moves away from the coincident point.
+    necessary, moves away from the coincident point. Positive weights are scaled
+    by their maximum first because only relative weights matter and unscaled
+    finite weights can still overflow weighted sums.
     """
 
     iteration_limit, convergence_tolerance_m = _validate_solver_controls(
@@ -161,7 +188,7 @@ def weighted_geometric_median(
         & (point_weights > 0.0)
     )
     points = points[finite]
-    point_weights = point_weights[finite]
+    point_weights = _normalize_relative_weights(point_weights[finite])
     if len(points) == 0:
         return np.asarray([np.nan, np.nan, np.nan], dtype=float), 0, np.nan
     if len(points) == 1:
@@ -293,6 +320,7 @@ globals().update(
 )
 globals()["EstimateInput"] = EstimateInput
 globals()["_validate_estimate_weight"] = _validate_estimate_weight
+globals()["_normalize_relative_weights"] = _normalize_relative_weights
 globals()["_validated_runtime_inputs"] = _validated_runtime_inputs
 globals()["_validated_estimate_input_objects"] = _validated_estimate_input_objects
 globals()["_validated_solver_samples"] = _validated_solver_samples
