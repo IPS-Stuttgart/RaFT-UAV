@@ -888,8 +888,16 @@ def _dataframe_from_ranked_records(ranked: pd.DataFrame, positions: list[int]) -
 
 
 def _radar_frame_group_column(radar: pd.DataFrame) -> str | None:
-    for column in ("frame_index", "timestamp", "time_s"):
-        if column in radar.columns:
+    available = [
+        column
+        for column in ("frame_index", "timestamp", "time_s")
+        if column in radar.columns
+    ]
+    for column in available:
+        if bool(radar[column].notna().all()):
+            return column
+    for column in available:
+        if bool(radar[column].notna().any()):
             return column
     return None
 
