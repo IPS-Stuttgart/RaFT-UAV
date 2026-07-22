@@ -2,9 +2,9 @@
 
 The maintained implementation lives in the sibling ``candidate_oracle_targets.py``
 module. This package preserves the public import path while rejecting malformed
-truth-matching time gates before they can silently widen or empty the training
-export and while keeping distinct floating-point thresholds distinct in output
-column labels.
+truth-matching time gates and oracle-label thresholds before they can silently
+widen, empty, or corrupt the training export, and while keeping distinct
+floating-point thresholds distinct in output column labels.
 """
 
 from __future__ import annotations
@@ -33,10 +33,40 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_BUILD_CANDIDATE_ORACLE_TARGETS = _IMPL.build_candidate_oracle_targets
 
 
+def _validated_numeric_tuple(
+    values: Any,
+    *,
+    name: str,
+    strictly_positive: bool,
+) -> tuple[float, ...]:
+    """Return a tuple of finite scalar thresholds with the requested sign."""
+
+    requirement = "positive" if strictly_positive else "non-negative"
+    message = f"{name} must contain only finite {requirement} scalars"
+    if values is None or isinstance(values, (str, bytes, bytearray)):
+        raise ValueError(message)
+    try:
+        items = tuple(values)
+    except TypeError as exc:
+        raise ValueError(message) from exc
+
+    normalized: list[float] = []
+    for value in items:
+        number = optional_float(value)
+        invalid_sign = (
+            number is not None
+            and (number <= 0.0 if strictly_positive else number < 0.0)
+        )
+        if number is None or invalid_sign:
+            raise ValueError(message)
+        normalized.append(number)
+    return tuple(normalized)
+
+
 def _validated_config(
     config: _IMPL.CandidateOracleTargetConfig | None,
 ) -> _IMPL.CandidateOracleTargetConfig:
-    """Return a config with a finite non-negative truth-time gate."""
+    """Return a config with valid time, temperature, and distance controls."""
 
     resolved = config or _IMPL.CandidateOracleTargetConfig()
     max_delta = optional_float(resolved.max_truth_time_delta_s)
@@ -44,7 +74,22 @@ def _validated_config(
         raise ValueError(
             "max_truth_time_delta_s must be a finite non-negative scalar"
         )
-    return replace(resolved, max_truth_time_delta_s=max_delta)
+    soft_tau_m = _validated_numeric_tuple(
+        resolved.soft_tau_m,
+        name="soft_tau_m",
+        strictly_positive=True,
+    )
+    good_thresholds_m = _validated_numeric_tuple(
+        resolved.good_thresholds_m,
+        name="good_thresholds_m",
+        strictly_positive=False,
+    )
+    return replace(
+        resolved,
+        max_truth_time_delta_s=max_delta,
+        soft_tau_m=soft_tau_m,
+        good_thresholds_m=good_thresholds_m,
+    )
 
 
 def _threshold_label(value: float) -> str:
@@ -62,7 +107,7 @@ def build_candidate_oracle_targets(
     *,
     config: _IMPL.CandidateOracleTargetConfig | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
-    """Build targets after validating the truth-matching time gate."""
+    """Build targets after validating all label-generation controls."""
 
     return _ORIGINAL_BUILD_CANDIDATE_ORACLE_TARGETS(
         candidates,
@@ -81,6 +126,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_validated_numeric_tuple"] = _validated_numeric_tuple
 globals()["_validated_config"] = _validated_config
 globals()["_threshold_label"] = _threshold_label
 globals()["build_candidate_oracle_targets"] = build_candidate_oracle_targets
