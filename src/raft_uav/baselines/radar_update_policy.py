@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.baselines.kalman import TrackingMeasurement, TrackingUpdateDiagnostics
+from raft_uav.numeric import optional_float
 
 ENV_DO_NO_HARM_RADAR_UPDATES = "RAFT_UAV_DO_NO_HARM_RADAR_UPDATES"
 ENV_DO_NO_HARM_RADAR_UPDATE_POLICY = "RAFT_UAV_DO_NO_HARM_RADAR_UPDATE_POLICY"
@@ -338,11 +339,7 @@ def _get(row: pd.Series | dict[str, Any], name: str) -> Any:
 
 
 def _finite_float(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if np.isfinite(number) else None
+    return optional_float(value)
 
 
 def _finite_int(value: Any) -> int | None:
