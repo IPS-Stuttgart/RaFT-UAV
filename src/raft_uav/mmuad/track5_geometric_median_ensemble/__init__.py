@@ -3,8 +3,9 @@
 The maintained implementation lives in the sibling
 ``track5_geometric_median_ensemble.py`` module. This package preserves the
 public import path while using the modified Weiszfeld update when an iterate
-coincides with an input point and validating ensemble inputs before early
-returns, file access, or artifact creation.
+coincides with an input point, scaling relative weights before weighted sums,
+and validating ensemble inputs before early returns, file access, or artifact
+creation.
 """
 
 from __future__ import annotations
@@ -68,6 +69,18 @@ def _validate_estimate_weight(value: object, *, label: str) -> float:
     return weight
 
 
+def _scaled_weights(weights: np.ndarray) -> tuple[np.ndarray, float]:
+    """Scale non-negative weights by their maximum without changing ratios."""
+
+    values = np.asarray(weights, dtype=float)
+    if values.size == 0:
+        return values.copy(), 1.0
+    scale = float(np.max(values))
+    if scale <= 0.0:
+        return values.copy(), 1.0
+    return values / scale, scale
+
+
 def _validated_runtime_inputs(
     estimate_inputs: Iterable[tuple[str, pd.DataFrame, object]],
 ) -> list[tuple[str, pd.DataFrame, float]]:
@@ -84,6 +97,54 @@ def _validated_runtime_inputs(
             )
         )
     return validated
+
+
+def _scaled_runtime_inputs(
+    estimate_inputs: list[tuple[str, pd.DataFrame, float]],
+) -> tuple[list[tuple[str, pd.DataFrame, float]], float]:
+    """Scale runtime weights while preserving their relative mass."""
+
+    if not estimate_inputs:
+        return estimate_inputs, 1.0
+    scaled_weights, scale = _scaled_weights(
+        np.asarray([weight for _, _, weight in estimate_inputs], dtype=float)
+    )
+    scaled = [
+        (label, estimates, float(weight))
+        for (label, estimates, _), weight in zip(
+            estimate_inputs,
+            scaled_weights,
+            strict=True,
+        )
+    ]
+    return scaled, scale
+
+
+def _restore_weight_scale(
+    estimates: pd.DataFrame,
+    diagnostics: pd.DataFrame,
+    *,
+    scale: float,
+    estimate_inputs: list[tuple[str, pd.DataFrame, float]],
+) -> None:
+    """Restore configured weight units in output diagnostics after scaling."""
+
+    if scale != 1.0:
+        for frame, column in (
+            (estimates, "geomedian_weight_sum"),
+            (diagnostics, "weight_sum"),
+        ):
+            if column not in frame.columns:
+                continue
+            values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+            with np.errstate(over="ignore", invalid="ignore"):
+                frame[column] = values * scale
+
+    summaries = diagnostics.attrs.get("input_summaries")
+    if isinstance(summaries, list) and len(summaries) == len(estimate_inputs):
+        for summary, (_, _, weight) in zip(summaries, estimate_inputs, strict=True):
+            if isinstance(summary, dict):
+                summary["weight"] = float(weight)
 
 
 def _validated_estimate_input_objects(
@@ -147,7 +208,9 @@ def weighted_geometric_median(
     with an input point. Replacing the zero distance by a small epsilon can make
     that point dominate the next update even when it is not a minimizer. The
     modified update checks the geometric-median subgradient condition and, when
-    necessary, moves away from the coincident point.
+    necessary, moves away from the coincident point. Positive weights are scaled
+    by their maximum first because only relative weights matter and unscaled
+    finite weights can still overflow weighted sums.
     """
 
     iteration_limit, convergence_tolerance_m = _validate_solver_controls(
@@ -161,7 +224,7 @@ def weighted_geometric_median(
         & (point_weights > 0.0)
     )
     points = points[finite]
-    point_weights = point_weights[finite]
+    point_weights, _ = _scaled_weights(point_weights[finite])
     if len(points) == 0:
         return np.asarray([np.nan, np.nan, np.nan], dtype=float), 0, np.nan
     if len(points) == 1:
@@ -240,13 +303,21 @@ def build_track5_geometric_median_ensemble(
         tolerance_m,
     )
     inputs = _validated_runtime_inputs(estimate_inputs)
-    return _ORIGINAL_BUILD_TRACK5_GEOMETRIC_MEDIAN_ENSEMBLE(
-        inputs,
+    scaled_inputs, weight_scale = _scaled_runtime_inputs(inputs)
+    estimates, diagnostics = _ORIGINAL_BUILD_TRACK5_GEOMETRIC_MEDIAN_ENSEMBLE(
+        scaled_inputs,
         template,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
         max_iterations=iteration_limit,
         tolerance_m=convergence_tolerance_m,
     )
+    _restore_weight_scale(
+        estimates,
+        diagnostics,
+        scale=weight_scale,
+        estimate_inputs=inputs,
+    )
+    return estimates, diagnostics
 
 
 def write_track5_geometric_median_outputs(
@@ -293,6 +364,9 @@ globals().update(
 )
 globals()["EstimateInput"] = EstimateInput
 globals()["_validate_estimate_weight"] = _validate_estimate_weight
+globals()["_scaled_weights"] = _scaled_weights
+globals()["_scaled_runtime_inputs"] = _scaled_runtime_inputs
+globals()["_restore_weight_scale"] = _restore_weight_scale
 globals()["_validated_runtime_inputs"] = _validated_runtime_inputs
 globals()["_validated_estimate_input_objects"] = _validated_estimate_input_objects
 globals()["_validated_solver_samples"] = _validated_solver_samples
