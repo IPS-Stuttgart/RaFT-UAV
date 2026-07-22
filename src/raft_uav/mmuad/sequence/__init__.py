@@ -49,17 +49,17 @@ def _candidate_sequence_dirs(root: Path, *, sequence_glob: str) -> list[Path]:
     if not root.is_dir():
         return []
     candidates: list[Path] = []
-    visited: set[Hashable] = set()
+    ancestor_identities: set[Hashable] = set()
     root_identity = _directory_identity(root)
     if root_identity is not None:
-        visited.add(root_identity)
+        ancestor_identities.add(root_identity)
     for child in _IMPL._non_modality_child_dirs(root):
         _collect_sequence_dirs(
             child,
             root=root,
             sequence_glob=sequence_glob,
             candidates=candidates,
-            visited=visited,
+            ancestor_identities=ancestor_identities,
         )
     return _IMPL._unique_paths(candidates)
 
@@ -70,35 +70,40 @@ def _collect_sequence_dirs(
     root: Path,
     sequence_glob: str,
     candidates: list[Path],
-    visited: set[Hashable],
+    ancestor_identities: set[Hashable] | None = None,
 ) -> None:
     """Recursively collect sequences while breaking directory-alias cycles."""
 
     if _IMPL._is_modality_dir(path):
         return
+    if ancestor_identities is None:
+        ancestor_identities = set()
     identity = _directory_identity(path)
-    if identity is None or identity in visited:
+    if identity is None or identity in ancestor_identities:
         return
-    visited.add(identity)
-    prior_count = len(candidates)
-    for child in _IMPL._non_modality_child_dirs(path):
-        _collect_sequence_dirs(
-            child,
+    ancestor_identities.add(identity)
+    try:
+        prior_count = len(candidates)
+        for child in _IMPL._non_modality_child_dirs(path):
+            _collect_sequence_dirs(
+                child,
+                root=root,
+                sequence_glob=sequence_glob,
+                candidates=candidates,
+                ancestor_identities=ancestor_identities,
+            )
+        if len(candidates) > prior_count:
+            return
+        if _IMPL._is_sequence_wrapper_dir(path):
+            return
+        if _IMPL._sequence_dir_matches(
+            path,
             root=root,
             sequence_glob=sequence_glob,
-            candidates=candidates,
-            visited=visited,
-        )
-    if len(candidates) > prior_count:
-        return
-    if _IMPL._is_sequence_wrapper_dir(path):
-        return
-    if _IMPL._sequence_dir_matches(
-        path,
-        root=root,
-        sequence_glob=sequence_glob,
-    ) and _IMPL._looks_like_sequence(path):
-        candidates.append(path)
+        ) and _IMPL._looks_like_sequence(path):
+            candidates.append(path)
+    finally:
+        ancestor_identities.remove(identity)
 
 
 def _timestamp_map_from_numpy_sidecar(path: Path) -> dict[str, float]:
