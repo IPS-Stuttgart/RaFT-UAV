@@ -164,7 +164,10 @@ class AsyncInteractingMultipleModelTracker:
         else:
             raise ValueError("initial_position must contain 2, 3, or 6 elements")
 
-        self.modes = tuple(modes or default_imm_modes(acceleration_std_mps2))
+        selected_modes = (
+            default_imm_modes(acceleration_std_mps2) if modes is None else modes
+        )
+        self.modes = tuple(selected_modes)
         if not self.modes:
             raise ValueError("modes must contain at least one IMMMode")
         self.mode_names = tuple(mode.name for mode in self.modes)
