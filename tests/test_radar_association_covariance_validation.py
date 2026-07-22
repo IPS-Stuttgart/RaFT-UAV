@@ -29,6 +29,8 @@ from raft_uav.baselines.radar_association import (
         ("track_bank_clutter_intensity", math.inf),
         ("stable_segment_max_transition_speed_mps", math.nan),
         ("stable_segment_range_gate_m", math.inf),
+        ("candidate_catprob_threshold", math.nan),
+        ("paper_compatible_catprob_threshold", math.inf),
     ],
 )
 def test_radar_association_rejects_nonfinite_numeric_parameters(
@@ -36,6 +38,28 @@ def test_radar_association_rejects_nonfinite_numeric_parameters(
     value: float,
 ) -> None:
     with pytest.raises(ValueError, match=f"{parameter} must be finite"):
+        run_async_cv_baseline_with_radar_association(
+            rf_measurements=[],
+            radar=pd.DataFrame(),
+            association="prediction-nis",
+            **{parameter: value},
+        )
+
+
+@pytest.mark.parametrize(
+    ("parameter", "value"),
+    [
+        ("candidate_catprob_threshold", -0.01),
+        ("candidate_catprob_threshold", 1.01),
+        ("paper_compatible_catprob_threshold", -0.01),
+        ("paper_compatible_catprob_threshold", 1.01),
+    ],
+)
+def test_radar_association_rejects_out_of_range_catprob_thresholds(
+    parameter: str,
+    value: float,
+) -> None:
+    with pytest.raises(ValueError, match=rf"{parameter} must be in \[0, 1\]"):
         run_async_cv_baseline_with_radar_association(
             rf_measurements=[],
             radar=pd.DataFrame(),
