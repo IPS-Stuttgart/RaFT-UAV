@@ -1,9 +1,10 @@
-"""Compatibility wrapper preserving candidate-reservoir text and flags.
+"""Compatibility fixes for candidate-reservoir inputs, flags, and scores.
 
 The maintained implementation lives in the sibling ``candidate_reservoir.py``
-module. This package preserves opaque sequence identifiers while normalizing
-serialized ``candidate_reservoir_protected`` values before summary counts are
-computed.
+module. This package preserves opaque sequence identifiers, normalizes serialized
+``candidate_reservoir_protected`` values before summary counts are computed, and
+treats non-finite ranking metadata as missing so corrupted scores cannot dominate
+reservoir selection or oracle top-k diagnostics.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_MAIN = _IMPL.main
 _ORIGINAL_BUILD_RESERVOIR_SUMMARY = _IMPL.build_reservoir_summary
+_ORIGINAL_BUILD_ORACLE_RECALL_TABLES = _IMPL.build_oracle_recall_tables
 _MAIN_LOCK = threading.RLock()
 
 
@@ -132,6 +134,60 @@ def _boolean_series(values: Any, index: pd.Index) -> pd.Series:
     return (truthy | (~falsey & numeric)).fillna(False).astype(bool)
 
 
+def _finite_numeric_column(
+    rows: pd.DataFrame,
+    column: str,
+    *,
+    default: float,
+) -> pd.Series:
+    """Return numeric values with NaN and infinities treated as missing."""
+
+    if column not in rows.columns:
+        return pd.Series(default, index=rows.index, dtype=float)
+    values = pd.to_numeric(rows[column], errors="coerce")
+    return values.where(np.isfinite(values))
+
+
+def _candidate_score(
+    rows: pd.DataFrame,
+    *,
+    config: _IMPL.ReservoirConfig,
+) -> pd.Series:
+    """Resolve candidate scores through finite primary and fallback values."""
+
+    primary = _finite_numeric_column(rows, config.score_column, default=np.nan)
+    fallback = _finite_numeric_column(
+        rows,
+        config.fallback_score_column,
+        default=1.0,
+    )
+    return primary.fillna(fallback).fillna(0.0).astype(float)
+
+
+def build_oracle_recall_tables(
+    reservoir: pd.DataFrame,
+    truth: pd.DataFrame,
+    *,
+    top_k_values: tuple[int, ...] = _IMPL._DEFAULT_TOP_K,
+    max_truth_time_delta_s: float = 0.5,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Rank oracle candidates after demoting non-finite precomputed scores."""
+
+    rows = pd.DataFrame(reservoir).copy()
+    if "candidate_reservoir_score" in rows.columns:
+        scores = pd.to_numeric(rows["candidate_reservoir_score"], errors="coerce")
+        rows["candidate_reservoir_score"] = scores.where(
+            np.isfinite(scores),
+            float("-inf"),
+        )
+    return _ORIGINAL_BUILD_ORACLE_RECALL_TABLES(
+        rows,
+        truth,
+        top_k_values=top_k_values,
+        max_truth_time_delta_s=max_truth_time_delta_s,
+    )
+
+
 def build_reservoir_summary(
     candidates: pd.DataFrame,
     reservoir: pd.DataFrame,
@@ -162,6 +218,9 @@ def main(argv: list[str] | None = None) -> int:
 _IMPL.load_candidate_inputs = load_candidate_inputs
 _IMPL._load_candidate_specs = _load_candidate_specs
 _IMPL._boolean_series = _boolean_series
+_IMPL._numeric_column = _finite_numeric_column
+_IMPL._candidate_score = _candidate_score
+_IMPL.build_oracle_recall_tables = build_oracle_recall_tables
 _IMPL.build_reservoir_summary = build_reservoir_summary
 _IMPL.main = main
 
@@ -176,6 +235,9 @@ globals()["load_candidate_inputs"] = load_candidate_inputs
 globals()["_load_candidate_specs"] = _load_candidate_specs
 globals()["_read_sequence_text_csv"] = _read_sequence_text_csv
 globals()["_boolean_series"] = _boolean_series
+globals()["_finite_numeric_column"] = _finite_numeric_column
+globals()["_candidate_score"] = _candidate_score
+globals()["build_oracle_recall_tables"] = build_oracle_recall_tables
 globals()["build_reservoir_summary"] = build_reservoir_summary
 globals()["main"] = main
 
