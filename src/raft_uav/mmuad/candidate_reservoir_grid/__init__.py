@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling
 ``candidate_reservoir_grid.py`` module. This package preserves the public import
-path while rejecting ambiguous or non-finite offset-grid specifications and
-removing repeated values that would otherwise rerun identical configurations.
+path while rejecting ambiguous or non-finite offset-grid specifications, removing
+repeated values that would otherwise rerun identical configurations, and keeping
+distinct floating-point offsets distinct in per-configuration labels.
 """
 
 from __future__ import annotations
@@ -60,7 +61,17 @@ def _parse_offset_specs(specs: Sequence[str]) -> list[tuple[str, tuple[float, ..
     return parsed
 
 
+def _format_float(value: float) -> str:
+    """Return a filename-safe shortest round-trip floating-point label."""
+
+    text = repr(float(value))
+    if text.endswith(".0") and "e" not in text.lower():
+        text = text[:-2]
+    return text.replace("-", "m").replace(".", "p").replace("+", "")
+
+
 _IMPL._parse_offset_specs = _parse_offset_specs
+_IMPL._format_float = _format_float
 
 globals().update(
     {
@@ -70,6 +81,7 @@ globals().update(
     }
 )
 globals()["_parse_offset_specs"] = _parse_offset_specs
+globals()["_format_float"] = _format_float
 
 __doc__ = _IMPL.__doc__
 __all__ = [
