@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from raft_uav.mmuad.io import load_candidate_file, load_truth_file
 
@@ -35,3 +36,11 @@ def test_single_row_numpy_candidate_table_preserves_time_and_confidence(tmp_path
             "confidence": 0.7,
         }
     ]
+
+
+def test_numpy_trajectory_column_vector_is_rejected(tmp_path) -> None:
+    path = tmp_path / "column-vector.npy"
+    np.save(path, np.array([[1.0], [2.0], [3.0], [0.7]], dtype=float))
+
+    with pytest.raises(ValueError, match=r"shape \(N, >=3\), got \(4, 1\)"):
+        load_truth_file(path)
