@@ -38,12 +38,39 @@ class AdaptiveProcessNoiseConfig:
     scale_gain: float = 0.5
 
     def __post_init__(self) -> None:
-        if self.base_acceleration_std_mps2 <= 0.0:
-            raise ValueError("base_acceleration_std_mps2 must be positive")
-        if self.min_scale <= 0.0 or self.max_scale < self.min_scale:
-            raise ValueError("scale bounds must be positive and ordered")
-        if not 0.0 < self.ewma_alpha <= 1.0:
-            raise ValueError("ewma_alpha must be in (0, 1]")
+        try:
+            base_config = _PyRecEstAdaptiveProcessNoiseConfig(
+                base_scale=self.base_acceleration_std_mps2
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "base_acceleration_std_mps2 must be a finite positive real scalar"
+            ) from exc
+
+        shared_config = _PyRecEstAdaptiveProcessNoiseConfig(
+            base_scale=1.0,
+            min_scale=self.min_scale,
+            max_scale=self.max_scale,
+            ewma_alpha=self.ewma_alpha,
+            high_nis_ratio=self.high_nis_ratio,
+            low_nis_ratio=self.low_nis_ratio,
+            scale_gain=self.scale_gain,
+        )
+
+        object.__setattr__(
+            self,
+            "base_acceleration_std_mps2",
+            base_config.base_scale,
+        )
+        for name in (
+            "min_scale",
+            "max_scale",
+            "ewma_alpha",
+            "high_nis_ratio",
+            "low_nis_ratio",
+            "scale_gain",
+        ):
+            object.__setattr__(self, name, getattr(shared_config, name))
 
 
 @dataclass
