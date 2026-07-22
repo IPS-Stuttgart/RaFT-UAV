@@ -54,7 +54,8 @@ def build_delayed_initial_hypotheses(
             continue
         time_s = float(getattr(measurement, "time_s"))
         state = np.zeros(6)
-        state[: min(vector.size, 3)] = vector[: min(vector.size, 3)]
+        copy_count = 6 if vector.size == 6 else min(vector.size, 3)
+        state[:copy_count] = vector[:copy_count]
         hypotheses.append(
             InitialHypothesis(
                 time_s=time_s,
