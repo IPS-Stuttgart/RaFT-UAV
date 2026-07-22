@@ -28,13 +28,37 @@ _MODULE_METADATA_NAMES = {
 }
 
 
+def _normalized_text_csv_columns(columns: Iterable[object]) -> list[str]:
+    """Return trimmed headers after rejecting case-insensitive collisions."""
+
+    normalized = [str(column).strip() for column in columns]
+    groups: dict[str, list[str]] = {}
+    for column in normalized:
+        groups.setdefault(column.casefold(), []).append(column)
+    collisions = sorted(
+        {
+            column
+            for group in groups.values()
+            if len(group) > 1
+            for column in group
+        },
+        key=str.casefold,
+    )
+    if collisions:
+        raise ValueError(
+            "CSV headers are ambiguous after trimming whitespace and ignoring case: "
+            f"{collisions}"
+        )
+    return normalized
+
+
 def _read_text_csv(path: Path) -> pd.DataFrame:
     """Read CSV/TSV exports without coercing opaque ids or keeping padded headers."""
 
     path = Path(path)
     separator = "\t" if _impl.data_file_suffix(path) == ".tsv" else ","
     frame = pd.read_csv(path, sep=separator, dtype=str, keep_default_na=False)
-    frame.columns = [str(column).strip() for column in frame.columns]
+    frame.columns = _normalized_text_csv_columns(frame.columns)
     return frame
 
 
@@ -233,6 +257,7 @@ _impl._read_point_cloud_csv = _read_point_cloud_csv
 _impl._numpy_array_from_export = _numpy_array_from_export
 _impl._read_numpy_trajectory_table = _read_numpy_trajectory_table
 _impl._read_numpy_point_cloud = _read_numpy_point_cloud
+
 
 globals().update(
     {

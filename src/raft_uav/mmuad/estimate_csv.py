@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import sys
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,30 @@ _ORIGINAL_PANDAS_READ_CSV = getattr(
 )
 
 
+def _normalized_estimate_csv_columns(columns: Iterable[object]) -> list[str]:
+    """Return trimmed estimate headers after rejecting ambiguous collisions."""
+
+    normalized = [str(column).strip() for column in columns]
+    groups: dict[str, list[str]] = {}
+    for column in normalized:
+        groups.setdefault(column.casefold(), []).append(column)
+    collisions = sorted(
+        {
+            column
+            for group in groups.values()
+            if len(group) > 1
+            for column in group
+        },
+        key=str.casefold,
+    )
+    if collisions:
+        raise ValueError(
+            "estimate CSV headers are ambiguous after trimming whitespace and "
+            f"ignoring case: {collisions}"
+        )
+    return normalized
+
+
 def read_estimate_csv(path: Path) -> pd.DataFrame:
     """Read estimate CSVs without coercing opaque identifier columns.
 
@@ -37,7 +62,7 @@ def read_estimate_csv(path: Path) -> pd.DataFrame:
 
 def _strip_column_names(rows: pd.DataFrame) -> pd.DataFrame:
     out = rows.copy()
-    out.columns = [str(column).strip() for column in out.columns]
+    out.columns = _normalized_estimate_csv_columns(out.columns)
     return out
 
 
