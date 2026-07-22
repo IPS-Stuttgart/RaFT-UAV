@@ -1,4 +1,4 @@
-"""Compatibility wrapper for robust Fortem JSONL radar loading."""
+"""Compatibility wrapper for robust AERPAW data loading."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "aerpaw.py"
@@ -20,6 +21,62 @@ if _SPEC is None or _SPEC.loader is None:
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+
+_original_normalize_rf = _IMPL.normalize_rf
+
+
+def _positive_finite_real_scalar(value: object, *, field: str) -> float:
+    """Return a positive finite real scalar without accepting pseudo-numbers."""
+
+    error = f"{field} must be a positive finite real scalar"
+    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+        raise ValueError(error)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+        raise ValueError(error)
+    try:
+        item = scalar.item()
+        if np.ma.is_masked(item) or isinstance(
+            item,
+            (bool, np.bool_, complex, np.complexfloating),
+        ):
+            raise ValueError(error)
+        number = float(item)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(number) or number <= 0.0:
+        raise ValueError(error)
+    return number
+
+
+def normalize_rf(
+    rf: pd.DataFrame,
+    projector: Any,
+    truth_origin_time: pd.Timestamp,
+    default_std_m: float = 75.0,
+    clock_offset_s: float = _IMPL.DEFAULT_RF_CLOCK_OFFSET_S,
+) -> pd.DataFrame:
+    """Normalize RF rows after validating the fallback measurement spread.
+
+    ``default_std_m`` is used whenever CEP is absent, non-finite, or non-positive.
+    Rejecting malformed fallback values here prevents invalid rows from silently
+    acquiring non-finite or singular measurement covariances downstream.
+    """
+
+    validated_default_std_m = _positive_finite_real_scalar(
+        default_std_m,
+        field="default_std_m",
+    )
+    return _original_normalize_rf(
+        rf,
+        projector,
+        truth_origin_time,
+        default_std_m=validated_default_std_m,
+        clock_offset_s=clock_offset_s,
+    )
 
 
 def _track_data_from_payload(
@@ -90,6 +147,7 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
     return pd.DataFrame.from_records(records)
 
 
+_IMPL.normalize_rf = normalize_rf
 _IMPL._track_data_from_payload = _track_data_from_payload
 _IMPL.read_radar_tracks_json = read_radar_tracks_json
 
@@ -100,6 +158,9 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_original_normalize_rf"] = _original_normalize_rf
+globals()["_positive_finite_real_scalar"] = _positive_finite_real_scalar
+globals()["normalize_rf"] = normalize_rf
 globals()["_track_data_from_payload"] = _track_data_from_payload
 globals()["read_radar_tracks_json"] = read_radar_tracks_json
 
