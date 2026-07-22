@@ -45,6 +45,20 @@ def build_delayed_initial_hypotheses(
 ) -> list[InitialHypothesis]:
     """Build initial-state candidates from the first short RF/radar window."""
 
+    window_s = _require_nonnegative_float(window_s, name="window_s")
+    max_hypotheses = _require_nonnegative_int(
+        max_hypotheses,
+        name="max_hypotheses",
+    )
+    initial_position_std_m = _require_nonnegative_float(
+        initial_position_std_m,
+        name="initial_position_std_m",
+    )
+    initial_velocity_std_mps = _require_nonnegative_float(
+        initial_velocity_std_mps,
+        name="initial_velocity_std_mps",
+    )
+
     rf = list(rf_measurements)
     radar_window = _first_radar_window(radar, window_s=window_s)
     hypotheses: list[InitialHypothesis] = []
@@ -100,7 +114,21 @@ def build_delayed_initial_hypotheses(
                 },
             )
         )
-    return sorted(hypotheses, key=lambda item: item.score)[: int(max_hypotheses)]
+    return sorted(hypotheses, key=lambda item: item.score)[:max_hypotheses]
+
+
+def _require_nonnegative_float(value: object, *, name: str) -> float:
+    number = _optional_float(value)
+    if number is None or number < 0.0:
+        raise ValueError(f"{name} must be a finite non-negative real scalar")
+    return number
+
+
+def _require_nonnegative_int(value: object, *, name: str) -> int:
+    number = _optional_int(value)
+    if number is None or number < 0:
+        raise ValueError(f"{name} must be a non-negative integer scalar")
+    return number
 
 
 def best_initial_hypothesis(
@@ -124,7 +152,7 @@ def _first_radar_window(radar: pd.DataFrame, *, window_s: float) -> pd.DataFrame
     work["time_s"] = times.loc[finite].to_numpy(dtype=float, na_value=np.nan)
     ordered = work.sort_values("time_s").reset_index(drop=True)
     start = float(ordered["time_s"].iloc[0])
-    return ordered.loc[ordered["time_s"] <= start + float(window_s)].copy()
+    return ordered.loc[ordered["time_s"] <= start + window_s].copy()
 
 
 def _radar_row_state(row: pd.Series, frame: pd.DataFrame) -> np.ndarray | None:
