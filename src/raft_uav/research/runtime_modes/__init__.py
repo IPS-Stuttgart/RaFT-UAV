@@ -1,8 +1,9 @@
-"""Compatibility fixes for backward association repair.
+"""Compatibility fixes and input validation for backward association repair.
 
 The maintained implementation lives in the sibling ``runtime_modes.py`` module.
 This package preserves the public import path while using timestamp grouping when
-frame-index metadata are incomplete and scoping repair anchors by sequence.
+frame-index metadata are incomplete, scoping repair anchors by sequence, and
+rejecting malformed repair bounds before they alter association behavior.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-from raft_uav.numeric import optional_int
+from raft_uav.numeric import optional_float, optional_int
 
 _LEGACY_PATH = Path(__file__).resolve().parent.parent / "runtime_modes.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -46,6 +47,15 @@ def _has_complete_frame_index(frame: pd.DataFrame) -> bool:
     """Return whether every row has an exact integer frame index."""
 
     return _exact_frame_indices(frame) is not None
+
+
+def _nonnegative_float(value: object, *, name: str) -> float:
+    """Return a finite, non-Boolean non-negative real scalar."""
+
+    normalized = optional_float(value)
+    if normalized is None or normalized < 0.0:
+        raise ValueError(f"{name} must be a finite non-negative real scalar")
+    return normalized
 
 
 def _frame_groups(
@@ -129,6 +139,11 @@ def _backward_repair_one_sequence(
 ) -> pd.DataFrame:
     """Repair one sequence using a frame key valid for both input tables."""
 
+    max_gap_s = _nonnegative_float(max_gap_s, name="max_gap_s")
+    max_repair_distance_m = _nonnegative_float(
+        max_repair_distance_m,
+        name="max_repair_distance_m",
+    )
     selected = selected.sort_values("time_s", kind="mergesort").reset_index(drop=True)
     repaired = [row.copy() for _, row in selected.iterrows()]
     use_frame_index = _has_complete_frame_index(selected) and (
@@ -149,7 +164,7 @@ def _backward_repair_one_sequence(
         left_time = float(left.time_s)
         right_time = float(right.time_s)
         gap_s = right_time - left_time
-        if gap_s <= 0.0 or gap_s > float(max_gap_s):
+        if gap_s <= 0.0 or gap_s > max_gap_s:
             continue
         left_pos = np.array(
             [left.east_m, left.north_m, left.up_m],
@@ -184,7 +199,7 @@ def _backward_repair_one_sequence(
                 axis=1,
             )
             best_idx = int(np.argmin(distances))
-            if float(distances[best_idx]) <= float(max_repair_distance_m):
+            if float(distances[best_idx]) <= max_repair_distance_m:
                 repaired_row = frame.iloc[best_idx].copy()
                 repaired_row["association_mode"] = "backward-repair"
                 repaired_row["association_score"] = float(distances[best_idx])
@@ -207,6 +222,11 @@ def backward_repair_associations(
 ) -> pd.DataFrame:
     """Repair gaps with sequence-local anchors and complete frame-key fallback."""
 
+    max_gap_s = _nonnegative_float(max_gap_s, name="max_gap_s")
+    max_repair_distance_m = _nonnegative_float(
+        max_repair_distance_m,
+        name="max_repair_distance_m",
+    )
     if selected.empty or candidates.empty:
         return selected.copy()
     selected_rows = pd.DataFrame(selected).copy()
@@ -272,6 +292,7 @@ for _name in dir(_LEGACY):
         globals()[_name] = getattr(_LEGACY, _name)
 globals()["_exact_frame_indices"] = _exact_frame_indices
 globals()["_has_complete_frame_index"] = _has_complete_frame_index
+globals()["_nonnegative_float"] = _nonnegative_float
 globals()["_frame_groups"] = _frame_groups
 globals()["_row_key"] = _row_key
 globals()["_backward_repair_one_sequence"] = _backward_repair_one_sequence
