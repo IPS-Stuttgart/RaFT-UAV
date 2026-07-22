@@ -10,20 +10,31 @@ def _normalized_key(value: Any) -> str:
     return str(value).strip().casefold()
 
 
+def _unique_normalized_key(mapping: Mapping[Any, Any], key: str) -> Any | None:
+    normalized = _normalized_key(key)
+    matches = [
+        candidate for candidate in mapping if _normalized_key(candidate) == normalized
+    ]
+    if len(matches) > 1:
+        joined = ", ".join(repr(str(candidate)) for candidate in matches)
+        raise ValueError(
+            f"split manifest contains ambiguous keys matching {key!r}: {joined}"
+        )
+    return matches[0] if matches else None
+
+
 def patch_module(split_module: Any) -> None:
     """Patch a split-manifest module to trim exported key/header whitespace."""
 
     def _mapping_value_case_insensitive(mapping: Mapping[Any, Any], key: str) -> Any | None:
-        lower_key = _normalized_key(key)
-        for candidate, value in mapping.items():
-            if _normalized_key(candidate) == lower_key:
-                return value
-        return None
+        matched_key = _unique_normalized_key(mapping, key)
+        if matched_key is None:
+            return None
+        return mapping[matched_key]
 
     def _entry_value(entry: Mapping[str, Any], aliases: tuple[str, ...]) -> str | None:
-        normalized_keys = {_normalized_key(key): key for key in entry}
         for alias in aliases:
-            key = alias if alias in entry else normalized_keys.get(_normalized_key(alias))
+            key = _unique_normalized_key(entry, alias)
             if key is None:
                 continue
             value = split_module._scalar_to_text(entry[key])
