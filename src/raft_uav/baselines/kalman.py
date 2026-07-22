@@ -26,6 +26,7 @@ from raft_uav.baselines.pyrecest_robust_update import (
     symmetrized,
 )
 from raft_uav.calibration.nis_covariance import scale_covariance_for_calibrated_source
+from raft_uav.numeric import optional_float
 
 __all__ = [
     "AsyncConstantVelocityKalmanTracker",
@@ -53,6 +54,9 @@ class TrackingMeasurement:
     _apply_runtime_calibration: InitVar[bool] = True
 
     def __post_init__(self, _apply_runtime_calibration: bool) -> None:
+        time_s = optional_float(self.time_s)
+        if time_s is None:
+            raise ValueError("measurement time_s must be a finite real scalar")
         vector = np.asarray(self.vector, dtype=float).reshape(-1)
         covariance = np.asarray(self.covariance, dtype=float)
         source = str(self.source)
@@ -70,7 +74,7 @@ class TrackingMeasurement:
             raise ValueError("calibrated measurement covariance must match vector dimension")
         if not np.isfinite(covariance).all():
             raise ValueError("calibrated measurement covariance must be finite")
-        object.__setattr__(self, "time_s", float(self.time_s))
+        object.__setattr__(self, "time_s", time_s)
         object.__setattr__(self, "vector", vector)
         object.__setattr__(self, "covariance", covariance)
         object.__setattr__(self, "source", source)
