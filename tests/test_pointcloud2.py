@@ -51,6 +51,16 @@ def test_pointcloud2_decodes_contiguous_export_with_zero_row_step() -> None:
     ]
 
 
+@pytest.mark.parametrize("dimension", ["width", "height"])
+def test_pointcloud2_respects_explicit_empty_dimensions(dimension: str) -> None:
+    message = replace(_xyz_message(row_step=0), **{dimension: 0})
+
+    frame = pointcloud2_to_dataframe(message)
+
+    assert frame.empty
+    assert frame.columns.tolist() == ["x_m", "y_m", "z_m"]
+
+
 def test_pointcloud2_rejects_negative_row_step() -> None:
     with pytest.raises(ValueError, match="row_step must be positive"):
         pointcloud2_to_dataframe(_xyz_message(row_step=-12))
