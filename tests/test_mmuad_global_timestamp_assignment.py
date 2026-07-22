@@ -55,6 +55,19 @@ def test_assignment_rejects_rounded_search_bound_outside_tolerance() -> None:
     assert assignment == {}
 
 
+def test_assignment_keeps_rounded_search_bound_inside_tolerance() -> None:
+    gap = abs(0.04 - 0.01)
+    assert gap <= 0.03
+
+    assignment = optimal_timestamp_assignment(
+        [0.04],
+        [0.01],
+        tolerance_s=0.03,
+    )
+
+    assert assignment == {0: 0}
+
+
 def test_public_track5_matching_uses_global_one_to_one_assignment() -> None:
     evaluated = evaluate_mmaud_results(
         _overlapping_results(),
