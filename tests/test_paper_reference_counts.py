@@ -32,3 +32,22 @@ def test_paper_reference_count_check_flags_mismatch():
 
     assert check["passed"] is False
     assert "mismatch" in check["message"]
+
+
+def test_paper_reference_count_check_reports_nonfinite_counts():
+    for invalid_count in (float("nan"), float("inf"), float("-inf")):
+        table = _reference_like_table()
+        table.loc[table["method"] == "RF raw", "selected_count"] = invalid_count
+
+        check = paper_reference_count_check(table)
+
+        assert check["passed"] is False
+        failed = next(
+            row
+            for row in check["checks"]
+            if row["method"] == "RF raw" and row["column"] == "selected_count"
+        )
+        assert failed["actual"] is None
+        assert failed["delta"] is None
+        assert failed["passed"] is False
+        assert "mismatch" in check["message"]
