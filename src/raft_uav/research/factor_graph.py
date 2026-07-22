@@ -40,6 +40,48 @@ class FactorGraphSmoothingResult:
     message: str
 
 
+def _finite_nonnegative_scalar(value: object, *, name: str) -> float:
+    """Return a finite non-negative real scalar without accepting pseudo-numbers."""
+
+    message = f"{name} must be a finite non-negative real scalar"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(message)
+    try:
+        array = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if array.ndim != 0 or np.iscomplexobj(array):
+        raise ValueError(message)
+    try:
+        number = float(array.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(number) or number < 0.0:
+        raise ValueError(message)
+    return number
+
+
+def _nonnegative_integer(value: object, *, name: str) -> int:
+    """Return an exact non-negative scalar integer."""
+
+    message = f"{name} must be a non-negative integer"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(message)
+    try:
+        array = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if array.ndim != 0 or np.iscomplexobj(array):
+        raise ValueError(message)
+    try:
+        number = float(array.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(number) or number < 0.0 or not number.is_integer():
+        raise ValueError(message)
+    return int(number)
+
+
 def smooth_position_trajectory(
     measurements: pd.DataFrame,
     *,
@@ -134,15 +176,20 @@ def coordinate_descent_association_and_smoothing(
     """
 
     _require_columns(radar, {"time_s", *PositionColumns}, "radar")
+    iteration_count = _nonnegative_integer(iterations, name="iterations")
+    candidate_gate = _finite_nonnegative_scalar(
+        candidate_gate_m,
+        name="candidate_gate_m",
+    )
     cfg = config or LeastSquaresSmoothingConfig()
     selected = _initial_radar_selection(radar)
     measurements = _combine_measurements(selected, rf)
     trajectory = smooth_position_trajectory(measurements, config=cfg).estimates
-    for _ in range(max(0, int(iterations))):
+    for _ in range(iteration_count):
         selected = _select_candidates_against_trajectory(
             radar,
             trajectory,
-            candidate_gate_m=float(candidate_gate_m),
+            candidate_gate_m=candidate_gate,
         )
         measurements = _combine_measurements(selected, rf)
         trajectory = smooth_position_trajectory(measurements, initial=trajectory, config=cfg).estimates
