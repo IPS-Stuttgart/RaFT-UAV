@@ -16,6 +16,28 @@ from raft_uav.research.factor_graph import (
 )
 
 
+def _selected_measurements(
+    selected: pd.DataFrame,
+    rf: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """Rebuild the measurement set used by coordinate-descent smoothing."""
+
+    frames = []
+    if rf is not None and not rf.empty:
+        rf_frame = rf.copy()
+        rf_frame["source"] = "rf"
+        frames.append(rf_frame)
+    if not selected.empty:
+        radar_frame = selected.copy()
+        radar_frame["source"] = "radar"
+        frames.append(radar_frame)
+    if not frames:
+        return pd.DataFrame(
+            columns=["time_s", "east_m", "north_m", "up_m", "source"]
+        )
+    return pd.concat(frames, ignore_index=True, sort=False)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--measurements", type=Path, default=None)
@@ -35,7 +57,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if args.measurements is not None:
-        result = smooth_position_trajectory(pd.read_csv(args.measurements), config=config)
+        result = smooth_position_trajectory(
+            pd.read_csv(args.measurements),
+            config=config,
+        )
         selected = None
     elif args.radar is not None:
         rf = pd.read_csv(args.rf) if args.rf is not None else None
@@ -45,14 +70,20 @@ def main(argv: list[str] | None = None) -> int:
             iterations=args.iterations,
             config=config,
         )
-        result = smooth_position_trajectory(estimates, config=config)
-        result = result.__class__(estimates, result.cost, result.optimality, result.iterations, result.success, result.message)
+        result = smooth_position_trajectory(
+            _selected_measurements(selected, rf),
+            initial=estimates,
+            config=config,
+        )
     else:
         raise ValueError("provide either --measurements or --radar")
     estimates_path = args.output_dir / "factor_graph_estimates.csv"
     result.estimates.to_csv(estimates_path, index=False)
     if selected is not None:
-        selected.to_csv(args.output_dir / "factor_graph_selected_radar.csv", index=False)
+        selected.to_csv(
+            args.output_dir / "factor_graph_selected_radar.csv",
+            index=False,
+        )
     summary = {
         "success": result.success,
         "cost": result.cost,
