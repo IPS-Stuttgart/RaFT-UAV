@@ -42,6 +42,17 @@ def test_equal_error_assignment_preserves_stable_request_order() -> None:
     assert assignment == {0: 0}
 
 
+def test_assignment_rejects_roundoff_candidate_beyond_tolerance() -> None:
+    assignment = optimal_timestamp_assignment(
+        [-1.48],
+        [-1.53],
+        tolerance_s=0.05,
+    )
+
+    assert abs(-1.53 - -1.48) > 0.05
+    assert assignment == {}
+
+
 def test_public_track5_matching_uses_global_one_to_one_assignment() -> None:
     evaluated = evaluate_mmaud_results(
         _overlapping_results(),
