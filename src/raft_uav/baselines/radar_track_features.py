@@ -19,8 +19,13 @@ def add_track_level_features(radar: pd.DataFrame, *, window_frames: int = 10) ->
     sort_columns = [c for c in ("time_s", "frame_index", "track_index") if c in out.columns]
     out = out.sort_values(sort_columns) if sort_columns else out
     feature_frames: list[pd.DataFrame] = []
-    for _, group in out.groupby("track_id", sort=False, dropna=False):
+    known_track_ids = out["track_id"].notna()
+    for _, group in out.loc[known_track_ids].groupby("track_id", sort=False):
         feature_frames.append(_features_for_track(group.copy(), window_frames=window_frames))
+    for row_index in out.index[~known_track_ids]:
+        feature_frames.append(
+            _features_for_track(out.loc[[row_index]].copy(), window_frames=window_frames)
+        )
     featured = pd.concat(feature_frames, ignore_index=False).sort_index()
     featured.index = original_index
     return featured
