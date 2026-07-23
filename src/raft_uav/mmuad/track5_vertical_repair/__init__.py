@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling ``track5_vertical_repair.py``
 module. This package preserves the public import path while rejecting malformed
-``iterations`` values, invalid repair thresholds, and invalid numeric rows instead
-of silently coercing or dropping them.
+``iterations`` values, invalid repair thresholds, Boolean or non-finite numeric
+rows, and duplicate fixed-grid keys instead of silently coercing or dropping them.
 """
 
 from __future__ import annotations
@@ -76,22 +76,77 @@ def _finite_nonnegative(value: object, *, name: str) -> float:
 
 
 def _validate_numeric_rows(submission: object) -> None:
-    """Reject numeric rows that the legacy normalizer would silently discard."""
+    """Reject numeric rows the legacy normalizer would silently coerce or discard."""
 
     rows = pd.DataFrame(submission)
     if any(column not in rows.columns for column in _NUMERIC_COLUMNS):
         return
-    invalid: list[str] = []
+
+    boolean_invalid: list[str] = []
+    nonfinite_invalid: list[str] = []
     for column in _NUMERIC_COLUMNS:
+        boolean = rows[column].map(
+            lambda value: isinstance(value, (bool, np.bool_))
+        ).to_numpy(dtype=bool)
+        if boolean.any():
+            boolean_invalid.append(
+                f"{column} rows {np.flatnonzero(boolean).tolist()}"
+            )
+
         numeric = pd.to_numeric(rows[column], errors="coerce")
         finite = np.isfinite(numeric.to_numpy(dtype=float))
-        if finite.all():
-            continue
-        row_positions = np.flatnonzero(~finite).tolist()
-        invalid.append(f"{column} rows {row_positions}")
-    if invalid:
-        details = "; ".join(invalid)
-        raise ValueError(f"submission contains non-finite numeric values: {details}")
+        if not finite.all():
+            nonfinite_invalid.append(
+                f"{column} rows {np.flatnonzero(~finite).tolist()}"
+            )
+    if boolean_invalid:
+        raise ValueError(
+            "submission contains Boolean numeric values: "
+            + "; ".join(boolean_invalid)
+        )
+    if nonfinite_invalid:
+        raise ValueError(
+            "submission contains non-finite numeric values: "
+            + "; ".join(nonfinite_invalid)
+        )
+
+
+def _validate_unique_fixed_grid_keys(submission: object) -> None:
+    """Reject duplicate normalized sequence/timestamp keys before repair."""
+
+    rows = pd.DataFrame(submission)
+    required = {"sequence_id", "time_s"}
+    if not required <= set(rows.columns):
+        return
+
+    normalized_keys = pd.DataFrame(
+        {
+            "sequence_id": rows["sequence_id"].astype(str),
+            "time_s": pd.to_numeric(rows["time_s"], errors="coerce"),
+        }
+    )
+    duplicate_mask = normalized_keys.duplicated(
+        subset=["sequence_id", "time_s"],
+        keep=False,
+    )
+    if not bool(duplicate_mask.any()):
+        return
+
+    duplicate_keys = (
+        normalized_keys.loc[duplicate_mask, ["sequence_id", "time_s"]]
+        .drop_duplicates()
+        .sort_values(["sequence_id", "time_s"])
+        .reset_index(drop=True)
+    )
+    sample = ", ".join(
+        f"{row.sequence_id}@{float(row.time_s):g}"
+        for row in duplicate_keys.head(5).itertuples(index=False)
+    )
+    suffix = ", ..." if len(duplicate_keys) > 5 else ""
+    raise ValueError(
+        f"submission contains {len(duplicate_keys)} duplicate "
+        f"(sequence_id, time_s) key(s): {sample}{suffix}"
+    )
 
 
 def repair_track5_vertical_spikes(
@@ -127,6 +182,7 @@ def repair_track5_vertical_spikes(
         )
     )
     _validate_numeric_rows(submission)
+    _validate_unique_fixed_grid_keys(submission)
     return _ORIGINAL_REPAIR(
         submission,
         max_vertical_speed_mps=validated_vertical_speed,
@@ -151,6 +207,7 @@ globals()["_finite_real_scalar"] = _finite_real_scalar
 globals()["_positive_integer"] = _positive_integer
 globals()["_finite_nonnegative"] = _finite_nonnegative
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
+globals()["_validate_unique_fixed_grid_keys"] = _validate_unique_fixed_grid_keys
 globals()["repair_track5_vertical_spikes"] = repair_track5_vertical_spikes
 
 __doc__ = _IMPL.__doc__
