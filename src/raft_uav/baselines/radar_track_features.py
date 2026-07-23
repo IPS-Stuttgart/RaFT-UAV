@@ -78,6 +78,9 @@ def _frame_gap(group: pd.DataFrame) -> np.ndarray:
     else:
         values = pd.to_numeric(group.get("time_s", pd.Series(np.nan, index=group.index)), errors="coerce").to_numpy(dtype=float)
     gaps = np.r_[0.0, np.diff(values)]
+    # A backwards frame transition starts a new sensor epoch rather than a
+    # physically meaningful negative gap.
+    gaps[np.isfinite(gaps) & (gaps < 0.0)] = 0.0
     return np.where(np.isfinite(gaps), gaps, np.nan)
 
 
