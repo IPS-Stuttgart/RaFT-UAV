@@ -34,6 +34,8 @@ _ORIGINAL_REPAIR_SEQUENCE_ONCE = _IMPL._repair_sequence_once
 def _finite_scalar(value: object, *, message: str) -> float:
     """Return a finite non-Boolean scalar float."""
 
+    if np.ma.is_masked(value):
+        raise ValueError(message)
     scalar = value
     if isinstance(value, np.ndarray):
         if value.ndim != 0:
