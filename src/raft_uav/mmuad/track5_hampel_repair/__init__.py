@@ -35,6 +35,8 @@ def _normalize_positive_integer(value: Any, *, field: str) -> int:
     """Return a positive integer scalar or raise a field-specific error."""
 
     message = f"{field} must be a positive finite integer"
+    if np.ma.is_masked(value):
+        raise ValueError(message)
     if isinstance(value, (bool, np.bool_)):
         raise ValueError(message)
     if isinstance(value, np.ndarray):
@@ -55,6 +57,8 @@ def _normalize_positive_integer(value: Any, *, field: str) -> int:
 def _finite_scalar(value: object, *, message: str) -> float:
     """Return a finite non-Boolean scalar float or raise ``ValueError``."""
 
+    if np.ma.is_masked(value):
+        raise ValueError(message)
     scalar = value
     if isinstance(value, np.ndarray):
         if value.ndim != 0:
