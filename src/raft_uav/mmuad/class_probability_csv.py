@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -21,14 +22,40 @@ SEQUENCE_ALIASES = (
 def read_sequence_text_csv(path: Path) -> pd.DataFrame:
     """Read CSV input while preserving opaque sequence ids as text."""
 
-    try:
-        rows = pd.read_csv(path, dtype=str, keep_default_na=False)
-    except TypeError:
-        rows = pd.read_csv(path, dtype=str, na_filter=False)
+    physical_columns = _read_physical_header(path)
+    _validate_unambiguous_columns(physical_columns)
+
+    rows = _read_text_csv(path)
     out = rows.copy()
     normalized_columns = [str(column).strip() for column in out.columns]
+    _validate_unambiguous_columns(normalized_columns)
+    out.columns = normalized_columns
+    return _canonicalize_sequence_id_column(out)
+
+
+def _read_text_csv(path: Path, **kwargs: Any) -> pd.DataFrame:
+    """Read text-valued CSV data across supported pandas versions."""
+
+    try:
+        return pd.read_csv(path, dtype=str, keep_default_na=False, **kwargs)
+    except TypeError:
+        return pd.read_csv(path, dtype=str, na_filter=False, **kwargs)
+
+
+def _read_physical_header(path: Path) -> list[str]:
+    """Read the unmangled physical header before pandas deduplicates names."""
+
+    header = _read_text_csv(path, header=None, nrows=1)
+    if header.empty:
+        return []
+    return [str(value).strip() for value in header.iloc[0].tolist()]
+
+
+def _validate_unambiguous_columns(columns: list[str]) -> None:
+    """Reject names that collide after whitespace/case normalization."""
+
     groups: dict[str, list[str]] = {}
-    for column in normalized_columns:
+    for column in columns:
         groups.setdefault(column.casefold(), []).append(column)
     ambiguous_columns = sorted(
         {
@@ -45,8 +72,6 @@ def read_sequence_text_csv(path: Path) -> pd.DataFrame:
             "CSV has ambiguous columns after trimming whitespace and ignoring case: "
             f"{ambiguous_text}"
         )
-    out.columns = normalized_columns
-    return _canonicalize_sequence_id_column(out)
 
 
 def read_class_probability_csv(path: Path) -> pd.DataFrame:
