@@ -5,8 +5,9 @@ package preserves the public import path while ensuring that timestamps within
 the existing 1 ns equality tolerance are accepted at either interpolation
 endpoint, regardless of whether a maximum time-delta gate is configured. The
 same endpoint rule is applied to both truth-grid metrics and paper-table
-interpolation at estimate timestamps. Non-finite nearest-time queries are
-rejected instead of being silently assigned to a finite endpoint.
+interpolation at estimate timestamps. Non-finite nearest-time queries and
+masked time-gate controls are rejected instead of being silently assigned or
+unwrapped.
 """
 
 from __future__ import annotations
@@ -30,7 +31,16 @@ _SPEC.loader.exec_module(_IMPL)
 
 _ENDPOINT_ATOL_S = 1.0e-9
 _ORIGINAL_NEAREST_TIME_INDICES = _IMPL.nearest_time_indices
+_ORIGINAL_VALIDATE_MAX_TIME_DELTA_S = _IMPL._validate_max_time_delta_s
 _ORIGINAL_INTERPOLATE_POSITIONS_AT_TIMES = _IMPL.interpolate_positions_at_times
+
+
+def _validate_max_time_delta_s_without_masked(value: object) -> float | None:
+    """Reject masked scalar gates before NumPy exposes their hidden payload."""
+
+    if value is not None and np.ma.is_masked(value):
+        raise ValueError("max_time_delta_s must be a finite, non-negative scalar")
+    return _ORIGINAL_VALIDATE_MAX_TIME_DELTA_S(value)
 
 
 def _nearest_time_indices_with_finite_queries(
@@ -144,6 +154,7 @@ def _interpolate_positions_at_times_with_symmetric_tolerance(
     return interpolated, valid | endpoint_equivalent
 
 
+_IMPL._validate_max_time_delta_s = _validate_max_time_delta_s_without_masked
 _IMPL.nearest_time_indices = _nearest_time_indices_with_finite_queries
 _IMPL._truth_grid_with_estimate_support = _truth_grid_with_symmetric_tolerance
 _IMPL.interpolate_positions_at_times = (
