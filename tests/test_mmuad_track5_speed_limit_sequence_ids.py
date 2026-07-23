@@ -33,6 +33,17 @@ def test_speed_limit_rejects_missing_or_blank_sequence_ids(value: object) -> Non
     assert "sequence_id rows [1]" in message
 
 
+def test_speed_limit_rejects_missing_categorical_sequence_ids() -> None:
+    rows = _submission()
+    rows["sequence_id"] = pd.Categorical(
+        ["seq0001", None, "seq0001"],
+        categories=["seq0001"],
+    )
+
+    with pytest.raises(ValueError, match=r"sequence_id rows \[1\]"):
+        project_track5_speed_limit(rows)
+
+
 def test_speed_limit_keeps_nonblank_numeric_sequence_ids() -> None:
     rows = _submission()
     rows["sequence_id"] = [0, 0, 0]
