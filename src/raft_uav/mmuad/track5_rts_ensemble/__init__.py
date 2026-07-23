@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling ``track5_rts_ensemble.py``
 module. This package keeps the public import path while preserving opaque
-sequence identifiers, canonicalizing template identifiers, and validating
-numeric controls before empty-template returns or estimate-file access.
+sequence identifiers, canonicalizing template identifiers, validating numeric
+controls, and initializing smoothing at the first real observation after a
+leading data gap.
 """
 
 from __future__ import annotations
@@ -172,6 +173,92 @@ def _validated_estimate_inputs(
     return validated
 
 
+def _rts_smooth_axis(
+    times: np.ndarray,
+    y: np.ndarray,
+    variance: np.ndarray,
+    *,
+    process_accel_std_mps2: float,
+    initial_position_std_m: float,
+    initial_velocity_std_mps: float,
+) -> np.ndarray:
+    """Smooth one axis without shifting a delayed first observation to time zero."""
+
+    times = np.asarray(times, dtype=float)
+    y = np.asarray(y, dtype=float)
+    variance = np.asarray(variance, dtype=float)
+    finite = np.isfinite(times) & np.isfinite(y) & np.isfinite(variance) & (variance > 0.0)
+    if not finite.any():
+        return np.full(len(times), np.nan, dtype=float)
+
+    n = len(times)
+    x_filt = np.zeros((n, 2), dtype=float)
+    p_filt = np.zeros((n, 2, 2), dtype=float)
+    x_pred = np.zeros((n, 2), dtype=float)
+    p_pred = np.zeros((n, 2, 2), dtype=float)
+    transitions = np.zeros((n, 2, 2), dtype=float)
+
+    first = int(np.flatnonzero(finite)[0])
+    x = np.asarray([float(y[first]), 0.0], dtype=float)
+    p = np.diag(
+        [
+            float(initial_position_std_m) ** 2,
+            float(initial_velocity_std_mps) ** 2,
+        ]
+    )
+    h = np.asarray([[1.0, 0.0]], dtype=float)
+    identity = np.eye(2)
+
+    for idx in range(first, n):
+        if idx > first:
+            dt = max(float(times[idx] - times[idx - 1]), 1.0e-6)
+            transition = np.asarray([[1.0, dt], [0.0, 1.0]], dtype=float)
+            process_noise = _IMPL._cv_process_noise(
+                dt,
+                float(process_accel_std_mps2),
+            )
+            x = transition @ x
+            p = transition @ p @ transition.T + process_noise
+            transitions[idx] = transition
+        else:
+            transitions[idx] = identity
+
+        x_pred[idx] = x
+        p_pred[idx] = p
+        if finite[idx]:
+            measurement_variance = float(variance[idx])
+            innovation = float(y[idx] - (h @ x)[0])
+            innovation_variance = float(
+                (h @ p @ h.T)[0, 0] + measurement_variance
+            )
+            if innovation_variance > 0.0:
+                gain = (p @ h.T / innovation_variance).reshape(2)
+                x = x + gain * innovation
+                p = (identity - np.outer(gain, h.reshape(2))) @ p
+        x_filt[idx] = x
+        p_filt[idx] = p
+
+    x_smooth = x_filt.copy()
+    p_smooth = p_filt.copy()
+    for idx in range(n - 2, first - 1, -1):
+        next_transition = transitions[idx + 1]
+        gain = p_filt[idx] @ next_transition.T @ np.linalg.pinv(p_pred[idx + 1])
+        x_smooth[idx] = x_filt[idx] + gain @ (
+            x_smooth[idx + 1] - x_pred[idx + 1]
+        )
+        p_smooth[idx] = p_filt[idx] + gain @ (
+            p_smooth[idx + 1] - p_pred[idx + 1]
+        ) @ gain.T
+
+    positions = x_smooth[:, 0].copy()
+    if first > 0:
+        leading_delta_s = times[:first] - times[first]
+        positions[:first] = (
+            x_smooth[first, 0] + leading_delta_s * x_smooth[first, 1]
+        )
+    return positions
+
+
 def build_track5_rts_ensemble(
     estimate_inputs: Iterable[tuple[str, pd.DataFrame, Any]],
     template: pd.DataFrame,
@@ -277,6 +364,7 @@ _IMPL._first_present = _first_present
 _IMPL._normalize_template_rows = _normalize_template_rows
 _IMPL._positive_finite = _positive_finite
 _IMPL._nonnegative_finite = _nonnegative_finite
+_IMPL._rts_smooth_axis = _rts_smooth_axis
 _IMPL.build_track5_rts_ensemble = build_track5_rts_ensemble
 _IMPL.write_track5_rts_ensemble_outputs = write_track5_rts_ensemble_outputs
 
@@ -298,6 +386,7 @@ globals()["_nonnegative_finite"] = _nonnegative_finite
 globals()["_optional_nonnegative_finite"] = _optional_nonnegative_finite
 globals()["_validated_runtime_inputs"] = _validated_runtime_inputs
 globals()["_validated_estimate_inputs"] = _validated_estimate_inputs
+globals()["_rts_smooth_axis"] = _rts_smooth_axis
 globals()["build_track5_rts_ensemble"] = build_track5_rts_ensemble
 globals()["write_track5_rts_ensemble_outputs"] = write_track5_rts_ensemble_outputs
 
