@@ -8,6 +8,7 @@ import pandas as pd
 
 def add_track_level_features(radar: pd.DataFrame, *, window_frames: int = 10) -> pd.DataFrame:
     """Append causal track-level features to normalized radar rows."""
+
     if radar.empty or "track_id" not in radar.columns:
         return radar.copy()
     if window_frames < 1:
