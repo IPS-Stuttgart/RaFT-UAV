@@ -53,7 +53,14 @@ def _hit_streak(group: pd.DataFrame) -> np.ndarray:
     frame_index = pd.to_numeric(group["frame_index"], errors="coerce").to_numpy(dtype=float)
     streak = np.ones(len(group), dtype=float)
     for i in range(1, len(group)):
-        if np.isfinite(frame_index[i]) and np.isfinite(frame_index[i - 1]) and frame_index[i] - frame_index[i - 1] <= 1.5:
+        previous = frame_index[i - 1]
+        current = frame_index[i]
+        if not (np.isfinite(previous) and np.isfinite(current)):
+            continue
+        frame_delta = current - previous
+        if np.isclose(frame_delta, 0.0, rtol=0.0, atol=1.0e-9):
+            streak[i] = streak[i - 1]
+        elif 0.0 < frame_delta <= 1.5:
             streak[i] = streak[i - 1] + 1.0
     return streak
 
