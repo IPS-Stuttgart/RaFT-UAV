@@ -22,6 +22,20 @@ _ORIGINAL_PANDAS_READ_CSV = getattr(
     _ORIGINAL_READ_CSV_ATTRIBUTE,
     pd.read_csv,
 )
+_PHYSICAL_HEADER_READ_CSV_OPTIONS = (
+    "sep",
+    "delimiter",
+    "quotechar",
+    "quoting",
+    "doublequote",
+    "escapechar",
+    "comment",
+    "encoding",
+    "encoding_errors",
+    "dialect",
+    "skipinitialspace",
+    "skiprows",
+)
 
 
 def _normalized_estimate_csv_columns(columns: Iterable[object]) -> list[str]:
@@ -48,6 +62,36 @@ def _normalized_estimate_csv_columns(columns: Iterable[object]) -> list[str]:
     return normalized
 
 
+def _validate_physical_estimate_csv_header(
+    source: Any,
+    *,
+    read_csv_kwargs: dict[str, Any] | None = None,
+) -> None:
+    """Reject duplicate path-based CSV headers before pandas mangles their names."""
+
+    if not isinstance(source, (str, Path)):
+        return
+    options = dict(read_csv_kwargs or {})
+    if options.get("header", "infer") not in {"infer", 0} or options.get("names") is not None:
+        return
+    header_options = {
+        key: options[key]
+        for key in _PHYSICAL_HEADER_READ_CSV_OPTIONS
+        if key in options
+    }
+    physical_header = _ORIGINAL_PANDAS_READ_CSV(
+        source,
+        header=None,
+        nrows=1,
+        dtype=str,
+        keep_default_na=False,
+        **header_options,
+    )
+    if physical_header.empty:
+        return
+    _normalized_estimate_csv_columns(physical_header.iloc[0].tolist())
+
+
 def read_estimate_csv(path: Path) -> pd.DataFrame:
     """Read estimate CSVs without coercing opaque identifier columns.
 
@@ -56,6 +100,7 @@ def read_estimate_csv(path: Path) -> pd.DataFrame:
     normal schema-specific numeric conversion in downstream loaders.
     """
 
+    _validate_physical_estimate_csv_header(path)
     rows = _ORIGINAL_PANDAS_READ_CSV(path, dtype=str, keep_default_na=False)
     return _strip_column_names(rows)
 
@@ -95,6 +140,8 @@ def _called_from_candidate_reservoir_cli() -> bool:
 
 def _read_csv_with_track5_estimate_grid_guard(*args: Any, **kwargs: Any) -> pd.DataFrame:
     if _called_from_track5_estimate_grid() or _called_from_candidate_reservoir_cli():
+        source = args[0] if args else kwargs.get("filepath_or_buffer")
+        _validate_physical_estimate_csv_header(source, read_csv_kwargs=kwargs)
         kwargs = dict(kwargs)
         kwargs["dtype"] = str
         kwargs.setdefault("keep_default_na", False)
