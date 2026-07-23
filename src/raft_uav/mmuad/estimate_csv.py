@@ -72,7 +72,8 @@ def _validate_physical_estimate_csv_header(
     if not isinstance(source, (str, Path)):
         return
     options = dict(read_csv_kwargs or {})
-    if options.get("header", "infer") not in {"infer", 0} or options.get("names") is not None:
+    header = options.get("header", "infer")
+    if (header != "infer" and header != 0) or options.get("names") is not None:
         return
     header_options = {
         key: options[key]
