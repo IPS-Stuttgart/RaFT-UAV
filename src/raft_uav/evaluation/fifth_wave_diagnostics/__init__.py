@@ -2,11 +2,13 @@
 
 The maintained implementation lives in the sibling ``fifth_wave_diagnostics.py``
 module. This package preserves the public import path while keeping serialized
-track identifiers exact in purity summaries.
+track identifiers exact and validating bootstrap controls before empty-input
+returns or lossy integer coercion.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import importlib.util
 from pathlib import Path
 import sys
@@ -14,7 +16,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-from raft_uav.numeric import optional_int
+from raft_uav.numeric import optional_float, optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "fifth_wave_diagnostics.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -26,6 +28,71 @@ if _SPEC is None or _SPEC.loader is None:  # pragma: no cover
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+
+MetricFunction = _IMPL.MetricFunction
+BootstrapInterval = _IMPL.BootstrapInterval
+_ORIGINAL_BLOCK_BOOTSTRAP_INTERVAL = _IMPL.block_bootstrap_interval
+_ORIGINAL_PAIRED_DELTA_SUMMARY = _IMPL.paired_delta_summary
+
+
+def _positive_integer_scalar(value: object, *, name: str) -> int:
+    """Return a positive exact integer scalar."""
+
+    normalized = optional_int(value)
+    if normalized is None or normalized < 1:
+        raise ValueError(f"{name} must be a positive integer scalar")
+    return normalized
+
+
+def _confidence_scalar(value: object) -> float:
+    """Return a finite scalar confidence strictly between zero and one."""
+
+    normalized = optional_float(value)
+    if normalized is None or not 0.0 < normalized < 1.0:
+        raise ValueError("confidence must be a finite real scalar in (0, 1)")
+    return normalized
+
+
+def block_bootstrap_interval(
+    values: Sequence[float] | np.ndarray,
+    *,
+    metric: str | MetricFunction = "mean",
+    block_size: int = 50,
+    resamples: int = 2000,
+    confidence: float = 0.95,
+    seed: int | None = 0,
+) -> BootstrapInterval:
+    """Return a bootstrap interval after validating every public control."""
+
+    _IMPL._metric_function(metric)
+    validated_block_size = _positive_integer_scalar(block_size, name="block_size")
+    validated_resamples = _positive_integer_scalar(resamples, name="resamples")
+    validated_confidence = _confidence_scalar(confidence)
+    return _ORIGINAL_BLOCK_BOOTSTRAP_INTERVAL(
+        values,
+        metric=metric,
+        block_size=validated_block_size,
+        resamples=validated_resamples,
+        confidence=validated_confidence,
+        seed=seed,
+    )
+
+
+def paired_delta_summary(
+    delta_frame: pd.DataFrame,
+    *,
+    block_size: int = 50,
+    resamples: int = 2000,
+    seed: int | None = 0,
+) -> dict[str, object]:
+    """Summarize paired deltas after validating bootstrap controls."""
+
+    return _ORIGINAL_PAIRED_DELTA_SUMMARY(
+        delta_frame,
+        block_size=_positive_integer_scalar(block_size, name="block_size"),
+        resamples=_positive_integer_scalar(resamples, name="resamples"),
+        seed=seed,
+    )
 
 
 def track_purity_summary(
@@ -69,6 +136,8 @@ def track_purity_summary(
     }
 
 
+_IMPL.block_bootstrap_interval = block_bootstrap_interval
+_IMPL.paired_delta_summary = paired_delta_summary
 _IMPL.track_purity_summary = track_purity_summary
 
 globals().update(
@@ -78,6 +147,10 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_positive_integer_scalar"] = _positive_integer_scalar
+globals()["_confidence_scalar"] = _confidence_scalar
+globals()["block_bootstrap_interval"] = block_bootstrap_interval
+globals()["paired_delta_summary"] = paired_delta_summary
 globals()["track_purity_summary"] = track_purity_summary
 
 __doc__ = _IMPL.__doc__
