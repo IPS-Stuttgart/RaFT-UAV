@@ -44,7 +44,7 @@ def _validated_gate_probabilities(values: Sequence[float]) -> tuple[float, ...]:
     }
     if collisions:
         rendered = "; ".join(
-            f"{suffix}: {', '.join(format(value, '.17g') for value in suffix_values)}"
+            f"{suffix}: {', '.join(repr(value) for value in suffix_values)}"
             for suffix, suffix_values in sorted(collisions.items())
         )
         raise ValueError(
