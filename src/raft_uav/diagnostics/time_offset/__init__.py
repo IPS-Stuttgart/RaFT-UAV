@@ -20,6 +20,7 @@ _original_catprob_candidate_pool = _legacy.catprob_candidate_pool
 _original_highest_catprob_candidate = _legacy.highest_catprob_candidate
 _original_nearest_candidate_to_truth = _legacy.nearest_candidate_to_truth
 _original_inside_truth_window = _legacy._inside_truth_window
+_original_resolve_dimensions = _legacy.resolve_dimensions
 _original_run_time_offset_diagnostic = _legacy.run_time_offset_diagnostic
 _ACTIVE_SWEEP_TAU_BOUNDS: ContextVar[tuple[float, float] | None] = ContextVar(
     "raft_uav_time_offset_sweep_tau_bounds",
@@ -78,6 +79,17 @@ def nearest_candidate_to_truth(candidates, truth_position):
         _finite_position_candidates(candidates),
         truth_position,
     )
+
+
+def resolve_dimensions(source: str, dimensions: object) -> int:
+    """Resolve ``auto`` or validate an explicit 2D/3D selection."""
+
+    if isinstance(dimensions, str) and dimensions == "auto":
+        return _original_resolve_dimensions(source, dimensions)
+    normalized = _optional_int(dimensions)
+    if normalized not in {2, 3}:
+        raise ValueError("dimensions must be 'auto', 2, or 3")
+    return normalized
 
 
 def _radar_group_sort_key(values: _pd.Series) -> _pd.Series:
@@ -175,6 +187,7 @@ def run_time_offset_diagnostic(
     normalized_tau_min_s = _finite_real_control(tau_min_s, name="tau_min_s")
     normalized_tau_max_s = _finite_real_control(tau_max_s, name="tau_max_s")
     normalized_tau_step_s = _positive_real_control(tau_step_s, name="tau_step_s")
+    normalized_dimensions = resolve_dimensions(source, dimensions)
     normalized_max_delta_s = _positive_real_control(
         max_truth_time_delta_s,
         name="max_truth_time_delta_s",
@@ -197,7 +210,7 @@ def run_time_offset_diagnostic(
             tau_min_s=normalized_tau_min_s,
             tau_max_s=normalized_tau_max_s,
             tau_step_s=normalized_tau_step_s,
-            dimensions=dimensions,
+            dimensions=normalized_dimensions,
             radar_selection=radar_selection,
             radar_catprob_threshold=normalized_catprob_threshold,
             max_truth_time_delta_s=normalized_max_delta_s,
@@ -213,6 +226,7 @@ _legacy.catprob_candidate_pool = catprob_candidate_pool
 _legacy.highest_catprob_candidate = highest_catprob_candidate
 _legacy.nearest_candidate_to_truth = nearest_candidate_to_truth
 _legacy.radar_frame_groups = radar_frame_groups
+_legacy.resolve_dimensions = resolve_dimensions
 _legacy._inside_truth_window = _inside_truth_window
 _legacy.run_time_offset_diagnostic = run_time_offset_diagnostic
 
@@ -223,5 +237,6 @@ globals()["catprob_candidate_pool"] = catprob_candidate_pool
 globals()["highest_catprob_candidate"] = highest_catprob_candidate
 globals()["nearest_candidate_to_truth"] = nearest_candidate_to_truth
 globals()["radar_frame_groups"] = radar_frame_groups
+globals()["resolve_dimensions"] = resolve_dimensions
 globals()["run_time_offset_diagnostic"] = run_time_offset_diagnostic
 __all__ = sorted(_name for _name in globals() if not _name.startswith("_"))
