@@ -36,7 +36,7 @@ _unmatched_prediction_row = _IMPL._unmatched_prediction_row
 _track_ids = _IMPL._track_ids
 _should_restrict_to_track_id = _IMPL._should_restrict_to_track_id
 _truth_track_id = _IMPL._truth_track_id
-_ORIGINAL_RENAME_SUBMISSION_ALIASES = _IMPL._rename_submission_aliases
+_ORIGINAL_LOAD_SUBMISSION_CSV = _IMPL.load_submission_csv
 
 
 def _normalized_submission_header(value: Any) -> str:
@@ -45,26 +45,35 @@ def _normalized_submission_header(value: Any) -> str:
     return str(value).strip().casefold()
 
 
-def _validated_rename_submission_aliases(frame: pd.DataFrame) -> pd.DataFrame:
-    """Reject physical header collisions before applying semantic aliases."""
+def _validate_unique_submission_headers(columns: Any) -> None:
+    """Reject physical CSV headers that become indistinguishable."""
 
-    normalized = [_normalized_submission_header(column) for column in frame.columns]
+    column_list = list(columns)
+    normalized = [_normalized_submission_header(column) for column in column_list]
     duplicate_mask = pd.Index(normalized).duplicated(keep=False)
-    if bool(duplicate_mask.any()):
-        ambiguous = sorted(
-            {
-                str(column)
-                for column, duplicated in zip(frame.columns, duplicate_mask)
-                if duplicated
-            },
-            key=lambda column: (_normalized_submission_header(column), column),
-        )
-        rendered = ", ".join(repr(column) for column in ambiguous)
-        raise ValueError(
-            "submission has ambiguous columns after trimming whitespace "
-            f"and ignoring case: {rendered}"
-        )
-    return _ORIGINAL_RENAME_SUBMISSION_ALIASES(frame)
+    if not bool(duplicate_mask.any()):
+        return
+    ambiguous = sorted(
+        {
+            str(column)
+            for column, duplicated in zip(column_list, duplicate_mask)
+            if duplicated
+        },
+        key=lambda column: (_normalized_submission_header(column), column),
+    )
+    rendered = ", ".join(repr(column) for column in ambiguous)
+    raise ValueError(
+        "submission has ambiguous columns after trimming whitespace "
+        f"and ignoring case: {rendered}"
+    )
+
+
+def load_submission_csv(path: Path) -> pd.DataFrame:
+    """Load a stable submission after validating its physical CSV headers."""
+
+    header = pd.read_csv(path, dtype=str, keep_default_na=False, nrows=0)
+    _validate_unique_submission_headers(header.columns)
+    return _ORIGINAL_LOAD_SUBMISSION_CSV(path)
 
 
 def _validated_max_time_delta_s(value: Any) -> float:
@@ -257,7 +266,7 @@ def _matched_prediction_row(
     }
 
 
-_IMPL._rename_submission_aliases = _validated_rename_submission_aliases
+_IMPL.load_submission_csv = load_submission_csv
 _IMPL.match_submission_to_truth = match_submission_to_truth
 
 globals().update(
@@ -268,7 +277,8 @@ globals().update(
     }
 )
 globals()["_normalized_submission_header"] = _normalized_submission_header
-globals()["_validated_rename_submission_aliases"] = _validated_rename_submission_aliases
+globals()["_validate_unique_submission_headers"] = _validate_unique_submission_headers
+globals()["load_submission_csv"] = load_submission_csv
 globals()["_validated_max_time_delta_s"] = _validated_max_time_delta_s
 globals()["match_submission_to_truth"] = match_submission_to_truth
 globals()["_optimal_time_assignment"] = _optimal_time_assignment
