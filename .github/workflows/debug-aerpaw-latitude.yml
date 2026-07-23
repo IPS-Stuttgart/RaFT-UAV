@@ -1,0 +1,40 @@
+---
+name: Debug AERPAW latitude filtering
+
+"on":
+  pull_request:
+    paths:
+      - "src/raft_uav/io/aerpaw/**"
+      - "tests/test_aerpaw_latitude_filtering.py"
+      - ".github/workflows/debug-aerpaw-latitude.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  pytest-output:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: python -m pip install -q -e ".[dev]"
+
+      - name: Capture pytest output
+        continue-on-error: true
+        run: pytest -q --tb=short --maxfail=10 > pytest-output.txt 2>&1
+
+      - name: Upload pytest output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-output
+          path: pytest-output.txt
+          if-no-files-found: error
