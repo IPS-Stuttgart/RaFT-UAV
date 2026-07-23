@@ -43,3 +43,27 @@ def test_normalize_truth_skips_malformed_coordinate_cells():
         np.zeros((1, 3)),
         atol=1e-6,
     )
+
+
+def test_normalize_truth_handles_nullable_coordinate_dtypes():
+    truth = pd.DataFrame(
+        {
+            "timestamp_raw": pd.Series(
+                ["2025-10-07 15:42:22", "2025-10-07 15:42:23"],
+                dtype="string",
+            ),
+            "latitude": pd.Series(["35.7274895", pd.NA], dtype="string"),
+            "longitude": pd.Series(["-78.696216", "-78.696216"], dtype="string"),
+            "altitude_m": pd.Series(["2.717", "2.717"], dtype="string"),
+        }
+    )
+
+    normalized, _projector, origin_time = normalize_truth(truth)
+
+    assert origin_time == pd.Timestamp("2025-10-07 15:42:22")
+    assert normalized["time_s"].tolist() == [0.0]
+    np.testing.assert_allclose(
+        normalized[["east_m", "north_m", "up_m"]].to_numpy(dtype=float),
+        np.zeros((1, 3)),
+        atol=1e-6,
+    )
