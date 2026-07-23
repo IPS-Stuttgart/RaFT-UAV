@@ -9,6 +9,7 @@ from raft_uav.diagnostics.time_offset import (
     best_offset_row,
     offset_grid,
     radar_frame_groups,
+    resolve_dimensions,
     sweep_positions_against_truth,
     truth_positions_at_times,
 )
@@ -17,6 +18,39 @@ from raft_uav.diagnostics.time_offset import (
 def test_offset_grid_is_inclusive():
     grid = offset_grid(-1.0, 1.0, 0.5)
     assert np.allclose(grid, np.array([-1.0, -0.5, 0.0, 0.5, 1.0]))
+
+
+@pytest.mark.parametrize(
+    "dimensions",
+    [
+        1,
+        4,
+        True,
+        np.bool_(False),
+        2.5,
+        np.nan,
+        np.array([2]),
+        np.ma.masked,
+        np.ma.array(2, mask=True),
+    ],
+)
+def test_resolve_dimensions_rejects_invalid_explicit_values(dimensions):
+    with pytest.raises(ValueError, match="dimensions must be 'auto', 2, or 3"):
+        resolve_dimensions("radar", dimensions)
+
+
+@pytest.mark.parametrize(
+    ("source", "dimensions", "expected"),
+    [
+        ("rf", "auto", 2),
+        ("radar", "auto", 3),
+        ("rf", "2", 2),
+        ("radar", 3.0, 3),
+        ("rf", np.array(2), 2),
+    ],
+)
+def test_resolve_dimensions_normalizes_valid_scalar_values(source, dimensions, expected):
+    assert resolve_dimensions(source, dimensions) == expected
 
 
 def test_truth_positions_at_times_interpolates_and_masks_outside_window():
@@ -129,6 +163,9 @@ def test_run_time_offset_diagnostic_keeps_rows_shiftable_into_truth_window(
         ("tau_max_s", np.inf),
         ("tau_step_s", True),
         ("tau_step_s", np.array([0.5])),
+        ("dimensions", True),
+        ("dimensions", 4),
+        ("dimensions", np.array([2])),
         ("max_truth_time_delta_s", np.nan),
         ("radar_catprob_threshold", np.nan),
     ],
@@ -153,6 +190,7 @@ def test_run_time_offset_diagnostic_rejects_malformed_numeric_controls_before_io
         "tau_min_s": -1.0,
         "tau_max_s": 1.0,
         "tau_step_s": 0.5,
+        "dimensions": "auto",
         "radar_selection": "catprob-oracle-nearest",
         "radar_catprob_threshold": 0.4,
         "max_truth_time_delta_s": 2.0,
@@ -181,6 +219,7 @@ def test_run_time_offset_diagnostic_normalizes_valid_scalar_controls(monkeypatch
         tau_min_s=np.array(-1.0),
         tau_max_s=np.float64(1.0),
         tau_step_s="0.5",
+        dimensions=np.array(2),
         radar_catprob_threshold=np.array(0.4),
         max_truth_time_delta_s=np.float64(2.0),
         write_plot=False,
@@ -197,6 +236,7 @@ def test_run_time_offset_diagnostic_normalizes_valid_scalar_controls(monkeypatch
     assert result["tau_min_s"] == -1.0
     assert result["tau_max_s"] == 1.0
     assert result["tau_step_s"] == 0.5
+    assert result["dimensions"] == 2
     assert result["radar_catprob_threshold"] == 0.4
     assert result["max_truth_time_delta_s"] == 2.0
 
