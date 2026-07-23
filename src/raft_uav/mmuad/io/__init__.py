@@ -1,8 +1,10 @@
-"""Compatibility package validating MMUAD dynamic point-extraction controls.
+"""Compatibility package validating MMUAD point-cloud controls and metadata.
 
 The maintained I/O compatibility layer lives in the sibling ``io.py`` module.
 This package preserves that public import path while rejecting malformed integer
 controls before dynamic background removal can silently clamp or truncate them.
+It also rejects unsupported PCD field widths before binary records can be decoded
+with shifted offsets and corrupted coordinates.
 """
 
 from __future__ import annotations
@@ -26,6 +28,11 @@ sys.modules[_SPEC.name] = _LEGACY
 _SPEC.loader.exec_module(_LEGACY)
 
 _ORIGINAL_DYNAMIC_POINT_RESIDUALS = _LEGACY._dynamic_point_residuals
+_PCD_NUMPY_DTYPES: dict[str, dict[int, str]] = {
+    "F": {4: "<f4", 8: "<f8"},
+    "I": {1: "<i1", 2: "<i2", 4: "<i4", 8: "<i8"},
+    "U": {1: "<u1", 2: "<u2", 4: "<u4", 8: "<u8"},
+}
 
 
 def _exact_integer_control(value: Any, *, name: str, minimum: int) -> int:
@@ -37,6 +44,22 @@ def _exact_integer_control(value: Any, *, name: str, minimum: int) -> int:
     if normalized is None or normalized < minimum:
         raise ValueError(message)
     return normalized
+
+
+def _pcd_numpy_dtype(*, size: int, type_code: str) -> str:
+    """Return an exact NumPy dtype for a supported PCD TYPE/SIZE pair."""
+
+    code = str(type_code).strip().upper()
+    if code not in _PCD_NUMPY_DTYPES:
+        raise ValueError(f"unsupported PCD type code: {type_code!r}")
+    normalized_size = optional_int(size)
+    supported = _PCD_NUMPY_DTYPES[code]
+    if normalized_size not in supported:
+        raise ValueError(
+            f"unsupported PCD SIZE {size!r} for TYPE {code!r}; "
+            f"supported sizes are {sorted(supported)}"
+        )
+    return supported[normalized_size]
 
 
 def _dynamic_point_residuals(
@@ -69,14 +92,17 @@ def _dynamic_point_residuals(
 
 
 # The exported point-cloud helpers are implemented in ``_io_impl`` and resolve
-# this function through that module's globals, so patch both compatibility layers.
+# these functions through that module's globals, so patch both compatibility layers.
 _LEGACY._dynamic_point_residuals = _dynamic_point_residuals
 _LEGACY._impl._dynamic_point_residuals = _dynamic_point_residuals
+_LEGACY._pcd_numpy_dtype = _pcd_numpy_dtype
+_LEGACY._impl._pcd_numpy_dtype = _pcd_numpy_dtype
 
 for _name in dir(_LEGACY):
     if not (_name.startswith("__") and _name.endswith("__")):
         globals()[_name] = getattr(_LEGACY, _name)
 globals()["_exact_integer_control"] = _exact_integer_control
+globals()["_pcd_numpy_dtype"] = _pcd_numpy_dtype
 globals()["_dynamic_point_residuals"] = _dynamic_point_residuals
 
 __doc__ = _LEGACY.__doc__
@@ -88,5 +114,6 @@ __all__ = sorted(
             if not (name.startswith("__") and name.endswith("__"))
         ],
         "_dynamic_point_residuals",
+        "_pcd_numpy_dtype",
     }
 )
