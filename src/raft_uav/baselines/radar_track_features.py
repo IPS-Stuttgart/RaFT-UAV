@@ -85,7 +85,10 @@ def _frame_gap(group: pd.DataFrame) -> np.ndarray:
 def _position_step(group: pd.DataFrame) -> np.ndarray:
     if not {"east_m", "north_m", "up_m"}.issubset(group.columns):
         return np.full(len(group), np.nan)
-    positions = group[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    positions = group[["east_m", "north_m", "up_m"]].apply(
+        pd.to_numeric,
+        errors="coerce",
+    ).to_numpy(dtype=float)
     diffs = np.diff(positions, axis=0)
     steps = np.r_[0.0, np.linalg.norm(diffs, axis=1)]
     return np.where(np.isfinite(steps), steps, np.nan)
@@ -104,7 +107,11 @@ def _range_rate(group: pd.DataFrame) -> np.ndarray:
     if "range_m" in group.columns:
         ranges = pd.to_numeric(group["range_m"], errors="coerce").to_numpy(dtype=float)
     elif {"east_m", "north_m", "up_m"}.issubset(group.columns):
-        ranges = np.linalg.norm(group[["east_m", "north_m", "up_m"]].to_numpy(dtype=float), axis=1)
+        positions = group[["east_m", "north_m", "up_m"]].apply(
+            pd.to_numeric,
+            errors="coerce",
+        ).to_numpy(dtype=float)
+        ranges = np.linalg.norm(positions, axis=1)
     else:
         return np.full(len(group), np.nan)
     times = pd.to_numeric(group.get("time_s", pd.Series(np.nan, index=group.index)), errors="coerce").to_numpy(dtype=float)
