@@ -109,7 +109,9 @@ def normalize_truth(
     normalized = truth.copy()
     for column in ("latitude", "longitude", "altitude_m"):
         if column in normalized.columns:
-            normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+            normalized[column] = pd.to_numeric(
+                normalized[column], errors="coerce"
+            ).astype(float)
     return _original_normalize_truth(
         normalized,
         projector,
