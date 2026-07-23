@@ -14,8 +14,10 @@ _PATCH_MARKER = "_raft_uav_groups_factor_graph_frames_by_index_and_time"
 def apply_factor_graph_frame_group_patch(module: ModuleType) -> None:
     """Patch factor-graph radar grouping to disambiguate counter reuse."""
 
-    original = module._radar_frame_groups
+    implementation = getattr(module, "_LEGACY", module)
+    original = implementation._radar_frame_groups
     if getattr(original, _PATCH_MARKER, False):
+        module._radar_frame_groups = original
         return
 
     @wraps(original)
@@ -64,4 +66,5 @@ def apply_factor_graph_frame_group_patch(module: ModuleType) -> None:
         ]
 
     setattr(radar_frame_groups, _PATCH_MARKER, True)
+    implementation._radar_frame_groups = radar_frame_groups
     module._radar_frame_groups = radar_frame_groups
