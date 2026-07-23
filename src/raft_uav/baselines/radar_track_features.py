@@ -78,7 +78,8 @@ def _frame_gap(group: pd.DataFrame) -> np.ndarray:
     else:
         values = pd.to_numeric(group.get("time_s", pd.Series(np.nan, index=group.index)), errors="coerce").to_numpy(dtype=float)
     gaps = np.r_[0.0, np.diff(values)]
-    return np.where(np.isfinite(gaps), gaps, np.nan)
+    gaps = np.where(np.isfinite(gaps), gaps, np.nan)
+    return np.where(gaps < 0.0, 0.0, gaps)
 
 
 def _position_step(group: pd.DataFrame) -> np.ndarray:
