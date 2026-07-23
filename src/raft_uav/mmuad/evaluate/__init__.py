@@ -1,7 +1,8 @@
 """Maintained MMUAD submission evaluation overrides.
 
-The legacy implementation remains in the sibling ``evaluate.py`` module.  This
-package preserves the public import path while replacing nearest-time matching
+The legacy implementation remains in the sibling ``evaluate.py`` module. This
+package preserves the public import path while rejecting ambiguous
+case/whitespace-equivalent submission headers and replacing nearest-time matching
 with a cardinality-first one-to-one assignment that is independent of CSV row
 order.
 """
@@ -35,6 +36,44 @@ _unmatched_prediction_row = _IMPL._unmatched_prediction_row
 _track_ids = _IMPL._track_ids
 _should_restrict_to_track_id = _IMPL._should_restrict_to_track_id
 _truth_track_id = _IMPL._truth_track_id
+_ORIGINAL_LOAD_SUBMISSION_CSV = _IMPL.load_submission_csv
+
+
+def _normalized_submission_header(value: Any) -> str:
+    """Return a case- and whitespace-insensitive submission header key."""
+
+    return str(value).strip().casefold()
+
+
+def _validate_unique_submission_headers(columns: Any) -> None:
+    """Reject physical CSV headers that become indistinguishable."""
+
+    column_list = list(columns)
+    normalized = [_normalized_submission_header(column) for column in column_list]
+    duplicate_mask = pd.Index(normalized).duplicated(keep=False)
+    if not bool(duplicate_mask.any()):
+        return
+    ambiguous = sorted(
+        {
+            str(column)
+            for column, duplicated in zip(column_list, duplicate_mask)
+            if duplicated
+        },
+        key=lambda column: (_normalized_submission_header(column), column),
+    )
+    rendered = ", ".join(repr(column) for column in ambiguous)
+    raise ValueError(
+        "submission has ambiguous columns after trimming whitespace "
+        f"and ignoring case: {rendered}"
+    )
+
+
+def load_submission_csv(path: Path) -> pd.DataFrame:
+    """Load a stable submission after validating its physical CSV headers."""
+
+    header = pd.read_csv(path, dtype=str, keep_default_na=False, nrows=0)
+    _validate_unique_submission_headers(header.columns)
+    return _ORIGINAL_LOAD_SUBMISSION_CSV(path)
 
 
 def _validated_max_time_delta_s(value: Any) -> float:
@@ -66,7 +105,7 @@ def match_submission_to_truth(
 ) -> pd.DataFrame:
     """Match predictions to truth with cardinality-first optimal assignment.
 
-    Existing sequence and track-ID gating semantics are retained.  Within each
+    Existing sequence and track-ID gating semantics are retained. Within each
     sequence, the assignment first maximizes the number of truth rows matched
     inside the time gate and then minimizes total absolute timestamp error.
     """
@@ -227,6 +266,7 @@ def _matched_prediction_row(
     }
 
 
+_IMPL.load_submission_csv = load_submission_csv
 _IMPL.match_submission_to_truth = match_submission_to_truth
 
 globals().update(
@@ -236,6 +276,9 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_normalized_submission_header"] = _normalized_submission_header
+globals()["_validate_unique_submission_headers"] = _validate_unique_submission_headers
+globals()["load_submission_csv"] = load_submission_csv
 globals()["_validated_max_time_delta_s"] = _validated_max_time_delta_s
 globals()["match_submission_to_truth"] = match_submission_to_truth
 globals()["_optimal_time_assignment"] = _optimal_time_assignment
