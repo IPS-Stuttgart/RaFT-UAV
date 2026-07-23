@@ -3,12 +3,13 @@
 The legacy implementation lives in the sibling ``submission.py`` file. This
 wrapper preserves the public import path while accepting spreadsheet-exported
 class-map and official Track 5 template CSV files with whitespace around alias
-headers, validating timestamp tolerances, and using globally consistent
-one-to-one template matching.
+headers, rejecting ambiguous class-map headers, validating timestamp tolerances,
+and using globally consistent one-to-one template matching.
 """
 
 from __future__ import annotations
 
+import csv
 import importlib.util
 from pathlib import Path
 import sys
@@ -49,6 +50,56 @@ def _strip_dataframe_column_whitespace(frame: Any) -> Any:
     out = frame.copy()
     out.columns = [str(column).strip() for column in out.columns]
     return out
+
+
+def _read_text_csv(source: Any, **kwargs: Any) -> Any:
+    """Read a text-valued CSV without converting opaque identifiers."""
+
+    try:
+        return _IMPL._impl.pd.read_csv(
+            source,
+            dtype=str,
+            keep_default_na=False,
+            **kwargs,
+        )
+    except TypeError:
+        return _IMPL._impl.pd.read_csv(source, **kwargs)
+
+
+def _physical_csv_columns(path: Path) -> list[str]:
+    """Read the unmangled physical header before pandas deduplicates names."""
+
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        try:
+            return next(csv.reader(handle))
+        except StopIteration:
+            return []
+
+
+def _normalized_column_key(value: Any) -> str:
+    """Return the lookup key used for class-map aliases."""
+
+    return str(value).strip().casefold()
+
+
+def _validate_unique_normalized_columns(columns: Any, *, context: str) -> None:
+    """Reject headers that collapse to one alias lookup key."""
+
+    columns_by_key: dict[str, list[str]] = {}
+    for column in columns:
+        columns_by_key.setdefault(_normalized_column_key(column), []).append(str(column))
+    collisions = [group for group in columns_by_key.values() if len(group) > 1]
+    if not collisions:
+        return
+
+    rendered = "; ".join(
+        ", ".join(repr(column) for column in group)
+        for group in collisions
+    )
+    raise ValueError(
+        f"{context} has ambiguous columns after trimming whitespace "
+        f"and ignoring case: {rendered}"
+    )
 
 
 def _validated_timestamp_tolerance(value: Any) -> float:
@@ -170,7 +221,7 @@ def _normalize_track5_template_with_stripped_headers(template: Any) -> Any:
 
 
 def _load_sequence_class_map_with_stripped_csv_headers(path: Path | str | None) -> dict[str, str]:
-    """Load class maps while tolerating whitespace-padded CSV alias headers."""
+    """Load class maps while accepting padded but rejecting ambiguous CSV headers."""
 
     if path is None:
         return {}
@@ -178,11 +229,13 @@ def _load_sequence_class_map_with_stripped_csv_headers(path: Path | str | None) 
     if path.suffix.lower() in {".json", ".yaml", ".yml"}:
         return _LEGACY_LOAD_SEQUENCE_CLASS_MAP(path)
 
-    try:
-        frame = _IMPL._impl.pd.read_csv(path, dtype=str, keep_default_na=False)
-    except TypeError:
-        frame = _IMPL._impl.pd.read_csv(path)
+    _validate_unique_normalized_columns(
+        _physical_csv_columns(path),
+        context="class-map CSV",
+    )
+    frame = _read_text_csv(path)
     frame = _strip_dataframe_column_whitespace(frame)
+    _validate_unique_normalized_columns(frame.columns, context="class-map CSV")
 
     lower = {str(column).casefold(): column for column in frame.columns}
     rename: dict[Any, str] = {}

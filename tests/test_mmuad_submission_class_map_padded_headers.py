@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from raft_uav.mmuad.submission import load_official_track5_template_file
 from raft_uav.mmuad.submission import load_sequence_class_map
 
@@ -14,6 +16,31 @@ def test_csv_class_map_accepts_padded_alias_headers(tmp_path) -> None:
     class_map = load_sequence_class_map(class_map_csv)
 
     assert class_map == {"001": "2", "010": "3"}
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "Sequence, sequence ,Type",
+        "Sequence,Sequence,Type",
+        "Sequence,Type, type ",
+    ],
+)
+def test_csv_class_map_rejects_ambiguous_normalized_headers(
+    tmp_path,
+    header: str,
+) -> None:
+    class_map_csv = tmp_path / "class_map.csv"
+    class_map_csv.write_text(
+        f"{header}\n001,999,2\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="class-map CSV has ambiguous columns after trimming whitespace and ignoring case",
+    ):
+        load_sequence_class_map(class_map_csv)
 
 
 def test_official_track5_template_accepts_padded_alias_headers(tmp_path) -> None:
