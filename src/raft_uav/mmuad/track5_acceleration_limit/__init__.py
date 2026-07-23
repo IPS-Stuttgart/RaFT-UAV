@@ -2,7 +2,8 @@
 
 The maintained implementation lives in the sibling ``track5_acceleration_limit.py``
 module. This package preserves the public import path while rejecting malformed
-scalar controls and keeping zero-blend runs diagnostic-only.
+scalar controls, invalid normalized rows, and duplicate fixed-grid keys, and while
+keeping zero-blend runs diagnostic-only.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from types import ModuleType
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_acceleration_limit.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -30,6 +32,13 @@ _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_REPAIR = _IMPL.repair_track5_acceleration_kinks
 _ORIGINAL_REPAIR_SEQUENCE = _IMPL._repair_sequence
+_NUMERIC_COLUMNS = (
+    "time_s",
+    "state_x_m",
+    "state_y_m",
+    "state_z_m",
+    "Classification",
+)
 
 
 class _Track5AccelerationLimitModule(ModuleType):
@@ -122,6 +131,68 @@ def _validated_controls(
     }
 
 
+def _validate_numeric_rows(submission: object) -> None:
+    """Reject normalized rows the legacy normalizer would silently drop."""
+
+    rows = pd.DataFrame(submission).copy()
+    if any(column not in rows.columns for column in _NUMERIC_COLUMNS):
+        return
+
+    boolean_invalid: list[str] = []
+    nonfinite_invalid: list[str] = []
+    for column in _NUMERIC_COLUMNS:
+        boolean = rows[column].map(
+            lambda value: isinstance(value, (bool, np.bool_))
+        ).to_numpy(dtype=bool)
+        if boolean.any():
+            boolean_invalid.append(f"{column} rows {np.flatnonzero(boolean).tolist()}")
+
+        numeric = pd.to_numeric(rows[column], errors="coerce")
+        finite = np.isfinite(numeric.to_numpy(dtype=float))
+        if not finite.all():
+            nonfinite_invalid.append(f"{column} rows {np.flatnonzero(~finite).tolist()}")
+    if boolean_invalid:
+        raise ValueError(
+            "submission contains Boolean numeric values: " + "; ".join(boolean_invalid)
+        )
+    if nonfinite_invalid:
+        raise ValueError(
+            "submission contains non-finite numeric values: "
+            + "; ".join(nonfinite_invalid)
+        )
+
+
+def _validate_unique_fixed_grid_keys(rows: pd.DataFrame) -> None:
+    """Reject duplicate normalized sequence/timestamp keys before repair."""
+
+    normalized_keys = pd.DataFrame(
+        {
+            "sequence_id": rows["sequence_id"].astype(str),
+            "time_s": pd.to_numeric(rows["time_s"], errors="coerce"),
+        }
+    )
+    duplicate_mask = normalized_keys.duplicated(
+        subset=["sequence_id", "time_s"], keep=False
+    )
+    if not bool(duplicate_mask.any()):
+        return
+    duplicate_keys = (
+        normalized_keys.loc[duplicate_mask, ["sequence_id", "time_s"]]
+        .drop_duplicates()
+        .sort_values(["sequence_id", "time_s"])
+        .reset_index(drop=True)
+    )
+    sample = ", ".join(
+        f"{row.sequence_id}@{float(row.time_s):g}"
+        for row in duplicate_keys.head(5).itertuples(index=False)
+    )
+    suffix = ", ..." if len(duplicate_keys) > 5 else ""
+    raise ValueError(
+        f"submission contains {len(duplicate_keys)} duplicate "
+        f"(sequence_id, time_s) key(s): {sample}{suffix}"
+    )
+
+
 def repair_track5_acceleration_kinks(
     submission,
     *,
@@ -131,7 +202,7 @@ def repair_track5_acceleration_kinks(
     iterations: int = 2,
     repair_blend: float = 1.0,
 ):
-    """Repair acceleration kinks after validating every scalar control."""
+    """Repair acceleration kinks after validating controls and fixed-grid rows."""
 
     controls = _validated_controls(
         max_acceleration_mps2=max_acceleration_mps2,
@@ -140,7 +211,10 @@ def repair_track5_acceleration_kinks(
         iterations=iterations,
         repair_blend=repair_blend,
     )
-    return _ORIGINAL_REPAIR(submission, **controls)
+    _validate_numeric_rows(submission)
+    normalized = _IMPL._normalized_submission(submission)
+    _validate_unique_fixed_grid_keys(normalized)
+    return _ORIGINAL_REPAIR(normalized, **controls)
 
 
 def _repair_sequence(group, **kwargs):
@@ -178,9 +252,12 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_NUMERIC_COLUMNS"] = _NUMERIC_COLUMNS
 globals()["_finite_scalar"] = _finite_scalar
 globals()["_positive_integer"] = _positive_integer
 globals()["_validated_controls"] = _validated_controls
+globals()["_validate_numeric_rows"] = _validate_numeric_rows
+globals()["_validate_unique_fixed_grid_keys"] = _validate_unique_fixed_grid_keys
 globals()["repair_track5_acceleration_kinks"] = repair_track5_acceleration_kinks
 globals()["_repair_sequence"] = _repair_sequence
 __doc__ = _IMPL.__doc__
