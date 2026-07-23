@@ -51,6 +51,39 @@ def _validated_image_weight(value: Any, *, name: str = "image_weight") -> float:
     return weight
 
 
+def _validated_sequence_ids(rows: pd.DataFrame, *, name: str) -> pd.DataFrame:
+    """Return rows with unique, non-missing opaque sequence identifiers."""
+
+    out = pd.DataFrame(rows).copy()
+    if "sequence_id" not in out.columns:
+        raise ValueError(f"{name} must contain a sequence_id column")
+
+    sequence = out["sequence_id"].astype("string")
+    missing_sequence = sequence.isna() | sequence.str.strip().eq("")
+    if bool(missing_sequence.any()):
+        raise ValueError(f"{name} contains missing sequence_id values")
+
+    sequence = sequence.astype(str)
+    duplicates = sequence.loc[sequence.duplicated(keep=False)].drop_duplicates()
+    if not duplicates.empty:
+        duplicate_text = ", ".join(repr(value) for value in duplicates.iloc[:5])
+        raise ValueError(
+            f"{name} contains duplicate sequence_id values: {duplicate_text}"
+        )
+    out["sequence_id"] = sequence
+    return out
+
+
+def _sequence_indexed(rows: pd.DataFrame, name: str) -> pd.DataFrame:
+    """Index one per-sequence feature table without silently discarding rows."""
+
+    out = pd.DataFrame(rows).copy()
+    if out.empty:
+        raise ValueError(f"{name} is empty")
+    out = _validated_sequence_ids(out, name=name)
+    return out.set_index("sequence_id", drop=True)
+
+
 def _validated_probability_frame(rows: pd.DataFrame, *, name: str) -> pd.DataFrame:
     """Validate one per-sequence probability table before fusion."""
 
@@ -63,18 +96,7 @@ def _validated_probability_frame(rows: pd.DataFrame, *, name: str) -> pd.DataFra
     if out.empty:
         return out.reset_index(drop=True)
 
-    sequence = out["sequence_id"].astype("string")
-    missing_sequence = sequence.isna() | sequence.str.strip().eq("")
-    if bool(missing_sequence.any()):
-        raise ValueError(f"{name} contains missing sequence_id values")
-    sequence = sequence.astype(str)
-    duplicates = sequence.loc[sequence.duplicated(keep=False)].drop_duplicates()
-    if not duplicates.empty:
-        duplicate_text = ", ".join(repr(value) for value in duplicates.iloc[:5])
-        raise ValueError(
-            f"{name} contains duplicate sequence_id values: {duplicate_text}"
-        )
-    out["sequence_id"] = sequence
+    out = _validated_sequence_ids(out, name=name)
 
     probability_columns = [
         f"predicted_probability_{label}"
@@ -202,6 +224,8 @@ def select_train_safe_fusion(
 
 
 _IMPL._validated_image_weight = _validated_image_weight
+_IMPL._validated_sequence_ids = _validated_sequence_ids
+_IMPL._sequence_indexed = _sequence_indexed
 _IMPL._validated_probability_frame = _validated_probability_frame
 _IMPL._validate_fused_probability_mass = _validate_fused_probability_mass
 _IMPL.fuse_sequence_probabilities = fuse_sequence_probabilities
@@ -215,6 +239,8 @@ globals().update(
     }
 )
 globals()["_validated_image_weight"] = _validated_image_weight
+globals()["_validated_sequence_ids"] = _validated_sequence_ids
+globals()["_sequence_indexed"] = _sequence_indexed
 globals()["_validated_probability_frame"] = _validated_probability_frame
 globals()["_validate_fused_probability_mass"] = _validate_fused_probability_mass
 globals()["fuse_sequence_probabilities"] = fuse_sequence_probabilities
