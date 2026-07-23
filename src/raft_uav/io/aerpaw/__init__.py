@@ -22,6 +22,7 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_original_normalize_truth = _IMPL.normalize_truth
 _original_normalize_rf = _IMPL.normalize_rf
 _original_read_rf_csv = _IMPL.read_rf_csv
 
@@ -95,6 +96,25 @@ def read_rf_csv(path: Path) -> pd.DataFrame:
         path=path,
     )
     return frame
+
+
+def normalize_truth(
+    truth: pd.DataFrame,
+    projector: Any = None,
+    *,
+    enu_origin_lla: Any = None,
+) -> tuple[pd.DataFrame, Any, pd.Timestamp]:
+    """Normalize truth after coercing malformed coordinate cells to missing values."""
+
+    normalized = truth.copy()
+    for column in ("latitude", "longitude", "altitude_m"):
+        if column in normalized.columns:
+            normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+    return _original_normalize_truth(
+        normalized,
+        projector,
+        enu_origin_lla=enu_origin_lla,
+    )
 
 
 def normalize_rf(
@@ -193,6 +213,7 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
 
 
 _IMPL.read_rf_csv = read_rf_csv
+_IMPL.normalize_truth = normalize_truth
 _IMPL.normalize_rf = normalize_rf
 _IMPL._track_data_from_payload = _track_data_from_payload
 _IMPL.read_radar_tracks_json = read_radar_tracks_json
@@ -204,12 +225,14 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_original_normalize_truth"] = _original_normalize_truth
 globals()["_original_normalize_rf"] = _original_normalize_rf
 globals()["_original_read_rf_csv"] = _original_read_rf_csv
 globals()["_positive_finite_real_scalar"] = _positive_finite_real_scalar
 globals()["_read_physical_rf_columns"] = _read_physical_rf_columns
 globals()["_validate_unambiguous_rf_columns"] = _validate_unambiguous_rf_columns
 globals()["read_rf_csv"] = read_rf_csv
+globals()["normalize_truth"] = normalize_truth
 globals()["normalize_rf"] = normalize_rf
 globals()["_track_data_from_payload"] = _track_data_from_payload
 globals()["read_radar_tracks_json"] = read_radar_tracks_json
