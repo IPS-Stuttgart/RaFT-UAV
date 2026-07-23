@@ -6,6 +6,10 @@ association repair, and reproducibility workflows without changing the default
 tracking pipeline.
 """
 
+from raft_uav.research import factor_graph as _factor_graph
+from raft_uav.research._factor_graph_frame_group_patch import (
+    apply_factor_graph_frame_group_patch,
+)
 from raft_uav.research.diagnostics import (
     association_regret,
     association_regret_summary,
@@ -15,13 +19,16 @@ from raft_uav.research.diagnostics import (
     leakage_sentinel,
     track_switch_metrics,
 )
-from raft_uav.research.factor_graph import (
-    FactorGraphSmoothingResult,
-    LeastSquaresSmoothingConfig,
-    coordinate_descent_association_and_smoothing,
-    smooth_position_trajectory,
-)
 from raft_uav.research.uncertainty import ConformalRadius, fit_conformal_radius
+
+apply_factor_graph_frame_group_patch(_factor_graph)
+
+FactorGraphSmoothingResult = _factor_graph.FactorGraphSmoothingResult
+LeastSquaresSmoothingConfig = _factor_graph.LeastSquaresSmoothingConfig
+coordinate_descent_association_and_smoothing = (
+    _factor_graph.coordinate_descent_association_and_smoothing
+)
+smooth_position_trajectory = _factor_graph.smooth_position_trajectory
 
 __all__ = [
     "ConformalRadius",
