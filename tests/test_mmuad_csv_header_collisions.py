@@ -54,8 +54,13 @@ def test_csv_loaders_reject_headers_that_collide_after_normalization(
             "001,0,1,9,2,3\n",
             "state_x_m",
         ),
+        (
+            "sequence_id,time_s,state_x_m,state_x_m,state_y_m,state_z_m\n"
+            "001,0,1,9,2,3\n",
+            "state_x_m",
+        ),
     ],
-    ids=("case", "whitespace"),
+    ids=("case", "whitespace", "exact"),
 )
 def test_estimate_csv_reader_rejects_ambiguous_normalized_headers(
     tmp_path: Path,
@@ -78,7 +83,7 @@ def test_guarded_estimate_csv_reader_rejects_ambiguous_headers(
 ) -> None:
     path = tmp_path / "estimate.csv"
     path.write_text(
-        "sequence_id,time_s,state_x_m, STATE_X_M,state_y_m,state_z_m\n"
+        "sequence_id,time_s,state_x_m,state_x_m,state_y_m,state_z_m\n"
         "001,0,1,9,2,3\n",
         encoding="utf-8",
     )
