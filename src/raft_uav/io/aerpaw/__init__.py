@@ -23,6 +23,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _original_normalize_rf = _IMPL.normalize_rf
+_original_read_rf_csv = _IMPL.read_rf_csv
 
 
 def _positive_finite_real_scalar(value: object, *, field: str) -> float:
@@ -50,6 +51,50 @@ def _positive_finite_real_scalar(value: object, *, field: str) -> float:
     if not np.isfinite(number) or number <= 0.0:
         raise ValueError(error)
     return number
+
+
+def _read_physical_rf_columns(path: Path) -> list[str]:
+    """Read the unmangled RF CSV header before pandas deduplicates names."""
+
+    header = pd.read_csv(
+        path,
+        header=None,
+        nrows=1,
+        dtype=str,
+        keep_default_na=False,
+    )
+    if header.empty:
+        return []
+    return [str(value) for value in header.iloc[0].tolist()]
+
+
+def _validate_unambiguous_rf_columns(columns: list[str], *, path: Path) -> None:
+    """Reject RF column names that collide after trimming whitespace."""
+
+    groups: dict[str, int] = {}
+    for column in columns:
+        normalized = str(column).strip()
+        groups[normalized] = groups.get(normalized, 0) + 1
+    duplicates = sorted(name for name, count in groups.items() if count > 1)
+    if duplicates:
+        duplicate_text = ", ".join(repr(name) for name in duplicates)
+        raise ValueError(
+            f"{path}: RF CSV has duplicate columns after trimming whitespace: "
+            f"{duplicate_text}"
+        )
+
+
+def read_rf_csv(path: Path) -> pd.DataFrame:
+    """Read Keysight RF rows without accepting ambiguous physical headers."""
+
+    path = Path(path)
+    _validate_unambiguous_rf_columns(_read_physical_rf_columns(path), path=path)
+    frame = _original_read_rf_csv(path)
+    _validate_unambiguous_rf_columns(
+        [str(column) for column in frame.columns],
+        path=path,
+    )
+    return frame
 
 
 def normalize_rf(
@@ -147,6 +192,7 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
     return pd.DataFrame.from_records(records)
 
 
+_IMPL.read_rf_csv = read_rf_csv
 _IMPL.normalize_rf = normalize_rf
 _IMPL._track_data_from_payload = _track_data_from_payload
 _IMPL.read_radar_tracks_json = read_radar_tracks_json
@@ -159,7 +205,11 @@ globals().update(
     }
 )
 globals()["_original_normalize_rf"] = _original_normalize_rf
+globals()["_original_read_rf_csv"] = _original_read_rf_csv
 globals()["_positive_finite_real_scalar"] = _positive_finite_real_scalar
+globals()["_read_physical_rf_columns"] = _read_physical_rf_columns
+globals()["_validate_unambiguous_rf_columns"] = _validate_unambiguous_rf_columns
+globals()["read_rf_csv"] = read_rf_csv
 globals()["normalize_rf"] = normalize_rf
 globals()["_track_data_from_payload"] = _track_data_from_payload
 globals()["read_radar_tracks_json"] = read_radar_tracks_json
