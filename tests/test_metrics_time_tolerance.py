@@ -29,6 +29,8 @@ def _sample_trajectory() -> tuple[np.ndarray, np.ndarray]:
         pytest.param(True, id="python-bool"),
         pytest.param(np.bool_(False), id="numpy-bool"),
         pytest.param(np.array([1.0]), id="non-scalar-array"),
+        pytest.param(np.ma.masked, id="masked-singleton"),
+        pytest.param(np.ma.array(5.0, mask=True), id="masked-scalar-array"),
     ],
 )
 def test_time_gated_metrics_reject_invalid_tolerances(invalid_tolerance: object) -> None:
@@ -100,6 +102,15 @@ def test_time_gated_metrics_accept_zero_and_numpy_scalar_tolerances() -> None:
         positions,
         times,
         max_time_delta_s=np.array(0.0),
+    )
+    np.testing.assert_allclose(interpolated, positions)
+    np.testing.assert_array_equal(valid, np.ones(2, dtype=bool))
+
+    interpolated, valid = interpolate_positions_at_times(
+        times,
+        positions,
+        times,
+        max_time_delta_s=np.ma.array(0.0, mask=False),
     )
     np.testing.assert_allclose(interpolated, positions)
     np.testing.assert_array_equal(valid, np.ones(2, dtype=bool))
