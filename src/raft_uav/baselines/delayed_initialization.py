@@ -63,10 +63,16 @@ def build_delayed_initial_hypotheses(
     radar_window = _first_radar_window(radar, window_s=window_s)
     hypotheses: list[InitialHypothesis] = []
     for measurement in rf:
-        vector = np.asarray(getattr(measurement, "vector", []), dtype=float).reshape(-1)
-        if vector.size < 2:
+        try:
+            vector = np.asarray(
+                getattr(measurement, "vector", []),
+                dtype=float,
+            ).reshape(-1)
+            time_s = float(getattr(measurement, "time_s"))
+        except (AttributeError, TypeError, ValueError, OverflowError):
             continue
-        time_s = float(getattr(measurement, "time_s"))
+        if vector.size < 2 or not np.isfinite(time_s) or not np.isfinite(vector).all():
+            continue
         state = np.zeros(6)
         if vector.size == 6:
             state[:] = vector

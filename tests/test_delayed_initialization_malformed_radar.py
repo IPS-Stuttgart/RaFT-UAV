@@ -56,3 +56,24 @@ def test_rf_support_ignores_malformed_radar_coordinates() -> None:
     )
     assert rf_hypothesis.score == pytest.approx(0.02)
     assert sum(hypothesis.source == "radar" for hypothesis in hypotheses) == 1
+
+
+def test_delayed_initialization_skips_malformed_rf_measurements() -> None:
+    valid = SimpleNamespace(time_s=0.5, vector=np.array([1.0, 2.0, 3.0]))
+    malformed = [
+        SimpleNamespace(time_s=np.nan, vector=np.array([4.0, 5.0, 6.0])),
+        SimpleNamespace(time_s=1.0, vector=np.array([np.inf, 5.0, 6.0])),
+        SimpleNamespace(time_s="bad-time", vector=np.array([4.0, 5.0, 6.0])),
+        SimpleNamespace(time_s=1.0, vector=["bad-position", 5.0, 6.0]),
+        SimpleNamespace(vector=np.array([4.0, 5.0, 6.0])),
+    ]
+
+    hypotheses = build_delayed_initial_hypotheses(
+        rf_measurements=[*malformed, valid],
+        radar=pd.DataFrame(),
+    )
+
+    assert len(hypotheses) == 1
+    assert hypotheses[0].source == "rf"
+    assert hypotheses[0].time_s == pytest.approx(0.5)
+    assert hypotheses[0].state == pytest.approx([1.0, 2.0, 3.0, 0.0, 0.0, 0.0])
