@@ -1,9 +1,9 @@
-"""Compatibility validation for oracle candidate-coverage truth gates.
+"""Compatibility validation for oracle candidate-coverage inputs.
 
 The maintained implementation lives in the sibling
 ``oracle_candidate_coverage.py`` module. This package preserves the public
-import path while rejecting malformed truth-matching gates before they can
-silently widen or empty the diagnostic.
+import path while rejecting malformed truth-matching gates and preventing
+fractional candidate identifiers from being silently truncated.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from typing import Any
 import pandas as pd
 
 from raft_uav.numeric import optional_float
+from raft_uav.numeric import optional_int as _shared_optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "oracle_candidate_coverage.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -38,6 +39,12 @@ def _nonnegative_finite_scalar(value: object, *, name: str) -> float:
     if normalized is None or normalized < 0.0:
         raise ValueError(f"{name} must be a finite non-negative scalar")
     return normalized
+
+
+def _optional_int(value: object) -> int | None:
+    """Return an exact integer-equivalent scalar without truncation."""
+
+    return _shared_optional_int(value)
 
 
 def build_oracle_candidate_coverage_diagnostics(
@@ -78,6 +85,7 @@ def build_oracle_candidate_coverage_diagnostics(
     )
 
 
+_IMPL._optional_int = _optional_int
 _IMPL.build_oracle_candidate_coverage_diagnostics = (
     build_oracle_candidate_coverage_diagnostics
 )
@@ -90,6 +98,7 @@ globals().update(
     }
 )
 globals()["_nonnegative_finite_scalar"] = _nonnegative_finite_scalar
+globals()["_optional_int"] = _optional_int
 globals()["build_oracle_candidate_coverage_diagnostics"] = (
     build_oracle_candidate_coverage_diagnostics
 )
