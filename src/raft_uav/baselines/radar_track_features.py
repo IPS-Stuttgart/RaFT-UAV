@@ -5,14 +5,18 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_int
+
 
 def add_track_level_features(radar: pd.DataFrame, *, window_frames: int = 10) -> pd.DataFrame:
     """Append causal track-level features to normalized radar rows."""
 
     if radar.empty or "track_id" not in radar.columns:
         return radar.copy()
-    if window_frames < 1:
-        raise ValueError("window_frames must be positive")
+    normalized_window_frames = optional_int(window_frames)
+    if normalized_window_frames is None or normalized_window_frames < 1:
+        raise ValueError("window_frames must be a positive integer")
+    window_frames = normalized_window_frames
 
     original_index = radar.index.copy()
     out = radar.reset_index(drop=True).copy()
