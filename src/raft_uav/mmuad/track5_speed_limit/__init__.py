@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling ``track5_speed_limit.py``
 module. This package preserves the public import path while rejecting malformed
-iteration counts, Boolean pseudo-numbers, invalid fixed-grid rows, and duplicate
-fixed-grid keys instead of silently coercing or dropping them.
+iteration counts, Boolean pseudo-numbers, missing sequence identifiers, invalid
+fixed-grid rows, and duplicate fixed-grid keys instead of silently coercing or
+dropping them.
 """
 
 from __future__ import annotations
@@ -58,6 +59,22 @@ def _reject_boolean_scalar(value: object, *, message: str) -> object:
     if isinstance(scalar, (bool, np.bool_)):
         raise ValueError(message)
     return value
+
+
+def _validate_sequence_ids(submission: object) -> None:
+    """Reject genuinely missing or blank sequence identifiers before string conversion."""
+
+    rows = _IMPL._strip_csv_headers(pd.DataFrame(submission).copy())
+    if "sequence_id" not in rows.columns:
+        return
+    text = rows["sequence_id"].astype("string").str.strip()
+    invalid = text.isna() | text.eq("").fillna(False)
+    if invalid.any():
+        row_positions = np.flatnonzero(invalid.to_numpy(dtype=bool)).tolist()[:5]
+        raise ValueError(
+            "submission contains missing or blank sequence_id values: "
+            f"sequence_id rows {row_positions}"
+        )
 
 
 def _validate_numeric_rows(submission: object) -> None:
@@ -144,6 +161,7 @@ def project_track5_speed_limit(
         anchor_blend,
         message="anchor_blend must be finite and in [0, 1)",
     )
+    _validate_sequence_ids(submission)
     _validate_numeric_rows(submission)
     _validate_unique_fixed_grid_keys(submission)
     return _ORIGINAL_PROJECT(
@@ -155,6 +173,7 @@ def project_track5_speed_limit(
 
 
 _IMPL.project_track5_speed_limit = project_track5_speed_limit
+_IMPL._validate_sequence_ids = _validate_sequence_ids
 
 globals().update(
     {
@@ -166,6 +185,7 @@ globals().update(
 globals()["_NUMERIC_COLUMNS"] = _NUMERIC_COLUMNS
 globals()["_positive_integer"] = _positive_integer
 globals()["_reject_boolean_scalar"] = _reject_boolean_scalar
+globals()["_validate_sequence_ids"] = _validate_sequence_ids
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
 globals()["_validate_unique_fixed_grid_keys"] = _validate_unique_fixed_grid_keys
 globals()["project_track5_speed_limit"] = project_track5_speed_limit
