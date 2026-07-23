@@ -2,9 +2,10 @@
 
 The maintained implementation lives in the sibling ``radar_association.py``
 module. This package preserves the public import path while rejecting non-finite
-numeric parameters before they can create NaN/Inf tracker state or covariance
-values, and initializes track-bank state from supported position-plus-velocity
-bootstrap measurements without a shape mismatch.
+numeric parameters and malformed integer controls before they can create NaN/Inf
+tracker state, covariance values, or silently truncated association settings, and
+initializes track-bank state from supported position-plus-velocity bootstrap
+measurements without a shape mismatch.
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ from types import ModuleType
 from typing import Any
 
 import numpy as np
+
+from raft_uav.numeric import optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "radar_association.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -79,6 +82,12 @@ _OPTIONAL_UNIT_INTERVAL_ASSOCIATION_PARAMETERS = (
     "candidate_catprob_threshold",
     "paper_compatible_catprob_threshold",
 )
+_POSITIVE_INTEGER_ASSOCIATION_PARAMETERS = (
+    "track_bank_max_hypotheses",
+    "track_bank_max_assignments",
+    "track_bank_max_candidates",
+    "stable_segment_min_frames",
+)
 
 
 class _RadarAssociationModule(ModuleType):
@@ -94,12 +103,15 @@ class _RadarAssociationModule(ModuleType):
 
 
 def run_async_cv_baseline_with_radar_association(*args: Any, **kwargs: Any) -> Any:
-    """Run radar association after validating numeric controls."""
+    """Run radar association after validating and normalizing numeric controls."""
 
     bound = _RUN_SIGNATURE.bind(*args, **kwargs)
     bound.apply_defaults()
     _validate_radar_association_parameters(bound.arguments)
-    return _ORIGINAL_RUN_ASYNC_CV_BASELINE_WITH_RADAR_ASSOCIATION(*args, **kwargs)
+    return _ORIGINAL_RUN_ASYNC_CV_BASELINE_WITH_RADAR_ASSOCIATION(
+        *bound.args,
+        **bound.kwargs,
+    )
 
 
 def _initial_mht_tracker(
@@ -164,6 +176,8 @@ def _validate_radar_association_parameters(arguments: dict[str, Any]) -> None:
         value = arguments[name]
         if value is not None:
             _require_finite_unit_interval(name, value)
+    for name in _POSITIVE_INTEGER_ASSOCIATION_PARAMETERS:
+        arguments[name] = _require_positive_integer(name, arguments[name])
 
     crossrange_min = float(arguments["radar_crossrange_min_std_m"])
     crossrange_max = float(arguments["radar_crossrange_max_std_m"])
@@ -205,6 +219,13 @@ def _require_finite_unit_interval(name: str, value: Any) -> float:
     number = _finite_float(name, value)
     if not 0.0 <= number <= 1.0:
         raise ValueError(f"{name} must be in [0, 1]")
+    return number
+
+
+def _require_positive_integer(name: str, value: Any) -> int:
+    number = optional_int(value)
+    if number is None or number < 1:
+        raise ValueError(f"{name} must be a positive integer")
     return number
 
 
