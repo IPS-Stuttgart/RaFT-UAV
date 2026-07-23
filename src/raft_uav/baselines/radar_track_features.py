@@ -28,8 +28,7 @@ def add_track_level_features(radar: pd.DataFrame, *, window_frames: int = 10) ->
 
 def _features_for_track(group: pd.DataFrame, *, window_frames: int) -> pd.DataFrame:
     group = group.sort_values([c for c in ("time_s", "frame_index", "track_index") if c in group.columns])
-    n = len(group)
-    group["track_age_frames"] = np.arange(n, dtype=float)
+    group["track_age_frames"] = _track_age(group)
     group["track_hit_streak_frames"] = _hit_streak(group)
     group["track_time_since_first_s"] = _time_since_first(group)
     group["track_frame_gap"] = _frame_gap(group)
@@ -45,6 +44,28 @@ def _features_for_track(group: pd.DataFrame, *, window_frames: int) -> pd.DataFr
         group["track_catprob_min_window"] = np.nan
     group["track_velocity_smoothness_mps"] = _velocity_smoothness(group, window_frames=window_frames)
     return group
+
+
+def _track_age(group: pd.DataFrame) -> np.ndarray:
+    """Count distinct observed frames without double-counting repeated rows."""
+
+    if len(group) == 0:
+        return np.asarray([], dtype=float)
+    if "frame_index" not in group.columns:
+        return np.arange(len(group), dtype=float)
+
+    frame_index = pd.to_numeric(group["frame_index"], errors="coerce").to_numpy(dtype=float)
+    age = np.zeros(len(group), dtype=float)
+    for i in range(1, len(group)):
+        previous = frame_index[i - 1]
+        current = frame_index[i]
+        same_frame = (
+            np.isfinite(previous)
+            and np.isfinite(current)
+            and np.isclose(current, previous, rtol=0.0, atol=1.0e-9)
+        )
+        age[i] = age[i - 1] if same_frame else age[i - 1] + 1.0
+    return age
 
 
 def _hit_streak(group: pd.DataFrame) -> np.ndarray:
