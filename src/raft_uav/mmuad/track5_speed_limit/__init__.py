@@ -67,10 +67,8 @@ def _validate_sequence_ids(submission: object) -> None:
     rows = _IMPL._strip_csv_headers(pd.DataFrame(submission).copy())
     if "sequence_id" not in rows.columns:
         return
-    raw = rows["sequence_id"]
-    missing = raw.isna()
-    text = raw.where(~missing, "").astype(str).str.strip()
-    invalid = missing | text.eq("")
+    text = rows["sequence_id"].astype("string").str.strip()
+    invalid = text.isna() | text.eq("").fillna(False)
     if invalid.any():
         row_positions = np.flatnonzero(invalid.to_numpy(dtype=bool)).tolist()[:5]
         raise ValueError(
