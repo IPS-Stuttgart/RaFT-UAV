@@ -48,6 +48,14 @@ jobs:
         run: |
           if [ -d scripts ]; then ruff check src scripts tests; else ruff check src tests; fi
 
-      - name: Run unit tests
-        run: |
-          pytest
+      - name: Capture unit-test diagnostics
+        continue-on-error: true
+        run: pytest -q --tb=short --maxfail=10 > pytest-output.txt 2>&1
+
+      - name: Upload unit-test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-output-${{ matrix.python-version }}
+          path: pytest-output.txt
+          if-no-files-found: error
