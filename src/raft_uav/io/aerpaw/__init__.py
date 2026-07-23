@@ -24,6 +24,7 @@ _SPEC.loader.exec_module(_IMPL)
 
 _original_normalize_truth = _IMPL.normalize_truth
 _original_normalize_rf = _IMPL.normalize_rf
+_original_normalize_radar = _IMPL.normalize_radar
 _original_read_rf_csv = _IMPL.read_rf_csv
 
 
@@ -52,6 +53,15 @@ def _positive_finite_real_scalar(value: object, *, field: str) -> float:
     if not np.isfinite(number) or number <= 0.0:
         raise ValueError(error)
     return number
+
+
+def _coerce_valid_latitude(frame: pd.DataFrame, *, column: str) -> None:
+    """Coerce one latitude column and mask rows outside the WGS84 interval."""
+
+    if column not in frame.columns:
+        return
+    latitude = pd.to_numeric(frame[column], errors="coerce").astype(float)
+    frame[column] = latitude.where(latitude.between(-90.0, 90.0))
 
 
 def _read_physical_rf_columns(path: Path) -> list[str]:
@@ -104,7 +114,7 @@ def normalize_truth(
     *,
     enu_origin_lla: Any = None,
 ) -> tuple[pd.DataFrame, Any, pd.Timestamp]:
-    """Normalize truth after coercing malformed coordinate cells to missing values."""
+    """Normalize truth after masking malformed or out-of-range coordinates."""
 
     normalized = truth.copy()
     for column in ("latitude", "longitude", "altitude_m"):
@@ -112,6 +122,7 @@ def normalize_truth(
             normalized[column] = pd.to_numeric(
                 normalized[column], errors="coerce"
             ).astype(float)
+    _coerce_valid_latitude(normalized, column="latitude")
     return _original_normalize_truth(
         normalized,
         projector,
@@ -126,7 +137,7 @@ def normalize_rf(
     default_std_m: float = 75.0,
     clock_offset_s: float = _IMPL.DEFAULT_RF_CLOCK_OFFSET_S,
 ) -> pd.DataFrame:
-    """Normalize RF rows after validating the fallback measurement spread.
+    """Normalize RF rows after validating spread and masking invalid latitudes.
 
     ``default_std_m`` is used whenever CEP is absent, non-finite, or non-positive.
     Rejecting malformed fallback values here prevents invalid rows from silently
@@ -137,11 +148,31 @@ def normalize_rf(
         default_std_m,
         field="default_std_m",
     )
+    normalized = rf.copy()
+    _coerce_valid_latitude(normalized, column="Latitude")
     return _original_normalize_rf(
-        rf,
+        normalized,
         projector,
         truth_origin_time,
         default_std_m=validated_default_std_m,
+        clock_offset_s=clock_offset_s,
+    )
+
+
+def normalize_radar(
+    radar: pd.DataFrame,
+    projector: Any,
+    truth_origin_time: pd.Timestamp,
+    clock_offset_s: float = _IMPL.DEFAULT_RADAR_CLOCK_OFFSET_S,
+) -> pd.DataFrame:
+    """Normalize radar rows after masking latitudes outside the WGS84 interval."""
+
+    normalized = radar.copy()
+    _coerce_valid_latitude(normalized, column="latitude")
+    return _original_normalize_radar(
+        normalized,
+        projector,
+        truth_origin_time,
         clock_offset_s=clock_offset_s,
     )
 
@@ -217,6 +248,7 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
 _IMPL.read_rf_csv = read_rf_csv
 _IMPL.normalize_truth = normalize_truth
 _IMPL.normalize_rf = normalize_rf
+_IMPL.normalize_radar = normalize_radar
 _IMPL._track_data_from_payload = _track_data_from_payload
 _IMPL.read_radar_tracks_json = read_radar_tracks_json
 
@@ -229,13 +261,16 @@ globals().update(
 )
 globals()["_original_normalize_truth"] = _original_normalize_truth
 globals()["_original_normalize_rf"] = _original_normalize_rf
+globals()["_original_normalize_radar"] = _original_normalize_radar
 globals()["_original_read_rf_csv"] = _original_read_rf_csv
 globals()["_positive_finite_real_scalar"] = _positive_finite_real_scalar
+globals()["_coerce_valid_latitude"] = _coerce_valid_latitude
 globals()["_read_physical_rf_columns"] = _read_physical_rf_columns
 globals()["_validate_unambiguous_rf_columns"] = _validate_unambiguous_rf_columns
 globals()["read_rf_csv"] = read_rf_csv
 globals()["normalize_truth"] = normalize_truth
 globals()["normalize_rf"] = normalize_rf
+globals()["normalize_radar"] = normalize_radar
 globals()["_track_data_from_payload"] = _track_data_from_payload
 globals()["read_radar_tracks_json"] = read_radar_tracks_json
 
