@@ -148,8 +148,10 @@ def normalize_rf(
         default_std_m,
         field="default_std_m",
     )
-    normalized = rf.copy()
-    _coerce_valid_latitude(normalized, column="Latitude")
+    normalized = rf
+    if "Latitude" in rf.columns:
+        normalized = rf.copy()
+        _coerce_valid_latitude(normalized, column="Latitude")
     return _original_normalize_rf(
         normalized,
         projector,
@@ -167,8 +169,10 @@ def normalize_radar(
 ) -> pd.DataFrame:
     """Normalize radar rows after masking latitudes outside the WGS84 interval."""
 
-    normalized = radar.copy()
-    _coerce_valid_latitude(normalized, column="latitude")
+    normalized = radar
+    if "latitude" in radar.columns:
+        normalized = radar.copy()
+        _coerce_valid_latitude(normalized, column="latitude")
     return _original_normalize_radar(
         normalized,
         projector,
