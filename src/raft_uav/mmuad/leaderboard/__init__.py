@@ -28,6 +28,13 @@ _SPEC.loader.exec_module(_IMPL)
 
 _LEGACY_LEADERBOARD_ENTRIES_FROM_CONFIG = _IMPL.leaderboard_entries_from_config
 _LEGACY_BUILD_MMUAD_LEADERBOARD = _IMPL.build_mmuad_leaderboard
+_HIGHER_IS_BETTER_RANK_METRICS = frozenset(
+    {
+        "truth_coverage_fraction",
+        "uav_type_accuracy",
+        "classification_accuracy",
+    }
+)
 
 
 def _validate_unique_method_labels(entries: list[Any]) -> None:
@@ -75,6 +82,12 @@ def build_mmuad_leaderboard(
     )
 
 
+def _rank_metric_ascending(metric: str) -> bool:
+    """Return the correct sort direction for a public leaderboard metric."""
+
+    return str(metric) not in _HIGHER_IS_BETTER_RANK_METRICS
+
+
 def rank_leaderboard_frame(
     frame: pd.DataFrame,
     *,
@@ -111,7 +124,7 @@ def rank_leaderboard_frame(
         sort_columns.append("_leaderboard_eligible")
         ascending.append(False)
     sort_columns.append(metric)
-    ascending.append(True)
+    ascending.append(_rank_metric_ascending(metric))
     for candidate, asc in (
         ("p95_3d_m", True),
         ("max_3d_m", True),
@@ -212,6 +225,7 @@ _IMPL.build_mmuad_leaderboard = build_mmuad_leaderboard
 _IMPL.rank_leaderboard_frame = rank_leaderboard_frame
 _IMPL._nonnegative_finite_config_float = _nonnegative_finite_config_float
 
+
 globals().update(
     {
         name: getattr(_IMPL, name)
@@ -223,6 +237,7 @@ globals()["leaderboard_entries_from_config"] = leaderboard_entries_from_config
 globals()["build_mmuad_leaderboard"] = build_mmuad_leaderboard
 globals()["rank_leaderboard_frame"] = rank_leaderboard_frame
 globals()["_validate_unique_method_labels"] = _validate_unique_method_labels
+globals()["_rank_metric_ascending"] = _rank_metric_ascending
 globals()["_leaderboard_eligibility_mask"] = _leaderboard_eligibility_mask
 globals()["_optional_leaderboard_flag_value"] = _optional_leaderboard_flag_value
 globals()["_leaderboard_flag_value"] = _leaderboard_flag_value
