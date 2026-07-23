@@ -142,7 +142,7 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
                 records.append(
                     _IMPL._flatten_track(current_frame_index, track_index, track, params)
                 )
-    if saw_non_object_payload:
+    if saw_non_object_payload and not records:
         raise ValueError("radar JSON must contain a JSON object")
     return pd.DataFrame.from_records(records)
 
