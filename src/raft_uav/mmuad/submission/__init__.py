@@ -9,6 +9,7 @@ and using globally consistent one-to-one template matching.
 
 from __future__ import annotations
 
+import csv
 import importlib.util
 from pathlib import Path
 import sys
@@ -62,21 +63,17 @@ def _read_text_csv(source: Any, **kwargs: Any) -> Any:
             **kwargs,
         )
     except TypeError:
-        return _IMPL._impl.pd.read_csv(
-            source,
-            dtype=str,
-            na_filter=False,
-            **kwargs,
-        )
+        return _IMPL._impl.pd.read_csv(source, **kwargs)
 
 
 def _physical_csv_columns(path: Path) -> list[str]:
     """Read the unmangled physical header before pandas deduplicates names."""
 
-    header = _read_text_csv(path, header=None, nrows=1)
-    if header.empty:
-        return []
-    return [str(value) for value in header.iloc[0].tolist()]
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        try:
+            return next(csv.reader(handle))
+        except StopIteration:
+            return []
 
 
 def _normalized_column_key(value: Any) -> str:
