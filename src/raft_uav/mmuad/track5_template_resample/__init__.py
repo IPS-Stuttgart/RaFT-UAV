@@ -27,6 +27,32 @@ _ORIGINAL_RESAMPLED_POSITION = _IMPL._resampled_position
 _ORIGINAL_RESAMPLED_CLASSIFICATION = _IMPL._resampled_classification
 
 
+def _normalized_column_name(value: object) -> str:
+    """Return the whitespace-insensitive, case-folded column name."""
+
+    return str(value).strip().casefold()
+
+
+def _first_present(rows: pd.DataFrame, candidates: tuple[str, ...]) -> Any | None:
+    """Return the unique physical column matching one of the supplied aliases."""
+
+    aliases = {_normalized_column_name(candidate) for candidate in candidates}
+    matching_columns = [
+        column
+        for column in rows.columns
+        if _normalized_column_name(column) in aliases
+    ]
+    if len(matching_columns) > 1:
+        rendered = ", ".join(repr(str(column)) for column in matching_columns)
+        raise ValueError(
+            "table contains ambiguous columns matching "
+            f"{tuple(candidates)!r}: {rendered}"
+        )
+    if matching_columns:
+        return matching_columns[0]
+    return None
+
+
 def _normalize_optional_nonnegative_float(value: Any, *, field: str) -> float | None:
     """Return an optional finite non-negative scalar with a stable error."""
 
@@ -193,6 +219,7 @@ def _resampled_classification(
     )
 
 
+_IMPL._first_present = _first_present
 _IMPL.resample_estimates_to_track5_template = resample_estimates_to_track5_template
 _IMPL.write_track5_template_resample_outputs = write_track5_template_resample_outputs
 _IMPL._normalize_estimate_rows = _normalize_estimate_rows
@@ -206,6 +233,8 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_normalized_column_name"] = _normalized_column_name
+globals()["_first_present"] = _first_present
 globals()["_normalize_optional_nonnegative_float"] = _normalize_optional_nonnegative_float
 globals()["resample_estimates_to_track5_template"] = resample_estimates_to_track5_template
 globals()["write_track5_template_resample_outputs"] = write_track5_template_resample_outputs
