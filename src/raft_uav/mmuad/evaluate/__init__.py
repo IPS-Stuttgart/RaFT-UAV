@@ -68,11 +68,25 @@ def _validate_unique_submission_headers(columns: Any) -> None:
     )
 
 
+def _read_physical_submission_headers(path: Path) -> list[str]:
+    """Read the unmangled CSV header before pandas deduplicates names."""
+
+    header = pd.read_csv(
+        path,
+        dtype=str,
+        keep_default_na=False,
+        header=None,
+        nrows=1,
+    )
+    if header.empty:
+        return []
+    return [str(value) for value in header.iloc[0].tolist()]
+
+
 def load_submission_csv(path: Path) -> pd.DataFrame:
     """Load a stable submission after validating its physical CSV headers."""
 
-    header = pd.read_csv(path, dtype=str, keep_default_na=False, nrows=0)
-    _validate_unique_submission_headers(header.columns)
+    _validate_unique_submission_headers(_read_physical_submission_headers(path))
     return _ORIGINAL_LOAD_SUBMISSION_CSV(path)
 
 
@@ -278,6 +292,7 @@ globals().update(
 )
 globals()["_normalized_submission_header"] = _normalized_submission_header
 globals()["_validate_unique_submission_headers"] = _validate_unique_submission_headers
+globals()["_read_physical_submission_headers"] = _read_physical_submission_headers
 globals()["load_submission_csv"] = load_submission_csv
 globals()["_validated_max_time_delta_s"] = _validated_max_time_delta_s
 globals()["match_submission_to_truth"] = match_submission_to_truth
