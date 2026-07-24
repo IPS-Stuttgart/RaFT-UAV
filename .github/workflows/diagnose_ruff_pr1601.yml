@@ -1,0 +1,46 @@
+---
+name: Diagnose Ruff PR 1601
+
+"on":
+  push:
+    branches:
+      - agent/normalize-empirical-sequence-ids
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package with test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Capture Ruff diagnostics
+        shell: bash
+        run: |
+          set +e
+          ruff check src scripts tests > ruff-output.txt 2>&1
+          status=$?
+          cat ruff-output.txt
+          printf '%s\n' "$status" > ruff-status.txt
+          exit 0
+
+      - name: Upload Ruff diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-pr1601-diagnostics
+          path: |
+            ruff-output.txt
+            ruff-status.txt
