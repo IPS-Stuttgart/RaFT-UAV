@@ -1,5 +1,6 @@
 import numpy as np
 
+from raft_uav.baselines import robust_map
 from raft_uav.baselines.kalman import TrackingMeasurement
 from raft_uav.baselines.robust_map import RobustMapSmootherConfig
 from raft_uav.baselines.smoothing import smooth_tracking_records
@@ -44,3 +45,37 @@ def test_accepted_only_matching_skips_rejected_nearest_record():
 
     assert len(smoothed) == len(records)
     assert all(record["map_matched_measurements"] == 1 for record in smoothed)
+
+
+def test_measurement_matching_maximizes_factor_count_before_time_error():
+    records = [
+        _record(0.0, accepted=True),
+        _record(0.8, accepted=True),
+    ]
+    measurements = [
+        TrackingMeasurement(
+            time_s=0.5,
+            vector=np.array([1.0, 0.0, 0.0]),
+            covariance=np.eye(3),
+            source="radar",
+        ),
+        TrackingMeasurement(
+            time_s=1.0,
+            vector=np.array([2.0, 0.0, 0.0]),
+            covariance=np.eye(3),
+            source="radar",
+        ),
+    ]
+
+    factors = robust_map._matched_measurement_factors(
+        records,
+        measurements,
+        np.array([0.0, 0.8]),
+        time_tolerance_s=0.5,
+        accepted_only=False,
+    )
+
+    assert [(factor.index, float(factor.vector[0])) for factor in factors] == [
+        (0, 1.0),
+        (1, 2.0),
+    ]

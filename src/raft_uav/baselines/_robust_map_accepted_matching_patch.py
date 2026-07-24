@@ -1,10 +1,11 @@
-"""Compatibility fix for accepted-only robust-MAP measurement matching."""
+"""Compatibility fixes for robust-MAP measurement matching."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from raft_uav.baselines import robust_map as _robust_map
 from raft_uav.baselines.kalman import TrackingMeasurement
@@ -18,45 +19,115 @@ def _matched_measurement_factors(
     time_tolerance_s: float,
     accepted_only: bool,
 ) -> list[_robust_map._MeasurementFactor]:
-    """Match measurements without allowing rejected records to shadow accepted ones."""
+    """Match measurements globally without losing feasible one-to-one factors.
+
+    The assignment first maximizes the number of matched measurements, then
+    maximizes source-consistent matches, and finally minimizes total timestamp
+    error. Rejected records are removed before assignment in accepted-only mode.
+    """
 
     if measurements is None:
         return []
-    used_record_indices: set[int] = set()
-    factors: list[_robust_map._MeasurementFactor] = []
     ordered = sorted(
         measurements,
         key=lambda item: (float(item.time_s), str(item.source), int(item.vector.size)),
     )
-    for measurement in ordered:
-        candidate_indices = _robust_map._candidate_record_indices(
-            times,
-            float(measurement.time_s),
-            tolerance_s=time_tolerance_s,
+    if not ordered or not records:
+        return []
+
+    record_times = np.asarray(times, dtype=float).reshape(-1)
+    if record_times.size != len(records):
+        raise ValueError("record times must align with tracking records")
+
+    record_eligible = np.isfinite(record_times)
+    if accepted_only:
+        record_eligible &= np.asarray(
+            [bool(record.get("accepted", True)) for record in records],
+            dtype=bool,
         )
-        candidate_indices = [idx for idx in candidate_indices if idx not in used_record_indices]
-        if accepted_only:
-            candidate_indices = [
-                idx for idx in candidate_indices if bool(records[idx].get("accepted", True))
-            ]
-        source_matches = [
-            idx for idx in candidate_indices if str(records[idx].get("source")) == measurement.source
-        ]
-        if source_matches:
-            candidate_indices = source_matches
-        if not candidate_indices:
-            continue
-        best_index = min(candidate_indices, key=lambda idx: abs(times[idx] - measurement.time_s))
-        used_record_indices.add(best_index)
-        factors.append(
-            _robust_map._MeasurementFactor(
-                index=int(best_index),
-                vector=np.asarray(measurement.vector, dtype=float).reshape(-1),
-                covariance=np.asarray(measurement.covariance, dtype=float),
-                source=measurement.source,
-            )
+    if not record_eligible.any():
+        return []
+
+    measurement_times = np.asarray(
+        [float(measurement.time_s) for measurement in ordered],
+        dtype=float,
+    )
+    time_deltas = np.abs(measurement_times[:, None] - record_times[None, :])
+    eligible = (
+        record_eligible[None, :]
+        & np.isfinite(time_deltas)
+        & (time_deltas <= float(time_tolerance_s))
+    )
+    if not eligible.any():
+        return []
+
+    measurement_sources = np.asarray(
+        [str(measurement.source) for measurement in ordered],
+        dtype=object,
+    )
+    record_sources = np.asarray(
+        [str(record.get("source")) for record in records],
+        dtype=object,
+    )
+    same_source = measurement_sources[:, None] == record_sources[None, :]
+
+    measurement_count, record_count = eligible.shape
+    max_matches = min(measurement_count, record_count)
+    source_penalty = float(max_matches + 1)
+    unmatched_penalty = float((max_matches + 1) ** 2)
+    normalized_time_error = np.zeros_like(time_deltas)
+    if time_tolerance_s > 0.0:
+        normalized_time_error = np.minimum(
+            time_deltas / float(time_tolerance_s),
+            1.0,
         )
-    return factors
+
+    costs = np.full(
+        (measurement_count, record_count + measurement_count),
+        unmatched_penalty,
+        dtype=float,
+    )
+    costs[:, :record_count] = np.where(
+        eligible,
+        np.where(same_source, 0.0, source_penalty) + normalized_time_error,
+        2.0 * unmatched_penalty,
+    )
+    # Stabilize exact timestamp/source ties in favor of the earlier record.
+    costs[:, :record_count] += np.where(
+        eligible,
+        np.arange(record_count, dtype=float)[None, :] * np.finfo(float).eps,
+        0.0,
+    )
+
+    measurement_indices, assignment_columns = linear_sum_assignment(costs)
+    assignments = sorted(
+        (
+            int(measurement_index),
+            int(record_index),
+        )
+        for measurement_index, record_index in zip(
+            measurement_indices,
+            assignment_columns,
+            strict=True,
+        )
+        if record_index < record_count and eligible[measurement_index, record_index]
+    )
+
+    return [
+        _robust_map._MeasurementFactor(
+            index=record_index,
+            vector=np.asarray(
+                ordered[measurement_index].vector,
+                dtype=float,
+            ).reshape(-1),
+            covariance=np.asarray(
+                ordered[measurement_index].covariance,
+                dtype=float,
+            ),
+            source=ordered[measurement_index].source,
+        )
+        for measurement_index, record_index in assignments
+    ]
 
 
 def apply_robust_map_accepted_matching_patch() -> None:
