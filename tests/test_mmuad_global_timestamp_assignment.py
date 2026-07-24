@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -50,6 +51,22 @@ def test_stable_tie_break_never_increases_timestamp_error() -> None:
     )
 
     assert assignment == {0: 1, 1: 2}
+
+
+@pytest.mark.parametrize(
+    "invalid_tolerance",
+    [True, np.bool_(False), np.array([0.5]), np.ma.masked, 1.0 + 0.0j],
+)
+def test_assignment_rejects_invalid_tolerance_scalars(invalid_tolerance: object) -> None:
+    with pytest.raises(
+        ValueError,
+        match="tolerance_s must be a finite nonnegative real scalar",
+    ):
+        optimal_timestamp_assignment(
+            [0.0],
+            [0.0],
+            tolerance_s=invalid_tolerance,
+        )
 
 
 def test_assignment_rejects_rounded_search_bound_outside_tolerance() -> None:
