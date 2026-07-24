@@ -88,6 +88,34 @@ def test_empirical_covariance_residuals_respect_sequence_ids():
     assert residuals.tolist() == [[1.0, -1.0]]
 
 
+def test_empirical_covariance_skips_missing_and_trims_sequence_ids():
+    truth = pd.DataFrame(
+        {
+            "sequence_id": [np.nan, " seq_a "],
+            "time_s": [0.0, 0.0],
+            "east_m": [100.0, 10.0],
+            "north_m": [100.0, 20.0],
+        }
+    )
+    rf = pd.DataFrame(
+        {
+            "sequence_id": [np.nan, "seq_a"],
+            "time_s": [0.0, 0.0],
+            "east_m": [150.0, 11.0],
+            "north_m": [160.0, 19.0],
+        }
+    )
+
+    residuals = aligned_residuals(
+        rf,
+        truth,
+        source="rf",
+        max_time_delta_s=0.25,
+    )
+
+    assert residuals.tolist() == [[1.0, -1.0]]
+
+
 def test_empirical_covariance_respects_time_gate():
     truth = pd.DataFrame(
         {
