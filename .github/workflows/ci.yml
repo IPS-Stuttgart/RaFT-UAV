@@ -7,9 +7,6 @@ name: CI
   pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -19,74 +16,8 @@ env:
   PYTHONUNBUFFERED: "1"
 
 jobs:
-  apply-canonical-range-gate-fix:
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.head_ref == 'agent/validate-canonical-tracklet-range-gate'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out source branch
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-
-      - name: Apply focused source fix and regression
-        shell: bash
-        run: |
-          python - <<'PY'
-          import base64
-          from pathlib import Path
-
-          source_path = Path('src/raft_uav/tracklet_viterbi_cli.py')
-          source = source_path.read_text(encoding='utf-8')
-          old = '''def _env_optional_positive_float(name: str, default: float | None) -> float | None:
-              value = os.environ.get(name)
-              if value is None or value == "":
-                  return default
-              parsed = float(value)
-              return None if parsed <= 0.0 else parsed
-          '''
-          new = '''def _env_optional_positive_float(name: str, default: float | None) -> float | None:
-              value = os.environ.get(name)
-              if value is None or value == "":
-                  return default
-              parsed = float(value)
-              if not math.isfinite(parsed) or parsed < 0.0:
-                  raise ValueError(f"{name} must be finite and nonnegative")
-              return None if parsed == 0.0 else parsed
-          '''
-          if source.count(old) != 1:
-              raise SystemExit('expected exactly one canonical range-gate helper')
-          source_path.write_text(source.replace(old, new), encoding='utf-8')
-
-          test_b64 = 'ZnJvbSBfX2Z1dHVyZV9fIGltcG9ydCBhbm5vdGF0aW9ucwoKaW1wb3J0IHB5dGVzdAoKZnJvbSByYWZ0X3VhdiBpbXBvcnQgdHJhY2tsZXRfdml0ZXJiaV9jbGkKCgpAcHl0ZXN0Lm1hcmsucGFyYW1ldHJpemUoInZhbHVlIiwgWyItMSIsICJuYW4iLCAiaW5mIiwgIi1pbmYiXSkKZGVmIHRlc3RfY2Fub25pY2FsX3RyYWNrbGV0X2NsaV9yZWplY3RzX2ludmFsaWRfcmFuZ2VfZ2F0ZV9lbnYoCiAgICBtb25rZXlwYXRjaDogcHl0ZXN0Lk1vbmtleVBhdGNoLAogICAgdmFsdWU6IHN0ciwKKSAtPiBOb25lOgogICAgbW9ua2V5cGF0Y2guc2V0ZW52KCJSQUZUX1VBVl9UUkFDS0xFVF9SQU5HRV9HQVRFX00iLCB2YWx1ZSkKCiAgICB3aXRoIHB5dGVzdC5yYWlzZXMoCiAgICAgICAgVmFsdWVFcnJvciwKICAgICAgICBtYXRjaD0iUkFGVF9VQVZfVFJBQ0tMRVRfUkFOR0VfR0FURV9NIG11c3QgYmUgZmluaXRlIGFuZCBub25uZWdhdGl2ZSIsCiAgICApOgogICAgICAgIHRyYWNrbGV0X3ZpdGVyYmlfY2xpLl90cmFja2xldF9jb25maWdfZnJvbV9lbnZpcm9ubWVudCgpCgoKZGVmIHRlc3RfY2Fub25pY2FsX3RyYWNrbGV0X2NsaV9rZWVwc196ZXJvX2FzX2Rpc2FibGVkX3JhbmdlX2dhdGUoCiAgICBtb25rZXlwYXRjaDogcHl0ZXN0Lk1vbmtleVBhdGNoLAopIC0+IE5vbmU6CiAgICBtb25rZXlwYXRjaC5zZXRlbnYoIlJBRlRfVUFWX1RSQUNLTEVUX1JBTkdFX0dBVEVfTSIsICIwIikKCiAgICBjb25maWcgPSB0cmFja2xldF92aXRlcmJpX2NsaS5fdHJhY2tsZXRfY29uZmlnX2Zyb21fZW52aXJvbm1lbnQoKQoKICAgIGFzc2VydCBjb25maWcucmFuZ2VfZ2F0ZV9tIGlzIE5vbmUKCgpkZWYgdGVzdF9jYW5vbmljYWxfdHJhY2tsZXRfY2xpX3ByZXNlcnZlc19wb3NpdGl2ZV9yYW5nZV9nYXRlX2VudigKICAgIG1vbmtleXBhdGNoOiBweXRlc3QuTW9ua2V5UGF0Y2gsCikgLT4gTm9uZToKICAgIG1vbmtleXBhdGNoLnNldGVudigiUkFGVF9VQVZfVFJBQ0tMRVRfUkFOR0VfR0FURV9NIiwgIjcyNS41IikKCiAgICBjb25maWcgPSB0cmFja2xldF92aXRlcmJpX2NsaS5fdHJhY2tsZXRfY29uZmlnX2Zyb21fZW52aXJvbm1lbnQoKQoKICAgIGFzc2VydCBjb25maWcucmFuZ2VfZ2F0ZV9tID09IHB5dGVzdC5hcHByb3goNzI1LjUpCg=='
-          Path('tests/test_tracklet_viterbi_cli_range_gate_env_validation.py').write_bytes(
-              base64.b64decode(test_b64)
-          )
-
-          for workflow in (
-              Path('.github/workflows/agent-validate-range-gate.yml'),
-              Path('.github/workflows/agent-validate-range-gate-pr.yml'),
-          ):
-              workflow.unlink(missing_ok=True)
-          PY
-          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
-          python -m py_compile src/raft_uav/tracklet_viterbi_cli.py tests/test_tracklet_viterbi_cli_range_gate_env_validation.py
-
-      - name: Commit focused fix
-        shell: bash
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m "Validate canonical tracklet range-gate overrides"
-          git push origin HEAD:${{ github.head_ref }}
-
   test:
     name: Python ${{ matrix.python-version }}
-    needs: apply-canonical-range-gate-fix
-    if: always() && needs.apply-canonical-range-gate-fix.result == 'skipped'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
