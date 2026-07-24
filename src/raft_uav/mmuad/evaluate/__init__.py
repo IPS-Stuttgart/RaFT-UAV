@@ -134,7 +134,9 @@ def match_submission_to_truth(
         submission["sequence_id"] = _normalize_submission_sequence_ids(
             submission["sequence_id"]
         )
-    if "track_id" in submission.columns:
+    if "track_id" not in submission.columns:
+        submission["track_id"] = ""
+    else:
         submission["track_id"] = submission["track_id"].map(
             lambda value: _valid_track_id_text(value) or ""
         )
@@ -161,7 +163,7 @@ def match_submission_to_truth(
         restrict_to_track_id = _should_restrict_to_track_id(
             truth_track_ids,
             submitted_track_ids,
-        )
+        ) or (len(truth_track_ids) > 1 and not submitted_track_ids)
         assignments, eligible = _optimal_time_assignment(
             pred_seq,
             truth_seq,
