@@ -13,6 +13,8 @@ from pathlib import Path
 import sys
 from typing import Iterable
 
+import pandas as pd
+
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_uncertainty_column_adapter.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.mmuad._track5_uncertainty_column_adapter_legacy",
@@ -46,6 +48,55 @@ def _validate_unique_estimate_labels(estimate_inputs: Iterable[object]) -> list[
     return inputs
 
 
+def _read_physical_header(path: Path) -> list[str]:
+    """Read the unmangled CSV header before pandas deduplicates names."""
+
+    header = pd.read_csv(
+        path,
+        dtype=str,
+        keep_default_na=False,
+        header=None,
+        nrows=1,
+    )
+    if header.empty:
+        return []
+    return [str(value) for value in header.iloc[0].tolist()]
+
+
+def _validate_unambiguous_uncertainty_columns(
+    path: Path,
+    *,
+    label: str,
+    requested: str | None,
+) -> None:
+    """Reject physical uncertainty columns that collapse to one normalized name."""
+
+    groups: dict[str, list[str]] = {}
+    for column in _read_physical_header(path):
+        groups.setdefault(_IMPL._column_name_key(column), []).append(column)
+
+    candidate_keys = (
+        {_IMPL._column_name_key(requested)}
+        if requested is not None
+        else {_IMPL._column_name_key(column) for column in _IMPL.DEFAULT_UNCERTAINTY_COLUMNS}
+    )
+    ambiguous_columns = sorted(
+        {
+            column
+            for key in candidate_keys
+            for column in groups.get(key, [])
+            if len(groups.get(key, [])) > 1
+        },
+        key=lambda column: (_IMPL._column_name_key(column), column),
+    )
+    if ambiguous_columns:
+        rendered = ", ".join(repr(column) for column in ambiguous_columns)
+        raise ValueError(
+            f"estimate CSV for {label!r} has ambiguous uncertainty columns after "
+            f"trimming whitespace and ignoring case: {rendered}"
+        )
+
+
 def normalize_uncertainty_estimate_inputs(
     estimate_inputs,
     *,
@@ -55,13 +106,21 @@ def normalize_uncertainty_estimate_inputs(
     fallback_sigma_m=30.0,
     require_uncertainty=False,
 ):
-    """Normalize inputs only after proving their output paths are distinct."""
+    """Normalize inputs only after proving labels and uncertainty columns are distinct."""
 
     inputs = _validate_unique_estimate_labels(estimate_inputs)
+    column_map = dict(uncertainty_columns or {})
+    for item in inputs:
+        requested = _IMPL._lookup_requested_uncertainty_column(column_map, item.label)
+        _validate_unambiguous_uncertainty_columns(
+            Path(item.path),
+            label=str(item.label),
+            requested=requested,
+        )
     return _ORIGINAL_NORMALIZE(
         inputs,
         output_dir=output_dir,
-        uncertainty_columns=uncertainty_columns,
+        uncertainty_columns=column_map,
         output_uncertainty_column=output_uncertainty_column,
         fallback_sigma_m=fallback_sigma_m,
         require_uncertainty=require_uncertainty,
@@ -97,6 +156,10 @@ globals().update(
         for name in dir(_IMPL)
         if not (name.startswith("__") and name.endswith("__"))
     }
+)
+globals()["_read_physical_header"] = _read_physical_header
+globals()["_validate_unambiguous_uncertainty_columns"] = (
+    _validate_unambiguous_uncertainty_columns
 )
 globals()["normalize_uncertainty_estimate_inputs"] = normalize_uncertainty_estimate_inputs
 globals()["_parse_uncertainty_column_map"] = _parse_uncertainty_column_map
