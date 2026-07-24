@@ -3,7 +3,8 @@
 The maintained implementation lives in the sibling
 ``candidate_reservoir_diversity.py`` module. This package preserves the public
 import path while aligning summary diagnostics with the configured branch
-column and retaining replace-on-use ``--top-k`` CLI semantics.
+column, retaining replace-on-use ``--top-k`` CLI semantics, and validating
+programmatic cap controls without lossy integer coercion.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ import sys
 from typing import Any
 
 import pandas as pd
+
+from raft_uav.numeric import optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_reservoir_diversity.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -30,7 +33,51 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_LEGACY_DIVERSITY_CAP_RESERVOIR = _IMPL.diversity_cap_reservoir
 _DEFAULT_TOP_K_VALUES = (1, 3, 5, 10, 20)
+
+
+def _nonnegative_integer(value: object, *, name: str) -> int:
+    """Return an exact non-negative integer control."""
+
+    parsed = optional_int(value)
+    if parsed is None or parsed < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return parsed
+
+
+def diversity_cap_reservoir(
+    reservoir: pd.DataFrame,
+    *,
+    max_candidates_per_frame: object = 40,
+    min_per_source: object = 1,
+    min_per_branch: object = 1,
+    score_column: str = "candidate_reservoir_score",
+    fallback_score_column: str = "confidence",
+    branch_column: str = "candidate_branch",
+) -> pd.DataFrame:
+    """Cap candidates per frame after validating integer controls exactly.
+
+    ``max_candidates_per_frame=0`` retains the established unbounded-cap
+    convention. Source and branch quotas may also be zero to disable the
+    corresponding protection rule.
+    """
+
+    cap = _nonnegative_integer(
+        max_candidates_per_frame,
+        name="max_candidates_per_frame",
+    )
+    source_quota = _nonnegative_integer(min_per_source, name="min_per_source")
+    branch_quota = _nonnegative_integer(min_per_branch, name="min_per_branch")
+    return _LEGACY_DIVERSITY_CAP_RESERVOIR(
+        reservoir,
+        max_candidates_per_frame=cap,
+        min_per_source=source_quota,
+        min_per_branch=branch_quota,
+        score_column=score_column,
+        fallback_score_column=fallback_score_column,
+        branch_column=branch_column,
+    )
 
 
 def _frame_label_coverage(
@@ -169,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
 
     top_k_values = _DEFAULT_TOP_K_VALUES if args.top_k is None else tuple(args.top_k)
     rows = pd.read_csv(args.input_csv)
-    capped = _IMPL.diversity_cap_reservoir(
+    capped = diversity_cap_reservoir(
         rows,
         max_candidates_per_frame=args.max_candidates_per_frame,
         min_per_source=args.min_per_source,
@@ -212,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+_IMPL.diversity_cap_reservoir = diversity_cap_reservoir
 _IMPL._frame_label_coverage = _frame_label_coverage
 _IMPL.diversity_cap_summary = diversity_cap_summary
 _IMPL.write_diversity_cap_outputs = write_diversity_cap_outputs
@@ -224,6 +272,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["diversity_cap_reservoir"] = diversity_cap_reservoir
 globals()["_frame_label_coverage"] = _frame_label_coverage
 globals()["diversity_cap_summary"] = diversity_cap_summary
 globals()["write_diversity_cap_outputs"] = write_diversity_cap_outputs
