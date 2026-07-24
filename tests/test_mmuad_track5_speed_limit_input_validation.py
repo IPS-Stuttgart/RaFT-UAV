@@ -106,6 +106,20 @@ def test_speed_limit_rejects_numeric_equivalent_duplicate_timestamps() -> None:
         project_track5_speed_limit(rows)
 
 
+def test_speed_limit_rejects_duplicate_official_grid_keys() -> None:
+    rows = pd.DataFrame(
+        {
+            "Sequence": ["seq0001", "seq0001", "seq0001"],
+            "Timestamp": [0.0, 1.0, 1.0],
+            "Position": ["(0,0,0)", "(100,0,0)", "(150,0,0)"],
+            "Classification": [2, 2, 2],
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"seq0001@1"):
+        project_track5_speed_limit(rows, max_speed_mps=10.0)
+
+
 def test_speed_limit_allows_timestamp_reuse_across_sequences() -> None:
     rows = _submission()
     rows.loc[2, "sequence_id"] = "seq0002"
