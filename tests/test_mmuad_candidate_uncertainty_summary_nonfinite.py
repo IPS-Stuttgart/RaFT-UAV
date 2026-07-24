@@ -4,6 +4,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.candidate_uncertainty import (
     CandidateUncertaintyModel,
@@ -39,5 +40,5 @@ def test_uncertainty_summary_excludes_nonfinite_truth_distances() -> None:
     assert summary["rmse_m"] == 0.0
     assert summary["truth_mean_m"] == 2.5
     assert summary["predicted_mean_m"] == 2.5
-    assert summary["correlation"] == 1.0
+    assert summary["correlation"] == pytest.approx(1.0)
     json.dumps(summary, allow_nan=False)
