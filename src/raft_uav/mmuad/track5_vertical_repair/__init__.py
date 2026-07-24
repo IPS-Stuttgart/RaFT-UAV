@@ -224,8 +224,8 @@ def repair_track5_vertical_spikes(
             name="max_horizontal_speed_mps",
         )
     )
-    _validate_identifier_rows(submission)
     _validate_numeric_rows(submission)
+    _validate_identifier_rows(submission)
     _validate_unique_fixed_grid_keys(submission)
     return _ORIGINAL_REPAIR(
         submission,
