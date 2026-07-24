@@ -14,6 +14,7 @@ import sys
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_uncertainty.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -29,6 +30,7 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_TRAIN = _IMPL.train_candidate_uncertainty
 _ORIGINAL_PREDICT = _IMPL.predict_candidate_sigma
 _ORIGINAL_APPLY = _IMPL.apply_candidate_uncertainty
+_ORIGINAL_SUMMARY = _IMPL.candidate_uncertainty_training_summary
 _ORIGINAL_SAVE = _IMPL.save_candidate_uncertainty_model
 _ORIGINAL_LOAD = _IMPL.load_candidate_uncertainty_model
 
@@ -200,6 +202,20 @@ def apply_candidate_uncertainty(
     )
 
 
+def candidate_uncertainty_training_summary(features, model):
+    """Summarize only rows with finite truth-distance labels."""
+
+    rows = pd.DataFrame(features).copy()
+    if "truth_distance_3d_m" not in rows.columns:
+        return _ORIGINAL_SUMMARY(rows, model)
+    truth = pd.to_numeric(rows["truth_distance_3d_m"], errors="coerce")
+    finite = np.isfinite(truth.to_numpy(dtype=float, na_value=np.nan))
+    return _ORIGINAL_SUMMARY(
+        rows.loc[finite].copy(),
+        _validate_candidate_uncertainty_model(model),
+    )
+
+
 def save_candidate_uncertainty_model(model, path: Path) -> Path:
     """Write only structurally valid portable model payloads."""
 
@@ -216,6 +232,7 @@ _IMPL._validate_candidate_uncertainty_model = _validate_candidate_uncertainty_mo
 _IMPL.train_candidate_uncertainty = train_candidate_uncertainty
 _IMPL.predict_candidate_sigma = predict_candidate_sigma
 _IMPL.apply_candidate_uncertainty = apply_candidate_uncertainty
+_IMPL.candidate_uncertainty_training_summary = candidate_uncertainty_training_summary
 _IMPL.save_candidate_uncertainty_model = save_candidate_uncertainty_model
 _IMPL.load_candidate_uncertainty_model = load_candidate_uncertainty_model
 
@@ -235,6 +252,9 @@ globals()["_validate_candidate_uncertainty_model"] = (
 globals()["train_candidate_uncertainty"] = train_candidate_uncertainty
 globals()["predict_candidate_sigma"] = predict_candidate_sigma
 globals()["apply_candidate_uncertainty"] = apply_candidate_uncertainty
+globals()["candidate_uncertainty_training_summary"] = (
+    candidate_uncertainty_training_summary
+)
 globals()["save_candidate_uncertainty_model"] = save_candidate_uncertainty_model
 globals()["load_candidate_uncertainty_model"] = load_candidate_uncertainty_model
 
