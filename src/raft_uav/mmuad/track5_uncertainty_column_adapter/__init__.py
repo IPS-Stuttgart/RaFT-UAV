@@ -34,17 +34,20 @@ def _validate_unique_estimate_labels(estimate_inputs: Iterable[object]) -> list[
     """Materialize inputs and reject normalized output-filename collisions."""
 
     inputs = list(estimate_inputs)
-    original_labels: dict[str, str] = {}
+    original_labels: dict[str, tuple[str, str]] = {}
     for item in inputs:
         raw_label = str(item.label)
         normalized_label = _IMPL._safe_label(raw_label)
-        if normalized_label in original_labels:
-            previous = original_labels[normalized_label]
+        portable_key = normalized_label.casefold()
+        if portable_key in original_labels:
+            previous, previous_normalized = original_labels[portable_key]
             raise ValueError(
-                "estimate labels must be unique after normalization; "
-                f"{previous!r} and {raw_label!r} both map to {normalized_label!r}"
+                "estimate labels must be unique after normalization, including "
+                "case-insensitive filenames; "
+                f"{previous!r} maps to {previous_normalized!r} and "
+                f"{raw_label!r} maps to {normalized_label!r}"
             )
-        original_labels[normalized_label] = raw_label
+        original_labels[portable_key] = (raw_label, normalized_label)
     return inputs
 
 
