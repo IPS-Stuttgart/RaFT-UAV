@@ -10,6 +10,8 @@ from pyrecest.filters.gaussian_hypothesis_mixture import (
 )
 from pyrecest.numerics import is_positive_semidefinite
 
+from raft_uav.numeric import optional_float
+
 
 _DEFAULT_POSITION_COVARIANCE = np.diag([25.0**2, 25.0**2, 35.0**2])
 
@@ -61,7 +63,13 @@ def _covariance_from_row(
     row: pd.Series,
     columns: tuple[str, str, str, str, str, str],
 ) -> np.ndarray:
-    ee, nn, uu, en, eu, nu = [float(row[column]) for column in columns]
+    values: list[float] = []
+    for column in columns:
+        value = optional_float(row[column])
+        if value is None:
+            return _DEFAULT_POSITION_COVARIANCE.copy()
+        values.append(value)
+    ee, nn, uu, en, eu, nu = values
     covariance = _symmetrized(
         np.array([[ee, en, eu], [en, nn, nu], [eu, nu, uu]], dtype=float)
     )
