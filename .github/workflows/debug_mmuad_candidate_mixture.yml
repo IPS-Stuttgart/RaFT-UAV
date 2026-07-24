@@ -30,9 +30,22 @@ jobs:
           status=${PIPESTATUS[0]}
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit "$status"
+      - name: Capture Ruff diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          ruff check src scripts tests 2>&1 | tee ruff_check.log
+          exit 0
       - name: Upload targeted test log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: candidate-mixture-test-log
           path: candidate_mixture_test.log
+      - name: Upload Ruff diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-check-log
+          path: ruff_check.log
