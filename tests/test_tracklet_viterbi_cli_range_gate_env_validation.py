@@ -1,3 +1,5 @@
+"""Regression coverage for canonical tracklet range-gate environment parsing."""
+
 from __future__ import annotations
 
 import pytest
