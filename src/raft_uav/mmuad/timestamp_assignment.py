@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
 from scipy.sparse import coo_matrix
@@ -51,6 +51,27 @@ def _assignment_error(
     )
 
 
+def _validated_tolerance_s(value: Any) -> float:
+    """Return a finite, nonnegative, non-Boolean scalar tolerance."""
+
+    error = "tolerance_s must be a finite nonnegative real scalar"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(error)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+        raise ValueError(error)
+    try:
+        tolerance = float(scalar.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(tolerance) or tolerance < 0.0:
+        raise ValueError(error)
+    return tolerance
+
+
 def optimal_timestamp_assignment(
     requested_times: Iterable[float],
     prediction_times: Iterable[float],
@@ -71,9 +92,7 @@ def optimal_timestamp_assignment(
         raise ValueError("timestamp arrays must be one-dimensional")
     if not np.isfinite(requests).all() or not np.isfinite(predictions).all():
         raise ValueError("timestamp arrays must contain only finite values")
-    tolerance = float(tolerance_s)
-    if not np.isfinite(tolerance) or tolerance < 0.0:
-        raise ValueError("tolerance_s must be non-negative and finite")
+    tolerance = _validated_tolerance_s(tolerance_s)
     if requests.size == 0 or predictions.size == 0:
         return {}
 
