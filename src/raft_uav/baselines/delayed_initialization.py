@@ -208,13 +208,18 @@ def _velocity_from_row(row: pd.Series) -> np.ndarray | None:
     return velocity if np.isfinite(velocity).all() else None
 
 
+def _track_id_matches(values: pd.Series, track_id: int) -> pd.Series:
+    """Match only track IDs accepted by the shared exact-integer parser."""
+
+    return values.map(_optional_int).eq(track_id)
+
+
 def _velocity_from_track(row: pd.Series, frame: pd.DataFrame) -> np.ndarray | None:
     track_id = _optional_int(row.get("track_id"))
     required = {*_POSITION_COLUMNS, "time_s", "track_id"}
     if track_id is None or not required.issubset(frame.columns):
         return None
-    track_ids = pd.to_numeric(frame["track_id"], errors="coerce")
-    track = frame.loc[track_ids == track_id].copy()
+    track = frame.loc[_track_id_matches(frame["track_id"], track_id)].copy()
     positions = track.loc[:, _POSITION_COLUMNS].apply(pd.to_numeric, errors="coerce")
     times = pd.to_numeric(track["time_s"], errors="coerce")
     finite = np.isfinite(times.to_numpy(dtype=float, na_value=np.nan))
@@ -268,11 +273,7 @@ def _track_support_score(row: pd.Series, radar: pd.DataFrame) -> float:
     track_id = _optional_int(row.get("track_id"))
     if track_id is None or "track_id" not in radar.columns:
         return 1.0
-    count = int(
-        np.count_nonzero(
-            pd.to_numeric(radar["track_id"], errors="coerce") == track_id
-        )
-    )
+    count = int(_track_id_matches(radar["track_id"], track_id).sum())
     return float(1.0 / max(count, 1))
 
 
