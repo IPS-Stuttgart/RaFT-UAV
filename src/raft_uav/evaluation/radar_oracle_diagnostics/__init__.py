@@ -38,7 +38,7 @@ def _sequence_keys(values: pd.Series) -> pd.Series:
 
 
 def _radar_frame_key_values(frame: pd.DataFrame) -> pd.Series:
-    """Use exact frame indices when valid, falling back to time per row."""
+    """Use frame index and time together, falling back to either usable field."""
 
     if "frame_index" not in frame.columns and "time_s" not in frame.columns:
         raise KeyError("radar is missing both frame_index and time_s")
@@ -52,14 +52,18 @@ def _radar_frame_key_values(frame: pd.DataFrame) -> pd.Series:
         if "time_s" in frame.columns
         else [None] * len(frame)
     )
-    keys: list[tuple[str, int | float] | None] = []
+    keys: list[tuple[object, ...] | None] = []
     for frame_index, time_s in zip(frame_indices, time_values, strict=True):
         event_index = _optional_int(frame_index)
-        if event_index is not None:
-            keys.append(("frame_index", event_index))
-            continue
         event_time = _optional_float(time_s)
-        keys.append(None if event_time is None else ("time_s", round(event_time, 9)))
+        if event_index is not None and event_time is not None:
+            keys.append(("frame_index_time", event_index, round(event_time, 9)))
+        elif event_index is not None:
+            keys.append(("frame_index", event_index))
+        elif event_time is not None:
+            keys.append(("time_s", round(event_time, 9)))
+        else:
+            keys.append(None)
     return pd.Series(keys, index=frame.index, dtype=object)
 
 
