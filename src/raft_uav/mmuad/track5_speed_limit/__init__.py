@@ -16,6 +16,8 @@ import sys
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.submission import normalize_official_track5_results_frame
+
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_speed_limit.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.mmuad._track5_speed_limit_legacy",
@@ -132,7 +134,7 @@ def _validate_unique_fixed_grid_keys(submission: object) -> None:
         }
         if not official_required <= set(lower_to_original):
             return
-        official = _IMPL.normalize_official_track5_results_frame(rows)
+        official = normalize_official_track5_results_frame(rows)
         normalized_keys = pd.DataFrame(
             {
                 "sequence_id": official["Sequence"].astype(str),
@@ -208,8 +210,3 @@ globals()["_validate_sequence_ids"] = _validate_sequence_ids
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
 globals()["_validate_unique_fixed_grid_keys"] = _validate_unique_fixed_grid_keys
 globals()["project_track5_speed_limit"] = project_track5_speed_limit
-
-__doc__ = _IMPL.__doc__
-__all__ = [
-    name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))
-]
