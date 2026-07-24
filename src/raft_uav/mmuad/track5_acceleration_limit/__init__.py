@@ -56,11 +56,15 @@ class _Track5AccelerationLimitModule(ModuleType):
 def _finite_scalar(value: object, *, message: str) -> float:
     """Return a finite non-Boolean scalar float."""
 
+    if np.ma.is_masked(value):
+        raise ValueError(message)
     scalar = value
     if isinstance(value, np.ndarray):
         if value.ndim != 0:
             raise ValueError(message)
         scalar = value.item()
+    if np.ma.is_masked(scalar):
+        raise ValueError(message)
     if isinstance(scalar, (bool, np.bool_)):
         raise ValueError(message)
     try:
