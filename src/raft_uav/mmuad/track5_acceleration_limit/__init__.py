@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling ``track5_acceleration_limit.py``
 module. This package preserves the public import path while rejecting malformed
-scalar controls, invalid normalized rows, and duplicate fixed-grid keys, and while
-keeping zero-blend runs diagnostic-only.
+scalar controls, missing sequence identifiers, invalid normalized rows, and duplicate
+fixed-grid keys, and while keeping zero-blend runs diagnostic-only.
 """
 
 from __future__ import annotations
@@ -135,6 +135,37 @@ def _validated_controls(
     }
 
 
+def _validate_sequence_ids(submission: object) -> None:
+    """Reject genuinely missing or blank sequence identifiers before string conversion."""
+
+    rows = pd.DataFrame(submission).copy()
+    sequence_columns = [
+        column
+        for column in rows.columns
+        if str(column).strip().casefold() == "sequence_id"
+    ]
+    if not sequence_columns:
+        sequence_columns = [
+            column
+            for column in rows.columns
+            if str(column).strip().casefold() == "sequence"
+        ]
+    if len(sequence_columns) != 1:
+        return
+
+    values = rows[sequence_columns[0]]
+    if isinstance(values, pd.DataFrame):
+        return
+    text = values.astype("string").str.strip()
+    invalid = text.isna() | text.eq("").fillna(False)
+    if invalid.any():
+        row_positions = np.flatnonzero(invalid.to_numpy(dtype=bool)).tolist()[:5]
+        raise ValueError(
+            "submission contains missing or blank sequence_id values: "
+            f"sequence_id rows {row_positions}"
+        )
+
+
 def _validate_numeric_rows(submission: object) -> None:
     """Reject normalized rows the legacy normalizer would silently drop."""
 
@@ -215,6 +246,7 @@ def repair_track5_acceleration_kinks(
         iterations=iterations,
         repair_blend=repair_blend,
     )
+    _validate_sequence_ids(submission)
     _validate_numeric_rows(submission)
     normalized = _IMPL._normalized_submission(submission)
     _validate_unique_fixed_grid_keys(normalized)
@@ -249,6 +281,7 @@ def _repair_sequence(group, **kwargs):
 _IMPL.repair_track5_acceleration_kinks = repair_track5_acceleration_kinks
 _IMPL._repair_sequence = _repair_sequence
 
+
 globals().update(
     {
         name: getattr(_IMPL, name)
@@ -260,6 +293,7 @@ globals()["_NUMERIC_COLUMNS"] = _NUMERIC_COLUMNS
 globals()["_finite_scalar"] = _finite_scalar
 globals()["_positive_integer"] = _positive_integer
 globals()["_validated_controls"] = _validated_controls
+globals()["_validate_sequence_ids"] = _validate_sequence_ids
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
 globals()["_validate_unique_fixed_grid_keys"] = _validate_unique_fixed_grid_keys
 globals()["repair_track5_acceleration_kinks"] = repair_track5_acceleration_kinks
