@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling
 ``candidate_reservoir_diversity.py`` module. This package preserves the public
-import path while aligning summary diagnostics with the configured branch
-column and retaining replace-on-use ``--top-k`` CLI semantics.
+import path while validating integer controls, aligning summary diagnostics with
+the configured branch column, and retaining replace-on-use ``--top-k`` CLI
+semantics.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ import sys
 from typing import Any
 
 import pandas as pd
+
+from raft_uav.numeric import optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_reservoir_diversity.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -31,6 +34,60 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _DEFAULT_TOP_K_VALUES = (1, 3, 5, 10, 20)
+_ORIGINAL_DIVERSITY_CAP_RESERVOIR = _IMPL.diversity_cap_reservoir
+
+
+def _integer_control(
+    value: object,
+    *,
+    field: str,
+    minimum: int | None = None,
+) -> int:
+    """Return an exact integer control, optionally enforcing a lower bound."""
+
+    normalized = optional_int(value)
+    if normalized is None or (minimum is not None and normalized < minimum):
+        requirement = (
+            "an integer"
+            if minimum is None
+            else f"an integer greater than or equal to {minimum}"
+        )
+        raise ValueError(f"{field} must be {requirement}")
+    return normalized
+
+
+def diversity_cap_reservoir(
+    reservoir: pd.DataFrame,
+    *,
+    max_candidates_per_frame: int = 40,
+    min_per_source: int = 1,
+    min_per_branch: int = 1,
+    score_column: str = "candidate_reservoir_score",
+    fallback_score_column: str = "confidence",
+    branch_column: str = "candidate_branch",
+) -> pd.DataFrame:
+    """Apply the diversity cap after validating exact integer controls."""
+
+    return _ORIGINAL_DIVERSITY_CAP_RESERVOIR(
+        reservoir,
+        max_candidates_per_frame=_integer_control(
+            max_candidates_per_frame,
+            field="max_candidates_per_frame",
+        ),
+        min_per_source=_integer_control(
+            min_per_source,
+            field="min_per_source",
+            minimum=0,
+        ),
+        min_per_branch=_integer_control(
+            min_per_branch,
+            field="min_per_branch",
+            minimum=0,
+        ),
+        score_column=score_column,
+        fallback_score_column=fallback_score_column,
+        branch_column=branch_column,
+    )
 
 
 def _frame_label_coverage(
@@ -144,7 +201,7 @@ def write_diversity_cap_outputs(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the diversity cap with aligned branch summaries and top-k parsing."""
+    """Run the diversity cap with validated controls and aligned branch summaries."""
 
     parser = argparse.ArgumentParser(
         prog="raft-uav-mmuad-diversity-cap-reservoir",
@@ -169,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
 
     top_k_values = _DEFAULT_TOP_K_VALUES if args.top_k is None else tuple(args.top_k)
     rows = pd.read_csv(args.input_csv)
-    capped = _IMPL.diversity_cap_reservoir(
+    capped = diversity_cap_reservoir(
         rows,
         max_candidates_per_frame=args.max_candidates_per_frame,
         min_per_source=args.min_per_source,
@@ -212,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+_IMPL.diversity_cap_reservoir = diversity_cap_reservoir
 _IMPL._frame_label_coverage = _frame_label_coverage
 _IMPL.diversity_cap_summary = diversity_cap_summary
 _IMPL.write_diversity_cap_outputs = write_diversity_cap_outputs
@@ -224,6 +282,9 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_ORIGINAL_DIVERSITY_CAP_RESERVOIR"] = _ORIGINAL_DIVERSITY_CAP_RESERVOIR
+globals()["_integer_control"] = _integer_control
+globals()["diversity_cap_reservoir"] = diversity_cap_reservoir
 globals()["_frame_label_coverage"] = _frame_label_coverage
 globals()["diversity_cap_summary"] = diversity_cap_summary
 globals()["write_diversity_cap_outputs"] = write_diversity_cap_outputs
