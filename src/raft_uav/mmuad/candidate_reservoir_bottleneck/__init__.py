@@ -1,9 +1,9 @@
-"""Index-safe compatibility layer for reservoir bottleneck summaries.
+"""Index-safe compatibility layer for reservoir bottleneck diagnostics.
 
 The maintained implementation lives in the sibling
 ``candidate_reservoir_bottleneck.py`` module.  This package preserves the
-public import path while selecting summary records by row position instead of
-assuming that caller-provided DataFrame index labels are integers.
+public import path while keeping annotations and summary row selection
+positional, independent of caller-provided DataFrame index labels.
 """
 
 from __future__ import annotations
@@ -28,6 +28,35 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 
+def annotate_gap_table(
+    gap_rows: pd.DataFrame,
+    *,
+    config: Any = None,
+) -> pd.DataFrame:
+    """Append annotations by row position rather than index-label alignment."""
+
+    rows = pd.DataFrame(gap_rows).copy()
+    if rows.empty:
+        return rows.assign(
+            primary_bottleneck=pd.Series(dtype=str),
+            recommended_action=pd.Series(dtype=str),
+        )
+    annotations = pd.DataFrame.from_records(
+        [
+            _IMPL.classify_gap_row(record, config=config)
+            for record in rows.to_dict(orient="records")
+        ]
+    )
+    add_columns = [
+        column
+        for column in annotations.columns
+        if column not in rows.columns or column in _IMPL._OVERWRITE_COLUMNS
+    ]
+    for column in add_columns:
+        rows[column] = annotations[column].to_numpy()
+    return rows
+
+
 def _max_record(rows: pd.DataFrame, column: str) -> dict[str, Any]:
     """Return the maximum-valued row without coercing its index label."""
 
@@ -40,6 +69,7 @@ def _max_record(rows: pd.DataFrame, column: str) -> dict[str, Any]:
     return _IMPL._jsonable(rows.iloc[position].to_dict())
 
 
+_IMPL.annotate_gap_table = annotate_gap_table
 _IMPL._max_record = _max_record
 
 for _name, _value in vars(_IMPL).items():
@@ -53,6 +83,7 @@ for _name, _value in vars(_IMPL).items():
     }:
         globals()[_name] = _value
 
+globals()["annotate_gap_table"] = annotate_gap_table
 globals()["_max_record"] = _max_record
 
 __doc__ = _IMPL.__doc__
