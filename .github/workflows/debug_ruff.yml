@@ -1,0 +1,32 @@
+name: Debug Ruff
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ruff-output:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: python -m pip install -e ".[dev]"
+      - name: Capture Ruff output
+        shell: bash
+        run: |
+          set +e
+          ruff check src scripts tests > ruff-output.txt 2>&1
+          echo "exit_status=$?" >> ruff-output.txt
+          exit 0
+      - name: Upload Ruff output
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-output
+          path: ruff-output.txt
+          if-no-files-found: error
