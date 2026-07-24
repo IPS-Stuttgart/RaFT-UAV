@@ -86,27 +86,39 @@ def _normalize_probability_input(class_probabilities: pd.DataFrame) -> pd.DataFr
         for column in rows.columns
         if str(column).casefold() in alias_keys
     ]
-    if len(sequence_columns) > 1:
-        rendered = ", ".join(repr(column) for column in sequence_columns)
-        raise ValueError(
-            "class probability table has ambiguous sequence identifier columns: "
-            f"{rendered}"
-        )
     if not sequence_columns:
         return rows
 
-    sequence_column = sequence_columns[0]
-    raw = rows[sequence_column]
-    text = raw.where(raw.notna(), "").astype(str).str.strip()
-    missing = text.eq("") | text.str.casefold().isin(_MISSING_SEQUENCE_TEXT)
-    if missing.any():
-        row_index = int(np.flatnonzero(missing.to_numpy(dtype=bool))[0])
-        bad_value = raw.iloc[row_index]
-        raise ValueError(
-            "class probability sequence identifiers must be non-empty; "
-            f"got {bad_value!r} at row {row_index}"
-        )
-    rows[sequence_column] = text
+    preferred_column = (
+        "sequence_id" if "sequence_id" in sequence_columns else sequence_columns[0]
+    )
+    normalized_ids: dict[str, pd.Series] = {}
+    for column in sequence_columns:
+        raw = rows[column]
+        text = raw.where(raw.notna(), "").astype(str).str.strip()
+        missing = text.eq("") | text.str.casefold().isin(_MISSING_SEQUENCE_TEXT)
+        if missing.any():
+            row_index = int(np.flatnonzero(missing.to_numpy(dtype=bool))[0])
+            bad_value = raw.iloc[row_index]
+            raise ValueError(
+                "class probability sequence identifiers must be non-empty; "
+                f"got {bad_value!r} in {column!r} at row {row_index}"
+            )
+        normalized_ids[column] = text
+
+    preferred_ids = normalized_ids[preferred_column]
+    for column, text in normalized_ids.items():
+        if column == preferred_column:
+            continue
+        conflicts = text.ne(preferred_ids)
+        if conflicts.any():
+            row_index = int(np.flatnonzero(conflicts.to_numpy(dtype=bool))[0])
+            raise ValueError(
+                "class probability table has conflicting sequence identifier "
+                f"columns {preferred_column!r} and {column!r} at row {row_index}"
+            )
+    for column, text in normalized_ids.items():
+        rows[column] = text
     return rows
 
 
