@@ -61,6 +61,27 @@ def _finite_nonnegative_scalar(value: object, *, name: str) -> float:
     return number
 
 
+def _finite_positive_scalar(value: object, *, name: str) -> float:
+    """Return a finite positive real scalar without accepting pseudo-numbers."""
+
+    message = f"{name} must be a finite positive real scalar"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(message)
+    try:
+        array = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if array.ndim != 0 or np.iscomplexobj(array):
+        raise ValueError(message)
+    try:
+        number = float(array.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(number) or number <= 0.0:
+        raise ValueError(message)
+    return number
+
+
 def _nonnegative_integer(value: object, *, name: str) -> int:
     """Return an exact non-negative scalar integer."""
 
@@ -82,6 +103,51 @@ def _nonnegative_integer(value: object, *, name: str) -> int:
     return int(number)
 
 
+def _positive_integer(value: object, *, name: str) -> int:
+    """Return an exact positive scalar integer."""
+
+    message = f"{name} must be a positive integer"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(message)
+    try:
+        array = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if array.ndim != 0 or np.iscomplexobj(array):
+        raise ValueError(message)
+    try:
+        number = float(array.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(number) or number <= 0.0 or not number.is_integer():
+        raise ValueError(message)
+    return int(number)
+
+
+def _validated_smoothing_config(
+    config: LeastSquaresSmoothingConfig | None,
+) -> LeastSquaresSmoothingConfig:
+    """Normalize public solver controls before any data-dependent early return."""
+
+    cfg = LeastSquaresSmoothingConfig() if config is None else config
+    return LeastSquaresSmoothingConfig(
+        motion_std_mps2=_finite_nonnegative_scalar(
+            cfg.motion_std_mps2,
+            name="motion_std_mps2",
+        ),
+        measurement_std_m=_finite_positive_scalar(
+            cfg.measurement_std_m,
+            name="measurement_std_m",
+        ),
+        rf_std_m=_finite_positive_scalar(
+            cfg.rf_std_m,
+            name="rf_std_m",
+        ),
+        robust_loss=cfg.robust_loss,
+        max_nfev=_positive_integer(cfg.max_nfev, name="max_nfev"),
+    )
+
+
 def smooth_position_trajectory(
     measurements: pd.DataFrame,
     *,
@@ -97,7 +163,7 @@ def smooth_position_trajectory(
     motion model.
     """
 
-    cfg = config or LeastSquaresSmoothingConfig()
+    cfg = _validated_smoothing_config(config)
     if measurements.empty:
         return FactorGraphSmoothingResult(pd.DataFrame(columns=["time_s", *PositionColumns]), 0.0, 0.0, 0, True, "empty")
     _require_columns(measurements, {"time_s", *PositionColumns}, "measurements")
@@ -145,7 +211,7 @@ def smooth_position_trajectory(
         residual,
         x0.reshape(-1),
         loss=cfg.robust_loss,
-        max_nfev=int(cfg.max_nfev),
+        max_nfev=cfg.max_nfev,
     )
     estimates = pd.DataFrame(result.x.reshape(-1, 3), columns=list(PositionColumns))
     estimates.insert(0, "time_s", times)
