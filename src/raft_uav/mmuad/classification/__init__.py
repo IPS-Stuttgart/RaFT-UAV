@@ -48,14 +48,40 @@ def _normalize_min_confidence(value: Any) -> float:
     return numeric
 
 
+def _validate_candidate_confidences(candidates: Any) -> None:
+    """Reject non-finite or non-real confidence weights when they are present."""
+
+    rows = candidates.rows
+    if "confidence" not in rows.columns:
+        return
+
+    values = rows["confidence"]
+    invalid_type = values.map(
+        lambda value: isinstance(
+            value,
+            (bool, np.bool_, complex, np.complexfloating),
+        )
+    )
+    message = "candidate confidence values must be finite real numbers when present"
+    if bool(invalid_type.any()):
+        raise ValueError(message)
+
+    numeric = _IMPL.pd.to_numeric(values, errors="coerce")
+    present = numeric.notna().to_numpy()
+    finite = np.isfinite(numeric.to_numpy(dtype=float))
+    if bool((present & ~finite).any()):
+        raise ValueError(message)
+
+
 def infer_sequence_class_map_from_candidates(
     candidates,
     *,
     min_confidence: float = 0.0,
     default_class: str = "unknown",
 ):
-    """Infer classes after validating the candidate-confidence threshold."""
+    """Infer classes after validating candidate confidence inputs."""
 
+    _validate_candidate_confidences(candidates)
     return _ORIGINAL_INFER_SEQUENCE_CLASS_MAP(
         candidates,
         min_confidence=_normalize_min_confidence(min_confidence),
@@ -74,6 +100,7 @@ globals().update(
 )
 globals()["infer_sequence_class_map_from_candidates"] = infer_sequence_class_map_from_candidates
 globals()["_normalize_min_confidence"] = _normalize_min_confidence
+globals()["_validate_candidate_confidences"] = _validate_candidate_confidences
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
