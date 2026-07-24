@@ -8,6 +8,8 @@ from collections.abc import Sequence
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_float as _optional_float
+
 
 @dataclass(frozen=True)
 class LinearRadarBiasModel:
@@ -38,12 +40,8 @@ def enu_covariance_from_range_az_el(
     """
 
     r = _validate_finite_nonnegative(range_m, "range_m")
-    az = float(azimuth_rad)
-    el = float(elevation_rad)
-    if not np.isfinite(az):
-        raise ValueError("azimuth_rad must be finite")
-    if not np.isfinite(el):
-        raise ValueError("elevation_rad must be finite")
+    az = _validate_finite_real(azimuth_rad, "azimuth_rad")
+    el = _validate_finite_real(elevation_rad, "elevation_rad")
     range_std = _validate_finite_nonnegative(range_std_m, "range_std_m")
     azimuth_std = _validate_finite_nonnegative(azimuth_std_rad, "azimuth_std_rad")
     elevation_std = _validate_finite_nonnegative(elevation_std_rad, "elevation_std_rad")
@@ -82,18 +80,24 @@ def covariance_columns_from_native_radar(
     missing = required - set(frame.columns)
     if missing:
         raise ValueError(f"radar frame is missing native-coordinate columns: {sorted(missing)}")
+    range_std = _validate_finite_nonnegative(range_std_m, "range_std_m")
+    az_std = np.deg2rad(
+        _validate_finite_nonnegative(azimuth_std_deg, "azimuth_std_deg")
+    )
+    el_std = np.deg2rad(
+        _validate_finite_nonnegative(elevation_std_deg, "elevation_std_deg")
+    )
+    min_std = _validate_finite_nonnegative(min_std_m, "min_std_m")
     out = frame.copy()
-    az_std = np.deg2rad(float(azimuth_std_deg))
-    el_std = np.deg2rad(float(elevation_std_deg))
     covariances = [
         enu_covariance_from_range_az_el(
             row.range_m,
             row.azimuth_rad,
             row.elevation_rad,
-            range_std_m=range_std_m,
+            range_std_m=range_std,
             azimuth_std_rad=az_std,
             elevation_std_rad=el_std,
-            min_std_m=min_std_m,
+            min_std_m=min_std,
         )
         for row in out.itertuples(index=False)
     ]
@@ -123,17 +127,23 @@ def fit_linear_radar_bias_model(
 ) -> LinearRadarBiasModel:
     """Fit a LOFO-safe linear radar spatial-bias model."""
 
-    x = radar_geometry_feature_matrix(examples, tuple(feature_names))
+    feature_names = tuple(feature_names)
+    if not feature_names:
+        raise ValueError("feature_names must contain at least one feature")
+    ridge = _validate_finite_nonnegative(ridge_lambda, "ridge_lambda")
+    x = radar_geometry_feature_matrix(examples, feature_names)
     y = examples.loc[:, list(residual_columns)].to_numpy(dtype=float)
     keep = np.isfinite(x).all(axis=1) & np.isfinite(y).all(axis=1)
     if not np.any(keep):
         raise ValueError("no finite bias-training examples")
     x = x[keep]
     y = y[keep]
-    penalty = float(ridge_lambda) * np.eye(x.shape[1])
-    penalty[0, 0] = 0.0
+    penalty = ridge * np.eye(x.shape[1])
+    for index, name in enumerate(feature_names):
+        if name == "intercept":
+            penalty[index, index] = 0.0
     coefficients = np.linalg.solve(x.T @ x + penalty, x.T @ y)
-    return LinearRadarBiasModel(tuple(feature_names), coefficients)
+    return LinearRadarBiasModel(feature_names, coefficients)
 
 
 def apply_linear_radar_bias_model(frame: pd.DataFrame, model: LinearRadarBiasModel) -> pd.DataFrame:
@@ -198,11 +208,15 @@ def _numeric(frame: pd.DataFrame, column: str) -> np.ndarray:
     return pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
 
 
-def _validate_finite_nonnegative(value: float, name: str) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be finite and non-negative") from exc
-    if not np.isfinite(number) or number < 0.0:
+def _validate_finite_real(value: object, name: str) -> float:
+    number = _optional_float(value)
+    if number is None:
+        raise ValueError(f"{name} must be finite")
+    return number
+
+
+def _validate_finite_nonnegative(value: object, name: str) -> float:
+    number = _optional_float(value)
+    if number is None or number < 0.0:
         raise ValueError(f"{name} must be finite and non-negative")
     return number
