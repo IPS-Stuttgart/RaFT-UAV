@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
+import re
 from typing import Iterable
 
 import numpy as np
@@ -26,6 +27,29 @@ _MODULE_METADATA_NAMES = {
     "__package__",
     "__spec__",
 }
+_FILENAME_NUMBER_TOKEN_RE = re.compile(
+    r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+)
+
+
+def infer_time_s_from_filename(path: Path) -> float:
+    """Infer a frame timestamp from the last numeric filename token.
+
+    A sign attached directly to an alphanumeric filename prefix is treated as
+    a separator, so ``frame-001.25`` maps to ``1.25``.  Leading signs and signs
+    following non-alphanumeric separators remain part of the timestamp.
+    """
+
+    stem = Path(path).stem
+    tokens: list[str] = []
+    for match in _FILENAME_NUMBER_TOKEN_RE.finditer(stem):
+        token = match.group(0)
+        if token[0] in "+-" and match.start() > 0 and stem[match.start() - 1].isalnum():
+            token = token[1:]
+        tokens.append(token)
+    if not tokens:
+        return 0.0
+    return float(tokens[-1])
 
 
 def _normalized_text_csv_columns(columns: Iterable[object]) -> list[str]:
@@ -250,6 +274,7 @@ def _read_numpy_point_cloud(path: Path) -> pd.DataFrame:
     return _impl._normalize_point_frame(frame, path=path)
 
 
+_impl.infer_time_s_from_filename = infer_time_s_from_filename
 _impl.load_candidate_csv = load_candidate_csv
 _impl.load_truth_csv = load_truth_csv
 _impl.load_point_cloud_csv_as_points = load_point_cloud_csv_as_points
