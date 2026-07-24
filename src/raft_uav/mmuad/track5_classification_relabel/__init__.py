@@ -34,10 +34,22 @@ _ORIGINAL_NORMALIZE_FRAME = _IMPL._normalize_frame
 _ORIGINAL_SEQUENCE_PREDICTION_LABELS = _IMPL._sequence_prediction_labels
 
 
+def _reject_boolean_class_labels(values: Any, *, name: str) -> None:
+    """Reject Boolean pseudo-numbers before pandas can coerce them to class IDs."""
+
+    raw = pd.Series(values, copy=False)
+    boolean = raw.map(lambda value: isinstance(value, (bool, np.bool_)))
+    if boolean.any():
+        raise ValueError(f"{name} contains Boolean class labels")
+
+
 def _validate_class_series(values: pd.Series, *, name: str) -> None:
     """Require finite labels exactly equal to official integer class IDs."""
 
-    numeric = pd.to_numeric(pd.Series(values), errors="coerce")
+    raw = pd.Series(values, copy=False)
+    _reject_boolean_class_labels(raw, name=name)
+
+    numeric = pd.to_numeric(raw, errors="coerce")
     numeric_values = numeric.to_numpy(float)
     if numeric.isna().any() or not np.isfinite(numeric_values).all():
         raise ValueError(f"{name} contains non-finite class labels")
@@ -102,13 +114,18 @@ def _normalize_frame(frame: pd.DataFrame, *, name: str) -> pd.DataFrame:
     rows = pd.DataFrame(frame).copy()
     if "Sequence" in rows.columns:
         _validate_sequence_ids(rows["Sequence"], name=name)
+    if "Classification" in rows.columns:
+        _reject_boolean_class_labels(
+            rows["Classification"],
+            name=f"{name}.Classification",
+        )
     normalized = _ORIGINAL_NORMALIZE_FRAME(rows, name=name)
     _validate_unique_row_keys(normalized, name=name)
     return normalized
 
 
 def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFrame:
-    """Validate aliased prediction sequence identifiers before aggregation."""
+    """Validate aliased prediction identifiers before aggregation and coercion."""
 
     rows = pd.DataFrame(sequence_predictions).copy()
     sequence_column = _IMPL._first_present(rows, _IMPL.SEQUENCE_ALIASES)
@@ -117,9 +134,16 @@ def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFr
             rows[sequence_column],
             name="sequence prediction table",
         )
+    class_column = _IMPL._first_present(rows, _IMPL.PREDICTED_CLASS_ALIASES)
+    if class_column is not None:
+        _reject_boolean_class_labels(
+            rows[class_column],
+            name=f"sequence prediction table.{class_column}",
+        )
     return _ORIGINAL_SEQUENCE_PREDICTION_LABELS(rows)
 
 
+_IMPL._reject_boolean_class_labels = _reject_boolean_class_labels
 _IMPL._validate_class_series = _validate_class_series
 _IMPL._validate_sequence_ids = _validate_sequence_ids
 _IMPL._validate_unique_row_keys = _validate_unique_row_keys
@@ -133,6 +157,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_reject_boolean_class_labels"] = _reject_boolean_class_labels
 globals()["_validate_class_series"] = _validate_class_series
 globals()["_validate_sequence_ids"] = _validate_sequence_ids
 globals()["_validate_unique_row_keys"] = _validate_unique_row_keys
