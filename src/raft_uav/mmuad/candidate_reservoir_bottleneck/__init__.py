@@ -65,7 +65,8 @@ def _max_record(rows: pd.DataFrame, column: str) -> dict[str, Any]:
     values = pd.to_numeric(rows[column], errors="coerce")
     if values.dropna().empty:
         return {}
-    position = int(np.nanargmax(values.to_numpy(dtype=float)))
+    numeric_values = values.to_numpy(dtype=float, na_value=np.nan)
+    position = int(np.nanargmax(numeric_values))
     return _IMPL._jsonable(rows.iloc[position].to_dict())
 
 
