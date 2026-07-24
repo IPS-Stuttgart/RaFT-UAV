@@ -55,6 +55,8 @@ def _finite_scalar(value: Any, *, field: str) -> float:
     """Return a finite non-Boolean scalar with a field-specific error."""
 
     message = f"{field} must be a finite scalar"
+    if np.ma.is_masked(value):
+        raise ValueError(message)
     if isinstance(value, (bool, np.bool_)):
         raise ValueError(message)
     if isinstance(value, np.ndarray):
