@@ -1,8 +1,9 @@
-"""Compatibility guard for unambiguous NIS reliability gate columns.
+"""Compatibility guards for NIS reliability report inputs and output columns.
 
 The maintained implementation lives in the sibling ``nis_reliability.py`` module.
-This package preserves the public import path while rejecting gate-probability
-sets that would overwrite one another after column-suffix formatting.
+This package preserves the public import path while rejecting measurement dimensions
+that are not exact positive integers and gate-probability sets that would overwrite
+one another after column-suffix formatting.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from pathlib import Path
 import sys
 from typing import Sequence
 
+import numpy as np
 import pandas as pd
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "nis_reliability.py"
@@ -26,6 +28,40 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_NIS_RELIABILITY_SUMMARY = _IMPL.nis_reliability_summary
+_ORIGINAL_NORMALIZED_NIS_FRAME = _IMPL._normalized_nis_frame
+
+
+def _exact_measurement_dimension_mask(values: pd.Series) -> np.ndarray:
+    """Return rows whose dimensions are non-Boolean exact positive integers."""
+
+    raw = pd.Series(values)
+    boolean = raw.map(lambda value: isinstance(value, (bool, np.bool_))).to_numpy(dtype=bool)
+    numeric = pd.to_numeric(raw, errors="coerce").to_numpy(dtype=float)
+    return (
+        np.isfinite(numeric)
+        & (numeric > 0.0)
+        & (numeric == np.rint(numeric))
+        & ~boolean
+    )
+
+
+def _normalized_nis_frame(
+    frame: pd.DataFrame,
+    *,
+    group_columns: Sequence[str],
+    accepted_only: bool,
+) -> pd.DataFrame:
+    """Normalize NIS rows without rounding near-integer dimensions."""
+
+    normalized = _ORIGINAL_NORMALIZED_NIS_FRAME(
+        frame,
+        group_columns=group_columns,
+        accepted_only=accepted_only,
+    )
+    if normalized.empty:
+        return normalized
+    valid_dimension = _exact_measurement_dimension_mask(normalized["measurement_dim"])
+    return normalized.loc[valid_dimension].copy()
 
 
 def _validated_gate_probabilities(values: Sequence[float]) -> tuple[float, ...]:
@@ -61,7 +97,7 @@ def nis_reliability_summary(
     gate_probabilities: Sequence[float] = _IMPL.DEFAULT_GATE_PROBABILITIES,
     accepted_only: bool = False,
 ) -> pd.DataFrame:
-    """Return NIS statistics only when every requested gate has unique columns."""
+    """Return NIS statistics only when dimensions and gate columns are unambiguous."""
 
     validated_probabilities = _validated_gate_probabilities(gate_probabilities)
     return _ORIGINAL_NIS_RELIABILITY_SUMMARY(
@@ -72,6 +108,7 @@ def nis_reliability_summary(
     )
 
 
+_IMPL._normalized_nis_frame = _normalized_nis_frame
 _IMPL.nis_reliability_summary = nis_reliability_summary
 
 globals().update(
@@ -81,6 +118,8 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_exact_measurement_dimension_mask"] = _exact_measurement_dimension_mask
+globals()["_normalized_nis_frame"] = _normalized_nis_frame
 globals()["_validated_gate_probabilities"] = _validated_gate_probabilities
 globals()["nis_reliability_summary"] = nis_reliability_summary
 
