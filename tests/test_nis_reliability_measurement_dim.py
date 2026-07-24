@@ -19,6 +19,34 @@ def test_nis_reliability_drops_noninteger_measurement_dim() -> None:
     assert summary.empty
 
 
+def test_nis_reliability_drops_near_integer_measurement_dims() -> None:
+    frame = pd.DataFrame(
+        {
+            "source": ["radar", "radar"],
+            "measurement_dim": [3.00001, 2.99999],
+            "nis": [1.0, 2.0],
+        }
+    )
+
+    summary = nis_reliability_summary(frame)
+
+    assert summary.empty
+
+
+def test_nis_reliability_drops_boolean_measurement_dim() -> None:
+    frame = pd.DataFrame(
+        {
+            "source": ["radar"],
+            "measurement_dim": [True],
+            "nis": [1.0],
+        }
+    )
+
+    summary = nis_reliability_summary(frame)
+
+    assert summary.empty
+
+
 def test_nis_reliability_keeps_integer_like_measurement_dim() -> None:
     frame = pd.DataFrame(
         {
