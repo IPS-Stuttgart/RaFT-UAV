@@ -135,9 +135,15 @@ def _normalize_local_result_sequence_ids(frame: pd.DataFrame) -> pd.DataFrame:
 def validate_mmaud_results_frame(frame: pd.DataFrame) -> pd.DataFrame:
     """Validate results after normalizing local sequence identifiers."""
 
-    return _ORIGINAL_VALIDATE_MMAUD_RESULTS_FRAME(
-        _normalize_local_result_sequence_ids(frame)
-    )
+    normalized = _normalize_local_result_sequence_ids(frame)
+    validated = _ORIGINAL_VALIDATE_MMAUD_RESULTS_FRAME(normalized)
+    dropped_count = len(normalized) - len(validated)
+    if dropped_count:
+        raise ValueError(
+            "mmaud_results contains "
+            f"{dropped_count} non-finite or non-numeric trajectory row(s)"
+        )
+    return validated
 
 
 def _validated_max_time_delta_s(value: Any) -> float:
