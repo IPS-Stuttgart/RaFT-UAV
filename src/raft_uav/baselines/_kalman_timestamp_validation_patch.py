@@ -1,4 +1,4 @@
-"""Runtime validation for asynchronous Kalman tracker scalar inputs."""
+"""Runtime validation for asynchronous Kalman and IMM tracker scalar inputs."""
 
 from __future__ import annotations
 
@@ -9,9 +9,12 @@ import numpy as np
 
 
 _kalman = import_module("raft_uav.baselines.kalman")
+_imm = import_module("raft_uav.baselines.imm")
 _ORIGINAL_TRACKING_MEASUREMENT_POST_INIT = _kalman.TrackingMeasurement.__post_init__
 _ORIGINAL_TRACKER_INIT = _kalman.AsyncConstantVelocityKalmanTracker.__init__
 _ORIGINAL_PREDICT_TO = _kalman.AsyncConstantVelocityKalmanTracker.predict_to
+_ORIGINAL_IMM_TRACKER_INIT = _imm.AsyncInteractingMultipleModelTracker.__init__
+_ORIGINAL_IMM_PREDICT_TO = _imm.AsyncInteractingMultipleModelTracker.predict_to
 
 
 def _finite_timestamp_seconds(value: Any, *, field_name: str) -> float:
@@ -110,12 +113,46 @@ def _predict_to(self: Any, time_s: float) -> None:
     _ORIGINAL_PREDICT_TO(self, validated_time_s)
 
 
-def apply_kalman_timestamp_validation_patch() -> None:
-    """Install scalar validation at public asynchronous Kalman boundaries."""
+def _imm_tracker_init(
+    self: Any,
+    initial_position: np.ndarray,
+    initial_time_s: float,
+    initial_position_std_m: float = 50.0,
+    initial_velocity_std_mps: float = 15.0,
+    acceleration_std_mps2: float = 4.0,
+    modes: Any = None,
+    initial_mode_probabilities: Any = None,
+    mode_switch_time_constant_s: float = 20.0,
+) -> None:
+    validated_time_s = _finite_timestamp_seconds(initial_time_s, field_name="initial_time_s")
+    _ORIGINAL_IMM_TRACKER_INIT(
+        self,
+        initial_position,
+        validated_time_s,
+        initial_position_std_m=initial_position_std_m,
+        initial_velocity_std_mps=initial_velocity_std_mps,
+        acceleration_std_mps2=acceleration_std_mps2,
+        modes=modes,
+        initial_mode_probabilities=initial_mode_probabilities,
+        mode_switch_time_constant_s=mode_switch_time_constant_s,
+    )
 
-    if getattr(_kalman, "_timestamp_validation_patch_applied", False):
-        return
-    _kalman.TrackingMeasurement.__post_init__ = _tracking_measurement_post_init
-    _kalman.AsyncConstantVelocityKalmanTracker.__init__ = _tracker_init
-    _kalman.AsyncConstantVelocityKalmanTracker.predict_to = _predict_to
-    _kalman._timestamp_validation_patch_applied = True
+
+def _imm_predict_to(self: Any, time_s: float) -> None:
+    validated_time_s = _finite_timestamp_seconds(time_s, field_name="time_s")
+    _ORIGINAL_IMM_PREDICT_TO(self, validated_time_s)
+
+
+def apply_kalman_timestamp_validation_patch() -> None:
+    """Install scalar validation at public asynchronous tracker boundaries."""
+
+    if not getattr(_kalman, "_timestamp_validation_patch_applied", False):
+        _kalman.TrackingMeasurement.__post_init__ = _tracking_measurement_post_init
+        _kalman.AsyncConstantVelocityKalmanTracker.__init__ = _tracker_init
+        _kalman.AsyncConstantVelocityKalmanTracker.predict_to = _predict_to
+        _kalman._timestamp_validation_patch_applied = True
+
+    if not getattr(_imm, "_timestamp_validation_patch_applied", False):
+        _imm.AsyncInteractingMultipleModelTracker.__init__ = _imm_tracker_init
+        _imm.AsyncInteractingMultipleModelTracker.predict_to = _imm_predict_to
+        _imm._timestamp_validation_patch_applied = True
