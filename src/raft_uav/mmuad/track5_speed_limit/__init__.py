@@ -109,18 +109,37 @@ def _validate_numeric_rows(submission: object) -> None:
 
 
 def _validate_unique_fixed_grid_keys(submission: object) -> None:
-    """Reject duplicate normalized sequence/timestamp keys before projection."""
+    """Reject duplicate normalized or official sequence/timestamp keys."""
 
     rows = _IMPL._strip_csv_headers(pd.DataFrame(submission).copy())
     required = {"sequence_id", "time_s"}
-    if not required <= set(rows.columns):
-        return
-    normalized_keys = pd.DataFrame(
-        {
-            "sequence_id": rows["sequence_id"].astype(str),
-            "time_s": pd.to_numeric(rows["time_s"], errors="coerce"),
+    if required <= set(rows.columns):
+        normalized_keys = pd.DataFrame(
+            {
+                "sequence_id": rows["sequence_id"].astype(str),
+                "time_s": pd.to_numeric(rows["time_s"], errors="coerce"),
+            }
+        )
+    else:
+        lower_to_original = {
+            str(column).strip().casefold(): column for column in rows.columns
         }
-    )
+        official_required = {
+            "sequence",
+            "timestamp",
+            "position",
+            "classification",
+        }
+        if not official_required <= set(lower_to_original):
+            return
+        official = _IMPL.normalize_official_track5_results_frame(rows)
+        normalized_keys = pd.DataFrame(
+            {
+                "sequence_id": official["Sequence"].astype(str),
+                "time_s": pd.to_numeric(official["Timestamp"], errors="coerce"),
+            }
+        )
+
     duplicate_mask = normalized_keys.duplicated(
         subset=["sequence_id", "time_s"], keep=False
     )
