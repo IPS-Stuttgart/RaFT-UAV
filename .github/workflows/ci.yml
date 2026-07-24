@@ -35,6 +35,7 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
+          import base64
           from pathlib import Path
 
           source_path = Path('src/raft_uav/tracklet_viterbi_cli.py')
@@ -59,46 +60,10 @@ jobs:
               raise SystemExit('expected exactly one canonical range-gate helper')
           source_path.write_text(source.replace(old, new), encoding='utf-8')
 
-          Path('tests/test_tracklet_viterbi_cli_range_gate_env_validation.py').write_text('''from __future__ import annotations
-
-import pytest
-
-from raft_uav import tracklet_viterbi_cli
-
-
-@pytest.mark.parametrize("value", ["-1", "nan", "inf", "-inf"])
-def test_canonical_tracklet_cli_rejects_invalid_range_gate_env(
-    monkeypatch: pytest.MonkeyPatch,
-    value: str,
-) -> None:
-    monkeypatch.setenv("RAFT_UAV_TRACKLET_RANGE_GATE_M", value)
-
-    with pytest.raises(
-        ValueError,
-        match="RAFT_UAV_TRACKLET_RANGE_GATE_M must be finite and nonnegative",
-    ):
-        tracklet_viterbi_cli._tracklet_config_from_environment()
-
-
-def test_canonical_tracklet_cli_keeps_zero_as_disabled_range_gate(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("RAFT_UAV_TRACKLET_RANGE_GATE_M", "0")
-
-    config = tracklet_viterbi_cli._tracklet_config_from_environment()
-
-    assert config.range_gate_m is None
-
-
-def test_canonical_tracklet_cli_preserves_positive_range_gate_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("RAFT_UAV_TRACKLET_RANGE_GATE_M", "725.5")
-
-    config = tracklet_viterbi_cli._tracklet_config_from_environment()
-
-    assert config.range_gate_m == pytest.approx(725.5)
-''', encoding='utf-8')
+          test_b64 = 'ZnJvbSBfX2Z1dHVyZV9fIGltcG9ydCBhbm5vdGF0aW9ucwoKaW1wb3J0IHB5dGVzdAoKZnJvbSByYWZ0X3VhdiBpbXBvcnQgdHJhY2tsZXRfdml0ZXJiaV9jbGkKCgpAcHl0ZXN0Lm1hcmsucGFyYW1ldHJpemUoInZhbHVlIiwgWyItMSIsICJuYW4iLCAiaW5mIiwgIi1pbmYiXSkKZGVmIHRlc3RfY2Fub25pY2FsX3RyYWNrbGV0X2NsaV9yZWplY3RzX2ludmFsaWRfcmFuZ2VfZ2F0ZV9lbnYoCiAgICBtb25rZXlwYXRjaDogcHl0ZXN0Lk1vbmtleVBhdGNoLAogICAgdmFsdWU6IHN0ciwKKSAtPiBOb25lOgogICAgbW9ua2V5cGF0Y2guc2V0ZW52KCJSQUZUX1VBVl9UUkFDS0xFVF9SQU5HRV9HQVRFX00iLCB2YWx1ZSkKCiAgICB3aXRoIHB5dGVzdC5yYWlzZXMoCiAgICAgICAgVmFsdWVFcnJvciwKICAgICAgICBtYXRjaD0iUkFGVF9VQVZfVFJBQ0tMRVRfUkFOR0VfR0FURV9NIG11c3QgYmUgZmluaXRlIGFuZCBub25uZWdhdGl2ZSIsCiAgICApOgogICAgICAgIHRyYWNrbGV0X3ZpdGVyYmlfY2xpLl90cmFja2xldF9jb25maWdfZnJvbV9lbnZpcm9ubWVudCgpCgoKZGVmIHRlc3RfY2Fub25pY2FsX3RyYWNrbGV0X2NsaV9rZWVwc196ZXJvX2FzX2Rpc2FibGVkX3JhbmdlX2dhdGUoCiAgICBtb25rZXlwYXRjaDogcHl0ZXN0Lk1vbmtleVBhdGNoLAopIC0+IE5vbmU6CiAgICBtb25rZXlwYXRjaC5zZXRlbnYoIlJBRlRfVUFWX1RSQUNLTEVUX1JBTkdFX0dBVEVfTSIsICIwIikKCiAgICBjb25maWcgPSB0cmFja2xldF92aXRlcmJpX2NsaS5fdHJhY2tsZXRfY29uZmlnX2Zyb21fZW52aXJvbm1lbnQoKQoKICAgIGFzc2VydCBjb25maWcucmFuZ2VfZ2F0ZV9tIGlzIE5vbmUKCgpkZWYgdGVzdF9jYW5vbmljYWxfdHJhY2tsZXRfY2xpX3ByZXNlcnZlc19wb3NpdGl2ZV9yYW5nZV9nYXRlX2VudigKICAgIG1vbmtleXBhdGNoOiBweXRlc3QuTW9ua2V5UGF0Y2gsCikgLT4gTm9uZToKICAgIG1vbmtleXBhdGNoLnNldGVudigiUkFGVF9VQVZfVFJBQ0tMRVRfUkFOR0VfR0FURV9NIiwgIjcyNS41IikKCiAgICBjb25maWcgPSB0cmFja2xldF92aXRlcmJpX2NsaS5fdHJhY2tsZXRfY29uZmlnX2Zyb21fZW52aXJvbm1lbnQoKQoKICAgIGFzc2VydCBjb25maWcucmFuZ2VfZ2F0ZV9tID09IHB5dGVzdC5hcHByb3goNzI1LjUpCg=='
+          Path('tests/test_tracklet_viterbi_cli_range_gate_env_validation.py').write_bytes(
+              base64.b64decode(test_b64)
+          )
 
           for workflow in (
               Path('.github/workflows/agent-validate-range-gate.yml'),
