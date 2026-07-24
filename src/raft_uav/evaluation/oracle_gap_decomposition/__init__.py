@@ -3,8 +3,9 @@
 The maintained implementation lives in the sibling
 ``oracle_gap_decomposition.py`` module. This package preserves the public import
 path while keeping estimate columns, row order, and invalid-time rows intact
-when selected-radar context is attached, and while preventing non-finite frame
-times from matching arbitrary truth or estimate rows.
+when selected-radar context is attached, preventing non-finite frame times from
+matching arbitrary truth or estimate rows, and requiring exact integer radar
+track identifiers in diagnostic outputs.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from raft_uav.numeric import optional_float
+from raft_uav.numeric import optional_float, optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "oracle_gap_decomposition.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -159,10 +160,77 @@ def _merge_selected_context(
     return merged
 
 
+def selected_track_stability_metrics(
+    selected_radar: pd.DataFrame | None,
+) -> dict[str, object]:
+    """Return identity stability using only exact integer radar track IDs."""
+
+    if (
+        selected_radar is None
+        or selected_radar.empty
+        or "track_id" not in selected_radar.columns
+    ):
+        return {
+            "selected_radar_rows": 0,
+            "track_switch_count": 0,
+            "dominant_track_fraction": float("nan"),
+            "selected_track_entropy": float("nan"),
+        }
+    sort_columns = [
+        column
+        for column in ("time_s", "frame_index")
+        if column in selected_radar.columns
+    ]
+    ordered = selected_radar.sort_values(sort_columns) if sort_columns else selected_radar
+    track_ids = pd.Series(
+        [optional_int(value) for value in ordered["track_id"]],
+        index=ordered.index,
+        dtype="Int64",
+    ).dropna()
+    if track_ids.empty:
+        return {
+            "selected_radar_rows": int(len(ordered)),
+            "track_switch_count": 0,
+            "dominant_track_fraction": float("nan"),
+            "selected_track_entropy": float("nan"),
+        }
+    values = track_ids.to_numpy(dtype=int)
+    switches = int(np.count_nonzero(values[1:] != values[:-1])) if values.size > 1 else 0
+    counts = track_ids.value_counts()
+    probabilities = counts.to_numpy(dtype=float) / float(counts.sum())
+    entropy = float(
+        -np.sum(probabilities * np.log(np.clip(probabilities, 1e-300, 1.0)))
+    )
+    gaps = _IMPL._time_gaps_s(ordered)
+    return {
+        "selected_radar_rows": int(len(ordered)),
+        "finite_track_id_rows": int(values.size),
+        "unique_selected_track_ids": int(counts.size),
+        "track_switch_count": switches,
+        "track_switch_rate": _IMPL._safe_rate(switches, max(values.size - 1, 0)),
+        "dominant_track_id": int(counts.index[0]),
+        "dominant_track_fraction": float(counts.iloc[0] / counts.sum()),
+        "selected_track_entropy": entropy,
+        "selected_time_gap_p95_s": _IMPL._percentile_or_nan(gaps, 95),
+        "selected_time_gap_max_s": (
+            float(np.max(gaps)) if gaps.size else float("nan")
+        ),
+    }
+
+
+def _optional_track_id(value: object) -> object:
+    """Return an exact integer track ID or the established empty marker."""
+
+    track_id = optional_int(value)
+    return "" if track_id is None else track_id
+
+
 _IMPL.decompose_radar_oracle_gap = decompose_radar_oracle_gap
 _IMPL._nearest_position = _nearest_position
 _IMPL._nearest_estimate_error = _nearest_estimate_error
 _IMPL._merge_selected_context = _merge_selected_context
+_IMPL.selected_track_stability_metrics = selected_track_stability_metrics
+_IMPL._optional_track_id = _optional_track_id
 
 globals().update(
     {
@@ -175,6 +243,8 @@ globals()["decompose_radar_oracle_gap"] = decompose_radar_oracle_gap
 globals()["_nearest_position"] = _nearest_position
 globals()["_nearest_estimate_error"] = _nearest_estimate_error
 globals()["_merge_selected_context"] = _merge_selected_context
+globals()["selected_track_stability_metrics"] = selected_track_stability_metrics
+globals()["_optional_track_id"] = _optional_track_id
 
 __doc__ = _IMPL.__doc__
 __all__ = [
