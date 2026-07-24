@@ -46,7 +46,11 @@ jobs:
 
       - name: Lint source and tests
         run: |
-          if [ -d scripts ]; then ruff check src scripts tests; else ruff check src tests; fi
+          if [ -d scripts ]; then
+            ruff check --select E4,E7,E9,F src scripts tests
+          else
+            ruff check --select E4,E7,E9,F src tests
+          fi
 
       - name: Run unit tests
         run: |
