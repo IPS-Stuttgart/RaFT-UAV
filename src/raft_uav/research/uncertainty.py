@@ -69,12 +69,16 @@ def apply_group_conformal_radius(
     group_column: str = "phase",
     output_column: str = "conformal_radius_m",
 ) -> pd.DataFrame:
-    """Append a conformal radius selected by group label."""
+    """Append a conformal radius selected by group label.
+
+    Rows whose group was not calibrated receive ``NaN`` rather than borrowing an
+    arbitrary radius from another group.
+    """
 
     out = frame.copy()
-    default = next(iter(radii.values()), ConformalRadius(float("nan"), 0.1, 0)).radius_m
+    groups = out.get(group_column, pd.Series("", index=out.index, dtype=str))
     out[output_column] = [
-        radii.get(str(value), ConformalRadius(float(default), 0.1, 0)).radius_m
-        for value in out.get(group_column, pd.Series([""] * len(out)))
+        float(radius.radius_m) if (radius := radii.get(str(value))) is not None else float("nan")
+        for value in groups
     ]
     return out
