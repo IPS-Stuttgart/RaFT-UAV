@@ -34,6 +34,7 @@ def test_evaluator_rejects_mixed_invalid_trajectory_rows(
     invalid_value: object,
 ) -> None:
     rows = _result_rows()
+    rows[column] = rows[column].astype(object)
     rows.loc[1, column] = invalid_value
 
     with pytest.raises(
