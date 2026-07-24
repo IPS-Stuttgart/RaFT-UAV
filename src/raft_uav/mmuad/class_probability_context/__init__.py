@@ -1,9 +1,9 @@
-"""Compatibility wrapper requiring exact Track 5 predicted class IDs.
+"""Compatibility wrapper for strict in-memory class-probability inputs.
 
 The maintained implementation lives in the sibling
 ``class_probability_context.py`` module. This package preserves the public
-import path while preventing near-integer classifier labels from being rounded
-into valid official class IDs.
+import path while applying the same header and sequence-id normalization used
+by the shared CSV reader.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _LEGACY_PROBABILITY_ROWS = _IMPL._probability_rows
+_MISSING_SEQUENCE_TEXT = frozenset({"nan", "none", "<na>"})
 
 
 def _predicted_class_labels(values: pd.Series) -> pd.Series:
@@ -55,6 +56,72 @@ def _predicted_class_labels(values: pd.Series) -> pd.Series:
     return text
 
 
+def _normalize_probability_input(class_probabilities: pd.DataFrame) -> pd.DataFrame:
+    """Normalize in-memory probability tables like the shared CSV reader."""
+
+    rows = pd.DataFrame(class_probabilities).copy()
+    normalized_columns = [str(column).strip() for column in rows.columns]
+    columns_by_key: dict[str, list[str]] = {}
+    for column in normalized_columns:
+        columns_by_key.setdefault(column.casefold(), []).append(column)
+    collisions = [
+        columns
+        for columns in columns_by_key.values()
+        if len(columns) > 1
+    ]
+    if collisions:
+        rendered = "; ".join(
+            ", ".join(repr(column) for column in columns)
+            for columns in collisions
+        )
+        raise ValueError(
+            "class probability table has ambiguous columns after trimming "
+            f"whitespace and ignoring case: {rendered}"
+        )
+    rows.columns = normalized_columns
+
+    alias_keys = {str(alias).casefold() for alias in _IMPL.SEQUENCE_ALIASES}
+    sequence_columns = [
+        column
+        for column in rows.columns
+        if str(column).casefold() in alias_keys
+    ]
+    if not sequence_columns:
+        return rows
+
+    preferred_column = (
+        "sequence_id" if "sequence_id" in sequence_columns else sequence_columns[0]
+    )
+    normalized_ids: dict[str, pd.Series] = {}
+    for column in sequence_columns:
+        raw = rows[column]
+        text = raw.where(raw.notna(), "").astype(str).str.strip()
+        missing = text.eq("") | text.str.casefold().isin(_MISSING_SEQUENCE_TEXT)
+        if missing.any():
+            row_index = int(np.flatnonzero(missing.to_numpy(dtype=bool))[0])
+            bad_value = raw.iloc[row_index]
+            raise ValueError(
+                "class probability sequence identifiers must be non-empty; "
+                f"got {bad_value!r} in {column!r} at row {row_index}"
+            )
+        normalized_ids[column] = text
+
+    preferred_ids = normalized_ids[preferred_column]
+    for column, text in normalized_ids.items():
+        if column == preferred_column:
+            continue
+        conflicts = text.ne(preferred_ids)
+        if conflicts.any():
+            row_index = int(np.flatnonzero(conflicts.to_numpy(dtype=bool))[0])
+            raise ValueError(
+                "class probability table has conflicting sequence identifier "
+                f"columns {preferred_column!r} and {column!r} at row {row_index}"
+            )
+    for column, text in normalized_ids.items():
+        rows[column] = text
+    return rows
+
+
 def _sanitize_probability_inputs(class_probabilities: pd.DataFrame) -> pd.DataFrame:
     """Clean each probability entry before duplicate-sequence aggregation."""
 
@@ -70,9 +137,10 @@ def _sanitize_probability_inputs(class_probabilities: pd.DataFrame) -> pd.DataFr
 
 
 def _probability_rows(class_probabilities: pd.DataFrame) -> pd.DataFrame:
-    """Normalize probability rows after sanitizing each source row."""
+    """Normalize probability rows after sanitizing their public inputs."""
 
-    sanitized = _sanitize_probability_inputs(class_probabilities)
+    normalized = _normalize_probability_input(class_probabilities)
+    sanitized = _sanitize_probability_inputs(normalized)
     return _LEGACY_PROBABILITY_ROWS(sanitized)
 
 
@@ -87,6 +155,7 @@ globals().update(
     }
 )
 globals()["_predicted_class_labels"] = _predicted_class_labels
+globals()["_normalize_probability_input"] = _normalize_probability_input
 globals()["_sanitize_probability_inputs"] = _sanitize_probability_inputs
 globals()["_probability_rows"] = _probability_rows
 
