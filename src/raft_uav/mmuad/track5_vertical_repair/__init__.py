@@ -3,7 +3,8 @@
 The maintained implementation lives in the sibling ``track5_vertical_repair.py``
 module. This package preserves the public import path while rejecting malformed
 ``iterations`` values, invalid repair thresholds, Boolean or non-finite numeric
-rows, and duplicate fixed-grid keys instead of silently coercing or dropping them.
+rows, invalid fixed-grid identifiers, and duplicate fixed-grid keys instead of
+silently coercing or dropping them.
 """
 
 from __future__ import annotations
@@ -14,6 +15,11 @@ import sys
 
 import numpy as np
 import pandas as pd
+
+from raft_uav.mmuad.submission import (
+    parse_official_classification_cell,
+    parse_official_sequence_cell,
+)
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_vertical_repair.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -111,6 +117,43 @@ def _validate_numeric_rows(submission: object) -> None:
         )
 
 
+def _validate_identifier_rows(submission: object) -> None:
+    """Reject sequence and class identifiers invalid for official Track 5 rows."""
+
+    rows = pd.DataFrame(submission)
+    required = {"sequence_id", "Classification"}
+    if not required <= set(rows.columns):
+        return
+
+    invalid_sequences: list[int] = []
+    for position, value in enumerate(rows["sequence_id"]):
+        if isinstance(value, (bool, np.bool_)):
+            invalid_sequences.append(position)
+            continue
+        try:
+            parse_official_sequence_cell(value)
+        except (TypeError, ValueError, OverflowError):
+            invalid_sequences.append(position)
+
+    invalid_classifications: list[int] = []
+    for position, value in enumerate(rows["Classification"]):
+        try:
+            parse_official_classification_cell(value)
+        except (TypeError, ValueError, OverflowError):
+            invalid_classifications.append(position)
+
+    details: list[str] = []
+    if invalid_sequences:
+        details.append(f"sequence_id rows {invalid_sequences}")
+    if invalid_classifications:
+        details.append(f"Classification rows {invalid_classifications}")
+    if details:
+        raise ValueError(
+            "submission contains invalid fixed-grid identifiers: "
+            + "; ".join(details)
+        )
+
+
 def _validate_unique_fixed_grid_keys(submission: object) -> None:
     """Reject duplicate normalized sequence/timestamp keys before repair."""
 
@@ -181,6 +224,7 @@ def repair_track5_vertical_spikes(
             name="max_horizontal_speed_mps",
         )
     )
+    _validate_identifier_rows(submission)
     _validate_numeric_rows(submission)
     _validate_unique_fixed_grid_keys(submission)
     return _ORIGINAL_REPAIR(
@@ -207,6 +251,7 @@ globals()["_finite_real_scalar"] = _finite_real_scalar
 globals()["_positive_integer"] = _positive_integer
 globals()["_finite_nonnegative"] = _finite_nonnegative
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
+globals()["_validate_identifier_rows"] = _validate_identifier_rows
 globals()["_validate_unique_fixed_grid_keys"] = _validate_unique_fixed_grid_keys
 globals()["repair_track5_vertical_spikes"] = repair_track5_vertical_spikes
 
