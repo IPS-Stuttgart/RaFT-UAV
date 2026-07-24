@@ -125,7 +125,7 @@ def match_submission_to_truth(
     """
 
     max_time_delta_s = _validated_max_time_delta_s(max_time_delta_s)
-    if truth.empty or submission.empty:
+    if submission.empty:
         return pd.DataFrame()
     submission = submission.copy()
     if "sequence_id" not in submission.columns:
