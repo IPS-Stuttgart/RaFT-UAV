@@ -3,9 +3,9 @@
 The maintained implementation lives in the sibling ``mot.py`` module. This
 package preserves the public import path while ensuring that pooled MOT metrics
 scope object identities by sequence, count tolerance-matched frames once,
-validate matching thresholds, resolve exact association ties deterministically,
-enforce timestamp tolerance on every matched row pair, and use globally optimal
-frame matching for both tracking and evaluation.
+validate sequence metadata and matching thresholds, resolve exact association
+ties deterministically, enforce timestamp tolerance on every matched row pair,
+and use globally optimal frame matching for both tracking and evaluation.
 """
 
 from __future__ import annotations
@@ -62,6 +62,22 @@ def _scope_truth_track_ids(truth: pd.DataFrame | None) -> pd.DataFrame | None:
     )
     scoped.loc[present, "track_id"] = scoped_ids
     return scoped
+
+
+def _validate_sequence_metadata(
+    estimates: pd.DataFrame,
+    truth: pd.DataFrame | None,
+) -> None:
+    """Reject one-sided sequence metadata before pooled timestamp matching."""
+
+    if truth is None or estimates.empty or truth.empty:
+        return
+    estimates_has_sequence = "sequence_id" in estimates.columns
+    truth_has_sequence = "sequence_id" in truth.columns
+    if estimates_has_sequence != truth_has_sequence:
+        raise ValueError(
+            "estimates and truth must either both contain sequence_id or both omit it"
+        )
 
 
 def _metric_frame_pairs(
@@ -440,6 +456,7 @@ def compute_multi_object_metrics(
 ) -> dict[str, Any]:
     """Compute MOT metrics with sequence-scoped identities and unique frames."""
 
+    _validate_sequence_metadata(estimates, truth)
     return _ORIGINAL_COMPUTE_MULTI_OBJECT_METRICS(
         estimates,
         _scope_truth_track_ids(truth),
@@ -464,6 +481,7 @@ globals().update(
     }
 )
 globals()["_scope_truth_track_ids"] = _scope_truth_track_ids
+globals()["_validate_sequence_metadata"] = _validate_sequence_metadata
 globals()["_metric_frame_pairs"] = _metric_frame_pairs
 globals()["_metric_time_cluster_pairs"] = _metric_time_cluster_pairs
 globals()["_metric_rows_in_time_cluster"] = _metric_rows_in_time_cluster
