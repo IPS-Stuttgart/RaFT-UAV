@@ -44,6 +44,27 @@ def test_uncertainty_adapter_rejects_normalized_output_filename_collisions(
     assert not output_dir.exists()
 
 
+def test_uncertainty_adapter_rejects_case_insensitive_filename_collisions(
+    tmp_path: Path,
+) -> None:
+    upper_csv = tmp_path / "upper.csv"
+    lower_csv = tmp_path / "lower.csv"
+    _write_estimate(upper_csv, x_m=1.0)
+    _write_estimate(lower_csv, x_m=99.0)
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="case-insensitive filenames"):
+        normalize_uncertainty_estimate_inputs(
+            [
+                EstimateInput("Sensor", upper_csv, 1.0),
+                EstimateInput("sensor", lower_csv, 1.0),
+            ],
+            output_dir=output_dir,
+        )
+
+    assert not output_dir.exists()
+
+
 def test_uncertainty_adapter_rejects_colliding_cli_column_labels() -> None:
     with pytest.raises(
         ValueError,
