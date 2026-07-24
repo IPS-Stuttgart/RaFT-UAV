@@ -107,7 +107,7 @@ def _validated_timestamp_tolerance(value: Any) -> float:
 
     np = _IMPL._impl.np
     scalar = value
-    if isinstance(scalar, (bool, np.bool_)):
+    if isinstance(scalar, (bool, np.bool_)) or np.ma.is_masked(scalar):
         raise ValueError("timestamp_tolerance_s must be non-negative and finite")
     if isinstance(scalar, np.ndarray):
         if scalar.ndim != 0:
