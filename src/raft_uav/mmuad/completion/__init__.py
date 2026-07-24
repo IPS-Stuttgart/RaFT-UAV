@@ -1,8 +1,8 @@
 """Compatibility validation for MMUAD trajectory completion controls.
 
 The maintained implementation lives in the sibling ``completion.py`` module.
-This package preserves the public import path while rejecting Boolean, complex,
-masked, and non-scalar interpolation-gap values before completion starts.
+This package preserves the public import path while rejecting malformed scalar
+controls before completion or summary generation starts.
 """
 
 from __future__ import annotations
@@ -12,6 +12,8 @@ from pathlib import Path
 import sys
 
 import numpy as np
+
+from raft_uav.numeric import optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "completion.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -23,6 +25,8 @@ if _SPEC is None or _SPEC.loader is None:  # pragma: no cover
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+
+_ORIGINAL_COMPLETION_SUMMARY = _IMPL.completion_summary
 
 
 def _normalize_max_interpolation_gap_s(value: object) -> float:
@@ -46,7 +50,37 @@ def _normalize_max_interpolation_gap_s(value: object) -> float:
     return gap
 
 
+def _normalize_requested_count(value: object, *, completed_count: int) -> int:
+    """Return an exact count consistent with the completed result rows."""
+
+    requested = optional_int(value)
+    if requested is None or requested < 0:
+        raise ValueError("requested_count must be a non-negative integer")
+    if requested < completed_count:
+        raise ValueError(
+            f"requested_count ({requested}) cannot be smaller than "
+            f"completed_count ({completed_count})"
+        )
+    return requested
+
+
+def completion_summary(result, *, requested_count: object | None = None):
+    """Summarize completion after validating an explicit requested count."""
+
+    normalized_requested_count = None
+    if requested_count is not None:
+        normalized_requested_count = _normalize_requested_count(
+            requested_count,
+            completed_count=len(result.rows),
+        )
+    return _ORIGINAL_COMPLETION_SUMMARY(
+        result,
+        requested_count=normalized_requested_count,
+    )
+
+
 _IMPL._normalize_max_interpolation_gap_s = _normalize_max_interpolation_gap_s
+_IMPL.completion_summary = completion_summary
 
 globals().update(
     {
@@ -56,6 +90,8 @@ globals().update(
     }
 )
 globals()["_normalize_max_interpolation_gap_s"] = _normalize_max_interpolation_gap_s
+globals()["_normalize_requested_count"] = _normalize_requested_count
+globals()["completion_summary"] = completion_summary
 
 __doc__ = _IMPL.__doc__
 __all__ = [
