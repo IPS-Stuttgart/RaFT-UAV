@@ -2,9 +2,7 @@
 name: Diagnose Ruff PR 1601
 
 "on":
-  push:
-    branches:
-      - agent/normalize-empirical-sequence-ids
+  pull_request:
 
 permissions:
   contents: read
