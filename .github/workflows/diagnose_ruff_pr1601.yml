@@ -1,5 +1,5 @@
 ---
-name: Diagnose Ruff PR 1601
+name: Validate PR 1601 Fix
 
 "on":
   pull_request:
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  diagnose:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -25,20 +25,30 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Capture Ruff diagnostics
+      - name: Capture focused validation
         shell: bash
         run: |
           set +e
-          ruff check src scripts tests > ruff-output.txt 2>&1
-          status=$?
-          cat ruff-output.txt
-          printf '%s\n' "$status" > ruff-status.txt
+          ruff check \
+            src/raft_uav/calibration/empirical_covariance.py \
+            tests/test_empirical_covariance.py \
+            > focused-ruff-output.txt 2>&1
+          ruff_status=$?
+          pytest -q tests/test_empirical_covariance.py \
+            > focused-pytest-output.txt 2>&1
+          pytest_status=$?
+          cat focused-ruff-output.txt
+          cat focused-pytest-output.txt
+          printf '%s\n' "$ruff_status" > focused-ruff-status.txt
+          printf '%s\n' "$pytest_status" > focused-pytest-status.txt
           exit 0
 
-      - name: Upload Ruff diagnostics
+      - name: Upload focused validation
         uses: actions/upload-artifact@v4
         with:
-          name: ruff-pr1601-diagnostics
+          name: pr1601-focused-validation
           path: |
-            ruff-output.txt
-            ruff-status.txt
+            focused-ruff-output.txt
+            focused-ruff-status.txt
+            focused-pytest-output.txt
+            focused-pytest-status.txt
