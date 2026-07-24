@@ -615,7 +615,9 @@ def _env_optional_positive_float(name: str, default: float | None) -> float | No
     if value is None or value == "":
         return default
     parsed = float(value)
-    return None if parsed <= 0.0 else parsed
+    if not math.isfinite(parsed) or parsed < 0.0:
+        raise ValueError(f"{name} must be finite and nonnegative")
+    return None if parsed == 0.0 else parsed
 
 
 def _env_bool(name: str, default: bool) -> bool:
