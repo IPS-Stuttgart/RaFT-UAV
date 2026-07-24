@@ -114,7 +114,7 @@ def _radar_group_sort_key(values: _pd.Series) -> _pd.Series:
 
 
 def radar_frame_groups(radar: _pd.DataFrame) -> list[_pd.DataFrame]:
-    """Group every radar row while preserving each usable physical frame ID."""
+    """Group every radar row while preserving distinct physical frames."""
 
     if radar.empty:
         return []
@@ -132,22 +132,28 @@ def radar_frame_groups(radar: _pd.DataFrame) -> list[_pd.DataFrame]:
         na_position="last",
     ).reset_index(drop=True)
 
-    group_positions: dict[tuple[str, object], list[int]] = {}
+    group_positions: dict[tuple[object, ...], list[int]] = {}
     for position, row in ordered.iterrows():
         frame_index = (
             _optional_int(row["frame_index"])
             if "frame_index" in ordered.columns
             else None
         )
-        if frame_index is not None:
-            key: tuple[str, object] = ("frame_index", frame_index)
-        elif "time_s" in ordered.columns:
-            time_s = _optional_float(row["time_s"])
-            key = (
-                ("time_s", time_s)
-                if time_s is not None
-                else ("row", int(position))
+        time_s = (
+            _optional_float(row["time_s"])
+            if "time_s" in ordered.columns
+            else None
+        )
+        if frame_index is not None and time_s is not None:
+            key: tuple[object, ...] = (
+                "frame_index_time",
+                frame_index,
+                time_s,
             )
+        elif frame_index is not None:
+            key = ("frame_index", frame_index)
+        elif time_s is not None:
+            key = ("time_s", time_s)
         else:
             key = ("row", int(position))
         group_positions.setdefault(key, []).append(int(position))
