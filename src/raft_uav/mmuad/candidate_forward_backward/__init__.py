@@ -2,7 +2,8 @@
 
 The maintained implementation lives in the sibling ``candidate_forward_backward.py``
 module. This package keeps the public import path while hardening candidate identity,
-row-wise score fallback, and tied-rank handling without duplicating the implementation.
+row-wise score fallback, tied-rank handling, and invalid uncertainty fallback without
+duplicating the implementation.
 """
 
 from __future__ import annotations
@@ -62,6 +63,21 @@ def _candidate_score_with_row_fallback(rows: pd.DataFrame, config: Any) -> pd.Se
     return score.fillna(float(score.loc[finite].min())).astype(float)
 
 
+def _candidate_sigma_with_invalid_fallback(rows: pd.DataFrame, config: Any) -> pd.Series:
+    """Use the configured fallback for malformed candidate uncertainty values."""
+
+    if config.sigma_column not in rows.columns:
+        sigma = pd.Series(config.default_sigma_m, index=rows.index, dtype=float)
+    else:
+        raw_sigma = rows[config.sigma_column]
+        boolean = raw_sigma.map(lambda value: isinstance(value, (bool, np.bool_)))
+        sigma = pd.to_numeric(raw_sigma, errors="coerce").astype(float)
+        valid = np.isfinite(sigma.to_numpy(float)) & (sigma.to_numpy(float) > 0.0)
+        valid &= ~boolean.to_numpy(bool)
+        sigma = sigma.where(valid, float(config.default_sigma_m))
+    return sigma.clip(config.sigma_min_m, config.sigma_max_m).astype(float)
+
+
 def _descending_average_ranks(values: np.ndarray) -> np.ndarray:
     """Return permutation-invariant descending ranks with average ranks for ties."""
 
@@ -82,6 +98,7 @@ def _descending_average_ranks(values: np.ndarray) -> np.ndarray:
 
 _IMPL._transition_log_likelihood = _transition_log_likelihood_with_canonical_track_ids
 _IMPL._candidate_score = _candidate_score_with_row_fallback
+_IMPL._candidate_sigma = _candidate_sigma_with_invalid_fallback
 _IMPL._descending_ranks = _descending_average_ranks
 
 globals().update(

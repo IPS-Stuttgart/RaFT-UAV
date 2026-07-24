@@ -5,7 +5,8 @@ The maintained implementation lives in the sibling
 import path while preserving opaque sequence identifiers in optional mixture
 initialization files, applying score fallbacks row by row, canonicalizing
 numeric tracker identifiers before track-continuation scoring, treating tied
-rank scores symmetrically, and rejecting non-finite inference controls.
+rank scores symmetrically, rejecting non-finite inference controls, and using
+the configured fallback for malformed candidate uncertainties.
 """
 
 from __future__ import annotations
@@ -65,6 +66,21 @@ def _candidate_score_with_rowwise_fallback(rows: pd.DataFrame, config: Any) -> p
     finite = resolved.dropna()
     fill_value = float(finite.min()) if not finite.empty else 1.0
     return resolved.fillna(fill_value).astype(float)
+
+
+def _candidate_sigma_with_invalid_fallback(rows: pd.DataFrame, config: Any) -> pd.Series:
+    """Use the configured fallback for malformed candidate uncertainty values."""
+
+    if config.sigma_column not in rows.columns:
+        sigma = pd.Series(config.default_sigma_m, index=rows.index, dtype=float)
+    else:
+        raw_sigma = rows[config.sigma_column]
+        boolean = raw_sigma.map(lambda value: isinstance(value, (bool, np.bool_)))
+        sigma = pd.to_numeric(raw_sigma, errors="coerce").astype(float)
+        valid = np.isfinite(sigma.to_numpy(float)) & (sigma.to_numpy(float) > 0.0)
+        valid &= ~boolean.to_numpy(bool)
+        sigma = sigma.where(valid, float(config.default_sigma_m))
+    return sigma.clip(config.sigma_min_m, config.sigma_max_m).astype(float)
 
 
 def _normalize_scores_with_average_ties(values: np.ndarray, mode: str) -> np.ndarray:
@@ -153,6 +169,7 @@ def _transition_log_likelihood_with_canonical_track_ids(
 
 _IMPL.pd = _PandasCsvProxy(pd)
 _IMPL._candidate_score = _candidate_score_with_rowwise_fallback
+_IMPL._candidate_sigma = _candidate_sigma_with_invalid_fallback
 _IMPL._normalize_scores = _normalize_scores_with_average_ties
 _IMPL._descending_ranks = _descending_average_ranks
 _IMPL._validate_config = _validate_config_with_finite_controls
