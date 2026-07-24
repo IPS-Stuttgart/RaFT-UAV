@@ -64,6 +64,15 @@ def _coerce_valid_latitude(frame: pd.DataFrame, *, column: str) -> None:
     frame[column] = latitude.where(latitude.between(-90.0, 90.0))
 
 
+def _coerce_valid_longitude(frame: pd.DataFrame, *, column: str) -> None:
+    """Coerce one longitude column and mask rows outside the WGS84 interval."""
+
+    if column not in frame.columns:
+        return
+    longitude = pd.to_numeric(frame[column], errors="coerce").astype(float)
+    frame[column] = longitude.where(longitude.between(-180.0, 180.0))
+
+
 def _read_physical_rf_columns(path: Path) -> list[str]:
     """Read the unmangled RF CSV header before pandas deduplicates names."""
 
@@ -123,6 +132,7 @@ def normalize_truth(
                 normalized[column], errors="coerce"
             ).astype(float)
     _coerce_valid_latitude(normalized, column="latitude")
+    _coerce_valid_longitude(normalized, column="longitude")
     return _original_normalize_truth(
         normalized,
         projector,
@@ -137,7 +147,7 @@ def normalize_rf(
     default_std_m: float = 75.0,
     clock_offset_s: float = _IMPL.DEFAULT_RF_CLOCK_OFFSET_S,
 ) -> pd.DataFrame:
-    """Normalize RF rows after validating spread and masking invalid latitudes.
+    """Normalize RF rows after validating spread and masking invalid coordinates.
 
     ``default_std_m`` is used whenever CEP is absent, non-finite, or non-positive.
     Rejecting malformed fallback values here prevents invalid rows from silently
@@ -149,9 +159,10 @@ def normalize_rf(
         field="default_std_m",
     )
     normalized = rf
-    if "Latitude" in rf.columns:
+    if "Latitude" in rf.columns or "Longitude" in rf.columns:
         normalized = rf.copy()
         _coerce_valid_latitude(normalized, column="Latitude")
+        _coerce_valid_longitude(normalized, column="Longitude")
     return _original_normalize_rf(
         normalized,
         projector,
@@ -167,12 +178,13 @@ def normalize_radar(
     truth_origin_time: pd.Timestamp,
     clock_offset_s: float = _IMPL.DEFAULT_RADAR_CLOCK_OFFSET_S,
 ) -> pd.DataFrame:
-    """Normalize radar rows after masking latitudes outside the WGS84 interval."""
+    """Normalize radar rows after masking coordinates outside WGS84 intervals."""
 
     normalized = radar
-    if "latitude" in radar.columns:
+    if "latitude" in radar.columns or "longitude" in radar.columns:
         normalized = radar.copy()
         _coerce_valid_latitude(normalized, column="latitude")
+        _coerce_valid_longitude(normalized, column="longitude")
     return _original_normalize_radar(
         normalized,
         projector,
@@ -269,6 +281,7 @@ globals()["_original_normalize_radar"] = _original_normalize_radar
 globals()["_original_read_rf_csv"] = _original_read_rf_csv
 globals()["_positive_finite_real_scalar"] = _positive_finite_real_scalar
 globals()["_coerce_valid_latitude"] = _coerce_valid_latitude
+globals()["_coerce_valid_longitude"] = _coerce_valid_longitude
 globals()["_read_physical_rf_columns"] = _read_physical_rf_columns
 globals()["_validate_unambiguous_rf_columns"] = _validate_unambiguous_rf_columns
 globals()["read_rf_csv"] = read_rf_csv
