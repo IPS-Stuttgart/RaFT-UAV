@@ -110,6 +110,50 @@ def _install_lts_duplicate_key_validation_guard() -> None:
     setattr(_cli, installed_attr, True)
 
 
+def _install_lts_optimal_iou_matching_guard() -> None:
+    try:
+        import numpy as np
+        from scipy.optimize import linear_sum_assignment
+
+        from raft_uav.multi_uav_lts import cli as _cli
+    except Exception:
+        return
+
+    installed_attr = "_raft_uav_optimal_iou_matching_guard_installed"
+    if getattr(_cli, installed_attr, False):
+        return
+
+    def _match_rows_by_iou(truth, predictions, *, iou_threshold):
+        """Maximize valid match count first, then total IoU."""
+
+        if not truth or not predictions:
+            return []
+        iou = np.asarray(
+            [
+                [_cli._box_iou(gt_row, pred_row) for pred_row in predictions]
+                for gt_row in truth
+            ],
+            dtype=float,
+        )
+        valid = iou >= float(iou_threshold)
+        if not np.any(valid):
+            return []
+
+        cardinality_bonus = float(min(iou.shape) + 1)
+        benefit = np.where(valid, cardinality_bonus + iou, 0.0)
+        gt_indices, pred_indices = linear_sum_assignment(benefit, maximize=True)
+        matches = [
+            (int(gt_index), int(pred_index), float(iou[gt_index, pred_index]))
+            for gt_index, pred_index in zip(gt_indices, pred_indices, strict=True)
+            if valid[gt_index, pred_index]
+        ]
+        matches.sort(key=lambda match: (match[0], match[1]))
+        return matches
+
+    _cli._match_rows_by_iou = _match_rows_by_iou
+    setattr(_cli, installed_attr, True)
+
+
 def _count_invalid_class_visibility_rows(text: str, *, parse_int_like) -> int:
     count = 0
     for raw in text.splitlines():
@@ -167,3 +211,4 @@ def _count_duplicate_frame_object_rows(text: str, *, parse_int_like) -> int:
 _install_zero_frame_coverage_guard()
 _install_lts_submission_domain_guard()
 _install_lts_duplicate_key_validation_guard()
+_install_lts_optimal_iou_matching_guard()
