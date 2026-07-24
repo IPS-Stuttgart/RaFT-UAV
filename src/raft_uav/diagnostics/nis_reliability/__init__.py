@@ -51,16 +51,26 @@ def _normalized_nis_frame(
     group_columns: Sequence[str],
     accepted_only: bool,
 ) -> pd.DataFrame:
-    """Normalize NIS rows without rounding near-integer dimensions."""
+    """Normalize NIS rows without rounding near-integer or Boolean dimensions."""
+
+    prepared = frame
+    validity_column: object | None = None
+    if "measurement_dim" in frame.columns:
+        prepared = frame.copy()
+        validity_column = object()
+        prepared[validity_column] = _exact_measurement_dimension_mask(
+            frame["measurement_dim"]
+        )
 
     normalized = _ORIGINAL_NORMALIZED_NIS_FRAME(
-        frame,
+        prepared,
         group_columns=group_columns,
         accepted_only=accepted_only,
     )
-    if normalized.empty:
-        return normalized
-    valid_dimension = _exact_measurement_dimension_mask(normalized["measurement_dim"])
+    if validity_column is None:
+        valid_dimension = _exact_measurement_dimension_mask(normalized["measurement_dim"])
+    else:
+        valid_dimension = normalized.pop(validity_column).to_numpy(dtype=bool)
     return normalized.loc[valid_dimension].copy()
 
 
