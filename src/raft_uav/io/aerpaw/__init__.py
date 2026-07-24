@@ -140,6 +140,65 @@ def normalize_truth(
     )
 
 
+def _unused_column_name(frame: pd.DataFrame, base: str) -> str:
+    """Return a private column name that does not collide with input data."""
+
+    name = base
+    while name in frame.columns:
+        name = f"_{name}"
+    return name
+
+
+def _normalize_zero_axis_rf_rows(
+    rf: pd.DataFrame,
+    projector: Any,
+    truth_origin_time: pd.Timestamp,
+    *,
+    default_std_m: float,
+    clock_offset_s: float,
+) -> pd.DataFrame:
+    """Normalize RF rows lying on exactly one zero-valued coordinate axis."""
+
+    out = rf.copy()
+    out["timestamp_raw"] = out["Time"].astype(str)
+    out["timestamp"] = pd.to_datetime(out["Time"], errors="coerce") + _IMPL.timedelta(
+        seconds=clock_offset_s
+    )
+    out["time_s"] = (out["timestamp"] - truth_origin_time).dt.total_seconds()
+
+    for column in ("Latitude", "Longitude", "Elevation", "CEP"):
+        if column in out.columns:
+            out[column] = pd.to_numeric(out[column], errors="coerce")
+
+    valid = (
+        out["timestamp"].notna()
+        & np.isfinite(out["Latitude"])
+        & np.isfinite(out["Longitude"])
+        & ~((out["Latitude"] == 0.0) & (out["Longitude"] == 0.0))
+    )
+    out = out.loc[valid].copy()
+    if out.empty:
+        out[["east_m", "north_m", "up_m", "std_m"]] = np.empty((0, 4))
+        return out
+
+    enu = projector.transform_many(
+        out["Latitude"].to_numpy(),
+        out["Longitude"].to_numpy(),
+        np.full(len(out), projector.origin_altitude_m),
+    )
+    out[["east_m", "north_m", "up_m"]] = enu
+
+    cep = (
+        pd.to_numeric(out["CEP"], errors="coerce")
+        if "CEP" in out.columns
+        else np.nan
+    )
+    std = np.asarray(cep, dtype=float)
+    std = np.where(np.isfinite(std) & (std > 0.0), std, default_std_m)
+    out["std_m"] = std
+    return out
+
+
 def normalize_rf(
     rf: pd.DataFrame,
     projector: Any,
@@ -147,11 +206,11 @@ def normalize_rf(
     default_std_m: float = 75.0,
     clock_offset_s: float = _IMPL.DEFAULT_RF_CLOCK_OFFSET_S,
 ) -> pd.DataFrame:
-    """Normalize RF rows after validating spread and masking invalid coordinates.
+    """Normalize RF rows while retaining valid equator/prime-meridian positions.
 
-    ``default_std_m`` is used whenever CEP is absent, non-finite, or non-positive.
-    Rejecting malformed fallback values here prevents invalid rows from silently
-    acquiring non-finite or singular measurement covariances downstream.
+    A coordinate pair of ``(0, 0)`` remains treated as the sensor's missing-value
+    sentinel. A zero on only one axis is a valid WGS84 coordinate and must not be
+    discarded.
     """
 
     validated_default_std_m = _positive_finite_real_scalar(
@@ -163,13 +222,61 @@ def normalize_rf(
         normalized = rf.copy()
         _coerce_valid_latitude(normalized, column="Latitude")
         _coerce_valid_longitude(normalized, column="Longitude")
-    return _original_normalize_rf(
-        normalized,
+
+    if "Latitude" not in normalized.columns or "Longitude" not in normalized.columns:
+        return _original_normalize_rf(
+            normalized,
+            projector,
+            truth_origin_time,
+            default_std_m=validated_default_std_m,
+            clock_offset_s=clock_offset_s,
+        )
+
+    latitude = pd.to_numeric(normalized["Latitude"], errors="coerce")
+    longitude = pd.to_numeric(normalized["Longitude"], errors="coerce")
+    finite = np.isfinite(latitude) & np.isfinite(longitude)
+    zero_axis = finite & ((latitude == 0.0) ^ (longitude == 0.0))
+    if not bool(zero_axis.any()):
+        return _original_normalize_rf(
+            normalized,
+            projector,
+            truth_origin_time,
+            default_std_m=validated_default_std_m,
+            clock_offset_s=clock_offset_s,
+        )
+
+    order_column = _unused_column_name(normalized, "__raft_uav_rf_input_order")
+    normalized = normalized.copy()
+    normalized[order_column] = np.arange(len(normalized), dtype=int)
+    ordinary = normalized.loc[~zero_axis].copy()
+    zero_axis_rows = normalized.loc[zero_axis].copy()
+
+    ordinary_result = _original_normalize_rf(
+        ordinary,
         projector,
         truth_origin_time,
         default_std_m=validated_default_std_m,
         clock_offset_s=clock_offset_s,
     )
+    zero_axis_result = _normalize_zero_axis_rf_rows(
+        zero_axis_rows,
+        projector,
+        truth_origin_time,
+        default_std_m=validated_default_std_m,
+        clock_offset_s=clock_offset_s,
+    )
+    result = pd.concat(
+        [ordinary_result, zero_axis_result],
+        ignore_index=True,
+        sort=False,
+    )
+    if result.empty:
+        return result.drop(columns=[order_column], errors="ignore")
+    result = result.sort_values(
+        ["time_s", order_column],
+        kind="mergesort",
+    ).reset_index(drop=True)
+    return result.drop(columns=[order_column], errors="ignore")
 
 
 def normalize_radar(
@@ -197,12 +304,7 @@ def _track_data_from_payload(
     payload: dict[str, Any],
     params: dict[str, Any],
 ) -> Any:
-    """Return the first list-valued Fortem track-data representation.
-
-    Some JSON-RPC logs include a null or malformed top-level ``trackData``
-    placeholder while storing the actual list in ``params.trackData``. A valid
-    top-level list keeps precedence; otherwise a valid nested list is used.
-    """
+    """Return the first list-valued Fortem track-data representation."""
 
     top_level = payload.get("trackData")
     if isinstance(top_level, list):
@@ -254,7 +356,12 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
                 if not isinstance(track, dict):
                     continue
                 records.append(
-                    _IMPL._flatten_track(current_frame_index, track_index, track, params)
+                    _IMPL._flatten_track(
+                        current_frame_index,
+                        track_index,
+                        track,
+                        params,
+                    )
                 )
     if saw_non_object_payload and not records:
         raise ValueError("radar JSON must contain a JSON object")
@@ -284,6 +391,8 @@ globals()["_coerce_valid_latitude"] = _coerce_valid_latitude
 globals()["_coerce_valid_longitude"] = _coerce_valid_longitude
 globals()["_read_physical_rf_columns"] = _read_physical_rf_columns
 globals()["_validate_unambiguous_rf_columns"] = _validate_unambiguous_rf_columns
+globals()["_unused_column_name"] = _unused_column_name
+globals()["_normalize_zero_axis_rf_rows"] = _normalize_zero_axis_rf_rows
 globals()["read_rf_csv"] = read_rf_csv
 globals()["normalize_truth"] = normalize_truth
 globals()["normalize_rf"] = normalize_rf
