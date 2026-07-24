@@ -30,21 +30,26 @@ _MISSING_SEQUENCE_KEYS = frozenset({"nan", "none", "<na>", "nat"})
 
 
 def _finite_scalar(value: object, field: str) -> float:
+    error = f"{field} must be a finite number"
+    if np.ma.is_masked(value):
+        raise ValueError(error)
     scalar = value
     if isinstance(value, np.ndarray):
         if value.ndim != 0:
-            raise ValueError(f"{field} must be a finite number")
+            raise ValueError(error)
         scalar = value.item()
+        if np.ma.is_masked(scalar):
+            raise ValueError(error)
     if isinstance(scalar, (bool, np.bool_)):
-        raise ValueError(f"{field} must be a finite number")
+        raise ValueError(error)
     if isinstance(scalar, (complex, np.complexfloating)):
-        raise ValueError(f"{field} must be a finite number")
+        raise ValueError(error)
     try:
         number = float(scalar)
     except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{field} must be a finite number") from exc
+        raise ValueError(error) from exc
     if not np.isfinite(number):
-        raise ValueError(f"{field} must be a finite number")
+        raise ValueError(error)
     return number
 
 
