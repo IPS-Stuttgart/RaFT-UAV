@@ -6,7 +6,8 @@ the existing 1 ns equality tolerance are accepted at either interpolation
 endpoint, regardless of whether a maximum time-delta gate is configured. The
 same endpoint rule is applied to both truth-grid metrics and paper-table
 interpolation at estimate timestamps. Non-finite and masked nearest-time queries
-are rejected, masked reference timestamps are ignored, and masked time-gate
+are rejected, masked reference timestamps are ignored, masked trajectory and
+interpolation timestamps are treated as unavailable, and masked time-gate
 controls are rejected instead of being silently unwrapped.
 """
 
@@ -32,6 +33,7 @@ _SPEC.loader.exec_module(_IMPL)
 _ENDPOINT_ATOL_S = 1.0e-9
 _ORIGINAL_NEAREST_TIME_INDICES = _IMPL.nearest_time_indices
 _ORIGINAL_VALIDATE_MAX_TIME_DELTA_S = _IMPL._validate_max_time_delta_s
+_ORIGINAL_PREPARE_TIME_POSITION_SAMPLES = _IMPL._prepare_time_position_samples
 _ORIGINAL_INTERPOLATE_POSITIONS_AT_TIMES = _IMPL.interpolate_positions_at_times
 
 
@@ -41,6 +43,23 @@ def _validate_max_time_delta_s_without_masked(value: object) -> float | None:
     if value is not None and np.ma.is_masked(value):
         raise ValueError("max_time_delta_s must be a finite, non-negative scalar")
     return _ORIGINAL_VALIDATE_MAX_TIME_DELTA_S(value)
+
+
+def _prepare_time_position_samples_without_masked_times(
+    times_s: np.ndarray,
+    positions_m: np.ndarray,
+    *,
+    dimensions: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Treat masked timestamps as unavailable trajectory samples."""
+
+    masked_times = np.ma.asarray(times_s, dtype=float).reshape(-1)
+    times = np.asarray(masked_times.filled(np.nan), dtype=float)
+    return _ORIGINAL_PREPARE_TIME_POSITION_SAMPLES(
+        times,
+        positions_m,
+        dimensions=dimensions,
+    )
 
 
 def _nearest_time_indices_with_finite_queries(
@@ -123,10 +142,12 @@ def _interpolate_positions_at_times_with_symmetric_tolerance(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Accept tolerance-equivalent queries at either trajectory endpoint."""
 
+    query_masked = np.ma.asarray(query_times_s, dtype=float).reshape(-1)
+    query = np.asarray(query_masked.filled(np.nan), dtype=float)
     interpolated, valid = _ORIGINAL_INTERPOLATE_POSITIONS_AT_TIMES(
         reference_times_s,
         reference_positions_m,
-        query_times_s,
+        query,
         max_time_delta_s=max_time_delta_s,
     )
 
@@ -142,7 +163,6 @@ def _interpolate_positions_at_times_with_symmetric_tolerance(
     if reference_times.size == 0:
         return interpolated, valid
 
-    query = np.asarray(query_times_s, dtype=float).reshape(-1)
     endpoint_equivalent = np.isfinite(query) & (
         np.isclose(
             query,
@@ -161,6 +181,9 @@ def _interpolate_positions_at_times_with_symmetric_tolerance(
 
 
 _IMPL._validate_max_time_delta_s = _validate_max_time_delta_s_without_masked
+_IMPL._prepare_time_position_samples = (
+    _prepare_time_position_samples_without_masked_times
+)
 _IMPL.nearest_time_indices = _nearest_time_indices_with_finite_queries
 _IMPL._truth_grid_with_estimate_support = _truth_grid_with_symmetric_tolerance
 _IMPL.interpolate_positions_at_times = (
