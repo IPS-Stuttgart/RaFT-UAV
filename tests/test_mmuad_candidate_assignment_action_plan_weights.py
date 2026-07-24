@@ -29,6 +29,8 @@ WEIGHT_FIELDS = (
         True,
         np.bool_(False),
         np.array([1.0]),
+        np.ma.masked,
+        np.ma.array(1.0, mask=True),
         "not-a-weight",
     ],
 )
