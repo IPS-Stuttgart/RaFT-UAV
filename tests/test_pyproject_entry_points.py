@@ -24,3 +24,12 @@ def test_track5_acceleration_limit_has_console_script() -> None:
         scripts["raft-uav-mmuad-track5-acceleration-limit"]
         == "raft_uav.mmuad.track5_acceleration_limit:main"
     )
+
+
+def test_track5_estimate_sequence_gate_fit_has_console_script() -> None:
+    scripts = _project_scripts()
+
+    assert (
+        scripts["raft-uav-mmuad-track5-estimate-sequence-gate-fit"]
+        == "raft_uav.mmuad.track5_estimate_sequence_gate_fit:main"
+    )
