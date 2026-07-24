@@ -71,7 +71,14 @@ def catprob_candidate_pool(candidates, threshold):
 
 
 def highest_catprob_candidate(candidates):
-    return _original_highest_catprob_candidate(_finite_position_candidates(candidates))
+    candidates = _finite_position_candidates(candidates)
+    if candidates.empty:
+        return None
+    if "cat_prob_uav" not in candidates.columns:
+        return candidates.iloc[0].copy()
+    scores = _pd.to_numeric(candidates["cat_prob_uav"], errors="coerce").fillna(-_np.inf)
+    best_position = int(_np.argmax(scores.to_numpy(dtype=float)))
+    return candidates.iloc[best_position].copy()
 
 
 def nearest_candidate_to_truth(candidates, truth_position):
