@@ -1,9 +1,10 @@
-"""Compatibility fixes for MMUAD trajectory-completion flag parsing.
+"""Compatibility fixes for MMUAD trajectory-completion parsing and grid inference.
 
 The maintained implementation lives in the sibling ``trajectory_completion.py``
 module. This package preserves the public import path while parsing serialized
 ``selected_path_update`` values explicitly instead of relying on string
-truthiness.
+truthiness, and while avoiding floating-point undercounting when inferring
+regular timestamps inside short gaps.
 """
 
 from __future__ import annotations
@@ -96,10 +97,57 @@ def _selected_measurements(source: pd.DataFrame) -> pd.DataFrame:
     return _ORIGINAL_SELECTED_MEASUREMENTS(_normalized_selected_path_updates(source))
 
 
+def _target_times(
+    group: pd.DataFrame,
+    truth_rows: pd.DataFrame | None,
+    *,
+    config: Any,
+) -> np.ndarray:
+    """Build target times without floor-based floating-point undercounting."""
+
+    original = _IMPL._unique_times(group)
+    targets = {float(value) for value in original}
+    if (
+        config.include_truth_timestamps
+        and truth_rows is not None
+        and not truth_rows.empty
+    ):
+        for timestamp in pd.to_numeric(
+            truth_rows["time_s"],
+            errors="coerce",
+        ).to_numpy(float):
+            if np.isfinite(timestamp) and _IMPL._time_supported_by_short_gap(
+                timestamp,
+                original,
+                config.max_gap_s,
+            ):
+                targets.add(float(timestamp))
+    elif config.infer_missing_grid:
+        step = _IMPL._typical_step_s(original)
+        if np.isfinite(step) and step > 0.0:
+            for left, right in zip(original[:-1], original[1:], strict=False):
+                gap_s = float(right - left)
+                if (
+                    gap_s <= max(float(config.max_gap_s), step)
+                    and gap_s > 1.5 * step
+                ):
+                    index = 1
+                    previous = float(left)
+                    while True:
+                        value = float(left + index * step)
+                        if value <= previous or value >= right - 1.0e-9:
+                            break
+                        targets.add(value)
+                        previous = value
+                        index += 1
+    return np.asarray(sorted(targets), dtype=float)
+
+
 _IMPL._parse_selected_path_update = _parse_selected_path_update
 _IMPL._normalized_selected_path_updates = _normalized_selected_path_updates
 _IMPL._estimate_rows = _estimate_rows
 _IMPL._selected_measurements = _selected_measurements
+_IMPL._target_times = _target_times
 
 globals().update(
     {
@@ -112,6 +160,7 @@ globals()["_parse_selected_path_update"] = _parse_selected_path_update
 globals()["_normalized_selected_path_updates"] = _normalized_selected_path_updates
 globals()["_estimate_rows"] = _estimate_rows
 globals()["_selected_measurements"] = _selected_measurements
+globals()["_target_times"] = _target_times
 
 __doc__ = _IMPL.__doc__
 __all__ = [
