@@ -41,6 +41,16 @@ class RigidTransform:
             raise ValueError("rotation must contain finite values")
         if not np.isfinite(translation).all():
             raise ValueError("translation_m must contain finite values")
+        if not np.allclose(
+            rotation.T @ rotation,
+            np.eye(3),
+            rtol=0.0,
+            atol=1.0e-6,
+        ):
+            raise ValueError("rotation must be orthonormal")
+        determinant = float(np.linalg.det(rotation))
+        if not np.isclose(determinant, 1.0, rtol=0.0, atol=1.0e-6):
+            raise ValueError("rotation must be right-handed with determinant +1")
         object.__setattr__(self, "rotation", rotation)
         object.__setattr__(self, "translation_m", translation)
 
