@@ -42,9 +42,7 @@ def _materialize_timestamp_values(
     except TypeError as exc:
         raise ValueError("timestamp arrays must be one-dimensional") from exc
     if any(isinstance(value, (bool, np.bool_)) for value in materialized):
-        raise ValueError(
-            f"{argument_name} must not contain Boolean timestamp values"
-        )
+        raise ValueError(f"{argument_name} must not contain Boolean timestamp values")
     return materialized
 
 
