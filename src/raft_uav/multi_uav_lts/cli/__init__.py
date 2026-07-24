@@ -17,6 +17,9 @@ from pathlib import Path
 import sys
 import zipfile
 
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "cli.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.multi_uav_lts._cli_legacy",
@@ -45,7 +48,36 @@ def _parse_int_like_exact(value: str) -> int:
     return int(parsed)
 
 
+def _match_rows_by_iou(truth, predictions, *, iou_threshold):
+    """Maximize valid match count first, then total IoU."""
+
+    if not truth or not predictions:
+        return []
+    iou = np.asarray(
+        [
+            [_IMPL._box_iou(gt_row, pred_row) for pred_row in predictions]
+            for gt_row in truth
+        ],
+        dtype=float,
+    )
+    valid = iou >= float(iou_threshold)
+    if not np.any(valid):
+        return []
+
+    cardinality_bonus = float(min(iou.shape) + 1)
+    benefit = np.where(valid, cardinality_bonus + iou, 0.0)
+    gt_indices, pred_indices = linear_sum_assignment(benefit, maximize=True)
+    matches = [
+        (int(gt_index), int(pred_index), float(iou[gt_index, pred_index]))
+        for gt_index, pred_index in zip(gt_indices, pred_indices, strict=True)
+        if valid[gt_index, pred_index]
+    ]
+    matches.sort(key=lambda match: (match[0], match[1]))
+    return matches
+
+
 _IMPL._parse_int_like = _parse_int_like_exact
+_IMPL._match_rows_by_iou = _match_rows_by_iou
 
 
 @dataclass(frozen=True)
@@ -191,6 +223,7 @@ globals().update(
 )
 globals()["SubmissionValidation"] = SubmissionValidation
 globals()["validate_submission_zip"] = validate_submission_zip
+globals()["_match_rows_by_iou"] = _match_rows_by_iou
 __doc__ = _IMPL.__doc__
 __all__ = [
     name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))
