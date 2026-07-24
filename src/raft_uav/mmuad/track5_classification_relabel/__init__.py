@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling
 ``track5_classification_relabel.py`` module. This package preserves the public
-import path while requiring exact integer class labels and genuine sequence
-identifiers before relabeling.
+import path while requiring exact integer class labels, genuine sequence
+identifiers, and unique official row keys before relabeling.
 """
 
 from __future__ import annotations
@@ -76,13 +76,35 @@ def _validate_sequence_ids(values: Any, *, name: str) -> None:
         )
 
 
+def _validate_unique_row_keys(rows: pd.DataFrame, *, name: str) -> None:
+    """Reject duplicate official ``Sequence``/``Timestamp`` row keys."""
+
+    duplicate = rows.duplicated(subset=["Sequence", "Timestamp"], keep=False)
+    if not duplicate.any():
+        return
+    keys = (
+        rows.loc[duplicate, ["Sequence", "Timestamp"]]
+        .drop_duplicates()
+        .head(5)
+    )
+    examples = [
+        (str(row.Sequence), float(row.Timestamp))
+        for row in keys.itertuples(index=False)
+    ]
+    raise ValueError(
+        f"{name} contains duplicate Sequence/Timestamp keys: {examples}"
+    )
+
+
 def _normalize_frame(frame: pd.DataFrame, *, name: str) -> pd.DataFrame:
-    """Validate official sequence identifiers before the legacy string coercion."""
+    """Validate official sequence identifiers and row keys before relabeling."""
 
     rows = pd.DataFrame(frame).copy()
     if "Sequence" in rows.columns:
         _validate_sequence_ids(rows["Sequence"], name=name)
-    return _ORIGINAL_NORMALIZE_FRAME(rows, name=name)
+    normalized = _ORIGINAL_NORMALIZE_FRAME(rows, name=name)
+    _validate_unique_row_keys(normalized, name=name)
+    return normalized
 
 
 def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFrame:
@@ -100,6 +122,7 @@ def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFr
 
 _IMPL._validate_class_series = _validate_class_series
 _IMPL._validate_sequence_ids = _validate_sequence_ids
+_IMPL._validate_unique_row_keys = _validate_unique_row_keys
 _IMPL._normalize_frame = _normalize_frame
 _IMPL._sequence_prediction_labels = _sequence_prediction_labels
 
@@ -112,6 +135,7 @@ globals().update(
 )
 globals()["_validate_class_series"] = _validate_class_series
 globals()["_validate_sequence_ids"] = _validate_sequence_ids
+globals()["_validate_unique_row_keys"] = _validate_unique_row_keys
 globals()["_normalize_frame"] = _normalize_frame
 globals()["_sequence_prediction_labels"] = _sequence_prediction_labels
 
