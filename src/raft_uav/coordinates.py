@@ -33,6 +33,7 @@ class LocalENUProjector:
             name="origin_altitude_m",
         )
         _validate_latitude(lat, name="origin_latitude_deg")
+        _validate_longitude(lon, name="origin_longitude_deg")
 
         object.__setattr__(self, "origin_latitude_deg", lat)
         object.__setattr__(self, "origin_longitude_deg", lon)
@@ -67,6 +68,7 @@ class LocalENUProjector:
         longitude_deg = _finite_real_scalar(longitude_deg, name="longitude_deg")
         altitude_m = _finite_real_scalar(altitude_m, name="altitude_m")
         _validate_latitude(latitude_deg, name="latitude_deg")
+        _validate_longitude(longitude_deg, name="longitude_deg")
 
         x, y, z = _geodetic_to_ecef(latitude_deg, longitude_deg, altitude_m)
         delta = np.array([x, y, z], dtype=float) - self._origin_ecef
@@ -126,6 +128,13 @@ def _validate_latitude(value: float | np.ndarray, *, name: str) -> None:
         raise ValueError(f"{name} must be between -90 and 90 degrees")
 
 
+def _validate_longitude(value: float | np.ndarray, *, name: str) -> None:
+    """Reject longitude values outside the canonical WGS84 interval."""
+
+    if np.any((value < -180.0) | (value > 180.0)):
+        raise ValueError(f"{name} must be between -180 and 180 degrees")
+
+
 def _finite_real_array(value: object, *, name: str) -> np.ndarray:
     """Return finite real numeric values without coercing Boolean pseudo-numbers."""
 
@@ -163,6 +172,7 @@ def _broadcast_geodetic_coordinates(
     longitude = _finite_real_array(longitude_deg, name="longitude_deg")
     altitude = _finite_real_array(altitude_m, name="altitude_m")
     _validate_latitude(latitude, name="latitude_deg")
+    _validate_longitude(longitude, name="longitude_deg")
     try:
         return np.broadcast_arrays(latitude, longitude, altitude)
     except ValueError as exc:
