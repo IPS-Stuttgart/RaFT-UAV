@@ -3,7 +3,8 @@
 The maintained implementation lives in the sibling
 ``track5_classification_relabel.py`` module. This package preserves the public
 import path while requiring exact integer class labels, genuine sequence
-identifiers, and unique official row keys before relabeling.
+identifiers, unique official row keys, and valid sequence-class probability
+mass before relabeling.
 """
 
 from __future__ import annotations
@@ -124,8 +125,52 @@ def _normalize_frame(frame: pd.DataFrame, *, name: str) -> pd.DataFrame:
     return normalized
 
 
+def _validate_sequence_probability_rows(
+    rows: pd.DataFrame,
+    *,
+    sequence_column: Any,
+    probability_items: list[tuple[int, Any]],
+) -> None:
+    """Reject malformed probability cells and sequence groups with zero mass."""
+
+    probability_columns = [column for _class_id, column in probability_items]
+    numeric = pd.DataFrame(index=rows.index)
+    invalid_examples: list[str] = []
+    for column in probability_columns:
+        converted = pd.to_numeric(rows[column], errors="coerce")
+        values = converted.to_numpy(float)
+        invalid = ~np.isfinite(values) | (values < 0.0)
+        if invalid.any() and len(invalid_examples) < 5:
+            for position in np.flatnonzero(invalid):
+                row_index = rows.index[int(position)]
+                invalid_examples.append(
+                    f"row {row_index}, {column!r}={rows.iloc[int(position)][column]!r}"
+                )
+                if len(invalid_examples) >= 5:
+                    break
+        numeric[column] = converted
+
+    if invalid_examples:
+        raise ValueError(
+            "sequence prediction probabilities contain non-finite, non-numeric, "
+            f"or negative values: {invalid_examples}"
+        )
+
+    sequence_ids = rows[sequence_column].astype(str).str.strip()
+    grouped = numeric.assign(_Sequence=sequence_ids).groupby("_Sequence", sort=True).mean()
+    totals = grouped.to_numpy(float).sum(axis=1)
+    empty = grouped.index[totals <= 0.0].astype(str).tolist()
+    if empty:
+        preview = ", ".join(repr(sequence_id) for sequence_id in empty[:10])
+        suffix = "" if len(empty) <= 10 else f", ... ({len(empty)} total)"
+        raise ValueError(
+            "sequence prediction probabilities have no positive mass for "
+            f"sequence(s): {preview}{suffix}"
+        )
+
+
 def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFrame:
-    """Validate aliased prediction identifiers before aggregation and coercion."""
+    """Validate aliased prediction identifiers and values before aggregation."""
 
     rows = pd.DataFrame(sequence_predictions).copy()
     sequence_column = _IMPL._first_present(rows, _IMPL.SEQUENCE_ALIASES)
@@ -140,6 +185,17 @@ def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFr
             rows[class_column],
             name=f"sequence prediction table.{class_column}",
         )
+    probability_items = _IMPL._probability_columns(rows)
+    probability_class_ids = tuple(class_id for class_id, _column in probability_items)
+    if (
+        sequence_column is not None
+        and _IMPL._valid_probability_class_ids(probability_class_ids)
+    ):
+        _validate_sequence_probability_rows(
+            rows,
+            sequence_column=sequence_column,
+            probability_items=probability_items,
+        )
     return _ORIGINAL_SEQUENCE_PREDICTION_LABELS(rows)
 
 
@@ -147,6 +203,7 @@ _IMPL._reject_boolean_class_labels = _reject_boolean_class_labels
 _IMPL._validate_class_series = _validate_class_series
 _IMPL._validate_sequence_ids = _validate_sequence_ids
 _IMPL._validate_unique_row_keys = _validate_unique_row_keys
+_IMPL._validate_sequence_probability_rows = _validate_sequence_probability_rows
 _IMPL._normalize_frame = _normalize_frame
 _IMPL._sequence_prediction_labels = _sequence_prediction_labels
 
@@ -161,6 +218,7 @@ globals()["_reject_boolean_class_labels"] = _reject_boolean_class_labels
 globals()["_validate_class_series"] = _validate_class_series
 globals()["_validate_sequence_ids"] = _validate_sequence_ids
 globals()["_validate_unique_row_keys"] = _validate_unique_row_keys
+globals()["_validate_sequence_probability_rows"] = _validate_sequence_probability_rows
 globals()["_normalize_frame"] = _normalize_frame
 globals()["_sequence_prediction_labels"] = _sequence_prediction_labels
 
