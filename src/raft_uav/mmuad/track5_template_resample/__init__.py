@@ -115,7 +115,7 @@ def write_track5_template_resample_outputs(
 
 
 def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
-    """Normalize estimates while preserving input order among equal timestamps."""
+    """Normalize estimates without silently discarding malformed trajectory rows."""
 
     rows = pd.DataFrame(estimates).copy()
     if rows.empty:
@@ -141,12 +141,21 @@ def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
         out["classification"] = _IMPL._normalized_classification_values(
             rows[classification_column]
         )
-    finite = out["sequence_id"].notna()
-    finite &= np.isfinite(
+    valid_sequence = out["sequence_id"].notna()
+    finite_numeric = np.isfinite(
         out[["time_s", "state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
     ).all(axis=1)
+    invalid_numeric = valid_sequence & ~finite_numeric
+    if invalid_numeric.any():
+        invalid_indices = out.index[invalid_numeric].tolist()
+        preview = ", ".join(str(index) for index in invalid_indices[:5])
+        suffix = ", ..." if len(invalid_indices) > 5 else ""
+        raise ValueError(
+            "estimates contain non-finite or non-numeric time or position values "
+            f"at row indices: {preview}{suffix}"
+        )
     return (
-        out.loc[finite]
+        out.loc[valid_sequence & finite_numeric]
         .sort_values(["sequence_id", "time_s"], kind="mergesort")
         .reset_index(drop=True)
     )
