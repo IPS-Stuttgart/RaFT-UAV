@@ -9,8 +9,8 @@ smoothed trajectory rather than the state from the preceding IRLS iteration.
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import numpy as np
 
