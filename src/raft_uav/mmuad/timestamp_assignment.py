@@ -117,6 +117,16 @@ def optimal_timestamp_assignment(
         upper = np.nextafter(request_time + tolerance, np.inf)
         left = int(np.searchsorted(sorted_predictions, lower, side="left"))
         right = int(np.searchsorted(sorted_predictions, upper, side="right"))
+        # The final gap subtraction can round a value outside these arithmetic
+        # bounds onto the tolerance. Include all adjacent values that satisfy the
+        # actual matching predicate before constructing the sparse graph.
+        while left > 0 and abs(float(sorted_predictions[left - 1] - request_time)) <= tolerance:
+            left -= 1
+        while (
+            right < prediction_count
+            and abs(float(sorted_predictions[right] - request_time)) <= tolerance
+        ):
+            right += 1
         for prediction_rank in range(left, right):
             gap = abs(float(sorted_predictions[prediction_rank] - request_time))
             # The widened window can include a value just outside the tolerance,
