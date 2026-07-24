@@ -25,5 +25,5 @@ def test_match_submission_to_truth_reports_predictions_when_truth_is_empty() -> 
     assert len(matches) == 1
     assert matches.loc[0, "sequence_id"] == "sequence-001"
     assert matches.loc[0, "track_id"] == "uav-7"
-    assert matches.loc[0, "matched"] == False  # noqa: E712
+    assert not bool(matches.loc[0, "matched"])
     assert matches.loc[0, "unmatched_reason"] == "missing_sequence_truth"
