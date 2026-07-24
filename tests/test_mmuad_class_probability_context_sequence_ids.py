@@ -73,18 +73,37 @@ def test_in_memory_probability_rows_reject_missing_sequence_ids(
         )
 
 
-def test_in_memory_probability_rows_reject_ambiguous_sequence_aliases() -> None:
+def test_in_memory_probability_rows_accept_equivalent_sequence_aliases() -> None:
     probabilities = pd.DataFrame(
         {
             "sequence_id": ["001"],
-            "Sequence": ["001"],
+            "Sequence": [" 001 "],
+            "predicted_class": [2],
+        }
+    )
+
+    row = attach_class_probability_context(
+        _candidate_frame(),
+        probabilities,
+        fill_missing="error",
+        interaction_columns=(),
+    ).rows.iloc[0]
+
+    assert row["image_class_prob_2"] == pytest.approx(1.0)
+
+
+def test_in_memory_probability_rows_reject_conflicting_sequence_aliases() -> None:
+    probabilities = pd.DataFrame(
+        {
+            "sequence_id": ["001"],
+            "Sequence": ["002"],
             "predicted_class": [2],
         }
     )
 
     with pytest.raises(
         ValueError,
-        match="ambiguous sequence identifier columns",
+        match="conflicting sequence identifier columns",
     ):
         attach_class_probability_context(
             _candidate_frame(),
