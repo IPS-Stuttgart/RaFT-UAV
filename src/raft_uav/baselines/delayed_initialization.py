@@ -73,11 +73,11 @@ def build_delayed_initial_hypotheses(
             continue
         if vector.size < 2 or not np.isfinite(time_s) or not np.isfinite(vector).all():
             continue
+        position_dimension = min(vector.size, len(_POSITION_COLUMNS))
         state = np.zeros(6)
         if vector.size == 6:
             state[:] = vector
         else:
-            position_dimension = min(vector.size, 3)
             state[:position_dimension] = vector[:position_dimension]
         hypotheses.append(
             InitialHypothesis(
@@ -87,7 +87,11 @@ def build_delayed_initial_hypotheses(
                     initial_position_std_m,
                     initial_velocity_std_mps,
                 ),
-                score=_rf_support_score(time_s, state[:3], radar_window),
+                score=_rf_support_score(
+                    time_s,
+                    state[:position_dimension],
+                    radar_window,
+                ),
                 source="rf",
                 metadata={"rf_dimension": int(vector.size)},
             )
@@ -246,11 +250,16 @@ def _rf_support_score(
     position: np.ndarray,
     radar: pd.DataFrame,
 ) -> float:
-    required = {*_POSITION_COLUMNS, "time_s"}
+    position = np.asarray(position, dtype=float).reshape(-1)
+    position_dimension = min(position.size, len(_POSITION_COLUMNS))
+    if position_dimension == 0:
+        return 1.0
+    position_columns = _POSITION_COLUMNS[:position_dimension]
+    required = {*position_columns, "time_s"}
     if radar.empty or not required.issubset(radar.columns):
         return 1.0
     times = pd.to_numeric(radar["time_s"], errors="coerce")
-    positions = radar.loc[:, _POSITION_COLUMNS].apply(pd.to_numeric, errors="coerce")
+    positions = radar.loc[:, position_columns].apply(pd.to_numeric, errors="coerce")
     finite = np.isfinite(times.to_numpy(dtype=float, na_value=np.nan))
     finite &= np.isfinite(
         positions.to_numpy(dtype=float, na_value=np.nan)
@@ -263,7 +272,8 @@ def _rf_support_score(
     if not nearby.any():
         return 1.0
     distances = np.linalg.norm(
-        positions_array[nearby] - position.reshape(1, 3),
+        positions_array[nearby]
+        - position[:position_dimension].reshape(1, position_dimension),
         axis=1,
     )
     return float(np.min(distances) / 100.0)
