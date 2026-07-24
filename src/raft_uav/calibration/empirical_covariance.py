@@ -9,7 +9,8 @@ association code.
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -29,6 +30,7 @@ _COVARIANCE_SUFFIXES = {
         (1, 2, "nu"),
     ),
 }
+_MISSING_SEQUENCE_KEYS = frozenset({"nan", "none", "<na>", "nat"})
 
 
 def estimate_empirical_measurement_covariances(
@@ -121,6 +123,16 @@ def aligned_residuals(
     return residuals.reshape((-1, len(coords)))
 
 
+def _sequence_keys(values: pd.Series) -> pd.Series:
+    """Return trimmed sequence identifiers while preserving missing values."""
+
+    keys = pd.Series(values, index=values.index, dtype="string").str.strip()
+    missing = keys.isna() | keys.eq("") | keys.str.lower().isin(
+        _MISSING_SEQUENCE_KEYS
+    )
+    return keys.mask(missing)
+
+
 def _aligned_residuals_by_sequence(
     frame: pd.DataFrame,
     truth: pd.DataFrame,
@@ -129,9 +141,13 @@ def _aligned_residuals_by_sequence(
     max_time_delta_s: float,
 ) -> np.ndarray:
     residual_blocks: list[np.ndarray] = []
-    truth_sequence_ids = truth["sequence_id"].astype(str)
-    for sequence_id, sequence_frame in frame.groupby(frame["sequence_id"].astype(str), sort=False):
-        sequence_truth = truth.loc[truth_sequence_ids == str(sequence_id)]
+    frame_sequence_ids = _sequence_keys(frame["sequence_id"])
+    truth_sequence_ids = _sequence_keys(truth["sequence_id"])
+    for sequence_id in pd.unique(frame_sequence_ids.dropna()):
+        frame_mask = frame_sequence_ids.eq(sequence_id).fillna(False)
+        truth_mask = truth_sequence_ids.eq(sequence_id).fillna(False)
+        sequence_frame = frame.loc[frame_mask]
+        sequence_truth = truth.loc[truth_mask]
         if sequence_truth.empty:
             continue
         block = aligned_residuals(
