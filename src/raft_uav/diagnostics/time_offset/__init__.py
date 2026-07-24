@@ -151,6 +151,22 @@ def radar_frame_groups(radar: _pd.DataFrame) -> list[_pd.DataFrame]:
     ]
 
 
+def _longest_track_id(radar: _pd.DataFrame) -> int | None:
+    """Return the most frequent exact integer track identifier."""
+
+    if "track_id" not in radar.columns or radar.empty:
+        return None
+    track_ids = _pd.Series(
+        [_optional_int(value) for value in radar["track_id"]],
+        index=radar.index,
+        dtype=object,
+    ).dropna()
+    if track_ids.empty:
+        return None
+    counts = track_ids.value_counts()
+    return int(counts.idxmax())
+
+
 def _inside_truth_window(frame: _pd.DataFrame, truth: _pd.DataFrame) -> _pd.DataFrame:
     """Keep rows that can overlap truth for at least one active sweep offset."""
 
@@ -226,6 +242,7 @@ _legacy.catprob_candidate_pool = catprob_candidate_pool
 _legacy.highest_catprob_candidate = highest_catprob_candidate
 _legacy.nearest_candidate_to_truth = nearest_candidate_to_truth
 _legacy.radar_frame_groups = radar_frame_groups
+_legacy._longest_track_id = _longest_track_id
 _legacy.resolve_dimensions = resolve_dimensions
 _legacy._inside_truth_window = _inside_truth_window
 _legacy.run_time_offset_diagnostic = run_time_offset_diagnostic
@@ -237,6 +254,7 @@ globals()["catprob_candidate_pool"] = catprob_candidate_pool
 globals()["highest_catprob_candidate"] = highest_catprob_candidate
 globals()["nearest_candidate_to_truth"] = nearest_candidate_to_truth
 globals()["radar_frame_groups"] = radar_frame_groups
+globals()["_longest_track_id"] = _longest_track_id
 globals()["resolve_dimensions"] = resolve_dimensions
 globals()["run_time_offset_diagnostic"] = run_time_offset_diagnostic
 __all__ = sorted(_name for _name in globals() if not _name.startswith("_"))
