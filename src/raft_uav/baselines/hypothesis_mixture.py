@@ -8,6 +8,10 @@ from pyrecest.filters.gaussian_hypothesis_mixture import (
     WeightedGaussianHypothesis as GaussianHypothesis,
     moment_match_gaussian_hypotheses as moment_match_hypotheses,
 )
+from pyrecest.numerics import is_positive_semidefinite
+
+
+_DEFAULT_POSITION_COVARIANCE = np.diag([25.0**2, 25.0**2, 35.0**2])
 
 
 def position_mixture_from_association_rows(
@@ -40,7 +44,7 @@ def position_mixture_from_association_rows(
         row_covariance = (
             _covariance_from_row(row, covariance_columns)
             if has_covariance
-            else np.diag([25.0**2, 25.0**2, 35.0**2])
+            else _DEFAULT_POSITION_COVARIANCE.copy()
         )
         hypotheses.append(
             GaussianHypothesis(
@@ -53,12 +57,17 @@ def position_mixture_from_association_rows(
     return moment_match_hypotheses(hypotheses)
 
 
-def _covariance_from_row(row: pd.Series, columns: tuple[str, str, str, str, str, str]) -> np.ndarray:
+def _covariance_from_row(
+    row: pd.Series,
+    columns: tuple[str, str, str, str, str, str],
+) -> np.ndarray:
     ee, nn, uu, en, eu, nu = [float(row[column]) for column in columns]
-    covariance = np.array([[ee, en, eu], [en, nn, nu], [eu, nu, uu]], dtype=float)
-    if not np.isfinite(covariance).all():
-        return np.diag([25.0**2, 25.0**2, 35.0**2])
-    return _symmetrized(covariance)
+    covariance = _symmetrized(
+        np.array([[ee, en, eu], [en, nn, nu], [eu, nu, uu]], dtype=float)
+    )
+    if not np.isfinite(covariance).all() or not is_positive_semidefinite(covariance):
+        return _DEFAULT_POSITION_COVARIANCE.copy()
+    return covariance
 
 
 def _symmetrized(matrix: np.ndarray) -> np.ndarray:
