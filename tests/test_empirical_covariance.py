@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.calibration.empirical_covariance import (
     aligned_residuals,
@@ -86,6 +87,60 @@ def test_empirical_covariance_residuals_respect_sequence_ids():
     )
 
     assert residuals.tolist() == [[1.0, -1.0]]
+
+
+@pytest.mark.parametrize("invalid_id", [np.nan, pd.NA, None, "", "   "])
+def test_empirical_covariance_rejects_missing_or_blank_sequence_ids(invalid_id):
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seq_a"],
+            "time_s": [0.0],
+            "east_m": [0.0],
+            "north_m": [0.0],
+        }
+    )
+    rf = pd.DataFrame(
+        {
+            "sequence_id": [invalid_id],
+            "time_s": [0.0],
+            "east_m": [1.0],
+            "north_m": [1.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="missing or blank sequence_id"):
+        aligned_residuals(
+            rf,
+            truth,
+            source="rf",
+            max_time_delta_s=0.25,
+        )
+
+
+def test_empirical_covariance_rejects_one_sided_sequence_ids():
+    truth = pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "east_m": [0.0],
+            "north_m": [0.0],
+        }
+    )
+    rf = pd.DataFrame(
+        {
+            "sequence_id": ["seq_a"],
+            "time_s": [0.0],
+            "east_m": [1.0],
+            "north_m": [1.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="either both contain sequence_id or both omit it"):
+        aligned_residuals(
+            rf,
+            truth,
+            source="rf",
+            max_time_delta_s=0.25,
+        )
 
 
 def test_empirical_covariance_respects_time_gate():
