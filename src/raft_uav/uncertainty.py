@@ -85,6 +85,17 @@ class HeteroscedasticUncertaintyModel:
     heads: tuple[VarianceHead, ...]
     metadata: Mapping[str, Any]
 
+    def __post_init__(self) -> None:
+        seen: set[tuple[str, str]] = set()
+        for head in self.heads:
+            key = (head.source, head.dimension)
+            if key in seen:
+                raise ValueError(
+                    "duplicate uncertainty head for "
+                    f"source {head.source!r} and dimension {head.dimension!r}"
+                )
+            seen.add(key)
+
     def apply_rf(self, rf: pd.DataFrame) -> pd.DataFrame:
         return self.apply(rf, source="rf")
 
