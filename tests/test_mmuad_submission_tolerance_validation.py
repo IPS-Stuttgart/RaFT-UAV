@@ -31,6 +31,8 @@ def _submission_and_template(tmp_path):
         False,
         np.array([0.25]),
         0.25 + 0.0j,
+        np.ma.masked,
+        np.ma.array(0.25, mask=True),
     ],
 )
 def test_submission_validator_rejects_invalid_timestamp_tolerances(
