@@ -1,9 +1,9 @@
-"""Compatibility package excluding missing assignment-block sequence identifiers.
+"""Compatibility package excluding invalid assignment-block grouping keys.
 
 The maintained implementation lives in the sibling
 ``candidate_assignment_blocks.py`` module. This package preserves the public
-import path while filtering genuinely missing sequence identifiers before the
-legacy implementation converts identifiers to strings.
+import path while filtering genuinely missing sequence identifiers and
+non-finite timestamps before the legacy implementation groups rows.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_assignment_blocks.py"
@@ -29,12 +30,20 @@ _ORIGINAL_BUILD = _IMPL.build_candidate_assignment_block_tables
 
 
 def _drop_missing_sequence_ids(frame_rows: Any) -> pd.DataFrame:
-    """Remove rows whose sequence identifier is genuinely missing."""
+    """Remove rows whose sequence ID is missing or timestamp is non-finite."""
 
     rows = pd.DataFrame(frame_rows).copy()
     if rows.empty or "sequence_id" not in rows.columns:
         return rows
-    return rows.loc[rows["sequence_id"].notna()].copy()
+    valid = rows["sequence_id"].notna()
+    if "time_s" in rows.columns:
+        time_s = pd.to_numeric(rows["time_s"], errors="coerce")
+        finite_time = pd.Series(
+            np.isfinite(time_s.to_numpy(dtype=float, na_value=np.nan)),
+            index=rows.index,
+        )
+        valid &= finite_time
+    return rows.loc[valid].copy()
 
 
 def build_candidate_assignment_block_tables(
@@ -42,7 +51,7 @@ def build_candidate_assignment_block_tables(
     *,
     max_gap_s: float = 1.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Build assignment blocks without materializing missing IDs as strings."""
+    """Build assignment blocks without materializing invalid grouping keys."""
 
     return _ORIGINAL_BUILD(
         _drop_missing_sequence_ids(frame_rows),
