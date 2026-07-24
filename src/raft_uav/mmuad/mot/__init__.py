@@ -163,17 +163,21 @@ def _metric_rows_in_time_cluster(
 def _validated_match_distance_m(value: Any) -> float:
     """Return a finite nonnegative MOT matching radius."""
 
-    if isinstance(value, (bool, np.bool_)):
-        raise ValueError("match_distance_m must be finite and nonnegative")
+    message = "match_distance_m must be finite and nonnegative"
+    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+        raise ValueError(message)
     try:
         array = np.asarray(value)
         if array.ndim != 0:
             raise TypeError
-        distance_m = float(array)
+        scalar = array.item()
+        if np.ma.is_masked(scalar) or isinstance(scalar, (bool, np.bool_)):
+            raise TypeError
+        distance_m = float(scalar)
     except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("match_distance_m must be finite and nonnegative") from exc
+        raise ValueError(message) from exc
     if not np.isfinite(distance_m) or distance_m < 0.0:
-        raise ValueError("match_distance_m must be finite and nonnegative")
+        raise ValueError(message)
     return distance_m
 
 

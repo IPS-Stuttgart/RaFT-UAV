@@ -9,7 +9,17 @@ from raft_uav.mmuad.mot import _greedy_truth_matches, compute_multi_object_metri
 
 @pytest.mark.parametrize(
     "invalid_distance",
-    [float("nan"), float("inf"), float("-inf"), -1.0, True, False, [1.0]],
+    [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        -1.0,
+        True,
+        False,
+        [1.0],
+        np.ma.masked,
+        np.ma.array(25.0, mask=True),
+    ],
 )
 def test_multi_object_metrics_rejects_invalid_match_distance(invalid_distance) -> None:
     with pytest.raises(ValueError, match="match_distance_m must be finite and nonnegative"):
