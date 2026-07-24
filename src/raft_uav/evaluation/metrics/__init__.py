@@ -5,9 +5,9 @@ package preserves the public import path while ensuring that timestamps within
 the existing 1 ns equality tolerance are accepted at either interpolation
 endpoint, regardless of whether a maximum time-delta gate is configured. The
 same endpoint rule is applied to both truth-grid metrics and paper-table
-interpolation at estimate timestamps. Non-finite nearest-time queries and
-masked time-gate controls are rejected instead of being silently assigned or
-unwrapped.
+interpolation at estimate timestamps. Non-finite and masked nearest-time queries
+are rejected, masked reference timestamps are ignored, and masked time-gate
+controls are rejected instead of being silently unwrapped.
 """
 
 from __future__ import annotations
@@ -47,12 +47,18 @@ def _nearest_time_indices_with_finite_queries(
     reference_times_s: np.ndarray,
     query_times_s: np.ndarray,
 ) -> np.ndarray:
-    """Reject invalid query timestamps before nearest-neighbor assignment."""
+    """Ignore masked references and reject invalid nearest-time queries."""
 
-    query = np.asarray(query_times_s, dtype=float).reshape(-1)
+    reference_masked = np.ma.asarray(reference_times_s, dtype=float).reshape(-1)
+    reference = np.asarray(reference_masked.filled(np.nan), dtype=float)
+
+    query_masked = np.ma.asarray(query_times_s, dtype=float).reshape(-1)
+    if bool(np.ma.getmaskarray(query_masked).any()):
+        raise ValueError("query_times_s must contain only finite timestamps")
+    query = np.asarray(query_masked.filled(np.nan), dtype=float)
     if not np.isfinite(query).all():
         raise ValueError("query_times_s must contain only finite timestamps")
-    return _ORIGINAL_NEAREST_TIME_INDICES(reference_times_s, query)
+    return _ORIGINAL_NEAREST_TIME_INDICES(reference, query)
 
 
 def _truth_grid_with_symmetric_tolerance(
