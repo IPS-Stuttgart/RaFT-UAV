@@ -1,8 +1,9 @@
-"""Compatibility validation for MMUAD trajectory completion controls.
+"""Compatibility validation for MMUAD trajectory completion.
 
 The maintained implementation lives in the sibling ``completion.py`` module.
 This package preserves the public import path while rejecting malformed scalar
-controls before completion or summary generation starts.
+controls and normalizing missing-like sequence identifiers consistently before
+completion or summary generation starts.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from pathlib import Path
 import sys
 
 import numpy as np
+import pandas as pd
 
 from raft_uav.numeric import optional_int
 
@@ -27,6 +29,8 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_COMPLETION_SUMMARY = _IMPL.completion_summary
+_ORIGINAL_COMPLETION_TEMPLATE_ROWS = _IMPL._completion_template_rows
+_MISSING_SEQUENCE_ID_STRINGS = {"", "nan", "none", "<na>", "nat"}
 
 
 def _normalize_max_interpolation_gap_s(value: object) -> float:
@@ -48,6 +52,28 @@ def _normalize_max_interpolation_gap_s(value: object) -> float:
     if not np.isfinite(gap) or gap < 0.0:
         raise ValueError(message)
     return gap
+
+
+def _completion_template_rows(truth_or_template: object) -> pd.DataFrame:
+    """Canonicalize missing-like template sequence ids before grouping."""
+
+    rows = _ORIGINAL_COMPLETION_TEMPLATE_ROWS(truth_or_template)
+    if rows.empty or "sequence_id" not in rows.columns:
+        return rows
+
+    normalized = rows.copy()
+    text = normalized["sequence_id"].where(
+        normalized["sequence_id"].notna(),
+        "default",
+    )
+    text = text.astype(str).str.strip()
+    missing = text.str.casefold().isin(_MISSING_SEQUENCE_ID_STRINGS)
+    normalized["sequence_id"] = text.where(~missing, "default")
+    return (
+        normalized.drop_duplicates()
+        .sort_values(["sequence_id", "time_s"])
+        .reset_index(drop=True)
+    )
 
 
 def _normalize_requested_count(value: object, *, completed_count: int) -> int:
@@ -80,6 +106,7 @@ def completion_summary(result, *, requested_count: object | None = None):
 
 
 _IMPL._normalize_max_interpolation_gap_s = _normalize_max_interpolation_gap_s
+_IMPL._completion_template_rows = _completion_template_rows
 _IMPL.completion_summary = completion_summary
 
 globals().update(
@@ -90,6 +117,7 @@ globals().update(
     }
 )
 globals()["_normalize_max_interpolation_gap_s"] = _normalize_max_interpolation_gap_s
+globals()["_completion_template_rows"] = _completion_template_rows
 globals()["_normalize_requested_count"] = _normalize_requested_count
 globals()["completion_summary"] = completion_summary
 
