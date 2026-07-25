@@ -17,6 +17,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.submission import (
+    parse_official_classification_cell,
+    parse_official_sequence_cell,
+)
+
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_jerk_limit.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.mmuad._track5_jerk_limit_legacy",
@@ -141,6 +146,13 @@ def _validated_controls(
     return controls
 
 
+def _row_index_preview(indices: list[Any]) -> str:
+    """Render a bounded list of offending DataFrame row labels."""
+
+    preview = ", ".join(str(index) for index in indices[:5])
+    return f"{preview}, ..." if len(indices) > 5 else preview
+
+
 def _normalized_submission_rejecting_invalid_rows(
     submission: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -161,7 +173,7 @@ def _normalized_submission_rejecting_invalid_rows(
         )
         rows = pd.DataFrame(
             {
-                "sequence_id": official["Sequence"].astype(str),
+                "sequence_id": official["Sequence"],
                 "time_s": pd.to_numeric(official["Timestamp"], errors="coerce"),
                 "state_x_m": xyz["state_x_m"],
                 "state_y_m": xyz["state_y_m"],
@@ -182,25 +194,46 @@ def _normalized_submission_rejecting_invalid_rows(
     if missing:
         raise ValueError(f"submission missing normalized columns: {sorted(missing)}")
 
-    rows["sequence_id"] = rows["sequence_id"].astype(str)
-    for column in (
-        "time_s",
-        "state_x_m",
-        "state_y_m",
-        "state_z_m",
-        "Classification",
-    ):
+    sequence_ids: list[str] = []
+    invalid_sequence_indices: list[Any] = []
+    for index, value in rows["sequence_id"].items():
+        try:
+            sequence_ids.append(parse_official_sequence_cell(value))
+        except ValueError:
+            sequence_ids.append("")
+            invalid_sequence_indices.append(index)
+    if invalid_sequence_indices:
+        raise ValueError(
+            "submission contains invalid sequence identifiers at row indices: "
+            f"{_row_index_preview(invalid_sequence_indices)}"
+        )
+    rows["sequence_id"] = sequence_ids
+
+    classifications: list[int] = []
+    invalid_classification_indices: list[Any] = []
+    for index, value in rows["Classification"].items():
+        try:
+            classifications.append(parse_official_classification_cell(value))
+        except ValueError:
+            classifications.append(0)
+            invalid_classification_indices.append(index)
+    if invalid_classification_indices:
+        raise ValueError(
+            "submission contains invalid Classification values at row indices: "
+            f"{_row_index_preview(invalid_classification_indices)}"
+        )
+    rows["Classification"] = classifications
+
+    for column in ("time_s", "state_x_m", "state_y_m", "state_z_m"):
         rows[column] = pd.to_numeric(rows[column], errors="coerce")
 
     finite_columns = ("time_s", "state_x_m", "state_y_m", "state_z_m")
     finite = np.isfinite(rows[list(finite_columns)].to_numpy(float)).all(axis=1)
     if not finite.all():
         invalid_indices = rows.index[~finite].tolist()
-        preview = ", ".join(str(index) for index in invalid_indices[:5])
-        suffix = ", ..." if len(invalid_indices) > 5 else ""
         raise ValueError(
             "submission contains non-finite time or position values "
-            f"at row indices: {preview}{suffix}"
+            f"at row indices: {_row_index_preview(invalid_indices)}"
         )
     return rows.sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
@@ -297,6 +330,7 @@ globals()["_finite_scalar"] = _finite_scalar
 globals()["_normalize_iterations"] = _normalize_iterations
 globals()["_validated_step_controls"] = _validated_step_controls
 globals()["_validated_controls"] = _validated_controls
+globals()["_row_index_preview"] = _row_index_preview
 globals()["_row_jerk_proxy_with_window_support"] = _row_jerk_proxy_with_window_support
 
 __doc__ = _IMPL.__doc__
