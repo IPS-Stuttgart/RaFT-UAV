@@ -125,13 +125,25 @@ def _imm_tracker_init(
     mode_switch_time_constant_s: float = 20.0,
 ) -> None:
     validated_time_s = _finite_timestamp_seconds(initial_time_s, field_name="initial_time_s")
+    validated_position_std_m = _finite_nonnegative_scale(
+        initial_position_std_m,
+        field_name="initial_position_std_m",
+    )
+    validated_velocity_std_mps = _finite_nonnegative_scale(
+        initial_velocity_std_mps,
+        field_name="initial_velocity_std_mps",
+    )
+    validated_acceleration_std_mps2 = _finite_nonnegative_scale(
+        acceleration_std_mps2,
+        field_name="acceleration_std_mps2",
+    )
     _ORIGINAL_IMM_TRACKER_INIT(
         self,
         initial_position,
         validated_time_s,
-        initial_position_std_m=initial_position_std_m,
-        initial_velocity_std_mps=initial_velocity_std_mps,
-        acceleration_std_mps2=acceleration_std_mps2,
+        initial_position_std_m=validated_position_std_m,
+        initial_velocity_std_mps=validated_velocity_std_mps,
+        acceleration_std_mps2=validated_acceleration_std_mps2,
         modes=modes,
         initial_mode_probabilities=initial_mode_probabilities,
         mode_switch_time_constant_s=mode_switch_time_constant_s,
