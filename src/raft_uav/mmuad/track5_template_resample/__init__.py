@@ -1,4 +1,4 @@
-"""Compatibility fixes for Track 5 template resampling."""
+"""Compatibility fixes for Track 5 template resampling and diagnostics."""
 
 from __future__ import annotations
 
@@ -174,6 +174,27 @@ def _unique_time_rows(group: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _bool_column(rows: pd.DataFrame, column: str) -> pd.Series:
+    """Normalize Boolean diagnostics, including CSV-style ``1.0`` / ``0.0``."""
+
+    if column not in rows.columns:
+        return pd.Series(False, index=rows.index, dtype=bool)
+    values = pd.Series(rows[column], index=rows.index)
+    if pd.api.types.is_bool_dtype(values.dtype):
+        return values.fillna(False).astype(bool)
+
+    numeric = pd.to_numeric(values, errors="coerce")
+    numeric_mask = numeric.notna()
+    normalized = pd.Series(False, index=rows.index, dtype=bool)
+    normalized.loc[numeric_mask] = numeric.loc[numeric_mask].eq(1.0)
+
+    text = values.fillna(False).astype(str).str.strip().str.lower()
+    normalized.loc[~numeric_mask] = text.loc[~numeric_mask].isin(
+        {"1", "true", "t", "yes", "y"}
+    )
+    return normalized
+
+
 def _resampled_position(
     group: pd.DataFrame,
     time_s: float,
@@ -205,6 +226,7 @@ def _resampled_classification(
 _IMPL.resample_estimates_to_track5_template = resample_estimates_to_track5_template
 _IMPL.write_track5_template_resample_outputs = write_track5_template_resample_outputs
 _IMPL._normalize_estimate_rows = _normalize_estimate_rows
+_IMPL._bool_column = _bool_column
 _IMPL._resampled_position = _resampled_position
 _IMPL._resampled_classification = _resampled_classification
 
@@ -219,6 +241,7 @@ globals()["_normalize_optional_nonnegative_float"] = _normalize_optional_nonnega
 globals()["resample_estimates_to_track5_template"] = resample_estimates_to_track5_template
 globals()["write_track5_template_resample_outputs"] = write_track5_template_resample_outputs
 globals()["_normalize_estimate_rows"] = _normalize_estimate_rows
+globals()["_bool_column"] = _bool_column
 globals()["_resampled_position"] = _resampled_position
 globals()["_resampled_classification"] = _resampled_classification
 
