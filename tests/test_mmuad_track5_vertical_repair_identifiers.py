@@ -35,7 +35,7 @@ def test_vertical_repair_rejects_invalid_sequence_ids(
         repair_track5_vertical_spikes(submission)
 
 
-@pytest.mark.parametrize("invalid_classification", [-1, 4, 1.5, "unknown"])
+@pytest.mark.parametrize("invalid_classification", [-1, 4, 1.5, "4", "1.5"])
 def test_vertical_repair_rejects_invalid_classifications(
     invalid_classification: object,
 ) -> None:
