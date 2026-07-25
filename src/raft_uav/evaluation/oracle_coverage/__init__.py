@@ -3,8 +3,9 @@
 The maintained implementation lives in the sibling ``oracle_coverage.py``
 module. This package preserves the public import path while preventing
 fractional identifiers from being truncated, large exact identifiers from being
-rounded through binary floating point, and malformed radar standard deviations
-from silently changing candidate scoring.
+rounded through binary floating point, malformed radar standard deviations from
+silently changing candidate scoring, and serialized Boolean diagnostics from
+corrupting oracle-retention summaries.
 """
 
 from __future__ import annotations
@@ -13,6 +14,8 @@ import importlib.util
 from pathlib import Path
 import sys
 from typing import Any
+
+import pandas as pd
 
 from raft_uav.numeric import optional_float as _shared_optional_float
 from raft_uav.numeric import optional_int as _shared_optional_int
@@ -29,6 +32,8 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_BUILD_ORACLE_CANDIDATE_COVERAGE = _IMPL.build_oracle_candidate_coverage
+_ORIGINAL_COVERAGE_SUMMARY = _IMPL._coverage_summary
+_ORIGINAL_BUCKET_SUMMARY = _IMPL._bucket_summary
 _IDENTIFIER_KEY_COLUMNS = frozenset({"frame_index", "track_index", "track_id"})
 _CANDIDATE_KEY_COLUMNS = (
     "frame_index",
@@ -39,6 +44,10 @@ _CANDIDATE_KEY_COLUMNS = (
     "north_m",
     "up_m",
 )
+_TRUE_BOOLEAN_TEXT = frozenset({"true", "t", "yes", "y", "1", "1.0"})
+_FALSE_BOOLEAN_TEXT = frozenset(
+    {"false", "f", "no", "n", "0", "0.0", "", "nan", "none", "<na>", "nat"}
+)
 
 
 def _positive_standard_deviation(name: str, value: object) -> float:
@@ -48,6 +57,67 @@ def _positive_standard_deviation(name: str, value: object) -> float:
     if standard_deviation is None or standard_deviation <= 0.0:
         raise ValueError(f"{name} must be a finite positive real scalar")
     return standard_deviation
+
+
+def _serialized_boolean_series(values: Any, *, column: str) -> pd.Series:
+    """Parse native and serialized Boolean diagnostics without object truthiness."""
+
+    series = pd.Series(values)
+    if series.empty:
+        return pd.Series(index=series.index, dtype=bool)
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return series.astype("boolean").fillna(False).astype(bool)
+
+    numeric = pd.to_numeric(series, errors="coerce")
+    text = series.astype("string").str.strip().str.casefold()
+    missing = series.isna() | text.isin(_FALSE_BOOLEAN_TEXT)
+    truthy = (text.isin(_TRUE_BOOLEAN_TEXT) | numeric.eq(1.0)).fillna(False)
+    falsy = (missing | numeric.eq(0.0)).fillna(False)
+    invalid = ~(truthy | falsy)
+    if bool(invalid.any()):
+        invalid_indices = invalid[invalid].index.tolist()
+        invalid_values = series.loc[invalid_indices].tolist()
+        raise ValueError(
+            f"{column} contains invalid Boolean values at rows "
+            f"{invalid_indices}: {invalid_values}"
+        )
+    return truthy.astype(bool)
+
+
+def _normalized_summary_frame(frame: Any) -> Any:
+    """Return a copy with summary Boolean diagnostics normalized explicitly."""
+
+    normalized = frame.copy()
+    for column in ("oracle_available", "oracle_retained"):
+        if column in normalized.columns:
+            normalized[column] = _serialized_boolean_series(
+                normalized[column],
+                column=column,
+            )
+    return normalized
+
+
+def _coverage_summary(
+    frame: Any,
+    *,
+    candidate_catprob_threshold: float | None,
+    config: Any,
+    truth_time_gate_s: float | None,
+) -> dict[str, Any]:
+    """Summarize oracle coverage after deterministic Boolean normalization."""
+
+    return _ORIGINAL_COVERAGE_SUMMARY(
+        _normalized_summary_frame(frame),
+        candidate_catprob_threshold=candidate_catprob_threshold,
+        config=config,
+        truth_time_gate_s=truth_time_gate_s,
+    )
+
+
+def _bucket_summary(frame: Any) -> Any:
+    """Build oracle-coverage buckets after deterministic Boolean normalization."""
+
+    return _ORIGINAL_BUCKET_SUMMARY(_normalized_summary_frame(frame))
 
 
 def build_oracle_candidate_coverage(
@@ -133,6 +203,8 @@ def _event_key(candidates: Any, time_s: float) -> str:
 
 
 _IMPL.build_oracle_candidate_coverage = build_oracle_candidate_coverage
+_IMPL._coverage_summary = _coverage_summary
+_IMPL._bucket_summary = _bucket_summary
 _IMPL._optional_int = _optional_int
 _IMPL._candidate_key = _candidate_key
 _IMPL._event_key = _event_key
@@ -145,6 +217,10 @@ globals().update(
     }
 )
 globals()["_positive_standard_deviation"] = _positive_standard_deviation
+globals()["_serialized_boolean_series"] = _serialized_boolean_series
+globals()["_normalized_summary_frame"] = _normalized_summary_frame
+globals()["_coverage_summary"] = _coverage_summary
+globals()["_bucket_summary"] = _bucket_summary
 globals()["build_oracle_candidate_coverage"] = build_oracle_candidate_coverage
 globals()["_optional_int"] = _optional_int
 globals()["_candidate_key"] = _candidate_key
