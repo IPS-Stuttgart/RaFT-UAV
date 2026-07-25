@@ -13,6 +13,7 @@ _imm = import_module("raft_uav.baselines.imm")
 _ORIGINAL_TRACKING_MEASUREMENT_POST_INIT = _kalman.TrackingMeasurement.__post_init__
 _ORIGINAL_TRACKER_INIT = _kalman.AsyncConstantVelocityKalmanTracker.__init__
 _ORIGINAL_PREDICT_TO = _kalman.AsyncConstantVelocityKalmanTracker.predict_to
+_ORIGINAL_COAST_TO = _kalman.AsyncConstantVelocityKalmanTracker.coast_to
 _ORIGINAL_IMM_TRACKER_INIT = _imm.AsyncInteractingMultipleModelTracker.__init__
 _ORIGINAL_IMM_PREDICT_TO = _imm.AsyncInteractingMultipleModelTracker.predict_to
 
@@ -21,13 +22,13 @@ def _finite_timestamp_seconds(value: Any, *, field_name: str) -> float:
     """Return a finite scalar timestamp or raise a field-specific error."""
 
     error = f"{field_name} must be a finite numeric timestamp"
-    if isinstance(value, bool | np.bool_):
+    if isinstance(value, bool | np.bool_) or np.ma.is_masked(value):
         raise ValueError(error)
     try:
         scalar = np.asarray(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(error) from exc
-    if scalar.ndim != 0:
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
         raise ValueError(error)
     try:
         timestamp_s = float(scalar.item())
@@ -85,7 +86,10 @@ def _tracker_init(
     initial_velocity_std_mps: float = 15.0,
     acceleration_std_mps2: float = 4.0,
 ) -> None:
-    validated_time_s = _finite_timestamp_seconds(initial_time_s, field_name="initial_time_s")
+    validated_time_s = _finite_timestamp_seconds(
+        initial_time_s,
+        field_name="initial_time_s",
+    )
     validated_position_std_m = _finite_nonnegative_scale(
         initial_position_std_m,
         field_name="initial_position_std_m",
@@ -113,6 +117,15 @@ def _predict_to(self: Any, time_s: float) -> None:
     _ORIGINAL_PREDICT_TO(self, validated_time_s)
 
 
+def _coast_to(self: Any, time_s: float) -> None:
+    """Validate before coast bookkeeping consumes bootstrap state."""
+
+    validated_time_s = _finite_timestamp_seconds(time_s, field_name="time_s")
+    if validated_time_s < self.current_time_s - 1.0e-9:
+        raise ValueError("measurements must be processed in chronological order")
+    _ORIGINAL_COAST_TO(self, validated_time_s)
+
+
 def _imm_tracker_init(
     self: Any,
     initial_position: np.ndarray,
@@ -124,7 +137,10 @@ def _imm_tracker_init(
     initial_mode_probabilities: Any = None,
     mode_switch_time_constant_s: float = 20.0,
 ) -> None:
-    validated_time_s = _finite_timestamp_seconds(initial_time_s, field_name="initial_time_s")
+    validated_time_s = _finite_timestamp_seconds(
+        initial_time_s,
+        field_name="initial_time_s",
+    )
     validated_position_std_m = _finite_nonnegative_scale(
         initial_position_std_m,
         field_name="initial_position_std_m",
@@ -162,6 +178,7 @@ def apply_kalman_timestamp_validation_patch() -> None:
         _kalman.TrackingMeasurement.__post_init__ = _tracking_measurement_post_init
         _kalman.AsyncConstantVelocityKalmanTracker.__init__ = _tracker_init
         _kalman.AsyncConstantVelocityKalmanTracker.predict_to = _predict_to
+        _kalman.AsyncConstantVelocityKalmanTracker.coast_to = _coast_to
         _kalman._timestamp_validation_patch_applied = True
 
     if not getattr(_imm, "_timestamp_validation_patch_applied", False):
