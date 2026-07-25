@@ -79,6 +79,25 @@ def _validate_sequence_ids(submission: object) -> None:
         )
 
 
+def _numeric_cell_kind(value: object) -> str | None:
+    """Classify scalar cell types that pandas would otherwise coerce unsafely."""
+
+    scalar = value
+    if isinstance(value, np.ma.MaskedArray):
+        if bool(np.ma.getmaskarray(value).any()):
+            return "masked"
+        scalar = value.data
+    if isinstance(scalar, np.ndarray):
+        if scalar.ndim != 0:
+            return "non-scalar"
+        scalar = scalar.item()
+    if isinstance(scalar, (bool, np.bool_)):
+        return "Boolean"
+    if isinstance(scalar, (complex, np.complexfloating)):
+        return "complex"
+    return None
+
+
 def _validate_numeric_rows(submission: object) -> None:
     """Reject numeric rows that the legacy normalizer would silently coerce or drop."""
 
@@ -87,24 +106,43 @@ def _validate_numeric_rows(submission: object) -> None:
         return
 
     boolean_invalid: list[str] = []
+    complex_invalid: list[str] = []
+    masked_invalid: list[str] = []
+    nonscalar_invalid: list[str] = []
     nonfinite_invalid: list[str] = []
     for column in _NUMERIC_COLUMNS:
-        boolean = rows[column].map(
-            lambda value: isinstance(value, (bool, np.bool_))
-        ).to_numpy(dtype=bool)
-        if boolean.any():
-            row_positions = np.flatnonzero(boolean).tolist()
-            boolean_invalid.append(f"{column} rows {row_positions}")
+        kinds = rows[column].map(_numeric_cell_kind)
+        for kind, target in (
+            ("Boolean", boolean_invalid),
+            ("complex", complex_invalid),
+            ("masked", masked_invalid),
+            ("non-scalar", nonscalar_invalid),
+        ):
+            invalid = kinds.eq(kind).to_numpy(dtype=bool)
+            if invalid.any():
+                row_positions = np.flatnonzero(invalid).tolist()
+                target.append(f"{column} rows {row_positions}")
 
-        numeric = pd.to_numeric(rows[column], errors="coerce")
+        typed_invalid = kinds.notna().to_numpy(dtype=bool)
+        numeric_input = rows[column].mask(typed_invalid, np.nan)
+        numeric = pd.to_numeric(numeric_input, errors="coerce")
         finite = np.isfinite(numeric.to_numpy(dtype=float))
-        if finite.all():
-            continue
-        row_positions = np.flatnonzero(~finite).tolist()
-        nonfinite_invalid.append(f"{column} rows {row_positions}")
+        invalid = ~finite & ~typed_invalid
+        if invalid.any():
+            row_positions = np.flatnonzero(invalid).tolist()
+            nonfinite_invalid.append(f"{column} rows {row_positions}")
     if boolean_invalid:
         details = "; ".join(boolean_invalid)
         raise ValueError(f"submission contains Boolean numeric values: {details}")
+    if complex_invalid:
+        details = "; ".join(complex_invalid)
+        raise ValueError(f"submission contains complex numeric values: {details}")
+    if masked_invalid:
+        details = "; ".join(masked_invalid)
+        raise ValueError(f"submission contains masked numeric values: {details}")
+    if nonscalar_invalid:
+        details = "; ".join(nonscalar_invalid)
+        raise ValueError(f"submission contains non-scalar numeric values: {details}")
     if nonfinite_invalid:
         details = "; ".join(nonfinite_invalid)
         raise ValueError(f"submission contains non-finite numeric values: {details}")
@@ -207,6 +245,7 @@ globals()["_NUMERIC_COLUMNS"] = _NUMERIC_COLUMNS
 globals()["_positive_integer"] = _positive_integer
 globals()["_reject_boolean_scalar"] = _reject_boolean_scalar
 globals()["_validate_sequence_ids"] = _validate_sequence_ids
+globals()["_numeric_cell_kind"] = _numeric_cell_kind
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
 globals()["_validate_unique_fixed_grid_keys"] = _validate_unique_fixed_grid_keys
 globals()["project_track5_speed_limit"] = project_track5_speed_limit
