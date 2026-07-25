@@ -38,6 +38,8 @@ _ORIGINAL_LOAD = _IMPL.load_candidate_uncertainty_model
 def _finite_float(value: Any, *, name: str) -> float:
     """Return one finite non-Boolean scalar with a field-specific error."""
 
+    if np.ma.is_masked(value):
+        raise ValueError(f"{name} must be finite")
     if isinstance(value, np.ndarray):
         if value.ndim != 0:
             raise ValueError(f"{name} must be finite")
@@ -71,8 +73,11 @@ def _exact_integer(value: Any, *, name: str, positive: bool = False) -> int:
 def _model_vector(model: Any, name: str, expected_size: int) -> np.ndarray:
     """Return one finite one-dimensional model vector of the expected length."""
 
+    raw_values = getattr(model, name)
+    if np.ma.is_masked(raw_values):
+        raise ValueError(f"{name} must contain {expected_size} finite values")
     try:
-        values = np.asarray(getattr(model, name), dtype=float)
+        values = np.asarray(raw_values, dtype=float)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"{name} must contain {expected_size} finite values") from exc
     if values.ndim != 1 or values.size != expected_size or not np.isfinite(values).all():
