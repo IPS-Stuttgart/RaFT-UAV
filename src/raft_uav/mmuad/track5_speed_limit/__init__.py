@@ -98,20 +98,33 @@ def _numeric_cell_kind(value: object) -> str | None:
     return None
 
 
-def _validate_numeric_rows(submission: object) -> None:
-    """Reject numeric rows that the legacy normalizer would silently coerce or drop."""
+def _numeric_validation_scalar(value: object) -> object:
+    """Unwrap supported zero-dimensional real numeric containers."""
 
-    rows = _IMPL._strip_csv_headers(pd.DataFrame(submission).copy())
+    scalar = value
+    if isinstance(value, np.ma.MaskedArray) and not bool(np.ma.getmaskarray(value).any()):
+        scalar = value.data
+    if isinstance(scalar, np.ndarray) and scalar.ndim == 0:
+        return scalar.item()
+    return scalar
+
+
+def _validate_numeric_rows(submission: object) -> pd.DataFrame:
+    """Validate numeric rows and return safe scalar containers for projection."""
+
+    raw_rows = pd.DataFrame(submission).copy()
+    rows = _IMPL._strip_csv_headers(raw_rows.copy())
     if any(column not in rows.columns for column in _NUMERIC_COLUMNS):
-        return
+        return raw_rows
 
+    normalized = rows.copy()
     boolean_invalid: list[str] = []
     complex_invalid: list[str] = []
     masked_invalid: list[str] = []
     nonscalar_invalid: list[str] = []
-    nonfinite_invalid: list[str] = []
     for column in _NUMERIC_COLUMNS:
         kinds = rows[column].map(_numeric_cell_kind)
+        normalized[column] = rows[column].map(_numeric_validation_scalar)
         for kind, target in (
             ("Boolean", boolean_invalid),
             ("complex", complex_invalid),
@@ -123,14 +136,6 @@ def _validate_numeric_rows(submission: object) -> None:
                 row_positions = np.flatnonzero(invalid).tolist()
                 target.append(f"{column} rows {row_positions}")
 
-        typed_invalid = kinds.notna().to_numpy(dtype=bool)
-        numeric_input = rows[column].mask(typed_invalid, np.nan)
-        numeric = pd.to_numeric(numeric_input, errors="coerce")
-        finite = np.isfinite(numeric.to_numpy(dtype=float))
-        invalid = ~finite & ~typed_invalid
-        if invalid.any():
-            row_positions = np.flatnonzero(invalid).tolist()
-            nonfinite_invalid.append(f"{column} rows {row_positions}")
     if boolean_invalid:
         details = "; ".join(boolean_invalid)
         raise ValueError(f"submission contains Boolean numeric values: {details}")
@@ -143,9 +148,19 @@ def _validate_numeric_rows(submission: object) -> None:
     if nonscalar_invalid:
         details = "; ".join(nonscalar_invalid)
         raise ValueError(f"submission contains non-scalar numeric values: {details}")
+
+    nonfinite_invalid: list[str] = []
+    for column in _NUMERIC_COLUMNS:
+        numeric = pd.to_numeric(normalized[column], errors="coerce")
+        finite = np.isfinite(numeric.to_numpy(dtype=float))
+        if finite.all():
+            continue
+        row_positions = np.flatnonzero(~finite).tolist()
+        nonfinite_invalid.append(f"{column} rows {row_positions}")
     if nonfinite_invalid:
         details = "; ".join(nonfinite_invalid)
         raise ValueError(f"submission contains non-finite numeric values: {details}")
+    return normalized
 
 
 def _validate_unique_fixed_grid_keys(submission: object) -> None:
@@ -221,10 +236,10 @@ def project_track5_speed_limit(
         message="anchor_blend must be finite and in [0, 1)",
     )
     _validate_sequence_ids(submission)
-    _validate_numeric_rows(submission)
-    _validate_unique_fixed_grid_keys(submission)
+    validated_submission = _validate_numeric_rows(submission)
+    _validate_unique_fixed_grid_keys(validated_submission)
     return _ORIGINAL_PROJECT(
-        submission,
+        validated_submission,
         max_speed_mps=validated_max_speed_mps,
         iterations=validated_iterations,
         anchor_blend=validated_anchor_blend,
@@ -246,6 +261,7 @@ globals()["_positive_integer"] = _positive_integer
 globals()["_reject_boolean_scalar"] = _reject_boolean_scalar
 globals()["_validate_sequence_ids"] = _validate_sequence_ids
 globals()["_numeric_cell_kind"] = _numeric_cell_kind
+globals()["_numeric_validation_scalar"] = _numeric_validation_scalar
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
 globals()["_validate_unique_fixed_grid_keys"] = _validate_unique_fixed_grid_keys
 globals()["project_track5_speed_limit"] = project_track5_speed_limit
