@@ -1,4 +1,11 @@
-"""Compatibility package for the basic MMUAD tracker."""
+"""Compatibility fixes for the basic MMUAD tracker.
+
+The maintained implementation lives in the sibling ``tracker.py`` module. This
+package preserves the public import path while normalizing numeric inputs,
+ignoring unusable timestamps in mobility scoring, preventing blank track IDs
+from becoming false multi-frame identities, and keeping truth interpolation
+inside the supported time span.
+"""
 
 from __future__ import annotations
 
@@ -26,6 +33,7 @@ _ORIGINAL_CANDIDATE_ROWS_WITH_OPTIONAL_DEFAULTS = (
     _LEGACY._candidate_rows_with_optional_defaults
 )
 _ORIGINAL_CANDIDATE_MOBILITY = _LEGACY._candidate_mobility
+_ORIGINAL_SELECT_TRACKLET_PATH = _LEGACY.select_tracklet_path
 _TRACKER_NUMERIC_COLUMNS = (
     "time_s",
     "x_m",
@@ -62,6 +70,27 @@ def _candidate_mobility(frame: pd.DataFrame, *, radius_m: float) -> np.ndarray:
             radius_m=radius_m,
         )
     return mobility
+
+
+def _is_blank_track_id(value: object) -> bool:
+    """Return whether a string identifier contains no non-whitespace text."""
+
+    return isinstance(value, str) and not value.strip()
+
+
+def select_tracklet_path(
+    candidates: pd.DataFrame,
+    *,
+    config: TrackerConfig,
+) -> pd.DataFrame:
+    """Select a path without treating blank IDs as stable track identities."""
+
+    rows = pd.DataFrame(candidates).copy()
+    if "track_id" in rows.columns:
+        blank = rows["track_id"].map(_is_blank_track_id)
+        if bool(blank.any()):
+            rows.loc[blank, "track_id"] = np.nan
+    return _ORIGINAL_SELECT_TRACKLET_PATH(rows, config=config)
 
 
 def add_truth_errors(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
@@ -106,4 +135,5 @@ def add_truth_errors(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFra
 
 _LEGACY._candidate_rows_with_optional_defaults = _candidate_rows_with_optional_defaults
 _LEGACY._candidate_mobility = _candidate_mobility
+_LEGACY.select_tracklet_path = select_tracklet_path
 _LEGACY.add_truth_errors = add_truth_errors
