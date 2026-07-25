@@ -8,21 +8,27 @@ from typing import Any
 
 import numpy as np
 
+from raft_uav.numeric import optional_float, optional_int
+
 _PATCH_MARKER = "_raft_uav_validates_finite_imm_transition_controls"
 
 
 def _finite_float(value: Any, *, name: str) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{name} must be a finite scalar") from exc
-    if not np.isfinite(parsed):
+    parsed = optional_float(value)
+    if parsed is None:
         raise ValueError(f"{name} must be a finite scalar")
     return parsed
 
 
+def _positive_int(value: Any, *, name: str) -> int:
+    parsed = optional_int(value)
+    if parsed is None or parsed < 1:
+        raise ValueError(f"{name} must be a positive integer scalar")
+    return parsed
+
+
 def apply_imm_transition_validation_patch(module: ModuleType) -> None:
-    """Patch the legacy IMM helpers with finite-control validation."""
+    """Patch the legacy IMM helpers with strict scalar-control validation."""
 
     original_fixed_turn_rate_matrix = module.fixed_turn_rate_matrix
     original_uniform_ctmc_transition_matrix = module.uniform_ctmc_transition_matrix
@@ -45,6 +51,7 @@ def apply_imm_transition_validation_patch(module: ModuleType) -> None:
         dt_s: float,
         mode_switch_time_constant_s: float,
     ) -> np.ndarray:
+        mode_count = _positive_int(n_modes, name="n_modes")
         dt = _finite_float(dt_s, name="dt_s")
         time_constant = _finite_float(
             mode_switch_time_constant_s,
@@ -53,7 +60,7 @@ def apply_imm_transition_validation_patch(module: ModuleType) -> None:
         if time_constant <= 0.0:
             raise ValueError("mode_switch_time_constant_s must be positive and finite")
         return original_uniform_ctmc_transition_matrix(
-            n_modes,
+            mode_count,
             dt,
             time_constant,
         )
