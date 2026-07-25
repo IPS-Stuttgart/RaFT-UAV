@@ -35,7 +35,7 @@ def test_vertical_repair_rejects_invalid_sequence_ids(
         repair_track5_vertical_spikes(submission)
 
 
-@pytest.mark.parametrize("invalid_classification", [-1, 4, 1.5, "unknown"])
+@pytest.mark.parametrize("invalid_classification", [-1, 4, 1.5])
 def test_vertical_repair_rejects_invalid_classifications(
     invalid_classification: object,
 ) -> None:
@@ -46,6 +46,18 @@ def test_vertical_repair_rejects_invalid_classifications(
     with pytest.raises(
         ValueError,
         match=r"invalid fixed-grid identifiers: Classification rows \[1\]",
+    ):
+        repair_track5_vertical_spikes(submission)
+
+
+def test_vertical_repair_rejects_nonnumeric_classification() -> None:
+    submission = _submission_rows()
+    submission["Classification"] = submission["Classification"].astype(object)
+    submission.loc[1, "Classification"] = "unknown"
+
+    with pytest.raises(
+        ValueError,
+        match=r"non-finite numeric values: Classification rows \[1\]",
     ):
         repair_track5_vertical_spikes(submission)
 
