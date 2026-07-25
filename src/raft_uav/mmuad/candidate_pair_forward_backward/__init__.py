@@ -5,8 +5,9 @@ The maintained implementation lives in the sibling
 import path while preserving opaque sequence identifiers in optional mixture
 initialization files, applying score fallbacks row by row, canonicalizing
 numeric tracker identifiers before track-continuation scoring, treating tied
-rank scores symmetrically, rejecting non-finite inference controls, and using
-the configured fallback for malformed candidate uncertainties.
+rank scores symmetrically, rejecting non-finite inference controls, using the
+configured fallback for malformed candidate uncertainties, and normalizing
+source and branch labels before switch-penalty comparisons.
 """
 
 from __future__ import annotations
@@ -120,6 +121,22 @@ def _descending_average_ranks(values: np.ndarray) -> np.ndarray:
     return ranks
 
 
+def _canonical_identity_labels(values: Any, *, default: str = "candidate") -> np.ndarray:
+    """Normalize opaque source/branch labels for identity comparisons only."""
+
+    labels: list[str] = []
+    for value in np.asarray(values, dtype=object).reshape(-1):
+        missing = value is None or np.ma.is_masked(value)
+        if not missing:
+            try:
+                missing = bool(pd.isna(value))
+            except (TypeError, ValueError):
+                missing = False
+        text = "" if missing else str(value).strip().casefold()
+        labels.append(text or default)
+    return np.asarray(labels, dtype=object)
+
+
 _ORIGINAL_VALIDATE_CONFIG = _IMPL._validate_config
 _NUMERIC_CONFIG_FIELDS = (
     "default_sigma_m",
@@ -153,15 +170,19 @@ def _validate_config_with_finite_controls(config: Any) -> None:
 _ORIGINAL_TRANSITION_LOG_LIKELIHOOD = _IMPL._transition_log_likelihood
 
 
-def _transition_log_likelihood_with_canonical_track_ids(
+def _transition_log_likelihood_with_canonical_identities(
     previous: dict[str, Any],
     current: dict[str, Any],
     config: Any,
 ) -> Any:
-    """Apply the existing transition model after canonicalizing track identity."""
+    """Apply the transition model after canonicalizing categorical identities."""
 
     previous_rows = dict(previous)
     current_rows = dict(current)
+    previous_rows["sources"] = _canonical_identity_labels(previous.get("sources", ()))
+    current_rows["sources"] = _canonical_identity_labels(current.get("sources", ()))
+    previous_rows["branches"] = _canonical_identity_labels(previous.get("branches", ()))
+    current_rows["branches"] = _canonical_identity_labels(current.get("branches", ()))
     previous_rows["track_ids"] = canonical_track_ids(previous.get("track_ids", ()))
     current_rows["track_ids"] = canonical_track_ids(current.get("track_ids", ()))
     return _ORIGINAL_TRANSITION_LOG_LIKELIHOOD(previous_rows, current_rows, config)
@@ -173,7 +194,7 @@ _IMPL._candidate_sigma = _candidate_sigma_with_invalid_fallback
 _IMPL._normalize_scores = _normalize_scores_with_average_ties
 _IMPL._descending_ranks = _descending_average_ranks
 _IMPL._validate_config = _validate_config_with_finite_controls
-_IMPL._transition_log_likelihood = _transition_log_likelihood_with_canonical_track_ids
+_IMPL._transition_log_likelihood = _transition_log_likelihood_with_canonical_identities
 
 globals().update(
     {
