@@ -15,8 +15,12 @@ def nearest_time_indices(
     working copy internally before using ``searchsorted``.
     """
 
-    reference = np.asarray(reference_times_s, dtype=float).reshape(-1)
-    query = np.asarray(query_times_s, dtype=float).reshape(-1)
+    reference_masked = np.ma.asarray(reference_times_s, dtype=float).reshape(-1)
+    query_masked = np.ma.asarray(query_times_s, dtype=float).reshape(-1)
+    reference = np.asarray(reference_masked.filled(np.nan), dtype=float)
+    query = np.asarray(query_masked.filled(np.nan), dtype=float)
+    if not bool(np.all(np.isfinite(query))):
+        raise ValueError("query_times_s must contain only finite timestamps")
     finite_reference = np.isfinite(reference)
     if not bool(np.any(finite_reference)):
         raise ValueError("reference_times_s must contain at least one finite timestamp")
