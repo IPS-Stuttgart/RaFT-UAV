@@ -29,19 +29,27 @@ class ConformalRadius:
         }
 
 
-def fit_conformal_radius(errors_m: Sequence[float], *, alpha: float = 0.1) -> ConformalRadius:
-    """Fit a split-conformal radius from calibration errors."""
+def fit_conformal_radius(
+    errors_m: Sequence[float],
+    *,
+    alpha: float = 0.1,
+) -> ConformalRadius:
+    """Fit a split-conformal radius from non-negative calibration errors."""
 
-    errors = np.asarray(errors_m, dtype=float).reshape(-1)
+    masked_errors = np.ma.asarray(errors_m, dtype=float).reshape(-1)
+    errors = np.asarray(masked_errors.filled(np.nan), dtype=float)
     errors = errors[np.isfinite(errors)]
     if not 0.0 < float(alpha) < 1.0:
         raise ValueError("alpha must be in (0, 1)")
+    if bool(np.any(errors < 0.0)):
+        raise ValueError("errors_m must contain only non-negative values")
     if errors.size == 0:
         return ConformalRadius(float("nan"), float(alpha), 0)
     n = errors.size
     rank = int(np.ceil((n + 1) * (1.0 - float(alpha))))
     rank = min(max(rank, 1), n)
-    return ConformalRadius(float(np.partition(errors, rank - 1)[rank - 1]), float(alpha), int(n))
+    radius = float(np.partition(errors, rank - 1)[rank - 1])
+    return ConformalRadius(radius, float(alpha), int(n))
 
 
 def fit_conformal_radii_by_group(
@@ -78,7 +86,9 @@ def apply_group_conformal_radius(
     out = frame.copy()
     groups = out.get(group_column, pd.Series("", index=out.index, dtype=str))
     out[output_column] = [
-        float(radius.radius_m) if (radius := radii.get(str(value))) is not None else float("nan")
+        float(radius.radius_m)
+        if (radius := radii.get(str(value))) is not None
+        else float("nan")
         for value in groups
     ]
     return out
