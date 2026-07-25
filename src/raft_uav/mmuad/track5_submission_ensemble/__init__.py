@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling
 ``track5_submission_ensemble.py`` module. This package preserves the public
-import path while preventing malformed normalized classification values from
-being silently dropped or truncated to integers and keeping weighted ensemble
+import path while preventing malformed normalized numeric and classification
+values from being silently dropped or truncated and keeping weighted ensemble
 arithmetic finite for very large non-negative weights.
 """
 
@@ -39,12 +39,34 @@ _ORIGINAL_NORMALIZE_INTERNAL_SUBMISSION_ROWS = (
 _ORIGINAL_ENSEMBLE_TRACK5_SUBMISSIONS = _IMPL.ensemble_track5_submissions
 
 
+def _invalid_row_summary(index: pd.Index, invalid: np.ndarray) -> str:
+    positions = np.flatnonzero(np.asarray(invalid, dtype=bool))
+    labels = [repr(index[int(position)]) for position in positions[:5]]
+    suffix = ", ..." if len(positions) > 5 else ""
+    return ", ".join(labels) + suffix
+
+
+def _raise_invalid_normalized_rows(
+    *,
+    source_path: Path,
+    index: pd.Index,
+    invalid: np.ndarray,
+    field: str,
+) -> None:
+    count = int(np.count_nonzero(invalid))
+    sample = _invalid_row_summary(index, invalid)
+    raise ValueError(
+        f"{source_path} contains {count} invalid normalized Track 5 {field} "
+        f"row(s) at index/indices {sample}"
+    )
+
+
 def _normalize_internal_submission_rows(
     rows: pd.DataFrame,
     *,
     source_path: Path,
 ) -> pd.DataFrame:
-    """Reject invalid classes on normalized rows with usable measurements."""
+    """Reject malformed normalized rows before the legacy loader can drop them."""
 
     frame = pd.DataFrame(rows).copy()
     lookup = _IMPL._normalized_column_lookup(frame)
@@ -60,22 +82,27 @@ def _normalize_internal_submission_rows(
             },
             index=frame.index,
         )
-        finite_measurements = pd.Series(
-            np.isfinite(measurements.to_numpy(dtype=float)).all(axis=1),
-            index=frame.index,
-        )
-        if bool(finite_measurements.any()):
-            raw_classes = frame.loc[finite_measurements, classification_column]
-            normalized_classes = _IMPL._predicted_class_labels(raw_classes)
-            valid_classes = normalized_classes.isin(OFFICIAL_CLASS_LABELS)
-            if not bool(valid_classes.all()):
-                examples = sorted(
-                    {repr(value) for value in raw_classes.loc[~valid_classes].tolist()}
+        for column in measurement_columns:
+            invalid = ~np.isfinite(measurements[column].to_numpy(dtype=float))
+            if bool(invalid.any()):
+                _raise_invalid_normalized_rows(
+                    source_path=source_path,
+                    index=frame.index,
+                    invalid=invalid,
+                    field=column,
                 )
-                raise ValueError(
-                    "invalid normalized Track 5 Classification values in "
-                    f"{source_path}: {', '.join(examples)}"
-                )
+
+        raw_classes = frame[classification_column]
+        normalized_classes = _IMPL._predicted_class_labels(raw_classes)
+        valid_classes = normalized_classes.isin(OFFICIAL_CLASS_LABELS)
+        if not bool(valid_classes.all()):
+            examples = sorted(
+                {repr(value) for value in raw_classes.loc[~valid_classes].tolist()}
+            )
+            raise ValueError(
+                "invalid normalized Track 5 Classification values in "
+                f"{source_path}: {', '.join(examples)}"
+            )
 
     return _ORIGINAL_NORMALIZE_INTERNAL_SUBMISSION_ROWS(
         frame,
@@ -154,6 +181,8 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_invalid_row_summary"] = _invalid_row_summary
+globals()["_raise_invalid_normalized_rows"] = _raise_invalid_normalized_rows
 globals()["_normalize_internal_submission_rows"] = (
     _normalize_internal_submission_rows
 )
