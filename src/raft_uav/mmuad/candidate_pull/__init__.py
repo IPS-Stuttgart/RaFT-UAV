@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling ``candidate_pull.py`` module.
 This package preserves the public import path while canonicalizing official result
-row indices, sanitizing non-finite candidate ranking metadata, and preventing
-finite score sums from overflowing during candidate-center construction.
+row indices, preserving result-row order during nearest-center alignment,
+sanitizing non-finite candidate ranking metadata, and preventing finite score
+sums from overflowing during candidate-center construction.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_NORMALIZE_OFFICIAL_RESULTS = _IMPL._normalize_official_results
 _ORIGINAL_TOPK_CANDIDATE_CENTERS = _IMPL.topk_candidate_centers
 _ORIGINAL_CANDIDATE_CENTERS_FOR_RESULTS = _IMPL.candidate_centers_for_results
+_ORIGINAL_ALIGN_CANDIDATE_CENTERS = _IMPL.align_candidate_centers
 _CANDIDATE_SCORE_COLUMNS = (
     "ranker_score",
     "cluster_ranker_score",
@@ -207,9 +209,47 @@ def candidate_centers_for_results(
     return _restore_score_scale(centers, factors)
 
 
+def align_candidate_centers(
+    results: pd.DataFrame,
+    centers: pd.DataFrame,
+    *,
+    time_tolerance_s: float,
+) -> pd.DataFrame:
+    """Align centers while preserving the caller's result-row order.
+
+    The legacy implementation sorts rows inside each sequence and concatenates
+    sequences in group-key order. Its returned frame therefore no longer matches
+    the positional order of ``results`` when sequences are interleaved or
+    timestamps are unsorted. The high-level candidate-pull workflow assigns
+    uncertainty columns from that frame positionally, which can attach another
+    row's diagnostics. Carrying a temporary global order column through the
+    merge restores the original row order after all per-sequence alignments.
+    """
+
+    ordered_results = results.copy()
+    order_column = "__candidate_pull_result_order__"
+    occupied = set(ordered_results.columns) | set(centers.columns)
+    while order_column in occupied:
+        order_column += "_"
+    ordered_results[order_column] = np.arange(len(ordered_results), dtype=np.int64)
+    aligned = _ORIGINAL_ALIGN_CANDIDATE_CENTERS(
+        ordered_results,
+        centers,
+        time_tolerance_s=time_tolerance_s,
+    )
+    if order_column not in aligned.columns:
+        return aligned
+    return (
+        aligned.sort_values(order_column, kind="mergesort")
+        .drop(columns=[order_column])
+        .reset_index(drop=True)
+    )
+
+
 _IMPL._normalize_official_results = _normalize_official_results
 _IMPL.topk_candidate_centers = topk_candidate_centers
 _IMPL.candidate_centers_for_results = candidate_centers_for_results
+_IMPL.align_candidate_centers = align_candidate_centers
 
 globals().update(
     {
@@ -221,6 +261,7 @@ globals().update(
 globals()["_normalize_official_results"] = _normalize_official_results
 globals()["topk_candidate_centers"] = topk_candidate_centers
 globals()["candidate_centers_for_results"] = candidate_centers_for_results
+globals()["align_candidate_centers"] = align_candidate_centers
 
 __doc__ = _IMPL.__doc__
 __all__ = [
