@@ -1,9 +1,10 @@
-"""Compatibility fix for cross-run selected-radar candidate matching.
+"""Compatibility fixes for tracklet feature-store diagnostics.
 
 The maintained implementation lives in the sibling ``tracklet_feature_store.py``
 module. This package preserves the public import path while matching external
 selected-radar rows by stable track ID, with track-index fallback only when an
-ID is unavailable.
+ID is unavailable, and parsing persisted Boolean diagnostics explicitly instead
+of relying on Python string truthiness.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -25,6 +27,15 @@ if _SPEC is None or _SPEC.loader is None:
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+
+_ORIGINAL_BUILD_COUNTERFACTUAL_ASSOCIATION_DASHBOARD = (
+    _IMPL.build_counterfactual_association_dashboard
+)
+_ORIGINAL_SUMMARIZE_COUNTERFACTUAL_REGRET = _IMPL.summarize_counterfactual_regret
+_TRUE_BOOLEAN_TEXT = frozenset({"true", "t", "yes", "y", "on"})
+_FALSE_BOOLEAN_TEXT = frozenset(
+    {"false", "f", "no", "n", "off", "", "nan", "none", "null", "<na>", "nat"}
+)
 
 
 def _identifier_key(
@@ -99,8 +110,58 @@ def _selection_mask(
     )
 
 
+def _boolean_series(values: Any, *, column: str) -> pd.Series:
+    """Parse native and serialized Boolean diagnostics without string truthiness."""
+
+    series = pd.Series(values, copy=False)
+    if series.empty:
+        return pd.Series(index=series.index, dtype=bool)
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return series.astype("boolean").fillna(False).astype(bool)
+
+    numeric = pd.to_numeric(series, errors="coerce")
+    text = series.astype("string").str.strip().str.casefold()
+    truthy = (numeric.eq(1.0) | text.isin(_TRUE_BOOLEAN_TEXT)).fillna(False)
+    falsy = (
+        series.isna() | numeric.eq(0.0) | text.isin(_FALSE_BOOLEAN_TEXT)
+    ).fillna(False)
+    invalid = ~(truthy | falsy)
+    if bool(invalid.any()):
+        indices = series.index[invalid].tolist()
+        invalid_values = series.loc[indices].tolist()
+        raise ValueError(
+            f"{column} contains invalid Boolean values at rows {indices}: "
+            f"{invalid_values}"
+        )
+    return truthy.astype(bool)
+
+
+def build_counterfactual_association_dashboard(features: Any) -> pd.DataFrame:
+    """Build the dashboard after normalizing persisted selection flags."""
+
+    normalized = pd.DataFrame(features).copy()
+    column = "chosen_by_selected_radar"
+    if column in normalized.columns:
+        normalized[column] = _boolean_series(normalized[column], column=column)
+    return _ORIGINAL_BUILD_COUNTERFACTUAL_ASSOCIATION_DASHBOARD(normalized)
+
+
+def summarize_counterfactual_regret(regret: Any) -> dict[str, Any]:
+    """Summarize regret after normalizing persisted availability flags."""
+
+    normalized = pd.DataFrame(regret).copy()
+    for column in ("truth_available", "selected_present"):
+        if column in normalized.columns:
+            normalized[column] = _boolean_series(normalized[column], column=column)
+    return _ORIGINAL_SUMMARIZE_COUNTERFACTUAL_REGRET(normalized)
+
+
 _IMPL._candidate_match_key = _candidate_match_key
 _IMPL._selection_mask = _selection_mask
+_IMPL.build_counterfactual_association_dashboard = (
+    build_counterfactual_association_dashboard
+)
+_IMPL.summarize_counterfactual_regret = summarize_counterfactual_regret
 
 globals().update(
     {
@@ -112,6 +173,11 @@ globals().update(
 globals()["_identifier_key"] = _identifier_key
 globals()["_candidate_match_key"] = _candidate_match_key
 globals()["_selection_mask"] = _selection_mask
+globals()["_boolean_series"] = _boolean_series
+globals()["build_counterfactual_association_dashboard"] = (
+    build_counterfactual_association_dashboard
+)
+globals()["summarize_counterfactual_regret"] = summarize_counterfactual_regret
 
 __doc__ = _IMPL.__doc__
 __all__ = [
