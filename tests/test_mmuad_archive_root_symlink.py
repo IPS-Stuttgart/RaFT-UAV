@@ -36,3 +36,20 @@ def test_extract_mmuad_archive_rejects_symlinked_root(tmp_path: Path) -> None:
         extract_mmuad_archive(archive, output_root)
 
     assert not (outside / "sequence" / "data.txt").exists()
+
+
+def test_extract_mmuad_archive_rejects_symlinked_output_root(tmp_path: Path) -> None:
+    archive = tmp_path / "bundle.zip"
+    _write_archive(archive)
+    output_root = tmp_path / "output"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    try:
+        output_root.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:  # pragma: no cover - platform permission limitation
+        pytest.skip(f"directory symlinks are unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="output root symlink"):
+        extract_mmuad_archive(archive, output_root)
+
+    assert not (outside / "sequence" / "data.txt").exists()

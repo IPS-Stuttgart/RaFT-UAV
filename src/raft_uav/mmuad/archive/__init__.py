@@ -40,13 +40,16 @@ class _ArchiveModule(ModuleType):
 
 
 def extract_mmuad_archive(archive_path: Path, output_root: Path) -> dict[str, Any]:
-    """Extract an archive without following a pre-existing extraction-root link."""
+    """Extract an archive without following pre-existing output-directory links."""
 
     archive = Path(archive_path)
     if not archive.is_file() or _IMPL.archive_kind(archive) == "unknown":
         return _ORIGINAL_EXTRACT_MMUAD_ARCHIVE(archive, output_root)
 
     output = Path(output_root)
+    if output.is_symlink():
+        raise ValueError(f"unsafe MMUAD output root symlink: {output}")
+
     archive_sha256 = _IMPL._sha256_file(archive)
     extract_root = output / (
         f"{_IMPL._safe_dir_name(_IMPL.archive_stem(archive))}-{archive_sha256[:12]}"
@@ -55,6 +58,8 @@ def extract_mmuad_archive(archive_path: Path, output_root: Path) -> dict[str, An
         raise ValueError(f"unsafe MMUAD extraction root symlink: {extract_root}")
 
     output.mkdir(parents=True, exist_ok=True)
+    if output.is_symlink():
+        raise ValueError(f"unsafe MMUAD output root symlink: {output}")
     extract_root.mkdir(exist_ok=True)
     expected_root = output.resolve() / extract_root.name
     if extract_root.is_symlink() or extract_root.resolve() != expected_root:
