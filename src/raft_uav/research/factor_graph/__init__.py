@@ -29,7 +29,7 @@ _SPEC.loader.exec_module(_LEGACY)
 def _row_position_std(row: pd.Series, cfg: object) -> np.ndarray:
     """Return valid row uncertainty or the configured source-specific default."""
 
-    source = str(row.get("source", "radar"))
+    source = str(row.get("source", "radar")).strip().casefold()
     default = float(cfg.rf_std_m if source == "rf" else cfg.measurement_std_m)
 
     std_columns = ("std_east_m", "std_north_m", "std_up_m")
