@@ -72,10 +72,10 @@ def _validate_sequence_ids(submission: object) -> None:
     text = rows["sequence_id"].astype("string").str.strip()
     invalid = text.isna() | text.eq("").fillna(False)
     if invalid.any():
-        row_positions = np.flatnonzero(invalid.to_numpy(dtype=bool)).tolist()[:5]
+        row_indices = rows.index[invalid.to_numpy(dtype=bool)].tolist()[:5]
         raise ValueError(
             "submission contains missing or blank sequence_id values: "
-            f"sequence_id rows {row_positions}"
+            f"sequence_id rows {row_indices}"
         )
 
 
@@ -93,15 +93,15 @@ def _validate_numeric_rows(submission: object) -> None:
             lambda value: isinstance(value, (bool, np.bool_))
         ).to_numpy(dtype=bool)
         if boolean.any():
-            row_positions = np.flatnonzero(boolean).tolist()
-            boolean_invalid.append(f"{column} rows {row_positions}")
+            row_indices = rows.index[boolean].tolist()
+            boolean_invalid.append(f"{column} rows {row_indices}")
 
         numeric = pd.to_numeric(rows[column], errors="coerce")
         finite = np.isfinite(numeric.to_numpy(dtype=float))
         if finite.all():
             continue
-        row_positions = np.flatnonzero(~finite).tolist()
-        nonfinite_invalid.append(f"{column} rows {row_positions}")
+        row_indices = rows.index[~finite].tolist()
+        nonfinite_invalid.append(f"{column} rows {row_indices}")
     if boolean_invalid:
         details = "; ".join(boolean_invalid)
         raise ValueError(f"submission contains Boolean numeric values: {details}")
