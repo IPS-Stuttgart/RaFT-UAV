@@ -188,7 +188,7 @@ def _bool_column(rows: pd.DataFrame, column: str) -> pd.Series:
     normalized = pd.Series(False, index=rows.index, dtype=bool)
     normalized.loc[numeric_mask] = numeric.loc[numeric_mask].eq(1.0)
 
-    text = values.fillna(False).astype(str).str.strip().str.lower()
+    text = values.astype("string").fillna("").str.strip().str.lower()
     normalized.loc[~numeric_mask] = text.loc[~numeric_mask].isin(
         {"1", "true", "t", "yes", "y"}
     )

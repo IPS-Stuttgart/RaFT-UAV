@@ -29,6 +29,27 @@ from raft_uav.mmuad.template_snap_utils import (
 )
 
 
+def _bool_column(rows: pd.DataFrame, column: str) -> pd.Series:
+    """Normalize Boolean diagnostics, including serialized numeric flags."""
+
+    if column not in rows.columns:
+        return pd.Series(False, index=rows.index, dtype=bool)
+    values = pd.Series(rows[column], index=rows.index)
+    if pd.api.types.is_bool_dtype(values.dtype):
+        return values.fillna(False).astype(bool)
+
+    numeric = pd.to_numeric(values, errors="coerce")
+    numeric_mask = numeric.notna()
+    normalized = pd.Series(False, index=rows.index, dtype=bool)
+    normalized.loc[numeric_mask] = numeric.loc[numeric_mask].eq(1.0)
+
+    text = values.fillna("").astype(str).str.strip().str.casefold()
+    normalized.loc[~numeric_mask] = text.loc[~numeric_mask].isin(
+        {"1", "true", "t", "yes", "y"}
+    )
+    return normalized
+
+
 def write_template_snapped_submission(
     *,
     results: pd.DataFrame,
@@ -71,15 +92,19 @@ def write_template_snapped_submission(
     )
     paths["validation_json"].write_text(json.dumps(_jsonable(validation.summary), indent=2))
     validation.rows.to_csv(paths["validation_rows_csv"], index=False)
+
+    valid = _bool_column(diagnostics, "valid")
+    extrapolated = _bool_column(diagnostics, "extrapolated")
+    large_gap_fallback = _bool_column(diagnostics, "large_gap_fallback")
     manifest = {
         "schema": "raft-uav-mmuad-template-snap-v1",
         "row_count": int(len(snapped)),
         "template_row_count": int(len(_normalize_template_rows(template))),
         "source_result_rows": int(len(results)),
-        "valid_snapped_rows": int(diagnostics["valid"].astype(bool).sum()),
-        "invalid_snapped_rows": int((~diagnostics["valid"].astype(bool)).sum()),
-        "extrapolated_rows": int(diagnostics["extrapolated"].astype(bool).sum()),
-        "large_gap_fallback_rows": int(diagnostics["large_gap_fallback"].astype(bool).sum()),
+        "valid_snapped_rows": int(valid.sum()),
+        "invalid_snapped_rows": int((~valid).sum()),
+        "extrapolated_rows": int(extrapolated.sum()),
+        "large_gap_fallback_rows": int(large_gap_fallback.sum()),
         "leaderboard_ready": bool(validation.summary.get("leaderboard_ready", False)),
         "codabench_upload_ready": bool(validation.summary.get("codabench_upload_ready", False)),
         "resample_method": str(resample_method),
