@@ -29,6 +29,7 @@ for _name in dir(_LEGACY):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_LEGACY, _name)
 
+TrackerConfig = _LEGACY.TrackerConfig
 _ORIGINAL_CANDIDATE_ROWS_WITH_OPTIONAL_DEFAULTS = (
     _LEGACY._candidate_rows_with_optional_defaults
 )
