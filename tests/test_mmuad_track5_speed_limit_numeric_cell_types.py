@@ -42,7 +42,12 @@ def test_speed_limit_rejects_wrapped_boolean_cells(value: object) -> None:
 
 @pytest.mark.parametrize(
     "value",
-    [1.0 + 2.0j, np.complex128(3.0 + 0.0j), np.array(4.0 + 5.0j), np.ma.array(6.0 + 0.0j, mask=False)],
+    [
+        1.0 + 2.0j,
+        np.complex128(3.0 + 0.0j),
+        np.array(4.0 + 5.0j),
+        np.ma.array(6.0 + 0.0j, mask=False),
+    ],
 )
 def test_speed_limit_rejects_complex_cells(value: object) -> None:
     rows = _submission()
