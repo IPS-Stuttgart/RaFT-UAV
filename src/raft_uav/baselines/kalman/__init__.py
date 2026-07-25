@@ -2,7 +2,8 @@
 
 The maintained implementation lives in the sibling ``kalman.py`` module. This
 package preserves the public import path while rejecting asymmetric or indefinite
-measurement covariances before they reach Kalman updates.
+measurement covariances and invalid tracker initialization values before they
+reach Kalman updates.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_TRACKING_MEASUREMENT_POST_INIT = _IMPL.TrackingMeasurement.__post_init__
+_ORIGINAL_TRACKER_INIT = _IMPL.AsyncConstantVelocityKalmanTracker.__init__
 
 
 def _validated_tracking_measurement_post_init(
@@ -50,9 +52,76 @@ def _validated_tracking_measurement_post_init(
     )
 
 
+def _finite_real_scalar(value: object, *, name: str, nonnegative: bool = False) -> float:
+    """Return a finite scalar, optionally requiring a non-negative value."""
+
+    parsed = _IMPL.optional_float(value)
+    if parsed is None or (nonnegative and parsed < 0.0):
+        qualifier = "finite, non-negative real scalar" if nonnegative else "finite real scalar"
+        raise ValueError(f"{name} must be a {qualifier}")
+    return parsed
+
+
+def _finite_initial_position(value: object) -> np.ndarray:
+    """Return a finite real 2D, 3D, or position-plus-velocity state vector."""
+
+    message = "initial_position must contain 2, 3, or 6 finite real values"
+    try:
+        masked = np.ma.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if bool(np.ma.getmaskarray(masked).any()) or np.iscomplexobj(masked.data):
+        raise ValueError(message)
+    try:
+        position = np.asarray(masked.data, dtype=float).reshape(-1)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if position.size not in (2, 3, 6) or not np.isfinite(position).all():
+        raise ValueError(message)
+    return position
+
+
+def _validated_tracker_init(
+    self: object,
+    initial_position: np.ndarray,
+    initial_time_s: float,
+    initial_position_std_m: float = 50.0,
+    initial_velocity_std_mps: float = 15.0,
+    acceleration_std_mps2: float = 4.0,
+) -> None:
+    """Reject malformed initialization values before constructing filter state."""
+
+    position = _finite_initial_position(initial_position)
+    time_s = _finite_real_scalar(initial_time_s, name="initial_time_s")
+    position_std = _finite_real_scalar(
+        initial_position_std_m,
+        name="initial_position_std_m",
+        nonnegative=True,
+    )
+    velocity_std = _finite_real_scalar(
+        initial_velocity_std_mps,
+        name="initial_velocity_std_mps",
+        nonnegative=True,
+    )
+    acceleration_std = _finite_real_scalar(
+        acceleration_std_mps2,
+        name="acceleration_std_mps2",
+        nonnegative=True,
+    )
+    _ORIGINAL_TRACKER_INIT(
+        self,
+        position,
+        time_s,
+        position_std,
+        velocity_std,
+        acceleration_std,
+    )
+
+
 _IMPL.TrackingMeasurement.__post_init__ = (
     _validated_tracking_measurement_post_init
 )
+_IMPL.AsyncConstantVelocityKalmanTracker.__init__ = _validated_tracker_init
 
 globals().update(
     {
@@ -64,9 +133,13 @@ globals().update(
 globals()["_ORIGINAL_TRACKING_MEASUREMENT_POST_INIT"] = (
     _ORIGINAL_TRACKING_MEASUREMENT_POST_INIT
 )
+globals()["_ORIGINAL_TRACKER_INIT"] = _ORIGINAL_TRACKER_INIT
 globals()["_validated_tracking_measurement_post_init"] = (
     _validated_tracking_measurement_post_init
 )
+globals()["_finite_real_scalar"] = _finite_real_scalar
+globals()["_finite_initial_position"] = _finite_initial_position
+globals()["_validated_tracker_init"] = _validated_tracker_init
 
 __doc__ = _IMPL.__doc__
 __all__ = [
