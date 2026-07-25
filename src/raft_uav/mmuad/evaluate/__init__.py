@@ -2,9 +2,11 @@
 
 The legacy implementation remains in the sibling ``evaluate.py`` module. This
 package preserves the public import path while rejecting ambiguous
-case/whitespace-equivalent submission headers, replacing nearest-time matching
-with a cardinality-first one-to-one assignment that is independent of CSV row
-order, and normalizing serialized match flags before metrics are summarized.
+case/whitespace-equivalent submission headers, rejecting malformed required
+numeric rows before the legacy loader can silently drop them, replacing
+nearest-time matching with a cardinality-first one-to-one assignment that is
+independent of CSV row order, and normalizing serialized match flags before
+metrics are summarized.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ _should_restrict_to_track_id = _IMPL._should_restrict_to_track_id
 _truth_track_id = _IMPL._truth_track_id
 _ORIGINAL_LOAD_SUBMISSION_CSV = _IMPL.load_submission_csv
 _ORIGINAL_METRICS_FROM_MATCHES = _IMPL.metrics_from_matches
+_REQUIRED_SUBMISSION_NUMERIC_COLUMNS = ("time_s", "x_m", "y_m", "z_m")
 _TRUE_MATCH_TEXT = frozenset({"true", "t", "yes", "y", "1", "1.0"})
 _FALSE_MATCH_TEXT = frozenset(
     {
@@ -101,10 +104,50 @@ def _read_physical_submission_headers(path: Path) -> list[str]:
     return [str(value) for value in header.iloc[0].tolist()]
 
 
+def _submission_rows_before_numeric_coercion(path: Path) -> pd.DataFrame:
+    """Return alias-normalized CSV rows before numeric coercion or filtering."""
+
+    frame = _IMPL.normalize_time_column_aliases(
+        pd.read_csv(path, dtype=str, keep_default_na=False),
+        target="time_s",
+    )
+    return _IMPL._rename_submission_aliases(frame)
+
+
+def _invalid_submission_row_summary(index: pd.Index, invalid: np.ndarray) -> str:
+    """Return a compact list of invalid original row labels."""
+
+    positions = np.flatnonzero(np.asarray(invalid, dtype=bool))
+    labels = [repr(index[int(position)]) for position in positions[:5]]
+    suffix = ", ..." if len(positions) > 5 else ""
+    return ", ".join(labels) + suffix
+
+
+def _validate_submission_numeric_rows(path: Path) -> None:
+    """Reject malformed required numeric rows before the legacy row filter runs."""
+
+    frame = _submission_rows_before_numeric_coercion(path)
+    missing = set(_REQUIRED_SUBMISSION_NUMERIC_COLUMNS).difference(frame.columns)
+    if missing:
+        return
+    for column in _REQUIRED_SUBMISSION_NUMERIC_COLUMNS:
+        numeric = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+        invalid = ~np.isfinite(numeric)
+        if not bool(invalid.any()):
+            continue
+        count = int(np.count_nonzero(invalid))
+        sample = _invalid_submission_row_summary(frame.index, invalid)
+        raise ValueError(
+            f"{path} contains {count} invalid submission {column} row(s) "
+            f"at index/indices {sample}"
+        )
+
+
 def load_submission_csv(path: Path) -> pd.DataFrame:
-    """Load a stable submission after validating its physical CSV headers."""
+    """Load a stable submission after validating headers and required rows."""
 
     _validate_unique_submission_headers(_read_physical_submission_headers(path))
+    _validate_submission_numeric_rows(path)
     return _ORIGINAL_LOAD_SUBMISSION_CSV(path)
 
 
@@ -367,6 +410,11 @@ globals().update(
 globals()["_normalized_submission_header"] = _normalized_submission_header
 globals()["_validate_unique_submission_headers"] = _validate_unique_submission_headers
 globals()["_read_physical_submission_headers"] = _read_physical_submission_headers
+globals()["_submission_rows_before_numeric_coercion"] = (
+    _submission_rows_before_numeric_coercion
+)
+globals()["_invalid_submission_row_summary"] = _invalid_submission_row_summary
+globals()["_validate_submission_numeric_rows"] = _validate_submission_numeric_rows
 globals()["load_submission_csv"] = load_submission_csv
 globals()["_validated_max_time_delta_s"] = _validated_max_time_delta_s
 globals()["match_submission_to_truth"] = match_submission_to_truth
