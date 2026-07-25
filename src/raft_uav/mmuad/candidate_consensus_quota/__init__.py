@@ -1,9 +1,10 @@
-"""Compatibility package validating candidate-consensus quota controls.
+"""Compatibility fixes for candidate-consensus quota controls and flags.
 
 The maintained implementation lives in the sibling
 ``candidate_consensus_quota.py`` module. This package preserves the public import
-path while validating scalar controls before empty-input returns and before
-numeric conversion can leak implementation-specific exceptions.
+path while validating scalar controls before empty-input returns and normalizing
+serialized Boolean diagnostics before they can corrupt summary counts or
+mandatory frame-cap selection.
 """
 
 from __future__ import annotations
@@ -11,10 +12,12 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
+
+from raft_uav.mmuad.candidate_reservoir import _boolean_series
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_consensus_quota.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -30,6 +33,11 @@ _SPEC.loader.exec_module(_IMPL)
 CandidateFrame = _IMPL.CandidateFrame
 ReservoirConfig = _IMPL.ReservoirConfig
 _ORIGINAL_BUILD = _IMPL.build_consensus_quota_reservoir
+_ORIGINAL_CAP_WITH_MANDATORY_CONSENSUS = _IMPL._cap_with_mandatory_consensus
+_BOOLEAN_DIAGNOSTIC_COLUMNS = (
+    "candidate_consensus_quota_selected",
+    "candidate_consensus_supported",
+)
 
 
 def _finite_scalar(value: Any, *, name: str) -> float:
@@ -89,6 +97,48 @@ def _boolean_control(value: Any, *, name: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(message)
     return value
+
+
+def _normalize_consensus_flags(rows: Any) -> pd.DataFrame:
+    """Normalize native and serialized consensus diagnostics explicitly."""
+
+    if isinstance(rows, CandidateFrame):
+        normalized = rows.rows.copy()
+    else:
+        normalized = pd.DataFrame(rows).copy()
+    for column in _BOOLEAN_DIAGNOSTIC_COLUMNS:
+        if column in normalized.columns:
+            normalized[column] = _boolean_series(
+                normalized[column],
+                normalized.index,
+            )
+    return normalized
+
+
+def _bool_column(rows: pd.DataFrame, column: str) -> pd.Series:
+    """Return one normalized Boolean diagnostic column."""
+
+    frame = pd.DataFrame(rows)
+    if column not in frame.columns:
+        return pd.Series(False, index=frame.index, dtype=bool)
+    return _boolean_series(frame[column], frame.index)
+
+
+def _cap_with_mandatory_consensus(
+    rows: pd.DataFrame,
+    *,
+    max_candidates_per_frame: int,
+    cap_reason_bonus: float,
+    preserve_reason_prefixes: Sequence[str],
+) -> pd.DataFrame:
+    """Apply the frame cap after normalizing serialized quota-selection flags."""
+
+    return _ORIGINAL_CAP_WITH_MANDATORY_CONSENSUS(
+        _normalize_consensus_flags(rows),
+        max_candidates_per_frame=max_candidates_per_frame,
+        cap_reason_bonus=cap_reason_bonus,
+        preserve_reason_prefixes=preserve_reason_prefixes,
+    )
 
 
 def _normalize_controls(
@@ -210,7 +260,7 @@ def build_consensus_quota_reservoir(
     origin_column: str | None = None,
     exclude_same_origin_support: bool = True,
 ) -> CandidateFrame:
-    """Build a consensus quota reservoir after normalizing every scalar control."""
+    """Build a consensus quota reservoir after normalizing controls and flags."""
 
     controls = _normalize_controls(
         consensus_top_n=consensus_top_n,
@@ -237,7 +287,7 @@ def build_consensus_quota_reservoir(
         name="exclude_same_origin_support",
     )
     return _ORIGINAL_BUILD(
-        candidates,
+        _normalize_consensus_flags(candidates),
         reservoir_config=reservoir_config,
         consensus_top_n=controls["consensus_top_n"],
         min_neighbor_count=controls["min_neighbor_count"],
@@ -263,6 +313,9 @@ def build_consensus_quota_reservoir(
 _IMPL._finite_scalar = _finite_scalar
 _IMPL._integer_control = _integer_control
 _IMPL._boolean_control = _boolean_control
+_IMPL._normalize_consensus_flags = _normalize_consensus_flags
+_IMPL._bool_column = _bool_column
+_IMPL._cap_with_mandatory_consensus = _cap_with_mandatory_consensus
 _IMPL._normalize_controls = _normalize_controls
 _IMPL._validate_controls = _validate_controls
 _IMPL.build_consensus_quota_reservoir = build_consensus_quota_reservoir
@@ -277,6 +330,9 @@ globals().update(
 globals()["_finite_scalar"] = _finite_scalar
 globals()["_integer_control"] = _integer_control
 globals()["_boolean_control"] = _boolean_control
+globals()["_normalize_consensus_flags"] = _normalize_consensus_flags
+globals()["_bool_column"] = _bool_column
+globals()["_cap_with_mandatory_consensus"] = _cap_with_mandatory_consensus
 globals()["_normalize_controls"] = _normalize_controls
 globals()["_validate_controls"] = _validate_controls
 globals()["build_consensus_quota_reservoir"] = build_consensus_quota_reservoir
