@@ -2,7 +2,8 @@
 
 The maintained implementation lives in the sibling ``track5_scorecard.py``
 module. This package preserves the public import path while retaining opaque
-sequence identifiers and normalizing serialized Boolean diagnostics.
+sequence identifiers and normalizing serialized Boolean diagnostics without
+silently accepting malformed flag values.
 """
 
 from __future__ import annotations
@@ -32,6 +33,23 @@ _SEQUENCE_IDENTIFIER_DTYPES = {
     "sequence": "string",
     "Sequence": "string",
 }
+_TRUE_BOOL_TEXT = frozenset({"true", "t", "yes", "y", "1", "1.0"})
+_FALSE_BOOL_TEXT = frozenset(
+    {
+        "false",
+        "f",
+        "no",
+        "n",
+        "0",
+        "0.0",
+        "",
+        "nan",
+        "none",
+        "null",
+        "<na>",
+        "nat",
+    }
+)
 
 
 def _load_optional_csv(path: Path | None) -> pd.DataFrame | None:
@@ -50,26 +68,33 @@ def _load_optional_csv(path: Path | None) -> pd.DataFrame | None:
 
 
 def _bool_series(values: Any) -> pd.Series:
-    """Normalize Boolean diagnostics, including CSV-style ``1.0`` / ``0.0``."""
+    """Normalize native and serialized Boolean diagnostics explicitly."""
 
     if values is None:
         return pd.Series(dtype=bool)
-    series = pd.Series(values)
+    input_name = getattr(values, "name", None)
+    series = pd.Series(values, copy=False)
     if series.empty:
-        return pd.Series(dtype=bool)
+        return pd.Series(index=series.index, dtype=bool)
     if pd.api.types.is_bool_dtype(series.dtype):
-        return series.fillna(False).astype(bool)
+        return series.astype("boolean").fillna(False).astype(bool)
 
     numeric = pd.to_numeric(series, errors="coerce")
-    numeric_mask = numeric.notna()
-    normalized = pd.Series(False, index=series.index, dtype=bool)
-    normalized.loc[numeric_mask] = numeric.loc[numeric_mask].eq(1.0)
-
-    text = series.astype("string").fillna("").str.strip().str.lower()
-    normalized.loc[~numeric_mask] = text.loc[~numeric_mask].isin(
-        {"1", "true", "t", "yes", "y"}
-    )
-    return normalized
+    text = series.astype("string").str.strip().str.casefold()
+    truthy = (text.isin(_TRUE_BOOL_TEXT) | numeric.eq(1.0)).fillna(False)
+    falsy = (
+        series.isna() | text.isin(_FALSE_BOOL_TEXT) | numeric.eq(0.0)
+    ).fillna(False)
+    invalid = ~(truthy | falsy)
+    if bool(invalid.any()):
+        invalid_indices = invalid[invalid].index.tolist()
+        invalid_values = series.loc[invalid_indices].tolist()
+        label = str(input_name) if input_name is not None else "Boolean diagnostics"
+        raise ValueError(
+            f"{label} contains invalid Boolean values at rows "
+            f"{invalid_indices}: {invalid_values}"
+        )
+    return truthy.astype(bool)
 
 
 _IMPL._load_optional_csv = _load_optional_csv
