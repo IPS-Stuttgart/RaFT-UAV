@@ -67,7 +67,14 @@ def catprob_candidate_pool(candidates, threshold):
     if threshold is None:
         return candidates
     threshold = _finite_real_control(threshold, name="threshold")
-    return _original_catprob_candidate_pool(candidates, threshold)
+    if candidates.empty or "cat_prob_uav" not in candidates.columns:
+        return candidates
+
+    scores = _pd.to_numeric(candidates["cat_prob_uav"], errors="coerce").to_numpy(
+        dtype=float
+    )
+    keep = _np.isfinite(scores) & (scores >= threshold)
+    return candidates.loc[keep].copy() if keep.any() else candidates
 
 
 def highest_catprob_candidate(candidates):
@@ -76,8 +83,14 @@ def highest_catprob_candidate(candidates):
         return None
     if "cat_prob_uav" not in candidates.columns:
         return candidates.iloc[0].copy()
-    scores = _pd.to_numeric(candidates["cat_prob_uav"], errors="coerce").fillna(-_np.inf)
-    best_position = int(_np.argmax(scores.to_numpy(dtype=float)))
+
+    scores = _pd.to_numeric(candidates["cat_prob_uav"], errors="coerce").to_numpy(
+        dtype=float
+    )
+    finite = _np.isfinite(scores)
+    if not finite.any():
+        return candidates.iloc[0].copy()
+    best_position = int(_np.argmax(_np.where(finite, scores, -_np.inf)))
     return candidates.iloc[best_position].copy()
 
 
