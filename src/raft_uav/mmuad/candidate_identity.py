@@ -8,6 +8,7 @@ opaque identifiers such as ``"001"`` into integer ``1``.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from decimal import Decimal, InvalidOperation
 import math
 import numbers
@@ -73,9 +74,9 @@ def canonical_track_id(value: Any) -> str | None:
     integer string.  Strings with leading zeros remain opaque, so ``"001"`` is
     not treated as the same identifier as numeric ``1``. Boolean-like values are
     treated as missing because schema coercion must not turn them into shared
-    temporal identities. Masked values, complex scalars, and non-scalar NumPy
-    arrays are likewise missing rather than being stringified into false stable
-    identities.
+    temporal identities. Masked values, complex scalars, and non-scalar
+    containers are likewise missing rather than being stringified into false
+    stable identities.
     """
 
     if value is None or np.ma.is_masked(value):
@@ -86,6 +87,8 @@ def canonical_track_id(value: Any) -> str | None:
         value = value.item()
     elif isinstance(value, np.generic):
         value = value.item()
+    if isinstance(value, Collection) and not isinstance(value, (str, bytes)):
+        return None
     if isinstance(value, numbers.Complex) and not isinstance(value, numbers.Real):
         return None
     if isinstance(value, Decimal) and not value.is_finite():
