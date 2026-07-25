@@ -1,9 +1,9 @@
-"""Compatibility wrapper validating candidate score calibration models.
+"""Compatibility fixes for candidate score calibration.
 
 The maintained implementation lives in the sibling
 ``candidate_score_calibration.py`` module. This package preserves the public
-import path while rejecting malformed persisted logit offsets before they can
-produce non-finite candidate scores or be silently discarded.
+import path while validating persisted logit offsets and retaining candidate
+row order through truth matching.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import sys
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_score_calibration.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -27,6 +28,7 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_VALIDATE_MODEL = _IMPL._validate_model
+_ORIGINAL_ATTACH_TRUTH_TARGETS = _IMPL._attach_truth_targets
 
 
 def _finite_logit_offset(value: Any, *, name: str) -> float:
@@ -81,7 +83,38 @@ def _validate_model(model: Mapping[str, Any]) -> None:
         _validate_offset_mapping(model.get(key, {}), name=key)
 
 
+def _attach_truth_targets(
+    candidates: pd.DataFrame,
+    truth: pd.DataFrame,
+    *,
+    good_threshold_m: float,
+    max_truth_time_delta_s: float,
+) -> pd.DataFrame:
+    """Attach truth targets without regrouping the caller's candidate rows."""
+
+    rows = pd.DataFrame(candidates).copy()
+    order_column = "__candidate_score_calibration_input_row_order"
+    while order_column in rows.columns:
+        order_column = f"_{order_column}"
+    rows[order_column] = np.arange(len(rows), dtype=int)
+
+    labelled = _ORIGINAL_ATTACH_TRUTH_TARGETS(
+        rows,
+        truth,
+        good_threshold_m=good_threshold_m,
+        max_truth_time_delta_s=max_truth_time_delta_s,
+    )
+    if order_column not in labelled.columns:  # pragma: no cover - defensive
+        return labelled
+    return (
+        labelled.sort_values(order_column, kind="stable")
+        .drop(columns=[order_column])
+        .reset_index(drop=True)
+    )
+
+
 _IMPL._validate_model = _validate_model
+_IMPL._attach_truth_targets = _attach_truth_targets
 
 globals().update(
     {
@@ -93,6 +126,7 @@ globals().update(
 globals()["_finite_logit_offset"] = _finite_logit_offset
 globals()["_validate_offset_mapping"] = _validate_offset_mapping
 globals()["_validate_model"] = _validate_model
+globals()["_attach_truth_targets"] = _attach_truth_targets
 
 __doc__ = _IMPL.__doc__
 __all__ = [
