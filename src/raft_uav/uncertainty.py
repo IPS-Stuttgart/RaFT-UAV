@@ -377,7 +377,7 @@ def _finite(value: object) -> float | None:
         return None
     try:
         out = float(value)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return None
     return out if np.isfinite(out) else None
 
