@@ -2,9 +2,9 @@
 
 The legacy implementation remains in the sibling ``evaluate.py`` module. This
 package preserves the public import path while rejecting ambiguous
-case/whitespace-equivalent submission headers and replacing nearest-time matching
+case/whitespace-equivalent submission headers, replacing nearest-time matching
 with a cardinality-first one-to-one assignment that is independent of CSV row
-order.
+order, and normalizing serialized match flags before metrics are summarized.
 """
 
 from __future__ import annotations
@@ -37,6 +37,24 @@ _track_ids = _IMPL._track_ids
 _should_restrict_to_track_id = _IMPL._should_restrict_to_track_id
 _truth_track_id = _IMPL._truth_track_id
 _ORIGINAL_LOAD_SUBMISSION_CSV = _IMPL.load_submission_csv
+_ORIGINAL_METRICS_FROM_MATCHES = _IMPL.metrics_from_matches
+_TRUE_MATCH_TEXT = frozenset({"true", "t", "yes", "y", "1", "1.0"})
+_FALSE_MATCH_TEXT = frozenset(
+    {
+        "false",
+        "f",
+        "no",
+        "n",
+        "0",
+        "0.0",
+        "",
+        "nan",
+        "none",
+        "null",
+        "<na>",
+        "nat",
+    }
+)
 
 
 def _normalized_submission_header(value: Any) -> str:
@@ -158,8 +176,12 @@ def match_submission_to_truth(
 
         pred_seq = pred_seq.reset_index(drop=True)
         truth_seq = truth_seq.reset_index(drop=True)
-        truth_track_ids = _track_ids(truth_seq) if "track_id" in truth_seq.columns else set()
-        submitted_track_ids = _track_ids(pred_seq) if "track_id" in pred_seq.columns else set()
+        truth_track_ids = (
+            _track_ids(truth_seq) if "track_id" in truth_seq.columns else set()
+        )
+        submitted_track_ids = (
+            _track_ids(pred_seq) if "track_id" in pred_seq.columns else set()
+        )
         restrict_to_track_id = _should_restrict_to_track_id(
             truth_track_ids,
             submitted_track_ids,
@@ -224,8 +246,12 @@ def _optimal_time_assignment(
     eligible = np.isfinite(time_delta) & (time_delta <= max_time_delta_s)
 
     if restrict_to_track_id:
-        pred_track_ids = predictions["track_id"].map(_valid_track_id_text).to_numpy(dtype=object)
-        truth_track_ids = truth["track_id"].map(_valid_track_id_text).to_numpy(dtype=object)
+        pred_track_ids = (
+            predictions["track_id"].map(_valid_track_id_text).to_numpy(dtype=object)
+        )
+        truth_track_ids = (
+            truth["track_id"].map(_valid_track_id_text).to_numpy(dtype=object)
+        )
         eligible &= pred_track_ids[:, np.newaxis] == truth_track_ids[np.newaxis, :]
 
     if not bool(eligible.any()):
@@ -270,7 +296,8 @@ def _matched_prediction_row(
     return {
         "sequence_id": sequence_id,
         "time_s": float(prediction["time_s"]),
-        "track_id": _valid_track_id_text(prediction.get("track_id", "uav0")) or "uav0",
+        "track_id": _valid_track_id_text(prediction.get("track_id", "uav0"))
+        or "uav0",
         "truth_time_s": float(truth["time_s"]),
         "truth_track_id": _truth_track_id(truth),
         "time_delta_s": abs(float(truth["time_s"]) - float(prediction["time_s"])),
@@ -282,8 +309,53 @@ def _matched_prediction_row(
     }
 
 
+def _normalized_match_flags(values: Any) -> pd.Series:
+    """Parse native and serialized Boolean match diagnostics explicitly."""
+
+    series = pd.Series(values, copy=False)
+    if series.empty:
+        return pd.Series(index=series.index, dtype=bool)
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return series.astype("boolean").fillna(False).astype(bool)
+
+    numeric = pd.to_numeric(series, errors="coerce")
+    text = series.astype("string").str.strip().str.casefold()
+    truthy = (text.isin(_TRUE_MATCH_TEXT) | numeric.eq(1.0)).fillna(False)
+    falsy = (
+        series.isna() | text.isin(_FALSE_MATCH_TEXT) | numeric.eq(0.0)
+    ).fillna(False)
+    invalid = ~(truthy | falsy)
+    if bool(invalid.any()):
+        invalid_indices = invalid[invalid].index.tolist()
+        invalid_values = series.loc[invalid_indices].tolist()
+        raise ValueError(
+            "matched contains invalid Boolean values at rows "
+            f"{invalid_indices}: {invalid_values}"
+        )
+    return truthy.astype(bool)
+
+
+def metrics_from_matches(
+    matches: pd.DataFrame,
+    *,
+    submission: pd.DataFrame,
+    truth: pd.DataFrame,
+) -> dict[str, Any]:
+    """Compute metrics after deterministic match-flag normalization."""
+
+    normalized = matches.copy()
+    if "matched" in normalized.columns:
+        normalized["matched"] = _normalized_match_flags(normalized["matched"])
+    return _ORIGINAL_METRICS_FROM_MATCHES(
+        normalized,
+        submission=submission,
+        truth=truth,
+    )
+
+
 _IMPL.load_submission_csv = load_submission_csv
 _IMPL.match_submission_to_truth = match_submission_to_truth
+_IMPL.metrics_from_matches = metrics_from_matches
 
 globals().update(
     {
@@ -300,6 +372,8 @@ globals()["_validated_max_time_delta_s"] = _validated_max_time_delta_s
 globals()["match_submission_to_truth"] = match_submission_to_truth
 globals()["_optimal_time_assignment"] = _optimal_time_assignment
 globals()["_matched_prediction_row"] = _matched_prediction_row
+globals()["_normalized_match_flags"] = _normalized_match_flags
+globals()["metrics_from_matches"] = metrics_from_matches
 
 __doc__ = _IMPL.__doc__
 __all__ = [
