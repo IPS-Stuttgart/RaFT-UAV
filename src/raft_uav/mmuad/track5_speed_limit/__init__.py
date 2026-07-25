@@ -16,6 +16,8 @@ import sys
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.submission import normalize_official_track5_results_frame
+
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_speed_limit.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.mmuad._track5_speed_limit_legacy",
@@ -70,10 +72,10 @@ def _validate_sequence_ids(submission: object) -> None:
     text = rows["sequence_id"].astype("string").str.strip()
     invalid = text.isna() | text.eq("").fillna(False)
     if invalid.any():
-        row_positions = np.flatnonzero(invalid.to_numpy(dtype=bool)).tolist()[:5]
+        row_indices = rows.index[invalid.to_numpy(dtype=bool)].tolist()[:5]
         raise ValueError(
             "submission contains missing or blank sequence_id values: "
-            f"sequence_id rows {row_positions}"
+            f"sequence_id rows {row_indices}"
         )
 
 
@@ -91,15 +93,15 @@ def _validate_numeric_rows(submission: object) -> None:
             lambda value: isinstance(value, (bool, np.bool_))
         ).to_numpy(dtype=bool)
         if boolean.any():
-            row_positions = np.flatnonzero(boolean).tolist()
-            boolean_invalid.append(f"{column} rows {row_positions}")
+            row_indices = rows.index[boolean].tolist()
+            boolean_invalid.append(f"{column} rows {row_indices}")
 
         numeric = pd.to_numeric(rows[column], errors="coerce")
         finite = np.isfinite(numeric.to_numpy(dtype=float))
         if finite.all():
             continue
-        row_positions = np.flatnonzero(~finite).tolist()
-        nonfinite_invalid.append(f"{column} rows {row_positions}")
+        row_indices = rows.index[~finite].tolist()
+        nonfinite_invalid.append(f"{column} rows {row_indices}")
     if boolean_invalid:
         details = "; ".join(boolean_invalid)
         raise ValueError(f"submission contains Boolean numeric values: {details}")
@@ -109,18 +111,37 @@ def _validate_numeric_rows(submission: object) -> None:
 
 
 def _validate_unique_fixed_grid_keys(submission: object) -> None:
-    """Reject duplicate normalized sequence/timestamp keys before projection."""
+    """Reject duplicate normalized or official sequence/timestamp keys."""
 
     rows = _IMPL._strip_csv_headers(pd.DataFrame(submission).copy())
     required = {"sequence_id", "time_s"}
-    if not required <= set(rows.columns):
-        return
-    normalized_keys = pd.DataFrame(
-        {
-            "sequence_id": rows["sequence_id"].astype(str),
-            "time_s": pd.to_numeric(rows["time_s"], errors="coerce"),
+    if required <= set(rows.columns):
+        normalized_keys = pd.DataFrame(
+            {
+                "sequence_id": rows["sequence_id"].astype(str),
+                "time_s": pd.to_numeric(rows["time_s"], errors="coerce"),
+            }
+        )
+    else:
+        lower_to_original = {
+            str(column).strip().casefold(): column for column in rows.columns
         }
-    )
+        official_required = {
+            "sequence",
+            "timestamp",
+            "position",
+            "classification",
+        }
+        if not official_required <= set(lower_to_original):
+            return
+        official = normalize_official_track5_results_frame(rows)
+        normalized_keys = pd.DataFrame(
+            {
+                "sequence_id": official["Sequence"].astype(str),
+                "time_s": pd.to_numeric(official["Timestamp"], errors="coerce"),
+            }
+        )
+
     duplicate_mask = normalized_keys.duplicated(
         subset=["sequence_id", "time_s"], keep=False
     )
@@ -189,8 +210,3 @@ globals()["_validate_sequence_ids"] = _validate_sequence_ids
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
 globals()["_validate_unique_fixed_grid_keys"] = _validate_unique_fixed_grid_keys
 globals()["project_track5_speed_limit"] = project_track5_speed_limit
-
-__doc__ = _IMPL.__doc__
-__all__ = [
-    name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))
-]
