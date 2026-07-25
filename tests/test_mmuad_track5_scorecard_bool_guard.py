@@ -91,3 +91,41 @@ def test_track5_scorecard_handles_nullable_numeric_boolean_flags() -> None:
     assert float(lidar["nearest_found_fraction"]) == pytest.approx(1.0 / 3.0)
     assert float(lidar["selected_found_fraction"]) == pytest.approx(2.0 / 3.0)
     assert float(lidar["selected_source_match_fraction"]) == pytest.approx(1.0 / 3.0)
+
+
+def test_track5_scorecard_normalizes_common_serialized_boolean_flags() -> None:
+    public_rows = pd.DataFrame(
+        {
+            "sequence_id": ["seq001"] * 7,
+            "matched": [" TRUE ", "false", "1.0", "0", "yes", " no ", None],
+            "error_3d_m": [1.0] * 7,
+            "squared_error_3d_m2": [1.0] * 7,
+        },
+        index=[3, 4, 5, 6, 7, 8, 9],
+    )
+
+    pose = build_pose_by_sequence_table(public_rows)
+
+    assert int(pose.loc[0, "count"]) == 3
+
+
+@pytest.mark.parametrize(
+    "value",
+    [2, -1, 0.5, "maybe", "truth", float("inf")],
+)
+def test_track5_scorecard_rejects_ambiguous_boolean_flags(value: object) -> None:
+    public_rows = pd.DataFrame(
+        {
+            "sequence_id": ["seq001"],
+            "matched": [value],
+            "error_3d_m": [1.0],
+            "squared_error_3d_m2": [1.0],
+        },
+        index=[42],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"contains invalid Boolean values at rows \[42\]",
+    ):
+        build_pose_by_sequence_table(public_rows)
