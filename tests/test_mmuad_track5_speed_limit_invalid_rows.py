@@ -30,7 +30,7 @@ def _submission_rows() -> pd.DataFrame:
         ("state_z_m", -np.inf),
     ],
 )
-def test_speed_limit_rejects_malformed_grid_rows(
+def test_speed_limit_reports_original_labels_for_malformed_grid_rows(
     column: str,
     invalid_value: object,
 ) -> None:
@@ -38,11 +38,12 @@ def test_speed_limit_rejects_malformed_grid_rows(
     submission[column] = submission[column].astype(object)
     submission.loc[12, column] = invalid_value
 
-    with pytest.raises(
-        ValueError,
-        match=r"non-finite or non-numeric time or position values at row indices: 12",
-    ):
+    with pytest.raises(ValueError) as error:
         project_track5_speed_limit(submission, max_speed_mps=10.0)
+
+    message = str(error.value)
+    assert "submission contains non-finite numeric values" in message
+    assert f"{column} rows [12]" in message
 
 
 def test_speed_limit_preserves_every_valid_grid_row() -> None:
