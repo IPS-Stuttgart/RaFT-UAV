@@ -376,7 +376,9 @@ def _radar_frame_groups(radar: pd.DataFrame) -> list[tuple[object, pd.DataFrame]
         frame_indices = pd.Series(np.nan, index=ordered.index, dtype=float)
     group_keys = pd.Series(
         [
-            ("frame_index", float(frame_index))
+            ("frame_index_time", float(frame_index), float(time_s))
+            if np.isfinite(frame_index) and np.isfinite(time_s)
+            else ("frame_index", float(frame_index))
             if np.isfinite(frame_index)
             else ("time_s", float(time_s))
             if np.isfinite(time_s)
