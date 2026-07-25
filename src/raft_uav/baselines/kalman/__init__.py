@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling ``kalman.py`` module. This
 package preserves the public import path while rejecting asymmetric or indefinite
-measurement covariances and invalid tracker initialization values before they
-reach Kalman updates.
+measurement covariances, invalid tracker initialization values, and malformed
+prediction timestamps before they reach Kalman updates.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_TRACKING_MEASUREMENT_POST_INIT = _IMPL.TrackingMeasurement.__post_init__
 _ORIGINAL_TRACKER_INIT = _IMPL.AsyncConstantVelocityKalmanTracker.__init__
+_ORIGINAL_TRACKER_PREDICT_TO = _IMPL.AsyncConstantVelocityKalmanTracker.predict_to
 
 
 def _validated_tracking_measurement_post_init(
@@ -57,7 +58,11 @@ def _finite_real_scalar(value: object, *, name: str, nonnegative: bool = False) 
 
     parsed = _IMPL.optional_float(value)
     if parsed is None or (nonnegative and parsed < 0.0):
-        qualifier = "finite, non-negative real scalar" if nonnegative else "finite real scalar"
+        qualifier = (
+            "finite, non-negative real scalar"
+            if nonnegative
+            else "finite real scalar"
+        )
         raise ValueError(f"{name} must be a {qualifier}")
     return parsed
 
@@ -118,10 +123,29 @@ def _validated_tracker_init(
     )
 
 
+def _validated_predict_to(self: object, time_s: float) -> None:
+    """Reject malformed prediction timestamps before constructing dynamics."""
+
+    target_time_s = _finite_real_scalar(time_s, name="time_s")
+    _ORIGINAL_TRACKER_PREDICT_TO(self, target_time_s)
+
+
+def _validated_coast_to(self: object, time_s: float) -> None:
+    """Coast atomically so rejected timestamps do not consume bootstrap state."""
+
+    target_time_s = _finite_real_scalar(time_s, name="time_s")
+    _ORIGINAL_TRACKER_PREDICT_TO(self, target_time_s)
+    self._initial_update_pending = False
+    self._last_prior_mean = self.mean.copy()
+    self._last_prior_covariance = self.covariance.copy()
+
+
 _IMPL.TrackingMeasurement.__post_init__ = (
     _validated_tracking_measurement_post_init
 )
 _IMPL.AsyncConstantVelocityKalmanTracker.__init__ = _validated_tracker_init
+_IMPL.AsyncConstantVelocityKalmanTracker.predict_to = _validated_predict_to
+_IMPL.AsyncConstantVelocityKalmanTracker.coast_to = _validated_coast_to
 
 globals().update(
     {
@@ -134,12 +158,15 @@ globals()["_ORIGINAL_TRACKING_MEASUREMENT_POST_INIT"] = (
     _ORIGINAL_TRACKING_MEASUREMENT_POST_INIT
 )
 globals()["_ORIGINAL_TRACKER_INIT"] = _ORIGINAL_TRACKER_INIT
+globals()["_ORIGINAL_TRACKER_PREDICT_TO"] = _ORIGINAL_TRACKER_PREDICT_TO
 globals()["_validated_tracking_measurement_post_init"] = (
     _validated_tracking_measurement_post_init
 )
 globals()["_finite_real_scalar"] = _finite_real_scalar
 globals()["_finite_initial_position"] = _finite_initial_position
 globals()["_validated_tracker_init"] = _validated_tracker_init
+globals()["_validated_predict_to"] = _validated_predict_to
+globals()["_validated_coast_to"] = _validated_coast_to
 
 __doc__ = _IMPL.__doc__
 __all__ = [
