@@ -47,7 +47,38 @@ def _row_position_std(row: pd.Series, cfg: object) -> np.ndarray:
     return np.full(3, default, dtype=float)
 
 
+def _initial_radar_selection(radar: pd.DataFrame) -> pd.DataFrame:
+    """Choose one finite-position candidate per usable radar frame."""
+
+    rows = []
+    for _, frame in _LEGACY._radar_frame_groups(radar):
+        positions = (
+            frame.loc[:, _LEGACY.PositionColumns]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(dtype=float)
+        )
+        finite_positions = np.isfinite(positions).all(axis=1)
+        if not finite_positions.any():
+            continue
+
+        candidates = frame.loc[finite_positions]
+        if "cat_prob_uav" in candidates.columns:
+            scores = pd.to_numeric(candidates["cat_prob_uav"], errors="coerce")
+            finite_scores = np.isfinite(scores.to_numpy(dtype=float))
+            if finite_scores.any():
+                rows.append(candidates.loc[scores.loc[finite_scores].idxmax()].copy())
+                continue
+        rows.append(candidates.iloc[0].copy())
+
+    return (
+        pd.DataFrame(rows).reset_index(drop=True)
+        if rows
+        else radar.iloc[0:0].copy()
+    )
+
+
 _LEGACY._row_position_std = _row_position_std
+_LEGACY._initial_radar_selection = _initial_radar_selection
 
 for _name in dir(_LEGACY):
     if not _name.startswith("__"):
