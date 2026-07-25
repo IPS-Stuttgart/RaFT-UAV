@@ -31,6 +31,24 @@ def test_factor_graph_falls_back_for_malformed_standard_deviations(
 
 
 @pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("rf", id="lowercase"),
+        pytest.param("RF", id="uppercase"),
+        pytest.param(" rf ", id="padded"),
+        pytest.param(np.str_("Rf"), id="numpy-string"),
+    ],
+)
+def test_factor_graph_normalizes_rf_source_labels(
+    config: LeastSquaresSmoothingConfig,
+    source: object,
+) -> None:
+    row = pd.Series({"source": source})
+
+    np.testing.assert_allclose(_row_position_std(row, config), [50.0, 50.0, 50.0])
+
+
+@pytest.mark.parametrize(
     "invalid_variance",
     [
         pytest.param(-1.0, id="negative"),
