@@ -2,9 +2,9 @@
 
 The maintained implementation lives in the sibling ``track5_speed_limit.py``
 module. This package preserves the public import path while rejecting malformed
-iteration counts, Boolean pseudo-numbers, missing sequence identifiers, invalid
-fixed-grid rows, and duplicate fixed-grid keys instead of silently coercing or
-dropping them.
+iteration counts, Boolean pseudo-numbers, non-scalar controls, missing sequence
+identifiers, invalid fixed-grid rows, and duplicate fixed-grid keys instead of
+silently coercing or dropping them.
 """
 
 from __future__ import annotations
@@ -38,29 +38,43 @@ _NUMERIC_COLUMNS = (
 )
 
 
+def _finite_scalar(value: object, *, message: str) -> float:
+    """Return one finite, non-Boolean scalar value."""
+
+    if np.ma.is_masked(value):
+        raise ValueError(message)
+    scalar = value
+    if isinstance(value, np.ndarray):
+        if value.ndim != 0:
+            raise ValueError(message)
+        scalar = value.item()
+    elif isinstance(value, np.generic):
+        scalar = value.item()
+    if np.ma.is_masked(scalar) or isinstance(scalar, (bool, np.bool_)):
+        raise ValueError(message)
+    try:
+        numeric = float(scalar)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(numeric):
+        raise ValueError(message)
+    return numeric
+
+
 def _positive_integer(value: object, *, name: str) -> int:
     """Return a positive integer without lossy or Boolean coercion."""
 
-    if isinstance(value, (bool, np.bool_)):
-        raise ValueError(f"{name} must be a positive integer")
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{name} must be a positive integer") from exc
-    if not np.isfinite(numeric) or numeric <= 0.0 or not numeric.is_integer():
-        raise ValueError(f"{name} must be a positive integer")
+    message = f"{name} must be a positive integer"
+    numeric = _finite_scalar(value, message=message)
+    if numeric <= 0.0 or not numeric.is_integer():
+        raise ValueError(message)
     return int(numeric)
 
 
-def _reject_boolean_scalar(value: object, *, message: str) -> object:
-    """Reject Python and NumPy Boolean pseudo-numbers."""
+def _reject_boolean_scalar(value: object, *, message: str) -> float:
+    """Normalize one finite scalar while rejecting Booleans and arrays."""
 
-    scalar = value
-    if isinstance(value, np.ndarray) and value.ndim == 0:
-        scalar = value.item()
-    if isinstance(scalar, (bool, np.bool_)):
-        raise ValueError(message)
-    return value
+    return _finite_scalar(value, message=message)
 
 
 def _validate_sequence_ids(submission: object) -> None:
@@ -72,10 +86,10 @@ def _validate_sequence_ids(submission: object) -> None:
     text = rows["sequence_id"].astype("string").str.strip()
     invalid = text.isna() | text.eq("").fillna(False)
     if invalid.any():
-        row_positions = np.flatnonzero(invalid.to_numpy(dtype=bool)).tolist()[:5]
+        row_indices = rows.index[invalid.to_numpy(dtype=bool)].tolist()[:5]
         raise ValueError(
             "submission contains missing or blank sequence_id values: "
-            f"sequence_id rows {row_positions}"
+            f"sequence_id rows {row_indices}"
         )
 
 
@@ -133,8 +147,8 @@ def _validate_numeric_rows(submission: object) -> pd.DataFrame:
         ):
             invalid = kinds.eq(kind).to_numpy(dtype=bool)
             if invalid.any():
-                row_positions = np.flatnonzero(invalid).tolist()
-                target.append(f"{column} rows {row_positions}")
+                row_indices = rows.index[invalid].tolist()
+                target.append(f"{column} rows {row_indices}")
 
     if boolean_invalid:
         details = "; ".join(boolean_invalid)
@@ -155,8 +169,8 @@ def _validate_numeric_rows(submission: object) -> pd.DataFrame:
         finite = np.isfinite(numeric.to_numpy(dtype=float))
         if finite.all():
             continue
-        row_positions = np.flatnonzero(~finite).tolist()
-        nonfinite_invalid.append(f"{column} rows {row_positions}")
+        row_indices = rows.index[~finite].tolist()
+        nonfinite_invalid.append(f"{column} rows {row_indices}")
     if nonfinite_invalid:
         details = "; ".join(nonfinite_invalid)
         raise ValueError(f"submission contains non-finite numeric values: {details}")
@@ -257,6 +271,7 @@ globals().update(
     }
 )
 globals()["_NUMERIC_COLUMNS"] = _NUMERIC_COLUMNS
+globals()["_finite_scalar"] = _finite_scalar
 globals()["_positive_integer"] = _positive_integer
 globals()["_reject_boolean_scalar"] = _reject_boolean_scalar
 globals()["_validate_sequence_ids"] = _validate_sequence_ids
