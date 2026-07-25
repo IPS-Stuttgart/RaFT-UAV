@@ -368,12 +368,45 @@ def read_radar_tracks_json(path: Path) -> pd.DataFrame:
     return pd.DataFrame.from_records(records)
 
 
+def _catprob_threshold_rows(
+    radar: pd.DataFrame,
+    catprob_threshold: float,
+) -> pd.DataFrame:
+    """Return rows with finite UAV probabilities above the threshold."""
+
+    if "cat_prob_uav" not in radar.columns:
+        raise KeyError("radar catprob selection requires cat_prob_uav")
+    cat_prob = pd.to_numeric(
+        radar["cat_prob_uav"],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    keep = np.isfinite(cat_prob) & (cat_prob >= float(catprob_threshold))
+    records = [
+        row
+        for row, keep_row in zip(
+            radar.to_dict("records"),
+            keep,
+            strict=True,
+        )
+        if keep_row
+    ]
+    index = radar.index[np.flatnonzero(keep)]
+    selected = pd.DataFrame.from_records(
+        records,
+        columns=radar.columns,
+        index=index,
+    )
+    selected["cat_prob_uav"] = cat_prob[keep]
+    return selected
+
+
 _IMPL.read_rf_csv = read_rf_csv
 _IMPL.normalize_truth = normalize_truth
 _IMPL.normalize_rf = normalize_rf
 _IMPL.normalize_radar = normalize_radar
 _IMPL._track_data_from_payload = _track_data_from_payload
 _IMPL.read_radar_tracks_json = read_radar_tracks_json
+_IMPL._catprob_threshold_rows = _catprob_threshold_rows
 
 globals().update(
     {
