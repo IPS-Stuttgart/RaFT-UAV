@@ -15,14 +15,14 @@ from raft_uav.baselines.kalman import AsyncConstantVelocityKalmanTracker
     ],
 )
 def test_tracker_rejects_invalid_scalar_initialization(keyword, value):
-    kwargs = {keyword: value}
+    kwargs = {
+        "initial_position": np.array([0.0, 0.0, 0.0]),
+        "initial_time_s": 0.0,
+    }
+    kwargs[keyword] = value
 
     with pytest.raises(ValueError, match=keyword):
-        AsyncConstantVelocityKalmanTracker(
-            initial_position=np.array([0.0, 0.0, 0.0]),
-            initial_time_s=0.0,
-            **kwargs,
-        )
+        AsyncConstantVelocityKalmanTracker(**kwargs)
 
 
 @pytest.mark.parametrize(
