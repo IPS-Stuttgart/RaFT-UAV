@@ -7,7 +7,8 @@ endpoint, regardless of whether a maximum time-delta gate is configured. The
 same endpoint rule is applied to both truth-grid metrics and paper-table
 interpolation at estimate timestamps. Non-finite and masked nearest-time queries
 are rejected, masked reference timestamps are ignored, masked trajectory samples
-are excluded, and masked interpolation queries are returned as invalid.
+are excluded, masked interpolation queries are returned as invalid, and complex
+trajectory values are rejected before NumPy can discard their imaginary parts.
 """
 
 from __future__ import annotations
@@ -36,6 +37,19 @@ _ORIGINAL_PREPARE_TIME_POSITION_SAMPLES = _IMPL._prepare_time_position_samples
 _ORIGINAL_INTERPOLATE_POSITIONS_AT_TIMES = _IMPL.interpolate_positions_at_times
 
 
+def _reject_complex_values(value: object, *, name: str) -> None:
+    """Reject complex payloads before float conversion can discard information."""
+
+    masked = np.ma.asarray(value)
+    if np.iscomplexobj(masked):
+        raise ValueError(f"{name} must contain only real values")
+    if masked.dtype != object:
+        return
+    for item in masked.compressed().reshape(-1):
+        if np.iscomplexobj(np.asanyarray(item)):
+            raise ValueError(f"{name} must contain only real values")
+
+
 def _validate_max_time_delta_s_without_masked(value: object) -> float | None:
     """Reject masked scalar gates before NumPy exposes their hidden payload."""
 
@@ -52,6 +66,8 @@ def _prepare_time_position_samples_without_masked(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Treat masked trajectory values like non-finite samples."""
 
+    _reject_complex_values(times_s, name="times_s")
+    _reject_complex_values(positions_m, name="positions_m")
     masked_times = np.ma.asarray(times_s, dtype=float)
     masked_positions = np.ma.asarray(positions_m, dtype=float)
     times = np.asarray(masked_times.filled(np.nan), dtype=float)
@@ -69,6 +85,8 @@ def _nearest_time_indices_with_finite_queries(
 ) -> np.ndarray:
     """Ignore masked references and reject invalid nearest-time queries."""
 
+    _reject_complex_values(reference_times_s, name="reference_times_s")
+    _reject_complex_values(query_times_s, name="query_times_s")
     reference_masked = np.ma.asarray(reference_times_s, dtype=float).reshape(-1)
     reference = np.asarray(reference_masked.filled(np.nan), dtype=float)
 
@@ -143,6 +161,9 @@ def _interpolate_positions_at_times_with_symmetric_tolerance(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Accept endpoint-equivalent queries while preserving input masks."""
 
+    _reject_complex_values(reference_times_s, name="reference_times_s")
+    _reject_complex_values(reference_positions_m, name="reference_positions_m")
+    _reject_complex_values(query_times_s, name="query_times_s")
     masked_reference_times = np.ma.asarray(reference_times_s, dtype=float)
     masked_reference_positions = np.ma.asarray(reference_positions_m, dtype=float)
     masked_query = np.ma.asarray(query_times_s, dtype=float).reshape(-1)
