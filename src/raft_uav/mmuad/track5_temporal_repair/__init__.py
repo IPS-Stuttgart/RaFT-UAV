@@ -1,9 +1,9 @@
-"""Compatibility wrapper validating temporal-repair iteration controls.
+"""Compatibility fixes for Track 5 temporal-repair inputs and outputs.
 
 The maintained implementation lives in the sibling ``track5_temporal_repair.py``
-module. This package preserves the public import path while rejecting zero,
-negative, fractional, Boolean, masked, and non-scalar iteration values before a
-trajectory can be modified.
+module. This package preserves the public import path while rejecting invalid
+iteration controls and normalizing persisted Boolean diagnostics before output
+summaries are computed.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import sys
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_temporal_repair.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -28,6 +29,9 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_REPAIR_TRACK5_TEMPORAL_SPIKES = _IMPL.repair_track5_temporal_spikes
+_ORIGINAL_WRITE_TRACK5_TEMPORAL_REPAIR_OUTPUTS = (
+    _IMPL.write_track5_temporal_repair_outputs
+)
 
 
 def _validate_iterations(value: Any) -> int:
@@ -60,6 +64,25 @@ def _validate_iterations(value: Any) -> int:
     return iterations
 
 
+def _boolean_series(values: Any, index: pd.Index) -> pd.Series:
+    """Parse Boolean-like values without making false strings truthy."""
+
+    series = pd.Series(values, index=index)
+    if series.empty:
+        return pd.Series(False, index=index, dtype=bool)
+    if pd.api.types.is_bool_dtype(series):
+        return series.fillna(False).astype(bool)
+    if pd.api.types.is_numeric_dtype(series):
+        numeric = pd.to_numeric(series, errors="coerce").fillna(0.0)
+        return numeric.ne(0.0)
+
+    text = series.astype("string").str.strip().str.lower()
+    truthy = text.isin({"1", "true", "t", "yes", "y"})
+    falsey = text.isin({"0", "false", "f", "no", "n", "", "none", "null", "nan"})
+    numeric = pd.to_numeric(text, errors="coerce").fillna(0.0).ne(0.0)
+    return (truthy | (~falsey & numeric)).fillna(False).astype(bool)
+
+
 def repair_track5_temporal_spikes(
     submission: Any,
     *,
@@ -77,7 +100,37 @@ def repair_track5_temporal_spikes(
     )
 
 
+def write_track5_temporal_repair_outputs(
+    *,
+    repaired: pd.DataFrame,
+    diagnostics: pd.DataFrame,
+    output_dir: Path,
+    input_submission_path: Path,
+    template: pd.DataFrame | None = None,
+    manifest: dict[str, Any] | None = None,
+    require_leaderboard_ready: bool = False,
+) -> dict[str, Path]:
+    """Write outputs after normalizing persisted repair flags."""
+
+    normalized_diagnostics = pd.DataFrame(diagnostics).copy()
+    if "repaired" in normalized_diagnostics.columns:
+        normalized_diagnostics["repaired"] = _boolean_series(
+            normalized_diagnostics["repaired"],
+            normalized_diagnostics.index,
+        )
+    return _ORIGINAL_WRITE_TRACK5_TEMPORAL_REPAIR_OUTPUTS(
+        repaired=repaired,
+        diagnostics=normalized_diagnostics,
+        output_dir=output_dir,
+        input_submission_path=input_submission_path,
+        template=template,
+        manifest=manifest,
+        require_leaderboard_ready=require_leaderboard_ready,
+    )
+
+
 _IMPL.repair_track5_temporal_spikes = repair_track5_temporal_spikes
+_IMPL.write_track5_temporal_repair_outputs = write_track5_temporal_repair_outputs
 
 globals().update(
     {
@@ -87,7 +140,11 @@ globals().update(
     }
 )
 globals()["_validate_iterations"] = _validate_iterations
+globals()["_boolean_series"] = _boolean_series
 globals()["repair_track5_temporal_spikes"] = repair_track5_temporal_spikes
+globals()["write_track5_temporal_repair_outputs"] = (
+    write_track5_temporal_repair_outputs
+)
 
 __doc__ = _IMPL.__doc__
 __all__ = [
