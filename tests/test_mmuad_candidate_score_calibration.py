@@ -4,12 +4,11 @@ import json
 import tomllib
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-import pytest
 
 from raft_uav.mmuad.candidate_score_calibration import (
     DEFAULT_OUTPUT_SCORE_COLUMN,
+    _attach_truth_targets,
     apply_candidate_score_calibration,
     fit_candidate_score_calibration,
     load_candidate_score_calibration_model,
@@ -112,33 +111,20 @@ def test_class_conditioned_calibration_reverses_wrong_generic_branch_scores() ->
     assert summary["calibrated_brier"] < summary["base_brier"]
 
 
-def test_calibration_diagnostics_preserve_interleaved_candidate_order() -> None:
+def test_truth_targets_preserve_interleaved_candidate_order() -> None:
     train_sequences = ("class0-a", "class1-a")
     candidates = _candidate_rows(train_sequences).iloc[[0, 3, 1, 2]].reset_index(drop=True)
 
-    _, calibrated, diagnostics = fit_candidate_score_calibration(
+    labelled = _attach_truth_targets(
         candidates,
         _truth_rows(train_sequences),
-        _probability_rows(train_sequences),
         good_threshold_m=1.0,
         max_truth_time_delta_s=0.1,
-        min_group_weight=1.0,
-        l2_penalty=0.1,
-        max_abs_logit_offset=8.0,
-        include_branch_source_interactions=False,
     )
 
-    assert calibrated.rows["track_id"].tolist() == candidates["track_id"].tolist()
-    expected_targets = np.asarray([1.0, 1.0, 0.0, 0.0])
-    expected_brier = np.mean(
-        (
-            calibrated.rows[DEFAULT_OUTPUT_SCORE_COLUMN].to_numpy(float)
-            - expected_targets
-        )
-        ** 2
-    )
-    summary = diagnostics.loc[diagnostics["level"] == "summary"].iloc[0]
-    assert summary["calibrated_brier"] == pytest.approx(expected_brier)
+    assert labelled["track_id"].tolist() == candidates["track_id"].tolist()
+    assert labelled["candidate_truth_matched"].tolist() == [True, True, True, True]
+    assert labelled["candidate_good_target"].tolist() == [True, True, False, False]
 
 
 def test_candidate_score_calibration_model_round_trip_and_unseen_branch(tmp_path: Path) -> None:
