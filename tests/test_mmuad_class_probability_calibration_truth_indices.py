@@ -29,7 +29,7 @@ _PROBABILITIES = np.asarray([[0.1, 0.9]], dtype=float)
         pytest.param(np.asarray([2]), id="out-of-range"),
         pytest.param(np.asarray([0.5]), id="fractional"),
         pytest.param(np.asarray([True]), id="boolean"),
-        pytest.param(np.ma.asarray([1], mask=[True]), id="masked"),
+        pytest.param(np.ma.array([1], mask=[True]), id="masked"),
     ],
 )
 def test_calibration_metrics_reject_invalid_truth_indices(
