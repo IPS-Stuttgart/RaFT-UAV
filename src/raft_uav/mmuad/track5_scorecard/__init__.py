@@ -65,7 +65,7 @@ def _bool_series(values: Any) -> pd.Series:
     normalized = pd.Series(False, index=series.index, dtype=bool)
     normalized.loc[numeric_mask] = numeric.loc[numeric_mask].eq(1.0)
 
-    text = series.fillna(False).astype(str).str.strip().str.lower()
+    text = series.astype("string").fillna("").str.strip().str.lower()
     normalized.loc[~numeric_mask] = text.loc[~numeric_mask].isin(
         {"1", "true", "t", "yes", "y"}
     )
