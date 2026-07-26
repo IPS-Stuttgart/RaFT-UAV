@@ -32,7 +32,7 @@ def complete_results_to_truth_timestamps(
     if extrapolation not in {"hold", "nan"}:
         raise ValueError("extrapolation must be 'hold' or 'nan'")
     max_gap_s = _normalize_max_interpolation_gap_s(max_interpolation_gap_s)
-    result_rows = _completion_result_rows(results)
+    result_rows = _deduplicate_completion_result_timestamps(_completion_result_rows(results))
     template = _completion_template_rows(truth_or_template)
     if template.empty:
         return CompletionResult(pd.DataFrame(columns=UG2_RESULT_COLUMNS), pd.DataFrame())
@@ -41,7 +41,7 @@ def complete_results_to_truth_timestamps(
     diag_rows: list[dict[str, Any]] = []
     for sequence_id, template_group in template.groupby("sequence_id", sort=True):
         seq = str(sequence_id)
-        seq_results = result_rows.loc[result_rows["sequence_id"] == seq].sort_values("timestamp")
+        seq_results = result_rows.loc[result_rows["sequence_id"] == seq]
         if seq_results.empty:
             for _, row in template_group.sort_values("time_s").iterrows():
                 diag_rows.append(
@@ -93,6 +93,22 @@ def _completion_result_rows(results: ResultsFrame | pd.DataFrame) -> pd.DataFram
         if "contains no finite trajectory rows" not in str(exc):
             raise
         return pd.DataFrame(columns=UG2_RESULT_COLUMNS)
+
+
+def _deduplicate_completion_result_timestamps(rows: pd.DataFrame) -> pd.DataFrame:
+    """Keep one deterministic, highest-confidence prediction per timestamp."""
+
+    if rows.empty:
+        return rows.copy()
+    ordered = rows.sort_values(
+        ["sequence_id", "timestamp", "score", "uav_type", "x", "y", "z"],
+        ascending=[True, True, False, True, True, True, True],
+        kind="mergesort",
+    )
+    return (
+        ordered.drop_duplicates(subset=["sequence_id", "timestamp"], keep="first")
+        .reset_index(drop=True)
+    )
 
 
 def _completion_template_rows(truth_or_template: TruthFrame | pd.DataFrame) -> pd.DataFrame:
