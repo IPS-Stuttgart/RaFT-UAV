@@ -4,8 +4,8 @@ The maintained implementation lives in the sibling
 ``oracle_gap_decomposition.py`` module. This package preserves the public import
 path while keeping estimate columns, row order, and invalid-time rows intact
 when selected-radar context is attached, preventing non-finite frame times from
-matching arbitrary truth or estimate rows, and requiring exact integer radar
-track identifiers in diagnostic outputs.
+matching arbitrary truth or estimate rows, requiring exact integer radar track
+identifiers in diagnostic outputs, and rejecting invalid oracle-gap thresholds.
 """
 
 from __future__ import annotations
@@ -37,6 +37,12 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_DECOMPOSE_RADAR_ORACLE_GAP = _IMPL.decompose_radar_oracle_gap
 _ORIGINAL_NEAREST_POSITION = _IMPL._nearest_position
 _ORIGINAL_NEAREST_ESTIMATE_ERROR = _IMPL._nearest_estimate_error
+_ORACLE_GAP_THRESHOLD_NAMES = (
+    "plausible_candidate_gate_m",
+    "truth_time_gate_s",
+    "estimate_time_gate_s",
+    "drift_error_gate_m",
+)
 _CONTEXT_COLUMNS = (
     "track_id",
     "association_score",
@@ -46,6 +52,17 @@ _CONTEXT_COLUMNS = (
 )
 _ROW_ORDER_COLUMN = "__raft_uav_confidence_row_order"
 _MERGE_TIME_COLUMN = "__raft_uav_confidence_merge_time_s"
+
+
+def _oracle_gap_config_post_init(config: object) -> None:
+    """Require every oracle-gap threshold to be a finite positive scalar."""
+
+    for name in _ORACLE_GAP_THRESHOLD_NAMES:
+        value = optional_float(getattr(config, name))
+        if value is None:
+            raise ValueError(f"{name} must be a finite number")
+        if value <= 0.0:
+            raise ValueError(f"{name} must be positive")
 
 
 @wraps(_ORIGINAL_DECOMPOSE_RADAR_ORACLE_GAP)
@@ -225,6 +242,7 @@ def _optional_track_id(value: object) -> object:
     return "" if track_id is None else track_id
 
 
+_IMPL.OracleGapConfig.__post_init__ = _oracle_gap_config_post_init
 _IMPL.decompose_radar_oracle_gap = decompose_radar_oracle_gap
 _IMPL._nearest_position = _nearest_position
 _IMPL._nearest_estimate_error = _nearest_estimate_error
