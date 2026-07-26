@@ -1,9 +1,10 @@
 """Anchor-aware package wrapper for candidate-mixture multi-start MAP.
 
 The implementation lives in the sibling ``candidate_mixture_map_multistart.py``
-file.  This wrapper keeps the public import path while correcting restart
+file. This wrapper keeps the public import path while correcting restart
 selection when the core smoother uses a non-zero initialization-anchor weight
-and rejecting numerically invalid restart outputs.
+and rejecting numerically invalid restart outputs as well as malformed
+restart-count and branch-coverage controls.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_SELECTION_OBJECTIVE = _IMPL.compute_candidate_mixture_selection_objective
 
 # Export the maintained implementation first; corrected functions below replace
-# the two affected callables while preserving all existing public/private helpers.
+# the affected callables while preserving all existing public/private helpers.
 globals().update(
     {
         name: getattr(_IMPL, name)
@@ -42,6 +43,59 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+
+
+def _finite_real_scalar(value: Any, *, message: str) -> float:
+    """Return one finite non-Boolean real scalar."""
+
+    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+        raise ValueError(message)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+        raise ValueError(message)
+    try:
+        number = float(scalar.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(number):
+        raise ValueError(message)
+    return number
+
+
+def _nonnegative_integer_control(value: Any, *, name: str) -> int:
+    """Return a finite non-negative integer without fractional truncation."""
+
+    message = f"{name} must be a finite non-negative integer scalar"
+    number = _finite_real_scalar(value, message=message)
+    if number < 0.0 or not number.is_integer():
+        raise ValueError(message)
+    return int(number)
+
+
+def _unit_interval_control(value: Any, *, name: str) -> float:
+    """Return a finite real scalar in the closed unit interval."""
+
+    message = f"{name} must be a finite real scalar within [0, 1]"
+    number = _finite_real_scalar(value, message=message)
+    if not 0.0 <= number <= 1.0:
+        raise ValueError(message)
+    return number
+
+
+def _validate_multistart_config(config: Any) -> None:
+    """Validate restart controls before the legacy implementation coerces them."""
+
+    _nonnegative_integer_control(
+        config.max_branch_starts,
+        name="max_branch_starts",
+    )
+    _unit_interval_control(
+        config.min_branch_frame_fraction,
+        name="min_branch_frame_fraction",
+    )
 
 
 def compute_candidate_mixture_selection_objective(
@@ -54,9 +108,9 @@ def compute_candidate_mixture_selection_objective(
     """Evaluate the full restart objective, including its initialization anchor.
 
     ``candidate_mixture_map`` adds ``anchor_weight * ||x - x_initial||^2`` to the
-    trajectory solve.  Because every restart has a different initial trajectory,
+    trajectory solve. Because every restart has a different initial trajectory,
     omitting that term makes objective values incomparable whenever
-    ``anchor_weight`` is non-zero.  Non-finite estimates or mixture log weights
+    ``anchor_weight`` is non-zero. Non-finite estimates or mixture log weights
     make a restart invalid instead of being silently omitted from the objective.
     """
 
@@ -270,8 +324,13 @@ def _trajectory_anchor_penalty(
 
 
 # Make the legacy CLI and any function globals resolve the corrected behavior.
+_IMPL._validate_multistart_config = _validate_multistart_config
 _IMPL.compute_candidate_mixture_selection_objective = compute_candidate_mixture_selection_objective
 _IMPL.run_multistart_candidate_mixture_map = run_multistart_candidate_mixture_map
+globals()["_finite_real_scalar"] = _finite_real_scalar
+globals()["_nonnegative_integer_control"] = _nonnegative_integer_control
+globals()["_unit_interval_control"] = _unit_interval_control
+globals()["_validate_multistart_config"] = _validate_multistart_config
 globals()["compute_candidate_mixture_selection_objective"] = (
     compute_candidate_mixture_selection_objective
 )
