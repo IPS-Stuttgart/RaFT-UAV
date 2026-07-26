@@ -23,7 +23,16 @@ def _rows() -> pd.DataFrame:
 
 @pytest.mark.parametrize(
     "radius_m",
-    [True, np.bool_(False), -0.1, np.nan, np.inf, [1.0], 1.0 + 0.0j, np.ma.masked],
+    [
+        True,
+        np.bool_(False),
+        -0.1,
+        np.nan,
+        np.inf,
+        [1.0],
+        1.0 + 0.0j,
+        np.ma.masked,
+    ],
 )
 def test_diversity_rejects_invalid_radius_controls(radius_m: object) -> None:
     with pytest.raises(
@@ -35,7 +44,18 @@ def test_diversity_rejects_invalid_radius_controls(radius_m: object) -> None:
 
 @pytest.mark.parametrize(
     "cap",
-    [True, np.bool_(False), 0, -1, 1.5, np.nan, np.inf, [2], 2.0 + 0.0j, np.ma.masked],
+    [
+        True,
+        np.bool_(False),
+        0,
+        -1,
+        1.5,
+        np.nan,
+        np.inf,
+        [2],
+        2.0 + 0.0j,
+        np.ma.masked,
+    ],
 )
 def test_diversity_rejects_invalid_frame_caps(cap: object) -> None:
     with pytest.raises(
