@@ -76,3 +76,21 @@ def test_delayed_initialization_preserves_valid_scalar_like_controls() -> None:
         np.diag(hypotheses[0].covariance),
         [4.0, 4.0, 4.0, 9.0, 9.0, 9.0],
     )
+
+
+def test_delayed_initialization_limits_rf_candidates_to_first_window() -> None:
+    rf = [
+        SimpleNamespace(time_s=20.0, vector=np.array([20.0, 0.0, 0.0])),
+        SimpleNamespace(time_s=10.0, vector=np.array([10.0, 0.0, 0.0])),
+        SimpleNamespace(time_s=14.5, vector=np.array([14.5, 0.0, 0.0])),
+        SimpleNamespace(time_s=15.1, vector=np.array([15.1, 0.0, 0.0])),
+    ]
+
+    hypotheses = build_delayed_initial_hypotheses(
+        rf_measurements=rf,
+        radar=pd.DataFrame(),
+        window_s=5.0,
+        max_hypotheses=8,
+    )
+
+    assert sorted(hypothesis.time_s for hypothesis in hypotheses) == [10.0, 14.5]
