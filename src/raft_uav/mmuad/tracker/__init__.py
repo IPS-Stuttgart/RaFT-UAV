@@ -156,7 +156,8 @@ def _run_sequence_filter(
     if events.empty:
         return pd.DataFrame()
 
-    bootstrap = selected.sort_values("time_s").iloc[0]
+    ordered_selected = _ordered_filter_events(selected, selected_keys=selected_keys)
+    bootstrap = ordered_selected.iloc[0]
     filt = _LEGACY._ConstantVelocityFilter(
         acceleration_std_mps2=config.acceleration_std_mps2,
         initial_time_s=float(bootstrap["time_s"]),
