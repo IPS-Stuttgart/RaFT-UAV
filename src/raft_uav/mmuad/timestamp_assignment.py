@@ -72,6 +72,12 @@ def _validated_tolerance_s(value: Any) -> float:
     return tolerance
 
 
+def _contains_boolean_timestamp(values: list[Any]) -> bool:
+    """Return whether an input timestamp sequence contains Boolean scalars."""
+
+    return any(isinstance(value, (bool, np.bool_)) for value in values)
+
+
 def optimal_timestamp_assignment(
     requested_times: Iterable[float],
     prediction_times: Iterable[float],
@@ -86,8 +92,14 @@ def optimal_timestamp_assignment(
     request and prediction arrays.
     """
 
-    requests = np.asarray(list(requested_times), dtype=float)
-    predictions = np.asarray(list(prediction_times), dtype=float)
+    request_values = list(requested_times)
+    prediction_values = list(prediction_times)
+    if _contains_boolean_timestamp(request_values) or _contains_boolean_timestamp(
+        prediction_values
+    ):
+        raise ValueError("timestamp arrays must contain only finite values")
+    requests = np.asarray(request_values, dtype=float)
+    predictions = np.asarray(prediction_values, dtype=float)
     if requests.ndim != 1 or predictions.ndim != 1:
         raise ValueError("timestamp arrays must be one-dimensional")
     if not np.isfinite(requests).all() or not np.isfinite(predictions).all():
