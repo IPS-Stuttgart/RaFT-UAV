@@ -26,6 +26,22 @@ def test_sequence_weight_map_rejects_invalid_sequence_identifiers(
         _sequence_weight_map(weights)
 
 
+def test_sequence_weight_map_rejects_duplicate_normalized_identifiers() -> None:
+    weights = pd.DataFrame(
+        {
+            "sequence_id": ["seq0001", "seq0001"],
+            "weight": [0.25, 0.75],
+        },
+        index=[10, 42],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"duplicate normalized sequence_id at row 42: seq0001",
+    ):
+        _sequence_weight_map(weights)
+
+
 def test_sequence_weight_map_preserves_valid_opaque_identifiers() -> None:
     weights = pd.DataFrame(
         {
