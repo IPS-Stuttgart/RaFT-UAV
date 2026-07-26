@@ -1,16 +1,18 @@
 """Compatibility fixes for MMUAD camera loading and model lookup.
 
 The maintained implementation lives in the sibling ``camera.py`` module. This
-package preserves the public import path while selecting specific camera models
-and correctly reading gzip-compressed YOLO label exports.
+package preserves the public import path while validating pinhole intrinsics,
+selecting specific camera models, and correctly reading gzip-compressed YOLO
+label exports.
 """
-
 from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
 import sys
 from typing import Any
+
+import numpy as np
 
 from raft_uav.mmuad.io import read_text_export
 
@@ -24,6 +26,61 @@ if _SPEC is None or _SPEC.loader is None:
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+
+_ORIGINAL_INTRINSICS_FROM_CAMERA_ENTRY = _IMPL._intrinsics_from_camera_entry
+_ORIGINAL_BACKPROJECT_PIXEL_TO_CAMERA_XYZ = _IMPL.backproject_pixel_to_camera_xyz
+
+
+def _validated_camera_intrinsics(intrinsics):
+    """Return normalized finite pinhole intrinsics with positive focal lengths."""
+
+    error = (
+        "camera intrinsics must contain finite real scalars with "
+        "fx > 0 and fy > 0"
+    )
+    values: dict[str, float] = {}
+    for name in ("fx", "fy", "cx", "cy"):
+        try:
+            value = getattr(intrinsics, name)
+        except AttributeError as exc:
+            raise ValueError(error) from exc
+        if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+            raise ValueError(error)
+        try:
+            scalar = np.asarray(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(error) from exc
+        if scalar.ndim != 0 or np.iscomplexobj(scalar):
+            raise ValueError(error)
+        try:
+            number = float(scalar.item())
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(error) from exc
+        if not np.isfinite(number):
+            raise ValueError(error)
+        values[name] = number
+    if values["fx"] <= 0.0 or values["fy"] <= 0.0:
+        raise ValueError(error)
+    return _IMPL.CameraIntrinsics(**values)
+
+
+def _intrinsics_from_camera_entry(entry):
+    """Load and validate one camera's pinhole intrinsics."""
+
+    return _validated_camera_intrinsics(
+        _ORIGINAL_INTRINSICS_FROM_CAMERA_ENTRY(entry)
+    )
+
+
+def backproject_pixel_to_camera_xyz(u_px, v_px, depth_m, intrinsics):
+    """Back-project only after validating the supplied camera intrinsics."""
+
+    return _ORIGINAL_BACKPROJECT_PIXEL_TO_CAMERA_XYZ(
+        u_px,
+        v_px,
+        depth_m,
+        _validated_camera_intrinsics(intrinsics),
+    )
 
 
 def _model_for_source(models, source):
@@ -162,6 +219,9 @@ def _read_yolo_label_table(path: Path):
     )
 
 
+_IMPL._validated_camera_intrinsics = _validated_camera_intrinsics
+_IMPL._intrinsics_from_camera_entry = _intrinsics_from_camera_entry
+_IMPL.backproject_pixel_to_camera_xyz = backproject_pixel_to_camera_xyz
 _IMPL._model_for_source = _model_for_source
 _IMPL._export_stem = _export_stem
 _IMPL._same_stem_image_path = _same_stem_image_path
@@ -175,6 +235,9 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_validated_camera_intrinsics"] = _validated_camera_intrinsics
+globals()["_intrinsics_from_camera_entry"] = _intrinsics_from_camera_entry
+globals()["backproject_pixel_to_camera_xyz"] = backproject_pixel_to_camera_xyz
 globals()["_model_for_source"] = _model_for_source
 globals()["_export_stem"] = _export_stem
 globals()["_same_stem_image_path"] = _same_stem_image_path
