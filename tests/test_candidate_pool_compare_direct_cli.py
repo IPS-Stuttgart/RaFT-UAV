@@ -19,8 +19,8 @@ def test_candidate_pool_compare_direct_cli_replaces_default_top_k(monkeypatch, t
         lambda specs: {"pool": pd.DataFrame({"sequence_id": ["s1"], "time_s": [0.0]})},
     )
     monkeypatch.setattr(
-        candidate_pool_compare.pd,
-        "read_csv",
+        candidate_pool_compare,
+        "read_estimate_csv",
         lambda path: pd.DataFrame({"sequence_id": ["s1"], "time_s": [0.0]}),
     )
 
