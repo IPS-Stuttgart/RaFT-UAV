@@ -79,6 +79,7 @@ if os.environ.get("RAFT_UAV_SKIP_RUNTIME_HOOKS") != "1":
     _optional_runtime_hook(_radar_covariance_install)
     _optional_runtime_hook(_tracklet_viterbi_install)
     _optional_runtime_hook(_runtime_cli_patch_install)
+    _optional_runtime_hook(_layout_topic_map_exports_validation_install)
 
 # Scalar validation and normalized measurement fallbacks are core input-safety
 # boundaries, not optional integrations. Keep them active when runtime hooks are skipped.
@@ -86,4 +87,3 @@ _optional_runtime_hook(_kalman_timestamp_validation_install)
 _optional_runtime_hook(_rf_measurement_fallback_install)
 _optional_runtime_hook(_uncertainty_payload_validation_install)
 _optional_runtime_hook(_candidate_reservoir_config_validation_install)
-_optional_runtime_hook(_layout_topic_map_exports_validation_install)
