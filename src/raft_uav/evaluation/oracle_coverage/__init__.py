@@ -4,8 +4,9 @@ The maintained implementation lives in the sibling ``oracle_coverage.py``
 module. This package preserves the public import path while preventing
 fractional identifiers from being truncated, large exact identifiers from being
 rounded through binary floating point, malformed radar standard deviations from
-silently changing candidate scoring, and serialized Boolean diagnostics from
-corrupting oracle-retention summaries.
+silently changing candidate scoring, serialized Boolean diagnostics from
+corrupting oracle-retention summaries, and equal class-probability scores from
+receiving row-order-dependent ranks.
 """
 
 from __future__ import annotations
@@ -202,12 +203,29 @@ def _event_key(candidates: Any, time_s: float) -> str:
     return f"time_s:{float(time_s):.9f}"
 
 
+def _rank_by_catprob(candidates: Any, oracle_iloc: int) -> float:
+    """Return a descending average rank so equal probabilities remain tied."""
+
+    if "cat_prob_uav" not in candidates.columns:
+        return float("nan")
+    position = int(oracle_iloc)
+    if position < 0 or position >= len(candidates):
+        return float("nan")
+    values = pd.to_numeric(
+        candidates["cat_prob_uav"],
+        errors="coerce",
+    ).fillna(float("-inf"))
+    ranks = values.rank(method="average", ascending=False)
+    return float(ranks.iloc[position])
+
+
 _IMPL.build_oracle_candidate_coverage = build_oracle_candidate_coverage
 _IMPL._coverage_summary = _coverage_summary
 _IMPL._bucket_summary = _bucket_summary
 _IMPL._optional_int = _optional_int
 _IMPL._candidate_key = _candidate_key
 _IMPL._event_key = _event_key
+_IMPL._rank_by_catprob = _rank_by_catprob
 
 globals().update(
     {
@@ -225,6 +243,7 @@ globals()["build_oracle_candidate_coverage"] = build_oracle_candidate_coverage
 globals()["_optional_int"] = _optional_int
 globals()["_candidate_key"] = _candidate_key
 globals()["_event_key"] = _event_key
+globals()["_rank_by_catprob"] = _rank_by_catprob
 
 __doc__ = _IMPL.__doc__
 __all__ = [
