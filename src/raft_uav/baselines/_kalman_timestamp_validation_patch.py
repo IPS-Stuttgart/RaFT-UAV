@@ -60,6 +60,25 @@ def _finite_nonnegative_scale(value: Any, *, field_name: str) -> float:
     return scale
 
 
+def _finite_initial_position(value: Any) -> np.ndarray:
+    """Return a finite real 2D, 3D, or 6D initial position/state vector."""
+
+    error = "initial_position must contain 2, 3, or 6 finite real values"
+    try:
+        masked = np.ma.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if bool(np.any(np.ma.getmaskarray(masked))) or np.iscomplexobj(masked.data):
+        raise ValueError(error)
+    try:
+        position = np.asarray(masked.data, dtype=float).reshape(-1)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if position.size not in (2, 3, 6) or not np.isfinite(position).all():
+        raise ValueError(error)
+    return position
+
+
 def _reject_masked_values(value: Any, *, field_name: str) -> None:
     """Reject arrays whose mask would be discarded by ``np.asarray``."""
 
@@ -137,6 +156,7 @@ def _imm_tracker_init(
     initial_mode_probabilities: Any = None,
     mode_switch_time_constant_s: float = 20.0,
 ) -> None:
+    validated_initial_position = _finite_initial_position(initial_position)
     validated_time_s = _finite_timestamp_seconds(
         initial_time_s,
         field_name="initial_time_s",
@@ -155,7 +175,7 @@ def _imm_tracker_init(
     )
     _ORIGINAL_IMM_TRACKER_INIT(
         self,
-        initial_position,
+        validated_initial_position,
         validated_time_s,
         initial_position_std_m=validated_position_std_m,
         initial_velocity_std_mps=validated_velocity_std_mps,
