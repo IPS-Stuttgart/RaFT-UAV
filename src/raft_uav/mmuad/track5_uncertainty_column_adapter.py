@@ -32,6 +32,36 @@ DEFAULT_UNCERTAINTY_COLUMNS = (
     "sigma_m",
     "rmse_m",
 )
+TRAJECTORY_DEFINING_COLUMN_KEYS = frozenset(
+    {
+        "sequence_id",
+        "sequence",
+        "seq",
+        "time_s",
+        "timestamp",
+        "timestamp_s",
+        "time",
+        "position",
+        "state_x_m",
+        "state_y_m",
+        "state_z_m",
+        "x_m",
+        "y_m",
+        "z_m",
+        "x",
+        "y",
+        "z",
+        "east_m",
+        "north_m",
+        "up_m",
+        "classification",
+        "class_id",
+        "class",
+        "label",
+        "uav_type",
+        "uav_type_id",
+    }
+)
 
 
 def normalize_uncertainty_estimate_inputs(
@@ -52,6 +82,7 @@ def normalize_uncertainty_estimate_inputs(
         (item.label for item in inputs),
         context="estimate",
     )
+    output_uncertainty_column = _validated_output_uncertainty_column(output_uncertainty_column)
     fallback_sigma_m = _positive_finite(fallback_sigma_m, name="fallback_sigma_m")
     column_map = dict(uncertainty_columns or {})
     normalized_dir = Path(output_dir) / NORMALIZED_DIR
@@ -292,6 +323,21 @@ def _lookup_column_name(lookup: dict[str, str], name: str) -> str | None:
 
 def _column_name_key(value: Any) -> str:
     return str(value).strip().lower()
+
+
+def _validated_output_uncertainty_column(value: Any) -> str:
+    if value is None:
+        raise ValueError("output_uncertainty_column must not be empty")
+    column = str(value)
+    key = _column_name_key(column)
+    if not key:
+        raise ValueError("output_uncertainty_column must not be empty")
+    if key in TRAJECTORY_DEFINING_COLUMN_KEYS:
+        raise ValueError(
+            "output_uncertainty_column must not overwrite a trajectory-defining column: "
+            f"{column!r}"
+        )
+    return column
 
 
 def _validate_unique_normalized_labels(
