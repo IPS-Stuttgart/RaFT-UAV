@@ -7,6 +7,7 @@ from raft_uav.baselines.kalman import TrackingMeasurement
 
 def test_training_collector_does_not_replay_bootstrap_event(monkeypatch):
     tracker_instances = []
+    implementation = training._IMPL
 
     class FakeTracker:
         def __init__(
@@ -50,27 +51,31 @@ def test_training_collector_does_not_replay_bootstrap_event(monkeypatch):
         {"kind": "radar", "time_s": 1.0, "candidates": candidates},
     ]
 
-    monkeypatch.setattr(training, "AsyncConstantVelocityKalmanTracker", FakeTracker)
-    monkeypatch.setattr(training, "_events", lambda rf_measurements, radar: events)
+    monkeypatch.setattr(implementation, "AsyncConstantVelocityKalmanTracker", FakeTracker)
+    monkeypatch.setattr(implementation, "_events", lambda rf_measurements, radar: events)
     monkeypatch.setattr(
-        training,
+        implementation,
         "_initial_measurement",
         lambda *args, **kwargs: initial_measurement,
     )
-    monkeypatch.setattr(training, "_catprob_candidate_pool", lambda frame, threshold: frame)
+    monkeypatch.setattr(implementation, "_catprob_candidate_pool", lambda frame, threshold: frame)
     monkeypatch.setattr(
-        training,
+        implementation,
         "_nis_scored_candidates",
         lambda frame, tracker, covariance: frame.assign(association_nis=1.0),
     )
-    monkeypatch.setattr(training, "_nearest_truth_position", lambda *args, **kwargs: np.zeros(3))
     monkeypatch.setattr(
-        training,
+        implementation,
+        "_nearest_truth_position",
+        lambda *args, **kwargs: np.zeros(3),
+    )
+    monkeypatch.setattr(
+        implementation,
         "_candidate_truth_errors",
         lambda frame, truth_xyz: np.zeros(len(frame)),
     )
     monkeypatch.setattr(
-        training,
+        implementation,
         "radar_association_feature_frame",
         lambda frame, **kwargs: pd.DataFrame({"dummy_feature": np.ones(len(frame))}),
     )
