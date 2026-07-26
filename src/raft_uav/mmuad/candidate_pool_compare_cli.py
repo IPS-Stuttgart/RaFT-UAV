@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from raft_uav.mmuad import candidate_pool_compare as _compare
+from raft_uav.mmuad.estimate_csv import read_estimate_csv
 
 _DEFAULT_FALLBACK_SCORE_COLUMN = _compare._DEFAULT_FALLBACK_SCORE_COLUMN
 _DEFAULT_SCORE_COLUMN = _compare._DEFAULT_SCORE_COLUMN
@@ -81,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
     if reference_candidates.empty:
         raise ValueError("reference candidate pool is empty")
     candidate_pools = _load_labeled_candidate_pools(args.candidate)
-    truth = pd.read_csv(args.truth_csv)
+    truth = read_estimate_csv(args.truth_csv)
     frame_rows, pooled, by_sequence, by_branch = build_candidate_pool_compare_tables(
         reference_candidates,
         candidate_pools,
