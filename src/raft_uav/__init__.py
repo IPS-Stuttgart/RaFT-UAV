@@ -18,7 +18,7 @@ def _optional_runtime_hook(import_install: Callable[[], Callable[[], None]]) -> 
         install()
     except ModuleNotFoundError as exc:
         missing_name = exc.name or ""
-        if missing_name.startswith("pyrecest"):
+        if missing_name == "pyrecest" or missing_name.startswith("pyrecest."):
             return
         raise
 
