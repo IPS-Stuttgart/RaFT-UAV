@@ -19,7 +19,11 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.submission import load_official_track5_template_file, load_sequence_class_map
-from raft_uav.mmuad.track5_estimate_ensemble import EstimateInput, parse_estimate_spec
+from raft_uav.mmuad.track5_estimate_ensemble import (
+    EstimateInput,
+    _normalize_unique_labels,
+    parse_estimate_spec,
+)
 from raft_uav.mmuad.track5_uncertainty_ensemble import write_track5_uncertainty_ensemble_outputs
 
 NORMALIZED_DIR = "normalized_estimates"
@@ -48,13 +52,17 @@ def normalize_uncertainty_estimate_inputs(
     inputs = list(estimate_inputs)
     if not inputs:
         raise ValueError("at least one estimate input is required")
+    safe_labels = _normalize_unique_labels(
+        (item.label for item in inputs),
+        context="estimate input",
+    )
     fallback_sigma_m = _positive_finite(fallback_sigma_m, name="fallback_sigma_m")
     column_map = dict(uncertainty_columns or {})
     normalized_dir = Path(output_dir) / NORMALIZED_DIR
     normalized_dir.mkdir(parents=True, exist_ok=True)
     normalized_inputs: list[EstimateInput] = []
     records: list[dict[str, Any]] = []
-    for item in inputs:
+    for item, safe_label in zip(inputs, safe_labels):
         rows = pd.read_csv(item.path, dtype=str, keep_default_na=False)
         source_column = _select_uncertainty_column(
             rows,
@@ -72,7 +80,7 @@ def normalize_uncertainty_estimate_inputs(
             fallback_count = int((~finite_positive).sum())
             out[output_uncertainty_column] = values.where(finite_positive, float(fallback_sigma_m))
             source = source_column
-        output_csv = normalized_dir / f"{_safe_label(item.label)}.csv"
+        output_csv = normalized_dir / f"{safe_label}.csv"
         out.to_csv(output_csv, index=False)
         normalized_inputs.append(
             EstimateInput(label=item.label, path=output_csv, weight=item.weight)
