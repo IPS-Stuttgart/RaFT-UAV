@@ -60,9 +60,27 @@ def _parse_official_truth_classification_cell(value: Any) -> int:
 
 
 def _official_track5_column_map(frame: pd.DataFrame) -> dict[str, Any]:
-    """Map official Track 5 columns after trimming common CSV header whitespace."""
+    """Map official Track 5 columns after rejecting normalized collisions."""
 
-    return {str(column).strip().lower(): column for column in frame.columns}
+    normalized: dict[str, list[Any]] = {}
+    for column in frame.columns:
+        key = str(column).strip().lower()
+        normalized.setdefault(key, []).append(column)
+    collisions = {
+        key: columns
+        for key, columns in normalized.items()
+        if len(columns) > 1
+    }
+    if collisions:
+        details = "; ".join(
+            f"{key!r}: {[str(column) for column in columns]!r}"
+            for key, columns in sorted(collisions.items())
+        )
+        raise ValueError(
+            "official Track 5 columns must be unique after trimming whitespace "
+            f"and ignoring case; collisions: {details}"
+        )
+    return {key: columns[0] for key, columns in normalized.items()}
 
 
 def _has_official_track5_columns(frame: pd.DataFrame) -> bool:
