@@ -152,8 +152,14 @@ def fit_heteroscedastic_uncertainty_model(
 ) -> HeteroscedasticUncertaintyModel:
     """Fit source/axis log-variance models from residuals to truth."""
 
-    min_std = _nested(DEFAULT_MIN_STD, min_std_m)
-    max_std = _nested(DEFAULT_MAX_STD, max_std_m)
+    ridge_lambda = _finite_nonnegative_parameter(ridge_lambda, name="ridge_lambda")
+    max_time_delta_s = _finite_nonnegative_parameter(
+        max_time_delta_s,
+        name="max_time_delta_s",
+    )
+    min_std = _nested(DEFAULT_MIN_STD, min_std_m, name="min_std_m")
+    max_std = _nested(DEFAULT_MAX_STD, max_std_m, name="max_std_m")
+    _validate_std_bounds(min_std, max_std)
     heads: list[VarianceHead] = []
     for source, frame in (("rf", rf), ("radar", radar)):
         if frame is None or frame.empty:
@@ -358,11 +364,73 @@ def _num(frame: pd.DataFrame, aliases: Sequence[str], default: float) -> np.ndar
 def _nested(
     base: Mapping[str, Mapping[str, float]],
     override: Mapping[str, Mapping[str, float]] | None,
+    *,
+    name: str,
 ) -> dict[str, dict[str, float]]:
     out = {source: dict(values) for source, values in base.items()}
-    for source, values in dict(override or {}).items():
-        out.setdefault(source, {}).update({key: float(value) for key, value in values.items()})
+    try:
+        override_items = dict(override or {}).items()
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a source-to-dimension mapping") from exc
+
+    for source, values in override_items:
+        if source not in out:
+            raise ValueError(f"{name} contains unknown source {source!r}")
+        if not isinstance(values, Mapping):
+            raise ValueError(f"{name}[{source!r}] must be a dimension mapping")
+        for dimension, value in values.items():
+            if dimension not in out[source]:
+                raise ValueError(
+                    f"{name}[{source!r}] contains unknown dimension {dimension!r}"
+                )
+            out[source][dimension] = _finite_positive_parameter(
+                value,
+                name=f"{name}[{source!r}][{dimension!r}]",
+            )
     return out
+
+
+def _validate_std_bounds(
+    min_std: Mapping[str, Mapping[str, float]],
+    max_std: Mapping[str, Mapping[str, float]],
+) -> None:
+    for source, dimensions in SOURCE_DIMS.items():
+        for dimension in dimensions:
+            minimum = float(min_std[source][dimension])
+            maximum = float(max_std[source][dimension])
+            if minimum > maximum:
+                raise ValueError(
+                    "min_std_m must not exceed max_std_m for "
+                    f"{source}.{dimension}: {minimum} > {maximum}"
+                )
+
+
+def _finite_nonnegative_parameter(value: object, *, name: str) -> float:
+    parsed = _finite_parameter(value, name=name)
+    if parsed < 0.0:
+        raise ValueError(f"{name} must be nonnegative")
+    return parsed
+
+
+def _finite_positive_parameter(value: object, *, name: str) -> float:
+    parsed = _finite_parameter(value, name=name)
+    if parsed <= 0.0:
+        raise ValueError(f"{name} must be positive")
+    return parsed
+
+
+def _finite_parameter(value: object, *, name: str) -> float:
+    if isinstance(value, bool | np.bool_):
+        raise ValueError(f"{name} must be a finite real number")
+    if isinstance(value, complex | np.complexfloating):
+        raise ValueError(f"{name} must be a finite real number")
+    try:
+        parsed = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite real number") from exc
+    if not np.isfinite(parsed):
+        raise ValueError(f"{name} must be a finite real number")
+    return parsed
 
 
 def _positive(value: object) -> float | None:
