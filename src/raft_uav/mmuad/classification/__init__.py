@@ -1,8 +1,10 @@
-"""Compatibility wrapper validating candidate-classification thresholds.
+"""Compatibility wrapper validating candidate-classification inputs.
 
 The maintained implementation lives in the sibling ``classification.py``
 module. This package preserves the public import path while ensuring malformed
-candidate confidence thresholds cannot silently produce all-default class maps.
+candidate confidence thresholds cannot silently produce all-default class maps
+and candidates without an explicit confidence column retain the documented
+unit-weight default.
 """
 
 from __future__ import annotations
@@ -13,6 +15,8 @@ import sys
 from typing import Any
 
 import numpy as np
+
+from raft_uav.mmuad.schema import CandidateFrame
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "classification.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -48,16 +52,25 @@ def _normalize_min_confidence(value: Any) -> float:
     return numeric
 
 
+def _with_default_confidence(candidates: CandidateFrame) -> CandidateFrame:
+    """Return candidates with unit confidence when class votes omit the column."""
+
+    rows = candidates.rows
+    if "class_name" not in rows.columns or "confidence" in rows.columns:
+        return candidates
+    return CandidateFrame(rows.assign(confidence=1.0))
+
+
 def infer_sequence_class_map_from_candidates(
     candidates,
     *,
     min_confidence: float = 0.0,
     default_class: str = "unknown",
 ):
-    """Infer classes after validating the candidate-confidence threshold."""
+    """Infer classes after normalizing public candidate-voting inputs."""
 
     return _ORIGINAL_INFER_SEQUENCE_CLASS_MAP(
-        candidates,
+        _with_default_confidence(candidates),
         min_confidence=_normalize_min_confidence(min_confidence),
         default_class=default_class,
     )
@@ -74,6 +87,7 @@ globals().update(
 )
 globals()["infer_sequence_class_map_from_candidates"] = infer_sequence_class_map_from_candidates
 globals()["_normalize_min_confidence"] = _normalize_min_confidence
+globals()["_with_default_confidence"] = _with_default_confidence
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
