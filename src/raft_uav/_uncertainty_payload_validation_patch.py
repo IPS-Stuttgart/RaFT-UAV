@@ -1,0 +1,110 @@
+"""Reject Boolean and lossy integer fields in uncertainty model heads."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+import numpy as np
+
+
+def _finite_real_scalar(value: object, *, name: str) -> float:
+    """Return a finite real scalar without Boolean or array coercion."""
+
+    error = f"{name} must be a finite real scalar"
+    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+        raise ValueError(error)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+        raise ValueError(error)
+    try:
+        number = float(scalar.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(number):
+        raise ValueError(error)
+    return number
+
+
+def _nonnegative_integer(value: object, *, name: str) -> int:
+    """Return a nonnegative integer scalar without truncation."""
+
+    number = _finite_real_scalar(value, name=name)
+    if number < 0.0 or not number.is_integer():
+        raise ValueError(f"{name} must be a nonnegative integer")
+    return int(number)
+
+
+def _validated_coefficients(values: object) -> tuple[object, ...]:
+    """Validate raw coefficient values before legacy float coercion."""
+
+    if isinstance(values, (str, bytes)):
+        raise ValueError("coefficients must be a sequence of finite real scalars")
+    try:
+        coefficients = tuple(values)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise ValueError(
+            "coefficients must be a sequence of finite real scalars"
+        ) from exc
+    for index, value in enumerate(coefficients):
+        _finite_real_scalar(value, name=f"coefficients[{index}]")
+    return coefficients
+
+
+def _validate_head_payload(item: object) -> Mapping[str, Any]:
+    """Validate raw serialized fields before the legacy loader coerces them."""
+
+    if not isinstance(item, Mapping):
+        raise ValueError("uncertainty variance head must be a mapping")
+    _validated_coefficients(item.get("coefficients", ()))
+    _finite_real_scalar(item.get("min_std_m"), name="min_std_m")
+    _finite_real_scalar(item.get("max_std_m"), name="max_std_m")
+    _nonnegative_integer(item.get("training_rows", 0), name="training_rows")
+    return item
+
+
+def install() -> None:
+    """Install raw-field validation on uncertainty head construction/loading."""
+
+    from raft_uav import uncertainty as uncertainty_module
+
+    head_class = uncertainty_module.VarianceHead
+    if getattr(head_class, "_raft_uav_raw_field_validation_installed", False):
+        return
+
+    original_init = head_class.__init__
+    original_from_dict = head_class.from_dict.__func__
+
+    def validated_init(
+        self,
+        source,
+        dimension,
+        feature_names,
+        coefficients,
+        min_std_m,
+        max_std_m,
+        training_rows,
+    ):
+        _validated_coefficients(coefficients)
+        _nonnegative_integer(training_rows, name="training_rows")
+        original_init(
+            self,
+            source,
+            dimension,
+            feature_names,
+            coefficients,
+            min_std_m,
+            max_std_m,
+            training_rows,
+        )
+
+    def validated_from_dict(cls, item):
+        _validate_head_payload(item)
+        return original_from_dict(cls, item)
+
+    head_class.__init__ = validated_init
+    head_class.from_dict = classmethod(validated_from_dict)
+    head_class._raft_uav_raw_field_validation_installed = True
