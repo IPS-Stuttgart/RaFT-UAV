@@ -43,7 +43,7 @@ def _finite_nonnegative_scale(value: Any, *, field_name: str) -> float:
     """Return a finite nonnegative scalar uncertainty scale."""
 
     error = f"{field_name} must be a finite nonnegative scalar"
-    if isinstance(value, bool | np.bool_):
+    if isinstance(value, bool | np.bool_) or np.ma.is_masked(value):
         raise ValueError(error)
     try:
         scalar = np.asarray(value)
