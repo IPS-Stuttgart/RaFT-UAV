@@ -42,6 +42,15 @@ def _validated_nonnegative_gate(value: object, *, name: str) -> float:
     return normalized
 
 
+def _validated_positive_gate(value: object, *, name: str) -> float:
+    """Return a finite positive scalar gate or raise a stable error."""
+
+    normalized = optional_float(value)
+    if normalized is None or normalized <= 0.0:
+        raise ValueError(f"{name} must be a finite positive scalar")
+    return normalized
+
+
 def collect_radar_association_training_frame(
     *,
     rf_measurements: Iterable[TrackingMeasurement],
@@ -58,8 +67,9 @@ def collect_radar_association_training_frame(
     teacher_association: str = "oracle",
     track_switch_nis_ratio: float = 0.5,
 ) -> pd.DataFrame:
-    """Collect training rows after validating both truth-matching gates."""
+    """Collect training rows after validating all truth-matching gates."""
 
+    positive_gate = _validated_positive_gate(positive_gate_m, name="positive_gate_m")
     distance_gate = _validated_nonnegative_gate(truth_gate_m, name="truth_gate_m")
     time_gate = _validated_nonnegative_gate(
         truth_time_gate_s,
@@ -74,7 +84,7 @@ def collect_radar_association_training_frame(
         radar_xy_std_m=radar_xy_std_m,
         radar_z_std_m=radar_z_std_m,
         candidate_catprob_threshold=candidate_catprob_threshold,
-        positive_gate_m=positive_gate_m,
+        positive_gate_m=positive_gate,
         truth_gate_m=distance_gate,
         truth_time_gate_s=time_gate,
         teacher_association=teacher_association,
@@ -92,6 +102,7 @@ globals().update(
     }
 )
 globals()["_validated_nonnegative_gate"] = _validated_nonnegative_gate
+globals()["_validated_positive_gate"] = _validated_positive_gate
 globals()["collect_radar_association_training_frame"] = (
     collect_radar_association_training_frame
 )
