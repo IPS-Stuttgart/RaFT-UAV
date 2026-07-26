@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling ``tracklet_feature_store.py``
 module. This package preserves the public import path while matching external
-selected-radar rows by stable track ID, with track-index fallback only when an
-ID is unavailable, and parsing persisted Boolean diagnostics explicitly instead
+selected-radar rows by stable opaque track ID, with track-index fallback only when
+an ID is unavailable, and parsing persisted Boolean diagnostics explicitly instead
 of relying on Python string truthiness.
 """
 
@@ -36,12 +36,48 @@ _TRUE_BOOLEAN_TEXT = frozenset({"true", "t", "yes", "y", "on"})
 _FALSE_BOOLEAN_TEXT = frozenset(
     {"false", "f", "no", "n", "off", "", "nan", "none", "null", "<na>", "nat"}
 )
+_MISSING_IDENTIFIER_TEXT = frozenset({"", "nan", "none", "null", "<na>", "nat"})
+
+
+def _stable_identifier(value: object) -> object | None:
+    """Return a hashable identifier without discarding opaque or fractional IDs."""
+
+    if value is None:
+        return None
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
+    if isinstance(value, (bool, np.bool_)):
+        return ("bool", bool(value))
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, int):
+        return ("number", int(value))
+    if isinstance(value, float):
+        number = float(value)
+        if not np.isfinite(number):
+            return None
+        return ("number", int(number) if number.is_integer() else number)
+
+    text = str(value).strip()
+    if text.casefold() in _MISSING_IDENTIFIER_TEXT:
+        return None
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return ("text", text)
+    if not np.isfinite(number):
+        return None
+    return ("number", int(number) if number.is_integer() else number)
 
 
 def _identifier_key(
     row: pd.Series,
     identifier: str,
-    value: int,
+    value: object,
 ) -> tuple[object, ...]:
     """Return one frame-scoped candidate identifier key."""
 
@@ -49,17 +85,17 @@ def _identifier_key(
         row.get("frame_key_type"),
         row.get("frame_key"),
         identifier,
-        int(value),
+        value,
     )
 
 
 def _candidate_match_key(row: pd.Series) -> tuple[object, ...] | None:
     """Return the strongest available frame-scoped candidate identity."""
 
-    track_id = _IMPL._optional_int(row.get("track_id"))
+    track_id = _stable_identifier(row.get("track_id"))
     if track_id is not None:
         return _identifier_key(row, "track_id", track_id)
-    track_index = _IMPL._optional_int(row.get("track_index"))
+    track_index = _stable_identifier(row.get("track_index"))
     if track_index is not None:
         return _identifier_key(row, "track_index", track_index)
     return None
@@ -79,8 +115,8 @@ def _selection_mask(
     selected_track_indices: set[tuple[object, ...]] = set()
     fallback_track_indices: set[tuple[object, ...]] = set()
     for _, row in selected.iterrows():
-        track_id = _IMPL._optional_int(row.get("track_id"))
-        track_index = _IMPL._optional_int(row.get("track_index"))
+        track_id = _stable_identifier(row.get("track_id"))
+        track_index = _stable_identifier(row.get("track_index"))
         if track_id is not None:
             selected_track_ids.add(_identifier_key(row, "track_id", track_id))
         if track_index is not None:
@@ -90,8 +126,8 @@ def _selection_mask(
                 fallback_track_indices.add(index_key)
 
     def is_selected(row: pd.Series) -> bool:
-        track_id = _IMPL._optional_int(row.get("track_id"))
-        track_index = _IMPL._optional_int(row.get("track_index"))
+        track_id = _stable_identifier(row.get("track_id"))
+        track_index = _stable_identifier(row.get("track_index"))
         if track_id is not None:
             id_key = _identifier_key(row, "track_id", track_id)
             if id_key in selected_track_ids:
@@ -170,6 +206,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_stable_identifier"] = _stable_identifier
 globals()["_identifier_key"] = _identifier_key
 globals()["_candidate_match_key"] = _candidate_match_key
 globals()["_selection_mask"] = _selection_mask
