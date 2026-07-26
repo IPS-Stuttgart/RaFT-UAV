@@ -1,9 +1,10 @@
-"""Compatibility wrapper validating Track 5 estimate sequence-gate weights.
+"""Compatibility fixes for Track 5 estimate sequence-gate weights.
 
 The maintained implementation lives in the sibling
 ``track5_estimate_sequence_gate.py`` module. This package preserves the public
 import path while rejecting Boolean, complex, non-scalar, masked, and non-finite
-blend weights before they can silently select a trajectory.
+blend weights, and duplicate normalized sequence identifiers, before they can
+silently select a trajectory.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import sys
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_estimate_sequence_gate.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -53,7 +55,34 @@ def _validate_weight(value: Any, *, name: str) -> float:
     return weight
 
 
+def _sequence_weight_map(rows: pd.DataFrame) -> dict[str, float]:
+    """Normalize weights while rejecting ambiguous duplicate sequence rows."""
+
+    frame = pd.DataFrame(rows).copy()
+    sequence_column = _IMPL._first_present(frame, _IMPL.SEQUENCE_ALIASES)
+    weight_column = _IMPL._first_present(frame, _IMPL.WEIGHT_ALIASES)
+    if sequence_column is None or weight_column is None:
+        raise ValueError("sequence weight table must contain sequence_id and weight columns")
+
+    result: dict[str, float] = {}
+    for _, row in frame.iterrows():
+        sequence_id = _IMPL._official_sequence_id_or_none(row[sequence_column])
+        if sequence_id is None:
+            continue
+        if sequence_id in result:
+            raise ValueError(
+                "sequence weight table contains duplicate normalized sequence_id: "
+                f"{sequence_id}"
+            )
+        result[sequence_id] = _validate_weight(
+            row[weight_column],
+            name="sequence_weight",
+        )
+    return result
+
+
 _IMPL._validate_weight = _validate_weight
+_IMPL._sequence_weight_map = _sequence_weight_map
 
 globals().update(
     {
@@ -63,6 +92,7 @@ globals().update(
     }
 )
 globals()["_validate_weight"] = _validate_weight
+globals()["_sequence_weight_map"] = _sequence_weight_map
 
 __doc__ = _IMPL.__doc__
 __all__ = [
