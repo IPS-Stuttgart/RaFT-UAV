@@ -18,6 +18,25 @@ import numpy as np
 import pandas as pd
 
 
+_TRUE_BOOL_TEXT = frozenset({"true", "t", "yes", "y", "1", "1.0"})
+_FALSE_BOOL_TEXT = frozenset(
+    {
+        "false",
+        "f",
+        "no",
+        "n",
+        "0",
+        "0.0",
+        "",
+        "nan",
+        "none",
+        "null",
+        "<na>",
+        "nat",
+    }
+)
+
+
 def build_candidate_oracle_block_tables(
     frame_rows: pd.DataFrame,
     *,
@@ -167,24 +186,29 @@ def _require_columns(rows: pd.DataFrame, columns: list[str]) -> None:
 
 
 def _to_bool_series(values: pd.Series) -> pd.Series:
-    series = pd.Series(values)
+    input_name = getattr(values, "name", None)
+    series = pd.Series(values, copy=False)
     if series.empty:
-        return pd.Series(dtype=bool)
+        return pd.Series(index=series.index, dtype=bool)
     if pd.api.types.is_bool_dtype(series.dtype):
-        return series.fillna(False).astype(bool)
+        return series.astype("boolean").fillna(False).astype(bool)
 
     numeric = pd.to_numeric(series, errors="coerce")
-    numeric_values = numeric.to_numpy(dtype=float)
-    numeric_truthy = pd.Series(
-        np.isfinite(numeric_values) & (numeric_values != 0.0),
-        index=series.index,
-    )
-    text = series.where(series.notna(), "").astype(str).str.strip().str.lower()
-    truthy_text = text.isin({"1", "1.0", "true", "t", "yes", "y"})
-    falsy_text = text.isin(
-        {"0", "0.0", "false", "f", "no", "n", "", "nan", "none", "<na>", "nat"}
-    )
-    return truthy_text | (numeric_truthy & ~falsy_text)
+    text = series.astype("string").str.strip().str.casefold()
+    truthy = (text.isin(_TRUE_BOOL_TEXT) | numeric.eq(1.0)).fillna(False)
+    falsy = (
+        series.isna() | text.isin(_FALSE_BOOL_TEXT) | numeric.eq(0.0)
+    ).fillna(False)
+    invalid = ~(truthy | falsy)
+    if bool(invalid.any()):
+        invalid_indices = invalid[invalid].index.tolist()
+        invalid_values = series.loc[invalid_indices].tolist()
+        label = str(input_name) if input_name is not None else "Boolean values"
+        raise ValueError(
+            f"{label} contains invalid Boolean values at rows "
+            f"{invalid_indices}: {invalid_values}"
+        )
+    return truthy.astype(bool)
 
 
 def _failure_mode(

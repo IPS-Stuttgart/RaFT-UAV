@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.candidate_oracle_blocks import (
     build_candidate_oracle_block_tables,
@@ -69,6 +70,29 @@ def test_candidate_oracle_blocks_preserve_numeric_true_topk_flags() -> None:
     buried = blocks.loc[blocks["oracle_failure_mode"] == "good_candidate_buried"].iloc[0]
     assert int(covered["frame_count"]) == 2
     assert int(buried["frame_count"]) == 2
+
+
+@pytest.mark.parametrize(
+    "value",
+    [2, -1, 0.5, "maybe", "truth", float("inf")],
+)
+def test_candidate_oracle_blocks_reject_invalid_topk_flags(value: object) -> None:
+    rows = pd.DataFrame(
+        {
+            "sequence_id": ["seqC"],
+            "time_s": [0.0],
+            "oracle_all_3d_m": [0.2],
+            "oracle_all_rank": [1],
+            "oracle_in_top3": [value],
+        },
+        index=[42],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"oracle_in_top3 contains invalid Boolean values at rows \[42\]",
+    ):
+        build_candidate_oracle_block_tables(rows, top_k=3)
 
 
 def test_candidate_oracle_blocks_cli_writes_artifacts(tmp_path) -> None:
