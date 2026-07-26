@@ -48,13 +48,17 @@ def normalize_uncertainty_estimate_inputs(
     inputs = list(estimate_inputs)
     if not inputs:
         raise ValueError("at least one estimate input is required")
+    safe_labels = _validate_unique_normalized_labels(
+        (item.label for item in inputs),
+        context="estimate",
+    )
     fallback_sigma_m = _positive_finite(fallback_sigma_m, name="fallback_sigma_m")
     column_map = dict(uncertainty_columns or {})
     normalized_dir = Path(output_dir) / NORMALIZED_DIR
     normalized_dir.mkdir(parents=True, exist_ok=True)
     normalized_inputs: list[EstimateInput] = []
     records: list[dict[str, Any]] = []
-    for item in inputs:
+    for item, safe_label in zip(inputs, safe_labels):
         rows = pd.read_csv(item.path, dtype=str, keep_default_na=False)
         source_column = _select_uncertainty_column(
             rows,
@@ -72,7 +76,7 @@ def normalize_uncertainty_estimate_inputs(
             fallback_count = int((~finite_positive).sum())
             out[output_uncertainty_column] = values.where(finite_positive, float(fallback_sigma_m))
             source = source_column
-        output_csv = normalized_dir / f"{_safe_label(item.label)}.csv"
+        output_csv = normalized_dir / f"{safe_label}.csv"
         out.to_csv(output_csv, index=False)
         normalized_inputs.append(
             EstimateInput(label=item.label, path=output_csv, weight=item.weight)
@@ -115,7 +119,6 @@ def write_uncertainty_column_adapter_outputs(
     """Write normalized estimates and optional upload-ready uncertainty ensemble."""
 
     output = Path(output_dir)
-    output.mkdir(parents=True, exist_ok=True)
     normalized_inputs, summary = normalize_uncertainty_estimate_inputs(
         estimate_inputs,
         output_dir=output,
@@ -227,17 +230,23 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _parse_uncertainty_column_map(values: list[str]) -> dict[str, str]:
-    mapping: dict[str, str] = {}
+    parsed: list[tuple[str, str]] = []
     for value in values:
         if "=" not in value:
             raise ValueError(f"uncertainty-column spec must be LABEL=COLUMN: {value}")
         label, column = value.split("=", 1)
-        label = _safe_label(label)
         column = column.strip()
         if not column:
-            raise ValueError(f"empty uncertainty column for label {label}")
-        mapping[label] = column
-    return mapping
+            raise ValueError(f"empty uncertainty column for label {_safe_label(label)}")
+        parsed.append((label, column))
+    safe_labels = _validate_unique_normalized_labels(
+        (label for label, _ in parsed),
+        context="uncertainty-column",
+    )
+    return {
+        safe_label: column
+        for safe_label, (_, column) in zip(safe_labels, parsed)
+    }
 
 
 def _lookup_requested_uncertainty_column(mapping: dict[str, str], label: str) -> str | None:
@@ -283,6 +292,38 @@ def _lookup_column_name(lookup: dict[str, str], name: str) -> str | None:
 
 def _column_name_key(value: Any) -> str:
     return str(value).strip().lower()
+
+
+def _validate_unique_normalized_labels(
+    values: Iterable[Any],
+    *,
+    context: str,
+) -> list[str]:
+    safe_labels: list[str] = []
+    seen_exact: dict[str, str] = {}
+    seen_casefold: dict[str, tuple[str, str]] = {}
+    for value in values:
+        raw_label = str(value)
+        safe_label = _safe_label(raw_label)
+        previous_raw = seen_exact.get(safe_label)
+        if previous_raw is not None:
+            raise ValueError(
+                f"{context} labels must be unique after normalization: "
+                f"{previous_raw!r} and {raw_label!r} both normalize to {safe_label!r}"
+            )
+        casefold_key = safe_label.casefold()
+        previous_case = seen_casefold.get(casefold_key)
+        if previous_case is not None:
+            previous_raw, previous_safe = previous_case
+            raise ValueError(
+                f"{context} labels collide on case-insensitive filenames: "
+                f"{previous_raw!r} -> {previous_safe!r}, "
+                f"{raw_label!r} -> {safe_label!r}"
+            )
+        seen_exact[safe_label] = raw_label
+        seen_casefold[casefold_key] = (raw_label, safe_label)
+        safe_labels.append(safe_label)
+    return safe_labels
 
 
 def _safe_label(value: str) -> str:
