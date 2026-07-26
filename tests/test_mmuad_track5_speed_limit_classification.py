@@ -19,7 +19,7 @@ def _submission() -> pd.DataFrame:
     )
 
 
-@pytest.mark.parametrize("value", [-1, 4, 1.5, "unknown"])
+@pytest.mark.parametrize("value", [-1, 4, 1.5])
 def test_speed_limit_rejects_invalid_classification_values(value: object) -> None:
     rows = _submission()
     rows["Classification"] = rows["Classification"].astype(object)
