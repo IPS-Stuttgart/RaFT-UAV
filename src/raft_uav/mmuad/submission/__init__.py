@@ -31,19 +31,31 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR = "_raft_uav_original_normalize_track5_template"
+_ORIGINAL_VERIFY_OFFICIAL_UPLOAD_MANIFEST_ATTR = (
+    "_raft_uav_original_verify_official_upload_manifest"
+)
 
 _LEGACY_LOAD_SEQUENCE_CLASS_MAP = _IMPL.load_sequence_class_map
 _LEGACY_VALIDATE_OFFICIAL_TRACK5_SUBMISSION = _IMPL.validate_official_track5_submission
-_LEGACY_VERIFY_OFFICIAL_UPLOAD_MANIFEST = _IMPL.verify_official_upload_manifest
 if not hasattr(_IMPL._impl, _ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR):
     setattr(
         _IMPL._impl,
         _ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR,
         _IMPL._impl._normalize_track5_template,
     )
+if not hasattr(_IMPL._impl, _ORIGINAL_VERIFY_OFFICIAL_UPLOAD_MANIFEST_ATTR):
+    setattr(
+        _IMPL._impl,
+        _ORIGINAL_VERIFY_OFFICIAL_UPLOAD_MANIFEST_ATTR,
+        _IMPL._impl.verify_official_upload_manifest,
+    )
 _LEGACY_NORMALIZE_TRACK5_TEMPLATE = getattr(
     _IMPL._impl,
     _ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR,
+)
+_LEGACY_VERIFY_OFFICIAL_UPLOAD_MANIFEST = getattr(
+    _IMPL._impl,
+    _ORIGINAL_VERIFY_OFFICIAL_UPLOAD_MANIFEST_ATTR,
 )
 
 
