@@ -72,6 +72,32 @@ def _validated_tolerance_s(value: Any) -> float:
     return tolerance
 
 
+def _validated_timestamp_array(
+    values: Iterable[float],
+    *,
+    argument_name: str,
+) -> np.ndarray:
+    """Return one finite real timestamp vector without lossy scalar coercion."""
+
+    try:
+        materialized = list(values)
+    except TypeError as exc:
+        raise ValueError("timestamp arrays must be one-dimensional") from exc
+    if any(isinstance(value, (bool, np.bool_)) for value in materialized):
+        raise ValueError(f"{argument_name} must not contain Boolean timestamp values")
+    if any(np.iscomplexobj(value) for value in materialized):
+        raise ValueError(f"{argument_name} must not contain complex timestamp values")
+    try:
+        timestamps = np.asarray(materialized, dtype=float)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{argument_name} must contain numeric timestamp values") from exc
+    if timestamps.ndim != 1:
+        raise ValueError("timestamp arrays must be one-dimensional")
+    if not np.isfinite(timestamps).all():
+        raise ValueError("timestamp arrays must contain only finite values")
+    return timestamps
+
+
 def optimal_timestamp_assignment(
     requested_times: Iterable[float],
     prediction_times: Iterable[float],
@@ -86,12 +112,14 @@ def optimal_timestamp_assignment(
     request and prediction arrays.
     """
 
-    requests = np.asarray(list(requested_times), dtype=float)
-    predictions = np.asarray(list(prediction_times), dtype=float)
-    if requests.ndim != 1 or predictions.ndim != 1:
-        raise ValueError("timestamp arrays must be one-dimensional")
-    if not np.isfinite(requests).all() or not np.isfinite(predictions).all():
-        raise ValueError("timestamp arrays must contain only finite values")
+    requests = _validated_timestamp_array(
+        requested_times,
+        argument_name="requested_times",
+    )
+    predictions = _validated_timestamp_array(
+        prediction_times,
+        argument_name="prediction_times",
+    )
     tolerance = _validated_tolerance_s(tolerance_s)
     if requests.size == 0 or predictions.size == 0:
         return {}
