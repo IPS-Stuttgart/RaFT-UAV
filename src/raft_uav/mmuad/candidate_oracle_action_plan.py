@@ -17,6 +17,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.estimate_csv import read_estimate_csv
+
 _ACTION_BY_MODE = {
     "missing_good_candidate": "improve_extraction_or_calibration",
     "good_candidate_buried": "improve_topk_recall_or_ranker",
@@ -128,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rank-weight", type=float, default=0.25)
     args = parser.parse_args(argv)
 
-    blocks = pd.read_csv(args.blocks_csv)
+    blocks = read_estimate_csv(args.blocks_csv)
     action_rows, action_summary = build_candidate_oracle_action_plan(
         blocks,
         top_n_blocks=args.top_n_blocks,

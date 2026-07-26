@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 
 from raft_uav.mmuad.candidate_oracle_action_plan import (
@@ -69,3 +71,37 @@ def test_action_plan_cli_writes_csv_and_json(tmp_path) -> None:
     assert len(actions) == 2
     assert "priority_score_sum" in summary.columns
     assert (output_dir / "mmuad_candidate_oracle_action_summary.json").exists()
+
+
+def test_action_plan_cli_preserves_numeric_looking_sequence_ids(tmp_path) -> None:
+    blocks_csv = tmp_path / "blocks.csv"
+    output_dir = tmp_path / "out"
+    blocks_csv.write_text(
+        "sequence_id,oracle_failure_mode,frame_count,duration_s,"
+        "oracle_all_3d_m_max,oracle_all_rank_p95\n"
+        "001,covered_in_topk,1,0.5,2.0,1\n",
+        encoding="utf-8",
+    )
+
+    rc = action_plan_main(
+        [
+            "--blocks-csv",
+            str(blocks_csv),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert rc == 0
+    actions = pd.read_csv(
+        output_dir / "mmuad_candidate_oracle_action_plan.csv",
+        dtype=str,
+        keep_default_na=False,
+    )
+    summary_payload = json.loads(
+        (output_dir / "mmuad_candidate_oracle_action_summary.json").read_text(
+            encoding="utf-8",
+        )
+    )
+    assert actions["sequence_id"].tolist() == ["001"]
+    assert summary_payload["actions"][0]["sequence_id"] == "001"
