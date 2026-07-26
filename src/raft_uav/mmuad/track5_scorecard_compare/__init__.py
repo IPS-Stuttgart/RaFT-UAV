@@ -1,9 +1,10 @@
-"""Compatibility guard for Track 5 scorecard per-sequence comparisons.
+"""Compatibility guards for Track 5 scorecard per-sequence comparisons.
 
 The maintained implementation lives in the sibling
 ``track5_scorecard_compare.py`` module. This package preserves the public import
 path while rejecting missing or duplicate per-sequence identifiers instead of
-silently treating malformed rows as real sequences.
+silently treating malformed rows as real sequences, and while preserving textual
+sequence identifiers when the CLI reads pose-by-sequence CSV files.
 """
 
 from __future__ import annotations
@@ -27,6 +28,32 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_NORMALIZE_POSE_TABLE = _IMPL._normalize_pose_by_sequence_table
+_ORIGINAL_MAIN = _IMPL.main
+_SEQUENCE_ID_DTYPES = {
+    "sequence_id": "string",
+    "sequence": "string",
+}
+
+
+class _SequencePreservingPandasProxy:
+    """Delegate pandas operations while loading sequence identifiers as text."""
+
+    def __init__(self, pandas_module: Any) -> None:
+        self._pandas_module = pandas_module
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._pandas_module, name)
+
+    def read_csv(self, *args: Any, **kwargs: Any) -> Any:
+        dtype = kwargs.get("dtype")
+        if dtype is None:
+            kwargs["dtype"] = dict(_SEQUENCE_ID_DTYPES)
+        elif isinstance(dtype, dict):
+            normalized_dtype = dict(dtype)
+            for column, column_dtype in _SEQUENCE_ID_DTYPES.items():
+                normalized_dtype.setdefault(column, column_dtype)
+            kwargs["dtype"] = normalized_dtype
+        return self._pandas_module.read_csv(*args, **kwargs)
 
 
 def _normalize_pose_by_sequence_table(rows: Any, *, label: str):
@@ -60,7 +87,19 @@ def _normalize_pose_by_sequence_table(rows: Any, *, label: str):
     return _ORIGINAL_NORMALIZE_POSE_TABLE(frame, label=label)
 
 
+def main(argv: list[str] | None = None) -> int:
+    """Run the scorecard CLI without numeric inference on sequence identifiers."""
+
+    pandas_module = _IMPL.pd
+    _IMPL.pd = _SequencePreservingPandasProxy(pandas_module)
+    try:
+        return _ORIGINAL_MAIN(argv)
+    finally:
+        _IMPL.pd = pandas_module
+
+
 _IMPL._normalize_pose_by_sequence_table = _normalize_pose_by_sequence_table
+_IMPL.main = main
 
 globals().update(
     {
@@ -70,6 +109,7 @@ globals().update(
     }
 )
 globals()["_normalize_pose_by_sequence_table"] = _normalize_pose_by_sequence_table
+globals()["main"] = main
 
 __doc__ = _IMPL.__doc__
 __all__ = [
