@@ -117,12 +117,16 @@ def _validate_candidate_uncertainty_model(model: Any) -> Any:
         raise ValueError("fallback_sigma_m must lie within the sigma bounds")
     _finite_float(model.bias, name="bias")
 
-    if model.model_type != "ridge":
-        payload = model.sklearn_estimator_base64
-        if not isinstance(payload, str) or not payload.strip():
+    payload = model.sklearn_estimator_base64
+    if model.model_type == "ridge":
+        if payload is not None and (not isinstance(payload, str) or payload != ""):
             raise ValueError(
-                f"{model.model_type} uncertainty model requires sklearn_estimator_base64"
+                "ridge uncertainty model must not define sklearn_estimator_base64"
             )
+    elif not isinstance(payload, str) or not payload.strip():
+        raise ValueError(
+            f"{model.model_type} uncertainty model requires sklearn_estimator_base64"
+        )
     return model
 
 
