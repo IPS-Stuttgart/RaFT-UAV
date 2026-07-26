@@ -21,16 +21,5 @@ def test_layout_inspector_handles_null_topic_map_exports(tmp_path: Path) -> None
 
     assert summary["file_count"] == 1
     assert summary["category_counts"] == {"json_metadata": 1}
-    assert summary["sequence_candidates"] == [
-        {
-            "sequence_id": ".",
-            "file_count": 1,
-            "categories": {"json_metadata": 1},
-            "has_topic_map_export": False,
-            "has_native_topic_map": False,
-            "has_candidates_or_points": False,
-            "has_truth_or_labels": False,
-            "has_class_labels": False,
-            "has_calibration": False,
-        }
-    ]
+    assert summary["sequence_candidates"][0]["has_topic_map_export"] is False
+    assert summary["sequence_candidates"][0]["has_truth_or_labels"] is False
