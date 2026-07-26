@@ -164,7 +164,7 @@ def _validate_unique_fixed_grid_keys(submission: object) -> None:
 
     normalized_keys = pd.DataFrame(
         {
-            "sequence_id": rows["sequence_id"].astype(str),
+            "sequence_id": rows["sequence_id"].map(parse_official_sequence_cell),
             "time_s": pd.to_numeric(rows["time_s"], errors="coerce"),
         }
     )
