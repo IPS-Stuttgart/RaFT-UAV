@@ -83,6 +83,26 @@ def test_estimate_sequence_gate_rejects_invalid_per_sequence_weights(
         )
 
 
+def test_estimate_sequence_gate_rejects_duplicate_sequence_weights() -> None:
+    duplicate_weights = pd.DataFrame(
+        {
+            "sequence_id": ["seq0001", "seq0001"],
+            "weight": [0.0, 1.0],
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"duplicate normalized sequence_id: seq0001",
+    ):
+        blend_track5_estimate_sequence_gate(
+            base_estimates=_estimates(0.0),
+            alternate_estimates=_estimates(10.0),
+            template=_template(),
+            sequence_weights=duplicate_weights,
+        )
+
+
 def test_estimate_sequence_gate_accepts_scalar_like_real_weights() -> None:
     estimates, diagnostics, weights = blend_track5_estimate_sequence_gate(
         base_estimates=_estimates(0.0),
