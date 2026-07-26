@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling ``paper_table.py`` module.
 This package preserves the public import path while excluding malformed radar
-anchors before interpolation and reporting invalid reference counts as failed
-checks instead of raising conversion errors.
+anchors before interpolation, reporting invalid reference counts as failed
+checks instead of raising conversion errors, and validating stable-segment
+controls before they can silently distort paper metrics.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -29,6 +31,7 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_INTERPOLATE_SELECTED_RADAR = (
     _IMPL._interpolate_selected_radar_to_frame_times
 )
+_ORIGINAL_RUN_PAPER_TABLE_DIAGNOSTIC = _IMPL.run_paper_table_diagnostic
 _POSITION_COLUMNS = ("east_m", "north_m", "up_m")
 
 
@@ -143,11 +146,121 @@ def paper_reference_count_check(
     }
 
 
+def _validated_positive_integer(value: Any, *, name: str) -> int:
+    """Return one finite positive integer scalar, excluding Booleans."""
+
+    message = f"{name} must be a positive integer scalar"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(message)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar) or scalar.dtype.kind == "b":
+        raise ValueError(message)
+    try:
+        number = float(scalar.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(number) or number < 1.0 or not number.is_integer():
+        raise ValueError(message)
+    return int(number)
+
+
+def _validated_positive_real(value: Any, *, name: str) -> float:
+    """Return one finite positive real scalar, excluding Booleans."""
+
+    message = f"{name} must be a finite positive real scalar"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(message)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar) or scalar.dtype.kind == "b":
+        raise ValueError(message)
+    try:
+        number = float(scalar.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(number) or number <= 0.0:
+        raise ValueError(message)
+    return number
+
+
+def run_paper_table_diagnostic(
+    *,
+    dataset_root: Path,
+    flight_name: str,
+    output_dir: Path = Path("outputs/paper-table"),
+    radar_catprob_threshold: float = 0.4,
+    radar_range_gate_m: float | None = 800.0,
+    radar_interpolation_max_gap_s: float | None = None,
+    radar_interpolation_max_speed_mps: float | None = None,
+    stable_segment_min_frames: int = 100,
+    stable_segment_max_transition_speed_mps: float = 65.0,
+    empirical_covariance: bool = False,
+    empirical_covariance_min_variance_m2: float = 1.0,
+    assert_reference_counts: bool = False,
+    reference_count_tolerance: int = 0,
+    enu_origin_lla: tuple[float, float, float] | None = None,
+    radar_selections: tuple[str, ...] = _IMPL.RADAR_SELECTIONS,
+    fusion_nis_gate_prob: float = _IMPL.PAPER_NIS_GATE_PROBABILITY,
+    rf_nis_gate_prob: float = _IMPL.PAPER_NIS_GATE_PROBABILITY,
+    truth_time_gate_s: float = 2.0,
+    acceleration_std_mps2: float = 4.0,
+    smoother_lag_s: float = 20.0,
+    include_smoothed_fusion: bool = False,
+    include_fusion: bool = True,
+    disable_radar_catprob_threshold: bool = False,
+    fusion_associations: tuple[str, ...] = _IMPL.FUSION_ASSOCIATIONS,
+) -> dict[str, Any]:
+    """Build a paper table after validating stable-segment controls."""
+
+    min_frames = _validated_positive_integer(
+        stable_segment_min_frames,
+        name="stable_segment_min_frames",
+    )
+    max_transition_speed_mps = _validated_positive_real(
+        stable_segment_max_transition_speed_mps,
+        name="stable_segment_max_transition_speed_mps",
+    )
+    return _ORIGINAL_RUN_PAPER_TABLE_DIAGNOSTIC(
+        dataset_root=dataset_root,
+        flight_name=flight_name,
+        output_dir=output_dir,
+        radar_catprob_threshold=radar_catprob_threshold,
+        radar_range_gate_m=radar_range_gate_m,
+        radar_interpolation_max_gap_s=radar_interpolation_max_gap_s,
+        radar_interpolation_max_speed_mps=radar_interpolation_max_speed_mps,
+        stable_segment_min_frames=min_frames,
+        stable_segment_max_transition_speed_mps=max_transition_speed_mps,
+        empirical_covariance=empirical_covariance,
+        empirical_covariance_min_variance_m2=empirical_covariance_min_variance_m2,
+        assert_reference_counts=assert_reference_counts,
+        reference_count_tolerance=reference_count_tolerance,
+        enu_origin_lla=enu_origin_lla,
+        radar_selections=radar_selections,
+        fusion_nis_gate_prob=fusion_nis_gate_prob,
+        rf_nis_gate_prob=rf_nis_gate_prob,
+        truth_time_gate_s=truth_time_gate_s,
+        acceleration_std_mps2=acceleration_std_mps2,
+        smoother_lag_s=smoother_lag_s,
+        include_smoothed_fusion=include_smoothed_fusion,
+        include_fusion=include_fusion,
+        disable_radar_catprob_threshold=disable_radar_catprob_threshold,
+        fusion_associations=fusion_associations,
+    )
+
+
 _IMPL._finite_interpolation_anchors = _finite_interpolation_anchors
 _IMPL._interpolate_selected_radar_to_frame_times = (
     _interpolate_selected_radar_to_frame_times
 )
 _IMPL.paper_reference_count_check = paper_reference_count_check
+_IMPL._validated_positive_integer = _validated_positive_integer
+_IMPL._validated_positive_real = _validated_positive_real
+_IMPL.run_paper_table_diagnostic = run_paper_table_diagnostic
 
 globals().update(
     {
@@ -161,6 +274,9 @@ globals()["_interpolate_selected_radar_to_frame_times"] = (
     _interpolate_selected_radar_to_frame_times
 )
 globals()["paper_reference_count_check"] = paper_reference_count_check
+globals()["_validated_positive_integer"] = _validated_positive_integer
+globals()["_validated_positive_real"] = _validated_positive_real
+globals()["run_paper_table_diagnostic"] = run_paper_table_diagnostic
 
 __doc__ = _IMPL.__doc__
 __all__ = [
