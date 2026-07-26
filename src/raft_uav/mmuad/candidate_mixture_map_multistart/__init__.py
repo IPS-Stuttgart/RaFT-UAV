@@ -2,7 +2,8 @@
 
 The implementation lives in the sibling ``candidate_mixture_map_multistart.py``
 file.  This wrapper keeps the public import path while correcting restart
-selection when the core smoother uses a non-zero initialization-anchor weight.
+selection when the core smoother uses a non-zero initialization-anchor weight
+and rejecting numerically invalid restart outputs.
 """
 
 from __future__ import annotations
@@ -55,8 +56,17 @@ def compute_candidate_mixture_selection_objective(
     ``candidate_mixture_map`` adds ``anchor_weight * ||x - x_initial||^2`` to the
     trajectory solve.  Because every restart has a different initial trajectory,
     omitting that term makes objective values incomparable whenever
-    ``anchor_weight`` is non-zero.
+    ``anchor_weight`` is non-zero.  Non-finite estimates or mixture log weights
+    make a restart invalid instead of being silently omitted from the objective.
     """
+
+    if not _selection_result_is_finite(result):
+        return {
+            "selection_objective": float("inf"),
+            "mixture_data_nll": float("inf"),
+            "smoothness_penalty": float("inf"),
+            "anchor_penalty": float("inf"),
+        }
 
     objective = dict(
         _ORIGINAL_SELECTION_OBJECTIVE(
@@ -142,6 +152,9 @@ def run_multistart_candidate_mixture_map(
     ).reset_index(drop=True)
     if ranked.empty:
         raise ValueError("candidate-mixture multi-start produced no starts")
+    objectives = pd.to_numeric(ranked["selection_objective"], errors="coerce").to_numpy(float)
+    if not np.isfinite(objectives).any():
+        raise ValueError("candidate-mixture multi-start produced no finite restart objective")
     selected_start = str(ranked.iloc[0]["start_name"])
     ranked["selected"] = ranked["start_name"].astype(str) == selected_start
     summary = {
@@ -159,6 +172,44 @@ def run_multistart_candidate_mixture_map(
         start_summary=ranked,
         initializations=starts,
         summary=_IMPL._jsonable(summary),
+    )
+
+
+def _selection_result_is_finite(result: core.CandidateMixtureMapResult) -> bool:
+    """Return whether all numerical inputs used for restart selection are finite."""
+
+    assignments = pd.DataFrame(result.assignments)
+    estimates = pd.DataFrame(result.estimates)
+    assignment_columns = ("sequence_id", "time_s", "mixture_log_weight")
+    estimate_columns = (
+        "sequence_id",
+        "time_s",
+        "state_x_m",
+        "state_y_m",
+        "state_z_m",
+    )
+    if assignments.empty or estimates.empty:
+        return False
+    if any(column not in assignments.columns for column in assignment_columns):
+        return False
+    if any(column not in estimates.columns for column in estimate_columns):
+        return False
+    if assignments["sequence_id"].isna().any() or estimates["sequence_id"].isna().any():
+        return False
+
+    assignment_values = assignments[["time_s", "mixture_log_weight"]].apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
+    estimate_values = estimates[
+        ["time_s", "state_x_m", "state_y_m", "state_z_m"]
+    ].apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
+    return bool(
+        np.isfinite(assignment_values.to_numpy(float)).all()
+        and np.isfinite(estimate_values.to_numpy(float)).all()
     )
 
 
@@ -225,6 +276,7 @@ globals()["compute_candidate_mixture_selection_objective"] = (
     compute_candidate_mixture_selection_objective
 )
 globals()["run_multistart_candidate_mixture_map"] = run_multistart_candidate_mixture_map
+globals()["_selection_result_is_finite"] = _selection_result_is_finite
 globals()["_trajectory_anchor_penalty"] = _trajectory_anchor_penalty
 
 __doc__ = _IMPL.__doc__
