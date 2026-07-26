@@ -56,7 +56,6 @@ def test_load_rejects_non_mapping_time_offsets(
     ("offset_payload", "field_name"),
     [
         ({"time_offsets": {"rf": "not-a-number"}}, "rf_time_offset_s"),
-        ({"time_offsets": {"radar": float("nan")}}, "radar_time_offset_s"),
         ({"rf_time_offset_correction_s": [1.0]}, "rf_time_offset_s"),
         ({"radar_time_offset_correction_s": {"seconds": 1.0}}, "radar_time_offset_s"),
     ],
@@ -74,6 +73,19 @@ def test_load_rejects_invalid_offsets(
 
     with pytest.raises(ValueError, match=field_name):
         load_calibration_bundle(manifest_path)
+
+
+def test_load_preserves_legacy_nonfinite_offsets_as_missing(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "bundle.json"
+    manifest_path.write_text(
+        '{"schema_version": 1, "time_offsets": {"rf": NaN, "radar": Infinity}}',
+        encoding="utf-8",
+    )
+
+    bundle = load_calibration_bundle(manifest_path)
+
+    assert bundle.rf_time_offset_s == 0.0
+    assert bundle.radar_time_offset_s == 0.0
 
 
 def test_load_preserves_numeric_string_offsets(tmp_path: Path) -> None:
@@ -105,7 +117,7 @@ def test_constructor_normalizes_scalar_offsets(tmp_path: Path) -> None:
     assert bundle.radar_time_offset_s == pytest.approx(-0.5)
 
 
-@pytest.mark.parametrize("offset_value", [np.nan, np.inf, "bad", np.array([1.0])])
+@pytest.mark.parametrize("offset_value", ["bad", np.array([1.0]), 1 + 2j, True])
 def test_writer_rejects_invalid_offsets_without_creating_file(
     tmp_path: Path,
     offset_value: object,
@@ -119,3 +131,16 @@ def test_writer_rejects_invalid_offsets_without_creating_file(
         )
 
     assert not manifest_path.exists()
+
+
+def test_writer_preserves_nonfinite_offsets_as_missing(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "bundle.json"
+
+    write_calibration_bundle_manifest(
+        manifest_path,
+        rf_time_offset_s=np.nan,
+        radar_time_offset_s=np.inf,
+    )
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["time_offsets"] == {"rf": None, "radar": None}
