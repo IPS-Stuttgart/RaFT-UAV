@@ -249,8 +249,13 @@ def _normalize_prediction_rows(
 
 def _select_sequence_class(group: pd.DataFrame, *, policy: ClassMapPolicy) -> pd.Series:
     if policy == "last":
-        timed = group.sort_values("time_s", na_position="first")
-        return timed.iloc[-1]
+        timed = group.sort_values(
+            ["time_s", "confidence", "classification"],
+            ascending=[False, False, True],
+            na_position="last",
+            kind="mergesort",
+        )
+        return timed.iloc[0]
     if policy == "confidence":
         by_class = group.groupby("classification", sort=True).agg(
             mean_confidence=("confidence", "mean"),
