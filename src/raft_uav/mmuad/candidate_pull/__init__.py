@@ -3,8 +3,9 @@
 The maintained implementation lives in the sibling ``candidate_pull.py`` module.
 This package preserves the public import path while canonicalizing official result
 row indices, preserving result-row order during nearest-center alignment,
-sanitizing non-finite candidate ranking metadata, and preventing finite score
-sums from overflowing during candidate-center construction.
+preserving opaque CSV sequence identifiers in the CLI, sanitizing non-finite
+candidate ranking metadata, and preventing finite score sums from overflowing
+during candidate-center construction.
 """
 
 from __future__ import annotations
@@ -12,9 +13,13 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+import threading
+from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from raft_uav.mmuad.estimate_csv import read_estimate_csv
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_pull.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -27,10 +32,12 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_MAIN = _IMPL.main
 _ORIGINAL_NORMALIZE_OFFICIAL_RESULTS = _IMPL._normalize_official_results
 _ORIGINAL_TOPK_CANDIDATE_CENTERS = _IMPL.topk_candidate_centers
 _ORIGINAL_CANDIDATE_CENTERS_FOR_RESULTS = _IMPL.candidate_centers_for_results
 _ORIGINAL_ALIGN_CANDIDATE_CENTERS = _IMPL.align_candidate_centers
+_MAIN_LOCK = threading.RLock()
 _CANDIDATE_SCORE_COLUMNS = (
     "ranker_score",
     "cluster_ranker_score",
@@ -40,6 +47,33 @@ _CANDIDATE_SCORE_COLUMNS = (
 )
 _SCORE_OUTPUT_COLUMNS = ("top_score", "top_score_margin")
 _COORDINATE_COLUMNS = ("Timestamp", "x_m", "y_m", "z_m")
+
+
+class _TextPreservingPandasProxy:
+    """Delegate pandas operations while preserving opaque CSV identifiers."""
+
+    def __init__(self, pandas_module: Any) -> None:
+        self._pandas_module = pandas_module
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._pandas_module, name)
+
+    def read_csv(self, path: Any, *args: Any, **kwargs: Any) -> pd.DataFrame:
+        if args or kwargs:
+            return self._pandas_module.read_csv(path, *args, **kwargs)
+        return read_estimate_csv(Path(path))
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the candidate-pull CLI with text-preserving CSV parsing."""
+
+    with _MAIN_LOCK:
+        original_impl_pd = _IMPL.pd
+        _IMPL.pd = _TextPreservingPandasProxy(original_impl_pd)
+        try:
+            return int(_ORIGINAL_MAIN(argv))
+        finally:
+            _IMPL.pd = original_impl_pd
 
 
 def _normalize_official_results(
@@ -246,6 +280,7 @@ def align_candidate_centers(
     )
 
 
+_IMPL.main = main
 _IMPL._normalize_official_results = _normalize_official_results
 _IMPL.topk_candidate_centers = topk_candidate_centers
 _IMPL.candidate_centers_for_results = candidate_centers_for_results
@@ -258,6 +293,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["main"] = main
 globals()["_normalize_official_results"] = _normalize_official_results
 globals()["topk_candidate_centers"] = topk_candidate_centers
 globals()["candidate_centers_for_results"] = candidate_centers_for_results
