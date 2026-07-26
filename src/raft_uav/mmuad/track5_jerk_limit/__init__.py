@@ -4,7 +4,8 @@ The maintained implementation lives in the sibling ``track5_jerk_limit.py``
 module. This package keeps the public import path while ensuring that jerk
 values remain attached to the actual four rows of every valid finite-difference
 window, malformed controls and grid rows cannot be silently coerced or dropped,
-and no-op repairs are not reported as applied trajectory changes.
+no-op repairs are not reported as applied trajectory changes, and multi-step
+diagnostics report the net displacement of the final trajectory.
 """
 
 from __future__ import annotations
@@ -254,7 +255,7 @@ def repair_track5_jerk_kinks(submission, **kwargs):
 
 
 def _repair_sequence(group, **kwargs):
-    """Validate direct calls to the private repair loop."""
+    """Validate a repair loop and report displacement from input to final output."""
 
     controls = _validated_controls(
         max_jerk_mps3=kwargs["max_jerk_mps3"],
@@ -265,7 +266,22 @@ def _repair_sequence(group, **kwargs):
         repair_blend=kwargs["repair_blend"],
     )
     kwargs.update(controls)
-    return _ORIGINAL_REPAIR_SEQUENCE(group, **kwargs)
+    coordinate_columns = ["state_x_m", "state_y_m", "state_z_m"]
+    original_positions = group[coordinate_columns].to_numpy(float)
+    repaired, diagnostics = _ORIGINAL_REPAIR_SEQUENCE(group, **kwargs)
+    final_positions = repaired[coordinate_columns].to_numpy(float)
+    net_displacement = np.linalg.norm(final_positions - original_positions, axis=1)
+    moved = np.isfinite(net_displacement) & (net_displacement > 0.0)
+    diagnostics = diagnostics.copy()
+    diagnostics["jerk_limit_displacement_m"] = np.where(
+        moved,
+        net_displacement,
+        0.0,
+    )
+    diagnostics["jerk_limit_applied"] = (
+        diagnostics["jerk_limit_applied"].to_numpy(bool) & moved
+    )
+    return repaired, diagnostics
 
 
 def _repair_sequence_once(group, **kwargs):
