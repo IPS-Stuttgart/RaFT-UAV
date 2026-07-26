@@ -72,11 +72,18 @@ def _validated_tolerance_s(value: Any) -> float:
     return tolerance
 
 
-def _validated_timestamp_array(values: Iterable[float]) -> np.ndarray:
-    """Return one-dimensional finite real timestamps without pseudo-numbers."""
+def _validated_timestamp_array(
+    values: Iterable[float],
+    *,
+    argument_name: str,
+) -> np.ndarray:
+    """Return finite real timestamps without lossy pseudo-number coercion."""
 
-    value_error = "timestamp arrays must contain only finite real scalar values"
-    shape_error = "timestamp arrays must be one-dimensional"
+    value_error = (
+        f"{argument_name} must contain only finite real scalar timestamp values"
+    )
+    shape_error = f"{argument_name} must be one-dimensional"
+    boolean_error = f"{argument_name} must not contain Boolean timestamp values"
     try:
         items = list(values)
     except TypeError as exc:
@@ -84,7 +91,9 @@ def _validated_timestamp_array(values: Iterable[float]) -> np.ndarray:
 
     normalized: list[float] = []
     for item in items:
-        if isinstance(item, (bool, np.bool_)) or np.ma.is_masked(item):
+        if isinstance(item, (bool, np.bool_)):
+            raise ValueError(boolean_error)
+        if np.ma.is_masked(item):
             raise ValueError(value_error)
         try:
             scalar = np.asarray(item)
@@ -92,17 +101,19 @@ def _validated_timestamp_array(values: Iterable[float]) -> np.ndarray:
             raise ValueError(value_error) from exc
         if scalar.ndim != 0:
             raise ValueError(shape_error)
-        if np.iscomplexobj(scalar) or np.issubdtype(scalar.dtype, np.bool_):
+        if np.issubdtype(scalar.dtype, np.bool_):
+            raise ValueError(boolean_error)
+        if np.iscomplexobj(scalar):
             raise ValueError(value_error)
-
         try:
             unwrapped = scalar.item()
         except ValueError as exc:
             raise ValueError(value_error) from exc
-        if isinstance(
-            unwrapped,
-            (bool, np.bool_, complex, np.complexfloating),
-        ) or np.ma.is_masked(unwrapped):
+        if isinstance(unwrapped, (bool, np.bool_)):
+            raise ValueError(boolean_error)
+        if isinstance(unwrapped, (complex, np.complexfloating)) or np.ma.is_masked(
+            unwrapped
+        ):
             raise ValueError(value_error)
         try:
             nested = np.asarray(unwrapped)
@@ -110,7 +121,9 @@ def _validated_timestamp_array(values: Iterable[float]) -> np.ndarray:
             raise ValueError(value_error) from exc
         if nested.ndim != 0:
             raise ValueError(shape_error)
-        if np.iscomplexobj(nested) or np.issubdtype(nested.dtype, np.bool_):
+        if np.issubdtype(nested.dtype, np.bool_):
+            raise ValueError(boolean_error)
+        if np.iscomplexobj(nested):
             raise ValueError(value_error)
         try:
             number = float(nested.item())
@@ -137,8 +150,14 @@ def optimal_timestamp_assignment(
     request and prediction arrays.
     """
 
-    requests = _validated_timestamp_array(requested_times)
-    predictions = _validated_timestamp_array(prediction_times)
+    requests = _validated_timestamp_array(
+        requested_times,
+        argument_name="requested_times",
+    )
+    predictions = _validated_timestamp_array(
+        prediction_times,
+        argument_name="prediction_times",
+    )
     tolerance = _validated_tolerance_s(tolerance_s)
     if requests.size == 0 or predictions.size == 0:
         return {}
@@ -167,7 +186,10 @@ def optimal_timestamp_assignment(
         # The final gap subtraction can round a value outside these arithmetic
         # bounds onto the tolerance. Include all adjacent values that satisfy the
         # actual matching predicate before constructing the sparse graph.
-        while left > 0 and abs(float(sorted_predictions[left - 1] - request_time)) <= tolerance:
+        while (
+            left > 0
+            and abs(float(sorted_predictions[left - 1] - request_time)) <= tolerance
+        ):
             left -= 1
         while (
             right < prediction_count
