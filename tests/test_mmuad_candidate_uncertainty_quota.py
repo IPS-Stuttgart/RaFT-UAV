@@ -38,8 +38,12 @@ def test_uncertainty_quota_preserves_low_sigma_candidate() -> None:
     ).rows
 
     assert set(reservoir["track_id"]) == {"score", "sigma"}
+    selected_flags = reservoir.set_index("track_id")[
+        "candidate_uncertainty_quota_selected"
+    ]
+    assert selected_flags.dtype == bool
+    assert selected_flags.to_dict() == {"score": False, "sigma": True}
     sigma_row = reservoir.loc[reservoir["track_id"] == "sigma"].iloc[0]
-    assert bool(sigma_row["candidate_uncertainty_quota_selected"])
     assert "source_branch_uncertainty:livox|raw" in sigma_row[
         "candidate_reservoir_reason"
     ]
@@ -59,6 +63,7 @@ def test_uncertainty_quota_disabled_matches_score_driven_cell_choice() -> None:
     ).rows
 
     assert reservoir["track_id"].tolist() == ["score"]
+    assert reservoir["candidate_uncertainty_quota_selected"].tolist() == [False]
 
 
 def test_uncertainty_quota_ignores_nonpositive_sigma() -> None:
@@ -72,7 +77,7 @@ def test_uncertainty_quota_ignores_nonpositive_sigma() -> None:
         uncertainty_top_n=1,
     ).rows
 
-    selected = reservoir.loc[reservoir["candidate_uncertainty_quota_selected"].fillna(False)]
+    selected = reservoir.loc[reservoir["candidate_uncertainty_quota_selected"]]
     assert selected["track_id"].tolist() == ["other"]
 
 
