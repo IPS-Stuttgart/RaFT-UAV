@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling ``track5_acceleration_limit.py``
 module. This package preserves the public import path while rejecting malformed
-scalar controls, missing sequence identifiers, invalid normalized rows, and duplicate
-fixed-grid keys, and while keeping zero-blend runs diagnostic-only.
+scalar controls, missing sequence identifiers, invalid normalized rows, invalid
+classification labels, and duplicate fixed-grid keys, and while keeping zero-blend
+runs diagnostic-only.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from raft_uav.mmuad.submission import parse_official_classification_cell
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_acceleration_limit.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -166,6 +169,37 @@ def _validate_sequence_ids(submission: object) -> None:
         )
 
 
+def _validate_classification_values(submission: object) -> None:
+    """Reject class labels outside the official Track 5 domain before repair."""
+
+    rows = pd.DataFrame(submission).copy()
+    classification_columns = [
+        column
+        for column in rows.columns
+        if str(column).strip().casefold() == "classification"
+    ]
+    if len(classification_columns) != 1:
+        return
+
+    values = rows[classification_columns[0]]
+    if isinstance(values, pd.DataFrame):
+        return
+
+    invalid: list[str] = []
+    for position, value in enumerate(values.tolist()):
+        try:
+            parse_official_classification_cell(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            invalid.append(f"{position}:{value!r} ({exc})")
+    if invalid:
+        preview = "; ".join(invalid[:5])
+        suffix = f"; {len(invalid) - 5} more" if len(invalid) > 5 else ""
+        raise ValueError(
+            "submission contains invalid Classification values at rows "
+            f"{preview}{suffix}"
+        )
+
+
 def _validate_numeric_rows(submission: object) -> None:
     """Reject normalized rows the legacy normalizer would silently drop."""
 
@@ -247,6 +281,7 @@ def repair_track5_acceleration_kinks(
         repair_blend=repair_blend,
     )
     _validate_sequence_ids(submission)
+    _validate_classification_values(submission)
     _validate_numeric_rows(submission)
     normalized = _IMPL._normalized_submission(submission)
     _validate_unique_fixed_grid_keys(normalized)
@@ -294,6 +329,7 @@ globals()["_finite_scalar"] = _finite_scalar
 globals()["_positive_integer"] = _positive_integer
 globals()["_validated_controls"] = _validated_controls
 globals()["_validate_sequence_ids"] = _validate_sequence_ids
+globals()["_validate_classification_values"] = _validate_classification_values
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
 globals()["_validate_unique_fixed_grid_keys"] = _validate_unique_fixed_grid_keys
 globals()["repair_track5_acceleration_kinks"] = repair_track5_acceleration_kinks
