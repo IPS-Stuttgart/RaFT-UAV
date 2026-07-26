@@ -78,6 +78,7 @@ def patch_module(split_module: Any) -> None:
 
     def _manifest_from_mapping(mapping: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
         out: dict[str, list[str]] = {}
+        raw_split_labels: dict[str, str] = {}
         for split, values in mapping.items():
             if _normalized_key(split) in split_module._SPLIT_VALUE_METADATA_KEYS:
                 continue
@@ -86,6 +87,13 @@ def patch_module(split_module: Any) -> None:
                 continue
             ids = _split_values_to_sequence_ids(values)
             if ids or split_module._is_explicit_split_container(values):
+                if split_name in out:
+                    previous = raw_split_labels[split_name]
+                    raise ValueError(
+                        "split manifest contains ambiguous split labels after trimming: "
+                        f"{previous!r}, {str(split)!r}"
+                    )
+                raw_split_labels[split_name] = str(split)
                 out[split_name] = list(ids)
         return {split: tuple(values) for split, values in out.items()}
 
