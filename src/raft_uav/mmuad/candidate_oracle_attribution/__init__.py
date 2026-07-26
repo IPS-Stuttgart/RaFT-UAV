@@ -3,7 +3,9 @@
 The maintained implementation lives in the sibling
 ``candidate_oracle_attribution.py`` module. This package preserves the public
 import path while rejecting malformed truth-matching time gates and top-K values
-before they can silently widen, empty, or change the diagnostic.
+before they can silently widen, empty, or change the diagnostic. The CLI also
+reads truth tables through the shared text-preserving MMUAD CSV reader so opaque
+sequence identifiers remain aligned with candidate inputs.
 """
 
 from __future__ import annotations
@@ -11,10 +13,13 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
-from typing import Sequence
+import threading
+from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
+
+from raft_uav.mmuad.estimate_csv import read_estimate_csv
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_oracle_attribution.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -31,6 +36,23 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_BUILD_TABLES = _IMPL.build_candidate_oracle_attribution_tables
+_ORIGINAL_MAIN = _IMPL.main
+_MAIN_LOCK = threading.RLock()
+
+
+class _TextPreservingPandasProxy:
+    """Delegate pandas operations while preserving opaque truth identifiers."""
+
+    def __init__(self, pandas_module: Any) -> None:
+        self._pandas_module = pandas_module
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._pandas_module, name)
+
+    def read_csv(self, path: Any, *args: Any, **kwargs: Any) -> pd.DataFrame:
+        if args or kwargs:
+            return self._pandas_module.read_csv(path, *args, **kwargs)
+        return read_estimate_csv(Path(path))
 
 
 def _nonnegative_finite_scalar(value: object, *, name: str) -> float:
@@ -102,10 +124,23 @@ def build_candidate_oracle_attribution_tables(
     )
 
 
+def main(argv: list[str] | None = None) -> int:
+    """Run the CLI with text-preserving truth CSV parsing."""
+
+    with _MAIN_LOCK:
+        original_impl_pd = _IMPL.pd
+        _IMPL.pd = _TextPreservingPandasProxy(original_impl_pd)
+        try:
+            return int(_ORIGINAL_MAIN(argv))
+        finally:
+            _IMPL.pd = original_impl_pd
+
+
 _IMPL.build_candidate_oracle_attribution_tables = (
     build_candidate_oracle_attribution_tables
 )
 _IMPL._normalize_top_k_values = _normalize_top_k_values
+_IMPL.main = main
 
 globals().update(
     {
@@ -118,6 +153,7 @@ globals()["_normalize_top_k_values"] = _normalize_top_k_values
 globals()["build_candidate_oracle_attribution_tables"] = (
     build_candidate_oracle_attribution_tables
 )
+globals()["main"] = main
 
 __doc__ = _IMPL.__doc__
 __all__ = [
