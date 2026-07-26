@@ -33,6 +33,13 @@ _INVALID_BINARY_TARGET = object()
 _TRUE_TARGET_TOKENS = frozenset({"true", "t", "yes", "y", "on"})
 _FALSE_TARGET_TOKENS = frozenset({"false", "f", "no", "n", "off"})
 _MISSING_TARGET_TOKENS = frozenset({"", "nan", "none", "null", "<na>", "nat"})
+_TRUTH_LABEL_COLUMNS = (
+    "good_cluster_2m",
+    "good_cluster_5m",
+    "good_cluster_10m",
+    "good_cluster_20m",
+    "good_cluster",
+)
 
 
 def train_cluster_ranker(
@@ -83,7 +90,7 @@ def label_cluster_features_against_truth(
     good_threshold_m: float = 5.0,
     max_truth_time_delta_s: float = 0.5,
 ) -> pd.DataFrame:
-    """Attach truth labels after validating matching gates."""
+    """Attach truth labels, leaving temporally unmatched rows unlabeled."""
 
     distance_gate = _validated_nonnegative_gate(
         good_threshold_m,
@@ -93,12 +100,22 @@ def label_cluster_features_against_truth(
         max_truth_time_delta_s,
         name="max_truth_time_delta_s",
     )
-    return _LEGACY_LABEL_CLUSTER_FEATURES_AGAINST_TRUTH(
+    labeled = _LEGACY_LABEL_CLUSTER_FEATURES_AGAINST_TRUTH(
         features,
         truth,
         good_threshold_m=distance_gate,
         max_truth_time_delta_s=time_gate,
     )
+    if "truth_matched" not in labeled.columns:
+        return labeled
+
+    matched = pd.Series(labeled["truth_matched"], index=labeled.index).fillna(False).astype(bool)
+    for column in _TRUTH_LABEL_COLUMNS:
+        if column not in labeled.columns:
+            continue
+        labeled[column] = pd.Series(labeled[column], index=labeled.index, dtype="boolean")
+        labeled.loc[~matched, column] = pd.NA
+    return labeled
 
 
 def _validated_nonnegative_gate(value: object, *, name: str) -> float:
