@@ -52,6 +52,26 @@ _FILTER_SORT_COLUMNS = (
     "x_m",
     "y_m",
     "z_m",
+    "_std_xy_sort_key",
+    "_std_z_sort_key",
+)
+_FILTER_SORT_ASCENDING = (
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    False,
+    False,
+)
+_FILTER_HELPER_COLUMNS = (
+    "_selected_update_order",
+    "_source_sort_key",
+    "_track_sort_key",
+    "_std_xy_sort_key",
+    "_std_z_sort_key",
 )
 
 
@@ -126,15 +146,35 @@ def _ordered_filter_events(
         "track_id",
         pd.Series("", index=events.index, dtype=object),
     ).fillna("").astype(str)
-    return (
-        events.sort_values(list(_FILTER_SORT_COLUMNS), kind="mergesort")
-        .drop(
-            columns=[
-                "_selected_update_order",
-                "_source_sort_key",
-                "_track_sort_key",
-            ]
+    std_xy_values = events.get(
+        "std_xy_m",
+        pd.Series(10.0, index=events.index, dtype=float),
+    )
+    events["_std_xy_sort_key"] = [
+        _LEGACY._positive_float(value, default=10.0) for value in std_xy_values
+    ]
+    std_z_values = events.get(
+        "std_z_m",
+        pd.Series(np.nan, index=events.index, dtype=float),
+    )
+    events["_std_z_sort_key"] = [
+        _LEGACY._positive_float(value, default=std_xy)
+        for value, std_xy in zip(
+            std_z_values,
+            events["_std_xy_sort_key"],
+            strict=True,
         )
+    ]
+    # Capped soft-anchor updates are nonlinear, so equal-position measurements
+    # with different covariance do not commute. Process less precise rows first
+    # and leave the more precise update last within an otherwise identical tie.
+    return (
+        events.sort_values(
+            list(_FILTER_SORT_COLUMNS),
+            ascending=list(_FILTER_SORT_ASCENDING),
+            kind="mergesort",
+        )
+        .drop(columns=list(_FILTER_HELPER_COLUMNS))
         .reset_index(drop=True)
     )
 
