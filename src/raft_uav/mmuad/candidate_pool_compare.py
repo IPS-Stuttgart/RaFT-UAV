@@ -416,8 +416,9 @@ def _add_mse_pair(
 ) -> None:
     ref = pd.to_numeric(group.get(reference), errors="coerce") if reference in group else pd.Series(dtype=float)
     cand = pd.to_numeric(group.get(candidate), errors="coerce") if candidate in group else pd.Series(dtype=float)
-    record[f"reference_{prefix}_mse"] = _mse(ref)
-    record[f"candidate_{prefix}_mse"] = _mse(cand)
+    paired = ref.notna() & cand.notna()
+    record[f"reference_{prefix}_mse"] = _mse(ref.loc[paired])
+    record[f"candidate_{prefix}_mse"] = _mse(cand.loc[paired])
     record[f"{prefix}_mse_delta"] = record[f"candidate_{prefix}_mse"] - record[f"reference_{prefix}_mse"]
 
 
