@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling
 ``track5_scorecard_compare.py`` module. This package preserves the public import
-path while rejecting duplicate per-sequence rows instead of silently keeping the
-first occurrence.
+path while rejecting missing or duplicate per-sequence identifiers instead of
+silently treating malformed rows as real sequences.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ _ORIGINAL_NORMALIZE_POSE_TABLE = _IMPL._normalize_pose_by_sequence_table
 
 
 def _normalize_pose_by_sequence_table(rows: Any, *, label: str):
-    """Reject duplicate sequence rows instead of silently keeping the first one."""
+    """Reject missing or duplicate sequence rows before legacy normalization."""
 
     frame = _IMPL.pd.DataFrame(rows).copy()
     sequence_column = None
@@ -40,7 +40,16 @@ def _normalize_pose_by_sequence_table(rows: Any, *, label: str):
         sequence_column = "sequence"
 
     if sequence_column is not None:
-        sequence_ids = frame[sequence_column].astype(str)
+        raw_sequence_ids = frame[sequence_column]
+        sequence_text = raw_sequence_ids.astype("string").str.strip()
+        missing = raw_sequence_ids.isna() | sequence_text.eq("").fillna(False)
+        if bool(missing.any()):
+            examples = missing[missing].index.tolist()[:5]
+            raise ValueError(
+                f"{label} pose table contains missing sequence_id rows: {examples}"
+            )
+
+        sequence_ids = raw_sequence_ids.astype(str)
         duplicate = sequence_ids.duplicated(keep=False)
         if duplicate.any():
             examples = sequence_ids.loc[duplicate].drop_duplicates().head(5).tolist()
