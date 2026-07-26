@@ -69,6 +69,12 @@ def _uncertainty_payload_validation_install() -> Callable[[], None]:
     return install
 
 
+def _point_cloud_source_name_install() -> Callable[[], None]:
+    from raft_uav.mmuad._point_cloud_source_name_patch import install
+
+    return install
+
+
 def _candidate_reservoir_config_validation_install() -> Callable[[], None]:
     from raft_uav.mmuad._candidate_reservoir_config_validation_patch import install
 
@@ -98,6 +104,7 @@ _optional_runtime_hook(_kalman_timestamp_validation_install)
 _optional_runtime_hook(_rf_measurement_fallback_install)
 _optional_runtime_hook(_catprob_sequence_install)
 _optional_runtime_hook(_uncertainty_payload_validation_install)
+_optional_runtime_hook(_point_cloud_source_name_install)
 _optional_runtime_hook(_candidate_reservoir_config_validation_install)
 _optional_runtime_hook(_acceleration_limit_displacement_install)
 _optional_runtime_hook(_repair_complex_row_validation_install)
