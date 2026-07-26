@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling ``source_calibration.py`` module.
 This package preserves the public import path while validating every loaded or fitted
-source transform before it can contaminate calibrated candidate coordinates and while
-preventing source-specific transforms from being applied backward to broader sources.
+source transform before it can contaminate calibrated candidate coordinates, rejecting
+ambiguous case-insensitive transform keys, and preventing source-specific transforms
+from being applied backward to broader sources.
 """
 
 from __future__ import annotations
@@ -38,6 +39,34 @@ def _validated_source_transform_post_init(self: object) -> None:
         raise ValueError("translation_m must contain only finite values")
 
 
+def _require_unambiguous_source_transform_keys(
+    transforms: dict[str, object],
+) -> None:
+    """Reject transform keys that collapse under case-insensitive lookup."""
+
+    keys_by_normalized_value: dict[str, list[str]] = {}
+    for key in transforms:
+        rendered = str(key)
+        keys_by_normalized_value.setdefault(rendered.lower(), []).append(rendered)
+
+    collisions = [
+        sorted(keys)
+        for keys in keys_by_normalized_value.values()
+        if len(keys) > 1
+    ]
+    if not collisions:
+        return
+
+    rendered_collisions = "; ".join(
+        ", ".join(repr(key) for key in keys)
+        for keys in sorted(collisions)
+    )
+    raise ValueError(
+        "source-calibration transforms contain ambiguous case-insensitive keys: "
+        f"{rendered_collisions}"
+    )
+
+
 def _match_source_transform(source: str, transforms: dict[str, object]) -> object | None:
     """Return an exact or longest forward-prefix transform for one source.
 
@@ -47,6 +76,7 @@ def _match_source_transform(source: str, transforms: dict[str, object]) -> objec
     broader ``sensor`` source.
     """
 
+    _require_unambiguous_source_transform_keys(transforms)
     source_l = str(source).lower()
     for key, transform in transforms.items():
         if source_l == str(key).lower():
@@ -71,6 +101,10 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_require_unambiguous_source_transform_keys"] = (
+    _require_unambiguous_source_transform_keys
+)
+globals()["_match_source_transform"] = _match_source_transform
 
 __doc__ = _IMPL.__doc__
 __all__ = [
