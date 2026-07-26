@@ -79,7 +79,9 @@ def collect_radar_association_training_frame(
     rows: list[dict[str, object]] = []
     current_track_id: int | None = None
 
-    for event in events:
+    # The first event only seeds the tracker. Replaying it would double-count an RF
+    # bootstrap or leak an oracle-selected radar bootstrap into its own features.
+    for event in events[1:]:
         if event["kind"] == "rf":
             measurement = event["measurement"]
             assert isinstance(measurement, TrackingMeasurement)
