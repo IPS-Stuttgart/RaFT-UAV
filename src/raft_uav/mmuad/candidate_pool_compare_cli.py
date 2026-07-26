@@ -13,6 +13,9 @@ from raft_uav.mmuad.estimate_csv import read_estimate_csv
 _DEFAULT_FALLBACK_SCORE_COLUMN = _compare._DEFAULT_FALLBACK_SCORE_COLUMN
 _DEFAULT_SCORE_COLUMN = _compare._DEFAULT_SCORE_COLUMN
 _DEFAULT_TOP_K = _compare._DEFAULT_TOP_K
+_ORIGINAL_READ_ESTIMATE_CSV = read_estimate_csv
+if not hasattr(_compare, "read_estimate_csv"):
+    _compare.read_estimate_csv = read_estimate_csv
 
 
 def load_candidate_inputs(specs: list[str]) -> pd.DataFrame:
@@ -42,6 +45,14 @@ def write_candidate_pool_compare_outputs(**kwargs: object) -> dict[str, Path]:
     """Compatibility hook for tests and callers that patch the CLI module."""
 
     return _compare.write_candidate_pool_compare_outputs(**kwargs)
+
+
+def _read_truth_csv(path: Path) -> pd.DataFrame:
+    """Read truth while preserving both historical monkeypatch hooks."""
+
+    if read_estimate_csv is not _ORIGINAL_READ_ESTIMATE_CSV:
+        return read_estimate_csv(path)
+    return _compare.read_estimate_csv(path)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -82,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     if reference_candidates.empty:
         raise ValueError("reference candidate pool is empty")
     candidate_pools = _load_labeled_candidate_pools(args.candidate)
-    truth = read_estimate_csv(args.truth_csv)
+    truth = _read_truth_csv(args.truth_csv)
     frame_rows, pooled, by_sequence, by_branch = build_candidate_pool_compare_tables(
         reference_candidates,
         candidate_pools,
