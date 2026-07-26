@@ -1,5 +1,8 @@
+import numpy as np
 import pandas as pd
+import pytest
 
+import raft_uav.diagnostics.paper_table as paper_table_module
 from raft_uav.diagnostics.paper_table import paper_reference_count_check
 
 
@@ -52,3 +55,58 @@ def test_paper_reference_count_check_reports_nonfinite_counts():
         assert failed["delta"] is None
         assert failed["passed"] is False
         assert "mismatch" in check["message"]
+
+
+@pytest.mark.parametrize(
+    "tolerance",
+    [
+        -1,
+        0.5,
+        True,
+        np.bool_(False),
+        np.nan,
+        np.inf,
+        1.0 + 0.0j,
+        np.array([1]),
+        np.ma.masked,
+    ],
+)
+def test_paper_reference_count_check_rejects_invalid_tolerance(tolerance):
+    with pytest.raises(ValueError, match="tolerance must be a non-negative integer scalar"):
+        paper_reference_count_check(_reference_like_table(), tolerance=tolerance)
+
+
+@pytest.mark.parametrize(
+    ("tolerance", "expected"),
+    [
+        (0, 0),
+        ("2", 2),
+        (np.int64(3), 3),
+        (np.array(4), 4),
+    ],
+)
+def test_paper_reference_count_check_normalizes_valid_tolerance(tolerance, expected):
+    check = paper_reference_count_check(_reference_like_table(), tolerance=tolerance)
+
+    assert check["tolerance"] == expected
+
+
+def test_run_paper_table_diagnostic_rejects_invalid_tolerance_before_io(monkeypatch):
+    def unexpected_run(**_kwargs):
+        raise AssertionError("paper-table implementation should not run")
+
+    monkeypatch.setattr(
+        paper_table_module,
+        "_ORIGINAL_RUN_PAPER_TABLE_DIAGNOSTIC",
+        unexpected_run,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="reference_count_tolerance must be a non-negative integer scalar",
+    ):
+        paper_table_module.run_paper_table_diagnostic(
+            dataset_root=".",
+            flight_name="dummy",
+            reference_count_tolerance=0.5,
+        )
