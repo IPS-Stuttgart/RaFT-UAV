@@ -19,6 +19,23 @@ _GROUP_COLUMNS = (
     "oracle_source",
     "dominant_source",
 )
+_TRUE_BOOL_TEXT = frozenset({"true", "t", "yes", "y", "1", "1.0"})
+_FALSE_BOOL_TEXT = frozenset(
+    {
+        "false",
+        "f",
+        "no",
+        "n",
+        "0",
+        "0.0",
+        "",
+        "nan",
+        "none",
+        "null",
+        "<na>",
+        "nat",
+    }
+)
 
 
 def build_candidate_assignment_branch_summary(frame_rows: pd.DataFrame) -> pd.DataFrame:
@@ -115,7 +132,7 @@ def _normalized_frame_rows(frame_rows: pd.DataFrame) -> pd.DataFrame:
     for column in ("dominant_is_oracle", "oracle_in_topk_by_weight"):
         if column not in rows.columns:
             rows[column] = False
-        rows[column] = _bool_series(rows[column])
+        rows[column] = _bool_series(rows[column], column_name=column)
     return rows
 
 
@@ -187,20 +204,30 @@ def _clean_text(values: pd.Series) -> pd.Series:
     return text.where(~missing, "unknown")
 
 
-def _bool_series(values: pd.Series) -> pd.Series:
-    series = pd.Series(values)
+def _bool_series(values: pd.Series, *, column_name: str | None = None) -> pd.Series:
+    input_name = getattr(values, "name", None)
+    series = pd.Series(values, copy=False)
     if series.empty:
         return pd.Series(dtype=bool, index=series.index)
     if pd.api.types.is_bool_dtype(series.dtype):
-        return series.fillna(False).astype(bool)
+        return series.astype("boolean").fillna(False).astype(bool)
+
     numeric = pd.to_numeric(series, errors="coerce")
-    numeric_truthy = numeric.notna() & (numeric != 0.0)
-    text = series.where(series.notna(), "").astype(str).str.strip().str.lower()
-    truthy_text = text.isin({"true", "t", "yes", "y", "1", "1.0"})
-    falsy_text = text.isin(
-        {"false", "f", "no", "n", "0", "0.0", "", "nan", "none", "<na>", "nat"}
-    )
-    return (truthy_text | (numeric_truthy & ~falsy_text)).astype(bool)
+    text = series.astype("string").str.strip().str.casefold()
+    truthy = (text.isin(_TRUE_BOOL_TEXT) | numeric.eq(1.0)).fillna(False)
+    falsy = (
+        series.isna() | text.isin(_FALSE_BOOL_TEXT) | numeric.eq(0.0)
+    ).fillna(False)
+    invalid = ~(truthy | falsy)
+    if bool(invalid.any()):
+        invalid_indices = invalid[invalid].index.tolist()
+        invalid_values = series.loc[invalid_indices].tolist()
+        label = column_name or (str(input_name) if input_name is not None else "Boolean values")
+        raise ValueError(
+            f"{label} contains invalid Boolean values at rows "
+            f"{invalid_indices}: {invalid_values}"
+        )
+    return truthy.astype(bool)
 
 
 def _mse(values: pd.Series) -> float:
