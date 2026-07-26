@@ -35,6 +35,7 @@ _PHYSICAL_HEADER_READ_CSV_OPTIONS = (
     "dialect",
     "skipinitialspace",
     "skiprows",
+    "compression",
 )
 
 
