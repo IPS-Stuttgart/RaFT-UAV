@@ -7,6 +7,7 @@ import pandas as pd
 
 from raft_uav.mmuad.candidate_pool_compare import (
     _by_reference_branch_summary,
+    _summarize_group,
     build_candidate_pool_compare_tables,
     main as pool_compare_main,
 )
@@ -84,6 +85,22 @@ def test_candidate_pool_compare_handles_all_missing_reference_branches() -> None
     by_branch = _by_reference_branch_summary(frame_rows, top_k_values=(1, 2))
 
     assert by_branch.empty
+
+
+def test_candidate_pool_compare_mse_uses_matched_frames() -> None:
+    frame_rows = pd.DataFrame(
+        {
+            "pool_label": ["partial", "partial"],
+            "reference_oracle_all_3d_m": [1.0, 100.0],
+            "candidate_oracle_all_3d_m": [2.0, np.nan],
+        }
+    )
+
+    summary = _summarize_group(frame_rows, pool_label="partial", top_k_values=())
+
+    assert summary["reference_oracle_all_mse"] == 1.0
+    assert summary["candidate_oracle_all_mse"] == 4.0
+    assert summary["oracle_all_mse_delta"] == 3.0
 
 
 def test_candidate_pool_compare_cli_writes_artifacts(tmp_path) -> None:
