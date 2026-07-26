@@ -111,7 +111,7 @@ def _finite_real_scalar(value: object, *, name: str) -> float:
         raise ValueError(error)
     try:
         item = scalar.item()
-        if np.ma.is_masked(item):
+        if np.ma.is_masked(item) or np.iscomplexobj(item):
             raise ValueError(error)
         number = float(item)
     except (TypeError, ValueError, OverflowError) as exc:
@@ -148,7 +148,9 @@ def _finite_real_array(value: object, *, name: str) -> np.ndarray:
     if np.iscomplexobj(array) or np.issubdtype(array.dtype, np.bool_):
         raise ValueError(error)
     if array.dtype == object and any(
-        isinstance(item, (bool, np.bool_)) or np.ma.is_masked(item)
+        isinstance(item, (bool, np.bool_))
+        or np.ma.is_masked(item)
+        or np.iscomplexobj(item)
         for item in array.flat
     ):
         raise ValueError(error)
