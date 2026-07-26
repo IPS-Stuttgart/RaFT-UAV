@@ -154,6 +154,32 @@ def _row_index_preview(indices: list[Any]) -> str:
     return f"{preview}, ..." if len(indices) > 5 else preview
 
 
+def _validate_unique_fixed_grid_keys(rows: pd.DataFrame) -> None:
+    """Reject duplicate sequence/timestamp rows before finite differencing."""
+
+    duplicate_mask = rows.duplicated(
+        subset=["sequence_id", "time_s"],
+        keep=False,
+    )
+    if not bool(duplicate_mask.any()):
+        return
+    duplicate_keys = (
+        rows.loc[duplicate_mask, ["sequence_id", "time_s"]]
+        .drop_duplicates()
+        .sort_values(["sequence_id", "time_s"])
+        .reset_index(drop=True)
+    )
+    sample = ", ".join(
+        f"{row.sequence_id}@{float(row.time_s):g}"
+        for row in duplicate_keys.head(5).itertuples(index=False)
+    )
+    suffix = ", ..." if len(duplicate_keys) > 5 else ""
+    raise ValueError(
+        f"submission contains {len(duplicate_keys)} duplicate "
+        f"(sequence_id, time_s) key(s): {sample}{suffix}"
+    )
+
+
 def _normalized_submission_rejecting_invalid_rows(
     submission: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -236,7 +262,9 @@ def _normalized_submission_rejecting_invalid_rows(
             "submission contains non-finite time or position values "
             f"at row indices: {_row_index_preview(invalid_indices)}"
         )
-    return rows.sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+    rows = rows.sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
+    _validate_unique_fixed_grid_keys(rows)
+    return rows
 
 
 def repair_track5_jerk_kinks(submission, **kwargs):
@@ -347,6 +375,7 @@ globals()["_normalize_iterations"] = _normalize_iterations
 globals()["_validated_step_controls"] = _validated_step_controls
 globals()["_validated_controls"] = _validated_controls
 globals()["_row_index_preview"] = _row_index_preview
+globals()["_validate_unique_fixed_grid_keys"] = _validate_unique_fixed_grid_keys
 globals()["_row_jerk_proxy_with_window_support"] = _row_jerk_proxy_with_window_support
 
 __doc__ = _IMPL.__doc__
