@@ -117,29 +117,36 @@ def _validate_numeric_rows(submission: object) -> None:
         )
 
 
-def _validate_identifier_rows(submission: object) -> None:
-    """Reject sequence and class identifiers invalid for official Track 5 rows."""
+def _validate_identifier_rows(submission: object) -> pd.DataFrame:
+    """Return rows with canonical sequence and class identifiers."""
 
-    rows = pd.DataFrame(submission)
+    rows = pd.DataFrame(submission).copy()
     required = {"sequence_id", "Classification"}
     if not required <= set(rows.columns):
-        return
+        return rows
 
+    normalized_sequences: list[str] = []
     invalid_sequences: list[int] = []
     for position, value in enumerate(rows["sequence_id"]):
         if isinstance(value, (bool, np.bool_)):
+            normalized_sequences.append("")
             invalid_sequences.append(position)
             continue
         try:
-            parse_official_sequence_cell(value)
+            normalized_sequences.append(parse_official_sequence_cell(value))
         except (TypeError, ValueError, OverflowError):
+            normalized_sequences.append("")
             invalid_sequences.append(position)
 
+    normalized_classifications: list[int] = []
     invalid_classifications: list[int] = []
     for position, value in enumerate(rows["Classification"]):
         try:
-            parse_official_classification_cell(value)
+            normalized_classifications.append(
+                parse_official_classification_cell(value)
+            )
         except (TypeError, ValueError, OverflowError):
+            normalized_classifications.append(0)
             invalid_classifications.append(position)
 
     details: list[str] = []
@@ -152,6 +159,10 @@ def _validate_identifier_rows(submission: object) -> None:
             "submission contains invalid fixed-grid identifiers: "
             + "; ".join(details)
         )
+
+    rows["sequence_id"] = normalized_sequences
+    rows["Classification"] = normalized_classifications
+    return rows
 
 
 def _validate_unique_fixed_grid_keys(submission: object) -> None:
@@ -225,10 +236,10 @@ def repair_track5_vertical_spikes(
         )
     )
     _validate_numeric_rows(submission)
-    _validate_identifier_rows(submission)
-    _validate_unique_fixed_grid_keys(submission)
+    validated_submission = _validate_identifier_rows(submission)
+    _validate_unique_fixed_grid_keys(validated_submission)
     return _ORIGINAL_REPAIR(
-        submission,
+        validated_submission,
         max_vertical_speed_mps=validated_vertical_speed,
         max_neighbor_vertical_speed_mps=validated_neighbor_vertical_speed,
         max_vertical_residual_m=validated_vertical_residual,
