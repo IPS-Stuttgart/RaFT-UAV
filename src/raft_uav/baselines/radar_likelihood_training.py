@@ -79,10 +79,13 @@ def collect_radar_association_training_frame(
     rows: list[dict[str, object]] = []
     current_track_id: int | None = None
 
-    # The first event only seeds the tracker. Replaying it would double-count an RF
-    # bootstrap or leak an oracle-selected radar bootstrap into its own features.
-    for event in events[1:]:
+    # The first event seeds the tracker. Retain a radar bootstrap as a training
+    # frame, but never apply the bootstrap measurement to the initialized tracker again.
+    for event_index, event in enumerate(events):
+        is_bootstrap_event = event_index == 0
         if event["kind"] == "rf":
+            if is_bootstrap_event:
+                continue
             measurement = event["measurement"]
             assert isinstance(measurement, TrackingMeasurement)
             tracker.update(measurement)
@@ -150,7 +153,8 @@ def collect_radar_association_training_frame(
                 track_switch_nis_ratio=track_switch_nis_ratio,
             )
         if selected is not None:
-            tracker.update(_radar_row_to_measurement(selected, covariance))
+            if not is_bootstrap_event:
+                tracker.update(_radar_row_to_measurement(selected, covariance))
             current_track_id = _optional_int(selected.get("track_id"))
 
     return pd.DataFrame.from_records(rows)
