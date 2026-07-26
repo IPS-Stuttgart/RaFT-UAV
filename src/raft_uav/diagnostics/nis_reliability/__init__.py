@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling ``nis_reliability.py`` module.
 This package preserves the public import path while rejecting measurement dimensions
-that are not exact positive integers and gate-probability sets that would overwrite
-one another after column-suffix formatting.
+that are not exact positive integers, preserving opaque CSV identifiers, and rejecting
+gate-probability sets that would overwrite one another after column-suffix formatting.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
-from typing import Sequence
+from typing import Iterable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -74,6 +74,28 @@ def _normalized_nis_frame(
     return normalized.loc[valid_dimension].copy()
 
 
+def read_nis_diagnostics(paths: Iterable[Path | str]) -> pd.DataFrame:
+    """Read diagnostics CSVs without coercing opaque identifier columns.
+
+    Per-sequence reliability reports may use numeric-looking identifiers such as
+    ``001``. Reading each file as text first prevents pandas from collapsing such
+    identifiers before the requested grouping is applied. NIS and dimension columns
+    are converted by the normal summary pipeline.
+    """
+
+    frames: list[pd.DataFrame] = []
+    for path_like in paths:
+        path = Path(path_like)
+        frame = pd.read_csv(path, dtype=str, keep_default_na=False)
+        frame["diagnostics_path"] = str(path)
+        if "measurement_dim" not in frame.columns:
+            frame["measurement_dim"] = _IMPL._infer_measurement_dim(frame)
+        frames.append(frame)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True, sort=False)
+
+
 def _validated_gate_probabilities(values: Sequence[float]) -> tuple[float, ...]:
     """Return valid probabilities whose formatted output suffixes are unique."""
 
@@ -119,6 +141,7 @@ def nis_reliability_summary(
 
 
 _IMPL._normalized_nis_frame = _normalized_nis_frame
+_IMPL.read_nis_diagnostics = read_nis_diagnostics
 _IMPL.nis_reliability_summary = nis_reliability_summary
 
 globals().update(
@@ -130,6 +153,7 @@ globals().update(
 )
 globals()["_exact_measurement_dimension_mask"] = _exact_measurement_dimension_mask
 globals()["_normalized_nis_frame"] = _normalized_nis_frame
+globals()["read_nis_diagnostics"] = read_nis_diagnostics
 globals()["_validated_gate_probabilities"] = _validated_gate_probabilities
 globals()["nis_reliability_summary"] = nis_reliability_summary
 
