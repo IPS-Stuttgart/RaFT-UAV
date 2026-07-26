@@ -16,7 +16,12 @@ _ORIGINAL_LOAD_CALIBRATION_BUNDLE = _IMPL.load_calibration_bundle
 _ORIGINAL_WRITE_CALIBRATION_BUNDLE_MANIFEST = _IMPL.write_calibration_bundle_manifest
 
 
-def _finite_real_offset(value: object, *, field_name: str) -> float:
+def _finite_real_offset(
+    value: object,
+    *,
+    field_name: str,
+    allow_nonfinite_missing: bool = False,
+) -> float:
     error = f"{field_name} must be a finite real scalar"
     if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
         raise ValueError(error)
@@ -33,7 +38,7 @@ def _finite_real_offset(value: object, *, field_name: str) -> float:
         number = float(item)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(error) from exc
-    if not np.isfinite(number):
+    if not np.isfinite(number) and not allow_nonfinite_missing:
         raise ValueError(error)
     return number
 
@@ -111,9 +116,17 @@ def load_calibration_bundle(path: str | Path) -> CalibrationBundle:
         raise ValueError(f"unsupported calibration bundle schema {schema_value!r}")
     rf_offset, radar_offset = _manifest_offsets(payload)
     if rf_offset is not None:
-        _finite_real_offset(rf_offset, field_name="rf_time_offset_s")
+        _finite_real_offset(
+            rf_offset,
+            field_name="rf_time_offset_s",
+            allow_nonfinite_missing=True,
+        )
     if radar_offset is not None:
-        _finite_real_offset(radar_offset, field_name="radar_time_offset_s")
+        _finite_real_offset(
+            radar_offset,
+            field_name="radar_time_offset_s",
+            allow_nonfinite_missing=True,
+        )
     return _ORIGINAL_LOAD_CALIBRATION_BUNDLE(path)
 
 
@@ -126,15 +139,17 @@ def write_calibration_bundle_manifest(
     uncertainty_model_path: str | Path | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> None:
-    """Write a bundle manifest after validating finite time offsets."""
+    """Write a bundle manifest after validating scalar time offsets."""
 
     validated_rf_offset = _finite_real_offset(
         rf_time_offset_s,
         field_name="rf_time_offset_s",
+        allow_nonfinite_missing=True,
     )
     validated_radar_offset = _finite_real_offset(
         radar_time_offset_s,
         field_name="radar_time_offset_s",
+        allow_nonfinite_missing=True,
     )
     _ORIGINAL_WRITE_CALIBRATION_BUNDLE_MANIFEST(
         path,
