@@ -8,6 +8,7 @@ reach Kalman updates.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 import importlib.util
 from pathlib import Path
 import sys
@@ -28,6 +29,8 @@ _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_TRACKING_MEASUREMENT_POST_INIT = _IMPL.TrackingMeasurement.__post_init__
 _ORIGINAL_TRACKER_INIT = _IMPL.AsyncConstantVelocityKalmanTracker.__init__
+_ORIGINAL_RUN_ASYNC_CV_BASELINE = _IMPL.run_async_cv_baseline
+_SOURCE_PRIORITY = {"rf": 0, "radar": 1}
 
 
 def _validated_tracking_measurement_post_init(
@@ -118,10 +121,66 @@ def _validated_tracker_init(
     )
 
 
+def _tracking_measurement_order_key(
+    measurement: _IMPL.TrackingMeasurement,
+) -> tuple[object, ...]:
+    """Return a deterministic order for measurements sharing a timestamp."""
+
+    source = str(measurement.source)
+    normalized_source = source.casefold()
+    vector = tuple(
+        np.asarray(measurement.vector, dtype=float).reshape(-1).tolist()
+    )
+    covariance = tuple(
+        np.asarray(measurement.covariance, dtype=float).reshape(-1).tolist()
+    )
+    return (
+        float(measurement.time_s),
+        _SOURCE_PRIORITY.get(normalized_source, len(_SOURCE_PRIORITY)),
+        normalized_source,
+        source,
+        len(vector),
+        vector,
+        covariance,
+    )
+
+
+def run_async_cv_baseline(
+    measurements: Iterable[_IMPL.TrackingMeasurement],
+    acceleration_std_mps2: float = 4.0,
+    gate_probabilities_by_source: Mapping[str, float | None] | None = None,
+    gate_thresholds_by_source: Mapping[str, float | None] | None = None,
+    safety_gate_probabilities_by_source: Mapping[str, float | None] | None = None,
+    safety_gate_thresholds_by_source: Mapping[str, float | None] | None = None,
+    robust_update_by_source: Mapping[str, str | None] | None = None,
+    inflation_alpha_by_source: Mapping[str, float] | None = None,
+    max_residual_norms_by_source: Mapping[str, float | None] | None = None,
+    student_t_dof_by_source: Mapping[str, float] | None = None,
+    huber_threshold_by_source: Mapping[str, float] | None = None,
+) -> list[dict[str, object]]:
+    """Run the CV baseline with deterministic same-timestamp measurement order."""
+
+    ordered = sorted(measurements, key=_tracking_measurement_order_key)
+    return _ORIGINAL_RUN_ASYNC_CV_BASELINE(
+        ordered,
+        acceleration_std_mps2=acceleration_std_mps2,
+        gate_probabilities_by_source=gate_probabilities_by_source,
+        gate_thresholds_by_source=gate_thresholds_by_source,
+        safety_gate_probabilities_by_source=safety_gate_probabilities_by_source,
+        safety_gate_thresholds_by_source=safety_gate_thresholds_by_source,
+        robust_update_by_source=robust_update_by_source,
+        inflation_alpha_by_source=inflation_alpha_by_source,
+        max_residual_norms_by_source=max_residual_norms_by_source,
+        student_t_dof_by_source=student_t_dof_by_source,
+        huber_threshold_by_source=huber_threshold_by_source,
+    )
+
+
 _IMPL.TrackingMeasurement.__post_init__ = (
     _validated_tracking_measurement_post_init
 )
 _IMPL.AsyncConstantVelocityKalmanTracker.__init__ = _validated_tracker_init
+_IMPL.run_async_cv_baseline = run_async_cv_baseline
 
 globals().update(
     {
@@ -134,12 +193,16 @@ globals()["_ORIGINAL_TRACKING_MEASUREMENT_POST_INIT"] = (
     _ORIGINAL_TRACKING_MEASUREMENT_POST_INIT
 )
 globals()["_ORIGINAL_TRACKER_INIT"] = _ORIGINAL_TRACKER_INIT
+globals()["_ORIGINAL_RUN_ASYNC_CV_BASELINE"] = _ORIGINAL_RUN_ASYNC_CV_BASELINE
+globals()["_SOURCE_PRIORITY"] = _SOURCE_PRIORITY
 globals()["_validated_tracking_measurement_post_init"] = (
     _validated_tracking_measurement_post_init
 )
 globals()["_finite_real_scalar"] = _finite_real_scalar
 globals()["_finite_initial_position"] = _finite_initial_position
 globals()["_validated_tracker_init"] = _validated_tracker_init
+globals()["_tracking_measurement_order_key"] = _tracking_measurement_order_key
+globals()["run_async_cv_baseline"] = run_async_cv_baseline
 
 __doc__ = _IMPL.__doc__
 __all__ = [
