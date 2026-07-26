@@ -39,12 +39,12 @@ def _fit(**kwargs):
     ("kwargs", "match"),
     [
         ({"ridge_lambda": -1.0}, "ridge_lambda must be nonnegative"),
-        ({"ridge_lambda": np.nan}, "ridge_lambda must be a finite real number"),
-        ({"ridge_lambda": True}, "ridge_lambda must be a finite real number"),
+        ({"ridge_lambda": np.nan}, "ridge_lambda must be a finite number"),
+        ({"ridge_lambda": True}, "ridge_lambda must be a finite number"),
         ({"max_time_delta_s": -1.0}, "max_time_delta_s must be nonnegative"),
         (
             {"max_time_delta_s": np.inf},
-            "max_time_delta_s must be a finite real number",
+            "max_time_delta_s must be a finite number",
         ),
     ],
 )
