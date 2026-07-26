@@ -21,6 +21,21 @@ def test_source_transform_lookup_is_forward_only_and_prefers_specific_key() -> N
     assert _match_source_transform("sensor_detail_clusters", transforms) is specific
 
 
+def test_source_transform_lookup_rejects_case_insensitive_duplicate_keys() -> None:
+    identity = SourceTransform.identity()
+    shifted = SourceTransform(np.eye(3), np.asarray([10.0, 0.0, 0.0]))
+
+    for transforms in (
+        {"radar": identity, "RADAR": shifted},
+        {"RADAR": shifted, "radar": identity},
+    ):
+        with pytest.raises(
+            ValueError,
+            match="ambiguous case-insensitive keys",
+        ):
+            _match_source_transform("radar", transforms)
+
+
 def test_source_calibration_does_not_apply_specific_transform_to_broad_source() -> None:
     candidates = CandidateFrame(
         pd.DataFrame(
