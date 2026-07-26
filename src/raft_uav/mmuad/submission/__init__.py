@@ -4,13 +4,15 @@ The legacy implementation lives in the sibling ``submission.py`` file. This
 wrapper preserves the public import path while accepting spreadsheet-exported
 class-map and official Track 5 template CSV files with whitespace around alias
 headers, rejecting ambiguous class-map headers, validating timestamp tolerances,
-and using globally consistent one-to-one template matching.
+using globally consistent one-to-one template matching, and rejecting non-Boolean
+readiness fields in upload manifests.
 """
 
 from __future__ import annotations
 
 import csv
 import importlib.util
+import json
 from pathlib import Path
 import sys
 from typing import Any
@@ -32,6 +34,7 @@ _ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR = "_raft_uav_original_normalize_track5_
 
 _LEGACY_LOAD_SEQUENCE_CLASS_MAP = _IMPL.load_sequence_class_map
 _LEGACY_VALIDATE_OFFICIAL_TRACK5_SUBMISSION = _IMPL.validate_official_track5_submission
+_LEGACY_VERIFY_OFFICIAL_UPLOAD_MANIFEST = _IMPL.verify_official_upload_manifest
 if not hasattr(_IMPL._impl, _ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR):
     setattr(
         _IMPL._impl,
@@ -141,6 +144,56 @@ def _validate_official_track5_submission_with_finite_tolerance(
         timestamp_tolerance_s=_validated_timestamp_tolerance(timestamp_tolerance_s),
         require_zip=require_zip,
     )
+
+
+def _manifest_json_boolean(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    errors: list[str],
+) -> bool:
+    """Return one optional JSON Boolean without Python string truthiness."""
+
+    if key not in payload:
+        return False
+    value = payload[key]
+    if isinstance(value, bool):
+        return value
+    errors.append(f"official upload manifest field {key!r} must be a JSON boolean")
+    return False
+
+
+def _verify_official_upload_manifest_with_boolean_flags(path: Path | str) -> dict[str, Any]:
+    """Verify upload manifests without promoting non-empty strings to readiness."""
+
+    summary = dict(_LEGACY_VERIFY_OFFICIAL_UPLOAD_MANIFEST(path))
+    manifest_path = Path(path)
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return summary
+    if not isinstance(payload, dict):
+        return summary
+
+    errors = list(summary.get("errors", []))
+    manifest_codabench_ready = _manifest_json_boolean(
+        payload,
+        "codabench_upload_ready",
+        errors=errors,
+    )
+    manifest_leaderboard_ready = _manifest_json_boolean(
+        payload,
+        "leaderboard_ready",
+        errors=errors,
+    )
+    summary["manifest_codabench_upload_ready"] = manifest_codabench_ready
+    summary["manifest_leaderboard_ready"] = manifest_leaderboard_ready
+    summary["errors"] = errors
+    summary["valid"] = not errors
+    summary["codabench_upload_ready"] = bool(
+        summary["valid"] and manifest_codabench_ready
+    )
+    return summary
 
 
 def _track5_template_coverage_rows(
@@ -276,6 +329,12 @@ _IMPL._impl.validate_official_track5_submission = (
 _IMPL.validate_official_track5_submission = (
     _validate_official_track5_submission_with_finite_tolerance
 )
+_IMPL._impl.verify_official_upload_manifest = (
+    _verify_official_upload_manifest_with_boolean_flags
+)
+_IMPL.verify_official_upload_manifest = (
+    _verify_official_upload_manifest_with_boolean_flags
+)
 
 globals().update(
     {
@@ -291,5 +350,6 @@ _track5_template_coverage_rows = _track5_template_coverage_rows
 validate_official_track5_submission = (
     _validate_official_track5_submission_with_finite_tolerance
 )
+verify_official_upload_manifest = _verify_official_upload_manifest_with_boolean_flags
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
