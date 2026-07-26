@@ -15,6 +15,8 @@ from typing import Any
 
 import numpy as np
 
+from raft_uav.mmuad.estimate_csv import read_estimate_csv
+
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_assignment_action_plan.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.mmuad._candidate_assignment_action_plan_legacy",
@@ -83,10 +85,54 @@ def build_candidate_assignment_action_plan(
     )
 
 
+def main(argv: list[str] | None = None) -> int:
+    """Run the action-plan CLI without coercing opaque sequence identifiers."""
+
+    parser = _IMPL.argparse.ArgumentParser(
+        prog="raft-uav-mmuad-candidate-assignment-action-plan",
+        description="prioritize MMUAD candidate-assignment failure blocks into experiment actions",
+    )
+    parser.add_argument("--blocks-csv", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--top-n-blocks", type=int, default=20)
+    parser.add_argument("--duration-weight", type=float, default=1.0)
+    parser.add_argument("--frame-weight", type=float, default=1.0)
+    parser.add_argument("--error-weight", type=float, default=1.0)
+    parser.add_argument("--regret-weight", type=float, default=1.0)
+    parser.add_argument("--buried-weight", type=float, default=0.5)
+    args = parser.parse_args(argv)
+
+    blocks = read_estimate_csv(args.blocks_csv)
+    action_rows, action_summary = build_candidate_assignment_action_plan(
+        blocks,
+        top_n_blocks=int(args.top_n_blocks),
+        duration_weight=float(args.duration_weight),
+        frame_weight=float(args.frame_weight),
+        error_weight=float(args.error_weight),
+        regret_weight=float(args.regret_weight),
+        buried_weight=float(args.buried_weight),
+    )
+    paths = _IMPL.write_candidate_assignment_action_plan_outputs(
+        output_dir=args.output_dir,
+        action_rows=action_rows,
+        action_summary=action_summary,
+    )
+    print("mmuad_candidate_assignment_action_plan=ok")
+    print(f"action_rows={len(action_rows)}")
+    print(f"action_summary_rows={len(action_summary)}")
+    if not action_summary.empty:
+        first = action_summary.iloc[0]
+        print(f"top_recommended_action={first['recommended_action']}")
+    for key, value in paths.items():
+        print(f"{key}={value}")
+    return 0
+
+
 _IMPL._finite_scalar = _finite_scalar
 _IMPL.build_candidate_assignment_action_plan = (
     build_candidate_assignment_action_plan
 )
+_IMPL.main = main
 
 globals().update(
     {
@@ -99,6 +145,7 @@ globals()["_finite_scalar"] = _finite_scalar
 globals()["build_candidate_assignment_action_plan"] = (
     build_candidate_assignment_action_plan
 )
+globals()["main"] = main
 
 __doc__ = _IMPL.__doc__
 __all__ = [
