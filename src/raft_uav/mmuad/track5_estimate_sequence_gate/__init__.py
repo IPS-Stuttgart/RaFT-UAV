@@ -2,9 +2,9 @@
 
 The maintained implementation lives in the sibling
 ``track5_estimate_sequence_gate.py`` module. This package preserves the public
-import path while rejecting malformed blend weights and invalid sequence
-identifiers before they can silently select a trajectory or fall back to the
-default blend weight.
+import path while rejecting malformed blend weights, invalid sequence
+identifiers, and duplicate normalized identifiers before they can silently
+select a trajectory or fall back to the default blend weight.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ def _validate_weight(value: Any, *, name: str) -> float:
 
 
 def _sequence_weight_map(rows: Any) -> dict[str, float]:
-    """Build a weight map without discarding malformed sequence rows."""
+    """Build an unambiguous weight map without discarding malformed rows."""
 
     frame = pd.DataFrame(rows).copy()
     sequence_column = _IMPL._first_present(frame, _IMPL.SEQUENCE_ALIASES)
@@ -76,6 +76,11 @@ def _sequence_weight_map(rows: Any) -> dict[str, float]:
                 "sequence weight table contains an invalid sequence identifier "
                 f"at row {index}: {raw_sequence_id!r}"
             ) from exc
+        if sequence_id in result:
+            raise ValueError(
+                "sequence weight table contains duplicate normalized sequence_id "
+                f"at row {index}: {sequence_id}"
+            )
         result[sequence_id] = _validate_weight(
             row[weight_column],
             name="sequence_weight",
