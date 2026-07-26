@@ -1,11 +1,13 @@
-"""Compatibility validation for candidate-oracle attribution controls.
+"""Compatibility validation and deterministic ordering for candidate-oracle attribution.
 
 The maintained implementation lives in the sibling
 ``candidate_oracle_attribution.py`` module. This package preserves the public
 import path while rejecting malformed truth-matching time gates and top-K values
-before they can silently widen, empty, or change the diagnostic. The CLI also
-reads truth tables through the shared text-preserving MMUAD CSV reader so opaque
-sequence identifiers remain aligned with candidate inputs.
+before they can silently widen, empty, or change the diagnostic. Equal-score
+candidates are ranked with explicit stable tie-break keys so CSV row order cannot
+change top-K oracle attribution. The CLI also reads truth tables through the
+shared text-preserving MMUAD CSV reader so opaque sequence identifiers remain
+aligned with candidate inputs.
 """
 
 from __future__ import annotations
@@ -35,9 +37,14 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
-_ORIGINAL_BUILD_TABLES = _IMPL.build_candidate_oracle_attribution_tables
 _ORIGINAL_MAIN = _IMPL.main
 _MAIN_LOCK = threading.RLock()
+_RANK_TEXT_COLUMNS = (
+    ("source", "unknown"),
+    ("track_id", ""),
+    ("candidate_branch", "candidate"),
+    ("class_name", ""),
+)
 
 
 class _TextPreservingPandasProxy:
@@ -98,6 +105,40 @@ def _normalize_top_k_values(values: Sequence[object]) -> tuple[int, ...]:
     return tuple(sorted(set(normalized)))
 
 
+def _stable_text_column(rows: pd.DataFrame, column: str, *, default: str) -> pd.Series:
+    """Return one comparable deterministic text key for candidate ranking."""
+
+    if column not in rows.columns:
+        return pd.Series(default, index=rows.index, dtype="string")
+    values = rows[column].where(rows[column].notna(), default)
+    return values.astype(str).str.strip()
+
+
+def _deterministic_candidate_ranking(group: pd.DataFrame) -> pd.DataFrame:
+    """Rank candidates by score and explicit stable tie-break keys."""
+
+    ranked = group.copy()
+    helper_columns: list[str] = []
+    for column, default in _RANK_TEXT_COLUMNS:
+        helper = f"_oracle_rank_{column}"
+        ranked[helper] = _stable_text_column(ranked, column, default=default)
+        helper_columns.append(helper)
+
+    sort_columns = [
+        "candidate_oracle_score",
+        *helper_columns,
+        "x_m",
+        "y_m",
+        "z_m",
+    ]
+    ascending = [False, *([True] * (len(sort_columns) - 1))]
+    return (
+        ranked.sort_values(sort_columns, ascending=ascending, kind="mergesort")
+        .drop(columns=helper_columns)
+        .reset_index(drop=True)
+    )
+
+
 def build_candidate_oracle_attribution_tables(
     candidates: pd.DataFrame,
     truth: pd.DataFrame,
@@ -107,21 +148,105 @@ def build_candidate_oracle_attribution_tables(
     fallback_score_column: str = "ranker_score",
     max_truth_time_delta_s: float = 0.5,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Return oracle-attribution tables with validated scalar controls."""
+    """Return oracle-attribution tables with validated deterministic ranking."""
 
     max_delta = _nonnegative_finite_scalar(
         max_truth_time_delta_s,
         name="max_truth_time_delta_s",
     )
     top_k = _normalize_top_k_values(top_k_values)
-    return _ORIGINAL_BUILD_TABLES(
-        candidates,
-        truth,
-        top_k_values=top_k,
+    rows = _IMPL.normalize_candidate_columns(pd.DataFrame(candidates).copy())
+    truth_rows = _IMPL.normalize_truth_columns(pd.DataFrame(truth).copy())
+    if rows.empty or truth_rows.empty:
+        empty = pd.DataFrame()
+        return empty, empty, empty, empty
+
+    rows = rows.copy()
+    if "source" not in rows.columns:
+        rows["source"] = "unknown"
+    if "candidate_branch" not in rows.columns:
+        rows["candidate_branch"] = rows["source"].fillna("candidate").astype(str)
+    if "track_id" not in rows.columns:
+        rows["track_id"] = np.arange(len(rows), dtype=int).astype(str)
+    rows["candidate_oracle_score"] = _IMPL._score_column(
+        rows,
         score_column=score_column,
         fallback_score_column=fallback_score_column,
-        max_truth_time_delta_s=max_delta,
     )
+    truth_by_sequence = {
+        str(sequence_id): group.sort_values("time_s").reset_index(drop=True)
+        for sequence_id, group in truth_rows.groupby("sequence_id", sort=True)
+    }
+
+    frame_records: list[dict[str, Any]] = []
+    for (sequence_id, time_s), group in rows.groupby(
+        ["sequence_id", "time_s"],
+        sort=True,
+    ):
+        seq_truth = truth_by_sequence.get(str(sequence_id))
+        if seq_truth is None or seq_truth.empty:
+            continue
+        truth_t = seq_truth["time_s"].to_numpy(float)
+        nearest_idx = int(np.argmin(np.abs(truth_t - float(time_s))))
+        truth_dt = float(time_s) - float(truth_t[nearest_idx])
+        if abs(truth_dt) > max_delta:
+            continue
+        truth_xyz = seq_truth.iloc[nearest_idx][["x_m", "y_m", "z_m"]].to_numpy(float)
+        ranked = _deterministic_candidate_ranking(group)
+        candidate_xyz = ranked[["x_m", "y_m", "z_m"]].to_numpy(float)
+        distances = np.linalg.norm(candidate_xyz - truth_xyz, axis=1)
+        best_pos = int(np.argmin(distances))
+        best_row = ranked.iloc[best_pos]
+        record: dict[str, Any] = {
+            "sequence_id": str(sequence_id),
+            "time_s": float(time_s),
+            "truth_time_delta_s": truth_dt,
+            "candidate_count": int(len(ranked)),
+            "oracle_all_3d_m": float(distances[best_pos]),
+            "oracle_all_rank": int(best_pos + 1),
+            "oracle_all_rank_fraction": float((best_pos + 1) / max(len(ranked), 1)),
+            "oracle_all_candidate_score": float(best_row["candidate_oracle_score"]),
+            "oracle_all_candidate_source": str(best_row.get("source", "unknown")),
+            "oracle_all_candidate_branch": str(
+                best_row.get("candidate_branch", "candidate")
+            ),
+            "oracle_all_candidate_track_id": str(best_row.get("track_id", "")),
+        }
+        for top_k_value in top_k:
+            bounded_k = min(int(top_k_value), len(distances))
+            top_distances = distances[:bounded_k]
+            top_best_pos = int(np.argmin(top_distances))
+            top_row = ranked.iloc[top_best_pos]
+            record[f"oracle_top{top_k_value}_3d_m"] = float(
+                top_distances[top_best_pos]
+            )
+            record[f"oracle_in_top{top_k_value}"] = bool(best_pos < bounded_k)
+            record[f"oracle_top{top_k_value}_candidate_source"] = str(
+                top_row.get("source", "unknown")
+            )
+            record[f"oracle_top{top_k_value}_candidate_branch"] = str(
+                top_row.get("candidate_branch", "candidate")
+            )
+        frame_records.append(record)
+
+    frame_rows = pd.DataFrame.from_records(frame_records)
+    if frame_rows.empty:
+        empty = pd.DataFrame()
+        return frame_rows, empty, empty, empty
+    pooled = pd.DataFrame.from_records(
+        [_IMPL._pooled_summary(frame_rows, top_k_values=top_k)]
+    )
+    branch_summary = _IMPL._group_summary(
+        frame_rows,
+        group_column="oracle_all_candidate_branch",
+        label_column="candidate_branch",
+    )
+    source_summary = _IMPL._group_summary(
+        frame_rows,
+        group_column="oracle_all_candidate_source",
+        label_column="source",
+    )
+    return frame_rows, pooled, branch_summary, source_summary
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -140,6 +265,7 @@ _IMPL.build_candidate_oracle_attribution_tables = (
     build_candidate_oracle_attribution_tables
 )
 _IMPL._normalize_top_k_values = _normalize_top_k_values
+_IMPL._deterministic_candidate_ranking = _deterministic_candidate_ranking
 _IMPL.main = main
 
 globals().update(
@@ -150,6 +276,7 @@ globals().update(
     }
 )
 globals()["_normalize_top_k_values"] = _normalize_top_k_values
+globals()["_deterministic_candidate_ranking"] = _deterministic_candidate_ranking
 globals()["build_candidate_oracle_attribution_tables"] = (
     build_candidate_oracle_attribution_tables
 )
