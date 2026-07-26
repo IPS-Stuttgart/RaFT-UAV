@@ -269,7 +269,14 @@ def _normalized_submission(submission: pd.DataFrame) -> pd.DataFrame:
     finite = np.isfinite(
         rows[["time_s", "state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
     ).all(axis=1)
-    rows = rows.loc[finite].copy()
+    if not finite.all():
+        invalid_indices = rows.index[~finite].tolist()
+        preview = ", ".join(str(index) for index in invalid_indices[:5])
+        suffix = ", ..." if len(invalid_indices) > 5 else ""
+        raise ValueError(
+            "submission contains non-finite or non-numeric time or position values "
+            f"at row indices: {preview}{suffix}"
+        )
     return rows.sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
