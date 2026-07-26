@@ -19,6 +19,7 @@ import pandas as pd
 from raft_uav.mmuad.submission import (
     normalize_official_track5_results_frame,
     parse_official_classification_cell,
+    parse_official_sequence_cell,
 )
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_speed_limit.py"
@@ -80,20 +81,28 @@ def _reject_boolean_scalar(value: object, *, message: str) -> float:
     return _finite_scalar(value, message=message)
 
 
-def _validate_sequence_ids(submission: object) -> None:
-    """Reject genuinely missing or blank sequence identifiers before string conversion."""
+def _validate_sequence_ids(submission: object) -> pd.DataFrame:
+    """Return rows with canonical nonblank sequence identifiers."""
 
     rows = _IMPL._strip_csv_headers(pd.DataFrame(submission).copy())
     if "sequence_id" not in rows.columns:
-        return
-    text = rows["sequence_id"].astype("string").str.strip()
-    invalid = text.isna() | text.eq("").fillna(False)
-    if invalid.any():
-        row_indices = rows.index[invalid.to_numpy(dtype=bool)].tolist()[:5]
+        return rows
+
+    normalized: list[str] = []
+    invalid: list[object] = []
+    for row_index, value in rows["sequence_id"].items():
+        try:
+            normalized.append(parse_official_sequence_cell(value))
+        except (TypeError, ValueError, OverflowError):
+            normalized.append("")
+            invalid.append(row_index)
+    if invalid:
         raise ValueError(
             "submission contains missing or blank sequence_id values: "
-            f"sequence_id rows {row_indices}"
+            f"sequence_id rows {invalid[:5]}"
         )
+    rows["sequence_id"] = normalized
+    return rows
 
 
 def _numeric_cell_kind(value: object) -> str | None:
@@ -273,8 +282,8 @@ def project_track5_speed_limit(
         anchor_blend,
         message="anchor_blend must be finite and in [0, 1)",
     )
-    _validate_sequence_ids(submission)
-    validated_submission = _validate_numeric_rows(submission)
+    validated_submission = _validate_sequence_ids(submission)
+    validated_submission = _validate_numeric_rows(validated_submission)
     _validate_unique_fixed_grid_keys(validated_submission)
     return _ORIGINAL_PROJECT(
         validated_submission,
