@@ -3,8 +3,8 @@
 The maintained implementation lives in the sibling ``track5_speed_limit.py``
 module. This package preserves the public import path while rejecting malformed
 iteration counts, Boolean pseudo-numbers, non-scalar controls, missing sequence
-identifiers, invalid fixed-grid rows, and duplicate fixed-grid keys instead of
-silently coercing or dropping them.
+identifiers, invalid fixed-grid rows, invalid classification labels, and
+duplicate fixed-grid keys instead of silently coercing or dropping them.
 """
 
 from __future__ import annotations
@@ -16,7 +16,10 @@ import sys
 import numpy as np
 import pandas as pd
 
-from raft_uav.mmuad.submission import normalize_official_track5_results_frame
+from raft_uav.mmuad.submission import (
+    normalize_official_track5_results_frame,
+    parse_official_classification_cell,
+)
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_speed_limit.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -123,6 +126,26 @@ def _numeric_validation_scalar(value: object) -> object:
     return scalar
 
 
+def _validate_classification_values(rows: pd.DataFrame) -> pd.Series:
+    """Return canonical official class ids and report their original row indices."""
+
+    parsed: list[int] = []
+    invalid: list[str] = []
+    for row_index, value in rows["Classification"].items():
+        try:
+            parsed.append(parse_official_classification_cell(value))
+        except (TypeError, ValueError, OverflowError) as exc:
+            invalid.append(f"{row_index}:{value!r} ({exc})")
+    if invalid:
+        preview = "; ".join(invalid[:5])
+        suffix = f"; {len(invalid) - 5} more" if len(invalid) > 5 else ""
+        raise ValueError(
+            "submission contains invalid Classification values at rows "
+            f"{preview}{suffix}"
+        )
+    return pd.Series(parsed, index=rows.index, dtype=int)
+
+
 def _validate_numeric_rows(submission: object) -> pd.DataFrame:
     """Validate numeric rows and return safe scalar containers for projection."""
 
@@ -174,6 +197,7 @@ def _validate_numeric_rows(submission: object) -> pd.DataFrame:
     if nonfinite_invalid:
         details = "; ".join(nonfinite_invalid)
         raise ValueError(f"submission contains non-finite numeric values: {details}")
+    normalized["Classification"] = _validate_classification_values(normalized)
     return normalized
 
 
@@ -277,6 +301,7 @@ globals()["_reject_boolean_scalar"] = _reject_boolean_scalar
 globals()["_validate_sequence_ids"] = _validate_sequence_ids
 globals()["_numeric_cell_kind"] = _numeric_cell_kind
 globals()["_numeric_validation_scalar"] = _numeric_validation_scalar
+globals()["_validate_classification_values"] = _validate_classification_values
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
 globals()["_validate_unique_fixed_grid_keys"] = _validate_unique_fixed_grid_keys
 globals()["project_track5_speed_limit"] = project_track5_speed_limit
