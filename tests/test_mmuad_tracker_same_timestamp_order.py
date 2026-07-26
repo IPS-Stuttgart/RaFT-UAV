@@ -33,6 +33,44 @@ def _candidate_rows(*, selected_first: bool) -> pd.DataFrame:
     return pd.DataFrame.from_records(records)
 
 
+def _duplicate_selected_rows(*, farther_first: bool) -> pd.DataFrame:
+    nearer = {
+        "_candidate_row_id": 0,
+        "time_s": 0.0,
+        "source": "radar",
+        "track_id": "selected",
+        "x_m": 0.0,
+        "y_m": 0.0,
+        "z_m": 0.0,
+        "std_xy_m": 1.0,
+        "std_z_m": 1.0,
+    }
+    farther = {
+        "_candidate_row_id": 1,
+        "time_s": 0.0,
+        "source": "radar",
+        "track_id": "selected",
+        "x_m": 10.0,
+        "y_m": 0.0,
+        "z_m": 0.0,
+        "std_xy_m": 1.0,
+        "std_z_m": 1.0,
+    }
+    later = {
+        "_candidate_row_id": 2,
+        "time_s": 1.0,
+        "source": "radar",
+        "track_id": "selected",
+        "x_m": 1.0,
+        "y_m": 0.0,
+        "z_m": 0.0,
+        "std_xy_m": 1.0,
+        "std_z_m": 1.0,
+    }
+    first_rows = (farther, nearer) if farther_first else (nearer, farther)
+    return pd.DataFrame.from_records([*first_rows, later])
+
+
 def test_same_timestamp_filter_updates_ignore_input_row_order() -> None:
     candidates_a = _candidate_rows(selected_first=True)
     candidates_b = _candidate_rows(selected_first=False)
@@ -64,6 +102,44 @@ def test_same_timestamp_filter_updates_ignore_input_row_order() -> None:
         "soft_anchor",
         "selected_update",
     ]
+    np.testing.assert_allclose(
+        result_a[["state_x_m", "state_y_m", "state_z_m", "v_x_mps"]],
+        result_b[["state_x_m", "state_y_m", "state_z_m", "v_x_mps"]],
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_same_timestamp_filter_bootstrap_ignores_selected_row_order() -> None:
+    candidates_a = _duplicate_selected_rows(farther_first=False)
+    candidates_b = _duplicate_selected_rows(farther_first=True)
+    config = TrackerConfig(
+        acceleration_std_mps2=1.0,
+        primary_covariance_scale=1.0,
+        secondary_covariance_scale=1.0,
+        soft_anchor_cap_m=1.0,
+        soft_anchor_gate_m=10.0,
+    )
+
+    result_a = _run_sequence_filter(
+        candidates_a,
+        candidates_a.copy(),
+        sequence_truth=None,
+        config=config,
+    )
+    result_b = _run_sequence_filter(
+        candidates_b,
+        candidates_b.copy(),
+        sequence_truth=None,
+        config=config,
+    )
+
+    assert result_a["update_action"].tolist() == [
+        "selected_update",
+        "selected_update",
+        "selected_update",
+    ]
+    assert result_a.loc[0, "state_x_m"] == 0.0
     np.testing.assert_allclose(
         result_a[["state_x_m", "state_y_m", "state_z_m", "v_x_mps"]],
         result_b[["state_x_m", "state_y_m", "state_z_m", "v_x_mps"]],
