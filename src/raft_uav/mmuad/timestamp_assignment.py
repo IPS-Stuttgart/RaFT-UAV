@@ -72,6 +72,57 @@ def _validated_tolerance_s(value: Any) -> float:
     return tolerance
 
 
+def _validated_timestamp_array(values: Iterable[float]) -> np.ndarray:
+    """Return one-dimensional finite real timestamps without pseudo-numbers."""
+
+    value_error = "timestamp arrays must contain only finite real scalar values"
+    shape_error = "timestamp arrays must be one-dimensional"
+    try:
+        items = list(values)
+    except TypeError as exc:
+        raise ValueError(shape_error) from exc
+
+    normalized: list[float] = []
+    for item in items:
+        if isinstance(item, (bool, np.bool_)) or np.ma.is_masked(item):
+            raise ValueError(value_error)
+        try:
+            scalar = np.asarray(item)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(value_error) from exc
+        if scalar.ndim != 0:
+            raise ValueError(shape_error)
+        if np.iscomplexobj(scalar) or np.issubdtype(scalar.dtype, np.bool_):
+            raise ValueError(value_error)
+
+        try:
+            unwrapped = scalar.item()
+        except ValueError as exc:
+            raise ValueError(value_error) from exc
+        if isinstance(
+            unwrapped,
+            (bool, np.bool_, complex, np.complexfloating),
+        ) or np.ma.is_masked(unwrapped):
+            raise ValueError(value_error)
+        try:
+            nested = np.asarray(unwrapped)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(value_error) from exc
+        if nested.ndim != 0:
+            raise ValueError(shape_error)
+        if np.iscomplexobj(nested) or np.issubdtype(nested.dtype, np.bool_):
+            raise ValueError(value_error)
+        try:
+            number = float(nested.item())
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(value_error) from exc
+        if not np.isfinite(number):
+            raise ValueError(value_error)
+        normalized.append(number)
+
+    return np.asarray(normalized, dtype=float)
+
+
 def optimal_timestamp_assignment(
     requested_times: Iterable[float],
     prediction_times: Iterable[float],
@@ -86,12 +137,8 @@ def optimal_timestamp_assignment(
     request and prediction arrays.
     """
 
-    requests = np.asarray(list(requested_times), dtype=float)
-    predictions = np.asarray(list(prediction_times), dtype=float)
-    if requests.ndim != 1 or predictions.ndim != 1:
-        raise ValueError("timestamp arrays must be one-dimensional")
-    if not np.isfinite(requests).all() or not np.isfinite(predictions).all():
-        raise ValueError("timestamp arrays must contain only finite values")
+    requests = _validated_timestamp_array(requested_times)
+    predictions = _validated_timestamp_array(prediction_times)
     tolerance = _validated_tolerance_s(tolerance_s)
     if requests.size == 0 or predictions.size == 0:
         return {}
