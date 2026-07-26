@@ -69,6 +69,12 @@ def _candidate_reservoir_config_validation_install() -> Callable[[], None]:
     return install
 
 
+def _layout_topic_map_exports_validation_install() -> Callable[[], None]:
+    from raft_uav.mmuad._layout_topic_map_exports_validation_patch import install
+
+    return install
+
+
 if os.environ.get("RAFT_UAV_SKIP_RUNTIME_HOOKS") != "1":
     _optional_runtime_hook(_radar_covariance_install)
     _optional_runtime_hook(_tracklet_viterbi_install)
@@ -80,3 +86,4 @@ _optional_runtime_hook(_kalman_timestamp_validation_install)
 _optional_runtime_hook(_rf_measurement_fallback_install)
 _optional_runtime_hook(_uncertainty_payload_validation_install)
 _optional_runtime_hook(_candidate_reservoir_config_validation_install)
+_optional_runtime_hook(_layout_topic_map_exports_validation_install)
