@@ -3,8 +3,8 @@
 The maintained implementation lives in the sibling ``paper_table.py`` module.
 This package preserves the public import path while excluding malformed radar
 anchors before interpolation, reporting invalid reference counts as failed
-checks instead of raising conversion errors, and validating stable-segment
-controls before they can silently distort paper metrics.
+checks instead of raising conversion errors, and validating stable-segment and
+reference-count controls before they can silently distort paper metrics.
 """
 
 from __future__ import annotations
@@ -77,7 +77,7 @@ def paper_reference_count_check(
 ) -> dict[str, object]:
     """Compare reference counts while treating invalid values as failed checks."""
 
-    tolerance_value = int(tolerance)
+    tolerance_value = _validated_nonnegative_integer(tolerance, name="tolerance")
     rows: list[dict[str, object]] = []
     passed = True
     for method, column, expected in _IMPL.PAPER_REFERENCE_COUNT_CHECKS:
@@ -144,6 +144,27 @@ def paper_reference_count_check(
         "checks": rows,
         "message": message,
     }
+
+
+def _validated_nonnegative_integer(value: Any, *, name: str) -> int:
+    """Return one finite non-negative integer scalar, excluding Booleans."""
+
+    message = f"{name} must be a non-negative integer scalar"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(message)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar) or scalar.dtype.kind == "b":
+        raise ValueError(message)
+    try:
+        number = float(scalar.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(number) or number < 0.0 or not number.is_integer():
+        raise ValueError(message)
+    return int(number)
 
 
 def _validated_positive_integer(value: Any, *, name: str) -> int:
@@ -215,7 +236,7 @@ def run_paper_table_diagnostic(
     disable_radar_catprob_threshold: bool = False,
     fusion_associations: tuple[str, ...] = _IMPL.FUSION_ASSOCIATIONS,
 ) -> dict[str, Any]:
-    """Build a paper table after validating stable-segment controls."""
+    """Build a paper table after validating public diagnostic controls."""
 
     min_frames = _validated_positive_integer(
         stable_segment_min_frames,
@@ -224,6 +245,10 @@ def run_paper_table_diagnostic(
     max_transition_speed_mps = _validated_positive_real(
         stable_segment_max_transition_speed_mps,
         name="stable_segment_max_transition_speed_mps",
+    )
+    normalized_reference_count_tolerance = _validated_nonnegative_integer(
+        reference_count_tolerance,
+        name="reference_count_tolerance",
     )
     return _ORIGINAL_RUN_PAPER_TABLE_DIAGNOSTIC(
         dataset_root=dataset_root,
@@ -238,7 +263,7 @@ def run_paper_table_diagnostic(
         empirical_covariance=empirical_covariance,
         empirical_covariance_min_variance_m2=empirical_covariance_min_variance_m2,
         assert_reference_counts=assert_reference_counts,
-        reference_count_tolerance=reference_count_tolerance,
+        reference_count_tolerance=normalized_reference_count_tolerance,
         enu_origin_lla=enu_origin_lla,
         radar_selections=radar_selections,
         fusion_nis_gate_prob=fusion_nis_gate_prob,
@@ -258,6 +283,7 @@ _IMPL._interpolate_selected_radar_to_frame_times = (
     _interpolate_selected_radar_to_frame_times
 )
 _IMPL.paper_reference_count_check = paper_reference_count_check
+_IMPL._validated_nonnegative_integer = _validated_nonnegative_integer
 _IMPL._validated_positive_integer = _validated_positive_integer
 _IMPL._validated_positive_real = _validated_positive_real
 _IMPL.run_paper_table_diagnostic = run_paper_table_diagnostic
@@ -274,6 +300,7 @@ globals()["_interpolate_selected_radar_to_frame_times"] = (
     _interpolate_selected_radar_to_frame_times
 )
 globals()["paper_reference_count_check"] = paper_reference_count_check
+globals()["_validated_nonnegative_integer"] = _validated_nonnegative_integer
 globals()["_validated_positive_integer"] = _validated_positive_integer
 globals()["_validated_positive_real"] = _validated_positive_real
 globals()["run_paper_table_diagnostic"] = run_paper_table_diagnostic
