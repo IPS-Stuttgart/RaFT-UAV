@@ -57,6 +57,14 @@ def _rf_measurement_fallback_install() -> Callable[[], None]:
     return apply_rf_measurement_fallback_patch
 
 
+def _radar_measurement_validation_install() -> Callable[[], None]:
+    from raft_uav.io._radar_measurement_validation_patch import (
+        apply_radar_measurement_validation_patch,
+    )
+
+    return apply_radar_measurement_validation_patch
+
+
 def _catprob_sequence_install() -> Callable[[], None]:
     from raft_uav.io._catprob_sequence_patch import install
 
@@ -96,6 +104,7 @@ if os.environ.get("RAFT_UAV_SKIP_RUNTIME_HOOKS") != "1":
 # boundaries, not optional integrations. Keep them active when runtime hooks are skipped.
 _optional_runtime_hook(_kalman_timestamp_validation_install)
 _optional_runtime_hook(_rf_measurement_fallback_install)
+_optional_runtime_hook(_radar_measurement_validation_install)
 _optional_runtime_hook(_catprob_sequence_install)
 _optional_runtime_hook(_uncertainty_payload_validation_install)
 _optional_runtime_hook(_candidate_reservoir_config_validation_install)
