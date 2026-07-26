@@ -111,9 +111,11 @@ def build_uncertainty_quota_reservoir(
         preserve_reason_prefixes=preserve_prefixes,
     )
     capped["candidate_uncertainty_quota_top_n"] = int(uncertainty_top_n)
-    capped["candidate_uncertainty_quota_selected"] = capped.get(
-        "candidate_uncertainty_quota_selected", False
-    )
+    selected_flag = capped.get("candidate_uncertainty_quota_selected")
+    if selected_flag is None:
+        capped["candidate_uncertainty_quota_selected"] = False
+    else:
+        capped["candidate_uncertainty_quota_selected"] = selected_flag.eq(True)
     capped = capped.drop(columns=["_uncertainty_quota_row_id"], errors="ignore")
     return CandidateFrame(normalize_candidate_columns(capped))
 
