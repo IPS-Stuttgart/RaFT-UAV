@@ -16,6 +16,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_float
 from raft_uav.mmuad.submission import parse_official_sequence_cell
 from raft_uav.mmuad.track5_estimate_ensemble import (
     EstimateInput,
@@ -123,6 +124,40 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     return out.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
+def _positive_finite_real_scalar(value: Any, *, name: str) -> float:
+    """Return one finite positive real scalar without Boolean coercion."""
+
+    parsed = optional_float(value)
+    if parsed is None or parsed <= 0.0:
+        raise ValueError(f"{name} must be a finite positive real scalar")
+    return parsed
+
+
+def _validate_sigma_parameters(
+    *,
+    fallback_sigma_m: Any,
+    sigma_min_m: Any,
+    sigma_max_m: Any,
+) -> tuple[float, float, float]:
+    """Validate uncertainty controls before template-dependent early returns."""
+
+    fallback = _positive_finite_real_scalar(
+        fallback_sigma_m,
+        name="fallback_sigma_m",
+    )
+    sigma_min = _positive_finite_real_scalar(
+        sigma_min_m,
+        name="sigma_min_m",
+    )
+    sigma_max = _positive_finite_real_scalar(
+        sigma_max_m,
+        name="sigma_max_m",
+    )
+    if sigma_max < sigma_min:
+        raise ValueError("sigma_max_m must be greater than or equal to sigma_min_m")
+    return fallback, sigma_min, sigma_max
+
+
 def _validated_estimate_inputs(
     estimate_inputs: Iterable[EstimateInput],
 ) -> list[EstimateInput]:
@@ -211,14 +246,19 @@ def build_track5_uncertainty_ensemble(
     *,
     template: pd.DataFrame,
     uncertainty_column: str = "predicted_sigma_m",
-    fallback_sigma_m: float = 30.0,
-    sigma_min_m: float = 1.0,
-    sigma_max_m: float = 100.0,
+    fallback_sigma_m: Any = 30.0,
+    sigma_min_m: Any = 1.0,
+    sigma_max_m: Any = 100.0,
     max_nearest_time_delta_s: float | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return the uncertainty ensemble after stable global-weight normalization."""
+    """Return the uncertainty ensemble after stable control and weight validation."""
 
     inputs = _validated_estimate_inputs(estimate_inputs)
+    fallback_sigma_m, sigma_min_m, sigma_max_m = _validate_sigma_parameters(
+        fallback_sigma_m=fallback_sigma_m,
+        sigma_min_m=sigma_min_m,
+        sigma_max_m=sigma_max_m,
+    )
     relative_inputs, weight_scale = _relative_weight_inputs(inputs)
     estimates, diagnostics = _LEGACY_BUILD(
         relative_inputs,
@@ -243,6 +283,8 @@ _IMPL._normalized_sequence_values = _normalized_sequence_values
 _IMPL._sequence_text_or_none = _sequence_text_or_none
 _IMPL._normalize_uncertainty_rows = _normalize_uncertainty_rows
 _IMPL._normalize_template_rows = _normalize_template_rows
+_IMPL._positive_finite = _positive_finite_real_scalar
+_IMPL._validate_sigma_parameters = _validate_sigma_parameters
 _IMPL.build_track5_uncertainty_ensemble = build_track5_uncertainty_ensemble
 
 for _name in dir(_IMPL):
@@ -255,6 +297,8 @@ globals()["_normalized_sequence_values"] = _normalized_sequence_values
 globals()["_sequence_text_or_none"] = _sequence_text_or_none
 globals()["_normalize_uncertainty_rows"] = _normalize_uncertainty_rows
 globals()["_normalize_template_rows"] = _normalize_template_rows
+globals()["_positive_finite_real_scalar"] = _positive_finite_real_scalar
+globals()["_validate_sigma_parameters"] = _validate_sigma_parameters
 globals()["_validated_estimate_inputs"] = _validated_estimate_inputs
 globals()["_relative_weight_inputs"] = _relative_weight_inputs
 globals()["_rescale_weight_diagnostics"] = _rescale_weight_diagnostics
