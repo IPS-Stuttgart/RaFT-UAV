@@ -21,6 +21,45 @@ def test_source_transform_lookup_is_forward_only_and_prefers_specific_key() -> N
     assert _match_source_transform("sensor_detail_clusters", transforms) is specific
 
 
+def test_source_calibration_rejects_case_insensitive_duplicate_transform_keys() -> None:
+    candidates = CandidateFrame(
+        pd.DataFrame(
+            {
+                "sequence_id": ["seq"],
+                "time_s": [0.0],
+                "source": ["radar"],
+                "track_id": ["track"],
+                "x_m": [1.0],
+                "y_m": [0.0],
+                "z_m": [0.0],
+                "confidence": [1.0],
+            }
+        )
+    )
+    identity = {
+        "linear": np.eye(3).tolist(),
+        "translation_m": [0.0, 0.0, 0.0],
+    }
+    shifted = {
+        "linear": np.eye(3).tolist(),
+        "translation_m": [10.0, 0.0, 0.0],
+    }
+
+    for transforms in (
+        {"radar": identity, "RADAR": shifted},
+        {"RADAR": shifted, "radar": identity},
+    ):
+        payload = {
+            "mode": "source-translation",
+            "transforms": transforms,
+        }
+        with pytest.raises(
+            ValueError,
+            match="ambiguous case-insensitive keys",
+        ):
+            apply_source_calibration_payload(candidates, payload)
+
+
 def test_source_calibration_does_not_apply_specific_transform_to_broad_source() -> None:
     candidates = CandidateFrame(
         pd.DataFrame(
