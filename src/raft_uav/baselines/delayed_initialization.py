@@ -59,20 +59,10 @@ def build_delayed_initial_hypotheses(
         name="initial_velocity_std_mps",
     )
 
-    rf = list(rf_measurements)
+    rf_window = _first_rf_window(rf_measurements, window_s=window_s)
     radar_window = _first_radar_window(radar, window_s=window_s)
     hypotheses: list[InitialHypothesis] = []
-    for measurement in rf:
-        try:
-            vector = np.asarray(
-                getattr(measurement, "vector", []),
-                dtype=float,
-            ).reshape(-1)
-            time_s = float(getattr(measurement, "time_s"))
-        except (AttributeError, TypeError, ValueError, OverflowError):
-            continue
-        if vector.size < 2 or not np.isfinite(time_s) or not np.isfinite(vector).all():
-            continue
+    for time_s, vector in rf_window:
         position_dimension = min(vector.size, len(_POSITION_COLUMNS))
         state = np.zeros(6)
         if vector.size == 6:
@@ -148,6 +138,37 @@ def best_initial_hypothesis(
 
     items = list(hypotheses)
     return min(items, key=lambda item: item.score) if items else None
+
+
+def _first_rf_window(
+    rf_measurements: Iterable[Any],
+    *,
+    window_s: float,
+) -> list[tuple[float, np.ndarray]]:
+    """Return valid RF measurements from the earliest RF initialization window."""
+
+    valid_measurements: list[tuple[float, np.ndarray]] = []
+    for measurement in rf_measurements:
+        try:
+            vector = np.asarray(
+                getattr(measurement, "vector", []),
+                dtype=float,
+            ).reshape(-1)
+            time_s = float(getattr(measurement, "time_s"))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            continue
+        if vector.size < 2 or not np.isfinite(time_s) or not np.isfinite(vector).all():
+            continue
+        valid_measurements.append((time_s, vector))
+
+    if not valid_measurements:
+        return []
+    start = min(time_s for time_s, _ in valid_measurements)
+    return [
+        (time_s, vector)
+        for time_s, vector in valid_measurements
+        if time_s <= start + window_s
+    ]
 
 
 def _first_radar_window(radar: pd.DataFrame, *, window_s: float) -> pd.DataFrame:
