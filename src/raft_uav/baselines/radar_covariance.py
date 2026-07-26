@@ -362,14 +362,26 @@ def _add_bias_residual_uncertainty(
 
 
 def _truthy(value: object) -> bool:
+    """Return whether a serialized covariance flag is canonically true.
+
+    The flag suppresses residual-variance addition, so malformed values must fail
+    closed: only native booleans, numeric one, and established true strings count
+    as true.  This avoids both underestimating covariance and crashing on values
+    such as infinity.
+    """
+
     if isinstance(value, (bool, np.bool_)):
         return bool(value)
     if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "y", "on"}:
+            return True
+        value = normalized
     try:
-        return bool(int(value))
-    except (TypeError, ValueError):
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
         return False
+    return bool(np.isfinite(number) and number == 1.0)
 
 
 def _regularized_covariance(
