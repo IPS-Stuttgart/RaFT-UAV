@@ -36,6 +36,31 @@ class _SequencePreservingPandasProxy:
         return _read_csv_preserving_sequence_id(path, *args, **kwargs)
 
 
+def _normalized_unique_columns(columns: Any) -> list[str]:
+    """Strip header whitespace and reject names that become indistinguishable."""
+
+    original = [str(column) for column in columns]
+    normalized = [column.strip() for column in original]
+    sources_by_name: dict[str, list[str]] = {}
+    for source, target in zip(original, normalized):
+        sources_by_name.setdefault(target, []).append(source)
+    collisions = {
+        target: sources
+        for target, sources in sources_by_name.items()
+        if len(sources) > 1
+    }
+    if collisions:
+        rendered = "; ".join(
+            f"{target!r} <- {', '.join(repr(source) for source in sources)}"
+            for target, sources in collisions.items()
+        )
+        raise ValueError(
+            "CSV contains ambiguous columns after trimming whitespace: "
+            f"{rendered}"
+        )
+    return normalized
+
+
 def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
     dtype_arg = kwargs.pop("dtype", None)
     converters = dict(kwargs.pop("converters", {}) or {})
@@ -59,7 +84,7 @@ def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
         kwargs["converters"] = converters
     rows = _ORIGINAL_READ_CSV(path, *args, **kwargs)
     out = rows.copy()
-    out.columns = [str(column).strip() for column in out.columns]
+    out.columns = _normalized_unique_columns(out.columns)
     return out
 
 
