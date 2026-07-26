@@ -59,10 +59,46 @@ def _parse_official_truth_classification_cell(value: Any) -> int:
     return parser(value)
 
 
-def _official_track5_column_map(frame: pd.DataFrame) -> dict[str, Any]:
-    """Map official Track 5 columns after trimming common CSV header whitespace."""
+def _normalized_official_track5_header(column: Any) -> str:
+    return str(column).strip().lower()
 
-    return {str(column).strip().lower(): column for column in frame.columns}
+
+def _validate_unique_official_track5_headers(columns: Any) -> None:
+    """Reject ambiguous official fields before order-dependent lookup."""
+
+    required = {
+        _normalized_official_track5_header(column)
+        for column in _submission_impl.OFFICIAL_UG2_RESULT_COLUMNS
+    }
+    physical_by_key: dict[str, list[str]] = {}
+    for column in columns:
+        key = _normalized_official_track5_header(column)
+        if key in required:
+            physical_by_key.setdefault(key, []).append(str(column))
+    collisions = {
+        key: physical
+        for key, physical in physical_by_key.items()
+        if len(physical) > 1
+    }
+    if collisions:
+        details = ", ".join(
+            f"{key!r}: {physical!r}"
+            for key, physical in sorted(collisions.items())
+        )
+        raise ValueError(
+            "official MMUAD results contain ambiguous columns after trimming "
+            f"whitespace and ignoring case: {details}"
+        )
+
+
+def _official_track5_column_map(frame: pd.DataFrame) -> dict[str, Any]:
+    """Map official Track 5 columns after rejecting normalized collisions."""
+
+    _validate_unique_official_track5_headers(frame.columns)
+    return {
+        _normalized_official_track5_header(column): column
+        for column in frame.columns
+    }
 
 
 def _has_official_track5_columns(frame: pd.DataFrame) -> bool:
@@ -184,9 +220,35 @@ def _evaluate_nearest_time_results(
     )
 
 
+def _read_physical_results_headers(source: Any) -> list[str]:
+    """Read the unmangled first CSV row and restore reusable streams."""
+
+    position: int | None = None
+    if hasattr(source, "tell") and hasattr(source, "seek"):
+        try:
+            position = int(source.tell())
+        except (OSError, TypeError, ValueError):
+            position = None
+    try:
+        header = pd.read_csv(
+            source,
+            dtype=str,
+            keep_default_na=False,
+            header=None,
+            nrows=1,
+        )
+    finally:
+        if position is not None:
+            source.seek(position)
+    if header.empty:
+        return []
+    return [str(value) for value in header.iloc[0].tolist()]
+
+
 def _read_results_csv_preserving_text(source: Any) -> pd.DataFrame:
     """Read evaluator CSV inputs without coercing ids or keeping padded headers."""
 
+    _validate_unique_official_track5_headers(_read_physical_results_headers(source))
     try:
         frame = pd.read_csv(source, dtype=str, keep_default_na=False)
     except TypeError:
@@ -325,10 +387,13 @@ for _name in dir(_IMPL):
 
 globals()["_parse_official_result_classification_cell"] = _parse_official_result_classification_cell
 globals()["_parse_official_truth_classification_cell"] = _parse_official_truth_classification_cell
+globals()["_normalized_official_track5_header"] = _normalized_official_track5_header
+globals()["_validate_unique_official_track5_headers"] = _validate_unique_official_track5_headers
 globals()["_official_track5_column_map"] = _official_track5_column_map
 globals()["_normalize_local_result_sequence_ids"] = _normalize_local_result_sequence_ids
 globals()["_validated_max_time_delta_s"] = _validated_max_time_delta_s
 globals()["_evaluate_nearest_time_results"] = _evaluate_nearest_time_results
+globals()["_read_physical_results_headers"] = _read_physical_results_headers
 globals()["_read_results_csv_preserving_text"] = _read_results_csv_preserving_text
 globals()["_evaluate_public_track5_timestamp_aligned"] = (
     _evaluate_public_track5_timestamp_aligned
