@@ -8,7 +8,12 @@ from typing import Any
 import numpy as np
 
 
-def _finite_real_scalar(value: object, *, name: str) -> float:
+def _finite_real_scalar(
+    value: object,
+    *,
+    name: str,
+    nonfinite_error: str | None = None,
+) -> float:
     """Return a finite real scalar without Boolean or array coercion."""
 
     error = f"{name} must be a finite real scalar"
@@ -25,7 +30,7 @@ def _finite_real_scalar(value: object, *, name: str) -> float:
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(error) from exc
     if not np.isfinite(number):
-        raise ValueError(error)
+        raise ValueError(nonfinite_error or error)
     return number
 
 
@@ -50,7 +55,11 @@ def _validated_coefficients(values: object) -> tuple[object, ...]:
             "coefficients must be a sequence of finite real scalars"
         ) from exc
     for index, value in enumerate(coefficients):
-        _finite_real_scalar(value, name=f"coefficients[{index}]")
+        _finite_real_scalar(
+            value,
+            name=f"coefficients[{index}]",
+            nonfinite_error="variance head coefficients must be finite numbers",
+        )
     return coefficients
 
 
