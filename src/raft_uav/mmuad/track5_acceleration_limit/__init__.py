@@ -169,37 +169,6 @@ def _validate_sequence_ids(submission: object) -> None:
         )
 
 
-def _validate_classification_values(submission: object) -> None:
-    """Reject class labels outside the official Track 5 domain before repair."""
-
-    rows = pd.DataFrame(submission).copy()
-    classification_columns = [
-        column
-        for column in rows.columns
-        if str(column).strip().casefold() == "classification"
-    ]
-    if len(classification_columns) != 1:
-        return
-
-    values = rows[classification_columns[0]]
-    if isinstance(values, pd.DataFrame):
-        return
-
-    invalid: list[str] = []
-    for position, value in enumerate(values.tolist()):
-        try:
-            parse_official_classification_cell(value)
-        except (TypeError, ValueError, OverflowError) as exc:
-            invalid.append(f"{position}:{value!r} ({exc})")
-    if invalid:
-        preview = "; ".join(invalid[:5])
-        suffix = f"; {len(invalid) - 5} more" if len(invalid) > 5 else ""
-        raise ValueError(
-            "submission contains invalid Classification values at rows "
-            f"{preview}{suffix}"
-        )
-
-
 def _validate_numeric_rows(submission: object) -> None:
     """Reject normalized rows the legacy normalizer would silently drop."""
 
@@ -229,6 +198,32 @@ def _validate_numeric_rows(submission: object) -> None:
             "submission contains non-finite numeric values: "
             + "; ".join(nonfinite_invalid)
         )
+
+
+def _validate_and_normalize_classifications(rows: pd.DataFrame) -> pd.DataFrame:
+    """Return rows with canonical official Track 5 class IDs."""
+
+    normalized = rows.copy()
+    parsed: list[int] = []
+    invalid: list[str] = []
+    for row_index, value in normalized["Classification"].items():
+        try:
+            parsed.append(parse_official_classification_cell(value))
+        except (TypeError, ValueError, OverflowError) as exc:
+            invalid.append(f"{row_index}:{value!r} ({exc})")
+    if invalid:
+        preview = "; ".join(invalid[:5])
+        suffix = f"; {len(invalid) - 5} more" if len(invalid) > 5 else ""
+        raise ValueError(
+            "submission contains invalid Classification values at rows "
+            f"{preview}{suffix}"
+        )
+    normalized["Classification"] = pd.Series(
+        parsed,
+        index=normalized.index,
+        dtype=int,
+    )
+    return normalized
 
 
 def _validate_unique_fixed_grid_keys(rows: pd.DataFrame) -> None:
@@ -281,9 +276,9 @@ def repair_track5_acceleration_kinks(
         repair_blend=repair_blend,
     )
     _validate_sequence_ids(submission)
-    _validate_classification_values(submission)
     _validate_numeric_rows(submission)
     normalized = _IMPL._normalized_submission(submission)
+    normalized = _validate_and_normalize_classifications(normalized)
     _validate_unique_fixed_grid_keys(normalized)
     return _ORIGINAL_REPAIR(normalized, **controls)
 
@@ -329,8 +324,10 @@ globals()["_finite_scalar"] = _finite_scalar
 globals()["_positive_integer"] = _positive_integer
 globals()["_validated_controls"] = _validated_controls
 globals()["_validate_sequence_ids"] = _validate_sequence_ids
-globals()["_validate_classification_values"] = _validate_classification_values
 globals()["_validate_numeric_rows"] = _validate_numeric_rows
+globals()["_validate_and_normalize_classifications"] = (
+    _validate_and_normalize_classifications
+)
 globals()["_validate_unique_fixed_grid_keys"] = _validate_unique_fixed_grid_keys
 globals()["repair_track5_acceleration_kinks"] = repair_track5_acceleration_kinks
 globals()["_repair_sequence"] = _repair_sequence
