@@ -6,8 +6,6 @@ import argparse
 import json
 from pathlib import Path
 
-import pandas as pd
-
 from raft_uav.mmuad.candidate_temporal_consensus_train_cv import (
     _DEFAULT_SELECTION_METRIC,
     _DEFAULT_TOP_K,
@@ -15,7 +13,7 @@ from raft_uav.mmuad.candidate_temporal_consensus_train_cv import (
     _parse_float_grid,
     select_temporal_consensus_config_by_sequence_cv,
 )
-from raft_uav.mmuad.io import load_candidate_file
+from raft_uav.mmuad.io import load_candidate_file, load_truth_csv
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -49,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
 
     top_k_values = tuple(args.top_k) if args.top_k is not None else _DEFAULT_TOP_K
     candidates = load_candidate_file(args.candidate_csv).rows
-    truth = pd.read_csv(args.truth_csv)
+    truth = load_truth_csv(args.truth_csv).rows
     selected, folds, grid, selected_candidates = select_temporal_consensus_config_by_sequence_cv(
         candidates,
         truth,
