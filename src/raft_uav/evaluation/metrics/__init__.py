@@ -7,8 +7,9 @@ endpoint, regardless of whether a maximum time-delta gate is configured. The
 same endpoint rule is applied to both truth-grid metrics and paper-table
 interpolation at estimate timestamps. Non-finite and masked nearest-time queries
 are rejected, masked reference timestamps are ignored, masked trajectory samples
-are excluded, masked interpolation queries are returned as invalid, and complex
-trajectory values are rejected before NumPy can discard their imaginary parts.
+are excluded, masked interpolation queries are returned as invalid, masked error
+summary entries are ignored, and complex metric values are rejected before NumPy
+can discard their imaginary parts.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ _ORIGINAL_NEAREST_TIME_INDICES = _IMPL.nearest_time_indices
 _ORIGINAL_VALIDATE_MAX_TIME_DELTA_S = _IMPL._validate_max_time_delta_s
 _ORIGINAL_PREPARE_TIME_POSITION_SAMPLES = _IMPL._prepare_time_position_samples
 _ORIGINAL_INTERPOLATE_POSITIONS_AT_TIMES = _IMPL.interpolate_positions_at_times
+_ORIGINAL_SUMMARIZE_ERRORS = _IMPL.summarize_errors
 
 
 def _reject_complex_values(value: object, *, name: str) -> None:
@@ -209,6 +211,17 @@ def _interpolate_positions_at_times_with_symmetric_tolerance(
     return interpolated, valid | endpoint_equivalent
 
 
+def _summarize_errors_without_masked(
+    errors_m: np.ndarray,
+) -> dict[str, float | None]:
+    """Summarize visible finite errors without exposing masked backing values."""
+
+    _reject_complex_values(errors_m, name="errors_m")
+    masked_errors = np.ma.asarray(errors_m, dtype=float)
+    errors = np.asarray(masked_errors.filled(np.nan), dtype=float)
+    return _ORIGINAL_SUMMARIZE_ERRORS(errors)
+
+
 _IMPL._validate_max_time_delta_s = _validate_max_time_delta_s_without_masked
 _IMPL._prepare_time_position_samples = _prepare_time_position_samples_without_masked
 _IMPL.nearest_time_indices = _nearest_time_indices_with_finite_queries
@@ -216,6 +229,7 @@ _IMPL._truth_grid_with_estimate_support = _truth_grid_with_symmetric_tolerance
 _IMPL.interpolate_positions_at_times = (
     _interpolate_positions_at_times_with_symmetric_tolerance
 )
+_IMPL.summarize_errors = _summarize_errors_without_masked
 
 globals().update(
     {
