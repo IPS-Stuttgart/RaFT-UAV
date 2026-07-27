@@ -90,13 +90,21 @@ def _select_radar_measurement_rows(
     )
 
 
-def install() -> None:
-    """Install sequence-scoped cat-probability selection once per interpreter."""
+def _install_class_probability_label_validation() -> None:
+    from raft_uav.mmuad._class_probability_label_validation_patch import (
+        install as install_label_validation,
+    )
 
-    if getattr(_aerpaw, "_catprob_sequence_patch_applied", False):
-        return
-    _aerpaw.select_radar_measurement_rows = _select_radar_measurement_rows
-    legacy = getattr(_aerpaw, "_IMPL", None)
-    if legacy is not None:
-        legacy.select_radar_measurement_rows = _select_radar_measurement_rows
-    _aerpaw._catprob_sequence_patch_applied = True
+    install_label_validation()
+
+
+def install() -> None:
+    """Install class-probability runtime fixes once per interpreter."""
+
+    if not getattr(_aerpaw, "_catprob_sequence_patch_applied", False):
+        _aerpaw.select_radar_measurement_rows = _select_radar_measurement_rows
+        legacy = getattr(_aerpaw, "_IMPL", None)
+        if legacy is not None:
+            legacy.select_radar_measurement_rows = _select_radar_measurement_rows
+        _aerpaw._catprob_sequence_patch_applied = True
+    _install_class_probability_label_validation()
