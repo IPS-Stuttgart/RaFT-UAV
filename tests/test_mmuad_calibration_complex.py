@@ -86,3 +86,24 @@ def test_rigid_transform_keeps_object_wrapped_real_values() -> None:
 
     np.testing.assert_allclose(transform.rotation, np.eye(3))
     np.testing.assert_allclose(transform.translation_m, [1.0, 2.0, 3.0])
+
+
+def test_mapping_keeps_opencv_style_real_matrix() -> None:
+    payload = {
+        "sensors": {
+            "camera": {
+                "rotation_matrix": {
+                    "data": np.eye(3).reshape(-1).tolist(),
+                    "rows": 3,
+                    "cols": 3,
+                },
+                "translation_m": [1.0, 2.0, 3.0],
+            }
+        }
+    }
+
+    calibration = calibration_from_mapping(payload)
+    transform = calibration.sensors["camera"].transform_sensor_to_world
+
+    np.testing.assert_allclose(transform.rotation, np.eye(3))
+    np.testing.assert_allclose(transform.translation_m, [1.0, 2.0, 3.0])
