@@ -152,7 +152,7 @@ def adaptive_process_noise_from_environment(
         return None
     return RollingNISAdaptiveAcceleration(
         AdaptiveProcessNoiseConfig(
-            base_acceleration_std_mps2=float(base_acceleration_std_mps2),
+            base_acceleration_std_mps2=base_acceleration_std_mps2,
             min_scale=_env_float(ENV_ADAPTIVE_PROCESS_NOISE_MIN_SCALE, 0.35),
             max_scale=_env_float(ENV_ADAPTIVE_PROCESS_NOISE_MAX_SCALE, 4.0),
             ewma_alpha=_env_float(ENV_ADAPTIVE_PROCESS_NOISE_EWMA_ALPHA, 0.05),

@@ -3,7 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from raft_uav.baselines.adaptive_process_noise import AdaptiveProcessNoiseConfig
+from raft_uav.baselines.adaptive_process_noise import (
+    ENV_ADAPTIVE_PROCESS_NOISE,
+    AdaptiveProcessNoiseConfig,
+    adaptive_process_noise_from_environment,
+)
 
 
 @pytest.mark.parametrize(
@@ -16,6 +20,20 @@ def test_adaptive_process_noise_rejects_invalid_base_acceleration(value: object)
         match="base_acceleration_std_mps2 must be a finite positive real scalar",
     ):
         AdaptiveProcessNoiseConfig(base_acceleration_std_mps2=value)
+
+
+@pytest.mark.parametrize("value", [True, np.bool_(True), "4.0"])
+def test_environment_factory_preserves_base_acceleration_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    value: object,
+) -> None:
+    monkeypatch.setenv(ENV_ADAPTIVE_PROCESS_NOISE, "1")
+
+    with pytest.raises(
+        ValueError,
+        match="base_acceleration_std_mps2 must be a finite positive real scalar",
+    ):
+        adaptive_process_noise_from_environment(base_acceleration_std_mps2=value)
 
 
 def test_adaptive_process_noise_validates_threshold_order_at_config_boundary() -> None:
