@@ -35,6 +35,7 @@ _ORIGINAL_CANDIDATE_ROWS_WITH_OPTIONAL_DEFAULTS = (
 )
 _ORIGINAL_CANDIDATE_MOBILITY = _LEGACY._candidate_mobility
 _ORIGINAL_SELECT_TRACKLET_PATH = _LEGACY.select_tracklet_path
+_ORIGINAL_RUN_MMUAD_TRACKER = _LEGACY.run_mmuad_tracker
 _TRACKER_NUMERIC_COLUMNS = (
     "time_s",
     "x_m",
@@ -73,6 +74,19 @@ _FILTER_HELPER_COLUMNS = (
     "_std_xy_sort_key",
     "_std_z_sort_key",
 )
+
+
+def run_mmuad_tracker(candidates, truth=None, *, config=None):
+    """Run the tracker without silently replacing invalid falsy configurations."""
+
+    resolved_config = TrackerConfig() if config is None else config
+    if not isinstance(resolved_config, TrackerConfig):
+        raise TypeError("config must be a TrackerConfig or None")
+    return _ORIGINAL_RUN_MMUAD_TRACKER(
+        candidates,
+        truth,
+        config=resolved_config,
+    )
 
 
 def _candidate_rows_with_optional_defaults(rows: pd.DataFrame) -> pd.DataFrame:
@@ -298,5 +312,6 @@ def add_truth_errors(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFra
 _LEGACY._candidate_rows_with_optional_defaults = _candidate_rows_with_optional_defaults
 _LEGACY._candidate_mobility = _candidate_mobility
 _LEGACY.select_tracklet_path = select_tracklet_path
+_LEGACY.run_mmuad_tracker = run_mmuad_tracker
 _LEGACY._run_sequence_filter = _run_sequence_filter
 _LEGACY.add_truth_errors = add_truth_errors
