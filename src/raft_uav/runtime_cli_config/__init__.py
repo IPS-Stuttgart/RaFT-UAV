@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling ``runtime_cli_config.py``
 module. This package preserves the public import path while rejecting malformed
-integer and floating-point controls before ``int(...)`` or ``float(...)`` can
-truncate, unwrap, or otherwise coerce them.
+integer, floating-point, choice, and Boolean controls before coercion can alter
+their meaning.
 """
 
 from __future__ import annotations
@@ -26,6 +26,8 @@ if _SPEC is None or _SPEC.loader is None:
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+
+_ORIGINAL_RUNTIME_CONFIG_FROM_ARGS = _IMPL.runtime_config_from_args
 
 
 def _runtime_option_from_token(token: str) -> str | None:
@@ -168,12 +170,39 @@ def _nonnegative_int(value: object, name: str) -> int:
     return _validated_integer(value, name, minimum=0, qualifier="nonnegative")
 
 
+def _boolean_scalar(value: object, name: str) -> bool:
+    """Return a native Boolean without accepting truthy non-Boolean values."""
+
+    if not isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be a Boolean scalar")
+    return bool(value)
+
+
+def runtime_config_from_args(args: object):
+    """Build runtime configuration after validating choice and Boolean controls."""
+
+    mode = _IMPL._choice(
+        getattr(args, "radar_covariance_mode"),
+        _IMPL.RADAR_COVARIANCE_MODES,
+        "radar_covariance_mode",
+    )
+    disable_rf_anchor = _boolean_scalar(
+        getattr(args, "disable_tracklet_rf_anchor"),
+        "disable_tracklet_rf_anchor",
+    )
+    config = _ORIGINAL_RUNTIME_CONFIG_FROM_ARGS(args)
+    config["radar_covariance"]["mode"] = mode
+    config["tracklet_viterbi"]["use_rf_anchor"] = not disable_rf_anchor
+    return config
+
+
 _IMPL._runtime_option_from_token = _runtime_option_from_token
 _IMPL.runtime_environment_names_from_argv = runtime_environment_names_from_argv
 _IMPL._runtime_passthrough_arguments = _runtime_passthrough_arguments
 _IMPL._finite_float = _finite_float
 _IMPL._positive_int = _positive_int
 _IMPL._nonnegative_int = _nonnegative_int
+_IMPL.runtime_config_from_args = runtime_config_from_args
 
 globals().update(
     {
@@ -188,6 +217,8 @@ globals()["_runtime_passthrough_arguments"] = _runtime_passthrough_arguments
 globals()["_finite_float"] = _finite_float
 globals()["_positive_int"] = _positive_int
 globals()["_nonnegative_int"] = _nonnegative_int
+globals()["_boolean_scalar"] = _boolean_scalar
+globals()["runtime_config_from_args"] = runtime_config_from_args
 
 __doc__ = _IMPL.__doc__
 __all__ = [
