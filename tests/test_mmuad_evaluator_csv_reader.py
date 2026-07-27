@@ -9,6 +9,7 @@ from raft_uav.mmuad.evaluator import (
     evaluate_mmaud_results,
     load_mmaud_results_csv,
     load_mmaud_results_file,
+    validate_mmaud_results_frame,
 )
 
 
@@ -33,6 +34,42 @@ def test_mmaud_evaluator_loader_strips_normalized_csv_headers(tmp_path) -> None:
         "score",
     ]
     assert float(rows.loc[0, "x"]) == pytest.approx(1.0)
+
+
+def test_mmaud_evaluator_rejects_ambiguous_programmatic_official_headers() -> None:
+    frame = pd.DataFrame(
+        [["expected", "wrong", 0.0, "(1.0,2.0,3.0)", 2]],
+        columns=[
+            "Sequence",
+            " sequence ",
+            "Timestamp",
+            "Position",
+            "Classification",
+        ],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"ambiguous columns.*'sequence'",
+    ):
+        validate_mmaud_results_frame(frame)
+
+
+def test_mmaud_evaluator_rejects_exact_duplicate_physical_official_headers(
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "mmaud_results.csv"
+    csv_path.write_text(
+        "Sequence,Sequence,Timestamp,Position,Classification\n"
+        'expected,wrong,0.0,"(1.0,2.0,3.0)",2\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"ambiguous columns.*'sequence'",
+    ):
+        load_mmaud_results_csv(csv_path)
 
 
 def test_mmaud_evaluator_zip_preserves_zero_padded_official_sequence_ids(tmp_path) -> None:
