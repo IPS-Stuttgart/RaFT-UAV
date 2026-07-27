@@ -3,9 +3,10 @@
 The maintained implementation lives in the sibling ``radar_association.py``
 module. This package preserves the public import path while rejecting non-finite
 numeric parameters and malformed integer controls before they can create NaN/Inf
-tracker state, covariance values, or silently truncated association settings, and
+tracker state, covariance values, or silently truncated association settings,
 initializes track-bank state from supported position-plus-velocity bootstrap
-measurements without a shape mismatch.
+measurements without a shape mismatch, and preserves radar frames when
+``frame_index`` is only partially populated.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_RUN_ASYNC_CV_BASELINE_WITH_RADAR_ASSOCIATION = (
     _IMPL.run_async_cv_baseline_with_radar_association
 )
+_ORIGINAL_RADAR_FRAME_GROUPS = _IMPL._radar_frame_groups
 _RUN_SIGNATURE = inspect.signature(
     _ORIGINAL_RUN_ASYNC_CV_BASELINE_WITH_RADAR_ASSOCIATION
 )
@@ -112,6 +114,26 @@ def run_async_cv_baseline_with_radar_association(*args: Any, **kwargs: Any) -> A
         *bound.args,
         **bound.kwargs,
     )
+
+
+def _radar_frame_groups(radar: Any) -> list[Any]:
+    """Group by complete frame indices, otherwise preserve all timestamp frames."""
+
+    if (
+        radar.empty
+        or "frame_index" not in radar.columns
+        or bool(radar["frame_index"].notna().all())
+    ):
+        return _ORIGINAL_RADAR_FRAME_GROUPS(radar)
+
+    ordered = radar.sort_values(
+        [
+            column
+            for column in ("time_s", "frame_index", "track_id", "track_index")
+            if column in radar.columns
+        ]
+    ).reset_index(drop=True)
+    return [group.copy() for _, group in ordered.groupby("time_s", sort=True, dropna=False)]
 
 
 def _initial_mht_tracker(
@@ -232,6 +254,7 @@ def _require_positive_integer(name: str, value: Any) -> int:
 _IMPL.run_async_cv_baseline_with_radar_association = (
     run_async_cv_baseline_with_radar_association
 )
+_IMPL._radar_frame_groups = _radar_frame_groups
 _IMPL._initial_mht_tracker = _initial_mht_tracker
 
 globals().update(
@@ -244,6 +267,7 @@ globals().update(
 globals()["run_async_cv_baseline_with_radar_association"] = (
     run_async_cv_baseline_with_radar_association
 )
+globals()["_radar_frame_groups"] = _radar_frame_groups
 globals()["_initial_mht_tracker"] = _initial_mht_tracker
 globals()["_validate_radar_association_parameters"] = (
     _validate_radar_association_parameters
