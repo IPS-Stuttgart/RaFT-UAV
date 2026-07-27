@@ -109,6 +109,8 @@ def read_estimate_csv(path: Path) -> pd.DataFrame:
 
 def _strip_column_names(rows: pd.DataFrame) -> pd.DataFrame:
     out = rows.copy()
+    if not all(isinstance(column, str) for column in out.columns):
+        return out
     out.columns = _normalized_estimate_csv_columns(out.columns)
     return out
 
