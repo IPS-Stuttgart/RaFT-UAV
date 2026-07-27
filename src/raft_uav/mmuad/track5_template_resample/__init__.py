@@ -33,7 +33,7 @@ def _normalize_optional_nonnegative_float(value: Any, *, field: str) -> float | 
     if value is None:
         return None
     message = f"{field} must be a finite non-negative number"
-    if isinstance(value, (bool, np.bool_)):
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
         raise ValueError(message)
     if isinstance(value, np.ndarray):
         if value.ndim != 0:
