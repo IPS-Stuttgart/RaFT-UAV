@@ -43,7 +43,7 @@ _NUMERIC_COLUMNS = (
 
 
 def _finite_scalar(value: object, *, message: str) -> float:
-    """Return one finite, non-Boolean scalar value."""
+    """Return one finite, non-Boolean, real scalar value."""
 
     if np.ma.is_masked(value):
         raise ValueError(message)
@@ -54,7 +54,11 @@ def _finite_scalar(value: object, *, message: str) -> float:
         scalar = value.item()
     elif isinstance(value, np.generic):
         scalar = value.item()
-    if np.ma.is_masked(scalar) or isinstance(scalar, (bool, np.bool_)):
+    if (
+        np.ma.is_masked(scalar)
+        or isinstance(scalar, (bool, np.bool_))
+        or isinstance(scalar, (complex, np.complexfloating))
+    ):
         raise ValueError(message)
     try:
         numeric = float(scalar)
