@@ -11,19 +11,13 @@ permissions:
 jobs:
   focused-tests:
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install package
-        run: python -m pip install --quiet -e ".[dev]"
-      - name: Run focused tests
-        run: >-
-          python -m pytest -q
-          tests/test_kalman_baseline.py
-          tests/test_kalman_measurement_array_validation.py
+      - name: Clone, install, and run focused tests
+        run: |
+          git clone --quiet --depth 1 --branch agent/reject-lossy-kalman-measurements \
+            https://github.com/IPS-Stuttgart/RaFT-UAV.git repo
+          cd repo
+          python -m pip install --quiet -e ".[dev]"
+          python -m pytest -vv --tb=short \
+            tests/test_kalman_baseline.py \
+            tests/test_kalman_measurement_array_validation.py
