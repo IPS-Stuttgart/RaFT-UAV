@@ -3,9 +3,10 @@
 The maintained implementation lives in the sibling
 ``oracle_gap_decomposition.py`` module. This package preserves the public import
 path while keeping estimate columns, row order, and invalid-time rows intact
-when selected-radar context is attached, preventing non-finite frame times from
-matching arbitrary truth or estimate rows, requiring exact integer radar track
-identifiers in diagnostic outputs, and rejecting invalid oracle-gap thresholds.
+when selected-radar context is attached, preserving partially indexed radar
+frames, preventing non-finite frame times from matching arbitrary truth or
+estimate rows, requiring exact integer radar track identifiers in diagnostic
+outputs, and rejecting invalid oracle-gap thresholds.
 """
 
 from __future__ import annotations
@@ -63,6 +64,40 @@ def _oracle_gap_config_post_init(config: object) -> None:
             raise ValueError(f"{name} must be a finite number")
         if value <= 0.0:
             raise ValueError(f"{name} must be positive")
+
+
+def _radar_frame_groups(radar: pd.DataFrame) -> list[pd.DataFrame]:
+    """Group indexed frames exactly and fall back per row to finite timestamps."""
+
+    if radar.empty:
+        return []
+    sort_columns = [
+        column
+        for column in ("time_s", "frame_index", "track_id", "track_index")
+        if column in radar.columns
+    ]
+    ordered = radar.sort_values(sort_columns).reset_index(drop=True)
+    times = pd.to_numeric(ordered["time_s"], errors="coerce")
+    if "frame_index" in ordered.columns:
+        frame_indices = pd.to_numeric(ordered["frame_index"], errors="coerce")
+    else:
+        frame_indices = pd.Series(np.nan, index=ordered.index, dtype=float)
+    group_keys = pd.Series(
+        [
+            ("frame_index", float(frame_index))
+            if np.isfinite(frame_index)
+            else ("time_s", float(time_s))
+            if np.isfinite(time_s)
+            else None
+            for frame_index, time_s in zip(frame_indices, times, strict=True)
+        ],
+        index=ordered.index,
+        dtype=object,
+    )
+    usable = group_keys.notna()
+    ordered = ordered.loc[usable]
+    group_keys = group_keys.loc[usable]
+    return [group.copy() for _, group in ordered.groupby(group_keys, sort=False)]
 
 
 @wraps(_ORIGINAL_DECOMPOSE_RADAR_ORACLE_GAP)
@@ -244,6 +279,7 @@ def _optional_track_id(value: object) -> object:
 
 _IMPL.OracleGapConfig.__post_init__ = _oracle_gap_config_post_init
 _IMPL.decompose_radar_oracle_gap = decompose_radar_oracle_gap
+_IMPL._radar_frame_groups = _radar_frame_groups
 _IMPL._nearest_position = _nearest_position
 _IMPL._nearest_estimate_error = _nearest_estimate_error
 _IMPL._merge_selected_context = _merge_selected_context
@@ -258,6 +294,7 @@ globals().update(
     }
 )
 globals()["decompose_radar_oracle_gap"] = decompose_radar_oracle_gap
+globals()["_radar_frame_groups"] = _radar_frame_groups
 globals()["_nearest_position"] = _nearest_position
 globals()["_nearest_estimate_error"] = _nearest_estimate_error
 globals()["_merge_selected_context"] = _merge_selected_context
