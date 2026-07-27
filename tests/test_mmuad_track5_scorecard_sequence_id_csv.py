@@ -61,3 +61,27 @@ def test_scorecard_optional_csvs_preserve_numeric_sequence_identifiers(
 
     regret = build_candidate_regret_summary(gap)
     assert regret.loc[0, "sequence"] == "0001"
+
+
+def test_scorecard_optional_csvs_preserve_na_like_sequence_identifiers(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "na_like_ids.csv"
+    path.write_text(
+        "sequence_id,sequence,Sequence,value\n"
+        "NA,null,N/A,\n"
+        ",,NA,2\n",
+        encoding="utf-8",
+    )
+
+    loaded = _load_optional_csv(path)
+
+    assert loaded is not None
+    assert loaded.loc[0, "sequence_id"] == "NA"
+    assert loaded.loc[0, "sequence"] == "null"
+    assert loaded.loc[0, "Sequence"] == "N/A"
+    assert str(loaded["sequence_id"].dtype).startswith("string")
+    assert pd.isna(loaded.loc[0, "value"])
+    assert pd.isna(loaded.loc[1, "sequence_id"])
+    assert pd.isna(loaded.loc[1, "sequence"])
+    assert loaded.loc[1, "Sequence"] == "NA"

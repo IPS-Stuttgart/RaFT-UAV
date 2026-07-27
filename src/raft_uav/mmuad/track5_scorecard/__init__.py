@@ -52,6 +52,12 @@ _FALSE_BOOL_TEXT = frozenset(
 )
 
 
+def _opaque_sequence_identifier(value: str) -> object:
+    """Preserve identifier text while retaining blank-field missingness."""
+
+    return pd.NA if value == "" else value
+
+
 def _load_optional_csv(path: Path | None) -> pd.DataFrame | None:
     """Load optional scorecard diagnostics while preserving opaque IDs."""
 
@@ -59,12 +65,18 @@ def _load_optional_csv(path: Path | None) -> pd.DataFrame | None:
         return None
 
     columns = pd.read_csv(path, nrows=0).columns
-    identifier_dtypes = {
-        name: dtype
-        for name, dtype in _SEQUENCE_IDENTIFIER_DTYPES.items()
-        if name in columns
-    }
-    return pd.read_csv(path, dtype=identifier_dtypes)
+    identifier_columns = [
+        name for name in _SEQUENCE_IDENTIFIER_DTYPES if name in columns
+    ]
+    frame = pd.read_csv(
+        path,
+        converters={
+            name: _opaque_sequence_identifier for name in identifier_columns
+        },
+    )
+    for name in identifier_columns:
+        frame[name] = frame[name].astype(_SEQUENCE_IDENTIFIER_DTYPES[name])
+    return frame
 
 
 def _bool_series(values: Any) -> pd.Series:
