@@ -21,6 +21,7 @@ from zipfile import ZipFile
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.class_probability_context import OFFICIAL_CLASS_LABELS
 from raft_uav.mmuad.class_probability_context import _predicted_class_labels
 from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
@@ -389,6 +390,21 @@ def _normalize_internal_submission_rows(rows: pd.DataFrame, *, source_path: Path
     classification_column = _normalized_classification_column(lookup)
     if classification_column is None:
         raise ValueError(f"{source_path} missing normalized Classification/classification column")
+
+    normalized_classifications = _predicted_class_labels(frame[classification_column])
+    valid_classifications = normalized_classifications.isin(OFFICIAL_CLASS_LABELS)
+    if not bool(valid_classifications.all()):
+        invalid_values = sorted(
+            {repr(value) for value in frame.loc[~valid_classifications, classification_column]}
+        )
+        sample = ", ".join(invalid_values[:5])
+        suffix = ", ..." if len(invalid_values) > 5 else ""
+        allowed = ", ".join(OFFICIAL_CLASS_LABELS)
+        raise ValueError(
+            f"invalid Track 5 Classification values in {source_path}: expected integer class "
+            f"IDs {{{allowed}}}; got {sample}{suffix}"
+        )
+
     out = pd.DataFrame(
         {
             "sequence_id": frame[lookup["sequence_id"]].astype(str),
@@ -396,16 +412,21 @@ def _normalize_internal_submission_rows(rows: pd.DataFrame, *, source_path: Path
             "state_x_m": pd.to_numeric(frame[lookup["state_x_m"]], errors="coerce"),
             "state_y_m": pd.to_numeric(frame[lookup["state_y_m"]], errors="coerce"),
             "state_z_m": pd.to_numeric(frame[lookup["state_z_m"]], errors="coerce"),
-            "Classification": pd.to_numeric(frame[classification_column], errors="coerce"),
+            "Classification": normalized_classifications.astype(int).to_numpy(),
         }
     )
-    finite = np.isfinite(
-        out[["time_s", "state_x_m", "state_y_m", "state_z_m", "Classification"]].to_numpy(float)
-    ).all(axis=1)
-    out = out.loc[finite].copy()
     if out.empty:
-        raise ValueError(f"{source_path} contains no finite normalized submission rows")
-    out["Classification"] = out["Classification"].astype(int)
+        raise ValueError(f"{source_path} contains no normalized submission rows")
+
+    numeric_columns = ["time_s", "state_x_m", "state_y_m", "state_z_m"]
+    finite = np.isfinite(out[numeric_columns].to_numpy(float)).all(axis=1)
+    if not bool(finite.all()):
+        invalid_rows = ", ".join(str(index) for index in frame.index[~finite][:5])
+        suffix = ", ..." if int((~finite).sum()) > 5 else ""
+        raise ValueError(
+            f"{source_path} contains non-finite normalized submission values at row(s) "
+            f"{invalid_rows}{suffix}"
+        )
     return out.sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
