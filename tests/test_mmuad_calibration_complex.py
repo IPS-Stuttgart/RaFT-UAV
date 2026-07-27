@@ -53,6 +53,26 @@ def test_mapping_rejects_object_wrapped_complex_rotation() -> None:
             calibration_from_mapping(payload)
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("quaternion_wxyz", [np.complex64(1.0 + 1.0j), 0.0, 0.0, 0.0], "quaternion"),
+        ("rpy_deg", [0.0, np.complex64(1.0 + 1.0j), 0.0], "rpy_deg"),
+    ],
+)
+def test_mapping_rejects_complex_rotation_parameterizations(
+    field: str,
+    value: list[object],
+    message: str,
+) -> None:
+    payload = {"sensors": {"radar": {field: value}}}
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", _COMPLEX_WARNING)
+        with pytest.raises(ValueError, match=rf"{message} must contain real values"):
+            calibration_from_mapping(payload)
+
+
 def test_mapping_rejects_complex_time_offset_before_cast() -> None:
     payload = {
         "sensors": {
