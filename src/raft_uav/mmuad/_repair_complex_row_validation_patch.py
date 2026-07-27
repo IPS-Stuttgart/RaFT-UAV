@@ -1,4 +1,4 @@
-"""Reject complex Track 5 repair cells before lossy float coercion."""
+"""Reject complex Track 5 repair inputs before lossy float coercion."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 _PATCH_MARKER = "_raft_uav_rejects_complex_repair_rows"
+_CONTROL_PATCH_MARKER = "_raft_uav_rejects_complex_repair_controls"
 _NUMERIC_COLUMNS = (
     "time_s",
     "state_x_m",
@@ -19,7 +20,7 @@ _NUMERIC_COLUMNS = (
 
 
 def _is_complex_scalar(value: object) -> bool:
-    """Return whether one scalar cell has a complex numeric dtype."""
+    """Return whether one unmasked scalar contains a complex numeric value."""
 
     if np.ma.is_masked(value):
         return False
@@ -31,7 +32,27 @@ def _is_complex_scalar(value: object) -> bool:
         return False
     if np.ma.isMaskedArray(scalar) and bool(np.ma.getmaskarray(scalar).any()):
         return False
-    return scalar.dtype.kind == "c"
+    if np.iscomplexobj(scalar):
+        return True
+    if scalar.dtype != object:
+        return False
+    try:
+        item = scalar.item()
+    except (TypeError, ValueError):
+        return False
+    if np.ma.is_masked(item):
+        return False
+    try:
+        item_array = np.asanyarray(item)
+    except (TypeError, ValueError):
+        return isinstance(item, (complex, np.complexfloating))
+    if item_array.ndim != 0:
+        return False
+    if np.ma.isMaskedArray(item_array) and bool(
+        np.ma.getmaskarray(item_array).any()
+    ):
+        return False
+    return bool(np.iscomplexobj(item_array))
 
 
 def _reject_complex_numeric_rows(submission: object) -> None:
@@ -74,14 +95,36 @@ def _wrap_submission_validator(module: Any, function_name: str) -> None:
         setattr(implementation, function_name, validated)
 
 
+def _wrap_control_validator(module: Any) -> None:
+    """Reject complex scalar controls before ``float`` can discard their phase."""
+
+    original: Callable[..., float] = getattr(module, "_finite_scalar")
+    if getattr(original, _CONTROL_PATCH_MARKER, False):
+        return
+
+    @wraps(original)
+    def validated(value: object, *, message: str) -> float:
+        if _is_complex_scalar(value):
+            raise ValueError(message)
+        return original(value, message=message)
+
+    setattr(validated, _CONTROL_PATCH_MARKER, True)
+    setattr(module, "_finite_scalar", validated)
+    implementation = getattr(module, "_IMPL", None)
+    if implementation is not None and hasattr(implementation, "_finite_scalar"):
+        setattr(implementation, "_finite_scalar", validated)
+
+
 def install() -> None:
-    """Install complex-row guards on all Track 5 trajectory-repair inputs."""
+    """Install complex-value guards on all Track 5 trajectory-repair inputs."""
 
     from raft_uav.mmuad import track5_acceleration_limit
     from raft_uav.mmuad import track5_hampel_repair
     from raft_uav.mmuad import track5_jerk_limit
     from raft_uav.mmuad import track5_vertical_repair
 
+    _wrap_control_validator(track5_acceleration_limit)
+    _wrap_control_validator(track5_jerk_limit)
     _wrap_submission_validator(track5_acceleration_limit, "_validate_numeric_rows")
     _wrap_submission_validator(track5_acceleration_limit, "_normalized_submission")
     _wrap_submission_validator(track5_jerk_limit, "_normalized_submission")
