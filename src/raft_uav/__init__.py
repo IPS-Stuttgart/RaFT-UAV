@@ -131,6 +131,12 @@ def _candidate_pull_index_install() -> Callable[[], None]:
     return install
 
 
+def _layout_topic_map_exports_validation_install() -> Callable[[], None]:
+    from raft_uav.mmuad._layout_topic_map_exports_validation_patch import install
+
+    return install
+
+
 def _radar_frame_grouping_install() -> Callable[[], None]:
     from raft_uav.baselines._radar_frame_grouping_patch import install
 
@@ -158,4 +164,5 @@ _optional_runtime_hook(_repair_complex_row_validation_install)
 _optional_runtime_hook(_acceleration_sequence_id_install)
 _optional_runtime_hook(_mot_match_distance_complex_install)
 _optional_runtime_hook(_candidate_pull_index_install)
+_optional_runtime_hook(_layout_topic_map_exports_validation_install)
 _optional_runtime_hook(_radar_frame_grouping_install)
