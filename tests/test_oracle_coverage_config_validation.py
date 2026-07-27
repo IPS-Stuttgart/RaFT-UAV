@@ -77,4 +77,4 @@ def test_oracle_coverage_accepts_explicit_tracklet_config(
         assert summary["radar_frame_count"] == 0
     else:
         assert result.frame_coverage.empty
-        assert result.summary["radar_frame_count"] == 0
+        assert result.summary["radar_frames"] == 0
