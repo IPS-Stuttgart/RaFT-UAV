@@ -62,7 +62,8 @@ def _catprob_frame_group_keys(radar: pd.DataFrame) -> list[tuple[Any, ...]]:
     else:
         times = pd.Series(np.nan, index=radar.index, dtype=float)
 
-    keys: list[tuple[Any, ...]] = []
+    rows: list[tuple[float, tuple[Any, ...] | None]] = []
+    indexed_frames_by_time: dict[tuple[Any, ...], set[float]] = {}
     for frame_index, timestamp, time_s in zip(
         frame_indices, timestamps, times, strict=True
     ):
@@ -72,13 +73,25 @@ def _catprob_frame_group_keys(radar: pd.DataFrame) -> list[tuple[Any, ...]]:
             time_key = ("time_s", float(time_s))
         else:
             time_key = None
+        numeric_frame_index = (
+            float(frame_index) if np.isfinite(frame_index) else float("nan")
+        )
+        rows.append((numeric_frame_index, time_key))
+        if np.isfinite(numeric_frame_index) and time_key is not None:
+            indexed_frames_by_time.setdefault(time_key, set()).add(numeric_frame_index)
 
+    keys: list[tuple[Any, ...]] = []
+    for frame_index, time_key in rows:
         if np.isfinite(frame_index) and time_key is not None:
-            key = ("frame_index", float(frame_index), *time_key)
+            key = ("frame_index", frame_index, *time_key)
         elif np.isfinite(frame_index):
-            key = ("frame_index", float(frame_index))
+            key = ("frame_index", frame_index)
         elif time_key is not None:
-            key = time_key
+            matching_frames = indexed_frames_by_time.get(time_key, set())
+            if len(matching_frames) == 1:
+                key = ("frame_index", next(iter(matching_frames)), *time_key)
+            else:
+                key = time_key
         else:
             key = ("__missing_frame__",)
         keys.append(key)
@@ -100,9 +113,7 @@ def _catprob_best_per_frame_rows(
     while key_column in candidates.columns:
         key_column = f"_{key_column}"
     ranked = aerpaw._catprob_ranked_rows(
-        candidates.assign(
-            **{key_column: _catprob_frame_group_keys(candidates)}
-        )
+        candidates.assign(**{key_column: _catprob_frame_group_keys(candidates)})
     )
 
     keep_positions: list[int] = []
