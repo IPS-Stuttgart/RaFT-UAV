@@ -1,4 +1,4 @@
-"""Runtime fix for sequence-scoped radar cat-probability selection."""
+"""Runtime safety for radar selection and sequence-scoped cat-probability filtering."""
 
 from __future__ import annotations
 
@@ -9,8 +9,59 @@ from importlib import import_module
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_float
+
+
 _aerpaw = import_module("raft_uav.io.aerpaw")
 _ORIGINAL_SELECT_RADAR_MEASUREMENT_ROWS = _aerpaw.select_radar_measurement_rows
+
+
+def _finite_real_control(value: object, *, name: str) -> float:
+    """Return a finite real scalar control value."""
+
+    number = optional_float(value)
+    if number is None:
+        raise ValueError(f"{name} must be a finite real scalar")
+    return number
+
+
+def _nonnegative_real_control(value: object, *, name: str) -> float:
+    """Return a finite non-negative real scalar control value."""
+
+    number = _finite_real_control(value, name=name)
+    if number < 0.0:
+        raise ValueError(f"{name} must be nonnegative")
+    return number
+
+
+def _validated_selection_controls(
+    radar: pd.DataFrame,
+    *,
+    selection: str,
+    truth: pd.DataFrame | None,
+    catprob_threshold: object,
+    truth_gate_m: object,
+    truth_time_gate_s: object,
+) -> tuple[object, object, object]:
+    """Validate only controls used by the active non-empty selection mode."""
+
+    if radar.empty:
+        return catprob_threshold, truth_gate_m, truth_time_gate_s
+    if selection in {"catprob", "catprob-all"}:
+        catprob_threshold = _finite_real_control(
+            catprob_threshold,
+            name="catprob_threshold",
+        )
+    elif selection == "truth-gated" and truth is not None:
+        truth_gate_m = _nonnegative_real_control(
+            truth_gate_m,
+            name="truth_gate_m",
+        )
+        truth_time_gate_s = _nonnegative_real_control(
+            truth_time_gate_s,
+            name="truth_time_gate_s",
+        )
+    return catprob_threshold, truth_gate_m, truth_time_gate_s
 
 
 def _sequence_group_key(value: object) -> tuple[object, ...]:
@@ -40,7 +91,16 @@ def _select_radar_measurement_rows(
     truth_gate_m: float = 150.0,
     truth_time_gate_s: float = 1.0,
 ) -> pd.DataFrame:
-    """Keep at most one cat-probability candidate per frame and sequence."""
+    """Validate controls and keep at most one catprob candidate per sequence frame."""
+
+    catprob_threshold, truth_gate_m, truth_time_gate_s = _validated_selection_controls(
+        radar,
+        selection=selection,
+        truth=truth,
+        catprob_threshold=catprob_threshold,
+        truth_gate_m=truth_gate_m,
+        truth_time_gate_s=truth_time_gate_s,
+    )
 
     if selection != "catprob" or "sequence_id" not in radar.columns or radar.empty:
         return _ORIGINAL_SELECT_RADAR_MEASUREMENT_ROWS(
