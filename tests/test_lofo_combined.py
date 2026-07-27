@@ -13,6 +13,17 @@ def test_shift_time_preserves_original_time_column():
     assert shifted["radar_time_offset_s"].tolist() == [0.5, 0.5]
 
 
+def test_shift_time_rebases_reapplied_offsets_on_original_timestamps():
+    frame = pd.DataFrame({"time_s": [1.0, 2.0], "east_m": [0.0, 1.0]})
+
+    first = shift_time(frame, 0.5, source="radar")
+    reapplied = shift_time(first, -0.25, source="radar")
+
+    assert reapplied["time_s"].tolist() == [0.75, 1.75]
+    assert reapplied["time_s_uncorrected"].tolist() == [1.0, 2.0]
+    assert reapplied["radar_time_offset_s"].tolist() == [-0.25, -0.25]
+
+
 def test_apply_time_offsets_shifts_rf_and_radar_only():
     item = {
         "truth": pd.DataFrame({"time_s": [10.0]}),
