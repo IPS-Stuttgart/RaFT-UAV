@@ -16,6 +16,7 @@ from typing import Any
 
 from raft_uav.runtime_cli_config import (
     _RUNTIME_FLAG_ENV_NAMES,
+    _runtime_option_from_token,
     apply_runtime_environment,
     parse_runtime_config,
     runtime_environment_names_from_argv,
@@ -52,8 +53,9 @@ def _runtime_aware_command(argv: list[str]) -> str | None:
         token = argv[index]
         if token == "--":
             return argv[index + 1] if index + 1 < len(argv) else None
-        option, separator, _ = token.partition("=")
-        if option in _RUNTIME_FLAG_ENV_NAMES:
+        _, separator, _ = token.partition("=")
+        option = _runtime_option_from_token(token)
+        if option is not None:
             index += 1
             if not separator and option not in _RUNTIME_VALUELESS_FLAGS:
                 index += 1
