@@ -2,9 +2,9 @@
 
 The maintained implementation lives in the sibling ``candidate_oracle_targets.py``
 module. This package preserves the public import path while rejecting malformed
-truth-matching time gates and oracle-label thresholds before they can silently
-widen, empty, or corrupt the training export, and while keeping distinct
-floating-point thresholds distinct in output column labels.
+truth-matching time gates, oracle-label thresholds, and candidate-score controls
+before they can silently widen, empty, or corrupt the training export, and while
+keeping distinct floating-point thresholds distinct in output column labels.
 """
 
 from __future__ import annotations
@@ -63,17 +63,63 @@ def _validated_numeric_tuple(
     return tuple(normalized)
 
 
+def _validated_score_column(value: Any, *, name: str) -> str:
+    """Return one normalized, non-empty candidate-score column name."""
+
+    message = f"{name} must be a non-empty string"
+    if not isinstance(value, str):
+        raise ValueError(message)
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(message)
+    return normalized
+
+
+def _validated_score_columns(values: Any) -> tuple[str, ...]:
+    """Return normalized fallback score-column names."""
+
+    message = "fallback_score_columns must contain only non-empty strings"
+    if values is None or isinstance(values, (str, bytes, bytearray)):
+        raise ValueError(message)
+    try:
+        items = tuple(values)
+    except TypeError as exc:
+        raise ValueError(message) from exc
+    try:
+        return tuple(
+            _validated_score_column(value, name="fallback_score_columns")
+            for value in items
+        )
+    except ValueError as exc:
+        raise ValueError(message) from exc
+
+
 def _validated_config(
     config: _IMPL.CandidateOracleTargetConfig | None,
 ) -> _IMPL.CandidateOracleTargetConfig:
-    """Return a config with valid time, temperature, and distance controls."""
+    """Return a config with valid matching, label, and score controls."""
 
-    resolved = config or _IMPL.CandidateOracleTargetConfig()
+    if config is None:
+        resolved = _IMPL.CandidateOracleTargetConfig()
+    elif not isinstance(config, _IMPL.CandidateOracleTargetConfig):
+        raise TypeError(
+            "config must be a CandidateOracleTargetConfig instance or None"
+        )
+    else:
+        resolved = config
+
     max_delta = optional_float(resolved.max_truth_time_delta_s)
     if max_delta is None or max_delta < 0.0:
         raise ValueError(
             "max_truth_time_delta_s must be a finite non-negative scalar"
         )
+    score_column = _validated_score_column(
+        resolved.score_column,
+        name="score_column",
+    )
+    fallback_score_columns = _validated_score_columns(
+        resolved.fallback_score_columns
+    )
     soft_tau_m = _validated_numeric_tuple(
         resolved.soft_tau_m,
         name="soft_tau_m",
@@ -87,6 +133,8 @@ def _validated_config(
     return replace(
         resolved,
         max_truth_time_delta_s=max_delta,
+        score_column=score_column,
+        fallback_score_columns=fallback_score_columns,
         soft_tau_m=soft_tau_m,
         good_thresholds_m=good_thresholds_m,
     )
@@ -127,6 +175,8 @@ globals().update(
     }
 )
 globals()["_validated_numeric_tuple"] = _validated_numeric_tuple
+globals()["_validated_score_column"] = _validated_score_column
+globals()["_validated_score_columns"] = _validated_score_columns
 globals()["_validated_config"] = _validated_config
 globals()["_threshold_label"] = _threshold_label
 globals()["build_candidate_oracle_targets"] = build_candidate_oracle_targets
