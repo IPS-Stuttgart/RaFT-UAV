@@ -32,6 +32,14 @@ def _truth() -> pd.DataFrame:
     )
 
 
+def test_empty_radar_rejects_unknown_selection_mode() -> None:
+    with pytest.raises(ValueError, match="unknown radar selection"):
+        select_radar_measurement_rows(
+            _radar().iloc[0:0],
+            selection="cat-prob",
+        )
+
+
 @pytest.mark.parametrize(
     "value",
     [
