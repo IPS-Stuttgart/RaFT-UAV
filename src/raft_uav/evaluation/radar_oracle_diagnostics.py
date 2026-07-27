@@ -21,6 +21,7 @@ PAPER_METRIC_COLUMNS = (
     "p95_2d_error_m",
     "max_2d_error_m",
 )
+_TRUTH_TIME_MATCH_ATOL_S = 1.0e-9
 
 
 def interpolate_truth_positions(
@@ -51,7 +52,12 @@ def interpolate_truth_positions(
         if not np.isfinite(query_time):
             continue
         insertion = int(np.searchsorted(truth_times, query_time))
-        if insertion < truth_times.size and np.isclose(truth_times[insertion], query_time):
+        if insertion < truth_times.size and np.isclose(
+            truth_times[insertion],
+            query_time,
+            rtol=0.0,
+            atol=_TRUTH_TIME_MATCH_ATOL_S,
+        ):
             nearest_delta = 0.0
             interpolated = truth_xyz[insertion]
         elif insertion == 0 or insertion >= truth_times.size:
