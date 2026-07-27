@@ -177,6 +177,8 @@ def _validate_max_time_delta_s(value: float | None) -> float | None:
     if value is None:
         return None
 
+    if np.ma.is_masked(value):
+        raise ValueError("max_time_delta_s must be a finite, non-negative scalar")
     array = np.asarray(value)
     if array.ndim != 0:
         raise ValueError("max_time_delta_s must be a finite, non-negative scalar")
