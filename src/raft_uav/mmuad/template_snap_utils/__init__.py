@@ -78,6 +78,18 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     return _ORIGINAL_NORMALIZE_TEMPLATE_ROWS(template)
 
 
+def _is_complex_classification_value(value: object) -> bool:
+    """Return whether a classification cell has a complex scalar dtype."""
+
+    if isinstance(value, (complex, np.complexfloating)):
+        return True
+    return bool(
+        isinstance(value, np.ndarray)
+        and value.ndim == 0
+        and np.issubdtype(value.dtype, np.complexfloating)
+    )
+
+
 def _integer_classification_values(values: pd.Series) -> pd.Series:
     """Return exact finite integer-valued official classification cells."""
 
@@ -88,6 +100,15 @@ def _integer_classification_values(values: pd.Series) -> pd.Series:
         bad_value = raw.iloc[row_index]
         raise ValueError(
             "official MMUAD Classification values must be integer ids, not booleans; "
+            f"got {bad_value!r}"
+        )
+
+    complex_mask = raw.map(_is_complex_classification_value)
+    if complex_mask.any():
+        row_index = int(np.flatnonzero(complex_mask.to_numpy())[0])
+        bad_value = raw.iloc[row_index]
+        raise ValueError(
+            "official MMUAD Classification values must be integer ids, not complex numbers; "
             f"got {bad_value!r}"
         )
 
@@ -160,6 +181,7 @@ globals()["load_official_track5_results_frame_from_frame"] = (
     load_official_track5_results_frame_from_frame
 )
 globals()["_normalize_template_rows"] = _normalize_template_rows
+globals()["_is_complex_classification_value"] = _is_complex_classification_value
 globals()["_integer_classification_values"] = _integer_classification_values
 
 __doc__ = _IMPL.__doc__

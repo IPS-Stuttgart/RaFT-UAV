@@ -97,6 +97,14 @@ def _integer_classification_values(values: pd.Series) -> pd.Series:
             "official MMUAD Classification values must be integer ids, not booleans; "
             f"got {bad_value!r}"
         )
+    complex_mask = raw.map(_is_complex_classification_value)
+    if complex_mask.any():
+        row_index = int(np.flatnonzero(complex_mask.to_numpy())[0])
+        bad_value = raw.iloc[row_index]
+        raise ValueError(
+            "official MMUAD Classification values must be integer ids, not complex numbers; "
+            f"got {bad_value!r}"
+        )
     numbers = pd.to_numeric(raw, errors="coerce")
     bad_text_mask = numbers.isna() & raw.notna()
     if bad_text_mask.any():
@@ -133,6 +141,16 @@ def _integer_classification_values(values: pd.Series) -> pd.Series:
             f"{{{allowed}}}; got {class_id!r}"
         )
     return numbers
+
+
+def _is_complex_classification_value(value: Any) -> bool:
+    if isinstance(value, (complex, np.complexfloating)):
+        return True
+    return bool(
+        isinstance(value, np.ndarray)
+        and value.ndim == 0
+        and np.issubdtype(value.dtype, np.complexfloating)
+    )
 
 
 def _template_sequence_value(value: Any) -> str | None:
