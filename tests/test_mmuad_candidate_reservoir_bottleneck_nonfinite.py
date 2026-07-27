@@ -9,6 +9,8 @@ import pytest
 
 from raft_uav.mmuad.candidate_reservoir_bottleneck import (
     BOTTLENECK_UNKNOWN,
+    BottleneckConfig,
+    build_bottleneck_summary,
     classify_gap_row,
     write_bottleneck_outputs,
 )
@@ -74,3 +76,27 @@ def test_write_bottleneck_outputs_emits_strict_json_for_numpy_values(
     assert "Infinity" not in text
     assert worst["upstream_nonfinite"] is None
     assert worst["upstream_vector"] == [1.0, None]
+
+
+def test_bottleneck_summary_ignores_nonfinite_worst_metrics() -> None:
+    annotated = pd.DataFrame(
+        {
+            "sequence_id": ["positive_inf", "negative_inf", "finite"],
+            "primary_bottleneck": ["unknown", "unknown", "assignment_limited"],
+            "recommended_action": [
+                "inspect_missing_metrics",
+                "inspect_missing_metrics",
+                "improve_assignment",
+            ],
+            "assignment_gap_mse_3d_m2": [np.inf, -np.inf, 12.0],
+            "topk_recall_gap_mse_3d_m2": [np.nan, np.inf, -np.inf],
+            "reservoir_oracle_all_mse_3d_m2": [np.inf, 3.0, 4.0],
+        }
+    )
+
+    summary = build_bottleneck_summary(annotated, config=BottleneckConfig())
+
+    assert summary["worst_assignment_gap"]["sequence_id"] == "finite"
+    assert summary["worst_assignment_gap"]["assignment_gap_mse_3d_m2"] == 12.0
+    assert summary["worst_topk_recall_gap"] == {}
+    assert summary["worst_reservoir_ceiling"]["sequence_id"] == "finite"
