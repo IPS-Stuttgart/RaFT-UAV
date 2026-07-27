@@ -122,7 +122,7 @@ def frame_context_features(candidates: pd.DataFrame) -> pd.DataFrame:
     out["frame_candidate_count"] = int(candidate_count)
     if candidate_count > 1:
         distances = np.linalg.norm(positions[:, None, :] - positions[None, :, :], axis=2)
-        distances[distances == 0.0] = np.nan
+        np.fill_diagonal(distances, np.nan)
         out["nearest_neighbor_distance_m"] = np.nanmin(distances, axis=1)
         out["mean_neighbor_distance_m"] = np.nanmean(distances, axis=1)
     else:
