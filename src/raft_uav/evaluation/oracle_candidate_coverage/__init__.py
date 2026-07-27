@@ -2,9 +2,9 @@
 
 The maintained implementation lives in the sibling
 ``oracle_candidate_coverage.py`` module. This package preserves the public
-import path while rejecting malformed truth-matching gates and radar
-standard deviations and preventing fractional candidate identifiers from being
-silently truncated.
+import path while rejecting malformed truth-matching gates, radar standard
+deviations, and explicit association configurations, and preventing fractional
+candidate identifiers from being silently truncated.
 """
 
 from __future__ import annotations
@@ -51,6 +51,18 @@ def _positive_finite_scalar(value: object, *, name: str) -> float:
     return normalized
 
 
+def _validate_association_config(config: object | None) -> None:
+    """Reject malformed explicit configs before empty-input fast paths."""
+
+    if config is not None and not isinstance(
+        config,
+        _IMPL._base_tracklet.TrackletViterbiAssociationConfig,
+    ):
+        raise ValueError(
+            "config must be a TrackletViterbiAssociationConfig instance or None"
+        )
+
+
 def _optional_int(value: object) -> int | None:
     """Return an exact integer-equivalent scalar without truncation."""
 
@@ -70,8 +82,9 @@ def build_oracle_candidate_coverage_diagnostics(
     truth_gate_m: float | None = None,
     config: object | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Build coverage diagnostics after validating numeric controls."""
+    """Build coverage diagnostics after validating public controls."""
 
+    _validate_association_config(config)
     normalized_time_gate = _nonnegative_finite_scalar(
         truth_time_gate_s,
         name="truth_time_gate_s",
@@ -117,6 +130,7 @@ globals().update(
 )
 globals()["_nonnegative_finite_scalar"] = _nonnegative_finite_scalar
 globals()["_positive_finite_scalar"] = _positive_finite_scalar
+globals()["_validate_association_config"] = _validate_association_config
 globals()["_optional_int"] = _optional_int
 globals()["build_oracle_candidate_coverage_diagnostics"] = (
     build_oracle_candidate_coverage_diagnostics
