@@ -82,9 +82,12 @@ def test_direct_candidate_centers_reject_ambiguous_or_misaligned_rows() -> None:
     ],
 )
 def test_direct_candidate_centers_reject_invalid_current_positions(
-    current_xyz: np.ndarray,
+    current_xyz: object,
 ) -> None:
     results = pd.DataFrame({"Sequence": ["seq1"], "Timestamp": [0.0]})
 
-    with pytest.raises(ValueError, match="current_xyz must contain only finite real values"):
+    with pytest.raises(
+        ValueError,
+        match="current_xyz must contain only finite real values",
+    ):
         candidate_centers_for_results(_candidates(), results, current_xyz)
