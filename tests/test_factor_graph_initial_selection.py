@@ -3,7 +3,10 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from raft_uav.research.factor_graph import _initial_radar_selection
+from raft_uav.research.factor_graph import (
+    _initial_radar_selection,
+    _select_candidates_against_trajectory,
+)
 
 
 def test_initial_selection_ignores_higher_scoring_nonfinite_position() -> None:
@@ -15,6 +18,24 @@ def test_initial_selection_ignores_higher_scoring_nonfinite_position() -> None:
             "east_m": [np.nan, 10.0],
             "north_m": [np.nan, 20.0],
             "up_m": [np.nan, 30.0],
+            "cat_prob_uav": [0.99, 0.80],
+        }
+    )
+
+    selected = _initial_radar_selection(radar)
+
+    assert selected["track_id"].tolist() == [11]
+
+
+def test_initial_selection_ignores_higher_scoring_complex_position() -> None:
+    radar = pd.DataFrame(
+        {
+            "time_s": [1.0, 1.0],
+            "frame_index": [4, 4],
+            "track_id": [10, 11],
+            "east_m": [1.0 + 100.0j, 10.0],
+            "north_m": [20.0, 20.0],
+            "up_m": [30.0, 30.0],
             "cat_prob_uav": [0.99, 0.80],
         }
     )
@@ -58,3 +79,32 @@ def test_initial_selection_skips_frames_without_finite_positions() -> None:
     selected = _initial_radar_selection(radar)
 
     assert selected["track_id"].tolist() == [20]
+
+
+def test_trajectory_selection_ignores_complex_position_candidates() -> None:
+    radar = pd.DataFrame(
+        {
+            "time_s": [1.0, 1.0],
+            "frame_index": [4, 4],
+            "track_id": [10, 11],
+            "east_m": [0.0 + 100.0j, 2.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+    trajectory = pd.DataFrame(
+        {
+            "time_s": [1.0],
+            "east_m": [0.0],
+            "north_m": [0.0],
+            "up_m": [0.0],
+        }
+    )
+
+    selected = _select_candidates_against_trajectory(
+        radar,
+        trajectory,
+        candidate_gate_m=10.0,
+    )
+
+    assert selected["track_id"].tolist() == [11]
