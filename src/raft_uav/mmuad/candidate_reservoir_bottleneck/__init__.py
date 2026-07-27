@@ -86,15 +86,17 @@ def annotate_gap_table(
 
 
 def _max_record(rows: pd.DataFrame, column: str) -> dict[str, Any]:
-    """Return the maximum-valued row without coercing its index label."""
+    """Return the maximum finite-valued row without coercing its index label."""
 
     if rows.empty or column not in rows.columns:
         return {}
     values = pd.to_numeric(rows[column], errors="coerce")
-    if values.dropna().empty:
-        return {}
     numeric_values = values.to_numpy(dtype=float, na_value=np.nan)
-    position = int(np.nanargmax(numeric_values))
+    finite = np.isfinite(numeric_values)
+    if not finite.any():
+        return {}
+    finite_positions = np.flatnonzero(finite)
+    position = int(finite_positions[int(np.argmax(numeric_values[finite]))])
     return _jsonable(rows.iloc[position].to_dict())
 
 
