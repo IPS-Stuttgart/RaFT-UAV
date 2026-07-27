@@ -129,6 +129,8 @@ def _validated_smoothing_config(
 ) -> LeastSquaresSmoothingConfig:
     """Normalize public solver controls before any data-dependent early return."""
 
+    if config is not None and not isinstance(config, LeastSquaresSmoothingConfig):
+        raise TypeError("config must be a LeastSquaresSmoothingConfig or None")
     cfg = LeastSquaresSmoothingConfig() if config is None else config
     return LeastSquaresSmoothingConfig(
         motion_std_mps2=_finite_nonnegative_scalar(
@@ -247,7 +249,7 @@ def coordinate_descent_association_and_smoothing(
         candidate_gate_m,
         name="candidate_gate_m",
     )
-    cfg = config or LeastSquaresSmoothingConfig()
+    cfg = _validated_smoothing_config(config)
     selected = _initial_radar_selection(radar)
     measurements = _combine_measurements(selected, rf)
     trajectory = smooth_position_trajectory(measurements, config=cfg).estimates
