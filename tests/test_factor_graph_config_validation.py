@@ -6,6 +6,7 @@ import pytest
 
 from raft_uav.research.factor_graph import (
     LeastSquaresSmoothingConfig,
+    coordinate_descent_association_and_smoothing,
     smooth_position_trajectory,
 )
 
@@ -73,3 +74,25 @@ def test_smoother_accepts_exact_scalar_like_controls() -> None:
 
     assert result.success
     assert result.iterations <= 20
+
+
+@pytest.mark.parametrize("invalid_config", [False, 0, "", {}])
+def test_factor_graph_public_apis_reject_falsy_non_configs(
+    invalid_config: object,
+) -> None:
+    empty_measurements = pd.DataFrame()
+    empty_radar = pd.DataFrame(
+        columns=["time_s", "east_m", "north_m", "up_m"]
+    )
+
+    with pytest.raises(TypeError, match="LeastSquaresSmoothingConfig"):
+        smooth_position_trajectory(
+            empty_measurements,
+            config=invalid_config,  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(TypeError, match="LeastSquaresSmoothingConfig"):
+        coordinate_descent_association_and_smoothing(
+            empty_radar,
+            config=invalid_config,  # type: ignore[arg-type]
+        )

@@ -57,7 +57,9 @@ def _validated_robust_loss_config(config: object | None) -> object | None:
 
     if config is None:
         return None
-    robust_loss = getattr(config, "robust_loss", None)
+    if not isinstance(config, _LEGACY.LeastSquaresSmoothingConfig):
+        raise TypeError("config must be a LeastSquaresSmoothingConfig or None")
+    robust_loss = config.robust_loss
     if callable(robust_loss):
         return config
     if not isinstance(robust_loss, str) or robust_loss not in _VALID_ROBUST_LOSSES:
