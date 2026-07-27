@@ -39,3 +39,21 @@ def test_split_manifest_rejects_duplicate_normalized_json_container_keys(tmp_pat
 
     with pytest.raises(ValueError, match="ambiguous keys matching"):
         load_split_manifest(path)
+
+
+def test_split_manifest_rejects_split_labels_that_collide_after_trimming(tmp_path):
+    path = tmp_path / "splits.json"
+    path.write_text(
+        json.dumps(
+            {
+                "splits": {
+                    "train": ["seq001"],
+                    " train ": ["seq002"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="ambiguous split labels after trimming"):
+        load_split_manifest(path)
