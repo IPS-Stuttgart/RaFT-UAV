@@ -9,6 +9,7 @@ updates when the path posterior favors a missed detection.
 
 from __future__ import annotations
 
+from functools import wraps
 import importlib.util
 from pathlib import Path
 import sys
@@ -31,6 +32,9 @@ _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_CONFIG_POST_INIT = _IMPL.TrackletViterbiAssociationConfig.__post_init__
 _ORIGINAL_REACQUISITION_COST = _IMPL._reacquisition_cost
+_ORIGINAL_RUN_ASYNC_CV_BASELINE_WITH_TRACKLET_VITERBI_ASSOCIATION = (
+    _IMPL.run_async_cv_baseline_with_tracklet_viterbi_association
+)
 _ORIGINAL_SELECTED_ROWS_FROM_SOFT_VITERBI_PATHS = (
     _IMPL._selected_rows_from_soft_viterbi_paths
 )
@@ -88,6 +92,33 @@ def _validated_config_post_init(self: Any) -> None:
         object.__setattr__(self, "range_gate_m", range_gate_m)
 
     _ORIGINAL_CONFIG_POST_INIT(self)
+
+
+def _validate_association_config(config: Any) -> None:
+    """Reject malformed explicit configs instead of replacing falsy values."""
+
+    if config is not None and not isinstance(
+        config,
+        _IMPL.TrackletViterbiAssociationConfig,
+    ):
+        raise ValueError(
+            "config must be a TrackletViterbiAssociationConfig instance or None"
+        )
+
+
+@wraps(_ORIGINAL_RUN_ASYNC_CV_BASELINE_WITH_TRACKLET_VITERBI_ASSOCIATION)
+def run_async_cv_baseline_with_tracklet_viterbi_association(
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Run tracklet-Viterbi association after validating an explicit config."""
+
+    if not args:
+        _validate_association_config(kwargs.get("config"))
+    return _ORIGINAL_RUN_ASYNC_CV_BASELINE_WITH_TRACKLET_VITERBI_ASSOCIATION(
+        *args,
+        **kwargs,
+    )
 
 
 def _bounded_reacquisition_cost(
@@ -177,6 +208,9 @@ def _miss_aware_selected_rows_from_soft_viterbi_paths(
 
 
 _IMPL.TrackletViterbiAssociationConfig.__post_init__ = _validated_config_post_init
+_IMPL.run_async_cv_baseline_with_tracklet_viterbi_association = (
+    run_async_cv_baseline_with_tracklet_viterbi_association
+)
 _IMPL._reacquisition_cost = _bounded_reacquisition_cost
 _IMPL._selected_rows_from_soft_viterbi_paths = (
     _miss_aware_selected_rows_from_soft_viterbi_paths
@@ -190,6 +224,10 @@ globals().update(
     }
 )
 globals()["_validated_config_post_init"] = _validated_config_post_init
+globals()["_validate_association_config"] = _validate_association_config
+globals()["run_async_cv_baseline_with_tracklet_viterbi_association"] = (
+    run_async_cv_baseline_with_tracklet_viterbi_association
+)
 globals()["_bounded_reacquisition_cost"] = _bounded_reacquisition_cost
 globals()["_miss_aware_selected_rows_from_soft_viterbi_paths"] = (
     _miss_aware_selected_rows_from_soft_viterbi_paths
