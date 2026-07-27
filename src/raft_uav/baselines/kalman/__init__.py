@@ -30,6 +30,8 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_TRACKING_MEASUREMENT_POST_INIT = _IMPL.TrackingMeasurement.__post_init__
 _ORIGINAL_TRACKER_INIT = _IMPL.AsyncConstantVelocityKalmanTracker.__init__
 _ORIGINAL_RUN_ASYNC_CV_BASELINE = _IMPL.run_async_cv_baseline
+_ORIGINAL_CONSTANT_VELOCITY_MATRIX = _IMPL.constant_velocity_matrix
+_ORIGINAL_WHITE_ACCELERATION_PROCESS_NOISE = _IMPL.white_acceleration_process_noise
 _SOURCE_PRIORITY = {"rf": 0, "radar": 1}
 
 
@@ -63,6 +65,28 @@ def _finite_real_scalar(value: object, *, name: str, nonnegative: bool = False) 
         qualifier = "finite, non-negative real scalar" if nonnegative else "finite real scalar"
         raise ValueError(f"{name} must be a {qualifier}")
     return parsed
+
+
+def constant_velocity_matrix(dt_s: float) -> np.ndarray:
+    """Return a CV transition matrix for a finite non-negative time step."""
+
+    dt = _finite_real_scalar(dt_s, name="dt_s", nonnegative=True)
+    return _ORIGINAL_CONSTANT_VELOCITY_MATRIX(dt)
+
+
+def white_acceleration_process_noise(
+    dt_s: float,
+    acceleration_std: float,
+) -> np.ndarray:
+    """Return finite positive-semidefinite CV process noise."""
+
+    dt = _finite_real_scalar(dt_s, name="dt_s", nonnegative=True)
+    std = _finite_real_scalar(
+        acceleration_std,
+        name="acceleration_std",
+        nonnegative=True,
+    )
+    return _ORIGINAL_WHITE_ACCELERATION_PROCESS_NOISE(dt, std)
 
 
 def _finite_initial_position(value: object) -> np.ndarray:
@@ -180,6 +204,8 @@ _IMPL.TrackingMeasurement.__post_init__ = (
     _validated_tracking_measurement_post_init
 )
 _IMPL.AsyncConstantVelocityKalmanTracker.__init__ = _validated_tracker_init
+_IMPL.constant_velocity_matrix = constant_velocity_matrix
+_IMPL.white_acceleration_process_noise = white_acceleration_process_noise
 _IMPL.run_async_cv_baseline = run_async_cv_baseline
 
 globals().update(
@@ -194,11 +220,17 @@ globals()["_ORIGINAL_TRACKING_MEASUREMENT_POST_INIT"] = (
 )
 globals()["_ORIGINAL_TRACKER_INIT"] = _ORIGINAL_TRACKER_INIT
 globals()["_ORIGINAL_RUN_ASYNC_CV_BASELINE"] = _ORIGINAL_RUN_ASYNC_CV_BASELINE
+globals()["_ORIGINAL_CONSTANT_VELOCITY_MATRIX"] = _ORIGINAL_CONSTANT_VELOCITY_MATRIX
+globals()["_ORIGINAL_WHITE_ACCELERATION_PROCESS_NOISE"] = (
+    _ORIGINAL_WHITE_ACCELERATION_PROCESS_NOISE
+)
 globals()["_SOURCE_PRIORITY"] = _SOURCE_PRIORITY
 globals()["_validated_tracking_measurement_post_init"] = (
     _validated_tracking_measurement_post_init
 )
 globals()["_finite_real_scalar"] = _finite_real_scalar
+globals()["constant_velocity_matrix"] = constant_velocity_matrix
+globals()["white_acceleration_process_noise"] = white_acceleration_process_noise
 globals()["_finite_initial_position"] = _finite_initial_position
 globals()["_validated_tracker_init"] = _validated_tracker_init
 globals()["_tracking_measurement_order_key"] = _tracking_measurement_order_key
