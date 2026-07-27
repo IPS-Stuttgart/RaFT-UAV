@@ -8,15 +8,40 @@ import pandas as pd
 _INSTALLED = False
 
 
-def _current_positions(current_xyz: object, *, row_count: int) -> np.ndarray:
-    """Return one finite-shape position row per result row."""
+def _contains_complex_values(values: np.ma.MaskedArray) -> bool:
+    """Return whether visible values contain any complex scalar."""
 
+    if np.iscomplexobj(values):
+        return True
+    if values.dtype != object:
+        return False
+    return any(
+        np.iscomplexobj(np.asanyarray(item))
+        for item in values.compressed().reshape(-1)
+    )
+
+
+def _current_positions(current_xyz: object, *, row_count: int) -> np.ndarray:
+    """Return one finite real position row per result row."""
+
+    shape_message = "current_xyz must have shape (len(results), 3)"
+    value_message = "current_xyz must contain only finite real values"
     try:
-        positions = np.asarray(current_xyz, dtype=float)
+        masked_positions = np.ma.asarray(current_xyz)
     except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("current_xyz must have shape (len(results), 3)") from exc
+        raise ValueError(shape_message) from exc
+    if _contains_complex_values(masked_positions):
+        raise ValueError(value_message)
+    if bool(np.ma.getmaskarray(masked_positions).any()):
+        raise ValueError(value_message)
+    try:
+        positions = np.asarray(masked_positions.filled(np.nan), dtype=float)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(shape_message) from exc
     if positions.ndim != 2 or positions.shape != (row_count, 3):
-        raise ValueError("current_xyz must have shape (len(results), 3)")
+        raise ValueError(shape_message)
+    if not bool(np.isfinite(positions).all()):
+        raise ValueError(value_message)
     return positions
 
 
