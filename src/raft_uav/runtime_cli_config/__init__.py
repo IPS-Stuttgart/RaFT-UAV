@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import numbers
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +26,56 @@ if _SPEC is None or _SPEC.loader is None:
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+
+
+def _runtime_option_from_token(token: str) -> str | None:
+    """Resolve an exact or uniquely abbreviated runtime long option."""
+
+    option = token.partition("=")[0]
+    if option == "--" or not option.startswith("--"):
+        return None
+    if option in _IMPL._RUNTIME_FLAG_ENV_NAMES:
+        return option
+    matches = [
+        candidate
+        for candidate in _IMPL._RUNTIME_FLAG_ENV_NAMES
+        if candidate.startswith(option)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def runtime_environment_names_from_argv(argv: Iterable[str]) -> set[str]:
+    """Return runtime env vars explicitly controlled by *argv* flags."""
+
+    names: set[str] = set()
+    for token in argv:
+        if token == "--":
+            break
+        option = _runtime_option_from_token(token)
+        if option is not None:
+            names.update(_IMPL._RUNTIME_FLAG_ENV_NAMES.get(option, ()))
+    return names
+
+
+def _runtime_passthrough_arguments(argv: Iterable[str]) -> list[str]:
+    """Restore runtime options that are also consumed by the base CLI."""
+
+    restored: list[str] = []
+    tokens = list(argv)
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            break
+        _, separator, value = token.partition("=")
+        option = _runtime_option_from_token(token)
+        if option in _IMPL._RUNTIME_PASSTHROUGH_FLAGS:
+            restored.append(f"{option}={value}" if separator else option)
+            if not separator and index + 1 < len(tokens):
+                index += 1
+                restored.append(tokens[index])
+        index += 1
+    return restored
 
 
 def _invalid_float(name: str) -> ValueError:
@@ -117,6 +168,9 @@ def _nonnegative_int(value: object, name: str) -> int:
     return _validated_integer(value, name, minimum=0, qualifier="nonnegative")
 
 
+_IMPL._runtime_option_from_token = _runtime_option_from_token
+_IMPL.runtime_environment_names_from_argv = runtime_environment_names_from_argv
+_IMPL._runtime_passthrough_arguments = _runtime_passthrough_arguments
 _IMPL._finite_float = _finite_float
 _IMPL._positive_int = _positive_int
 _IMPL._nonnegative_int = _nonnegative_int
@@ -128,6 +182,9 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_runtime_option_from_token"] = _runtime_option_from_token
+globals()["runtime_environment_names_from_argv"] = runtime_environment_names_from_argv
+globals()["_runtime_passthrough_arguments"] = _runtime_passthrough_arguments
 globals()["_finite_float"] = _finite_float
 globals()["_positive_int"] = _positive_int
 globals()["_nonnegative_int"] = _nonnegative_int
