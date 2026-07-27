@@ -163,9 +163,12 @@ def select_fixed_lag_tracklet_viterbi_path(
 
         start_s = float(events[global_index]["time_s"])
         end_s = start_s + float(lag_s)
+        # Begin at the current event index, not merely its timestamp. Otherwise,
+        # an earlier frame with the same timestamp is reintroduced after it was
+        # committed and can weaken the synthetic forced-prefix constraint.
         window_indices = [
             index
-            for index, event in enumerate(events)
+            for index, event in enumerate(events[global_index:], start=global_index)
             if start_s <= float(event["time_s"]) <= end_s
         ]
         if global_index not in window_indices:
