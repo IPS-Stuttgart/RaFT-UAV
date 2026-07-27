@@ -114,9 +114,12 @@ def shift_time(frame: pd.DataFrame, tau_s: float, *, source: str) -> pd.DataFram
     out = frame.copy()
     if out.empty or "time_s" not in out.columns:
         return out
-    if "time_s_uncorrected" not in out.columns:
-        out["time_s_uncorrected"] = out["time_s"]
-    out["time_s"] = pd.to_numeric(out["time_s"], errors="coerce") + float(tau_s)
+    if "time_s_uncorrected" in out.columns:
+        base_time = pd.to_numeric(out["time_s_uncorrected"], errors="coerce")
+    else:
+        base_time = pd.to_numeric(out["time_s"], errors="coerce")
+        out["time_s_uncorrected"] = base_time
+    out["time_s"] = base_time + float(tau_s)
     out[f"{source}_time_offset_s"] = float(tau_s)
     return out
 
