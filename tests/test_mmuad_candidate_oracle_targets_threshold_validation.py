@@ -93,6 +93,46 @@ def test_candidate_oracle_targets_rejects_scalar_threshold_collections(
         build_candidate_oracle_targets(_candidate_rows(), _truth_rows(), config=config)
 
 
+@pytest.mark.parametrize("config", [False, 0, "", {}, []])
+def test_candidate_oracle_targets_rejects_non_config_objects(config: object) -> None:
+    with pytest.raises(TypeError, match="CandidateOracleTargetConfig"):
+        build_candidate_oracle_targets(
+            _candidate_rows(),
+            _truth_rows(),
+            config=config,
+        )
+
+
+@pytest.mark.parametrize("score_column", [None, "", "   ", True, 1])
+def test_candidate_oracle_targets_rejects_invalid_score_column(
+    score_column: object,
+) -> None:
+    config = CandidateOracleTargetConfig(score_column=score_column)
+
+    with pytest.raises(ValueError, match="score_column"):
+        build_candidate_oracle_targets(_candidate_rows(), _truth_rows(), config=config)
+
+
+@pytest.mark.parametrize(
+    "fallback_score_columns",
+    [
+        None,
+        "ranker_score",
+        ("ranker_score", ""),
+        ("ranker_score", True),
+    ],
+)
+def test_candidate_oracle_targets_rejects_invalid_fallback_score_columns(
+    fallback_score_columns: object,
+) -> None:
+    config = CandidateOracleTargetConfig(
+        fallback_score_columns=fallback_score_columns,
+    )
+
+    with pytest.raises(ValueError, match="fallback_score_columns"):
+        build_candidate_oracle_targets(_candidate_rows(), _truth_rows(), config=config)
+
+
 def test_candidate_oracle_targets_normalizes_valid_threshold_scalars() -> None:
     target_rows, frame_summary, summary = build_candidate_oracle_targets(
         _candidate_rows(),
@@ -109,3 +149,25 @@ def test_candidate_oracle_targets_normalizes_valid_threshold_scalars() -> None:
     assert summary["config"]["good_thresholds_m"] == [0.0, 1.5]
     assert "soft_oracle_weight_tau_2p5_m" in target_rows.columns
     assert "candidate_good_le_0_m" in target_rows.columns
+
+
+def test_candidate_oracle_targets_normalizes_score_column_names() -> None:
+    candidates = _candidate_rows().assign(
+        ranker_score=[0.1, 0.9],
+        confidence=[0.8, 0.2],
+    )
+
+    target_rows, _, summary = build_candidate_oracle_targets(
+        candidates,
+        _truth_rows(),
+        config=CandidateOracleTargetConfig(
+            score_column=" ranker_score ",
+            fallback_score_columns=(" confidence ",),
+        ),
+    )
+
+    config_summary = summary["config"]
+    assert config_summary["score_column"] == "ranker_score"
+    assert config_summary["fallback_score_columns"] == ["confidence"]
+    near_rank = target_rows.loc[target_rows["track_id"] == "near", "candidate_score_rank"]
+    assert int(near_rank.iloc[0]) == 2
