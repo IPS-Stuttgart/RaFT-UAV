@@ -1,0 +1,67 @@
+name: Apply layout exports core fix
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.head_ref == 'agent/fix-layout-topic-map-exports'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Move validation into the core helper
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          layout_path = Path("src/raft_uav/mmuad/layout.py")
+          layout_text = layout_path.read_text()
+          old_layout = '''def _topic_map_payload_has_truth_export(payload: dict[str, Any]) -> bool:
+              for export in payload.get("exports", []):
+          '''.replace("          ", "")
+          new_layout = '''def _topic_map_payload_has_truth_export(payload: dict[str, Any]) -> bool:
+              exports = payload.get("exports", [])
+              if not isinstance(exports, list):
+                  return False
+              for export in exports:
+          '''.replace("          ", "")
+          if layout_text.count(old_layout) != 1:
+              raise RuntimeError("unexpected topic-map helper match count")
+          layout_path.write_text(layout_text.replace(old_layout, new_layout))
+
+          init_path = Path("src/raft_uav/__init__.py")
+          init_text = init_path.read_text()
+          hook = '''\n\ndef _layout_topic_map_exports_validation_install() -> Callable[[], None]:
+              from raft_uav.mmuad._layout_topic_map_exports_validation_patch import install
+
+              return install
+          '''.replace("          ", "")
+          if init_text.count(hook) != 1:
+              raise RuntimeError("unexpected layout hook definition count")
+          init_text = init_text.replace(hook, "")
+          invocation = "_optional_runtime_hook(_layout_topic_map_exports_validation_install)\n"
+          if init_text.count(invocation) != 1:
+              raise RuntimeError("unexpected layout hook invocation count")
+          init_path.write_text(init_text.replace(invocation, ""))
+
+          Path("src/raft_uav/mmuad/_layout_topic_map_exports_validation_patch.py").unlink()
+          PY
+
+      - name: Commit direct core fix and remove workflow
+        run: |
+          rm .github/workflows/apply-layout-exports-core-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Validate topic-map exports in layout core"
+          git push origin HEAD:${{ github.head_ref }}
