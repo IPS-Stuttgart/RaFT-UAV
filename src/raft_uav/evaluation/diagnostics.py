@@ -260,21 +260,28 @@ def _position_error_frame(
     estimate_positions = estimate_frame[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
     truth_times = truth["time_s"].to_numpy(dtype=float)
     truth_positions = truth[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+
+    finite_estimate = np.isfinite(estimate_times) & np.isfinite(estimate_positions).all(axis=1)
+    finite_truth = np.isfinite(truth_times) & np.isfinite(truth_positions).all(axis=1)
+    if not finite_estimate.any() or not finite_truth.any():
+        return pd.DataFrame()
+
+    estimate_work = estimate_frame.loc[finite_estimate].copy()
+    estimate_times = estimate_times[finite_estimate]
+    estimate_positions = estimate_positions[finite_estimate]
+    truth_times = truth_times[finite_truth]
+    truth_positions = truth_positions[finite_truth]
+
     truth_indices = nearest_time_indices(truth_times, estimate_times)
     time_delta = np.abs(truth_times[truth_indices] - estimate_times)
     deltas = estimate_positions - truth_positions[truth_indices]
     error_2d = np.linalg.norm(deltas[:, :2], axis=1)
     error_3d = np.linalg.norm(deltas, axis=1)
-    finite = (
-        np.isfinite(estimate_times)
-        & np.isfinite(time_delta)
-        & np.isfinite(error_2d)
-        & np.isfinite(error_3d)
-    )
+    finite = np.isfinite(time_delta) & np.isfinite(error_2d) & np.isfinite(error_3d)
     if max_eval_time_delta_s is not None:
         finite &= time_delta <= float(max_eval_time_delta_s)
 
-    out = estimate_frame.loc[finite].copy()
+    out = estimate_work.loc[finite].copy()
     out["truth_time_delta_s"] = time_delta[finite]
     out["error_2d_m"] = error_2d[finite]
     out["error_3d_m"] = error_3d[finite]
