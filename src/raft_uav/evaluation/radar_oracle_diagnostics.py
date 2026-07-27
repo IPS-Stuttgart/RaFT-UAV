@@ -37,14 +37,16 @@ def interpolate_truth_positions(
     required = {"time_s", "east_m", "north_m", "up_m"}
     if not required.issubset(truth.columns):
         raise KeyError(f"truth is missing required columns: {sorted(required - set(truth.columns))}")
-    ordered = truth.sort_values("time_s").reset_index(drop=True)
-    truth_times = ordered["time_s"].to_numpy(dtype=float)
-    truth_xyz = ordered[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    truth_times = pd.to_numeric(truth["time_s"], errors="coerce").to_numpy(dtype=float)
+    truth_xyz = truth[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
     finite = np.isfinite(truth_times) & np.isfinite(truth_xyz).all(axis=1)
     truth_times = truth_times[finite]
     truth_xyz = truth_xyz[finite]
     if truth_times.size == 0:
         return positions, valid
+    order = np.argsort(truth_times, kind="mergesort")
+    truth_times = truth_times[order]
+    truth_xyz = truth_xyz[order]
     for idx, query_time in enumerate(query_times):
         if not np.isfinite(query_time):
             continue
