@@ -1,9 +1,9 @@
-"""Compatibility wrapper for strict Multi-UAV LTS ZIP validation.
+"""Compatibility wrapper for strict Multi-UAV LTS validation and scoring.
 
 The maintained implementation lives in the sibling ``cli.py`` module. This
 package preserves the public import path while rejecting repeated ZIP member
-names, non-root member paths, non-positive class ids, and visibility values
-outside ``[0, 1]``.
+names, non-root member paths, non-positive class ids, visibility values outside
+``[0, 1]``, and invalid IoU thresholds used by the diagnostic scorer.
 """
 
 from __future__ import annotations
@@ -20,6 +20,8 @@ import zipfile
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
+from raft_uav.numeric import optional_float
+
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "cli.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.multi_uav_lts._cli_legacy",
@@ -32,6 +34,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_SUBMISSION_VALIDATION = _IMPL.SubmissionValidation
+_ORIGINAL_SCORE_LTS_PREDICTIONS = _IMPL.score_lts_predictions
 _summarize_prediction_text = _IMPL._summarize_prediction_text
 
 
@@ -48,9 +51,19 @@ def _parse_int_like_exact(value: str) -> int:
     return int(parsed)
 
 
+def _normalize_iou_threshold(value: object) -> float:
+    """Return a finite scalar IoU threshold in the closed unit interval."""
+
+    threshold = optional_float(value)
+    if threshold is None or not 0.0 <= threshold <= 1.0:
+        raise ValueError("iou_threshold must be a finite real scalar in [0, 1]")
+    return threshold
+
+
 def _match_rows_by_iou(truth, predictions, *, iou_threshold):
     """Maximize valid match count first, then total IoU."""
 
+    threshold = _normalize_iou_threshold(iou_threshold)
     if not truth or not predictions:
         return []
     iou = np.asarray(
@@ -60,7 +73,7 @@ def _match_rows_by_iou(truth, predictions, *, iou_threshold):
         ],
         dtype=float,
     )
-    valid = iou >= float(iou_threshold)
+    valid = iou >= threshold
     if not np.any(valid):
         return []
 
@@ -76,8 +89,27 @@ def _match_rows_by_iou(truth, predictions, *, iou_threshold):
     return matches
 
 
+def score_lts_predictions(
+    prediction_path: Path,
+    truth_dir: Path,
+    *,
+    iou_threshold: object = 0.5,
+    sequences: list[str] | None = None,
+):
+    """Build an LTS scorecard with a validated IoU matching threshold."""
+
+    threshold = _normalize_iou_threshold(iou_threshold)
+    return _ORIGINAL_SCORE_LTS_PREDICTIONS(
+        prediction_path,
+        truth_dir,
+        iou_threshold=threshold,
+        sequences=sequences,
+    )
+
+
 _IMPL._parse_int_like = _parse_int_like_exact
 _IMPL._match_rows_by_iou = _match_rows_by_iou
+_IMPL.score_lts_predictions = score_lts_predictions
 
 
 @dataclass(frozen=True)
@@ -223,7 +255,9 @@ globals().update(
 )
 globals()["SubmissionValidation"] = SubmissionValidation
 globals()["validate_submission_zip"] = validate_submission_zip
+globals()["_normalize_iou_threshold"] = _normalize_iou_threshold
 globals()["_match_rows_by_iou"] = _match_rows_by_iou
+globals()["score_lts_predictions"] = score_lts_predictions
 __doc__ = _IMPL.__doc__
 __all__ = [
     name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))
