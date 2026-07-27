@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling ``time_offset.py`` module.
 This package preserves the public import path while pooling per-frame radar
-oracle errors exactly and rejecting malformed time-offset sweep inputs before
-they can produce invalid timestamps or misleading calibration rows.
+oracle errors exactly and rejecting malformed time-offset sweep inputs and
+lossy timestamp coercions before they can produce invalid calibration rows.
 """
 
 from __future__ import annotations
@@ -96,6 +96,29 @@ def _measurement_dimensions(value: Any) -> int:
     return dimensions
 
 
+def _normalized_timestamp_cells(values: pd.Series, *, column: str) -> pd.Series:
+    """Normalize real timestamp cells without Boolean or imaginary coercion."""
+
+    normalized: list[object] = []
+    for value in values:
+        if np.ma.is_masked(value):
+            normalized.append(np.nan)
+            continue
+        scalar = value
+        if isinstance(value, np.ndarray) and value.ndim == 0:
+            scalar = value.item()
+        if isinstance(scalar, (bool, np.bool_)):
+            raise ValueError(f"{column} must not contain Boolean timestamp values")
+        if isinstance(scalar, (complex, np.complexfloating)):
+            if not np.isfinite(scalar.imag) or scalar.imag != 0.0:
+                raise ValueError(
+                    f"{column} must not contain timestamps with nonzero imaginary components"
+                )
+            scalar = scalar.real
+        normalized.append(scalar)
+    return pd.Series(normalized, index=values.index)
+
+
 def apply_time_offset(
     frame: pd.DataFrame,
     offset_s: float | None,
@@ -103,13 +126,26 @@ def apply_time_offset(
     time_column: str = "time_s",
     copy_uncorrected: bool = True,
 ) -> pd.DataFrame:
-    """Shift timestamps after validating the requested correction."""
+    """Shift timestamps after validating the requested correction and active time cells."""
 
     validated_offset = (
         None if offset_s is None else _finite_offset_seconds(offset_s)
     )
+    validated_frame = frame
+    if time_column in frame.columns:
+        raw_column = f"{time_column}_uncorrected"
+        source_column = (
+            raw_column
+            if copy_uncorrected and raw_column in frame.columns
+            else time_column
+        )
+        validated_frame = frame.copy()
+        validated_frame[source_column] = _normalized_timestamp_cells(
+            frame[source_column],
+            column=source_column,
+        )
     return _ORIGINAL_APPLY_TIME_OFFSET(
-        frame,
+        validated_frame,
         validated_offset,
         time_column=time_column,
         copy_uncorrected=copy_uncorrected,
@@ -205,6 +241,7 @@ globals().update(
 globals()["_finite_offset_seconds"] = _finite_offset_seconds
 globals()["_validated_offsets"] = _validated_offsets
 globals()["_measurement_dimensions"] = _measurement_dimensions
+globals()["_normalized_timestamp_cells"] = _normalized_timestamp_cells
 globals()["apply_time_offset"] = apply_time_offset
 globals()["aggregate_radar_time_offset_sweep"] = (
     aggregate_radar_time_offset_sweep
