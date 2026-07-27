@@ -1,5 +1,7 @@
 """Baseline trackers."""
 
+from importlib import import_module
+
 from raft_uav.baselines import imm as _imm
 from raft_uav.baselines import pyrecest_innovation_diagnostics as _pyrecest_innovation_diagnostics
 from raft_uav.baselines import radar_association as _radar_association
@@ -9,6 +11,9 @@ from raft_uav.baselines._imm_transition_validation_patch import (
 )
 from raft_uav.baselines._innovation_diagnostic_record_patch import (
     apply_innovation_diagnostic_record_patch,
+)
+from raft_uav.baselines._learned_radar_std_validation_patch import (
+    apply_learned_radar_std_validation_patch,
 )
 from raft_uav.baselines._radar_association_interpolation_patch import (
     apply_radar_association_interpolation_patch,
@@ -33,6 +38,17 @@ uniform_ctmc_transition_matrix = _imm.uniform_ctmc_transition_matrix
 apply_radar_association_interpolation_patch()
 apply_robust_map_accepted_matching_patch()
 apply_robust_map_lag_validation_patch()
+
+_learned_radar_association = import_module(
+    "raft_uav.baselines.learned_radar_association"
+)
+_stateful_learned_radar_association = import_module(
+    "raft_uav.baselines.stateful_learned_radar_association"
+)
+apply_learned_radar_std_validation_patch(
+    _learned_radar_association,
+    _stateful_learned_radar_association,
+)
 
 RADAR_ASSOCIATION_MODES = _radar_association.RADAR_ASSOCIATION_MODES
 run_async_cv_baseline_with_radar_association = (
