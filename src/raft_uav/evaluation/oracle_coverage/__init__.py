@@ -4,7 +4,8 @@ The maintained implementation lives in the sibling ``oracle_coverage.py``
 module. This package preserves the public import path while preventing
 fractional identifiers from being truncated, large exact identifiers from being
 rounded through binary floating point, malformed radar standard deviations from
-silently changing candidate scoring, serialized Boolean diagnostics from
+silently changing candidate scoring, malformed explicit tracklet configurations
+from disappearing behind defaults, serialized Boolean diagnostics from
 corrupting oracle-retention summaries, and equal class-probability scores from
 receiving row-order-dependent ranks.
 """
@@ -58,6 +59,18 @@ def _positive_standard_deviation(name: str, value: object) -> float:
     if standard_deviation is None or standard_deviation <= 0.0:
         raise ValueError(f"{name} must be a finite positive real scalar")
     return standard_deviation
+
+
+def _validated_tracklet_config(config: object | None) -> Any:
+    """Return a valid explicit tracklet configuration or the default instance."""
+
+    if config is None:
+        return _IMPL.TrackletViterbiAssociationConfig()
+    if not isinstance(config, _IMPL.TrackletViterbiAssociationConfig):
+        raise ValueError(
+            "config must be a TrackletViterbiAssociationConfig instance or None"
+        )
+    return config
 
 
 def _serialized_boolean_series(values: Any, *, column: str) -> pd.Series:
@@ -140,8 +153,9 @@ def build_oracle_candidate_coverage(
     inflation_alpha_by_source: Any = None,
     max_residual_norms_by_source: Any = None,
 ) -> Any:
-    """Build oracle coverage after validating radar measurement uncertainty."""
+    """Build oracle coverage after validating public configuration controls."""
 
+    validated_config = _validated_tracklet_config(config)
     validated_xy_std_m = _positive_standard_deviation(
         "radar_xy_std_m",
         radar_xy_std_m,
@@ -155,7 +169,7 @@ def build_oracle_candidate_coverage(
         truth=truth,
         rf_measurements=rf_measurements,
         candidate_catprob_threshold=candidate_catprob_threshold,
-        config=config,
+        config=validated_config,
         acceleration_std_mps2=acceleration_std_mps2,
         radar_xy_std_m=validated_xy_std_m,
         radar_z_std_m=validated_z_std_m,
@@ -235,6 +249,7 @@ globals().update(
     }
 )
 globals()["_positive_standard_deviation"] = _positive_standard_deviation
+globals()["_validated_tracklet_config"] = _validated_tracklet_config
 globals()["_serialized_boolean_series"] = _serialized_boolean_series
 globals()["_normalized_summary_frame"] = _normalized_summary_frame
 globals()["_coverage_summary"] = _coverage_summary
