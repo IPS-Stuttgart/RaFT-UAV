@@ -571,7 +571,10 @@ def _topic_map_has_truth_export(path: Path) -> bool:
 
 
 def _topic_map_payload_has_truth_export(payload: dict[str, Any]) -> bool:
-    for export in payload.get("exports", []):
+    exports = payload.get("exports", [])
+    if not isinstance(exports, list):
+        return False
+    for export in exports:
         if not isinstance(export, dict):
             continue
         kind = str(export.get("kind", "")).lower()
