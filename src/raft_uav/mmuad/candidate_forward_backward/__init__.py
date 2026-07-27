@@ -29,6 +29,10 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_ATTACH_FORWARD_BACKWARD_CANDIDATE_PRIOR = (
+    _IMPL.attach_forward_backward_candidate_prior
+)
+_ORIGINAL_WRITE_FORWARD_BACKWARD_OUTPUTS = _IMPL.write_forward_backward_outputs
 _ORIGINAL_TRANSITION_LOG_LIKELIHOOD = _IMPL._transition_log_likelihood
 _ORIGINAL_VALIDATE_CONFIG = _IMPL._validate_config
 
@@ -63,6 +67,50 @@ def _validate_config_with_finite_controls(config: Any) -> None:
     _ORIGINAL_VALIDATE_CONFIG(config)
 
 
+def _resolved_forward_backward_config(config: Any) -> Any:
+    """Return a validated config without replacing explicit falsy values."""
+
+    resolved = _IMPL.CandidateForwardBackwardConfig() if config is None else config
+    if not isinstance(resolved, _IMPL.CandidateForwardBackwardConfig):
+        raise TypeError("config must be a CandidateForwardBackwardConfig or None")
+    _validate_config_with_finite_controls(resolved)
+    return resolved
+
+
+def attach_forward_backward_candidate_prior(
+    candidates: Any,
+    *,
+    config: Any = None,
+) -> Any:
+    """Attach the prior after validating an explicitly supplied configuration."""
+
+    resolved = _resolved_forward_backward_config(config)
+    return _ORIGINAL_ATTACH_FORWARD_BACKWARD_CANDIDATE_PRIOR(
+        candidates,
+        config=resolved,
+    )
+
+
+def write_forward_backward_outputs(
+    candidates: Any,
+    *,
+    output_csv: Path,
+    summary_json: Path | None = None,
+    config: Any = None,
+    extra_summary: dict[str, Any] | None = None,
+) -> None:
+    """Write outputs only after validating an explicitly supplied configuration."""
+
+    resolved = _resolved_forward_backward_config(config)
+    _ORIGINAL_WRITE_FORWARD_BACKWARD_OUTPUTS(
+        candidates,
+        output_csv=output_csv,
+        summary_json=summary_json,
+        config=resolved,
+        extra_summary=extra_summary,
+    )
+
+
 def _transition_log_likelihood_with_canonical_track_ids(
     previous: dict[str, Any],
     current: dict[str, Any],
@@ -94,7 +142,10 @@ def _candidate_score_with_row_fallback(rows: pd.DataFrame, config: Any) -> pd.Se
     return score.fillna(float(score.loc[finite].min())).astype(float)
 
 
-def _candidate_sigma_with_invalid_fallback(rows: pd.DataFrame, config: Any) -> pd.Series:
+def _candidate_sigma_with_invalid_fallback(
+    rows: pd.DataFrame,
+    config: Any,
+) -> pd.Series:
     """Use the configured fallback for malformed candidate uncertainty values."""
 
     if config.sigma_column not in rows.columns:
@@ -128,6 +179,8 @@ def _descending_average_ranks(values: np.ndarray) -> np.ndarray:
 
 
 _IMPL._validate_config = _validate_config_with_finite_controls
+_IMPL.attach_forward_backward_candidate_prior = attach_forward_backward_candidate_prior
+_IMPL.write_forward_backward_outputs = write_forward_backward_outputs
 _IMPL._transition_log_likelihood = _transition_log_likelihood_with_canonical_track_ids
 _IMPL._candidate_score = _candidate_score_with_row_fallback
 _IMPL._candidate_sigma = _candidate_sigma_with_invalid_fallback
