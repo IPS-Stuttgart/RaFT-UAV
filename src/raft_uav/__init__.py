@@ -143,6 +143,12 @@ def _radar_frame_grouping_install() -> Callable[[], None]:
     return install
 
 
+def _layout_archive_decode_install() -> Callable[[], None]:
+    from raft_uav.mmuad._layout_archive_decode_patch import install
+
+    return install
+
+
 if os.environ.get("RAFT_UAV_SKIP_RUNTIME_HOOKS") != "1":
     _optional_runtime_hook(_radar_covariance_install)
     _optional_runtime_hook(_tracklet_viterbi_install)
@@ -166,3 +172,4 @@ _optional_runtime_hook(_acceleration_sequence_id_install)
 _optional_runtime_hook(_mot_match_distance_complex_install)
 _optional_runtime_hook(_candidate_pull_index_install)
 _optional_runtime_hook(_radar_frame_grouping_install)
+_optional_runtime_hook(_layout_archive_decode_install)
