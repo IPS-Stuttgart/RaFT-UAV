@@ -224,8 +224,10 @@ def _prepare_time_position_samples(
     *,
     dimensions: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    times = np.asarray(times_s, dtype=float).reshape(-1)
-    positions = np.asarray(positions_m, dtype=float)
+    times_masked = np.ma.asarray(times_s, dtype=float).reshape(-1)
+    positions_masked = np.ma.asarray(positions_m, dtype=float)
+    times = np.asarray(times_masked.filled(np.nan), dtype=float)
+    positions = np.asarray(positions_masked.filled(np.nan), dtype=float)
     if positions.ndim != 2:
         raise ValueError("positions_m must be a 2D array")
     if positions.shape[0] != times.size:
@@ -309,7 +311,8 @@ def _interpolate_positions(
 def summarize_errors(errors_m: np.ndarray) -> dict[str, float | None]:
     """Summarize scalar position errors."""
 
-    errors = np.asarray(errors_m, dtype=float).reshape(-1)
+    errors_masked = np.ma.asarray(errors_m, dtype=float).reshape(-1)
+    errors = np.asarray(errors_masked.filled(np.nan), dtype=float)
     errors = errors[np.isfinite(errors)]
     if errors.size == 0:
         return {
@@ -350,14 +353,15 @@ def interpolate_positions_at_times(
     """
 
     max_time_delta_s = _validate_max_time_delta_s(max_time_delta_s)
-    reference_array = np.asarray(reference_positions_m, dtype=float)
+    reference_array = np.ma.asarray(reference_positions_m)
     reference_dimensions = reference_array.shape[1] if reference_array.ndim == 2 else 3
     reference_times, reference_positions = _prepare_time_position_series(
         reference_times_s,
-        reference_array,
+        reference_positions_m,
         dimensions=reference_dimensions,
     )
-    query = np.asarray(query_times_s, dtype=float).reshape(-1)
+    query_masked = np.ma.asarray(query_times_s, dtype=float).reshape(-1)
+    query = np.asarray(query_masked.filled(np.nan), dtype=float)
     if reference_times.size == 0:
         return np.full((query.size, reference_positions.shape[1] if reference_positions.ndim == 2 else 3), np.nan), np.zeros(query.size, dtype=bool)
     interpolated = _interpolate_positions(reference_times, reference_positions, query)
