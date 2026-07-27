@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling ``candidate_forward_backward.py``
 module. This package keeps the public import path while hardening candidate identity,
-row-wise score fallback, tied-rank handling, and invalid uncertainty fallback without
-duplicating the implementation.
+row-wise score fallback, tied-rank handling, invalid uncertainty fallback, and
+configuration validation without duplicating the implementation.
 """
 
 from __future__ import annotations
@@ -30,6 +30,37 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_TRANSITION_LOG_LIKELIHOOD = _IMPL._transition_log_likelihood
+_ORIGINAL_VALIDATE_CONFIG = _IMPL._validate_config
+
+_FINITE_CONFIG_CONTROLS = (
+    "default_sigma_m",
+    "sigma_min_m",
+    "sigma_max_m",
+    "score_weight",
+    "sigma_log_weight",
+    "transition_distance_std_m",
+    "transition_speed_std_mps",
+    "max_speed_mps",
+    "speed_gate_penalty",
+    "source_switch_penalty",
+    "branch_switch_penalty",
+    "track_continuation_bonus",
+    "time_gap_penalty",
+)
+
+
+def _validate_config_with_finite_controls(config: Any) -> None:
+    """Reject non-finite controls before they can poison posterior probabilities."""
+
+    for name in _FINITE_CONFIG_CONTROLS:
+        value = getattr(config, name)
+        try:
+            finite = bool(np.isfinite(value))
+        except (TypeError, ValueError):
+            finite = False
+        if not finite:
+            raise ValueError(f"{name} must be finite")
+    _ORIGINAL_VALIDATE_CONFIG(config)
 
 
 def _transition_log_likelihood_with_canonical_track_ids(
@@ -96,6 +127,7 @@ def _descending_average_ranks(values: np.ndarray) -> np.ndarray:
     return ranks
 
 
+_IMPL._validate_config = _validate_config_with_finite_controls
 _IMPL._transition_log_likelihood = _transition_log_likelihood_with_canonical_track_ids
 _IMPL._candidate_score = _candidate_score_with_row_fallback
 _IMPL._candidate_sigma = _candidate_sigma_with_invalid_fallback
