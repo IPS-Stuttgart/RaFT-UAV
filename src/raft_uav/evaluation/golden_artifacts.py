@@ -12,6 +12,47 @@ import pandas as pd
 
 
 DEFAULT_REQUIRED_FILES = ("metrics.json", "estimates.csv", "diagnostics.csv", "selected_radar.csv")
+_MAX_NAN_FRACTION_ERROR = "max_nan_fraction must be a finite real scalar in [0, 1]"
+
+
+def _validate_max_nan_fraction(value: object) -> float:
+    """Return a valid fraction threshold without lossy scalar coercion."""
+
+    if np.ma.is_masked(value):
+        raise ValueError(_MAX_NAN_FRACTION_ERROR)
+    scalar = value
+    if isinstance(value, np.ma.MaskedArray):
+        if value.ndim != 0:
+            raise ValueError(_MAX_NAN_FRACTION_ERROR)
+        scalar = value.data.item()
+    elif isinstance(value, np.ndarray):
+        if value.ndim != 0:
+            raise ValueError(_MAX_NAN_FRACTION_ERROR)
+        scalar = value.item()
+    elif isinstance(value, np.generic):
+        scalar = value.item()
+    if (
+        np.ma.is_masked(scalar)
+        or isinstance(scalar, (bool, np.bool_))
+        or isinstance(scalar, (complex, np.complexfloating))
+    ):
+        raise ValueError(_MAX_NAN_FRACTION_ERROR)
+    try:
+        fraction = float(scalar)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(_MAX_NAN_FRACTION_ERROR) from exc
+    if not np.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
+        raise ValueError(_MAX_NAN_FRACTION_ERROR)
+    return fraction
+
+
+def _parse_max_nan_fraction(value: str) -> float:
+    """Parse the CLI threshold with an actionable argparse error."""
+
+    try:
+        return _validate_max_nan_fraction(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def check_run_artifacts(
@@ -22,6 +63,7 @@ def check_run_artifacts(
 ) -> list[dict[str, Any]]:
     """Return check results for one run output directory."""
 
+    max_nan_fraction = _validate_max_nan_fraction(max_nan_fraction)
     results: list[dict[str, Any]] = []
     for name in required_files:
         path = run_dir / name
@@ -47,7 +89,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", type=Path, nargs="+")
     parser.add_argument("--output-json", type=Path, required=True)
-    parser.add_argument("--max-nan-fraction", type=float, default=0.05)
+    parser.add_argument("--max-nan-fraction", type=_parse_max_nan_fraction, default=0.05)
     parser.add_argument("--fail-on-error", action="store_true")
     args = parser.parse_args(argv)
 
@@ -70,7 +112,14 @@ def _check_metrics(path: Path) -> list[dict[str, Any]]:
     try:
         metrics = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
-        return [{"check": "metrics_json_parse", "file": str(path), "passed": False, "message": str(exc)}]
+        return [
+            {
+                "check": "metrics_json_parse",
+                "file": str(path),
+                "passed": False,
+                "message": str(exc),
+            }
+        ]
     rows.append({"check": "metrics_json_parse", "file": str(path), "passed": True, "message": ""})
     for key in ("posterior_records", "accepted_measurements", "position_error_3d"):
         rows.append(
@@ -86,6 +135,7 @@ def _check_metrics(path: Path) -> list[dict[str, Any]]:
 
 
 def _check_csv(path: Path, *, max_nan_fraction: float) -> list[dict[str, Any]]:
+    max_nan_fraction = _validate_max_nan_fraction(max_nan_fraction)
     rows: list[dict[str, Any]] = []
     try:
         frame = pd.read_csv(path)
@@ -97,7 +147,11 @@ def _check_csv(path: Path, *, max_nan_fraction: float) -> list[dict[str, Any]]:
             "check": "csv_nonempty_or_allowed",
             "file": str(path),
             "passed": len(frame) > 0 or path.name == "selected_radar.csv",
-            "message": "" if len(frame) > 0 or path.name == "selected_radar.csv" else "CSV has no rows",
+            "message": (
+                ""
+                if len(frame) > 0 or path.name == "selected_radar.csv"
+                else "CSV has no rows"
+            ),
         }
     )
     if frame.empty:
@@ -109,9 +163,9 @@ def _check_csv(path: Path, *, max_nan_fraction: float) -> list[dict[str, Any]]:
             {
                 "check": "numeric_nan_fraction",
                 "file": str(path),
-                "passed": nan_fraction <= float(max_nan_fraction),
+                "passed": nan_fraction <= max_nan_fraction,
                 "value": nan_fraction,
-                "message": "" if nan_fraction <= float(max_nan_fraction) else "too many NaNs",
+                "message": "" if nan_fraction <= max_nan_fraction else "too many NaNs",
             }
         )
         numeric_values = numeric.to_numpy(dtype=float, na_value=np.nan)
@@ -120,12 +174,10 @@ def _check_csv(path: Path, *, max_nan_fraction: float) -> list[dict[str, Any]]:
             {
                 "check": "numeric_nonfinite_fraction",
                 "file": str(path),
-                "passed": nonfinite_fraction <= float(max_nan_fraction),
+                "passed": nonfinite_fraction <= max_nan_fraction,
                 "value": nonfinite_fraction,
                 "message": (
-                    ""
-                    if nonfinite_fraction <= float(max_nan_fraction)
-                    else "too many non-finite values"
+                    "" if nonfinite_fraction <= max_nan_fraction else "too many non-finite values"
                 ),
             }
         )
