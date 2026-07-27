@@ -49,8 +49,33 @@ def test_mapping_rejects_object_wrapped_complex_rotation() -> None:
 
     with warnings.catch_warnings():
         warnings.simplefilter("error", _COMPLEX_WARNING)
-        with pytest.raises(ValueError, match="rotation must contain real values"):
+        with pytest.raises(ValueError, match="calibration matrix must contain real values"):
             calibration_from_mapping(payload)
+
+
+def test_mapping_rejects_complex_time_offset_before_cast() -> None:
+    payload = {
+        "sensors": {
+            "radar": {
+                "time_offset_s": np.complex64(0.25 + 0.5j),
+            }
+        }
+    }
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", _COMPLEX_WARNING)
+        with pytest.raises(ValueError, match="time_offset_s.*must contain real values"):
+            calibration_from_mapping(payload)
+
+
+def test_apply_rejects_complex_points_before_cast() -> None:
+    transform = RigidTransform.identity()
+    points = np.array([[1.0 + 2.0j, 0.0, 0.0]])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", _COMPLEX_WARNING)
+        with pytest.raises(ValueError, match="xyz must contain real values"):
+            transform.apply(points)
 
 
 def test_rigid_transform_keeps_object_wrapped_real_values() -> None:
