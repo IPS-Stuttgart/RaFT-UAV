@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.schema import CandidateFrame
 from raft_uav.mmuad.tracker import TrackerConfig, run_mmuad_tracker, select_tracklet_path
@@ -8,6 +9,27 @@ from raft_uav.mmuad.tracker import TrackerConfig, run_mmuad_tracker, select_trac
 
 def _tracker_config() -> TrackerConfig:
     return TrackerConfig(selection_mobility_radius_m=0.0)
+
+
+def _empty_candidates() -> CandidateFrame:
+    return CandidateFrame(
+        pd.DataFrame(
+            columns=["sequence_id", "time_s", "source", "x_m", "y_m", "z_m"]
+        )
+    )
+
+
+def test_tracker_rejects_falsy_explicit_config_before_empty_return() -> None:
+    with pytest.raises(TypeError, match="TrackerConfig"):
+        run_mmuad_tracker(_empty_candidates(), config=False)
+
+
+def test_tracker_preserves_default_empty_input_behavior() -> None:
+    output = run_mmuad_tracker(_empty_candidates())
+
+    assert output.metrics == {"count": 0}
+    assert output.estimates.empty
+    assert output.selected_tracklets.empty
 
 
 def test_tracker_orders_numeric_string_timestamps_chronologically() -> None:
