@@ -172,14 +172,24 @@ def pointcloud2_to_candidates(
 
 
 def _finite_timestamp_seconds(value: Any) -> float:
-    if isinstance(value, bool | np.bool_):
-        raise ValueError("PointCloud2 time_s must be a finite numeric timestamp")
+    error = "PointCloud2 time_s must be a finite numeric timestamp"
+    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+        raise ValueError(error)
     try:
-        timestamp_s = float(value)
+        scalar = np.asarray(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError("PointCloud2 time_s must be a finite numeric timestamp") from exc
+        raise ValueError(error) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+        raise ValueError(error)
+    item = scalar.item()
+    if np.ma.is_masked(item) or isinstance(item, (bool, np.bool_)) or np.iscomplexobj(item):
+        raise ValueError(error)
+    try:
+        timestamp_s = float(item)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
     if not np.isfinite(timestamp_s):
-        raise ValueError("PointCloud2 time_s must be a finite numeric timestamp")
+        raise ValueError(error)
     return timestamp_s
 
 

@@ -1,7 +1,9 @@
 import struct
 from types import SimpleNamespace
 from typing import Any
+import warnings
 
+import numpy as np
 import pytest
 
 from raft_uav.mmuad.pointcloud2 import pointcloud2_to_candidates, pointcloud2_to_dataframe
@@ -91,3 +93,24 @@ def test_pointcloud2_to_candidates_rejects_malformed_timestamps(time_s: Any) -> 
             sequence_id="seq0",
             time_s=time_s,
         )
+
+
+@pytest.mark.parametrize(
+    "time_s",
+    [
+        1.25 + 2.0j,
+        np.complex64(1.25 + 2.0j),
+        np.complex128(1.25 + 2.0j),
+        np.array(np.complex64(1.25 + 2.0j), dtype=object),
+        np.ma.array(np.complex128(1.25 + 2.0j), dtype=object, mask=False),
+    ],
+)
+def test_pointcloud2_to_candidates_rejects_complex_timestamps(time_s: Any) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(ValueError, match="time_s must be a finite numeric timestamp"):
+            pointcloud2_to_candidates(
+                _empty_message(_field("x", 0), _field("y", 4), _field("z", 8)),
+                sequence_id="seq0",
+                time_s=time_s,
+            )
