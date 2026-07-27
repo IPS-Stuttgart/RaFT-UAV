@@ -9,6 +9,7 @@ from importlib import import_module
 import numpy as np
 import pandas as pd
 
+from raft_uav.io._catprob_frame_grouping import catprob_best_per_frame_rows
 from raft_uav.numeric import optional_float
 
 
@@ -83,6 +84,29 @@ def _sequence_position_groups(values: pd.Series) -> list[list[int]]:
     return list(groups.values())
 
 
+def _select_unscoped_radar_measurement_rows(
+    radar: pd.DataFrame,
+    *,
+    selection: str,
+    truth: pd.DataFrame | None,
+    catprob_threshold: object,
+    truth_gate_m: object,
+    truth_time_gate_s: object,
+) -> pd.DataFrame:
+    """Dispatch one sequence through the authoritative selection implementation."""
+
+    if selection == "catprob":
+        return catprob_best_per_frame_rows(radar, float(catprob_threshold))
+    return _ORIGINAL_SELECT_RADAR_MEASUREMENT_ROWS(
+        radar,
+        selection=selection,
+        truth=truth,
+        catprob_threshold=catprob_threshold,
+        truth_gate_m=truth_gate_m,
+        truth_time_gate_s=truth_time_gate_s,
+    )
+
+
 @wraps(_ORIGINAL_SELECT_RADAR_MEASUREMENT_ROWS)
 def _select_radar_measurement_rows(
     radar: pd.DataFrame,
@@ -105,7 +129,7 @@ def _select_radar_measurement_rows(
     )
 
     if selection != "catprob" or "sequence_id" not in radar.columns or radar.empty:
-        return _ORIGINAL_SELECT_RADAR_MEASUREMENT_ROWS(
+        return _select_unscoped_radar_measurement_rows(
             radar,
             selection=selection,
             truth=truth,
@@ -116,7 +140,7 @@ def _select_radar_measurement_rows(
 
     position_groups = _sequence_position_groups(radar["sequence_id"])
     if len(position_groups) <= 1:
-        return _ORIGINAL_SELECT_RADAR_MEASUREMENT_ROWS(
+        return _select_unscoped_radar_measurement_rows(
             radar,
             selection=selection,
             truth=truth,
@@ -132,7 +156,7 @@ def _select_radar_measurement_rows(
     scoped[order_column] = np.arange(len(scoped), dtype=int)
 
     selected_parts = [
-        _ORIGINAL_SELECT_RADAR_MEASUREMENT_ROWS(
+        _select_unscoped_radar_measurement_rows(
             scoped.iloc[positions],
             selection=selection,
             truth=truth,
@@ -164,9 +188,11 @@ def install() -> None:
     """Install class-probability runtime fixes once per interpreter."""
 
     if not getattr(_aerpaw, "_catprob_sequence_patch_applied", False):
+        _aerpaw._catprob_best_per_frame_rows = catprob_best_per_frame_rows
         _aerpaw.select_radar_measurement_rows = _select_radar_measurement_rows
         legacy = getattr(_aerpaw, "_IMPL", None)
         if legacy is not None:
+            legacy._catprob_best_per_frame_rows = catprob_best_per_frame_rows
             legacy.select_radar_measurement_rows = _select_radar_measurement_rows
         _aerpaw._catprob_sequence_patch_applied = True
     _install_class_probability_label_validation()
