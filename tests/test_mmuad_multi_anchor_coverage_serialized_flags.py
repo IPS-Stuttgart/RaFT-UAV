@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import raft_uav.mmuad.candidate_mixture_group_multi_anchor_coverage as coverage_module
 from raft_uav.mmuad.candidate_mixture_group_multi_anchor_coverage import (
@@ -84,3 +85,54 @@ def test_coverage_summary_parses_serialized_rescue_flags() -> None:
     coverage = summary["anchor_group_coverage"]
     assert coverage["rescued_candidate_rows"] == 1
     assert coverage["rescued_group_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("enabled", 1, "enabled"),
+        ("max_anchor_distance_m", True, "max_anchor_distance_m"),
+        ("max_extra_groups_per_frame", True, "max_extra_groups_per_frame"),
+        ("max_extra_groups_per_frame", 1.5, "max_extra_groups_per_frame"),
+        (
+            "max_siblings_per_rescued_group",
+            False,
+            "max_siblings_per_rescued_group",
+        ),
+        (
+            "max_siblings_per_rescued_group",
+            1.5,
+            "max_siblings_per_rescued_group",
+        ),
+    ],
+)
+def test_coverage_config_rejects_lossy_scalar_coercion(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    config = AnchorGroupCoverageConfig(**{field: value})
+
+    with pytest.raises(ValueError, match=message):
+        coverage_module._validate_coverage_config(config)
+
+
+@pytest.mark.parametrize("value", [False, 0, "", {}])
+def test_public_selector_rejects_falsy_non_config_values(value: object) -> None:
+    with pytest.raises(TypeError, match="coverage_config"):
+        coverage_module.select_multi_anchor_coverage_hypothesis_group_topk(
+            pd.DataFrame(),
+            anchor_estimates={},
+            coverage_config=value,
+        )
+
+
+def test_coverage_config_accepts_integer_like_numpy_scalars() -> None:
+    config = AnchorGroupCoverageConfig(
+        enabled=np.bool_(True),
+        max_anchor_distance_m=np.float64(2.5),
+        max_extra_groups_per_frame=np.float64(2.0),
+        max_siblings_per_rescued_group=np.int64(1),
+    )
+
+    coverage_module._validate_coverage_config(config)
