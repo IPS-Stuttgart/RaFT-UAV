@@ -46,16 +46,99 @@ def _radar_frame_groups(radar: pd.DataFrame) -> list[pd.DataFrame]:
     return [group.copy() for _, group in ordered.groupby(group_keys, sort=False)]
 
 
+def _catprob_frame_group_keys(radar: pd.DataFrame) -> list[tuple[Any, ...]]:
+    """Build per-row physical-frame keys for the legacy catProb selector."""
+
+    if "frame_index" in radar.columns:
+        frame_indices = pd.to_numeric(radar["frame_index"], errors="coerce")
+    else:
+        frame_indices = pd.Series(np.nan, index=radar.index, dtype=float)
+    if "timestamp" in radar.columns:
+        timestamps = pd.to_datetime(radar["timestamp"], errors="coerce")
+    else:
+        timestamps = pd.Series(pd.NaT, index=radar.index, dtype="datetime64[ns]")
+    if "time_s" in radar.columns:
+        times = pd.to_numeric(radar["time_s"], errors="coerce")
+    else:
+        times = pd.Series(np.nan, index=radar.index, dtype=float)
+
+    rows: list[tuple[float, tuple[Any, ...] | None]] = []
+    indexed_frames_by_time: dict[tuple[Any, ...], set[float]] = {}
+    for frame_index, timestamp, time_s in zip(
+        frame_indices, timestamps, times, strict=True
+    ):
+        if not pd.isna(timestamp):
+            time_key: tuple[Any, ...] | None = ("timestamp", timestamp)
+        elif np.isfinite(time_s):
+            time_key = ("time_s", float(time_s))
+        else:
+            time_key = None
+        numeric_frame_index = (
+            float(frame_index) if np.isfinite(frame_index) else float("nan")
+        )
+        rows.append((numeric_frame_index, time_key))
+        if np.isfinite(numeric_frame_index) and time_key is not None:
+            indexed_frames_by_time.setdefault(time_key, set()).add(numeric_frame_index)
+
+    keys: list[tuple[Any, ...]] = []
+    for frame_index, time_key in rows:
+        if np.isfinite(frame_index) and time_key is not None:
+            key = ("frame_index", frame_index, *time_key)
+        elif np.isfinite(frame_index):
+            key = ("frame_index", frame_index)
+        elif time_key is not None:
+            matching_frames = indexed_frames_by_time.get(time_key, set())
+            if len(matching_frames) == 1:
+                key = ("frame_index", next(iter(matching_frames)), *time_key)
+            else:
+                key = time_key
+        else:
+            key = ("__missing_frame__",)
+        keys.append(key)
+    return keys
+
+
+def _catprob_best_per_frame_rows(
+    radar: pd.DataFrame, catprob_threshold: float
+) -> pd.DataFrame:
+    """Select one candidate per physical frame under mixed index availability."""
+
+    from raft_uav.io import aerpaw
+
+    candidates = aerpaw._catprob_threshold_rows(radar, catprob_threshold)
+    if candidates.empty:
+        return candidates
+
+    key_column = "__raft_uav_frame_group_key__"
+    while key_column in candidates.columns:
+        key_column = f"_{key_column}"
+    ranked = aerpaw._catprob_ranked_rows(
+        candidates.assign(**{key_column: _catprob_frame_group_keys(candidates)})
+    )
+
+    keep_positions: list[int] = []
+    seen_frames: set[tuple[Any, ...]] = set()
+    for position, frame_key in enumerate(ranked[key_column].tolist()):
+        if frame_key in seen_frames:
+            continue
+        seen_frames.add(frame_key)
+        keep_positions.append(position)
+    selected = aerpaw._dataframe_from_ranked_records(ranked, keep_positions)
+    return selected.drop(columns=[key_column]).sort_index()
+
+
 def install() -> None:
-    """Install collision-safe frame grouping into the public association module."""
+    """Install collision-safe grouping into association and legacy selection."""
 
     global _INSTALLED
     if _INSTALLED:
         return
     from raft_uav.baselines import radar_association
+    from raft_uav.io import aerpaw
 
     radar_association._radar_frame_groups = _radar_frame_groups
     implementation: Any = getattr(radar_association, "_IMPL", None)
     if implementation is not None:
         implementation._radar_frame_groups = _radar_frame_groups
+    aerpaw._catprob_best_per_frame_rows = _catprob_best_per_frame_rows
     _INSTALLED = True
