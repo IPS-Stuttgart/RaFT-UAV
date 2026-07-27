@@ -101,6 +101,12 @@ def _repair_complex_row_validation_install() -> Callable[[], None]:
     return install
 
 
+def _acceleration_sequence_id_install() -> Callable[[], None]:
+    from raft_uav.mmuad._acceleration_sequence_id_patch import install
+
+    return install
+
+
 def _candidate_pull_index_install() -> Callable[[], None]:
     from raft_uav.mmuad._candidate_pull_index_patch import install
 
@@ -123,4 +129,5 @@ _optional_runtime_hook(_point_cloud_source_name_install)
 _optional_runtime_hook(_candidate_reservoir_config_validation_install)
 _optional_runtime_hook(_acceleration_limit_displacement_install)
 _optional_runtime_hook(_repair_complex_row_validation_install)
+_optional_runtime_hook(_acceleration_sequence_id_install)
 _optional_runtime_hook(_candidate_pull_index_install)
