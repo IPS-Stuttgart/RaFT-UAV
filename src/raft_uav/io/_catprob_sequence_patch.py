@@ -43,8 +43,10 @@ def _validated_selection_controls(
     truth_gate_m: object,
     truth_time_gate_s: object,
 ) -> tuple[object, object, object]:
-    """Validate only controls used by the active non-empty selection mode."""
+    """Validate the selection mode and controls used by a non-empty input."""
 
+    if not isinstance(selection, str) or selection not in _aerpaw.RADAR_SELECTION_MODES:
+        raise ValueError(f"unknown radar selection {selection!r}")
     if radar.empty:
         return catprob_threshold, truth_gate_m, truth_time_gate_s
     if selection in {"catprob", "catprob-all"}:
