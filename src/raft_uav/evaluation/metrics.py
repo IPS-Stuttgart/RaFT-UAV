@@ -180,10 +180,14 @@ def _validate_max_time_delta_s(value: float | None) -> float | None:
     if np.ma.is_masked(value):
         raise ValueError("max_time_delta_s must be a finite, non-negative scalar")
     array = np.asarray(value)
-    if array.ndim != 0:
+    if array.ndim != 0 or np.iscomplexobj(array):
         raise ValueError("max_time_delta_s must be a finite, non-negative scalar")
     scalar = array.item()
-    if isinstance(scalar, (bool, np.bool_)):
+    if (
+        isinstance(scalar, (bool, np.bool_))
+        or np.ma.is_masked(scalar)
+        or np.iscomplexobj(scalar)
+    ):
         raise ValueError("max_time_delta_s must be a finite, non-negative scalar")
     try:
         parsed = float(scalar)
