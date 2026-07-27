@@ -27,6 +27,26 @@ def test_factor_graph_skips_rows_without_finite_time_and_position() -> None:
     )
 
 
+def test_factor_graph_skips_positions_with_nonzero_imaginary_components() -> None:
+    measurements = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0],
+            "east_m": [1.0 + 5.0j, 2.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+
+    result = smooth_position_trajectory(measurements)
+
+    assert result.success
+    np.testing.assert_allclose(result.estimates["time_s"], [1.0])
+    np.testing.assert_allclose(
+        result.estimates[["east_m", "north_m", "up_m"]],
+        [[2.0, 0.0, 0.0]],
+    )
+
+
 def test_factor_graph_rejects_measurements_without_any_usable_row() -> None:
     measurements = pd.DataFrame(
         {
