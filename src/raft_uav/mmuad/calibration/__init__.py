@@ -42,7 +42,7 @@ def _contains_complex(value: Any) -> bool:
     if isinstance(value, (complex, np.complexfloating)):
         return True
     if isinstance(value, dict):
-        return any(_contains_complex(item) for item in value.values())
+        return any(item is not value and _contains_complex(item) for item in value.values())
     try:
         values = np.asarray(value)
     except (TypeError, ValueError):
@@ -106,13 +106,19 @@ def _transform_from_matrix(matrix: np.ndarray) -> RigidTransform:
 
 
 def calibration_from_mapping(payload: dict[str, Any]):
-    """Build calibrations after validating real-valued clock offsets."""
+    """Build calibrations after validating values cast before helper dispatch."""
 
     sensors_payload = payload.get("sensors", payload)
     if isinstance(sensors_payload, dict):
         for source, entry in sensors_payload.items():
-            if isinstance(entry, dict) and "time_offset_s" in entry:
+            if not isinstance(entry, dict):
+                continue
+            if "time_offset_s" in entry:
                 _reject_complex(entry["time_offset_s"], name=f"time_offset_s for {source!r}")
+            if "quaternion_wxyz" in entry:
+                _reject_complex(entry["quaternion_wxyz"], name="quaternion")
+            if "rpy_deg" in entry:
+                _reject_complex(entry["rpy_deg"], name="rpy_deg")
     return _ORIGINAL_CALIBRATION_FROM_MAPPING(payload)
 
 
