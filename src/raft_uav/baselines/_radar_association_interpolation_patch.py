@@ -13,6 +13,9 @@ from importlib import import_module
 import numpy as np
 
 
+_ANCHOR_ATOL_S = 1.0e-9
+
+
 def apply_radar_association_interpolation_patch() -> None:
     """Install interpolation masks that reject frames outside the anchor span."""
 
@@ -41,7 +44,12 @@ def _anchor_hits(
     if frame_times.size == 0:
         return on_anchor
     anchor_indices = np.minimum(insertion, anchor_times.size - 1)
-    return on_anchor & np.isclose(anchor_times[anchor_indices], frame_times)
+    return on_anchor & np.isclose(
+        anchor_times[anchor_indices],
+        frame_times,
+        rtol=0.0,
+        atol=_ANCHOR_ATOL_S,
+    )
 
 
 def _within_interpolation_gap(
