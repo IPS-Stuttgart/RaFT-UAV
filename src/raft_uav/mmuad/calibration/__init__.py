@@ -37,10 +37,12 @@ _ORIGINAL_TRANSFORM_FROM_MATRIX = _IMPL._transform_from_matrix
 
 
 def _contains_complex(value: Any) -> bool:
-    """Return whether an array-like value contains a complex scalar."""
+    """Return whether a nested array-like value contains a complex scalar."""
 
     if isinstance(value, (complex, np.complexfloating)):
         return True
+    if isinstance(value, dict):
+        return any(_contains_complex(item) for item in value.values())
     try:
         values = np.asarray(value)
     except (TypeError, ValueError):
@@ -49,7 +51,7 @@ def _contains_complex(value: Any) -> bool:
         return True
     if values.dtype != object:
         return False
-    return any(_contains_complex(item) for item in values.flat)
+    return any(item is not value and _contains_complex(item) for item in values.flat)
 
 
 def _reject_complex(value: Any, *, name: str) -> None:
