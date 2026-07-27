@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.baselines.kalman import TrackingMeasurement
+from raft_uav.numeric import optional_float
 from raft_uav.uncertainty import covariance_from_row
 
 
@@ -25,13 +26,28 @@ def rf_measurements_to_enu_with_uncertainty(
 
     default_std = _require_positive_float(default_std_m, name="default_std_m")
     measurements: list[TrackingMeasurement] = []
-    for _, row in rf.iterrows():
-        std_m = _positive_float(row.get("std_m")) or default_std
+    for position, (_, row) in enumerate(rf.iterrows()):
+        std_value = rf["std_m"].iloc[position] if "std_m" in rf.columns else None
+        std_m = _positive_float(std_value) or default_std
         fallback = np.diag([std_m**2, std_m**2])
         measurements.append(
             TrackingMeasurement(
-                time_s=float(row["time_s"]),
-                vector=np.array([float(row["east_m"]), float(row["north_m"])]),
+                time_s=_finite_real_scalar(
+                    rf["time_s"].iloc[position],
+                    name="time_s",
+                ),
+                vector=np.array(
+                    [
+                        _finite_real_scalar(
+                            rf["east_m"].iloc[position],
+                            name="east_m",
+                        ),
+                        _finite_real_scalar(
+                            rf["north_m"].iloc[position],
+                            name="north_m",
+                        ),
+                    ]
+                ),
                 covariance=covariance_from_row(
                     row,
                     2,
@@ -67,8 +83,23 @@ def radar_measurements_to_enu_with_uncertainty(
     )
     position_fallback = np.diag([default_xy_std**2, default_xy_std**2, default_z_std**2])
     measurements: list[TrackingMeasurement] = []
-    for _, row in radar.iterrows():
-        position = np.array([float(row["east_m"]), float(row["north_m"]), float(row["up_m"])])
+    for position_index, (_, row) in enumerate(radar.iterrows()):
+        position = np.array(
+            [
+                _finite_real_scalar(
+                    radar["east_m"].iloc[position_index],
+                    name="east_m",
+                ),
+                _finite_real_scalar(
+                    radar["north_m"].iloc[position_index],
+                    name="north_m",
+                ),
+                _finite_real_scalar(
+                    radar["up_m"].iloc[position_index],
+                    name="up_m",
+                ),
+            ]
+        )
         position_covariance = covariance_from_row(
             row,
             3,
@@ -86,7 +117,10 @@ def radar_measurements_to_enu_with_uncertainty(
             covariance[3:, 3:] = np.diag([default_velocity_std**2] * 3)
         measurements.append(
             TrackingMeasurement(
-                time_s=float(row["time_s"]),
+                time_s=_finite_real_scalar(
+                    radar["time_s"].iloc[position_index],
+                    name="time_s",
+                ),
                 vector=vector,
                 covariance=covariance,
                 source="radar",
@@ -102,9 +136,18 @@ def _radar_velocity_vector_enu(row: pd.Series) -> np.ndarray | None:
     try:
         velocity = np.array(
             [
-                float(row["velocity_east_mps"]),
-                float(row["velocity_north_mps"]),
-                -float(row["velocity_down_mps"]),
+                _finite_real_scalar(
+                    row["velocity_east_mps"],
+                    name="velocity_east_mps",
+                ),
+                _finite_real_scalar(
+                    row["velocity_north_mps"],
+                    name="velocity_north_mps",
+                ),
+                -_finite_real_scalar(
+                    row["velocity_down_mps"],
+                    name="velocity_down_mps",
+                ),
             ],
             dtype=float,
         )
@@ -113,18 +156,25 @@ def _radar_velocity_vector_enu(row: pd.Series) -> np.ndarray | None:
     return velocity if np.isfinite(velocity).all() else None
 
 
-def _require_positive_float(value: object, *, name: str) -> float:
-    number = _positive_float(value)
+def _finite_real_scalar(value: object, *, name: str) -> float:
+    """Return one finite real scalar without lossy NumPy coercion."""
+
+    number = optional_float(value)
     if number is None:
+        raise ValueError(f"{name} must be a finite real scalar")
+    return number
+
+
+def _require_positive_float(value: object, *, name: str) -> float:
+    number = _finite_real_scalar(value, name=name)
+    if number <= 0.0:
         raise ValueError(f"{name} must be finite and positive, got {value!r}")
     return number
 
 
 def _positive_float(value: object) -> float | None:
-    if isinstance(value, bool | np.bool_):
-        return None
     try:
-        number = float(value)
-    except (TypeError, ValueError):
+        number = _finite_real_scalar(value, name="value")
+    except ValueError:
         return None
-    return number if np.isfinite(number) and number > 0.0 else None
+    return number if number > 0.0 else None
