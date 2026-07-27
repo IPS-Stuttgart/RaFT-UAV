@@ -70,3 +70,21 @@ def test_direct_candidate_centers_reject_ambiguous_or_misaligned_rows() -> None:
     results = duplicate_index.reset_index(drop=True)
     with pytest.raises(ValueError, match=r"current_xyz must have shape"):
         candidate_centers_for_results(_candidates(), results, np.zeros((1, 3)))
+
+
+@pytest.mark.parametrize(
+    "current_xyz",
+    [
+        np.array([[1.0 + 2.0j, 0.0, 0.0]]),
+        np.array([[np.nan, 0.0, 0.0]]),
+        np.array([[np.inf, 0.0, 0.0]]),
+        np.ma.array([[1.0, 0.0, 0.0]], mask=[[True, False, False]]),
+    ],
+)
+def test_direct_candidate_centers_reject_invalid_current_positions(
+    current_xyz: np.ndarray,
+) -> None:
+    results = pd.DataFrame({"Sequence": ["seq1"], "Timestamp": [0.0]})
+
+    with pytest.raises(ValueError, match="current_xyz must contain only finite real values"):
+        candidate_centers_for_results(_candidates(), results, current_xyz)
