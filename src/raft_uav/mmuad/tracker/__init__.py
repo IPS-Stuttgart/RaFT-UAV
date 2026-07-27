@@ -211,7 +211,14 @@ def _run_sequence_filter(
         return pd.DataFrame()
 
     ordered_selected = _ordered_filter_events(selected, selected_keys=selected_keys)
-    bootstrap = ordered_selected.iloc[0]
+    # Disabling selected-measurement bootstrap must also change the initial event.
+    # Otherwise rows before the first selected detection are processed from a state
+    # initialized in the future, while the legacy predictor only rewinds its clock.
+    bootstrap = (
+        ordered_selected.iloc[0]
+        if config.first_selected_bootstrap
+        else events.iloc[0]
+    )
     filt = _LEGACY._ConstantVelocityFilter(
         acceleration_std_mps2=config.acceleration_std_mps2,
         initial_time_s=float(bootstrap["time_s"]),
