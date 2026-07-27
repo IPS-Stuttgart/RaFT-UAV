@@ -20,6 +20,11 @@ import pandas as pd
 
 from raft_uav.baselines.kalman import TrackingMeasurement, measurement_matrix
 import raft_uav.baselines.radar_association as radar_association
+from raft_uav.heteroscedastic_measurements import (
+    _finite_real_scalar,
+    _positive_float,
+    _require_positive_float,
+)
 import raft_uav.cli as legacy_cli
 import raft_uav.io.aerpaw as aerpaw
 from raft_uav.uncertainty import HeteroscedasticUncertaintyModel, covariance_from_row
@@ -89,7 +94,7 @@ def heteroscedastic_covariance_hooks(
             frame = _apply_model_if_available(model, frame, source="rf")
             return rf_measurements_to_enu_with_row_covariance(
                 frame,
-                default_std_m=float(kwargs.get("default_std_m", 75.0)),
+                default_std_m=kwargs.get("default_std_m", 75.0),
             )
 
         def radar_measurements_to_enu_hook(*args: object, **kwargs: object) -> list[TrackingMeasurement]:
@@ -99,9 +104,12 @@ def heteroscedastic_covariance_hooks(
             frame = _apply_model_if_available(model, frame, source="radar")
             return radar_measurements_to_enu_with_row_covariance(
                 frame,
-                default_xy_std_m=float(kwargs.get("default_xy_std_m", 25.0)),
-                default_z_std_m=float(kwargs.get("default_z_std_m", 35.0)),
-                default_velocity_std_mps=float(kwargs.get("default_velocity_std_mps", 12.0)),
+                default_xy_std_m=kwargs.get("default_xy_std_m", 25.0),
+                default_z_std_m=kwargs.get("default_z_std_m", 35.0),
+                default_velocity_std_mps=kwargs.get(
+                    "default_velocity_std_mps",
+                    12.0,
+                ),
                 include_velocity=bool(kwargs.get("include_velocity", False)),
             )
 
@@ -181,14 +189,30 @@ def rf_measurements_to_enu_with_row_covariance(
 ) -> list[TrackingMeasurement]:
     """Convert normalized RF rows, preferring learned row-wise covariance."""
 
+    default_std = _require_positive_float(default_std_m, name="default_std_m")
     measurements: list[TrackingMeasurement] = []
-    for _, row in rf.iterrows():
-        std_m = _positive_float(row.get("std_m")) or float(default_std_m)
+    for position, (_, row) in enumerate(rf.iterrows()):
+        std_value = rf["std_m"].iloc[position] if "std_m" in rf.columns else None
+        std_m = _positive_float(std_value) or default_std
         fallback = np.diag([std_m**2, std_m**2])
         measurements.append(
             TrackingMeasurement(
-                time_s=float(row["time_s"]),
-                vector=np.array([float(row["east_m"]), float(row["north_m"])]),
+                time_s=_finite_real_scalar(
+                    rf["time_s"].iloc[position],
+                    name="time_s",
+                ),
+                vector=np.array(
+                    [
+                        _finite_real_scalar(
+                            rf["east_m"].iloc[position],
+                            name="east_m",
+                        ),
+                        _finite_real_scalar(
+                            rf["north_m"].iloc[position],
+                            name="north_m",
+                        ),
+                    ]
+                ),
                 covariance=covariance_from_row(row, 2, fallback),
                 source="rf",
             )
@@ -206,12 +230,39 @@ def radar_measurements_to_enu_with_row_covariance(
 ) -> list[TrackingMeasurement]:
     """Convert normalized radar rows, preferring learned row-wise covariance."""
 
+    default_xy_std = _require_positive_float(
+        default_xy_std_m,
+        name="default_xy_std_m",
+    )
+    default_z_std = _require_positive_float(
+        default_z_std_m,
+        name="default_z_std_m",
+    )
+    default_velocity_std = _require_positive_float(
+        default_velocity_std_mps,
+        name="default_velocity_std_mps",
+    )
     fallback_position_covariance = np.diag(
-        [float(default_xy_std_m) ** 2, float(default_xy_std_m) ** 2, float(default_z_std_m) ** 2]
+        [default_xy_std**2, default_xy_std**2, default_z_std**2]
     )
     measurements: list[TrackingMeasurement] = []
-    for _, row in radar.iterrows():
-        position = np.array([float(row["east_m"]), float(row["north_m"]), float(row["up_m"])])
+    for position_index, (_, row) in enumerate(radar.iterrows()):
+        position = np.array(
+            [
+                _finite_real_scalar(
+                    radar["east_m"].iloc[position_index],
+                    name="east_m",
+                ),
+                _finite_real_scalar(
+                    radar["north_m"].iloc[position_index],
+                    name="north_m",
+                ),
+                _finite_real_scalar(
+                    radar["up_m"].iloc[position_index],
+                    name="up_m",
+                ),
+            ]
+        )
         position_covariance = covariance_from_row(row, 3, fallback_position_covariance)
         velocity = aerpaw._radar_velocity_vector_enu(row) if include_velocity else None
         if velocity is None:
@@ -221,10 +272,13 @@ def radar_measurements_to_enu_with_row_covariance(
             vector = np.concatenate([position, velocity])
             covariance = np.zeros((6, 6), dtype=float)
             covariance[:3, :3] = position_covariance
-            covariance[3:, 3:] = np.diag([float(default_velocity_std_mps) ** 2] * 3)
+            covariance[3:, 3:] = np.diag([default_velocity_std**2] * 3)
         measurements.append(
             TrackingMeasurement(
-                time_s=float(row["time_s"]),
+                time_s=_finite_real_scalar(
+                    radar["time_s"].iloc[position_index],
+                    name="time_s",
+                ),
                 vector=vector,
                 covariance=covariance,
                 source="radar",
@@ -265,7 +319,18 @@ def nis_scored_candidates_with_row_covariance(
     state_position = observation @ state
     predicted_covariance = observation @ state_covariance @ observation.T
 
-    vectors = candidates[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    vectors = np.column_stack(
+        [
+            np.array(
+                [
+                    _finite_real_scalar(value, name=column)
+                    for value in candidates[column].tolist()
+                ],
+                dtype=float,
+            )
+            for column in ("east_m", "north_m", "up_m")
+        ]
+    )
     nises: list[float] = []
     for (_, row), vector in zip(candidates.iterrows(), vectors):
         measurement_covariance = covariance_from_row(row, 3, np.asarray(covariance, dtype=float))
@@ -281,14 +346,6 @@ def nis_scored_candidates_with_row_covariance(
     scored["association_nis"] = np.asarray(nises, dtype=float)
     scored["association_candidate_rows"] = int(len(candidates))
     return scored
-
-
-def _positive_float(value: object) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if np.isfinite(number) and number > 0.0 else None
 
 
 if __name__ == "__main__":
