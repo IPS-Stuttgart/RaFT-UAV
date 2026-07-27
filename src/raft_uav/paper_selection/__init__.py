@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling ``paper_selection.py``
 module. This package preserves the public import path while excluding non-finite
-class probabilities and preserving exact integer-like track identifiers in
-selection metadata and segment tie-breaking.
+class probabilities, preserving exact integer-like track identifiers, and
+splitting reused frame counters into distinct continuous-track epochs.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ if _SPEC is None or _SPEC.loader is None:  # pragma: no cover
 _LEGACY = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _LEGACY
 _SPEC.loader.exec_module(_LEGACY)
+_ORIGINAL_CONTINUOUS_TRACK_SEGMENTS = _LEGACY._continuous_track_segments
 
 
 def _catprob_candidate_pool(
@@ -75,9 +76,63 @@ def _track_id_from_frame(frame: pd.DataFrame) -> int:
     return -1
 
 
+def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
+    """Split complete frame-index tracks at chronological counter restarts."""
+
+    if radar.empty or "track_id" not in radar.columns:
+        return []
+
+    segments: list[pd.DataFrame] = []
+    for _, track_rows in radar.groupby("track_id", sort=True):
+        frame_index = (
+            pd.to_numeric(track_rows["frame_index"], errors="coerce")
+            if "frame_index" in track_rows.columns
+            else None
+        )
+        if (
+            frame_index is None
+            or not bool(np.isfinite(frame_index).all())
+            or "time_s" not in track_rows.columns
+        ):
+            segments.extend(_ORIGINAL_CONTINUOUS_TRACK_SEGMENTS(track_rows))
+            continue
+
+        times = pd.to_numeric(track_rows["time_s"], errors="coerce")
+        if not bool(np.isfinite(times).all()):
+            segments.extend(_ORIGINAL_CONTINUOUS_TRACK_SEGMENTS(track_rows))
+            continue
+
+        chronological_order = np.argsort(
+            times.to_numpy(dtype=float),
+            kind="mergesort",
+        )
+        chronological = track_rows.iloc[chronological_order].reset_index(drop=True)
+        chronological_frames = pd.to_numeric(
+            chronological["frame_index"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+        chronological_times = pd.to_numeric(
+            chronological["time_s"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+        frame_deltas = np.diff(chronological_frames)
+        time_deltas = np.diff(chronological_times)
+        restart = (time_deltas > 1.0e-9) & (frame_deltas <= 1.0e-9)
+        epoch_bounds = np.r_[
+            0,
+            np.flatnonzero(restart) + 1,
+            len(chronological),
+        ]
+        for start, end in zip(epoch_bounds[:-1], epoch_bounds[1:]):
+            epoch = chronological.iloc[int(start) : int(end)].copy()
+            segments.extend(_ORIGINAL_CONTINUOUS_TRACK_SEGMENTS(epoch))
+    return segments
+
+
 _LEGACY._catprob_candidate_pool = _catprob_candidate_pool
 _LEGACY._mean_catprob = _mean_catprob
 _LEGACY._track_id_from_frame = _track_id_from_frame
+_LEGACY._continuous_track_segments = _continuous_track_segments
 
 globals().update(
     {
@@ -89,6 +144,7 @@ globals().update(
 globals()["_catprob_candidate_pool"] = _catprob_candidate_pool
 globals()["_mean_catprob"] = _mean_catprob
 globals()["_track_id_from_frame"] = _track_id_from_frame
+globals()["_continuous_track_segments"] = _continuous_track_segments
 
 __doc__ = _LEGACY.__doc__
 __all__ = [
