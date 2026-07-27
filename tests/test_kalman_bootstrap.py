@@ -1,6 +1,10 @@
 import numpy as np
 
-from raft_uav.baselines.kalman import TrackingMeasurement, run_async_cv_baseline
+from raft_uav.baselines.kalman import (
+    AsyncConstantVelocityKalmanTracker,
+    TrackingMeasurement,
+    run_async_cv_baseline,
+)
 
 
 def test_async_cv_baseline_does_not_reprocess_bootstrap_measurement() -> None:
@@ -25,7 +29,10 @@ def test_async_cv_baseline_does_not_reprocess_bootstrap_measurement() -> None:
     assert records[0]["update_action"] == "initialized"
     assert records[0]["accepted"] is True
     np.testing.assert_allclose(records[0]["state"][:3], [10.0, 20.0, 30.0])
-    np.testing.assert_allclose(np.diag(records[0]["covariance"]), [2500.0, 2500.0, 2500.0, 225.0, 225.0, 225.0])
+    np.testing.assert_allclose(
+        np.diag(records[0]["covariance"]),
+        [2500.0, 2500.0, 2500.0, 225.0, 225.0, 225.0],
+    )
 
 
 def test_bootstrap_detection_does_not_skip_distinct_same_time_measurement() -> None:
@@ -52,3 +59,25 @@ def test_bootstrap_detection_does_not_skip_distinct_same_time_measurement() -> N
     updated_covariance = np.asarray(records[1]["covariance"])
     initial_covariance = np.asarray(records[0]["covariance"])
     assert updated_covariance[0, 0] < initial_covariance[0, 0]
+
+
+def test_bootstrap_detection_uses_absolute_timestamp_tolerance() -> None:
+    tracker = AsyncConstantVelocityKalmanTracker(
+        initial_position=np.array([10.0, 20.0, 30.0]),
+        initial_time_s=1000.0,
+        acceleration_std_mps2=0.0,
+    )
+    initial_covariance = tracker.covariance_matrix
+    measurement = TrackingMeasurement(
+        time_s=1000.005,
+        vector=np.array([10.0, 20.0, 30.0]),
+        covariance=np.eye(3),
+        source="rf",
+    )
+
+    diagnostics = tracker.update(measurement)
+
+    assert diagnostics.update_action != "initialized"
+    assert diagnostics.accepted is True
+    assert tracker.current_time_s == measurement.time_s
+    assert tracker.covariance_matrix[0, 0] < initial_covariance[0, 0]
