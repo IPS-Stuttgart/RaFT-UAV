@@ -4,8 +4,9 @@ The maintained implementation lives in the sibling ``trajectory_completion.py``
 module. This package preserves the public import path while parsing serialized
 ``selected_path_update`` values explicitly instead of relying on string
 truthiness, avoiding floating-point undercounting when inferring regular
-timestamps inside short gaps, and validating completion controls before they can
-silently disable processing or corrupt finite trajectories.
+timestamps inside short gaps, validating completion controls before they can
+silently disable processing or corrupt finite trajectories, and keeping pooled
+kinematic diagnostics from bridging independent trajectories.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_COMPLETE_AND_SMOOTH_ESTIMATES = _IMPL.complete_and_smooth_estimates
 _ORIGINAL_ESTIMATE_ROWS = _IMPL._estimate_rows
 _ORIGINAL_SELECTED_MEASUREMENTS = _IMPL._selected_measurements
+_ORIGINAL_SPEED_GATE_SUMMARY_ROW = _IMPL._speed_gate_summary_row
 _TRUE_TEXT = frozenset({"1", "true", "t", "yes", "y", "on"})
 _FALSE_TEXT = frozenset(
     {"0", "false", "f", "no", "n", "off", "", "none", "null", "nan", "<na>", "nat"}
@@ -151,6 +153,118 @@ def _validate_trajectory_completion_config(config: Any) -> None:
         )
 
 
+def _trajectory_diagnostic_groups(estimates: pd.DataFrame):
+    """Yield independent trajectories for aggregate kinematic diagnostics."""
+
+    group_columns = [
+        column
+        for column in ("sequence_id", "output_track_id")
+        if column in estimates.columns
+    ]
+    if not group_columns:
+        yield estimates
+        return
+    for _, group in estimates.groupby(
+        group_columns,
+        sort=False,
+        dropna=False,
+    ):
+        yield group
+
+
+def _trajectory_segment_speeds(estimates: pd.DataFrame) -> np.ndarray:
+    """Return finite segment speeds without crossing trajectory boundaries."""
+
+    required = {"time_s", "state_x_m", "state_y_m", "state_z_m"}
+    if estimates.empty or not required.issubset(estimates.columns):
+        return np.asarray([], dtype=float)
+
+    speed_parts: list[np.ndarray] = []
+    for group in _trajectory_diagnostic_groups(estimates):
+        values = group.sort_values("time_s")
+        times = pd.to_numeric(values["time_s"], errors="coerce").to_numpy(float)
+        xyz = (
+            values[["state_x_m", "state_y_m", "state_z_m"]]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(float)
+        )
+        finite = np.isfinite(times) & np.isfinite(xyz).all(axis=1)
+        speeds = _IMPL._segment_speeds(times[finite], xyz[finite])
+        finite_speeds = speeds[np.isfinite(speeds)]
+        if finite_speeds.size:
+            speed_parts.append(finite_speeds)
+    return np.concatenate(speed_parts) if speed_parts else np.asarray([], dtype=float)
+
+
+def _speed_gate_summary_row(
+    source: pd.DataFrame,
+    *,
+    sequence_id: str,
+    trajectory_id: str,
+    config: Any,
+) -> dict[str, Any]:
+    """Summarize segment speeds without connecting independent trajectories."""
+
+    summary = _ORIGINAL_SPEED_GATE_SUMMARY_ROW(
+        source,
+        sequence_id=sequence_id,
+        trajectory_id=trajectory_id,
+        config=config,
+    )
+    finite_speeds = _trajectory_segment_speeds(source)
+    gate = float(config.speed_gate_mps or 0.0)
+    summary.update(
+        {
+            "segment_count": int(len(finite_speeds)),
+            "segment_over_gate_count": int(np.sum(finite_speeds > gate))
+            if gate > 0.0
+            else 0,
+            "max_segment_speed_mps": float(np.max(finite_speeds))
+            if finite_speeds.size
+            else np.nan,
+            "p95_segment_speed_mps": float(np.percentile(finite_speeds, 95.0))
+            if finite_speeds.size
+            else np.nan,
+            "median_segment_speed_mps": float(np.median(finite_speeds))
+            if finite_speeds.size
+            else np.nan,
+        }
+    )
+    return summary
+
+
+def _trajectory_roughness(estimates: pd.DataFrame) -> float | None:
+    """Average acceleration magnitude without crossing trajectory boundaries."""
+
+    required = {"time_s", "state_x_m", "state_y_m", "state_z_m"}
+    if estimates.empty or not required.issubset(estimates.columns):
+        return None
+
+    norm_parts: list[np.ndarray] = []
+    for group in _trajectory_diagnostic_groups(estimates):
+        values = group.sort_values("time_s")
+        times = pd.to_numeric(values["time_s"], errors="coerce").to_numpy(float)
+        xyz = (
+            values[["state_x_m", "state_y_m", "state_z_m"]]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(float)
+        )
+        finite = np.isfinite(times) & np.isfinite(xyz).all(axis=1)
+        times = times[finite]
+        xyz = xyz[finite]
+        if len(times) < 3:
+            continue
+        velocities = _IMPL._finite_difference_velocities(times, xyz)
+        accelerations = _IMPL._finite_difference_velocities(times, velocities)
+        norms = np.linalg.norm(accelerations[1:-1], axis=1)
+        finite_norms = norms[np.isfinite(norms)]
+        if finite_norms.size:
+            norm_parts.append(finite_norms)
+    if not norm_parts:
+        return None
+    return float(np.mean(np.concatenate(norm_parts)))
+
+
 def complete_and_smooth_estimates(
     estimates: pd.DataFrame,
     truth: Any = None,
@@ -223,6 +337,8 @@ _IMPL._selected_measurements = _selected_measurements
 _IMPL._finite_nonnegative_control = _finite_nonnegative_control
 _IMPL._unit_interval_control = _unit_interval_control
 _IMPL._validate_trajectory_completion_config = _validate_trajectory_completion_config
+_IMPL._speed_gate_summary_row = _speed_gate_summary_row
+_IMPL._trajectory_roughness = _trajectory_roughness
 _IMPL.complete_and_smooth_estimates = complete_and_smooth_estimates
 _IMPL._target_times = _target_times
 
@@ -242,6 +358,8 @@ globals()["_unit_interval_control"] = _unit_interval_control
 globals()["_validate_trajectory_completion_config"] = (
     _validate_trajectory_completion_config
 )
+globals()["_speed_gate_summary_row"] = _speed_gate_summary_row
+globals()["_trajectory_roughness"] = _trajectory_roughness
 globals()["complete_and_smooth_estimates"] = complete_and_smooth_estimates
 globals()["_target_times"] = _target_times
 
