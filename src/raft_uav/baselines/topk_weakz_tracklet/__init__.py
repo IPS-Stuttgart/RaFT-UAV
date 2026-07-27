@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import importlib.util
+from operator import index
 from pathlib import Path
 import sys
 from typing import Any
@@ -31,6 +32,96 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_BUILD_FORTEM_TRACKLETS = _IMPL.build_fortem_tracklets
+_ORIGINAL_CONFIG_POST_INIT = _IMPL.TopKWeakZTrackletConfig.__post_init__
+
+_POSITIVE_INTEGER_FIELDS = (
+    "top_k_paths",
+    "beam_width",
+    "max_tracklets",
+    "min_tracklet_length",
+)
+_POSITIVE_REAL_FIELDS = (
+    "max_intra_tracklet_gap_s",
+    "max_transition_gap_s",
+    "max_transition_speed_mps",
+    "max_transition_altitude_jump_m",
+    "range_slack_m",
+    "weakz_radar_xy_std_m",
+    "weakz_radar_z_std_m",
+    "acceleration_std_mps2",
+    "smoother_lag_s",
+    "smoother_acceleration_std_mps2",
+    "rf_radar_consistency_std_m",
+    "rf_min_reliability",
+    "rf_max_covariance_scale",
+    "rf_outside_radar_scale",
+)
+_NONNEGATIVE_REAL_FIELDS = (
+    "track_switch_cost",
+    "gap_cost_per_s",
+    "speed_cost_weight",
+    "altitude_jump_cost_weight",
+    "tracklet_length_reward",
+    "catprob_reward_weight",
+    "confidence_reward_weight",
+    "range_penalty_weight",
+    "replay_nis_weight",
+    "replay_rejection_penalty",
+)
+_OPTIONAL_POSITIVE_REAL_FIELDS = (
+    "range_gate_m",
+    "rf_reject_distance_m",
+)
+
+
+def _finite_real(value: object, *, name: str) -> float:
+    message = f"{name} must be a finite real scalar"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(message)
+    try:
+        array = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if array.ndim != 0 or np.iscomplexobj(array):
+        raise ValueError(message)
+    try:
+        number = float(array.item())
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(number):
+        raise ValueError(message)
+    return number
+
+
+def _positive_integer(value: object, *, name: str) -> int:
+    message = f"{name} must be a positive integer"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(message)
+    try:
+        number = index(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if number < 1:
+        raise ValueError(message)
+    return int(number)
+
+
+def _validated_config_post_init(config: object) -> None:
+    """Reject malformed controls before they reach scoring or slicing code."""
+
+    for name in _POSITIVE_INTEGER_FIELDS:
+        _positive_integer(getattr(config, name), name=name)
+    for name in _POSITIVE_REAL_FIELDS:
+        if _finite_real(getattr(config, name), name=name) <= 0.0:
+            raise ValueError(f"{name} must be positive")
+    for name in _NONNEGATIVE_REAL_FIELDS:
+        if _finite_real(getattr(config, name), name=name) < 0.0:
+            raise ValueError(f"{name} must be nonnegative")
+    for name in _OPTIONAL_POSITIVE_REAL_FIELDS:
+        value = getattr(config, name)
+        if value is not None and _finite_real(value, name=name) <= 0.0:
+            raise ValueError(f"{name} must be positive or None")
+    _ORIGINAL_CONFIG_POST_INIT(config)
 
 
 def build_fortem_tracklets(
@@ -68,6 +159,7 @@ def build_fortem_tracklets(
     return restored
 
 
+_IMPL.TopKWeakZTrackletConfig.__post_init__ = _validated_config_post_init
 _IMPL._optional_int = _optional_int
 _IMPL.build_fortem_tracklets = build_fortem_tracklets
 
