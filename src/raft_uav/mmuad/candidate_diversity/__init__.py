@@ -4,7 +4,8 @@ The maintained implementation lives in the sibling ``candidate_diversity.py``
 module. This package preserves the public import path while coercing candidate
 coordinates before spatial filtering so malformed rows are skipped rather than
 raising during NumPy conversion. It also validates diversity controls before
-legacy numeric coercion can silently clamp or truncate them.
+legacy numeric coercion can silently clamp or truncate them and rejects complex
+protected-candidate flags before NumPy can discard their imaginary components.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_DIVERSIFY = _IMPL.diversify_candidate_reservoir
+_ORIGINAL_PARSE_PROTECTED_FLAG = _IMPL._parse_protected_flag
 
 
 def _finite_nonnegative_control(value: Any, *, name: str) -> float:
@@ -72,6 +74,27 @@ def _positive_integer_control(value: Any, *, name: str) -> int:
     return int(number)
 
 
+def _parse_protected_flag(value: Any) -> bool:
+    """Reject complex scalar flags before legacy numeric coercion."""
+
+    if not np.ma.is_masked(value):
+        try:
+            scalar = np.asarray(value)
+        except (TypeError, ValueError):
+            scalar = None
+        if scalar is not None and scalar.ndim == 0:
+            try:
+                item = scalar.item()
+            except (TypeError, ValueError):
+                item = value
+            if isinstance(item, (complex, np.complexfloating)):
+                raise ValueError(
+                    "candidate_reservoir_protected values must be boolean-like; "
+                    f"got {value!r}"
+                )
+    return _ORIGINAL_PARSE_PROTECTED_FLAG(value)
+
+
 def diversify_candidate_reservoir(rows, **kwargs):
     """Validate controls and coerce coordinates before diversity pruning."""
 
@@ -94,6 +117,7 @@ def diversify_candidate_reservoir(rows, **kwargs):
 
 _IMPL._finite_nonnegative_control = _finite_nonnegative_control
 _IMPL._positive_integer_control = _positive_integer_control
+_IMPL._parse_protected_flag = _parse_protected_flag
 _IMPL.diversify_candidate_reservoir = diversify_candidate_reservoir
 
 globals().update(
@@ -105,6 +129,7 @@ globals().update(
 )
 globals()["_finite_nonnegative_control"] = _finite_nonnegative_control
 globals()["_positive_integer_control"] = _positive_integer_control
+globals()["_parse_protected_flag"] = _parse_protected_flag
 globals()["diversify_candidate_reservoir"] = diversify_candidate_reservoir
 
 __doc__ = _IMPL.__doc__
