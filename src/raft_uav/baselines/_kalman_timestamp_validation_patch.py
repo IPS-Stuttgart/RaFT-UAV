@@ -12,6 +12,9 @@ _kalman = import_module("raft_uav.baselines.kalman")
 _imm = import_module("raft_uav.baselines.imm")
 _ORIGINAL_TRACKING_MEASUREMENT_POST_INIT = _kalman.TrackingMeasurement.__post_init__
 _ORIGINAL_TRACKER_INIT = _kalman.AsyncConstantVelocityKalmanTracker.__init__
+_ORIGINAL_IS_BOOTSTRAP_MEASUREMENT = (
+    _kalman.AsyncConstantVelocityKalmanTracker._is_bootstrap_measurement
+)
 _ORIGINAL_PREDICT_TO = _kalman.AsyncConstantVelocityKalmanTracker.predict_to
 _ORIGINAL_COAST_TO = _kalman.AsyncConstantVelocityKalmanTracker.coast_to
 _ORIGINAL_IMM_TRACKER_INIT = _imm.AsyncInteractingMultipleModelTracker.__init__
@@ -146,6 +149,21 @@ def _tracker_init(
     )
 
 
+def _is_bootstrap_measurement(self: Any, measurement: Any) -> bool:
+    """Require an absolute timestamp match for bootstrap suppression."""
+
+    if not self._initial_update_pending:
+        return False
+    if not np.isclose(
+        float(measurement.time_s),
+        float(self.current_time_s),
+        rtol=0.0,
+        atol=1.0e-9,
+    ):
+        return False
+    return bool(_ORIGINAL_IS_BOOTSTRAP_MEASUREMENT(self, measurement))
+
+
 def _predict_to(self: Any, time_s: float) -> None:
     validated_time_s = _finite_timestamp_seconds(time_s, field_name="time_s")
     _ORIGINAL_PREDICT_TO(self, validated_time_s)
@@ -212,6 +230,9 @@ def apply_kalman_timestamp_validation_patch() -> None:
     if not getattr(_kalman, "_timestamp_validation_patch_applied", False):
         _kalman.TrackingMeasurement.__post_init__ = _tracking_measurement_post_init
         _kalman.AsyncConstantVelocityKalmanTracker.__init__ = _tracker_init
+        _kalman.AsyncConstantVelocityKalmanTracker._is_bootstrap_measurement = (
+            _is_bootstrap_measurement
+        )
         _kalman.AsyncConstantVelocityKalmanTracker.predict_to = _predict_to
         _kalman.AsyncConstantVelocityKalmanTracker.coast_to = _coast_to
         _kalman._timestamp_validation_patch_applied = True
