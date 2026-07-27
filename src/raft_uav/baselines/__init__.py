@@ -2,6 +2,13 @@
 
 from importlib import import_module
 
+from raft_uav.baselines import kalman as _kalman
+from raft_uav.baselines._kalman_measurement_array_validation_patch import (
+    apply_kalman_measurement_array_validation_patch,
+)
+
+apply_kalman_measurement_array_validation_patch(_kalman)
+
 from raft_uav.baselines import imm as _imm
 from raft_uav.baselines import pyrecest_innovation_diagnostics as _pyrecest_innovation_diagnostics
 from raft_uav.baselines import radar_association as _radar_association
