@@ -418,7 +418,7 @@ def _inspect_zip_archive(archive_path: Path, root: Path) -> list[LayoutFile]:
             topic_map_text = None
             if _is_topic_map_member(name):
                 with archive.open(info) as handle:
-                    topic_map_text = handle.read().decode("utf-8")
+                    topic_map_text = _decode_topic_map_text(handle.read())
             rows.append(
                 _classify_archive_member(
                     archive_path,
@@ -443,7 +443,7 @@ def _inspect_tar_archive(archive_path: Path, root: Path) -> list[LayoutFile]:
                 handle = archive.extractfile(info)
                 if handle is not None:
                     with handle:
-                        topic_map_text = handle.read().decode("utf-8")
+                        topic_map_text = _decode_topic_map_text(handle.read())
             rows.append(
                 _classify_archive_member(
                     archive_path,
@@ -460,6 +460,15 @@ def _is_topic_map_member(name: str) -> bool:
     path = PurePosixPath(name)
     suffix = data_file_suffix(Path(path.name))
     return suffix in {".json", ".yaml", ".yml"} and "topic_map" in path.name.lower()
+
+
+def _decode_topic_map_text(payload: bytes) -> str | None:
+    """Decode archive metadata, returning ``None`` for malformed UTF-8."""
+
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 def _layout_recommendations(
