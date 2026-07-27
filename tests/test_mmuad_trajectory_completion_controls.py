@@ -49,6 +49,11 @@ def test_completion_rejects_unknown_modes_before_empty_return(
         complete_and_smooth_estimates(pd.DataFrame(), config=config)
 
 
+def test_completion_does_not_replace_falsy_supplied_config_with_defaults() -> None:
+    with pytest.raises(ValueError, match="trajectory completion mode"):
+        complete_and_smooth_estimates(pd.DataFrame(), config=False)
+
+
 def test_completion_preserves_default_empty_input_behavior() -> None:
     result = complete_and_smooth_estimates(pd.DataFrame())
 
