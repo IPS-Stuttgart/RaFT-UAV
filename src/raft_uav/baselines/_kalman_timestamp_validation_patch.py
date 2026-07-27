@@ -1,4 +1,4 @@
-"""Runtime validation for asynchronous Kalman and IMM tracker scalar inputs."""
+"""Runtime validation for asynchronous Kalman and IMM tracker inputs."""
 
 from __future__ import annotations
 
@@ -86,12 +86,27 @@ def _reject_masked_values(value: Any, *, field_name: str) -> None:
         raise ValueError(f"{field_name} must not contain masked values")
 
 
+def _reject_complex_values(value: Any, *, field_name: str) -> None:
+    """Reject complex values before real-valued NumPy coercion can discard them."""
+
+    try:
+        array = np.asanyarray(value)
+    except (TypeError, ValueError):
+        return
+    if np.iscomplexobj(array) or (
+        array.dtype == object and any(np.iscomplexobj(item) for item in array.flat)
+    ):
+        raise ValueError(f"{field_name} must contain real values")
+
+
 def _tracking_measurement_post_init(
     self: Any,
     _apply_runtime_calibration: bool,
 ) -> None:
     _reject_masked_values(self.vector, field_name="measurement vector")
     _reject_masked_values(self.covariance, field_name="measurement covariance")
+    _reject_complex_values(self.vector, field_name="measurement vector")
+    _reject_complex_values(self.covariance, field_name="measurement covariance")
     time_s = _finite_timestamp_seconds(self.time_s, field_name="measurement time_s")
     _ORIGINAL_TRACKING_MEASUREMENT_POST_INIT(self, _apply_runtime_calibration)
     object.__setattr__(self, "time_s", time_s)
