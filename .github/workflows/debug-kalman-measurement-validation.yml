@@ -1,9 +1,9 @@
 name: Debug Kalman measurement validation
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/reject-lossy-kalman-measurements
+      - main
 
 permissions:
   contents: read
