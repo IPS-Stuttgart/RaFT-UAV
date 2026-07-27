@@ -37,11 +37,11 @@ def test_position_errors_rejects_object_wrapped_complex_time_gate(
         match="max_time_delta_s must be a finite, non-negative scalar",
     ):
         position_errors_m(
-  times,
-  positions,
-  times,
-  positions,
-  max_time_delta_s=max_time_delta_s,
+            times,
+            positions,
+            times,
+            positions,
+            max_time_delta_s=max_time_delta_s,
         )
 
 
