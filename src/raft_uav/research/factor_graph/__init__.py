@@ -27,6 +27,7 @@ _SPEC.loader.exec_module(_LEGACY)
 _ORIGINAL_SMOOTH_POSITION_TRAJECTORY = _LEGACY.smooth_position_trajectory
 
 _TIME_POSITION_COLUMNS = ("time_s", *_LEGACY.PositionColumns)
+_VALID_ROBUST_LOSSES = frozenset({"linear", "huber", "soft_l1", "cauchy", "arctan"})
 
 
 def _real_float(value: object) -> float | None:
@@ -49,6 +50,20 @@ def _real_float(value: object) -> float | None:
             return None
         return float(value.real)
     return optional_float(value)
+
+
+def _validated_robust_loss_config(config: object | None) -> object | None:
+    """Reject unsupported least-squares losses before data-dependent returns."""
+
+    if config is None:
+        return None
+    robust_loss = getattr(config, "robust_loss", None)
+    if callable(robust_loss):
+        return config
+    if not isinstance(robust_loss, str) or robust_loss not in _VALID_ROBUST_LOSSES:
+        allowed = ", ".join(sorted(_VALID_ROBUST_LOSSES))
+        raise ValueError(f"robust_loss must be one of {allowed} or a callable")
+    return config
 
 
 def _normalized_real_time_positions(frame: pd.DataFrame) -> pd.DataFrame:
@@ -86,7 +101,7 @@ def smooth_position_trajectory(
     return _ORIGINAL_SMOOTH_POSITION_TRAJECTORY(
         _normalized_real_time_positions(measurements),
         initial=normalized_initial,
-        config=config,
+        config=_validated_robust_loss_config(config),
     )
 
 
