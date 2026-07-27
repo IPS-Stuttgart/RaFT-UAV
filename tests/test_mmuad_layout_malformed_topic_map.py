@@ -7,7 +7,8 @@ from raft_uav.mmuad.layout import inspect_mmuad_layout
 
 
 def test_layout_inspector_handles_null_topic_map_exports(tmp_path: Path) -> None:
-    (tmp_path / "topic_map.json").write_text(
+    topic_map = tmp_path / "topic_map.json"
+    topic_map.write_text(
         json.dumps(
             {
                 "schema": "raft-uav-mmuad-topic-map-v1",
