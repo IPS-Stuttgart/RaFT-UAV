@@ -2,22 +2,14 @@
 
 from importlib import import_module
 
-from raft_uav.baselines import kalman as _kalman
-from raft_uav.baselines._kalman_measurement_array_validation_patch import (
-    apply_kalman_measurement_array_validation_patch,
-)
-
-apply_kalman_measurement_array_validation_patch(_kalman)
-
-from raft_uav.baselines import imm as _imm
-from raft_uav.baselines import pyrecest_innovation_diagnostics as _pyrecest_innovation_diagnostics
-from raft_uav.baselines import radar_association as _radar_association
-from raft_uav.baselines import smoothing as _smoothing
 from raft_uav.baselines._imm_transition_validation_patch import (
     apply_imm_transition_validation_patch,
 )
 from raft_uav.baselines._innovation_diagnostic_record_patch import (
     apply_innovation_diagnostic_record_patch,
+)
+from raft_uav.baselines._kalman_measurement_array_validation_patch import (
+    apply_kalman_measurement_array_validation_patch,
 )
 from raft_uav.baselines._learned_radar_std_validation_patch import (
     apply_learned_radar_std_validation_patch,
@@ -31,6 +23,16 @@ from raft_uav.baselines._robust_map_accepted_matching_patch import (
 from raft_uav.baselines._robust_map_lag_validation_patch import (
     apply_robust_map_lag_validation_patch,
 )
+
+_kalman = import_module("raft_uav.baselines.kalman")
+apply_kalman_measurement_array_validation_patch(_kalman)
+
+_imm = import_module("raft_uav.baselines.imm")
+_pyrecest_innovation_diagnostics = import_module(
+    "raft_uav.baselines.pyrecest_innovation_diagnostics"
+)
+_radar_association = import_module("raft_uav.baselines.radar_association")
+_smoothing = import_module("raft_uav.baselines.smoothing")
 
 apply_imm_transition_validation_patch(_imm)
 apply_innovation_diagnostic_record_patch(_pyrecest_innovation_diagnostics)
