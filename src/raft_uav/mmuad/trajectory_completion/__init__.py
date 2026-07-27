@@ -159,7 +159,9 @@ def complete_and_smooth_estimates(
 ):
     """Complete trajectories after validating every numeric processing control."""
 
-    resolved_config = config or _IMPL.TrajectoryCompletionConfig()
+    resolved_config = (
+        _IMPL.TrajectoryCompletionConfig() if config is None else config
+    )
     _validate_trajectory_completion_config(resolved_config)
     return _ORIGINAL_COMPLETE_AND_SMOOTH_ESTIMATES(
         estimates,
