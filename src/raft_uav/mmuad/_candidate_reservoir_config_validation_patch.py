@@ -1,4 +1,4 @@
-"""Reject lossy schema-version coercion in candidate-reservoir configs."""
+"""Reject lossy coercion in candidate-reservoir configuration files."""
 
 from __future__ import annotations
 
@@ -6,6 +6,14 @@ import json
 from pathlib import Path
 
 import numpy as np
+
+_COUNT_KEYS = (
+    "global_top_n",
+    "per_source_top_n",
+    "per_branch_top_n",
+    "max_candidates_per_frame",
+)
+_SCORE_COLUMN_KEYS = ("score_column", "fallback_score_column")
 
 
 def _exact_integer_scalar(value: object, *, name: str) -> int:
@@ -35,8 +43,74 @@ def _exact_integer_scalar(value: object, *, name: str) -> int:
     return int(number)
 
 
+def _nonnegative_integer_scalar(value: object, *, name: str) -> int:
+    """Return a non-negative exact integer scalar."""
+
+    number = _exact_integer_scalar(value, name=name)
+    if number < 0:
+        raise ValueError(f"{name} must be a non-negative exact integer scalar")
+    return number
+
+
+def _finite_real_scalar(value: object, *, name: str) -> float:
+    """Return a finite scalar float without Boolean or complex coercion."""
+
+    error = f"{name} must be a finite real scalar"
+    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+        raise ValueError(error)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+        raise ValueError(error)
+    try:
+        item = scalar.item()
+        if np.ma.is_masked(item) or isinstance(
+            item,
+            (bool, np.bool_, complex, np.complexfloating),
+        ):
+            raise ValueError(error)
+        number = float(item)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(number):
+        raise ValueError(error)
+    return number
+
+
+def _unit_interval_scalar(value: object, *, name: str) -> float:
+    """Return a finite scalar constrained to the closed unit interval."""
+
+    number = _finite_real_scalar(value, name=name)
+    if not 0.0 <= number <= 1.0:
+        raise ValueError(f"{name} must be between 0 and 1")
+    return number
+
+
+def _nonempty_string(value: object, *, name: str) -> str:
+    """Return a non-empty string without silently stringifying other types."""
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string")
+    return value
+
+
+def _finite_float_mapping(value: object, *, name: str) -> dict[str, float]:
+    """Normalize a JSON object whose values must be finite real scalars."""
+
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be a JSON object")
+    return {
+        str(key): _finite_real_scalar(item, name=f"{name}[{key!r}]")
+        for key, item in value.items()
+    }
+
+
 def install() -> None:
-    """Install exact schema validation on the train-selected config loader."""
+    """Install strict validation on the train-selected config loader."""
 
     from raft_uav.mmuad import candidate_reservoir_apply as apply_module
 
@@ -67,13 +141,28 @@ def install() -> None:
             raise ValueError(
                 f"candidate reservoir config missing required keys: {missing}"
             )
+
         validated = dict(payload)
         validated["schema_version"] = schema_version
-        validated["branch_score_offsets"] = apply_module._float_mapping(
-            payload.get("branch_score_offsets", {})
+        for key in _COUNT_KEYS:
+            validated[key] = _nonnegative_integer_scalar(payload[key], name=key)
+        for key in _SCORE_COLUMN_KEYS:
+            validated[key] = _nonempty_string(payload[key], name=key)
+
+        score_floor_quantile = payload.get("score_floor_quantile")
+        if score_floor_quantile is not None:
+            validated["score_floor_quantile"] = _unit_interval_scalar(
+                score_floor_quantile,
+                name="score_floor_quantile",
+            )
+
+        validated["branch_score_offsets"] = _finite_float_mapping(
+            payload.get("branch_score_offsets", {}),
+            name="branch_score_offsets",
         )
-        validated["source_score_offsets"] = apply_module._float_mapping(
-            payload.get("source_score_offsets", {})
+        validated["source_score_offsets"] = _finite_float_mapping(
+            payload.get("source_score_offsets", {}),
+            name="source_score_offsets",
         )
         return validated
 
