@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling ``sequence.py`` module. This
 package preserves the public import path while preventing timestamp sidecars from
-deserializing pickle-backed object arrays and preventing directory symlink cycles
-from recursing indefinitely during sequence discovery.
+deserializing pickle-backed object arrays, rejecting complex timestamps, and
+preventing directory symlink cycles from recursing indefinitely during sequence
+discovery.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
-from typing import Hashable
+from typing import Any, Hashable
 
 import numpy as np
 
@@ -106,6 +107,31 @@ def _collect_sequence_dirs(
         ancestor_identities.remove(identity)
 
 
+def _coerce_timestamp_value(value: Any) -> float:
+    """Return one scalar timestamp without discarding complex components."""
+
+    if np.ma.is_masked(value):
+        return float("nan")
+    try:
+        array = np.asarray(value)
+    except (TypeError, ValueError):
+        array = None
+    if array is not None:
+        if np.iscomplexobj(array):
+            return float("nan")
+        if array.size == 1:
+            try:
+                value = array.item()
+            except (TypeError, ValueError):
+                pass
+            if np.ma.is_masked(value) or np.iscomplexobj(value):
+                return float("nan")
+    try:
+        return float(value)
+    except (OverflowError, TypeError, ValueError):
+        return float("nan")
+
+
 def _timestamp_map_from_numpy_sidecar(path: Path) -> dict[str, float]:
     """Read a filename-to-time NumPy sidecar without loading pickled objects."""
 
@@ -171,6 +197,7 @@ def _timestamps_from_numpy_sidecar(path: Path) -> list[float]:
 
 _IMPL._candidate_sequence_dirs = _candidate_sequence_dirs
 _IMPL._collect_sequence_dirs = _collect_sequence_dirs
+_IMPL._coerce_timestamp_value = _coerce_timestamp_value
 _IMPL._timestamp_map_from_numpy_sidecar = _timestamp_map_from_numpy_sidecar
 _IMPL._timestamps_from_numpy_sidecar = _timestamps_from_numpy_sidecar
 
@@ -183,6 +210,7 @@ globals().update(
 )
 globals()["_candidate_sequence_dirs"] = _candidate_sequence_dirs
 globals()["_collect_sequence_dirs"] = _collect_sequence_dirs
+globals()["_coerce_timestamp_value"] = _coerce_timestamp_value
 globals()["_directory_identity"] = _directory_identity
 globals()["_timestamp_map_from_numpy_sidecar"] = _timestamp_map_from_numpy_sidecar
 globals()["_timestamps_from_numpy_sidecar"] = _timestamps_from_numpy_sidecar
