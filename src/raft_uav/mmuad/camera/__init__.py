@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling ``camera.py`` module. This
 package preserves the public import path while validating pinhole intrinsics,
-selecting specific camera models, and correctly reading gzip-compressed YOLO
-label exports.
+selecting specific camera models, rejecting ambiguous detection columns, and
+correctly reading gzip-compressed YOLO label exports.
 """
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_INTRINSICS_FROM_CAMERA_ENTRY = _IMPL._intrinsics_from_camera_entry
 _ORIGINAL_BACKPROJECT_PIXEL_TO_CAMERA_XYZ = _IMPL.backproject_pixel_to_camera_xyz
+_ORIGINAL_NORMALIZE_CAMERA_DETECTION_COLUMNS = _IMPL._normalize_camera_detection_columns
 
 
 def _validated_camera_intrinsics(intrinsics):
@@ -81,6 +82,33 @@ def backproject_pixel_to_camera_xyz(u_px, v_px, depth_m, intrinsics):
         depth_m,
         _validated_camera_intrinsics(intrinsics),
     )
+
+
+def _normalize_camera_detection_columns(frame):
+    """Normalize padded headers and reject case-insensitive column collisions."""
+
+    normalized = frame.copy()
+    columns = [str(column).strip() for column in normalized.columns]
+    groups: dict[str, list[str]] = {}
+    for column in columns:
+        groups.setdefault(column.casefold(), []).append(column)
+    ambiguous = sorted(
+        {
+            column
+            for group in groups.values()
+            if len(group) > 1
+            for column in group
+        },
+        key=lambda column: (column.casefold(), column),
+    )
+    if ambiguous:
+        names = ", ".join(repr(column) for column in ambiguous)
+        raise ValueError(
+            "camera detection table has ambiguous columns after trimming whitespace "
+            f"and ignoring case: {names}"
+        )
+    normalized.columns = columns
+    return _ORIGINAL_NORMALIZE_CAMERA_DETECTION_COLUMNS(normalized)
 
 
 def _model_for_source(models, source):
@@ -222,6 +250,7 @@ def _read_yolo_label_table(path: Path):
 _IMPL._validated_camera_intrinsics = _validated_camera_intrinsics
 _IMPL._intrinsics_from_camera_entry = _intrinsics_from_camera_entry
 _IMPL.backproject_pixel_to_camera_xyz = backproject_pixel_to_camera_xyz
+_IMPL._normalize_camera_detection_columns = _normalize_camera_detection_columns
 _IMPL._model_for_source = _model_for_source
 _IMPL._export_stem = _export_stem
 _IMPL._same_stem_image_path = _same_stem_image_path
@@ -238,6 +267,7 @@ globals().update(
 globals()["_validated_camera_intrinsics"] = _validated_camera_intrinsics
 globals()["_intrinsics_from_camera_entry"] = _intrinsics_from_camera_entry
 globals()["backproject_pixel_to_camera_xyz"] = backproject_pixel_to_camera_xyz
+globals()["_normalize_camera_detection_columns"] = _normalize_camera_detection_columns
 globals()["_model_for_source"] = _model_for_source
 globals()["_export_stem"] = _export_stem
 globals()["_same_stem_image_path"] = _same_stem_image_path
