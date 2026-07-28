@@ -49,6 +49,20 @@ def _validate_weight(value: Any, *, name: str) -> float:
     return weight
 
 
+def _is_ignored_missing_sequence_id(value: Any) -> bool:
+    """Return whether a legacy missing-like sequence cell should be skipped."""
+
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().casefold() in {"nan", "none", "<na>"}
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(missing, (bool, np.bool_)) and bool(missing)
+
+
 def _sequence_weight_map(weights: pd.DataFrame) -> dict[str, float]:
     """Validate sequence ids and weights before averaging duplicate entries."""
 
@@ -64,16 +78,22 @@ def _sequence_weight_map(weights: pd.DataFrame) -> dict[str, float]:
     if weight_column is None:
         raise ValueError(f"sequence weights missing one of columns: {_IMPL.WEIGHT_ALIASES}")
 
-    normalized_ids: list[str] = []
+    normalized_ids: list[str | None] = []
     for index, value in rows[sequence_column].items():
         try:
             normalized_ids.append(_IMPL.parse_official_sequence_cell(value))
         except ValueError as exc:
+            if _is_ignored_missing_sequence_id(value):
+                normalized_ids.append(None)
+                continue
             raise ValueError(
                 "sequence weights contain an invalid sequence identifier "
                 f"at row {index}: {value!r}"
             ) from exc
     rows["__sequence_id"] = normalized_ids
+    rows = rows.loc[rows["__sequence_id"].notna()].copy()
+    if rows.empty:
+        return {}
 
     out: dict[str, float] = {}
     for sequence, group in rows.groupby("__sequence_id", sort=True):
