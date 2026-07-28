@@ -40,6 +40,7 @@ _POINT_FIELD_FORMATS: dict[int, tuple[str, int]] = {
     7: ("f", 4),   # FLOAT32
     8: ("d", 8),   # FLOAT64
 }
+_DECODED_COORDINATE_COLUMNS = frozenset({"x_m", "y_m", "z_m"})
 
 
 def pointcloud2_to_dataframe(message: Any) -> pd.DataFrame:
@@ -229,6 +230,10 @@ def _normalize_fields(fields: Iterable[Any]) -> list[PointFieldSpec]:
     seen_names: set[str] = set()
     for field in fields:
         name = _normalize_field_name(getattr(field, "name"))
+        if name in _DECODED_COORDINATE_COLUMNS:
+            raise ValueError(
+                f"PointCloud2 field name {name!r} conflicts with decoded coordinate column"
+            )
         if name in seen_names:
             raise ValueError(
                 f"PointCloud2 fields contain duplicate normalized name: {name!r}"
