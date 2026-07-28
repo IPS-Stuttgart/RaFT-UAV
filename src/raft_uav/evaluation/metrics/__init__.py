@@ -161,7 +161,7 @@ def _interpolate_positions_at_times_with_symmetric_tolerance(
     *,
     max_time_delta_s: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Accept endpoint-equivalent queries while preserving input masks."""
+    """Accept bracket-equivalent queries while preserving input masks."""
 
     _reject_complex_values(reference_times_s, name="reference_times_s")
     _reject_complex_values(reference_positions_m, name="reference_positions_m")
@@ -194,21 +194,24 @@ def _interpolate_positions_at_times_with_symmetric_tolerance(
     if prepared_reference_times.size == 0:
         return interpolated, valid
 
-    endpoint_equivalent = np.isfinite(query) & (
+    right = np.searchsorted(prepared_reference_times, query, side="left")
+    right = np.clip(right, 0, prepared_reference_times.size - 1)
+    left = np.clip(right - 1, 0, prepared_reference_times.size - 1)
+    bracket_equivalent = np.isfinite(query) & (
         np.isclose(
             query,
-            prepared_reference_times[0],
+            prepared_reference_times[left],
             rtol=0.0,
             atol=_ENDPOINT_ATOL_S,
         )
         | np.isclose(
             query,
-            prepared_reference_times[-1],
+            prepared_reference_times[right],
             rtol=0.0,
             atol=_ENDPOINT_ATOL_S,
         )
     )
-    return interpolated, valid | endpoint_equivalent
+    return interpolated, valid | bracket_equivalent
 
 
 def _summarize_errors_without_masked(
