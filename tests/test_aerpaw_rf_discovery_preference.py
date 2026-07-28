@@ -23,6 +23,8 @@ def test_discover_flights_prefers_aadm_rf_exports(
     for name in (
         "000_diagnostics.csv",
         "000_diagnostics_rerun.csv",
+        "AADM-archive.csv",
+        "AADM-archive-rerun.csv",
         "AADM.csv",
         "AADM_rerun.csv",
     ):
