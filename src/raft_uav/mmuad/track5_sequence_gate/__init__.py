@@ -1,8 +1,9 @@
 """Compatibility package validating Track 5 sequence-gate weights.
 
 The maintained implementation lives in the sibling ``track5_sequence_gate.py``
-module. This package preserves the public import path while validating every
-configured weight before duplicate sequence rows are averaged.
+module. This package preserves the public import path while rejecting malformed
+sequence identifiers and validating every configured weight before duplicate
+sequence rows are averaged.
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ def _validate_weight(value: Any, *, name: str) -> float:
 
 
 def _sequence_weight_map(weights: pd.DataFrame) -> dict[str, float]:
-    """Validate each weight row before averaging duplicate sequence entries."""
+    """Validate sequence ids and weights before averaging duplicate entries."""
 
     rows = pd.DataFrame(weights).copy()
     if rows.empty:
@@ -63,10 +64,16 @@ def _sequence_weight_map(weights: pd.DataFrame) -> dict[str, float]:
     if weight_column is None:
         raise ValueError(f"sequence weights missing one of columns: {_IMPL.WEIGHT_ALIASES}")
 
-    rows["__sequence_id"] = rows[sequence_column].map(_IMPL._sequence_weight_key)
-    rows = rows.loc[rows["__sequence_id"].notna()].copy()
-    if rows.empty:
-        return {}
+    normalized_ids: list[str] = []
+    for index, value in rows[sequence_column].items():
+        try:
+            normalized_ids.append(_IMPL.parse_official_sequence_cell(value))
+        except ValueError as exc:
+            raise ValueError(
+                "sequence weights contain an invalid sequence identifier "
+                f"at row {index}: {value!r}"
+            ) from exc
+    rows["__sequence_id"] = normalized_ids
 
     out: dict[str, float] = {}
     for sequence, group in rows.groupby("__sequence_id", sort=True):
