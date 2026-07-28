@@ -35,6 +35,46 @@ def test_discover_flights_prefers_aadm_rf_exports(
     assert flight.rf_csv == flight_dir / expected_name
 
 
+@pytest.mark.parametrize(
+    ("variant", "canonical_name", "legacy_name", "expected_name"),
+    [
+        (
+            "auto",
+            "AADM.csv",
+            "rf_measurements_rerun.csv",
+            "rf_measurements_rerun.csv",
+        ),
+        (
+            "rerun",
+            "AADM.csv",
+            "rf_measurements_rerun.csv",
+            "rf_measurements_rerun.csv",
+        ),
+        (
+            "original",
+            "AADM_rerun.csv",
+            "rf_measurements.csv",
+            "rf_measurements.csv",
+        ),
+    ],
+)
+def test_discover_flights_does_not_cross_rf_variants(
+    tmp_path: Path,
+    variant: str,
+    canonical_name: str,
+    legacy_name: str,
+    expected_name: str,
+) -> None:
+    flight_dir = tmp_path / "RF Sensor and Radar" / "Opt1"
+    flight_dir.mkdir(parents=True)
+    for name in (canonical_name, legacy_name):
+        (flight_dir / name).write_text("value\n", encoding="utf-8")
+
+    [flight] = discover_flights(tmp_path, variant=variant)
+
+    assert flight.rf_csv == flight_dir / expected_name
+
+
 def test_discover_flights_keeps_legacy_rf_filename_fallback(tmp_path: Path) -> None:
     flight_dir = tmp_path / "RF Sensor and Radar" / "Opt1"
     flight_dir.mkdir(parents=True)
