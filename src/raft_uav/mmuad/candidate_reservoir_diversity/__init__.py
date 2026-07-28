@@ -3,8 +3,9 @@
 The maintained implementation lives in the sibling
 ``candidate_reservoir_diversity.py`` module. This package preserves the public
 import path while aligning summary diagnostics with the configured branch
-column, retaining replace-on-use ``--top-k`` CLI semantics, and validating
-programmatic cap controls without lossy integer coercion.
+column, retaining replace-on-use ``--top-k`` CLI semantics, validating
+programmatic cap controls without lossy integer coercion, and preventing
+non-finite ranking scores from dominating a frame cap.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.numeric import optional_int
@@ -44,6 +46,30 @@ def _nonnegative_integer(value: object, *, name: str) -> int:
     if parsed is None or parsed < 0:
         raise ValueError(f"{name} must be a non-negative integer")
     return parsed
+
+
+def _score(
+    rows: pd.DataFrame,
+    score_column: str,
+    fallback_score_column: str,
+) -> pd.Series:
+    """Return finite ranking scores with the documented fallback semantics.
+
+    CSV and NumPy inputs may contain positive or negative infinity. Treat those
+    values like other unavailable scores: first fall back from the primary score
+    to the configured fallback column, then use zero when neither value is
+    finite. Otherwise a single ``+inf`` value always wins a tight frame cap.
+    """
+
+    primary = _IMPL._numeric(rows, score_column, default=np.nan).replace(
+        [np.inf, -np.inf],
+        np.nan,
+    )
+    fallback = _IMPL._numeric(rows, fallback_score_column, default=1.0).replace(
+        [np.inf, -np.inf],
+        np.nan,
+    )
+    return primary.fillna(fallback).fillna(0.0).astype(float)
 
 
 def diversity_cap_reservoir(
@@ -259,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+_IMPL._score = _score
 _IMPL.diversity_cap_reservoir = diversity_cap_reservoir
 _IMPL._frame_label_coverage = _frame_label_coverage
 _IMPL.diversity_cap_summary = diversity_cap_summary
@@ -272,6 +299,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_score"] = _score
 globals()["diversity_cap_reservoir"] = diversity_cap_reservoir
 globals()["_frame_label_coverage"] = _frame_label_coverage
 globals()["diversity_cap_summary"] = diversity_cap_summary
