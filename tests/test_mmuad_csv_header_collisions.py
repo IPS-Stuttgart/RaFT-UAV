@@ -22,8 +22,18 @@ from raft_uav.mmuad.io import load_candidate_csv, load_truth_csv
             "time_s,x_m, X_M,y_m,z_m\n0,1,2,3,4,5\n",
             "x_m",
         ),
+        (
+            load_truth_csv,
+            "time_s,time_s,x_m,y_m,z_m\n0,1,2,3,4\n",
+            "time_s",
+        ),
+        (
+            load_candidate_csv,
+            "time_s,x_m,x_m,y_m,z_m\n0,1,2,3,4\n",
+            "x_m",
+        ),
     ],
-    ids=("truth", "candidate"),
+    ids=("truth-normalized", "candidate-normalized", "truth-exact", "candidate-exact"),
 )
 def test_csv_loaders_reject_headers_that_collide_after_normalization(
     tmp_path: Path,
