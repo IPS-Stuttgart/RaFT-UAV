@@ -52,6 +52,23 @@ def test_sequence_gate_keeps_averaging_valid_duplicate_weights() -> None:
     assert result.estimates.loc[0, "state_x_m"] == pytest.approx(5.0)
 
 
+def test_sequence_gate_rejects_invalid_sequence_ids_in_weight_table() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"invalid sequence identifier at row 0",
+    ):
+        blend_track5_sequence_gate(
+            base_submission=_submission(0.0),
+            alternate_submission=_submission(10.0),
+            sequence_weights=pd.DataFrame(
+                {
+                    "sequence_id": [""],
+                    "weight": [1.0],
+                }
+            ),
+        )
+
+
 @pytest.mark.parametrize("value", [True, np.bool_(False), np.array([0.5]), 0.5 + 0.0j])
 def test_sequence_gate_rejects_non_real_scalar_default_weights(value: object) -> None:
     with pytest.raises(ValueError, match=r"default_weight.*\[0, 1\]"):
