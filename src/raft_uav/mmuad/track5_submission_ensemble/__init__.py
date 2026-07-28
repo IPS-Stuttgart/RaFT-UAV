@@ -2,9 +2,10 @@
 
 The maintained implementation lives in the sibling
 ``track5_submission_ensemble.py`` module. This package preserves the public
-import path while preventing malformed normalized numeric and classification
-values from being silently dropped or truncated and keeping weighted ensemble
-arithmetic finite for very large non-negative weights.
+import path while rejecting ambiguous CSV headers, preventing malformed
+normalized numeric and classification values from being silently dropped or
+truncated, and keeping weighted ensemble arithmetic finite for very large
+non-negative weights.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
@@ -33,10 +34,79 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_READ_TRACK5_SUBMISSION_CSV = _IMPL._read_track5_submission_csv
 _ORIGINAL_NORMALIZE_INTERNAL_SUBMISSION_ROWS = (
     _IMPL._normalize_internal_submission_rows
 )
 _ORIGINAL_ENSEMBLE_TRACK5_SUBMISSIONS = _IMPL.ensemble_track5_submissions
+
+
+def _normalized_column_name(value: object) -> str:
+    """Return the whitespace-insensitive, case-folded column name."""
+
+    return str(value).strip().casefold()
+
+
+def _normalized_column_lookup(rows: pd.DataFrame) -> dict[str, Any]:
+    """Return unique normalized columns or reject ambiguous physical names."""
+
+    lookup: dict[str, Any] = {}
+    for column in rows.columns:
+        normalized = _normalized_column_name(column)
+        if normalized in lookup:
+            first = lookup[normalized]
+            raise ValueError(
+                "ambiguous Track 5 submission columns after whitespace/case "
+                f"normalization for {normalized!r}: {first!r}, {column!r}"
+            )
+        lookup[normalized] = column
+    return lookup
+
+
+def _validate_physical_submission_header(source: Any) -> None:
+    """Reject duplicate physical CSV headers before pandas mangles their names."""
+
+    rewind_position: int | None = None
+    if not isinstance(source, (str, Path)):
+        try:
+            rewind_position = int(source.tell())
+        except (AttributeError, OSError, TypeError, ValueError):
+            return
+
+    try:
+        try:
+            physical_header = pd.read_csv(
+                source,
+                header=None,
+                nrows=1,
+                dtype=str,
+                keep_default_na=False,
+            )
+        except TypeError:
+            physical_header = pd.read_csv(source, header=None, nrows=1)
+    finally:
+        if rewind_position is not None:
+            try:
+                source.seek(rewind_position)
+            except (AttributeError, OSError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    "Track 5 submission stream could not be rewound after header validation"
+                ) from exc
+
+    if physical_header.empty:
+        return
+    _normalized_column_lookup(
+        pd.DataFrame(columns=physical_header.iloc[0].tolist())
+    )
+
+
+def _read_track5_submission_csv(source: Any) -> pd.DataFrame:
+    """Read Track 5 CSV data after validating its physical header."""
+
+    _validate_physical_submission_header(source)
+    rows = _ORIGINAL_READ_TRACK5_SUBMISSION_CSV(source)
+    _normalized_column_lookup(rows)
+    return rows
 
 
 def _invalid_row_summary(index: pd.Index, invalid: np.ndarray) -> str:
@@ -69,7 +139,7 @@ def _normalize_internal_submission_rows(
     """Reject malformed normalized rows before the legacy loader can drop them."""
 
     frame = pd.DataFrame(rows).copy()
-    lookup = _IMPL._normalized_column_lookup(frame)
+    lookup = _normalized_column_lookup(frame)
     classification_column = _IMPL._normalized_classification_column(lookup)
     measurement_columns = ("time_s", "state_x_m", "state_y_m", "state_z_m")
     if classification_column is not None and all(
@@ -171,6 +241,8 @@ def ensemble_track5_submissions(
     return estimates, diagnostics
 
 
+_IMPL._normalized_column_lookup = _normalized_column_lookup
+_IMPL._read_track5_submission_csv = _read_track5_submission_csv
 _IMPL._normalize_internal_submission_rows = _normalize_internal_submission_rows
 _IMPL.ensemble_track5_submissions = ensemble_track5_submissions
 
@@ -181,6 +253,12 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_normalized_column_name"] = _normalized_column_name
+globals()["_normalized_column_lookup"] = _normalized_column_lookup
+globals()["_validate_physical_submission_header"] = (
+    _validate_physical_submission_header
+)
+globals()["_read_track5_submission_csv"] = _read_track5_submission_csv
 globals()["_invalid_row_summary"] = _invalid_row_summary
 globals()["_raise_invalid_normalized_rows"] = _raise_invalid_normalized_rows
 globals()["_normalize_internal_submission_rows"] = (
