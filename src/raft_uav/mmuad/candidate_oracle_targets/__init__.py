@@ -2,9 +2,10 @@
 
 The maintained implementation lives in the sibling ``candidate_oracle_targets.py``
 module. This package preserves the public import path while rejecting malformed
-truth-matching time gates, oracle-label thresholds, and candidate-score controls
-before they can silently widen, empty, or corrupt the training export, and while
-keeping distinct floating-point thresholds distinct in output column labels.
+truth-matching time gates, oracle-label thresholds, candidate-score controls,
+and non-finite candidate-score values before they can silently widen, empty, or
+corrupt the training export, and while keeping distinct floating-point thresholds
+distinct in output column labels.
 """
 
 from __future__ import annotations
@@ -140,6 +141,27 @@ def _validated_config(
     )
 
 
+def _candidate_score(
+    rows: pd.DataFrame,
+    *,
+    config: _IMPL.CandidateOracleTargetConfig,
+) -> pd.Series:
+    """Use the first finite real score in the configured fallback chain."""
+
+    columns = (config.score_column, *config.fallback_score_columns)
+    result = pd.Series(float("nan"), index=rows.index, dtype=float)
+    for column in columns:
+        if column not in rows.columns:
+            continue
+        values = pd.Series(
+            [optional_float(value) for value in rows[column]],
+            index=rows.index,
+            dtype=float,
+        )
+        result = result.where(result.notna(), values)
+    return result.fillna(0.0).astype(float)
+
+
 def _threshold_label(value: float) -> str:
     """Return a column-safe shortest round-trip floating-point label."""
 
@@ -164,6 +186,7 @@ def build_candidate_oracle_targets(
     )
 
 
+_IMPL._candidate_score = _candidate_score
 _IMPL._threshold_label = _threshold_label
 _IMPL.build_candidate_oracle_targets = build_candidate_oracle_targets
 
@@ -178,6 +201,7 @@ globals()["_validated_numeric_tuple"] = _validated_numeric_tuple
 globals()["_validated_score_column"] = _validated_score_column
 globals()["_validated_score_columns"] = _validated_score_columns
 globals()["_validated_config"] = _validated_config
+globals()["_candidate_score"] = _candidate_score
 globals()["_threshold_label"] = _threshold_label
 globals()["build_candidate_oracle_targets"] = build_candidate_oracle_targets
 
