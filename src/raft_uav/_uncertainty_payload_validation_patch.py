@@ -1,4 +1,4 @@
-"""Reject Boolean and lossy integer fields in uncertainty model heads."""
+"""Reject malformed uncertainty payloads and non-finite fit coordinates."""
 
 from __future__ import annotations
 
@@ -6,6 +6,9 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 import numpy as np
+import pandas as pd
+
+_COORDINATE_COLUMNS = ("east_m", "north_m", "up_m")
 
 
 def _finite_real_scalar(
@@ -95,8 +98,33 @@ def _validate_model_payload(payload: object) -> Mapping[str, Any]:
     return payload
 
 
+def _mask_nonfinite_fit_coordinates(
+    frame: pd.DataFrame | None,
+) -> pd.DataFrame | None:
+    """Mask non-finite coordinates so they cannot become clipped fit targets."""
+
+    if frame is None or frame.empty:
+        return frame
+    out = frame.copy()
+    for column in _COORDINATE_COLUMNS:
+        if column not in out.columns:
+            continue
+        try:
+            values = pd.to_numeric(out[column], errors="raise")
+            raw = values.to_numpy()
+            if np.iscomplexobj(raw):
+                continue
+            numeric = values.to_numpy(dtype=float, na_value=np.nan)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        nonfinite = ~np.isfinite(numeric)
+        if bool(np.any(nonfinite)):
+            out.loc[nonfinite, column] = np.nan
+    return out
+
+
 def install() -> None:
-    """Install raw-field validation on uncertainty model construction/loading."""
+    """Install raw-field, container, and fit-coordinate validation."""
 
     from raft_uav import uncertainty as uncertainty_module
 
@@ -146,3 +174,44 @@ def install() -> None:
 
         model_class.from_dict = classmethod(validated_model_from_dict)
         model_class._raft_uav_container_validation_installed = True
+
+    if getattr(
+        uncertainty_module,
+        "_raft_uav_nonfinite_fit_coordinate_validation_installed",
+        False,
+    ):
+        return
+
+    original_fit = uncertainty_module.fit_heteroscedastic_uncertainty_model
+
+    def validated_fit_heteroscedastic_uncertainty_model(
+        *,
+        rf,
+        radar,
+        truth,
+        ridge_lambda=1.0,
+        max_time_delta_s=2.0,
+        min_std_m=None,
+        max_std_m=None,
+        metadata=None,
+    ):
+        return original_fit(
+            rf=_mask_nonfinite_fit_coordinates(rf),
+            radar=_mask_nonfinite_fit_coordinates(radar),
+            truth=_mask_nonfinite_fit_coordinates(truth),
+            ridge_lambda=ridge_lambda,
+            max_time_delta_s=max_time_delta_s,
+            min_std_m=min_std_m,
+            max_std_m=max_std_m,
+            metadata=metadata,
+        )
+
+    uncertainty_module.fit_heteroscedastic_uncertainty_model = (
+        validated_fit_heteroscedastic_uncertainty_model
+    )
+    legacy = getattr(uncertainty_module, "_legacy", None)
+    if legacy is not None:
+        legacy.fit_heteroscedastic_uncertainty_model = (
+            validated_fit_heteroscedastic_uncertainty_model
+        )
+    uncertainty_module._raft_uav_nonfinite_fit_coordinate_validation_installed = True
