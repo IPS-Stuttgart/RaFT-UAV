@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import numpy as np
@@ -75,31 +75,37 @@ def _validate_head_payload(item: object) -> Mapping[str, Any]:
     return item
 
 
+def _validate_model_payload(payload: object) -> Mapping[str, Any]:
+    """Reject malformed top-level containers before legacy coercion."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("uncertainty model payload must be a mapping")
+
+    metadata = payload.get("metadata", {})
+    if not isinstance(metadata, Mapping):
+        raise ValueError("uncertainty model metadata must be a mapping")
+
+    if "heads" in payload:
+        heads = payload["heads"]
+        if isinstance(heads, (str, bytes, bytearray, Mapping)) or not isinstance(
+            heads, Iterable
+        ):
+            raise ValueError("uncertainty model heads must be an iterable of mappings")
+
+    return payload
+
+
 def install() -> None:
-    """Install raw-field validation on uncertainty head construction/loading."""
+    """Install raw-field validation on uncertainty model construction/loading."""
 
     from raft_uav import uncertainty as uncertainty_module
 
     head_class = uncertainty_module.VarianceHead
-    if getattr(head_class, "_raft_uav_raw_field_validation_installed", False):
-        return
+    if not getattr(head_class, "_raft_uav_raw_field_validation_installed", False):
+        original_init = head_class.__init__
+        original_from_dict = head_class.from_dict.__func__
 
-    original_init = head_class.__init__
-    original_from_dict = head_class.from_dict.__func__
-
-    def validated_init(
-        self,
-        source,
-        dimension,
-        feature_names,
-        coefficients,
-        min_std_m,
-        max_std_m,
-        training_rows,
-    ):
-        _validated_coefficients(coefficients)
-        _nonnegative_integer(training_rows, name="training_rows")
-        original_init(
+        def validated_init(
             self,
             source,
             dimension,
@@ -108,12 +114,35 @@ def install() -> None:
             min_std_m,
             max_std_m,
             training_rows,
-        )
+        ):
+            _validated_coefficients(coefficients)
+            _nonnegative_integer(training_rows, name="training_rows")
+            original_init(
+                self,
+                source,
+                dimension,
+                feature_names,
+                coefficients,
+                min_std_m,
+                max_std_m,
+                training_rows,
+            )
 
-    def validated_from_dict(cls, item):
-        _validate_head_payload(item)
-        return original_from_dict(cls, item)
+        def validated_from_dict(cls, item):
+            _validate_head_payload(item)
+            return original_from_dict(cls, item)
 
-    head_class.__init__ = validated_init
-    head_class.from_dict = classmethod(validated_from_dict)
-    head_class._raft_uav_raw_field_validation_installed = True
+        head_class.__init__ = validated_init
+        head_class.from_dict = classmethod(validated_from_dict)
+        head_class._raft_uav_raw_field_validation_installed = True
+
+    model_class = uncertainty_module.HeteroscedasticUncertaintyModel
+    if not getattr(model_class, "_raft_uav_container_validation_installed", False):
+        original_model_from_dict = model_class.from_dict.__func__
+
+        def validated_model_from_dict(cls, payload):
+            _validate_model_payload(payload)
+            return original_model_from_dict(cls, payload)
+
+        model_class.from_dict = classmethod(validated_model_from_dict)
+        model_class._raft_uav_container_validation_installed = True
