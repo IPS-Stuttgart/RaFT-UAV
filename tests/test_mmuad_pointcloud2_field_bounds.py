@@ -3,11 +3,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from raft_uav.mmuad.pointcloud2 import pointcloud2_to_dataframe
 
 
-def test_pointcloud2_decoder_keeps_field_reads_inside_each_record() -> None:
+def test_pointcloud2_decoder_rejects_required_field_outside_record() -> None:
     record_width = 16
     fields = [
         SimpleNamespace(name="x", offset=0, datatype=7, count=1),
@@ -24,6 +25,5 @@ def test_pointcloud2_decoder_keeps_field_reads_inside_each_record() -> None:
         is_bigendian=False,
     )
 
-    decoded = pointcloud2_to_dataframe(message)
-
-    assert decoded.empty
+    with pytest.raises(ValueError, match="field 'y' does not fit within point_step 16"):
+        pointcloud2_to_dataframe(message)
