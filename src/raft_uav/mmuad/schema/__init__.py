@@ -2,12 +2,15 @@
 
 The maintained implementation lives in the sibling ``schema.py`` module. This
 package preserves the public import path while ensuring that values nested in
-NumPy arrays are normalized recursively before JSON serialization and that the
-``NaT`` missing-value sentinel is not retained as a literal sequence identifier.
+NumPy arrays are normalized recursively before JSON serialization, that the
+``NaT`` missing-value sentinel is not retained as a literal sequence identifier,
+and that case- or whitespace-equivalent column names cannot be selected
+ambiguously.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import importlib.util
 from pathlib import Path
 import sys
@@ -54,8 +57,24 @@ def _normalize_sequence_id_values(
     return normalized.where(~missing_nat, str(default_sequence_id))
 
 
+def _column_lookup(columns: Iterable[object]) -> dict[str, object]:
+    """Return normalized column lookup after rejecting ambiguous names."""
+
+    lookup: dict[str, object] = {}
+    for column in columns:
+        key = _IMPL._column_key(column)
+        if key in lookup:
+            raise ValueError(
+                "column names are ambiguous after trimming whitespace and ignoring case: "
+                f"{lookup[key]!r} and {column!r} both normalize to {key!r}"
+            )
+        lookup[key] = column
+    return lookup
+
+
 _IMPL.load_jsonable = load_jsonable
 _IMPL._normalize_sequence_id_values = _normalize_sequence_id_values
+_IMPL._column_lookup = _column_lookup
 
 globals().update(
     {
@@ -66,6 +85,7 @@ globals().update(
 )
 globals()["load_jsonable"] = load_jsonable
 globals()["_normalize_sequence_id_values"] = _normalize_sequence_id_values
+globals()["_column_lookup"] = _column_lookup
 
 __doc__ = _IMPL.__doc__
 __all__ = [
