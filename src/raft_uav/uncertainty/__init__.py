@@ -235,6 +235,16 @@ def _aligned_residuals(
     return aligned.drop(columns=order_column).reset_index(drop=True)
 
 
+def _optional_mapping(value: object | None, field: str) -> Mapping | None:
+    """Return an optional mapping without treating falsy non-mappings as absent."""
+
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field} must be a mapping or None")
+    return value
+
+
 def fit_heteroscedastic_uncertainty_model(
     *,
     rf: pd.DataFrame | None,
@@ -246,7 +256,7 @@ def fit_heteroscedastic_uncertainty_model(
     max_std_m: Mapping[str, Mapping[str, float]] | None = None,
     metadata: Mapping[str, object] | None = None,
 ) -> HeteroscedasticUncertaintyModel:
-    """Fit uncertainty heads after validating optimization controls."""
+    """Fit uncertainty heads after validating optimization controls and mappings."""
 
     validated_ridge_lambda = _nonnegative_fit_control(
         ridge_lambda,
@@ -256,15 +266,18 @@ def fit_heteroscedastic_uncertainty_model(
         max_time_delta_s,
         "max_time_delta_s",
     )
+    validated_min_std_m = _optional_mapping(min_std_m, "min_std_m")
+    validated_max_std_m = _optional_mapping(max_std_m, "max_std_m")
+    validated_metadata = _optional_mapping(metadata, "metadata")
     return _original_fit_heteroscedastic_uncertainty_model(
         rf=rf,
         radar=radar,
         truth=truth,
         ridge_lambda=validated_ridge_lambda,
         max_time_delta_s=validated_max_time_delta_s,
-        min_std_m=min_std_m,
-        max_std_m=max_std_m,
-        metadata=metadata,
+        min_std_m=validated_min_std_m,
+        max_std_m=validated_max_std_m,
+        metadata=validated_metadata,
     )
 
 
@@ -288,6 +301,7 @@ globals()["_aligned_residuals"] = _aligned_residuals
 globals()["_finite_scalar"] = _finite_scalar
 globals()["_nonnegative_fit_control"] = _nonnegative_fit_control
 globals()["_exact_integer_scalar"] = _exact_integer_scalar
+globals()["_optional_mapping"] = _optional_mapping
 globals()["_validated_model_from_dict"] = _validated_model_from_dict
 globals()["fit_heteroscedastic_uncertainty_model"] = (
     fit_heteroscedastic_uncertainty_model
