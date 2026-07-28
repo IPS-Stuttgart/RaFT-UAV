@@ -16,6 +16,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.numeric import optional_float
@@ -141,6 +142,17 @@ def _validated_config(
     )
 
 
+def _optional_candidate_score(value: object) -> float | None:
+    """Recover real values from pandas columns upcast to complex dtype."""
+
+    if isinstance(value, (complex, np.complexfloating)):
+        imaginary = float(np.imag(value))
+        if not np.isfinite(imaginary) or imaginary != 0.0:
+            return None
+        value = np.real(value)
+    return optional_float(value)
+
+
 def _candidate_score(
     rows: pd.DataFrame,
     *,
@@ -154,7 +166,7 @@ def _candidate_score(
         if column not in rows.columns:
             continue
         values = pd.Series(
-            [optional_float(value) for value in rows[column]],
+            [_optional_candidate_score(value) for value in rows[column]],
             index=rows.index,
             dtype=float,
         )
@@ -201,6 +213,7 @@ globals()["_validated_numeric_tuple"] = _validated_numeric_tuple
 globals()["_validated_score_column"] = _validated_score_column
 globals()["_validated_score_columns"] = _validated_score_columns
 globals()["_validated_config"] = _validated_config
+globals()["_optional_candidate_score"] = _optional_candidate_score
 globals()["_candidate_score"] = _candidate_score
 globals()["_threshold_label"] = _threshold_label
 globals()["build_candidate_oracle_targets"] = build_candidate_oracle_targets
