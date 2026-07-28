@@ -76,11 +76,28 @@ def _normalized_text_csv_columns(columns: Iterable[object]) -> list[str]:
     return normalized
 
 
+def _validate_physical_text_csv_header(path: Path, *, separator: str) -> None:
+    """Reject duplicate physical headers before pandas mangles their names."""
+
+    physical_header = pd.read_csv(
+        Path(path),
+        sep=separator,
+        header=None,
+        nrows=1,
+        dtype=str,
+        keep_default_na=False,
+    )
+    if physical_header.empty:
+        return
+    _normalized_text_csv_columns(physical_header.iloc[0].tolist())
+
+
 def _read_text_csv(path: Path) -> pd.DataFrame:
     """Read CSV/TSV exports without coercing opaque ids or keeping padded headers."""
 
     path = Path(path)
     separator = "\t" if _impl.data_file_suffix(path) == ".tsv" else ","
+    _validate_physical_text_csv_header(path, separator=separator)
     frame = pd.read_csv(path, sep=separator, dtype=str, keep_default_na=False)
     frame.columns = _normalized_text_csv_columns(frame.columns)
     return frame
