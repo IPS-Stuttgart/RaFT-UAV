@@ -175,10 +175,11 @@ def _boolean_series(values: Any, *, column: str) -> pd.Series:
 def build_counterfactual_association_dashboard(features: Any) -> pd.DataFrame:
     """Build the dashboard after normalizing persisted selection flags."""
 
-    normalized = pd.DataFrame(features).copy().reset_index(drop=True)
+    normalized = pd.DataFrame(features).copy()
     column = "chosen_by_selected_radar"
     if column in normalized.columns:
         normalized[column] = _boolean_series(normalized[column], column=column)
+    normalized = normalized.reset_index(drop=True)
     return _ORIGINAL_BUILD_COUNTERFACTUAL_ASSOCIATION_DASHBOARD(normalized)
 
 
