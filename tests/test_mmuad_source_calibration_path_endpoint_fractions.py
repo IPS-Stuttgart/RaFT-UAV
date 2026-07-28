@@ -69,3 +69,17 @@ def test_path_ensemble_preserves_near_endpoint_fractions() -> None:
     )
     assert (ensemble[EFFECTIVE_ALPHA_COLUMN] > 0.0).all()
     assert ensemble["candidate_branch"].nunique() == 2
+
+
+def test_path_ensemble_keeps_close_fractions_as_distinct_identities() -> None:
+    fractions = (0.50000000000001, 0.50000000000002)
+
+    ensemble = build_source_calibration_path_ensemble(
+        CandidateFrame(_candidate_rows().iloc[[0]]),
+        _calibration_payload(),
+        fractions=fractions,
+    ).rows.sort_values(CALIBRATION_FRACTION_COLUMN)
+
+    assert ensemble[CALIBRATION_FRACTION_COLUMN].tolist() == pytest.approx(fractions)
+    assert ensemble["candidate_branch"].nunique() == len(fractions)
+    assert ensemble["track_id"].nunique() == len(fractions)
