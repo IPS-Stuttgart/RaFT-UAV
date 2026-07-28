@@ -80,3 +80,26 @@ def test_pointcloud2_rejects_duplicate_normalized_field_names() -> None:
 
     with pytest.raises(ValueError, match="duplicate normalized name: 'x'"):
         pointcloud2_to_dataframe(message)
+
+
+@pytest.mark.parametrize(
+    ("malformed_field", "match"),
+    [
+        (Field("x", 0, datatype=99), "unsupported datatype 99"),
+        (Field("y", 4, count=2), "must have count 1"),
+        (Field("z", 12), "does not fit within point_step 12"),
+    ],
+)
+def test_pointcloud2_rejects_malformed_required_xyz_fields(
+    malformed_field: Field,
+    match: str,
+) -> None:
+    message = _xyz_message(row_step=24)
+    fields = [
+        malformed_field if field.name == malformed_field.name else field
+        for field in message.fields
+    ]
+    malformed = replace(message, fields=fields)
+
+    with pytest.raises(ValueError, match=match):
+        pointcloud2_to_dataframe(malformed)
