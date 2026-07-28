@@ -2,9 +2,9 @@
 
 The maintained implementation lives in the sibling ``track5_estimate_ensemble.py``
 file. This wrapper preserves the public import surface while rejecting malformed
-weights and trim fractions before empty-template returns, weight configuration
-normalization, or estimate-file access, and while keeping weighted arithmetic
-finite for very large non-negative weights.
+weights, trim fractions, and template rows before empty-template returns, weight
+configuration normalization, or estimate-file access, and while keeping weighted
+arithmetic finite for very large non-negative weights.
 """
 
 from __future__ import annotations
@@ -56,6 +56,57 @@ def _validate_trim_fraction(value: Any) -> float:
             "trim_fraction must be a finite real scalar in [0, 0.5)"
         )
     return parsed
+
+
+def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
+    """Normalize all requested template rows or reject the first malformed row."""
+
+    rows = pd.DataFrame(template).copy()
+    sequence_column = _IMPL._first_present(
+        rows,
+        ("sequence_id", "Sequence", "sequence", "seq"),
+    )
+    time_column = _IMPL._first_present(
+        rows,
+        ("time_s", "Timestamp", "timestamp", "timestamp_s", "time"),
+    )
+    if sequence_column is None or time_column is None:
+        raise ValueError("template must contain sequence and timestamp columns")
+
+    sequence_ids: list[str] = []
+    timestamps: list[float] = []
+    for row_label, sequence_value, time_value in zip(
+        rows.index,
+        rows[sequence_column],
+        rows[time_column],
+        strict=True,
+    ):
+        try:
+            sequence_id = _IMPL.parse_official_sequence_cell(sequence_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "template contains an invalid sequence identifier at "
+                f"row {row_label!r}: {sequence_value!r}"
+            ) from exc
+        timestamp = optional_float(time_value)
+        if timestamp is None:
+            raise ValueError(
+                f"template contains an invalid timestamp at row {row_label!r}: "
+                f"{time_value!r}"
+            )
+        sequence_ids.append(sequence_id)
+        timestamps.append(timestamp)
+
+    return (
+        pd.DataFrame(
+            {
+                "sequence_id": sequence_ids,
+                "time_s": timestamps,
+            }
+        )
+        .sort_values(["sequence_id", "time_s"])
+        .reset_index(drop=True)
+    )
 
 
 def _normalize_estimate_weight_mapping(raw_weights: dict[Any, Any]) -> dict[str, float]:
@@ -223,6 +274,7 @@ def write_track5_estimate_ensemble_outputs(
 
 _IMPL._validate_ensemble_weight = _validate_ensemble_weight
 _IMPL._validate_trim_fraction = _validate_trim_fraction
+_IMPL._normalize_template_rows = _normalize_template_rows
 _IMPL._normalize_estimate_weight_mapping = _normalize_estimate_weight_mapping
 _IMPL.apply_estimate_weight_config = apply_estimate_weight_config
 _IMPL.build_track5_estimate_ensemble = build_track5_estimate_ensemble
@@ -239,6 +291,7 @@ globals().update(
 # Keep the patched helpers available to direct imports and dependent wrappers.
 globals()["_validate_ensemble_weight"] = _validate_ensemble_weight
 globals()["_validate_trim_fraction"] = _validate_trim_fraction
+globals()["_normalize_template_rows"] = _normalize_template_rows
 globals()["_normalize_estimate_weight_mapping"] = _normalize_estimate_weight_mapping
 globals()["_validated_runtime_inputs"] = _validated_runtime_inputs
 globals()["_scaled_runtime_inputs"] = _scaled_runtime_inputs
