@@ -59,7 +59,10 @@ def pointcloud2_to_dataframe(message: Any) -> pd.DataFrame:
     missing = {"x", "y", "z"}.difference(by_name)
     if missing:
         raise ValueError(f"PointCloud2 message missing required fields: {sorted(missing)}")
-    point_step = int(getattr(message, "point_step"))
+    point_step = _integer_metadata(
+        getattr(message, "point_step"),
+        name="point_step",
+    )
     data = bytes(getattr(message, "data"))
     if point_step <= 0:
         raise ValueError("PointCloud2 point_step must be positive")
@@ -119,8 +122,8 @@ def _validate_required_xyz_fields(
 
 
 def _point_offsets(message: Any, *, point_step: int, data_length: int) -> list[int]:
-    width = int(getattr(message, "width", 0))
-    height = int(getattr(message, "height", 1))
+    width = _integer_metadata(getattr(message, "width", 0), name="width")
+    height = _integer_metadata(getattr(message, "height", 1), name="height")
     if width <= 0 or height <= 0:
         return [index * point_step for index in range(data_length // point_step)]
 
@@ -156,7 +159,7 @@ def _normalized_row_step(message: Any, *, point_step: int, width: int, data_leng
     row_step = getattr(message, "row_step", None)
     if row_step is None:
         return contiguous_row_step
-    row_step = int(row_step)
+    row_step = _integer_metadata(row_step, name="row_step")
     if row_step == 0 and data_length >= contiguous_row_step:
         return contiguous_row_step
     if row_step <= 0:
@@ -225,6 +228,31 @@ def _normalize_field_name(value: Any) -> str:
     return str(value).replace(chr(0), "").strip().lower()
 
 
+def _integer_metadata(value: Any, *, name: str) -> int:
+    """Return integral PointCloud2 metadata without lossy coercion."""
+
+    error = f"PointCloud2 {name} must be an integer scalar"
+    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+        raise ValueError(error)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+        raise ValueError(error)
+    item = scalar.item()
+    if np.ma.is_masked(item) or isinstance(item, (bool, np.bool_)) or np.iscomplexobj(item):
+        raise ValueError(error)
+    try:
+        integer = int(item)
+        numeric = float(item)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(numeric) or numeric != float(integer):
+        raise ValueError(error)
+    return integer
+
+
 def _normalize_fields(fields: Iterable[Any]) -> list[PointFieldSpec]:
     normalized: list[PointFieldSpec] = []
     seen_names: set[str] = set()
@@ -242,9 +270,18 @@ def _normalize_fields(fields: Iterable[Any]) -> list[PointFieldSpec]:
         normalized.append(
             PointFieldSpec(
                 name=name,
-                offset=int(getattr(field, "offset")),
-                datatype=int(getattr(field, "datatype")),
-                count=int(getattr(field, "count", 1)),
+                offset=_integer_metadata(
+                    getattr(field, "offset"),
+                    name=f"field {name!r} offset",
+                ),
+                datatype=_integer_metadata(
+                    getattr(field, "datatype"),
+                    name=f"field {name!r} datatype",
+                ),
+                count=_integer_metadata(
+                    getattr(field, "count", 1),
+                    name=f"field {name!r} count",
+                ),
             )
         )
     return normalized
