@@ -8,6 +8,10 @@ from pathlib import Path
 from raft_uav.io import aerpaw as _aerpaw
 
 _CANONICAL_RF_EXPORT_NAMES = ("AADM.csv", "AADM_rerun.csv")
+_RF_SENSOR_AND_RADAR_DIR_NAMES = (
+    "RF Sensor and Radar",
+    "RF_Sensor_and_Radar",
+)
 _ORIGINAL_DISCOVER_ATTR = "_discover_flights_before_rf_preference"
 _original_discover_flights = getattr(
     _aerpaw,
@@ -15,6 +19,22 @@ _original_discover_flights = getattr(
     _aerpaw.discover_flights,
 )
 setattr(_aerpaw, _ORIGINAL_DISCOVER_ATTR, _original_discover_flights)
+
+
+def _find_rf_sensor_and_radar_root(dataset_root: Path) -> Path:
+    """Find either supported RF-root spelling at any extraction depth."""
+
+    root = Path(dataset_root)
+    if root.is_dir() and root.name in _RF_SENSOR_AND_RADAR_DIR_NAMES:
+        return root
+    for name in _RF_SENSOR_AND_RADAR_DIR_NAMES:
+        candidate = root / name
+        if candidate.is_dir():
+            return candidate
+    for candidate in root.rglob("*"):
+        if candidate.is_dir() and candidate.name in _RF_SENSOR_AND_RADAR_DIR_NAMES:
+            return candidate
+    raise FileNotFoundError(f"Could not find RF Sensor and Radar folder under {root}")
 
 
 def _prefer_canonical_rf_export(
@@ -52,5 +72,7 @@ def _discover_flights(
     return [_prefer_canonical_rf_export(flight) for flight in flights]
 
 
+_aerpaw.find_rf_sensor_and_radar_root = _find_rf_sensor_and_radar_root
+_aerpaw._IMPL.find_rf_sensor_and_radar_root = _find_rf_sensor_and_radar_root
 _aerpaw.discover_flights = _discover_flights
 _aerpaw._IMPL.discover_flights = _discover_flights
