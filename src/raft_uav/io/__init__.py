@@ -7,6 +7,7 @@ from pathlib import Path
 
 from raft_uav.io import aerpaw as _aerpaw
 
+_CANONICAL_RF_EXPORT_NAMES = ("AADM.csv", "AADM_rerun.csv")
 _ORIGINAL_DISCOVER_ATTR = "_discover_flights_before_rf_preference"
 _original_discover_flights = getattr(
     _aerpaw,
@@ -21,9 +22,15 @@ def _prefer_canonical_rf_export(
     *,
     variant: str,
 ) -> _aerpaw.FlightPaths:
-    """Prefer canonical AADM exports over unrelated CSV artifacts."""
+    """Prefer exact canonical AADM exports over unrelated CSV artifacts."""
 
-    canonical = sorted(flight.root.glob("AADM*.csv"))
+    canonical = [
+        candidate
+        for candidate in (
+            flight.root / name for name in _CANONICAL_RF_EXPORT_NAMES
+        )
+        if candidate.is_file()
+    ]
     if not canonical:
         return flight
     rf_csv = _aerpaw._preferred_variant(canonical, variant=variant)
