@@ -84,6 +84,23 @@ def _sequence_position_groups(values: pd.Series) -> list[list[int]]:
     return list(groups.values())
 
 
+def _sequence_match_key(value: object) -> tuple[object, ...]:
+    """Return a cross-table key for radar/truth sequence matching."""
+
+    if _aerpaw._is_missing_scalar(value):
+        return ("missing",)
+    return ("text", str(value))
+
+
+def _sequence_positions_by_match_key(
+    values: pd.Series,
+) -> dict[tuple[object, ...], list[int]]:
+    groups: dict[tuple[object, ...], list[int]] = {}
+    for position, value in enumerate(values.to_numpy(dtype=object)):
+        groups.setdefault(_sequence_match_key(value), []).append(position)
+    return groups
+
+
 def _select_unscoped_radar_measurement_rows(
     radar: pd.DataFrame,
     *,
@@ -117,7 +134,7 @@ def _select_radar_measurement_rows(
     truth_gate_m: float = 150.0,
     truth_time_gate_s: float = 1.0,
 ) -> pd.DataFrame:
-    """Validate controls and keep at most one catprob candidate per sequence frame."""
+    """Validate controls and preserve optional sequence boundaries during selection."""
 
     catprob_threshold, truth_gate_m, truth_time_gate_s = _validated_selection_controls(
         radar,
@@ -128,7 +145,17 @@ def _select_radar_measurement_rows(
         truth_time_gate_s=truth_time_gate_s,
     )
 
-    if selection != "catprob" or "sequence_id" not in radar.columns or radar.empty:
+    sequence_scoped_catprob = (
+        selection == "catprob" and "sequence_id" in radar.columns and not radar.empty
+    )
+    sequence_scoped_truth_gate = (
+        selection == "truth-gated"
+        and truth is not None
+        and "sequence_id" in radar.columns
+        and "sequence_id" in truth.columns
+        and not radar.empty
+    )
+    if not sequence_scoped_catprob and not sequence_scoped_truth_gate:
         return _select_unscoped_radar_measurement_rows(
             radar,
             selection=selection,
@@ -138,16 +165,25 @@ def _select_radar_measurement_rows(
             truth_time_gate_s=truth_time_gate_s,
         )
 
-    position_groups = _sequence_position_groups(radar["sequence_id"])
-    if len(position_groups) <= 1:
-        return _select_unscoped_radar_measurement_rows(
-            radar,
-            selection=selection,
-            truth=truth,
-            catprob_threshold=catprob_threshold,
-            truth_gate_m=truth_gate_m,
-            truth_time_gate_s=truth_time_gate_s,
-        )
+    if sequence_scoped_truth_gate:
+        radar_groups = _sequence_positions_by_match_key(radar["sequence_id"])
+        truth_groups = _sequence_positions_by_match_key(truth["sequence_id"])
+        position_groups = list(radar_groups.items())
+    else:
+        truth_groups = {}
+        position_groups = [
+            (None, positions)
+            for positions in _sequence_position_groups(radar["sequence_id"])
+        ]
+        if len(position_groups) <= 1:
+            return _select_unscoped_radar_measurement_rows(
+                radar,
+                selection=selection,
+                truth=truth,
+                catprob_threshold=catprob_threshold,
+                truth_gate_m=truth_gate_m,
+                truth_time_gate_s=truth_time_gate_s,
+            )
 
     order_column = "__raft_uav_catprob_input_order"
     while order_column in radar.columns:
@@ -155,17 +191,27 @@ def _select_radar_measurement_rows(
     scoped = radar.copy()
     scoped[order_column] = np.arange(len(scoped), dtype=int)
 
-    selected_parts = [
-        _select_unscoped_radar_measurement_rows(
-            scoped.iloc[positions],
-            selection=selection,
-            truth=truth,
-            catprob_threshold=catprob_threshold,
-            truth_gate_m=truth_gate_m,
-            truth_time_gate_s=truth_time_gate_s,
+    selected_parts: list[pd.DataFrame] = []
+    for sequence_key, positions in position_groups:
+        scoped_truth = truth
+        if sequence_scoped_truth_gate:
+            truth_positions = truth_groups.get(sequence_key, [])
+            if not truth_positions:
+                continue
+            scoped_truth = truth.iloc[truth_positions]
+        selected_parts.append(
+            _select_unscoped_radar_measurement_rows(
+                scoped.iloc[positions],
+                selection=selection,
+                truth=scoped_truth,
+                catprob_threshold=catprob_threshold,
+                truth_gate_m=truth_gate_m,
+                truth_time_gate_s=truth_time_gate_s,
+            )
         )
-        for positions in position_groups
-    ]
+
+    if not selected_parts:
+        return radar.iloc[0:0].copy()
     selected = pd.concat(selected_parts, axis=0, sort=False)
     if selected.empty:
         return radar.iloc[0:0].copy()
