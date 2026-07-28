@@ -1,9 +1,10 @@
-"""Compatibility fixes for Track 5 consensus template headers.
+"""Compatibility fixes for Track 5 consensus template validation.
 
 The maintained implementation lives in the sibling
 ``track5_estimate_consensus_ensemble.py`` module. This package preserves the
 public import path while making template alias lookup insensitive to surrounding
-whitespace and rejecting ambiguous alias columns before sequence/time alignment.
+whitespace and rejecting ambiguous columns or malformed rows before sequence/time
+alignment.
 """
 
 from __future__ import annotations
@@ -12,6 +13,10 @@ import importlib.util
 from pathlib import Path
 import sys
 from typing import Any
+
+import pandas as pd
+
+from raft_uav.numeric import optional_float
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_estimate_consensus_ensemble.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -54,7 +59,59 @@ def _first_present(rows: Any, names: tuple[str, ...]) -> Any | None:
     return None
 
 
+def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
+    """Normalize every requested template row or reject the first malformed row."""
+
+    rows = pd.DataFrame(template).copy()
+    sequence_column = _first_present(
+        rows,
+        ("sequence_id", "Sequence", "sequence", "seq"),
+    )
+    time_column = _first_present(
+        rows,
+        ("time_s", "Timestamp", "timestamp", "timestamp_s", "time"),
+    )
+    if sequence_column is None or time_column is None:
+        raise ValueError("template must contain sequence and timestamp columns")
+
+    sequence_ids: list[str] = []
+    timestamps: list[float] = []
+    for row_label, sequence_value, time_value in zip(
+        rows.index,
+        rows[sequence_column],
+        rows[time_column],
+        strict=True,
+    ):
+        try:
+            sequence_id = _IMPL.parse_official_sequence_cell(sequence_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "template contains an invalid sequence identifier at "
+                f"row {row_label!r}: {sequence_value!r}"
+            ) from exc
+        timestamp = optional_float(time_value)
+        if timestamp is None:
+            raise ValueError(
+                f"template contains an invalid timestamp at row {row_label!r}: "
+                f"{time_value!r}"
+            )
+        sequence_ids.append(sequence_id)
+        timestamps.append(timestamp)
+
+    return (
+        pd.DataFrame(
+            {
+                "sequence_id": sequence_ids,
+                "time_s": timestamps,
+            }
+        )
+        .sort_values(["sequence_id", "time_s"])
+        .reset_index(drop=True)
+    )
+
+
 _IMPL._first_present = _first_present
+_IMPL._normalize_template_rows = _normalize_template_rows
 
 globals().update(
     {
@@ -67,6 +124,7 @@ globals().update(
 # Keep the patched helpers visible to tests and exploratory callers.
 globals()["_normalized_column_name"] = _normalized_column_name
 globals()["_first_present"] = _first_present
+globals()["_normalize_template_rows"] = _normalize_template_rows
 __doc__ = _IMPL.__doc__
 __all__ = [
     name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))
