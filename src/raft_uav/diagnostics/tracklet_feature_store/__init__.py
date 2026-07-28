@@ -179,6 +179,7 @@ def build_counterfactual_association_dashboard(features: Any) -> pd.DataFrame:
     column = "chosen_by_selected_radar"
     if column in normalized.columns:
         normalized[column] = _boolean_series(normalized[column], column=column)
+    normalized = normalized.reset_index(drop=True)
     return _ORIGINAL_BUILD_COUNTERFACTUAL_ASSOCIATION_DASHBOARD(normalized)
 
 
