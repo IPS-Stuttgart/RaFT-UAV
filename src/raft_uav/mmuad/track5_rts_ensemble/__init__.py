@@ -2,9 +2,9 @@
 
 The maintained implementation lives in the sibling ``track5_rts_ensemble.py``
 module. This package keeps the public import path while preserving opaque
-sequence identifiers, canonicalizing template identifiers, validating numeric
-controls, and initializing smoothing at the first real observation after a
-leading data gap.
+sequence identifiers, canonicalizing unique template identifiers, rejecting
+ambiguous template aliases, validating numeric controls, and initializing
+smoothing at the first real observation after a leading data gap.
 """
 
 from __future__ import annotations
@@ -54,16 +54,29 @@ class _PandasCsvProxy:
         return read_estimate_csv(Path(path))
 
 
-def _first_present(rows: pd.DataFrame, names: tuple[str, ...]) -> Any | None:
-    """Return a column whose stripped, case-folded name matches an alias."""
+def _normalized_column_name(value: object) -> str:
+    """Return the whitespace-insensitive, case-folded column name."""
 
-    normalized = {str(column).strip().casefold(): column for column in rows.columns}
-    for name in names:
-        if name in rows.columns:
-            return name
-        found = normalized.get(str(name).strip().casefold())
-        if found is not None:
-            return found
+    return str(value).strip().casefold()
+
+
+def _first_present(rows: pd.DataFrame, names: tuple[str, ...]) -> Any | None:
+    """Return the unique original column matching one of the supplied aliases."""
+
+    aliases = {_normalized_column_name(name) for name in names}
+    matching_columns = [
+        column
+        for column in rows.columns
+        if _normalized_column_name(column) in aliases
+    ]
+    if len(matching_columns) > 1:
+        rendered = ", ".join(repr(str(column)) for column in matching_columns)
+        raise ValueError(
+            "template contains ambiguous columns matching "
+            f"{tuple(names)!r}: {rendered}"
+        )
+    if matching_columns:
+        return matching_columns[0]
     return None
 
 
@@ -381,6 +394,7 @@ globals().update(
 )
 
 # Keep patched helpers and public functions importable after re-exporting the legacy module.
+globals()["_normalized_column_name"] = _normalized_column_name
 globals()["_first_present"] = _first_present
 globals()["_sequence_text_or_none"] = _sequence_text_or_none
 globals()["_normalize_template_rows"] = _normalize_template_rows
