@@ -19,10 +19,8 @@ setattr(_aerpaw, _ORIGINAL_DISCOVER_ATTR, _original_discover_flights)
 
 def _prefer_canonical_rf_export(
     flight: _aerpaw.FlightPaths,
-    *,
-    variant: str,
 ) -> _aerpaw.FlightPaths:
-    """Prefer exact canonical AADM exports over unrelated CSV artifacts."""
+    """Prefer exact canonical AADM exports without crossing file variants."""
 
     canonical = [
         candidate
@@ -31,9 +29,11 @@ def _prefer_canonical_rf_export(
         )
         if candidate.is_file()
     ]
-    if not canonical:
+    if not canonical or flight.rf_variant not in {"original", "rerun"}:
         return flight
-    rf_csv = _aerpaw._preferred_variant(canonical, variant=variant)
+    rf_csv = _aerpaw._preferred_variant(canonical, variant=flight.rf_variant)
+    if rf_csv is None:
+        return flight
     return replace(
         flight,
         rf_csv=rf_csv,
@@ -49,10 +49,7 @@ def _discover_flights(
     """Discover flights with deterministic canonical RF-file preference."""
 
     flights = _original_discover_flights(dataset_root, variant=variant)
-    return [
-        _prefer_canonical_rf_export(flight, variant=variant)
-        for flight in flights
-    ]
+    return [_prefer_canonical_rf_export(flight) for flight in flights]
 
 
 _aerpaw.discover_flights = _discover_flights
