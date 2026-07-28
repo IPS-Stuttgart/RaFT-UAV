@@ -29,6 +29,16 @@ def _as_string_tuple(value: Any) -> tuple[str, ...]:
     return tuple(str(item) for item in value)
 
 
+def _optional_mapping(value: object | None, field_name: str) -> Mapping[str, Any]:
+    """Return an optional mapping without hiding malformed falsy values."""
+
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a mapping or None")
+    return value
+
+
 @dataclass(frozen=True)
 class ExperimentConfig:
     """Serializable configuration for one experiment family."""
@@ -45,6 +55,12 @@ class ExperimentConfig:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "ExperimentConfig":
+        environment = _optional_mapping(payload.get("environment"), "environment")
+        calibration_artifacts = _optional_mapping(
+            payload.get("calibration_artifacts"),
+            "calibration_artifacts",
+        )
+        metadata = _optional_mapping(payload.get("metadata"), "metadata")
         return cls(
             name=str(payload.get("name", "experiment")),
             dataset_root=str(payload.get("dataset_root", "")),
@@ -52,12 +68,11 @@ class ExperimentConfig:
             flights=_as_string_tuple(payload.get("flights")),
             methods=_as_string_tuple(payload.get("methods")),
             options=_as_string_tuple(payload.get("options")),
-            environment={str(k): str(v) for k, v in dict(payload.get("environment", {}) or {}).items()},
+            environment={str(k): str(v) for k, v in environment.items()},
             calibration_artifacts={
-                str(k): str(v)
-                for k, v in dict(payload.get("calibration_artifacts", {}) or {}).items()
+                str(k): str(v) for k, v in calibration_artifacts.items()
             },
-            metadata=dict(payload.get("metadata", {}) or {}),
+            metadata=dict(metadata),
         )
 
     @classmethod
