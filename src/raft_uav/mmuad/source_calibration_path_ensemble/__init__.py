@@ -3,7 +3,8 @@
 The maintained implementation lives in the sibling
 ``source_calibration_path_ensemble.py`` module. This package preserves the
 public import path while treating only exact ``0`` and ``1`` fractions as
-calibration-path endpoints.
+calibration-path endpoints and assigning round-trip-safe branch tokens to every
+distinct normalized fraction.
 """
 
 from __future__ import annotations
@@ -37,6 +38,12 @@ def _contains_fraction(values: Sequence[float], target: float) -> bool:
     """Return whether an exact normalized endpoint is present."""
 
     return any(float(value) == float(target) for value in values)
+
+
+def _fraction_token(value: float) -> str:
+    """Return a round-trip-safe branch token for one normalized float."""
+
+    return f"{float(value):.17g}".replace("-", "m").replace(".", "p")
 
 
 def _annotate_fraction(
@@ -134,7 +141,7 @@ def build_source_calibration_path_ensemble(
     for fraction in normalized_fractions:
         if fraction == 0.0 or fraction == 1.0:
             continue
-        branch = f"{prefix}_f{_IMPL._fraction_token(fraction)}"
+        branch = f"{prefix}_f{_fraction_token(fraction)}"
         parts.append(
             _IMPL._interpolate_calibrated_rows(
                 calibrated_rows,
@@ -165,6 +172,7 @@ def build_source_calibration_path_ensemble(
 
 
 _IMPL._contains_fraction = _contains_fraction
+_IMPL._fraction_token = _fraction_token
 _IMPL._annotate_fraction = _annotate_fraction
 _IMPL.build_source_calibration_path_ensemble = build_source_calibration_path_ensemble
 
@@ -176,6 +184,7 @@ globals().update(
     }
 )
 globals()["_contains_fraction"] = _contains_fraction
+globals()["_fraction_token"] = _fraction_token
 globals()["_annotate_fraction"] = _annotate_fraction
 globals()["build_source_calibration_path_ensemble"] = (
     build_source_calibration_path_ensemble
