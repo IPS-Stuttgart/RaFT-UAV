@@ -1,14 +1,13 @@
-"""Reject malformed uncertainty payloads and non-finite fit coordinates."""
+"""Reject malformed uncertainty payloads and non-finite fit residuals."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from functools import wraps
 from typing import Any
 
 import numpy as np
 import pandas as pd
-
-_COORDINATE_COLUMNS = ("east_m", "north_m", "up_m")
 
 
 def _finite_real_scalar(
@@ -98,33 +97,31 @@ def _validate_model_payload(payload: object) -> Mapping[str, Any]:
     return payload
 
 
-def _mask_nonfinite_fit_coordinates(
-    frame: pd.DataFrame | None,
-) -> pd.DataFrame | None:
-    """Mask non-finite coordinates so they cannot become clipped fit targets."""
+def _mask_nonfinite_fit_residuals(frame: pd.DataFrame) -> pd.DataFrame:
+    """Replace non-finite residuals with missing values before variance fitting."""
 
-    if frame is None or frame.empty:
+    residual_columns = [
+        column
+        for column in frame.columns
+        if column.startswith("residual_") and column.endswith("_m")
+    ]
+    if frame.empty or not residual_columns:
         return frame
+
     out = frame.copy()
-    for column in _COORDINATE_COLUMNS:
-        if column not in out.columns:
-            continue
-        try:
-            values = pd.to_numeric(out[column], errors="raise")
-            raw = values.to_numpy()
-            if np.iscomplexobj(raw):
-                continue
-            numeric = values.to_numpy(dtype=float, na_value=np.nan)
-        except (TypeError, ValueError, OverflowError):
-            continue
-        nonfinite = ~np.isfinite(numeric)
+    for column in residual_columns:
+        values = pd.to_numeric(out[column], errors="coerce").to_numpy(
+            dtype=float,
+            na_value=np.nan,
+        )
+        nonfinite = ~np.isfinite(values)
         if bool(np.any(nonfinite)):
             out.loc[nonfinite, column] = np.nan
     return out
 
 
 def install() -> None:
-    """Install raw-field, container, and fit-coordinate validation."""
+    """Install raw-field, container, and fit-residual validation."""
 
     from raft_uav import uncertainty as uncertainty_module
 
@@ -177,41 +174,19 @@ def install() -> None:
 
     if getattr(
         uncertainty_module,
-        "_raft_uav_nonfinite_fit_coordinate_validation_installed",
+        "_raft_uav_nonfinite_fit_residual_validation_installed",
         False,
     ):
         return
 
-    original_fit = uncertainty_module.fit_heteroscedastic_uncertainty_model
+    legacy = uncertainty_module._legacy
+    original_aligned_residuals = legacy._aligned_residuals
 
-    def validated_fit_heteroscedastic_uncertainty_model(
-        *,
-        rf,
-        radar,
-        truth,
-        ridge_lambda=1.0,
-        max_time_delta_s=2.0,
-        min_std_m=None,
-        max_std_m=None,
-        metadata=None,
-    ):
-        return original_fit(
-            rf=_mask_nonfinite_fit_coordinates(rf),
-            radar=_mask_nonfinite_fit_coordinates(radar),
-            truth=_mask_nonfinite_fit_coordinates(truth),
-            ridge_lambda=ridge_lambda,
-            max_time_delta_s=max_time_delta_s,
-            min_std_m=min_std_m,
-            max_std_m=max_std_m,
-            metadata=metadata,
-        )
+    @wraps(original_aligned_residuals)
+    def validated_aligned_residuals(*args, **kwargs):
+        aligned = original_aligned_residuals(*args, **kwargs)
+        return _mask_nonfinite_fit_residuals(aligned)
 
-    uncertainty_module.fit_heteroscedastic_uncertainty_model = (
-        validated_fit_heteroscedastic_uncertainty_model
-    )
-    legacy = getattr(uncertainty_module, "_legacy", None)
-    if legacy is not None:
-        legacy.fit_heteroscedastic_uncertainty_model = (
-            validated_fit_heteroscedastic_uncertainty_model
-        )
-    uncertainty_module._raft_uav_nonfinite_fit_coordinate_validation_installed = True
+    legacy._aligned_residuals = validated_aligned_residuals
+    uncertainty_module._aligned_residuals = validated_aligned_residuals
+    uncertainty_module._raft_uav_nonfinite_fit_residual_validation_installed = True
