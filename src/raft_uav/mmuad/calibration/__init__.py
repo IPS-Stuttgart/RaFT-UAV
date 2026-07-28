@@ -3,7 +3,8 @@
 The maintained implementation lives in the sibling ``calibration.py`` module.
 This package preserves the public import path while rejecting complex-valued
 calibration inputs before NumPy can silently discard their imaginary components
-during real-valued coercion.
+during real-valued coercion and rejecting ambiguous or blank sensor names before
+calibration selection becomes order dependent.
 """
 
 from __future__ import annotations
@@ -59,6 +60,37 @@ def _reject_complex(value: Any, *, name: str) -> None:
         raise ValueError(f"{name} must contain real values")
 
 
+def _normalized_sensor_name(value: object) -> str:
+    """Return the logical calibration sensor name used during lookup."""
+
+    return str(value).strip().lower()
+
+
+def _validate_sensor_names(payload: dict[str, Any]) -> None:
+    """Reject sensor names whose normalized lookup identity is ambiguous."""
+
+    sensors_payload = payload.get("sensors", payload)
+    if not isinstance(sensors_payload, dict):
+        return
+    sensors_are_nested = sensors_payload is not payload
+    normalized: dict[str, object] = {}
+    for source in sensors_payload:
+        sensor_name = _normalized_sensor_name(source)
+        if (
+            not sensors_are_nested
+            and sensor_name in _IMPL._CALIBRATION_METADATA_KEYS
+        ):
+            continue
+        if not sensor_name:
+            raise ValueError("calibration sensor names must not be blank")
+        if sensor_name in normalized:
+            raise ValueError(
+                "calibration sensor names are ambiguous after trimming whitespace "
+                f"and ignoring case: {normalized[sensor_name]!r} and {source!r}"
+            )
+        normalized[sensor_name] = source
+
+
 class RigidTransform(_ORIGINAL_RIGID_TRANSFORM):
     """Rigid transform that rejects lossy complex-to-real coercion."""
 
@@ -106,8 +138,9 @@ def _transform_from_matrix(matrix: np.ndarray) -> RigidTransform:
 
 
 def calibration_from_mapping(payload: dict[str, Any]):
-    """Build calibrations after validating values cast before helper dispatch."""
+    """Build calibrations after validating names and cast-before-dispatch values."""
 
+    _validate_sensor_names(payload)
     sensors_payload = payload.get("sensors", payload)
     if isinstance(sensors_payload, dict):
         for source, entry in sensors_payload.items():
@@ -140,6 +173,8 @@ globals().update(
 )
 globals()["_contains_complex"] = _contains_complex
 globals()["_reject_complex"] = _reject_complex
+globals()["_normalized_sensor_name"] = _normalized_sensor_name
+globals()["_validate_sensor_names"] = _validate_sensor_names
 globals()["RigidTransform"] = RigidTransform
 globals()["SensorCalibration"] = SensorCalibration
 globals()["calibration_from_mapping"] = calibration_from_mapping
