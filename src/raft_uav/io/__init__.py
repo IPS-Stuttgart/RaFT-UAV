@@ -8,16 +8,9 @@ from pathlib import Path
 from raft_uav.io import aerpaw as _aerpaw
 
 _CANONICAL_RF_EXPORT_NAMES = ("AADM.csv", "AADM_rerun.csv")
-_ORIGINAL_FIND_RF_ROOT_ATTR = "_find_rf_root_before_nested_underscore_support"
-_original_find_rf_sensor_and_radar_root = getattr(
-    _aerpaw,
-    _ORIGINAL_FIND_RF_ROOT_ATTR,
-    _aerpaw.find_rf_sensor_and_radar_root,
-)
-setattr(
-    _aerpaw,
-    _ORIGINAL_FIND_RF_ROOT_ATTR,
-    _original_find_rf_sensor_and_radar_root,
+_RF_SENSOR_AND_RADAR_DIR_NAMES = (
+    "RF Sensor and Radar",
+    "RF_Sensor_and_Radar",
 )
 _ORIGINAL_DISCOVER_ATTR = "_discover_flights_before_rf_preference"
 _original_discover_flights = getattr(
@@ -29,16 +22,19 @@ setattr(_aerpaw, _ORIGINAL_DISCOVER_ATTR, _original_discover_flights)
 
 
 def _find_rf_sensor_and_radar_root(dataset_root: Path) -> Path:
-    """Find nested underscored RF roots accepted by the direct-path loader."""
+    """Find either supported RF-root spelling at any extraction depth."""
 
-    try:
-        return _original_find_rf_sensor_and_radar_root(dataset_root)
-    except FileNotFoundError:
-        root = Path(dataset_root)
-        for candidate in root.rglob("RF_Sensor_and_Radar"):
-            if candidate.is_dir():
-                return candidate
-        raise
+    root = Path(dataset_root)
+    if root.is_dir() and root.name in _RF_SENSOR_AND_RADAR_DIR_NAMES:
+        return root
+    for name in _RF_SENSOR_AND_RADAR_DIR_NAMES:
+        candidate = root / name
+        if candidate.is_dir():
+            return candidate
+    for candidate in root.rglob("*"):
+        if candidate.is_dir() and candidate.name in _RF_SENSOR_AND_RADAR_DIR_NAMES:
+            return candidate
+    raise FileNotFoundError(f"Could not find RF Sensor and Radar folder under {root}")
 
 
 def _prefer_canonical_rf_export(
