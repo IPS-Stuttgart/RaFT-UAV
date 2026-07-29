@@ -54,10 +54,50 @@ def test_candidate_reservoir_falls_back_from_nonfinite_primary_score() -> None:
     assert reservoir.loc[0, "candidate_reservoir_score"] == 0.9
 
 
+def test_candidate_reservoir_rejects_complex_scores_without_losing_real_rows() -> None:
+    candidates = _candidate_rows()
+    candidates["track_id"] = ["corrupt-complex", "finite-best"]
+    candidates["ranker_score"] = pd.Series([1.0 + 2.0j, 0.5 + 0.0j], dtype=complex)
+    candidates["confidence"] = [0.1, 0.4]
+
+    reservoir = build_candidate_reservoir(
+        candidates,
+        config=ReservoirConfig(
+            global_top_n=1,
+            per_source_top_n=0,
+            per_branch_top_n=0,
+            max_candidates_per_frame=1,
+            score_column="ranker_score",
+            fallback_score_column="confidence",
+        ),
+    )
+
+    assert reservoir["track_id"].tolist() == ["finite-best"]
+    assert reservoir.loc[0, "candidate_reservoir_score"] == 0.5
+
+
 def test_oracle_recall_demotes_nonfinite_precomputed_scores() -> None:
     reservoir = _candidate_rows().rename(
         columns={"ranker_score": "candidate_reservoir_score"}
     )
+
+    frame_rows, pooled, _by_sequence = build_oracle_recall_tables(
+        reservoir,
+        _truth_rows(),
+        top_k_values=(1,),
+        max_truth_time_delta_s=0.1,
+    )
+
+    assert frame_rows.loc[0, "oracle_top1_3d_m"] == 0.0
+    assert pooled.loc[0, "oracle_top1_3d_m_mse"] == 0.0
+
+
+def test_oracle_recall_demotes_complex_scores_without_losing_real_rows() -> None:
+    reservoir = _candidate_rows()
+    reservoir["track_id"] = ["corrupt-complex", "finite-best"]
+    reservoir["x_m"] = [20.0, 0.0]
+    reservoir["ranker_score"] = pd.Series([1.0 + 2.0j, 0.5 + 0.0j], dtype=complex)
+    reservoir = reservoir.rename(columns={"ranker_score": "candidate_reservoir_score"})
 
     frame_rows, pooled, _by_sequence = build_oracle_recall_tables(
         reservoir,
