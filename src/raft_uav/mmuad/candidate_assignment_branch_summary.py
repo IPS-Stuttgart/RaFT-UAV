@@ -74,7 +74,7 @@ def write_candidate_assignment_branch_summary(
         }
     )
     paths["branch_summary_json"].write_text(
-        json.dumps(_jsonable(payload), indent=2),
+        json.dumps(_jsonable(payload), indent=2, allow_nan=False),
         encoding="utf-8",
     )
     return {key: str(value) for key, value in paths.items()}
@@ -230,19 +230,27 @@ def _bool_series(values: pd.Series, *, column_name: str | None = None) -> pd.Ser
     return truthy.astype(bool)
 
 
+def _finite_numeric(values: pd.Series) -> np.ndarray:
+    numeric = pd.to_numeric(values, errors="coerce").to_numpy(
+        dtype=float,
+        na_value=np.nan,
+    )
+    return numeric[np.isfinite(numeric)]
+
+
 def _mse(values: pd.Series) -> float:
-    series = pd.to_numeric(values, errors="coerce").dropna()
-    return float(np.mean(np.square(series.to_numpy(float)))) if not series.empty else float("nan")
+    finite = _finite_numeric(values)
+    return float(np.mean(np.square(finite))) if finite.size else float("nan")
 
 
 def _mean(values: pd.Series) -> float:
-    series = pd.to_numeric(values, errors="coerce").dropna()
-    return float(series.mean()) if not series.empty else float("nan")
+    finite = _finite_numeric(values)
+    return float(np.mean(finite)) if finite.size else float("nan")
 
 
 def _quantile(values: pd.Series, quantile: float) -> float:
-    series = pd.to_numeric(values, errors="coerce").dropna()
-    return float(series.quantile(quantile)) if not series.empty else float("nan")
+    finite = _finite_numeric(values)
+    return float(np.quantile(finite, quantile)) if finite.size else float("nan")
 
 
 def _safe_difference(left: float, right: float) -> float:
@@ -282,6 +290,9 @@ def _jsonable(value: Any) -> Any:
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
+    if isinstance(value, (float, np.floating)):
+        number = float(value)
+        return number if np.isfinite(number) else None
     if hasattr(value, "item"):
         try:
             return value.item()
