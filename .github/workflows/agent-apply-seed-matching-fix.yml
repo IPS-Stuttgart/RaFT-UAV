@@ -1,0 +1,60 @@
+name: Apply valid seed matching fix
+
+on:
+  push:
+    branches:
+      - agent/maximize-valid-seed-matches
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/maximize-valid-seed-matches
+
+      - name: Apply focused source patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path("src/raft_uav/multi_uav_lts/fixed_population.py")
+          workflow_path = Path(".github/workflows/agent-apply-seed-matching-fix.yml")
+          source = source_path.read_text(encoding="utf-8")
+          old = '''    overlaps = iou_matrix(seeds, frame_one)
+              rows, cols = linear_sum_assignment(-overlaps)
+              return {
+                  frame_one[prediction_index].object_id: seeds[seed_index].object_id
+                  for seed_index, prediction_index in zip(rows, cols, strict=True)
+                  if overlaps[seed_index, prediction_index] >= min_iou
+              }
+          '''
+          new = '''    overlaps = iou_matrix(seeds, frame_one)
+              valid = overlaps >= min_iou
+              # Prioritize the number of gate-valid pairs before using IoU as a tie-breaker.
+              cardinality_bonus = float(min(overlaps.shape) + 1)
+              score = np.where(valid, cardinality_bonus + overlaps, 0.0)
+              rows, cols = linear_sum_assignment(-score)
+              return {
+                  frame_one[prediction_index].object_id: seeds[seed_index].object_id
+                  for seed_index, prediction_index in zip(rows, cols, strict=True)
+                  if valid[seed_index, prediction_index]
+              }
+          '''
+          if source.count(old) != 1:
+              raise SystemExit("expected seed mapping block was not found exactly once")
+          source_path.write_text(source.replace(old, new), encoding="utf-8")
+          workflow_path.unlink()
+          PY
+
+      - name: Commit source fix and remove one-shot workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/raft_uav/multi_uav_lts/fixed_population.py \
+            .github/workflows/agent-apply-seed-matching-fix.yml
+          git commit -m "Preserve maximum valid seed mappings"
+          git push origin HEAD:agent/maximize-valid-seed-matches
