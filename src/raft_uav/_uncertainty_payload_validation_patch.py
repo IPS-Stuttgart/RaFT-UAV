@@ -1,11 +1,13 @@
-"""Reject Boolean and lossy integer fields in uncertainty model heads."""
+"""Reject malformed uncertainty payloads and non-finite fit residuals."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from functools import wraps
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 
 def _finite_real_scalar(
@@ -95,8 +97,31 @@ def _validate_model_payload(payload: object) -> Mapping[str, Any]:
     return payload
 
 
+def _mask_nonfinite_fit_residuals(frame: pd.DataFrame) -> pd.DataFrame:
+    """Replace non-finite residuals with missing values before variance fitting."""
+
+    residual_columns = [
+        column
+        for column in frame.columns
+        if column.startswith("residual_") and column.endswith("_m")
+    ]
+    if frame.empty or not residual_columns:
+        return frame
+
+    out = frame.copy()
+    for column in residual_columns:
+        values = pd.to_numeric(out[column], errors="coerce").to_numpy(
+            dtype=float,
+            na_value=np.nan,
+        )
+        nonfinite = ~np.isfinite(values)
+        if bool(np.any(nonfinite)):
+            out.loc[nonfinite, column] = np.nan
+    return out
+
+
 def install() -> None:
-    """Install raw-field validation on uncertainty model construction/loading."""
+    """Install raw-field, container, and fit-residual validation."""
 
     from raft_uav import uncertainty as uncertainty_module
 
@@ -146,3 +171,22 @@ def install() -> None:
 
         model_class.from_dict = classmethod(validated_model_from_dict)
         model_class._raft_uav_container_validation_installed = True
+
+    if getattr(
+        uncertainty_module,
+        "_raft_uav_nonfinite_fit_residual_validation_installed",
+        False,
+    ):
+        return
+
+    legacy = uncertainty_module._legacy
+    original_aligned_residuals = legacy._aligned_residuals
+
+    @wraps(original_aligned_residuals)
+    def validated_aligned_residuals(*args, **kwargs):
+        aligned = original_aligned_residuals(*args, **kwargs)
+        return _mask_nonfinite_fit_residuals(aligned)
+
+    legacy._aligned_residuals = validated_aligned_residuals
+    uncertainty_module._aligned_residuals = validated_aligned_residuals
+    uncertainty_module._raft_uav_nonfinite_fit_residual_validation_installed = True
