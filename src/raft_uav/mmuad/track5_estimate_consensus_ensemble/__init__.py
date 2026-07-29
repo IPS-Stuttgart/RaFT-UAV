@@ -1,10 +1,10 @@
-"""Compatibility fixes for Track 5 consensus template validation.
+"""Compatibility fixes for Track 5 consensus input and template validation.
 
 The maintained implementation lives in the sibling
 ``track5_estimate_consensus_ensemble.py`` module. This package preserves the
-public import path while making template alias lookup insensitive to surrounding
-whitespace and rejecting ambiguous columns or malformed rows before sequence/time
-alignment.
+public import path while rejecting ambiguous estimate labels, making template
+alias lookup insensitive to surrounding whitespace, and rejecting ambiguous
+columns or malformed rows before sequence/time alignment.
 """
 
 from __future__ import annotations
@@ -110,8 +110,58 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _validate_unique_estimate_labels(estimate_inputs: Any) -> tuple[Any, ...]:
+    """Materialize estimate inputs and reject ambiguous normalized labels."""
+
+    loaded_inputs = tuple(estimate_inputs)
+    seen_labels: dict[str, str] = {}
+    for raw_label, _, _ in loaded_inputs:
+        raw_text = str(raw_label)
+        safe_label = _IMPL._safe_label(raw_text)
+        previous = seen_labels.get(safe_label)
+        if previous is not None:
+            if previous == raw_text:
+                raise ValueError(f"estimate input label {safe_label!r} is duplicated")
+            raise ValueError(
+                "estimate input labels collide after normalization: "
+                f"{previous!r} and {raw_text!r} both normalize to {safe_label!r}"
+            )
+        seen_labels[safe_label] = raw_text
+    return loaded_inputs
+
+
+_ORIGINAL_BUILD_TRACK5_CONSENSUS_ESTIMATE_ENSEMBLE = (
+    _IMPL.build_track5_consensus_estimate_ensemble
+)
+
+
+def _build_track5_consensus_estimate_ensemble(
+    estimate_inputs: Any,
+    template: pd.DataFrame,
+    *,
+    consensus_radius_m: float = 5.0,
+    fallback_policy: str = "max-weight",
+    min_consensus_weight_fraction: float = 0.0,
+    max_nearest_time_delta_s: float | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build the ensemble after validating normalized input-label identity."""
+
+    loaded_inputs = _validate_unique_estimate_labels(estimate_inputs)
+    return _ORIGINAL_BUILD_TRACK5_CONSENSUS_ESTIMATE_ENSEMBLE(
+        loaded_inputs,
+        template,
+        consensus_radius_m=consensus_radius_m,
+        fallback_policy=fallback_policy,
+        min_consensus_weight_fraction=min_consensus_weight_fraction,
+        max_nearest_time_delta_s=max_nearest_time_delta_s,
+    )
+
+
 _IMPL._first_present = _first_present
 _IMPL._normalize_template_rows = _normalize_template_rows
+_IMPL.build_track5_consensus_estimate_ensemble = (
+    _build_track5_consensus_estimate_ensemble
+)
 
 globals().update(
     {
@@ -125,6 +175,7 @@ globals().update(
 globals()["_normalized_column_name"] = _normalized_column_name
 globals()["_first_present"] = _first_present
 globals()["_normalize_template_rows"] = _normalize_template_rows
+globals()["_validate_unique_estimate_labels"] = _validate_unique_estimate_labels
 __doc__ = _IMPL.__doc__
 __all__ = [
     name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))
