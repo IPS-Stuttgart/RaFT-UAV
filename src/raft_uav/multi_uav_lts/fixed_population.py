@@ -226,11 +226,15 @@ def _seed_track_mapping(
     if not seeds or not frame_one:
         return {}
     overlaps = iou_matrix(seeds, frame_one)
-    rows, cols = linear_sum_assignment(-overlaps)
+    valid = overlaps >= min_iou
+    # Prioritize the number of gate-valid pairs before using IoU as a tie-breaker.
+    cardinality_bonus = float(min(overlaps.shape) + 1)
+    score = np.where(valid, cardinality_bonus + overlaps, 0.0)
+    rows, cols = linear_sum_assignment(-score)
     return {
         frame_one[prediction_index].object_id: seeds[seed_index].object_id
         for seed_index, prediction_index in zip(rows, cols, strict=True)
-        if overlaps[seed_index, prediction_index] >= min_iou
+        if valid[seed_index, prediction_index]
     }
 
 
