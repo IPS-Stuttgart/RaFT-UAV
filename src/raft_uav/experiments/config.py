@@ -116,6 +116,7 @@ def write_resolved_experiment_config(
 ) -> dict[str, Any]:
     """Write a resolved, auditable experiment configuration JSON."""
 
+    extra_mapping = _optional_mapping(extra, "extra")
     payload: dict[str, Any] = {
         "argv": list(sys.argv if argv is None else argv),
         "python": sys.version,
@@ -125,8 +126,8 @@ def write_resolved_experiment_config(
     }
     if config is not None:
         payload["config"] = config.to_dict()
-    if extra:
-        payload["extra"] = dict(extra)
+    if extra_mapping:
+        payload["extra"] = dict(extra_mapping)
     resolved = _jsonable(payload)
     path = Path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
