@@ -3,7 +3,7 @@
 The maintained implementation lives in the sibling ``candidate_reservoir.py``
 module. This package preserves opaque sequence identifiers, normalizes serialized
 ``candidate_reservoir_protected`` values before summary counts are computed, and
-treats non-finite ranking metadata as missing so corrupted scores cannot dominate
+treats malformed ranking metadata as missing so corrupted scores cannot dominate
 reservoir selection or oracle top-k diagnostics.
 """
 
@@ -18,6 +18,8 @@ from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
+
+from raft_uav.numeric import optional_float
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_reservoir.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -134,18 +136,41 @@ def _boolean_series(values: Any, index: pd.Index) -> pd.Series:
     return (truthy | (~falsey & numeric)).fillna(False).astype(bool)
 
 
+def _optional_candidate_score(value: object) -> float | None:
+    """Recover real scores from pandas columns upcast to complex dtype."""
+
+    parsed = optional_float(value)
+    if parsed is not None:
+        return parsed
+    if np.ma.is_masked(value):
+        return None
+    if isinstance(value, np.ndarray):
+        if value.ndim != 0:
+            return None
+        value = value.item()
+    if not isinstance(value, (complex, np.complexfloating)):
+        return None
+    imaginary = float(np.imag(value))
+    if not np.isfinite(imaginary) or imaginary != 0.0:
+        return None
+    return optional_float(np.real(value))
+
+
 def _finite_numeric_column(
     rows: pd.DataFrame,
     column: str,
     *,
     default: float,
 ) -> pd.Series:
-    """Return numeric values with NaN and infinities treated as missing."""
+    """Return finite real values with malformed scalars treated as missing."""
 
     if column not in rows.columns:
         return pd.Series(default, index=rows.index, dtype=float)
-    values = pd.to_numeric(rows[column], errors="coerce")
-    return values.where(np.isfinite(values))
+    return pd.Series(
+        [_optional_candidate_score(value) for value in rows[column]],
+        index=rows.index,
+        dtype=float,
+    )
 
 
 def _candidate_score(
@@ -171,15 +196,15 @@ def build_oracle_recall_tables(
     top_k_values: tuple[int, ...] = _IMPL._DEFAULT_TOP_K,
     max_truth_time_delta_s: float = 0.5,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Rank oracle candidates after demoting non-finite precomputed scores."""
+    """Rank oracle candidates after demoting malformed precomputed scores."""
 
     rows = pd.DataFrame(reservoir).copy()
     if "candidate_reservoir_score" in rows.columns:
-        scores = pd.to_numeric(rows["candidate_reservoir_score"], errors="coerce")
-        rows["candidate_reservoir_score"] = scores.where(
-            np.isfinite(scores),
-            float("-inf"),
-        )
+        rows["candidate_reservoir_score"] = _finite_numeric_column(
+            rows,
+            "candidate_reservoir_score",
+            default=np.nan,
+        ).fillna(float("-inf"))
     return _ORIGINAL_BUILD_ORACLE_RECALL_TABLES(
         rows,
         truth,
@@ -218,6 +243,7 @@ def main(argv: list[str] | None = None) -> int:
 _IMPL.load_candidate_inputs = load_candidate_inputs
 _IMPL._load_candidate_specs = _load_candidate_specs
 _IMPL._boolean_series = _boolean_series
+_IMPL._optional_candidate_score = _optional_candidate_score
 _IMPL._numeric_column = _finite_numeric_column
 _IMPL._candidate_score = _candidate_score
 _IMPL.build_oracle_recall_tables = build_oracle_recall_tables
@@ -235,6 +261,7 @@ globals()["load_candidate_inputs"] = load_candidate_inputs
 globals()["_load_candidate_specs"] = _load_candidate_specs
 globals()["_read_sequence_text_csv"] = _read_sequence_text_csv
 globals()["_boolean_series"] = _boolean_series
+globals()["_optional_candidate_score"] = _optional_candidate_score
 globals()["_finite_numeric_column"] = _finite_numeric_column
 globals()["_candidate_score"] = _candidate_score
 globals()["build_oracle_recall_tables"] = build_oracle_recall_tables
