@@ -139,14 +139,21 @@ def _boolean_series(values: Any, index: pd.Index) -> pd.Series:
 def _optional_candidate_score(value: object) -> float | None:
     """Recover real scores from pandas columns upcast to complex dtype."""
 
-    if isinstance(value, np.ndarray) and value.ndim == 0:
-        value = value.item()
-    if isinstance(value, (complex, np.complexfloating)):
-        imaginary = float(np.imag(value))
-        if not np.isfinite(imaginary) or imaginary != 0.0:
+    parsed = optional_float(value)
+    if parsed is not None:
+        return parsed
+    if np.ma.is_masked(value):
+        return None
+    if isinstance(value, np.ndarray):
+        if value.ndim != 0:
             return None
-        value = np.real(value)
-    return optional_float(value)
+        value = value.item()
+    if not isinstance(value, (complex, np.complexfloating)):
+        return None
+    imaginary = float(np.imag(value))
+    if not np.isfinite(imaginary) or imaginary != 0.0:
+        return None
+    return optional_float(np.real(value))
 
 
 def _finite_numeric_column(
