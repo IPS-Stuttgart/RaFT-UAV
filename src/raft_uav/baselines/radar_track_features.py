@@ -161,6 +161,13 @@ def _velocity_smoothness(group: pd.DataFrame, *, window_frames: int) -> np.ndarr
             -pd.to_numeric(group["velocity_down_mps"], errors="coerce").to_numpy(dtype=float),
         ]
     )
-    diffs = np.r_[np.zeros((1, 3)), np.diff(velocity, axis=0)]
+    diffs = np.r_[np.full((1, 3), np.nan), np.diff(velocity, axis=0)]
     norms = np.linalg.norm(diffs, axis=1)
-    return pd.Series(norms).rolling(window_frames, min_periods=1).mean().to_numpy(dtype=float)
+    smoothness = (
+        pd.Series(norms)
+        .rolling(window_frames, min_periods=1)
+        .mean()
+        .to_numpy(dtype=float, copy=True)
+    )
+    smoothness[~np.isfinite(norms)] = np.nan
+    return smoothness
