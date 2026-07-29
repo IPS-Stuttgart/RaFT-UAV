@@ -94,9 +94,21 @@ def postprocess_fixed_population(
     min_iou = validate_unit_interval(min_seed_iou, name="min_seed_iou")
     max_gap = validate_nonnegative_int(relink_max_gap, name="relink_max_gap")
     max_cost = validate_nonnegative_finite(relink_max_cost, name="relink_max_cost")
+    if not first_frame_label_dir.exists():
+        raise FileNotFoundError(
+            f"first-frame label directory does not exist: {first_frame_label_dir}"
+        )
+    if not first_frame_label_dir.is_dir():
+        raise NotADirectoryError(
+            f"first-frame label path is not a directory: {first_frame_label_dir}"
+        )
+    label_paths = sorted(first_frame_label_dir.glob("*.txt"))
+    if not label_paths:
+        raise ValueError(
+            f"first-frame label directory contains no .txt files: {first_frame_label_dir}"
+        )
     predictions = prediction_texts(prediction_path)
     requested = set(sequences or ())
-    label_paths = sorted(first_frame_label_dir.glob("*.txt"))
     if requested:
         missing = sorted(requested - {path.stem for path in label_paths})
         if missing:

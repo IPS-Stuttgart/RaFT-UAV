@@ -41,3 +41,33 @@ def test_validation_failure_preserves_existing_outputs(tmp_path: Path) -> None:
 
     assert (output / "old.txt").read_text(encoding="utf-8") == "original\n"
     assert not (output / "A.txt").exists()
+
+
+@pytest.mark.parametrize(
+    ("label_state", "error_type", "message"),
+    [
+        ("missing", FileNotFoundError, "first-frame label directory does not exist"),
+        ("file", NotADirectoryError, "first-frame label path is not a directory"),
+        ("empty", ValueError, r"first-frame label directory contains no \.txt files"),
+    ],
+)
+def test_invalid_label_input_preserves_existing_outputs(
+    tmp_path: Path,
+    label_state: str,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    labels = tmp_path / "labels"
+    predictions = tmp_path / "predictions"
+    output = tmp_path / "output"
+    _write(predictions / "S.txt", "1,1,0,0,10,10,1,1,1\n")
+    _write(output / "old.txt", "original\n")
+    if label_state == "file":
+        labels.write_text("not a directory\n", encoding="utf-8")
+    elif label_state == "empty":
+        labels.mkdir()
+
+    with pytest.raises(error_type, match=message):
+        postprocess_fixed_population(predictions, labels, output)
+
+    assert (output / "old.txt").read_text(encoding="utf-8") == "original\n"
