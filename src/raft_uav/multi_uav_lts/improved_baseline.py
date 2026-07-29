@@ -73,11 +73,15 @@ def _option_value(arguments: list[str], option: str) -> str | None:
     prefix = option + "="
     for index, value in enumerate(arguments):
         if value.startswith(prefix):
-            return value[len(prefix) :]
+            return _validated_option_value(
+                value[len(prefix) :], option=option, reject_option_like=False
+            )
         if value == option:
             if index + 1 >= len(arguments):
                 raise ValueError(f"{option} requires a value")
-            return arguments[index + 1]
+            return _validated_option_value(
+                arguments[index + 1], option=option, reject_option_like=True
+            )
     return None
 
 
@@ -85,14 +89,29 @@ def _pop_option(arguments: list[str], option: str) -> str | None:
     prefix = option + "="
     for index, value in enumerate(arguments):
         if value.startswith(prefix):
+            option_value = _validated_option_value(
+                value[len(prefix) :], option=option, reject_option_like=False
+            )
             arguments.pop(index)
-            return value[len(prefix) :]
+            return option_value
         if value == option:
             if index + 1 >= len(arguments):
                 raise ValueError(f"{option} requires a value")
+            option_value = _validated_option_value(
+                arguments[index + 1], option=option, reject_option_like=True
+            )
             arguments.pop(index)
-            return arguments.pop(index)
+            arguments.pop(index)
+            return option_value
     return None
+
+
+def _validated_option_value(
+    value: str, *, option: str, reject_option_like: bool
+) -> str:
+    if not value or (reject_option_like and value.startswith("-")):
+        raise ValueError(f"{option} requires a value")
+    return value
 
 
 if __name__ == "__main__":
