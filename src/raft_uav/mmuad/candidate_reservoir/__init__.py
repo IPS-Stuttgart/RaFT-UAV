@@ -1,10 +1,10 @@
 """Compatibility fixes for candidate-reservoir inputs, flags, and scores.
 
 The maintained implementation lives in the sibling ``candidate_reservoir.py``
-module. This package preserves opaque sequence identifiers, normalizes serialized
-``candidate_reservoir_protected`` values before summary counts are computed, and
-treats malformed ranking metadata as missing so corrupted scores cannot dominate
-reservoir selection or oracle top-k diagnostics.
+module. This package preserves opaque sequence identifiers, strictly normalizes
+serialized ``candidate_reservoir_protected`` values before summary counts are
+computed, and treats malformed ranking metadata as missing so corrupted scores
+cannot dominate reservoir selection or oracle top-k diagnostics.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.candidate_diversity import _parse_protected_flag
 from raft_uav.numeric import optional_float
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_reservoir.py"
@@ -118,22 +119,12 @@ def _load_candidate_specs(specs: list[str]) -> pd.DataFrame:
 
 
 def _boolean_series(values: Any, index: pd.Index) -> pd.Series:
-    """Parse boolean-like values without making false strings truthy."""
+    """Parse protection flags with the same semantics used during pruning."""
 
     series = pd.Series(values, index=index)
     if series.empty:
         return pd.Series(False, index=index, dtype=bool)
-    if pd.api.types.is_bool_dtype(series):
-        return series.fillna(False).astype(bool)
-    if pd.api.types.is_numeric_dtype(series):
-        numeric = pd.to_numeric(series, errors="coerce").fillna(0.0)
-        return numeric.ne(0.0)
-
-    text = series.astype("string").str.strip().str.lower()
-    truthy = text.isin({"1", "true", "t", "yes", "y"})
-    falsey = text.isin({"0", "false", "f", "no", "n", "", "none", "null", "nan"})
-    numeric = pd.to_numeric(text, errors="coerce").fillna(0.0).ne(0.0)
-    return (truthy | (~falsey & numeric)).fillna(False).astype(bool)
+    return series.map(_parse_protected_flag).astype(bool)
 
 
 def _optional_candidate_score(value: object) -> float | None:
