@@ -78,10 +78,16 @@ def build_stratified_folds(
 
     if fold_count < 2:
         raise ValueError("fold_count must be at least 2")
-    if fold_count > len(sequences):
+    unique_sequences = set(sequences)
+    if len(unique_sequences) != len(sequences):
+        duplicates = sorted(
+            sequence for sequence in unique_sequences if sequences.count(sequence) > 1
+        )
+        raise ValueError(f"duplicate sequence names: {', '.join(duplicates)}")
+    if fold_count > len(unique_sequences):
         raise ValueError("fold_count cannot exceed the sequence count")
     by_scenario: dict[str, list[str]] = {}
-    for sequence in sorted(set(sequences)):
+    for sequence in sorted(unique_sequences):
         by_scenario.setdefault(scenario_prefix(sequence), []).append(sequence)
     folds: list[list[str]] = [[] for _ in range(fold_count)]
     generator = random.Random(seed)
