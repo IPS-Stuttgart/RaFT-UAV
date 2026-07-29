@@ -70,7 +70,9 @@ def test_grid_keeps_colliding_rounded_config_outputs_separate(tmp_path: Path) ->
         _BASE_CONFIG_ID,
         f"{_BASE_CONFIG_ID}__2",
     )
-    assert Path(rows[0].prediction_dir).read_text(encoding="utf-8") == expected
+    assert Path(rows[0].prediction_dir, "C_00.txt").read_text(
+        encoding="utf-8"
+    ) == expected
     assert (output / "best_predictions" / "C_00.txt").read_text(
         encoding="utf-8"
     ) == expected
