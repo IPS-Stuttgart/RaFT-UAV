@@ -1,8 +1,9 @@
-"""Compatibility package validating spatial-diversity reservoir scales.
+"""Compatibility fixes for spatial-diversity reservoir selection.
 
 The maintained implementation lives in the sibling
 ``candidate_reservoir_spatial.py`` module. This package preserves the public
-import path while rejecting malformed spatial scales before candidate selection.
+import path while validating cap controls and spatial scales exactly, and while
+treating malformed ranking scores as missing before candidate selection.
 """
 
 from __future__ import annotations
@@ -14,6 +15,9 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from raft_uav.mmuad.candidate_reservoir import _finite_numeric_column
+from raft_uav.numeric import optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_reservoir_spatial.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -29,6 +33,15 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _LEGACY_SPATIAL_DIVERSITY_CAP_RESERVOIR = _IMPL.spatial_diversity_cap_reservoir
+
+
+def _nonnegative_integer(value: object, *, name: str) -> int:
+    """Return an exact non-negative integer control."""
+
+    parsed = optional_int(value)
+    if parsed is None or parsed < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return parsed
 
 
 def _positive_finite_scale(value: Any, *, name: str) -> float:
@@ -52,12 +65,24 @@ def _positive_finite_scale(value: Any, *, name: str) -> float:
     return scale
 
 
+def _score(
+    rows: pd.DataFrame,
+    score_column: str,
+    fallback_score_column: str,
+) -> pd.Series:
+    """Return finite real ranking scores with documented fallback semantics."""
+
+    primary = _finite_numeric_column(rows, score_column, default=np.nan)
+    fallback = _finite_numeric_column(rows, fallback_score_column, default=1.0)
+    return primary.fillna(fallback).fillna(0.0).astype(float)
+
+
 def spatial_diversity_cap_reservoir(
     reservoir: pd.DataFrame,
     *,
-    max_candidates_per_frame: int = 40,
-    min_per_source: int = 1,
-    min_per_branch: int = 1,
+    max_candidates_per_frame: object = 40,
+    min_per_source: object = 1,
+    min_per_branch: object = 1,
     score_column: str = "candidate_reservoir_score",
     fallback_score_column: str = "confidence",
     branch_column: str = "candidate_branch",
@@ -65,17 +90,23 @@ def spatial_diversity_cap_reservoir(
     spatial_diversity_scale_m: float = 10.0,
     spatial_distance_cap_m: float = 50.0,
 ) -> pd.DataFrame:
-    """Cap candidates after validating the spatial decay scale."""
+    """Cap candidates after validating controls and ranking scores."""
 
+    cap = _nonnegative_integer(
+        max_candidates_per_frame,
+        name="max_candidates_per_frame",
+    )
+    source_quota = _nonnegative_integer(min_per_source, name="min_per_source")
+    branch_quota = _nonnegative_integer(min_per_branch, name="min_per_branch")
     scale_m = _positive_finite_scale(
         spatial_diversity_scale_m,
         name="spatial_diversity_scale_m",
     )
     return _LEGACY_SPATIAL_DIVERSITY_CAP_RESERVOIR(
         reservoir,
-        max_candidates_per_frame=max_candidates_per_frame,
-        min_per_source=min_per_source,
-        min_per_branch=min_per_branch,
+        max_candidates_per_frame=cap,
+        min_per_source=source_quota,
+        min_per_branch=branch_quota,
         score_column=score_column,
         fallback_score_column=fallback_score_column,
         branch_column=branch_column,
@@ -85,7 +116,7 @@ def spatial_diversity_cap_reservoir(
     )
 
 
-_IMPL._positive_finite_scale = _positive_finite_scale
+_IMPL._score = _score
 _IMPL.spatial_diversity_cap_reservoir = spatial_diversity_cap_reservoir
 
 globals().update(
@@ -95,7 +126,9 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_nonnegative_integer"] = _nonnegative_integer
 globals()["_positive_finite_scale"] = _positive_finite_scale
+globals()["_score"] = _score
 globals()["spatial_diversity_cap_reservoir"] = spatial_diversity_cap_reservoir
 
 __doc__ = _IMPL.__doc__
