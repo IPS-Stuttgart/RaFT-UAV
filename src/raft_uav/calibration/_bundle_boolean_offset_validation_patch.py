@@ -1,4 +1,4 @@
-"""Validate calibration-bundle manifests and time offsets at public boundaries."""
+"""Validate calibration-bundle manifests, metadata, and time offsets at public boundaries."""
 
 from __future__ import annotations
 
@@ -65,9 +65,23 @@ def _exact_schema_version(value: object) -> int:
     return int(number)
 
 
+def _optional_mapping(
+    value: object | None,
+    *,
+    field_name: str,
+) -> Mapping[str, Any]:
+    """Return an optional manifest mapping without hiding malformed values."""
+
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a mapping or null")
+    return value
+
+
 @dataclass(frozen=True)
 class CalibrationBundle(_ORIGINAL_CALIBRATION_BUNDLE):
-    """Calibration bundle with validated finite time offsets."""
+    """Calibration bundle with validated metadata and finite time offsets."""
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -82,6 +96,11 @@ class CalibrationBundle(_ORIGINAL_CALIBRATION_BUNDLE):
                 self.radar_time_offset_s,
                 field_name="radar_time_offset_s",
             ),
+        )
+        object.__setattr__(
+            self,
+            "metadata",
+            dict(_optional_mapping(self.metadata, field_name="metadata")),
         )
 
 
@@ -105,7 +124,7 @@ def _manifest_offsets(payload: Mapping[str, Any]) -> tuple[object, object]:
 
 
 def load_calibration_bundle(path: str | Path) -> CalibrationBundle:
-    """Load a bundle after validating its shape, schema, and time offsets."""
+    """Load a bundle after validating its shape, schema, metadata, and offsets."""
 
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(payload, Mapping):
@@ -114,6 +133,7 @@ def load_calibration_bundle(path: str | Path) -> CalibrationBundle:
     schema_version = _exact_schema_version(schema_value)
     if schema_version != 1:
         raise ValueError(f"unsupported calibration bundle schema {schema_value!r}")
+    _optional_mapping(payload.get("metadata"), field_name="metadata")
     rf_offset, radar_offset = _manifest_offsets(payload)
     if rf_offset is not None:
         _finite_real_offset(
@@ -139,7 +159,7 @@ def write_calibration_bundle_manifest(
     uncertainty_model_path: str | Path | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> None:
-    """Write a bundle manifest after validating scalar time offsets."""
+    """Write a bundle manifest after validating metadata and scalar offsets."""
 
     validated_rf_offset = _finite_real_offset(
         rf_time_offset_s,
@@ -151,13 +171,14 @@ def write_calibration_bundle_manifest(
         field_name="radar_time_offset_s",
         allow_nonfinite_missing=True,
     )
+    validated_metadata = _optional_mapping(metadata, field_name="metadata")
     _ORIGINAL_WRITE_CALIBRATION_BUNDLE_MANIFEST(
         path,
         rf_time_offset_s=validated_rf_offset,
         radar_time_offset_s=validated_radar_offset,
         bias_model_path=bias_model_path,
         uncertainty_model_path=uncertainty_model_path,
-        metadata=metadata,
+        metadata=validated_metadata,
     )
 
 
