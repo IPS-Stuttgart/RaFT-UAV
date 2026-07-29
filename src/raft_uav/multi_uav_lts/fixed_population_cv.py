@@ -20,6 +20,9 @@ from .metrics import evaluate_lts_predictions
 class FoldScore:
     fold: int
     sequences: tuple[str, ...]
+    codabench_hota: float
+    codabench_mota: float
+    codabench_idf1: float
     hota: float
     deta: float
     assa: float
@@ -36,6 +39,10 @@ class CrossValidationRow:
     relink_max_gap: int
     relink_max_cost: float
     interpolate_single_frame: bool
+    mean_codabench_hota: float
+    std_codabench_hota: float
+    mean_codabench_mota: float
+    mean_codabench_idf1: float
     mean_hota: float
     std_hota: float
     mean_deta: float
@@ -43,6 +50,9 @@ class CrossValidationRow:
     mean_loca: float
     mean_mota: float
     mean_idf1: float
+    pooled_codabench_hota: float
+    pooled_codabench_mota: float
+    pooled_codabench_idf1: float
     pooled_hota: float
     pooled_mota: float
     pooled_idf1: float
@@ -140,6 +150,9 @@ def run_fixed_population_cv(
                 FoldScore(
                     fold=fold_index,
                     sequences=fold_sequences,
+                    codabench_hota=metrics.codabench_hota,
+                    codabench_mota=metrics.codabench_mota,
+                    codabench_idf1=metrics.codabench_idf1,
                     hota=metrics.hota,
                     deta=metrics.deta,
                     assa=metrics.assa,
@@ -160,6 +173,18 @@ def run_fixed_population_cv(
                 "relink_max_gap": max_gap,
                 "relink_max_cost": max_cost,
                 "interpolate_single_frame": interpolate,
+                "mean_codabench_hota": _mean(
+                    score.codabench_hota for score in fold_scores
+                ),
+                "std_codabench_hota": _std(
+                    score.codabench_hota for score in fold_scores
+                ),
+                "mean_codabench_mota": _mean(
+                    score.codabench_mota for score in fold_scores
+                ),
+                "mean_codabench_idf1": _mean(
+                    score.codabench_idf1 for score in fold_scores
+                ),
                 "mean_hota": _mean(score.hota for score in fold_scores),
                 "std_hota": _std(score.hota for score in fold_scores),
                 "mean_deta": _mean(score.deta for score in fold_scores),
@@ -167,6 +192,9 @@ def run_fixed_population_cv(
                 "mean_loca": _mean(score.loca for score in fold_scores),
                 "mean_mota": _mean(score.mota for score in fold_scores),
                 "mean_idf1": _mean(score.idf1 for score in fold_scores),
+                "pooled_codabench_hota": pooled.codabench_hota,
+                "pooled_codabench_mota": pooled.codabench_mota,
+                "pooled_codabench_idf1": pooled.codabench_idf1,
                 "pooled_hota": pooled.hota,
                 "pooled_mota": pooled.mota,
                 "pooled_idf1": pooled.idf1,
@@ -181,10 +209,10 @@ def run_fixed_population_cv(
         )
     raw_rows.sort(
         key=lambda row: (
-            -float(row["mean_hota"]),
-            float(row["std_hota"]),
-            -float(row["mean_idf1"]),
-            -float(row["mean_mota"]),
+            -float(row["mean_codabench_hota"]),
+            float(row["std_codabench_hota"]),
+            -float(row["mean_codabench_idf1"]),
+            -float(row["mean_codabench_mota"]),
             int(row["grid_index"]),
         )
     )
@@ -196,6 +224,10 @@ def run_fixed_population_cv(
             relink_max_gap=int(row["relink_max_gap"]),
             relink_max_cost=float(row["relink_max_cost"]),
             interpolate_single_frame=bool(row["interpolate_single_frame"]),
+            mean_codabench_hota=float(row["mean_codabench_hota"]),
+            std_codabench_hota=float(row["std_codabench_hota"]),
+            mean_codabench_mota=float(row["mean_codabench_mota"]),
+            mean_codabench_idf1=float(row["mean_codabench_idf1"]),
             mean_hota=float(row["mean_hota"]),
             std_hota=float(row["std_hota"]),
             mean_deta=float(row["mean_deta"]),
@@ -203,6 +235,9 @@ def run_fixed_population_cv(
             mean_loca=float(row["mean_loca"]),
             mean_mota=float(row["mean_mota"]),
             mean_idf1=float(row["mean_idf1"]),
+            pooled_codabench_hota=float(row["pooled_codabench_hota"]),
+            pooled_codabench_mota=float(row["pooled_codabench_mota"]),
+            pooled_codabench_idf1=float(row["pooled_codabench_idf1"]),
             pooled_hota=float(row["pooled_hota"]),
             pooled_mota=float(row["pooled_mota"]),
             pooled_idf1=float(row["pooled_idf1"]),
@@ -332,10 +367,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     if rows:
         print(f"best_config={rows[0].config_id}")
-        print(f"best_cv_HOTA={rows[0].mean_hota:.6f}")
-        print(f"best_cv_HOTA_std={rows[0].std_hota:.6f}")
-        print(f"best_cv_IDF1={rows[0].mean_idf1:.6f}")
-        print(f"best_cv_MOTA={rows[0].mean_mota:.6f}")
+        print(f"best_cv_CODABENCH_HOTA={rows[0].mean_codabench_hota:.6f}")
+        print(
+            f"best_cv_CODABENCH_HOTA_std={rows[0].std_codabench_hota:.6f}"
+        )
+        print(f"best_cv_CODABENCH_IDF1={rows[0].mean_codabench_idf1:.6f}")
+        print(f"best_cv_CODABENCH_MOTA={rows[0].mean_codabench_mota:.6f}")
+        print(f"best_cv_standard_HOTA={rows[0].mean_hota:.6f}")
     return 0
 
 
