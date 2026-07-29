@@ -60,6 +60,9 @@ def test_cv_selects_relinking_by_held_out_hota(tmp_path: Path) -> None:
     )
 
     assert rows[0].relink_max_gap == 1
+    assert rows[0].mean_codabench_hota == 1.0
+    assert rows[0].std_codabench_hota == 0.0
+    assert rows[0].mean_codabench_idf1 == 1.0
     assert rows[0].mean_hota == 1.0
     assert rows[0].std_hota == 0.0
     assert rows[0].mean_idf1 == 1.0
