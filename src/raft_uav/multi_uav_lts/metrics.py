@@ -1,4 +1,4 @@
-"""Competition-style HOTA, CLEAR, and identity metrics for Multi-UAV LTS."""
+"""Organizer-export and canonical TrackEval metrics for Multi-UAV LTS."""
 
 from __future__ import annotations
 
@@ -39,6 +39,7 @@ class SequenceMetrics:
     predicted_detections: int
     gt_ids: int
     predicted_ids: int
+    hota_at_005: float
     hota: float
     deta: float
     assa: float
@@ -73,6 +74,10 @@ class BenchmarkMetrics:
     sequence_count: int
     gt_detections: int
     predicted_detections: int
+    codabench_hota: float
+    codabench_mota: float
+    codabench_idf1: float
+    combined_hota_at_005: float
     hota: float
     deta: float
     assa: float
@@ -152,6 +157,7 @@ def evaluate_lts_predictions(
     hota_fields = finalize_hota(hota)
     clear_fields = finalize_clear(clear)
     identity_fields = finalize_identity(identity)
+    combined_hota_at_005 = float(hota_fields["hota"][0])
     return BenchmarkMetrics(
         prediction_path=str(prediction_path),
         truth_dir=str(truth_dir),
@@ -159,6 +165,16 @@ def evaluate_lts_predictions(
         sequence_count=len(sequence_metrics),
         gt_detections=sum(row.gt_detections for row in sequence_metrics),
         predicted_detections=sum(row.predicted_detections for row in sequence_metrics),
+        codabench_hota=_organizer_average(
+            (row.hota_at_005 for row in sequence_metrics), combined_hota_at_005
+        ),
+        codabench_mota=_organizer_average(
+            (row.mota for row in sequence_metrics), clear_fields["mota"]
+        ),
+        codabench_idf1=_organizer_average(
+            (row.idf1 for row in sequence_metrics), identity_fields["idf1"]
+        ),
+        combined_hota_at_005=combined_hota_at_005,
         hota=float(np.mean(hota_fields["hota"])),
         deta=float(np.mean(hota_fields["deta"])),
         assa=float(np.mean(hota_fields["assa"])),
@@ -204,6 +220,7 @@ def _sequence_metrics(
         predicted_detections=prepared.num_tracker_detections,
         gt_ids=prepared.num_gt_ids,
         predicted_ids=prepared.num_tracker_ids,
+        hota_at_005=float(hota_fields["hota"][0]),
         hota=float(np.mean(hota_fields["hota"])),
         deta=float(np.mean(hota_fields["deta"])),
         assa=float(np.mean(hota_fields["assa"])),
@@ -231,6 +248,11 @@ def _sequence_metrics(
     )
 
 
+def _organizer_average(values: Iterable[float], combined_value: float) -> float:
+    materialized = [float(value) for value in values]
+    return (sum(materialized) + float(combined_value)) / max(1, len(materialized) + 1)
+
+
 def _float_tuple(values: np.ndarray) -> tuple[float, ...]:
     return tuple(float(value) for value in values)
 
@@ -254,6 +276,7 @@ def write_sequence_csv(metrics: BenchmarkMetrics, path: Path) -> None:
         "predicted_detections",
         "gt_ids",
         "predicted_ids",
+        "hota_at_005",
         "hota",
         "deta",
         "assa",
@@ -318,6 +341,8 @@ def main(argv: list[str] | None = None) -> int:
         write_sequence_csv(metrics, args.sequence_summary_csv)
     if args.alpha_summary_csv:
         write_alpha_csv(metrics, args.alpha_summary_csv)
+    for name in ("codabench_hota", "codabench_mota", "codabench_idf1"):
+        print(f"{name.upper()}={getattr(metrics, name):.6f}")
     for name in ("hota", "deta", "assa", "loca", "mota", "idf1"):
         print(f"{name.upper()}={getattr(metrics, name):.6f}")
     return 0
