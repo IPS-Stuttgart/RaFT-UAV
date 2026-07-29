@@ -76,6 +76,42 @@ def test_nearest_neighbor_ignores_unsupervised_training_sequence() -> None:
     assert predicted.loc[0, "sequence_gate_weight"] == pytest.approx(0.75)
 
 
+@pytest.mark.parametrize(
+    ("column", "malformed_value"),
+    [
+        ("sequence_gate_weight", 0.25 + 2.0j),
+        ("matched_rows", 2.0 + 3.0j),
+        ("pose_mse_m2", 1.0 + 4.0j),
+    ],
+)
+def test_nearest_neighbor_ignores_complex_supervision_metadata(
+    column: str,
+    malformed_value: complex,
+) -> None:
+    malformed = {
+        "sequence_id": "malformed",
+        "row_count": 2,
+        "sequence_gate_weight": 0.25,
+        "matched_rows": 2,
+        "pose_mse_m2": 1.0,
+    }
+    malformed[column] = malformed_value
+    supervised = {
+        "sequence_id": "supervised",
+        "row_count": 20,
+        "sequence_gate_weight": 0.75,
+        "matched_rows": 2,
+        "pose_mse_m2": 1.0,
+    }
+    train = pd.DataFrame.from_records([malformed, supervised])
+    apply = pd.DataFrame({"sequence_id": ["apply"], "row_count": [2]})
+
+    predicted = _nearest_neighbor_predict(train, apply)
+
+    assert predicted.loc[0, "nearest_train_sequence_id"] == "supervised"
+    assert predicted.loc[0, "sequence_gate_weight"] == pytest.approx(0.75)
+
+
 def test_sequence_gate_fit_requires_two_truth_supervised_sequences() -> None:
     sequences = ("seqA", "seqB")
 

@@ -15,6 +15,8 @@ import sys
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_float
+
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_estimate_sequence_gate_fit.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.mmuad._track5_estimate_sequence_gate_fit_legacy",
@@ -34,6 +36,21 @@ _ORIGINAL_LOSO_WEIGHTS = _IMPL._loso_weights
 _ORIGINAL_NEAREST_NEIGHBOR_PREDICT = _IMPL._nearest_neighbor_predict
 
 
+def _finite_real_series(values: pd.Series) -> pd.Series:
+    """Normalize finite real scalars without truncating imaginary components."""
+
+    normalized: list[float] = []
+    for value in values:
+        if isinstance(value, (complex, np.complexfloating)):
+            real = float(np.real(value))
+            imaginary = float(np.imag(value))
+            number = real if np.isfinite(real) and imaginary == 0.0 else None
+        else:
+            number = optional_float(value)
+        normalized.append(np.nan if number is None else number)
+    return pd.Series(normalized, index=values.index, dtype=float)
+
+
 def _supervised_training_features(
     features: pd.DataFrame,
     *,
@@ -50,19 +67,13 @@ def _supervised_training_features(
             f"{context} requires training features with columns: {sorted(required)}"
         )
 
-    weights = pd.to_numeric(rows["sequence_gate_weight"], errors="coerce")
+    weights = _finite_real_series(rows["sequence_gate_weight"])
     supervised = np.isfinite(weights.to_numpy(float))
     if "matched_rows" in rows.columns:
-        matched_rows = pd.to_numeric(
-            rows["matched_rows"],
-            errors="coerce",
-        ).to_numpy(float)
+        matched_rows = _finite_real_series(rows["matched_rows"]).to_numpy(float)
         supervised &= np.isfinite(matched_rows) & (matched_rows > 0.0)
     if "pose_mse_m2" in rows.columns:
-        pose_mse = pd.to_numeric(
-            rows["pose_mse_m2"],
-            errors="coerce",
-        ).to_numpy(float)
+        pose_mse = _finite_real_series(rows["pose_mse_m2"]).to_numpy(float)
         supervised &= np.isfinite(pose_mse)
 
     rows = rows.loc[supervised].copy()
@@ -124,6 +135,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_finite_real_series"] = _finite_real_series
 globals()["_supervised_training_features"] = _supervised_training_features
 globals()["_loso_weights"] = _loso_weights
 globals()["_nearest_neighbor_predict"] = _nearest_neighbor_predict
