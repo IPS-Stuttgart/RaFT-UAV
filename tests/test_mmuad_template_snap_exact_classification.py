@@ -20,7 +20,10 @@ def _results(classification: object) -> pd.DataFrame:
 _TEMPLATE = pd.DataFrame({"Sequence": ["seq001"], "Timestamp": [1.0]})
 
 
-@pytest.mark.parametrize("classification", [1.000001, "2.000001"])
+@pytest.mark.parametrize(
+    "classification",
+    [0.999999, 1.000001, "1.999999", "2.000001"],
+)
 def test_template_snap_rejects_near_integer_classifications(
     classification: object,
 ) -> None:
