@@ -1,13 +1,13 @@
 # Multi-UAV LTS result-improvement workflow
 
-This workflow adds competition-style local metrics and a first-frame-seeded
+This workflow adds organizer-compatible local scoring and a first-frame-seeded
 post-processing stage for the Beyond Strong Baseline Multi-UAV Tracking LTS
 benchmark.
 
 The older `score-predictions` command remains useful as a compact IoU-0.5
 smoke diagnostic. It is not suitable for selecting leaderboard configurations
-because it does not compute HOTA over the standard localization thresholds or
-the global identity assignment used by IDF1.
+because it does not reproduce the competition scorer's HOTA, MOTA, and IDF1
+export.
 
 ## 1. Audit the fixed-population assumption
 
@@ -28,7 +28,7 @@ The audit also reports identities that disappear and later reappear, together
 with their maximum annotation gaps. If late births exist, do not use strict
 birth suppression without extending the model to handle confirmed late births.
 
-## 2. Evaluate the raw baseline with HOTA, MOTA, and IDF1
+## 2. Evaluate the raw baseline with the organizer export
 
 ```bash
 PYTHONPATH=src RAFT_UAV_SKIP_RUNTIME_HOOKS=1 \
@@ -42,18 +42,22 @@ python -m raft_uav.multi_uav_lts.metrics \
     /mnt/lexar4tb/multi_uav_lts/outputs/train_baseline/hota_by_alpha.csv
 ```
 
-The evaluator follows the TrackEval HOTA, CLEAR, and Identity definitions for
-single-class two-dimensional boxes:
+The command reports two families of metrics:
 
-- HOTA is averaged over IoU thresholds 0.05 through 0.95.
-- Sequence HOTA statistics are combined by detection counts, as in TrackEval.
-- CLEAR matching preserves previous-frame identity matches before maximizing
-  localization similarity.
-- IDF1 uses a global ground-truth-to-predicted-identity assignment.
+- `CODABENCH_HOTA`, `CODABENCH_MOTA`, and `CODABENCH_IDF1` reproduce the
+  organizer's published scoring script. Its HOTA field is `HOTA(0)`, the first
+  TrackEval localization threshold at IoU 0.05. The script averages every
+  sequence row together with the `COMBINED_SEQ` row.
+- `HOTA`, `DetA`, `AssA`, and `LocA` are canonical TrackEval diagnostics from
+  the detection-weighted combined sequence. Canonical `HOTA` is the mean over
+  IoU thresholds 0.05 through 0.95. The reported canonical MOTA and IDF1 are
+  likewise computed from combined counts.
 
-The benchmark data do not currently expose ignored regions through the LTS text
-format, so this evaluator does not perform MOTChallenge distractor or ignored
-region preprocessing.
+Use the `CODABENCH_*` fields as the configuration-selection objective. Retain
+canonical HOTA and its components to diagnose whether a change primarily helps
+detection, association, or localization. The benchmark text format does not
+expose ignored regions, so the local evaluator does not perform MOTChallenge
+distractor or ignored-region preprocessing.
 
 ## 3. Apply conservative fixed-population post-processing
 
@@ -95,41 +99,47 @@ python -m raft_uav.multi_uav_lts.fixed_population \
 ```
 
 `--interpolate-single-frame` is optional and should be selected only by
-held-out HOTA. Blind interpolation can increase false positives or reduce
-high-threshold localization accuracy.
+held-out `CODABENCH_HOTA`. Blind interpolation can increase false positives or
+reduce localization quality at stricter IoU thresholds.
 
-## 4. Tune against HOTA on training sequences
+## 4. Select parameters with scenario-stratified cross-validation
 
-The grid runner evaluates every post-processing configuration with the exact
-local metrics, ranks primarily by HOTA, and materializes the winning prediction
-directory:
+Use the dedicated cross-validation runner for final parameter selection. It
+builds deterministic folds stratified by sequence prefix, evaluates every
+configuration on each held-out fold, and ranks by mean `CODABENCH_HOTA` with
+lower fold-to-fold variance as the first tie-breaker:
 
 ```bash
 PYTHONPATH=src RAFT_UAV_SKIP_RUNTIME_HOOKS=1 \
-python -m raft_uav.multi_uav_lts.fixed_population_grid \
+python -m raft_uav.multi_uav_lts.fixed_population_cv \
   /mnt/lexar4tb/multi_uav_lts/outputs/train_baseline/predictions \
   --truth-dir /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels \
   --first-frame-label-dir \
     /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels_FirstFrameOnly \
   --output-dir \
-    /mnt/lexar4tb/multi_uav_lts/outputs/fixed_population_grid
+    /mnt/lexar4tb/multi_uav_lts/outputs/fixed_population_cv \
+  --fold-count 5 \
+  --seed 0
 ```
 
 Outputs include:
 
 ```text
-fixed_population_grid/
-  grid_ranking.csv
-  grid_summary.json
+fixed_population_cv/
+  cv_ranking.csv
+  cv_summary.json
+  fold_assignments.csv
   best_predictions/
   configs/<configuration>/predictions/
 ```
 
-For final tuning, run sequence-wise folds rather than selecting parameters on
-all training sequences. Pass the held-out names with `--sequences` and aggregate
-fold results outside the command. Scenario prefixes should be distributed
-across folds so cloud, tree, building, partially out-of-view, takeoff, landing,
-and large-target sequences are represented in every validation round.
+`fold_assignments.csv` makes the split reproducible and shows the scenario
+prefix assigned to each fold. The summary retains both fold-averaged Codabench
+metrics and canonical TrackEval diagnostics.
+
+For fast exploratory work, `fixed_population_grid` evaluates configurations on
+the same selected sequence set and ranks by `CODABENCH_HOTA`. Do not use its
+in-sample ranking as the final model-selection result.
 
 ## 5. Apply the selected configuration to test predictions
 
@@ -165,7 +175,7 @@ python -m raft_uav.multi_uav_lts.cli package-submission \
     /mnt/lexar4tb/multi_uav_lts/outputs/test_fixed_population/validation.json
 ```
 
-Run the coverage audit on the final prediction directory before upload. The
-fixed-population summary, grid ranking, final validation, exact command line,
-git commit, and ZIP checksum should be stored together as submission
-provenance.
+Run the coverage audit on the final prediction directory before upload. Store
+the population audit, cross-validation ranking, fixed-population summary, final
+validation, exact command line, git commit, and ZIP checksum together as
+submission provenance.
