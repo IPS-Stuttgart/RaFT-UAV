@@ -10,6 +10,8 @@ from pathlib import Path
 
 import numpy as np
 
+from raft_uav.numeric import optional_float, optional_int
+
 
 @dataclass(frozen=True)
 class Detection:
@@ -227,22 +229,14 @@ def validate_unit_interval(value: object, *, name: str) -> float:
 
 
 def validate_nonnegative_finite(value: object, *, name: str) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be a finite non-negative scalar") from exc
-    if not math.isfinite(parsed) or parsed < 0.0:
+    parsed = optional_float(value)
+    if parsed is None or parsed < 0.0:
         raise ValueError(f"{name} must be a finite non-negative scalar")
     return parsed
 
 
 def validate_nonnegative_int(value: object, *, name: str) -> int:
-    if isinstance(value, bool):
-        raise ValueError(f"{name} must be a non-negative integer")
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be a non-negative integer") from exc
-    if parsed < 0 or float(parsed) != float(value):
+    parsed = optional_int(value)
+    if parsed is None or parsed < 0:
         raise ValueError(f"{name} must be a non-negative integer")
     return parsed
