@@ -37,9 +37,20 @@ class PopulationAudit:
     sequences: tuple[SequencePopulationAudit, ...]
 
 
+def _truth_paths(truth_dir: Path) -> list[Path]:
+    if not truth_dir.exists():
+        raise FileNotFoundError(f"truth directory does not exist: {truth_dir}")
+    if not truth_dir.is_dir():
+        raise NotADirectoryError(f"truth path is not a directory: {truth_dir}")
+    truth_paths = sorted(truth_dir.glob("*.txt"))
+    if not truth_paths:
+        raise ValueError(f"truth directory contains no .txt files: {truth_dir}")
+    return truth_paths
+
+
 def audit_first_frame_population(truth_dir: Path) -> PopulationAudit:
     sequence_rows: list[SequencePopulationAudit] = []
-    for truth_path in sorted(truth_dir.glob("*.txt")):
+    for truth_path in _truth_paths(truth_dir):
         rows = parse_detection_text(
             truth_path.read_text(encoding="utf-8"), source=str(truth_path)
         )
