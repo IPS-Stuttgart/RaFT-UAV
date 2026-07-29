@@ -10,6 +10,7 @@ import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from ._config_ids import claim_config_id
 from .fixed_population import postprocess_fixed_population
 from .metrics import evaluate_lts_predictions
 
@@ -54,6 +55,7 @@ def run_fixed_population_grid(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     raw_rows: list[dict[str, object]] = []
+    used_config_ids: set[str] = set()
     combinations = itertools.product(
         min_seed_ious,
         relink_max_gaps,
@@ -61,10 +63,11 @@ def run_fixed_population_grid(
         interpolation_options,
     )
     for index, (min_iou, max_gap, max_cost, interpolate) in enumerate(combinations):
-        config_id = (
+        base_config_id = (
             f"seed{min_iou:.3f}_gap{max_gap}_cost{max_cost:.3f}_"
             f"interp{int(interpolate)}"
         ).replace(".", "p")
+        config_id = claim_config_id(base_config_id, used_config_ids)
         prediction_dir = output_dir / "configs" / config_id / "predictions"
         summary = postprocess_fixed_population(
             prediction_path,
