@@ -116,7 +116,7 @@ def _integer_classification_values(values: pd.Series) -> pd.Series:
         )
     numeric = numbers.to_numpy(dtype=float)
     finite = np.isfinite(numeric)
-    integer_like = finite & np.isclose(numeric, np.rint(numeric))
+    integer_like = finite & (numeric == np.rint(numeric))
     fractional = finite & ~integer_like
     if fractional.any():
         row_index = int(np.flatnonzero(fractional)[0])
