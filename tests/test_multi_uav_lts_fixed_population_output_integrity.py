@@ -1,0 +1,43 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from raft_uav.multi_uav_lts.fixed_population import postprocess_fixed_population
+
+
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def test_replaces_existing_prediction_set(tmp_path: Path) -> None:
+    labels = tmp_path / "labels"
+    predictions = tmp_path / "predictions"
+    output = tmp_path / "output"
+    _write(labels / "S.txt", "1,7,0,0,10,10,1,1,1\n")
+    _write(predictions / "S.txt", "1,1,0,0,10,10,1,1,1\n")
+    _write(output / "stale.txt", "1,99,0,0,1,1,1,1,1\n")
+    _write(output / "notes.json", "{}")
+
+    postprocess_fixed_population(predictions, labels, output)
+
+    assert sorted(path.name for path in output.glob("*.txt")) == ["S.txt"]
+    assert (output / "notes.json").read_text(encoding="utf-8") == "{}"
+
+
+def test_validation_failure_preserves_existing_outputs(tmp_path: Path) -> None:
+    labels = tmp_path / "labels"
+    predictions = tmp_path / "predictions"
+    output = tmp_path / "output"
+    _write(labels / "A.txt", "1,7,0,0,10,10,1,1,1\n")
+    _write(labels / "B.txt", "2,8,0,0,10,10,1,1,1\n")
+    _write(predictions / "A.txt", "1,1,0,0,10,10,1,1,1\n")
+    _write(output / "old.txt", "original\n")
+
+    with pytest.raises(ValueError, match="first-frame-only"):
+        postprocess_fixed_population(predictions, labels, output)
+
+    assert (output / "old.txt").read_text(encoding="utf-8") == "original\n"
+    assert not (output / "A.txt").exists()

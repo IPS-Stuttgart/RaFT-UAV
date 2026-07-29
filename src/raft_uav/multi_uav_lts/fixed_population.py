@@ -102,8 +102,7 @@ def postprocess_fixed_population(
         if missing:
             raise ValueError(f"unknown first-frame sequences: {', '.join(missing)}")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    summaries: list[SequencePostprocessSummary] = []
+    results: list[_SequenceResult] = []
     for label_path in label_paths:
         sequence = label_path.stem
         if requested and sequence not in requested:
@@ -117,20 +116,27 @@ def postprocess_fixed_population(
             predictions.get(f"{sequence}.txt", ""),
             source=f"{prediction_path}:{sequence}.txt",
         )
-        result = _postprocess_sequence(
-            sequence,
-            seeds,
-            rows,
-            min_seed_iou=min_iou,
-            relink_max_gap=max_gap,
-            relink_max_cost=max_cost,
-            interpolate_single_frame=interpolate_single_frame,
+        results.append(
+            _postprocess_sequence(
+                sequence,
+                seeds,
+                rows,
+                min_seed_iou=min_iou,
+                relink_max_gap=max_gap,
+                relink_max_cost=max_cost,
+                interpolate_single_frame=interpolate_single_frame,
+            )
         )
-        (output_dir / f"{sequence}.txt").write_text(
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for stale_path in output_dir.glob("*.txt"):
+        stale_path.unlink()
+    for result in results:
+        (output_dir / f"{result.summary.sequence}.txt").write_text(
             "".join(format_detection(row) + "\n" for row in result.rows),
             encoding="utf-8",
         )
-        summaries.append(result.summary)
+    summaries = [result.summary for result in results]
 
     return FixedPopulationSummary(
         prediction_path=str(prediction_path),
