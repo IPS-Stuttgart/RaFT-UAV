@@ -3,9 +3,9 @@
 The legacy implementation lives in the sibling ``submission.py`` file. This
 wrapper preserves the public import path while accepting spreadsheet-exported
 class-map and official Track 5 template CSV files with whitespace around alias
-headers, rejecting ambiguous class-map headers, validating timestamp tolerances,
-using globally consistent one-to-one template matching, and rejecting non-Boolean
-readiness fields in upload manifests.
+headers, rejecting ambiguous class-map headers and conflicting duplicate rows,
+validating timestamp tolerances, using globally consistent one-to-one template
+matching, and rejecting non-Boolean readiness fields in upload manifests.
 """
 
 from __future__ import annotations
@@ -285,6 +285,22 @@ def _normalize_track5_template_with_stripped_headers(template: Any) -> Any:
     return _LEGACY_NORMALIZE_TRACK5_TEMPLATE(_strip_dataframe_column_whitespace(template))
 
 
+def _store_class_map_entry(
+    class_map: dict[str, str],
+    *,
+    sequence_id: str,
+    uav_type: str,
+) -> None:
+    """Store one mapping while rejecting conflicting duplicate sequence rows."""
+
+    if sequence_id in class_map and class_map[sequence_id] != uav_type:
+        raise ValueError(
+            "class-map CSV assigns conflicting UAV types to sequence "
+            f"{sequence_id!r}: {class_map[sequence_id]!r} and {uav_type!r}"
+        )
+    class_map[sequence_id] = uav_type
+
+
 def _load_sequence_class_map_with_stripped_csv_headers(path: Path | str | None) -> dict[str, str]:
     """Load class maps while accepting padded but rejecting ambiguous CSV headers."""
 
@@ -324,7 +340,11 @@ def _load_sequence_class_map_with_stripped_csv_headers(path: Path | str | None) 
         sequence_id = _IMPL._class_map_sequence_key(row["sequence_id"])
         uav_type = _IMPL._class_map_uav_type(row["uav_type"])
         if sequence_id is not None and uav_type is not None:
-            class_map[sequence_id] = uav_type
+            _store_class_map_entry(
+                class_map,
+                sequence_id=sequence_id,
+                uav_type=uav_type,
+            )
     return class_map
 
 
