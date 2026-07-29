@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.candidate_reservoir import ReservoirConfig
+from raft_uav.mmuad.candidate_reservoir import _optional_candidate_score
 from raft_uav.mmuad.candidate_reservoir import build_candidate_reservoir
 from raft_uav.mmuad.candidate_reservoir import build_oracle_recall_tables
 
@@ -74,6 +75,10 @@ def test_candidate_reservoir_rejects_complex_scores_without_losing_real_rows() -
 
     assert reservoir["track_id"].tolist() == ["finite-best"]
     assert reservoir.loc[0, "candidate_reservoir_score"] == 0.5
+
+
+def test_candidate_score_parser_keeps_masked_scalars_missing() -> None:
+    assert _optional_candidate_score(np.ma.array(1.0 + 0.0j, mask=True)) is None
 
 
 def test_oracle_recall_demotes_nonfinite_precomputed_scores() -> None:
