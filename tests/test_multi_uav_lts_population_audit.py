@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from raft_uav.multi_uav_lts.population_audit import audit_first_frame_population
 
 
@@ -26,3 +28,24 @@ def test_population_audit_finds_late_births_and_reappearances(tmp_path: Path) ->
     assert audit.maximum_gap_frames == 1
     assert audit.sequences[0].late_birth_ids == (2,)
     assert audit.sequences[0].reappearing_ids == (1,)
+
+
+def test_population_audit_rejects_missing_truth_directory(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="truth directory does not exist"):
+        audit_first_frame_population(tmp_path / "missing")
+
+
+def test_population_audit_rejects_non_directory_truth_path(tmp_path: Path) -> None:
+    truth = tmp_path / "truth.txt"
+    truth.write_text("", encoding="utf-8")
+
+    with pytest.raises(NotADirectoryError, match="truth path is not a directory"):
+        audit_first_frame_population(truth)
+
+
+def test_population_audit_rejects_empty_truth_directory(tmp_path: Path) -> None:
+    truth = tmp_path / "truth"
+    truth.mkdir()
+
+    with pytest.raises(ValueError, match=r"truth directory contains no \.txt files"):
+        audit_first_frame_population(truth)
