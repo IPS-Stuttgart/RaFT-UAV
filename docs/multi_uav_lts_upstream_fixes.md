@@ -1,9 +1,34 @@
 # Multi-UAV LTS upstream BoT-SORT fixes
 
 The official baseline runner treats `YOLOv12-BoT-SORT-ReID/BoT-SORT` as an
-external checkout. RaFT-UAV therefore does not silently edit that checkout.
-Instead, the following command applies a small, validated compatibility patch
-before inference:
+external checkout. RaFT-UAV therefore applies the compatibility changes through
+an explicit, validated patch step rather than maintaining an untracked manual
+edit.
+
+## Recommended improved runner
+
+The improved wrapper applies or verifies the patch, records its summary, uses
+1920-pixel inference unless `--img-size` is explicitly supplied, and then calls
+the existing official-baseline runner with the remaining arguments:
+
+```bash
+PYTHONPATH=src RAFT_UAV_SKIP_RUNTIME_HOOKS=1 \
+python -m raft_uav.multi_uav_lts.improved_baseline \
+  --work-root /mnt/lexar4tb/multi_uav_lts \
+  --device 0 \
+  --normalize \
+  --sort-rows
+```
+
+`--dry-run` checks whether the upstream patch is needed without changing the
+external checkout. `--package-only` skips the patch because inference is not
+run. Pass `--skip-upstream-fixes` only for a deliberate unpatched ablation.
+`--upstream-fixes-json <path>` overrides the default summary location under the
+baseline output directory.
+
+## Standalone patch command
+
+The patch can also be applied independently before invoking another runner:
 
 ```bash
 PYTHONPATH=src RAFT_UAV_SKIP_RUNTIME_HOOKS=1 \
@@ -51,6 +76,6 @@ external repository changes incompatibly, it raises an error rather than
 partially modifying the checkout. Inspect the upstream revision and update the
 patch rules deliberately in that case.
 
-After applying the patch, run the baseline normally and then follow
+After inference, follow
 [`multi_uav_lts_result_improvement.md`](multi_uav_lts_result_improvement.md)
 for HOTA evaluation and first-frame-seeded post-processing.
