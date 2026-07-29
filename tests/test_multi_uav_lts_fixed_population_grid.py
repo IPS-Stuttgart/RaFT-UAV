@@ -41,6 +41,8 @@ def test_grid_ranks_identity_preserving_configuration(tmp_path: Path) -> None:
     )
 
     assert rows[0].relink_max_gap == 1
+    assert rows[0].codabench_hota == 1.0
+    assert rows[0].codabench_idf1 == 1.0
     assert rows[0].hota == 1.0
     assert rows[0].idf1 == 1.0
     assert (output / "best_predictions" / "S.txt").exists()
