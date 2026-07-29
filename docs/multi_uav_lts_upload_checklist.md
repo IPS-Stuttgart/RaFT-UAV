@@ -4,8 +4,10 @@ Use this checklist before uploading a Multi-UAV LTS ZIP to Codabench. It is
 intended to catch local packaging and shard-completion problems before spending
 an official submission attempt.
 
-For HOTA-based training evaluation, first-frame population auditing, seeded
-identity post-processing, and parameter selection, follow
+Before generating predictions, apply the deterministic baseline corrections in
+[`multi_uav_lts_upstream_fixes.md`](multi_uav_lts_upstream_fixes.md). For
+organizer-compatible training evaluation, first-frame population auditing,
+seeded identity post-processing, and parameter selection, follow
 [`multi_uav_lts_result_improvement.md`](multi_uav_lts_result_improvement.md)
 before starting this final upload checklist.
 
@@ -86,7 +88,8 @@ Store the following next to the final upload artifact:
 - source prediction folder;
 - template ZIP path and checksum;
 - final ZIP checksum;
-- fixed-population summary and selected training-grid row, when used;
+- population audit, selected cross-validation row, and fixed-population summary;
+- upstream-fix summary;
 - coverage audit JSON;
 - final validation JSON.
 
