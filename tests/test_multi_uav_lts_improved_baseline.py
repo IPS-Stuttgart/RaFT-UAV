@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from raft_uav.multi_uav_lts import improved_baseline
 from raft_uav.multi_uav_lts.upstream_fixes import UpstreamFixSummary
 
@@ -101,3 +103,23 @@ def test_package_only_skips_upstream_patch(tmp_path: Path, monkeypatch) -> None:
 
     assert result == 0
     assert captured["arguments"][-2:] == ["--img-size", "1600"]
+
+
+def test_missing_summary_value_does_not_consume_dry_run(monkeypatch) -> None:
+    def unexpected(*args, **kwargs):
+        raise AssertionError("upstream patch should not run for malformed arguments")
+
+    monkeypatch.setattr(improved_baseline, "apply_upstream_fixes", unexpected)
+
+    with pytest.raises(ValueError, match="--upstream-fixes-json requires a value"):
+        improved_baseline.main(["--upstream-fixes-json", "--dry-run"])
+
+
+def test_missing_forwarded_option_value_is_rejected() -> None:
+    with pytest.raises(ValueError, match="--work-root requires a value"):
+        improved_baseline.main(["--work-root", "--package-only"])
+
+
+def test_empty_inline_wrapper_value_is_rejected() -> None:
+    with pytest.raises(ValueError, match="--upstream-fixes-json requires a value"):
+        improved_baseline.main(["--upstream-fixes-json="])
