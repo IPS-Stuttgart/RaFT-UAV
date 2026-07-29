@@ -22,6 +22,9 @@ class GridRow:
     relink_max_gap: int
     relink_max_cost: float
     interpolate_single_frame: bool
+    codabench_hota: float
+    codabench_mota: float
+    codabench_idf1: float
     hota: float
     deta: float
     assa: float
@@ -85,6 +88,9 @@ def run_fixed_population_grid(
                 "relink_max_gap": max_gap,
                 "relink_max_cost": max_cost,
                 "interpolate_single_frame": interpolate,
+                "codabench_hota": metrics.codabench_hota,
+                "codabench_mota": metrics.codabench_mota,
+                "codabench_idf1": metrics.codabench_idf1,
                 "hota": metrics.hota,
                 "deta": metrics.deta,
                 "assa": metrics.assa,
@@ -102,9 +108,9 @@ def run_fixed_population_grid(
 
     raw_rows.sort(
         key=lambda row: (
-            -float(row["hota"]),
-            -float(row["idf1"]),
-            -float(row["mota"]),
+            -float(row["codabench_hota"]),
+            -float(row["codabench_idf1"]),
+            -float(row["codabench_mota"]),
             int(row["grid_index"]),
         )
     )
@@ -116,6 +122,9 @@ def run_fixed_population_grid(
             relink_max_gap=int(row["relink_max_gap"]),
             relink_max_cost=float(row["relink_max_cost"]),
             interpolate_single_frame=bool(row["interpolate_single_frame"]),
+            codabench_hota=float(row["codabench_hota"]),
+            codabench_mota=float(row["codabench_mota"]),
+            codabench_idf1=float(row["codabench_idf1"]),
             hota=float(row["hota"]),
             deta=float(row["deta"]),
             assa=float(row["assa"]),
@@ -193,9 +202,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     if rows:
         print(f"best_config={rows[0].config_id}")
-        print(f"best_HOTA={rows[0].hota:.6f}")
-        print(f"best_IDF1={rows[0].idf1:.6f}")
-        print(f"best_MOTA={rows[0].mota:.6f}")
+        print(f"best_CODABENCH_HOTA={rows[0].codabench_hota:.6f}")
+        print(f"best_CODABENCH_IDF1={rows[0].codabench_idf1:.6f}")
+        print(f"best_CODABENCH_MOTA={rows[0].codabench_mota:.6f}")
+        print(f"best_standard_HOTA={rows[0].hota:.6f}")
     return 0
 
 
