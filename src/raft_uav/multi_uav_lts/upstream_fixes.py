@@ -28,6 +28,17 @@ class UpstreamFixSummary:
     files: tuple[PatchedFile, ...]
 
 
+@dataclass(frozen=True)
+class _PreparedPatch:
+    path: Path
+    original: str
+    patched: str
+
+    @property
+    def changed(self) -> bool:
+        return self.patched != self.original
+
+
 def apply_upstream_fixes(
     botsort_root: Path,
     *,
@@ -41,26 +52,30 @@ def apply_upstream_fixes(
         (root / "tools" / "inference.py", _patch_inference),
         (root / "tracker" / "mc_bot_sort.py", _patch_tracker),
     )
-    results: list[PatchedFile] = []
+    prepared: list[_PreparedPatch] = []
     for path, patcher in targets:
         if not path.is_file():
             raise FileNotFoundError(path)
         original = path.read_text(encoding="utf-8")
-        patched = patcher(original)
-        changed = patched != original
+        prepared.append(_PreparedPatch(path, original, patcher(original)))
+
+    results: list[PatchedFile] = []
+    for patch in prepared:
         backup_path: Path | None = None
-        if changed and not check_only:
+        if patch.changed and not check_only:
             if create_backups:
-                backup_path = path.with_suffix(path.suffix + ".raft-uav-original")
+                backup_path = patch.path.with_suffix(
+                    patch.path.suffix + ".raft-uav-original"
+                )
                 if not backup_path.exists():
-                    backup_path.write_text(original, encoding="utf-8")
-            temporary = path.with_suffix(path.suffix + ".raft-uav-tmp")
-            temporary.write_text(patched, encoding="utf-8")
-            temporary.replace(path)
+                    backup_path.write_text(patch.original, encoding="utf-8")
+            temporary = patch.path.with_suffix(patch.path.suffix + ".raft-uav-tmp")
+            temporary.write_text(patch.patched, encoding="utf-8")
+            temporary.replace(patch.path)
         results.append(
             PatchedFile(
-                path=str(path),
-                changed=changed,
+                path=str(patch.path),
+                changed=patch.changed,
                 backup_path=str(backup_path) if backup_path is not None else None,
             )
         )

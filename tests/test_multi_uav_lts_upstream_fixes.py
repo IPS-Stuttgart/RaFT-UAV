@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from raft_uav.multi_uav_lts.upstream_fixes import apply_upstream_fixes
+import pytest
+
+from raft_uav.multi_uav_lts.upstream_fixes import (
+    UpstreamPatchError,
+    apply_upstream_fixes,
+)
 
 
 INFERENCE = '''import torch
@@ -80,3 +85,17 @@ def test_check_mode_does_not_modify_files(tmp_path: Path) -> None:
     assert summary.changed_file_count == 2
     assert (root / "tools" / "inference.py").read_text(encoding="utf-8") == INFERENCE
     assert (root / "tracker" / "mc_bot_sort.py").read_text(encoding="utf-8") == TRACKER
+
+
+def test_validation_failure_does_not_partially_modify_checkout(tmp_path: Path) -> None:
+    root = _checkout(tmp_path)
+    tracker_path = root / "tracker" / "mc_bot_sort.py"
+    malformed_tracker = "class Tracker:\n    pass\n"
+    tracker_path.write_text(malformed_tracker, encoding="utf-8")
+
+    with pytest.raises(UpstreamPatchError, match="confirmed-track output"):
+        apply_upstream_fixes(root)
+
+    assert (root / "tools" / "inference.py").read_text(encoding="utf-8") == INFERENCE
+    assert tracker_path.read_text(encoding="utf-8") == malformed_tracker
+    assert not (root / "tools" / "inference.py.raft-uav-original").exists()
