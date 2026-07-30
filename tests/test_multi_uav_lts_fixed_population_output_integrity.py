@@ -71,3 +71,30 @@ def test_invalid_label_input_preserves_existing_outputs(
         postprocess_fixed_population(predictions, labels, output)
 
     assert (output / "old.txt").read_text(encoding="utf-8") == "original\n"
+
+
+@pytest.mark.parametrize(
+    ("output_alias", "message"),
+    [
+        ("labels", "output directory must differ from first-frame label directory"),
+        ("predictions", "output directory must differ from prediction directory"),
+    ],
+)
+def test_rejects_output_directory_that_aliases_an_input(
+    tmp_path: Path,
+    output_alias: str,
+    message: str,
+) -> None:
+    labels = tmp_path / "labels"
+    predictions = tmp_path / "predictions"
+    label_text = "1,7,0,0,10,10,1,1,1\n"
+    prediction_text = "1,1,0,0,10,10,1,1,1\n"
+    _write(labels / "S.txt", label_text)
+    _write(predictions / "S.txt", prediction_text)
+    output = labels if output_alias == "labels" else predictions
+
+    with pytest.raises(ValueError, match=message):
+        postprocess_fixed_population(predictions, labels, output)
+
+    assert (labels / "S.txt").read_text(encoding="utf-8") == label_text
+    assert (predictions / "S.txt").read_text(encoding="utf-8") == prediction_text
