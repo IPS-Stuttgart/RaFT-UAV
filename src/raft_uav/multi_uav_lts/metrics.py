@@ -105,6 +105,17 @@ class BenchmarkMetrics:
     sequences: tuple[SequenceMetrics, ...]
 
 
+def _truth_paths(truth_dir: Path) -> list[Path]:
+    if not truth_dir.exists():
+        raise FileNotFoundError(f"truth directory does not exist: {truth_dir}")
+    if not truth_dir.is_dir():
+        raise NotADirectoryError(f"truth path is not a directory: {truth_dir}")
+    truth_paths = sorted(truth_dir.glob("*.txt"))
+    if not truth_paths:
+        raise ValueError(f"truth directory contains no .txt files: {truth_dir}")
+    return truth_paths
+
+
 def evaluate_lts_predictions(
     prediction_path: Path,
     truth_dir: Path,
@@ -118,8 +129,15 @@ def evaluate_lts_predictions(
         clear_iou_threshold, name="clear_iou_threshold"
     )
     predictions = prediction_texts(prediction_path)
+    truth_paths = _truth_paths(truth_dir)
+    truth_names = {f"{path.stem}.txt" for path in truth_paths}
+    unexpected_predictions = sorted(set(predictions) - truth_names)
+    if unexpected_predictions:
+        raise ValueError(
+            "prediction input contains unknown sequence files: "
+            + ", ".join(unexpected_predictions)
+        )
     requested = set(sequences or ())
-    truth_paths = sorted(truth_dir.glob("*.txt"))
     if requested:
         missing = sorted(requested - {path.stem for path in truth_paths})
         if missing:
