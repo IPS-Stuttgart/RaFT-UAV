@@ -10,6 +10,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_float
+
 BRANCH_SUMMARY_CSV = "mmuad_candidate_assignment_branch_summary.csv"
 BRANCH_SUMMARY_JSON = "mmuad_candidate_assignment_branch_summary.json"
 _GROUP_COLUMNS = (
@@ -153,7 +155,7 @@ def _normalized_frame_rows(frame_rows: pd.DataFrame) -> pd.DataFrame:
     ):
         if column not in rows.columns:
             rows[column] = np.nan
-        rows[column] = pd.to_numeric(rows[column], errors="coerce")
+        rows[column] = _finite_real_series(rows[column])
     for column in ("dominant_is_oracle", "oracle_in_topk_by_weight"):
         if column not in rows.columns:
             rows[column] = False
@@ -255,11 +257,23 @@ def _bool_series(values: pd.Series, *, column_name: str | None = None) -> pd.Ser
     return truthy.astype(bool)
 
 
+def _finite_real_series(values: pd.Series) -> pd.Series:
+    """Normalize finite real scalars without discarding imaginary components."""
+
+    normalized: list[float] = []
+    for value in values:
+        if isinstance(value, (complex, np.complexfloating)):
+            real = float(np.real(value))
+            imaginary = float(np.imag(value))
+            number = real if np.isfinite(real) and imaginary == 0.0 else None
+        else:
+            number = optional_float(value)
+        normalized.append(np.nan if number is None else number)
+    return pd.Series(normalized, index=values.index, dtype=float)
+
+
 def _finite_numeric(values: pd.Series) -> np.ndarray:
-    numeric = pd.to_numeric(values, errors="coerce").to_numpy(
-        dtype=float,
-        na_value=np.nan,
-    )
+    numeric = _finite_real_series(pd.Series(values, copy=False)).to_numpy(dtype=float)
     return numeric[np.isfinite(numeric)]
 
 
