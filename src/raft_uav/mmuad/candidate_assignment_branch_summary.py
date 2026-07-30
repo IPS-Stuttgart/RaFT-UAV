@@ -290,14 +290,19 @@ def _jsonable(value: Any) -> Any:
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return _jsonable(value.tolist())
+    if value is pd.NA or value is pd.NaT:
+        return None
     if isinstance(value, (float, np.floating)):
         number = float(value)
         return number if np.isfinite(number) else None
     if hasattr(value, "item"):
         try:
-            return value.item()
+            item = value.item()
         except Exception:
             return value
+        return value if item is value else _jsonable(item)
     return value
 
 
