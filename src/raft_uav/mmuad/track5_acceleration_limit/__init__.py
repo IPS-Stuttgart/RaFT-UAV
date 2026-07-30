@@ -170,14 +170,14 @@ def _validate_sequence_ids(submission: object) -> None:
 
 
 def _validate_numeric_rows(submission: object) -> None:
-    """Reject normalized rows the legacy normalizer would silently drop."""
+    """Reject normalized rows whose numeric cells cannot be represented safely."""
 
     rows = pd.DataFrame(submission).copy()
     if any(column not in rows.columns for column in _NUMERIC_COLUMNS):
         return
 
     boolean_invalid: list[str] = []
-    nonfinite_invalid: list[str] = []
+    complex_invalid: list[str] = []
     for column in _NUMERIC_COLUMNS:
         boolean = rows[column].map(
             lambda value: isinstance(value, (bool, np.bool_))
@@ -185,14 +185,26 @@ def _validate_numeric_rows(submission: object) -> None:
         if boolean.any():
             boolean_invalid.append(f"{column} rows {np.flatnonzero(boolean).tolist()}")
 
-        numeric = pd.to_numeric(rows[column], errors="coerce")
-        finite = np.isfinite(numeric.to_numpy(dtype=float))
-        if not finite.all():
-            nonfinite_invalid.append(f"{column} rows {np.flatnonzero(~finite).tolist()}")
+        complex_values = rows[column].map(np.iscomplexobj).to_numpy(dtype=bool)
+        if complex_values.any():
+            row_positions = np.flatnonzero(complex_values).tolist()
+            complex_invalid.append(f"{column} rows {row_positions}")
+
     if boolean_invalid:
         raise ValueError(
             "submission contains Boolean numeric values: " + "; ".join(boolean_invalid)
         )
+    if complex_invalid:
+        raise ValueError(
+            "submission contains complex numeric values: " + "; ".join(complex_invalid)
+        )
+
+    nonfinite_invalid: list[str] = []
+    for column in _NUMERIC_COLUMNS:
+        numeric = pd.to_numeric(rows[column], errors="coerce")
+        finite = np.isfinite(numeric.to_numpy(dtype=float))
+        if not finite.all():
+            nonfinite_invalid.append(f"{column} rows {np.flatnonzero(~finite).tolist()}")
     if nonfinite_invalid:
         raise ValueError(
             "submission contains non-finite numeric values: "
