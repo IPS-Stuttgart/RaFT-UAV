@@ -92,12 +92,44 @@ def _sequence_match_key(value: object) -> tuple[object, ...]:
     return ("text", str(value))
 
 
+def _sequence_match_identity(value: object) -> tuple[object, ...]:
+    """Return a representation-aware identity used to detect text-key collisions."""
+
+    if _aerpaw._is_missing_scalar(value):
+        return ("missing",)
+    if isinstance(value, (str, np.str_)):
+        return ("string", str(value))
+    if isinstance(value, (bool, np.bool_)):
+        return ("bool", bool(value))
+    if isinstance(value, (int, np.integer)):
+        return ("integer", int(value))
+    if isinstance(value, (float, np.floating)):
+        return ("real", float(value))
+    return _sequence_group_key(value)
+
+
 def _sequence_positions_by_match_key(
     values: pd.Series,
+    *,
+    table_name: str,
 ) -> dict[tuple[object, ...], list[int]]:
+    """Group positions by cross-table key without silently merging distinct IDs."""
+
     groups: dict[tuple[object, ...], list[int]] = {}
+    identities: dict[tuple[object, ...], tuple[object, ...]] = {}
+    representatives: dict[tuple[object, ...], object] = {}
     for position, value in enumerate(values.to_numpy(dtype=object)):
-        groups.setdefault(_sequence_match_key(value), []).append(position)
+        match_key = _sequence_match_key(value)
+        identity = _sequence_match_identity(value)
+        if match_key in identities and identities[match_key] != identity:
+            raise ValueError(
+                f"{table_name} sequence_id contains ambiguous values after text "
+                f"normalization: {representatives[match_key]!r} and {value!r} "
+                f"both map to {str(value)!r}"
+            )
+        identities.setdefault(match_key, identity)
+        representatives.setdefault(match_key, value)
+        groups.setdefault(match_key, []).append(position)
     return groups
 
 
@@ -166,8 +198,14 @@ def _select_radar_measurement_rows(
         )
 
     if sequence_scoped_truth_gate:
-        radar_groups = _sequence_positions_by_match_key(radar["sequence_id"])
-        truth_groups = _sequence_positions_by_match_key(truth["sequence_id"])
+        radar_groups = _sequence_positions_by_match_key(
+            radar["sequence_id"],
+            table_name="radar",
+        )
+        truth_groups = _sequence_positions_by_match_key(
+            truth["sequence_id"],
+            table_name="truth",
+        )
         position_groups = list(radar_groups.items())
     else:
         truth_groups = {}
