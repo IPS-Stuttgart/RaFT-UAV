@@ -62,27 +62,28 @@ def _optional_decimal_int(value: Decimal) -> int | None:
 
 
 def _scalar_numeric_input(value: object) -> object | None:
-    if value is None:
-        return None
-    if _is_masked_value(value):
-        return None
-    if isinstance(value, bool | np.bool_):
-        return None
-    if isinstance(value, complex | np.complexfloating):
-        return None
-    if isinstance(value, np.ndarray):
-        if value.ndim > 0:
+    seen_array_ids: set[int] = set()
+    while True:
+        if value is None:
             return None
-        value = value.item()
         if _is_masked_value(value):
             return None
         if isinstance(value, bool | np.bool_):
             return None
         if isinstance(value, complex | np.complexfloating):
             return None
-    elif _is_non_scalar_array_like(value):
-        return None
-    return value
+        if isinstance(value, np.ndarray):
+            if value.ndim > 0:
+                return None
+            array_id = id(value)
+            if array_id in seen_array_ids:
+                return None
+            seen_array_ids.add(array_id)
+            value = value.item()
+            continue
+        if _is_non_scalar_array_like(value):
+            return None
+        return value
 
 
 def _is_non_scalar_array_like(value: object) -> bool:
