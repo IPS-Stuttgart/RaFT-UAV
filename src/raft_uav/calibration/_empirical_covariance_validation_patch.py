@@ -64,6 +64,22 @@ def _positive_variance_floor(value: object) -> float:
     return floor
 
 
+def _floor_covariance_eigenvalues(
+    covariance: np.ndarray,
+    *,
+    min_variance_m2: float,
+) -> np.ndarray:
+    """Floor variance in every principal direction, not only coordinate axes."""
+
+    covariance = np.asarray(covariance, dtype=float)
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    floored = np.maximum(eigenvalues, float(min_variance_m2))
+    if np.array_equal(floored, eigenvalues):
+        return covariance
+    regularized = (eigenvectors * floored) @ eigenvectors.T
+    return 0.5 * (regularized + regularized.T)
+
+
 def estimate_empirical_measurement_covariances(
     *,
     rf: pd.DataFrame | None,
@@ -105,11 +121,16 @@ def empirical_covariance_matrix(
     *,
     min_variance_m2: float = 1.0,
 ) -> np.ndarray:
-    """Estimate a covariance after validating its diagonal variance floor."""
+    """Estimate a covariance with a variance floor in every principal direction."""
 
-    return _ORIGINAL_EMPIRICAL_COVARIANCE_MATRIX(
+    floor = _positive_variance_floor(min_variance_m2)
+    covariance = _ORIGINAL_EMPIRICAL_COVARIANCE_MATRIX(
         residuals,
-        min_variance_m2=_positive_variance_floor(min_variance_m2),
+        min_variance_m2=floor,
+    )
+    return _floor_covariance_eigenvalues(
+        covariance,
+        min_variance_m2=floor,
     )
 
 
