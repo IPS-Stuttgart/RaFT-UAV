@@ -4,15 +4,21 @@ The maintained I/O compatibility layer lives in the sibling ``io.py`` module.
 This package preserves that public import path while rejecting malformed integer
 controls before dynamic background removal can silently clamp or truncate them.
 It also rejects unsupported PCD field widths before binary records can be decoded
-with shifted offsets and corrupted coordinates.
+with shifted offsets and corrupted coordinates, and rejects ambiguous raw BIN
+row widths instead of silently reinterpreting XYZ data as XYZI.
 """
 
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
+import os
+import re
 import sys
+from pathlib import Path
 from typing import Any
+
+import numpy as np
+import pandas as pd
 
 from raft_uav.numeric import optional_int
 
@@ -28,6 +34,7 @@ sys.modules[_SPEC.name] = _LEGACY
 _SPEC.loader.exec_module(_LEGACY)
 
 _ORIGINAL_DYNAMIC_POINT_RESIDUALS = _LEGACY._dynamic_point_residuals
+_BINARY_POINT_COLUMNS_ENV = "RAFT_UAV_BINARY_POINT_COLUMNS"
 _PCD_NUMPY_DTYPES: dict[str, dict[int, str]] = {
     "F": {4: "<f4", 8: "<f8"},
     "I": {1: "<i1", 2: "<i2", 4: "<i4", 8: "<i8"},
@@ -60,6 +67,90 @@ def _pcd_numpy_dtype(*, size: int, type_code: str) -> str:
             f"supported sizes are {sorted(supported)}"
         )
     return supported[normalized_size]
+
+
+def _binary_point_columns_from_filename(path: Path) -> int | None:
+    """Return an XYZ/XYZI width encoded as a standalone filename token."""
+
+    tokens = set(filter(None, re.split(r"[^a-z0-9]+", Path(path).name.casefold())))
+    hints = {3 for token in tokens if token == "xyz"}
+    hints.update(4 for token in tokens if token == "xyzi")
+    if len(hints) > 1:
+        raise ValueError(
+            f"binary point-cloud filename {path} contains conflicting XYZ and XYZI hints"
+        )
+    return next(iter(hints), None)
+
+
+def _binary_point_columns_from_environment() -> int | None:
+    """Return an optional process-wide BIN row width override."""
+
+    raw = os.environ.get(_BINARY_POINT_COLUMNS_ENV)
+    if raw is None or not raw.strip():
+        return None
+    aliases = {"3": 3, "xyz": 3, "4": 4, "xyzi": 4}
+    normalized = aliases.get(raw.strip().casefold())
+    if normalized is None:
+        raise ValueError(
+            f"{_BINARY_POINT_COLUMNS_ENV} must be one of 3, xyz, 4, or xyzi"
+        )
+    return normalized
+
+
+def _binary_point_column_count(path: Path, value_count: int) -> int:
+    """Resolve a deterministic BIN row width without guessing ambiguous data."""
+
+    filename_hint = _binary_point_columns_from_filename(path)
+    environment_hint = _binary_point_columns_from_environment()
+    if (
+        filename_hint is not None
+        and environment_hint is not None
+        and filename_hint != environment_hint
+    ):
+        raise ValueError(
+            f"binary point-cloud width hint for {path} conflicts with "
+            f"{_BINARY_POINT_COLUMNS_ENV}={environment_hint}"
+        )
+    hinted = filename_hint if filename_hint is not None else environment_hint
+    if hinted is not None:
+        if value_count % hinted != 0:
+            raise ValueError(
+                f"binary point cloud {path} contains {value_count} float32 values, "
+                f"which is not divisible into {hinted}-column rows"
+            )
+        return hinted
+
+    possible = [columns for columns in (3, 4) if value_count % columns == 0]
+    if len(possible) == 1:
+        return possible[0]
+    if len(possible) == 2:
+        raise ValueError(
+            f"binary point cloud {path} contains {value_count} float32 values, which "
+            "is ambiguous between XYZ and XYZI rows; add an '.xyz.' or '.xyzi.' "
+            f"filename token, or set {_BINARY_POINT_COLUMNS_ENV}=3 or 4"
+        )
+    raise ValueError(
+        f"binary point cloud {path} must contain float32 XYZ or XYZI rows"
+    )
+
+
+def _read_binary_point_cloud(path: Path) -> pd.DataFrame:
+    """Read little-endian float32 XYZ/XYZI rows without ambiguous reshaping."""
+
+    payload = _LEGACY.read_binary_export(path)
+    if len(payload) % np.dtype("<f4").itemsize != 0:
+        raise ValueError(
+            f"binary point cloud {path} byte length is not a whole number of float32 values"
+        )
+    raw = np.frombuffer(payload, dtype="<f4")
+    if raw.size < 3:
+        raise ValueError(f"binary point cloud {path} contains fewer than 3 float32 values")
+    columns = _binary_point_column_count(path, int(raw.size))
+    rows = raw.reshape(-1, columns)
+    frame = pd.DataFrame(
+        {"x_m": rows[:, 0], "y_m": rows[:, 1], "z_m": rows[:, 2]}
+    )
+    return _LEGACY._normalize_point_frame(frame, path=path)
 
 
 def _dynamic_point_residuals(
@@ -97,12 +188,15 @@ _LEGACY._dynamic_point_residuals = _dynamic_point_residuals
 _LEGACY._impl._dynamic_point_residuals = _dynamic_point_residuals
 _LEGACY._pcd_numpy_dtype = _pcd_numpy_dtype
 _LEGACY._impl._pcd_numpy_dtype = _pcd_numpy_dtype
+_LEGACY._read_binary_point_cloud = _read_binary_point_cloud
+_LEGACY._impl._read_binary_point_cloud = _read_binary_point_cloud
 
 for _name in dir(_LEGACY):
     if not (_name.startswith("__") and _name.endswith("__")):
         globals()[_name] = getattr(_LEGACY, _name)
 globals()["_exact_integer_control"] = _exact_integer_control
 globals()["_pcd_numpy_dtype"] = _pcd_numpy_dtype
+globals()["_read_binary_point_cloud"] = _read_binary_point_cloud
 globals()["_dynamic_point_residuals"] = _dynamic_point_residuals
 
 __doc__ = _LEGACY.__doc__
@@ -115,5 +209,6 @@ __all__ = sorted(
         ],
         "_dynamic_point_residuals",
         "_pcd_numpy_dtype",
+        "_read_binary_point_cloud",
     }
 )
