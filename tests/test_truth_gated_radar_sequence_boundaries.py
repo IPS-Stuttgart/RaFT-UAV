@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from raft_uav.io.aerpaw import select_radar_measurement_rows
 
@@ -66,3 +67,41 @@ def test_truth_gate_scopes_truth_even_for_one_radar_sequence() -> None:
     )
 
     assert _truth_gated(radar, truth).empty
+
+
+def _coincident_rows(sequence_ids: pd.Series | list[object]) -> pd.DataFrame:
+    count = len(sequence_ids)
+    return pd.DataFrame(
+        {
+            "sequence_id": sequence_ids,
+            "time_s": [0.0] * count,
+            "east_m": [0.0] * count,
+            "north_m": [0.0] * count,
+            "up_m": [0.0] * count,
+        }
+    )
+
+
+def test_truth_gate_rejects_text_colliding_radar_sequence_ids() -> None:
+    radar = _coincident_rows(pd.Series([1, "1"], dtype=object))
+    truth = _coincident_rows(["1"])
+
+    with pytest.raises(ValueError, match="radar sequence_id contains ambiguous values"):
+        _truth_gated(radar, truth)
+
+
+def test_truth_gate_rejects_text_colliding_truth_sequence_ids() -> None:
+    radar = _coincident_rows(["1"])
+    truth = _coincident_rows(pd.Series([1, "1"], dtype=object))
+
+    with pytest.raises(ValueError, match="truth sequence_id contains ambiguous values"):
+        _truth_gated(radar, truth)
+
+
+def test_truth_gate_matches_numeric_and_text_ids_across_tables() -> None:
+    radar = _coincident_rows(pd.Series([1], dtype=object))
+    truth = _coincident_rows(["1"])
+
+    selected = _truth_gated(radar, truth)
+
+    assert selected["sequence_id"].tolist() == [1]
