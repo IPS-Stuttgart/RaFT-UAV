@@ -78,6 +78,23 @@ class _SequenceResult:
     summary: SequencePostprocessSummary
 
 
+def _reject_output_input_aliases(
+    prediction_path: Path,
+    first_frame_label_dir: Path,
+    output_dir: Path,
+) -> None:
+    output_resolved = output_dir.resolve()
+    if output_resolved == first_frame_label_dir.resolve():
+        raise ValueError(
+            "output directory must differ from first-frame label directory: "
+            f"{output_dir}"
+        )
+    if prediction_path.is_dir() and output_resolved == prediction_path.resolve():
+        raise ValueError(
+            f"output directory must differ from prediction directory: {output_dir}"
+        )
+
+
 def postprocess_fixed_population(
     prediction_path: Path,
     first_frame_label_dir: Path,
@@ -102,6 +119,7 @@ def postprocess_fixed_population(
         raise NotADirectoryError(
             f"first-frame label path is not a directory: {first_frame_label_dir}"
         )
+    _reject_output_input_aliases(prediction_path, first_frame_label_dir, output_dir)
     label_paths = sorted(first_frame_label_dir.glob("*.txt"))
     if not label_paths:
         raise ValueError(
