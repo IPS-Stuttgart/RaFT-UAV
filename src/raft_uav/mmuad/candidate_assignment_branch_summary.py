@@ -19,6 +19,27 @@ _GROUP_COLUMNS = (
     "oracle_source",
     "dominant_source",
 )
+_SUMMARY_COLUMNS = (
+    "sequence_id",
+    "group_label",
+    "frame_count",
+    "state_error_3d_m_mse",
+    "oracle_error_3d_m_mse",
+    "dominant_error_3d_m_mse",
+    "state_vs_oracle_mse_gap",
+    "dominant_vs_oracle_mse_gap",
+    "state_regret_m_mean",
+    "dominant_regret_m_mean",
+    "state_error_3d_m_p95",
+    "oracle_mixture_weight_mean",
+    "oracle_weight_deficit_mean",
+    "oracle_weight_rank_p50",
+    "candidate_count_mean",
+    "dominant_matches_oracle_rate",
+    "oracle_in_topk_by_weight_rate",
+    "assignment_priority_score",
+    *_GROUP_COLUMNS,
+)
 _TRUE_BOOL_TEXT = frozenset({"true", "t", "yes", "y", "1", "1.0"})
 _FALSE_BOOL_TEXT = frozenset(
     {
@@ -41,14 +62,18 @@ _FALSE_BOOL_TEXT = frozenset(
 def build_candidate_assignment_branch_summary(frame_rows: pd.DataFrame) -> pd.DataFrame:
     rows = _normalized_frame_rows(frame_rows)
     if rows.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=_SUMMARY_COLUMNS)
     records: list[dict[str, Any]] = []
     records.extend(_group_records(rows, sequence_id="__pooled__"))
     for sequence_id, group in rows.groupby("sequence_id", sort=True):
         records.extend(_group_records(group, sequence_id=str(sequence_id)))
-    return pd.DataFrame.from_records(records).sort_values(
-        ["sequence_id", "assignment_priority_score", "frame_count"],
-        ascending=[True, False, False],
+    return (
+        pd.DataFrame.from_records(records, columns=_SUMMARY_COLUMNS)
+        .sort_values(
+            ["sequence_id", "assignment_priority_score", "frame_count"],
+            ascending=[True, False, False],
+        )
+        .reset_index(drop=True)
     )
 
 
