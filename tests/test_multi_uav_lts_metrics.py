@@ -111,3 +111,56 @@ def test_duplicate_frame_object_keys_are_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="duplicate predictions"):
         evaluate_lts_predictions(predictions, truth)
+
+
+@pytest.mark.parametrize(
+    ("truth_state", "error_type", "message"),
+    [
+        ("missing", FileNotFoundError, "truth directory does not exist"),
+        ("file", NotADirectoryError, "truth path is not a directory"),
+        ("empty", ValueError, r"truth directory contains no \.txt files"),
+    ],
+)
+def test_invalid_truth_inputs_are_rejected(
+    tmp_path: Path,
+    truth_state: str,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    predictions = tmp_path / "predictions"
+    predictions.mkdir()
+    truth = tmp_path / "truth"
+    if truth_state == "file":
+        truth.write_text("not a directory\n", encoding="utf-8")
+    elif truth_state == "empty":
+        truth.mkdir()
+
+    with pytest.raises(error_type, match=message):
+        evaluate_lts_predictions(predictions, truth)
+
+
+def test_unknown_prediction_sequence_is_rejected(tmp_path: Path) -> None:
+    truth = tmp_path / "truth"
+    predictions = tmp_path / "predictions"
+    _write(truth / "S.txt", "1,1,0,0,10,10,1,1,1\n")
+    _write(predictions / "S_typo.txt", "1,1,0,0,10,10,1,1,1\n")
+
+    with pytest.raises(
+        ValueError, match="prediction input contains unknown sequence files: S_typo.txt"
+    ):
+        evaluate_lts_predictions(predictions, truth)
+
+
+def test_known_unrequested_prediction_sequence_is_allowed(tmp_path: Path) -> None:
+    truth = tmp_path / "truth"
+    predictions = tmp_path / "predictions"
+    row = "1,1,0,0,10,10,1,1,1\n"
+    _write(truth / "A.txt", row)
+    _write(truth / "B.txt", row)
+    _write(predictions / "A.txt", row)
+    _write(predictions / "B.txt", row)
+
+    metrics = evaluate_lts_predictions(predictions, truth, sequences=["A"])
+
+    assert metrics.sequence_count == 1
+    assert metrics.sequences[0].sequence == "A"
