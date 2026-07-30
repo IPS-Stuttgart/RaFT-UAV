@@ -41,6 +41,21 @@ def test_package_submission_rejects_template_output_alias_without_modifying_temp
     assert template.read_bytes() == original
 
 
+def test_package_submission_rejects_prediction_output_alias_without_modifying_prediction(
+    tmp_path: Path,
+) -> None:
+    prediction_dir = tmp_path / "predictions"
+    prediction_dir.mkdir()
+    prediction = prediction_dir / "S_00.txt"
+    original = "1,1,10,20,5,6,1,1,1\n"
+    prediction.write_text(original, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="output ZIP must differ from prediction input"):
+        package_submission(prediction_dir, prediction)
+
+    assert prediction.read_text(encoding="utf-8") == original
+
+
 def test_constant_first_frame_rejects_label_output_alias_without_modifying_labels(
     tmp_path: Path,
 ) -> None:
