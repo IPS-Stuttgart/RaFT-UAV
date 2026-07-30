@@ -157,11 +157,27 @@ def _template_classification_by_key(template: pd.DataFrame) -> dict[tuple[str, f
         & np.isfinite(rows["Timestamp"].to_numpy(float))
         & rows["Classification"].notna()
     )
-    rows = rows.loc[finite]
+    rows = rows.loc[finite].copy()
+    _reject_conflicting_template_classifications(rows)
     return {
         (str(row["Sequence"]), float(row["Timestamp"])): int(row["Classification"])
         for _, row in rows.iterrows()
     }
+
+
+def _reject_conflicting_template_classifications(rows: pd.DataFrame) -> None:
+    """Reject contradictory labels for the same normalized template timestamp."""
+
+    for (sequence_id, timestamp), group in rows.groupby(
+        ["Sequence", "Timestamp"],
+        sort=False,
+    ):
+        class_ids = sorted({int(value) for value in group["Classification"]})
+        if len(class_ids) > 1:
+            raise ValueError(
+                "Track 5 template contains conflicting Classification values for "
+                f"sequence {sequence_id!r} at timestamp {float(timestamp)!r}: {class_ids}"
+            )
 
 
 def _template_sequence_key(value: Any) -> str | None:
