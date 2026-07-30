@@ -48,6 +48,41 @@ def _truth_paths(truth_dir: Path) -> list[Path]:
     return truth_paths
 
 
+def _paths_alias(left: Path, right: Path) -> bool:
+    left_path = Path(left)
+    right_path = Path(right)
+    try:
+        return left_path.samefile(right_path)
+    except OSError:
+        return left_path.resolve() == right_path.resolve()
+
+
+def _reject_population_audit_output_aliases(
+    audit: PopulationAudit,
+    json_path: Path,
+    csv_path: Path,
+) -> None:
+    json_output = Path(json_path)
+    csv_output = Path(csv_path)
+    if _paths_alias(json_output, csv_output):
+        raise ValueError("population audit JSON and CSV outputs must differ")
+
+    truth_dir = Path(audit.truth_dir)
+    if not truth_dir.is_dir():
+        return
+    truth_paths = tuple(truth_dir.glob("*.txt"))
+    for label, output_path in (
+        ("JSON output", json_output),
+        ("CSV output", csv_output),
+    ):
+        for truth_path in truth_paths:
+            if _paths_alias(output_path, truth_path):
+                raise ValueError(
+                    f"population audit {label} must differ from truth input file: "
+                    f"{truth_path}"
+                )
+
+
 def audit_first_frame_population(truth_dir: Path) -> PopulationAudit:
     sequence_rows: list[SequencePopulationAudit] = []
     for truth_path in _truth_paths(truth_dir):
@@ -115,6 +150,7 @@ def audit_first_frame_population(truth_dir: Path) -> PopulationAudit:
 def write_population_audit(
     audit: PopulationAudit, json_path: Path, csv_path: Path
 ) -> None:
+    _reject_population_audit_output_aliases(audit, json_path, csv_path)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(
