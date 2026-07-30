@@ -1,7 +1,7 @@
 """Compatibility fixes for paper-style radar preselection.
 
 The maintained implementation lives in the sibling ``paper_selection.py``
-module. This package preserves the public import path while excluding non-finite
+module. This package preserves the public import path while excluding malformed
 class probabilities, preserving exact integer-like track identifiers, and
 splitting reused frame counters into distinct continuous-track epochs.
 """
@@ -15,7 +15,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-from raft_uav.numeric import optional_int
+from raft_uav.numeric import optional_float, optional_int
 
 _LEGACY_PATH = Path(__file__).resolve().parent.parent / "paper_selection.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -30,18 +30,46 @@ _SPEC.loader.exec_module(_LEGACY)
 _ORIGINAL_CONTINUOUS_TRACK_SEGMENTS = _LEGACY._continuous_track_segments
 
 
+def _finite_catprob_value(value: object) -> float | None:
+    """Return one finite real probability without discarding an imaginary part."""
+
+    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+        return None
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError):
+        return None
+    if scalar.ndim != 0:
+        return None
+    item = scalar.item()
+    if np.ma.is_masked(item) or isinstance(item, (bool, np.bool_)):
+        return None
+    if np.iscomplexobj(item):
+        if not np.isfinite(item.real) or not np.isfinite(item.imag) or item.imag != 0.0:
+            return None
+        item = item.real
+    return optional_float(item)
+
+
+def _finite_catprob_values(values: pd.Series) -> np.ndarray:
+    """Return finite real class probabilities and mark malformed cells missing."""
+
+    parsed = [_finite_catprob_value(value) for value in values.tolist()]
+    return np.asarray(
+        [np.nan if value is None else value for value in parsed],
+        dtype=float,
+    )
+
+
 def _catprob_candidate_pool(
     candidates: pd.DataFrame,
     catprob_threshold: float | None,
 ) -> pd.DataFrame:
-    """Apply the class-probability gate without accepting NaN or infinity."""
+    """Apply the class-probability gate without accepting malformed values."""
 
     if catprob_threshold is None or "cat_prob_uav" not in candidates.columns:
         return candidates.copy()
-    catprob = pd.to_numeric(
-        candidates["cat_prob_uav"],
-        errors="coerce",
-    ).to_numpy(dtype=float)
+    catprob = _finite_catprob_values(candidates["cat_prob_uav"])
     pool = candidates.loc[
         np.isfinite(catprob) & (catprob >= float(catprob_threshold))
     ].copy()
@@ -52,14 +80,11 @@ def _catprob_candidate_pool(
 
 
 def _mean_catprob(frame: pd.DataFrame) -> float:
-    """Return the mean of finite class probabilities for track tie-breaking."""
+    """Return the mean of finite real class probabilities for track tie-breaking."""
 
     if "cat_prob_uav" not in frame.columns or frame.empty:
         return 0.0
-    catprob = pd.to_numeric(
-        frame["cat_prob_uav"],
-        errors="coerce",
-    ).to_numpy(dtype=float)
+    catprob = _finite_catprob_values(frame["cat_prob_uav"])
     finite = catprob[np.isfinite(catprob)]
     return float(np.mean(finite)) if finite.size else 0.0
 
@@ -141,6 +166,8 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_finite_catprob_value"] = _finite_catprob_value
+globals()["_finite_catprob_values"] = _finite_catprob_values
 globals()["_catprob_candidate_pool"] = _catprob_candidate_pool
 globals()["_mean_catprob"] = _mean_catprob
 globals()["_track_id_from_frame"] = _track_id_from_frame

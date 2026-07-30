@@ -94,4 +94,11 @@ def test_imm_tracker_preserves_distinct_mode_probability_keys() -> None:
     )
 
     assert tracker.mode_names == ("slow", "fast")
-    assert tracker.mode_probability_map == {"slow": 0.25, "fast": 0.75}
+    probability_map = tracker.mode_probability_map
+    assert tuple(probability_map) == ("slow", "fast")
+    np.testing.assert_allclose(
+        tuple(probability_map.values()),
+        (0.25, 0.75),
+        rtol=0.0,
+        atol=np.finfo(float).eps,
+    )
