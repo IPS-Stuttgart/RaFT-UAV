@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -92,6 +93,64 @@ def _canonicalize_sequence_class_map(class_map: dict[Any, Any]) -> dict[str, str
         if normalized_sequence_id is not None and normalized_uav_type is not None:
             normalized[normalized_sequence_id] = normalized_uav_type
     return normalized
+
+
+def _store_class_map_payload_entry(
+    class_map: dict[str, str],
+    *,
+    sequence_id: str,
+    uav_type: str,
+) -> None:
+    """Store one JSON/YAML mapping without silently resolving conflicts."""
+
+    if sequence_id in class_map and class_map[sequence_id] != uav_type:
+        raise ValueError(
+            "JSON/YAML class map assigns conflicting UAV types to normalized sequence "
+            f"{sequence_id!r}: {class_map[sequence_id]!r} and {uav_type!r}"
+        )
+    class_map[sequence_id] = uav_type
+
+
+def _class_map_from_rows_with_conflict_check(rows: list[Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sequence_id = _impl._entry_value(row, _impl._SEQUENCE_ID_ALIASES)
+        uav_type = _impl._entry_value(row, _impl._UAV_TYPE_ALIASES)
+        if sequence_id is not None and uav_type is not None:
+            _store_class_map_payload_entry(
+                out,
+                sequence_id=sequence_id,
+                uav_type=uav_type,
+            )
+    return out
+
+
+def _class_map_from_mapping_with_conflict_check(
+    mapping: Mapping[str, Any],
+) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for key, value in mapping.items():
+        if str(key).lower() in _impl._CLASS_MAP_KEYS + _impl._CLASS_MAP_METADATA_KEYS:
+            continue
+        sequence_id = _impl._scalar_to_text(key)
+        if sequence_id is None:
+            continue
+        if isinstance(value, dict):
+            mapped_sequence_id = _impl._entry_value(value, _impl._SEQUENCE_ID_ALIASES)
+            uav_type = _impl._entry_value(value, _impl._UAV_TYPE_ALIASES)
+            if mapped_sequence_id is not None:
+                sequence_id = mapped_sequence_id
+        else:
+            uav_type = _impl._scalar_to_text(value)
+        if uav_type is not None:
+            _store_class_map_payload_entry(
+                out,
+                sequence_id=sequence_id,
+                uav_type=uav_type,
+            )
+    return out
 
 
 def _class_map_sequence_key(value: Any) -> str | None:
@@ -444,6 +503,8 @@ def _official_track5_row_diagnostics_with_domain(frame: Any) -> tuple[Any, Any]:
     return diagnostics, normalized
 
 
+_impl._class_map_from_rows = _class_map_from_rows_with_conflict_check
+_impl._class_map_from_mapping = _class_map_from_mapping_with_conflict_check
 _impl.parse_official_classification_cell = _parse_official_classification_cell_with_domain
 _impl.load_sequence_class_map = _load_sequence_class_map_with_official_sequences
 _impl.load_official_track5_template_file = (
