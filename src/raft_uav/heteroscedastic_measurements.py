@@ -9,6 +9,93 @@ from raft_uav.baselines.kalman import TrackingMeasurement
 from raft_uav.numeric import optional_float
 from raft_uav.uncertainty import covariance_from_row
 
+_COVARIANCE_LAYOUTS = {
+    2: (("ee", "nn"), ((0, 1, "en"),)),
+    3: (
+        ("ee", "nn", "uu"),
+        ((0, 1, "en"), (0, 2, "eu"), (1, 2, "nu")),
+    ),
+}
+
+
+def _finite_covariance_value(value: object) -> float | None:
+    """Return one finite real covariance entry, or ``None`` when unavailable."""
+
+    if isinstance(value, (bool, np.bool_, complex, np.complexfloating)):
+        return None
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) else None
+
+
+def _positive_covariance_value(value: object) -> float | None:
+    """Return one positive finite variance, or ``None`` when unavailable."""
+
+    number = _finite_covariance_value(value)
+    return number if number is not None and number > 0.0 else None
+
+
+def _covariance_with_partial_learned_overrides(
+    row: pd.Series,
+    dim: int,
+    fallback: np.ndarray,
+) -> np.ndarray:
+    """Overlay available learned axes on association/default covariance.
+
+    Partial uncertainty models are intentionally supported when the training data
+    exposes only a subset of position dimensions. Keep learned variances for those
+    dimensions instead of discarding the whole learned covariance block.
+    """
+
+    try:
+        names, cross_terms = _COVARIANCE_LAYOUTS[dim]
+    except KeyError as exc:
+        raise ValueError("dim must be 2 or 3") from exc
+
+    base = covariance_from_row(
+        row,
+        dim,
+        fallback,
+        prefixes=("association_cov",),
+    )
+    learned_diagonal = tuple(
+        _positive_covariance_value(row.get(f"cov_{name}")) for name in names
+    )
+    if not any(value is not None for value in learned_diagonal):
+        return base
+
+    candidate = base.copy()
+    for index, value in enumerate(learned_diagonal):
+        if value is not None:
+            candidate[index, index] = value
+
+    for first, second, suffix in cross_terms:
+        if learned_diagonal[first] is None or learned_diagonal[second] is None:
+            continue
+        value = _finite_covariance_value(row.get(f"cov_{suffix}"))
+        candidate[first, second] = candidate[second, first] = (
+            0.0 if value is None else value
+        )
+
+    candidate_row = {
+        f"candidate_{name}": candidate[index, index]
+        for index, name in enumerate(names)
+    }
+    candidate_row.update(
+        {
+            f"candidate_{suffix}": candidate[first, second]
+            for first, second, suffix in cross_terms
+        }
+    )
+    return covariance_from_row(
+        pd.Series(candidate_row),
+        dim,
+        base,
+        prefixes=("candidate",),
+    )
+
 
 def rf_measurements_to_enu_with_uncertainty(
     rf: pd.DataFrame,
@@ -48,11 +135,10 @@ def rf_measurements_to_enu_with_uncertainty(
                         ),
                     ]
                 ),
-                covariance=covariance_from_row(
+                covariance=_covariance_with_partial_learned_overrides(
                     row,
                     2,
                     fallback,
-                    prefixes=("cov", "association_cov"),
                 ),
                 source="rf",
             )
@@ -100,11 +186,10 @@ def radar_measurements_to_enu_with_uncertainty(
                 ),
             ]
         )
-        position_covariance = covariance_from_row(
+        position_covariance = _covariance_with_partial_learned_overrides(
             row,
             3,
             position_fallback,
-            prefixes=("cov", "association_cov"),
         )
         velocity = _radar_velocity_vector_enu(row)
         if velocity is None:
