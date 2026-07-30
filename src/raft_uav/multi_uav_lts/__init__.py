@@ -3,6 +3,86 @@
 from __future__ import annotations
 
 import math
+from functools import wraps
+from pathlib import Path
+
+
+def _install_lts_input_output_alias_guard() -> None:
+    try:
+        from raft_uav.multi_uav_lts import cli as _cli
+    except Exception:
+        return
+
+    installed_attr = "_raft_uav_input_output_alias_guard_installed"
+    if getattr(_cli, installed_attr, False):
+        return
+
+    original_package_submission = _cli.package_submission
+    original_write_constant_first_frame_predictions = (
+        _cli.write_constant_first_frame_predictions
+    )
+    original_write_first_frame_labels = _cli.write_first_frame_labels
+
+    def _paths_alias(left: Path, right: Path) -> bool:
+        return Path(left).resolve() == Path(right).resolve()
+
+    @wraps(original_package_submission)
+    def _package_submission(
+        prediction_dir: Path,
+        output_zip: Path,
+        *,
+        template_zip: Path | None = None,
+        normalize: bool = False,
+        sort_rows: bool = False,
+    ):
+        if template_zip is not None and _paths_alias(output_zip, template_zip):
+            raise ValueError(f"output ZIP must differ from template ZIP: {output_zip}")
+        return original_package_submission(
+            prediction_dir,
+            output_zip,
+            template_zip=template_zip,
+            normalize=normalize,
+            sort_rows=sort_rows,
+        )
+
+    @wraps(original_write_constant_first_frame_predictions)
+    def _write_constant_first_frame_predictions(
+        sequence_root: Path,
+        first_frame_label_dir: Path,
+        output_dir: Path,
+    ):
+        if _paths_alias(output_dir, first_frame_label_dir):
+            raise ValueError(
+                "output directory must differ from first-frame label directory: "
+                f"{output_dir}"
+            )
+        return original_write_constant_first_frame_predictions(
+            sequence_root,
+            first_frame_label_dir,
+            output_dir,
+        )
+
+    @wraps(original_write_first_frame_labels)
+    def _write_first_frame_labels(
+        truth_dir: Path,
+        output_dir: Path,
+        *,
+        frame_id: int = 1,
+    ):
+        if _paths_alias(output_dir, truth_dir):
+            raise ValueError(
+                f"output directory must differ from truth directory: {output_dir}"
+            )
+        return original_write_first_frame_labels(
+            truth_dir,
+            output_dir,
+            frame_id=frame_id,
+        )
+
+    _cli.package_submission = _package_submission
+    _cli.write_constant_first_frame_predictions = _write_constant_first_frame_predictions
+    _cli.write_first_frame_labels = _write_first_frame_labels
+    setattr(_cli, installed_attr, True)
 
 
 def _install_zero_frame_coverage_guard() -> None:
@@ -164,6 +244,7 @@ def _count_duplicate_frame_object_rows(text: str, *, parse_int_like) -> int:
     return duplicate_rows
 
 
+_install_lts_input_output_alias_guard()
 _install_zero_frame_coverage_guard()
 _install_lts_submission_domain_guard()
 _install_lts_duplicate_key_validation_guard()
