@@ -48,13 +48,47 @@ def _positive_real_control(value: object, *, name: str) -> float:
     return normalized
 
 
+def _finite_real_value(value: object) -> float | None:
+    """Return a finite real scalar without discarding an imaginary component."""
+
+    if _np.ma.is_masked(value) or isinstance(value, (bool, _np.bool_)):
+        return None
+    try:
+        scalar = _np.asarray(value)
+    except (TypeError, ValueError):
+        return None
+    if scalar.ndim != 0:
+        return None
+    item = scalar.item()
+    if _np.ma.is_masked(item) or isinstance(item, (bool, _np.bool_)):
+        return None
+    if _np.iscomplexobj(item):
+        if not _np.isfinite(item.real) or not _np.isfinite(item.imag) or item.imag != 0.0:
+            return None
+        item = item.real
+    return _optional_float(item)
+
+
+def _finite_real_values(values: _pd.Series) -> _np.ndarray:
+    """Convert finite real cells and mark malformed values missing."""
+
+    parsed = [_finite_real_value(value) for value in values.tolist()]
+    return _np.asarray(
+        [_np.nan if value is None else value for value in parsed],
+        dtype=float,
+    )
+
+
 def _finite_position_candidates(candidates):
     if candidates.empty:
         return candidates
 
-    numeric_positions = candidates.loc[:, _POSITION_COLUMNS].apply(
-        _pd.to_numeric,
-        errors="coerce",
+    numeric_positions = _pd.DataFrame(
+        {
+            column: _finite_real_values(candidates[column])
+            for column in _POSITION_COLUMNS
+        },
+        index=candidates.index,
     )
     finite = _np.isfinite(numeric_positions.to_numpy(dtype=float)).all(axis=1)
     cleaned = candidates.loc[finite].copy()
@@ -70,9 +104,7 @@ def catprob_candidate_pool(candidates, threshold):
     if candidates.empty or "cat_prob_uav" not in candidates.columns:
         return candidates
 
-    scores = _pd.to_numeric(candidates["cat_prob_uav"], errors="coerce").to_numpy(
-        dtype=float
-    )
+    scores = _finite_real_values(candidates["cat_prob_uav"])
     keep = _np.isfinite(scores) & (scores >= threshold)
     return candidates.loc[keep].copy() if keep.any() else candidates
 
@@ -84,9 +116,7 @@ def highest_catprob_candidate(candidates):
     if "cat_prob_uav" not in candidates.columns:
         return candidates.iloc[0].copy()
 
-    scores = _pd.to_numeric(candidates["cat_prob_uav"], errors="coerce").to_numpy(
-        dtype=float
-    )
+    scores = _finite_real_values(candidates["cat_prob_uav"])
     finite = _np.isfinite(scores)
     if not finite.any():
         return candidates.iloc[0].copy()
@@ -171,10 +201,7 @@ def radar_frame_groups(radar: _pd.DataFrame) -> list[_pd.DataFrame]:
             key = ("row", int(position))
         group_positions.setdefault(key, []).append(int(position))
 
-    return [
-        ordered.iloc[positions].copy()
-        for positions in group_positions.values()
-    ]
+    return [ordered.iloc[positions].copy() for positions in group_positions.values()]
 
 
 def _longest_track_id(radar: _pd.DataFrame) -> int | None:
