@@ -63,8 +63,16 @@ def _install_fakes(
             coasted_rows=0,
         )
 
-    monkeypatch.setattr(closed_world_cv, "evaluate_lts_predictions", fake_evaluate)
-    monkeypatch.setattr(closed_world_cv, "postprocess_closed_world", fake_postprocess)
+    # Several repository regressions reload compatibility packages. Patch the
+    # exact global namespace used by the function under test rather than a
+    # potentially replaced package attribute.
+    function_globals = closed_world_cv.run_closed_world_cv.__globals__
+    monkeypatch.setitem(
+        function_globals, "evaluate_lts_predictions", fake_evaluate
+    )
+    monkeypatch.setitem(
+        function_globals, "postprocess_closed_world", fake_postprocess
+    )
 
 
 def _inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
