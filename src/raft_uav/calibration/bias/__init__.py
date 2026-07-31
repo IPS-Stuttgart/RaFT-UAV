@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling ``bias.py`` module. This
 package preserves the public import path while ensuring ``correct_frame``
-respects ``keep_uncorrected=False`` and serialized truth timestamps are numeric
-before nearest-time calibration sorting.
+respects ``keep_uncorrected=False``, serialized truth timestamps are numeric
+before nearest-time calibration sorting, and genuinely complex calibration
+values are not silently reduced to their real components.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from pathlib import Path
 import sys
 from typing import Sequence
 
+import numpy as np
 import pandas as pd
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "bias.py"
@@ -44,6 +46,39 @@ def _correct_frame(
     return corrected.drop(columns=raw_columns, errors="ignore")
 
 
+def _finite_real_numeric_series(values: pd.Series) -> pd.Series:
+    """Coerce numeric values without discarding nonzero imaginary components."""
+
+    numeric = pd.to_numeric(values, errors="coerce")
+    array = numeric.to_numpy()
+    if not np.iscomplexobj(array):
+        return numeric
+    real = np.real(array)
+    imaginary = np.imag(array)
+    return pd.Series(
+        np.where(
+            np.isfinite(real) & np.isfinite(imaginary) & (imaginary == 0.0),
+            real,
+            np.nan,
+        ),
+        index=values.index,
+        dtype=float,
+    )
+
+
+def _normalized_bias_frame(
+    frame: pd.DataFrame,
+    columns: Sequence[str],
+) -> pd.DataFrame:
+    """Return a copy whose requested numeric columns contain finite real values."""
+
+    normalized = frame.copy()
+    for column in columns:
+        if column in normalized.columns:
+            normalized[column] = _finite_real_numeric_series(normalized[column])
+    return normalized
+
+
 def make_bias_training_examples(
     measurements: pd.DataFrame,
     truth: pd.DataFrame,
@@ -52,16 +87,13 @@ def make_bias_training_examples(
     target_columns: Sequence[str],
     time_gate_s: float = 2.0,
 ) -> pd.DataFrame:
-    """Build bias examples after normalizing serialized truth timestamps."""
+    """Build bias examples without silently accepting complex numeric cells."""
 
-    normalized_truth = truth.copy()
-    if "time_s" in normalized_truth.columns:
-        normalized_truth["time_s"] = pd.to_numeric(
-            normalized_truth["time_s"],
-            errors="coerce",
-        )
+    numeric_columns = ("time_s", *(str(column) for column in target_columns))
+    normalized_measurements = _normalized_bias_frame(measurements, numeric_columns)
+    normalized_truth = _normalized_bias_frame(truth, numeric_columns)
     return _ORIGINAL_MAKE_BIAS_TRAINING_EXAMPLES(
-        measurements,
+        normalized_measurements,
         normalized_truth,
         source=source,
         target_columns=target_columns,
@@ -80,6 +112,8 @@ globals().update(
     }
 )
 globals()["_correct_frame"] = _correct_frame
+globals()["_finite_real_numeric_series"] = _finite_real_numeric_series
+globals()["_normalized_bias_frame"] = _normalized_bias_frame
 globals()["make_bias_training_examples"] = make_bias_training_examples
 
 __doc__ = _IMPL.__doc__
