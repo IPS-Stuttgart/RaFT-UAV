@@ -8,8 +8,11 @@ Before generating predictions, apply the deterministic baseline corrections in
 [`multi_uav_lts_upstream_fixes.md`](multi_uav_lts_upstream_fixes.md). For
 organizer-compatible training evaluation, first-frame population auditing,
 seeded identity post-processing, and parameter selection, follow
-[`multi_uav_lts_result_improvement.md`](multi_uav_lts_result_improvement.md)
-before starting this final upload checklist.
+[`multi_uav_lts_result_improvement.md`](multi_uav_lts_result_improvement.md).
+The optional closed-world identity-bank experiment and its guarded raw fallback
+are documented in
+[`multi_uav_lts_closed_world.md`](multi_uav_lts_closed_world.md). Complete all
+training-side selection before starting this final upload checklist.
 
 ## 1. Check the source data inventory
 
@@ -88,7 +91,8 @@ Store the following next to the final upload artifact:
 - source prediction folder;
 - template ZIP path and checksum;
 - final ZIP checksum;
-- population audit, selected cross-validation row, and fixed-population summary;
+- population audit and selected cross-validation row;
+- fixed-population or closed-world summary, including the raw-control deltas;
 - upstream-fix summary;
 - coverage audit JSON;
 - final validation JSON.
