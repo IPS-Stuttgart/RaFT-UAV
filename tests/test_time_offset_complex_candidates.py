@@ -40,3 +40,19 @@ def test_catprob_pool_preserves_zero_imaginary_values_after_dtype_promotion() ->
     selected = catprob_candidate_pool(_candidates(), 0.6)
 
     assert selected["track_id"].tolist() == ["real", "promoted-real"]
+
+
+def test_catprob_pool_excludes_nonreal_scores_from_finite_fallback() -> None:
+    candidates = pd.DataFrame(
+        {
+            "east_m": [0.0, 10.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+            "cat_prob_uav": [0.99 + 2.0j, 0.4],
+            "track_id": ["malformed-near", "valid-below-threshold"],
+        }
+    )
+
+    selected = catprob_candidate_pool(candidates, 0.5)
+
+    assert selected["track_id"].tolist() == ["valid-below-threshold"]
