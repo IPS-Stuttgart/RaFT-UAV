@@ -215,32 +215,11 @@ def run_closed_world_cv(
             }
         )
 
-    raw_hota = float(raw_row["mean_codabench_hota"])
-    raw_mota = float(raw_row["mean_codabench_mota"])
-    raw_idf1 = float(raw_row["mean_codabench_idf1"])
-    for row in candidates:
-        hota_gain = float(row["mean_codabench_hota"]) - raw_hota
-        mota_delta = float(row["mean_codabench_mota"]) - raw_mota
-        idf1_delta = float(row["mean_codabench_idf1"]) - raw_idf1
-        row["hota_gain_vs_raw"] = hota_gain
-        row["mota_delta_vs_raw"] = mota_delta
-        row["idf1_delta_vs_raw"] = idf1_delta
-        row["eligible"] = bool(row["is_raw"]) or (
-            hota_gain >= min_hota_gain
-            and mota_delta >= -max_mota_drop
-            and idf1_delta >= -max_idf1_drop
-        )
-
-    candidates.sort(
-        key=lambda row: (
-            not bool(row["eligible"]),
-            -float(row["mean_codabench_hota"]),
-            float(row["std_codabench_hota"]),
-            -float(row["mean_codabench_idf1"]),
-            -float(row["mean_codabench_mota"]),
-            0 if bool(row["is_raw"]) else 1,
-            int(row["grid_index"]),
-        )
+    candidates = _rank_candidates(
+        candidates,
+        max_mota_drop=max_mota_drop,
+        max_idf1_drop=max_idf1_drop,
+        min_hota_gain=min_hota_gain,
     )
     rows = tuple(
         _materialize_row(row, rank=rank, selected=rank == 1)
@@ -262,6 +241,55 @@ def run_closed_world_cv(
         min_hota_gain=min_hota_gain,
     )
     return rows
+
+
+def _rank_candidates(
+    candidates: list[dict[str, object]],
+    *,
+    max_mota_drop: float,
+    max_idf1_drop: float,
+    min_hota_gain: float,
+) -> list[dict[str, object]]:
+    """Apply raw-relative metric guards and return a deterministic ranking."""
+
+    raw_candidates = [row for row in candidates if bool(row["is_raw"])]
+    if len(raw_candidates) != 1:
+        raise ValueError(
+            "closed-world ranking requires exactly one raw candidate; "
+            f"received {len(raw_candidates)}"
+        )
+    raw = raw_candidates[0]
+    raw_hota = float(raw["mean_codabench_hota"])
+    raw_mota = float(raw["mean_codabench_mota"])
+    raw_idf1 = float(raw["mean_codabench_idf1"])
+    ranked: list[dict[str, object]] = []
+    for source_row in candidates:
+        row = dict(source_row)
+        hota_gain = float(row["mean_codabench_hota"]) - raw_hota
+        mota_delta = float(row["mean_codabench_mota"]) - raw_mota
+        idf1_delta = float(row["mean_codabench_idf1"]) - raw_idf1
+        row["hota_gain_vs_raw"] = hota_gain
+        row["mota_delta_vs_raw"] = mota_delta
+        row["idf1_delta_vs_raw"] = idf1_delta
+        row["eligible"] = bool(row["is_raw"]) or (
+            hota_gain >= min_hota_gain
+            and mota_delta >= -max_mota_drop
+            and idf1_delta >= -max_idf1_drop
+        )
+        ranked.append(row)
+
+    ranked.sort(
+        key=lambda row: (
+            not bool(row["eligible"]),
+            -float(row["mean_codabench_hota"]),
+            float(row["std_codabench_hota"]),
+            -float(row["mean_codabench_idf1"]),
+            -float(row["mean_codabench_mota"]),
+            0 if bool(row["is_raw"]) else 1,
+            int(row["grid_index"]),
+        )
+    )
+    return ranked
 
 
 def _truth_sequences(truth_dir: Path) -> tuple[str, ...]:
@@ -411,10 +439,12 @@ def _materialize_predictions(
     output_dir: Path,
     sequences: tuple[str, ...],
 ) -> None:
+    # Read before replacing the destination so a rerun can safely use the
+    # previous best_predictions directory as its raw input.
+    texts = prediction_texts(prediction_path)
     if output_dir.exists():
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True)
-    texts = prediction_texts(prediction_path)
     for sequence in sequences:
         (output_dir / f"{sequence}.txt").write_text(
             texts.get(f"{sequence}.txt", ""), encoding="utf-8"
