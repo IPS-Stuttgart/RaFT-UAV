@@ -42,3 +42,26 @@ def test_evaluator_rejects_mixed_invalid_trajectory_rows(
         match="1 non-finite or non-numeric trajectory row",
     ):
         validate_mmaud_results_frame(rows)
+
+
+@pytest.mark.parametrize("column", ["timestamp", "x", "y", "z", "score"])
+@pytest.mark.parametrize("value", [1.0 + 2.0j, np.complex128(1.0 + 0.0j)])
+def test_evaluator_rejects_complex_trajectory_rows(
+    column: str,
+    value: complex,
+) -> None:
+    rows = _result_rows()
+    rows[column] = rows[column].astype(object)
+    rows.loc[1, column] = value
+
+    with pytest.raises(ValueError, match="1 complex trajectory row"):
+        validate_mmaud_results_frame(rows)
+
+
+def test_evaluator_rejects_complex_trajectory_aliases() -> None:
+    rows = _result_rows().rename(columns={"timestamp": "time_s", "score": "confidence"})
+    rows["confidence"] = rows["confidence"].astype(object)
+    rows.loc[1, "confidence"] = 0.5 + 0.25j
+
+    with pytest.raises(ValueError, match="1 complex trajectory row"):
+        validate_mmaud_results_frame(rows)
