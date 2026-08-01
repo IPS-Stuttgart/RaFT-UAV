@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from numbers import Integral
 import sys
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,17 @@ def _normalized_estimate_csv_columns(columns: Iterable[object]) -> list[str]:
     return normalized
 
 
+def _header_row_index(header: Any) -> int | None:
+    """Return the zero-based logical header row supported by pandas."""
+
+    if header == "infer":
+        return 0
+    if isinstance(header, bool) or not isinstance(header, Integral):
+        return None
+    index = int(header)
+    return index if index >= 0 else None
+
+
 def _validate_physical_estimate_csv_header(
     source: Any,
     *,
@@ -73,25 +85,27 @@ def _validate_physical_estimate_csv_header(
     if not isinstance(source, (str, Path)):
         return
     options = dict(read_csv_kwargs or {})
-    header = options.get("header", "infer")
-    if (header != "infer" and header != 0) or options.get("names") is not None:
+    if options.get("names") is not None:
+        return
+    header_row_index = _header_row_index(options.get("header", "infer"))
+    if header_row_index is None:
         return
     header_options = {
         key: options[key]
         for key in _PHYSICAL_HEADER_READ_CSV_OPTIONS
         if key in options
     }
-    physical_header = _ORIGINAL_PANDAS_READ_CSV(
+    physical_rows = _ORIGINAL_PANDAS_READ_CSV(
         source,
         header=None,
-        nrows=1,
+        nrows=header_row_index + 1,
         dtype=str,
         keep_default_na=False,
         **header_options,
     )
-    if physical_header.empty:
+    if len(physical_rows) <= header_row_index:
         return
-    _normalized_estimate_csv_columns(physical_header.iloc[0].tolist())
+    _normalized_estimate_csv_columns(physical_rows.iloc[header_row_index].tolist())
 
 
 def read_estimate_csv(path: Path) -> pd.DataFrame:
