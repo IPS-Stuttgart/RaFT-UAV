@@ -56,3 +56,19 @@ def test_catprob_pool_excludes_nonreal_scores_from_finite_fallback() -> None:
     selected = catprob_candidate_pool(candidates, 0.5)
 
     assert selected["track_id"].tolist() == ["valid-below-threshold"]
+
+
+def test_catprob_pool_excludes_nonscalar_scores_from_finite_fallback() -> None:
+    candidates = pd.DataFrame(
+        {
+            "east_m": [0.0, 10.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+            "cat_prob_uav": pd.Series([np.array([0.99]), 0.4], dtype=object),
+            "track_id": ["malformed-array", "valid-below-threshold"],
+        }
+    )
+
+    selected = catprob_candidate_pool(candidates, 0.5)
+
+    assert selected["track_id"].tolist() == ["valid-below-threshold"]
