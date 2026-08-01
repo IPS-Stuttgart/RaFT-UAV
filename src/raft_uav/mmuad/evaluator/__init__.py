@@ -2,9 +2,10 @@
 
 The legacy evaluator implementation lives in the sibling ``evaluator.py`` file.
 This wrapper preserves public imports while overriding official-result
-classification validation, normalizing local result sequence identifiers, and
-using globally consistent one-to-one timestamp matching. Official truth-file
-loading remains permissive so existing local truth archives stay readable.
+classification validation, normalizing local result sequence identifiers,
+rejecting complex local trajectory values, and using globally consistent
+one-to-one timestamp matching. Official truth-file loading remains permissive so
+existing local truth archives stay readable.
 """
 from __future__ import annotations
 
@@ -37,6 +38,19 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_VALIDATE_MMAUD_RESULTS_FRAME = _IMPL.validate_mmaud_results_frame
 _ORIGINAL_EVALUATE_NEAREST_TIME_RESULTS = _IMPL._evaluate_nearest_time_results
 _MISSING_SEQUENCE_ID_STRINGS = {"", "nan", "none", "<na>", "nat"}
+_LOCAL_NUMERIC_RESULT_COLUMNS = (
+    "timestamp",
+    "time_s",
+    "t",
+    "x",
+    "x_m",
+    "y",
+    "y_m",
+    "z",
+    "z_m",
+    "score",
+    "confidence",
+)
 
 
 def _parse_official_result_classification_cell(value: Any) -> int:
@@ -168,10 +182,36 @@ def _normalize_local_result_sequence_ids(frame: pd.DataFrame) -> pd.DataFrame:
     return rows
 
 
+def _is_complex_result_value(value: Any) -> bool:
+    """Return whether one result cell contains a complex numeric payload."""
+
+    if isinstance(value, (complex, np.complexfloating)):
+        return True
+    try:
+        array = np.asanyarray(value)
+    except (TypeError, ValueError):
+        return False
+    return bool(np.iscomplexobj(array))
+
+
+def _reject_complex_local_result_values(frame: pd.DataFrame) -> None:
+    """Reject complex values before float conversion can discard imaginary parts."""
+
+    complex_rows = np.zeros(len(frame), dtype=bool)
+    for column in _LOCAL_NUMERIC_RESULT_COLUMNS:
+        if column not in frame.columns:
+            continue
+        complex_rows |= frame[column].map(_is_complex_result_value).to_numpy(dtype=bool)
+    count = int(complex_rows.sum())
+    if count:
+        raise ValueError(f"mmaud_results contains {count} complex trajectory row(s)")
+
+
 def validate_mmaud_results_frame(frame: pd.DataFrame) -> pd.DataFrame:
     """Validate results after normalizing local sequence identifiers."""
 
     normalized = _normalize_local_result_sequence_ids(frame)
+    _reject_complex_local_result_values(normalized)
     validated = _ORIGINAL_VALIDATE_MMAUD_RESULTS_FRAME(normalized)
     dropped_count = len(normalized) - len(validated)
     if dropped_count:
@@ -391,6 +431,8 @@ globals()["_normalized_official_track5_header"] = _normalized_official_track5_he
 globals()["_validate_unique_official_track5_headers"] = _validate_unique_official_track5_headers
 globals()["_official_track5_column_map"] = _official_track5_column_map
 globals()["_normalize_local_result_sequence_ids"] = _normalize_local_result_sequence_ids
+globals()["_is_complex_result_value"] = _is_complex_result_value
+globals()["_reject_complex_local_result_values"] = _reject_complex_local_result_values
 globals()["_validated_max_time_delta_s"] = _validated_max_time_delta_s
 globals()["_evaluate_nearest_time_results"] = _evaluate_nearest_time_results
 globals()["_read_physical_results_headers"] = _read_physical_results_headers
