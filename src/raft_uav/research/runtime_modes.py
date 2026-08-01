@@ -96,7 +96,13 @@ def segment_flight_phases(frame: pd.DataFrame) -> pd.Series:
             if not np.isfinite(headings[index]):
                 headings[index] = headings[index - 1]
         headings = np.unwrap(headings)
-        turn_rate = np.abs(np.diff(headings, prepend=headings[0]))
+        heading_change = np.abs(np.diff(headings, prepend=headings[0]))
+        turn_rate = np.divide(
+            heading_change,
+            dt,
+            out=np.full_like(heading_change, np.nan),
+            where=np.isfinite(dt),
+        )
         finite_turn_rate = turn_rate[np.isfinite(turn_rate)]
         if finite_turn_rate.size:
             threshold = np.percentile(finite_turn_rate, 90)
