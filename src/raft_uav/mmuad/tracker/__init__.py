@@ -9,12 +9,15 @@ deterministically, and keeping truth interpolation inside the supported time spa
 
 from __future__ import annotations
 
+from dataclasses import replace
 import importlib.util
 from pathlib import Path
 import sys
 
 import numpy as np
 import pandas as pd
+
+from raft_uav.numeric import optional_float
 
 _LEGACY_PATH = Path(__file__).resolve().parent.parent / "tracker.py"
 _LEGACY_NAME = f"{__name__.rsplit('.', 1)[0]}._tracker_legacy"
@@ -76,12 +79,40 @@ _FILTER_HELPER_COLUMNS = (
 )
 
 
+def _normalize_covariance_scale(value: object, *, field_name: str) -> float:
+    """Return a finite non-negative covariance scale."""
+
+    scale = optional_float(value)
+    if scale is None or scale < 0.0:
+        raise ValueError(
+            f"{field_name} must be a finite non-negative real scalar"
+        )
+    return scale
+
+
+def _validated_tracker_config(config: TrackerConfig) -> TrackerConfig:
+    """Normalize covariance scales before they reach Kalman updates."""
+
+    return replace(
+        config,
+        primary_covariance_scale=_normalize_covariance_scale(
+            config.primary_covariance_scale,
+            field_name="primary_covariance_scale",
+        ),
+        secondary_covariance_scale=_normalize_covariance_scale(
+            config.secondary_covariance_scale,
+            field_name="secondary_covariance_scale",
+        ),
+    )
+
+
 def run_mmuad_tracker(candidates, truth=None, *, config=None):
     """Run the tracker without silently replacing invalid falsy configurations."""
 
     resolved_config = TrackerConfig() if config is None else config
     if not isinstance(resolved_config, TrackerConfig):
         raise TypeError("config must be a TrackerConfig or None")
+    resolved_config = _validated_tracker_config(resolved_config)
     return _ORIGINAL_RUN_MMUAD_TRACKER(
         candidates,
         truth,
