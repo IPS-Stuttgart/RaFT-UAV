@@ -2,9 +2,10 @@
 
 The maintained implementation lives in the sibling ``track5_speed_limit.py``
 module. This package preserves the public import path while rejecting malformed
-iteration counts, Boolean pseudo-numbers, non-scalar controls, missing sequence
-identifiers, invalid fixed-grid rows, invalid classification labels, and
-duplicate fixed-grid keys instead of silently coercing or dropping them.
+iteration counts, Boolean pseudo-numbers, non-scalar controls, nested array
+payloads, cyclic object arrays, missing sequence identifiers, invalid fixed-grid
+rows, invalid classification labels, and duplicate fixed-grid keys instead of
+silently coercing or dropping them.
 """
 
 from __future__ import annotations
@@ -43,17 +44,19 @@ _NUMERIC_COLUMNS = (
 
 
 def _finite_scalar(value: object, *, message: str) -> float:
-    """Return one finite, non-Boolean, real scalar value."""
+    """Return one finite, non-Boolean, recursively unwrapped real scalar."""
 
-    if np.ma.is_masked(value):
-        raise ValueError(message)
     scalar = value
-    if isinstance(value, np.ndarray):
-        if value.ndim != 0:
-            raise ValueError(message)
-        scalar = value.item()
-    elif isinstance(value, np.generic):
-        scalar = value.item()
+    seen_arrays: set[int] = set()
+    while isinstance(scalar, (np.ndarray, np.generic)):
+        if isinstance(scalar, np.ndarray):
+            if np.ma.is_masked(scalar) or scalar.ndim != 0:
+                raise ValueError(message)
+            identity = id(scalar)
+            if identity in seen_arrays:
+                raise ValueError(message)
+            seen_arrays.add(identity)
+        scalar = scalar.item()
     if (
         np.ma.is_masked(scalar)
         or isinstance(scalar, (bool, np.bool_))
