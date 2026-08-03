@@ -129,7 +129,9 @@ def position_errors_at_estimates_m(
         estimate_positions_m,
         dimensions=dimensions,
     )
-    truth_times, truth_positions = _prepare_time_position_samples(
+    # Truth is a trajectory, not an emitted-sample stream. Match the interpolation
+    # metrics by keeping the final row when upstream data contains duplicate times.
+    truth_times, truth_positions = _prepare_time_position_series(
         truth_times_s,
         truth_positions_m,
         dimensions=dimensions,
@@ -336,7 +338,6 @@ def summarize_errors(errors_m: np.ndarray) -> dict[str, float | None]:
         "p95_m": float(np.percentile(errors, 95)),
         "max_m": float(np.max(errors)),
     }
-
 def interpolate_positions_at_times(
     reference_times_s: np.ndarray,
     reference_positions_m: np.ndarray,
