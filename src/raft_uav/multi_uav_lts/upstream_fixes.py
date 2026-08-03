@@ -127,6 +127,38 @@ def _patch_inference(text: str) -> str:
         "    opt.mot20 = not opt.fuse_score",
         label="score-fusion compatibility assignment",
     )
+    text = _replace_once(
+        text,
+        "        if opt.with_pos and idx == 0:",
+        "        frame_initial_track_ids = None\n"
+        "        if opt.with_pos and idx == 0:",
+        label="initial-track ID frame state",
+    )
+    text = _replace_once(
+        text,
+        '            prior_box = []\n\n            with open(gt_path, "r") as file:',
+        '            prior_box = []\n'
+        '            frame_initial_track_ids = []\n\n'
+        '            with open(gt_path, "r") as file:',
+        label="initial-track ID collection",
+    )
+    text = _replace_once(
+        text,
+        "                    obj_id = int(values[0])  # Extract ID",
+        "                    obj_id = int(values[1])  # Extract object ID\n"
+        "                    frame_initial_track_ids.append(obj_id)",
+        label="initial-track ID append",
+    )
+    text = _replace_once(
+        text,
+        "                online_targets, slosts_targets = tracker.update(detections, im0)",
+        "                online_targets, slosts_targets = tracker.update(\n"
+        "                    detections,\n"
+        "                    im0,\n"
+        "                    initial_track_ids=frame_initial_track_ids,\n"
+        "                )",
+        label="initial-track ID tracker call",
+    )
     for index in range(4):
         old = f"round(tlwh[{index}], 2)"
         new = f"float(tlwh[{index}])"
@@ -140,6 +172,110 @@ def _patch_inference(text: str) -> str:
 
 
 def _patch_tracker(text: str) -> str:
+    text = _replace_once(
+        text,
+        "    def activate(self, kalman_filter, frame_id):\n"
+        '        """Start a new tracklet"""\n'
+        "        self.kalman_filter = kalman_filter\n"
+        "        self.track_id = self.next_id()",
+        "    def activate(self, kalman_filter, frame_id, forced_track_id=None):\n"
+        '        """Start a tracklet, optionally with a benchmark-supplied ID."""\n'
+        "        self.kalman_filter = kalman_filter\n"
+        "        if forced_track_id is None:\n"
+        "            self.track_id = self.next_id()\n"
+        "        else:\n"
+        "            if isinstance(forced_track_id, (bool, np.bool_)) or not isinstance(\n"
+        "                forced_track_id, (int, np.integer)\n"
+        "            ):\n"
+        '                raise ValueError("forced_track_id must be a positive integer")\n'
+        "            forced_track_id = int(forced_track_id)\n"
+        "            if forced_track_id <= 0:\n"
+        '                raise ValueError("forced_track_id must be a positive integer")\n'
+        "            self.track_id = forced_track_id\n"
+        "            BaseTrack._count = max(BaseTrack._count, forced_track_id)",
+        label="forced track activation",
+    )
+    text = _replace_once(
+        text,
+        "    def update(self, output_results, img):\n"
+        "        self.frame_id += 1\n"
+        "        activated_starcks = []",
+        "    def update(self, output_results, img, initial_track_ids=None):\n"
+        "        self.frame_id += 1\n"
+        "        if initial_track_ids is not None:\n"
+        "            if self.frame_id != 1:\n"
+        "                raise ValueError(\n"
+        '                    "initial_track_ids may only be supplied on tracker frame 1"\n'
+        "                )\n"
+        "            initial_track_ids = list(initial_track_ids)\n"
+        "            if len(initial_track_ids) != len(output_results):\n"
+        "                raise ValueError(\n"
+        '                    "initial_track_ids must match the number of input detections"\n'
+        "                )\n"
+        "            normalized_track_ids = []\n"
+        "            for track_id in initial_track_ids:\n"
+        "                if isinstance(track_id, (bool, np.bool_)) or not isinstance(\n"
+        "                    track_id, (int, np.integer)\n"
+        "                ):\n"
+        "                    raise ValueError(\n"
+        '                        "initial_track_ids must contain positive integers"\n'
+        "                    )\n"
+        "                track_id = int(track_id)\n"
+        "                if track_id <= 0:\n"
+        "                    raise ValueError(\n"
+        '                        "initial_track_ids must contain positive integers"\n'
+        "                    )\n"
+        "                normalized_track_ids.append(track_id)\n"
+        "            if len(set(normalized_track_ids)) != len(normalized_track_ids):\n"
+        '                raise ValueError("initial_track_ids must be unique")\n'
+        "            initial_track_ids = np.asarray(\n"
+        "                normalized_track_ids, dtype=np.int64\n"
+        "            )\n"
+        "        initial_track_ids_keep = None\n"
+        "        activated_starcks = []",
+        label="initial-track ID validation",
+    )
+    text = _replace_once(
+        text,
+        "            features_keep = features[remain_inds]\n"
+        "        else:\n"
+        "            bboxes = []",
+        "            features_keep = features[remain_inds]\n"
+        "            if initial_track_ids is not None:\n"
+        "                if not np.all(lowest_inds) or not np.all(remain_inds):\n"
+        "                    raise ValueError(\n"
+        '                        "every initialized track must pass the tracking thresholds"\n'
+        "                    )\n"
+        "                initial_track_ids_keep = initial_track_ids\n"
+        "        else:\n"
+        "            bboxes = []",
+        label="initial-track ID threshold preservation",
+    )
+    text = _replace_once(
+        text,
+        "        else:\n"
+        "            detections = []\n\n"
+        "        ''' Add newly detected tracklets to tracked_stracks'''",
+        "        else:\n"
+        "            detections = []\n\n"
+        "        if initial_track_ids_keep is not None:\n"
+        "            for detection, forced_track_id in zip(\n"
+        "                detections, initial_track_ids_keep\n"
+        "            ):\n"
+        "                detection.forced_track_id = int(forced_track_id)\n\n"
+        "        ''' Add newly detected tracklets to tracked_stracks'''",
+        label="initial-track ID attachment",
+    )
+    text = _replace_once(
+        text,
+        "            track.activate(self.kalman_filter, self.frame_id)",
+        "            track.activate(\n"
+        "                self.kalman_filter,\n"
+        "                self.frame_id,\n"
+        '                forced_track_id=getattr(track, "forced_track_id", None),\n'
+        "            )",
+        label="forced track activation call",
+    )
     text = _replace_once(
         text,
         "        output_stracks = [track for track in self.tracked_stracks]",
