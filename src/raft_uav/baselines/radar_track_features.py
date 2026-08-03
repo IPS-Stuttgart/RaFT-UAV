@@ -34,6 +34,7 @@ def add_track_level_features(radar: pd.DataFrame, *, window_frames: int = 10) ->
             ["sequence_id", "track_id"],
             sort=False,
             dropna=False,
+            observed=True,
         )
     else:
         track_groups = known_tracks.groupby("track_id", sort=False)
