@@ -338,6 +338,8 @@ def summarize_errors(errors_m: np.ndarray) -> dict[str, float | None]:
         "p95_m": float(np.percentile(errors, 95)),
         "max_m": float(np.max(errors)),
     }
+
+
 def interpolate_positions_at_times(
     reference_times_s: np.ndarray,
     reference_positions_m: np.ndarray,
