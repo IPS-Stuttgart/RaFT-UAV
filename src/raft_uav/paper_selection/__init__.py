@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling ``paper_selection.py``
 module. This package preserves the public import path while excluding malformed
-class probabilities, preserving exact integer-like track identifiers, and
-splitting reused frame counters into distinct continuous-track epochs.
+or out-of-range class probabilities, preserving exact integer-like track
+identifiers, and splitting reused frame counters into distinct continuous-track
+epochs.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ _ORIGINAL_CONTINUOUS_TRACK_SEGMENTS = _LEGACY._continuous_track_segments
 
 
 def _finite_catprob_value(value: object) -> float | None:
-    """Return one finite real probability without discarding an imaginary part."""
+    """Return one finite real probability in [0, 1] without lossy coercion."""
 
     if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
         return None
@@ -48,11 +49,14 @@ def _finite_catprob_value(value: object) -> float | None:
         if not np.isfinite(item.real) or not np.isfinite(item.imag) or item.imag != 0.0:
             return None
         item = item.real
-    return optional_float(item)
+    parsed = optional_float(item)
+    if parsed is None or not 0.0 <= parsed <= 1.0:
+        return None
+    return parsed
 
 
 def _finite_catprob_values(values: pd.Series) -> np.ndarray:
-    """Return finite real class probabilities and mark malformed cells missing."""
+    """Return bounded finite class probabilities and mark malformed cells missing."""
 
     parsed = [_finite_catprob_value(value) for value in values.tolist()]
     return np.asarray(
@@ -65,7 +69,7 @@ def _catprob_candidate_pool(
     candidates: pd.DataFrame,
     catprob_threshold: float | None,
 ) -> pd.DataFrame:
-    """Apply the class-probability gate without accepting malformed values."""
+    """Apply the class-probability gate without accepting invalid values."""
 
     if catprob_threshold is None or "cat_prob_uav" not in candidates.columns:
         return candidates.copy()
@@ -80,7 +84,7 @@ def _catprob_candidate_pool(
 
 
 def _mean_catprob(frame: pd.DataFrame) -> float:
-    """Return the mean of finite real class probabilities for track tie-breaking."""
+    """Return the mean of valid class probabilities for track tie-breaking."""
 
     if "cat_prob_uav" not in frame.columns or frame.empty:
         return 0.0
