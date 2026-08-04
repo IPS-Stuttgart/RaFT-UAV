@@ -40,24 +40,43 @@ def _first_present(row: pd.Series, columns: tuple[str, ...]) -> Any:
     return None
 
 
+def _unwrap_numeric_scalar(value: Any, *, message: str) -> Any:
+    """Recursively unwrap zero-dimensional arrays without scalar coercion."""
+
+    seen_array_ids: set[int] = set()
+    while isinstance(value, np.ndarray):
+        array_id = id(value)
+        if array_id in seen_array_ids:
+            raise ValueError(message)
+        seen_array_ids.add(array_id)
+
+        if np.ma.isMaskedArray(value):
+            if bool(np.ma.getmaskarray(value).any()):
+                raise ValueError(message)
+            value = np.ma.getdata(value)
+            continue
+        if value.ndim != 0:
+            raise ValueError(message)
+        try:
+            value = value.item()
+        except ValueError as exc:
+            raise ValueError(message) from exc
+    return value
+
+
 def _float(value: Any) -> float:
     """Return a finite scalar float without lossy implicit coercion."""
 
     message = f"expected finite float, got {value!r}"
-    if isinstance(value, (bool, np.bool_)):
+    if np.ma.is_masked(value):
         raise ValueError(message)
-    if np.ma.isMaskedArray(value):
-        if bool(np.ma.getmaskarray(value).any()):
-            raise ValueError(message)
-        value = np.ma.getdata(value)
     try:
-        array = np.asarray(value)
+        scalar = _unwrap_numeric_scalar(value, message=message)
     except (TypeError, ValueError, OverflowError):
         raise ValueError(message) from None
-    if array.ndim != 0:
-        raise ValueError(message)
-    scalar = array.item()
     if isinstance(scalar, (bool, np.bool_, complex, np.complexfloating)):
+        raise ValueError(message)
+    if np.ma.is_masked(scalar):
         raise ValueError(message)
     try:
         number = float(scalar)
@@ -79,6 +98,7 @@ globals().update(
     }
 )
 globals()["_first_present"] = _first_present
+globals()["_unwrap_numeric_scalar"] = _unwrap_numeric_scalar
 globals()["_float"] = _float
 
 __doc__ = _IMPL.__doc__
