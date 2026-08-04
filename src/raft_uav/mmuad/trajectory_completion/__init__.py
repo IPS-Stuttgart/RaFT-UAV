@@ -3,15 +3,17 @@
 The maintained implementation lives in the sibling ``trajectory_completion.py``
 module. This package preserves the public import path while parsing serialized
 ``selected_path_update`` values explicitly instead of relying on string
-truthiness, avoiding floating-point undercounting when inferring regular
-timestamps inside short gaps, validating completion controls before they can
-silently disable processing or corrupt finite trajectories, keeping pooled
-kinematic diagnostics from bridging independent trajectories, and preserving
-the final posterior when sequential updates share a timestamp.
+truthiness, normalizing serialized Boolean completion controls, avoiding
+floating-point undercounting when inferring regular timestamps inside short
+gaps, validating completion controls before they can silently disable
+processing or corrupt finite trajectories, keeping pooled kinematic diagnostics
+from bridging independent trajectories, and preserving the final posterior when
+sequential updates share a timestamp.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 import importlib.util
 from pathlib import Path
 import sys
@@ -43,6 +45,7 @@ _TRUE_TEXT = frozenset({"1", "true", "t", "yes", "y", "on"})
 _FALSE_TEXT = frozenset(
     {"0", "false", "f", "no", "n", "off", "", "none", "null", "nan", "<na>", "nat"}
 )
+_CONFIG_FALSE_TEXT = frozenset({"0", "false", "f", "no", "n", "off"})
 _TRAJECTORY_COMPLETION_MODES = frozenset(
     {
         "none",
@@ -89,6 +92,39 @@ def _parse_selected_path_update(value: Any) -> bool:
         return bool(numeric) if np.isfinite(numeric) else False
 
     raise ValueError(f"cannot parse selected_path_update value: {scalar!r}")
+
+
+def _boolean_control(value: Any, *, name: str) -> bool:
+    """Return one strict Boolean control, including common serialized forms."""
+
+    message = f"{name} must be a Boolean scalar"
+    scalar = value
+    seen_array_ids: set[int] = set()
+    while isinstance(scalar, np.ndarray):
+        if scalar.ndim != 0:
+            raise ValueError(message)
+        array_id = id(scalar)
+        if array_id in seen_array_ids:
+            raise ValueError(message)
+        seen_array_ids.add(array_id)
+        scalar = scalar.item()
+
+    if np.ma.is_masked(scalar):
+        raise ValueError(message)
+    if isinstance(scalar, (bool, np.bool_)):
+        return bool(scalar)
+    if isinstance(scalar, str):
+        text = scalar.strip().casefold()
+        if text in _TRUE_TEXT:
+            return True
+        if text in _CONFIG_FALSE_TEXT:
+            return False
+        raise ValueError(message)
+
+    numeric = optional_float(scalar)
+    if numeric in {0.0, 1.0}:
+        return bool(numeric)
+    raise ValueError(message)
 
 
 def _normalized_selected_path_updates(rows: pd.DataFrame) -> pd.DataFrame:
@@ -178,12 +214,34 @@ def _validate_trajectory_completion_config(config: Any) -> None:
     _finite_nonnegative_control(config.max_gap_s, name="max_gap_s")
     _finite_nonnegative_control(config.fixed_lag_s, name="fixed_lag_s")
     _unit_interval_control(config.smoothing_blend, name="smoothing_blend")
+    _boolean_control(
+        config.include_truth_timestamps,
+        name="include_truth_timestamps",
+    )
+    _boolean_control(config.infer_missing_grid, name="infer_missing_grid")
     _finite_nonnegative_control(config.speed_gate_mps, name="speed_gate_mps")
     if config.outlier_replacement_max_gap_s is not None:
         _finite_nonnegative_control(
             config.outlier_replacement_max_gap_s,
             name="outlier_replacement_max_gap_s",
         )
+
+
+def _normalized_trajectory_completion_config(config: Any):
+    """Return a config whose Boolean controls cannot rely on string truthiness."""
+
+    _validate_trajectory_completion_config(config)
+    return replace(
+        config,
+        include_truth_timestamps=_boolean_control(
+            config.include_truth_timestamps,
+            name="include_truth_timestamps",
+        ),
+        infer_missing_grid=_boolean_control(
+            config.infer_missing_grid,
+            name="infer_missing_grid",
+        ),
+    )
 
 
 def _trajectory_diagnostic_groups(estimates: pd.DataFrame):
@@ -304,16 +362,16 @@ def complete_and_smooth_estimates(
     *,
     config: Any = None,
 ):
-    """Complete trajectories after validating every numeric processing control."""
+    """Complete trajectories after validating every processing control."""
 
     resolved_config = (
         _IMPL.TrajectoryCompletionConfig() if config is None else config
     )
-    _validate_trajectory_completion_config(resolved_config)
+    normalized_config = _normalized_trajectory_completion_config(resolved_config)
     return _ORIGINAL_COMPLETE_AND_SMOOTH_ESTIMATES(
         estimates,
         truth,
-        config=resolved_config,
+        config=normalized_config,
     )
 
 
@@ -327,8 +385,16 @@ def _target_times(
 
     original = _IMPL._unique_times(group)
     targets = {float(value) for value in original}
+    include_truth_timestamps = _boolean_control(
+        config.include_truth_timestamps,
+        name="include_truth_timestamps",
+    )
+    infer_missing_grid = _boolean_control(
+        config.infer_missing_grid,
+        name="infer_missing_grid",
+    )
     if (
-        config.include_truth_timestamps
+        include_truth_timestamps
         and truth_rows is not None
         and not truth_rows.empty
     ):
@@ -342,7 +408,7 @@ def _target_times(
                 config.max_gap_s,
             ):
                 targets.add(float(timestamp))
-    elif config.infer_missing_grid:
+    elif infer_missing_grid:
         step = _IMPL._typical_step_s(original)
         if np.isfinite(step) and step > 0.0:
             for left, right in zip(original[:-1], original[1:], strict=False):
@@ -364,6 +430,7 @@ def _target_times(
 
 
 _IMPL._parse_selected_path_update = _parse_selected_path_update
+_IMPL._boolean_control = _boolean_control
 _IMPL._normalized_selected_path_updates = _normalized_selected_path_updates
 _IMPL._estimate_rows = _estimate_rows
 _IMPL._selected_measurements = _selected_measurements
@@ -371,6 +438,9 @@ _IMPL._dedupe_by_time = _dedupe_by_time
 _IMPL._finite_nonnegative_control = _finite_nonnegative_control
 _IMPL._unit_interval_control = _unit_interval_control
 _IMPL._validate_trajectory_completion_config = _validate_trajectory_completion_config
+_IMPL._normalized_trajectory_completion_config = (
+    _normalized_trajectory_completion_config
+)
 _IMPL._speed_gate_summary_row = _speed_gate_summary_row
 _IMPL._trajectory_roughness = _trajectory_roughness
 _IMPL.complete_and_smooth_estimates = complete_and_smooth_estimates
@@ -384,6 +454,7 @@ globals().update(
     }
 )
 globals()["_parse_selected_path_update"] = _parse_selected_path_update
+globals()["_boolean_control"] = _boolean_control
 globals()["_normalized_selected_path_updates"] = _normalized_selected_path_updates
 globals()["_estimate_rows"] = _estimate_rows
 globals()["_selected_measurements"] = _selected_measurements
@@ -392,6 +463,9 @@ globals()["_finite_nonnegative_control"] = _finite_nonnegative_control
 globals()["_unit_interval_control"] = _unit_interval_control
 globals()["_validate_trajectory_completion_config"] = (
     _validate_trajectory_completion_config
+)
+globals()["_normalized_trajectory_completion_config"] = (
+    _normalized_trajectory_completion_config
 )
 globals()["_speed_gate_summary_row"] = _speed_gate_summary_row
 globals()["_trajectory_roughness"] = _trajectory_roughness
