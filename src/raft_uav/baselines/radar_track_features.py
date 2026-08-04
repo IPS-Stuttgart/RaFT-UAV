@@ -9,7 +9,11 @@ from raft_uav.numeric import optional_int
 
 
 def add_track_level_features(radar: pd.DataFrame, *, window_frames: int = 10) -> pd.DataFrame:
-    """Append causal track-level features to normalized radar rows."""
+    """Append causal track-level features to normalized radar rows.
+
+    When ``sequence_id`` is present, temporal history is scoped to each sequence
+    because Fortem track identifiers may be reused between independent flights.
+    """
 
     if radar.empty or "track_id" not in radar.columns:
         return radar.copy()
@@ -24,7 +28,17 @@ def add_track_level_features(radar: pd.DataFrame, *, window_frames: int = 10) ->
     out = out.sort_values(sort_columns) if sort_columns else out
     feature_frames: list[pd.DataFrame] = []
     known_track_ids = out["track_id"].notna()
-    for _, group in out.loc[known_track_ids].groupby("track_id", sort=False):
+    known_tracks = out.loc[known_track_ids]
+    if "sequence_id" in out.columns:
+        track_groups = known_tracks.groupby(
+            ["sequence_id", "track_id"],
+            sort=False,
+            dropna=False,
+            observed=True,
+        )
+    else:
+        track_groups = known_tracks.groupby("track_id", sort=False)
+    for _, group in track_groups:
         feature_frames.append(_features_for_track(group.copy(), window_frames=window_frames))
     for row_index in out.index[~known_track_ids]:
         feature_frames.append(
