@@ -1,0 +1,188 @@
+---
+name: Multi-UAV LTS workstation2 probe
+
+"on":
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/multi-uav-lts-workstation2-probe.yml"
+      - ".github/workflows/multi-uav-lts-guarded-tournament.yml"
+      - "src/raft_uav/multi_uav_lts/tournament.py"
+      - "tests/test_multi_uav_lts_tournament.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multi-uav-lts-workstation2-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+  WORK_ROOT: /mnt/lexar4tb/multi_uav_lts
+  TRUTH_DIR: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels
+  TRAIN_SEQUENCE_ROOT: /mnt/lexar4tb/multi_uav_lts/extracted/TrainImages
+  FIRST_FRAME_LABEL_DIR: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels_FirstFrameOnly
+  RAW_PREDICTION_PATH: /mnt/lexar4tb/multi_uav_lts/outputs/train_baseline/predictions
+  FIXED_POPULATION_OUTPUT: /mnt/lexar4tb/multi_uav_lts/outputs/fixed_population_cv
+  OUTPUT_ROOT: /mnt/lexar4tb/multi_uav_lts/outputs/guarded_tournaments
+  UPSTREAM_PYTHON: /mnt/lexar4tb/multi_uav_lts/venvs/yolov12-botsort-py312/bin/python
+  BOTSORT_ROOT: /mnt/lexar4tb/multi_uav_lts/repos/YOLOv12-BoT-SORT-ReID/BoT-SORT
+
+jobs:
+  probe:
+    name: Probe GPU and mounted LTS data
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out RaFT-UAV
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+
+      - name: Record runner and NVIDIA environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p outputs/multi-uav-lts-workstation2-probe
+          {
+            echo "runner_name=${RUNNER_NAME}"
+            echo "runner_os=${RUNNER_OS}"
+            echo "runner_arch=${RUNNER_ARCH}"
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "git_commit=${GITHUB_SHA}"
+            uname -a
+          } | tee outputs/multi-uav-lts-workstation2-probe/runner.txt
+          nvidia-smi -L \
+            | tee outputs/multi-uav-lts-workstation2-probe/nvidia-smi-L.txt
+          nvidia-smi \
+            --query-gpu=index,name,uuid,driver_version,memory.total,compute_cap \
+            --format=csv,noheader \
+            | tee outputs/multi-uav-lts-workstation2-probe/nvidia-smi.csv
+
+      - name: Probe mounted dataset and experiment paths
+        id: probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          def path_record(raw_path: str) -> dict[str, object]:
+              path = Path(raw_path).expanduser()
+              record: dict[str, object] = {
+                  "path": str(path),
+                  "exists": path.exists(),
+                  "is_dir": path.is_dir(),
+                  "is_file": path.is_file(),
+              }
+              if path.is_dir():
+                  record["txt_file_count"] = len(list(path.glob("*.txt")))
+                  record["directory_count"] = len(
+                      [child for child in path.iterdir() if child.is_dir()]
+                  )
+              return record
+
+          paths = {
+              "work_root": path_record(os.environ["WORK_ROOT"]),
+              "truth_dir": path_record(os.environ["TRUTH_DIR"]),
+              "train_sequence_root": path_record(
+                  os.environ["TRAIN_SEQUENCE_ROOT"]
+              ),
+              "first_frame_label_dir": path_record(
+                  os.environ["FIRST_FRAME_LABEL_DIR"]
+              ),
+              "raw_prediction_path": path_record(
+                  os.environ["RAW_PREDICTION_PATH"]
+              ),
+              "fixed_population_output": path_record(
+                  os.environ["FIXED_POPULATION_OUTPUT"]
+              ),
+              "output_root": path_record(os.environ["OUTPUT_ROOT"]),
+              "upstream_python": path_record(os.environ["UPSTREAM_PYTHON"]),
+              "botsort_inference": path_record(
+                  str(Path(os.environ["BOTSORT_ROOT"]) / "tools/inference.py")
+              ),
+          }
+          truth = Path(os.environ["TRUTH_DIR"])
+          truth_sequences = (
+              sorted(path.stem for path in truth.glob("*.txt"))
+              if truth.is_dir()
+              else []
+          )
+          core_failures = []
+          for key in (
+              "work_root",
+              "truth_dir",
+              "train_sequence_root",
+              "first_frame_label_dir",
+          ):
+              if not paths[key]["is_dir"]:
+                  core_failures.append(f"{key} is not an available directory")
+          if len(truth_sequences) != 102:
+              core_failures.append(
+                  f"truth sequence count is {len(truth_sequences)}, expected 102"
+              )
+          if not paths["upstream_python"]["is_file"]:
+              core_failures.append("upstream_python is unavailable")
+          if not paths["botsort_inference"]["is_file"]:
+              core_failures.append("BoT-SORT tools/inference.py is unavailable")
+
+          raw_ready = bool(
+              paths["raw_prediction_path"]["is_dir"]
+              or paths["raw_prediction_path"]["is_file"]
+          )
+          payload = {
+              "schema": "raft-uav-lts-workstation2-probe-v1",
+              "runner_name": os.environ.get("RUNNER_NAME"),
+              "git_sha": os.environ.get("GITHUB_SHA"),
+              "core_ready": not core_failures,
+              "core_failures": core_failures,
+              "existing_raw_predictions_ready": raw_ready,
+              "truth_sequence_count": len(truth_sequences),
+              "truth_sequences": truth_sequences,
+              "paths": paths,
+          }
+          output = Path("outputs/multi-uav-lts-workstation2-probe/probe.json")
+          output.write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"core_ready={str(not core_failures).lower()}\n")
+              handle.write(f"raw_ready={str(raw_ready).lower()}\n")
+              handle.write(f"truth_sequence_count={len(truth_sequences)}\n")
+          if core_failures:
+              raise SystemExit("; ".join(core_failures))
+          PY
+
+      - name: Publish probe summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Multi-UAV LTS workstation2 probe"
+            echo
+            echo "- Runner: \`${RUNNER_NAME}\`"
+            echo "- Core data and toolchain ready: \`${{ steps.probe.outputs.core_ready || 'unknown' }}\`"
+            echo "- Existing raw predictions ready: \`${{ steps.probe.outputs.raw_ready || 'unknown' }}\`"
+            echo "- Truth sequences: \`${{ steps.probe.outputs.truth_sequence_count || 'unknown' }}\`"
+            echo "- This pull-request job performs no model inference or tournament evaluation."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload probe evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: multi-uav-lts-workstation2-probe-${{ github.run_id }}
+          path: outputs/multi-uav-lts-workstation2-probe/
+          if-no-files-found: error
+          retention-days: 30
