@@ -18,6 +18,9 @@ from raft_uav.baselines._imm_transition_validation_patch import (
 from raft_uav.baselines._innovation_diagnostic_record_patch import (
     apply_innovation_diagnostic_record_patch,
 )
+from raft_uav.baselines._learned_radar_duplicate_index_patch import (
+    apply_learned_radar_duplicate_index_patch,
+)
 from raft_uav.baselines._learned_radar_std_validation_patch import (
     apply_learned_radar_std_validation_patch,
 )
@@ -53,6 +56,7 @@ _learned_radar_association = import_module(
 _stateful_learned_radar_association = import_module(
     "raft_uav.baselines.stateful_learned_radar_association"
 )
+apply_learned_radar_duplicate_index_patch(_learned_radar_association)
 apply_learned_radar_std_validation_patch(
     _learned_radar_association,
     _stateful_learned_radar_association,
