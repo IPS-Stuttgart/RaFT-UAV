@@ -32,3 +32,16 @@ def test_estimate_fit_wrapper_does_not_consume_nonseekable_stream() -> None:
 
     assert rows.loc[0, "sequence_id"] == "001"
     assert rows.loc[0, "time_s"] == 0.0
+
+
+def test_estimate_fit_wrapper_preserves_padded_id_header_in_nonseekable_stream() -> None:
+    csv_stream = _NonSeekableTextStream(
+        " scene_id ,time_s,state_x_m,state_y_m,state_z_m\n"
+        "001,0.0,1.0,2.0,3.0\n"
+    )
+
+    rows = _read_csv_preserving_sequence_id(csv_stream)
+
+    assert rows.columns[0] == "scene_id"
+    assert rows.loc[0, "scene_id"] == "001"
+    assert rows.loc[0, "time_s"] == 0.0
