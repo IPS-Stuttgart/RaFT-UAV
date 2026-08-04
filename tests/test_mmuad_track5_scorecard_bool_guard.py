@@ -153,7 +153,7 @@ def test_track5_scorecard_rejects_complex_boolean_flags(value: object) -> None:
     public_rows = pd.DataFrame(
         {
             "sequence_id": ["seq001"],
-            "matched": pd.Series([value], dtype=object),
+            "matched": pd.Series([value], index=[73], dtype=object),
             "error_3d_m": [1.0],
             "squared_error_3d_m2": [1.0],
         },
