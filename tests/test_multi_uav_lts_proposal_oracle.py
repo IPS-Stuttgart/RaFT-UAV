@@ -111,3 +111,37 @@ def test_reserved_or_path_like_source_names_are_rejected(tmp_path: Path) -> None
             truth,
             tmp_path / "output",
         )
+
+
+def test_zip_proposal_source_is_read_sequence_by_sequence(tmp_path: Path) -> None:
+    from zipfile import ZipFile
+
+    truth = tmp_path / "truth"
+    archive = tmp_path / "proposals.zip"
+    _write(truth / "S.txt", "1,1,0,0,10,10,1,1,1\n")
+    with ZipFile(archive, "w") as handle:
+        handle.writestr("S.txt", "1,1,0,0,10,10,0.5,1,1\n")
+
+    summary = audit_proposal_banks(
+        {"detector": archive},
+        truth,
+        tmp_path / "output",
+        confidence_thresholds=(0.0,),
+        iou_thresholds=(0.5,),
+        oracle_confidence_threshold=0.0,
+        oracle_iou_threshold=0.5,
+    )
+
+    assert summary.coverage[0].matched_count == 1
+
+
+def test_truth_directory_cannot_be_used_as_proposal_input(tmp_path: Path) -> None:
+    truth = tmp_path / "truth"
+    _write(truth / "S.txt", "1,1,0,0,10,10,1,1,1\n")
+
+    with pytest.raises(ValueError, match="must not alias the truth"):
+        audit_proposal_banks(
+            {"detector": truth},
+            truth,
+            tmp_path / "output",
+        )
