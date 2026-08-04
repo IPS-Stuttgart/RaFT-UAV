@@ -69,7 +69,11 @@ def _radar_geometry_cell(
 
     seen: set[int] = set()
     current = value
-    while isinstance(current, np.ndarray) and current.ndim == 0:
+    while True:
+        if np.ma.is_masked(current):
+            return np.nan
+        if not isinstance(current, np.ndarray) or current.ndim != 0:
+            break
         identity = id(current)
         if identity in seen:
             raise ValueError(
@@ -78,9 +82,6 @@ def _radar_geometry_cell(
             )
         seen.add(identity)
         current = current.item()
-
-    if np.ma.is_masked(current):
-        return np.nan
     if isinstance(current, (bool, np.bool_)):
         raise ValueError(
             f"radar geometry column {column!r} contains a Boolean value "
@@ -98,15 +99,19 @@ def _normalize_radar_geometry_cells(frame: pd.DataFrame) -> pd.DataFrame:
     """Inspect geometry cells before pandas or NumPy can coerce their types."""
 
     normalized = frame.copy()
-    for column in normalized.columns:
+    for position, column in enumerate(normalized.columns):
         if str(column).strip().lower() not in _RADAR_GEOMETRY_COLUMNS:
             continue
-        normalized[column] = pd.Series(
-            (
-                _radar_geometry_cell(value, column=column, row=row)
-                for row, value in normalized[column].items()
+        values = normalized.iloc[:, position]
+        normalized.isetitem(
+            position,
+            pd.Series(
+                (
+                    _radar_geometry_cell(value, column=column, row=row)
+                    for row, value in values.items()
+                ),
+                index=normalized.index,
             ),
-            index=normalized.index,
         )
     return normalized
 
