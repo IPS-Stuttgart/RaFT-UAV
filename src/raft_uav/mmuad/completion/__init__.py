@@ -33,23 +33,41 @@ _ORIGINAL_COMPLETION_TEMPLATE_ROWS = _IMPL._completion_template_rows
 _MISSING_SEQUENCE_ID_STRINGS = {"", "nan", "none", "<na>", "nat"}
 
 
+def _finite_real_scalar(value: object, *, message: str) -> float:
+    """Return one finite, non-Boolean, recursively unwrapped real scalar."""
+
+    scalar = value
+    seen_arrays: set[int] = set()
+    while isinstance(scalar, (np.ndarray, np.generic)):
+        if isinstance(scalar, np.ndarray):
+            if np.ma.is_masked(scalar) or scalar.ndim != 0:
+                raise ValueError(message)
+            identity = id(scalar)
+            if identity in seen_arrays:
+                raise ValueError(message)
+            seen_arrays.add(identity)
+        scalar = scalar.item()
+    if (
+        np.ma.is_masked(scalar)
+        or isinstance(scalar, (bool, np.bool_))
+        or isinstance(scalar, (complex, np.complexfloating))
+    ):
+        raise ValueError(message)
+    try:
+        numeric = float(scalar)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(numeric):
+        raise ValueError(message)
+    return numeric
+
+
 def _normalize_max_interpolation_gap_s(value: object) -> float:
     """Return a finite non-negative real scalar interpolation gap."""
 
     message = "max_interpolation_gap_s must be a finite non-negative number"
-    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
-        raise ValueError(message)
-    try:
-        array = np.asarray(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(message) from exc
-    if array.ndim != 0 or array.dtype.kind in {"b", "c"}:
-        raise ValueError(message)
-    try:
-        gap = float(array.item())
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(message) from exc
-    if not np.isfinite(gap) or gap < 0.0:
+    gap = _finite_real_scalar(value, message=message)
+    if gap < 0.0:
         raise ValueError(message)
     return gap
 
@@ -116,6 +134,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_finite_real_scalar"] = _finite_real_scalar
 globals()["_normalize_max_interpolation_gap_s"] = _normalize_max_interpolation_gap_s
 globals()["_completion_template_rows"] = _completion_template_rows
 globals()["_normalize_requested_count"] = _normalize_requested_count
