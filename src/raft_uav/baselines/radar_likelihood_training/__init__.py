@@ -69,9 +69,17 @@ def _student_selected_candidate(
 
     if scored.empty:
         return None
-    score_column = "association_score" if "association_score" in scored.columns else "association_nis"
+    score_column = (
+        "association_score"
+        if "association_score" in scored.columns
+        else "association_nis"
+    )
     best = _single_best_candidate(scored, score_column=score_column)
-    if teacher_association == "prediction-nis" or current_track_id is None or "track_id" not in scored:
+    if (
+        teacher_association == "prediction-nis"
+        or current_track_id is None
+        or "track_id" not in scored
+    ):
         return best
     current = scored.loc[scored["track_id"] == current_track_id]
     if current.empty:
