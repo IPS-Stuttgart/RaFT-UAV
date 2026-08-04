@@ -62,13 +62,14 @@ def test_wrapper_applies_patches_and_forwards_proposal_controls(
     )
     assert captured["proposal_patch"] == captured["upstream"]
     assert captured["arguments"][-2:] == ["--img-size", "1920"]
-    assert captured["command"][-6:] == [
+    assert captured["command"][-7:] == [
         "--proposal-output-dir",
         str(tmp_path / "outputs" / "proposal_baseline" / "proposals"),
         "--proposal-conf-thres",
         "0.001",
         "--proposal-iou-thres",
         "0.95",
+        "--nosave",
     ]
     assert (
         tmp_path / "outputs" / "proposal_baseline" / "proposal_run_summary.json"
