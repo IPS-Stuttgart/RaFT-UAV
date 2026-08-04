@@ -15,6 +15,9 @@ from . import (
 from . import (
     _empirical_covariance_validation_patch as _empirical_covariance_validation_patch,
 )
+from . import (
+    _empirical_covariance_duplicate_truth_patch as _empirical_covariance_duplicate_truth_patch,
+)
 
 __all__ = [
     "BiasCorrectionBank",
