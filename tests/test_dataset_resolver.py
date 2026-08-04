@@ -50,6 +50,18 @@ def test_find_dataset_accepts_persistent_cache_dir(tmp_path: Path) -> None:
     assert module.find_rf_root(tmp_path, max_depth=8) == rf_root
 
 
+def test_find_dataset_prefers_canonical_direct_directory(tmp_path: Path) -> None:
+    module = load_find_dataset_module()
+    assert module.RF_DIR_NAMES == ("RF Sensor and Radar", "RF_Sensor_and_Radar")
+
+    canonical = tmp_path / "RF Sensor and Radar"
+    compatibility = tmp_path / "RF_Sensor_and_Radar"
+    canonical.mkdir()
+    compatibility.mkdir()
+
+    assert module.find_rf_root(tmp_path, max_depth=8) == canonical
+
+
 def test_find_dataset_main_creates_nested_output_dirs(tmp_path: Path, monkeypatch) -> None:
     module = load_find_dataset_module()
     rf_root = tmp_path / "AADM2025Dryad" / "RF Sensor and Radar"
