@@ -9,7 +9,8 @@ interpolation at estimate timestamps. Non-finite and masked nearest-time queries
 are rejected, masked reference timestamps are ignored, masked trajectory and
 error samples are excluded, masked interpolation queries are returned as invalid,
 and complex trajectory and error values are rejected before NumPy can discard
-their imaginary parts.
+their imaginary parts. Boolean pseudo-numbers are rejected instead of being
+silently reinterpreted as 0.0 or 1.0.
 """
 
 from __future__ import annotations
@@ -52,6 +53,24 @@ def _reject_complex_values(value: object, *, name: str) -> None:
             raise ValueError(f"{name} must contain only real values")
 
 
+def _reject_boolean_values(value: object, *, name: str) -> None:
+    """Reject Boolean pseudo-numbers before float conversion maps them to 0/1."""
+
+    masked = np.ma.asarray(value)
+    if np.issubdtype(masked.dtype, np.bool_):
+        raise ValueError(f"{name} must not contain Boolean values")
+    if masked.dtype != object and isinstance(value, np.ndarray):
+        return
+
+    object_masked = np.ma.asarray(value, dtype=object)
+    for item in object_masked.compressed().reshape(-1):
+        if isinstance(item, (bool, np.bool_)) or np.issubdtype(
+            np.asanyarray(item).dtype,
+            np.bool_,
+        ):
+            raise ValueError(f"{name} must not contain Boolean values")
+
+
 def _validate_max_time_delta_s_without_masked(value: object) -> float | None:
     """Reject masked scalar gates before NumPy exposes their hidden payload."""
 
@@ -70,6 +89,8 @@ def _prepare_time_position_samples_without_masked(
 
     _reject_complex_values(times_s, name="times_s")
     _reject_complex_values(positions_m, name="positions_m")
+    _reject_boolean_values(times_s, name="times_s")
+    _reject_boolean_values(positions_m, name="positions_m")
     masked_times = np.ma.asarray(times_s, dtype=float)
     masked_positions = np.ma.asarray(positions_m, dtype=float)
     times = np.asarray(masked_times.filled(np.nan), dtype=float)
@@ -89,6 +110,8 @@ def _nearest_time_indices_with_finite_queries(
 
     _reject_complex_values(reference_times_s, name="reference_times_s")
     _reject_complex_values(query_times_s, name="query_times_s")
+    _reject_boolean_values(reference_times_s, name="reference_times_s")
+    _reject_boolean_values(query_times_s, name="query_times_s")
     reference_masked = np.ma.asarray(reference_times_s, dtype=float).reshape(-1)
     reference = np.asarray(reference_masked.filled(np.nan), dtype=float)
 
@@ -166,6 +189,9 @@ def _interpolate_positions_at_times_with_symmetric_tolerance(
     _reject_complex_values(reference_times_s, name="reference_times_s")
     _reject_complex_values(reference_positions_m, name="reference_positions_m")
     _reject_complex_values(query_times_s, name="query_times_s")
+    _reject_boolean_values(reference_times_s, name="reference_times_s")
+    _reject_boolean_values(reference_positions_m, name="reference_positions_m")
+    _reject_boolean_values(query_times_s, name="query_times_s")
     masked_reference_times = np.ma.asarray(reference_times_s, dtype=float)
     masked_reference_positions = np.ma.asarray(reference_positions_m, dtype=float)
     masked_query = np.ma.asarray(query_times_s, dtype=float).reshape(-1)
@@ -220,6 +246,7 @@ def _summarize_errors_without_masked(
     """Exclude masked errors and reject complex values before summarization."""
 
     _reject_complex_values(errors_m, name="errors_m")
+    _reject_boolean_values(errors_m, name="errors_m")
     masked_errors = np.ma.asarray(errors_m, dtype=float).reshape(-1)
     errors = np.asarray(masked_errors.filled(np.nan), dtype=float)
     return _ORIGINAL_SUMMARIZE_ERRORS(errors)
