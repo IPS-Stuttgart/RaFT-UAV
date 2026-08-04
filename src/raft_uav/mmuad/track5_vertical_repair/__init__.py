@@ -41,19 +41,48 @@ _NUMERIC_COLUMNS = (
 )
 
 
+def _unwrap_zero_dimensional_scalar(value: object, *, message: str) -> object:
+    """Recursively unwrap a scalar array without accepting cycles or vectors."""
+
+    scalar = value
+    seen_arrays: set[int] = set()
+    while isinstance(scalar, np.ndarray):
+        if scalar.ndim != 0 or id(scalar) in seen_arrays:
+            raise ValueError(message)
+        seen_arrays.add(id(scalar))
+        scalar = scalar.item()
+    return scalar
+
+
+def _forbidden_numeric_kind(value: object) -> str | None:
+    """Classify scalar values that NumPy would coerce lossily to real floats."""
+
+    if np.ma.is_masked(value):
+        return None
+    try:
+        scalar = _unwrap_zero_dimensional_scalar(
+            value,
+            message="numeric values must be scalar",
+        )
+    except ValueError:
+        return "non-scalar"
+    if isinstance(scalar, (bool, np.bool_)):
+        return "Boolean"
+    if isinstance(scalar, (complex, np.complexfloating)):
+        return "complex"
+    return None
+
+
 def _finite_real_scalar(value: object, *, message: str) -> float:
     """Return a finite real scalar without array, Boolean, or complex coercion."""
 
-    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+    if np.ma.is_masked(value):
+        raise ValueError(message)
+    scalar = _unwrap_zero_dimensional_scalar(value, message=message)
+    if isinstance(scalar, (bool, np.bool_, complex, np.complexfloating)):
         raise ValueError(message)
     try:
-        scalar = np.asarray(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(message) from exc
-    if scalar.ndim != 0 or scalar.dtype.kind in {"b", "c"}:
-        raise ValueError(message)
-    try:
-        numeric = float(scalar.item())
+        numeric = float(scalar)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(message) from exc
     if not np.isfinite(numeric):
@@ -89,18 +118,32 @@ def _validate_numeric_rows(submission: object) -> None:
         return
 
     boolean_invalid: list[str] = []
+    complex_invalid: list[str] = []
+    nonscalar_invalid: list[str] = []
     nonfinite_invalid: list[str] = []
     for column in _NUMERIC_COLUMNS:
-        boolean = rows[column].map(
-            lambda value: isinstance(value, (bool, np.bool_))
-        ).to_numpy(dtype=bool)
+        kinds = rows[column].map(_forbidden_numeric_kind)
+        boolean = kinds.eq("Boolean").to_numpy(dtype=bool)
+        complex_values = kinds.eq("complex").to_numpy(dtype=bool)
+        nonscalar = kinds.eq("non-scalar").to_numpy(dtype=bool)
+        forbidden = boolean | complex_values | nonscalar
         if boolean.any():
             boolean_invalid.append(
                 f"{column} rows {np.flatnonzero(boolean).tolist()}"
             )
+        if complex_values.any():
+            complex_invalid.append(
+                f"{column} rows {np.flatnonzero(complex_values).tolist()}"
+            )
+        if nonscalar.any():
+            nonscalar_invalid.append(
+                f"{column} rows {np.flatnonzero(nonscalar).tolist()}"
+            )
 
-        numeric = pd.to_numeric(rows[column], errors="coerce")
+        safe_values = rows[column].mask(forbidden, np.nan)
+        numeric = pd.to_numeric(safe_values, errors="coerce")
         finite = np.isfinite(numeric.to_numpy(dtype=float))
+        finite[forbidden] = True
         if not finite.all():
             nonfinite_invalid.append(
                 f"{column} rows {np.flatnonzero(~finite).tolist()}"
@@ -109,6 +152,16 @@ def _validate_numeric_rows(submission: object) -> None:
         raise ValueError(
             "submission contains Boolean numeric values: "
             + "; ".join(boolean_invalid)
+        )
+    if complex_invalid:
+        raise ValueError(
+            "submission contains complex numeric values: "
+            + "; ".join(complex_invalid)
+        )
+    if nonscalar_invalid:
+        raise ValueError(
+            "submission contains non-scalar numeric values: "
+            + "; ".join(nonscalar_invalid)
         )
     if nonfinite_invalid:
         raise ValueError(
@@ -258,6 +311,8 @@ globals().update(
     }
 )
 globals()["_NUMERIC_COLUMNS"] = _NUMERIC_COLUMNS
+globals()["_unwrap_zero_dimensional_scalar"] = _unwrap_zero_dimensional_scalar
+globals()["_forbidden_numeric_kind"] = _forbidden_numeric_kind
 globals()["_finite_real_scalar"] = _finite_real_scalar
 globals()["_positive_integer"] = _positive_integer
 globals()["_finite_nonnegative"] = _finite_nonnegative
