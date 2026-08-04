@@ -38,6 +38,8 @@ python -m raft_uav.multi_uav_lts.proposal_baseline \
 ```
 
 The normal tracker still uses its ordinary `--conf-thres` and `--iou-thres`.
+Image and video visualizations are disabled by default to keep the full training
+run tractable; pass `--save-visualizations` only for a small diagnostic subset.
 The additional proposal pass uses the lower confidence threshold and relaxed
 NMS threshold, converts boxes back to original-image coordinates, and writes
 one LTS-shaped proposal file per sequence under:
