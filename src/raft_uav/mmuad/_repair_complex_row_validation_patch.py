@@ -20,39 +20,33 @@ _NUMERIC_COLUMNS = (
 
 
 def _is_complex_scalar(value: object) -> bool:
-    """Return whether one unmasked scalar contains a complex numeric value."""
+    """Return whether one recursively wrapped scalar contains a complex value."""
 
-    if np.ma.is_masked(value):
-        return False
-    try:
-        scalar = np.asanyarray(value)
-    except (TypeError, ValueError):
-        return False
-    if scalar.ndim != 0:
-        return False
-    if np.ma.isMaskedArray(scalar) and bool(np.ma.getmaskarray(scalar).any()):
-        return False
-    if np.iscomplexobj(scalar):
-        return True
-    if scalar.dtype != object:
-        return False
-    try:
-        item = scalar.item()
-    except (TypeError, ValueError):
-        return False
-    if np.ma.is_masked(item):
-        return False
-    try:
-        item_array = np.asanyarray(item)
-    except (TypeError, ValueError):
-        return isinstance(item, (complex, np.complexfloating))
-    if item_array.ndim != 0:
-        return False
-    if np.ma.isMaskedArray(item_array) and bool(
-        np.ma.getmaskarray(item_array).any()
-    ):
-        return False
-    return bool(np.iscomplexobj(item_array))
+    scalar = value
+    seen_arrays: set[int] = set()
+    while True:
+        if np.ma.is_masked(scalar):
+            return False
+        try:
+            array = np.asanyarray(scalar)
+        except (TypeError, ValueError):
+            return isinstance(scalar, (complex, np.complexfloating))
+        if array.ndim != 0:
+            return False
+        if np.ma.isMaskedArray(array) and bool(np.ma.getmaskarray(array).any()):
+            return False
+        if np.iscomplexobj(array):
+            return True
+        if array.dtype != object:
+            return False
+        array_id = id(array)
+        if array_id in seen_arrays:
+            return False
+        seen_arrays.add(array_id)
+        try:
+            scalar = array.item()
+        except (TypeError, ValueError):
+            return False
 
 
 def _reject_complex_numeric_rows(submission: object) -> None:
