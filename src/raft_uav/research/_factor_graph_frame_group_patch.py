@@ -11,6 +11,33 @@ import pandas as pd
 _PATCH_MARKER = "_raft_uav_groups_factor_graph_frames_by_index_and_time"
 
 
+def _finite_real_scalar(value: object) -> float | None:
+    """Return a finite real scalar without complex-column dtype poisoning."""
+
+    if value is None or np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+        return None
+    try:
+        array = np.asarray(value)
+    except (TypeError, ValueError):
+        return None
+    if array.ndim != 0:
+        return None
+    scalar = array.item()
+    if np.ma.is_masked(scalar) or isinstance(scalar, (bool, np.bool_)):
+        return None
+    if isinstance(scalar, (complex, np.complexfloating)):
+        real = float(np.real(scalar))
+        imaginary = float(np.imag(scalar))
+        if not np.isfinite(real) or not np.isfinite(imaginary) or imaginary != 0.0:
+            return None
+        return real
+    try:
+        number = float(scalar)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if np.isfinite(number) else None
+
+
 def apply_factor_graph_frame_group_patch(module: ModuleType) -> None:
     """Patch factor-graph radar grouping to disambiguate counter reuse."""
 
@@ -30,11 +57,16 @@ def apply_factor_graph_frame_group_patch(module: ModuleType) -> None:
             if column in radar.columns
         ]
         ordered = radar.sort_values(sort_cols).reset_index(drop=True)
-        times = pd.to_numeric(ordered["time_s"], errors="coerce")
+        times = pd.Series(
+            [_finite_real_scalar(value) for value in ordered["time_s"]],
+            index=ordered.index,
+            dtype=float,
+        )
         if "frame_index" in ordered.columns:
-            frame_indices = pd.to_numeric(
-                ordered["frame_index"],
-                errors="coerce",
+            frame_indices = pd.Series(
+                [_finite_real_scalar(value) for value in ordered["frame_index"]],
+                index=ordered.index,
+                dtype=float,
             )
         else:
             frame_indices = pd.Series(

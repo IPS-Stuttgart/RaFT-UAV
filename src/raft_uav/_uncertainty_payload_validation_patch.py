@@ -25,8 +25,10 @@ def _finite_real_scalar(
         scalar = np.asarray(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(error) from exc
-    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+    if scalar.ndim != 0:
         raise ValueError(error)
+    if np.iscomplexobj(scalar):
+        raise ValueError(nonfinite_error or error)
     try:
         number = float(scalar.item())
     except (TypeError, ValueError, OverflowError) as exc:
