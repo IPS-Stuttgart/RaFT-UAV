@@ -27,6 +27,9 @@ from raft_uav.baselines._radar_association_interpolation_patch import (
 from raft_uav.baselines._radar_index_patch_bundle import (
     apply_radar_index_patch_bundle,
 )
+from raft_uav.baselines._radar_update_policy_candidate_count_patch import (
+    apply_radar_update_policy_candidate_count_patch,
+)
 from raft_uav.baselines._robust_map_accepted_matching_patch import (
     apply_robust_map_accepted_matching_patch,
 )
@@ -50,6 +53,11 @@ uniform_ctmc_transition_matrix = _imm.uniform_ctmc_transition_matrix
 apply_radar_association_interpolation_patch()
 apply_robust_map_accepted_matching_patch()
 apply_robust_map_lag_validation_patch()
+
+_radar_update_policy = import_module(
+    "raft_uav.baselines.radar_update_policy"
+)
+apply_radar_update_policy_candidate_count_patch(_radar_update_policy)
 
 _learned_radar_association = import_module(
     "raft_uav.baselines.learned_radar_association"
