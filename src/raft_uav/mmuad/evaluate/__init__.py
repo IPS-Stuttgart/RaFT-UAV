@@ -5,8 +5,8 @@ package preserves the public import path while rejecting ambiguous
 case/whitespace-equivalent submission headers, rejecting malformed required
 numeric rows before the legacy loader can silently drop them, replacing
 nearest-time matching with a cardinality-first one-to-one assignment that is
-independent of CSV row order, and normalizing serialized match flags before
-metrics are summarized.
+independent of CSV row order, retaining authoritative final same-time truth
+snapshots, and normalizing serialized match flags before metrics are summarized.
 """
 
 from __future__ import annotations
@@ -172,6 +172,48 @@ def _validated_max_time_delta_s(value: Any) -> float:
     return time_delta_s
 
 
+def _authoritative_truth_rows(truth: pd.DataFrame) -> pd.DataFrame:
+    """Retain the final normalized same-time truth row per identifiable target."""
+
+    raw = pd.DataFrame(truth).copy()
+    order_column = "_submission_eval_truth_input_order"
+    while order_column in raw.columns:
+        order_column = f"_{order_column}"
+    raw[order_column] = np.arange(len(raw), dtype=np.int64)
+    rows = normalize_truth_columns(raw)
+    if rows.empty:
+        return rows.drop(columns=[order_column], errors="ignore")
+
+    time_key = ["sequence_id", "time_s"]
+    if "track_id" not in rows.columns:
+        return (
+            rows.sort_values([*time_key, order_column], kind="mergesort")
+            .drop_duplicates(time_key, keep="last")
+            .drop(columns=[order_column])
+            .reset_index(drop=True)
+        )
+
+    track_key_column = "_submission_eval_truth_track_key"
+    while track_key_column in rows.columns:
+        track_key_column = f"_{track_key_column}"
+    rows[track_key_column] = rows["track_id"].map(_valid_track_id_text)
+    identified = rows.loc[rows[track_key_column].notna()]
+    anonymous = rows.loc[rows[track_key_column].isna()]
+    identified = (
+        identified.sort_values(
+            [*time_key, track_key_column, order_column],
+            kind="mergesort",
+        )
+        .drop_duplicates([*time_key, track_key_column], keep="last")
+    )
+    return (
+        pd.concat([identified, anonymous], ignore_index=True)
+        .sort_values([*time_key, order_column], kind="mergesort")
+        .drop(columns=[order_column, track_key_column])
+        .reset_index(drop=True)
+    )
+
+
 def match_submission_to_truth(
     submission: pd.DataFrame,
     truth: pd.DataFrame,
@@ -201,7 +243,7 @@ def match_submission_to_truth(
         submission["track_id"] = submission["track_id"].map(
             lambda value: _valid_track_id_text(value) or ""
         )
-    truth = normalize_truth_columns(truth)
+    truth = _authoritative_truth_rows(truth)
     if "track_id" in truth.columns:
         truth["track_id"] = truth["track_id"].map(
             lambda value: _valid_track_id_text(value) or ""
@@ -384,7 +426,7 @@ def metrics_from_matches(
     submission: pd.DataFrame,
     truth: pd.DataFrame,
 ) -> dict[str, Any]:
-    """Compute metrics after deterministic match-flag normalization."""
+    """Compute metrics against the same authoritative truth used for matching."""
 
     normalized = matches.copy()
     if "matched" in normalized.columns:
@@ -392,11 +434,12 @@ def metrics_from_matches(
     return _ORIGINAL_METRICS_FROM_MATCHES(
         normalized,
         submission=submission,
-        truth=truth,
+        truth=_authoritative_truth_rows(truth),
     )
 
 
 _IMPL.load_submission_csv = load_submission_csv
+_IMPL._authoritative_truth_rows = _authoritative_truth_rows
 _IMPL.match_submission_to_truth = match_submission_to_truth
 _IMPL.metrics_from_matches = metrics_from_matches
 
@@ -417,6 +460,7 @@ globals()["_invalid_submission_row_summary"] = _invalid_submission_row_summary
 globals()["_validate_submission_numeric_rows"] = _validate_submission_numeric_rows
 globals()["load_submission_csv"] = load_submission_csv
 globals()["_validated_max_time_delta_s"] = _validated_max_time_delta_s
+globals()["_authoritative_truth_rows"] = _authoritative_truth_rows
 globals()["match_submission_to_truth"] = match_submission_to_truth
 globals()["_optimal_time_assignment"] = _optimal_time_assignment
 globals()["_matched_prediction_row"] = _matched_prediction_row
