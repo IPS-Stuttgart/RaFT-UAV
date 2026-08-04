@@ -111,7 +111,13 @@ def _validate_variance_head(head) -> None:
         raise ValueError(f"unknown {source} uncertainty features: {unknown_features}")
 
     try:
-        coefficients = np.asarray(head.coefficients, dtype=float).reshape(-1)
+        coefficient_values = np.asarray(head.coefficients)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("variance head coefficients must be finite numbers") from exc
+    if np.iscomplexobj(coefficient_values):
+        raise ValueError("variance head coefficients must be finite numbers")
+    try:
+        coefficients = coefficient_values.astype(float, copy=False).reshape(-1)
     except (TypeError, ValueError) as exc:
         raise ValueError("variance head coefficients must be finite numbers") from exc
     if coefficients.size != len(feature_names):
