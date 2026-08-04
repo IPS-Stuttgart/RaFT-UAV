@@ -9,6 +9,7 @@ from raft_uav.research.diagnostics import (
 
 
 def test_track_switch_metrics_sorts_numeric_string_timestamps_numerically() -> None:
+    """Public diagnostic imports must sort numeric strings chronologically."""
     numeric = pd.DataFrame(
         {
             "time_s": [1.0, 2.0, 10.0],
