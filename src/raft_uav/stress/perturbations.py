@@ -188,8 +188,10 @@ def jitter_timestamps(
         .to_numpy()
     )
     group_count = int(group_ids.max()) + 1
-    jitter_by_group = rng.normal(0.0, jitter_std_s, group_count)
-    out["time_s"] = times.to_numpy() + jitter_by_group[group_ids]
+    row_jitter = rng.normal(0.0, jitter_std_s, len(out))
+    first_positions = np.full(group_count, len(group_ids), dtype=int)
+    np.minimum.at(first_positions, group_ids, np.arange(len(group_ids)))
+    out["time_s"] = times.to_numpy() + row_jitter[first_positions[group_ids]]
     return out
 
 
