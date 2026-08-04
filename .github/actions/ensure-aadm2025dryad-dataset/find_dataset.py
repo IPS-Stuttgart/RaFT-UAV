@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-RF_DIR_NAMES = {"RF Sensor and Radar", "RF_Sensor_and_Radar"}
+RF_DIR_NAMES = ("RF Sensor and Radar", "RF_Sensor_and_Radar")
 TRANSIENT_DATASET_PREFIX = "AADM2025Dryad.tmp."
 
 
