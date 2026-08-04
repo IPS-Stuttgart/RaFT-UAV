@@ -141,12 +141,14 @@ def _target_time_candidate_groups(
     target_times: np.ndarray,
     tolerance_s: float,
 ) -> list[tuple[float, pd.DataFrame]]:
-    """Match target times without collapsing a nearest timestamp to one row.
+    """Match each target time to exactly one complete candidate frame.
 
-    Candidate tables commonly contain several hypotheses at each timestamp. If
-    no timestamp lies inside the tolerance window, the legacy fallback selected
-    one row by positional index. Keep every hypothesis from the nearest timestamp
-    instead, matching the grouped behavior used when a timestamp is in tolerance.
+    A tolerance window can contain several candidate timestamps. Combining all
+    rows in that window treats temporally distinct detections as simultaneous and
+    lets top-K selection compare candidates from different frames. Select the
+    nearest timestamp inside the window instead, using stable earlier-time tie
+    breaking, and retain every hypothesis from that timestamp. If the window is
+    empty, retain the existing globally nearest-frame fallback.
     """
 
     groups: list[tuple[float, pd.DataFrame]] = []
@@ -158,10 +160,14 @@ def _target_time_candidate_groups(
         right = int(np.searchsorted(candidate_times, target_time + tolerance, side="right"))
         if right <= left:
             nearest = int(np.argmin(np.abs(candidate_times - target_time)))
-            nearest_time = float(candidate_times[nearest])
-            left = int(np.searchsorted(candidate_times, nearest_time, side="left"))
-            right = int(np.searchsorted(candidate_times, nearest_time, side="right"))
-        groups.append((float(target_time), sequence_rows.iloc[left:right]))
+        else:
+            nearest = left + int(
+                np.argmin(np.abs(candidate_times[left:right] - target_time))
+            )
+        nearest_time = float(candidate_times[nearest])
+        frame_left = int(np.searchsorted(candidate_times, nearest_time, side="left"))
+        frame_right = int(np.searchsorted(candidate_times, nearest_time, side="right"))
+        groups.append((float(target_time), sequence_rows.iloc[frame_left:frame_right]))
     return groups
 
 
