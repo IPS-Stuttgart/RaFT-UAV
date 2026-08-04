@@ -80,7 +80,8 @@ def evaluate_identity(data: PreparedSequence, *, threshold: float) -> IdentityCo
     for gt_ids, tracker_ids, similarity in zip(
         data.gt_ids, data.tracker_ids, data.similarity_scores, strict=True
     ):
-        match_gt, match_tracker = np.nonzero(similarity >= threshold)
+        eligible = (similarity >= threshold) & (similarity > _EPS)
+        match_gt, match_tracker = np.nonzero(eligible)
         if len(match_gt):
             np.add.at(potential, (gt_ids[match_gt], tracker_ids[match_tracker]), 1)
         if len(gt_ids):
