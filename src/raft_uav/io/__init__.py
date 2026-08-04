@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
 
 from raft_uav.io import aerpaw as _aerpaw
 
@@ -13,12 +17,53 @@ _RF_SENSOR_AND_RADAR_DIR_NAMES = (
     "RF_Sensor_and_Radar",
 )
 _ORIGINAL_DISCOVER_ATTR = "_discover_flights_before_rf_preference"
+_ORIGINAL_NORMALIZE_RF_ATTR = "_normalize_rf_before_clock_offset_validation"
+_ORIGINAL_NORMALIZE_RADAR_ATTR = "_normalize_radar_before_clock_offset_validation"
 _original_discover_flights = getattr(
     _aerpaw,
     _ORIGINAL_DISCOVER_ATTR,
     _aerpaw.discover_flights,
 )
+_original_normalize_rf = getattr(
+    _aerpaw,
+    _ORIGINAL_NORMALIZE_RF_ATTR,
+    _aerpaw.normalize_rf,
+)
+_original_normalize_radar = getattr(
+    _aerpaw,
+    _ORIGINAL_NORMALIZE_RADAR_ATTR,
+    _aerpaw.normalize_radar,
+)
 setattr(_aerpaw, _ORIGINAL_DISCOVER_ATTR, _original_discover_flights)
+setattr(_aerpaw, _ORIGINAL_NORMALIZE_RF_ATTR, _original_normalize_rf)
+setattr(_aerpaw, _ORIGINAL_NORMALIZE_RADAR_ATTR, _original_normalize_radar)
+
+
+def _finite_real_scalar(value: object, *, field: str) -> float:
+    """Return a finite real scalar without accepting pseudo-numbers."""
+
+    error = f"{field} must be a finite real scalar"
+    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+        raise ValueError(error)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+        raise ValueError(error)
+    try:
+        item = scalar.item()
+        if np.ma.is_masked(item) or isinstance(
+            item,
+            (bool, np.bool_, complex, np.complexfloating),
+        ):
+            raise ValueError(error)
+        number = float(item)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(number):
+        raise ValueError(error)
+    return number
 
 
 def _find_rf_sensor_and_radar_root(dataset_root: Path) -> Path:
@@ -72,7 +117,51 @@ def _discover_flights(
     return [_prefer_canonical_rf_export(flight) for flight in flights]
 
 
+def _normalize_rf(
+    rf: pd.DataFrame,
+    projector: Any,
+    truth_origin_time: pd.Timestamp,
+    default_std_m: float = 75.0,
+    clock_offset_s: float = _aerpaw.DEFAULT_RF_CLOCK_OFFSET_S,
+) -> pd.DataFrame:
+    """Normalize RF rows after validating the independent clock offset."""
+
+    return _original_normalize_rf(
+        rf,
+        projector,
+        truth_origin_time,
+        default_std_m=default_std_m,
+        clock_offset_s=_finite_real_scalar(
+            clock_offset_s,
+            field="clock_offset_s",
+        ),
+    )
+
+
+def _normalize_radar(
+    radar: pd.DataFrame,
+    projector: Any,
+    truth_origin_time: pd.Timestamp,
+    clock_offset_s: float = _aerpaw.DEFAULT_RADAR_CLOCK_OFFSET_S,
+) -> pd.DataFrame:
+    """Normalize radar rows after validating the independent clock offset."""
+
+    return _original_normalize_radar(
+        radar,
+        projector,
+        truth_origin_time,
+        clock_offset_s=_finite_real_scalar(
+            clock_offset_s,
+            field="clock_offset_s",
+        ),
+    )
+
+
 _aerpaw.find_rf_sensor_and_radar_root = _find_rf_sensor_and_radar_root
 _aerpaw._IMPL.find_rf_sensor_and_radar_root = _find_rf_sensor_and_radar_root
 _aerpaw.discover_flights = _discover_flights
 _aerpaw._IMPL.discover_flights = _discover_flights
+_aerpaw.normalize_rf = _normalize_rf
+_aerpaw._IMPL.normalize_rf = _normalize_rf
+_aerpaw.normalize_radar = _normalize_radar
+_aerpaw._IMPL.normalize_radar = _normalize_radar
