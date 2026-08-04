@@ -56,30 +56,20 @@ def _require_unique_normalized_columns(
     )
 
 
-def load_official_track5_results_frame_from_frame(
-    frame: pd.DataFrame,
-) -> pd.DataFrame:
-    """Normalize official results only when every header is unambiguous."""
+def _is_boolean_scalar_value(value: object) -> bool:
+    """Return whether a cell is a Python, NumPy, or zero-dimensional Boolean."""
 
-    _require_unique_normalized_columns(
-        pd.DataFrame(frame),
-        context="official Track 5 results",
+    if isinstance(value, (bool, np.bool_)):
+        return True
+    return bool(
+        isinstance(value, np.ndarray)
+        and value.ndim == 0
+        and np.issubdtype(value.dtype, np.bool_)
     )
-    return _ORIGINAL_LOAD_OFFICIAL_TRACK5_RESULTS_FRAME_FROM_FRAME(frame)
 
 
-def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
-    """Normalize template rows only when every header is unambiguous."""
-
-    _require_unique_normalized_columns(
-        pd.DataFrame(template),
-        context="Track 5 template",
-    )
-    return _ORIGINAL_NORMALIZE_TEMPLATE_ROWS(template)
-
-
-def _is_complex_classification_value(value: object) -> bool:
-    """Return whether a classification cell has a complex scalar dtype."""
+def _is_complex_scalar_value(value: object) -> bool:
+    """Return whether a cell is a Python, NumPy, or zero-dimensional complex scalar."""
 
     if isinstance(value, (complex, np.complexfloating)):
         return True
@@ -90,11 +80,98 @@ def _is_complex_classification_value(value: object) -> bool:
     )
 
 
+def _validate_real_timestamp_cells(
+    values: pd.Series,
+    *,
+    context: str,
+) -> None:
+    """Reject timestamp cells that pandas would reinterpret as real numbers."""
+
+    raw = pd.Series(values)
+    boolean_mask = raw.map(_is_boolean_scalar_value)
+    if boolean_mask.any():
+        row_position = int(np.flatnonzero(boolean_mask.to_numpy())[0])
+        bad_value = raw.iloc[row_position]
+        raise ValueError(
+            f"{context} Timestamp values must be real numbers, not booleans; "
+            f"got {bad_value!r} at row position {row_position}"
+        )
+
+    complex_mask = raw.map(_is_complex_scalar_value)
+    if complex_mask.any():
+        row_position = int(np.flatnonzero(complex_mask.to_numpy())[0])
+        bad_value = raw.iloc[row_position]
+        raise ValueError(
+            f"{context} Timestamp values must be real numbers, not complex numbers; "
+            f"got {bad_value!r} at row position {row_position}"
+        )
+
+
+def _timestamp_column(
+    frame: pd.DataFrame,
+    *,
+    aliases: tuple[str, ...],
+) -> object | None:
+    """Return the first normalized timestamp alias without truthiness coercion."""
+
+    lower = {str(column).strip().lower(): column for column in frame.columns}
+    for alias in aliases:
+        column = lower.get(alias)
+        if column is not None:
+            return column
+    return None
+
+
+def load_official_track5_results_frame_from_frame(
+    frame: pd.DataFrame,
+) -> pd.DataFrame:
+    """Normalize official results only when headers and timestamp scalars are safe."""
+
+    normalized_frame = pd.DataFrame(frame)
+    _require_unique_normalized_columns(
+        normalized_frame,
+        context="official Track 5 results",
+    )
+    timestamp_column = _timestamp_column(normalized_frame, aliases=("timestamp",))
+    if timestamp_column is not None:
+        _validate_real_timestamp_cells(
+            normalized_frame[timestamp_column],
+            context="official Track 5 results",
+        )
+    return _ORIGINAL_LOAD_OFFICIAL_TRACK5_RESULTS_FRAME_FROM_FRAME(frame)
+
+
+def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
+    """Normalize template rows only when headers and timestamp scalars are safe."""
+
+    normalized_template = pd.DataFrame(template)
+    _require_unique_normalized_columns(
+        normalized_template,
+        context="Track 5 template",
+    )
+    timestamp_column = _timestamp_column(
+        normalized_template,
+        aliases=("timestamp", "time_s"),
+    )
+    if timestamp_column is not None:
+        _validate_real_timestamp_cells(
+            normalized_template[timestamp_column],
+            context="Track 5 template",
+        )
+    return _ORIGINAL_NORMALIZE_TEMPLATE_ROWS(template)
+
+
+def _is_complex_classification_value(value: object) -> bool:
+    """Return whether a classification cell has a complex scalar dtype."""
+
+    return _is_complex_scalar_value(value)
+
+
 def _integer_classification_values(values: pd.Series) -> pd.Series:
     """Return exact finite integer-valued official classification cells."""
 
     raw = pd.Series(values)
-    boolean_mask = raw.map(lambda value: isinstance(value, (bool, np.bool_)))
+    boolean_mask = raw.map(_is_boolean_scalar_value)
     if boolean_mask.any():
         row_index = int(np.flatnonzero(boolean_mask.to_numpy())[0])
         bad_value = raw.iloc[row_index]
@@ -177,6 +254,10 @@ globals().update(
     }
 )
 globals()["_require_unique_normalized_columns"] = _require_unique_normalized_columns
+globals()["_is_boolean_scalar_value"] = _is_boolean_scalar_value
+globals()["_is_complex_scalar_value"] = _is_complex_scalar_value
+globals()["_validate_real_timestamp_cells"] = _validate_real_timestamp_cells
+globals()["_timestamp_column"] = _timestamp_column
 globals()["load_official_track5_results_frame_from_frame"] = (
     load_official_track5_results_frame_from_frame
 )
