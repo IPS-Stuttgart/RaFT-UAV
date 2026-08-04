@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -127,5 +128,40 @@ def test_track5_scorecard_rejects_ambiguous_boolean_flags(value: object) -> None
     with pytest.raises(
         ValueError,
         match=r"contains invalid Boolean values at rows \[42\]",
+    ):
+        build_pose_by_sequence_table(public_rows)
+
+
+def _nested_complex_scalar(value: complex) -> np.ndarray:
+    inner = np.asarray(value)
+    outer = np.empty((), dtype=object)
+    outer[()] = inner
+    return outer
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        1.0 + 0.0j,
+        0.0 + 0.0j,
+        np.complex128(1.0 + 0.0j),
+        np.asarray(0.0 + 0.0j),
+        _nested_complex_scalar(1.0 + 0.0j),
+    ],
+)
+def test_track5_scorecard_rejects_complex_boolean_flags(value: object) -> None:
+    public_rows = pd.DataFrame(
+        {
+            "sequence_id": ["seq001"],
+            "matched": pd.Series([value], dtype=object),
+            "error_3d_m": [1.0],
+            "squared_error_3d_m2": [1.0],
+        },
+        index=[73],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"contains invalid Boolean values at rows \[73\]",
     ):
         build_pose_by_sequence_table(public_rows)
