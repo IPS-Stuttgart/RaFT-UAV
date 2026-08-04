@@ -54,9 +54,64 @@ def _normalize_max_interpolation_gap_s(value: object) -> float:
     return gap
 
 
-def _completion_template_rows(truth_or_template: object) -> pd.DataFrame:
-    """Canonicalize missing-like template sequence ids before grouping."""
+def _is_boolean_template_time(value: object) -> bool:
+    """Return whether a scalar-like template time contains a Boolean."""
 
+    scalar = value
+    seen_array_ids: set[int] = set()
+    while True:
+        if isinstance(scalar, (bool, np.bool_)):
+            return True
+        if isinstance(scalar, np.ndarray):
+            if scalar.ndim != 0:
+                return False
+            identity = id(scalar)
+            if identity in seen_array_ids:
+                return False
+            seen_array_ids.add(identity)
+            if np.issubdtype(scalar.dtype, np.bool_):
+                return True
+            try:
+                scalar = scalar.item()
+            except ValueError:
+                return False
+            continue
+        if isinstance(scalar, np.generic):
+            scalar = scalar.item()
+            continue
+        return False
+
+
+def _reject_boolean_template_timestamps(truth_or_template: object) -> None:
+    """Reject template times that pandas would silently reinterpret as 0 or 1."""
+
+    raw = (
+        truth_or_template.rows
+        if isinstance(truth_or_template, _IMPL.TruthFrame)
+        else pd.DataFrame(truth_or_template)
+    )
+    normalized = _IMPL.normalize_time_column_aliases(
+        pd.DataFrame(raw).copy(),
+        target="time_s",
+    )
+    if "time_s" not in normalized.columns:
+        return
+    boolean_mask = normalized["time_s"].map(_is_boolean_template_time).to_numpy(
+        dtype=bool
+    )
+    if not bool(boolean_mask.any()):
+        return
+    row_position = int(np.flatnonzero(boolean_mask)[0])
+    raise ValueError(
+        "completion template time_s must not contain Boolean values; "
+        f"row position {row_position}"
+    )
+
+
+def _completion_template_rows(truth_or_template: object) -> pd.DataFrame:
+    """Canonicalize missing-like ids after validating template time scalars."""
+
+    _reject_boolean_template_timestamps(truth_or_template)
     rows = _ORIGINAL_COMPLETION_TEMPLATE_ROWS(truth_or_template)
     if rows.empty or "sequence_id" not in rows.columns:
         return rows
@@ -117,6 +172,10 @@ globals().update(
     }
 )
 globals()["_normalize_max_interpolation_gap_s"] = _normalize_max_interpolation_gap_s
+globals()["_is_boolean_template_time"] = _is_boolean_template_time
+globals()["_reject_boolean_template_timestamps"] = (
+    _reject_boolean_template_timestamps
+)
 globals()["_completion_template_rows"] = _completion_template_rows
 globals()["_normalize_requested_count"] = _normalize_requested_count
 globals()["completion_summary"] = completion_summary
