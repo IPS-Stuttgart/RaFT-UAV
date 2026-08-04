@@ -23,6 +23,7 @@ _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_RESAMPLE_ESTIMATES = _IMPL.resample_estimates_to_track5_template
 _ORIGINAL_WRITE_OUTPUTS = _IMPL.write_track5_template_resample_outputs
+_ORIGINAL_NORMALIZE_TEMPLATE_ROWS = _IMPL._normalize_template_rows
 _ORIGINAL_RESAMPLED_POSITION = _IMPL._resampled_position
 _ORIGINAL_RESAMPLED_CLASSIFICATION = _IMPL._resampled_classification
 
@@ -114,6 +115,32 @@ def write_track5_template_resample_outputs(
     )
 
 
+def _is_complex_scalar(value: Any) -> bool:
+    """Return whether a cell carries a complex scalar, including zero imaginary part."""
+
+    if isinstance(value, np.ndarray):
+        if value.ndim != 0:
+            return False
+        value = value.item()
+    return isinstance(value, (complex, np.complexfloating))
+
+
+def _complex_scalar_mask(values: pd.Series) -> pd.Series:
+    """Locate complex scalar cells without coercing them to floating point."""
+
+    series = pd.Series(values, index=values.index)
+    if pd.api.types.is_complex_dtype(series.dtype):
+        return pd.Series(True, index=series.index, dtype=bool)
+    return series.map(_is_complex_scalar).fillna(False).astype(bool)
+
+
+def _invalid_row_message(mask: pd.Series, *, prefix: str) -> ValueError:
+    invalid_indices = mask.index[mask].tolist()
+    preview = ", ".join(str(index) for index in invalid_indices[:5])
+    suffix = ", ..." if len(invalid_indices) > 5 else ""
+    return ValueError(f"{prefix} at row indices: {preview}{suffix}")
+
+
 def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
     """Normalize estimates without silently discarding malformed trajectory rows."""
 
@@ -128,9 +155,21 @@ def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
     classification_column = _IMPL._first_present(rows, _IMPL.CLASSIFICATION_ALIASES)
     if sequence_column is None or time_column is None:
         raise ValueError("estimates must contain sequence and time columns")
+
+    normalized_sequence = _IMPL._normalized_sequence_values(rows[sequence_column])
+    valid_sequence = normalized_sequence.notna()
+    complex_numeric = pd.Series(False, index=rows.index, dtype=bool)
+    for column in (time_column, *coord_columns):
+        complex_numeric |= _complex_scalar_mask(rows[column])
+    if (valid_sequence & complex_numeric).any():
+        raise _invalid_row_message(
+            valid_sequence & complex_numeric,
+            prefix="estimates contain complex time or position values",
+        )
+
     out = pd.DataFrame(
         {
-            "sequence_id": _IMPL._normalized_sequence_values(rows[sequence_column]),
+            "sequence_id": normalized_sequence,
             "time_s": pd.to_numeric(rows[time_column], errors="coerce"),
             "state_x_m": pd.to_numeric(rows[coord_columns[0]], errors="coerce"),
             "state_y_m": pd.to_numeric(rows[coord_columns[1]], errors="coerce"),
@@ -141,24 +180,41 @@ def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
         out["classification"] = _IMPL._normalized_classification_values(
             rows[classification_column]
         )
-    valid_sequence = out["sequence_id"].notna()
     finite_numeric = np.isfinite(
         out[["time_s", "state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
     ).all(axis=1)
     invalid_numeric = valid_sequence & ~finite_numeric
     if invalid_numeric.any():
-        invalid_indices = out.index[invalid_numeric].tolist()
-        preview = ", ".join(str(index) for index in invalid_indices[:5])
-        suffix = ", ..." if len(invalid_indices) > 5 else ""
-        raise ValueError(
-            "estimates contain non-finite or non-numeric time or position values "
-            f"at row indices: {preview}{suffix}"
+        raise _invalid_row_message(
+            invalid_numeric,
+            prefix="estimates contain non-finite or non-numeric time or position values",
         )
     return (
         out.loc[valid_sequence & finite_numeric]
         .sort_values(["sequence_id", "time_s"], kind="mergesort")
         .reset_index(drop=True)
     )
+
+
+def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
+    """Reject complex programmatic timestamps before the legacy real-valued normalization."""
+
+    rows = pd.DataFrame(template).copy()
+    if rows.empty:
+        return _ORIGINAL_NORMALIZE_TEMPLATE_ROWS(rows)
+    sequence_column = _IMPL._first_present(rows, _IMPL.SEQUENCE_ALIASES)
+    time_column = _IMPL._first_present(rows, _IMPL.TIME_ALIASES)
+    if sequence_column is None or time_column is None:
+        return _ORIGINAL_NORMALIZE_TEMPLATE_ROWS(rows)
+
+    valid_sequence = _IMPL._normalized_sequence_values(rows[sequence_column]).notna()
+    complex_time = valid_sequence & _complex_scalar_mask(rows[time_column])
+    if complex_time.any():
+        raise _invalid_row_message(
+            complex_time,
+            prefix="template contains complex timestamp values",
+        )
+    return _ORIGINAL_NORMALIZE_TEMPLATE_ROWS(rows)
 
 
 def _unique_time_rows(group: pd.DataFrame) -> pd.DataFrame:
@@ -226,6 +282,7 @@ def _resampled_classification(
 _IMPL.resample_estimates_to_track5_template = resample_estimates_to_track5_template
 _IMPL.write_track5_template_resample_outputs = write_track5_template_resample_outputs
 _IMPL._normalize_estimate_rows = _normalize_estimate_rows
+_IMPL._normalize_template_rows = _normalize_template_rows
 _IMPL._bool_column = _bool_column
 _IMPL._resampled_position = _resampled_position
 _IMPL._resampled_classification = _resampled_classification
@@ -240,7 +297,11 @@ globals().update(
 globals()["_normalize_optional_nonnegative_float"] = _normalize_optional_nonnegative_float
 globals()["resample_estimates_to_track5_template"] = resample_estimates_to_track5_template
 globals()["write_track5_template_resample_outputs"] = write_track5_template_resample_outputs
+globals()["_is_complex_scalar"] = _is_complex_scalar
+globals()["_complex_scalar_mask"] = _complex_scalar_mask
+globals()["_invalid_row_message"] = _invalid_row_message
 globals()["_normalize_estimate_rows"] = _normalize_estimate_rows
+globals()["_normalize_template_rows"] = _normalize_template_rows
 globals()["_bool_column"] = _bool_column
 globals()["_resampled_position"] = _resampled_position
 globals()["_resampled_classification"] = _resampled_classification
