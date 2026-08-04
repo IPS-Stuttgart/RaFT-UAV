@@ -287,7 +287,7 @@ def _read_numpy_point_cloud(path: Path) -> pd.DataFrame:
         raise ValueError(f"NumPy point cloud must be shape (N, >=3), got {arr.shape}")
     frame = pd.DataFrame({"x_m": arr[:, 0], "y_m": arr[:, 1], "z_m": arr[:, 2]})
     if arr.shape[1] >= 4:
-        frame["time_s"] = arr[:, 3]
+        frame["intensity"] = arr[:, 3]
     return _impl._normalize_point_frame(frame, path=path)
 
 
