@@ -34,6 +34,12 @@ def _submission_and_truth() -> tuple[pd.DataFrame, pd.DataFrame]:
     return submission, truth
 
 
+def _boxed(value: object) -> np.ndarray:
+    boxed = np.empty((), dtype=object)
+    boxed[()] = value
+    return boxed
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -46,6 +52,11 @@ def _submission_and_truth() -> tuple[pd.DataFrame, pd.DataFrame]:
         float("inf"),
         0.5 + 0.0j,
         np.ma.masked,
+        _boxed(True),
+        _boxed(np.bool_(False)),
+        _boxed(_boxed(True)),
+        _boxed(np.complex128(0.5 + 2.0j)),
+        _boxed(np.asarray([0.5])),
     ],
 )
 def test_submission_matching_rejects_invalid_time_gates(value: object) -> None:
@@ -59,6 +70,19 @@ def test_submission_matching_rejects_invalid_time_gates(value: object) -> None:
             submission,
             truth,
             max_time_delta_s=value,
+        )
+
+
+def test_submission_matching_rejects_cyclic_time_gate() -> None:
+    submission, truth = _submission_and_truth()
+    cyclic = np.empty((), dtype=object)
+    cyclic[()] = cyclic
+
+    with pytest.raises(ValueError, match="max_time_delta_s"):
+        match_submission_to_truth(
+            submission,
+            truth,
+            max_time_delta_s=cyclic,
         )
 
 
@@ -85,7 +109,14 @@ def test_optimal_time_assignment_validates_direct_calls() -> None:
         )
 
 
-@pytest.mark.parametrize("value", [np.float64(10.0), np.array(10.0)])
+@pytest.mark.parametrize(
+    "value",
+    [
+        np.float64(10.0),
+        np.array(10.0),
+        _boxed(np.asarray(10.0)),
+    ],
+)
 def test_submission_matching_accepts_real_scalar_like_time_gates(value: object) -> None:
     submission, truth = _submission_and_truth()
 
