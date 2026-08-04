@@ -9,15 +9,18 @@ from raft_uav.multi_uav_lts.tournament import (
 )
 
 
-def _legacy_content_digest(path: Path) -> str:
+def _legacy_content_digest(path: Path) -> tuple[str, int]:
     digest = hashlib.sha256()
+    total_bytes = 0
     files = tuple(child for child in sorted(path.rglob("*")) if child.is_file())
     for file_path in files:
         relative = file_path.relative_to(path).as_posix().encode("utf-8")
+        payload = file_path.read_bytes()
         digest.update(len(relative).to_bytes(8, "big"))
         digest.update(relative)
-        digest.update(file_path.read_bytes())
-    return digest.hexdigest()
+        digest.update(payload)
+        total_bytes += len(payload)
+    return digest.hexdigest(), total_bytes
 
 
 def test_content_digest_frames_each_file_payload(tmp_path: Path) -> None:
@@ -27,17 +30,20 @@ def test_content_digest_frames_each_file_payload(tmp_path: Path) -> None:
     right.mkdir()
 
     payload = b"prediction-payload"
-    forged_next_header = len(b"b").to_bytes(8, "big") + b"b"
-    (left / "a").write_bytes(forged_next_header + payload)
-    (right / "a").write_bytes(b"")
+    header_b = len(b"b").to_bytes(8, "big") + b"b"
+    header_c = len(b"c").to_bytes(8, "big") + b"c"
+    (left / "a").write_bytes(b"")
+    (left / "c").write_bytes(header_b + payload)
+    (right / "a").write_bytes(header_c)
     (right / "b").write_bytes(payload)
 
-    assert _legacy_content_digest(left) == _legacy_content_digest(right)
+    left_legacy = _legacy_content_digest(left)
+    right_legacy = _legacy_content_digest(right)
+    assert left_legacy == right_legacy
 
     left_digest, left_bytes = _content_digest(left)
     right_digest, right_bytes = _content_digest(right)
 
     assert left_digest != right_digest
-    assert left_bytes == len(forged_next_header) + len(payload)
-    assert right_bytes == len(payload)
+    assert left_bytes == right_bytes == len(header_b) + len(payload)
     assert _CONTENT_DIGEST_SCHEMA.endswith("-v2")
