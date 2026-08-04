@@ -59,7 +59,7 @@ def test_record_arrays_rejects_masked_values(field: str, value: object) -> None:
         ("state", np.asarray([0.0, 1.0, 2.0, 3.0, 4.0, True], dtype=object)),
         ("state", np.asarray([0.0, 1.0, 2.0, 3.0, 4.0, np.nan])),
         ("covariance", np.full((6, 6), False)),
-        ("covariance", np.eye(6) * np.inf),
+        ("covariance", np.diag([np.inf, 1.0, 1.0, 1.0, 1.0, 1.0])),
     ],
 )
 def test_record_arrays_rejects_boolean_and_nonfinite_values(
