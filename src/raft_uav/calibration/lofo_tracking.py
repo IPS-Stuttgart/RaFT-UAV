@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.evaluation.metrics import position_errors_m, summarize_errors
+from raft_uav.numeric import optional_float
 
 
 _ESTIMATE_COLUMNS = (
@@ -33,10 +34,13 @@ def tracking_metrics(
 ) -> dict[str, Any]:
     """Compute core tracking metrics for the corrected held-out flight."""
 
-    truth_times = truth["time_s"].to_numpy(dtype=float)
-    truth_positions = truth[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
-    estimate_times = estimates["time_s"].to_numpy(dtype=float)
-    estimate_positions = estimates[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+    # Preserve the original scalar types here. The shared evaluation layer
+    # rejects Boolean and complex pseudo-numbers before converting valid data
+    # to float; eager conversion in this helper would bypass that boundary.
+    truth_times = truth["time_s"].to_numpy()
+    truth_positions = truth[["east_m", "north_m", "up_m"]].to_numpy()
+    estimate_times = estimates["time_s"].to_numpy()
+    estimate_positions = estimates[["east_m", "north_m", "up_m"]].to_numpy()
     return {
         "flight": flight_name,
         "method": "tracklet-viterbi-lofo-time-offset-bias",
@@ -65,15 +69,51 @@ def tracking_metrics(
     }
 
 
+def _finite_record_scalar(value: object, *, field: str) -> float:
+    """Return one finite real tracker-record scalar."""
+
+    number = optional_float(value)
+    if number is None:
+        raise ValueError(f"{field} must be a finite real scalar")
+    return number
+
+
+def _record_state_vector(value: object, *, record_index: int) -> np.ndarray:
+    """Return one validated six-dimensional tracker state."""
+
+    error = (
+        f"record {record_index} state must contain exactly "
+        "6 finite real scalars"
+    )
+    try:
+        state = np.ma.asarray(value, dtype=object)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if state.size != 6:
+        raise ValueError(error)
+
+    values: list[float] = []
+    for component in state.reshape(-1):
+        number = optional_float(component)
+        if number is None:
+            raise ValueError(error)
+        values.append(number)
+    return np.asarray(values, dtype=float)
+
+
 def records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
     """Convert tracker records into the estimates.csv schema used by reports."""
 
     rows = []
-    for record in records:
-        state = np.asarray(record["state"], dtype=float).reshape(6)
+    for record_index, record in enumerate(records):
+        state = _record_state_vector(record["state"], record_index=record_index)
+        time_s = _finite_record_scalar(
+            record["time_s"],
+            field=f"record {record_index} time_s",
+        )
         rows.append(
             {
-                "time_s": float(record["time_s"]),
+                "time_s": time_s,
                 "source": str(record["source"]),
                 "east_m": state[0],
                 "north_m": state[1],
