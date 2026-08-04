@@ -121,12 +121,12 @@ def run_mmuad_tracker(candidates, truth=None, *, config=None):
 
 
 def _candidate_rows_with_optional_defaults(rows: pd.DataFrame) -> pd.DataFrame:
-    """Fill optional columns and normalize values used numerically by the tracker."""
+    """Fill defaults and retain only finite real scalar tracker values."""
 
     out = _ORIGINAL_CANDIDATE_ROWS_WITH_OPTIONAL_DEFAULTS(rows)
     for column in _TRACKER_NUMERIC_COLUMNS:
         if column in out.columns:
-            out[column] = pd.to_numeric(out[column], errors="coerce")
+            out[column] = out[column].map(optional_float)
     return out
 
 
