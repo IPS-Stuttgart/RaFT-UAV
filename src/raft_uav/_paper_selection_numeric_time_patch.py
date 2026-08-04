@@ -13,28 +13,45 @@ from raft_uav.numeric import optional_float
 
 _paper_selection = import_module("raft_uav.paper_selection")
 _PATCH_MARKER = "_raft_uav_paper_numeric_time_patch_applied"
-_ORIGINAL_LARGEST_CONTINUOUS_TRACK_SEGMENT: Callable[[pd.DataFrame], pd.DataFrame] = (
-    _paper_selection._largest_continuous_track_segment
-)
+_ORIGINAL_LARGEST_CONTINUOUS_TRACK_SEGMENT: Callable[
+    [pd.DataFrame], pd.DataFrame
+] = _paper_selection._largest_continuous_track_segment
 _ORIGINAL_SORT_RADAR_ROWS: Callable[[pd.DataFrame], pd.DataFrame] = (
     _paper_selection._sort_radar_rows
 )
+
+
+def _is_missing_scalar(value: object) -> bool:
+    """Return whether one cell is a scalar missing value."""
+
+    if value is None:
+        return True
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(missing, (bool, np.bool_)) and bool(missing)
 
 
 def _numeric_like_strings(values: pd.Series) -> pd.Series:
     """Normalize a wholly numeric serialized column and preserve other payloads."""
 
     materialized = values.tolist()
-    nonmissing = [value for value in materialized if not pd.isna(value)]
+    nonmissing = [
+        value for value in materialized if not _is_missing_scalar(value)
+    ]
     if not nonmissing or not any(isinstance(value, str) for value in nonmissing):
         return values.copy()
 
     parsed = [optional_float(value) for value in materialized]
     for original, numeric in zip(materialized, parsed):
-        if not pd.isna(original) and numeric is None:
+        if not _is_missing_scalar(original) and numeric is None:
             return values.copy()
     return pd.Series(
-        [np.nan if pd.isna(original) else numeric for original, numeric in zip(materialized, parsed)],
+        [
+            np.nan if _is_missing_scalar(original) else numeric
+            for original, numeric in zip(materialized, parsed)
+        ],
         index=values.index,
         dtype=float,
     )
