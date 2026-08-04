@@ -63,10 +63,35 @@ def _finite_nonnegative_scale(value: Any, *, field_name: str) -> float:
     return scale
 
 
+def _boolean_scalar_hidden_in_arrays(value: Any) -> bool:
+    """Return whether zero-dimensional array wrappers contain a Boolean scalar."""
+
+    seen_array_ids: set[int] = set()
+    while isinstance(value, np.ndarray) and value.ndim == 0:
+        array_id = id(value)
+        if array_id in seen_array_ids:
+            return False
+        seen_array_ids.add(array_id)
+        value = value.item()
+    return isinstance(value, bool | np.bool_)
+
+
+def _reject_boolean_values(value: Any, *, field_name: str) -> None:
+    """Reject Boolean pseudo-numbers before float coercion rewrites them as 0/1."""
+
+    try:
+        array = np.asarray(value, dtype=object)
+    except (TypeError, ValueError):
+        return
+    if any(_boolean_scalar_hidden_in_arrays(item) for item in array.flat):
+        raise ValueError(f"{field_name} must contain only real non-Boolean values")
+
+
 def _finite_initial_position(value: Any) -> np.ndarray:
     """Return a finite real 2D, 3D, or 6D initial position/state vector."""
 
     error = "initial_position must contain 2, 3, or 6 finite real values"
+    _reject_boolean_values(value, field_name="initial_position")
     try:
         masked = np.ma.asarray(value)
     except (TypeError, ValueError) as exc:
@@ -108,6 +133,8 @@ def _tracking_measurement_post_init(
 ) -> None:
     _reject_masked_values(self.vector, field_name="measurement vector")
     _reject_masked_values(self.covariance, field_name="measurement covariance")
+    _reject_boolean_values(self.vector, field_name="measurement vector")
+    _reject_boolean_values(self.covariance, field_name="measurement covariance")
     _reject_complex_values(self.vector, field_name="measurement vector")
     _reject_complex_values(self.covariance, field_name="measurement covariance")
     time_s = _finite_timestamp_seconds(self.time_s, field_name="measurement time_s")
@@ -123,6 +150,7 @@ def _tracker_init(
     initial_velocity_std_mps: float = 15.0,
     acceleration_std_mps2: float = 4.0,
 ) -> None:
+    validated_initial_position = _finite_initial_position(initial_position)
     validated_time_s = _finite_timestamp_seconds(
         initial_time_s,
         field_name="initial_time_s",
@@ -141,7 +169,7 @@ def _tracker_init(
     )
     _ORIGINAL_TRACKER_INIT(
         self,
-        initial_position,
+        validated_initial_position,
         validated_time_s,
         initial_position_std_m=validated_position_std_m,
         initial_velocity_std_mps=validated_velocity_std_mps,
