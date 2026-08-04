@@ -304,7 +304,15 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
         with:
           name: multi-uav-lts-proposal-oracle-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.RUN_DIR }}
+          path: |
+            ${{ env.RUN_DIR }}/probe.json
+            ${{ env.RUN_DIR }}/runner.txt
+            ${{ env.RUN_DIR }}/nvidia-smi-L.txt
+            ${{ env.RUN_DIR }}/pip-freeze.txt
+            ${{ env.RUN_DIR }}/*-console.txt
+            ${{ env.RUN_DIR }}/baseline/*.json
+            ${{ env.RUN_DIR }}/baseline/*.csv
+            ${{ env.RUN_DIR }}/oracle/
           if-no-files-found: error
           retention-days: 30
           compression-level: 6
