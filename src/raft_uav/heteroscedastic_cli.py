@@ -10,6 +10,7 @@ and radar association NIS scoring uses each candidate's own covariance.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from inspect import signature
 from pathlib import Path
 import sys
 from threading import RLock
@@ -88,29 +89,33 @@ def heteroscedastic_covariance_hooks(
             return _apply_model_if_available(model, frame, source="radar")
 
         def rf_measurements_to_enu_hook(*args: object, **kwargs: object) -> list[TrackingMeasurement]:
-            frame = args[0] if args else None
+            bound = signature(original_legacy_rf_measurements_to_enu).bind(*args, **kwargs)
+            bound.apply_defaults()
+            frame = bound.arguments["rf"]
             if not isinstance(frame, pd.DataFrame) or "east_m" not in frame.columns:
                 return original_legacy_rf_measurements_to_enu(*args, **kwargs)
             frame = _apply_model_if_available(model, frame, source="rf")
             return rf_measurements_to_enu_with_row_covariance(
                 frame,
-                default_std_m=kwargs.get("default_std_m", 75.0),
+                default_std_m=bound.arguments["default_std_m"],
             )
 
-        def radar_measurements_to_enu_hook(*args: object, **kwargs: object) -> list[TrackingMeasurement]:
-            frame = args[0] if args else None
+        def radar_measurements_to_enu_hook(
+            *args: object,
+            **kwargs: object,
+        ) -> list[TrackingMeasurement]:
+            bound = signature(original_legacy_radar_measurements_to_enu).bind(*args, **kwargs)
+            bound.apply_defaults()
+            frame = bound.arguments["radar"]
             if not isinstance(frame, pd.DataFrame) or "east_m" not in frame.columns:
                 return original_legacy_radar_measurements_to_enu(*args, **kwargs)
             frame = _apply_model_if_available(model, frame, source="radar")
             return radar_measurements_to_enu_with_row_covariance(
                 frame,
-                default_xy_std_m=kwargs.get("default_xy_std_m", 25.0),
-                default_z_std_m=kwargs.get("default_z_std_m", 35.0),
-                default_velocity_std_mps=kwargs.get(
-                    "default_velocity_std_mps",
-                    12.0,
-                ),
-                include_velocity=bool(kwargs.get("include_velocity", False)),
+                default_xy_std_m=bound.arguments["default_xy_std_m"],
+                default_z_std_m=bound.arguments["default_z_std_m"],
+                default_velocity_std_mps=bound.arguments["default_velocity_std_mps"],
+                include_velocity=bound.arguments["include_velocity"],
             )
 
         def run_association_hook(*args: object, **kwargs: object) -> tuple[list[dict[str, object]], pd.DataFrame]:
