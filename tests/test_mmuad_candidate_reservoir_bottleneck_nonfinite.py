@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from raft_uav.mmuad.candidate_reservoir_bottleneck import (
+    BOTTLENECK_ASSIGNMENT,
     BOTTLENECK_UNKNOWN,
     BottleneckConfig,
     build_bottleneck_summary,
@@ -38,6 +39,43 @@ def test_classify_gap_row_treats_nonfinite_metrics_as_missing(
 
     assert result[column] is None
     assert result["primary_bottleneck"] == BOTTLENECK_UNKNOWN
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("mixture_mse_3d_m2", -0.25),
+        ("reservoir_oracle_all_mse_3d_m2", np.float32(-1.0)),
+        ("mixture_mse_3d_m2", np.asarray(-2.0, dtype=object)),
+    ],
+)
+def test_classify_gap_row_treats_negative_mse_as_missing(
+    column: str,
+    value: object,
+) -> None:
+    row = {
+        "mixture_mse_3d_m2": 5.0,
+        "reservoir_oracle_all_mse_3d_m2": 2.0,
+        column: value,
+    }
+
+    result = classify_gap_row(row)
+
+    assert result[column] is None
+    assert result["primary_bottleneck"] == BOTTLENECK_UNKNOWN
+
+
+def test_classify_gap_row_ignores_negative_topk_mse() -> None:
+    result = classify_gap_row(
+        {
+            "mixture_mse_3d_m2": 100.0,
+            "reservoir_oracle_all_mse_3d_m2": 10.0,
+            "reservoir_oracle_top1_mse_3d_m2": -1.0,
+        }
+    )
+
+    assert result["best_reservoir_oracle_topk_mse_3d_m2"] is None
+    assert result["primary_bottleneck"] == BOTTLENECK_ASSIGNMENT
 
 
 def test_write_bottleneck_outputs_emits_strict_json_for_numpy_values(

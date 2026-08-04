@@ -33,9 +33,12 @@ _SPEC.loader.exec_module(_IMPL)
 
 
 def _optional_float(value: Any) -> float | None:
-    """Return a finite scalar float or ``None`` for invalid metrics."""
+    """Return a finite non-negative MSE scalar or ``None`` for invalid metrics."""
 
-    return _shared_optional_float(value)
+    number = _shared_optional_float(value)
+    if number is None or number < 0.0:
+        return None
+    return number
 
 
 def _jsonable(value: Any) -> Any:
