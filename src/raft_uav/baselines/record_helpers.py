@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from raft_uav.numeric import optional_float
+
 
 def _reject_complex_values(value: object, *, name: str) -> None:
     """Reject complex payloads before float conversion can discard information."""
@@ -19,29 +21,40 @@ def _reject_complex_values(value: object, *, name: str) -> None:
 
 
 def _real_array(value: object, *, name: str, shape: tuple[int, ...]) -> np.ndarray:
-    """Return an unmasked real-valued array with the requested shape."""
+    """Return a finite, unmasked real-valued array with the requested shape."""
 
     _reject_complex_values(value, name=name)
     masked = np.ma.asarray(value)
     if bool(np.ma.getmaskarray(masked).any()):
         raise ValueError(f"{name} must not contain masked values")
     try:
-        return np.asarray(masked, dtype=float).reshape(shape)
+        cells = np.asarray(value, dtype=object).reshape(shape)
     except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{name} must have shape {shape} and contain real values") from exc
+        raise ValueError(
+            f"{name} must have shape {shape} and contain finite real values"
+        ) from exc
+    parsed = np.empty(shape, dtype=float)
+    for index, item in np.ndenumerate(cells):
+        number = optional_float(item)
+        if number is None:
+            raise ValueError(
+                f"{name} must have shape {shape} and contain finite real values"
+            )
+        parsed[index] = number
+    return parsed
 
 
 def _real_scalar(value: object, *, name: str) -> float:
-    """Return an unmasked real scalar without discarding information."""
+    """Return a finite, unmasked real scalar without discarding information."""
 
     _reject_complex_values(value, name=name)
     masked = np.ma.asarray(value)
     if masked.ndim != 0 or np.ma.is_masked(masked):
         raise ValueError(f"{name} must be an unmasked real scalar")
-    try:
-        return float(masked.item())
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{name} must be an unmasked real scalar") from exc
+    parsed = optional_float(masked.item())
+    if parsed is None:
+        raise ValueError(f"{name} must be a finite unmasked real scalar")
+    return parsed
 
 
 def record_arrays(records: list[dict[str, object]]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
