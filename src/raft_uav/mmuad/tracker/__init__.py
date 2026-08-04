@@ -4,7 +4,8 @@ The maintained implementation lives in the sibling ``tracker.py`` module. This
 package preserves the public import path while normalizing numeric inputs,
 ignoring unusable timestamps in mobility scoring, preventing blank track IDs
 from becoming false multi-frame identities, ordering same-timestamp updates
-deterministically, and keeping truth interpolation inside the supported time span.
+deterministically, keeping final same-time truth samples, and keeping truth
+interpolation inside the supported time span.
 """
 
 from __future__ import annotations
@@ -307,6 +308,22 @@ def _run_sequence_filter(
     return estimates
 
 
+def _finite_truth_by_time(truth: pd.DataFrame) -> pd.DataFrame:
+    """Return the final finite truth row for every normalized timestamp."""
+
+    columns = ["time_s", "x_m", "y_m", "z_m"]
+    work = truth.loc[:, columns].apply(pd.to_numeric, errors="coerce")
+    finite = np.isfinite(work.to_numpy(dtype=float)).all(axis=1)
+    if not finite.any():
+        return work.iloc[0:0].copy()
+    return (
+        work.loc[finite]
+        .drop_duplicates(subset=["time_s"], keep="last")
+        .sort_values("time_s", kind="mergesort")
+        .reset_index(drop=True)
+    )
+
+
 def add_truth_errors(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
     """Attach interpolated truth errors only inside the finite truth time span."""
 
@@ -352,4 +369,5 @@ _LEGACY._candidate_mobility = _candidate_mobility
 _LEGACY.select_tracklet_path = select_tracklet_path
 _LEGACY.run_mmuad_tracker = run_mmuad_tracker
 _LEGACY._run_sequence_filter = _run_sequence_filter
+_LEGACY._finite_truth_by_time = _finite_truth_by_time
 _LEGACY.add_truth_errors = add_truth_errors
