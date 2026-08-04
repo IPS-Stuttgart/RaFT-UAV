@@ -69,8 +69,22 @@ def segment_flight_phases(frame: pd.DataFrame) -> pd.Series:
 
     if frame.empty:
         return pd.Series(dtype=str)
-    ordered = frame.sort_values("time_s") if "time_s" in frame.columns else frame.copy()
-    times = pd.to_numeric(ordered.get("time_s", pd.Series(range(len(ordered)))), errors="coerce").to_numpy(dtype=float)
+    ordered = frame.copy()
+    if "time_s" in ordered.columns:
+        sort_column = "_raft_uav_numeric_time_s"
+        while sort_column in ordered.columns:
+            sort_column = f"_{sort_column}"
+        ordered[sort_column] = pd.to_numeric(
+            ordered["time_s"], errors="coerce"
+        ).to_numpy(dtype=float)
+        ordered = ordered.sort_values(
+            sort_column,
+            kind="mergesort",
+            na_position="last",
+        )
+        times = ordered.pop(sort_column).to_numpy(dtype=float)
+    else:
+        times = np.arange(len(ordered), dtype=float)
     positions = ordered.loc[:, [c for c in PositionColumns if c in ordered.columns]].to_numpy(dtype=float)
     if positions.shape[1] < 2 or len(ordered) < 3:
         return pd.Series(["unknown"] * len(ordered), index=ordered.index)
