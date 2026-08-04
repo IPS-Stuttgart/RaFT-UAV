@@ -249,7 +249,14 @@ def _count_duplicate_frame_object_rows(text: str, *, parse_int_like) -> int:
     return duplicate_rows
 
 
+def _install_tournament_copy_alias_guard() -> None:
+    from raft_uav.multi_uav_lts._tournament_copy_alias_guard import install
+
+    install()
+
+
 _install_lts_input_output_alias_guard()
 _install_zero_frame_coverage_guard()
 _install_lts_submission_domain_guard()
 _install_lts_duplicate_key_validation_guard()
+_install_tournament_copy_alias_guard()
