@@ -187,8 +187,6 @@ def _nearest_candidate_frame(
 ) -> pd.DataFrame:
     """Return every hypothesis from the single nearest candidate timestamp."""
 
-    if candidates.empty or not {"Sequence", "Timestamp"}.issubset(candidates.columns):
-        return candidates.iloc[0:0].copy()
     sequence_rows = candidates.loc[
         candidates["Sequence"].astype(str) == str(sequence)
     ].copy()
@@ -196,10 +194,7 @@ def _nearest_candidate_frame(
         return sequence_rows
 
     candidate_times = pd.to_numeric(sequence_rows["Timestamp"], errors="coerce")
-    try:
-        target_time = float(target_time_s)
-    except (TypeError, ValueError, OverflowError):
-        return sequence_rows.iloc[0:0].copy()
+    target_time = float(target_time_s)
     finite = np.isfinite(candidate_times.to_numpy(dtype=float))
     if not np.isfinite(target_time) or not bool(finite.any()):
         return sequence_rows.iloc[0:0].copy()
@@ -271,6 +266,11 @@ def candidate_centers_for_results(
     """
 
     rows = _sanitize_candidate_ranking_metadata(candidates)
+    if rows.empty:
+        return _IMPL._empty_centers()
+    for column in ("Sequence", "Timestamp", "x_m", "y_m", "z_m"):
+        if column not in rows.columns:
+            raise ValueError(f"candidate rows missing required column {column!r}")
     scaled, scales = _scale_sequence_scores(rows)
     result_rows = pd.DataFrame(results).copy()
     positions = np.asarray(current_xyz)
@@ -278,8 +278,8 @@ def candidate_centers_for_results(
     for position, (row_index, result_row) in enumerate(result_rows.iterrows()):
         frame = _nearest_candidate_frame(
             scaled,
-            sequence=result_row.get("Sequence"),
-            target_time_s=result_row.get("Timestamp"),
+            sequence=result_row["Sequence"],
+            target_time_s=result_row["Timestamp"],
             tolerance_s=float(time_tolerance_s),
         )
         if frame.empty:
@@ -298,11 +298,11 @@ def candidate_centers_for_results(
             continue
         centers = centers.copy()
         centers["row_index"] = row_index
-        centers["Sequence"] = str(result_row.get("Sequence"))
+        centers["Sequence"] = str(result_row["Sequence"])
         parts.append(centers)
-    centers = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
-    if centers.empty:
-        return centers
+    if not parts:
+        return _IMPL._empty_centers()
+    centers = pd.concat(parts, ignore_index=True)
     factors = np.array(
         [scales.get(str(sequence), 1.0) for sequence in centers["Sequence"]],
         dtype=float,
