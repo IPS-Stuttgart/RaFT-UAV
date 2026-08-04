@@ -354,18 +354,56 @@ def run_experiment(
     return 0
 
 
+def _finite_record_scalar(value: object, *, field: str) -> float:
+    """Return one finite real tracker-record scalar."""
+
+    number = _optional_float(value)
+    if number is None:
+        raise ValueError(f"{field} must be a finite real scalar")
+    return number
+
+
+def _record_state_vector(value: object, *, field: str) -> np.ndarray:
+    """Return one validated six-dimensional tracker state."""
+
+    error = f"{field} must contain exactly 6 finite real scalars"
+    try:
+        state = np.ma.asarray(value, dtype=object)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if state.size != 6:
+        raise ValueError(error)
+
+    values: list[float] = []
+    for component in state.reshape(-1):
+        number = _optional_float(component)
+        if number is None:
+            raise ValueError(error)
+        values.append(number)
+    return np.asarray(values, dtype=float)
+
+
 def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
-    for record in records:
-        state = np.asarray(record["state"], dtype=float).reshape(6)
+    for record_index, record in enumerate(records):
+        state = _record_state_vector(
+            record["state"],
+            field=f"record {record_index} state",
+        )
         filtered_state = record.get("filtered_state")
         filtered = (
-            np.asarray(filtered_state, dtype=float).reshape(6)
+            _record_state_vector(
+                filtered_state,
+                field=f"record {record_index} filtered_state",
+            )
             if filtered_state is not None
             else None
         )
         row = {
-            "time_s": float(record["time_s"]),
+            "time_s": _finite_record_scalar(
+                record["time_s"],
+                field=f"record {record_index} time_s",
+            ),
             "source": str(record["source"]),
             "measurement_dim": int(record.get("measurement_dim", 0)),
             "accepted": bool(record.get("accepted", True)),
@@ -397,7 +435,10 @@ def _records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
         probabilities = record.get("mode_probability_map")
         if isinstance(probabilities, dict):
             for mode_name, probability in probabilities.items():
-                row[f"mode_probability_{str(mode_name).replace('-', '_')}"] = float(probability)
+                field = f"record {record_index} mode probability {mode_name!r}"
+                row[f"mode_probability_{str(mode_name).replace('-', '_')}"] = (
+                    _finite_record_scalar(probability, field=field)
+                )
         rows.append(row)
     return pd.DataFrame.from_records(rows).sort_values("time_s").reset_index(drop=True)
 
