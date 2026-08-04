@@ -15,8 +15,14 @@ def install() -> None:
 
     from raft_uav import uncertainty as uncertainty_module
 
-    original: Callable[..., Any] = uncertainty_module._nearest_time_indices
+    implementation_module = getattr(
+        uncertainty_module,
+        "_legacy",
+        uncertainty_module,
+    )
+    original: Callable[..., Any] = implementation_module._nearest_time_indices
     if getattr(original, _PATCH_MARKER, False):
+        uncertainty_module._nearest_time_indices = original
         return
 
     @wraps(original)
@@ -42,4 +48,5 @@ def install() -> None:
         return authoritative_indices[matched_subset_indices]
 
     setattr(nearest_time_indices, _PATCH_MARKER, True)
+    implementation_module._nearest_time_indices = nearest_time_indices
     uncertainty_module._nearest_time_indices = nearest_time_indices
