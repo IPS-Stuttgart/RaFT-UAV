@@ -31,6 +31,13 @@ def _truth() -> pd.DataFrame:
     )
 
 
+def _nested_complex_scalar(value: complex) -> np.ndarray:
+    inner = np.asarray(value)
+    outer = np.empty((), dtype=object)
+    outer[()] = inner
+    return outer
+
+
 def test_metrics_from_matches_parses_serialized_boolean_flags() -> None:
     matches = pd.DataFrame(
         {
@@ -73,6 +80,40 @@ def test_metrics_from_matches_rejects_ambiguous_flags() -> None:
     with pytest.raises(
         ValueError,
         match=r"matched contains invalid Boolean values at rows \[42\]",
+    ):
+        metrics_from_matches(
+            matches,
+            submission=_submission(1),
+            truth=_truth().iloc[:1].copy(),
+        )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        1.0 + 0.0j,
+        0.0 + 0.0j,
+        np.complex128(1.0 + 0.0j),
+        np.asarray(0.0 + 0.0j),
+        _nested_complex_scalar(1.0 + 0.0j),
+    ],
+)
+def test_metrics_from_matches_rejects_complex_boolean_flags(value: object) -> None:
+    matches = pd.DataFrame(
+        {
+            "sequence_id": ["seq"],
+            "time_s": [0.0],
+            "truth_time_s": [0.0],
+            "matched": pd.Series([value], index=[73], dtype=object),
+            "error_2d_m": [1.0],
+            "error_3d_m": [1.0],
+        },
+        index=[73],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"matched contains invalid Boolean values at rows \[73\]",
     ):
         metrics_from_matches(
             matches,
