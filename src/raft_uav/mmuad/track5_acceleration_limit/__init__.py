@@ -56,19 +56,45 @@ class _Track5AccelerationLimitModule(ModuleType):
             setattr(implementation, name, value)
 
 
+def _unwrap_numeric_scalar(value: object) -> tuple[object, str | None]:
+    """Recursively unwrap one scalar and classify unsafe array payloads."""
+
+    scalar = value
+    seen_arrays: set[int] = set()
+    while True:
+        if np.ma.is_masked(scalar):
+            return scalar, "masked"
+        if isinstance(scalar, (bool, np.bool_)):
+            return scalar, "Boolean"
+        if isinstance(scalar, (complex, np.complexfloating)):
+            return scalar, "complex"
+        if isinstance(scalar, np.ndarray):
+            identity = id(scalar)
+            if identity in seen_arrays:
+                return scalar, "non-scalar"
+            seen_arrays.add(identity)
+            if isinstance(scalar, np.ma.MaskedArray):
+                if bool(np.ma.getmaskarray(scalar).any()):
+                    return scalar, "masked"
+                if scalar.ndim != 0:
+                    return scalar, "non-scalar"
+                scalar = scalar.data
+                continue
+            if scalar.ndim != 0:
+                return scalar, "non-scalar"
+            scalar = scalar.item()
+            continue
+        if isinstance(scalar, np.generic):
+            scalar = scalar.item()
+            continue
+        return scalar, None
+
+
 def _finite_scalar(value: object, *, message: str) -> float:
     """Return a finite non-Boolean scalar float."""
 
-    if np.ma.is_masked(value):
-        raise ValueError(message)
-    scalar = value
-    if isinstance(value, np.ndarray):
-        if value.ndim != 0:
-            raise ValueError(message)
-        scalar = value.item()
-    if np.ma.is_masked(scalar):
-        raise ValueError(message)
-    if isinstance(scalar, (bool, np.bool_)):
+    scalar, kind = _unwrap_numeric_scalar(value)
+    if kind is not None:
         raise ValueError(message)
     try:
         numeric = float(scalar)
@@ -169,35 +195,40 @@ def _validate_sequence_ids(submission: object) -> None:
         )
 
 
-def _validate_numeric_rows(submission: object) -> None:
-    """Reject normalized rows whose numeric cells cannot be represented safely."""
+def _validate_numeric_rows(submission: object) -> pd.DataFrame:
+    """Return normalized rows after rejecting unsafe numeric cell payloads."""
 
     rows = pd.DataFrame(submission).copy()
     if any(column not in rows.columns for column in _NUMERIC_COLUMNS):
-        return
+        return rows
 
-    boolean_invalid: list[str] = []
-    complex_invalid: list[str] = []
+    invalid_by_kind: dict[str, list[str]] = {
+        "Boolean": [],
+        "complex": [],
+        "masked": [],
+        "non-scalar": [],
+    }
     for column in _NUMERIC_COLUMNS:
-        boolean = rows[column].map(
-            lambda value: isinstance(value, (bool, np.bool_))
-        ).to_numpy(dtype=bool)
-        if boolean.any():
-            boolean_invalid.append(f"{column} rows {np.flatnonzero(boolean).tolist()}")
+        normalized_values: list[object] = []
+        invalid_positions: dict[str, list[int]] = {
+            kind: [] for kind in invalid_by_kind
+        }
+        for row_position, value in enumerate(rows[column].tolist()):
+            scalar, kind = _unwrap_numeric_scalar(value)
+            normalized_values.append(scalar)
+            if kind is not None:
+                invalid_positions[kind].append(row_position)
+        rows[column] = normalized_values
+        for kind, positions in invalid_positions.items():
+            if positions:
+                invalid_by_kind[kind].append(f"{column} rows {positions}")
 
-        complex_values = rows[column].map(np.iscomplexobj).to_numpy(dtype=bool)
-        if complex_values.any():
-            row_positions = np.flatnonzero(complex_values).tolist()
-            complex_invalid.append(f"{column} rows {row_positions}")
-
-    if boolean_invalid:
-        raise ValueError(
-            "submission contains Boolean numeric values: " + "; ".join(boolean_invalid)
-        )
-    if complex_invalid:
-        raise ValueError(
-            "submission contains complex numeric values: " + "; ".join(complex_invalid)
-        )
+    for kind in ("Boolean", "complex", "masked", "non-scalar"):
+        invalid = invalid_by_kind[kind]
+        if invalid:
+            raise ValueError(
+                f"submission contains {kind} numeric values: " + "; ".join(invalid)
+            )
 
     nonfinite_invalid: list[str] = []
     for column in _NUMERIC_COLUMNS:
@@ -210,6 +241,7 @@ def _validate_numeric_rows(submission: object) -> None:
             "submission contains non-finite numeric values: "
             + "; ".join(nonfinite_invalid)
         )
+    return rows
 
 
 def _validate_and_normalize_classifications(rows: pd.DataFrame) -> pd.DataFrame:
@@ -288,8 +320,8 @@ def repair_track5_acceleration_kinks(
         repair_blend=repair_blend,
     )
     _validate_sequence_ids(submission)
-    _validate_numeric_rows(submission)
-    normalized = _IMPL._normalized_submission(submission)
+    validated_submission = _validate_numeric_rows(submission)
+    normalized = _IMPL._normalized_submission(validated_submission)
     normalized = _validate_and_normalize_classifications(normalized)
     _validate_unique_fixed_grid_keys(normalized)
     return _ORIGINAL_REPAIR(normalized, **controls)
@@ -332,6 +364,7 @@ globals().update(
     }
 )
 globals()["_NUMERIC_COLUMNS"] = _NUMERIC_COLUMNS
+globals()["_unwrap_numeric_scalar"] = _unwrap_numeric_scalar
 globals()["_finite_scalar"] = _finite_scalar
 globals()["_positive_integer"] = _positive_integer
 globals()["_validated_controls"] = _validated_controls
