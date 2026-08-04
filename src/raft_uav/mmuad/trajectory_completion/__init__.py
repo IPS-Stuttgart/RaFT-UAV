@@ -5,8 +5,9 @@ module. This package preserves the public import path while parsing serialized
 ``selected_path_update`` values explicitly instead of relying on string
 truthiness, avoiding floating-point undercounting when inferring regular
 timestamps inside short gaps, validating completion controls before they can
-silently disable processing or corrupt finite trajectories, and keeping pooled
-kinematic diagnostics from bridging independent trajectories.
+silently disable processing or corrupt finite trajectories, keeping pooled
+kinematic diagnostics from bridging independent trajectories, and preserving
+the final posterior when sequential updates share a timestamp.
 """
 
 from __future__ import annotations
@@ -111,6 +112,38 @@ def _selected_measurements(source: pd.DataFrame) -> pd.DataFrame:
     """Select smoothing measurements after normalizing serialized flags."""
 
     return _ORIGINAL_SELECTED_MEASUREMENTS(_normalized_selected_path_updates(source))
+
+
+def _dedupe_by_time(group: pd.DataFrame) -> pd.DataFrame:
+    """Keep the final filter posterior for each duplicate timestamp.
+
+    Same-timestamp tracker rows are sequential posterior snapshots. Prefer the
+    explicit selected update, then any selected-path row, and otherwise the last
+    snapshot. Coordinate-wise medians create a state the filter never produced.
+    """
+
+    rows = pd.DataFrame(group).sort_values("time_s", kind="mergesort").copy()
+    if not rows["time_s"].duplicated().any():
+        return rows.reset_index(drop=True)
+
+    kept: list[pd.Series] = []
+    for _, same_time in rows.groupby("time_s", sort=True):
+        normalized = _normalized_selected_path_updates(same_time)
+        update_actions = normalized.get(
+            "update_action",
+            pd.Series("", index=normalized.index, dtype=object),
+        ).fillna("").astype(str)
+        selected_updates = update_actions.eq("selected_update")
+        if bool(selected_updates.any()):
+            kept.append(normalized.loc[selected_updates].iloc[-1].copy())
+            continue
+        if "selected_path_update" in normalized.columns:
+            selected_path = normalized["selected_path_update"].astype(bool)
+            if bool(selected_path.any()):
+                kept.append(normalized.loc[selected_path].iloc[-1].copy())
+                continue
+        kept.append(normalized.iloc[-1].copy())
+    return pd.DataFrame(kept).reset_index(drop=True)
 
 
 def _finite_nonnegative_control(value: Any, *, name: str) -> float:
@@ -334,6 +367,7 @@ _IMPL._parse_selected_path_update = _parse_selected_path_update
 _IMPL._normalized_selected_path_updates = _normalized_selected_path_updates
 _IMPL._estimate_rows = _estimate_rows
 _IMPL._selected_measurements = _selected_measurements
+_IMPL._dedupe_by_time = _dedupe_by_time
 _IMPL._finite_nonnegative_control = _finite_nonnegative_control
 _IMPL._unit_interval_control = _unit_interval_control
 _IMPL._validate_trajectory_completion_config = _validate_trajectory_completion_config
@@ -353,6 +387,7 @@ globals()["_parse_selected_path_update"] = _parse_selected_path_update
 globals()["_normalized_selected_path_updates"] = _normalized_selected_path_updates
 globals()["_estimate_rows"] = _estimate_rows
 globals()["_selected_measurements"] = _selected_measurements
+globals()["_dedupe_by_time"] = _dedupe_by_time
 globals()["_finite_nonnegative_control"] = _finite_nonnegative_control
 globals()["_unit_interval_control"] = _unit_interval_control
 globals()["_validate_trajectory_completion_config"] = (
