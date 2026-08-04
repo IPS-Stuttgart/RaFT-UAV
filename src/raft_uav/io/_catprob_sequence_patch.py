@@ -15,6 +15,11 @@ from raft_uav.numeric import optional_float
 
 _aerpaw = import_module("raft_uav.io.aerpaw")
 _ORIGINAL_SELECT_RADAR_MEASUREMENT_ROWS = _aerpaw.select_radar_measurement_rows
+_legacy = getattr(_aerpaw, "_IMPL", None)
+_ORIGINAL_TRUTH_GATED_ROWS = getattr(
+    _legacy if _legacy is not None else _aerpaw,
+    "_truth_gated_rows",
+)
 
 
 def _finite_real_control(value: object, *, name: str) -> float:
@@ -33,6 +38,43 @@ def _nonnegative_real_control(value: object, *, name: str) -> float:
     if number < 0.0:
         raise ValueError(f"{name} must be nonnegative")
     return number
+
+
+def _truth_with_final_duplicate_samples(truth: pd.DataFrame) -> pd.DataFrame:
+    """Keep the final row for every finite numeric-equivalent truth timestamp."""
+
+    if truth.empty or "time_s" not in truth.columns:
+        return truth
+
+    time_keys = pd.to_numeric(truth["time_s"], errors="coerce").to_numpy(dtype=float)
+    final_positions: dict[float, int] = {}
+    for position, time_s in enumerate(time_keys):
+        if np.isfinite(time_s):
+            final_positions[float(time_s)] = position
+
+    keep_positions = [
+        position
+        for position, time_s in enumerate(time_keys)
+        if not np.isfinite(time_s) or final_positions[float(time_s)] == position
+    ]
+    return truth.iloc[keep_positions].copy()
+
+
+@wraps(_ORIGINAL_TRUTH_GATED_ROWS)
+def _truth_gated_rows(
+    radar: pd.DataFrame,
+    truth: pd.DataFrame,
+    truth_gate_m: float,
+    truth_time_gate_s: float,
+) -> pd.DataFrame:
+    """Gate radar rows against the authoritative final same-time truth sample."""
+
+    return _ORIGINAL_TRUTH_GATED_ROWS(
+        radar,
+        _truth_with_final_duplicate_samples(truth),
+        truth_gate_m,
+        truth_time_gate_s,
+    )
 
 
 def _validated_selection_controls(
@@ -273,10 +315,12 @@ def install() -> None:
 
     if not getattr(_aerpaw, "_catprob_sequence_patch_applied", False):
         _aerpaw._catprob_best_per_frame_rows = catprob_best_per_frame_rows
+        _aerpaw._truth_gated_rows = _truth_gated_rows
         _aerpaw.select_radar_measurement_rows = _select_radar_measurement_rows
         legacy = getattr(_aerpaw, "_IMPL", None)
         if legacy is not None:
             legacy._catprob_best_per_frame_rows = catprob_best_per_frame_rows
+            legacy._truth_gated_rows = _truth_gated_rows
             legacy.select_radar_measurement_rows = _select_radar_measurement_rows
         _aerpaw._catprob_sequence_patch_applied = True
     _install_class_probability_label_validation()
