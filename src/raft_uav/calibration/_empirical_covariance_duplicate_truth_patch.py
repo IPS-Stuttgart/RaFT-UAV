@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from raft_uav.calibration import empirical_covariance as _IMPL
+from raft_uav.calibration import empirical_covariance as _PUBLIC_MODULE
 
-_ORIGINAL_NEAREST_TIME_INDICES = _IMPL._nearest_time_indices
+_IMPLEMENTATION_MODULE = getattr(_PUBLIC_MODULE, "_IMPL", _PUBLIC_MODULE)
+_ORIGINAL_NEAREST_TIME_INDICES = _IMPLEMENTATION_MODULE._nearest_time_indices
 _PATCH_MARKER = "_raft_uav_prefers_final_duplicate_covariance_truth"
 
 
@@ -27,6 +28,9 @@ def _nearest_time_indices(
     )
 
 
-setattr(_nearest_time_indices, _PATCH_MARKER, True)
-if not getattr(_IMPL._nearest_time_indices, _PATCH_MARKER, False):
-    _IMPL._nearest_time_indices = _nearest_time_indices
+if getattr(_ORIGINAL_NEAREST_TIME_INDICES, _PATCH_MARKER, False):
+    _PUBLIC_MODULE._nearest_time_indices = _ORIGINAL_NEAREST_TIME_INDICES
+else:
+    setattr(_nearest_time_indices, _PATCH_MARKER, True)
+    _IMPLEMENTATION_MODULE._nearest_time_indices = _nearest_time_indices
+    _PUBLIC_MODULE._nearest_time_indices = _nearest_time_indices
