@@ -8,6 +8,7 @@ from raft_uav.mmuad.schema import CandidateFrame
 
 
 def test_symmetric_optimal_assignment_ignores_input_row_order() -> None:
+    """Exact assignment ties must not depend on candidate DataFrame row order."""
     rows = pd.DataFrame(
         {
             "sequence_id": ["s1"] * 4,
