@@ -5,9 +5,11 @@ The maintained implementation lives in the sibling
 import path while rejecting malformed truth-matching time gates and top-K values
 before they can silently widen, empty, or change the diagnostic. Equal-score
 candidates are ranked with explicit stable tie-break keys so CSV row order cannot
-change top-K oracle attribution. The CLI also reads truth tables through the
-shared text-preserving MMUAD CSV reader so opaque sequence identifiers remain
-aligned with candidate inputs.
+change top-K oracle attribution. Duplicate truth timestamps retain the final
+original row so attribution follows the repository-wide authoritative trajectory
+convention. The CLI also reads truth tables through the shared text-preserving
+MMUAD CSV reader so opaque sequence identifiers remain aligned with candidate
+inputs.
 """
 
 from __future__ import annotations
@@ -105,6 +107,30 @@ def _normalize_top_k_values(values: Sequence[object]) -> tuple[int, ...]:
     return tuple(sorted(set(normalized)))
 
 
+def _normalize_truth_trajectory(truth: pd.DataFrame) -> pd.DataFrame:
+    """Normalize truth and retain the final original row at duplicate times."""
+
+    raw_truth = pd.DataFrame(truth).copy()
+    order_column = "_candidate_oracle_attribution_input_order"
+    while order_column in raw_truth.columns:
+        order_column = f"_{order_column}"
+    raw_truth[order_column] = np.arange(len(raw_truth), dtype=np.int64)
+    truth_rows = _IMPL.normalize_truth_columns(raw_truth)
+    if truth_rows.empty:
+        return truth_rows.drop(columns=[order_column], errors="ignore")
+
+    return (
+        truth_rows.sort_values(
+            ["sequence_id", "time_s", order_column],
+            kind="mergesort",
+        )
+        .drop_duplicates(["sequence_id", "time_s"], keep="last")
+        .sort_values(["sequence_id", "time_s"], kind="mergesort")
+        .drop(columns=[order_column])
+        .reset_index(drop=True)
+    )
+
+
 def _stable_text_column(rows: pd.DataFrame, column: str, *, default: str) -> pd.Series:
     """Return one comparable deterministic text key for candidate ranking."""
 
@@ -156,7 +182,7 @@ def build_candidate_oracle_attribution_tables(
     )
     top_k = _normalize_top_k_values(top_k_values)
     rows = _IMPL.normalize_candidate_columns(pd.DataFrame(candidates).copy())
-    truth_rows = _IMPL.normalize_truth_columns(pd.DataFrame(truth).copy())
+    truth_rows = _normalize_truth_trajectory(truth)
     if rows.empty or truth_rows.empty:
         empty = pd.DataFrame()
         return empty, empty, empty, empty
