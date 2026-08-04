@@ -5,7 +5,36 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from raft_uav.numeric import optional_int
+from raft_uav.numeric import optional_float, optional_int
+
+
+_TRACK_SORT_COLUMNS = ("time_s", "frame_index", "track_index")
+
+
+def _sort_track_rows(rows: pd.DataFrame) -> pd.DataFrame:
+    """Return rows in stable numeric chronology without changing their labels."""
+
+    sort_columns = [column for column in _TRACK_SORT_COLUMNS if column in rows.columns]
+    if not sort_columns:
+        return rows
+
+    sort_keys: dict[str, list[float | None]] = {}
+    key_columns: list[str] = []
+    for position, column in enumerate(sort_columns):
+        key = f"sort_key_{position}"
+        sort_keys[key] = [optional_float(value) for value in rows[column].tolist()]
+        key_columns.append(key)
+
+    row_order = (
+        pd.DataFrame(sort_keys)
+        .sort_values(
+            key_columns,
+            kind="mergesort",
+            na_position="last",
+        )
+        .index.to_numpy()
+    )
+    return rows.iloc[row_order]
 
 
 def add_track_level_features(radar: pd.DataFrame, *, window_frames: int = 10) -> pd.DataFrame:
@@ -23,9 +52,7 @@ def add_track_level_features(radar: pd.DataFrame, *, window_frames: int = 10) ->
     window_frames = normalized_window_frames
 
     original_index = radar.index.copy()
-    out = radar.reset_index(drop=True).copy()
-    sort_columns = [c for c in ("time_s", "frame_index", "track_index") if c in out.columns]
-    out = out.sort_values(sort_columns) if sort_columns else out
+    out = _sort_track_rows(radar.reset_index(drop=True).copy())
     feature_frames: list[pd.DataFrame] = []
     known_track_ids = out["track_id"].notna()
     known_tracks = out.loc[known_track_ids]
@@ -50,7 +77,7 @@ def add_track_level_features(radar: pd.DataFrame, *, window_frames: int = 10) ->
 
 
 def _features_for_track(group: pd.DataFrame, *, window_frames: int) -> pd.DataFrame:
-    group = group.sort_values([c for c in ("time_s", "frame_index", "track_index") if c in group.columns])
+    group = _sort_track_rows(group)
     group["track_age_frames"] = _track_age(group)
     group["track_hit_streak_frames"] = _hit_streak(group)
     group["track_time_since_first_s"] = _time_since_first(group)
@@ -60,12 +87,21 @@ def _features_for_track(group: pd.DataFrame, *, window_frames: int) -> pd.DataFr
     group["track_range_rate_mps"] = _range_rate(group)
     if "cat_prob_uav" in group.columns:
         cat = pd.to_numeric(group["cat_prob_uav"], errors="coerce")
-        group["track_catprob_mean_window"] = cat.rolling(window_frames, min_periods=1).mean().to_numpy(dtype=float)
-        group["track_catprob_min_window"] = cat.rolling(window_frames, min_periods=1).min().to_numpy(dtype=float)
+        group["track_catprob_mean_window"] = cat.rolling(
+            window_frames,
+            min_periods=1,
+        ).mean().to_numpy(dtype=float)
+        group["track_catprob_min_window"] = cat.rolling(
+            window_frames,
+            min_periods=1,
+        ).min().to_numpy(dtype=float)
     else:
         group["track_catprob_mean_window"] = np.nan
         group["track_catprob_min_window"] = np.nan
-    group["track_velocity_smoothness_mps"] = _velocity_smoothness(group, window_frames=window_frames)
+    group["track_velocity_smoothness_mps"] = _velocity_smoothness(
+        group,
+        window_frames=window_frames,
+    )
     return group
 
 
@@ -110,7 +146,10 @@ def _hit_streak(group: pd.DataFrame) -> np.ndarray:
 
 
 def _time_since_first(group: pd.DataFrame) -> np.ndarray:
-    times = pd.to_numeric(group.get("time_s", pd.Series(np.nan, index=group.index)), errors="coerce").to_numpy(dtype=float)
+    times = pd.to_numeric(
+        group.get("time_s", pd.Series(np.nan, index=group.index)),
+        errors="coerce",
+    ).to_numpy(dtype=float)
     if times.size == 0 or not np.isfinite(times[0]):
         return np.full(len(group), np.nan)
     return times - times[0]
@@ -120,7 +159,10 @@ def _frame_gap(group: pd.DataFrame) -> np.ndarray:
     if "frame_index" in group.columns:
         values = pd.to_numeric(group["frame_index"], errors="coerce").to_numpy(dtype=float)
     else:
-        values = pd.to_numeric(group.get("time_s", pd.Series(np.nan, index=group.index)), errors="coerce").to_numpy(dtype=float)
+        values = pd.to_numeric(
+            group.get("time_s", pd.Series(np.nan, index=group.index)),
+            errors="coerce",
+        ).to_numpy(dtype=float)
     gaps = np.r_[0.0, np.diff(values)]
     gaps = np.where(np.isfinite(gaps), gaps, np.nan)
     return np.where(gaps < 0.0, 0.0, gaps)
@@ -140,7 +182,10 @@ def _position_step(group: pd.DataFrame) -> np.ndarray:
 
 def _speed_from_positions(group: pd.DataFrame) -> np.ndarray:
     steps = _position_step(group)
-    times = pd.to_numeric(group.get("time_s", pd.Series(np.nan, index=group.index)), errors="coerce").to_numpy(dtype=float)
+    times = pd.to_numeric(
+        group.get("time_s", pd.Series(np.nan, index=group.index)),
+        errors="coerce",
+    ).to_numpy(dtype=float)
     dt = np.r_[np.nan, np.diff(times)]
     speed = np.divide(steps, dt, out=np.full(len(group), np.nan), where=dt > 0.0)
     speed[0] = np.nan
@@ -158,7 +203,10 @@ def _range_rate(group: pd.DataFrame) -> np.ndarray:
         ranges = np.linalg.norm(positions, axis=1)
     else:
         return np.full(len(group), np.nan)
-    times = pd.to_numeric(group.get("time_s", pd.Series(np.nan, index=group.index)), errors="coerce").to_numpy(dtype=float)
+    times = pd.to_numeric(
+        group.get("time_s", pd.Series(np.nan, index=group.index)),
+        errors="coerce",
+    ).to_numpy(dtype=float)
     dt = np.r_[np.nan, np.diff(times)]
     dr = np.r_[np.nan, np.diff(ranges)]
     return np.divide(dr, dt, out=np.full(len(group), np.nan), where=dt > 0.0)
@@ -170,9 +218,18 @@ def _velocity_smoothness(group: pd.DataFrame, *, window_frames: int) -> np.ndarr
         return np.full(len(group), np.nan)
     velocity = np.column_stack(
         [
-            pd.to_numeric(group["velocity_east_mps"], errors="coerce").to_numpy(dtype=float),
-            pd.to_numeric(group["velocity_north_mps"], errors="coerce").to_numpy(dtype=float),
-            -pd.to_numeric(group["velocity_down_mps"], errors="coerce").to_numpy(dtype=float),
+            pd.to_numeric(
+                group["velocity_east_mps"],
+                errors="coerce",
+            ).to_numpy(dtype=float),
+            pd.to_numeric(
+                group["velocity_north_mps"],
+                errors="coerce",
+            ).to_numpy(dtype=float),
+            -pd.to_numeric(
+                group["velocity_down_mps"],
+                errors="coerce",
+            ).to_numpy(dtype=float),
         ]
     )
     diffs = np.r_[np.full((1, 3), np.nan), np.diff(velocity, axis=0)]
