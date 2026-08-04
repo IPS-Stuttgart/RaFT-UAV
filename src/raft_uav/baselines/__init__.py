@@ -12,6 +12,9 @@ from raft_uav.baselines._imm_measurement_order_patch import (
 from raft_uav.baselines._imm_mode_validation_patch import (
     apply_imm_mode_validation_patch,
 )
+from raft_uav.baselines._imm_radar_duplicate_index_patch import (
+    apply_imm_radar_duplicate_index_patch,
+)
 from raft_uav.baselines._imm_transition_validation_patch import (
     apply_imm_transition_validation_patch,
 )
@@ -35,6 +38,9 @@ apply_imm_measurement_order_patch(_imm)
 apply_imm_mode_validation_patch(_imm)
 apply_imm_transition_validation_patch(_imm)
 apply_innovation_diagnostic_record_patch(_pyrecest_innovation_diagnostics)
+
+_imm_radar_association = import_module("raft_uav.baselines.imm_radar_association")
+apply_imm_radar_duplicate_index_patch(_imm_radar_association)
 
 AsyncInteractingMultipleModelTracker = _imm.AsyncInteractingMultipleModelTracker
 IMMMode = _imm.IMMMode
