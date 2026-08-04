@@ -3,10 +3,12 @@
 The maintained implementation lives in the sibling
 ``radar_oracle_diagnostics.py`` module. This package preserves the public import
 path while keeping pooled sequences and partially indexed radar frames distinct.
+Duplicate truth timestamps follow the shared final-sample trajectory convention.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import importlib.util
 from pathlib import Path
 import sys
@@ -27,6 +29,7 @@ if _SPEC is None or _SPEC.loader is None:  # pragma: no cover
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+_ORIGINAL_INTERPOLATE_TRUTH_POSITIONS = _IMPL.interpolate_truth_positions
 
 
 def _sequence_keys(values: pd.Series) -> pd.Series:
@@ -118,6 +121,43 @@ def _matching_truth_rows(truth: pd.DataFrame, frame: pd.DataFrame) -> pd.DataFra
     return truth.loc[mask].copy()
 
 
+def _truth_with_final_duplicate_samples(truth: pd.DataFrame) -> pd.DataFrame:
+    """Keep the final row at each finite truth timestamp.
+
+    Truth tables can contain sequential posterior snapshots at one timestamp.
+    The final row is the authoritative trajectory sample throughout the shared
+    metric layer; retaining an earlier duplicate here would make oracle
+    interpolation and nearest-sample metrics disagree.
+    """
+
+    if truth.empty or "time_s" not in truth.columns:
+        return truth
+    time_keys = pd.Series(
+        [_optional_float(value) for value in truth["time_s"]],
+        index=truth.index,
+        dtype=float,
+    )
+    finite = time_keys.notna()
+    duplicate = pd.Series(False, index=truth.index, dtype=bool)
+    duplicate.loc[finite] = time_keys.loc[finite].duplicated(keep="last")
+    return truth.loc[~duplicate].copy()
+
+
+def interpolate_truth_positions(
+    truth: pd.DataFrame,
+    query_times_s: Iterable[float],
+    *,
+    max_time_delta_s: float | None = 2.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Interpolate truth after applying the shared final-duplicate convention."""
+
+    return _ORIGINAL_INTERPOLATE_TRUTH_POSITIONS(
+        _truth_with_final_duplicate_samples(truth),
+        query_times_s,
+        max_time_delta_s=max_time_delta_s,
+    )
+
+
 def nearest_candidate_oracle(
     radar: pd.DataFrame,
     truth: pd.DataFrame,
@@ -182,6 +222,7 @@ def nearest_candidate_oracle(
     return selected.sort_values(sort_columns, kind="mergesort").reset_index(drop=True)
 
 
+_IMPL.interpolate_truth_positions = interpolate_truth_positions
 _IMPL._radar_frame_groups = _radar_frame_groups
 _IMPL.nearest_candidate_oracle = nearest_candidate_oracle
 
@@ -196,6 +237,8 @@ globals()["_sequence_keys"] = _sequence_keys
 globals()["_radar_frame_key_values"] = _radar_frame_key_values
 globals()["_radar_frame_groups"] = _radar_frame_groups
 globals()["_matching_truth_rows"] = _matching_truth_rows
+globals()["_truth_with_final_duplicate_samples"] = _truth_with_final_duplicate_samples
+globals()["interpolate_truth_positions"] = interpolate_truth_positions
 globals()["nearest_candidate_oracle"] = nearest_candidate_oracle
 
 __doc__ = _IMPL.__doc__
