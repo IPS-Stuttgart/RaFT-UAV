@@ -3,8 +3,8 @@
 The maintained implementation lives in the sibling
 ``track5_classification_relabel.py`` module. This package preserves the public
 import path while requiring exact integer class labels, genuine sequence
-identifiers, unique official row keys, and valid sequence-class probability
-mass before relabeling.
+identifiers, unique official row keys, valid nearest-time gates, and valid
+sequence-class probability mass before relabeling.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ _SPEC.loader.exec_module(_IMPL)
 
 VALID_CLASS_IDS = _IMPL.VALID_CLASS_IDS
 _ORIGINAL_NORMALIZE_FRAME = _IMPL._normalize_frame
+_ORIGINAL_NEAREST_TIME_RELABEL_MERGE = _IMPL._nearest_time_relabel_merge
 _ORIGINAL_SEQUENCE_PREDICTION_LABELS = _IMPL._sequence_prediction_labels
 
 
@@ -95,11 +96,7 @@ def _validate_unique_row_keys(rows: pd.DataFrame, *, name: str) -> None:
     duplicate = rows.duplicated(subset=["Sequence", "Timestamp"], keep=False)
     if not duplicate.any():
         return
-    keys = (
-        rows.loc[duplicate, ["Sequence", "Timestamp"]]
-        .drop_duplicates()
-        .head(5)
-    )
+    keys = rows.loc[duplicate, ["Sequence", "Timestamp"]].drop_duplicates().head(5)
     examples = [
         (str(row.Sequence), float(row.Timestamp))
         for row in keys.itertuples(index=False)
@@ -123,6 +120,51 @@ def _normalize_frame(frame: pd.DataFrame, *, name: str) -> pd.DataFrame:
     normalized = _ORIGINAL_NORMALIZE_FRAME(rows, name=name)
     _validate_unique_row_keys(normalized, name=name)
     return normalized
+
+
+def _normalize_optional_nonnegative_float(value: Any, *, field: str) -> float | None:
+    """Return an optional finite non-negative scalar with a stable error."""
+
+    if value is None:
+        return None
+    message = f"{field} must be a finite non-negative number"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(message)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if scalar.ndim != 0:
+        raise ValueError(message)
+    item = scalar.item()
+    if isinstance(item, (bool, np.bool_)) or np.ma.is_masked(item) or np.iscomplexobj(item):
+        raise ValueError(message)
+    try:
+        number = float(item)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(number) or number < 0.0:
+        raise ValueError(message)
+    return number
+
+
+def _nearest_time_relabel_merge(
+    pose: pd.DataFrame,
+    source: pd.DataFrame,
+    *,
+    max_nearest_time_delta_s: float | None,
+) -> pd.DataFrame:
+    """Validate nearest-time tolerance before matching classification rows."""
+
+    tolerance = _normalize_optional_nonnegative_float(
+        max_nearest_time_delta_s,
+        field="max_nearest_time_delta_s",
+    )
+    return _ORIGINAL_NEAREST_TIME_RELABEL_MERGE(
+        pose,
+        source,
+        max_nearest_time_delta_s=tolerance,
+    )
 
 
 def _validate_sequence_probability_rows(
@@ -203,8 +245,10 @@ _IMPL._reject_boolean_class_labels = _reject_boolean_class_labels
 _IMPL._validate_class_series = _validate_class_series
 _IMPL._validate_sequence_ids = _validate_sequence_ids
 _IMPL._validate_unique_row_keys = _validate_unique_row_keys
-_IMPL._validate_sequence_probability_rows = _validate_sequence_probability_rows
+_IMPL._normalize_optional_nonnegative_float = _normalize_optional_nonnegative_float
 _IMPL._normalize_frame = _normalize_frame
+_IMPL._nearest_time_relabel_merge = _nearest_time_relabel_merge
+_IMPL._validate_sequence_probability_rows = _validate_sequence_probability_rows
 _IMPL._sequence_prediction_labels = _sequence_prediction_labels
 
 globals().update(
@@ -218,8 +262,10 @@ globals()["_reject_boolean_class_labels"] = _reject_boolean_class_labels
 globals()["_validate_class_series"] = _validate_class_series
 globals()["_validate_sequence_ids"] = _validate_sequence_ids
 globals()["_validate_unique_row_keys"] = _validate_unique_row_keys
-globals()["_validate_sequence_probability_rows"] = _validate_sequence_probability_rows
+globals()["_normalize_optional_nonnegative_float"] = _normalize_optional_nonnegative_float
 globals()["_normalize_frame"] = _normalize_frame
+globals()["_nearest_time_relabel_merge"] = _nearest_time_relabel_merge
+globals()["_validate_sequence_probability_rows"] = _validate_sequence_probability_rows
 globals()["_sequence_prediction_labels"] = _sequence_prediction_labels
 
 __doc__ = _IMPL.__doc__
