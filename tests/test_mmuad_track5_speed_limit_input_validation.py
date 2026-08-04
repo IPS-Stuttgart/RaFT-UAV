@@ -21,6 +21,12 @@ def _submission() -> pd.DataFrame:
     )
 
 
+def _nested_object_array(value: object) -> np.ndarray:
+    nested = np.empty((), dtype=object)
+    nested[()] = value
+    return nested
+
+
 @pytest.mark.parametrize(
     "iterations",
     [0, -1, 1.5, True, False, np.nan, np.inf, -np.inf],
@@ -40,6 +46,76 @@ def test_speed_limit_accepts_integer_equivalent_iteration_count() -> None:
         _submission(),
         max_speed_mps=10.0,
         iterations=1.0,
+    )
+
+    pd.testing.assert_frame_equal(actual, expected)
+    pd.testing.assert_frame_equal(actual_diagnostics, expected_diagnostics)
+
+
+@pytest.mark.parametrize(
+    ("keyword", "value", "message"),
+    [
+        (
+            "iterations",
+            _nested_object_array(np.array([2.0])),
+            "iterations must be a positive integer",
+        ),
+        (
+            "iterations",
+            _nested_object_array(np.array(True)),
+            "iterations must be a positive integer",
+        ),
+        (
+            "max_speed_mps",
+            _nested_object_array(np.array([10.0])),
+            "max_speed_mps must be positive and finite",
+        ),
+        (
+            "max_speed_mps",
+            _nested_object_array(np.array(True)),
+            "max_speed_mps must be positive and finite",
+        ),
+        (
+            "anchor_blend",
+            _nested_object_array(np.array([0.25])),
+            r"anchor_blend must be finite and in \[0, 1\)",
+        ),
+        (
+            "anchor_blend",
+            _nested_object_array(np.array(False)),
+            r"anchor_blend must be finite and in \[0, 1\)",
+        ),
+    ],
+)
+def test_speed_limit_rejects_nested_non_scalar_controls(
+    keyword: str,
+    value: object,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        project_track5_speed_limit(_submission(), **{keyword: value})
+
+
+def test_speed_limit_rejects_cyclic_object_array_control() -> None:
+    cyclic = np.empty((), dtype=object)
+    cyclic[()] = cyclic
+
+    with pytest.raises(ValueError, match="max_speed_mps must be positive and finite"):
+        project_track5_speed_limit(_submission(), max_speed_mps=cyclic)
+
+
+def test_speed_limit_accepts_recursively_nested_zero_dimensional_scalars() -> None:
+    expected, expected_diagnostics = project_track5_speed_limit(
+        _submission(),
+        max_speed_mps=10.0,
+        iterations=2,
+        anchor_blend=0.25,
+    )
+    actual, actual_diagnostics = project_track5_speed_limit(
+        _submission(),
+        max_speed_mps=_nested_object_array(np.array(10.0)),
+        iterations=_nested_object_array(np.array(2)),
+        anchor_blend=_nested_object_array(np.array(0.25)),
     )
 
     pd.testing.assert_frame_equal(actual, expected)
