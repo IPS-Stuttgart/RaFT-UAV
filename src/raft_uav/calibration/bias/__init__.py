@@ -3,8 +3,8 @@
 The maintained implementation lives in the sibling ``bias.py`` module. This
 package preserves the public import path while ensuring ``correct_frame``
 respects ``keep_uncorrected=False``, serialized truth timestamps are numeric
-before nearest-time calibration sorting, and genuinely complex calibration
-values are not silently reduced to their real components.
+before nearest-time calibration sorting, and Boolean or genuinely complex
+calibration values are not silently reinterpreted as real numbers.
 """
 
 from __future__ import annotations
@@ -46,10 +46,35 @@ def _correct_frame(
     return corrected.drop(columns=raw_columns, errors="ignore")
 
 
-def _finite_real_numeric_series(values: pd.Series) -> pd.Series:
-    """Coerce numeric values without discarding nonzero imaginary components."""
+def _is_boolean_numeric_cell(value: object) -> bool:
+    """Return whether a scalar-like calibration cell contains a Boolean."""
 
-    numeric = pd.to_numeric(values, errors="coerce")
+    scalar = value
+    seen_arrays: set[int] = set()
+    while True:
+        if isinstance(scalar, (bool, np.bool_)):
+            return True
+        if isinstance(scalar, np.ndarray):
+            identity = id(scalar)
+            if identity in seen_arrays or scalar.ndim != 0:
+                return False
+            seen_arrays.add(identity)
+            if np.issubdtype(scalar.dtype, np.bool_):
+                return True
+            scalar = scalar.item()
+            continue
+        if isinstance(scalar, np.generic):
+            scalar = scalar.item()
+            continue
+        return False
+
+
+def _finite_real_numeric_series(values: pd.Series) -> pd.Series:
+    """Coerce real values without accepting Boolean or complex pseudo-numbers."""
+
+    raw = pd.Series(values)
+    boolean = raw.map(_is_boolean_numeric_cell).to_numpy(dtype=bool)
+    numeric = pd.to_numeric(raw, errors="coerce")
     array = numeric.to_numpy()
     if np.iscomplexobj(array):
         real = np.real(array)
@@ -59,6 +84,7 @@ def _finite_real_numeric_series(values: pd.Series) -> pd.Series:
     else:
         real = np.asarray(array, dtype=float)
         result = np.where(np.isfinite(real), real, np.nan)
+    result = np.where(boolean, np.nan, result)
     return pd.Series(result, index=values.index, dtype=float)
 
 
@@ -98,7 +124,7 @@ def make_bias_training_examples(
     target_columns: Sequence[str],
     time_gate_s: float = 2.0,
 ) -> pd.DataFrame:
-    """Build bias examples without silently accepting complex numeric cells."""
+    """Build bias examples without silently accepting non-real numeric cells."""
 
     numeric_columns = ("time_s", *(str(column) for column in target_columns))
     normalized_measurements = _drop_invalid_numeric_rows(
@@ -129,6 +155,7 @@ globals().update(
     }
 )
 globals()["_correct_frame"] = _correct_frame
+globals()["_is_boolean_numeric_cell"] = _is_boolean_numeric_cell
 globals()["_finite_real_numeric_series"] = _finite_real_numeric_series
 globals()["_normalized_bias_frame"] = _normalized_bias_frame
 globals()["_drop_invalid_numeric_rows"] = _drop_invalid_numeric_rows
