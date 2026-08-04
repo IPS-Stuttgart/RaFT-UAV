@@ -34,7 +34,15 @@ def test_symmetric_optimal_assignment_ignores_input_row_order() -> None:
         config=config,
     )
     columns = ["time_s", "track_id", "output_track_id"]
-    forward_ids = forward.estimates.loc[:, columns].sort_values(columns[:2]).reset_index(drop=True)
-    backward_ids = backward.estimates.loc[:, columns].sort_values(columns[:2]).reset_index(drop=True)
+    forward_ids = (
+        forward.estimates.loc[:, columns]
+        .sort_values(columns[:2])
+        .reset_index(drop=True)
+    )
+    backward_ids = (
+        backward.estimates.loc[:, columns]
+        .sort_values(columns[:2])
+        .reset_index(drop=True)
+    )
 
     assert_frame_equal(forward_ids, backward_ids)
