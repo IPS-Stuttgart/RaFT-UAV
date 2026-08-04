@@ -167,6 +167,36 @@ def _nearest_time_relabel_merge(
     )
 
 
+def _normalize_probability_scalar(value: Any) -> float:
+    """Return one finite non-negative real probability without lossy coercion."""
+
+    current = value
+    seen_arrays: set[int] = set()
+    while True:
+        if isinstance(current, (bool, np.bool_)) or np.ma.is_masked(current):
+            raise ValueError("invalid probability scalar")
+        if np.iscomplexobj(current):
+            raise ValueError("invalid probability scalar")
+        if isinstance(current, np.ndarray):
+            if current.ndim != 0:
+                raise ValueError("invalid probability scalar")
+            identity = id(current)
+            if identity in seen_arrays:
+                raise ValueError("invalid probability scalar")
+            seen_arrays.add(identity)
+            current = current.item()
+            continue
+        break
+
+    try:
+        number = float(current)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("invalid probability scalar") from exc
+    if not np.isfinite(number) or number < 0.0:
+        raise ValueError("invalid probability scalar")
+    return number
+
+
 def _validate_sequence_probability_rows(
     rows: pd.DataFrame,
     *,
@@ -179,18 +209,18 @@ def _validate_sequence_probability_rows(
     numeric = pd.DataFrame(index=rows.index)
     invalid_examples: list[str] = []
     for column in probability_columns:
-        converted = pd.to_numeric(rows[column], errors="coerce")
-        values = converted.to_numpy(float)
-        invalid = ~np.isfinite(values) | (values < 0.0)
-        if invalid.any() and len(invalid_examples) < 5:
-            for position in np.flatnonzero(invalid):
-                row_index = rows.index[int(position)]
-                invalid_examples.append(
-                    f"row {row_index}, {column!r}={rows.iloc[int(position)][column]!r}"
-                )
-                if len(invalid_examples) >= 5:
-                    break
-        numeric[column] = converted
+        normalized_values: list[float] = []
+        for position, value in enumerate(rows[column].tolist()):
+            try:
+                normalized_values.append(_normalize_probability_scalar(value))
+            except ValueError:
+                normalized_values.append(np.nan)
+                if len(invalid_examples) < 5:
+                    row_index = rows.index[position]
+                    invalid_examples.append(
+                        f"row {row_index}, {column!r}={value!r}"
+                    )
+        numeric[column] = np.asarray(normalized_values, dtype=float)
 
     if invalid_examples:
         raise ValueError(
@@ -246,6 +276,7 @@ _IMPL._validate_class_series = _validate_class_series
 _IMPL._validate_sequence_ids = _validate_sequence_ids
 _IMPL._validate_unique_row_keys = _validate_unique_row_keys
 _IMPL._normalize_optional_nonnegative_float = _normalize_optional_nonnegative_float
+_IMPL._normalize_probability_scalar = _normalize_probability_scalar
 _IMPL._normalize_frame = _normalize_frame
 _IMPL._nearest_time_relabel_merge = _nearest_time_relabel_merge
 _IMPL._validate_sequence_probability_rows = _validate_sequence_probability_rows
@@ -263,6 +294,7 @@ globals()["_validate_class_series"] = _validate_class_series
 globals()["_validate_sequence_ids"] = _validate_sequence_ids
 globals()["_validate_unique_row_keys"] = _validate_unique_row_keys
 globals()["_normalize_optional_nonnegative_float"] = _normalize_optional_nonnegative_float
+globals()["_normalize_probability_scalar"] = _normalize_probability_scalar
 globals()["_normalize_frame"] = _normalize_frame
 globals()["_nearest_time_relabel_merge"] = _nearest_time_relabel_merge
 globals()["_validate_sequence_probability_rows"] = _validate_sequence_probability_rows
