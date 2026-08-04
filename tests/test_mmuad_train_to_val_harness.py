@@ -97,7 +97,7 @@ def test_train_to_val_harness_dry_run_consumes_selected_config(tmp_path: Path) -
                     "smoothing_speed_gate_mps": 20.0,
                     "smoothing_blend": 0.5,
                     "classifier_method": "nearest-centroid",
-                    "image_nonimage_fusion_weight": 0.75,
+                    "image_nonimage_fusion_weight": 0.0,
                 },
             }
         ),
@@ -136,6 +136,7 @@ def test_train_to_val_harness_dry_run_consumes_selected_config(tmp_path: Path) -
     assert payload["viterbi_motion_weight"] == 4.0
     assert payload["smoothing_mode"] == "fixed-lag"
     assert payload["classifier_method"] == "nearest-centroid"
+    assert payload["image_nonimage_fusion_weight"] == 0.0
 
     commands = {step["name"]: step["command"] for step in payload["planned_commands"]}
     ranker = commands["train_cluster_ranker"]
