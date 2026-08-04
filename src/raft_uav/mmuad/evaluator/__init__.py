@@ -3,8 +3,9 @@
 The legacy evaluator implementation lives in the sibling ``evaluator.py`` file.
 This wrapper preserves public imports while overriding official-result
 classification validation, normalizing local result sequence identifiers,
-rejecting complex local trajectory values, and using globally consistent
-one-to-one timestamp matching. Official truth-file loading remains permissive so
+rejecting complex local trajectory values, retaining the final row for duplicate
+truth timestamps, and using globally consistent one-to-one timestamp matching.
+Official truth-file loading remains permissive so
 existing local truth archives stay readable.
 """
 from __future__ import annotations
@@ -222,6 +223,29 @@ def validate_mmaud_results_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return validated
 
 
+def _final_truth_rows_per_timestamp(truth_rows: pd.DataFrame) -> pd.DataFrame:
+    """Retain the final truth row for each normalized sequence timestamp."""
+
+    if truth_rows.empty:
+        return truth_rows.copy()
+    rows = truth_rows.copy()
+    rows["sequence_id"] = rows["sequence_id"].astype(str)
+    rows["time_s"] = pd.to_numeric(rows["time_s"], errors="raise").astype(float)
+    rows["_truth_row_order"] = np.arange(len(rows), dtype=np.int64)
+    rows = rows.drop_duplicates(
+        subset=["sequence_id", "time_s"],
+        keep="last",
+    )
+    return (
+        rows.sort_values(
+            ["sequence_id", "time_s", "_truth_row_order"],
+            kind="mergesort",
+        )
+        .drop(columns="_truth_row_order")
+        .reset_index(drop=True)
+    )
+
+
 def _validated_max_time_delta_s(value: Any) -> float:
     """Return a finite, nonnegative, non-Boolean nearest-time gate."""
 
@@ -254,7 +278,7 @@ def _evaluate_nearest_time_results(
 
     return _ORIGINAL_EVALUATE_NEAREST_TIME_RESULTS(
         result_rows,
-        truth_rows,
+        _final_truth_rows_per_timestamp(truth_rows),
         class_map=class_map,
         max_time_delta_s=_validated_max_time_delta_s(max_time_delta_s),
     )
@@ -320,6 +344,7 @@ def _evaluate_public_track5_timestamp_aligned(
     """Evaluate Track 5 rows with a globally optimal timestamp assignment."""
 
     tolerance = _validated_timestamp_tolerance(timestamp_tolerance_s)
+    truth_rows = _final_truth_rows_per_timestamp(truth_rows)
     if truth_rows.empty:
         return _IMPL._empty_truth_evaluation(
             result_rows,
@@ -328,9 +353,7 @@ def _evaluate_public_track5_timestamp_aligned(
         )
 
     result_rows = result_rows.copy()
-    truth_rows = truth_rows.copy()
     result_rows["sequence_id"] = result_rows["sequence_id"].astype(str)
-    truth_rows["sequence_id"] = truth_rows["sequence_id"].astype(str)
     used_result_indices: set[int] = set()
     error_records: list[dict[str, Any]] = []
 
@@ -415,6 +438,7 @@ _IMPL._has_official_track5_columns = _has_official_track5_columns
 _IMPL._official_track5_results_to_local_frame = _official_track5_results_to_local_frame
 _IMPL._official_track5_truth_to_rows = _official_track5_truth_to_rows
 _IMPL.validate_mmaud_results_frame = validate_mmaud_results_frame
+_IMPL._final_truth_rows_per_timestamp = _final_truth_rows_per_timestamp
 _IMPL._validated_max_time_delta_s = _validated_max_time_delta_s
 _IMPL._evaluate_nearest_time_results = _evaluate_nearest_time_results
 _IMPL.load_mmaud_results_csv = load_mmaud_results_csv
@@ -433,6 +457,7 @@ globals()["_official_track5_column_map"] = _official_track5_column_map
 globals()["_normalize_local_result_sequence_ids"] = _normalize_local_result_sequence_ids
 globals()["_is_complex_result_value"] = _is_complex_result_value
 globals()["_reject_complex_local_result_values"] = _reject_complex_local_result_values
+globals()["_final_truth_rows_per_timestamp"] = _final_truth_rows_per_timestamp
 globals()["_validated_max_time_delta_s"] = _validated_max_time_delta_s
 globals()["_evaluate_nearest_time_results"] = _evaluate_nearest_time_results
 globals()["_read_physical_results_headers"] = _read_physical_results_headers
