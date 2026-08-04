@@ -23,6 +23,7 @@ def test_segment_flight_phases_uses_angular_rate_for_irregular_samples() -> None
 
 
 def test_segment_flight_phases_sorts_numeric_string_timestamps_numerically() -> None:
+    """Equivalent numeric and string timestamps must yield identical phases."""
     numeric_frame = pd.DataFrame(
         {
             "time_s": [1.0, 2.0, 10.0, 11.0, 12.0, 13.0],
