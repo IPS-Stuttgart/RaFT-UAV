@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -27,6 +29,18 @@ def _pose_table(mse: float) -> pd.DataFrame:
     )
 
 
+def _boxed(value: object) -> np.ndarray:
+    boxed = np.empty((), dtype=object)
+    boxed[()] = value
+    return boxed
+
+
+def _cyclic_box() -> np.ndarray:
+    boxed = np.empty((), dtype=object)
+    boxed[()] = boxed
+    return boxed
+
+
 @pytest.mark.parametrize(
     "invalid_tolerance",
     [
@@ -36,6 +50,9 @@ def _pose_table(mse: float) -> pd.DataFrame:
         True,
         1.0 + 0.0j,
         np.array([-1.0]),
+        np.ma.array(0.25, mask=True),
+        _boxed(_boxed(True)),
+        _cyclic_box(),
     ],
 )
 def test_pose_comparison_rejects_invalid_regression_tolerance(
@@ -56,7 +73,7 @@ def test_pose_comparison_accepts_boxed_nonnegative_regression_tolerance() -> Non
     _, summary = compare_pose_by_sequence_tables(
         _pose_table(1.0),
         _pose_table(1.5),
-        regression_tolerance_mse=np.array(np.array(0.25, dtype=object), dtype=object),
+        regression_tolerance_mse=_boxed(_boxed(0.25)),
     )
 
     assert summary["regressed_sequence_count"] == 1
@@ -65,7 +82,7 @@ def test_pose_comparison_accepts_boxed_nonnegative_regression_tolerance() -> Non
 
 
 def test_scorecard_compare_cli_rejects_negative_regression_tolerance(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     baseline_csv = tmp_path / "baseline.csv"
     candidate_csv = tmp_path / "candidate.csv"
