@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling ``train_selected_config.py``
 module. This package preserves the public import path while making alias
-selection skip missing values and rejecting malformed numeric controls before
-Python or NumPy can silently coerce them.
+selection skip missing values, rejecting malformed numeric controls before
+Python or NumPy can silently coerce them, and refusing classifier-fusion weights
+that the train-to-validation pipeline does not consume.
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ if _SPEC is None or _SPEC.loader is None:
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+
+_ORIGINAL_VALIDATE_TRAIN_SELECTED_CONFIG = _IMPL.validate_train_selected_config
 
 
 def _first_present(row: pd.Series, columns: tuple[str, ...]) -> Any:
@@ -68,8 +71,22 @@ def _float(value: Any) -> float:
     return number
 
 
+def validate_train_selected_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Reject train-selected settings that the validation harness ignores."""
+
+    normalized = _ORIGINAL_VALIDATE_TRAIN_SELECTED_CONFIG(config)
+    if normalized["image_nonimage_fusion_weight"] != 0.0:
+        raise ValueError(
+            "image_nonimage_fusion_weight must be 0.0 because the "
+            "train-to-validation pipeline does not consume image-fusion outputs; "
+            "use the sequence_classifier_fusion workflow instead"
+        )
+    return normalized
+
+
 _IMPL._first_present = _first_present
 _IMPL._float = _float
+_IMPL.validate_train_selected_config = validate_train_selected_config
 
 globals().update(
     {
@@ -80,6 +97,7 @@ globals().update(
 )
 globals()["_first_present"] = _first_present
 globals()["_float"] = _float
+globals()["validate_train_selected_config"] = validate_train_selected_config
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]

@@ -61,7 +61,7 @@ def test_train_selected_config_writes_required_fields_from_train_summaries(
     ).to_csv(smoothing_csv, index=False)
     pd.DataFrame(
         [
-            {"method": "random-forest", "fusion_weight": 0.5, "classification_accuracy": 0.75},
+            {"method": "random-forest", "fusion_weight": 0.0, "classification_accuracy": 0.75},
             {
                 "method": "hist-gradient-boosting",
                 "fusion_weight": 0.25,
@@ -108,5 +108,5 @@ def test_train_selected_config_writes_required_fields_from_train_summaries(
     assert payload["smoothing_speed_gate_mps"] == 20.0
     assert payload["smoothing_blend"] == 0.5
     assert payload["classifier_method"] == "random-forest"
-    assert payload["image_nonimage_fusion_weight"] == 0.5
+    assert payload["image_nonimage_fusion_weight"] == 0.0
     assert (output_dir / "mmuad_train_selected_config_summary.csv").exists()
