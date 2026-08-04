@@ -4,8 +4,9 @@ The maintained implementation lives in the sibling
 ``track5_scorecard_compare.py`` module. This package preserves the public import
 path while rejecting missing or duplicate per-sequence identifiers instead of
 silently treating malformed rows as real sequences, while preserving textual
-sequence identifiers when the CLI reads pose-by-sequence CSV files, and while
-requiring regression tolerances to be finite non-negative real scalars.
+sequence identifiers when the CLI reads pose-by-sequence CSV files, while
+requiring regression tolerances to be finite non-negative real scalars, and while
+rejecting colliding comparison labels before pandas creates duplicate columns.
 """
 
 from __future__ import annotations
@@ -125,14 +126,18 @@ def compare_pose_by_sequence_tables(
     candidate_label: str = "candidate",
     regression_tolerance_mse: Any = 0.0,
 ):
-    """Compare pose tables with a valid non-negative regression tolerance."""
+    """Compare pose tables with valid labels and regression tolerance."""
 
+    baseline_label_text = str(baseline_label)
+    candidate_label_text = str(candidate_label)
+    if baseline_label_text == candidate_label_text:
+        raise ValueError("baseline_label and candidate_label must be distinct")
     tolerance = _normalize_regression_tolerance(regression_tolerance_mse)
     return _ORIGINAL_COMPARE_POSE_TABLES(
         baseline,
         candidate,
-        baseline_label=baseline_label,
-        candidate_label=candidate_label,
+        baseline_label=baseline_label_text,
+        candidate_label=candidate_label_text,
         regression_tolerance_mse=tolerance,
     )
 
