@@ -183,6 +183,7 @@ def match_submission_to_truth(
     Existing sequence and track-ID gating semantics are retained. Within each
     sequence, the assignment first maximizes the number of truth rows matched
     inside the time gate and then minimizes total absolute timestamp error.
+    Exact-cost ties use canonical time/position ordering instead of CSV row order.
     """
 
     max_time_delta_s = _validated_max_time_delta_s(max_time_delta_s)
@@ -273,6 +274,58 @@ def match_submission_to_truth(
     return pd.DataFrame.from_records(rows)
 
 
+def _finite_real_assignment_order_values(values: pd.Series) -> pd.Series:
+    """Return finite real sort keys without changing the evaluated payload."""
+
+    parsed: list[float] = []
+    for value in values.tolist():
+        try:
+            if np.ma.is_masked(value):
+                raise TypeError
+            scalar = np.asarray(value)
+            if scalar.ndim != 0 or np.iscomplexobj(scalar):
+                raise TypeError
+            number = float(scalar.item())
+        except (TypeError, ValueError, OverflowError):
+            number = float("inf")
+        parsed.append(number if np.isfinite(number) else float("inf"))
+    return pd.Series(parsed, index=values.index, dtype=float)
+
+
+def _canonical_assignment_order(frame: pd.DataFrame) -> np.ndarray:
+    """Return a payload-derived row order for deterministic assignment ties."""
+
+    if frame.empty:
+        return np.empty(0, dtype=int)
+
+    rows = frame.reset_index(drop=True)
+    sort_keys = pd.DataFrame(index=rows.index)
+    sort_columns: list[str] = []
+    for column in ("time_s", "x_m", "y_m", "z_m"):
+        key = f"_assignment_order_{column}"
+        values = (
+            rows[column]
+            if column in rows.columns
+            else pd.Series(np.nan, index=rows.index)
+        )
+        sort_keys[key] = _finite_real_assignment_order_values(values)
+        sort_columns.append(key)
+
+    track_values = (
+        rows["track_id"]
+        if "track_id" in rows.columns
+        else pd.Series("", index=rows.index)
+    )
+    track_key = "_assignment_order_track_id"
+    sort_keys[track_key] = track_values.where(track_values.notna(), "").astype(str).str.strip()
+    sort_columns.append(track_key)
+
+    return (
+        sort_keys.sort_values(sort_columns, kind="mergesort")
+        .index.to_numpy(dtype=int)
+    )
+
+
 def _optimal_time_assignment(
     predictions: pd.DataFrame,
     truth: pd.DataFrame,
@@ -280,7 +333,7 @@ def _optimal_time_assignment(
     restrict_to_track_id: bool,
     max_time_delta_s: float,
 ) -> tuple[dict[int, int], np.ndarray]:
-    """Return a cardinality-first one-to-one assignment and eligibility mask."""
+    """Return a cardinality-first, deterministic assignment and eligibility mask."""
 
     max_time_delta_s = _validated_max_time_delta_s(max_time_delta_s)
     pred_times = pd.to_numeric(predictions["time_s"], errors="coerce").to_numpy(float)
@@ -300,6 +353,11 @@ def _optimal_time_assignment(
     if not bool(eligible.any()):
         return {}, eligible
 
+    prediction_order = _canonical_assignment_order(predictions)
+    truth_order = _canonical_assignment_order(truth)
+    ordered_time_delta = time_delta[np.ix_(prediction_order, truth_order)]
+    ordered_eligible = eligible[np.ix_(prediction_order, truth_order)]
+
     max_matches = min(len(predictions), len(truth))
     distance_weight = 0.5 / float(max_matches + 1)
     distance_scale = max(float(np.max(time_delta[eligible])), 1.0)
@@ -309,15 +367,19 @@ def _optimal_time_assignment(
         dtype=float,
     )
     costs[:, : len(truth)] = np.where(
-        eligible,
-        distance_weight * time_delta / distance_scale,
+        ordered_eligible,
+        distance_weight * ordered_time_delta / distance_scale,
         2.0,
     )
-    pred_positions, assignment_columns = linear_sum_assignment(costs)
+    ordered_pred_positions, assignment_columns = linear_sum_assignment(costs)
     assignments = {
-        int(pred_position): int(truth_position)
-        for pred_position, truth_position in zip(pred_positions, assignment_columns)
-        if truth_position < len(truth) and eligible[pred_position, truth_position]
+        int(prediction_order[pred_position]): int(truth_order[truth_position])
+        for pred_position, truth_position in zip(
+            ordered_pred_positions,
+            assignment_columns,
+        )
+        if truth_position < len(truth)
+        and ordered_eligible[pred_position, truth_position]
     }
     return assignments, eligible
 
@@ -418,6 +480,10 @@ globals()["_validate_submission_numeric_rows"] = _validate_submission_numeric_ro
 globals()["load_submission_csv"] = load_submission_csv
 globals()["_validated_max_time_delta_s"] = _validated_max_time_delta_s
 globals()["match_submission_to_truth"] = match_submission_to_truth
+globals()["_finite_real_assignment_order_values"] = (
+    _finite_real_assignment_order_values
+)
+globals()["_canonical_assignment_order"] = _canonical_assignment_order
 globals()["_optimal_time_assignment"] = _optimal_time_assignment
 globals()["_matched_prediction_row"] = _matched_prediction_row
 globals()["_normalized_match_flags"] = _normalized_match_flags
