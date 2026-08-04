@@ -84,6 +84,8 @@ def _drop_invalid_numeric_rows(
     if frame.empty:
         return frame.copy()
     required = tuple(str(column) for column in columns)
+    if any(column not in frame.columns for column in required):
+        return frame.copy()
     valid = np.isfinite(frame.loc[:, required].to_numpy(dtype=float)).all(axis=1)
     return frame.loc[valid].reset_index(drop=True)
 
