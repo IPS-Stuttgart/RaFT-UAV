@@ -46,3 +46,19 @@ def test_timestamp_jitter_uses_time_for_rows_without_frame_index() -> None:
 
     assert offsets.iloc[0] == offsets.iloc[1]
     assert offsets.iloc[0] != offsets.iloc[2]
+
+
+def test_timestamp_jitter_preserves_rng_consumption_per_input_row() -> None:
+    frame = pd.DataFrame(
+        {
+            "frame_index": [0, 0, 1],
+            "time_s": [10.0, 10.0, 20.0],
+        }
+    )
+    actual_rng = np.random.default_rng(31)
+    jitter_timestamps(frame, std_s=0.5, rng=actual_rng)
+
+    expected_rng = np.random.default_rng(31)
+    expected_rng.normal(0.0, 0.5, len(frame))
+
+    assert actual_rng.normal() == expected_rng.normal()
