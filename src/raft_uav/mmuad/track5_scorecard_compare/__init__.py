@@ -3,8 +3,9 @@
 The maintained implementation lives in the sibling
 ``track5_scorecard_compare.py`` module. This package preserves the public import
 path while rejecting missing or duplicate per-sequence identifiers instead of
-silently treating malformed rows as real sequences, and while preserving textual
-sequence identifiers when the CLI reads pose-by-sequence CSV files.
+silently treating malformed rows as real sequences, while preserving textual
+sequence identifiers when the CLI reads pose-by-sequence CSV files, and while
+requiring regression tolerances to be finite non-negative real scalars.
 """
 
 from __future__ import annotations
@@ -28,11 +29,15 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_NORMALIZE_POSE_TABLE = _IMPL._normalize_pose_by_sequence_table
+_ORIGINAL_COMPARE_POSE_TABLES = _IMPL.compare_pose_by_sequence_tables
 _ORIGINAL_MAIN = _IMPL.main
 _SEQUENCE_ID_DTYPES = {
     "sequence_id": "string",
     "sequence": "string",
 }
+_REGRESSION_TOLERANCE_ERROR = (
+    "regression_tolerance_mse must be a finite non-negative real scalar"
+)
 
 
 class _SequencePreservingPandasProxy:
@@ -87,6 +92,51 @@ def _normalize_pose_by_sequence_table(rows: Any, *, label: str):
     return _ORIGINAL_NORMALIZE_POSE_TABLE(frame, label=label)
 
 
+def _normalize_regression_tolerance(value: Any) -> float:
+    """Return a lossless finite non-negative regression tolerance."""
+
+    current = value
+    seen: set[int] = set()
+    while isinstance(current, _IMPL.np.ndarray):
+        identity = id(current)
+        if identity in seen or current.ndim != 0:
+            raise ValueError(_REGRESSION_TOLERANCE_ERROR)
+        seen.add(identity)
+        if _IMPL.np.ma.isMaskedArray(current) and _IMPL.np.ma.is_masked(current):
+            raise ValueError(_REGRESSION_TOLERANCE_ERROR)
+        current = current.item()
+
+    if isinstance(current, (bool, _IMPL.np.bool_)) or _IMPL.np.iscomplexobj(current):
+        raise ValueError(_REGRESSION_TOLERANCE_ERROR)
+    try:
+        normalized = float(current)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(_REGRESSION_TOLERANCE_ERROR) from exc
+    if not _IMPL.np.isfinite(normalized) or normalized < 0.0:
+        raise ValueError(_REGRESSION_TOLERANCE_ERROR)
+    return normalized
+
+
+def compare_pose_by_sequence_tables(
+    baseline: Any,
+    candidate: Any,
+    *,
+    baseline_label: str = "baseline",
+    candidate_label: str = "candidate",
+    regression_tolerance_mse: Any = 0.0,
+):
+    """Compare pose tables with a valid non-negative regression tolerance."""
+
+    tolerance = _normalize_regression_tolerance(regression_tolerance_mse)
+    return _ORIGINAL_COMPARE_POSE_TABLES(
+        baseline,
+        candidate,
+        baseline_label=baseline_label,
+        candidate_label=candidate_label,
+        regression_tolerance_mse=tolerance,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the scorecard CLI without numeric inference on sequence identifiers."""
 
@@ -99,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 _IMPL._normalize_pose_by_sequence_table = _normalize_pose_by_sequence_table
+_IMPL.compare_pose_by_sequence_tables = compare_pose_by_sequence_tables
 _IMPL.main = main
 
 globals().update(
@@ -109,6 +160,8 @@ globals().update(
     }
 )
 globals()["_normalize_pose_by_sequence_table"] = _normalize_pose_by_sequence_table
+globals()["_normalize_regression_tolerance"] = _normalize_regression_tolerance
+globals()["compare_pose_by_sequence_tables"] = compare_pose_by_sequence_tables
 globals()["main"] = main
 
 __doc__ = _IMPL.__doc__
