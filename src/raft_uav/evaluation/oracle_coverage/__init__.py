@@ -6,8 +6,9 @@ fractional identifiers from being truncated, large exact identifiers from being
 rounded through binary floating point, malformed radar standard deviations from
 silently changing candidate scoring, malformed explicit tracklet configurations
 from disappearing behind defaults, serialized Boolean diagnostics from
-corrupting oracle-retention summaries, and equal class-probability scores from
-receiving row-order-dependent ranks.
+corrupting oracle-retention summaries, equal class-probability scores from
+receiving row-order-dependent ranks, and distinct candidate rows from collapsing
+onto one diagnostic identity.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_BUILD_ORACLE_CANDIDATE_COVERAGE = _IMPL.build_oracle_candidate_coverage
+_ORIGINAL_ORACLE_COVERAGE_ROW = _IMPL._oracle_coverage_row
 _ORIGINAL_COVERAGE_SUMMARY = _IMPL._coverage_summary
 _ORIGINAL_BUCKET_SUMMARY = _IMPL._bucket_summary
 _IDENTIFIER_KEY_COLUMNS = frozenset({"frame_index", "track_index", "track_id"})
@@ -46,6 +48,7 @@ _CANDIDATE_KEY_COLUMNS = (
     "north_m",
     "up_m",
 )
+_CANDIDATE_ROW_POSITION_KEY = "__candidate_row_position__"
 _TRUE_BOOLEAN_TEXT = frozenset({"true", "t", "yes", "y", "1", "1.0"})
 _FALSE_BOOLEAN_TEXT = frozenset(
     {"false", "f", "no", "n", "0", "0.0", "", "nan", "none", "<na>", "nat"}
@@ -191,10 +194,14 @@ def _optional_int(value: object) -> int | None:
 
 
 def _candidate_key(row: Any) -> tuple[tuple[str, object], ...]:
-    """Build a candidate key while preserving exact identifier identity."""
+    """Build an exact frame-local candidate key."""
 
+    row_position = _optional_int(row.name)
+    stable_position: object = row_position if row_position is not None else str(row.name)
+    key: list[tuple[str, object]] = [
+        (_CANDIDATE_ROW_POSITION_KEY, stable_position)
+    ]
     columns = [column for column in _CANDIDATE_KEY_COLUMNS if column in row.index]
-    key: list[tuple[str, object]] = []
     for column in columns:
         value = row[column]
         if column in _IDENTIFIER_KEY_COLUMNS:
@@ -204,6 +211,19 @@ def _candidate_key(row: Any) -> tuple[tuple[str, object], ...]:
             stable = _IMPL._stable_value(value)
         key.append((column, stable))
     return tuple(key)
+
+
+def _oracle_coverage_row(
+    *,
+    candidates: Any,
+    **kwargs: Any,
+) -> Any:
+    """Evaluate one frame after assigning unique frame-local row positions."""
+
+    return _ORIGINAL_ORACLE_COVERAGE_ROW(
+        candidates=candidates.reset_index(drop=True),
+        **kwargs,
+    )
 
 
 def _event_key(candidates: Any, time_s: float) -> str:
@@ -238,6 +258,7 @@ _IMPL._coverage_summary = _coverage_summary
 _IMPL._bucket_summary = _bucket_summary
 _IMPL._optional_int = _optional_int
 _IMPL._candidate_key = _candidate_key
+_IMPL._oracle_coverage_row = _oracle_coverage_row
 _IMPL._event_key = _event_key
 _IMPL._rank_by_catprob = _rank_by_catprob
 
@@ -257,6 +278,7 @@ globals()["_bucket_summary"] = _bucket_summary
 globals()["build_oracle_candidate_coverage"] = build_oracle_candidate_coverage
 globals()["_optional_int"] = _optional_int
 globals()["_candidate_key"] = _candidate_key
+globals()["_oracle_coverage_row"] = _oracle_coverage_row
 globals()["_event_key"] = _event_key
 globals()["_rank_by_catprob"] = _rank_by_catprob
 
