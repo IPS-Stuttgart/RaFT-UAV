@@ -97,21 +97,54 @@ class LocalENUProjector:
         return delta @ self._ecef_to_enu_rotation.T
 
 
+def _unwrap_zero_dimensional_arrays(value: object, *, error: str) -> object:
+    """Recursively unwrap scalar arrays without accepting hidden vectors."""
+
+    seen_array_ids: set[int] = set()
+    while isinstance(value, np.ndarray):
+        if np.ma.is_masked(value) or value.ndim != 0:
+            raise ValueError(error)
+        if np.issubdtype(value.dtype, np.bool_) or np.iscomplexobj(value):
+            raise ValueError(error)
+        array_id = id(value)
+        if array_id in seen_array_ids:
+            raise ValueError(error)
+        seen_array_ids.add(array_id)
+        try:
+            value = value.item()
+        except ValueError as exc:
+            raise ValueError(error) from exc
+    return value
+
+
 def _finite_real_scalar(value: object, *, name: str) -> float:
     """Return a finite real scalar or raise a field-specific error."""
 
     error = f"{name} must be a finite real scalar"
-    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+    value = _unwrap_zero_dimensional_arrays(value, error=error)
+    if (
+        np.ma.is_masked(value)
+        or isinstance(value, (bool, np.bool_))
+        or isinstance(value, (complex, np.complexfloating))
+    ):
         raise ValueError(error)
     try:
         scalar = np.asarray(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(error) from exc
-    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+    if (
+        scalar.ndim != 0
+        or np.issubdtype(scalar.dtype, np.bool_)
+        or np.iscomplexobj(scalar)
+    ):
         raise ValueError(error)
     try:
         item = scalar.item()
-        if np.ma.is_masked(item) or np.iscomplexobj(item):
+        if (
+            np.ma.is_masked(item)
+            or isinstance(item, (bool, np.bool_))
+            or isinstance(item, (complex, np.complexfloating))
+        ):
             raise ValueError(error)
         number = float(item)
     except (TypeError, ValueError, OverflowError) as exc:
@@ -147,17 +180,20 @@ def _finite_real_array(value: object, *, name: str) -> np.ndarray:
         raise ValueError(error) from exc
     if np.iscomplexobj(array) or np.issubdtype(array.dtype, np.bool_):
         raise ValueError(error)
-    if array.dtype == object and any(
-        isinstance(item, (bool, np.bool_))
-        or np.ma.is_masked(item)
-        or np.iscomplexobj(item)
-        for item in array.flat
-    ):
-        raise ValueError(error)
-    try:
-        numeric = np.asarray(array, dtype=float)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(error) from exc
+    if array.dtype == object:
+        try:
+            numeric = np.fromiter(
+                (_finite_real_scalar(item, name=name) for item in array.flat),
+                dtype=float,
+                count=array.size,
+            ).reshape(array.shape)
+        except ValueError as exc:
+            raise ValueError(error) from exc
+    else:
+        try:
+            numeric = np.asarray(array, dtype=float)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(error) from exc
     if not np.isfinite(numeric).all():
         raise ValueError(error)
     return numeric
