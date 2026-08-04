@@ -3,9 +3,10 @@
 The maintained implementation lives in the sibling ``mot.py`` module. This
 package preserves the public import path while ensuring that pooled MOT metrics
 scope object identities by sequence, count tolerance-matched frames once,
-validate sequence metadata and matching thresholds, resolve exact association
-ties deterministically, enforce timestamp tolerance on every matched row pair,
-and use globally optimal frame matching for both tracking and evaluation.
+validate sequence metadata and identifiers, validate matching thresholds,
+resolve exact association ties deterministically, enforce timestamp tolerance
+on every matched row pair, and use globally optimal frame matching for both
+tracking and evaluation.
 """
 
 from __future__ import annotations
@@ -64,12 +65,25 @@ def _scope_truth_track_ids(truth: pd.DataFrame | None) -> pd.DataFrame | None:
     return scoped
 
 
+def _validate_present_sequence_ids(frame: pd.DataFrame, *, label: str) -> None:
+    """Reject missing-like sequence IDs before they are converted to strings."""
+
+    if frame.empty or "sequence_id" not in frame.columns:
+        return
+    present = _IMPL._track_id_present_mask(frame["sequence_id"])
+    if not bool(present.all()):
+        raise ValueError(f"{label} sequence_id values must be non-missing")
+
+
 def _validate_sequence_metadata(
     estimates: pd.DataFrame,
     truth: pd.DataFrame | None,
 ) -> None:
-    """Reject one-sided sequence metadata before pooled timestamp matching."""
+    """Reject malformed or one-sided sequence metadata before matching."""
 
+    _validate_present_sequence_ids(estimates, label="estimates")
+    if truth is not None:
+        _validate_present_sequence_ids(truth, label="truth")
     if truth is None or estimates.empty or truth.empty:
         return
     estimates_has_sequence = "sequence_id" in estimates.columns
@@ -481,6 +495,7 @@ globals().update(
     }
 )
 globals()["_scope_truth_track_ids"] = _scope_truth_track_ids
+globals()["_validate_present_sequence_ids"] = _validate_present_sequence_ids
 globals()["_validate_sequence_metadata"] = _validate_sequence_metadata
 globals()["_metric_frame_pairs"] = _metric_frame_pairs
 globals()["_metric_time_cluster_pairs"] = _metric_time_cluster_pairs
