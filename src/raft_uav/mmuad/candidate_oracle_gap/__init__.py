@@ -1,9 +1,9 @@
 """Compatibility package for validated MMUAD candidate oracle-gap diagnostics.
 
 The maintained implementation lives in the sibling ``candidate_oracle_gap.py``
-module. This package validates the nearest-time gate and prevents genuinely
-complex timestamps, positions, or confidence values from being silently cast
-to their real components.
+module. This package validates the nearest-time gate and prevents Boolean,
+complex, or boxed numeric cells from being silently cast to different real
+values.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.mmuad._candidate_oracle_gap_legacy",
     _IMPL_PATH,
 )
-if _SPEC is None or _SPEC.loader is None:
+if _SPEC is None or _SPEC.loader is None:  # pragma: no cover
     raise ImportError(f"cannot load legacy candidate oracle-gap module from {_IMPL_PATH}")
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
@@ -35,36 +35,52 @@ _ORIGINAL_FINITE_CANDIDATE_ROWS = _IMPL._finite_candidate_rows
 _ORIGINAL_FINITE_TRUTH_ROWS = _IMPL._finite_truth_rows
 
 
+def _real_numeric_value(value: object) -> float:
+    """Return one finite real value or NaN without lossy scalar coercion."""
+
+    seen_array_ids: set[int] = set()
+    while isinstance(value, np.ndarray):
+        if np.ma.is_masked(value) or value.ndim != 0:
+            return np.nan
+        array_id = id(value)
+        if array_id in seen_array_ids:
+            return np.nan
+        seen_array_ids.add(array_id)
+        value = value.item()
+
+    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+        return np.nan
+    if isinstance(value, (complex, np.complexfloating)):
+        if not np.isfinite(value.real) or not np.isfinite(value.imag):
+            return np.nan
+        if value.imag != 0.0:
+            return np.nan
+        value = value.real
+
+    normalized = optional_float(value)
+    return np.nan if normalized is None else normalized
+
+
 def _coerce_real_numeric_columns(
     rows: pd.DataFrame,
     columns: tuple[str, ...],
 ) -> pd.DataFrame:
-    """Convert numeric columns without discarding nonzero imaginary components."""
+    """Convert numeric columns without Boolean or lossy complex coercion."""
 
     normalized = rows.copy()
     for column in columns:
         if column not in normalized.columns:
             continue
-        numeric = pd.to_numeric(normalized[column], errors="coerce")
-        values = numeric.to_numpy()
-        if np.iscomplexobj(values):
-            real = np.real(values)
-            imaginary = np.imag(values)
-            numeric = pd.Series(
-                np.where(
-                    np.isfinite(imaginary) & (imaginary == 0.0),
-                    real,
-                    np.nan,
-                ),
-                index=normalized.index,
-                dtype=float,
-            )
-        normalized[column] = numeric
+        normalized[column] = pd.Series(
+            [_real_numeric_value(value) for value in normalized[column].tolist()],
+            index=normalized.index,
+            dtype=float,
+        )
     return normalized
 
 
 def _finite_candidate_rows(candidates: pd.DataFrame) -> pd.DataFrame:
-    """Reject candidates whose required numeric fields are genuinely complex."""
+    """Reject candidates whose required numeric fields are not finite real values."""
 
     normalized = _coerce_real_numeric_columns(
         candidates,
@@ -74,7 +90,7 @@ def _finite_candidate_rows(candidates: pd.DataFrame) -> pd.DataFrame:
 
 
 def _finite_truth_rows(truth: pd.DataFrame) -> pd.DataFrame:
-    """Reject truth rows whose timestamps or positions are genuinely complex."""
+    """Reject truth rows whose timestamps or positions are not finite real values."""
 
     normalized = _coerce_real_numeric_columns(
         truth,
@@ -120,6 +136,7 @@ for _name in dir(_IMPL):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_IMPL, _name)
 
+globals()["_real_numeric_value"] = _real_numeric_value
 globals()["_coerce_real_numeric_columns"] = _coerce_real_numeric_columns
 globals()["_finite_candidate_rows"] = _finite_candidate_rows
 globals()["_finite_truth_rows"] = _finite_truth_rows
