@@ -1,0 +1,478 @@
+---
+name: Multi-UAV LTS guarded tournament
+
+"on":
+  workflow_dispatch:
+    inputs:
+      work_root:
+        description: Multi-UAV LTS work root on workstation2
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts
+        type: string
+      truth_dir:
+        description: Complete training-label directory
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels
+        type: string
+      train_sequence_root:
+        description: Training-image sequence root used when regenerating raw predictions
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainImages
+        type: string
+      first_frame_label_dir:
+        description: First-frame training labels
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels_FirstFrameOnly
+        type: string
+      raw_prediction_path:
+        description: Existing raw prediction directory or ZIP
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/outputs/train_baseline/predictions
+        type: string
+      candidate_specs:
+        description: Optional semicolon/newline-separated NAME=PATH candidate list
+        required: false
+        default: ""
+        type: string
+      output_root:
+        description: Persistent result root
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/outputs/guarded_tournaments
+        type: string
+      regenerate_raw_baseline:
+        description: Regenerate a seeded YOLOv12-BoT-SORT training baseline
+        required: false
+        default: false
+        type: boolean
+      run_fixed_population_cv:
+        description: Run fixed-population CV and add its best predictions as a candidate
+        required: false
+        default: false
+        type: boolean
+      fixed_population_output:
+        description: Fixed-population CV output root
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/outputs/fixed_population_cv
+        type: string
+      upstream_python:
+        description: Python executable for the external YOLOv12-BoT-SORT checkout
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/venvs/yolov12-botsort-py312/bin/python
+        type: string
+      device:
+        description: CUDA device passed to the upstream tracker
+        required: true
+        default: "0"
+        type: string
+      img_size:
+        description: Upstream detector image size
+        required: true
+        default: "1920"
+        type: string
+      fold_count:
+        description: Scenario-stratified CV fold count
+        required: true
+        default: "5"
+        type: string
+      seed:
+        description: Fold and bootstrap seed
+        required: true
+        default: "0"
+        type: string
+      expected_sequence_count:
+        description: Required number of training sequences
+        required: true
+        default: "102"
+        type: string
+      bootstrap_samples:
+        description: Paired sequence-bootstrap sample count
+        required: true
+        default: "5000"
+        type: string
+      min_mean_hota_gain:
+        description: Minimum mean CV CODABENCH_HOTA gain over raw
+        required: true
+        default: "0.001"
+        type: string
+      min_ci_hota_gain:
+        description: Minimum paired 95% HOTA-gain CI lower bound
+        required: true
+        default: "0.0"
+        type: string
+      max_mean_mota_drop:
+        description: Maximum accepted mean CV CODABENCH_MOTA drop
+        required: true
+        default: "0.002"
+        type: string
+      max_mean_idf1_drop:
+        description: Maximum accepted mean CV CODABENCH_IDF1 drop
+        required: true
+        default: "0.002"
+        type: string
+      max_worst_scenario_hota_drop:
+        description: Maximum accepted HOTA drop in any scenario prefix
+        required: true
+        default: "0.01"
+        type: string
+      require_improvement:
+        description: Fail the job when every transformed candidate loses to raw
+        required: false
+        default: false
+        type: boolean
+      probe_only:
+        description: Verify runner, GPU, and mounted paths without evaluating
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multi-uav-lts-guarded-tournament-workstation2
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  GPU_DEVICE: ${{ inputs.device }}
+  WORK_ROOT: ${{ inputs.work_root }}
+  TRUTH_DIR: ${{ inputs.truth_dir }}
+  TRAIN_SEQUENCE_ROOT: ${{ inputs.train_sequence_root }}
+  FIRST_FRAME_LABEL_DIR: ${{ inputs.first_frame_label_dir }}
+  REQUESTED_RAW_PREDICTION_PATH: ${{ inputs.raw_prediction_path }}
+  CANDIDATE_SPECS: ${{ inputs.candidate_specs }}
+  OUTPUT_ROOT: ${{ inputs.output_root }}
+  FIXED_POPULATION_OUTPUT: ${{ inputs.fixed_population_output }}
+  UPSTREAM_PYTHON: ${{ inputs.upstream_python }}
+  IMG_SIZE: ${{ inputs.img_size }}
+  FOLD_COUNT: ${{ inputs.fold_count }}
+  TOURNAMENT_SEED: ${{ inputs.seed }}
+  EXPECTED_SEQUENCE_COUNT: ${{ inputs.expected_sequence_count }}
+  BOOTSTRAP_SAMPLES: ${{ inputs.bootstrap_samples }}
+  MIN_MEAN_HOTA_GAIN: ${{ inputs.min_mean_hota_gain }}
+  MIN_CI_HOTA_GAIN: ${{ inputs.min_ci_hota_gain }}
+  MAX_MEAN_MOTA_DROP: ${{ inputs.max_mean_mota_drop }}
+  MAX_MEAN_IDF1_DROP: ${{ inputs.max_mean_idf1_drop }}
+  MAX_WORST_SCENARIO_HOTA_DROP: ${{ inputs.max_worst_scenario_hota_drop }}
+  VENV_PATH: ${{ github.workspace }}/.lts-tournament-venv-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  tournament:
+    name: Guarded 102-sequence LTS tournament
+    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    timeout-minutes: 720
+
+    steps:
+      - name: Check out RaFT-UAV
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          clean: true
+
+      - name: Prepare isolated result and Python directories
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_DIR="${OUTPUT_ROOT}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${RUN_DIR}"
+          echo "run_dir=${RUN_DIR}" >> "${GITHUB_OUTPUT}"
+          echo "RUN_DIR=${RUN_DIR}" >> "${GITHUB_ENV}"
+          if [[ "${{ inputs.regenerate_raw_baseline }}" == "true" ]]; then
+            EFFECTIVE_RAW="${RUN_DIR}/raw-baseline/predictions"
+          else
+            EFFECTIVE_RAW="${REQUESTED_RAW_PREDICTION_PATH}"
+          fi
+          echo "effective_raw=${EFFECTIVE_RAW}" >> "${GITHUB_OUTPUT}"
+          echo "EFFECTIVE_RAW=${EFFECTIVE_RAW}" >> "${GITHUB_ENV}"
+
+      - name: Record runner, repository, and NVIDIA environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "runner_name=${RUNNER_NAME}"
+            echo "runner_os=${RUNNER_OS}"
+            echo "runner_arch=${RUNNER_ARCH}"
+            echo "gpu_device=${GPU_DEVICE}"
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "git_commit=${GITHUB_SHA}"
+            uname -a
+          } | tee "${RUN_DIR}/runner.txt"
+          nvidia-smi -L | tee "${RUN_DIR}/nvidia-smi-L.txt"
+          nvidia-smi \
+            --query-gpu=index,name,uuid,driver_version,memory.total,compute_cap \
+            --format=csv,noheader \
+            | tee "${RUN_DIR}/nvidia-smi.csv"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install isolated tournament environment
+        if: ${{ ! inputs.probe_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "${VENV_PATH}"
+          "${VENV_PATH}/bin/python" -m pip install --upgrade pip
+          "${VENV_PATH}/bin/python" -m pip install -e ".[dev]"
+          "${VENV_PATH}/bin/python" -m pip check
+          "${VENV_PATH}/bin/python" -m pip freeze --all \
+            > "${RUN_DIR}/pip-freeze.txt"
+
+      - name: Probe mounted inputs
+        shell: bash
+        env:
+          REGENERATE_RAW: ${{ inputs.regenerate_raw_baseline }}
+          RUN_FIXED_POPULATION_CV: ${{ inputs.run_fixed_population_cv }}
+          PROBE_ONLY: ${{ inputs.probe_only }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          def record(path: str) -> dict[str, object]:
+              candidate = Path(path).expanduser()
+              return {
+                  "path": str(candidate),
+                  "exists": candidate.exists(),
+                  "is_dir": candidate.is_dir(),
+                  "is_file": candidate.is_file(),
+              }
+
+          paths = {
+              "work_root": record(os.environ["WORK_ROOT"]),
+              "truth_dir": record(os.environ["TRUTH_DIR"]),
+              "train_sequence_root": record(os.environ["TRAIN_SEQUENCE_ROOT"]),
+              "first_frame_label_dir": record(os.environ["FIRST_FRAME_LABEL_DIR"]),
+              "requested_raw_prediction_path": record(
+                  os.environ["REQUESTED_RAW_PREDICTION_PATH"]
+              ),
+              "fixed_population_output": record(
+                  os.environ["FIXED_POPULATION_OUTPUT"]
+              ),
+              "upstream_python": record(os.environ["UPSTREAM_PYTHON"]),
+          }
+          truth = Path(os.environ["TRUTH_DIR"])
+          truth_files = sorted(truth.glob("*.txt")) if truth.is_dir() else []
+          payload = {
+              "schema": "raft-uav-lts-workstation2-probe-v1",
+              "runner_name": os.environ.get("RUNNER_NAME"),
+              "git_sha": os.environ.get("GITHUB_SHA"),
+              "paths": paths,
+              "truth_sequence_count": len(truth_files),
+              "truth_sequences": [path.stem for path in truth_files],
+          }
+          output = Path(os.environ["RUN_DIR"]) / "probe.json"
+          output.write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(payload, indent=2, sort_keys=True))
+
+          if os.environ["PROBE_ONLY"].lower() == "true":
+              raise SystemExit(0)
+
+          failures = []
+          if not paths["truth_dir"]["is_dir"]:
+              failures.append("truth_dir")
+          if os.environ["REGENERATE_RAW"].lower() == "true":
+              for key in (
+                  "work_root",
+                  "train_sequence_root",
+                  "first_frame_label_dir",
+              ):
+                  if not paths[key]["is_dir"]:
+                      failures.append(key)
+              if not paths["upstream_python"]["is_file"]:
+                  failures.append("upstream_python")
+          elif not (
+              paths["requested_raw_prediction_path"]["is_dir"]
+              or paths["requested_raw_prediction_path"]["is_file"]
+          ):
+              failures.append("requested_raw_prediction_path")
+          if os.environ["RUN_FIXED_POPULATION_CV"].lower() == "true":
+              if not paths["first_frame_label_dir"]["is_dir"]:
+                  failures.append("first_frame_label_dir")
+          if failures:
+              raise SystemExit(
+                  "required mounted inputs are unavailable: "
+                  + ", ".join(sorted(set(failures)))
+              )
+          PY
+
+      - name: Apply maintained upstream identity-seeding fixes
+        if: ${{ ! inputs.probe_only && inputs.regenerate_raw_baseline }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${VENV_PATH}/bin/python" \
+            -m raft_uav.multi_uav_lts.upstream_fixes \
+            "${WORK_ROOT}/repos/YOLOv12-BoT-SORT-ReID/BoT-SORT" \
+            | tee "${RUN_DIR}/upstream-fixes.txt"
+
+      - name: Regenerate seeded raw training baseline
+        if: ${{ ! inputs.probe_only && inputs.regenerate_raw_baseline }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${VENV_PATH}/bin/python" \
+            scripts/run_multi_uav_lts_official_baseline.py \
+            --work-root "${WORK_ROOT}" \
+            --sequence-root "${TRAIN_SEQUENCE_ROOT}" \
+            --first-frame-label-dir "${FIRST_FRAME_LABEL_DIR}" \
+            --output-dir "${RUN_DIR}/raw-baseline" \
+            --predictions-dir "${EFFECTIVE_RAW}" \
+            --no-template \
+            --python "${UPSTREAM_PYTHON}" \
+            --device "${GPU_DEVICE}" \
+            --img-size "${IMG_SIZE}" \
+            --normalize \
+            --sort-rows \
+            --overwrite \
+            | tee "${RUN_DIR}/raw-baseline-console.txt"
+
+      - name: Run fixed-population cross-validation candidate
+        if: ${{ ! inputs.probe_only && inputs.run_fixed_population_cv }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          FIXED_POPULATION_RUN_DIR="${FIXED_POPULATION_OUTPUT}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${FIXED_POPULATION_RUN_DIR}"
+          echo "FIXED_POPULATION_RUN_DIR=${FIXED_POPULATION_RUN_DIR}" >> "${GITHUB_ENV}"
+          "${VENV_PATH}/bin/python" \
+            -m raft_uav.multi_uav_lts.fixed_population_cv \
+            "${EFFECTIVE_RAW}" \
+            --truth-dir "${TRUTH_DIR}" \
+            --first-frame-label-dir "${FIRST_FRAME_LABEL_DIR}" \
+            --output-dir "${FIXED_POPULATION_RUN_DIR}" \
+            --fold-count "${FOLD_COUNT}" \
+            --seed "${TOURNAMENT_SEED}" \
+            | tee "${RUN_DIR}/fixed-population-cv-console.txt"
+
+      - name: Run guarded candidate tournament
+        if: ${{ ! inputs.probe_only }}
+        shell: bash
+        env:
+          RUN_FIXED_POPULATION_CV: ${{ inputs.run_fixed_population_cv }}
+          REQUIRE_IMPROVEMENT: ${{ inputs.require_improvement }}
+        run: |
+          set -euo pipefail
+          candidate_args=()
+          while IFS= read -r specification; do
+            specification="$(
+              printf '%s' "${specification}" \
+                | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+            )"
+            if [[ -n "${specification}" ]]; then
+              candidate_args+=(--candidate "${specification}")
+            fi
+          done < <(printf '%s' "${CANDIDATE_SPECS}" | tr ';' '\n')
+
+          if [[ "${RUN_FIXED_POPULATION_CV}" == "true" ]]; then
+            candidate_args+=(
+              --candidate
+              "fixed_population_cv=${FIXED_POPULATION_RUN_DIR}/best_predictions"
+            )
+          fi
+
+          improvement_args=()
+          if [[ "${REQUIRE_IMPROVEMENT}" == "true" ]]; then
+            improvement_args+=(--require-improvement)
+          fi
+
+          "${VENV_PATH}/bin/python" \
+            -m raft_uav.multi_uav_lts.tournament \
+            "${EFFECTIVE_RAW}" \
+            "${candidate_args[@]}" \
+            --truth-dir "${TRUTH_DIR}" \
+            --output-dir "${RUN_DIR}/tournament" \
+            --fold-count "${FOLD_COUNT}" \
+            --seed "${TOURNAMENT_SEED}" \
+            --expected-sequence-count "${EXPECTED_SEQUENCE_COUNT}" \
+            --bootstrap-samples "${BOOTSTRAP_SAMPLES}" \
+            --min-mean-hota-gain "${MIN_MEAN_HOTA_GAIN}" \
+            --min-ci-hota-gain "${MIN_CI_HOTA_GAIN}" \
+            --max-mean-mota-drop "${MAX_MEAN_MOTA_DROP}" \
+            --max-mean-idf1-drop "${MAX_MEAN_IDF1_DROP}" \
+            --max-worst-scenario-hota-drop \
+              "${MAX_WORST_SCENARIO_HOTA_DROP}" \
+            "${improvement_args[@]}" \
+            | tee "${RUN_DIR}/tournament-console.txt"
+
+      - name: Publish job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Multi-UAV LTS guarded tournament"
+            echo
+            echo "- Runner: \`${RUNNER_NAME}\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Result directory: \`${RUN_DIR}\`"
+            echo "- Probe only: \`${{ inputs.probe_only }}\`"
+            if [[ -f "${RUN_DIR}/probe.json" ]]; then
+              count="$(
+                python -c \
+                  'import json,sys; print(json.load(open(sys.argv[1]))["truth_sequence_count"])' \
+                  "${RUN_DIR}/probe.json"
+              )"
+              echo "- Training sequences observed: \`${count}\`"
+            fi
+            if [[ -f "${RUN_DIR}/tournament/tournament_summary.json" ]]; then
+              python - "${RUN_DIR}/tournament/tournament_summary.json" <<'PY'
+          import json
+          import sys
+
+          summary = json.load(open(sys.argv[1], encoding="utf-8"))
+          selected_name = summary["selected_candidate"]
+          selected = next(
+              row for row in summary["rows"] if row["name"] == selected_name
+          )
+          print(f"- Selected candidate: `{selected_name}`")
+          print(f"- Selection status: `{summary['selection_status']}`")
+          print(
+              "- Mean CV CODABENCH_HOTA: "
+              f"`{selected['mean_cv_codabench_hota']:.6f}`"
+          )
+          print(
+              "- Paired HOTA-gain 95% CI: "
+              f"`[{selected['paired_hota_gain_ci_low']:.6f}, "
+              f"{selected['paired_hota_gain_ci_high']:.6f}]`"
+          )
+          print(
+              "- Mean CV CODABENCH_MOTA delta vs raw: "
+              f"`{selected['mean_cv_mota_delta_vs_raw']:.6f}`"
+          )
+          print(
+              "- Mean CV CODABENCH_IDF1 delta vs raw: "
+              f"`{selected['mean_cv_idf1_delta_vs_raw']:.6f}`"
+          )
+          PY
+            else
+              echo "- Tournament did not produce a final summary."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload tournament evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: multi-uav-lts-tournament-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.prepare.outputs.run_dir }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
+
+      - name: Remove isolated tournament environment
+        if: always()
+        shell: bash
+        run: rm -rf "${VENV_PATH}"
