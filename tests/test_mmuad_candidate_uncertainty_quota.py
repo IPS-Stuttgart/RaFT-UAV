@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.candidate_reservoir import ReservoirConfig
 from raft_uav.mmuad.candidate_uncertainty_quota import build_uncertainty_quota_reservoir
@@ -81,10 +83,36 @@ def test_uncertainty_quota_ignores_nonpositive_sigma() -> None:
     assert selected["track_id"].tolist() == ["other"]
 
 
+def test_uncertainty_quota_ignores_boolean_and_complex_sigma() -> None:
+    rows = _rows().copy()
+    rows["predicted_sigma_m"] = pd.Series(
+        [20.0, True, 5.0, 1.0 + 2.0j],
+        dtype=object,
+    )
+
+    reservoir = build_uncertainty_quota_reservoir(
+        rows,
+        reservoir_config=ReservoirConfig(max_candidates_per_frame=4),
+        per_source_branch_top_n=0,
+        uncertainty_top_n=1,
+    ).rows
+
+    selected = reservoir.loc[reservoir["candidate_uncertainty_quota_selected"]]
+    assert selected["track_id"].tolist() == ["other"]
+
+
+@pytest.mark.parametrize(
+    "invalid_budget",
+    [True, 1.5, np.array(True, dtype=object), np.array(1.5)],
+)
+def test_uncertainty_quota_rejects_lossy_budgets(invalid_budget: object) -> None:
+    with pytest.raises(ValueError, match="uncertainty_top_n"):
+        build_uncertainty_quota_reservoir(
+            _rows(),
+            uncertainty_top_n=invalid_budget,  # type: ignore[arg-type]
+        )
+
+
 def test_uncertainty_quota_rejects_negative_budget() -> None:
-    try:
+    with pytest.raises(ValueError, match="uncertainty_top_n"):
         build_uncertainty_quota_reservoir(_rows(), uncertainty_top_n=-1)
-    except ValueError as exc:
-        assert "uncertainty_top_n" in str(exc)
-    else:
-        raise AssertionError("expected negative uncertainty quota to fail")

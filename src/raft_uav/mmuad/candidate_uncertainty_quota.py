@@ -23,6 +23,7 @@ from raft_uav.mmuad.candidate_source_branch_reservoir import (
     build_source_branch_reservoir,
 )
 from raft_uav.mmuad.schema import CandidateFrame, normalize_candidate_columns
+from raft_uav.numeric import optional_float, optional_int
 
 _DEFAULT_SIGMA_COLUMNS = (
     "predicted_sigma_m",
@@ -46,8 +47,9 @@ def build_uncertainty_quota_reservoir(
 ) -> CandidateFrame:
     """Return a source/branch reservoir augmented with low-sigma candidates."""
 
-    if uncertainty_top_n < 0:
-        raise ValueError("uncertainty_top_n must be non-negative")
+    normalized_uncertainty_top_n = optional_int(uncertainty_top_n)
+    if normalized_uncertainty_top_n is None or normalized_uncertainty_top_n < 0:
+        raise ValueError("uncertainty_top_n must be a non-negative integer scalar")
     config = reservoir_config or ReservoirConfig()
     rows = _candidate_rows(candidates)
     if rows.empty:
@@ -72,7 +74,7 @@ def build_uncertainty_quota_reservoir(
         int(row["_uncertainty_quota_row_id"]): row.to_dict()
         for _, row in base.iterrows()
     }
-    if uncertainty_top_n > 0:
+    if normalized_uncertainty_top_n > 0:
         group_cols = ["sequence_id", "time_s", "source", "candidate_branch"]
         for key, group in rows.groupby(group_cols, sort=False, dropna=False):
             finite = group.loc[group["candidate_uncertainty_quota_sigma_m"].notna()].copy()
@@ -81,7 +83,7 @@ def build_uncertainty_quota_reservoir(
             kept = finite.sort_values(
                 ["candidate_uncertainty_quota_sigma_m", "_uncertainty_quota_row_id"],
                 ascending=[True, True],
-            ).head(int(uncertainty_top_n))
+            ).head(normalized_uncertainty_top_n)
             reason = f"{_REASON_PREFIX}{key[2]}|{key[3]}"
             for _, candidate in kept.iterrows():
                 row_id = int(candidate["_uncertainty_quota_row_id"])
@@ -110,7 +112,7 @@ def build_uncertainty_quota_reservoir(
         cap_reason_bonus=float(config.cap_reason_bonus),
         preserve_reason_prefixes=preserve_prefixes,
     )
-    capped["candidate_uncertainty_quota_top_n"] = int(uncertainty_top_n)
+    capped["candidate_uncertainty_quota_top_n"] = normalized_uncertainty_top_n
     selected_flag = capped.get("candidate_uncertainty_quota_selected")
     if selected_flag is None:
         capped["candidate_uncertainty_quota_selected"] = False
@@ -140,13 +142,21 @@ def _first_finite_sigma(rows: pd.DataFrame, columns: Sequence[str]) -> pd.Series
     for column in columns:
         if column not in rows.columns:
             continue
-        values = pd.to_numeric(rows[column], errors="coerce")
-        values = values.where(np.isfinite(values) & (values > 0.0), np.nan)
+        values = pd.Series(
+            (optional_float(value) for value in rows[column]),
+            index=rows.index,
+            dtype=float,
+        )
+        values = values.where(values > 0.0, np.nan)
         sigma = sigma.where(sigma.notna(), values)
     return sigma
 
 
 def _merge_reason(existing: object, new_reason: str) -> str:
-    tokens = {token.strip() for token in str(existing).replace(";", ",").split(",") if token.strip()}
+    tokens = {
+        token.strip()
+        for token in str(existing).replace(";", ",").split(",")
+        if token.strip()
+    }
     tokens.add(new_reason)
     return ";".join(sorted(tokens))
