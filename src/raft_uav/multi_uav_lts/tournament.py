@@ -28,6 +28,7 @@ from .fixed_population_cv import build_stratified_folds, scenario_prefix
 from .metrics import BenchmarkMetrics, SequenceMetrics, evaluate_lts_predictions
 
 _SCHEMA = "raft-uav-multi-uav-lts-guarded-tournament-v1"
+_CONTENT_DIGEST_SCHEMA = "raft-uav-multi-uav-lts-content-v2"
 _NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
@@ -568,6 +569,9 @@ def _scenario_groups(
 
 def _content_digest(path: Path) -> tuple[str, int]:
     digest = hashlib.sha256()
+    schema = _CONTENT_DIGEST_SCHEMA.encode("ascii")
+    digest.update(len(schema).to_bytes(8, "big"))
+    digest.update(schema)
     total_bytes = 0
     if path.is_file():
         files = (path,)
@@ -575,14 +579,23 @@ def _content_digest(path: Path) -> tuple[str, int]:
     else:
         files = tuple(child for child in sorted(path.rglob("*")) if child.is_file())
         root = path
+    digest.update(len(files).to_bytes(8, "big"))
     for file_path in files:
         relative = file_path.relative_to(root).as_posix().encode("utf-8")
+        expected_size = file_path.stat().st_size
         digest.update(len(relative).to_bytes(8, "big"))
         digest.update(relative)
+        digest.update(expected_size.to_bytes(16, "big"))
+        streamed_bytes = 0
         with file_path.open("rb") as handle:
             while chunk := handle.read(1024 * 1024):
+                streamed_bytes += len(chunk)
                 total_bytes += len(chunk)
                 digest.update(chunk)
+        if streamed_bytes != expected_size:
+            raise OSError(
+                f"candidate file changed while hashing: {file_path}"
+            )
     return digest.hexdigest(), total_bytes
 
 
@@ -617,6 +630,7 @@ def _write_outputs(
     output_dir = Path(result.output_dir)
     payload = {
         "schema": _SCHEMA,
+        "content_digest_schema": _CONTENT_DIGEST_SCHEMA,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "git_sha": os.environ.get("GITHUB_SHA"),
         "truth_dir": str(truth_dir),
@@ -765,7 +779,8 @@ def _write_provenance(
     rows: tuple[CandidateScore, ...],
 ) -> None:
     payload = {
-        "schema": "raft-uav-multi-uav-lts-tournament-provenance-v1",
+        "schema": "raft-uav-multi-uav-lts-tournament-provenance-v2",
+        "content_digest_schema": _CONTENT_DIGEST_SCHEMA,
         "git_sha": os.environ.get("GITHUB_SHA"),
         "github_run_id": os.environ.get("GITHUB_RUN_ID"),
         "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
