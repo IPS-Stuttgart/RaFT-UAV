@@ -36,3 +36,32 @@ def test_tracker_truth_errors_do_not_extrapolate_outside_truth_support() -> None
     metrics = compute_metrics(result, truth)
     assert metrics["count"] == 1
     assert metrics["mean_3d_m"] == 0.0
+
+
+def test_tracker_truth_errors_use_final_duplicate_truth_sample() -> None:
+    estimates = pd.DataFrame(
+        {
+            "time_s": [0.0, 1.0],
+            "state_x_m": [0.0, 10.0],
+            "state_y_m": [0.0, 0.0],
+            "state_z_m": [0.0, 0.0],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "time_s": ["0", 1.0, 0.0],
+            "x_m": [100.0, 10.0, 0.0],
+            "y_m": [0.0, 0.0, 0.0],
+            "z_m": [0.0, 0.0, 0.0],
+        },
+        index=[7, 7, 7],
+    )
+
+    result = add_truth_errors(estimates, truth)
+
+    np.testing.assert_allclose(result["truth_x_m"], [0.0, 10.0])
+    np.testing.assert_allclose(result["error_3d_m"], [0.0, 0.0])
+
+    metrics = compute_metrics(result, truth)
+    assert metrics["count"] == 2
+    assert metrics["mean_3d_m"] == 0.0
