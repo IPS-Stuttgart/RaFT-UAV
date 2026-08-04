@@ -151,20 +151,34 @@ def load_submission_csv(path: Path) -> pd.DataFrame:
     return _ORIGINAL_LOAD_SUBMISSION_CSV(path)
 
 
+def _unwrap_scalar_value(value: Any, *, error: str) -> Any:
+    """Recursively unwrap one NumPy scalar without accepting cycles or vectors."""
+
+    scalar = value
+    seen_arrays: set[int] = set()
+    while isinstance(scalar, (np.ndarray, np.generic)):
+        if isinstance(scalar, np.ndarray):
+            if np.ma.is_masked(scalar) or scalar.ndim != 0:
+                raise ValueError(error)
+            identity = id(scalar)
+            if identity in seen_arrays:
+                raise ValueError(error)
+            seen_arrays.add(identity)
+        scalar = scalar.item()
+    if np.ma.is_masked(scalar):
+        raise ValueError(error)
+    return scalar
+
+
 def _validated_max_time_delta_s(value: Any) -> float:
     """Return a finite, nonnegative, non-Boolean scalar time gate."""
 
     error = "max_time_delta_s must be a finite nonnegative real scalar"
-    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+    scalar = _unwrap_scalar_value(value, error=error)
+    if isinstance(scalar, (bool, complex)):
         raise ValueError(error)
     try:
-        scalar = np.asarray(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(error) from exc
-    if scalar.ndim != 0 or np.iscomplexobj(scalar):
-        raise ValueError(error)
-    try:
-        time_delta_s = float(scalar.item())
+        time_delta_s = float(scalar)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(error) from exc
     if not np.isfinite(time_delta_s) or time_delta_s < 0.0:
@@ -352,6 +366,26 @@ def _matched_prediction_row(
     }
 
 
+def _is_complex_match_flag(value: Any) -> bool:
+    """Return whether scalar array wrappers contain a complex match flag."""
+
+    scalar = value
+    seen_arrays: set[int] = set()
+    while isinstance(scalar, np.ndarray):
+        if np.ma.is_masked(scalar) or scalar.ndim != 0:
+            return False
+        identity = id(scalar)
+        if identity in seen_arrays:
+            return False
+        seen_arrays.add(identity)
+        scalar = scalar.item()
+    if np.ma.is_masked(scalar):
+        return False
+    if isinstance(scalar, np.generic):
+        scalar = scalar.item()
+    return isinstance(scalar, complex)
+
+
 def _normalized_match_flags(values: Any) -> pd.Series:
     """Parse native and serialized Boolean match diagnostics explicitly."""
 
@@ -361,13 +395,14 @@ def _normalized_match_flags(values: Any) -> pd.Series:
     if pd.api.types.is_bool_dtype(series.dtype):
         return series.astype("boolean").fillna(False).astype(bool)
 
+    complex_values = series.map(_is_complex_match_flag).fillna(False).astype(bool)
     numeric = pd.to_numeric(series, errors="coerce")
     text = series.astype("string").str.strip().str.casefold()
     truthy = (text.isin(_TRUE_MATCH_TEXT) | numeric.eq(1.0)).fillna(False)
     falsy = (
         series.isna() | text.isin(_FALSE_MATCH_TEXT) | numeric.eq(0.0)
     ).fillna(False)
-    invalid = ~(truthy | falsy)
+    invalid = complex_values | ~(truthy | falsy)
     if bool(invalid.any()):
         invalid_indices = invalid[invalid].index.tolist()
         invalid_values = series.loc[invalid_indices].tolist()
@@ -416,10 +451,12 @@ globals()["_submission_rows_before_numeric_coercion"] = (
 globals()["_invalid_submission_row_summary"] = _invalid_submission_row_summary
 globals()["_validate_submission_numeric_rows"] = _validate_submission_numeric_rows
 globals()["load_submission_csv"] = load_submission_csv
+globals()["_unwrap_scalar_value"] = _unwrap_scalar_value
 globals()["_validated_max_time_delta_s"] = _validated_max_time_delta_s
 globals()["match_submission_to_truth"] = match_submission_to_truth
 globals()["_optimal_time_assignment"] = _optimal_time_assignment
 globals()["_matched_prediction_row"] = _matched_prediction_row
+globals()["_is_complex_match_flag"] = _is_complex_match_flag
 globals()["_normalized_match_flags"] = _normalized_match_flags
 globals()["metrics_from_matches"] = metrics_from_matches
 
