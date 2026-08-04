@@ -105,8 +105,13 @@ def catprob_candidate_pool(candidates, threshold):
         return candidates
 
     scores = _finite_real_values(candidates["cat_prob_uav"])
-    keep = _np.isfinite(scores) & (scores >= threshold)
-    return candidates.loc[keep].copy() if keep.any() else candidates
+    finite = _np.isfinite(scores)
+    keep = finite & (scores >= threshold)
+    if keep.any():
+        return candidates.loc[keep].copy()
+    if finite.any():
+        return candidates.loc[finite].copy()
+    return candidates
 
 
 def highest_catprob_candidate(candidates):
