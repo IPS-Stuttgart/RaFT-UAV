@@ -5,7 +5,7 @@ This package preserves that public import path while rejecting malformed integer
 controls before dynamic background removal can silently clamp or truncate them.
 It also rejects unsupported PCD field widths before binary records can be decoded
 with shifted offsets and corrupted coordinates, and rejects ambiguous raw BIN
-row widths instead of silently reinterpreting XYZ data as XYZI.
+row widths unless the path identifies a sensor with a documented export layout.
 """
 
 from __future__ import annotations
@@ -97,8 +97,18 @@ def _binary_point_columns_from_environment() -> int | None:
     return normalized
 
 
+def _binary_point_columns_from_sensor_path(path: Path) -> int | None:
+    """Return the documented row width implied by a known sensor path."""
+
+    tokens: set[str] = set()
+    for part in Path(path).parts:
+        tokens.update(filter(None, re.split(r"[^a-z0-9]+", part.casefold())))
+    # Livox raw exports store x, y, z, and reflectivity as four float32 values.
+    return 4 if "livox" in tokens else None
+
+
 def _binary_point_column_count(path: Path, value_count: int) -> int:
-    """Resolve a deterministic BIN row width without guessing ambiguous data."""
+    """Resolve a deterministic BIN row width without guessing generic data."""
 
     filename_hint = _binary_point_columns_from_filename(path)
     environment_hint = _binary_point_columns_from_environment()
@@ -112,6 +122,8 @@ def _binary_point_column_count(path: Path, value_count: int) -> int:
             f"{_BINARY_POINT_COLUMNS_ENV}={environment_hint}"
         )
     hinted = filename_hint if filename_hint is not None else environment_hint
+    if hinted is None:
+        hinted = _binary_point_columns_from_sensor_path(path)
     if hinted is not None:
         if value_count % hinted != 0:
             raise ValueError(
