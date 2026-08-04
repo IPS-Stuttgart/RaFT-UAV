@@ -113,7 +113,10 @@ def _frame_groups(
         values = pd.to_numeric(work["time_s"], errors="coerce")
         finite = np.isfinite(values.to_numpy(dtype=float))
         work = work.loc[finite].copy()
-        work[key_column] = values.loc[finite].to_numpy(dtype=float)
+        work[key_column] = [
+            round(float(value), 9)
+            for value in values.loc[finite].to_numpy(dtype=float)
+        ]
         key_kind = "time_s"
 
     groups: list[tuple[tuple[str, int | float], pd.DataFrame]] = []
