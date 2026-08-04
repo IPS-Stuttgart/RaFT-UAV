@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_scorecard.py"
@@ -79,6 +80,24 @@ def _load_optional_csv(path: Path | None) -> pd.DataFrame | None:
     return frame
 
 
+def _is_complex_scalar(value: Any) -> bool:
+    """Return whether scalar array wrappers contain a complex pseudo-Boolean."""
+
+    scalar = value
+    seen_arrays: set[int] = set()
+    while isinstance(scalar, np.ndarray):
+        if scalar.ndim != 0:
+            return False
+        array_id = id(scalar)
+        if array_id in seen_arrays:
+            return False
+        seen_arrays.add(array_id)
+        scalar = scalar.item()
+    if isinstance(scalar, np.generic):
+        scalar = scalar.item()
+    return isinstance(scalar, complex)
+
+
 def _bool_series(values: Any) -> pd.Series:
     """Normalize native and serialized Boolean diagnostics explicitly."""
 
@@ -91,13 +110,14 @@ def _bool_series(values: Any) -> pd.Series:
     if pd.api.types.is_bool_dtype(series.dtype):
         return series.astype("boolean").fillna(False).astype(bool)
 
+    complex_values = series.map(_is_complex_scalar).fillna(False).astype(bool)
     numeric = pd.to_numeric(series, errors="coerce")
     text = series.astype("string").str.strip().str.casefold()
     truthy = (text.isin(_TRUE_BOOL_TEXT) | numeric.eq(1.0)).fillna(False)
     falsy = (
         series.isna() | text.isin(_FALSE_BOOL_TEXT) | numeric.eq(0.0)
     ).fillna(False)
-    invalid = ~(truthy | falsy)
+    invalid = complex_values | ~(truthy | falsy)
     if bool(invalid.any()):
         invalid_indices = invalid[invalid].index.tolist()
         invalid_values = series.loc[invalid_indices].tolist()
@@ -120,6 +140,7 @@ globals().update(
     }
 )
 globals()["_load_optional_csv"] = _load_optional_csv
+globals()["_is_complex_scalar"] = _is_complex_scalar
 globals()["_bool_series"] = _bool_series
 
 __doc__ = _IMPL.__doc__
