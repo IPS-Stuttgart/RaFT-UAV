@@ -123,24 +123,30 @@ def _normalize_frame(frame: pd.DataFrame, *, name: str) -> pd.DataFrame:
 
 
 def _normalize_optional_nonnegative_float(value: Any, *, field: str) -> float | None:
-    """Return an optional finite non-negative scalar with a stable error."""
+    """Return an optional finite non-negative recursively unwrapped scalar."""
 
     if value is None:
         return None
     message = f"{field} must be a finite non-negative number"
-    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+    scalar = value
+    seen_arrays: set[int] = set()
+    while isinstance(scalar, (np.ndarray, np.generic)):
+        if isinstance(scalar, np.ndarray):
+            if np.ma.is_masked(scalar) or scalar.ndim != 0:
+                raise ValueError(message)
+            identity = id(scalar)
+            if identity in seen_arrays:
+                raise ValueError(message)
+            seen_arrays.add(identity)
+        scalar = scalar.item()
+    if (
+        np.ma.is_masked(scalar)
+        or isinstance(scalar, (bool, np.bool_))
+        or isinstance(scalar, (complex, np.complexfloating))
+    ):
         raise ValueError(message)
     try:
-        scalar = np.asarray(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(message) from exc
-    if scalar.ndim != 0:
-        raise ValueError(message)
-    item = scalar.item()
-    if isinstance(item, (bool, np.bool_)) or np.ma.is_masked(item) or np.iscomplexobj(item):
-        raise ValueError(message)
-    try:
-        number = float(item)
+        number = float(scalar)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(message) from exc
     if not np.isfinite(number) or number < 0.0:
