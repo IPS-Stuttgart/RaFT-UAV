@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling ``radar.py`` module. This
 package preserves the public import path while ensuring that negative radar
-ranges are discarded and malformed uncertainty parameters are rejected before
-they can produce plausible-looking Cartesian detections with invalid metadata.
+ranges are discarded, malformed uncertainty parameters are rejected, and
+lossy Boolean or complex radar geometry cells cannot become plausible-looking
+Cartesian detections.
 """
 
 from __future__ import annotations
@@ -28,12 +29,98 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_RADAR_POLAR_FRAME_TO_CANDIDATES = _IMPL.radar_polar_frame_to_candidates
+_RADAR_GEOMETRY_COLUMNS = frozenset(
+    {
+        "range_m",
+        "range",
+        "r",
+        "rho",
+        "distance_m",
+        "distance",
+        "azimuth_rad",
+        "az_rad",
+        "bearing_rad",
+        "azimuth_deg",
+        "az_deg",
+        "bearing_deg",
+        "azimuth",
+        "az",
+        "bearing",
+        "elevation_rad",
+        "el_rad",
+        "pitch_rad",
+        "elevation_deg",
+        "el_deg",
+        "pitch_deg",
+        "elevation",
+        "el",
+        "pitch",
+    }
+)
+
+
+def _radar_geometry_cell(
+    value: Any,
+    *,
+    column: object,
+    row: object,
+) -> Any:
+    """Return one geometry cell after rejecting lossy pseudo-numbers."""
+
+    seen: set[int] = set()
+    current = value
+    while True:
+        if np.ma.is_masked(current):
+            return np.nan
+        if not isinstance(current, np.ndarray) or current.ndim != 0:
+            break
+        identity = id(current)
+        if identity in seen:
+            raise ValueError(
+                f"radar geometry column {column!r} contains a cyclic scalar "
+                f"at row {row!r}"
+            )
+        seen.add(identity)
+        current = current.item()
+    if isinstance(current, (bool, np.bool_)):
+        raise ValueError(
+            f"radar geometry column {column!r} contains a Boolean value "
+            f"at row {row!r}"
+        )
+    if np.iscomplexobj(current):
+        raise ValueError(
+            f"radar geometry column {column!r} contains a complex value "
+            f"at row {row!r}"
+        )
+    return current
+
+
+def _normalize_radar_geometry_cells(frame: pd.DataFrame) -> pd.DataFrame:
+    """Inspect geometry cells before pandas or NumPy can coerce their types."""
+
+    normalized = frame.copy()
+    for position, column in enumerate(normalized.columns):
+        if str(column).strip().lower() not in _RADAR_GEOMETRY_COLUMNS:
+            continue
+        values = normalized.iloc[:, position]
+        normalized.isetitem(
+            position,
+            pd.Series(
+                (
+                    _radar_geometry_cell(value, column=column, row=row)
+                    for row, value in values.items()
+                ),
+                index=normalized.index,
+            ),
+        )
+    return normalized
 
 
 def _drop_negative_radar_ranges(frame: pd.DataFrame) -> pd.DataFrame:
     """Return a normalized radar frame without physically invalid ranges."""
 
-    normalized = _IMPL.normalize_time_column_aliases(frame, target="time_s")
+    normalized = _normalize_radar_geometry_cells(frame)
+    normalized = _IMPL.normalize_time_column_aliases(normalized, target="time_s")
     normalized = _IMPL._normalize_radar_columns(normalized)
     range_m = pd.to_numeric(normalized["range_m"], errors="coerce")
     negative = range_m.lt(0.0).fillna(False)
@@ -122,6 +209,8 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_radar_geometry_cell"] = _radar_geometry_cell
+globals()["_normalize_radar_geometry_cells"] = _normalize_radar_geometry_cells
 globals()["_drop_negative_radar_ranges"] = _drop_negative_radar_ranges
 globals()["_validated_radar_std"] = _validated_radar_std
 globals()["radar_polar_frame_to_candidates"] = radar_polar_frame_to_candidates
