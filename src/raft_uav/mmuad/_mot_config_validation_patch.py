@@ -48,14 +48,15 @@ def _ordered_candidate_frame(candidates: Any, mot: Any) -> Any:
     if not isinstance(rows, pd.DataFrame) or rows.empty:
         return candidates
 
-    ordered = rows.copy()
+    ordered = rows.copy().reset_index(drop=True)
+    sort_keys = pd.DataFrame(index=ordered.index)
     sort_columns: list[str] = []
     ascending: list[bool] = []
 
     for name in ("sequence_id",):
         key = f"{_ORDER_HELPER_PREFIX}{name}"
         values = ordered[name] if name in ordered.columns else pd.Series("", index=ordered.index)
-        ordered[key] = _text_order_values(values)
+        sort_keys[key] = _text_order_values(values)
         sort_columns.append(key)
         ascending.append(True)
 
@@ -66,12 +67,12 @@ def _ordered_candidate_frame(candidates: Any, mot: Any) -> Any:
             if name in ordered.columns
             else pd.Series(np.nan, index=ordered.index)
         )
-        ordered[key] = _finite_real_order_values(values)
+        sort_keys[key] = _finite_real_order_values(values)
         sort_columns.append(key)
         ascending.append(True)
 
     confidence_key = f"{_ORDER_HELPER_PREFIX}confidence"
-    ordered[confidence_key] = mot._mot_confidence_values(ordered)
+    sort_keys[confidence_key] = mot._mot_confidence_values(ordered)
     sort_columns.append(confidence_key)
     ascending.append(False)
 
@@ -82,23 +83,23 @@ def _ordered_candidate_frame(candidates: Any, mot: Any) -> Any:
             if name in ordered.columns
             else pd.Series(np.nan, index=ordered.index)
         )
-        ordered[key] = _finite_real_order_values(values)
+        sort_keys[key] = _finite_real_order_values(values)
         sort_columns.append(key)
         ascending.append(True)
 
     for name in ("source", "track_id", "class_name"):
         key = f"{_ORDER_HELPER_PREFIX}{name}"
         values = ordered[name] if name in ordered.columns else pd.Series("", index=ordered.index)
-        ordered[key] = _text_order_values(values)
+        sort_keys[key] = _text_order_values(values)
         sort_columns.append(key)
         ascending.append(True)
 
-    ordered = (
-        ordered.sort_values(sort_columns, ascending=ascending, kind="mergesort")
-        .drop(columns=sort_columns)
-        .reset_index(drop=True)
-    )
-    return mot.CandidateFrame(ordered)
+    row_order = sort_keys.sort_values(
+        sort_columns,
+        ascending=ascending,
+        kind="mergesort",
+    ).index.to_numpy()
+    return mot.CandidateFrame(ordered.iloc[row_order].reset_index(drop=True))
 
 
 def install() -> None:
