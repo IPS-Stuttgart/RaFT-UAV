@@ -43,10 +43,13 @@ def _ordered_radar_rows(radar: pd.DataFrame) -> pd.DataFrame:
         for column in ("time_s", "frame_index", "track_id")
         if column in rows.columns
     ]
+    column_values = {
+        column: rows[column].tolist() for column in sort_columns
+    }
     positions = sorted(
         range(len(rows)),
         key=lambda position: tuple(
-            _sort_value(rows.iloc[position][column], column=column)
+            _sort_value(column_values[column][position], column=column)
             for column in sort_columns
         ),
     )
