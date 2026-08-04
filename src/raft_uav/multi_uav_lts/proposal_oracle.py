@@ -6,19 +6,20 @@ import argparse
 import csv
 import json
 import re
+from collections import Counter
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Sequence
+from zipfile import BadZipFile, ZipFile
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from ._records import (
     Detection,
-    box_iou,
     format_detection,
     parse_detection_text,
-    prediction_texts,
     rows_by_frame,
     validate_unit_interval,
 )
@@ -135,6 +136,75 @@ class _CoverageCounts:
     size_matched: Mapping[str, int]
 
 
+class _ProposalReader:
+    """Read one proposal sequence at a time from a directory or ZIP."""
+
+    def __init__(self, path: Path, *, truth_names: set[str]) -> None:
+        self.path = path
+        self._directory_files: dict[str, Path] = {}
+        self._zip: ZipFile | None = None
+        self._zip_members: dict[str, str] = {}
+        if not path.exists():
+            raise FileNotFoundError(f"proposal input does not exist: {path}")
+        if path.is_dir():
+            self._directory_files = {
+                candidate.stem: candidate
+                for candidate in sorted(path.glob("*.txt"))
+                if candidate.is_file()
+            }
+            names = set(self._directory_files)
+        elif path.is_file():
+            try:
+                self._zip = ZipFile(path)
+            except BadZipFile as exc:
+                raise ValueError(f"proposal file is not a ZIP archive: {path}") from exc
+            for info in self._zip.infolist():
+                member = PurePosixPath(info.filename.replace("\\", "/"))
+                if info.is_dir() or member.suffix.lower() != ".txt":
+                    continue
+                if len(member.parts) != 1:
+                    raise ValueError(
+                        f"proposal ZIP entries must be root-level .txt files: {info.filename}"
+                    )
+                sequence = member.stem
+                if sequence in self._zip_members:
+                    raise ValueError(
+                        f"proposal ZIP contains duplicate sequence entry: {member.name}"
+                    )
+                self._zip_members[sequence] = info.filename
+            names = set(self._zip_members)
+        else:
+            raise ValueError(f"unsupported proposal input: {path}")
+        unexpected = sorted(names - truth_names)
+        if unexpected:
+            raise ValueError(
+                "proposal input contains unknown sequence files: "
+                + ", ".join(unexpected)
+            )
+
+    def close(self) -> None:
+        if self._zip is not None:
+            self._zip.close()
+
+    def rows(self, sequence: str) -> tuple[Detection, ...]:
+        if self._zip is None:
+            candidate = self._directory_files.get(sequence)
+            text = "" if candidate is None else candidate.read_text(encoding="utf-8")
+        else:
+            member = self._zip_members.get(sequence)
+            text = "" if member is None else self._zip.read(member).decode("utf-8")
+        parsed = parse_detection_text(
+            text,
+            source=f"{self.path}:{sequence}.txt",
+        )
+        for row in parsed:
+            if not 0.0 <= row.confidence <= 1.0:
+                raise ValueError(
+                    f"{self.path}:{sequence}.txt: proposal confidence must be in [0, 1]"
+                )
+        return tuple(parsed)
+
+
 def audit_proposal_banks(
     proposal_paths: Mapping[str, Path],
     truth_dir: Path,
@@ -177,74 +247,96 @@ def audit_proposal_banks(
     selected_paths = [path for path in truth_paths if not requested or path.stem in requested]
     selected_sequences = tuple(path.stem for path in selected_paths)
 
-    truth_by_sequence = {
-        path.stem: parse_detection_text(
-            path.read_text(encoding="utf-8"),
-            source=str(path),
-        )
-        for path in selected_paths
-    }
-    proposals_by_source = {
-        name: _load_source(path, selected_sequences, truth_names)
-        for name, path in normalized_paths.items()
-    }
-    source_rows: dict[str, dict[str, tuple[Detection, ...]]] = {
-        name: {
-            sequence: tuple(_canonicalize_proposals(rows.get(sequence, ())))
-            for sequence in selected_sequences
-        }
-        for name, rows in proposals_by_source.items()
-    }
+    source_names = list(normalized_paths)
+    if include_fused and len(source_names) > 1:
+        source_names.append("fused")
     sources = [
         ProposalSource(name=name, path=str(path), fused=False)
         for name, path in normalized_paths.items()
     ]
-    if include_fused and len(source_rows) > 1:
-        fused_name = "fused"
-        if fused_name in source_rows:
-            raise ValueError("proposal source name 'fused' is reserved")
-        source_rows[fused_name] = {
-            sequence: tuple(
-                _canonicalize_proposals(
-                    row
-                    for name in normalized_paths
-                    for row in source_rows[name][sequence]
-                )
+    if "fused" in source_names:
+        sources.append(ProposalSource(name="fused", path="<union>", fused=True))
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    oracle_dirs = _prepare_oracle_dirs(output_dir, source_names)
+    output_rows = {source: 0 for source in source_names}
+    count_groups: dict[tuple[str, float, float], list[_CoverageCounts]] = {
+        (source, confidence, iou): []
+        for source in source_names
+        for confidence in confidence_values
+        for iou in iou_values
+    }
+    sequence_rows: list[SequenceCoverageRow] = []
+
+    with ExitStack() as stack:
+        readers: dict[str, _ProposalReader] = {}
+        for name, path in normalized_paths.items():
+            reader = _ProposalReader(path, truth_names=truth_names)
+            stack.callback(reader.close)
+            readers[name] = reader
+        for truth_path in selected_paths:
+            sequence = truth_path.stem
+            truth_rows = parse_detection_text(
+                truth_path.read_text(encoding="utf-8"),
+                source=str(truth_path),
             )
-            for sequence in selected_sequences
-        }
-        sources.append(ProposalSource(name=fused_name, path="<union>", fused=True))
+            rows_by_source = {
+                name: tuple(_canonicalize_proposals(reader.rows(sequence)))
+                for name, reader in readers.items()
+            }
+            if "fused" in source_names:
+                rows_by_source["fused"] = tuple(
+                    _canonicalize_proposals(
+                        row
+                        for name in normalized_paths
+                        for row in rows_by_source[name]
+                    )
+                )
+            for source in source_names:
+                proposal_rows = rows_by_source[source]
+                grid = _coverage_grid(
+                    truth_rows,
+                    proposal_rows,
+                    confidence_thresholds=confidence_values,
+                    iou_thresholds=iou_values,
+                )
+                for confidence in confidence_values:
+                    for iou in iou_values:
+                        counts = grid[(confidence, iou)]
+                        count_groups[(source, confidence, iou)].append(counts)
+                        sequence_rows.append(
+                            _sequence_coverage_row(
+                                source,
+                                sequence,
+                                confidence,
+                                iou,
+                                counts,
+                            )
+                        )
+                oracle_rows = _oracle_rows(
+                    truth_rows,
+                    proposal_rows,
+                    confidence_threshold=oracle_confidence,
+                    iou_threshold=oracle_iou,
+                    exact_seed_rows=True,
+                )
+                output_rows[source] += len(oracle_rows)
+                (oracle_dirs[source] / f"{sequence}.txt").write_text(
+                    "".join(format_detection(row) + "\n" for row in oracle_rows),
+                    encoding="utf-8",
+                )
 
     coverage_rows: list[CoverageRow] = []
-    sequence_rows: list[SequenceCoverageRow] = []
     size_rows: list[SizeCoverageRow] = []
-    for source, by_sequence in source_rows.items():
-        for confidence_threshold in confidence_values:
-            for iou_threshold in iou_values:
-                sequence_counts: list[_CoverageCounts] = []
-                for sequence in selected_sequences:
-                    counts = _coverage_counts(
-                        truth_by_sequence[sequence],
-                        by_sequence[sequence],
-                        confidence_threshold=confidence_threshold,
-                        iou_threshold=iou_threshold,
-                    )
-                    sequence_counts.append(counts)
-                    sequence_rows.append(
-                        _sequence_coverage_row(
-                            source,
-                            sequence,
-                            confidence_threshold,
-                            iou_threshold,
-                            counts,
-                        )
-                    )
-                aggregate = _combine_counts(sequence_counts)
+    for source in source_names:
+        for confidence in confidence_values:
+            for iou in iou_values:
+                aggregate = _combine_counts(count_groups[(source, confidence, iou)])
                 coverage_rows.append(
                     _coverage_row(
                         source,
-                        confidence_threshold,
-                        iou_threshold,
+                        confidence,
+                        iou,
                         len(selected_sequences),
                         aggregate,
                     )
@@ -255,8 +347,8 @@ def audit_proposal_banks(
                     size_rows.append(
                         SizeCoverageRow(
                             source=source,
-                            confidence_threshold=confidence_threshold,
-                            iou_threshold=iou_threshold,
+                            confidence_threshold=confidence,
+                            iou_threshold=iou,
                             size_bin=size_bin,
                             truth_count=truth_count,
                             matched_count=matched_count,
@@ -264,19 +356,17 @@ def audit_proposal_banks(
                         )
                     )
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     oracle_scores = tuple(
-        _materialize_oracle(
+        _score_oracle(
             source,
-            source_rows[source],
-            truth_by_sequence,
+            oracle_dirs[source],
             truth_dir,
-            output_dir,
             selected_sequences,
             confidence_threshold=oracle_confidence,
             iou_threshold=oracle_iou,
+            output_rows=output_rows[source],
         )
-        for source in source_rows
+        for source in source_names
     )
     summary = ProposalOracleSummary(
         schema="raft-uav-multi-uav-lts-proposal-oracle-v1",
@@ -341,39 +431,37 @@ def _reject_output_aliases(
     output_dir: Path,
 ) -> None:
     output = output_dir.resolve()
-    if output == truth_dir.resolve():
+    truth = truth_dir.resolve()
+    if output == truth:
         raise ValueError("output directory must differ from truth directory")
+    seen_inputs: dict[Path, str] = {}
     for name, path in proposal_paths.items():
-        if path.is_dir() and output == path.resolve():
+        resolved = path.resolve()
+        if resolved == truth:
+            raise ValueError(f"proposal source '{name}' must not alias the truth directory")
+        if resolved in seen_inputs:
+            raise ValueError(
+                f"proposal sources '{seen_inputs[resolved]}' and '{name}' alias the same input"
+            )
+        seen_inputs[resolved] = name
+        if path.is_dir() and output == resolved:
             raise ValueError(
                 f"output directory must differ from proposal directory '{name}'"
             )
 
 
-def _load_source(
-    path: Path,
-    selected_sequences: tuple[str, ...],
-    all_truth_names: set[str],
-) -> dict[str, tuple[Detection, ...]]:
-    texts = prediction_texts(path)
-    unexpected = sorted(Path(name).stem for name in texts if Path(name).stem not in all_truth_names)
-    if unexpected:
-        raise ValueError(
-            "proposal input contains unknown sequence files: " + ", ".join(unexpected)
-        )
-    rows: dict[str, tuple[Detection, ...]] = {}
-    for sequence in selected_sequences:
-        parsed = parse_detection_text(
-            texts.get(f"{sequence}.txt", ""),
-            source=f"{path}:{sequence}.txt",
-        )
-        for row in parsed:
-            if not 0.0 <= row.confidence <= 1.0:
-                raise ValueError(
-                    f"{path}:{sequence}.txt: proposal confidence must be in [0, 1]"
-                )
-        rows[sequence] = tuple(parsed)
-    return rows
+def _prepare_oracle_dirs(
+    output_dir: Path,
+    sources: Sequence[str],
+) -> dict[str, Path]:
+    result: dict[str, Path] = {}
+    for source in sources:
+        oracle_dir = output_dir / "oracle_predictions" / source
+        oracle_dir.mkdir(parents=True, exist_ok=True)
+        for stale_path in oracle_dir.glob("*.txt"):
+            stale_path.unlink()
+        result[source] = oracle_dir
+    return result
 
 
 def _canonicalize_proposals(rows: Iterable[Detection]) -> list[Detection]:
@@ -400,59 +488,104 @@ def _canonicalize_proposals(rows: Iterable[Detection]) -> list[Detection]:
     return output
 
 
-def _coverage_counts(
+def _coverage_grid(
     truth_rows: list[Detection],
     proposal_rows: tuple[Detection, ...],
     *,
-    confidence_threshold: float,
-    iou_threshold: float,
-) -> _CoverageCounts:
+    confidence_thresholds: tuple[float, ...],
+    iou_thresholds: tuple[float, ...],
+) -> dict[tuple[float, float], _CoverageCounts]:
     truth_frames = rows_by_frame(truth_rows)
-    proposal_frames = rows_by_frame(
-        [row for row in proposal_rows if row.confidence >= confidence_threshold]
-    )
-    truth_count = len(truth_rows)
-    proposal_count = sum(len(rows) for rows in proposal_frames.values())
-    matched_count = 0
-    matched_iou_sum = 0.0
-    best_iou_sum = 0.0
-    size_truth = {name: 0 for name, _lower, _upper in _SIZE_BINS}
-    size_matched = {name: 0 for name, _lower, _upper in _SIZE_BINS}
+    proposal_frames = rows_by_frame(proposal_rows)
+    size_truth = Counter(_size_bin(row) for row in truth_rows)
+    proposal_counts = {confidence: 0 for confidence in confidence_thresholds}
+    best_iou_sums = {confidence: 0.0 for confidence in confidence_thresholds}
+    matched_counts = {
+        (confidence, iou): 0
+        for confidence in confidence_thresholds
+        for iou in iou_thresholds
+    }
+    matched_iou_sums = {key: 0.0 for key in matched_counts}
+    size_matched = {key: Counter() for key in matched_counts}
     frame_ids = sorted(set(truth_frames) | set(proposal_frames))
     for frame_id in frame_ids:
         truth = truth_frames.get(frame_id, ())
         proposals = proposal_frames.get(frame_id, ())
         matrix = _iou_matrix(truth, proposals)
-        if len(truth):
-            if matrix.shape[1]:
-                best_iou_sum += float(np.max(matrix, axis=1).sum())
-            for row in truth:
-                size_truth[_size_bin(row)] += 1
-        matches = _optimal_matches(matrix, min_iou=iou_threshold)
-        matched_count += len(matches)
-        matched_iou_sum += sum(match.iou for match in matches)
-        for match in matches:
-            size_matched[_size_bin(truth[match.truth_index])] += 1
-    return _CoverageCounts(
-        truth_count=truth_count,
-        proposal_count=proposal_count,
-        matched_count=matched_count,
-        matched_iou_sum=matched_iou_sum,
-        best_iou_sum=best_iou_sum,
-        size_truth=size_truth,
-        size_matched=size_matched,
-    )
+        scores = np.asarray([row.confidence for row in proposals], dtype=float)
+        for confidence in confidence_thresholds:
+            indices = np.flatnonzero(scores >= confidence)
+            proposal_counts[confidence] += int(indices.size)
+            filtered = matrix[:, indices]
+            if len(truth) and filtered.shape[1]:
+                best_iou_sums[confidence] += float(np.max(filtered, axis=1).sum())
+            for iou in iou_thresholds:
+                key = (confidence, iou)
+                matches = _optimal_matches(filtered, min_iou=iou)
+                matched_counts[key] += len(matches)
+                matched_iou_sums[key] += sum(match.iou for match in matches)
+                for match in matches:
+                    size_matched[key][_size_bin(truth[match.truth_index])] += 1
+    result: dict[tuple[float, float], _CoverageCounts] = {}
+    for confidence in confidence_thresholds:
+        for iou in iou_thresholds:
+            key = (confidence, iou)
+            result[key] = _CoverageCounts(
+                truth_count=len(truth_rows),
+                proposal_count=proposal_counts[confidence],
+                matched_count=matched_counts[key],
+                matched_iou_sum=matched_iou_sums[key],
+                best_iou_sum=best_iou_sums[confidence],
+                size_truth={
+                    name: int(size_truth[name]) for name, _lower, _upper in _SIZE_BINS
+                },
+                size_matched={
+                    name: int(size_matched[key][name])
+                    for name, _lower, _upper in _SIZE_BINS
+                },
+            )
+    return result
 
 
 def _iou_matrix(
     truth: Sequence[Detection],
     proposals: Sequence[Detection],
 ) -> np.ndarray:
-    matrix = np.zeros((len(truth), len(proposals)), dtype=float)
-    for truth_index, truth_row in enumerate(truth):
-        for proposal_index, proposal_row in enumerate(proposals):
-            matrix[truth_index, proposal_index] = box_iou(truth_row, proposal_row)
-    return matrix
+    if not truth or not proposals:
+        return np.zeros((len(truth), len(proposals)), dtype=float)
+    truth_boxes = np.asarray(
+        [
+            [row.x1, row.y1, row.x1 + row.width, row.y1 + row.height]
+            for row in truth
+        ],
+        dtype=float,
+    )
+    proposal_boxes = np.asarray(
+        [
+            [row.x1, row.y1, row.x1 + row.width, row.y1 + row.height]
+            for row in proposals
+        ],
+        dtype=float,
+    )
+    top_left = np.maximum(truth_boxes[:, None, :2], proposal_boxes[None, :, :2])
+    bottom_right = np.minimum(truth_boxes[:, None, 2:], proposal_boxes[None, :, 2:])
+    intersection_wh = np.maximum(0.0, bottom_right - top_left)
+    intersection = intersection_wh[..., 0] * intersection_wh[..., 1]
+    truth_area = (
+        (truth_boxes[:, 2] - truth_boxes[:, 0])
+        * (truth_boxes[:, 3] - truth_boxes[:, 1])
+    )[:, None]
+    proposal_area = (
+        (proposal_boxes[:, 2] - proposal_boxes[:, 0])
+        * (proposal_boxes[:, 3] - proposal_boxes[:, 1])
+    )[None, :]
+    union = truth_area + proposal_area - intersection
+    return np.divide(
+        intersection,
+        union,
+        out=np.zeros_like(intersection),
+        where=union > 0.0,
+    )
 
 
 def _optimal_matches(matrix: np.ndarray, *, min_iou: float) -> tuple[_Match, ...]:
@@ -547,35 +680,16 @@ def _size_bin(row: Detection) -> str:
     raise AssertionError("unreachable size bin")
 
 
-def _materialize_oracle(
+def _score_oracle(
     source: str,
-    proposals_by_sequence: Mapping[str, tuple[Detection, ...]],
-    truth_by_sequence: Mapping[str, list[Detection]],
+    oracle_dir: Path,
     truth_dir: Path,
-    output_dir: Path,
     selected_sequences: tuple[str, ...],
     *,
     confidence_threshold: float,
     iou_threshold: float,
+    output_rows: int,
 ) -> OracleScore:
-    oracle_dir = output_dir / "oracle_predictions" / source
-    oracle_dir.mkdir(parents=True, exist_ok=True)
-    for stale_path in oracle_dir.glob("*.txt"):
-        stale_path.unlink()
-    output_rows = 0
-    for sequence in selected_sequences:
-        rows = _oracle_rows(
-            truth_by_sequence[sequence],
-            proposals_by_sequence[sequence],
-            confidence_threshold=confidence_threshold,
-            iou_threshold=iou_threshold,
-            exact_seed_rows=True,
-        )
-        output_rows += len(rows)
-        (oracle_dir / f"{sequence}.txt").write_text(
-            "".join(format_detection(row) + "\n" for row in rows),
-            encoding="utf-8",
-        )
     metrics = evaluate_lts_predictions(
         oracle_dir,
         truth_dir,
