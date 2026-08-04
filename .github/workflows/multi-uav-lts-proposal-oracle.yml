@@ -1,0 +1,310 @@
+---
+name: Multi-UAV LTS proposal oracle
+
+"on":
+  workflow_dispatch:
+    inputs:
+      truth_dir:
+        description: Complete training-label directory
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels
+        type: string
+      proposal_specs:
+        description: Semicolon/newline-separated NAME=PATH proposal sources
+        required: false
+        default: ""
+        type: string
+      regenerate_proposals:
+        description: Regenerate a seeded 1920px baseline proposal bank
+        required: false
+        default: false
+        type: boolean
+      work_root:
+        description: Multi-UAV LTS work root used for regeneration
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts
+        type: string
+      train_sequence_root:
+        description: Training-image sequence root used for regeneration
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainImages
+        type: string
+      first_frame_label_dir:
+        description: First-frame training labels used for regeneration
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels_FirstFrameOnly
+        type: string
+      upstream_python:
+        description: Python executable for the external BoT-SORT checkout
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/venvs/yolov12-botsort-py312/bin/python
+        type: string
+      device:
+        description: CUDA device used for proposal regeneration
+        required: true
+        default: "0"
+        type: string
+      img_size:
+        description: Detector image size used for regeneration
+        required: true
+        default: "1920"
+        type: string
+      proposal_conf_threshold:
+        description: Low detector confidence threshold for proposal export
+        required: true
+        default: "0.001"
+        type: string
+      proposal_iou_threshold:
+        description: Relaxed NMS IoU threshold for proposal export
+        required: true
+        default: "0.95"
+        type: string
+      oracle_conf_threshold:
+        description: Confidence threshold used for oracle materialization
+        required: true
+        default: "0.003"
+        type: string
+      oracle_iou_threshold:
+        description: IoU gate used for oracle materialization
+        required: true
+        default: "0.05"
+        type: string
+      output_root:
+        description: Result root; run-specific output is created below it
+        required: true
+        default: /tmp/raft-uav-lts-proposal-oracle
+        type: string
+      probe_only:
+        description: Check paths and environment without installing or running
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multi-uav-lts-proposal-oracle-workstation2
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  TRUTH_DIR: ${{ inputs.truth_dir }}
+  PROPOSAL_SPECS: ${{ inputs.proposal_specs }}
+  WORK_ROOT: ${{ inputs.work_root }}
+  TRAIN_SEQUENCE_ROOT: ${{ inputs.train_sequence_root }}
+  FIRST_FRAME_LABEL_DIR: ${{ inputs.first_frame_label_dir }}
+  UPSTREAM_PYTHON: ${{ inputs.upstream_python }}
+  GPU_DEVICE: ${{ inputs.device }}
+  IMG_SIZE: ${{ inputs.img_size }}
+  PROPOSAL_CONF: ${{ inputs.proposal_conf_threshold }}
+  PROPOSAL_IOU: ${{ inputs.proposal_iou_threshold }}
+  ORACLE_CONF: ${{ inputs.oracle_conf_threshold }}
+  ORACLE_IOU: ${{ inputs.oracle_iou_threshold }}
+  OUTPUT_ROOT: ${{ inputs.output_root }}
+  VENV_PATH: ${{ github.workspace }}/.lts-proposal-venv-${{ github.run_id }}
+
+jobs:
+  proposal-oracle:
+    name: Export and audit LTS proposals
+    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    timeout-minutes: 720
+
+    steps:
+      - name: Check out RaFT-UAV
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+
+      - name: Prepare run directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_DIR="${OUTPUT_ROOT}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${RUN_DIR}"
+          echo "RUN_DIR=${RUN_DIR}" >> "${GITHUB_ENV}"
+
+      - name: Record runner and GPU environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "runner_name=${RUNNER_NAME}"
+            echo "runner_os=${RUNNER_OS}"
+            echo "runner_arch=${RUNNER_ARCH}"
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "git_commit=${GITHUB_SHA}"
+            uname -a
+          } | tee "${RUN_DIR}/runner.txt"
+          nvidia-smi -L | tee "${RUN_DIR}/nvidia-smi-L.txt"
+
+      - name: Probe mounted inputs
+        shell: bash
+        env:
+          REGENERATE: ${{ inputs.regenerate_proposals }}
+          PROBE_ONLY: ${{ inputs.probe_only }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          def probe(raw: str) -> dict[str, object]:
+              path = Path(raw).expanduser()
+              record = {
+                  "path": str(path),
+                  "exists": path.exists(),
+                  "is_dir": path.is_dir(),
+                  "is_file": path.is_file(),
+                  "readable": False,
+                  "error": None,
+              }
+              try:
+                  if path.is_dir():
+                      next(path.iterdir(), None)
+                  elif path.is_file():
+                      path.open("rb").close()
+                  record["readable"] = path.exists()
+              except OSError as exc:
+                  record["error"] = f"{type(exc).__name__}: {exc}"
+              return record
+
+          paths = {
+              "truth_dir": probe(os.environ["TRUTH_DIR"]),
+              "work_root": probe(os.environ["WORK_ROOT"]),
+              "train_sequence_root": probe(os.environ["TRAIN_SEQUENCE_ROOT"]),
+              "first_frame_label_dir": probe(os.environ["FIRST_FRAME_LABEL_DIR"]),
+              "upstream_python": probe(os.environ["UPSTREAM_PYTHON"]),
+          }
+          payload = {
+              "schema": "raft-uav-lts-proposal-oracle-probe-v1",
+              "paths": paths,
+              "proposal_specs": os.environ.get("PROPOSAL_SPECS", ""),
+          }
+          output = Path(os.environ["RUN_DIR"]) / "probe.json"
+          output.write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          if os.environ["PROBE_ONLY"].lower() == "true":
+              raise SystemExit(0)
+          failures = []
+          if not paths["truth_dir"]["is_dir"] or not paths["truth_dir"]["readable"]:
+              failures.append("truth_dir")
+          if os.environ["REGENERATE"].lower() == "true":
+              for key in ("work_root", "train_sequence_root", "first_frame_label_dir"):
+                  if not paths[key]["is_dir"] or not paths[key]["readable"]:
+                      failures.append(key)
+              if not paths["upstream_python"]["is_file"]:
+                  failures.append("upstream_python")
+          elif not os.environ.get("PROPOSAL_SPECS", "").strip():
+              failures.append("proposal_specs")
+          if failures:
+              raise SystemExit(
+                  "required proposal-oracle inputs are unavailable: "
+                  + ", ".join(sorted(set(failures)))
+              )
+          PY
+
+      - name: Set up Python 3.11
+        if: ${{ ! inputs.probe_only }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install isolated experiment environment
+        if: ${{ ! inputs.probe_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "${VENV_PATH}"
+          "${VENV_PATH}/bin/python" -m pip install --upgrade pip
+          "${VENV_PATH}/bin/python" -m pip install -e ".[dev]"
+          "${VENV_PATH}/bin/python" -m pip check
+          "${VENV_PATH}/bin/python" -m pip freeze --all \
+            > "${RUN_DIR}/pip-freeze.txt"
+
+      - name: Regenerate seeded low-threshold proposal bank
+        if: ${{ ! inputs.probe_only && inputs.regenerate_proposals }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${VENV_PATH}/bin/python" \
+            -m raft_uav.multi_uav_lts.proposal_baseline \
+            --work-root "${WORK_ROOT}" \
+            --sequence-root "${TRAIN_SEQUENCE_ROOT}" \
+            --first-frame-label-dir "${FIRST_FRAME_LABEL_DIR}" \
+            --output-dir "${RUN_DIR}/baseline" \
+            --proposal-output-dir "${RUN_DIR}/baseline/proposals" \
+            --no-template \
+            --python "${UPSTREAM_PYTHON}" \
+            --device "${GPU_DEVICE}" \
+            --img-size "${IMG_SIZE}" \
+            --proposal-conf-thres "${PROPOSAL_CONF}" \
+            --proposal-iou-thres "${PROPOSAL_IOU}" \
+            --overwrite \
+            | tee "${RUN_DIR}/proposal-baseline-console.txt"
+
+      - name: Run proposal recall and identity-oracle audit
+        if: ${{ ! inputs.probe_only }}
+        shell: bash
+        env:
+          REGENERATE: ${{ inputs.regenerate_proposals }}
+        run: |
+          set -euo pipefail
+          proposal_args=()
+          if [[ "${REGENERATE}" == "true" ]]; then
+            proposal_args+=(
+              --proposal "seeded_yolo1920=${RUN_DIR}/baseline/proposals"
+            )
+          fi
+          while IFS= read -r specification; do
+            specification="$(
+              printf '%s' "${specification}" \
+                | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+            )"
+            if [[ -n "${specification}" ]]; then
+              proposal_args+=(--proposal "${specification}")
+            fi
+          done < <(printf '%s' "${PROPOSAL_SPECS}" | tr ';' '\n')
+
+          "${VENV_PATH}/bin/python" \
+            -m raft_uav.multi_uav_lts.proposal_oracle \
+            "${proposal_args[@]}" \
+            --truth-dir "${TRUTH_DIR}" \
+            --output-dir "${RUN_DIR}/oracle" \
+            --confidence-thresholds 0 0.001 0.003 0.01 0.03 0.09 \
+            --iou-thresholds 0.05 0.3 0.5 \
+            --oracle-confidence-threshold "${ORACLE_CONF}" \
+            --oracle-iou-threshold "${ORACLE_IOU}" \
+            | tee "${RUN_DIR}/proposal-oracle-console.txt"
+
+      - name: Publish job summary
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          {
+            echo "### Multi-UAV LTS proposal oracle"
+            echo
+            echo "- Runner: \`${RUNNER_NAME}\`"
+            echo "- Run directory: \`${RUN_DIR}\`"
+            echo "- Regenerated proposals: \`${{ inputs.regenerate_proposals }}\`"
+            echo "- Probe only: \`${{ inputs.probe_only }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload proposal-oracle evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+        with:
+          name: multi-uav-lts-proposal-oracle-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RUN_DIR }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
