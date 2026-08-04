@@ -58,6 +58,30 @@ def _nonnegative_float(value: object, *, name: str) -> float:
     return normalized
 
 
+def _sort_by_numeric_time(
+    frame: pd.DataFrame,
+    *,
+    prefix_columns: tuple[str, ...] = (),
+) -> pd.DataFrame:
+    """Stable-sort numeric-like timestamps without rewriting payload values."""
+
+    work = pd.DataFrame(frame).copy()
+    sort_column = "_runtime_mode_numeric_time_s"
+    while sort_column in work.columns:
+        sort_column = f"_{sort_column}"
+    work[sort_column] = pd.Series(
+        [optional_float(value) for value in work["time_s"].tolist()],
+        index=work.index,
+        dtype=float,
+    )
+    ordered = work.sort_values(
+        [*prefix_columns, sort_column],
+        kind="mergesort",
+        na_position="last",
+    )
+    return ordered.drop(columns=sort_column)
+
+
 def _frame_groups(
     frame: pd.DataFrame,
     *,
@@ -144,7 +168,7 @@ def _backward_repair_one_sequence(
         max_repair_distance_m,
         name="max_repair_distance_m",
     )
-    selected = selected.sort_values("time_s", kind="mergesort").reset_index(drop=True)
+    selected = _sort_by_numeric_time(selected).reset_index(drop=True)
     repaired = [row.copy() for _, row in selected.iterrows()]
     use_frame_index = _has_complete_frame_index(selected) and (
         _has_complete_frame_index(candidates)
@@ -206,11 +230,7 @@ def _backward_repair_one_sequence(
                 repaired_row["association_repaired"] = True
                 repaired.append(repaired_row)
                 selected_keys.add(key)
-    return (
-        pd.DataFrame(repaired)
-        .sort_values("time_s", kind="mergesort")
-        .reset_index(drop=True)
-    )
+    return _sort_by_numeric_time(pd.DataFrame(repaired)).reset_index(drop=True)
 
 
 def backward_repair_associations(
@@ -273,15 +293,15 @@ def backward_repair_associations(
                 max_repair_distance_m=max_repair_distance_m,
             )
         )
-    return (
-        pd.concat(repaired_parts, ignore_index=True, sort=False)
-        .sort_values(["sequence_id", "time_s"], kind="mergesort")
-        .reset_index(drop=True)
-    )
+    return _sort_by_numeric_time(
+        pd.concat(repaired_parts, ignore_index=True, sort=False),
+        prefix_columns=("sequence_id",),
+    ).reset_index(drop=True)
 
 
 _LEGACY._exact_frame_indices = _exact_frame_indices
 _LEGACY._has_complete_frame_index = _has_complete_frame_index
+_LEGACY._sort_by_numeric_time = _sort_by_numeric_time
 _LEGACY._frame_groups = _frame_groups
 _LEGACY._row_key = _row_key
 _LEGACY._backward_repair_one_sequence = _backward_repair_one_sequence
@@ -293,6 +313,7 @@ for _name in dir(_LEGACY):
 globals()["_exact_frame_indices"] = _exact_frame_indices
 globals()["_has_complete_frame_index"] = _has_complete_frame_index
 globals()["_nonnegative_float"] = _nonnegative_float
+globals()["_sort_by_numeric_time"] = _sort_by_numeric_time
 globals()["_frame_groups"] = _frame_groups
 globals()["_row_key"] = _row_key
 globals()["_backward_repair_one_sequence"] = _backward_repair_one_sequence
