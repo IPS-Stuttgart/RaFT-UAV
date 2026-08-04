@@ -1,9 +1,9 @@
-"""Normalize numeric-like paper-selection ordering without mutating row payloads."""
+"""Normalize serialized paper-selection chronology at narrow sort boundaries."""
 
 from __future__ import annotations
 
 from importlib import import_module
-from typing import Sequence
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -13,148 +13,75 @@ from raft_uav.numeric import optional_float
 
 _paper_selection = import_module("raft_uav.paper_selection")
 _PATCH_MARKER = "_raft_uav_paper_numeric_time_patch_applied"
+_ORIGINAL_LARGEST_CONTINUOUS_TRACK_SEGMENT: Callable[[pd.DataFrame], pd.DataFrame] = (
+    _paper_selection._largest_continuous_track_segment
+)
+_ORIGINAL_SORT_RADAR_ROWS: Callable[[pd.DataFrame], pd.DataFrame] = (
+    _paper_selection._sort_radar_rows
+)
 
 
-def _numeric_series(values: pd.Series) -> pd.Series:
-    """Return finite real scalar values while preserving the source index."""
+def _numeric_like_strings(values: pd.Series) -> pd.Series:
+    """Normalize a wholly numeric serialized column and preserve other payloads."""
 
+    materialized = values.tolist()
+    nonmissing = [value for value in materialized if not pd.isna(value)]
+    if not nonmissing or not any(isinstance(value, str) for value in nonmissing):
+        return values.copy()
+
+    parsed = [optional_float(value) for value in materialized]
+    for original, numeric in zip(materialized, parsed):
+        if not pd.isna(original) and numeric is None:
+            return values.copy()
     return pd.Series(
-        [optional_float(value) for value in values],
+        [np.nan if pd.isna(original) else numeric for original, numeric in zip(materialized, parsed)],
         index=values.index,
         dtype=float,
     )
 
 
-def _sort_with_numeric_keys(
-    frame: pd.DataFrame,
-    columns: Sequence[str],
-) -> pd.DataFrame:
-    """Sort numeric-like keys numerically while retaining original columns."""
-
-    if frame.empty:
-        return frame.copy()
+def _normalize_chronology(frame: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy with numeric serialized time/frame keys only."""
 
     out = frame.copy()
-    sort_columns: list[str] = []
-    temporary_columns: list[str] = []
-    for position, column in enumerate(columns):
-        if column not in out.columns:
-            continue
-
-        numeric = _numeric_series(out[column])
-        nonmissing = ~out[column].isna()
-        use_numeric = column in {"time_s", "frame_index"} or bool(
-            numeric.loc[nonmissing].notna().all()
-        )
-        if not use_numeric:
-            sort_columns.append(column)
-            continue
-
-        key = f"__raft_uav_numeric_sort_{position}"
-        while key in out.columns:
-            key += "_"
-        out[key] = numeric
-        sort_columns.append(key)
-        temporary_columns.append(key)
-
-    if not sort_columns:
-        return out
-    ordered = out.sort_values(
-        sort_columns,
-        kind="mergesort",
-        na_position="last",
-    )
-    return ordered.drop(columns=temporary_columns)
-
-
-def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
-    """Split tracks after stable numeric ordering of frame and time keys."""
-
-    if radar.empty or "track_id" not in radar.columns:
-        return []
-
-    segments: list[pd.DataFrame] = []
-    for _, track_rows in radar.groupby("track_id", sort=True):
-        frame_index = (
-            _numeric_series(track_rows["frame_index"])
-            if "frame_index" in track_rows.columns
-            else None
-        )
-        use_frame_index = frame_index is not None and bool(
-            np.isfinite(frame_index).all()
-        )
-        sort_candidates = (
-            ("frame_index", "time_s", "track_index")
-            if use_frame_index
-            else ("time_s", "track_index")
-        )
-        ordered = _sort_with_numeric_keys(track_rows, sort_candidates).reset_index(
-            drop=True
-        )
-        frame_column = "frame_index" if use_frame_index else "time_s"
-        frame_values = _numeric_series(ordered[frame_column]).to_numpy(dtype=float)
-        split_points = np.r_[
-            0,
-            np.where(
-                np.diff(frame_values)
-                > _paper_selection._segment_gap_threshold(frame_values)
-            )[0]
-            + 1,
-            len(ordered),
-        ]
-        for start, end in zip(split_points[:-1], split_points[1:]):
-            segment = ordered.iloc[int(start) : int(end)].copy()
-            if not segment.empty:
-                segments.append(segment)
-    return segments
+    for column in ("time_s", "frame_index"):
+        if column in out.columns:
+            out[column] = _numeric_like_strings(out[column])
+    return out
 
 
 def _largest_continuous_track_segment(radar: pd.DataFrame) -> pd.DataFrame:
-    """Select the largest segment using numeric timestamp tie breakers."""
+    """Delegate segment selection after normalizing serialized chronology."""
 
-    if radar.empty or "track_id" not in radar.columns:
-        return radar.iloc[0:0].copy()
-    segments = _continuous_track_segments(radar)
-    if not segments:
-        return radar.iloc[0:0].copy()
-
-    def segment_key(segment: pd.DataFrame) -> tuple[int, float, float, float, int]:
-        times = _numeric_series(segment["time_s"]).to_numpy(dtype=float)
-        finite_times = times[np.isfinite(times)]
-        if finite_times.size:
-            start_time = float(finite_times[0])
-            duration = float(finite_times[-1] - finite_times[0])
-        else:
-            start_time = float("inf")
-            duration = float("-inf")
-        return (
-            int(len(segment)),
-            duration,
-            _paper_selection._mean_catprob(segment),
-            -start_time,
-            -_paper_selection._track_id_from_frame(segment),
-        )
-
-    return max(segments, key=segment_key).copy()
-
-
-def _sort_radar_rows(frame: pd.DataFrame) -> pd.DataFrame:
-    """Sort public paper-selection output by normalized numeric keys."""
-
-    return _sort_with_numeric_keys(
-        frame,
-        ("time_s", "frame_index", "track_id", "track_index"),
+    return _ORIGINAL_LARGEST_CONTINUOUS_TRACK_SEGMENT(
+        _normalize_chronology(radar)
     )
 
 
+def _sort_radar_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    """Delegate stable row ordering after normalizing serialized chronology."""
+
+    return _ORIGINAL_SORT_RADAR_ROWS(_normalize_chronology(frame))
+
+
 def install() -> None:
-    """Install numeric paper-selection ordering once per interpreter."""
+    """Install narrow chronology wrappers once per interpreter."""
 
     if getattr(_paper_selection, _PATCH_MARKER, False):
         return
-    _paper_selection._continuous_track_segments = _continuous_track_segments
+
+    # Public imports resolve through the compatibility package, while its
+    # maintained function objects retain the sibling legacy module as their
+    # globals. Patch both namespaces so direct and internal calls share the same
+    # chronology contract without replacing identifier or segmentation logic.
     _paper_selection._largest_continuous_track_segment = (
         _largest_continuous_track_segment
     )
     _paper_selection._sort_radar_rows = _sort_radar_rows
+    legacy = getattr(_paper_selection, "_LEGACY", None)
+    if legacy is not None:
+        legacy._largest_continuous_track_segment = (
+            _largest_continuous_track_segment
+        )
+        legacy._sort_radar_rows = _sort_radar_rows
     setattr(_paper_selection, _PATCH_MARKER, True)
