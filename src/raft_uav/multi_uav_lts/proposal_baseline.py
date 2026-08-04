@@ -28,6 +28,7 @@ def main(argv: list[str] | None = None) -> int:
     forwarded = list(sys.argv[1:] if argv is None else argv)
     skip_upstream = _remove_flag(forwarded, "--skip-upstream-fixes")
     skip_proposal_patch = _remove_flag(forwarded, "--skip-proposal-export-patch")
+    save_visualizations = _remove_flag(forwarded, "--save-visualizations")
     upstream_summary_override = _pop_option(forwarded, "--upstream-fixes-json")
     proposal_patch_summary_override = _pop_option(
         forwarded,
@@ -93,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         proposal_output_dir=proposal_output_dir,
         proposal_confidence=proposal_confidence,
         proposal_iou=proposal_iou,
+        suppress_visualizations=not save_visualizations,
     )
     return_code = int(runner.main(forwarded))
     wrapper_summary_path = Path(wrapper_summary_override) if wrapper_summary_override else (
@@ -108,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
         proposal_iou=proposal_iou,
         dry_run=dry_run,
         package_only=package_only,
+        save_visualizations=save_visualizations,
         return_code=return_code,
     )
     print(f"multi_uav_lts_proposal_dir={proposal_output_dir}")
@@ -121,6 +124,7 @@ def _install_proposal_command_wrapper(
     proposal_output_dir: Path,
     proposal_confidence: float,
     proposal_iou: float,
+    suppress_visualizations: bool,
 ) -> None:
     original: Callable[..., list[str]] = runner._inference_command
 
@@ -136,6 +140,8 @@ def _install_proposal_command_wrapper(
                 format(proposal_iou, ".15g"),
             ]
         )
+        if suppress_visualizations:
+            command.append("--nosave")
         return command
 
     runner._inference_command = proposal_command
@@ -152,6 +158,7 @@ def _write_run_summary(
     proposal_iou: float,
     dry_run: bool,
     package_only: bool,
+    save_visualizations: bool,
     return_code: int,
 ) -> None:
     payload = {
@@ -164,6 +171,7 @@ def _write_run_summary(
         "proposal_iou_threshold": proposal_iou,
         "dry_run": dry_run,
         "package_only": package_only,
+        "save_visualizations": save_visualizations,
         "return_code": return_code,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
