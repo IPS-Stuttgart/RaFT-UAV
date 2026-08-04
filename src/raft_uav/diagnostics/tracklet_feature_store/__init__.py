@@ -146,6 +146,26 @@ def _selection_mask(
     )
 
 
+def _is_complex_scalar(value: object) -> bool:
+    """Return whether scalar array wrappers contain a complex pseudo-Boolean."""
+
+    scalar = value
+    seen_arrays: set[int] = set()
+    while isinstance(scalar, np.ndarray):
+        if np.ma.is_masked(scalar) or scalar.ndim != 0:
+            return False
+        identity = id(scalar)
+        if identity in seen_arrays:
+            return False
+        seen_arrays.add(identity)
+        scalar = scalar.item()
+    if np.ma.is_masked(scalar):
+        return False
+    if isinstance(scalar, np.generic):
+        scalar = scalar.item()
+    return isinstance(scalar, complex)
+
+
 def _boolean_series(values: Any, *, column: str) -> pd.Series:
     """Parse native and serialized Boolean diagnostics without string truthiness."""
 
@@ -155,13 +175,14 @@ def _boolean_series(values: Any, *, column: str) -> pd.Series:
     if pd.api.types.is_bool_dtype(series.dtype):
         return series.astype("boolean").fillna(False).astype(bool)
 
+    complex_values = series.map(_is_complex_scalar).fillna(False).astype(bool)
     numeric = pd.to_numeric(series, errors="coerce")
     text = series.astype("string").str.strip().str.casefold()
     truthy = (numeric.eq(1.0) | text.isin(_TRUE_BOOLEAN_TEXT)).fillna(False)
     falsy = (
         series.isna() | numeric.eq(0.0) | text.isin(_FALSE_BOOLEAN_TEXT)
     ).fillna(False)
-    invalid = ~(truthy | falsy)
+    invalid = complex_values | ~(truthy | falsy)
     if bool(invalid.any()):
         indices = series.index[invalid].tolist()
         invalid_values = series.loc[indices].tolist()
@@ -211,6 +232,7 @@ globals()["_stable_identifier"] = _stable_identifier
 globals()["_identifier_key"] = _identifier_key
 globals()["_candidate_match_key"] = _candidate_match_key
 globals()["_selection_mask"] = _selection_mask
+globals()["_is_complex_scalar"] = _is_complex_scalar
 globals()["_boolean_series"] = _boolean_series
 globals()["build_counterfactual_association_dashboard"] = (
     build_counterfactual_association_dashboard
