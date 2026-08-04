@@ -317,15 +317,23 @@ def estimate_stateful_transition_costs(
         {
             "flight": frame_keys["flight"],
             "frame_key": frame_keys["frame_key"],
+            "frame_order": frame_keys["frame_order"],
             "time_s": frame_keys["time_s"],
             "label": labels.to_numpy(dtype=bool),
         }
     )
     frame_summary = (
         frame_labels.groupby(["flight", "frame_key"], dropna=False)
-        .agg(label=("label", "max"), time_s=("time_s", "median"))
+        .agg(
+            label=("label", "max"),
+            time_s=("time_s", "median"),
+            frame_order=("frame_order", "median"),
+        )
         .reset_index()
-        .sort_values(["flight", "time_s", "frame_key"], kind="mergesort")
+        .sort_values(
+            ["flight", "time_s", "frame_order", "frame_key"],
+            kind="mergesort",
+        )
     )
     positive_frames = int(frame_summary["label"].sum())
     missed_frames = int(len(frame_summary) - positive_frames)
@@ -364,13 +372,19 @@ def estimate_stateful_transition_costs(
         positive_keys = _stateful_frame_keys(positive_rows)
         positive_rows["_stateful_flight"] = positive_keys["flight"].to_numpy()
         positive_rows["_stateful_frame_key"] = positive_keys["frame_key"].to_numpy()
+        positive_rows["_stateful_frame_order"] = positive_keys["frame_order"].to_numpy()
         positive_rows["_stateful_time_s"] = positive_keys["time_s"].to_numpy()
         track_ids = pd.to_numeric(positive_rows.get("track_id"), errors="coerce")
         positive_rows["_stateful_track_id"] = track_ids
         finite_track_count = int(track_ids.notna().sum())
         missing_track_count = int(track_ids.isna().sum())
         positive_rows = positive_rows.sort_values(
-            ["_stateful_flight", "_stateful_time_s", "_stateful_frame_key"],
+            [
+                "_stateful_flight",
+                "_stateful_time_s",
+                "_stateful_frame_order",
+                "_stateful_frame_key",
+            ],
             kind="mergesort",
         )
         stay_count = 0
@@ -458,10 +472,12 @@ def _stateful_frame_keys(frame: pd.DataFrame) -> pd.DataFrame:
         frame_index.astype("Int64").astype(str),
         rounded_time.astype(str),
     )
+    frame_order = frame_index.where(frame_index.notna(), rounded_time)
     return pd.DataFrame(
         {
             "flight": flight.to_numpy(),
             "frame_key": pd.Series(frame_key, index=frame.index).to_numpy(),
+            "frame_order": frame_order.fillna(0.0).to_numpy(dtype=float),
             "time_s": time_s.fillna(0.0).to_numpy(dtype=float),
         },
         index=frame.index,
