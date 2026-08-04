@@ -4,8 +4,8 @@ The maintained implementation lives in the sibling ``candidate_pull.py`` module.
 This package preserves the public import path while canonicalizing official result
 row indices, preserving result-row order during nearest-center alignment,
 preserving opaque CSV sequence identifiers in the CLI, sanitizing non-finite
-candidate ranking metadata, and preventing finite score sums from overflowing
-during candidate-center construction.
+candidate ranking metadata, preventing finite score sums from overflowing during
+candidate-center construction, and keeping candidate pulls temporally coherent.
 """
 
 from __future__ import annotations
@@ -178,6 +178,39 @@ def _scale_sequence_scores(
     return scaled, scales
 
 
+def _nearest_candidate_frame(
+    candidates: pd.DataFrame,
+    *,
+    sequence: object,
+    target_time_s: object,
+    tolerance_s: float,
+) -> pd.DataFrame:
+    """Return every hypothesis from the single nearest candidate timestamp."""
+
+    sequence_rows = candidates.loc[
+        candidates["Sequence"].astype(str) == str(sequence)
+    ].copy()
+    if sequence_rows.empty:
+        return sequence_rows
+
+    candidate_times = pd.to_numeric(sequence_rows["Timestamp"], errors="coerce")
+    target_time = float(target_time_s)
+    finite = np.isfinite(candidate_times.to_numpy(dtype=float))
+    if not np.isfinite(target_time) or not bool(finite.any()):
+        return sequence_rows.iloc[0:0].copy()
+
+    unique_times = np.unique(candidate_times.loc[finite].to_numpy(dtype=float))
+    deltas = np.abs(unique_times - target_time)
+    eligible = deltas <= float(tolerance_s)
+    if not bool(eligible.any()):
+        return sequence_rows.iloc[0:0].copy()
+    eligible_times = unique_times[eligible]
+    nearest_time = float(
+        eligible_times[int(np.argmin(np.abs(eligible_times - target_time)))]
+    )
+    return sequence_rows.loc[candidate_times.eq(nearest_time)].copy()
+
+
 def _restore_score_scale(frame: pd.DataFrame, factors: np.ndarray) -> pd.DataFrame:
     """Restore diagnostic score units after overflow-safe normalization."""
 
@@ -223,19 +256,53 @@ def candidate_centers_for_results(
     top_k: int = 5,
     time_tolerance_s: float = 0.5,
 ) -> pd.DataFrame:
-    """Return row-wise centers with stable finite score normalization."""
+    """Return row-wise centers from one complete nearest candidate frame.
+
+    A tolerance window can contain several sensor timestamps. Ranking all rows in
+    that window together treats detections from different times as simultaneous,
+    so a high-score future or past candidate can replace every hypothesis from the
+    actually nearest frame. Select one nearest timestamp per result row, use the
+    earlier frame for exact ties, and retain every candidate from that timestamp.
+    """
 
     rows = _sanitize_candidate_ranking_metadata(candidates)
+    if rows.empty:
+        return _IMPL._empty_centers()
+    for column in ("Sequence", "Timestamp", "x_m", "y_m", "z_m"):
+        if column not in rows.columns:
+            raise ValueError(f"candidate rows missing required column {column!r}")
     scaled, scales = _scale_sequence_scores(rows)
-    centers = _ORIGINAL_CANDIDATE_CENTERS_FOR_RESULTS(
-        scaled,
-        results,
-        current_xyz,
-        top_k=top_k,
-        time_tolerance_s=time_tolerance_s,
-    )
-    if centers.empty:
-        return centers
+    result_rows = pd.DataFrame(results).copy()
+    positions = np.asarray(current_xyz)
+    parts: list[pd.DataFrame] = []
+    for position, (row_index, result_row) in enumerate(result_rows.iterrows()):
+        frame = _nearest_candidate_frame(
+            scaled,
+            sequence=result_row["Sequence"],
+            target_time_s=result_row["Timestamp"],
+            tolerance_s=float(time_tolerance_s),
+        )
+        if frame.empty:
+            continue
+        one_result = result_row.to_frame().T
+        one_result.index = pd.RangeIndex(1)
+        one_positions = positions[position : position + 1]
+        centers = _ORIGINAL_CANDIDATE_CENTERS_FOR_RESULTS(
+            frame,
+            one_result,
+            one_positions,
+            top_k=top_k,
+            time_tolerance_s=time_tolerance_s,
+        )
+        if centers.empty:
+            continue
+        centers = centers.copy()
+        centers["row_index"] = row_index
+        centers["Sequence"] = str(result_row["Sequence"])
+        parts.append(centers)
+    if not parts:
+        return _IMPL._empty_centers()
+    centers = pd.concat(parts, ignore_index=True)
     factors = np.array(
         [scales.get(str(sequence), 1.0) for sequence in centers["Sequence"]],
         dtype=float,
@@ -295,6 +362,7 @@ globals().update(
 )
 globals()["main"] = main
 globals()["_normalize_official_results"] = _normalize_official_results
+globals()["_nearest_candidate_frame"] = _nearest_candidate_frame
 globals()["topk_candidate_centers"] = topk_candidate_centers
 globals()["candidate_centers_for_results"] = candidate_centers_for_results
 globals()["align_candidate_centers"] = align_candidate_centers
