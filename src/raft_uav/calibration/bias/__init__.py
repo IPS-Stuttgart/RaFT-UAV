@@ -47,20 +47,19 @@ def _correct_frame(
 
 
 def _finite_real_numeric_series(values: pd.Series) -> pd.Series:
-    """Coerce numeric values without discarding nonzero imaginary components."""
+    """Coerce values to finite reals without discarding imaginary components."""
 
     numeric = pd.to_numeric(values, errors="coerce")
     array = numeric.to_numpy()
-    if not np.iscomplexobj(array):
-        return numeric
-    real = np.real(array)
-    imaginary = np.imag(array)
+    if np.iscomplexobj(array):
+        real = np.real(array)
+        imaginary = np.imag(array)
+        valid = np.isfinite(real) & np.isfinite(imaginary) & (imaginary == 0.0)
+    else:
+        real = np.asarray(array, dtype=float)
+        valid = np.isfinite(real)
     return pd.Series(
-        np.where(
-            np.isfinite(real) & np.isfinite(imaginary) & (imaginary == 0.0),
-            real,
-            np.nan,
-        ),
+        np.where(valid, real, np.nan),
         index=values.index,
         dtype=float,
     )
@@ -79,6 +78,21 @@ def _normalized_bias_frame(
     return normalized
 
 
+def _drop_invalid_bias_rows(
+    frame: pd.DataFrame,
+    columns: Sequence[str],
+) -> pd.DataFrame:
+    """Remove rows unusable for multi-axis residual construction."""
+
+    normalized = _normalized_bias_frame(frame, columns)
+    if any(column not in normalized.columns for column in columns):
+        return normalized
+    valid = np.ones(len(normalized), dtype=bool)
+    for column in columns:
+        valid &= np.isfinite(normalized[column].to_numpy(dtype=float))
+    return normalized.loc[valid].reset_index(drop=True)
+
+
 def make_bias_training_examples(
     measurements: pd.DataFrame,
     truth: pd.DataFrame,
@@ -90,8 +104,8 @@ def make_bias_training_examples(
     """Build bias examples without silently accepting complex numeric cells."""
 
     numeric_columns = ("time_s", *(str(column) for column in target_columns))
-    normalized_measurements = _normalized_bias_frame(measurements, numeric_columns)
-    normalized_truth = _normalized_bias_frame(truth, numeric_columns)
+    normalized_measurements = _drop_invalid_bias_rows(measurements, numeric_columns)
+    normalized_truth = _drop_invalid_bias_rows(truth, numeric_columns)
     return _ORIGINAL_MAKE_BIAS_TRAINING_EXAMPLES(
         normalized_measurements,
         normalized_truth,
@@ -114,6 +128,7 @@ globals().update(
 globals()["_correct_frame"] = _correct_frame
 globals()["_finite_real_numeric_series"] = _finite_real_numeric_series
 globals()["_normalized_bias_frame"] = _normalized_bias_frame
+globals()["_drop_invalid_bias_rows"] = _drop_invalid_bias_rows
 globals()["make_bias_training_examples"] = make_bias_training_examples
 
 __doc__ = _IMPL.__doc__
