@@ -95,6 +95,12 @@ def _uncertainty_apply_validation_install() -> Callable[[], None]:
     return install
 
 
+def _uncertainty_duplicate_truth_install() -> Callable[[], None]:
+    from raft_uav._uncertainty_duplicate_truth_patch import install
+
+    return install
+
+
 def _radar_text_id_csv_install() -> Callable[[], None]:
     from raft_uav.mmuad._radar_text_id_csv_patch import install
 
@@ -194,6 +200,7 @@ _optional_runtime_hook(_geodetic_input_validation_install)
 _optional_runtime_hook(_catprob_sequence_install)
 _optional_runtime_hook(_uncertainty_payload_validation_install)
 _optional_runtime_hook(_uncertainty_apply_validation_install)
+_optional_runtime_hook(_uncertainty_duplicate_truth_install)
 _optional_runtime_hook(_radar_text_id_csv_install)
 _optional_runtime_hook(_point_cloud_source_name_install)
 _optional_runtime_hook(_candidate_reservoir_config_validation_install)
