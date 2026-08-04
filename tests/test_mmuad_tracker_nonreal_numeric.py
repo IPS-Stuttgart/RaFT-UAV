@@ -30,7 +30,8 @@ def test_tracker_ignores_non_real_required_candidate_values(
             "x_m": [1.0, 2.0],
             "y_m": [0.0, 0.0],
             "z_m": [0.0, 0.0],
-        }
+        },
+        dtype=object,
     )
     rows.at[0, column] = invalid_value
 
