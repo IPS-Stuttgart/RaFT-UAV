@@ -15,7 +15,7 @@ import sys
 import pandas as pd
 
 from raft_uav.baselines.kalman import TrackingMeasurement
-from raft_uav.numeric import optional_float
+from raft_uav.numeric import optional_float, optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "radar_likelihood_training.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -49,6 +49,50 @@ def _validated_positive_gate(value: object, *, name: str) -> float:
     if normalized is None or normalized <= 0.0:
         raise ValueError(f"{name} must be a finite positive scalar")
     return normalized
+
+
+def _single_best_candidate(frame: pd.DataFrame, *, score_column: str) -> pd.Series:
+    """Select one minimum-score row without relying on index-label uniqueness."""
+
+    position = int(frame[score_column].reset_index(drop=True).idxmin())
+    return frame.iloc[position].copy()
+
+
+def _student_selected_candidate(
+    scored: pd.DataFrame,
+    *,
+    teacher_association: str,
+    current_track_id: int | None,
+    track_switch_nis_ratio: float,
+) -> pd.Series | None:
+    """Select exactly one student candidate even when row labels are duplicated."""
+
+    if scored.empty:
+        return None
+    score_column = (
+        "association_score"
+        if "association_score" in scored.columns
+        else "association_nis"
+    )
+    best = _single_best_candidate(scored, score_column=score_column)
+    if (
+        teacher_association == "prediction-nis"
+        or current_track_id is None
+        or "track_id" not in scored
+    ):
+        return best
+    current = scored.loc[scored["track_id"] == current_track_id]
+    if current.empty:
+        return best
+    current_best = _single_best_candidate(current, score_column=score_column)
+    best_track_id = optional_int(best.get("track_id"))
+    if best_track_id == current_track_id:
+        return best
+    if float(best["association_nis"]) < float(current_best["association_nis"]) * float(
+        track_switch_nis_ratio
+    ):
+        return best
+    return current_best
 
 
 def collect_radar_association_training_frame(
@@ -92,6 +136,7 @@ def collect_radar_association_training_frame(
     )
 
 
+_IMPL._student_selected_candidate = _student_selected_candidate
 _IMPL.collect_radar_association_training_frame = collect_radar_association_training_frame
 
 globals().update(
@@ -103,6 +148,8 @@ globals().update(
 )
 globals()["_validated_nonnegative_gate"] = _validated_nonnegative_gate
 globals()["_validated_positive_gate"] = _validated_positive_gate
+globals()["_single_best_candidate"] = _single_best_candidate
+globals()["_student_selected_candidate"] = _student_selected_candidate
 globals()["collect_radar_association_training_frame"] = (
     collect_radar_association_training_frame
 )
