@@ -168,13 +168,30 @@ def jitter_timestamps(
 ) -> pd.DataFrame:
     jitter_std_s = _finite_nonnegative_float(std_s, name="std_s")
     out = frame.copy()
-    if jitter_std_s == 0.0 or "time_s" not in out.columns:
+    if jitter_std_s == 0.0 or "time_s" not in out.columns or out.empty:
         return out
-    out["time_s"] = pd.to_numeric(out["time_s"], errors="coerce") + rng.normal(
-        0.0,
-        jitter_std_s,
-        len(out),
+
+    times = pd.to_numeric(out["time_s"], errors="coerce")
+    group_keys = pd.DataFrame(index=out.index)
+    if "sequence_id" in out.columns:
+        group_keys["sequence_id"] = out["sequence_id"]
+    if "frame_index" in out.columns:
+        frame_index = out["frame_index"]
+        group_keys["frame_index"] = frame_index
+        group_keys["_stress_time_fallback_s"] = times.where(frame_index.isna())
+    else:
+        group_keys["_stress_time_s"] = times
+
+    group_ids = (
+        group_keys.groupby(list(group_keys.columns), sort=True, dropna=False)
+        .ngroup()
+        .to_numpy()
     )
+    group_count = int(group_ids.max()) + 1
+    row_jitter = rng.normal(0.0, jitter_std_s, len(out))
+    first_positions = np.full(group_count, len(group_ids), dtype=int)
+    np.minimum.at(first_positions, group_ids, np.arange(len(group_ids)))
+    out["time_s"] = times.to_numpy() + row_jitter[first_positions[group_ids]]
     return out
 
 
