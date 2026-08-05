@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 import numpy as np
 from pyrecest.smoothers import smooth_records as smooth_pyrecest_records
@@ -13,7 +13,11 @@ from raft_uav.baselines.kalman import (
     white_acceleration_process_noise,
 )
 from raft_uav.baselines.record_helpers import copy_record
-from raft_uav.baselines.robust_map import RobustMapSmootherConfig, robust_map_smooth_records
+from raft_uav.baselines.robust_map import (
+    RobustMapSmootherConfig,
+    _validated_lag_s,
+    robust_map_smooth_records,
+)
 
 SMOOTHER_MODES = ("none", "rts", "fixed-lag", "robust-map", "fixed-lag-map")
 
@@ -30,29 +34,44 @@ def smooth_tracking_records(
     """Return tracking records with smoothed state/covariance estimates.
 
     ``rts`` and ``fixed-lag`` delegate to PyRecEst's generic asynchronous record
-    smoother. ``robust-map`` and ``fixed-lag-map`` remain RaFT-UAV-specific
-    because they build an application-specific RF/radar measurement factor graph.
+    smoother. ``robust-map`` and ``fixed-lag-map`` keep only RaFT-UAV's CV model,
+    measurement matching, and record conversion around PyRecEst's generic robust
+    linear-Gaussian MAP solver.
     """
 
     if method not in SMOOTHER_MODES:
         raise ValueError(f"unknown smoother method {method!r}")
-    if method == "none" or not records:
-        return [copy_record(record) for record in records]
-    if method in ("fixed-lag", "fixed-lag-map") and (lag_s is None or lag_s < 0.0):
-        raise ValueError(f"{method} smoothing requires a nonnegative lag_s")
+
     if method in ("robust-map", "fixed-lag-map"):
+        if robust_map_config is not None and not isinstance(
+            robust_map_config,
+            RobustMapSmootherConfig,
+        ):
+            raise TypeError(
+                "robust_map_config must be a RobustMapSmootherConfig or None"
+            )
+        normalized_lag_s = None
+        if method == "fixed-lag-map":
+            normalized_lag_s = _required_lag_s(lag_s, method=method)
         return robust_map_smooth_records(
             records,
             measurements=measurements,
             acceleration_std_mps2=acceleration_std_mps2,
             config=robust_map_config,
-            lag_s=None if method == "robust-map" else float(lag_s),
+            lag_s=normalized_lag_s,
         )
+
+    normalized_lag_s = None
+    if method == "fixed-lag":
+        normalized_lag_s = _required_lag_s(lag_s, method=method)
+
+    if method == "none" or not records:
+        return [copy_record(record) for record in records]
 
     return smooth_pyrecest_records(
         records,
         method="rts" if method == "rts" else "fixed-lag",
-        lag=None if method == "rts" else float(lag_s),
+        lag=normalized_lag_s,
         transition_model=_constant_velocity_transition_for_state_dim,
         process_noise_model=lambda dt_s, state_dim: _constant_velocity_process_noise_for_state_dim(
             dt_s,
@@ -68,15 +87,24 @@ def smooth_tracking_records(
         filtered_covariance_key="filtered_covariance",
         metadata={
             "smoother_method": method,
-            "smoother_lag_s": None if method == "rts" else float(lag_s),
+            "smoother_lag_s": normalized_lag_s,
         },
     )
+
+
+def _required_lag_s(value: object, *, method: str) -> float:
+    """Return a validated lag for a method that requires one."""
+
+    normalized = _validated_lag_s(value)
+    if normalized is None:
+        raise ValueError(f"{method} smoothing requires a nonnegative lag_s")
+    return normalized
 
 
 def _constant_velocity_transition_for_state_dim(dt_s: float, state_dim: int) -> np.ndarray:
     """Return a CV transition embedded in a record's state dimension.
 
-    The standard RaFT-UAV state is 6D ``[e,n,u,ve,vn,vu]``.  Experimental
+    The standard RaFT-UAV state is 6D ``[e,n,u,ve,vn,vu]``. Experimental
     variants may append bias states; those extra dimensions are modeled as
     identity dynamics by the generic record smoother unless a specialized
     smoother is used.
