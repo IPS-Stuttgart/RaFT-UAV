@@ -1,0 +1,42 @@
+name: Validate PyRecEst candidate-mixture migration
+
+on:
+  push:
+    branches:
+      - agent/use-pyrecest-candidate-mixture-factor
+
+permissions:
+  contents: read
+
+jobs:
+  targeted-tests:
+    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    timeout-minutes: 20
+    steps:
+      - name: Check out migration branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/use-pyrecest-candidate-mixture-factor
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install exact upstream candidate-mixture revision
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            "pyrecest @ git+https://github.com/FlorianPfaff/PyRecEst.git@9591716135a2e940be7172ac708b5199c6f2f5d9" \
+            pandas PyYAML scikit-learn pytest
+          python -m pip install --no-deps -e .
+
+      - name: Run candidate-mixture regression family
+        run: |
+          python -m pytest -q tests/test_mmuad_candidate_mixture*.py
+          python -m compileall -q \
+            src/raft_uav/mmuad/_candidate_mixture_pyrecest.py \
+            src/raft_uav/mmuad/candidate_mixture_map/__init__.py
