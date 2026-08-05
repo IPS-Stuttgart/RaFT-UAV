@@ -193,14 +193,19 @@ class _ProposalReader:
         else:
             member = self._zip_members.get(sequence)
             text = "" if member is None else self._zip.read(member).decode("utf-8")
-        parsed = parse_detection_text(
-            text,
-            source=f"{self.path}:{sequence}.txt",
-        )
+        source = f"{self.path}:{sequence}.txt"
+        try:
+            parsed = parse_detection_text(text, source=source)
+        except ValueError as exc:
+            if "confidence must be in [-1, 1]" not in str(exc):
+                raise
+            raise ValueError(
+                f"{source}: proposal confidence must be in [0, 1]"
+            ) from exc
         for row in parsed:
             if not 0.0 <= row.confidence <= 1.0:
                 raise ValueError(
-                    f"{self.path}:{sequence}.txt: proposal confidence must be in [0, 1]"
+                    f"{source}: proposal confidence must be in [0, 1]"
                 )
         return tuple(parsed)
 
