@@ -120,6 +120,33 @@ def test_build_image_evidence_rejects_boxed_or_masked_time_gates(
         )
 
 
+@pytest.mark.parametrize(
+    ("keyword", "value", "message"),
+    [
+        ("max_frames", np.array(True), "max_frames must be a non-negative integer"),
+        (
+            "max_time_delta_s",
+            np.ma.array(0.5, mask=True),
+            "max_time_delta_s must be None or a finite non-negative number",
+        ),
+    ],
+)
+def test_direct_sampler_rejects_boxed_or_masked_controls(
+    keyword: str,
+    value,
+    message: str,
+) -> None:
+    controls = {"max_frames": 1, "max_time_delta_s": 0.1}
+    controls[keyword] = value
+
+    with pytest.raises(ValueError, match=message):
+        _sample_nearest_image_rows(
+            _image_rows(),
+            [0.0],
+            **controls,
+        )
+
+
 def test_direct_sampler_validates_controls_before_iteration() -> None:
     rows = _image_rows()
 
