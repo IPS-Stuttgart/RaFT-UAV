@@ -30,7 +30,10 @@ def optional_int(value: object) -> int | None:
     if value is None:
         return None
     if isinstance(value, Integral):
-        return int(value)
+        try:
+            return int(value)
+        except (OverflowError, TypeError, ValueError):
+            return None
     if isinstance(value, Rational):
         return int(value.numerator) if value.denominator == 1 else None
     if isinstance(value, Decimal):
