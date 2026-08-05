@@ -172,7 +172,11 @@ def _validated_max_time_delta_s(value: Any) -> float:
     return time_delta_s
 
 
-def _authoritative_truth_rows(truth: pd.DataFrame) -> pd.DataFrame:
+def _authoritative_truth_rows(
+    truth: pd.DataFrame,
+    *,
+    require_positions: bool = True,
+) -> pd.DataFrame:
     """Retain the final normalized same-time truth row per identifiable target."""
 
     raw = pd.DataFrame(truth).copy()
@@ -180,7 +184,22 @@ def _authoritative_truth_rows(truth: pd.DataFrame) -> pd.DataFrame:
     while order_column in raw.columns:
         order_column = f"_{order_column}"
     raw[order_column] = np.arange(len(raw), dtype=np.int64)
-    rows = normalize_truth_columns(raw)
+    if require_positions:
+        rows = normalize_truth_columns(raw)
+    else:
+        rows = _IMPL.normalize_time_column_aliases(raw, target="time_s")
+        rows = _IMPL._rename_submission_aliases(rows)
+        if "sequence_id" not in rows.columns:
+            rows["sequence_id"] = "default"
+        if "time_s" not in rows.columns:
+            raise ValueError(
+                f"truth table missing 'time_s'; available={list(rows.columns)}"
+            )
+        rows["sequence_id"] = _normalize_submission_sequence_ids(
+            rows["sequence_id"]
+        )
+        rows["time_s"] = pd.to_numeric(rows["time_s"], errors="coerce")
+        rows = rows.loc[np.isfinite(rows["time_s"])].copy()
     if rows.empty:
         return rows.drop(columns=[order_column], errors="ignore")
 
@@ -496,7 +515,7 @@ def metrics_from_matches(
     return _ORIGINAL_METRICS_FROM_MATCHES(
         normalized,
         submission=submission,
-        truth=_authoritative_truth_rows(truth),
+        truth=_authoritative_truth_rows(truth, require_positions=False),
     )
 
 
