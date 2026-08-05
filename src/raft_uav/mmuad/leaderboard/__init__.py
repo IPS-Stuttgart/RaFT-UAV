@@ -28,6 +28,7 @@ _SPEC.loader.exec_module(_IMPL)
 
 _LEGACY_LEADERBOARD_ENTRIES_FROM_CONFIG = _IMPL.leaderboard_entries_from_config
 _LEGACY_BUILD_MMUAD_LEADERBOARD = _IMPL.build_mmuad_leaderboard
+_LEGACY_FORMAT_MARKDOWN_CELL = _IMPL._format_markdown_cell
 _HIGHER_IS_BETTER_RANK_METRICS = frozenset(
     {
         "truth_coverage_fraction",
@@ -199,6 +200,24 @@ def _leaderboard_flag_value(value: Any) -> bool:
     return False
 
 
+def _escape_markdown_table_text(text: str) -> str:
+    """Escape text that would otherwise change Markdown table structure."""
+
+    return (
+        text.replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("\r\n", "<br>")
+        .replace("\r", "<br>")
+        .replace("\n", "<br>")
+    )
+
+
+def _format_markdown_cell(value: Any) -> str:
+    """Format one cell while preserving pipes, backslashes, and line breaks."""
+
+    return _escape_markdown_table_text(str(_LEGACY_FORMAT_MARKDOWN_CELL(value)))
+
+
 def _nonnegative_finite_config_float(value: Any, field: str) -> float:
     """Return a finite non-negative real scalar without array coercion."""
 
@@ -223,6 +242,7 @@ def _nonnegative_finite_config_float(value: Any, field: str) -> float:
 _IMPL.leaderboard_entries_from_config = leaderboard_entries_from_config
 _IMPL.build_mmuad_leaderboard = build_mmuad_leaderboard
 _IMPL.rank_leaderboard_frame = rank_leaderboard_frame
+_IMPL._format_markdown_cell = _format_markdown_cell
 _IMPL._nonnegative_finite_config_float = _nonnegative_finite_config_float
 
 
@@ -241,6 +261,8 @@ globals()["_rank_metric_ascending"] = _rank_metric_ascending
 globals()["_leaderboard_eligibility_mask"] = _leaderboard_eligibility_mask
 globals()["_optional_leaderboard_flag_value"] = _optional_leaderboard_flag_value
 globals()["_leaderboard_flag_value"] = _leaderboard_flag_value
+globals()["_escape_markdown_table_text"] = _escape_markdown_table_text
+globals()["_format_markdown_cell"] = _format_markdown_cell
 globals()["_nonnegative_finite_config_float"] = _nonnegative_finite_config_float
 
 __doc__ = _IMPL.__doc__
