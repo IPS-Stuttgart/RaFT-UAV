@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from io import StringIO
 import json
 from pathlib import Path
+import threading
 import tomllib
 
 import pandas as pd
 import pytest
 
+from raft_uav.mmuad import track5_estimate_ensemble_text_cli as text_cli
 from raft_uav.mmuad.track5_estimate_ensemble_text_cli import main as ensemble_main
 
 
@@ -66,6 +69,45 @@ def test_track5_estimate_ensemble_cli_keeps_zero_padded_sequence_ids(tmp_path: P
 
     validation = json.loads((output_dir / "mmuad_track5_ensemble_validation.json").read_text())
     assert validation["leaderboard_ready"] is True
+
+
+def test_estimate_ensemble_text_reader_is_thread_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    original_read_csv = pd.read_csv
+    entered = threading.Event()
+    release = threading.Event()
+    inside: dict[str, object] = {}
+    outcome: dict[str, object] = {}
+
+    def fake_main(argv: list[str] | None = None) -> int:
+        del argv
+        inside["value"] = text_cli._impl.pd.read_csv(
+            StringIO("sequence_id\n001\n")
+        ).iloc[0, 0]
+        entered.set()
+        if not release.wait(timeout=5.0):
+            raise TimeoutError("test did not release the ensemble invocation")
+        return 0
+
+    monkeypatch.setattr(text_cli._impl, "main", fake_main)
+
+    def run_cli() -> None:
+        outcome["status"] = text_cli.main([])
+
+    thread = threading.Thread(target=run_cli)
+    thread.start()
+    assert entered.wait(timeout=5.0)
+    try:
+        outside_value = pd.read_csv(StringIO("sequence_id\n001\n")).iloc[0, 0]
+    finally:
+        release.set()
+        thread.join(timeout=5.0)
+
+    assert not thread.is_alive()
+    assert outcome["status"] == 0
+    assert inside["value"] == "001"
+    assert outside_value == 1
+    assert not isinstance(outside_value, str)
+    assert pd.read_csv is original_read_csv
 
 
 def test_estimate_ensemble_console_script_uses_text_id_wrapper() -> None:
