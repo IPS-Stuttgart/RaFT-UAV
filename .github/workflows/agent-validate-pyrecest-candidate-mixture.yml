@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - agent/use-pyrecest-candidate-mixture-factor
+  pull_request:
 
 permissions:
   contents: read
@@ -40,5 +41,3 @@ jobs:
           python -m compileall -q \
             src/raft_uav/mmuad/_candidate_mixture_pyrecest.py \
             src/raft_uav/mmuad/candidate_mixture_map/__init__.py
-
-# This follow-up branch update intentionally triggers validation.
