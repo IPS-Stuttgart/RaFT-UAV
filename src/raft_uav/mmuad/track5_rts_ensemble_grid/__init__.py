@@ -1,9 +1,9 @@
 """Compatibility fixes for Track 5 RTS ensemble grid inputs and scoring.
 
 The implementation lives in the sibling ``track5_rts_ensemble_grid.py`` file.
-This wrapper preserves opaque estimate sequence IDs and rejects malformed
-truth-matching tolerances before they can silently widen or empty train-side
-scoring.
+This wrapper preserves opaque estimate sequence IDs, rejects malformed
+truth-matching tolerances, and materializes one-shot parameter grids before the
+legacy nested search consumes them repeatedly.
 """
 
 from __future__ import annotations
@@ -73,17 +73,35 @@ def _nonnegative_finite_scalar(value: object, *, name: str) -> float:
 @wraps(_ORIGINAL_RUN_GRID_SEARCH)
 def run_track5_rts_ensemble_grid_search(
     *args: object,
+    measurement_sigma_grid: object = _IMPL.DEFAULT_MEASUREMENT_SIGMA_GRID,
+    process_accel_grid: object = _IMPL.DEFAULT_PROCESS_ACCEL_GRID,
+    spread_variance_scale_grid: object = _IMPL.DEFAULT_SPREAD_VARIANCE_SCALE_GRID,
     score_time_tolerance_s: object = 1.0e-6,
     **kwargs: object,
 ):
-    """Run the grid search with a validated truth-time scoring tolerance."""
+    """Run the complete grid search with validated reusable parameter values."""
 
     tolerance = _nonnegative_finite_scalar(
         score_time_tolerance_s,
         name="score_time_tolerance_s",
     )
+    measurement_values = _IMPL._positive_grid(
+        measurement_sigma_grid,
+        "measurement_sigma_grid",
+    )
+    process_values = _IMPL._nonnegative_grid(
+        process_accel_grid,
+        "process_accel_grid",
+    )
+    spread_values = _IMPL._nonnegative_grid(
+        spread_variance_scale_grid,
+        "spread_variance_scale_grid",
+    )
     return _ORIGINAL_RUN_GRID_SEARCH(
         *args,
+        measurement_sigma_grid=measurement_values,
+        process_accel_grid=process_values,
+        spread_variance_scale_grid=spread_values,
         score_time_tolerance_s=tolerance,
         **kwargs,
     )
