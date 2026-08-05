@@ -1,9 +1,10 @@
-"""Compatibility package aligning sequence-alignment CLI and API defaults.
+"""Compatibility package aligning sequence-alignment CLI and API behavior.
 
 The maintained implementation lives in the sibling
 ``sequence_alignment_audit.py`` module. This package preserves the public import
 path while making an omitted ``--sequence-glob`` audit all discovered sequences,
-matching :func:`build_sequence_alignment_audit`.
+matching :func:`build_sequence_alignment_audit`, and keeping pure-translation
+diagnostics separate from axis, sign, and scale alternatives.
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ import importlib.util
 from pathlib import Path
 import sys
 from typing import Sequence
+
+import pandas as pd
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "sequence_alignment_audit.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -45,7 +48,26 @@ def main(argv: list[str] | None = None) -> int:
     return _ORIGINAL_MAIN(arguments)
 
 
+def _pick_best_translation_row(group: pd.DataFrame) -> pd.Series | None:
+    """Return only the as-is median-translation diagnostic row.
+
+    Axis, sign, and scale variants with an additional median translation do not
+    isolate a translation error. Letting the best of those rows drive the
+    translation diagnosis can misclassify an axis or scale defect as a simple
+    offset. If the pure-translation row is absent, return ``None`` so the legacy
+    summary falls back to the as-is row instead of making an unsupported claim.
+    """
+
+    rows = group.loc[
+        group["variant"].astype(str) == "as-is+median-translation"
+    ]
+    if rows.empty:
+        return None
+    return rows.iloc[0]
+
+
 _IMPL.main = main
+_IMPL._pick_best_translation_row = _pick_best_translation_row
 
 globals().update(
     {
@@ -56,6 +78,7 @@ globals().update(
 )
 globals()["_ORIGINAL_MAIN"] = _ORIGINAL_MAIN
 globals()["_has_sequence_glob"] = _has_sequence_glob
+globals()["_pick_best_translation_row"] = _pick_best_translation_row
 globals()["main"] = main
 
 __doc__ = _IMPL.__doc__
