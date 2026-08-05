@@ -18,6 +18,23 @@ def _read_optional_csv(path: Path) -> pd.DataFrame | None:
     return pd.read_csv(path) if path.exists() else None
 
 
+def _record_optional_artifact_presence(
+    summary: dict[str, object],
+    *,
+    label: str,
+    artifact_a: pd.DataFrame | None,
+    artifact_b: pd.DataFrame | None,
+) -> None:
+    present_a = artifact_a is not None
+    present_b = artifact_b is not None
+    presence_equal = present_a == present_b
+    summary[f"{label}_artifact_present_a"] = present_a
+    summary[f"{label}_artifact_present_b"] = present_b
+    summary[f"{label}_artifact_presence_equal"] = presence_equal
+    if not presence_equal:
+        summary[f"{label}_rows_equal"] = False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_a", type=Path)
@@ -40,11 +57,19 @@ def main() -> int:
         selected_b=selected_b,
         atol=args.atol,
     )
+    _record_optional_artifact_presence(
+        summary,
+        label="selected",
+        artifact_a=selected_a,
+        artifact_b=selected_b,
+    )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(f"summary_json={args.output_json}")
     if args.fail_on_difference:
         if not bool(summary.get("estimates_nearly_equal", False)):
+            return 1
+        if not bool(summary["selected_artifact_presence_equal"]):
             return 1
         if "selected_rows_equal" in summary and not bool(summary["selected_rows_equal"]):
             return 1
