@@ -37,6 +37,7 @@ def test_submission_ensemble_grid_rejects_empty_weight_grid(tmp_path: Path) -> N
         step=0.5,
         include_singletons=False,
     )
+    assert empty_grid == []
 
     with pytest.raises(ValueError, match="weight grid produced no rows"):
         evaluate_submission_ensemble_weight_grid(
