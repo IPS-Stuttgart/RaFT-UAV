@@ -274,7 +274,11 @@ def fit_heteroscedastic_uncertainty_model(
     )
     validated_min_std_m = _optional_mapping(min_std_m, "min_std_m")
     validated_max_std_m = _optional_mapping(max_std_m, "max_std_m")
-    validated_metadata = _optional_mapping(metadata, "metadata")
+    validated_metadata = dict(_optional_mapping(metadata, "metadata") or {})
+    validated_metadata.update(
+        ridge_lambda=validated_ridge_lambda,
+        max_time_delta_s=validated_max_time_delta_s,
+    )
     return _original_fit_heteroscedastic_uncertainty_model(
         rf=rf,
         radar=radar,
