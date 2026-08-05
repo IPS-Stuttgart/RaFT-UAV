@@ -1,7 +1,7 @@
 """NIS-based measurement-covariance calibration utilities.
 
 The Kalman and IMM baselines already record normalized innovation squared (NIS)
-for every RF and radar update.  This module turns those diagnostics into
+for every RF and radar update. This module turns those diagnostics into
 source/dimension-specific covariance multipliers and exposes a small runtime hook
 that can scale newly constructed tracking measurements from a calibration JSON.
 """
@@ -17,11 +17,14 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.stats import chi2
+from pyrecest.tracking import (
+    INNOVATION_COVARIANCE_SCALE_METHODS,
+    estimate_innovation_covariance_scale,
+)
 
 ENV_NIS_COVARIANCE_CALIBRATION_JSON = "RAFT_UAV_NIS_COVARIANCE_CALIBRATION_JSON"
 NIS_COVARIANCE_CALIBRATION_SCHEMA = "raft-uav-nis-covariance-calibration-v1"
-NIS_COVARIANCE_CALIBRATION_METHODS = ("mean", "quantile")
+NIS_COVARIANCE_CALIBRATION_METHODS = INNOVATION_COVARIANCE_SCALE_METHODS
 
 _CACHED_PATH: str | None = None
 _CACHED_MTIME_NS: int | None = None
@@ -120,10 +123,10 @@ def fit_nis_covariance_calibration_from_frame(
     """Fit per-source covariance multipliers by matching NIS to chi-square targets.
 
     With ``method='mean'``, the observed mean NIS is matched to the measurement
-    dimension.  With ``method='quantile'``, the observed quantile is matched to
-    the corresponding chi-square quantile.  The fitted multiplier scales the
-    measurement covariance before future updates; values greater than one make
-    the source less confident, values below one make it more confident.
+    dimension. With ``method='quantile'``, the observed quantile is matched to
+    the corresponding chi-square quantile. The fitted value is an innovation-
+    covariance scale estimate that RaFT-UAV applies to measurement covariance as
+    an operational approximation.
     """
 
     method = _validate_method(method)
@@ -257,10 +260,10 @@ def scale_covariance_for_calibrated_source(
 ) -> np.ndarray:
     """Scale a measurement covariance using the runtime calibration if configured.
 
-    Exact source/dimension calibration groups take precedence.  When a radar
+    Exact source/dimension calibration groups take precedence. When a radar
     measurement is augmented with velocity and no explicit ``radar:6`` group is
     available, reuse a fitted ``radar:3`` position calibration for the leading
-    position block.  LOFO NIS calibration is usually fitted from position-only
+    position block. LOFO NIS calibration is usually fitted from position-only
     diagnostics, while the result-oriented SOTA runner can later enable radar
     velocity updates; without this fallback those radar measurements would
     silently bypass the fitted radar covariance scale.
@@ -325,30 +328,29 @@ def _fit_group(
     max_scale: float,
     accepted_only: bool,
 ) -> NISCovarianceCalibrationGroup:
-    count = int(values.size)
-    if method == "mean":
-        statistic = float(np.mean(values))
-        target = float(measurement_dim)
-        quantile_value: float | None = None
-    else:
-        statistic = float(np.quantile(values, quantile))
-        target = float(chi2.ppf(quantile, df=measurement_dim))
-        quantile_value = float(quantile)
-    raw_scale = statistic / target if target > 0.0 else 1.0
-    enabled = bool(count >= min_samples and np.isfinite(raw_scale) and raw_scale > 0.0)
+    estimate = estimate_innovation_covariance_scale(
+        values,
+        measurement_dim=measurement_dim,
+        method=method,
+        quantile=quantile,
+    )
+    raw_scale = float(estimate.scale)
+    enabled = bool(
+        estimate.count >= min_samples and np.isfinite(raw_scale) and raw_scale > 0.0
+    )
     applied_scale = float(np.clip(raw_scale, min_scale, max_scale)) if enabled else 1.0
     return NISCovarianceCalibrationGroup(
         source=source,
-        measurement_dim=int(measurement_dim),
-        count=count,
-        method=method,
-        statistic=statistic,
-        target=target,
-        raw_scale=float(raw_scale),
+        measurement_dim=estimate.measurement_dim,
+        count=estimate.count,
+        method=estimate.method,
+        statistic=estimate.statistic,
+        target=estimate.target,
+        raw_scale=raw_scale,
         applied_scale=applied_scale,
         enabled=enabled,
         accepted_only=bool(accepted_only),
-        quantile=quantile_value,
+        quantile=estimate.quantile,
     )
 
 

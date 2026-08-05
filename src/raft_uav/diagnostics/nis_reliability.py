@@ -15,9 +15,12 @@ from typing import Any, Iterable, Sequence
 
 import numpy as np
 import pandas as pd
-from scipy.stats import chi2
+from pyrecest.tracking import (
+    DEFAULT_NIS_GATE_PROBABILITIES,
+    summarize_nis_consistency,
+)
 
-DEFAULT_GATE_PROBABILITIES = (0.95, 0.99)
+DEFAULT_GATE_PROBABILITIES = DEFAULT_NIS_GATE_PROBABILITIES
 DEFAULT_GROUP_COLUMNS = ("source", "measurement_dim")
 
 
@@ -236,43 +239,47 @@ def _nis_stats(
     out: dict[str, Any] = {"count": int(values.size)}
     if values.size == 0:
         return out
+    if dim is None:
+        out.update(
+            {
+                "nis_mean": float(np.mean(values)),
+                "nis_std": float(np.std(values, ddof=1)) if values.size > 1 else 0.0,
+                "nis_median": float(np.percentile(values, 50.0)),
+                "nis_p90": float(np.percentile(values, 90.0)),
+                "nis_p95": float(np.percentile(values, 95.0)),
+                "nis_p99": float(np.percentile(values, 99.0)),
+                "nis_max": float(np.max(values)),
+            }
+        )
+        return out
+
+    summary = summarize_nis_consistency(
+        values,
+        measurement_dim=dim,
+        gate_probabilities=gate_probabilities,
+    )
     out.update(
         {
-            "nis_mean": float(np.mean(values)),
-            "nis_std": float(np.std(values, ddof=1)) if values.size > 1 else 0.0,
-            "nis_median": float(np.percentile(values, 50.0)),
-            "nis_p90": float(np.percentile(values, 90.0)),
-            "nis_p95": float(np.percentile(values, 95.0)),
-            "nis_p99": float(np.percentile(values, 99.0)),
-            "nis_max": float(np.max(values)),
+            "nis_mean": summary.nis_mean,
+            "nis_std": summary.nis_std,
+            "nis_median": summary.nis_median,
+            "nis_p90": summary.nis_p90,
+            "nis_p95": summary.nis_p95,
+            "nis_p99": summary.nis_p99,
+            "nis_max": summary.nis_max,
+            "chi2_mean_expected": summary.chi2_mean_expected,
+            "mean_covariance_scale": summary.mean_innovation_covariance_scale,
+            "chi2_ks_distance": summary.chi2_ks_distance,
         }
     )
-    if dim is None:
-        return out
-    out["chi2_mean_expected"] = float(dim)
-    out["mean_covariance_scale"] = float(out["nis_mean"] / max(float(dim), 1.0e-12))
-    sorted_values = np.sort(values)
-    empirical_cdf_upper = np.arange(1, values.size + 1, dtype=float) / float(values.size)
-    empirical_cdf_lower = np.arange(values.size, dtype=float) / float(values.size)
-    theoretical_cdf = chi2.cdf(sorted_values, df=int(dim))
-    out["chi2_ks_distance"] = float(
-        max(
-            np.max(empirical_cdf_upper - theoretical_cdf),
-            np.max(theoretical_cdf - empirical_cdf_lower),
-        )
-    )
-    for probability in gate_probabilities:
-        probability = _validate_probability(probability)
-        threshold = float(chi2.ppf(probability, df=int(dim)))
-        suffix = _probability_suffix(probability)
-        actual = float(np.mean(values <= threshold))
-        observed_quantile = float(np.quantile(values, probability))
-        out[f"gate_threshold_{suffix}"] = threshold
-        out[f"expected_under_gate_{suffix}"] = float(probability)
-        out[f"actual_under_gate_{suffix}"] = actual
-        out[f"acceptance_gap_{suffix}"] = actual - float(probability)
-        out[f"observed_quantile_{suffix}"] = observed_quantile
-        out[f"tail_covariance_scale_{suffix}"] = observed_quantile / max(threshold, 1.0e-12)
+    for coverage in summary.coverage:
+        suffix = _probability_suffix(coverage.probability)
+        out[f"gate_threshold_{suffix}"] = coverage.threshold
+        out[f"expected_under_gate_{suffix}"] = coverage.expected_fraction
+        out[f"actual_under_gate_{suffix}"] = coverage.actual_fraction
+        out[f"acceptance_gap_{suffix}"] = coverage.coverage_gap
+        out[f"observed_quantile_{suffix}"] = coverage.observed_quantile
+        out[f"tail_covariance_scale_{suffix}"] = coverage.innovation_covariance_scale
     return out
 
 
