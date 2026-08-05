@@ -16,6 +16,9 @@ def test_exact_time_assignment_ties_ignore_dataframe_row_order(
         {
             "sequence_id": ["seqA", "seqA"],
             "time_s": [0.0, 0.0],
+            # Explicit blank IDs represent multiple anonymous targets. Omitting
+            # the column denotes sequential snapshots of one anonymous target.
+            "track_id": ["", ""],
             "x_m": [0.0, 10.0],
             "y_m": [0.0, 0.0],
             "z_m": [0.0, 0.0],
