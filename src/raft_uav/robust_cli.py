@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Iterator
 from contextlib import contextmanager
+from threading import RLock
 from typing import Any
 
 from raft_uav import cli as _base_cli
@@ -24,6 +25,7 @@ _ROBUST_UPDATE_HELP = (
     "student-t applies heavy-tailed covariance reweighting, and huber applies "
     "multivariate Huber covariance reweighting"
 )
+_ARGUMENT_PARSER_PATCH_LOCK = RLock()
 
 
 @contextmanager
@@ -33,22 +35,27 @@ def expose_heavy_tailed_robust_update_modes() -> Iterator[None]:
     The base dispatcher creates its parser inside ``main()``, so the least
     invasive public-surface patch is to adjust only the corresponding
     ``ArgumentParser.add_argument`` call while the parser is being constructed.
+    Calls are serialized because the patch changes a process-global class method.
     """
 
-    original_add_argument = argparse.ArgumentParser.add_argument
+    with _ARGUMENT_PARSER_PATCH_LOCK:
+        original_add_argument = argparse.ArgumentParser.add_argument
 
-    def patched_add_argument(self: argparse.ArgumentParser, *args: Any, **kwargs: Any):
-        if _ROBUST_UPDATE_OPTION in args and kwargs.get("choices") == _BASE_ROBUST_UPDATE_CHOICES:
-            kwargs = dict(kwargs)
-            kwargs["choices"] = _EXPOSED_ROBUST_UPDATE_CHOICES
-            kwargs["help"] = _ROBUST_UPDATE_HELP
-        return original_add_argument(self, *args, **kwargs)
+        def patched_add_argument(self: argparse.ArgumentParser, *args: Any, **kwargs: Any):
+            if (
+                _ROBUST_UPDATE_OPTION in args
+                and kwargs.get("choices") == _BASE_ROBUST_UPDATE_CHOICES
+            ):
+                kwargs = dict(kwargs)
+                kwargs["choices"] = _EXPOSED_ROBUST_UPDATE_CHOICES
+                kwargs["help"] = _ROBUST_UPDATE_HELP
+            return original_add_argument(self, *args, **kwargs)
 
-    argparse.ArgumentParser.add_argument = patched_add_argument
-    try:
-        yield
-    finally:
-        argparse.ArgumentParser.add_argument = original_add_argument
+        argparse.ArgumentParser.add_argument = patched_add_argument
+        try:
+            yield
+        finally:
+            argparse.ArgumentParser.add_argument = original_add_argument
 
 
 def main(argv: list[str] | None = None) -> int:
