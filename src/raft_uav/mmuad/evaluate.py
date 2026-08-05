@@ -487,20 +487,24 @@ def _error_metrics(frame: pd.DataFrame) -> dict[str, Any]:
 
 
 def _final_error(frame: pd.DataFrame, column: str) -> float | None:
+    """Return the error at the latest matched truth time when available."""
+
     values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
     finite = np.isfinite(values)
     if not finite.any():
         return None
-    if "time_s" not in frame.columns:
-        return float(values[np.flatnonzero(finite)[-1]])
-    times = pd.to_numeric(frame["time_s"], errors="coerce").to_numpy(dtype=float)
-    timed = finite & np.isfinite(times)
-    if not timed.any():
-        return float(values[np.flatnonzero(finite)[-1]])
-    timed_indices = np.flatnonzero(timed)
-    latest_time = float(np.max(times[timed_indices]))
-    latest_indices = timed_indices[times[timed_indices] == latest_time]
-    return float(values[latest_indices[-1]])
+    for time_column in ("truth_time_s", "time_s"):
+        if time_column not in frame.columns:
+            continue
+        times = pd.to_numeric(frame[time_column], errors="coerce").to_numpy(dtype=float)
+        timed = finite & np.isfinite(times)
+        if not timed.any():
+            continue
+        timed_indices = np.flatnonzero(timed)
+        latest_time = float(np.max(times[timed_indices]))
+        latest_indices = timed_indices[times[timed_indices] == latest_time]
+        return float(values[latest_indices[-1]])
+    return float(values[np.flatnonzero(finite)[-1]])
 
 
 def _truth_track_id(row: pd.Series) -> str:
