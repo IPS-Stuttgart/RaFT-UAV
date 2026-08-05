@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   targeted-tests:
-    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Check out migration branch
