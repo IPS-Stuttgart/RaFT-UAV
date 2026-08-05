@@ -303,8 +303,10 @@ def _one_to_one_neighbor_match(
 
     neighbor_count = len(neighbor)
     gate_distance = float(config.max_speed_mps * dt_s)
-    unmatched_cost = gate_distance + max(1.0e-6, gate_distance * 1.0e-6)
-    ineligible_cost = unmatched_cost + max(unmatched_cost, 1.0)
+    # Make valid-match cardinality primary, then minimize distance within it.
+    cardinality_scale = max(gate_distance, 1.0)
+    unmatched_cost = float(min(count, neighbor_count) + 1) * cardinality_scale
+    ineligible_cost = unmatched_cost + cardinality_scale
     cost = np.full(
         (count, neighbor_count + count),
         ineligible_cost,
