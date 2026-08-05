@@ -166,10 +166,16 @@ def robust_map_smooth_records(
 ) -> list[dict[str, object]]:
     """Run robust-MAP smoothing after validating configuration and lag."""
 
+    normalized_acceleration_std_mps2 = acceleration_std_mps2
+    if records:
+        normalized_acceleration_std_mps2 = _finite_float(
+            acceleration_std_mps2,
+            name="acceleration_std_mps2",
+        )
     return _ORIGINAL_ROBUST_MAP_SMOOTH_RECORDS(
         records,
         measurements=measurements,
-        acceleration_std_mps2=acceleration_std_mps2,
+        acceleration_std_mps2=normalized_acceleration_std_mps2,
         config=_validated_robust_map_config(config, name="config"),
         lag_s=_validated_lag_s(lag_s),
     )
@@ -187,6 +193,12 @@ def smooth_tracking_records(
 ) -> list[dict[str, object]]:
     """Validate robust-MAP controls before dispatching to either smoother."""
 
+    normalized_acceleration_std_mps2 = acceleration_std_mps2
+    if records and method in _smoothing.SMOOTHER_MODES and method != "none":
+        normalized_acceleration_std_mps2 = _finite_float(
+            acceleration_std_mps2,
+            name="acceleration_std_mps2",
+        )
     normalized_lag_s = lag_s
     if method in {"fixed-lag", "fixed-lag-map"}:
         normalized_lag_s = _validated_lag_s(lag_s)
@@ -201,7 +213,7 @@ def smooth_tracking_records(
     return _ORIGINAL_SMOOTH_TRACKING_RECORDS(
         records,
         method=method,
-        acceleration_std_mps2=acceleration_std_mps2,
+        acceleration_std_mps2=normalized_acceleration_std_mps2,
         lag_s=normalized_lag_s,
         measurements=measurements,
         robust_map_config=normalized_config,
