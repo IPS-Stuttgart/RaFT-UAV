@@ -8,6 +8,8 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_float
+
 
 @dataclass(frozen=True)
 class ConformalRadius:
@@ -29,6 +31,63 @@ class ConformalRadius:
         }
 
 
+def _is_missing_or_nonfinite_error(value: object) -> bool:
+    """Return whether one malformed numeric parse represents an ignorable gap."""
+
+    seen_array_ids: set[int] = set()
+    while isinstance(value, np.ndarray):
+        if value.ndim != 0:
+            return False
+        array_id = id(value)
+        if array_id in seen_array_ids:
+            return False
+        seen_array_ids.add(array_id)
+        value = value.item()
+
+    if value is None or np.ma.is_masked(value):
+        return True
+    if isinstance(value, (bool, np.bool_, complex, np.complexfloating)):
+        return False
+
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return True
+
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return False
+    return not np.isfinite(number)
+
+
+def _finite_calibration_errors(errors_m: Sequence[float]) -> np.ndarray:
+    """Normalize real calibration errors without lossy numeric coercion."""
+
+    try:
+        masked_errors = np.ma.asarray(errors_m, dtype=object).reshape(-1)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("errors_m must contain real scalar values") from exc
+
+    values = np.asarray(masked_errors.data, dtype=object).reshape(-1)
+    mask = np.ma.getmaskarray(masked_errors).reshape(-1)
+    normalized: list[float] = []
+    for value, is_masked in zip(values, mask, strict=True):
+        if bool(is_masked):
+            continue
+        error = optional_float(value)
+        if error is None:
+            if _is_missing_or_nonfinite_error(value):
+                continue
+            raise ValueError("errors_m must contain real scalar values")
+        if error < 0.0:
+            raise ValueError("errors_m must contain only non-negative values")
+        normalized.append(error)
+    return np.asarray(normalized, dtype=float)
+
+
 def fit_conformal_radius(
     errors_m: Sequence[float],
     *,
@@ -36,20 +95,18 @@ def fit_conformal_radius(
 ) -> ConformalRadius:
     """Fit a split-conformal radius from non-negative calibration errors."""
 
-    masked_errors = np.ma.asarray(errors_m, dtype=float).reshape(-1)
-    errors = np.asarray(masked_errors.filled(np.nan), dtype=float)
-    errors = errors[np.isfinite(errors)]
-    if not 0.0 < float(alpha) < 1.0:
-        raise ValueError("alpha must be in (0, 1)")
-    if bool(np.any(errors < 0.0)):
-        raise ValueError("errors_m must contain only non-negative values")
+    normalized_alpha = optional_float(alpha)
+    if normalized_alpha is None or not 0.0 < normalized_alpha < 1.0:
+        raise ValueError("alpha must be a finite real scalar in (0, 1)")
+
+    errors = _finite_calibration_errors(errors_m)
     if errors.size == 0:
-        return ConformalRadius(float("nan"), float(alpha), 0)
+        return ConformalRadius(float("nan"), normalized_alpha, 0)
     n = errors.size
-    rank = int(np.ceil((n + 1) * (1.0 - float(alpha))))
+    rank = int(np.ceil((n + 1) * (1.0 - normalized_alpha)))
     rank = min(max(rank, 1), n)
     radius = float(np.partition(errors, rank - 1)[rank - 1])
-    return ConformalRadius(radius, float(alpha), int(n))
+    return ConformalRadius(radius, normalized_alpha, int(n))
 
 
 def fit_conformal_radii_by_group(
