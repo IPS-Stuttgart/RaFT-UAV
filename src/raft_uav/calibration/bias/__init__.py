@@ -3,8 +3,9 @@
 The maintained implementation lives in the sibling ``bias.py`` module. This
 package preserves the public import path while ensuring ``correct_frame``
 respects ``keep_uncorrected=False``, serialized truth timestamps are numeric
-before nearest-time calibration sorting, and genuinely complex calibration
-values are not silently reduced to their real components.
+before nearest-time calibration sorting, duplicate truth timestamps retain
+their final valid row, and genuinely complex calibration values are not
+silently reduced to their real components.
 """
 
 from __future__ import annotations
@@ -90,6 +91,16 @@ def _drop_invalid_numeric_rows(
     return frame.loc[valid].reset_index(drop=True)
 
 
+def _keep_final_truth_rows(truth: pd.DataFrame) -> pd.DataFrame:
+    """Keep the final valid row for each numeric truth timestamp."""
+
+    if truth.empty or "time_s" not in truth.columns:
+        return truth.copy()
+    return truth.drop_duplicates(subset=["time_s"], keep="last").reset_index(
+        drop=True
+    )
+
+
 def make_bias_training_examples(
     measurements: pd.DataFrame,
     truth: pd.DataFrame,
@@ -98,7 +109,7 @@ def make_bias_training_examples(
     target_columns: Sequence[str],
     time_gate_s: float = 2.0,
 ) -> pd.DataFrame:
-    """Build bias examples without silently accepting complex numeric cells."""
+    """Build bias examples from finite real inputs and authoritative truth rows."""
 
     numeric_columns = ("time_s", *(str(column) for column in target_columns))
     normalized_measurements = _drop_invalid_numeric_rows(
@@ -109,6 +120,7 @@ def make_bias_training_examples(
         _normalized_bias_frame(truth, numeric_columns),
         numeric_columns,
     )
+    normalized_truth = _keep_final_truth_rows(normalized_truth)
     return _ORIGINAL_MAKE_BIAS_TRAINING_EXAMPLES(
         normalized_measurements,
         normalized_truth,
@@ -132,6 +144,7 @@ globals()["_correct_frame"] = _correct_frame
 globals()["_finite_real_numeric_series"] = _finite_real_numeric_series
 globals()["_normalized_bias_frame"] = _normalized_bias_frame
 globals()["_drop_invalid_numeric_rows"] = _drop_invalid_numeric_rows
+globals()["_keep_final_truth_rows"] = _keep_final_truth_rows
 globals()["make_bias_training_examples"] = make_bias_training_examples
 
 __doc__ = _IMPL.__doc__
