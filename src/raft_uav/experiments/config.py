@@ -13,6 +13,8 @@ import subprocess
 import sys
 from typing import Any, Mapping
 
+import pandas as pd
+
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover
@@ -180,9 +182,17 @@ def _jsonable(value: Any) -> Any:
         return [_jsonable(item) for item in value]
     if isinstance(value, Path):
         return str(value)
+    if value is None:
+        return None
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, bool) and missing:
+        return None
     if isinstance(value, float):
         return value if math.isfinite(value) else None
-    if value is None or isinstance(value, (str, int, bool)):
+    if isinstance(value, (str, int, bool)):
         return value
     if isinstance(value, numbers.Integral):
         return int(value)
