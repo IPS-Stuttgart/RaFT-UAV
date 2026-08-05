@@ -493,10 +493,22 @@ def metrics_from_matches(
     normalized = matches.copy()
     if "matched" in normalized.columns:
         normalized["matched"] = _normalized_match_flags(normalized["matched"])
+
+    metric_truth = pd.DataFrame(truth).copy()
+    try:
+        metric_truth = _authoritative_truth_rows(metric_truth)
+    except ValueError as exc:
+        missing_coordinate = any(
+            f"truth table missing {column!r}" in str(exc)
+            for column in ("x_m", "y_m", "z_m")
+        )
+        if not missing_coordinate:
+            raise
+
     return _ORIGINAL_METRICS_FROM_MATCHES(
         normalized,
         submission=submission,
-        truth=_authoritative_truth_rows(truth),
+        truth=metric_truth,
     )
 
 
