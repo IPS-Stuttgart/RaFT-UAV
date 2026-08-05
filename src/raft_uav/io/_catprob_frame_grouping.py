@@ -27,7 +27,9 @@ def _catprob_frame_group_keys(radar: pd.DataFrame) -> list[tuple[Any, ...]]:
     Valid frame indices remain distinct even when their timestamps collide. Rows
     without an index fall back to timestamp/time. When a timestamp contains
     exactly one indexed frame, its missing-index rows are treated as candidates
-    from that same physical frame for backward compatibility.
+    from that same physical frame for backward compatibility. Rows without any
+    usable frame metadata remain distinct because grouping them would silently
+    discard unrelated detections.
     """
 
     if "frame_index" in radar.columns:
@@ -60,7 +62,7 @@ def _catprob_frame_group_keys(radar: pd.DataFrame) -> list[tuple[Any, ...]]:
             indexed_frames_by_time.setdefault(time_key, set()).add(numeric_frame)
 
     keys: list[tuple[Any, ...]] = []
-    for frame_index, time_key in rows:
+    for row_position, (frame_index, time_key) in enumerate(rows):
         if frame_index is not None and time_key is not None:
             key = ("frame_index", frame_index, *time_key)
         elif frame_index is not None:
@@ -72,7 +74,7 @@ def _catprob_frame_group_keys(radar: pd.DataFrame) -> list[tuple[Any, ...]]:
             else:
                 key = time_key
         else:
-            key = ("__missing_frame__",)
+            key = ("__missing_frame__", row_position)
         keys.append(key)
     return keys
 
