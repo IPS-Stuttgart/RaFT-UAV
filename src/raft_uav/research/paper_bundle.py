@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 import json
 import os
 import platform
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +34,39 @@ def git_sha(repo_root: Path | None = None) -> str:
         return "unknown"
 
 
+def _validated_commands(
+    commands: list[ReproducibilityCommand],
+) -> list[ReproducibilityCommand]:
+    """Validate command names before they become log-file paths."""
+
+    validated = list(commands)
+    seen_log_names: set[str] = set()
+    for command in validated:
+        if not isinstance(command, ReproducibilityCommand):
+            raise TypeError("commands must contain ReproducibilityCommand values")
+        name = command.name
+        if (
+            not isinstance(name, str)
+            or not name
+            or name != name.strip()
+            or name in {".", ".."}
+            or any(ord(character) < 32 or ord(character) == 127 for character in name)
+        ):
+            raise ValueError(
+                "reproducibility command names must be non-empty, trimmed log-file stems"
+            )
+        log_name = f"{name}.log"
+        if Path(log_name).name != log_name:
+            raise ValueError(
+                "reproducibility command names must not contain path separators"
+            )
+        normalized_log_name = os.path.normcase(log_name)
+        if normalized_log_name in seen_log_names:
+            raise ValueError("reproducibility command names must be unique")
+        seen_log_names.add(normalized_log_name)
+    return validated
+
+
 def write_reproducibility_bundle(
     output_dir: Path,
     *,
@@ -42,17 +76,23 @@ def write_reproducibility_bundle(
 ) -> dict[str, Any]:
     """Write manifest, README, and optional command outputs for paper results."""
 
+    validated_commands = _validated_commands(commands)
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "git_sha": git_sha(Path.cwd()),
         "python": sys.version,
         "platform": platform.platform(),
-        "environment_overrides": {k: v for k, v in os.environ.items() if k.startswith("RAFT_UAV_")},
+        "environment_overrides": {
+            key: value for key, value in os.environ.items() if key.startswith("RAFT_UAV_")
+        },
         "config": config,
-        "commands": [asdict(command) for command in commands],
+        "commands": [asdict(command) for command in validated_commands],
         "dry_run": bool(dry_run),
     }
-    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    (output_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2),
+        encoding="utf-8",
+    )
     readme_lines = [
         "# RaFT-UAV reproducibility bundle",
         "",
@@ -61,18 +101,23 @@ def write_reproducibility_bundle(
         "## Commands",
         "",
     ]
-    for command in commands:
+    for command in validated_commands:
         readme_lines.append(f"### {command.name}")
         if command.description:
             readme_lines.append(command.description)
         readme_lines.append("")
         readme_lines.append("```bash")
-        readme_lines.append(" ".join(command.command))
+        readme_lines.append(shlex.join(command.command))
         readme_lines.append("```")
         readme_lines.append("")
         if not dry_run:
             log_path = output_dir / f"{command.name}.log"
             with log_path.open("w", encoding="utf-8") as handle:
-                subprocess.run(command.command, check=True, stdout=handle, stderr=subprocess.STDOUT)
+                subprocess.run(
+                    command.command,
+                    check=True,
+                    stdout=handle,
+                    stderr=subprocess.STDOUT,
+                )
     (output_dir / "README.md").write_text("\n".join(readme_lines), encoding="utf-8")
     return manifest
