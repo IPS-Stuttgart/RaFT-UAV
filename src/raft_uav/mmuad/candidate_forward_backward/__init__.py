@@ -53,11 +53,37 @@ _FINITE_CONFIG_CONTROLS = (
 )
 
 
+def _validate_real_scalar_control(value: Any, *, name: str) -> None:
+    """Reject Boolean, complex, masked, and non-scalar numeric controls."""
+
+    scalar_error = f"{name} must be a non-Boolean real scalar"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(scalar_error)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(scalar_error) from exc
+    if scalar.ndim != 0:
+        raise ValueError(scalar_error)
+    if np.issubdtype(scalar.dtype, np.bool_) or np.iscomplexobj(scalar):
+        raise ValueError(scalar_error)
+    try:
+        unwrapped = scalar.item()
+    except ValueError as exc:
+        raise ValueError(scalar_error) from exc
+    if (
+        isinstance(unwrapped, (bool, np.bool_, complex, np.complexfloating))
+        or np.ma.is_masked(unwrapped)
+    ):
+        raise ValueError(scalar_error)
+
+
 def _validate_config_with_finite_controls(config: Any) -> None:
-    """Reject non-finite controls before they can poison posterior probabilities."""
+    """Reject lossy or non-finite controls before they poison posteriors."""
 
     for name in _FINITE_CONFIG_CONTROLS:
         value = getattr(config, name)
+        _validate_real_scalar_control(value, name=name)
         try:
             finite = bool(np.isfinite(value))
         except (TypeError, ValueError):
