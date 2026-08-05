@@ -48,6 +48,9 @@ def test_fusion_rejects_duplicate_sequence_probability_rows() -> None:
         True,
         0.5 + 0.0j,
         np.ma.masked,
+        np.array(True, dtype=object),
+        np.array(0.5 + 2.0j, dtype=object),
+        np.array([0.5]),
     ],
 )
 def test_fusion_rejects_invalid_probability_values(value: object) -> None:
@@ -63,6 +66,21 @@ def test_fusion_rejects_invalid_probability_values(value: object) -> None:
             nonimage,
             image_weight=0.5,
         )
+
+
+def test_fusion_accepts_recursively_boxed_real_probability() -> None:
+    boxed_real = np.array(np.array(0.75, dtype=object), dtype=object)
+    image = _probabilities(["seq"], first_probability=boxed_real)
+    nonimage = _probabilities(["seq"], first_probability=0.25)
+
+    fused = fuse_sequence_probabilities(
+        image,
+        nonimage,
+        image_weight=0.5,
+    )
+
+    first_label = str(OFFICIAL_SEQUENCE_CLASS_LABELS[0])
+    assert fused[f"predicted_probability_{first_label}"].tolist() == pytest.approx([1.0])
 
 
 def test_fusion_rejects_zero_fused_probability_mass() -> None:
