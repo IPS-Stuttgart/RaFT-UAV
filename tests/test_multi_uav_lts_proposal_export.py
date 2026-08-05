@@ -39,11 +39,29 @@ INFERENCE = (
     "    opt.ablation = False\n"
 )
 
+CURRENT_INFERENCE = INFERENCE.replace(
+    "    res_list = []\n",
+    "    if opt.save_score_sidecar:\n"
+    "        os.makedirs(opt.save_score_sidecar, exist_ok=True)\n"
+    "    res_list = []\n"
+    "    score_sidecar_rows = []\n",
+)
+
 
 def _checkout(tmp_path: Path) -> Path:
     root = tmp_path / "BoT-SORT"
     (root / "tools").mkdir(parents=True)
     (root / "tools" / "inference.py").write_text(INFERENCE, encoding="utf-8")
+    return root
+
+
+def _checkout_current(tmp_path: Path) -> Path:
+    root = tmp_path / "BoT-SORT"
+    (root / "tools").mkdir(parents=True)
+    (root / "tools" / "inference.py").write_text(
+        CURRENT_INFERENCE,
+        encoding="utf-8",
+    )
     return root
 
 
@@ -75,6 +93,20 @@ def test_check_mode_does_not_modify_external_source(tmp_path: Path) -> None:
     assert summary.needs_update
     assert (root / "tools" / "inference.py").read_text(encoding="utf-8") == INFERENCE
     assert not (root / "tools" / "inference.py.raft-uav-proposal-original").exists()
+
+
+def test_patch_accepts_current_score_sidecar_initialization(tmp_path: Path) -> None:
+    root = _checkout_current(tmp_path)
+
+    summary = apply_proposal_export_patch(root)
+
+    source = (root / "tools" / "inference.py").read_text(encoding="utf-8")
+    assert summary.changed
+    assert "score_sidecar_rows = []" in source
+    assert source.index("proposal_handle = None") < source.index(
+        "score_sidecar_rows = []"
+    )
+    compile(source, "inference.py", "exec")
 
 
 def test_source_drift_fails_before_modification(tmp_path: Path) -> None:

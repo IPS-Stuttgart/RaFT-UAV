@@ -26,6 +26,7 @@ DEFAULT_OUTPUT_NAME = "proposal_baseline"
 
 def main(argv: list[str] | None = None) -> int:
     forwarded = list(sys.argv[1:] if argv is None else argv)
+    help_requested = _has_flag(forwarded, "--help") or _has_flag(forwarded, "-h")
     skip_upstream = _remove_flag(forwarded, "--skip-upstream-fixes")
     skip_proposal_patch = _remove_flag(forwarded, "--skip-proposal-export-patch")
     save_visualizations = _remove_flag(forwarded, "--save-visualizations")
@@ -72,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         if proposal_patch_summary_override
         else output_dir / "proposal_export_patch_summary.json"
     )
-    if not package_only:
+    if not package_only and not help_requested:
         if not skip_upstream:
             upstream_summary = apply_upstream_fixes(
                 botsort_root,
