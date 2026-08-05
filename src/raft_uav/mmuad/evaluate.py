@@ -477,13 +477,30 @@ def _error_metrics(frame: pd.DataFrame) -> dict[str, Any]:
         "p95_3d_m": _nanpercentile(err3, 95.0),
         "max_3d_m": _nanmax(err3),
         "ade_3d_m": _nanmean(err3),
-        "fde_3d_m": _final_error(frame, "error_3d_m"),
+        "fde_3d_m": _mean_final_error(frame, "error_3d_m"),
         "mean_2d_m": _nanmean(err2),
         "p95_2d_m": _nanpercentile(err2, 95.0),
         "max_2d_m": _nanmax(err2),
-        "fde_2d_m": _final_error(frame, "error_2d_m"),
+        "fde_2d_m": _mean_final_error(frame, "error_2d_m"),
     }
     return out
+
+
+def _mean_final_error(frame: pd.DataFrame, column: str) -> float | None:
+    """Average endpoint errors across each sequence/track trajectory."""
+
+    key_columns = [
+        key for key in ("sequence_id", "track_id") if key in frame.columns
+    ]
+    if not key_columns:
+        return _final_error(frame, column)
+
+    final_errors: list[float] = []
+    for _, trajectory in frame.groupby(key_columns, sort=False, dropna=False):
+        final_error = _final_error(trajectory, column)
+        if final_error is not None:
+            final_errors.append(final_error)
+    return float(np.mean(final_errors)) if final_errors else None
 
 
 def _final_error(frame: pd.DataFrame, column: str) -> float | None:
