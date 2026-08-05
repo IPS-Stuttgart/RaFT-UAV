@@ -172,11 +172,16 @@ def _first_rf_window(
 
 
 def _first_radar_window(radar: pd.DataFrame, *, window_s: float) -> pd.DataFrame:
-    if radar.empty or "time_s" not in radar.columns:
+    required = {"time_s", *_POSITION_COLUMNS}
+    if radar.empty or not required.issubset(radar.columns):
         return radar.iloc[0:0].copy()
     work = radar.copy()
     times = pd.to_numeric(work["time_s"], errors="coerce")
+    positions = work.loc[:, _POSITION_COLUMNS].apply(pd.to_numeric, errors="coerce")
     finite = np.isfinite(times.to_numpy(dtype=float, na_value=np.nan))
+    finite &= np.isfinite(
+        positions.to_numpy(dtype=float, na_value=np.nan)
+    ).all(axis=1)
     work = work.loc[finite].copy()
     if work.empty:
         return work
