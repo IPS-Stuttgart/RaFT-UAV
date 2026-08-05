@@ -51,6 +51,37 @@ def _validate_unique_estimate_labels(estimate_inputs: Iterable[object]) -> list[
     return inputs
 
 
+def _validate_uncertainty_column_mapping(
+    inputs: Iterable[object],
+    uncertainty_columns: dict[object, str] | None,
+) -> dict[object, str]:
+    """Reject unknown mapping labels and multiple aliases for one estimate."""
+
+    mapping = dict(uncertainty_columns or {})
+    consumed_keys: set[object] = set()
+    for item in inputs:
+        raw_label = str(item.label)
+        safe_label = _IMPL._safe_label(raw_label)
+        aliases = {raw_label, safe_label}
+        matched_keys = [key for key in mapping if key in aliases]
+        if len(matched_keys) > 1:
+            rendered = ", ".join(sorted((repr(key) for key in matched_keys)))
+            raise ValueError(
+                "uncertainty_columns must define at most one mapping per estimate; "
+                f"{raw_label!r} is addressed by multiple labels: {rendered}"
+            )
+        consumed_keys.update(matched_keys)
+
+    unused_keys = [key for key in mapping if key not in consumed_keys]
+    if unused_keys:
+        rendered = ", ".join(sorted((repr(key) for key in unused_keys)))
+        raise ValueError(
+            "uncertainty_columns contains labels that do not match estimate inputs: "
+            f"{rendered}"
+        )
+    return mapping
+
+
 def _read_physical_header(path: Path) -> list[str]:
     """Read the unmangled CSV header before pandas deduplicates names."""
 
@@ -112,7 +143,7 @@ def normalize_uncertainty_estimate_inputs(
     """Normalize inputs only after proving labels and uncertainty columns are distinct."""
 
     inputs = _validate_unique_estimate_labels(estimate_inputs)
-    column_map = dict(uncertainty_columns or {})
+    column_map = _validate_uncertainty_column_mapping(inputs, uncertainty_columns)
     for item in inputs:
         requested = _IMPL._lookup_requested_uncertainty_column(column_map, item.label)
         _validate_unambiguous_uncertainty_columns(
@@ -160,6 +191,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_validate_uncertainty_column_mapping"] = _validate_uncertainty_column_mapping
 globals()["_read_physical_header"] = _read_physical_header
 globals()["_validate_unambiguous_uncertainty_columns"] = (
     _validate_unambiguous_uncertainty_columns
