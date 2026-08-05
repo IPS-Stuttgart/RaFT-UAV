@@ -27,6 +27,9 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_SUMMARIZE_RADAR_GEOMETRY_AUDIT = _IMPL.summarize_radar_geometry_audit
+_ORIGINAL_SUMMARIZE_RADAR_GEOMETRY_BY_TRACK = _IMPL.summarize_radar_geometry_by_track
+
 for _name in dir(_IMPL):
     if not (_name.startswith("__") and _name.endswith("__")):
         globals()[_name] = getattr(_IMPL, _name)
@@ -70,7 +73,7 @@ def _sequence_scoped_integer_count(frame: pd.DataFrame, column: str) -> int:
 def summarize_radar_geometry_audit(audit: pd.DataFrame) -> dict[str, object]:
     """Summarize pooled audit rows without merging reused flight-local IDs."""
 
-    summary = _IMPL.summarize_radar_geometry_audit(audit)
+    summary = _ORIGINAL_SUMMARIZE_RADAR_GEOMETRY_AUDIT(audit)
     if "sequence_id" in audit.columns:
         if "track_id" in audit.columns:
             summary["track_ids"] = _sequence_scoped_integer_count(audit, "track_id")
@@ -85,7 +88,7 @@ def summarize_radar_geometry_by_track(audit: pd.DataFrame) -> pd.DataFrame:
     if audit.empty or "track_id" not in audit.columns:
         return pd.DataFrame()
     if "sequence_id" not in audit.columns:
-        return _IMPL.summarize_radar_geometry_by_track(audit)
+        return _ORIGINAL_SUMMARIZE_RADAR_GEOMETRY_BY_TRACK(audit)
 
     sequence_column = "__raft_uav_sequence_id__"
     while sequence_column in audit.columns:
@@ -101,7 +104,7 @@ def summarize_radar_geometry_by_track(audit: pd.DataFrame) -> pd.DataFrame:
         sort=False,
         dropna=False,
     ):
-        per_track = _IMPL.summarize_radar_geometry_by_track(
+        per_track = _ORIGINAL_SUMMARIZE_RADAR_GEOMETRY_BY_TRACK(
             sequence_rows.drop(columns=[sequence_column])
         )
         if per_track.empty:
