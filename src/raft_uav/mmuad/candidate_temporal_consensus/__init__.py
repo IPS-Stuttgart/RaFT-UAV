@@ -8,6 +8,7 @@ defaults, disable temporal gating, or propagate non-finite consensus scores.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import importlib.util
 from pathlib import Path
 import sys
@@ -46,20 +47,46 @@ _FINITE_CONFIG_FIELDS = (
 )
 
 
+def _unwrapped_real_scalar(value: Any, *, field_name: str) -> Any:
+    """Return a scalar payload without lossy nested-container coercion."""
+
+    message = f"{field_name} must be a finite real scalar"
+    scalar = value
+    seen_arrays: set[int] = set()
+    while isinstance(scalar, (np.ndarray, np.generic)):
+        if np.ma.is_masked(scalar):
+            raise ValueError(message)
+        if isinstance(scalar, np.ndarray):
+            if scalar.ndim != 0:
+                raise ValueError(message)
+            marker = id(scalar)
+            if marker in seen_arrays:
+                raise ValueError(message)
+            seen_arrays.add(marker)
+        scalar = scalar.item()
+
+    if (
+        np.ma.is_masked(scalar)
+        or isinstance(scalar, (bool, np.bool_))
+        or isinstance(scalar, (complex, np.complexfloating))
+    ):
+        raise ValueError(message)
+    try:
+        scalar_array = np.asarray(scalar)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if scalar_array.ndim != 0 or np.iscomplexobj(scalar_array):
+        raise ValueError(message)
+    return scalar
+
+
 def _finite_real_scalar(value: Any, *, field_name: str) -> float:
     """Return one finite real scalar without accepting Boolean pseudo-numbers."""
 
     message = f"{field_name} must be a finite real scalar"
-    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
-        raise ValueError(message)
+    scalar = _unwrapped_real_scalar(value, field_name=field_name)
     try:
-        scalar = np.asarray(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(message) from exc
-    if scalar.ndim != 0 or np.iscomplexobj(scalar):
-        raise ValueError(message)
-    try:
-        number = float(scalar.item())
+        number = float(scalar)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(message) from exc
     if not np.isfinite(number):
@@ -70,7 +97,7 @@ def _finite_real_scalar(value: Any, *, field_name: str) -> float:
 def _validated_config(
     config: _IMPL.TemporalConsensusConfig | None,
 ) -> _IMPL.TemporalConsensusConfig:
-    """Resolve and validate one temporal-consensus configuration."""
+    """Resolve, validate, and normalize one temporal-consensus configuration."""
 
     if config is None:
         resolved = _IMPL.TemporalConsensusConfig()
@@ -89,7 +116,7 @@ def _validated_config(
     for field_name in _POSITIVE_CONFIG_FIELDS:
         if values[field_name] <= 0.0:
             raise ValueError(f"{field_name} must be positive")
-    return resolved
+    return replace(resolved, **values)
 
 
 def _validate_config(config: _IMPL.TemporalConsensusConfig) -> None:
@@ -121,6 +148,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_unwrapped_real_scalar"] = _unwrapped_real_scalar
 globals()["_finite_real_scalar"] = _finite_real_scalar
 globals()["_validated_config"] = _validated_config
 globals()["_validate_config"] = _validate_config
