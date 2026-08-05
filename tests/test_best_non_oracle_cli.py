@@ -26,6 +26,17 @@ def test_best_non_oracle_defaults_to_imm_fixed_lag_tracklet_viterbi() -> None:
     assert all("oracle" not in token for token in forwarded)
 
 
+def test_best_non_oracle_allows_exact_time_evaluation() -> None:
+    args = best_non_oracle_cli._parse_args(
+        ["dataset", "--flight", "Opt2", "--max-eval-time-delta-s", "0"]
+    )
+
+    forwarded = best_non_oracle_cli.build_tracklet_cli_argv(args)
+
+    assert args.max_eval_time_delta_s == 0.0
+    assert _arg_after(forwarded, "--max-eval-time-delta-s") == "0"
+
+
 def test_best_non_oracle_main_forwards_expanded_command(monkeypatch) -> None:
     seen: dict[str, list[str]] = {}
 
