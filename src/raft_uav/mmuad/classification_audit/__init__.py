@@ -29,6 +29,15 @@ _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_BUILD = _IMPL.build_mmuad_classification_audit
 _MISSING_ROW = "<missing-row>"
+_ALIGNMENT_METRIC_COLUMNS = (
+    "row_count",
+    "correct_row_count",
+    "matched_row_count",
+    "missing_prediction_row_count",
+    "extra_prediction_row_count",
+    "row_key_parity",
+    "per_sequence_accuracy",
+)
 
 
 def _valid_class_series(values: pd.Series) -> bool:
@@ -49,25 +58,41 @@ def _row_keys(rows: pd.DataFrame, *, side: str) -> list[tuple[Any, ...]]:
     for position, (sequence, timestamp) in enumerate(
         zip(rows["Sequence"].astype(str), timestamps, strict=True)
     ):
+        sequence_text = str(sequence)
         if not np.isfinite(timestamp):
-            keys.append((f"invalid-{side}", int(position)))
+            # Keep malformed timestamps unique and side-specific. In particular,
+            # a missing truth timestamp must never match a missing result timestamp.
+            keys.append((f"invalid-{side}", sequence_text, int(position), 0))
             continue
-        base = (str(sequence), float(timestamp))
+        base = (sequence_text, float(timestamp))
         occurrence = occurrences.get(base, 0)
         occurrences[base] = occurrence + 1
         keys.append(("valid", *base, occurrence))
     return keys
 
 
+def _attach_row_keys(rows: pd.DataFrame, *, side: str) -> pd.DataFrame:
+    keyed = rows.copy()
+    keyed["_row_key"] = pd.Series(
+        _row_keys(keyed, side=side),
+        index=keyed.index,
+        dtype=object,
+    )
+    return keyed
+
+
 def _build_row_alignment(truth: pd.DataFrame, results: pd.DataFrame) -> pd.DataFrame:
     """Align truth and predictions one-to-one without matching invalid timestamps."""
 
-    truth_rows = _IMPL._class_rows(truth)
-    result_rows = _IMPL._class_rows(results)
-    truth_rows = truth_rows.assign(_row_key=_row_keys(truth_rows, side="truth"))
-    result_rows = result_rows.assign(_row_key=_row_keys(result_rows, side="result"))
+    truth_rows = _attach_row_keys(_IMPL._class_rows(truth), side="truth")
+    result_rows = _attach_row_keys(_IMPL._class_rows(results), side="result")
     result_lookup = {
-        key: row for key, (_, row) in zip(result_rows["_row_key"], result_rows.iterrows())
+        key: row
+        for key, (_, row) in zip(
+            result_rows["_row_key"],
+            result_rows.iterrows(),
+            strict=True,
+        )
     }
     records: list[dict[str, Any]] = []
     for _, truth_row in truth_rows.iterrows():
@@ -146,24 +171,37 @@ def _sequence_alignment_metrics(alignment: pd.DataFrame) -> dict[str, dict[str, 
 def _update_sequence_frame(
     frame: pd.DataFrame,
     metrics: dict[str, dict[str, Any]],
+    *,
+    append_missing_sequences: bool,
 ) -> pd.DataFrame:
     updated = frame.copy()
     if "sequence" not in updated.columns:
         return updated
+
     sequences = updated["sequence"].astype(str)
-    columns = (
-        "row_count",
-        "correct_row_count",
-        "matched_row_count",
-        "missing_prediction_row_count",
-        "extra_prediction_row_count",
-        "row_key_parity",
-        "per_sequence_accuracy",
-    )
-    for column in columns:
+    for column in _ALIGNMENT_METRIC_COLUMNS:
         updated[column] = [metrics.get(sequence, {}).get(column, np.nan) for sequence in sequences]
     updated["sequence_accuracy"] = updated["per_sequence_accuracy"]
-    return updated
+
+    if not append_missing_sequences:
+        return updated
+
+    existing = set(sequences.tolist())
+    missing_sequences = sorted(set(metrics) - existing)
+    if not missing_sequences:
+        return updated
+
+    appended_rows: list[dict[str, Any]] = []
+    for sequence in missing_sequences:
+        row = {column: np.nan for column in updated.columns}
+        row["sequence"] = sequence
+        row.update(metrics[sequence])
+        row["sequence_accuracy"] = metrics[sequence]["per_sequence_accuracy"]
+        appended_rows.append(row)
+    return pd.concat(
+        [updated, pd.DataFrame.from_records(appended_rows, columns=updated.columns)],
+        ignore_index=True,
+    )
 
 
 def _aligned_confusion_matrix(
@@ -224,6 +262,18 @@ def _aligned_confusion_matrix(
     ).reset_index(drop=True)
 
 
+def _default_label_explains_score(summary: dict[str, Any], current_accuracy: float) -> bool:
+    constant_accuracy = summary.get("constant_prediction_accuracy")
+    constant_prediction = str(summary.get("submission_constant_prediction", ""))
+    return bool(
+        constant_prediction
+        and np.isfinite(current_accuracy)
+        and constant_accuracy is not None
+        and np.isfinite(float(constant_accuracy))
+        and abs(current_accuracy - float(constant_accuracy)) <= 1.0e-12
+    )
+
+
 def build_mmuad_classification_audit(
     *,
     truth: pd.DataFrame,
@@ -244,37 +294,51 @@ def build_mmuad_classification_audit(
     )
     alignment = _build_row_alignment(truth, results)
     metrics = _sequence_alignment_metrics(alignment)
-    sequence_summary = _update_sequence_frame(audit.sequence_class_summary, metrics)
-    classification_audit = _update_sequence_frame(audit.classification_audit, metrics)
     summary = dict(audit.summary)
+
     scored_count = int(len(alignment))
     correct_count = int(alignment["correct"].sum()) if scored_count else 0
+    matched_count = int(alignment["match_state"].eq("both").sum())
     missing_count = int(alignment["match_state"].eq("truth_only").sum())
     extra_count = int(alignment["match_state"].eq("result_only").sum())
-    current_accuracy = float(correct_count / scored_count) if scored_count else np.nan
-    constant_accuracy = summary.get("constant_prediction_accuracy")
-    constant_prediction = str(summary.get("submission_constant_prediction", ""))
-    default_explains = bool(
-        constant_prediction
-        and np.isfinite(current_accuracy)
-        and constant_accuracy is not None
-        and np.isfinite(float(constant_accuracy))
-        and abs(current_accuracy - float(constant_accuracy)) <= 1.0e-12
-    )
+    row_key_parity = missing_count == 0 and extra_count == 0
+
+    if row_key_parity:
+        # Preserve every legacy table and metric for already well-formed
+        # submissions. The compatibility layer only changes malformed row sets.
+        sequence_summary = audit.sequence_class_summary.copy()
+        classification_audit = audit.classification_audit.copy()
+        confusion = audit.confusion_matrix.copy()
+        current_accuracy = float(summary.get("current_accuracy", np.nan))
+        default_explains = bool(summary.get("default_label_explains_score", False))
+    else:
+        sequence_summary = _update_sequence_frame(
+            audit.sequence_class_summary,
+            metrics,
+            append_missing_sequences=True,
+        )
+        classification_audit = _update_sequence_frame(
+            audit.classification_audit,
+            metrics,
+            append_missing_sequences=False,
+        )
+        confusion = _aligned_confusion_matrix(alignment, class_names=resolved_class_names)
+        current_accuracy = float(correct_count / scored_count) if scored_count else np.nan
+        default_explains = _default_label_explains_score(summary, current_accuracy)
+        if "default_label_explains_score" in sequence_summary.columns:
+            sequence_summary["default_label_explains_score"] = default_explains
+
     summary.update(
         {
             "current_accuracy": current_accuracy,
             "classification_scored_row_count": scored_count,
-            "matched_row_count": int(alignment["match_state"].eq("both").sum()),
+            "matched_row_count": matched_count,
             "missing_prediction_row_count": missing_count,
             "extra_prediction_row_count": extra_count,
-            "row_key_parity": missing_count == 0 and extra_count == 0,
+            "row_key_parity": row_key_parity,
             "default_label_explains_score": default_explains,
         }
     )
-    if "default_label_explains_score" in sequence_summary.columns:
-        sequence_summary["default_label_explains_score"] = default_explains
-    confusion = _aligned_confusion_matrix(alignment, class_names=resolved_class_names)
     return _IMPL.MmuadClassificationAudit(
         classification_audit=classification_audit,
         confusion_matrix=confusion,
