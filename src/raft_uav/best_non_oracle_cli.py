@@ -150,7 +150,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=_DEFAULT_RADAR_CATPROB_THRESHOLD,
     )
     parser.add_argument("--smoother-lag-s", type=_positive_float, default=_DEFAULT_SMOOTHER_LAG_S)
-    parser.add_argument("--max-eval-time-delta-s", type=_positive_float, default=2.0)
+    parser.add_argument("--max-eval-time-delta-s", type=_nonnegative_float, default=2.0)
     parser.add_argument(
         "--robust-update",
         choices=_ROBUST_UPDATE_CHOICES,
