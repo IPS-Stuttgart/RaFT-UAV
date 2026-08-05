@@ -92,14 +92,13 @@ class RadarCovarianceConfig:
             "min_std_m",
             "max_std_m",
         ):
-            value = float(getattr(self, name))
-            if not np.isfinite(value) or value <= 0.0:
-                raise ValueError(f"{name} must be finite and positive")
-        if float(self.max_std_m) < float(self.min_std_m):
+            value = _finite_real_scalar(getattr(self, name), name=name, positive=True)
+            object.__setattr__(self, name, value)
+        if self.max_std_m < self.min_std_m:
             raise ValueError("max_std_m must be >= min_std_m")
         for name in ("origin_east_m", "origin_north_m", "origin_up_m"):
-            if not np.isfinite(float(getattr(self, name))):
-                raise ValueError(f"{name} must be finite")
+            value = _finite_real_scalar(getattr(self, name), name=name, positive=False)
+            object.__setattr__(self, name, value)
 
     def fixed_covariance(self) -> np.ndarray:
         """Return the fixed fallback radar covariance."""
@@ -115,15 +114,40 @@ class RadarCovarianceConfig:
         )
 
 
+def _finite_real_scalar(value: object, *, name: str, positive: bool) -> float:
+    """Return one losslessly validated finite real scalar."""
+
+    requirement = "finite and positive" if positive else "finite"
+    error = f"{name} must be {requirement}"
+    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+        raise ValueError(error)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+        raise ValueError(error)
+    try:
+        item = scalar.item()
+        if (
+            np.ma.is_masked(item)
+            or isinstance(item, (bool, np.bool_))
+            or np.iscomplexobj(item)
+        ):
+            raise ValueError(error)
+        number = float(item)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(number) or (positive and number <= 0.0):
+        raise ValueError(error)
+    return number
+
+
 def fixed_radar_covariance(xy_std_m: float = 25.0, z_std_m: float = 35.0) -> np.ndarray:
     """Return the historical fixed diagonal radar position covariance."""
 
-    xy_std = float(xy_std_m)
-    z_std = float(z_std_m)
-    if not np.isfinite(xy_std) or xy_std <= 0.0:
-        raise ValueError("xy_std_m must be finite and positive")
-    if not np.isfinite(z_std) or z_std <= 0.0:
-        raise ValueError("z_std_m must be finite and positive")
+    xy_std = _finite_real_scalar(xy_std_m, name="xy_std_m", positive=True)
+    z_std = _finite_real_scalar(z_std_m, name="z_std_m", positive=True)
     return np.diag([xy_std**2, xy_std**2, z_std**2])
 
 
