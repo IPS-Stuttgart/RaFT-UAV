@@ -30,6 +30,7 @@ jobs:
       - name: Install exact upstream candidate-mixture revision
         run: |
           python -m pip install --upgrade pip
+          python -m pip uninstall -y pyrecest || true
           python -m pip install \
             "pyrecest @ git+https://github.com/FlorianPfaff/PyRecEst.git@9591716135a2e940be7172ac708b5199c6f2f5d9" \
             pandas PyYAML scikit-learn pytest
