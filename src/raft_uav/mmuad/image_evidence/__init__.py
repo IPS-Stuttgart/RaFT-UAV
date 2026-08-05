@@ -33,17 +33,40 @@ _ORIGINAL_SAMPLE_NEAREST_IMAGE_ROWS = _IMPL._sample_nearest_image_rows
 
 
 def _scalar_item(value: Any, *, name: str, contract: str) -> Any:
-    """Return one scalar item or raise a field-specific validation error."""
+    """Return one unmasked, non-Boolean scalar item or raise a validation error."""
 
-    if isinstance(value, (bool, np.bool_)):
-        raise ValueError(f"{name} must be {contract}")
-    try:
-        array = np.asarray(value)
-    except Exception as exc:
-        raise ValueError(f"{name} must be {contract}") from exc
-    if array.ndim != 0:
-        raise ValueError(f"{name} must be {contract}")
-    return array.item()
+    message = f"{name} must be {contract}"
+    current = value
+    seen_arrays: set[int] = set()
+    while True:
+        if current is np.ma.masked:
+            raise ValueError(message)
+        if np.ma.isMaskedArray(current):
+            try:
+                if bool(np.any(np.ma.getmaskarray(current))):
+                    raise ValueError(message)
+            except (TypeError, ValueError, RuntimeError) as exc:
+                raise ValueError(message) from exc
+        if isinstance(current, (bool, np.bool_)):
+            raise ValueError(message)
+        try:
+            array = np.asarray(current)
+        except Exception as exc:
+            raise ValueError(message) from exc
+        if array.ndim != 0:
+            raise ValueError(message)
+
+        item = array.item()
+        if not isinstance(item, np.ndarray):
+            if item is np.ma.masked or isinstance(item, (bool, np.bool_)):
+                raise ValueError(message)
+            return item
+
+        identity = id(item)
+        if identity in seen_arrays:
+            raise ValueError(message)
+        seen_arrays.add(identity)
+        current = item
 
 
 def _normalize_max_frames(value: Any, *, name: str) -> int:
