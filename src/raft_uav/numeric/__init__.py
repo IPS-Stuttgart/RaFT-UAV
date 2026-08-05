@@ -89,7 +89,10 @@ def _scalar_numeric_input(value: object) -> object | None:
 def _is_non_scalar_array_like(value: object) -> bool:
     """Return whether ``value`` advertises array-like, non-scalar dimensionality."""
 
-    ndim = getattr(value, "ndim", None)
+    try:
+        ndim = getattr(value, "ndim", None)
+    except Exception:
+        return True
     if ndim is None:
         return False
     try:
