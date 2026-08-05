@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.evaluation.metrics import nearest_time_indices
-from raft_uav.numeric import optional_int
+from raft_uav.numeric import optional_float, optional_int
 
 
 def build_diagnostic_summary(
@@ -24,30 +24,51 @@ def build_diagnostic_summary(
 ) -> dict[str, Any]:
     """Build a small JSON-serializable diagnostic summary for one tracker run."""
 
-    if top_n < 1:
+    normalized_top_n = optional_int(top_n)
+    if normalized_top_n is None or normalized_top_n < 1:
         raise ValueError("top_n must be positive")
-    if window_s <= 0.0:
+
+    normalized_window_s = optional_float(window_s)
+    if normalized_window_s is None or normalized_window_s <= 0.0:
         raise ValueError("window_s must be positive")
+
+    normalized_max_eval_time_delta_s: float | None = None
+    if max_eval_time_delta_s is not None:
+        normalized_max_eval_time_delta_s = optional_float(max_eval_time_delta_s)
+        if (
+            normalized_max_eval_time_delta_s is None
+            or normalized_max_eval_time_delta_s < 0.0
+        ):
+            raise ValueError("max_eval_time_delta_s must be non-negative")
 
     return {
         "schema_version": 1,
-        "top_n": int(top_n),
-        "window_s": float(window_s),
-        "top_residuals": _top_residuals(estimate_frame, top_n=top_n),
+        "top_n": normalized_top_n,
+        "window_s": normalized_window_s,
+        "top_residuals": _top_residuals(
+            estimate_frame,
+            top_n=normalized_top_n,
+        ),
         "track_switches": {
             "posterior_radar": _track_switch_summary(
                 estimate_frame.loc[_source_mask(estimate_frame, "radar")],
-                top_n=top_n,
+                top_n=normalized_top_n,
             ),
-            "selected_radar": _track_switch_summary(selected_radar, top_n=top_n),
+            "selected_radar": _track_switch_summary(
+                selected_radar,
+                top_n=normalized_top_n,
+            ),
         },
-        "covariance_inflation": _covariance_inflation_summary(estimate_frame, top_n=top_n),
+        "covariance_inflation": _covariance_inflation_summary(
+            estimate_frame,
+            top_n=normalized_top_n,
+        ),
         "worst_time_windows": _worst_time_windows(
             estimate_frame=estimate_frame,
             truth=truth,
-            max_eval_time_delta_s=max_eval_time_delta_s,
-            window_s=window_s,
-            top_n=top_n,
+            max_eval_time_delta_s=normalized_max_eval_time_delta_s,
+            window_s=normalized_window_s,
+            top_n=normalized_top_n,
         ),
     }
 
