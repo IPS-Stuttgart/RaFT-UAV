@@ -57,3 +57,28 @@ def test_confidence_context_keeps_rows_with_invalid_times() -> None:
     assert diagnostics["track_id"].tolist() == [100, 101, 102]
     assert diagnostics.loc[0, "selected_context_track_id"] == 200
     assert diagnostics.loc[[1, 2], "selected_context_track_id"].isna().all()
+
+
+def test_confidence_context_is_scoped_by_sequence() -> None:
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["flight-a", "flight-b"],
+            "time_s": [0.0, 0.0],
+            "track_id": [100, 101],
+        },
+        index=pd.Index([8, 3], name="estimate_row"),
+    )
+    selected = pd.DataFrame(
+        {
+            "sequence_id": ["flight-a", "flight-b"],
+            "time_s": [0.0, 0.0],
+            "track_id": [200, 300],
+            "association_score": [2.0, 3.0],
+        }
+    )
+
+    diagnostics = confidence_diagnostics(estimates, selected)
+
+    assert diagnostics.index.equals(estimates.index)
+    assert diagnostics["selected_context_track_id"].tolist() == [200, 300]
+    assert diagnostics["selected_context_association_score"].tolist() == [2.0, 3.0]
