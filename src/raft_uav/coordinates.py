@@ -101,18 +101,47 @@ def _finite_real_scalar(value: object, *, name: str) -> float:
     """Return a finite real scalar or raise a field-specific error."""
 
     error = f"{name} must be a finite real scalar"
+    return _finite_real_scalar_value(value, error=error, seen=set())
+
+
+def _finite_real_scalar_value(
+    value: object,
+    *,
+    error: str,
+    seen: set[int],
+) -> float:
+    """Recursively normalize one scalar without lossy NumPy coercion."""
+
     if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
         raise ValueError(error)
+    if np.iscomplexobj(value):
+        raise ValueError(error)
+
     try:
         scalar = np.asarray(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(error) from exc
-    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+    if scalar.ndim != 0 or np.issubdtype(scalar.dtype, np.bool_):
+        raise ValueError(error)
+    if np.iscomplexobj(scalar):
+        raise ValueError(error)
+
+    item = scalar.item()
+    if scalar.dtype == object and (isinstance(value, np.ndarray) or item is not value):
+        marker = id(scalar)
+        if marker in seen or item is scalar or item is value:
+            raise ValueError(error)
+        seen.add(marker)
+        try:
+            return _finite_real_scalar_value(item, error=error, seen=seen)
+        finally:
+            seen.remove(marker)
+
+    if np.ma.is_masked(item) or isinstance(item, (bool, np.bool_)):
+        raise ValueError(error)
+    if np.iscomplexobj(item):
         raise ValueError(error)
     try:
-        item = scalar.item()
-        if np.ma.is_masked(item) or np.iscomplexobj(item):
-            raise ValueError(error)
         number = float(item)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(error) from exc
@@ -147,17 +176,15 @@ def _finite_real_array(value: object, *, name: str) -> np.ndarray:
         raise ValueError(error) from exc
     if np.iscomplexobj(array) or np.issubdtype(array.dtype, np.bool_):
         raise ValueError(error)
-    if array.dtype == object and any(
-        isinstance(item, (bool, np.bool_))
-        or np.ma.is_masked(item)
-        or np.iscomplexobj(item)
-        for item in array.flat
-    ):
-        raise ValueError(error)
-    try:
-        numeric = np.asarray(array, dtype=float)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(error) from exc
+    if array.dtype == object:
+        numeric = np.empty(array.shape, dtype=float)
+        for index, item in np.ndenumerate(array):
+            numeric[index] = _finite_real_scalar_value(item, error=error, seen=set())
+    else:
+        try:
+            numeric = np.asarray(array, dtype=float)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(error) from exc
     if not np.isfinite(numeric).all():
         raise ValueError(error)
     return numeric
