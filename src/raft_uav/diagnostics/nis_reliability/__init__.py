@@ -11,7 +11,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -122,6 +122,30 @@ def _validated_gate_probabilities(values: Sequence[float]) -> tuple[float, ...]:
     return probabilities
 
 
+def _jsonable(value: Any) -> Any:
+    """Recursively normalize report values to strict JSON-compatible scalars."""
+
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return [_jsonable(item) for item in value.tolist()]
+
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
+
+    if isinstance(value, np.generic):
+        return _jsonable(value.item())
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value
+
+
 def nis_reliability_summary(
     frame: pd.DataFrame,
     *,
@@ -142,6 +166,7 @@ def nis_reliability_summary(
 
 _IMPL._normalized_nis_frame = _normalized_nis_frame
 _IMPL.read_nis_diagnostics = read_nis_diagnostics
+_IMPL._jsonable = _jsonable
 _IMPL.nis_reliability_summary = nis_reliability_summary
 
 globals().update(
@@ -155,6 +180,7 @@ globals()["_exact_measurement_dimension_mask"] = _exact_measurement_dimension_ma
 globals()["_normalized_nis_frame"] = _normalized_nis_frame
 globals()["read_nis_diagnostics"] = read_nis_diagnostics
 globals()["_validated_gate_probabilities"] = _validated_gate_probabilities
+globals()["_jsonable"] = _jsonable
 globals()["nis_reliability_summary"] = nis_reliability_summary
 
 __doc__ = _IMPL.__doc__
