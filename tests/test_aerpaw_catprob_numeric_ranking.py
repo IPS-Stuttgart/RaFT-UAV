@@ -62,6 +62,19 @@ def test_catprob_best_per_frame_ignores_all_missing_frame_index() -> None:
     assert selected["track_id"].tolist() == [2, 3]
 
 
+def test_catprob_best_per_frame_preserves_rows_without_frame_metadata() -> None:
+    radar = pd.DataFrame(
+        {
+            "cat_prob_uav": [0.8, 0.9],
+            "track_id": ["first", "second"],
+        }
+    )
+
+    selected = _catprob_best_per_frame_rows(radar, catprob_threshold=0.0)
+
+    assert selected["track_id"].tolist() == ["first", "second"]
+
+
 def test_catprob_best_per_frame_ignores_non_finite_probabilities() -> None:
     radar = pd.DataFrame(
         {
