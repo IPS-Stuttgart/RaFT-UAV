@@ -3,12 +3,13 @@
 The maintained implementation lives in the sibling
 ``source_calibration_path_ensemble.py`` module. This package preserves the
 public import path while treating only exact ``0`` and ``1`` fractions as
-calibration-path endpoints and assigning round-trip-safe branch tokens to every
-distinct normalized fraction.
+calibration-path endpoints, assigning round-trip-safe branch tokens to every
+distinct normalized fraction, and rejecting lossy pseudo-numeric fractions.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import importlib.util
 from pathlib import Path
 import sys
@@ -44,6 +45,57 @@ def _fraction_token(value: float) -> str:
     """Return a round-trip-safe branch token for one normalized float."""
 
     return f"{float(value):.17g}".replace("-", "m").replace(".", "p")
+
+
+def _coerce_fraction(value: object) -> float:
+    """Return one finite real fraction without lossy scalar coercion."""
+
+    error = "calibration fractions must be finite real scalars"
+    current = value
+    seen_arrays: set[int] = set()
+    while isinstance(current, np.ndarray):
+        if current.ndim != 0 or np.ma.is_masked(current) or np.iscomplexobj(current):
+            raise ValueError(error)
+        marker = id(current)
+        if marker in seen_arrays:
+            raise ValueError(error)
+        seen_arrays.add(marker)
+        current = current.item()
+    if (
+        np.ma.is_masked(current)
+        or isinstance(current, (bool, np.bool_))
+        or np.iscomplexobj(current)
+    ):
+        raise ValueError(error)
+    try:
+        number = float(current)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(number):
+        raise ValueError(error)
+    return number
+
+
+def _normalize_fractions(values: Iterable[object]) -> tuple[float, ...]:
+    """Normalize a non-empty iterable of finite real fractions in ``[0, 1]``."""
+
+    if isinstance(values, (str, bytes, bytearray)):
+        raise ValueError(
+            "calibration fractions must be an iterable of finite real scalars"
+        )
+    try:
+        raw_values = tuple(values)
+    except TypeError as exc:
+        raise ValueError(
+            "calibration fractions must be an iterable of finite real scalars"
+        ) from exc
+    if not raw_values:
+        raise ValueError("at least one calibration fraction is required")
+    fractions = tuple(_coerce_fraction(value) for value in raw_values)
+    for value in fractions:
+        if value < 0.0 or value > 1.0:
+            raise ValueError("calibration fractions must lie in [0, 1]")
+    return tuple(sorted(set(fractions)))
 
 
 def _annotate_fraction(
@@ -107,7 +159,7 @@ def build_source_calibration_path_ensemble(
 ) -> CandidateFrame:
     """Return every requested finite path fraction as a distinct hypothesis."""
 
-    normalized_fractions = _IMPL._normalize_fractions(fractions)
+    normalized_fractions = _normalize_fractions(fractions)
     union = _IMPL.build_source_calibration_branch_union(
         candidates,
         calibration_payload,
@@ -173,6 +225,8 @@ def build_source_calibration_path_ensemble(
 
 _IMPL._contains_fraction = _contains_fraction
 _IMPL._fraction_token = _fraction_token
+_IMPL._coerce_fraction = _coerce_fraction
+_IMPL._normalize_fractions = _normalize_fractions
 _IMPL._annotate_fraction = _annotate_fraction
 _IMPL.build_source_calibration_path_ensemble = build_source_calibration_path_ensemble
 
@@ -185,6 +239,8 @@ globals().update(
 )
 globals()["_contains_fraction"] = _contains_fraction
 globals()["_fraction_token"] = _fraction_token
+globals()["_coerce_fraction"] = _coerce_fraction
+globals()["_normalize_fractions"] = _normalize_fractions
 globals()["_annotate_fraction"] = _annotate_fraction
 globals()["build_source_calibration_path_ensemble"] = (
     build_source_calibration_path_ensemble
