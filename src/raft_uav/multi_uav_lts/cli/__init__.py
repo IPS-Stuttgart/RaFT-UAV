@@ -60,6 +60,31 @@ def _normalize_iou_threshold(value: object) -> float:
     return threshold
 
 
+def _validate_truth_selection(
+    truth_dir: Path,
+    sequences: list[str] | None,
+) -> None:
+    """Reject missing truth data and requested sequence names that cannot be scored."""
+
+    truth_root = Path(truth_dir)
+    if not truth_root.is_dir():
+        raise FileNotFoundError(f"truth directory does not exist: {truth_root}")
+
+    available = {
+        path.stem
+        for path in truth_root.glob("*.txt")
+        if path.is_file()
+    }
+    if not available:
+        raise ValueError(f"truth directory contains no .txt sequence files: {truth_root}")
+
+    if sequences:
+        unknown = sorted(set(sequences) - available)
+        if unknown:
+            names = ", ".join(unknown)
+            raise ValueError(f"requested truth sequences are unavailable: {names}")
+
+
 def _match_rows_by_iou(truth, predictions, *, iou_threshold):
     """Maximize valid match count first, then total IoU."""
 
@@ -96,9 +121,10 @@ def score_lts_predictions(
     iou_threshold: object = 0.5,
     sequences: list[str] | None = None,
 ):
-    """Build an LTS scorecard with a validated IoU matching threshold."""
+    """Build an LTS scorecard with validated truth inputs and IoU threshold."""
 
     threshold = _normalize_iou_threshold(iou_threshold)
+    _validate_truth_selection(truth_dir, sequences)
     return _ORIGINAL_SCORE_LTS_PREDICTIONS(
         prediction_path,
         truth_dir,
@@ -256,6 +282,7 @@ globals().update(
 globals()["SubmissionValidation"] = SubmissionValidation
 globals()["validate_submission_zip"] = validate_submission_zip
 globals()["_normalize_iou_threshold"] = _normalize_iou_threshold
+globals()["_validate_truth_selection"] = _validate_truth_selection
 globals()["_match_rows_by_iou"] = _match_rows_by_iou
 globals()["score_lts_predictions"] = score_lts_predictions
 __doc__ = _IMPL.__doc__
