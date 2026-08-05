@@ -37,11 +37,11 @@ def git_sha(repo_root: Path | None = None) -> str:
 def _validated_commands(
     commands: list[ReproducibilityCommand],
 ) -> list[ReproducibilityCommand]:
-    """Validate command names before they become log-file paths."""
+    """Validate and snapshot commands before writing bundle artifacts."""
 
-    validated = list(commands)
+    validated: list[ReproducibilityCommand] = []
     seen_log_names: set[str] = set()
-    for command in validated:
+    for command in list(commands):
         if not isinstance(command, ReproducibilityCommand):
             raise TypeError("commands must contain ReproducibilityCommand values")
         name = command.name
@@ -64,6 +64,28 @@ def _validated_commands(
         if normalized_log_name in seen_log_names:
             raise ValueError("reproducibility command names must be unique")
         seen_log_names.add(normalized_log_name)
+
+        argv = command.command
+        if not isinstance(argv, list):
+            raise TypeError("reproducibility command argv must be a list of strings")
+        if not argv:
+            raise ValueError("reproducibility command argv must not be empty")
+        if any(not isinstance(argument, str) for argument in argv):
+            raise TypeError("reproducibility command argv entries must be strings")
+        if not argv[0].strip():
+            raise ValueError("reproducibility command executable must be non-empty")
+        if any("\x00" in argument for argument in argv):
+            raise ValueError("reproducibility command argv must not contain NUL bytes")
+        if not isinstance(command.description, str):
+            raise TypeError("reproducibility command descriptions must be strings")
+
+        validated.append(
+            ReproducibilityCommand(
+                name=name,
+                command=list(argv),
+                description=command.description,
+            )
+        )
     return validated
 
 
