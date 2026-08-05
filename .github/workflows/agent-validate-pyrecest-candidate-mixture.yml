@@ -32,7 +32,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip uninstall -y pyrecest || true
           python -m pip install \
-            "pyrecest @ git+https://github.com/FlorianPfaff/PyRecEst.git@9591716135a2e940be7172ac708b5199c6f2f5d9" \
+            "pyrecest @ git+https://github.com/FlorianPfaff/PyRecEst.git@4cb8337553004c2724c221bda791877c55a6d331" \
             pandas PyYAML scikit-learn pytest
           python -m pip install --no-deps -e .
 
