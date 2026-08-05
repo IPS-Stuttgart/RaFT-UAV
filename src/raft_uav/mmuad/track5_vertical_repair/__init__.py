@@ -42,18 +42,29 @@ _NUMERIC_COLUMNS = (
 
 
 def _finite_real_scalar(value: object, *, message: str) -> float:
-    """Return a finite real scalar without array, Boolean, or complex coercion."""
+    """Return a finite real scalar without lossy nested-container coercion."""
 
-    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+    scalar = value
+    seen_arrays: set[int] = set()
+    while isinstance(scalar, (np.ndarray, np.generic)):
+        if np.ma.is_masked(scalar):
+            raise ValueError(message)
+        if isinstance(scalar, np.ndarray):
+            if scalar.ndim != 0:
+                raise ValueError(message)
+            identity = id(scalar)
+            if identity in seen_arrays:
+                raise ValueError(message)
+            seen_arrays.add(identity)
+        scalar = scalar.item()
+    if (
+        np.ma.is_masked(scalar)
+        or isinstance(scalar, (bool, np.bool_))
+        or isinstance(scalar, (complex, np.complexfloating))
+    ):
         raise ValueError(message)
     try:
-        scalar = np.asarray(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(message) from exc
-    if scalar.ndim != 0 or scalar.dtype.kind in {"b", "c"}:
-        raise ValueError(message)
-    try:
-        numeric = float(scalar.item())
+        numeric = float(scalar)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(message) from exc
     if not np.isfinite(numeric):
