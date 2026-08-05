@@ -3,10 +3,11 @@
 The maintained implementation lives in the sibling
 ``oracle_gap_decomposition.py`` module. This package preserves the public import
 path while keeping estimate columns, row order, and invalid-time rows intact
-when selected-radar context is attached, preserving partially indexed radar
-frames, preventing non-finite frame times from matching arbitrary truth or
-estimate rows, requiring exact integer radar track identifiers in diagnostic
-outputs, and rejecting invalid oracle-gap thresholds.
+when selected-radar context is attached, scoping that context by sequence when
+sequence metadata is available, preserving partially indexed radar frames,
+preventing non-finite frame times from matching arbitrary truth or estimate
+rows, requiring exact integer radar track identifiers in diagnostic outputs,
+and rejecting invalid oracle-gap thresholds.
 """
 
 from __future__ import annotations
@@ -51,8 +52,10 @@ _CONTEXT_COLUMNS = (
     "association_weight_entropy",
     "association_hypothesis_count",
 )
+_MISSING_SEQUENCE_ID_STRINGS = frozenset({"", "nan", "none", "<na>", "nat"})
 _ROW_ORDER_COLUMN = "__raft_uav_confidence_row_order"
 _MERGE_TIME_COLUMN = "__raft_uav_confidence_merge_time_s"
+_SEQUENCE_KEY_COLUMN = "__raft_uav_confidence_sequence_id"
 
 
 def _oracle_gap_config_post_init(config: object) -> None:
@@ -153,11 +156,19 @@ def _nearest_estimate_error(
     )
 
 
+def _normalized_context_sequence_keys(values: pd.Series) -> pd.Series:
+    """Return trimmed sequence keys while preserving missing identifiers."""
+
+    keys = pd.Series(values, index=values.index, dtype="string").str.strip()
+    missing = keys.isna() | keys.str.casefold().isin(_MISSING_SEQUENCE_ID_STRINGS)
+    return keys.mask(missing)
+
+
 def _merge_selected_context(
     estimates: pd.DataFrame,
     selected: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Attach selected-radar context without corrupting estimate columns or order."""
+    """Attach selected-radar context without crossing sequence boundaries."""
 
     if "time_s" not in estimates.columns or "time_s" not in selected.columns:
         return estimates
@@ -168,46 +179,80 @@ def _merge_selected_context(
     if not available_context:
         return estimates
 
+    scope_by_sequence = (
+        "sequence_id" in estimates.columns and "sequence_id" in selected.columns
+    )
     left = estimates.copy()
     original_index = left.index
     left[_ROW_ORDER_COLUMN] = np.arange(len(left), dtype=np.int64)
     left[_MERGE_TIME_COLUMN] = pd.to_numeric(left["time_s"], errors="coerce")
+    if scope_by_sequence:
+        left[_SEQUENCE_KEY_COLUMN] = _normalized_context_sequence_keys(
+            left["sequence_id"]
+        )
 
     context = selected[["time_s", *available_context]].copy()
     context[_MERGE_TIME_COLUMN] = pd.to_numeric(
         context["time_s"],
         errors="coerce",
     )
+    if scope_by_sequence:
+        context[_SEQUENCE_KEY_COLUMN] = _normalized_context_sequence_keys(
+            selected["sequence_id"]
+        )
     renamed_context = {
         column: f"selected_context_{column}" for column in available_context
     }
     context = context.drop(columns=["time_s"]).rename(columns=renamed_context)
-    context = context.loc[
-        np.isfinite(context[_MERGE_TIME_COLUMN].to_numpy(dtype=float))
-    ].sort_values(_MERGE_TIME_COLUMN)
+    usable_context = np.isfinite(
+        context[_MERGE_TIME_COLUMN].to_numpy(dtype=float)
+    )
+    if scope_by_sequence:
+        usable_context &= context[_SEQUENCE_KEY_COLUMN].notna().to_numpy(dtype=bool)
+    context = context.loc[usable_context].sort_values(
+        _MERGE_TIME_COLUMN,
+        kind="mergesort",
+    )
 
     output_columns = list(renamed_context.values())
     valid_left = np.isfinite(left[_MERGE_TIME_COLUMN].to_numpy(dtype=float))
+    if scope_by_sequence:
+        valid_left &= left[_SEQUENCE_KEY_COLUMN].notna().to_numpy(dtype=bool)
     if context.empty or not valid_left.any():
         for column in output_columns:
             left[column] = np.nan
         merged = left
     else:
-        matched = pd.merge_asof(
-            left.loc[valid_left].sort_values(_MERGE_TIME_COLUMN),
-            context,
-            on=_MERGE_TIME_COLUMN,
-            direction="nearest",
-            tolerance=0.25,
+        sortable_left = left.loc[valid_left].sort_values(
+            _MERGE_TIME_COLUMN,
+            kind="mergesort",
         )
+        if scope_by_sequence:
+            matched = pd.merge_asof(
+                sortable_left,
+                context,
+                on=_MERGE_TIME_COLUMN,
+                by=_SEQUENCE_KEY_COLUMN,
+                direction="nearest",
+                tolerance=0.25,
+            )
+        else:
+            matched = pd.merge_asof(
+                sortable_left,
+                context,
+                on=_MERGE_TIME_COLUMN,
+                direction="nearest",
+                tolerance=0.25,
+            )
         unmatched = left.loc[~valid_left].copy()
         for column in output_columns:
             unmatched[column] = np.nan
         merged = pd.concat([matched, unmatched], ignore_index=True, sort=False)
 
-    merged = merged.sort_values(_ROW_ORDER_COLUMN).drop(
-        columns=[_ROW_ORDER_COLUMN, _MERGE_TIME_COLUMN]
-    )
+    helper_columns = [_ROW_ORDER_COLUMN, _MERGE_TIME_COLUMN]
+    if scope_by_sequence:
+        helper_columns.append(_SEQUENCE_KEY_COLUMN)
+    merged = merged.sort_values(_ROW_ORDER_COLUMN).drop(columns=helper_columns)
     merged.index = original_index
     return merged
 
@@ -297,6 +342,7 @@ globals()["decompose_radar_oracle_gap"] = decompose_radar_oracle_gap
 globals()["_radar_frame_groups"] = _radar_frame_groups
 globals()["_nearest_position"] = _nearest_position
 globals()["_nearest_estimate_error"] = _nearest_estimate_error
+globals()["_normalized_context_sequence_keys"] = _normalized_context_sequence_keys
 globals()["_merge_selected_context"] = _merge_selected_context
 globals()["selected_track_stability_metrics"] = selected_track_stability_metrics
 globals()["_optional_track_id"] = _optional_track_id
