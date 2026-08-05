@@ -1,0 +1,56 @@
+name: Apply empty-grid fix directly
+
+on:
+  push:
+    branches:
+      - agent/fix-empty-submission-ensemble-grid
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: agent/fix-empty-submission-ensemble-grid
+          fetch-depth: 0
+
+      - name: Move guard into maintained module
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path("src/raft_uav/mmuad/track5_submission_ensemble_grid.py")
+          text = source.read_text(encoding="utf-8")
+          old = (
+              "    weight_rows = tuple(tuple(float(weight) for weight in weights) for weights in weight_grid)\n"
+              "    summary_records: list[dict[str, Any]] = []\n"
+          )
+          new = (
+              "    weight_rows = tuple(tuple(float(weight) for weight in weights) for weights in weight_grid)\n"
+              "    if not weight_rows:\n"
+              "        raise ValueError(\"weight grid produced no rows\")\n"
+              "    summary_records: list[dict[str, Any]] = []\n"
+          )
+          if new not in text:
+              if old not in text:
+                  raise SystemExit("expected weight-grid initialization was not found")
+              source.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          for path in (
+              Path("src/raft_uav/mmuad/track5_submission_ensemble_grid/__init__.py"),
+              Path("src/raft_uav/mmuad/track5_submission_ensemble_grid/__main__.py"),
+              Path(".github/workflows/apply-empty-grid-direct-fix.yml"),
+          ):
+              path.unlink(missing_ok=True)
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Apply empty grid guard directly"
+          git push origin HEAD:agent/fix-empty-submission-ensemble-grid
