@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+import threading
 from typing import Any
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_scorecard_compare.py"
@@ -39,6 +40,7 @@ _SEQUENCE_ID_DTYPES = {
 _REGRESSION_TOLERANCE_ERROR = (
     "regression_tolerance_mse must be a finite non-negative real scalar"
 )
+_MAIN_LOCK = threading.RLock()
 
 
 class _SequencePreservingPandasProxy:
@@ -145,12 +147,13 @@ def compare_pose_by_sequence_tables(
 def main(argv: list[str] | None = None) -> int:
     """Run the scorecard CLI without numeric inference on sequence identifiers."""
 
-    pandas_module = _IMPL.pd
-    _IMPL.pd = _SequencePreservingPandasProxy(pandas_module)
-    try:
-        return _ORIGINAL_MAIN(argv)
-    finally:
-        _IMPL.pd = pandas_module
+    with _MAIN_LOCK:
+        pandas_module = _IMPL.pd
+        _IMPL.pd = _SequencePreservingPandasProxy(pandas_module)
+        try:
+            return _ORIGINAL_MAIN(argv)
+        finally:
+            _IMPL.pd = pandas_module
 
 
 _IMPL._normalize_pose_by_sequence_table = _normalize_pose_by_sequence_table
