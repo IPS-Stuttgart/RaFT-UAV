@@ -287,7 +287,18 @@ def _read_numpy_point_cloud(path: Path) -> pd.DataFrame:
         raise ValueError(f"NumPy point cloud must be shape (N, >=3), got {arr.shape}")
     frame = pd.DataFrame({"x_m": arr[:, 0], "y_m": arr[:, 1], "z_m": arr[:, 2]})
     if arr.shape[1] >= 4:
-        frame["intensity"] = arr[:, 3]
+        fourth_column = arr[:, 3]
+        filename_has_timestamp = _FILENAME_NUMBER_TOKEN_RE.search(Path(path).stem) is not None
+        constant_finite_column = bool(np.isfinite(fourth_column).all()) and bool(
+            np.equal(fourth_column, fourth_column[0]).all()
+        )
+        # Four-column exports are ambiguous: current LiDAR dumps use XYZI and
+        # carry time in the filename, while legacy XYZT exports use a constant
+        # fourth column and filenames without a numeric timestamp token.
+        if not filename_has_timestamp and constant_finite_column:
+            frame["time_s"] = fourth_column
+        else:
+            frame["intensity"] = fourth_column
     return _impl._normalize_point_frame(frame, path=path)
 
 
