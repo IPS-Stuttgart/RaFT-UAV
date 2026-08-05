@@ -27,6 +27,10 @@ _ORIGINAL_NORMALIZE_TEMPLATE_ROWS = _IMPL._normalize_template_rows
 _ORIGINAL_RESAMPLED_POSITION = _IMPL._resampled_position
 _ORIGINAL_RESAMPLED_CLASSIFICATION = _IMPL._resampled_classification
 
+_TRUE_BOOLEAN_TEXT = frozenset({"1", "1.0", "true", "t", "yes", "y"})
+_FALSE_BOOLEAN_TEXT = frozenset({"0", "0.0", "false", "f", "no", "n"})
+_MISSING_BOOLEAN_TEXT = frozenset({"", "na", "nan", "none", "null", "<na>", "nat"})
+
 
 def _normalize_optional_nonnegative_float(value: Any, *, field: str) -> float | None:
     """Return an optional finite non-negative scalar with a stable error."""
@@ -230,25 +234,124 @@ def _unique_time_rows(group: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _boolean_diagnostic_error(
+    *,
+    column: str,
+    row_index: object,
+    value: object,
+) -> ValueError:
+    """Build one stable error for malformed Boolean diagnostic cells."""
+
+    return ValueError(
+        f"{column} must contain Boolean diagnostics encoded as true/false or 1/0; "
+        f"got {value!r} at row index {row_index!r}"
+    )
+
+
+def _unwrap_boolean_scalar(
+    value: object,
+    *,
+    column: str,
+    row_index: object,
+) -> object:
+    """Unwrap scalar NumPy containers without exposing masks or cycling forever."""
+
+    seen: set[int] = set()
+    while isinstance(value, np.ndarray):
+        if np.ma.is_masked(value):
+            return pd.NA
+        if value.ndim != 0:
+            raise _boolean_diagnostic_error(
+                column=column,
+                row_index=row_index,
+                value=value,
+            )
+        marker = id(value)
+        if marker in seen:
+            raise _boolean_diagnostic_error(
+                column=column,
+                row_index=row_index,
+                value="cyclic scalar container",
+            )
+        seen.add(marker)
+        value = value.item()
+    return value
+
+
+def _boolean_diagnostic_value(
+    value: object,
+    *,
+    column: str,
+    row_index: object,
+) -> bool:
+    """Parse one strict Boolean diagnostic cell."""
+
+    value = _unwrap_boolean_scalar(
+        value,
+        column=column,
+        row_index=row_index,
+    )
+    if np.ma.is_masked(value) or value is None or value is pd.NA or value is pd.NaT:
+        return False
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (complex, np.complexfloating)):
+        raise _boolean_diagnostic_error(
+            column=column,
+            row_index=row_index,
+            value=value,
+        )
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in _TRUE_BOOLEAN_TEXT:
+            return True
+        if normalized in _FALSE_BOOLEAN_TEXT or normalized in _MISSING_BOOLEAN_TEXT:
+            return False
+        raise _boolean_diagnostic_error(
+            column=column,
+            row_index=row_index,
+            value=value,
+        )
+
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return False
+
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise _boolean_diagnostic_error(
+            column=column,
+            row_index=row_index,
+            value=value,
+        ) from exc
+    if not np.isfinite(numeric) or numeric not in (0.0, 1.0):
+        raise _boolean_diagnostic_error(
+            column=column,
+            row_index=row_index,
+            value=value,
+        )
+    return bool(numeric)
+
+
 def _bool_column(rows: pd.DataFrame, column: str) -> pd.Series:
-    """Normalize Boolean diagnostics, including CSV-style ``1.0`` / ``0.0``."""
+    """Normalize strict Boolean diagnostics, including CSV-style ``1.0`` / ``0.0``."""
 
     if column not in rows.columns:
         return pd.Series(False, index=rows.index, dtype=bool)
     values = pd.Series(rows[column], index=rows.index)
-    if pd.api.types.is_bool_dtype(values.dtype):
-        return values.fillna(False).astype(bool)
-
-    numeric = pd.to_numeric(values, errors="coerce")
-    numeric_mask = numeric.notna()
-    normalized = pd.Series(False, index=rows.index, dtype=bool)
-    normalized.loc[numeric_mask] = numeric.loc[numeric_mask].eq(1.0)
-
-    text = values.astype("string").fillna("").str.strip().str.lower()
-    normalized.loc[~numeric_mask] = text.loc[~numeric_mask].isin(
-        {"1", "true", "t", "yes", "y"}
-    )
-    return normalized
+    normalized = [
+        _boolean_diagnostic_value(
+            value,
+            column=column,
+            row_index=row_index,
+        )
+        for row_index, value in values.items()
+    ]
+    return pd.Series(normalized, index=rows.index, dtype=bool)
 
 
 def _resampled_position(
@@ -302,6 +405,9 @@ globals()["_complex_scalar_mask"] = _complex_scalar_mask
 globals()["_invalid_row_message"] = _invalid_row_message
 globals()["_normalize_estimate_rows"] = _normalize_estimate_rows
 globals()["_normalize_template_rows"] = _normalize_template_rows
+globals()["_boolean_diagnostic_error"] = _boolean_diagnostic_error
+globals()["_unwrap_boolean_scalar"] = _unwrap_boolean_scalar
+globals()["_boolean_diagnostic_value"] = _boolean_diagnostic_value
 globals()["_bool_column"] = _bool_column
 globals()["_resampled_position"] = _resampled_position
 globals()["_resampled_classification"] = _resampled_classification
