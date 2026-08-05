@@ -16,6 +16,38 @@ _ORIGINAL_LOAD_CALIBRATION_BUNDLE = _IMPL.load_calibration_bundle
 _ORIGINAL_WRITE_CALIBRATION_BUNDLE_MANIFEST = _IMPL.write_calibration_bundle_manifest
 
 
+def _unwrapped_real_scalar(value: object, *, error: str) -> object:
+    """Return a scalar payload without lossy nested-container coercion."""
+
+    scalar = value
+    seen_arrays: set[int] = set()
+    while isinstance(scalar, (np.ndarray, np.generic)):
+        if np.ma.is_masked(scalar):
+            raise ValueError(error)
+        if isinstance(scalar, np.ndarray):
+            if scalar.ndim != 0:
+                raise ValueError(error)
+            marker = id(scalar)
+            if marker in seen_arrays:
+                raise ValueError(error)
+            seen_arrays.add(marker)
+        scalar = scalar.item()
+
+    if (
+        np.ma.is_masked(scalar)
+        or isinstance(scalar, (bool, np.bool_))
+        or isinstance(scalar, (complex, np.complexfloating))
+    ):
+        raise ValueError(error)
+    try:
+        scalar_array = np.asarray(scalar)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar_array.ndim != 0 or np.iscomplexobj(scalar_array):
+        raise ValueError(error)
+    return scalar
+
+
 def _finite_real_offset(
     value: object,
     *,
@@ -23,18 +55,8 @@ def _finite_real_offset(
     allow_nonfinite_missing: bool = False,
 ) -> float:
     error = f"{field_name} must be a finite real scalar"
-    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
-        raise ValueError(error)
+    item = _unwrapped_real_scalar(value, error=error)
     try:
-        scalar = np.asarray(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(error) from exc
-    if scalar.ndim != 0 or np.iscomplexobj(scalar):
-        raise ValueError(error)
-    try:
-        item = scalar.item()
-        if np.ma.is_masked(item) or isinstance(item, (bool, np.bool_)):
-            raise ValueError(error)
         number = float(item)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(error) from exc
@@ -45,18 +67,8 @@ def _finite_real_offset(
 
 def _exact_schema_version(value: object) -> int:
     error = "schema_version must be an exact integer scalar"
-    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
-        raise ValueError(error)
+    item = _unwrapped_real_scalar(value, error=error)
     try:
-        scalar = np.asarray(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(error) from exc
-    if scalar.ndim != 0 or np.iscomplexobj(scalar):
-        raise ValueError(error)
-    try:
-        item = scalar.item()
-        if np.ma.is_masked(item) or isinstance(item, (bool, np.bool_)):
-            raise ValueError(error)
         number = float(item)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(error) from exc
