@@ -318,7 +318,10 @@ def _install_numpy_gzip_export_guard() -> None:
             raise ValueError(f"NumPy point cloud must be shape (N, >=3), got {arr.shape}")
         frame = _pd.DataFrame({"x_m": arr[:, 0], "y_m": arr[:, 1], "z_m": arr[:, 2]})
         if arr.shape[1] >= 4:
-            frame["time_s"] = arr[:, 3]
+            if _mmuad_io._FILENAME_NUMBER_TOKEN_RE.search(_Path(path).stem):
+                frame["intensity"] = arr[:, 3]
+            else:
+                frame["time_s"] = arr[:, 3]
         return _mmuad_io._normalize_point_frame(frame, path=_Path(path))
 
     def _read_numpy_trajectory_table(path):
@@ -336,7 +339,9 @@ def _install_numpy_gzip_export_guard() -> None:
         )
         if arr.dtype.names:
             return _pd.DataFrame.from_records(arr)
-        compact_vector = _mmuad_io._compact_numpy_coordinate_vector(arr)
+        compact_vector = None
+        if arr.ndim == 1 or (arr.ndim == 2 and arr.shape[1] == 1):
+            compact_vector = _mmuad_io._compact_numpy_coordinate_vector(arr)
         if compact_vector is not None:
             return _mmuad_io._compact_vector_trajectory_frame(compact_vector, path=_Path(path))
         if arr.ndim != 2 or arr.shape[1] < 4:
@@ -348,6 +353,8 @@ def _install_numpy_gzip_export_guard() -> None:
 
     _mmuad_io._read_numpy_point_cloud = _read_numpy_point_cloud
     _mmuad_io._read_numpy_trajectory_table = _read_numpy_trajectory_table
+    _mmuad_io._impl._read_numpy_point_cloud = _read_numpy_point_cloud
+    _mmuad_io._impl._read_numpy_trajectory_table = _read_numpy_trajectory_table
 
 
 def _install_track5_scorecard_bool_guard() -> None:
