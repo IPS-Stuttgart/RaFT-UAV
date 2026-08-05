@@ -1,15 +1,17 @@
-"""Compatibility wrapper for reusable gap-threshold iterables.
+"""Compatibility fixes for frame-gap diagnostics.
 
 The implementation remains in the sibling module. This package wrapper preserves
-its public API while ensuring one-shot iterables passed to ``summarize_frame_gap``
-are reused for every group and oracle column.
+its public API while reusing one-shot gap-threshold iterables and preventing
+invalid or ambiguous rounded timestamp keys from corrupting exact frame joins.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable as _Iterable
 import importlib.util
 from pathlib import Path
 import sys
+from typing import Any
 
 import pandas as pd
 
@@ -31,6 +33,55 @@ for _name, _value in vars(_IMPL).items():
         globals()[_name] = _value
 
 
+def _require_unique_frame_keys(rows: pd.DataFrame, *, label: str) -> None:
+    """Reject ambiguous frame keys before a one-to-one diagnostic join."""
+
+    key_columns = ["sequence_id", "_join_time_s"]
+    duplicated = rows.duplicated(key_columns, keep=False)
+    if not bool(duplicated.any()):
+        return
+    examples: list[dict[str, Any]] = (
+        rows.loc[duplicated, key_columns]
+        .drop_duplicates()
+        .head(5)
+        .to_dict(orient="records")
+    )
+    raise ValueError(
+        f"{label} contain duplicate frame keys after timestamp rounding: {examples}"
+    )
+
+
+def _join_estimates_to_oracle_exact(
+    estimate_rows: pd.DataFrame,
+    oracle_rows: pd.DataFrame,
+    *,
+    time_round_decimals: int,
+) -> pd.DataFrame:
+    """Join only finite, unique per-sequence rounded frame timestamps."""
+
+    estimate_rows = estimate_rows.copy()
+    oracle_rows = oracle_rows.copy()
+    estimate_rows["_join_time_s"] = _IMPL._rounded_time(
+        estimate_rows["time_s"],
+        time_round_decimals,
+    )
+    oracle_rows["_join_time_s"] = _IMPL._rounded_time(
+        oracle_rows["time_s"],
+        time_round_decimals,
+    )
+    estimate_rows = estimate_rows.loc[estimate_rows["_join_time_s"].notna()].copy()
+    oracle_rows = oracle_rows.loc[oracle_rows["_join_time_s"].notna()].copy()
+    _require_unique_frame_keys(estimate_rows, label="estimates")
+    _require_unique_frame_keys(oracle_rows, label="oracle frames")
+    return oracle_rows.merge(
+        estimate_rows,
+        on=["sequence_id", "_join_time_s"],
+        how="inner",
+        suffixes=("_oracle", "_mixture"),
+        validate="one_to_one",
+    )
+
+
 def summarize_frame_gap(
     frame_gap: pd.DataFrame,
     *,
@@ -47,7 +98,10 @@ def summarize_frame_gap(
     )
 
 
+_IMPL._join_estimates_to_oracle_exact = _join_estimates_to_oracle_exact
 _IMPL.summarize_frame_gap = summarize_frame_gap
+globals()["_require_unique_frame_keys"] = _require_unique_frame_keys
+globals()["_join_estimates_to_oracle_exact"] = _join_estimates_to_oracle_exact
 globals()["summarize_frame_gap"] = summarize_frame_gap
 
 __all__ = sorted(name for name in vars(_IMPL) if not name.startswith("_"))
