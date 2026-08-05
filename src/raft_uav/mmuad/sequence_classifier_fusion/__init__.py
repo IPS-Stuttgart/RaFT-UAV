@@ -51,6 +51,42 @@ def _validated_image_weight(value: Any, *, name: str = "image_weight") -> float:
     return weight
 
 
+def _validated_probability_scalar(value: Any) -> float:
+    """Return one finite non-negative real scalar probability."""
+
+    message = "probability must be a finite non-negative real scalar"
+    current = value
+    seen: set[int] = set()
+    while True:
+        if isinstance(current, (bool, np.bool_, complex, np.complexfloating)):
+            raise ValueError(message)
+        if np.ma.is_masked(current):
+            raise ValueError(message)
+        try:
+            scalar = np.asarray(current)
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise ValueError(message) from exc
+        if scalar.ndim != 0 or scalar.dtype.kind in {"b", "c"}:
+            raise ValueError(message)
+        if scalar.dtype.kind != "O":
+            try:
+                probability = float(scalar.item())
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(message) from exc
+            break
+        marker = id(current)
+        if marker in seen:
+            raise ValueError(message)
+        seen.add(marker)
+        unwrapped = scalar.item()
+        if unwrapped is current:
+            raise ValueError(message)
+        current = unwrapped
+    if not np.isfinite(probability) or probability < 0.0:
+        raise ValueError(message)
+    return probability
+
+
 def _validated_sequence_ids(rows: pd.DataFrame, *, name: str) -> pd.DataFrame:
     """Return rows with unique, non-missing opaque sequence identifiers."""
 
@@ -111,20 +147,13 @@ def _validated_probability_frame(rows: pd.DataFrame, *, name: str) -> pd.DataFra
     invalid_rows = np.zeros(len(out), dtype=bool)
     numeric_columns: dict[str, pd.Series] = {}
     for column in probability_columns:
-        raw = out[column]
-        invalid_scalar = raw.map(
-            lambda value: isinstance(
-                value,
-                (bool, np.bool_, complex, np.complexfloating),
-            )
-            or np.ma.is_masked(value)
-        )
-        clean = raw.astype(object).where(~invalid_scalar, np.nan)
-        numeric = pd.to_numeric(clean, errors="coerce").astype(float)
-        values = numeric.to_numpy(dtype=float)
-        invalid_rows |= invalid_scalar.to_numpy(dtype=bool)
-        invalid_rows |= ~np.isfinite(values) | (values < 0.0)
-        numeric_columns[column] = numeric
+        values = np.full(len(out), np.nan, dtype=float)
+        for position, value in enumerate(out[column].tolist()):
+            try:
+                values[position] = _validated_probability_scalar(value)
+            except ValueError:
+                invalid_rows[position] = True
+        numeric_columns[column] = pd.Series(values, index=out.index, dtype=float)
     if bool(invalid_rows.any()):
         bad_sequences = out.loc[invalid_rows, "sequence_id"].astype(str).drop_duplicates()
         bad_text = ", ".join(repr(value) for value in bad_sequences.iloc[:5])
@@ -224,6 +253,7 @@ def select_train_safe_fusion(
 
 
 _IMPL._validated_image_weight = _validated_image_weight
+_IMPL._validated_probability_scalar = _validated_probability_scalar
 _IMPL._validated_sequence_ids = _validated_sequence_ids
 _IMPL._sequence_indexed = _sequence_indexed
 _IMPL._validated_probability_frame = _validated_probability_frame
@@ -239,6 +269,7 @@ globals().update(
     }
 )
 globals()["_validated_image_weight"] = _validated_image_weight
+globals()["_validated_probability_scalar"] = _validated_probability_scalar
 globals()["_validated_sequence_ids"] = _validated_sequence_ids
 globals()["_sequence_indexed"] = _sequence_indexed
 globals()["_validated_probability_frame"] = _validated_probability_frame
