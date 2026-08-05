@@ -413,6 +413,8 @@ def _validate_nonnegative_int(value: int, name: str) -> int:
 
 
 def _truthy(value: object) -> bool:
+    if pd.isna(value):
+        return False
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "t", "yes", "y"}
     return bool(value)
