@@ -5,12 +5,14 @@ package preserves the public import path while ensuring that timestamps within
 the existing 1 ns equality tolerance are accepted at either interpolation
 endpoint, regardless of whether a maximum time-delta gate is configured. The
 same endpoint rule is applied to both truth-grid metrics and paper-table
-interpolation at estimate timestamps. Non-finite and masked nearest-time queries
-are rejected, masked reference timestamps are ignored, masked trajectory and
-error samples are excluded, masked interpolation queries are returned as invalid,
-and complex trajectory and error values are rejected before NumPy can discard
-their imaginary parts. Boolean pseudo-numbers are rejected instead of being
-silently reinterpreted as 0.0 or 1.0.
+interpolation at estimate timestamps. Single-sample estimate trajectories retain
+zero-width temporal support, so only tolerance-equivalent truth timestamps are
+scored. Non-finite and masked nearest-time queries are rejected, masked reference
+timestamps are ignored, masked trajectory and error samples are excluded, masked
+interpolation queries are returned as invalid, and complex trajectory and error
+values are rejected before NumPy can discard their imaginary parts. Boolean
+pseudo-numbers are rejected instead of being silently reinterpreted as 0.0 or
+1.0.
 """
 
 from __future__ import annotations
@@ -122,6 +124,35 @@ def _nearest_time_indices_with_finite_queries(
     if not np.isfinite(query).all():
         raise ValueError("query_times_s must contain only finite timestamps")
     return _ORIGINAL_NEAREST_TIME_INDICES(reference, query)
+
+
+def _single_sample_position_errors_with_exact_support(
+    estimate_times: np.ndarray,
+    estimate_positions: np.ndarray,
+    truth_times: np.ndarray,
+    truth_positions: np.ndarray,
+    *,
+    max_time_delta_s: float | None,
+    dimensions: int,
+) -> np.ndarray:
+    """Score only truth samples inside a one-sample trajectory's zero-width support."""
+
+    del max_time_delta_s
+    supported = np.isclose(
+        truth_times,
+        estimate_times[0],
+        rtol=0.0,
+        atol=_ENDPOINT_ATOL_S,
+    )
+    if not bool(np.any(supported)):
+        return np.array([], dtype=float)
+
+    deltas = (
+        estimate_positions[0, :dimensions]
+        - truth_positions[supported, :dimensions]
+    )
+    errors = np.linalg.norm(deltas, axis=1)
+    return errors[np.isfinite(errors)]
 
 
 def _truth_grid_with_symmetric_tolerance(
@@ -255,6 +286,9 @@ def _summarize_errors_without_masked(
 _IMPL._validate_max_time_delta_s = _validate_max_time_delta_s_without_masked
 _IMPL._prepare_time_position_samples = _prepare_time_position_samples_without_masked
 _IMPL.nearest_time_indices = _nearest_time_indices_with_finite_queries
+_IMPL._single_sample_position_errors_m = (
+    _single_sample_position_errors_with_exact_support
+)
 _IMPL._truth_grid_with_estimate_support = _truth_grid_with_symmetric_tolerance
 _IMPL.interpolate_positions_at_times = (
     _interpolate_positions_at_times_with_symmetric_tolerance
