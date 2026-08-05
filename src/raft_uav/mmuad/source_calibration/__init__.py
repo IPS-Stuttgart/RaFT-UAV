@@ -3,8 +3,9 @@
 The maintained implementation lives in the sibling ``source_calibration.py`` module.
 This package preserves the public import path while validating every loaded or fitted
 source transform before it can contaminate calibrated candidate coordinates, rejecting
-ambiguous case-insensitive transform keys, and preventing source-specific transforms
-from leaking onto unrelated or broader sources.
+lossy Boolean, complex, masked, or cyclic coefficients, rejecting ambiguous
+case-insensitive transform keys, and preventing source-specific transforms from leaking
+onto unrelated or broader sources.
 """
 
 from __future__ import annotations
@@ -29,9 +30,62 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_SOURCE_TRANSFORM_POST_INIT = _IMPL.SourceTransform.__post_init__
 
 
-def _validated_source_transform_post_init(self: object) -> None:
-    """Normalize a source transform, then reject non-finite coefficients."""
+def _validate_real_transform_values(
+    value: object,
+    *,
+    name: str,
+    seen: set[int] | None = None,
+) -> None:
+    """Reject values that NumPy would silently coerce while building a transform."""
 
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must not contain Boolean values")
+    if isinstance(value, (complex, np.complexfloating)):
+        raise ValueError(f"{name} must not contain complex values")
+
+    if isinstance(value, np.ma.MaskedArray):
+        if bool(np.ma.getmaskarray(value).any()):
+            raise ValueError(f"{name} must not contain masked values")
+        _validate_real_transform_values(value.data, name=name, seen=seen)
+        return
+
+    if isinstance(value, np.ndarray):
+        if np.issubdtype(value.dtype, np.bool_):
+            raise ValueError(f"{name} must not contain Boolean values")
+        if np.issubdtype(value.dtype, np.complexfloating):
+            raise ValueError(f"{name} must not contain complex values")
+        if value.dtype != object:
+            return
+        seen = set() if seen is None else seen
+        value_id = id(value)
+        if value_id in seen:
+            raise ValueError(f"{name} must not contain cyclic values")
+        seen.add(value_id)
+        try:
+            for item in value.flat:
+                _validate_real_transform_values(item, name=name, seen=seen)
+        finally:
+            seen.remove(value_id)
+        return
+
+    if isinstance(value, (list, tuple)):
+        seen = set() if seen is None else seen
+        value_id = id(value)
+        if value_id in seen:
+            raise ValueError(f"{name} must not contain cyclic values")
+        seen.add(value_id)
+        try:
+            for item in value:
+                _validate_real_transform_values(item, name=name, seen=seen)
+        finally:
+            seen.remove(value_id)
+
+
+def _validated_source_transform_post_init(self: object) -> None:
+    """Normalize a source transform after rejecting lossy coefficients."""
+
+    _validate_real_transform_values(self.linear, name="linear transform")
+    _validate_real_transform_values(self.translation_m, name="translation_m")
     _ORIGINAL_SOURCE_TRANSFORM_POST_INIT(self)
     if not np.isfinite(self.linear).all():
         raise ValueError("linear transform must contain only finite values")
