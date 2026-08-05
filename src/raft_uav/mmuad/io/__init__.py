@@ -34,6 +34,7 @@ sys.modules[_SPEC.name] = _LEGACY
 _SPEC.loader.exec_module(_LEGACY)
 
 _ORIGINAL_DYNAMIC_POINT_RESIDUALS = _LEGACY._dynamic_point_residuals
+_ORIGINAL_READ_NUMPY_POINT_CLOUD = _LEGACY._read_numpy_point_cloud
 _BINARY_POINT_COLUMNS_ENV = "RAFT_UAV_BINARY_POINT_COLUMNS"
 _PCD_NUMPY_DTYPES: dict[str, dict[int, str]] = {
     "F": {4: "<f4", 8: "<f8"},
@@ -165,6 +166,41 @@ def _read_binary_point_cloud(path: Path) -> pd.DataFrame:
     return _LEGACY._normalize_point_frame(frame, path=path)
 
 
+def _filename_contains_timestamp(path: Path) -> bool:
+    """Return whether the filename supplies the timestamp used for one frame."""
+
+    return _LEGACY._FILENAME_NUMBER_TOKEN_RE.search(Path(path).stem) is not None
+
+
+def _read_numpy_point_cloud(path: Path) -> pd.DataFrame:
+    """Preserve legacy XYZT arrays while accepting timestamped XYZI frame files."""
+
+    frame = _ORIGINAL_READ_NUMPY_POINT_CLOUD(path)
+    if _filename_contains_timestamp(path):
+        return frame
+
+    array = _LEGACY._numpy_array_from_export(
+        path,
+        preferred_keys=(
+            "points",
+            "point_cloud",
+            "pointcloud",
+            "cloud",
+            "lidar_points",
+            "livox_points",
+            "rows",
+            "data",
+        ),
+    )
+    if array.ndim == 1:
+        array = array.reshape(1, -1)
+    if array.ndim == 2 and array.shape[1] >= 4 and len(frame) == array.shape[0]:
+        frame = frame.copy()
+        frame["time_s"] = array[:, 3]
+        frame = frame.drop(columns=["intensity"], errors="ignore")
+    return frame
+
+
 def _dynamic_point_residuals(
     points,
     *,
@@ -202,6 +238,8 @@ _LEGACY._pcd_numpy_dtype = _pcd_numpy_dtype
 _LEGACY._impl._pcd_numpy_dtype = _pcd_numpy_dtype
 _LEGACY._read_binary_point_cloud = _read_binary_point_cloud
 _LEGACY._impl._read_binary_point_cloud = _read_binary_point_cloud
+_LEGACY._read_numpy_point_cloud = _read_numpy_point_cloud
+_LEGACY._impl._read_numpy_point_cloud = _read_numpy_point_cloud
 
 for _name in dir(_LEGACY):
     if not (_name.startswith("__") and _name.endswith("__")):
@@ -209,6 +247,7 @@ for _name in dir(_LEGACY):
 globals()["_exact_integer_control"] = _exact_integer_control
 globals()["_pcd_numpy_dtype"] = _pcd_numpy_dtype
 globals()["_read_binary_point_cloud"] = _read_binary_point_cloud
+globals()["_read_numpy_point_cloud"] = _read_numpy_point_cloud
 globals()["_dynamic_point_residuals"] = _dynamic_point_residuals
 
 __doc__ = _LEGACY.__doc__
@@ -222,5 +261,6 @@ __all__ = sorted(
         "_dynamic_point_residuals",
         "_pcd_numpy_dtype",
         "_read_binary_point_cloud",
+        "_read_numpy_point_cloud",
     }
 )
