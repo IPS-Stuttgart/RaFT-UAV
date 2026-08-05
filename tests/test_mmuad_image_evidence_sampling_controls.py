@@ -13,6 +13,12 @@ from raft_uav.mmuad.image_evidence import (
 )
 
 
+def _object_scalar(value: object) -> np.ndarray:
+    boxed = np.empty((), dtype=object)
+    boxed[()] = value
+    return boxed
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -55,6 +61,52 @@ def test_build_image_evidence_rejects_invalid_frame_limits(
     ],
 )
 def test_build_image_evidence_rejects_invalid_time_gates(
+    tmp_path: Path,
+    value,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="max_image_time_delta_s must be None or a finite non-negative number",
+    ):
+        build_image_evidence(
+            tmp_path / "missing",
+            max_image_time_delta_s=value,
+        )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        np.array(True),
+        np.array(True, dtype=object),
+        np.ma.array(3, mask=True),
+        _object_scalar(np.ma.masked),
+    ],
+)
+def test_build_image_evidence_rejects_boxed_or_masked_frame_limits(
+    tmp_path: Path,
+    value,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="max_frames_per_sequence must be a non-negative integer",
+    ):
+        build_image_evidence(
+            tmp_path / "missing",
+            max_frames_per_sequence=value,
+        )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        np.array(False),
+        np.array(False, dtype=object),
+        np.ma.array(0.5, mask=True),
+        _object_scalar(np.ma.array(0.5, mask=True)),
+    ],
+)
+def test_build_image_evidence_rejects_boxed_or_masked_time_gates(
     tmp_path: Path,
     value,
 ) -> None:
