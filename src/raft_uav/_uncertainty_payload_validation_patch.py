@@ -19,18 +19,33 @@ def _finite_real_scalar(
     """Return a finite real scalar without Boolean or array coercion."""
 
     error = f"{name} must be a finite real scalar"
-    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+    scalar = value
+    seen_arrays: set[int] = set()
+    while isinstance(scalar, np.ndarray):
+        if np.ma.is_masked(scalar):
+            raise ValueError(error)
+        if scalar.ndim != 0:
+            raise ValueError(error)
+        marker = id(scalar)
+        if marker in seen_arrays:
+            raise ValueError(error)
+        seen_arrays.add(marker)
+        scalar = scalar.item()
+
+    if np.ma.is_masked(scalar) or isinstance(scalar, (bool, np.bool_)):
         raise ValueError(error)
-    try:
-        scalar = np.asarray(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(error) from exc
-    if scalar.ndim != 0:
-        raise ValueError(error)
-    if np.iscomplexobj(scalar):
+    if isinstance(scalar, (complex, np.complexfloating)):
         raise ValueError(nonfinite_error or error)
     try:
-        number = float(scalar.item())
+        scalar_array = np.asarray(scalar)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar_array.ndim != 0:
+        raise ValueError(error)
+    if np.iscomplexobj(scalar_array):
+        raise ValueError(nonfinite_error or error)
+    try:
+        number = float(scalar)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(error) from exc
     if not np.isfinite(number):
@@ -143,6 +158,8 @@ def install() -> None:
             training_rows,
         ):
             _validated_coefficients(coefficients)
+            _finite_real_scalar(min_std_m, name="min_std_m")
+            _finite_real_scalar(max_std_m, name="max_std_m")
             _nonnegative_integer(training_rows, name="training_rows")
             original_init(
                 self,
