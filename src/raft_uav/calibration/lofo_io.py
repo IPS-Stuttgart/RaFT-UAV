@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -70,12 +71,24 @@ def inside_truth_window(frame: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFram
 def jsonable(value: Any) -> Any:
     """Convert NumPy/Pandas values into JSON-safe objects."""
 
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {str(key): jsonable(item) for key, item in value.items()}
-    if isinstance(value, list | tuple):
+    if isinstance(value, (list, tuple)):
         return [jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return jsonable(value.tolist())
     if isinstance(value, np.generic):
         return jsonable(value.item())
+    if isinstance(value, Path):
+        return str(value)
+    if value is None:
+        return None
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
     if isinstance(value, float) and not np.isfinite(value):
         return None
     return value
