@@ -378,8 +378,12 @@ def _best_row(
 
 def _first_present(row: pd.Series, columns: tuple[str, ...]) -> Any:
     for column in columns:
-        if column in row.index:
-            return row[column]
+        if column not in row.index:
+            continue
+        value = row[column]
+        if value is None or _is_nan(value):
+            continue
+        return value
     return None
 
 
