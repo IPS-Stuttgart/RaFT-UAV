@@ -30,12 +30,6 @@ from raft_uav.baselines._radar_index_patch_bundle import (
 from raft_uav.baselines._radar_update_policy_candidate_count_patch import (
     apply_radar_update_policy_candidate_count_patch,
 )
-from raft_uav.baselines._robust_map_accepted_matching_patch import (
-    apply_robust_map_accepted_matching_patch,
-)
-from raft_uav.baselines._robust_map_lag_validation_patch import (
-    apply_robust_map_lag_validation_patch,
-)
 
 apply_imm_measurement_order_patch(_imm)
 apply_imm_mode_validation_patch(_imm)
@@ -51,8 +45,6 @@ run_async_imm_baseline = _imm.run_async_imm_baseline
 uniform_ctmc_transition_matrix = _imm.uniform_ctmc_transition_matrix
 
 apply_radar_association_interpolation_patch()
-apply_robust_map_accepted_matching_patch()
-apply_robust_map_lag_validation_patch()
 
 _radar_update_policy = import_module(
     "raft_uav.baselines.radar_update_policy"
