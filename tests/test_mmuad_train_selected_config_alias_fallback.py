@@ -30,7 +30,7 @@ def test_train_selected_config_falls_back_from_missing_preferred_aliases(
                 "method": "hist-gradient-boosting",
                 "image_nonimage_fusion_weight": None,
                 "fusion_weight": None,
-                "image_weight": 0.75,
+                "image_weight": 0.0,
                 "classification_accuracy": 0.8,
             }
         ]
@@ -44,6 +44,6 @@ def test_train_selected_config_falls_back_from_missing_preferred_aliases(
     assert config["source_calibration_mode"] == "source-translation"
     assert config["source_translation_alpha"] == 0.25
     assert config["classifier_method"] == "hist-gradient-boosting"
-    assert config["image_nonimage_fusion_weight"] == 0.75
+    assert config["image_nonimage_fusion_weight"] == 0.0
     assert records[0]["source_calibration_mode"] == "source-translation"
-    assert records[1]["image_nonimage_fusion_weight"] == 0.75
+    assert records[1]["image_nonimage_fusion_weight"] == 0.0
