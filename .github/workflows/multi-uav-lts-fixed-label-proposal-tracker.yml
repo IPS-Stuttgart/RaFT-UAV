@@ -1,0 +1,302 @@
+---
+name: Multi-UAV LTS fixed-label proposal tracker
+
+"on":
+  workflow_dispatch:
+    inputs:
+      proposal_specs:
+        description: Semicolon/newline-separated NAME=PATH proposal sources
+        required: true
+        type: string
+      first_frame_label_dir:
+        description: First-frame training labels
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels_FirstFrameOnly
+        type: string
+      sequence_root:
+        description: Training image sequence root
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainImages
+        type: string
+      truth_dir:
+        description: Complete training labels for local scoring
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels
+        type: string
+      output_root:
+        description: Run-specific output is created below this path
+        required: true
+        default: /tmp/raft-uav-lts-fixed-label-tracker
+        type: string
+      min_confidence:
+        description: Minimum retained proposal confidence
+        required: true
+        default: "0.003"
+        type: string
+      duplicate_iou_threshold:
+        description: Cross-source near-duplicate IoU threshold
+        required: true
+        default: "0.98"
+        type: string
+      max_center_distance:
+        description: Normalized center-distance gate
+        required: true
+        default: "6.0"
+        type: string
+      missed_cost:
+        description: Private missed-detection assignment cost
+        required: true
+        default: "2.5"
+        type: string
+      max_missed_frames:
+        description: Maximum proposal reacquisition memory
+        required: true
+        default: "60"
+        type: string
+      coast_frames:
+        description: Number of missed frames to emit; start with zero
+        required: true
+        default: "0"
+        type: string
+      confidence_weight:
+        description: Negative-log-confidence assignment weight
+        required: true
+        default: "0.1"
+        type: string
+      probe_only:
+        description: Check runner and mounted inputs without tracking
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multi-uav-lts-fixed-label-proposal-tracker-workstation2
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PROPOSAL_SPECS: ${{ inputs.proposal_specs }}
+  FIRST_FRAME_LABEL_DIR: ${{ inputs.first_frame_label_dir }}
+  SEQUENCE_ROOT: ${{ inputs.sequence_root }}
+  TRUTH_DIR: ${{ inputs.truth_dir }}
+  OUTPUT_ROOT: ${{ inputs.output_root }}
+  MIN_CONFIDENCE: ${{ inputs.min_confidence }}
+  DUPLICATE_IOU_THRESHOLD: ${{ inputs.duplicate_iou_threshold }}
+  MAX_CENTER_DISTANCE: ${{ inputs.max_center_distance }}
+  MISSED_COST: ${{ inputs.missed_cost }}
+  MAX_MISSED_FRAMES: ${{ inputs.max_missed_frames }}
+  COAST_FRAMES: ${{ inputs.coast_frames }}
+  CONFIDENCE_WEIGHT: ${{ inputs.confidence_weight }}
+  VENV_PATH: ${{ github.workspace }}/.lts-fixed-label-venv-${{ github.run_id }}
+
+jobs:
+  track:
+    name: Track fixed LTS identities over proposal banks
+    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out RaFT-UAV
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+
+      - name: Prepare run directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_DIR="${OUTPUT_ROOT}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${RUN_DIR}"
+          echo "RUN_DIR=${RUN_DIR}" >> "${GITHUB_ENV}"
+
+      - name: Record runner environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "runner_name=${RUNNER_NAME}"
+            echo "runner_os=${RUNNER_OS}"
+            echo "runner_arch=${RUNNER_ARCH}"
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "git_commit=${GITHUB_SHA}"
+            uname -a
+          } | tee "${RUN_DIR}/runner.txt"
+          nvidia-smi -L | tee "${RUN_DIR}/nvidia-smi-L.txt"
+
+      - name: Probe mounted inputs
+        shell: bash
+        env:
+          PROBE_ONLY: ${{ inputs.probe_only }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          def probe(raw: str) -> dict[str, object]:
+              path = Path(raw).expanduser()
+              record = {
+                  "path": str(path),
+                  "exists": path.exists(),
+                  "is_dir": path.is_dir(),
+                  "is_file": path.is_file(),
+                  "readable": False,
+                  "error": None,
+              }
+              try:
+                  if path.is_dir():
+                      next(path.iterdir(), None)
+                  elif path.is_file():
+                      path.open("rb").close()
+                  record["readable"] = path.exists()
+              except OSError as exc:
+                  record["error"] = f"{type(exc).__name__}: {exc}"
+              return record
+
+          proposal_records = {}
+          failures = []
+          specifications = os.environ["PROPOSAL_SPECS"].replace(";", "\n")
+          for raw in specifications.splitlines():
+              specification = raw.strip()
+              if not specification:
+                  continue
+              name, separator, raw_path = specification.partition("=")
+              if not separator or not name.strip() or not raw_path.strip():
+                  failures.append(f"malformed proposal specification: {specification}")
+                  continue
+              record = probe(raw_path.strip())
+              proposal_records[name.strip()] = record
+              if not (record["readable"] and (record["is_dir"] or record["is_file"])):
+                  failures.append(f"proposal source unavailable: {name.strip()}")
+          if not proposal_records:
+              failures.append("no proposal sources supplied")
+
+          paths = {
+              "first_frame_label_dir": probe(os.environ["FIRST_FRAME_LABEL_DIR"]),
+              "sequence_root": probe(os.environ["SEQUENCE_ROOT"]),
+              "truth_dir": probe(os.environ["TRUTH_DIR"]),
+              "output_root": probe(os.environ["OUTPUT_ROOT"]),
+          }
+          for name in ("first_frame_label_dir", "sequence_root", "truth_dir"):
+              if not paths[name]["is_dir"] or not paths[name]["readable"]:
+                  failures.append(f"required directory unavailable: {name}")
+          payload = {
+              "schema": "raft-uav-lts-fixed-label-tracker-probe-v1",
+              "paths": paths,
+              "proposal_sources": proposal_records,
+              "failures": failures,
+          }
+          output = Path(os.environ["RUN_DIR"]) / "probe.json"
+          output.write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          if os.environ["PROBE_ONLY"].lower() == "true":
+              raise SystemExit(0)
+          if failures:
+              raise SystemExit("; ".join(failures))
+          PY
+
+      - name: Set up Python 3.11
+        if: ${{ ! inputs.probe_only }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install isolated tracker environment
+        if: ${{ ! inputs.probe_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "${VENV_PATH}"
+          "${VENV_PATH}/bin/python" -m pip install --upgrade pip
+          "${VENV_PATH}/bin/python" -m pip install -e ".[dev]"
+          "${VENV_PATH}/bin/python" -m pip check
+          "${VENV_PATH}/bin/python" -m pip freeze --all \
+            > "${RUN_DIR}/pip-freeze.txt"
+
+      - name: Run fixed-label proposal tracker
+        if: ${{ ! inputs.probe_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          proposal_args=()
+          while IFS= read -r specification; do
+            specification="$(
+              printf '%s' "${specification}" \
+                | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+            )"
+            if [[ -n "${specification}" ]]; then
+              proposal_args+=(--proposal "${specification}")
+            fi
+          done < <(printf '%s' "${PROPOSAL_SPECS}" | tr ';' '\n')
+
+          "${VENV_PATH}/bin/python" \
+            -m raft_uav.multi_uav_lts.proposal_tracker \
+            "${proposal_args[@]}" \
+            --first-frame-label-dir "${FIRST_FRAME_LABEL_DIR}" \
+            --sequence-root "${SEQUENCE_ROOT}" \
+            --truth-dir "${TRUTH_DIR}" \
+            --output-dir "${RUN_DIR}/predictions" \
+            --min-confidence "${MIN_CONFIDENCE}" \
+            --duplicate-iou-threshold "${DUPLICATE_IOU_THRESHOLD}" \
+            --max-center-distance "${MAX_CENTER_DISTANCE}" \
+            --missed-cost "${MISSED_COST}" \
+            --max-missed-frames "${MAX_MISSED_FRAMES}" \
+            --coast-frames "${COAST_FRAMES}" \
+            --confidence-weight "${CONFIDENCE_WEIGHT}" \
+            | tee "${RUN_DIR}/tracker-console.txt"
+
+      - name: Publish tracker summary
+        if: ${{ ! inputs.probe_only && always() }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          summary_path = (
+              Path(os.environ["RUN_DIR"])
+              / "predictions"
+              / "fixed_label_tracker_summary.json"
+          )
+          if not summary_path.is_file():
+              raise SystemExit(0)
+          summary = json.loads(summary_path.read_text(encoding="utf-8"))
+          score = summary.get("score") or {}
+          lines = [
+              "### Multi-UAV LTS fixed-label proposal tracker",
+              "",
+              f"- Sequences: `{summary['sequence_count']}`",
+              f"- Assigned rows: `{summary['assigned_rows']}`",
+              f"- Coasted rows: `{summary['coasted_rows']}`",
+              f"- Missed states: `{summary['missed_states']}`",
+              f"- CODABENCH_HOTA: `{score.get('codabench_hota', 'not scored')}`",
+              f"- CODABENCH_MOTA: `{score.get('codabench_mota', 'not scored')}`",
+              f"- CODABENCH_IDF1: `{score.get('codabench_idf1', 'not scored')}`",
+          ]
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open(
+              "a", encoding="utf-8"
+          ) as handle:
+              handle.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Upload tracker evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        with:
+          name: multi-uav-lts-fixed-label-tracker-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RUN_DIR }}
+          if-no-files-found: error
+          retention-days: 30
