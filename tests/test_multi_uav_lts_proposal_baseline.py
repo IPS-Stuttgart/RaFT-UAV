@@ -103,6 +103,28 @@ def test_package_only_skips_external_source_patches(
     )
 
 
+def test_help_skips_external_source_patches(tmp_path: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("external patches must not run while showing help")
+
+    monkeypatch.setattr(proposal_baseline, "apply_upstream_fixes", unexpected)
+    monkeypatch.setattr(
+        proposal_baseline,
+        "apply_proposal_export_patch",
+        unexpected,
+    )
+    runner = SimpleNamespace(
+        _inference_command=lambda *args, **kwargs: [],
+        main=lambda arguments: captured.setdefault("arguments", arguments) and 0,
+    )
+    monkeypatch.setattr(proposal_baseline, "_load_official_runner", lambda: runner)
+
+    assert proposal_baseline.main(["--help", "--work-root", str(tmp_path)]) == 0
+    assert "--help" in captured["arguments"]
+
+
 def test_invalid_proposal_threshold_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="proposal_conf_thres"):
         proposal_baseline.main(

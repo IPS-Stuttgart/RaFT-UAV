@@ -63,8 +63,7 @@ def apply_proposal_export_patch(
 def _patch_inference(text: str) -> str:
     text = _replace_once(
         text,
-        "    os.makedirs(opt.save_path_answer, exist_ok=True)\n    res_list = []",
-        "    os.makedirs(opt.save_path_answer, exist_ok=True)\n"
+        "    res_list = []",
         "    res_list = []\n"
         "    proposal_handle = None\n"
         "    proposal_file = None\n"
