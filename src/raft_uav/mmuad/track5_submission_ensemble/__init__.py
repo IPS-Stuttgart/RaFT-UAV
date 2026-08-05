@@ -241,10 +241,43 @@ def ensemble_track5_submissions(
     return estimates, diagnostics
 
 
+def _is_missing_json_scalar(value: Any) -> bool:
+    """Return whether a non-container value represents missing JSON data."""
+
+    if value is pd.NA or value is pd.NaT or value is np.ma.masked:
+        return True
+    if isinstance(value, (dict, list, tuple, np.ndarray)):
+        return False
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(missing, (bool, np.bool_)) and bool(missing)
+
+
+def _jsonable(value: Any) -> Any:
+    """Normalize nested NumPy and pandas values into strict JSON data."""
+
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return _jsonable(value.tolist())
+    if isinstance(value, np.generic):
+        return _jsonable(value.item())
+    if _is_missing_json_scalar(value):
+        return None
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value
+
+
 _IMPL._normalized_column_lookup = _normalized_column_lookup
 _IMPL._read_track5_submission_csv = _read_track5_submission_csv
 _IMPL._normalize_internal_submission_rows = _normalize_internal_submission_rows
 _IMPL.ensemble_track5_submissions = ensemble_track5_submissions
+_IMPL._jsonable = _jsonable
 
 globals().update(
     {
@@ -265,6 +298,8 @@ globals()["_normalize_internal_submission_rows"] = (
     _normalize_internal_submission_rows
 )
 globals()["ensemble_track5_submissions"] = ensemble_track5_submissions
+globals()["_is_missing_json_scalar"] = _is_missing_json_scalar
+globals()["_jsonable"] = _jsonable
 
 __doc__ = _IMPL.__doc__
 __all__ = [
