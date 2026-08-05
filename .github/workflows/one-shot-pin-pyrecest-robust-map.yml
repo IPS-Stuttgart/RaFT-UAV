@@ -21,18 +21,48 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Pin PyRecEst integration commit
+      - name: Pin PyRecEst and normalize the adapter import block
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          path = Path("pyproject.toml")
-          text = path.read_text(encoding="utf-8")
+          project = Path("pyproject.toml")
+          text = project.read_text(encoding="utf-8")
           old = '    "pyrecest @ git+https://github.com/FlorianPfaff/PyRecEst.git@main",'
           new = '    "pyrecest @ git+https://github.com/FlorianPfaff/PyRecEst.git@de9998b3c2b707df4e4ca87681c2af5a3958ccfd",'
           if text.count(old) != 1:
               raise SystemExit("expected exactly one PyRecEst main dependency")
-          path.write_text(text.replace(old, new), encoding="utf-8")
+          project.write_text(text.replace(old, new), encoding="utf-8")
+
+          adapter = Path("src/raft_uav/baselines/robust_map.py")
+          text = adapter.read_text(encoding="utf-8")
+          old = '''from pyrecest.smoothers import (
+              LinearGaussianMeasurementFactor as _PyRecEstMeasurementFactor,
+          )
+          from pyrecest.smoothers import (
+              RobustLinearGaussianMapConfig as _PyRecEstRobustMapConfig,
+          )
+          from pyrecest.smoothers import (
+              fixed_lag_robust_linear_gaussian_map_smooth as _pyrecest_fixed_lag_robust_map,
+          )
+          from pyrecest.smoothers import (
+              robust_linear_gaussian_map_smooth as _pyrecest_robust_map,
+          )
+          from pyrecest.smoothers.robust_linear_gaussian_map import (
+              ROBUST_LINEAR_GAUSSIAN_MAP_LOSSES,
+          )
+          '''
+          new = '''from pyrecest.smoothers import (
+              LinearGaussianMeasurementFactor as _PyRecEstMeasurementFactor,
+              ROBUST_LINEAR_GAUSSIAN_MAP_LOSSES,
+              RobustLinearGaussianMapConfig as _PyRecEstRobustMapConfig,
+              fixed_lag_robust_linear_gaussian_map_smooth as _pyrecest_fixed_lag_robust_map,
+              robust_linear_gaussian_map_smooth as _pyrecest_robust_map,
+          )
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("expected exactly one robust MAP import block")
+          adapter.write_text(text.replace(old, new), encoding="utf-8")
           PY
 
       - name: Regenerate lockfile
@@ -45,7 +75,8 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/one-shot-pin-pyrecest-robust-map.yml
-          git add pyproject.toml poetry.lock
+          git rm .github/one-shot-pin-pyrecest-robust-map.trigger
+          git add pyproject.toml poetry.lock src/raft_uav/baselines/robust_map.py
           git diff --cached --check
           git commit -m 'Pin PyRecEst robust MAP integration head'
           git push origin "HEAD:${GITHUB_REF_NAME}"
