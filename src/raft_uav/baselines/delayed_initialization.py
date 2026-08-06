@@ -13,6 +13,8 @@ from raft_uav.numeric import optional_float as _optional_float
 from raft_uav.numeric import optional_int as _optional_int
 
 _POSITION_COLUMNS = ("east_m", "north_m", "up_m")
+_SEQUENCE_ID_FIELDS = ("sequence_id", "flight_id")
+_SERIALIZED_MISSING_SEQUENCE_IDS = frozenset({"nan", "none", "<na>", "nat"})
 
 
 @dataclass(frozen=True)
@@ -138,33 +140,111 @@ def _require_single_sequence_inputs(
 
     raise ValueError(
         "Delayed initialization requires inputs from one sequence; "
-        f"found sequence_id values {sorted(sequence_ids)!r} "
+        f"found sequence identifiers {sorted(sequence_ids)!r} "
         f"(radar={sorted(radar_ids)!r}, rf={sorted(rf_ids)!r}). "
         "Filter the RF and radar data to one sequence before initialization."
     )
 
 
 def _radar_sequence_ids(radar: pd.DataFrame) -> set[str]:
-    if radar.empty or "sequence_id" not in radar.columns:
+    fields = [field for field in _SEQUENCE_ID_FIELDS if field in radar.columns]
+    if radar.empty or not fields:
         return set()
-    return {
-        sequence_id
-        for value in radar["sequence_id"]
-        if (sequence_id := _canonical_sequence_id(value)) is not None
-    }
+
+    sequence_ids: set[str] = set()
+    missing_count = 0
+    rows = radar.loc[:, fields].itertuples(index=False, name=None)
+    for position, row_values in enumerate(rows):
+        aliases = dict(zip(fields, row_values, strict=True))
+        sequence_id = _canonical_sequence_aliases(
+            aliases,
+            location=f"radar row {position}",
+        )
+        if sequence_id is None:
+            missing_count += 1
+        else:
+            sequence_ids.add(sequence_id)
+
+    _reject_partial_sequence_metadata(
+        source="radar",
+        sequence_ids=sequence_ids,
+        missing_count=missing_count,
+        total_count=len(radar),
+    )
+    return sequence_ids
 
 
 def _rf_sequence_ids(rf_measurements: Iterable[Any]) -> set[str]:
     sequence_ids: set[str] = set()
-    for measurement in rf_measurements:
-        if isinstance(measurement, Mapping):
-            value = measurement.get("sequence_id")
+    missing_count = 0
+    total_count = 0
+    for position, measurement in enumerate(rf_measurements):
+        total_count += 1
+        sequence_id = _canonical_sequence_aliases(
+            _measurement_sequence_aliases(measurement),
+            location=f"RF measurement {position}",
+        )
+        if sequence_id is None:
+            missing_count += 1
         else:
-            value = getattr(measurement, "sequence_id", None)
+            sequence_ids.add(sequence_id)
+
+    _reject_partial_sequence_metadata(
+        source="RF measurements",
+        sequence_ids=sequence_ids,
+        missing_count=missing_count,
+        total_count=total_count,
+    )
+    return sequence_ids
+
+
+def _measurement_sequence_aliases(measurement: Any) -> dict[str, object]:
+    if isinstance(measurement, Mapping):
+        return {
+            field: measurement.get(field)
+            for field in _SEQUENCE_ID_FIELDS
+            if field in measurement
+        }
+    return {
+        field: getattr(measurement, field)
+        for field in _SEQUENCE_ID_FIELDS
+        if hasattr(measurement, field)
+    }
+
+
+def _canonical_sequence_aliases(
+    values: Mapping[str, object],
+    *,
+    location: str,
+) -> str | None:
+    canonical: dict[str, str] = {}
+    for field_name, value in values.items():
         sequence_id = _canonical_sequence_id(value)
         if sequence_id is not None:
-            sequence_ids.add(sequence_id)
-    return sequence_ids
+            canonical[field_name] = sequence_id
+
+    distinct_ids = set(canonical.values())
+    if len(distinct_ids) > 1:
+        raise ValueError(
+            "Delayed initialization requires consistent sequence aliases; "
+            f"{location} has {canonical!r}"
+        )
+    return next(iter(distinct_ids), None)
+
+
+def _reject_partial_sequence_metadata(
+    *,
+    source: str,
+    sequence_ids: set[str],
+    missing_count: int,
+    total_count: int,
+) -> None:
+    if not sequence_ids or missing_count == 0:
+        return
+    raise ValueError(
+        "Delayed initialization requires complete sequence metadata within "
+        f"each input; {source} has {missing_count} unlabeled of {total_count} rows."
+    )
 
 
 def _canonical_sequence_id(value: object) -> str | None:
@@ -174,10 +254,14 @@ def _canonical_sequence_id(value: object) -> str | None:
         missing = pd.isna(value)
     except (TypeError, ValueError):
         missing = False
-    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+    if not isinstance(missing, (bool, np.bool_)):
+        raise ValueError("sequence identifiers must be scalar")
+    if bool(missing):
         return None
     text = str(value).strip()
-    return text or None
+    if not text or text.casefold() in _SERIALIZED_MISSING_SEQUENCE_IDS:
+        return None
+    return text
 
 
 def _require_nonnegative_float(value: object, *, name: str) -> float:
