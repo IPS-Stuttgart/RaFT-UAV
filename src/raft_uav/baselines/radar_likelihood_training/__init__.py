@@ -119,14 +119,16 @@ def collect_radar_association_training_frame(
         truth_time_gate_s,
         name="truth_time_gate_s",
     )
+    radar_xy_std = _validated_positive_gate(radar_xy_std_m, name="radar_xy_std_m")
+    radar_z_std = _validated_positive_gate(radar_z_std_m, name="radar_z_std_m")
     return _ORIGINAL_COLLECT_RADAR_ASSOCIATION_TRAINING_FRAME(
         rf_measurements=rf_measurements,
         radar=radar,
         truth=truth,
         flight_name=flight_name,
         acceleration_std_mps2=acceleration_std_mps2,
-        radar_xy_std_m=radar_xy_std_m,
-        radar_z_std_m=radar_z_std_m,
+        radar_xy_std_m=radar_xy_std,
+        radar_z_std_m=radar_z_std,
         candidate_catprob_threshold=candidate_catprob_threshold,
         positive_gate_m=positive_gate,
         truth_gate_m=distance_gate,
