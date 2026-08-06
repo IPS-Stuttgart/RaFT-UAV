@@ -90,7 +90,7 @@ def label_cluster_features_against_truth(
     good_threshold_m: float = 5.0,
     max_truth_time_delta_s: float = 0.5,
 ) -> pd.DataFrame:
-    """Attach truth labels, leaving temporally unmatched rows unlabeled."""
+    """Attach truth labels using the authoritative final same-time truth row."""
 
     distance_gate = _validated_nonnegative_gate(
         good_threshold_m,
@@ -100,9 +100,10 @@ def label_cluster_features_against_truth(
         max_truth_time_delta_s,
         name="max_truth_time_delta_s",
     )
+    authoritative_truth = _authoritative_truth_rows(truth)
     labeled = _LEGACY_LABEL_CLUSTER_FEATURES_AGAINST_TRUTH(
         features,
-        truth,
+        authoritative_truth,
         good_threshold_m=distance_gate,
         max_truth_time_delta_s=time_gate,
     )
@@ -116,6 +117,24 @@ def label_cluster_features_against_truth(
         labeled[column] = pd.Series(labeled[column], index=labeled.index, dtype="boolean")
         labeled.loc[~matched, column] = pd.NA
     return labeled
+
+
+def _authoritative_truth_rows(truth: Any) -> pd.DataFrame:
+    """Keep the final finite row for each normalized sequence timestamp."""
+
+    rows = _IMPL._truth_rows(truth).reset_index(drop=True)
+    if rows.empty:
+        return rows
+    rows["_truth_input_order"] = np.arange(len(rows), dtype=np.int64)
+    return (
+        rows.sort_values(
+            ["sequence_id", "time_s", "_truth_input_order"],
+            kind="mergesort",
+        )
+        .drop_duplicates(["sequence_id", "time_s"], keep="last")
+        .drop(columns="_truth_input_order")
+        .reset_index(drop=True)
+    )
 
 
 def _validated_nonnegative_gate(value: object, *, name: str) -> float:
@@ -253,6 +272,7 @@ globals()["train_cluster_ranker"] = train_cluster_ranker
 globals()["label_cluster_features_against_truth"] = (
     label_cluster_features_against_truth
 )
+globals()["_authoritative_truth_rows"] = _authoritative_truth_rows
 globals()["_validated_nonnegative_gate"] = _validated_nonnegative_gate
 globals()["_binary_auc"] = _binary_auc
 globals()["_ranker_prediction_summary"] = _ranker_prediction_summary
