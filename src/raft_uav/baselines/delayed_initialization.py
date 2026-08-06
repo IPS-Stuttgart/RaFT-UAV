@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -59,7 +60,12 @@ def build_delayed_initial_hypotheses(
         name="initial_velocity_std_mps",
     )
 
-    rf_window = _first_rf_window(rf_measurements, window_s=window_s)
+    measurement_list = list(rf_measurements)
+    _require_single_sequence_inputs(
+        rf_measurements=measurement_list,
+        radar=radar,
+    )
+    rf_window = _first_rf_window(measurement_list, window_s=window_s)
     radar_window = _first_radar_window(radar, window_s=window_s)
     hypotheses: list[InitialHypothesis] = []
     for time_s, vector in rf_window:
@@ -115,6 +121,63 @@ def build_delayed_initial_hypotheses(
             )
         )
     return sorted(hypotheses, key=lambda item: item.score)[:max_hypotheses]
+
+
+def _require_single_sequence_inputs(
+    *,
+    rf_measurements: Iterable[Any],
+    radar: pd.DataFrame,
+) -> None:
+    """Reject pooled inputs that would initialize one track from several flights."""
+
+    radar_ids = _radar_sequence_ids(radar)
+    rf_ids = _rf_sequence_ids(rf_measurements)
+    sequence_ids = radar_ids | rf_ids
+    if len(sequence_ids) <= 1:
+        return
+
+    raise ValueError(
+        "Delayed initialization requires inputs from one sequence; "
+        f"found sequence_id values {sorted(sequence_ids)!r} "
+        f"(radar={sorted(radar_ids)!r}, rf={sorted(rf_ids)!r}). "
+        "Filter the RF and radar data to one sequence before initialization."
+    )
+
+
+def _radar_sequence_ids(radar: pd.DataFrame) -> set[str]:
+    if radar.empty or "sequence_id" not in radar.columns:
+        return set()
+    return {
+        sequence_id
+        for value in radar["sequence_id"]
+        if (sequence_id := _canonical_sequence_id(value)) is not None
+    }
+
+
+def _rf_sequence_ids(rf_measurements: Iterable[Any]) -> set[str]:
+    sequence_ids: set[str] = set()
+    for measurement in rf_measurements:
+        if isinstance(measurement, Mapping):
+            value = measurement.get("sequence_id")
+        else:
+            value = getattr(measurement, "sequence_id", None)
+        sequence_id = _canonical_sequence_id(value)
+        if sequence_id is not None:
+            sequence_ids.add(sequence_id)
+    return sequence_ids
+
+
+def _canonical_sequence_id(value: object) -> str | None:
+    if value is None:
+        return None
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _require_nonnegative_float(value: object, *, name: str) -> float:
