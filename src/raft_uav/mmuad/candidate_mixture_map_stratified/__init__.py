@@ -65,3 +65,7 @@ __all__ = [
     for name in dir(_IMPL)
     if not (name.startswith("__") and name.endswith("__"))
 ]
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
