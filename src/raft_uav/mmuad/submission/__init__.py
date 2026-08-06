@@ -34,11 +34,11 @@ _ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR = "_raft_uav_original_normalize_track5_
 _ORIGINAL_VERIFY_OFFICIAL_UPLOAD_MANIFEST_ATTR = (
     "_raft_uav_original_verify_official_upload_manifest"
 )
+_ORIGINAL_METRICS_FOR_FRAME_ATTR = "_raft_uav_original_metrics_for_frame"
+_ORIGINAL_FINAL_ERROR_ATTR = "_raft_uav_original_final_error"
 
 _LEGACY_LOAD_SEQUENCE_CLASS_MAP = _IMPL.load_sequence_class_map
 _LEGACY_VALIDATE_OFFICIAL_TRACK5_SUBMISSION = _IMPL.validate_official_track5_submission
-_LEGACY_METRICS_FOR_FRAME = _IMPL._impl._metrics_for_frame
-_LEGACY_FINAL_ERROR = _IMPL._impl._final_error
 if not hasattr(_IMPL._impl, _ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR):
     setattr(
         _IMPL._impl,
@@ -51,6 +51,18 @@ if not hasattr(_IMPL._impl, _ORIGINAL_VERIFY_OFFICIAL_UPLOAD_MANIFEST_ATTR):
         _ORIGINAL_VERIFY_OFFICIAL_UPLOAD_MANIFEST_ATTR,
         _IMPL._impl.verify_official_upload_manifest,
     )
+if not hasattr(_IMPL._impl, _ORIGINAL_METRICS_FOR_FRAME_ATTR):
+    setattr(
+        _IMPL._impl,
+        _ORIGINAL_METRICS_FOR_FRAME_ATTR,
+        _IMPL._impl._metrics_for_frame,
+    )
+if not hasattr(_IMPL._impl, _ORIGINAL_FINAL_ERROR_ATTR):
+    setattr(
+        _IMPL._impl,
+        _ORIGINAL_FINAL_ERROR_ATTR,
+        _IMPL._impl._final_error,
+    )
 _LEGACY_NORMALIZE_TRACK5_TEMPLATE = getattr(
     _IMPL._impl,
     _ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR,
@@ -58,6 +70,14 @@ _LEGACY_NORMALIZE_TRACK5_TEMPLATE = getattr(
 _LEGACY_VERIFY_OFFICIAL_UPLOAD_MANIFEST = getattr(
     _IMPL._impl,
     _ORIGINAL_VERIFY_OFFICIAL_UPLOAD_MANIFEST_ATTR,
+)
+_LEGACY_METRICS_FOR_FRAME = getattr(
+    _IMPL._impl,
+    _ORIGINAL_METRICS_FOR_FRAME_ATTR,
+)
+_LEGACY_FINAL_ERROR = getattr(
+    _IMPL._impl,
+    _ORIGINAL_FINAL_ERROR_ATTR,
 )
 
 
