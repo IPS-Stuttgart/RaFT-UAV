@@ -4,7 +4,8 @@ The implementation lives in the sibling ``track5_segment_source_gate.py`` file.
 This wrapper keeps the public import path while accepting spreadsheet-exported
 template DataFrames with whitespace around alias headers, canonicalizing opaque
 sequence IDs with the shared official Track 5 parser, and rejecting malformed
-source-gate controls before they can disable penalties or corrupt path costs.
+source-gate controls and source weights before they can disable penalties or
+corrupt path costs.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ _ORIGINAL_NORMALIZE_TEMPLATE_ROWS_ATTR = "_raft_uav_original_normalize_template_
 _ORIGINAL_FIRST_PRESENT_ATTR = "_raft_uav_original_first_present"
 _ORIGINAL_BUILD_ATTR = "_raft_uav_original_build_track5_segment_source_gate"
 _ORIGINAL_WRITE_ATTR = "_raft_uav_original_write_track5_segment_source_gate_outputs"
+_ORIGINAL_RESAMPLE_SOURCES_ATTR = "_raft_uav_original_resample_sources"
 
 if not hasattr(_IMPL, _ORIGINAL_NORMALIZE_TEMPLATE_ROWS_ATTR):
     setattr(
@@ -51,10 +53,13 @@ if not hasattr(_IMPL, _ORIGINAL_WRITE_ATTR):
         _ORIGINAL_WRITE_ATTR,
         _IMPL.write_track5_segment_source_gate_outputs,
     )
+if not hasattr(_IMPL, _ORIGINAL_RESAMPLE_SOURCES_ATTR):
+    setattr(_IMPL, _ORIGINAL_RESAMPLE_SOURCES_ATTR, _IMPL._resample_sources)
 
 
 _ORIGINAL_BUILD = getattr(_IMPL, _ORIGINAL_BUILD_ATTR)
 _ORIGINAL_WRITE = getattr(_IMPL, _ORIGINAL_WRITE_ATTR)
+_ORIGINAL_RESAMPLE_SOURCES = getattr(_IMPL, _ORIGINAL_RESAMPLE_SOURCES_ATTR)
 
 
 def _official_sequence_text(value: Any) -> str | None:
@@ -93,7 +98,9 @@ def _normalize_template_rows_with_official_sequence_ids(template: Any) -> Any:
             "time_s": _IMPL.pd.to_numeric(rows[time_column], errors="coerce"),
         }
     )
-    finite = out["sequence_id"].notna() & _IMPL.np.isfinite(out["time_s"].to_numpy(float))
+    finite = out["sequence_id"].notna() & _IMPL.np.isfinite(
+        out["time_s"].to_numpy(float)
+    )
     return (
         out.loc[finite]
         .drop_duplicates()
@@ -106,13 +113,19 @@ def _finite_config_value(value: Any, *, name: str) -> float:
     """Return one finite non-Boolean scalar for a source-gate control."""
 
     message = f"{name} must be a finite scalar"
-    if isinstance(value, _IMPL.np.ndarray):
-        if value.ndim != 0:
+    seen_container_ids: set[int] = set()
+    while isinstance(value, (_IMPL.np.ndarray, _IMPL.np.generic)):
+        if _IMPL.np.ma.isMaskedArray(value) and _IMPL.np.ma.is_masked(value):
             raise ValueError(message)
+        if isinstance(value, _IMPL.np.ndarray):
+            if value.ndim != 0:
+                raise ValueError(message)
+            identity = id(value)
+            if identity in seen_container_ids:
+                raise ValueError(message)
+            seen_container_ids.add(identity)
         value = value.item()
-    elif isinstance(value, _IMPL.np.generic):
-        value = value.item()
-    if isinstance(value, bool):
+    if _IMPL.np.ma.is_masked(value) or isinstance(value, bool):
         raise ValueError(message)
     try:
         number = float(value)
@@ -140,6 +153,32 @@ def _validated_segment_source_gate_config(config: Any | None) -> Any:
         if value < 0.0:
             raise ValueError(f"{name} must be non-negative and finite")
     return resolved
+
+
+def _resample_sources_with_validated_weights(
+    estimate_inputs: Any,
+    template_rows: Any,
+    *,
+    max_nearest_time_delta_s: float | None,
+) -> Any:
+    """Reject malformed source weights before template resampling."""
+
+    validated_inputs = []
+    for raw_label, estimates, raw_weight in estimate_inputs:
+        label = _IMPL._safe_label(raw_label)
+        message = f"estimate weight must be finite and non-negative for {label}"
+        try:
+            weight = _finite_config_value(raw_weight, name=f"estimate weight for {label}")
+        except ValueError as exc:
+            raise ValueError(message) from exc
+        if weight < 0.0:
+            raise ValueError(message)
+        validated_inputs.append((raw_label, estimates, weight))
+    return _ORIGINAL_RESAMPLE_SOURCES(
+        validated_inputs,
+        template_rows,
+        max_nearest_time_delta_s=max_nearest_time_delta_s,
+    )
 
 
 def build_track5_segment_source_gate(
@@ -186,6 +225,7 @@ _IMPL._first_present = _first_present_with_stripped_headers
 _IMPL._normalize_template_rows = _normalize_template_rows_with_official_sequence_ids
 _IMPL._finite_config_value = _finite_config_value
 _IMPL._validated_segment_source_gate_config = _validated_segment_source_gate_config
+_IMPL._resample_sources = _resample_sources_with_validated_weights
 _IMPL.build_track5_segment_source_gate = build_track5_segment_source_gate
 _IMPL.write_track5_segment_source_gate_outputs = write_track5_segment_source_gate_outputs
 
@@ -201,7 +241,12 @@ _first_present = _first_present_with_stripped_headers
 _normalize_template_rows = _normalize_template_rows_with_official_sequence_ids
 _finite_config_value = _finite_config_value
 _validated_segment_source_gate_config = _validated_segment_source_gate_config
+_resample_sources = _resample_sources_with_validated_weights
 build_track5_segment_source_gate = build_track5_segment_source_gate
 write_track5_segment_source_gate_outputs = write_track5_segment_source_gate_outputs
 __doc__ = _IMPL.__doc__
-__all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
+__all__ = [
+    name
+    for name in dir(_IMPL)
+    if not (name.startswith("__") and name.endswith("__"))
+]
