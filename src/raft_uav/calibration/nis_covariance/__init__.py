@@ -57,11 +57,11 @@ def _normalized_diagnostics_frame(
     if missing:
         raise KeyError(f"diagnostics frame is missing required columns: {missing}")
 
-    _validate_measurement_dimensions(frame["measurement_dim"])
-
     work = frame.copy()
     if accepted_only and "accepted" in work.columns:
         work = work.loc[work["accepted"].map(_truthy)].copy()
+
+    _validate_measurement_dimensions(work["measurement_dim"])
 
     source = work["source"].astype("string").str.strip()
     valid_source = source.notna() & source.ne("").fillna(False)
