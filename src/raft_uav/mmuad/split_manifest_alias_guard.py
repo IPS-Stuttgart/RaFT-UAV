@@ -74,6 +74,8 @@ def patch_module(split_module: Any) -> None:
                 sequence_id = split_module._scalar_to_text(item)
                 if sequence_id is not None:
                     split_module._append_unique_value(out, sequence_id)
+            if isinstance(values, set):
+                out.sort()
         return tuple(out)
 
     def _manifest_from_mapping(mapping: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
