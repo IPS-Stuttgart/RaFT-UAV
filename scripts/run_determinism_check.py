@@ -14,8 +14,30 @@ import pandas as pd
 from raft_uav.evaluation.fifth_wave_diagnostics import deterministic_artifact_summary
 
 
+_ESTIMATE_REQUIRED_COLUMNS = ("time_s", "east_m", "north_m", "up_m")
+
+
 def _read_optional_csv(path: Path) -> pd.DataFrame | None:
     return pd.read_csv(path) if path.exists() else None
+
+
+def _record_estimate_schema(
+    summary: dict[str, object],
+    estimates_a: pd.DataFrame,
+    estimates_b: pd.DataFrame,
+) -> None:
+    missing_a = [
+        column for column in _ESTIMATE_REQUIRED_COLUMNS if column not in estimates_a.columns
+    ]
+    missing_b = [
+        column for column in _ESTIMATE_REQUIRED_COLUMNS if column not in estimates_b.columns
+    ]
+    schema_equal = not missing_a and not missing_b
+    summary["estimate_missing_columns_a"] = missing_a
+    summary["estimate_missing_columns_b"] = missing_b
+    summary["estimate_schema_equal"] = schema_equal
+    if not schema_equal:
+        summary["estimates_nearly_equal"] = False
 
 
 def main() -> int:
@@ -40,6 +62,7 @@ def main() -> int:
         selected_b=selected_b,
         atol=args.atol,
     )
+    _record_estimate_schema(summary, estimates_a, estimates_b)
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(f"summary_json={args.output_json}")
