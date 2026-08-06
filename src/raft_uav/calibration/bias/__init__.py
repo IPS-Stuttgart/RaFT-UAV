@@ -223,6 +223,23 @@ def make_bias_training_examples(
         numeric_columns,
     )
 
+    required_columns = set(numeric_columns)
+    has_required_columns = required_columns.issubset(normalized_measurements.columns) and (
+        required_columns.issubset(normalized_truth.columns)
+    )
+    if (
+        normalized_measurements.empty
+        or normalized_truth.empty
+        or not has_required_columns
+    ):
+        return _ORIGINAL_MAKE_BIAS_TRAINING_EXAMPLES(
+            normalized_measurements,
+            normalized_truth,
+            source=source,
+            target_columns=target_columns,
+            time_gate_s=time_gate_s,
+        )
+
     measurement_sequence_column = _sequence_column(normalized_measurements)
     truth_sequence_column = _sequence_column(normalized_truth)
     measurement_keys = _sequence_keys(
