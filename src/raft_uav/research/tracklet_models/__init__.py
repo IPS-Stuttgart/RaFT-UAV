@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -23,6 +24,44 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_TRACKLET_FEATURE_FRAME = _IMPL.tracklet_feature_frame
 
 
+def _validated_max_frame_gap(value: Any) -> float:
+    """Return a finite non-negative scalar tracklet segmentation threshold."""
+
+    message = "max_frame_gap must be a finite non-negative real scalar"
+    current = value
+    seen: set[int] = set()
+    while True:
+        if isinstance(current, (bool, np.bool_)) or np.ma.is_masked(current):
+            raise ValueError(message)
+        if isinstance(current, (complex, np.complexfloating)):
+            raise ValueError(message)
+        try:
+            scalar = np.asarray(current)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(message) from exc
+        if scalar.ndim != 0 or scalar.dtype.kind in {"b", "c"}:
+            raise ValueError(message)
+        if scalar.dtype.kind != "O":
+            current = scalar.item()
+            break
+        marker = id(current)
+        if marker in seen:
+            raise ValueError(message)
+        seen.add(marker)
+        item = scalar.item()
+        if item is current:
+            raise ValueError(message)
+        current = item
+
+    try:
+        gap = float(current)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(gap) or gap < 0.0:
+        raise ValueError(message)
+    return gap
+
+
 def tracklet_feature_frame(
     radar: pd.DataFrame,
     *,
@@ -30,8 +69,12 @@ def tracklet_feature_frame(
 ) -> pd.DataFrame:
     """Aggregate tracklets independently for every explicit sequence."""
 
+    normalized_max_frame_gap = _validated_max_frame_gap(max_frame_gap)
     if radar.empty or "sequence_id" not in radar.columns:
-        return _ORIGINAL_TRACKLET_FEATURE_FRAME(radar, max_frame_gap=max_frame_gap)
+        return _ORIGINAL_TRACKLET_FEATURE_FRAME(
+            radar,
+            max_frame_gap=normalized_max_frame_gap,
+        )
 
     feature_frames: list[pd.DataFrame] = []
     for sequence_id, sequence_rows in radar.groupby(
@@ -41,7 +84,7 @@ def tracklet_feature_frame(
     ):
         features = _ORIGINAL_TRACKLET_FEATURE_FRAME(
             sequence_rows,
-            max_frame_gap=max_frame_gap,
+            max_frame_gap=normalized_max_frame_gap,
         )
         if features.empty:
             continue
@@ -85,6 +128,7 @@ def estimate_frame_clutter_density(radar: pd.DataFrame) -> dict[str, float]:
     return out
 
 
+_IMPL._validated_max_frame_gap = _validated_max_frame_gap
 _IMPL.tracklet_feature_frame = tracklet_feature_frame
 _IMPL.estimate_frame_clutter_density = estimate_frame_clutter_density
 
@@ -95,6 +139,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_validated_max_frame_gap"] = _validated_max_frame_gap
 globals()["tracklet_feature_frame"] = tracklet_feature_frame
 globals()["estimate_frame_clutter_density"] = estimate_frame_clutter_density
 
