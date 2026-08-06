@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -110,6 +111,33 @@ def test_segment_source_gate_rejects_malformed_source_weights(weight: object) ->
             [("primary", _estimates(), weight)],
             _template(),
         )
+
+
+def test_segment_source_gate_writer_rejects_malformed_weight_before_delegate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delegated = False
+
+    def _unexpected_delegate(**kwargs: object) -> dict[str, Path]:
+        nonlocal delegated
+        delegated = True
+        return {}
+
+    monkeypatch.setattr(segment_gate, "_ORIGINAL_WRITE", _unexpected_delegate)
+    estimate_input = segment_gate.EstimateInput(
+        label="primary",
+        path=Path("unused.csv"),
+        weight=True,
+    )
+
+    with pytest.raises(ValueError, match="estimate weight"):
+        segment_gate.write_track5_segment_source_gate_outputs(
+            estimate_inputs=[estimate_input],
+            template=_template(),
+            output_dir=Path("unused"),
+        )
+
+    assert not delegated
 
 
 def test_segment_source_gate_accepts_zero_dimensional_numeric_scalars() -> None:
