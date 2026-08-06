@@ -80,39 +80,57 @@ def _runtime_passthrough_arguments(argv: Iterable[str]) -> list[str]:
     return restored
 
 
+def _unwrap_scalar(value: object, *, error: ValueError) -> object:
+    """Recursively unwrap zero-dimensional NumPy containers.
+
+    Object arrays can contain another zero-dimensional array, so a single
+    ``item()`` call is not sufficient. Cyclic object scalars are rejected
+    deterministically instead of recursing through NumPy's scalar conversion.
+    """
+
+    current = value
+    seen: set[int] = set()
+    while True:
+        if np.ma.is_masked(current):
+            raise error
+        if np.ma.isMaskedArray(current):
+            if bool(np.ma.getmaskarray(current).any()):
+                raise error
+            current = np.ma.getdata(current)
+            continue
+        if isinstance(current, np.ndarray):
+            marker = id(current)
+            if marker in seen or current.ndim != 0:
+                raise error
+            seen.add(marker)
+            current = current.item()
+            continue
+        if isinstance(current, np.generic):
+            current = current.item()
+            continue
+        return current
+
+
 def _invalid_float(name: str) -> ValueError:
     return ValueError(f"{name} must be a finite real scalar")
 
 
 def _finite_float(value: object, name: str) -> float:
-    """Return a finite real scalar without Boolean or array coercion."""
+    """Return a finite real scalar without lossy nested coercion."""
 
-    if isinstance(value, (bool, np.bool_)):
-        raise _invalid_float(name)
-    if np.ma.isMaskedArray(value):
-        if bool(np.ma.getmaskarray(value).any()):
-            raise _invalid_float(name)
-        value = np.ma.getdata(value)
-
-    try:
-        array = np.asarray(value)
-    except (TypeError, ValueError) as exc:
-        raise _invalid_float(name) from exc
-    if array.ndim != 0 or np.iscomplexobj(array):
-        raise _invalid_float(name)
-
-    scalar = array.item()
-    if np.ma.is_masked(scalar) or isinstance(
+    error = _invalid_float(name)
+    scalar = _unwrap_scalar(value, error=error)
+    if isinstance(
         scalar,
         (bool, np.bool_, complex, np.complexfloating),
-    ):
-        raise _invalid_float(name)
+    ) or np.iscomplexobj(scalar):
+        raise error
     try:
         number = float(scalar)
     except (TypeError, ValueError, OverflowError) as exc:
-        raise _invalid_float(name) from exc
+        raise error from exc
     if not np.isfinite(number):
-        raise _invalid_float(name)
+        raise error
     return number
 
 
@@ -127,19 +145,10 @@ def _validated_integer(
     minimum: int,
     qualifier: str,
 ) -> int:
-    if isinstance(value, (bool, np.bool_)):
-        raise _invalid_integer(name, qualifier)
-    if np.ma.isMaskedArray(value):
-        if bool(np.ma.getmaskarray(value).any()):
-            raise _invalid_integer(name, qualifier)
-        value = np.ma.getdata(value)
-
-    array = np.asarray(value)
-    if array.ndim != 0:
-        raise _invalid_integer(name, qualifier)
-    scalar = array.item()
+    error = _invalid_integer(name, qualifier)
+    scalar = _unwrap_scalar(value, error=error)
     if isinstance(scalar, (bool, np.bool_)):
-        raise _invalid_integer(name, qualifier)
+        raise error
 
     if isinstance(scalar, numbers.Integral):
         number = int(scalar)
@@ -147,18 +156,18 @@ def _validated_integer(
         try:
             number = int(scalar.strip())
         except (TypeError, ValueError, OverflowError):
-            raise _invalid_integer(name, qualifier) from None
+            raise error from None
     else:
         try:
             numeric = float(scalar)
         except (TypeError, ValueError, OverflowError):
-            raise _invalid_integer(name, qualifier) from None
+            raise error from None
         if not np.isfinite(numeric) or not numeric.is_integer():
-            raise _invalid_integer(name, qualifier)
+            raise error
         number = int(numeric)
 
     if number < minimum:
-        raise _invalid_integer(name, qualifier)
+        raise error
     return number
 
 
@@ -214,6 +223,7 @@ globals().update(
 globals()["_runtime_option_from_token"] = _runtime_option_from_token
 globals()["runtime_environment_names_from_argv"] = runtime_environment_names_from_argv
 globals()["_runtime_passthrough_arguments"] = _runtime_passthrough_arguments
+globals()["_unwrap_scalar"] = _unwrap_scalar
 globals()["_finite_float"] = _finite_float
 globals()["_positive_int"] = _positive_int
 globals()["_nonnegative_int"] = _nonnegative_int
