@@ -8,10 +8,15 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: agent-exported-pooled-fde-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   patch-and-test:
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    timeout-minutes: 20
     steps:
       - name: Check out pull request branch
         uses: actions/checkout@v4
