@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import importlib
+
 import pandas as pd
 
-from raft_uav.mmuad.submission import compute_trajectory_metrics
+from raft_uav.mmuad import submission
 
 
-def test_exported_pooled_fde_averages_each_sequence_endpoint() -> None:
-    estimates = pd.DataFrame(
+def _multi_sequence_estimates() -> pd.DataFrame:
+    return pd.DataFrame(
         {
             "sequence_id": ["short", "short", "long", "long"],
             "time_s": [0.0, 1.0, 0.0, 2.0],
@@ -15,7 +17,9 @@ def test_exported_pooled_fde_averages_each_sequence_endpoint() -> None:
         }
     )
 
-    metrics = compute_trajectory_metrics(estimates)
+
+def test_exported_pooled_fde_averages_each_sequence_endpoint() -> None:
+    metrics = submission.compute_trajectory_metrics(_multi_sequence_estimates())
 
     assert metrics["pooled"]["fde_3d_m"] == 60.0
     assert metrics["pooled"]["fde_2d_m"] == 36.0
@@ -34,9 +38,19 @@ def test_exported_sequence_fde_averages_each_track_endpoint() -> None:
         }
     )
 
-    metrics = compute_trajectory_metrics(estimates)
+    metrics = submission.compute_trajectory_metrics(estimates)
 
     assert metrics["pooled"]["fde_3d_m"] == 60.0
     assert metrics["pooled"]["fde_2d_m"] == 36.0
     assert metrics["sequences"]["seq1"]["fde_3d_m"] == 60.0
     assert metrics["sequences"]["seq1"]["fde_2d_m"] == 36.0
+
+
+def test_exported_pooled_fde_survives_submission_wrapper_reload() -> None:
+    reloaded = importlib.reload(submission)
+    reloaded = importlib.reload(reloaded)
+
+    metrics = reloaded.compute_trajectory_metrics(_multi_sequence_estimates())
+
+    assert metrics["pooled"]["fde_3d_m"] == 60.0
+    assert metrics["pooled"]["fde_2d_m"] == 36.0
