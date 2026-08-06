@@ -61,7 +61,9 @@ def _frame_key(frame: pd.DataFrame) -> _FrameKey:
 
     if frame.empty:
         return "row_position", 0, None
-    return _diagnostic_frame_key(frame.iloc[0], fallback_position=0)
+    row = frame.iloc[0]
+    fallback_position = int(row.name) if isinstance(row.name, (int, np.integer)) else 0
+    return _diagnostic_frame_key(row, fallback_position=fallback_position)
 
 
 def _row_key(row: pd.Series) -> _FrameKey:
@@ -163,13 +165,19 @@ def _nearest_truth_position(
         return None, None
 
     usable_indices = np.flatnonzero(usable)
+    unique_truth = pd.DataFrame(
+        {
+            "time_s": times[usable],
+            "source_index": usable_indices,
+        }
+    ).drop_duplicates(subset=["time_s"], keep="last")
     local_index = int(
         _IMPL._nearest_time_indices(
-            times[usable],
+            unique_truth["time_s"].to_numpy(dtype=float),
             np.array([float(query_time_s)], dtype=float),
         )[0]
     )
-    index = int(usable_indices[local_index])
+    index = int(unique_truth["source_index"].iloc[local_index])
     delta_s = float(abs(times[index] - float(query_time_s)))
     if delta_s > float(max_delta):
         return None, delta_s
