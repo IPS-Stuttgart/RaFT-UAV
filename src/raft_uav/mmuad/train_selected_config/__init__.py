@@ -2,7 +2,8 @@
 
 The maintained implementation lives in the sibling ``train_selected_config.py``
 module. This package preserves the public import path while making alias
-selection skip missing values, rejecting malformed numeric controls before
+selection skip missing values, ensuring component-level fixed updates cannot be
+overridden by summary CSV aliases, rejecting malformed numeric controls before
 Python or NumPy can silently coerce them, and refusing classifier-fusion weights
 that the train-to-validation pipeline does not consume.
 """
@@ -28,6 +29,7 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_SELECT_COMPONENT = _IMPL._select_component
 _ORIGINAL_VALIDATE_TRAIN_SELECTED_CONFIG = _IMPL.validate_train_selected_config
 
 
@@ -41,6 +43,37 @@ def _first_present(row: pd.Series, columns: tuple[str, ...]) -> Any:
         if not _IMPL._is_nan(value):
             return value
     return None
+
+
+def _select_component(
+    config: dict[str, Any],
+    records: list[dict[str, Any]],
+    *,
+    component: str,
+    csv_path: Path | None,
+    mappings: dict[str, tuple[str, ...]],
+    metric_columns: tuple[str, ...],
+    maximize: bool,
+    fixed_updates: dict[str, Any] | None = None,
+) -> None:
+    """Apply component-fixed values after CSV-derived aliases."""
+
+    _ORIGINAL_SELECT_COMPONENT(
+        config,
+        records,
+        component=component,
+        csv_path=csv_path,
+        mappings=mappings,
+        metric_columns=metric_columns,
+        maximize=maximize,
+        fixed_updates=fixed_updates,
+    )
+    if csv_path is None or not fixed_updates:
+        return
+    config.update(fixed_updates)
+    records[-1].update(
+        {key: _IMPL._jsonable(value) for key, value in fixed_updates.items()}
+    )
 
 
 def _float(value: Any) -> float:
@@ -85,6 +118,7 @@ def validate_train_selected_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 _IMPL._first_present = _first_present
+_IMPL._select_component = _select_component
 _IMPL._float = _float
 _IMPL.validate_train_selected_config = validate_train_selected_config
 
@@ -96,6 +130,7 @@ globals().update(
     }
 )
 globals()["_first_present"] = _first_present
+globals()["_select_component"] = _select_component
 globals()["_float"] = _float
 globals()["validate_train_selected_config"] = validate_train_selected_config
 
