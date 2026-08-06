@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import shlex
 import sys
 
 import numpy as np
@@ -108,8 +109,16 @@ def _validate_measurement_dimensions(values: pd.Series) -> None:
         )
 
 
+def environment_assignment(path: Path | str) -> str:
+    """Return a POSIX-shell-safe environment assignment for a calibration file."""
+
+    value = shlex.quote(str(Path(path)))
+    return f"{_IMPL.ENV_NIS_COVARIANCE_CALIBRATION_JSON}={value}"
+
+
 _IMPL._truthy = _truthy
 _IMPL._normalized_diagnostics_frame = _normalized_diagnostics_frame
+_IMPL.environment_assignment = environment_assignment
 
 globals().update(
     {
@@ -121,6 +130,7 @@ globals().update(
 globals()["_truthy"] = _truthy
 globals()["_normalized_diagnostics_frame"] = _normalized_diagnostics_frame
 globals()["_validate_measurement_dimensions"] = _validate_measurement_dimensions
+globals()["environment_assignment"] = environment_assignment
 
 __doc__ = _IMPL.__doc__
 __all__ = [
