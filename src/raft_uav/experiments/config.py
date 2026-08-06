@@ -39,6 +39,23 @@ def _optional_mapping(value: object | None, field_name: str) -> Mapping[str, Any
     return value
 
 
+def _environment_prefix_tuple(prefixes: object) -> tuple[str, ...]:
+    """Normalize environment prefixes without iterating a scalar string by character."""
+
+    if isinstance(prefixes, str):
+        normalized = (prefixes,)
+    else:
+        try:
+            normalized = tuple(prefixes)  # type: ignore[arg-type]
+        except TypeError as exc:
+            raise ValueError(
+                "environment prefixes must be a string or iterable of strings"
+            ) from exc
+    if any(not isinstance(prefix, str) or not prefix for prefix in normalized):
+        raise ValueError("environment prefixes must be non-empty strings")
+    return normalized
+
+
 @dataclass(frozen=True)
 class ExperimentConfig:
     """Serializable configuration for one experiment family."""
@@ -111,7 +128,7 @@ def write_resolved_experiment_config(
     *,
     config: ExperimentConfig | None = None,
     argv: list[str] | None = None,
-    env_prefixes: tuple[str, ...] = ("RAFT_UAV_",),
+    env_prefixes: str | tuple[str, ...] = ("RAFT_UAV_",),
     extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write a resolved, auditable experiment configuration JSON."""
@@ -138,11 +155,14 @@ def write_resolved_experiment_config(
     return resolved
 
 
-def filtered_environment(prefixes: tuple[str, ...] = ("RAFT_UAV_",)) -> dict[str, str]:
+def filtered_environment(
+    prefixes: str | tuple[str, ...] = ("RAFT_UAV_",),
+) -> dict[str, str]:
+    normalized_prefixes = _environment_prefix_tuple(prefixes)
     return {
         key: value
         for key, value in sorted(os.environ.items())
-        if any(key.startswith(prefix) for prefix in prefixes)
+        if any(key.startswith(prefix) for prefix in normalized_prefixes)
     }
 
 
