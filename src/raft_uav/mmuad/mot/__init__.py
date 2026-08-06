@@ -5,8 +5,9 @@ package preserves the public import path while ensuring that pooled MOT metrics
 scope object identities by sequence, count tolerance-matched frames once,
 validate sequence metadata and identifiers, validate matching thresholds,
 resolve exact association ties deterministically, enforce timestamp tolerance
-on every matched row pair, and use globally optimal frame matching for both
-tracking and evaluation.
+on every matched row pair, group tolerance-linked detections into physical
+tracker frames, and use globally optimal frame matching for both tracking and
+evaluation.
 """
 
 from __future__ import annotations
@@ -322,13 +323,40 @@ def _optimal_track_matches(
     }
 
 
+def _candidate_time_clusters(
+    candidates: pd.DataFrame,
+) -> Iterator[tuple[float, pd.DataFrame]]:
+    """Yield tolerance-linked candidate rows as one physical tracker frame."""
+
+    ordered = candidates.copy()
+    ordered["_mot_time_s"] = pd.to_numeric(ordered["time_s"], errors="coerce")
+    ordered = ordered.loc[np.isfinite(ordered["_mot_time_s"])].sort_values(
+        "_mot_time_s",
+        kind="mergesort",
+    )
+    ordered = ordered.reset_index(drop=True)
+    if ordered.empty:
+        return
+
+    times = ordered["_mot_time_s"].to_numpy(float)
+    cluster_start = 0
+    for index in range(1, len(ordered)):
+        if times[index] - times[index - 1] > _IMPL._MOT_TIME_MATCH_ATOL_S:
+            group = ordered.iloc[cluster_start:index].drop(columns="_mot_time_s")
+            yield float(times[cluster_start]), group.copy()
+            cluster_start = index
+
+    group = ordered.iloc[cluster_start:].drop(columns="_mot_time_s")
+    yield float(times[cluster_start]), group.copy()
+
+
 def _run_multi_sequence(
     candidates: pd.DataFrame,
     sequence_truth: pd.DataFrame | None,
     *,
     config: Any,
 ) -> pd.DataFrame:
-    """Run one sequence with globally optimal gated association per frame."""
+    """Run one sequence with globally optimal association per physical frame."""
 
     candidates = candidates.loc[_IMPL._finite_position_mask(candidates)].copy()
     if candidates.empty:
@@ -337,8 +365,7 @@ def _run_multi_sequence(
     active: dict[int, Any] = {}
     last_update: dict[int, float] = {}
     records: list[dict[str, Any]] = []
-    for time_s, group in candidates.sort_values("time_s").groupby("time_s", sort=True):
-        time_s = float(time_s)
+    for time_s, group in _candidate_time_clusters(candidates):
         for track_id in list(active):
             if time_s - last_update[track_id] > config.max_track_age_s:
                 active.pop(track_id, None)
@@ -483,6 +510,7 @@ _IMPL._track_count = _track_count
 _IMPL._nearest_track_id = _nearest_track_id
 _IMPL._cardinality_first_assignment = _cardinality_first_assignment
 _IMPL._optimal_track_matches = _optimal_track_matches
+_IMPL._candidate_time_clusters = _candidate_time_clusters
 _IMPL._run_multi_sequence = _run_multi_sequence
 _IMPL._greedy_truth_matches = _greedy_truth_matches
 _IMPL.compute_multi_object_metrics = compute_multi_object_metrics
@@ -505,6 +533,7 @@ globals()["_track_count"] = _track_count
 globals()["_nearest_track_id"] = _nearest_track_id
 globals()["_cardinality_first_assignment"] = _cardinality_first_assignment
 globals()["_optimal_track_matches"] = _optimal_track_matches
+globals()["_candidate_time_clusters"] = _candidate_time_clusters
 globals()["_run_multi_sequence"] = _run_multi_sequence
 globals()["_greedy_truth_matches"] = _greedy_truth_matches
 globals()["compute_multi_object_metrics"] = compute_multi_object_metrics
