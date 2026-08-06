@@ -37,6 +37,8 @@ _ORIGINAL_VERIFY_OFFICIAL_UPLOAD_MANIFEST_ATTR = (
 
 _LEGACY_LOAD_SEQUENCE_CLASS_MAP = _IMPL.load_sequence_class_map
 _LEGACY_VALIDATE_OFFICIAL_TRACK5_SUBMISSION = _IMPL.validate_official_track5_submission
+_LEGACY_METRICS_FOR_FRAME = _IMPL._impl._metrics_for_frame
+_LEGACY_FINAL_ERROR = _IMPL._impl._final_error
 if not hasattr(_IMPL._impl, _ORIGINAL_NORMALIZE_TRACK5_TEMPLATE_ATTR):
     setattr(
         _IMPL._impl,
@@ -348,6 +350,35 @@ def _load_sequence_class_map_with_stripped_csv_headers(path: Path | str | None) 
     return class_map
 
 
+def _mean_trajectory_final_error(frame: Any, column: str) -> float:
+    """Average final errors over each available sequence/track trajectory."""
+
+    np = _IMPL._impl.np
+    key_columns = [
+        key for key in ("sequence_id", "track_id") if key in frame.columns
+    ]
+    if not key_columns:
+        return _LEGACY_FINAL_ERROR(frame, column)
+
+    final_errors: list[float] = []
+    for _, trajectory in frame.groupby(key_columns, sort=False, dropna=False):
+        final_error = _LEGACY_FINAL_ERROR(trajectory, column)
+        if np.isfinite(final_error):
+            final_errors.append(final_error)
+    return float(np.mean(final_errors)) if final_errors else float("nan")
+
+
+def _metrics_for_frame_with_trajectory_fde(frame: Any) -> dict[str, Any]:
+    """Preserve trajectory metrics while aggregating FDE over all endpoints."""
+
+    metrics = dict(_LEGACY_METRICS_FOR_FRAME(frame))
+    if "fde_3d_m" in metrics:
+        metrics["fde_3d_m"] = _mean_trajectory_final_error(frame, "error_3d_m")
+    if "fde_2d_m" in metrics:
+        metrics["fde_2d_m"] = _mean_trajectory_final_error(frame, "error_2d_m")
+    return metrics
+
+
 _IMPL._impl.load_sequence_class_map = _load_sequence_class_map_with_stripped_csv_headers
 _IMPL.load_sequence_class_map = _load_sequence_class_map_with_stripped_csv_headers
 _IMPL._impl._normalize_track5_template = _normalize_track5_template_with_stripped_headers
@@ -355,6 +386,9 @@ _IMPL._normalize_track5_template = _normalize_track5_template_with_stripped_head
 _IMPL._impl._track5_template_coverage_rows = _track5_template_coverage_rows
 if hasattr(_IMPL, "_track5_template_coverage_rows"):
     _IMPL._track5_template_coverage_rows = _track5_template_coverage_rows
+_IMPL._impl._metrics_for_frame = _metrics_for_frame_with_trajectory_fde
+if hasattr(_IMPL, "_metrics_for_frame"):
+    _IMPL._metrics_for_frame = _metrics_for_frame_with_trajectory_fde
 _IMPL._impl.validate_official_track5_submission = (
     _validate_official_track5_submission_with_finite_tolerance
 )
@@ -379,6 +413,7 @@ globals().update(
 load_sequence_class_map = _load_sequence_class_map_with_stripped_csv_headers
 _normalize_track5_template = _normalize_track5_template_with_stripped_headers
 _track5_template_coverage_rows = _track5_template_coverage_rows
+_metrics_for_frame = _metrics_for_frame_with_trajectory_fde
 validate_official_track5_submission = (
     _validate_official_track5_submission_with_finite_tolerance
 )
