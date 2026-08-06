@@ -31,18 +31,29 @@ def select_constrained_configs(
 
     if rows.empty:
         return rows.copy()
+    constraint_specs = _constraint_specs(constraints)
+    working = rows.copy()
+    required_numeric_columns = {
+        objective,
+        *(column for column, _, _ in constraint_specs),
+    }
+    for column in required_numeric_columns:
+        if column not in working.columns:
+            raise KeyError(column)
+        working[column] = pd.to_numeric(working[column], errors="coerce")
+
     group_columns = tuple(group_columns)
     if group_columns:
         grouped = (
-            rows.groupby(list(group_columns), dropna=False)
+            working.groupby(list(group_columns), dropna=False)
             .mean(numeric_only=True)
             .reset_index()
         )
     else:
-        grouped = rows.copy()
+        grouped = working
     keep = np.ones(len(grouped), dtype=bool)
-    for column, op, threshold in _constraint_specs(constraints):
-        values = pd.to_numeric(grouped[column], errors="coerce").to_numpy(dtype=float)
+    for column, op, threshold in constraint_specs:
+        values = grouped[column].to_numpy(dtype=float)
         keep &= _compare(values, op, float(threshold))
     feasible = grouped.loc[keep].copy()
     feasible["constraint_feasible"] = True
