@@ -34,6 +34,40 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_ADD_ASSIGNMENT_TEMPORAL_CANDIDATE_CONSENSUS = (
     _IMPL.add_assignment_temporal_candidate_consensus
 )
+_ORIGINAL_WRITE_ASSIGNMENT_MATCH = _IMPL._write_assignment_match
+
+
+def _write_assignment_match(
+    out: pd.DataFrame,
+    current: pd.DataFrame,
+    match: dict[str, Any],
+    *,
+    direction: str,
+) -> None:
+    """Write one assignment without manufacturing IDs for missing values."""
+
+    neighbor_rows = match.get("neighbor_rows")
+    if neighbor_rows is None or neighbor_rows.empty or "track_id" not in neighbor_rows:
+        _ORIGINAL_WRITE_ASSIGNMENT_MATCH(
+            out,
+            current,
+            match,
+            direction=direction,
+        )
+        return
+
+    normalized_match = dict(match)
+    normalized_neighbors = neighbor_rows.copy()
+    track_ids = normalized_neighbors["track_id"].astype(object).copy()
+    track_ids.loc[track_ids.isna()] = ""
+    normalized_neighbors["track_id"] = track_ids
+    normalized_match["neighbor_rows"] = normalized_neighbors
+    _ORIGINAL_WRITE_ASSIGNMENT_MATCH(
+        out,
+        current,
+        normalized_match,
+        direction=direction,
+    )
 
 
 def _invert_neighbor_match(
@@ -158,6 +192,7 @@ def add_assignment_temporal_candidate_consensus(
     )
 
 
+_IMPL._write_assignment_match = _write_assignment_match
 _IMPL._annotate_sequence_one_to_one = _annotate_sequence_one_to_one
 _IMPL.add_assignment_temporal_candidate_consensus = (
     add_assignment_temporal_candidate_consensus
