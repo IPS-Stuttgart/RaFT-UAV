@@ -4,8 +4,9 @@ The maintained implementation lives in the sibling ``candidate_oracle_targets.py
 module. This package preserves the public import path while rejecting malformed
 truth-matching time gates, oracle-label thresholds, candidate-score controls,
 and non-finite candidate-score values before they can silently widen, empty, or
-corrupt the training export, and while keeping distinct floating-point thresholds
-distinct in output column labels.
+corrupt the training export. It also keeps distinct floating-point thresholds
+distinct in output labels and retains the final finite truth snapshot for every
+normalized sequence timestamp.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_BUILD_CANDIDATE_ORACLE_TARGETS = _IMPL.build_candidate_oracle_targets
+_ORIGINAL_NORMALIZE_TRUTH_COLUMNS = _IMPL.normalize_truth_columns
 
 
 def _validated_numeric_tuple(
@@ -183,18 +185,42 @@ def _threshold_label(value: float) -> str:
     return text.replace("-", "m").replace(".", "p").replace("+", "")
 
 
+def _authoritative_truth_rows(truth: pd.DataFrame) -> pd.DataFrame:
+    """Retain the final finite input row for each normalized truth timestamp."""
+
+    rows = pd.DataFrame(truth).copy()
+    if rows.empty:
+        return rows
+    marker = "_candidate_oracle_truth_input_order"
+    while marker in rows.columns:
+        marker = f"_{marker}"
+    rows[marker] = np.arange(len(rows), dtype=np.int64)
+    normalized = _ORIGINAL_NORMALIZE_TRUTH_COLUMNS(rows)
+    if normalized.empty:
+        return normalized.drop(columns=[marker], errors="ignore")
+    return (
+        normalized.sort_values(marker)
+        .drop_duplicates(["sequence_id", "time_s"], keep="last")
+        .sort_values(["sequence_id", "time_s"])
+        .drop(columns=[marker])
+        .reset_index(drop=True)
+    )
+
+
 def build_candidate_oracle_targets(
     candidates: pd.DataFrame,
     truth: pd.DataFrame,
     *,
     config: _IMPL.CandidateOracleTargetConfig | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
-    """Build targets after validating all label-generation controls."""
+    """Build targets after validating controls and canonicalizing truth rows."""
 
+    validated_config = _validated_config(config)
+    authoritative_truth = _authoritative_truth_rows(truth)
     return _ORIGINAL_BUILD_CANDIDATE_ORACLE_TARGETS(
         candidates,
-        truth,
-        config=_validated_config(config),
+        authoritative_truth,
+        config=validated_config,
     )
 
 
@@ -209,6 +235,10 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_ORIGINAL_BUILD_CANDIDATE_ORACLE_TARGETS"] = (
+    _ORIGINAL_BUILD_CANDIDATE_ORACLE_TARGETS
+)
+globals()["_ORIGINAL_NORMALIZE_TRUTH_COLUMNS"] = _ORIGINAL_NORMALIZE_TRUTH_COLUMNS
 globals()["_validated_numeric_tuple"] = _validated_numeric_tuple
 globals()["_validated_score_column"] = _validated_score_column
 globals()["_validated_score_columns"] = _validated_score_columns
@@ -216,6 +246,7 @@ globals()["_validated_config"] = _validated_config
 globals()["_optional_candidate_score"] = _optional_candidate_score
 globals()["_candidate_score"] = _candidate_score
 globals()["_threshold_label"] = _threshold_label
+globals()["_authoritative_truth_rows"] = _authoritative_truth_rows
 globals()["build_candidate_oracle_targets"] = build_candidate_oracle_targets
 
 __doc__ = _IMPL.__doc__
