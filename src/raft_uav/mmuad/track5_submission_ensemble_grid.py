@@ -88,6 +88,8 @@ def evaluate_submission_ensemble_weight_grid(
         raise ValueError("at least one submission input is required")
     policies = _normalize_class_policies(class_policies)
     weight_rows = tuple(tuple(float(weight) for weight in weights) for weights in weight_grid)
+    if not weight_rows:
+        raise ValueError("weight grid produced no rows")
     summary_records: list[dict[str, Any]] = []
     sequence_records: list[dict[str, Any]] = []
     best_row: SubmissionGridRow | None = None
