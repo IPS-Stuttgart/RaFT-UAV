@@ -3,8 +3,8 @@
 The maintained implementation lives in the sibling
 ``track5_classification_relabel.py`` module. This package preserves the public
 import path while requiring exact integer class labels, genuine sequence
-identifiers, unique official row keys, valid nearest-time gates, and valid
-sequence-class probability mass before relabeling.
+identifiers, unique official row keys, valid nearest-time gates, unambiguous
+probability columns, and valid sequence-class probability mass before relabeling.
 """
 
 from __future__ import annotations
@@ -167,6 +167,65 @@ def _nearest_time_relabel_merge(
     )
 
 
+def _probability_column_class_id(column: Any) -> int | None:
+    """Return the encoded class ID for a supported probability-column spelling."""
+
+    normalized = str(column).strip().lower()
+    if normalized.isdecimal():
+        return int(normalized)
+    for prefix in _IMPL.PROBABILITY_PREFIXES:
+        if not normalized.startswith(prefix):
+            continue
+        suffix = normalized[len(prefix) :]
+        return int(suffix) if suffix.isdecimal() else None
+    return None
+
+
+def _validate_probability_column_schema(rows: pd.DataFrame) -> None:
+    """Reject unsupported classes and competing aliases for one probability class.
+
+    The legacy lookup builds a one-value mapping from normalized column names and
+    then prefers bare class IDs over prefixed aliases. A table containing both
+    ``0`` and ``predicted_probability_0`` therefore silently ignores one value
+    source. Likewise, an out-of-domain column such as
+    ``predicted_probability_4`` is ignored whenever at least two valid class
+    columns remain. Both cases can change the selected official class while the
+    input appears to have been consumed completely.
+    """
+
+    aliases: dict[int, list[Any]] = {int(class_id): [] for class_id in VALID_CLASS_IDS}
+    unsupported: list[Any] = []
+    for column in rows.columns:
+        class_id = _probability_column_class_id(column)
+        if class_id is None:
+            continue
+        if class_id not in aliases:
+            unsupported.append(column)
+        else:
+            aliases[class_id].append(column)
+
+    if unsupported:
+        raise ValueError(
+            "sequence prediction table contains probability columns outside official "
+            f"classes {VALID_CLASS_IDS}: {unsupported}"
+        )
+
+    ambiguous = {
+        class_id: columns
+        for class_id, columns in aliases.items()
+        if len(columns) > 1
+    }
+    if ambiguous:
+        details = "; ".join(
+            f"class {class_id}: {columns}"
+            for class_id, columns in sorted(ambiguous.items())
+        )
+        raise ValueError(
+            "sequence prediction table contains multiple probability columns for "
+            f"the same class: {details}"
+        )
+
+
 def _validate_sequence_probability_rows(
     rows: pd.DataFrame,
     *,
@@ -227,6 +286,7 @@ def _sequence_prediction_labels(sequence_predictions: pd.DataFrame) -> pd.DataFr
             rows[class_column],
             name=f"sequence prediction table.{class_column}",
         )
+    _validate_probability_column_schema(rows)
     probability_items = _IMPL._probability_columns(rows)
     probability_class_ids = tuple(class_id for class_id, _column in probability_items)
     if (
@@ -248,6 +308,8 @@ _IMPL._validate_unique_row_keys = _validate_unique_row_keys
 _IMPL._normalize_optional_nonnegative_float = _normalize_optional_nonnegative_float
 _IMPL._normalize_frame = _normalize_frame
 _IMPL._nearest_time_relabel_merge = _nearest_time_relabel_merge
+_IMPL._probability_column_class_id = _probability_column_class_id
+_IMPL._validate_probability_column_schema = _validate_probability_column_schema
 _IMPL._validate_sequence_probability_rows = _validate_sequence_probability_rows
 _IMPL._sequence_prediction_labels = _sequence_prediction_labels
 
@@ -265,6 +327,8 @@ globals()["_validate_unique_row_keys"] = _validate_unique_row_keys
 globals()["_normalize_optional_nonnegative_float"] = _normalize_optional_nonnegative_float
 globals()["_normalize_frame"] = _normalize_frame
 globals()["_nearest_time_relabel_merge"] = _nearest_time_relabel_merge
+globals()["_probability_column_class_id"] = _probability_column_class_id
+globals()["_validate_probability_column_schema"] = _validate_probability_column_schema
 globals()["_validate_sequence_probability_rows"] = _validate_sequence_probability_rows
 globals()["_sequence_prediction_labels"] = _sequence_prediction_labels
 
