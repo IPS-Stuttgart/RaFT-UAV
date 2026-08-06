@@ -1,0 +1,438 @@
+---
+name: Multi-UAV LTS global tracklet graph
+
+"on":
+  workflow_dispatch:
+    inputs:
+      proposal_path:
+        description: Complete low-threshold training proposal directory or ZIP
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/outputs/proposals_1920_low_threshold
+        type: string
+      raw_prediction_path:
+        description: Raw seeded YOLOv12-BoT-SORT training predictions
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/outputs/train_baseline/predictions
+        type: string
+      truth_dir:
+        description: Complete training-label directory
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels
+        type: string
+      first_frame_label_dir:
+        description: First-frame training labels
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels_FirstFrameOnly
+        type: string
+      output_root:
+        description: Persistent result root
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/outputs/global_tracklet_graph
+        type: string
+      frame_width:
+        description: Original image width used by the border re-entry ablation
+        required: true
+        default: "1920"
+        type: string
+      frame_height:
+        description: Original image height used by the border re-entry ablation
+        required: true
+        default: "1080"
+        type: string
+      min_confidence:
+        description: Proposal confidence threshold
+        required: true
+        default: "0.003"
+        type: string
+      global_max_gap:
+        description: Ordinary global tracklet-link gap
+        required: true
+        default: "12"
+        type: string
+      border_max_gap:
+        description: Maximum same-border re-entry gap
+        required: true
+        default: "90"
+        type: string
+      min_birth_frames:
+        description: Minimum observations for a confirmed late birth
+        required: true
+        default: "3"
+        type: string
+      min_birth_span:
+        description: Minimum first-to-last frame span for a late birth
+        required: true
+        default: "2"
+        type: string
+      min_birth_mean_confidence:
+        description: Minimum mean confidence for a late-birth path
+        required: true
+        default: "0.01"
+        type: string
+      fold_count:
+        description: Scenario-stratified tournament fold count
+        required: true
+        default: "5"
+        type: string
+      seed:
+        description: Fold and paired-bootstrap seed
+        required: true
+        default: "0"
+        type: string
+      expected_sequence_count:
+        description: Required number of complete training sequences
+        required: true
+        default: "102"
+        type: string
+      bootstrap_samples:
+        description: Paired sequence-bootstrap sample count
+        required: true
+        default: "5000"
+        type: string
+      min_mean_hota_gain:
+        description: Minimum mean CV CODABENCH_HOTA gain over raw
+        required: true
+        default: "0.001"
+        type: string
+      min_ci_hota_gain:
+        description: Minimum paired HOTA-gain confidence-bound value
+        required: true
+        default: "0.0"
+        type: string
+      max_mean_mota_drop:
+        description: Maximum accepted mean CODABENCH_MOTA drop
+        required: true
+        default: "0.002"
+        type: string
+      max_mean_idf1_drop:
+        description: Maximum accepted mean CODABENCH_IDF1 drop
+        required: true
+        default: "0.002"
+        type: string
+      max_worst_scenario_hota_drop:
+        description: Maximum accepted HOTA drop for any scenario prefix
+        required: true
+        default: "0.01"
+        type: string
+      require_improvement:
+        description: Fail when every graph candidate loses to raw
+        required: false
+        default: false
+        type: boolean
+      probe_only:
+        description: Verify paths and manifests without running experiments
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multi-uav-lts-global-tracklet-graph-workstation2
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PROPOSAL_PATH: ${{ inputs.proposal_path }}
+  RAW_PREDICTION_PATH: ${{ inputs.raw_prediction_path }}
+  TRUTH_DIR: ${{ inputs.truth_dir }}
+  FIRST_FRAME_LABEL_DIR: ${{ inputs.first_frame_label_dir }}
+  OUTPUT_ROOT: ${{ inputs.output_root }}
+  FRAME_WIDTH: ${{ inputs.frame_width }}
+  FRAME_HEIGHT: ${{ inputs.frame_height }}
+  MIN_CONFIDENCE: ${{ inputs.min_confidence }}
+  GLOBAL_MAX_GAP: ${{ inputs.global_max_gap }}
+  BORDER_MAX_GAP: ${{ inputs.border_max_gap }}
+  MIN_BIRTH_FRAMES: ${{ inputs.min_birth_frames }}
+  MIN_BIRTH_SPAN: ${{ inputs.min_birth_span }}
+  MIN_BIRTH_MEAN_CONFIDENCE: ${{ inputs.min_birth_mean_confidence }}
+  FOLD_COUNT: ${{ inputs.fold_count }}
+  TOURNAMENT_SEED: ${{ inputs.seed }}
+  EXPECTED_SEQUENCE_COUNT: ${{ inputs.expected_sequence_count }}
+  BOOTSTRAP_SAMPLES: ${{ inputs.bootstrap_samples }}
+  MIN_MEAN_HOTA_GAIN: ${{ inputs.min_mean_hota_gain }}
+  MIN_CI_HOTA_GAIN: ${{ inputs.min_ci_hota_gain }}
+  MAX_MEAN_MOTA_DROP: ${{ inputs.max_mean_mota_drop }}
+  MAX_MEAN_IDF1_DROP: ${{ inputs.max_mean_idf1_drop }}
+  MAX_WORST_SCENARIO_HOTA_DROP: ${{ inputs.max_worst_scenario_hota_drop }}
+
+jobs:
+  global-tracklet-graph:
+    name: Global graph ablations and guarded tournament
+    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    timeout-minutes: 720
+
+    steps:
+      - name: Check out RaFT-UAV
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+
+      - name: Prepare isolated result directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_DIR="${OUTPUT_ROOT}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          VENV_PATH="${GITHUB_WORKSPACE}/.lts-global-graph-venv"
+          VENV_PATH+="-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${RUN_DIR}"
+          echo "RUN_DIR=${RUN_DIR}" >> "${GITHUB_ENV}"
+          echo "VENV_PATH=${VENV_PATH}" >> "${GITHUB_ENV}"
+
+      - name: Record runner and GPU environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "runner_name=${RUNNER_NAME}"
+            echo "runner_os=${RUNNER_OS}"
+            echo "runner_arch=${RUNNER_ARCH}"
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "git_commit=${GITHUB_SHA}"
+            uname -a
+          } | tee "${RUN_DIR}/runner.txt"
+          nvidia-smi -L | tee "${RUN_DIR}/nvidia-smi-L.txt"
+
+      - name: Probe mounted inputs and sequence manifests
+        shell: bash
+        env:
+          PROBE_ONLY: ${{ inputs.probe_only }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          from zipfile import BadZipFile, ZipFile
+
+          def path_record(raw: str) -> dict[str, object]:
+              path = Path(raw).expanduser()
+              return {
+                  "path": str(path),
+                  "exists": path.exists(),
+                  "is_dir": path.is_dir(),
+                  "is_file": path.is_file(),
+              }
+
+          def sequence_names(raw: str) -> list[str]:
+              path = Path(raw).expanduser()
+              if path.is_dir():
+                  return sorted(candidate.stem for candidate in path.glob("*.txt"))
+              if not path.is_file():
+                  return []
+              try:
+                  with ZipFile(path) as archive:
+                      names = []
+                      for info in archive.infolist():
+                          member = PurePosixPath(info.filename.replace("\\", "/"))
+                          if info.is_dir() or member.suffix.lower() != ".txt":
+                              continue
+                          if len(member.parts) != 1:
+                              raise SystemExit(
+                                  "proposal ZIP must contain root-level .txt files"
+                              )
+                          names.append(member.stem)
+                      if len(names) != len(set(names)):
+                          raise SystemExit("proposal ZIP has duplicate sequence entries")
+                      return sorted(names)
+              except BadZipFile as exc:
+                  raise SystemExit(f"proposal input is not a ZIP: {path}") from exc
+
+          paths = {
+              "proposal_path": path_record(os.environ["PROPOSAL_PATH"]),
+              "raw_prediction_path": path_record(os.environ["RAW_PREDICTION_PATH"]),
+              "truth_dir": path_record(os.environ["TRUTH_DIR"]),
+              "first_frame_label_dir": path_record(
+                  os.environ["FIRST_FRAME_LABEL_DIR"]
+              ),
+          }
+          truth_names = sequence_names(os.environ["TRUTH_DIR"])
+          seed_names = sequence_names(os.environ["FIRST_FRAME_LABEL_DIR"])
+          proposal_names = sequence_names(os.environ["PROPOSAL_PATH"])
+          expected = int(os.environ["EXPECTED_SEQUENCE_COUNT"])
+          failures = []
+          if not paths["truth_dir"]["is_dir"]:
+              failures.append("truth_dir is unavailable")
+          if not paths["first_frame_label_dir"]["is_dir"]:
+              failures.append("first_frame_label_dir is unavailable")
+          if not (
+              paths["proposal_path"]["is_dir"]
+              or paths["proposal_path"]["is_file"]
+          ):
+              failures.append("proposal_path is unavailable")
+          if not (
+              paths["raw_prediction_path"]["is_dir"]
+              or paths["raw_prediction_path"]["is_file"]
+          ):
+              failures.append("raw_prediction_path is unavailable")
+          if len(truth_names) != expected:
+              failures.append(
+                  f"truth sequence count is {len(truth_names)}, expected {expected}"
+              )
+          if seed_names != truth_names:
+              failures.append("first-frame and truth sequence manifests differ")
+          if proposal_names != truth_names:
+              failures.append("proposal and truth sequence manifests differ")
+          payload = {
+              "schema": "raft-uav-lts-global-tracklet-graph-probe-v1",
+              "paths": paths,
+              "expected_sequence_count": expected,
+              "truth_sequence_count": len(truth_names),
+              "seed_sequence_count": len(seed_names),
+              "proposal_sequence_count": len(proposal_names),
+              "truth_sequences": truth_names,
+              "failures": failures,
+              "ready": not failures,
+          }
+          output = Path(os.environ["RUN_DIR"]) / "probe.json"
+          output.write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          if failures and os.environ["PROBE_ONLY"].lower() != "true":
+              raise SystemExit("; ".join(failures))
+          PY
+
+      - name: Set up Python 3.11
+        if: ${{ ! inputs.probe_only }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install isolated experiment environment
+        if: ${{ ! inputs.probe_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "${VENV_PATH}"
+          "${VENV_PATH}/bin/python" -m pip install --upgrade pip
+          "${VENV_PATH}/bin/python" -m pip install -e ".[dev]"
+          "${VENV_PATH}/bin/python" -m pip check
+          "${VENV_PATH}/bin/python" -m pip freeze --all \
+            > "${RUN_DIR}/pip-freeze.txt"
+
+      - name: Run focused graph regressions
+        if: ${{ ! inputs.probe_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${VENV_PATH}/bin/python" -m pytest -q \
+            tests/test_multi_uav_lts_global_tracklet_graph.py \
+            | tee "${RUN_DIR}/focused-tests.txt"
+
+      - name: Generate graph ablation candidates
+        if: ${{ ! inputs.probe_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          common_args=(
+            "${PROPOSAL_PATH}"
+            --first-frame-label-dir "${FIRST_FRAME_LABEL_DIR}"
+            --min-confidence "${MIN_CONFIDENCE}"
+            --global-max-gap "${GLOBAL_MAX_GAP}"
+            --border-max-gap "${BORDER_MAX_GAP}"
+            --min-birth-frames "${MIN_BIRTH_FRAMES}"
+            --min-birth-span "${MIN_BIRTH_SPAN}"
+            --min-birth-mean-confidence "${MIN_BIRTH_MEAN_CONFIDENCE}"
+          )
+
+          run_candidate() {
+            local name="$1"
+            shift
+            local output="${RUN_DIR}/candidates/${name}"
+            mkdir -p "${output}"
+            "${VENV_PATH}/bin/python" \
+              -m raft_uav.multi_uav_lts.global_tracklet_graph \
+              "${common_args[@]}" \
+              --output-dir "${output}" \
+              "$@" \
+              | tee "${RUN_DIR}/${name}-console.txt"
+          }
+
+          run_candidate graph_no_births \
+            --no-allow-births \
+            --no-enable-border-reentry
+          run_candidate graph_births \
+            --allow-births \
+            --no-enable-border-reentry
+          run_candidate graph_births_greedy_local \
+            --allow-births \
+            --no-enable-border-reentry \
+            --no-reciprocal-local-links
+          run_candidate graph_births_border \
+            --allow-births \
+            --enable-border-reentry \
+            --frame-width "${FRAME_WIDTH}" \
+            --frame-height "${FRAME_HEIGHT}"
+
+      - name: Run guarded raw-controlled tournament
+        if: ${{ ! inputs.probe_only }}
+        shell: bash
+        env:
+          REQUIRE_IMPROVEMENT: ${{ inputs.require_improvement }}
+        run: |
+          set -euo pipefail
+          improvement_args=()
+          if [[ "${REQUIRE_IMPROVEMENT}" == "true" ]]; then
+            improvement_args+=(--require-improvement)
+          fi
+          "${VENV_PATH}/bin/python" \
+            -m raft_uav.multi_uav_lts.tournament \
+            "${RAW_PREDICTION_PATH}" \
+            --candidate \
+              "graph_no_births=${RUN_DIR}/candidates/graph_no_births" \
+            --candidate \
+              "graph_births=${RUN_DIR}/candidates/graph_births" \
+            --candidate \
+              "graph_births_greedy_local=${RUN_DIR}/candidates/graph_births_greedy_local" \
+            --candidate \
+              "graph_births_border=${RUN_DIR}/candidates/graph_births_border" \
+            --truth-dir "${TRUTH_DIR}" \
+            --output-dir "${RUN_DIR}/tournament" \
+            --fold-count "${FOLD_COUNT}" \
+            --seed "${TOURNAMENT_SEED}" \
+            --expected-sequence-count "${EXPECTED_SEQUENCE_COUNT}" \
+            --bootstrap-samples "${BOOTSTRAP_SAMPLES}" \
+            --min-mean-hota-gain "${MIN_MEAN_HOTA_GAIN}" \
+            --min-ci-hota-gain "${MIN_CI_HOTA_GAIN}" \
+            --max-mean-mota-drop "${MAX_MEAN_MOTA_DROP}" \
+            --max-mean-idf1-drop "${MAX_MEAN_IDF1_DROP}" \
+            --max-worst-scenario-hota-drop \
+              "${MAX_WORST_SCENARIO_HOTA_DROP}" \
+            "${improvement_args[@]}" \
+            | tee "${RUN_DIR}/tournament-console.txt"
+
+      - name: Publish job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Multi-UAV LTS global tracklet graph"
+            echo
+            echo "- Runner: \`${RUNNER_NAME}\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Result directory: \`${RUN_DIR}\`"
+            echo "- Probe only: \`${{ inputs.probe_only }}\`"
+            if [[ -f "${RUN_DIR}/tournament/selected_candidate.txt" ]]; then
+              selected="$(cat "${RUN_DIR}/tournament/selected_candidate.txt")"
+              echo "- Guarded selection: \`${selected}\`"
+            fi
+            echo
+            echo "The oracle proposal materialization is not used by this workflow."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload graph evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: multi-uav-lts-global-tracklet-graph-${{ github.run_id }}
+          path: ${{ env.RUN_DIR }}
+          if-no-files-found: error
+          retention-days: 30
