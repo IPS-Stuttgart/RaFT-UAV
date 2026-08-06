@@ -12,6 +12,7 @@ from collections.abc import Iterable
 import importlib.util
 from pathlib import Path
 import sys
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -30,6 +31,51 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_INTERPOLATE_TRUTH_POSITIONS = _IMPL.interpolate_truth_positions
+_ORIGINAL_TIME_OFFSET_SWEEP = _IMPL.time_offset_sweep
+
+
+def _finite_real_scalar(value: Any, *, field: str) -> float:
+    """Return a finite real scalar without Boolean or array coercion."""
+
+    message = f"{field} must be a finite real scalar"
+    seen: set[int] = set()
+    scalar = value
+    while isinstance(scalar, np.ndarray):
+        if np.ma.is_masked(scalar) or scalar.ndim != 0:
+            raise ValueError(message)
+        marker = id(scalar)
+        if marker in seen:
+            raise ValueError(message)
+        seen.add(marker)
+        scalar = scalar.item()
+    if np.ma.is_masked(scalar) or isinstance(scalar, (bool, np.bool_)):
+        raise ValueError(message)
+    if isinstance(scalar, (complex, np.complexfloating)):
+        raise ValueError(message)
+    try:
+        number = float(scalar)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not np.isfinite(number):
+        raise ValueError(message)
+    return number
+
+
+def _time_offset_seconds(value: Any) -> float:
+    """Validate one signed timestamp correction."""
+
+    return _finite_real_scalar(value, field="time_offset_s")
+
+
+def _max_time_delta_seconds(value: Any | None) -> float | None:
+    """Validate an optional non-negative truth freshness gate."""
+
+    if value is None:
+        return None
+    maximum = _finite_real_scalar(value, field="max_time_delta_s")
+    if maximum < 0.0:
+        raise ValueError("max_time_delta_s must be nonnegative or None")
+    return maximum
 
 
 def _sequence_keys(values: pd.Series) -> pd.Series:
@@ -154,7 +200,7 @@ def interpolate_truth_positions(
     return _ORIGINAL_INTERPOLATE_TRUTH_POSITIONS(
         _truth_with_final_duplicate_samples(truth),
         query_times_s,
-        max_time_delta_s=max_time_delta_s,
+        max_time_delta_s=_max_time_delta_seconds(max_time_delta_s),
     )
 
 
@@ -167,6 +213,8 @@ def nearest_candidate_oracle(
 ) -> pd.DataFrame:
     """Select the truth-nearest candidate independently for each physical frame."""
 
+    offset = _time_offset_seconds(time_offset_s)
+    maximum_delta = _max_time_delta_seconds(max_time_delta_s)
     if radar.empty:
         return _IMPL._empty_oracle_selection(radar)
     required = {"time_s", "east_m", "north_m", "up_m"}
@@ -182,8 +230,8 @@ def nearest_candidate_oracle(
             continue
         truth_position, valid = _IMPL.interpolate_truth_positions(
             frame_truth,
-            [frame_time + float(time_offset_s)],
-            max_time_delta_s=max_time_delta_s,
+            [frame_time + offset],
+            max_time_delta_s=maximum_delta,
         )
         if not bool(valid[0]):
             continue
@@ -198,8 +246,8 @@ def nearest_candidate_oracle(
         errors_2d[finite] = np.linalg.norm(residuals[:, :2], axis=1)
         best = int(np.argmin(errors_3d))
         selected = frame.iloc[best].copy()
-        selected["oracle_time_offset_s"] = float(time_offset_s)
-        selected["oracle_truth_time_s"] = frame_time + float(time_offset_s)
+        selected["oracle_time_offset_s"] = offset
+        selected["oracle_truth_time_s"] = frame_time + offset
         selected["oracle_error_3d_m"] = float(errors_3d[best])
         selected["oracle_error_2d_m"] = float(errors_2d[best])
         selected["oracle_candidate_rows"] = int(len(frame))
@@ -222,9 +270,28 @@ def nearest_candidate_oracle(
     return selected.sort_values(sort_columns, kind="mergesort").reset_index(drop=True)
 
 
+def time_offset_sweep(
+    radar: pd.DataFrame,
+    truth: pd.DataFrame,
+    offsets_s: Iterable[float],
+    *,
+    max_time_delta_s: float | None = 2.0,
+) -> pd.DataFrame:
+    """Sweep only validated timestamp corrections and freshness settings."""
+
+    offsets = [_time_offset_seconds(offset) for offset in offsets_s]
+    return _ORIGINAL_TIME_OFFSET_SWEEP(
+        radar,
+        truth,
+        offsets,
+        max_time_delta_s=_max_time_delta_seconds(max_time_delta_s),
+    )
+
+
 _IMPL.interpolate_truth_positions = interpolate_truth_positions
 _IMPL._radar_frame_groups = _radar_frame_groups
 _IMPL.nearest_candidate_oracle = nearest_candidate_oracle
+_IMPL.time_offset_sweep = time_offset_sweep
 
 globals().update(
     {
@@ -233,6 +300,9 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_finite_real_scalar"] = _finite_real_scalar
+globals()["_time_offset_seconds"] = _time_offset_seconds
+globals()["_max_time_delta_seconds"] = _max_time_delta_seconds
 globals()["_sequence_keys"] = _sequence_keys
 globals()["_radar_frame_key_values"] = _radar_frame_key_values
 globals()["_radar_frame_groups"] = _radar_frame_groups
@@ -240,6 +310,7 @@ globals()["_matching_truth_rows"] = _matching_truth_rows
 globals()["_truth_with_final_duplicate_samples"] = _truth_with_final_duplicate_samples
 globals()["interpolate_truth_positions"] = interpolate_truth_positions
 globals()["nearest_candidate_oracle"] = nearest_candidate_oracle
+globals()["time_offset_sweep"] = time_offset_sweep
 
 __doc__ = _IMPL.__doc__
 __all__ = [
