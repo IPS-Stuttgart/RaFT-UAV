@@ -11,6 +11,7 @@ import importlib.util
 from pathlib import Path
 import sys
 
+from raft_uav.mmuad.split_folder_scope_guard import patch_module as _patch_split_folder_scope
 from raft_uav.mmuad.split_manifest_alias_guard import patch_module as _patch_split_module
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "splits.py"
@@ -25,6 +26,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _patch_split_module(_IMPL)
+_patch_split_folder_scope(_IMPL)
 
 for _name in dir(_IMPL):
     if not _name.startswith("__"):
