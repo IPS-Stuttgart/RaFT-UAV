@@ -93,15 +93,6 @@ def _drop_invalid_numeric_rows(
     return frame.loc[valid].reset_index(drop=True)
 
 
-def _sequence_column(frame: pd.DataFrame) -> str | None:
-    """Return the preferred sequence identifier column present in ``frame``."""
-
-    return next(
-        (column for column in _SEQUENCE_COLUMN_CANDIDATES if column in frame.columns),
-        None,
-    )
-
-
 def _canonical_sequence_id(value: object) -> str | None:
     """Return a stable scalar sequence identifier, or ``None`` for missing values."""
 
@@ -115,6 +106,20 @@ def _canonical_sequence_id(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _sequence_column(frame: pd.DataFrame) -> str | None:
+    """Return the first populated supported sequence identifier column."""
+
+    fallback: str | None = None
+    for column in _SEQUENCE_COLUMN_CANDIDATES:
+        if column not in frame.columns:
+            continue
+        if fallback is None:
+            fallback = column
+        if frame[column].map(_canonical_sequence_id).notna().any():
+            return column
+    return fallback
 
 
 def _sequence_keys(frame: pd.DataFrame, column: str | None) -> pd.Series:
@@ -224,8 +229,9 @@ def make_bias_training_examples(
     )
 
     required_columns = set(numeric_columns)
-    has_required_columns = required_columns.issubset(normalized_measurements.columns) and (
-        required_columns.issubset(normalized_truth.columns)
+    has_required_columns = (
+        required_columns.issubset(normalized_measurements.columns)
+        and required_columns.issubset(normalized_truth.columns)
     )
     if (
         normalized_measurements.empty
@@ -248,10 +254,11 @@ def make_bias_training_examples(
     )
     truth_keys = _sequence_keys(normalized_truth, truth_sequence_column)
     explicit_sequence_ids = {
-        sequence_id
-        for sequence_id in (*measurement_keys.tolist(), *truth_keys.tolist())
-        if sequence_id is not None
+        sequence_id for sequence_id in measurement_keys if sequence_id is not None
     }
+    explicit_sequence_ids.update(
+        sequence_id for sequence_id in truth_keys if sequence_id is not None
+    )
     pooled = len(explicit_sequence_ids) > 1
 
     if pooled and (
@@ -304,8 +311,8 @@ globals()["_correct_frame"] = _correct_frame
 globals()["_finite_real_numeric_series"] = _finite_real_numeric_series
 globals()["_normalized_bias_frame"] = _normalized_bias_frame
 globals()["_drop_invalid_numeric_rows"] = _drop_invalid_numeric_rows
-globals()["_sequence_column"] = _sequence_column
 globals()["_canonical_sequence_id"] = _canonical_sequence_id
+globals()["_sequence_column"] = _sequence_column
 globals()["_sequence_keys"] = _sequence_keys
 globals()["_temporary_column"] = _temporary_column
 globals()["_keep_final_truth_rows"] = _keep_final_truth_rows
