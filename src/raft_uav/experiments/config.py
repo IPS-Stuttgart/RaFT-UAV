@@ -19,14 +19,20 @@ except ModuleNotFoundError:  # pragma: no cover
     tomllib = None  # type: ignore[assignment]
 
 
-def _as_string_tuple(value: Any) -> tuple[str, ...]:
-    """Normalize one scalar string or an iterable of values to a string tuple."""
+def _as_string_tuple(value: Any, field_name: str) -> tuple[str, ...]:
+    """Normalize one scalar string or a non-mapping iterable to a string tuple."""
 
     if value is None:
         return ()
     if isinstance(value, str):
         return (value,) if value else ()
-    return tuple(str(item) for item in value)
+    message = f"{field_name} must be a string, a non-mapping iterable, or None"
+    if isinstance(value, Mapping):
+        raise ValueError(message)
+    try:
+        return tuple(str(item) for item in value)
+    except TypeError as exc:
+        raise ValueError(message) from exc
 
 
 def _optional_mapping(value: object | None, field_name: str) -> Mapping[str, Any]:
@@ -82,9 +88,9 @@ class ExperimentConfig:
             name=str(payload.get("name", "experiment")),
             dataset_root=str(payload.get("dataset_root", "")),
             output_dir=str(payload.get("output_dir", "outputs/experiment")),
-            flights=_as_string_tuple(payload.get("flights")),
-            methods=_as_string_tuple(payload.get("methods")),
-            options=_as_string_tuple(payload.get("options")),
+            flights=_as_string_tuple(payload.get("flights"), "flights"),
+            methods=_as_string_tuple(payload.get("methods"), "methods"),
+            options=_as_string_tuple(payload.get("options"), "options"),
             environment={str(k): str(v) for k, v in environment.items()},
             calibration_artifacts={
                 str(k): str(v) for k, v in calibration_artifacts.items()
