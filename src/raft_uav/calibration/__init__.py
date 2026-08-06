@@ -18,6 +18,9 @@ from . import (
 from . import (
     _empirical_covariance_duplicate_truth_patch as _empirical_covariance_duplicate_truth_patch,
 )
+from . import (
+    _nis_covariance_missing_source_patch as _nis_covariance_missing_source_patch,
+)
 
 __all__ = [
     "BiasCorrectionBank",
