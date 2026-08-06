@@ -9,7 +9,10 @@ from typing import Any
 import numpy as np
 import pytest
 
-from raft_uav.mmuad.pointcloud2 import pointcloud2_to_dataframe
+from raft_uav.mmuad.pointcloud2 import (
+    pointcloud2_to_candidates,
+    pointcloud2_to_dataframe,
+)
 
 
 @dataclass(frozen=True)
@@ -65,4 +68,13 @@ def test_pointcloud2_rejects_malformed_endianness_metadata(
     with pytest.raises(ValueError, match="is_bigendian must be a Boolean scalar"):
         pointcloud2_to_dataframe(
             _message(byte_order="<", is_bigendian=is_bigendian)
+        )
+
+
+def test_pointcloud2_candidates_share_endianness_validation() -> None:
+    with pytest.raises(ValueError, match="is_bigendian must be a Boolean scalar"):
+        pointcloud2_to_candidates(
+            _message(byte_order="<", is_bigendian="maybe"),
+            sequence_id="seq0",
+            time_s=0.0,
         )
