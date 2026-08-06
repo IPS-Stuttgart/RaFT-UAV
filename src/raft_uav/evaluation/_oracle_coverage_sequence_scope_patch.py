@@ -8,6 +8,7 @@ import inspect
 from typing import Any
 
 import pandas as pd
+from pandas.api.types import is_scalar
 
 
 _compact_coverage = import_module("raft_uav.evaluation.oracle_coverage")
@@ -25,39 +26,54 @@ _MISSING_SEQUENCE_TEXT = frozenset({"", "nan", "none", "<na>", "nat"})
 
 
 def _canonical_sequence_id(value: object) -> str | None:
-    """Return a stable sequence identifier, or ``None`` for missing values."""
+    """Return a stable scalar sequence identifier, or ``None`` when missing."""
 
-    if value is None:
+    if not is_scalar(value):
+        raise ValueError("sequence identifiers must be scalar")
+    if value is None or bool(pd.isna(value)):
         return None
-    try:
-        if bool(pd.isna(value)):
-            return None
-    except (TypeError, ValueError):
-        pass
     text = str(value).strip()
     return None if text.casefold() in _MISSING_SEQUENCE_TEXT else text
 
 
-def _sequence_column(frame: pd.DataFrame) -> str | None:
-    """Return the first populated supported sequence identifier column."""
+def _sequence_keys(
+    frame: pd.DataFrame,
+    *,
+    diagnostic: str,
+    role: str,
+) -> pd.Series:
+    """Return validated canonical sequence identifiers aligned with ``frame``."""
 
-    fallback: str | None = None
-    for column in _SEQUENCE_COLUMN_CANDIDATES:
-        if column not in frame.columns:
-            continue
-        if fallback is None:
-            fallback = column
-        if frame[column].map(_canonical_sequence_id).notna().any():
-            return column
-    return fallback
-
-
-def _sequence_keys(frame: pd.DataFrame, column: str | None) -> pd.Series:
-    """Return canonical sequence identifiers aligned with ``frame`` rows."""
-
-    if column is None:
+    columns = [
+        column
+        for column in _SEQUENCE_COLUMN_CANDIDATES
+        if column in frame.columns
+    ]
+    if not columns:
         return pd.Series([None] * len(frame), index=frame.index, dtype=object)
-    return frame[column].map(_canonical_sequence_id).astype(object)
+
+    by_column: dict[str, pd.Series] = {}
+    for column in columns:
+        try:
+            by_column[column] = (
+                frame[column].map(_canonical_sequence_id).astype(object)
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"{diagnostic} requires scalar {column} values on {role} rows"
+            ) from exc
+
+    keys = by_column[columns[0]].copy()
+    for column in columns[1:]:
+        other = by_column[column]
+        conflicts = keys.notna() & other.notna() & keys.ne(other)
+        if bool(conflicts.any()):
+            raise ValueError(
+                f"{diagnostic} requires matching sequence_id and flight_id "
+                f"on {role} rows"
+            )
+        keys = keys.where(keys.notna(), other)
+    return keys
 
 
 def _single_sequence_inputs(
@@ -73,10 +89,16 @@ def _single_sequence_inputs(
     if radar_rows.empty or truth_rows.empty:
         return radar_rows, truth_rows
 
-    radar_column = _sequence_column(radar_rows)
-    truth_column = _sequence_column(truth_rows)
-    radar_keys = _sequence_keys(radar_rows, radar_column)
-    truth_keys = _sequence_keys(truth_rows, truth_column)
+    radar_keys = _sequence_keys(
+        radar_rows,
+        diagnostic=diagnostic,
+        role="radar",
+    )
+    truth_keys = _sequence_keys(
+        truth_rows,
+        diagnostic=diagnostic,
+        role="truth",
+    )
     radar_ids = sorted({str(value) for value in radar_keys.dropna().tolist()})
     truth_ids = sorted({str(value) for value in truth_keys.dropna().tolist()})
 
@@ -94,6 +116,10 @@ def _single_sequence_inputs(
     if radar_keys.isna().any():
         raise ValueError(
             f"{diagnostic} requires a sequence identifier on every radar row"
+        )
+    if truth_keys.isna().any():
+        raise ValueError(
+            f"{diagnostic} requires a sequence identifier on every truth row"
         )
 
     sequence_id = radar_ids[0]
