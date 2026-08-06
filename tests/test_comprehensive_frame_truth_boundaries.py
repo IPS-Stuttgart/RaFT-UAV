@@ -106,3 +106,34 @@ def test_invalid_truth_position_is_skipped_for_nearest_finite_sample() -> None:
     assert np.isclose(table.loc[0, "truth_time_delta_s"], 0.1)
     assert bool(table.loc[0, "candidate_available"])
     assert np.isclose(table.loc[0, "best_candidate_error_m"], 0.0)
+
+
+def test_final_finite_duplicate_truth_sample_is_authoritative() -> None:
+    radar = pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "frame_index": [4],
+            "track_id": [8],
+            "east_m": [0.0],
+            "north_m": [0.0],
+            "up_m": [0.0],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "time_s": [0.0, 0.0],
+            "east_m": [100.0, 0.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+
+    table = candidate_recall_regret_table(
+        radar,
+        truth,
+        truth_gate_m=1.0,
+        truth_time_gate_s=0.1,
+    )
+
+    assert bool(table.loc[0, "candidate_available"])
+    assert np.isclose(table.loc[0, "best_candidate_error_m"], 0.0)
