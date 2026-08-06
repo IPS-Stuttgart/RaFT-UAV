@@ -18,7 +18,10 @@ def _append_frame_keys(frame: pd.DataFrame) -> pd.DataFrame:
     """Use timestamp-qualified frame indices and row-wise timestamp fallback."""
 
     out = frame.copy()
-    times = pd.to_numeric(out["time_s"], errors="coerce")
+    if "time_s" in out.columns:
+        times = pd.to_numeric(out["time_s"], errors="coerce")
+    else:
+        times = pd.Series(np.nan, index=out.index, dtype=float)
     time_keys = times.round(9).astype(str)
     out["frame_key_type"] = "time_s"
     out["frame_key"] = time_keys
