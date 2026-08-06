@@ -1,9 +1,10 @@
 """Compatibility package for validated MMUAD candidate oracle-gap diagnostics.
 
 The maintained implementation lives in the sibling ``candidate_oracle_gap.py``
-module. This package validates the nearest-time gate and prevents genuinely
-complex timestamps, positions, or confidence values from being silently cast
-to their real components.
+module. This package validates the nearest-time gate, prevents genuinely complex
+timestamps, positions, or confidence values from being silently cast to their
+real components, and applies the shared final-sample convention to duplicate
+truth timestamps.
 """
 
 from __future__ import annotations
@@ -74,13 +75,30 @@ def _finite_candidate_rows(candidates: pd.DataFrame) -> pd.DataFrame:
 
 
 def _finite_truth_rows(truth: pd.DataFrame) -> pd.DataFrame:
-    """Reject truth rows whose timestamps or positions are genuinely complex."""
+    """Keep the final finite truth row at each normalized sequence timestamp."""
+
+    order_column = "_candidate_oracle_gap_truth_row_order"
+    while order_column in truth.columns:
+        order_column = f"_{order_column}"
+    positioned = truth.copy()
+    positioned[order_column] = np.arange(len(positioned), dtype=int)
 
     normalized = _coerce_real_numeric_columns(
-        truth,
+        positioned,
         ("time_s", "x_m", "y_m", "z_m"),
     )
-    return _ORIGINAL_FINITE_TRUTH_ROWS(normalized)
+    rows = _ORIGINAL_FINITE_TRUTH_ROWS(normalized)
+    if rows.empty:
+        return rows.drop(columns=[order_column], errors="ignore")
+
+    key_columns = ["sequence_id", "time_s"]
+    return (
+        rows.sort_values([*key_columns, order_column], kind="mergesort")
+        .drop_duplicates(key_columns, keep="last")
+        .sort_values(key_columns, kind="mergesort")
+        .drop(columns=[order_column], errors="ignore")
+        .reset_index(drop=True)
+    )
 
 
 def _normalize_max_time_delta_s(value: Any) -> float | None:
