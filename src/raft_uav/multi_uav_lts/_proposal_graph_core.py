@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, replace
 from typing import Protocol, Sequence
 
@@ -269,7 +270,7 @@ def _seed_mapping(
     overlaps = np.asarray(
         [[box_iou(seed, node.row) for node in nodes] for seed in seeds]
     )
-    valid = overlaps >= min_iou
+    valid = (overlaps > 0.0) & (overlaps >= min_iou)
     bonus = float(min(overlaps.shape) + 1)
     rows, cols = linear_sum_assignment(-np.where(valid, bonus + overlaps, 0.0))
     return {
@@ -285,26 +286,102 @@ def _global_links(
 ) -> dict[int, int]:
     if not p.enable_global_links or len(tracklets) < 2:
         return {}
-    count = len(tracklets)
-    matrix = np.full((2 * count, 2 * count), _INVALID)
-    candidates = np.full((count, count), np.inf)
-    for left in tracklets:
-        for right in tracklets:
-            cost = _link_cost(left, right, p)
-            if math.isfinite(cost) and cost < p.max_link_cost:
-                matrix[left.index, right.index] = cost
-                candidates[left.index, right.index] = cost
-    unmatched = 0.5 * p.max_link_cost
-    for index in range(count):
-        matrix[index, count + index] = unmatched
-        matrix[count + index, index] = unmatched
-    matrix[count:, count:] = 0.0
-    rows, cols = linear_sum_assignment(matrix)
-    return {
-        int(row): int(col)
-        for row, col in zip(rows, cols, strict=True)
-        if row < count and col < count and candidates[row, col] < p.max_link_cost
+    candidates = _candidate_links(tracklets, p)
+    if not candidates:
+        return {}
+    components = _link_components(candidates)
+    component_index = {
+        node: index
+        for index, component in enumerate(components)
+        for node in component
     }
+    grouped: list[dict[tuple[int, int], float]] = [dict() for _ in components]
+    for edge, cost in candidates.items():
+        grouped[component_index[edge[0]]][edge] = cost
+    links: dict[int, int] = {}
+    for component_candidates in grouped:
+        links.update(_solve_link_component(component_candidates, p.max_link_cost))
+    return links
+
+
+def _candidate_links(
+    tracklets: tuple[_Tracklet, ...],
+    p: GraphParameters,
+) -> dict[tuple[int, int], float]:
+    starts: dict[int, list[_Tracklet]] = {}
+    for tracklet in tracklets:
+        starts.setdefault(tracklet.start, []).append(tracklet)
+    frames = sorted(starts)
+    candidates: dict[tuple[int, int], float] = {}
+    for left in tracklets:
+        lower = bisect_left(frames, left.end + 1)
+        upper = bisect_right(frames, left.end + p.max_link_gap + 1)
+        for frame in frames[lower:upper]:
+            for right in starts[frame]:
+                cost = _link_cost(left, right, p)
+                if math.isfinite(cost) and cost < p.max_link_cost:
+                    candidates[(left.index, right.index)] = cost
+    return candidates
+
+
+def _link_components(
+    candidates: dict[tuple[int, int], float],
+) -> tuple[tuple[int, ...], ...]:
+    adjacency: dict[int, set[int]] = {}
+    for left, right in candidates:
+        adjacency.setdefault(left, set()).add(right)
+        adjacency.setdefault(right, set()).add(left)
+    visited: set[int] = set()
+    components: list[tuple[int, ...]] = []
+    for root in sorted(adjacency):
+        if root in visited:
+            continue
+        stack = [root]
+        component: list[int] = []
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            component.append(current)
+            stack.extend(sorted(adjacency[current] - visited, reverse=True))
+        components.append(tuple(sorted(component)))
+    return tuple(components)
+
+
+def _solve_link_component(
+    candidates: dict[tuple[int, int], float],
+    max_link_cost: float,
+) -> dict[int, int]:
+    left_ids = sorted({left for left, _right in candidates})
+    right_ids = sorted({right for _left, right in candidates})
+    if not left_ids or not right_ids:
+        return {}
+    left_position = {value: index for index, value in enumerate(left_ids)}
+    right_position = {value: index for index, value in enumerate(right_ids)}
+    left_count = len(left_ids)
+    right_count = len(right_ids)
+    size = left_count + right_count
+    matrix = np.full((size, size), _INVALID)
+    for (left, right), cost in candidates.items():
+        if left in left_position and right in right_position:
+            matrix[left_position[left], right_position[right]] = cost
+    unmatched = 0.5 * max_link_cost
+    for index in range(left_count):
+        matrix[index, right_count + index] = unmatched
+    for index in range(right_count):
+        matrix[left_count + index, index] = unmatched
+    matrix[left_count:, right_count:] = 0.0
+    rows, cols = linear_sum_assignment(matrix)
+    links: dict[int, int] = {}
+    for row, col in zip(rows, cols, strict=True):
+        if row >= left_count or col >= right_count:
+            continue
+        left = left_ids[int(row)]
+        right = right_ids[int(col)]
+        if candidates.get((left, right), math.inf) < max_link_cost:
+            links[left] = right
+    return links
 
 
 def _link_cost(left: _Tracklet, right: _Tracklet, p: GraphParameters) -> float:
