@@ -3,6 +3,7 @@
 from importlib import import_module
 
 from raft_uav.baselines import imm as _imm
+from raft_uav.baselines import kalman as _kalman
 from raft_uav.baselines import pyrecest_innovation_diagnostics as _pyrecest_innovation_diagnostics
 from raft_uav.baselines import radar_association as _radar_association
 from raft_uav.baselines import smoothing as _smoothing
@@ -36,7 +37,11 @@ from raft_uav.baselines._robust_map_accepted_matching_patch import (
 from raft_uav.baselines._robust_map_lag_validation_patch import (
     apply_robust_map_lag_validation_patch,
 )
+from raft_uav.baselines._tracking_measurement_source_validation_patch import (
+    apply_tracking_measurement_source_validation_patch,
+)
 
+apply_tracking_measurement_source_validation_patch(_kalman)
 apply_imm_measurement_order_patch(_imm)
 apply_imm_mode_validation_patch(_imm)
 apply_imm_transition_validation_patch(_imm)
