@@ -68,7 +68,7 @@ permissions:
 
 concurrency:
   group: multi-uav-lts-proposal-graph-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
