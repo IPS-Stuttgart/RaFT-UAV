@@ -174,16 +174,34 @@ def _first_rf_window(
 def _first_radar_window(radar: pd.DataFrame, *, window_s: float) -> pd.DataFrame:
     if radar.empty or "time_s" not in radar.columns:
         return radar.iloc[0:0].copy()
+
     work = radar.copy()
-    times = pd.to_numeric(work["time_s"], errors="coerce")
-    finite = np.isfinite(times.to_numpy(dtype=float, na_value=np.nan))
-    work = work.loc[finite].copy()
+    work["time_s"] = pd.to_numeric(work["time_s"], errors="coerce")
+    finite_time = np.isfinite(
+        work["time_s"].to_numpy(dtype=float, na_value=np.nan)
+    )
+    work = work.loc[finite_time].copy()
     if work.empty:
         return work
-    work["time_s"] = times.loc[finite].to_numpy(dtype=float, na_value=np.nan)
+
+    anchor_rows = work
+    if set(_POSITION_COLUMNS).issubset(work.columns):
+        positions = work.loc[:, _POSITION_COLUMNS].apply(
+            pd.to_numeric,
+            errors="coerce",
+        )
+        finite_positions = np.isfinite(
+            positions.to_numpy(dtype=float, na_value=np.nan)
+        ).all(axis=1)
+        anchor_rows = work.loc[finite_positions]
+        if anchor_rows.empty:
+            return work.iloc[0:0].copy()
+
+    start = float(anchor_rows["time_s"].min())
     ordered = work.sort_values("time_s").reset_index(drop=True)
-    start = float(ordered["time_s"].iloc[0])
-    return ordered.loc[ordered["time_s"] <= start + window_s].copy()
+    return ordered.loc[
+        ordered["time_s"].between(start, start + window_s)
+    ].copy()
 
 
 def _radar_row_state(row: pd.Series, frame: pd.DataFrame) -> np.ndarray | None:
