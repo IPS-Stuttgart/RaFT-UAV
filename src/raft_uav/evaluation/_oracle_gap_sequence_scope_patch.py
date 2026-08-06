@@ -7,9 +7,14 @@ from importlib import import_module
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_int
+
 
 _oracle_gap = import_module("raft_uav.evaluation.oracle_gap_decomposition")
 _ORIGINAL_DECOMPOSE_RADAR_ORACLE_GAP = _oracle_gap.decompose_radar_oracle_gap
+_ORIGINAL_SELECTED_TRACK_STABILITY_METRICS = (
+    _oracle_gap.selected_track_stability_metrics
+)
 
 
 def _sequence_keys(values: pd.Series) -> pd.Series:
@@ -121,15 +126,81 @@ def decompose_radar_oracle_gap(
     return pd.concat(chunks, ignore_index=True)
 
 
+def selected_track_stability_metrics(
+    selected_radar: pd.DataFrame | None,
+) -> dict[str, object]:
+    """Count track transitions and time gaps only within each sequence."""
+
+    base = dict(_ORIGINAL_SELECTED_TRACK_STABILITY_METRICS(selected_radar))
+    if (
+        selected_radar is None
+        or selected_radar.empty
+        or "track_id" not in selected_radar.columns
+        or "sequence_id" not in selected_radar.columns
+    ):
+        return base
+
+    selected_rows = pd.DataFrame(selected_radar).copy()
+    sequence_keys = _sequence_keys(selected_rows["sequence_id"])
+    switches = 0
+    transition_count = 0
+    gap_parts: list[np.ndarray] = []
+
+    for sequence_key in pd.unique(sequence_keys):
+        part = selected_rows.loc[sequence_keys.eq(sequence_key)].copy()
+        sort_columns = [
+            column
+            for column in ("time_s", "frame_index")
+            if column in part.columns
+        ]
+        ordered = part.sort_values(sort_columns) if sort_columns else part
+        track_ids = pd.Series(
+            [optional_int(value) for value in ordered["track_id"]],
+            index=ordered.index,
+            dtype="Int64",
+        ).dropna()
+        values = track_ids.to_numpy(dtype=int)
+        if values.size > 1:
+            switches += int(np.count_nonzero(values[1:] != values[:-1]))
+            transition_count += int(values.size - 1)
+        gaps = _oracle_gap._time_gaps_s(ordered)
+        if gaps.size:
+            gap_parts.append(gaps)
+
+    all_gaps = np.concatenate(gap_parts) if gap_parts else np.empty(0, dtype=float)
+    base.update(
+        {
+            "selected_sequence_count": int(len(pd.unique(sequence_keys))),
+            "track_switch_count": int(switches),
+            "track_switch_rate": _oracle_gap._safe_rate(
+                switches,
+                transition_count,
+            ),
+            "selected_time_gap_p95_s": _oracle_gap._percentile_or_nan(
+                all_gaps,
+                95,
+            ),
+            "selected_time_gap_max_s": (
+                float(np.max(all_gaps)) if all_gaps.size else float("nan")
+            ),
+        }
+    )
+    return base
+
+
 def install() -> None:
     """Install sequence scoping on public and legacy implementation paths."""
 
     if getattr(_oracle_gap, "_sequence_scope_patch_applied", False):
         return
     _oracle_gap.decompose_radar_oracle_gap = decompose_radar_oracle_gap
+    _oracle_gap.selected_track_stability_metrics = selected_track_stability_metrics
     implementation = getattr(_oracle_gap, "_IMPL", None)
     if implementation is not None:
         implementation.decompose_radar_oracle_gap = decompose_radar_oracle_gap
+        implementation.selected_track_stability_metrics = (
+            selected_track_stability_metrics
+        )
     _oracle_gap._sequence_scope_patch_applied = True
 
 
