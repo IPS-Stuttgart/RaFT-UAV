@@ -13,6 +13,7 @@ import re
 from pathlib import Path, PurePosixPath
 import shutil
 import tarfile
+import tempfile
 from typing import Any
 import zipfile
 
@@ -115,8 +116,8 @@ def _extract_zip_archive(archive_path: Path, extract_root: Path) -> tuple[list[d
                 continue
             seen_destinations.add(destination)
             destination.parent.mkdir(parents=True, exist_ok=True)
-            with archive.open(info) as source, destination.open("wb") as target:
-                shutil.copyfileobj(source, target)
+            with archive.open(info) as source:
+                _copy_archive_member_atomically(source, destination)
             extracted.append(
                 {
                     "member": member_name,
@@ -155,8 +156,8 @@ def _extract_tar_archive(archive_path: Path, extract_root: Path) -> tuple[list[d
                 skipped.append({"member": member_name, "reason": "unreadable_member"})
                 continue
             destination.parent.mkdir(parents=True, exist_ok=True)
-            with source, destination.open("wb") as target:
-                shutil.copyfileobj(source, target)
+            with source:
+                _copy_archive_member_atomically(source, destination)
             extracted.append(
                 {
                     "member": member_name,
@@ -165,6 +166,27 @@ def _extract_tar_archive(archive_path: Path, extract_root: Path) -> tuple[list[d
                 }
             )
     return extracted, skipped
+
+
+def _copy_archive_member_atomically(source: Any, destination: Path) -> None:
+    """Copy one member without exposing a partial destination on failure."""
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as target:
+            temporary_path = Path(target.name)
+            shutil.copyfileobj(source, target)
+        temporary_path.replace(destination)
+    except BaseException:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def normalize_archive_member_name(name: str) -> str:
