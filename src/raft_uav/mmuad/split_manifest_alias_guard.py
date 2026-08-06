@@ -26,6 +26,8 @@ def _unique_normalized_key(mapping: Mapping[Any, Any], key: str) -> Any | None:
 def patch_module(split_module: Any) -> None:
     """Patch a split-manifest module to trim exported key/header whitespace."""
 
+    original_load_split_manifest = split_module.load_split_manifest
+
     def _mapping_value_case_insensitive(mapping: Mapping[Any, Any], key: str) -> Any | None:
         matched_key = _unique_normalized_key(mapping, key)
         if matched_key is None:
@@ -119,11 +121,40 @@ def patch_module(split_module: Any) -> None:
             )
         raise ValueError(f"split {split_name!r} not found; available splits: {available}")
 
+    def _validate_disjoint_sequence_references(
+        manifest: dict[str, tuple[str, ...]],
+    ) -> dict[str, tuple[str, ...]]:
+        owners: dict[str, str] = {}
+        conflicts: dict[str, set[str]] = {}
+        for split, sequence_ids in manifest.items():
+            for sequence_id in sequence_ids:
+                normalized = split_module._normalize_sequence_reference(sequence_id)
+                if not normalized:
+                    continue
+                previous = owners.setdefault(normalized, split)
+                if previous != split:
+                    conflicts.setdefault(normalized, {previous}).add(split)
+        if conflicts:
+            details = "; ".join(
+                f"{reference!r}: {', '.join(sorted(splits))}"
+                for reference, splits in sorted(conflicts.items())
+            )
+            raise ValueError(
+                "split manifest assigns sequence references to multiple splits: " + details
+            )
+        return manifest
+
+    def _load_split_manifest(path: Any) -> dict[str, tuple[str, ...]]:
+        manifest = original_load_split_manifest(path)
+        return _validate_disjoint_sequence_references(manifest)
+
     split_module._mapping_value_case_insensitive = _mapping_value_case_insensitive
     split_module._entry_value = _entry_value
     split_module._split_values_to_sequence_ids = _split_values_to_sequence_ids
     split_module._manifest_from_mapping = _manifest_from_mapping
     split_module.resolve_split_name = _resolve_split_name
+    split_module._validate_disjoint_sequence_references = _validate_disjoint_sequence_references
+    split_module.load_split_manifest = _load_split_manifest
 
 
 def install() -> None:
