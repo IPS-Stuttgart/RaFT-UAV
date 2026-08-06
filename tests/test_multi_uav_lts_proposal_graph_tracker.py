@@ -289,7 +289,7 @@ def test_rejects_out_of_domain_proposal_confidence(tmp_path: Path) -> None:
     labels = tmp_path / "labels"
     proposals = tmp_path / "proposals"
     write_rows(labels / "SEQ.txt", [row(1, 1, 0.0)])
-    write_rows(proposals / "SEQ.txt", [row(1, 1, 0.0, confidence=1.1)])
+    write_rows(proposals / "SEQ.txt", [row(1, 1, 0.0, confidence=-0.1)])
 
     with pytest.raises(ValueError, match=r"confidence must be in \[0, 1\]"):
         track_proposal_graph(proposals, labels, tmp_path / "output")
