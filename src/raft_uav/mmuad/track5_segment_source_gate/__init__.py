@@ -155,6 +155,19 @@ def _validated_segment_source_gate_config(config: Any | None) -> Any:
     return resolved
 
 
+def _validated_source_weight(value: Any, *, label: str) -> float:
+    """Return one finite non-negative source weight."""
+
+    message = f"estimate weight must be finite and non-negative for {label}"
+    try:
+        weight = _finite_config_value(value, name=f"estimate weight for {label}")
+    except ValueError as exc:
+        raise ValueError(message) from exc
+    if weight < 0.0:
+        raise ValueError(message)
+    return weight
+
+
 def _resample_sources_with_validated_weights(
     estimate_inputs: Any,
     template_rows: Any,
@@ -166,13 +179,7 @@ def _resample_sources_with_validated_weights(
     validated_inputs = []
     for raw_label, estimates, raw_weight in estimate_inputs:
         label = _IMPL._safe_label(raw_label)
-        message = f"estimate weight must be finite and non-negative for {label}"
-        try:
-            weight = _finite_config_value(raw_weight, name=f"estimate weight for {label}")
-        except ValueError as exc:
-            raise ValueError(message) from exc
-        if weight < 0.0:
-            raise ValueError(message)
+        weight = _validated_source_weight(raw_weight, label=label)
         validated_inputs.append((raw_label, estimates, weight))
     return _ORIGINAL_RESAMPLE_SOURCES(
         validated_inputs,
@@ -210,13 +217,25 @@ def write_track5_segment_source_gate_outputs(
 ) -> dict[str, Any]:
     """Write source-gate artifacts only from a valid cost configuration."""
 
+    validated_config = _validated_segment_source_gate_config(config)
+    validated_inputs = []
+    for item in estimate_inputs:
+        label = _IMPL._safe_label(item.label)
+        weight = _validated_source_weight(item.weight, label=label)
+        validated_inputs.append(
+            _IMPL.EstimateInput(
+                label=item.label,
+                path=item.path,
+                weight=weight,
+            )
+        )
     return _ORIGINAL_WRITE(
-        estimate_inputs=estimate_inputs,
+        estimate_inputs=validated_inputs,
         template=template,
         output_dir=output_dir,
         class_map=class_map,
         default_classification=default_classification,
-        config=_validated_segment_source_gate_config(config),
+        config=validated_config,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
     )
 
@@ -225,6 +244,7 @@ _IMPL._first_present = _first_present_with_stripped_headers
 _IMPL._normalize_template_rows = _normalize_template_rows_with_official_sequence_ids
 _IMPL._finite_config_value = _finite_config_value
 _IMPL._validated_segment_source_gate_config = _validated_segment_source_gate_config
+_IMPL._validated_source_weight = _validated_source_weight
 _IMPL._resample_sources = _resample_sources_with_validated_weights
 _IMPL.build_track5_segment_source_gate = build_track5_segment_source_gate
 _IMPL.write_track5_segment_source_gate_outputs = write_track5_segment_source_gate_outputs
@@ -241,6 +261,7 @@ _first_present = _first_present_with_stripped_headers
 _normalize_template_rows = _normalize_template_rows_with_official_sequence_ids
 _finite_config_value = _finite_config_value
 _validated_segment_source_gate_config = _validated_segment_source_gate_config
+_validated_source_weight = _validated_source_weight
 _resample_sources = _resample_sources_with_validated_weights
 build_track5_segment_source_gate = build_track5_segment_source_gate
 write_track5_segment_source_gate_outputs = write_track5_segment_source_gate_outputs
