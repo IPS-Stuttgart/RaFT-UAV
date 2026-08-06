@@ -126,7 +126,7 @@ def _metric_time_cluster_pairs(
     estimates: pd.DataFrame,
     truth: pd.DataFrame,
 ) -> Iterator[tuple[pd.DataFrame, pd.DataFrame]]:
-    """Group timestamps into clusters whose total span stays within tolerance."""
+    """Group timestamps through adjacent tolerance links without splitting pairs."""
 
     estimate_times = pd.to_numeric(estimates["time_s"], errors="coerce").to_numpy(float)
     truth_times = pd.to_numeric(truth["time_s"], errors="coerce").to_numpy(float)
@@ -144,7 +144,7 @@ def _metric_time_cluster_pairs(
     previous_time = cluster_start
     for current_value in ordered_times[1:]:
         current_time = float(current_value)
-        if current_time - cluster_start > _IMPL._MOT_TIME_MATCH_ATOL_S:
+        if current_time - previous_time > _IMPL._MOT_TIME_MATCH_ATOL_S:
             yield (
                 _metric_rows_in_time_cluster(
                     estimates,
