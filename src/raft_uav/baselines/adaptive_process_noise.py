@@ -116,9 +116,12 @@ class RollingNISAdaptiveAcceleration:
         )
 
     def acceleration_std_mps2(self, source_weights: Mapping[str, float] | None = None) -> float:
-        """Return the adapted acceleration standard deviation."""
+        """Return the acceleration standard deviation for the adapted covariance scale."""
 
-        return float(self.config.base_acceleration_std_mps2 * self.adapter.scale(source_weights))
+        covariance_scale = self.adapter.scale(source_weights)
+        return float(
+            self.config.base_acceleration_std_mps2 * covariance_scale**0.5
+        )
 
 
 def adaptive_scale_from_ratio(ratio: float, config: AdaptiveProcessNoiseConfig) -> float:
