@@ -1,0 +1,54 @@
+---
+name: Validate exported pooled FDE fix
+
+"on":
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/agent-validate-exported-pooled-fde.yml"
+      - "src/raft_uav/mmuad/submission/__init__.py"
+      - "tests/test_mmuad_submission_pooled_fde.py"
+      - "tests/test_mmuad_submission_reload.py"
+      - "tests/test_mmuad_evaluate_pooled_fde.py"
+
+permissions:
+  contents: read
+
+jobs:
+  focused-validation:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run focused regressions
+        run: |
+          python -m pytest \
+            tests/test_mmuad_submission_pooled_fde.py \
+            tests/test_mmuad_submission_reload.py \
+            tests/test_mmuad_evaluate_pooled_fde.py \
+            -q
+
+      - name: Lint focused changes
+        run: |
+          python -m ruff check \
+            src/raft_uav/mmuad/submission/__init__.py \
+            tests/test_mmuad_submission_pooled_fde.py
