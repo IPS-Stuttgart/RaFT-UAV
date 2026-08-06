@@ -158,11 +158,9 @@ def track_proposal_graph(
         if requested and sequence not in requested:
             continue
         seeds = _seed_rows(label_path)
-        proposals = tuple(
-            parse_detection_text(
-                proposal_text.get(f"{sequence}.txt", ""),
-                source=f"{proposal_path}:{sequence}.txt",
-            )
+        proposals = _proposal_rows(
+            proposal_text.get(f"{sequence}.txt", ""),
+            source=f"{proposal_path}:{sequence}.txt",
         )
         result = track_sequence(seeds, proposals, parameters)
         (output_dir / f"{sequence}.txt").write_text(
@@ -195,10 +193,18 @@ def track_proposal_graph(
 
 
 def _parameters(**raw: object) -> ProposalGraphParameters:
-    unit = lambda key: validate_unit_interval(raw[key], name=key)
-    finite = lambda key: validate_nonnegative_finite(raw[key], name=key)
-    positive = lambda key: _positive(raw[key], name=key)
-    integer = lambda key: validate_nonnegative_int(raw[key], name=key)
+    def unit(key: str) -> float:
+        return validate_unit_interval(raw[key], name=key)
+
+    def finite(key: str) -> float:
+        return validate_nonnegative_finite(raw[key], name=key)
+
+    def positive(key: str) -> float:
+        return _positive(raw[key], name=key)
+
+    def integer(key: str) -> int:
+        return validate_nonnegative_int(raw[key], name=key)
+
     global_links = raw["enable_global_links"]
     if not isinstance(global_links, bool):
         raise ValueError("enable_global_links must be a Boolean")
@@ -277,6 +283,15 @@ def _input_paths(
     return labels
 
 
+def _proposal_rows(text: str, *, source: str) -> tuple[Detection, ...]:
+    rows = parse_detection_text(text, source=source)
+    reject_duplicate_keys(rows, label="proposal")
+    for row in rows:
+        if not 0.0 <= row.confidence <= 1.0:
+            raise ValueError(f"{source}: proposal confidence must be in [0, 1]")
+    return tuple(rows)
+
+
 def _seed_rows(path: Path) -> tuple[Detection, ...]:
     rows = parse_detection_text(path.read_text(encoding="utf-8"), source=str(path))
     if any(row.frame_id != 1 for row in rows):
@@ -292,7 +307,9 @@ def _summary(
     parameters: ProposalGraphParameters,
     rows: tuple[SequenceProposalGraphSummary, ...],
 ) -> ProposalGraphSummary:
-    total = lambda name: sum(getattr(row, name) for row in rows)
+    def total(name: str) -> int:
+        return sum(int(getattr(row, name)) for row in rows)
+
     return ProposalGraphSummary(
         schema="raft-uav-multi-uav-lts-proposal-graph-v1",
         proposal_path=str(proposal_path),
