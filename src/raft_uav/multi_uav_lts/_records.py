@@ -125,11 +125,12 @@ def prepare_sequence(
     }
     truth_by_frame = rows_by_frame(truth_rows)
     predictions_by_frame = rows_by_frame(prediction_rows)
-    frame_count = max([0, *truth_by_frame, *predictions_by_frame])
+    frame_ids = sorted(set(truth_by_frame) | set(predictions_by_frame))
+    frame_count = max(frame_ids, default=0)
     gt_ids: list[np.ndarray] = []
     tracker_ids: list[np.ndarray] = []
     similarities: list[np.ndarray] = []
-    for frame_id in range(1, frame_count + 1):
+    for frame_id in frame_ids:
         gt_frame = truth_by_frame.get(frame_id, ())
         tracker_frame = predictions_by_frame.get(frame_id, ())
         gt_ids.append(np.asarray([gt_map[row.object_id] for row in gt_frame], dtype=int))
