@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.research.optimizer import select_constrained_configs
@@ -21,7 +22,7 @@ def test_grouped_optimizer_keeps_numeric_string_metrics() -> None:
 
     assert ranked["method"].tolist() == ["a", "b"]
     assert ranked["error_3d_rmse_m"].tolist() == [11.0, 8.5]
-    assert ranked["truth_coverage_rate"].tolist() == [0.85, 0.55]
+    np.testing.assert_allclose(ranked["truth_coverage_rate"], [0.85, 0.55])
     assert ranked["constraint_feasible"].tolist() == [True, False]
 
 
