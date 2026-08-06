@@ -3,8 +3,9 @@
 The maintained implementation lives in the sibling ``candidate_reservoir.py``
 module. This package preserves opaque sequence identifiers, strictly normalizes
 serialized ``candidate_reservoir_protected`` values before summary counts are
-computed, and treats malformed ranking metadata as missing so corrupted scores
-cannot dominate reservoir selection or oracle top-k diagnostics.
+computed, treats malformed ranking metadata as missing so corrupted scores
+cannot dominate reservoir selection, and applies the shared final-sample
+convention to duplicate truth timestamps in oracle diagnostics.
 """
 
 from __future__ import annotations
@@ -180,6 +181,33 @@ def _candidate_score(
     return primary.fillna(fallback).fillna(0.0).astype(float)
 
 
+def _truth_with_final_duplicate_samples(truth: pd.DataFrame) -> pd.DataFrame:
+    """Keep the final input row at each normalized sequence/timestamp pair."""
+
+    rows = pd.DataFrame(truth).copy()
+    order_column = "_candidate_reservoir_truth_row_order"
+    while order_column in rows.columns:
+        order_column = f"_{order_column}"
+    rows[order_column] = np.arange(len(rows), dtype=int)
+
+    normalized = _IMPL.normalize_truth_columns(rows)
+    if normalized.empty:
+        return normalized.drop(columns=[order_column], errors="ignore")
+
+    normalized = normalized.sort_values(
+        ["sequence_id", "time_s", order_column],
+        kind="mergesort",
+    ).drop_duplicates(
+        ["sequence_id", "time_s"],
+        keep="last",
+    )
+    return (
+        normalized.sort_values(["sequence_id", "time_s"], kind="mergesort")
+        .drop(columns=[order_column], errors="ignore")
+        .reset_index(drop=True)
+    )
+
+
 def build_oracle_recall_tables(
     reservoir: pd.DataFrame,
     truth: pd.DataFrame,
@@ -187,7 +215,7 @@ def build_oracle_recall_tables(
     top_k_values: tuple[int, ...] = _IMPL._DEFAULT_TOP_K,
     max_truth_time_delta_s: float = 0.5,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Rank oracle candidates after demoting malformed precomputed scores."""
+    """Rank candidates against the authoritative final truth sample."""
 
     rows = pd.DataFrame(reservoir).copy()
     if "candidate_reservoir_score" in rows.columns:
@@ -196,9 +224,10 @@ def build_oracle_recall_tables(
             "candidate_reservoir_score",
             default=np.nan,
         ).fillna(float("-inf"))
+    truth_rows = _truth_with_final_duplicate_samples(truth)
     return _ORIGINAL_BUILD_ORACLE_RECALL_TABLES(
         rows,
-        truth,
+        truth_rows,
         top_k_values=top_k_values,
         max_truth_time_delta_s=max_truth_time_delta_s,
     )
@@ -237,6 +266,7 @@ _IMPL._boolean_series = _boolean_series
 _IMPL._optional_candidate_score = _optional_candidate_score
 _IMPL._numeric_column = _finite_numeric_column
 _IMPL._candidate_score = _candidate_score
+_IMPL._truth_with_final_duplicate_samples = _truth_with_final_duplicate_samples
 _IMPL.build_oracle_recall_tables = build_oracle_recall_tables
 _IMPL.build_reservoir_summary = build_reservoir_summary
 _IMPL.main = main
@@ -255,6 +285,7 @@ globals()["_boolean_series"] = _boolean_series
 globals()["_optional_candidate_score"] = _optional_candidate_score
 globals()["_finite_numeric_column"] = _finite_numeric_column
 globals()["_candidate_score"] = _candidate_score
+globals()["_truth_with_final_duplicate_samples"] = _truth_with_final_duplicate_samples
 globals()["build_oracle_recall_tables"] = build_oracle_recall_tables
 globals()["build_reservoir_summary"] = build_reservoir_summary
 globals()["main"] = main
