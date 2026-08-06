@@ -447,22 +447,63 @@ def _rows_for_sequence(frame: pd.DataFrame, sequence_id: str) -> pd.DataFrame:
 
 
 def _covered_truth_count(matched: pd.DataFrame, truth: pd.DataFrame) -> int:
-    """Count unique truth samples covered by at least one matched prediction."""
+    """Count covered truth samples while preserving anonymous multiplicity."""
 
     if matched.empty:
         return 0
-    key_columns = ["sequence_id", "truth_time_s"]
-    if "track_id" in truth.columns and "truth_track_id" in matched.columns:
-        truth_track_ids = _track_ids(truth)
-        matched_truth_track_ids = matched["truth_track_id"].map(_valid_track_id_text)
-        if truth_track_ids and matched_truth_track_ids.isin(truth_track_ids).any():
-            key_columns.append("truth_track_id")
-    if any(column not in matched.columns for column in key_columns):
+
+    matched_required = {"sequence_id", "truth_time_s"}
+    truth_required = {"sequence_id", "time_s"}
+    if not matched_required.issubset(matched.columns) or not truth_required.issubset(
+        truth.columns
+    ):
         return int(len(matched))
-    covered = matched[key_columns].copy()
-    truth_times = pd.to_numeric(covered["truth_time_s"], errors="coerce")
-    covered = covered.loc[truth_times.notna()]
-    return int(covered.drop_duplicates().shape[0])
+
+    use_track_ids = "track_id" in truth.columns and "truth_track_id" in matched.columns
+
+    def key_counts(
+        frame: pd.DataFrame,
+        *,
+        time_column: str,
+        track_column: str | None,
+    ) -> dict[tuple[str, float, str | None], int]:
+        sequences = _normalize_submission_sequence_ids(frame["sequence_id"])
+        times = pd.to_numeric(frame[time_column], errors="coerce").to_numpy(
+            dtype=float
+        )
+        track_ids = (
+            frame[track_column].map(_valid_track_id_text).tolist()
+            if track_column is not None
+            else [None] * len(frame)
+        )
+        counts: dict[tuple[str, float, str | None], int] = {}
+        for sequence_id, time_s, track_id in zip(
+            sequences.tolist(),
+            times.tolist(),
+            track_ids,
+        ):
+            if not np.isfinite(time_s):
+                continue
+            key = (str(sequence_id), float(time_s), track_id)
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    truth_counts = key_counts(
+        truth,
+        time_column="time_s",
+        track_column="track_id" if use_track_ids else None,
+    )
+    matched_counts = key_counts(
+        matched,
+        time_column="truth_time_s",
+        track_column="truth_track_id" if use_track_ids else None,
+    )
+    return int(
+        sum(
+            min(matched_count, truth_counts.get(key, 0))
+            for key, matched_count in matched_counts.items()
+        )
+    )
 
 
 def _error_metrics(frame: pd.DataFrame) -> dict[str, Any]:
