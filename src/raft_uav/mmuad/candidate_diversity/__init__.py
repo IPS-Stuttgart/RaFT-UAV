@@ -6,7 +6,8 @@ coordinates before spatial filtering so malformed rows are skipped rather than
 raising during NumPy conversion. It also validates diversity controls before
 legacy numeric coercion can silently clamp or truncate them, normalizes score
 columns row by row without discarding complex components, and rejects complex
-protected-candidate flags before NumPy can discard their imaginary components.
+or non-binary numeric protected-candidate flags before they can be treated as
+truthy.
 """
 
 from __future__ import annotations
@@ -110,7 +111,7 @@ def _finite_real_score_series(values: pd.Series) -> pd.Series:
 
 
 def _parse_protected_flag(value: Any) -> bool:
-    """Reject complex scalar flags before legacy numeric coercion."""
+    """Reject complex and non-binary numeric flags before legacy coercion."""
 
     if not np.ma.is_masked(value):
         try:
@@ -127,6 +128,21 @@ def _parse_protected_flag(value: Any) -> bool:
                     "candidate_reservoir_protected values must be boolean-like; "
                     f"got {value!r}"
                 )
+            if not isinstance(item, (bool, np.bool_, str)) and item is not None:
+                try:
+                    missing = pd.isna(item)
+                except (TypeError, ValueError):
+                    missing = False
+                if not (isinstance(missing, (bool, np.bool_)) and bool(missing)):
+                    try:
+                        number = float(item)
+                    except (TypeError, ValueError, OverflowError):
+                        number = float("nan")
+                    if np.isfinite(number) and number not in {0.0, 1.0}:
+                        raise ValueError(
+                            "candidate_reservoir_protected values must be boolean-like; "
+                            f"got {value!r}"
+                        )
     return _ORIGINAL_PARSE_PROTECTED_FLAG(value)
 
 
