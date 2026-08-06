@@ -49,6 +49,12 @@ def _kalman_timestamp_validation_install() -> Callable[[], None]:
     return apply_kalman_timestamp_validation_patch
 
 
+def _tracking_measurement_covariance_install() -> Callable[[], None]:
+    from raft_uav.baselines._tracking_measurement_covariance_patch import install
+
+    return install
+
+
 def _imm_bootstrap_timestamp_install() -> Callable[[], None]:
     from raft_uav.baselines._imm_bootstrap_timestamp_patch import install
 
@@ -211,6 +217,7 @@ if os.environ.get("RAFT_UAV_SKIP_RUNTIME_HOOKS") != "1":
 # Scalar validation and normalized measurement fallbacks are core input-safety
 # boundaries, not optional integrations. Keep them active when runtime hooks are skipped.
 _optional_runtime_hook(_kalman_timestamp_validation_install)
+_optional_runtime_hook(_tracking_measurement_covariance_install)
 _optional_runtime_hook(_imm_bootstrap_timestamp_install)
 _optional_runtime_hook(_rf_measurement_fallback_install)
 _optional_runtime_hook(_radar_measurement_validation_install)
