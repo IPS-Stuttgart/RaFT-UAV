@@ -35,7 +35,7 @@ def _as_string_tuple(value: Any, field_name: str) -> tuple[str, ...]:
         raise ValueError(message) from exc
 
 
-def _optional_mapping(value: object | None, field_name: str) -> Mapping[str, Any]:
+def _optional_mapping(value: object | None, field_name: str) -> Mapping[object, Any]:
     """Return an optional mapping without hiding malformed falsy values."""
 
     if value is None:
@@ -43,6 +43,24 @@ def _optional_mapping(value: object | None, field_name: str) -> Mapping[str, Any
     if not isinstance(value, Mapping):
         raise ValueError(f"{field_name} must be a mapping or None")
     return value
+
+
+def _validate_unique_string_keys(
+    value: Mapping[object, Any],
+    field_name: str,
+) -> None:
+    """Reject distinct mapping keys that collapse during JSON conversion."""
+
+    original_keys: dict[str, object] = {}
+    for key in value:
+        normalized = str(key)
+        if normalized in original_keys:
+            first_key = original_keys[normalized]
+            raise ValueError(
+                f"{field_name} contains keys {first_key!r} and {key!r} "
+                f"that both normalize to {normalized!r}"
+            )
+        original_keys[normalized] = key
 
 
 def _environment_prefix_tuple(prefixes: object) -> tuple[str, ...]:
@@ -84,6 +102,12 @@ class ExperimentConfig:
             "calibration_artifacts",
         )
         metadata = _optional_mapping(payload.get("metadata"), "metadata")
+        _validate_unique_string_keys(environment, "environment")
+        _validate_unique_string_keys(
+            calibration_artifacts,
+            "calibration_artifacts",
+        )
+        _validate_unique_string_keys(metadata, "metadata")
         return cls(
             name=str(payload.get("name", "experiment")),
             dataset_root=str(payload.get("dataset_root", "")),
@@ -201,6 +225,7 @@ def _run_git(args: list[str], cwd: Path) -> str:
 
 def _jsonable(value: Any) -> Any:
     if isinstance(value, Mapping):
+        _validate_unique_string_keys(value, "mapping")
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
