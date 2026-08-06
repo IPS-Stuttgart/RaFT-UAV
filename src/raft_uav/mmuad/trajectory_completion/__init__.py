@@ -89,7 +89,11 @@ def _parse_selected_path_update(value: Any) -> bool:
 
     if isinstance(scalar, (int, float, np.integer, np.floating)):
         numeric = float(scalar)
-        return bool(numeric) if np.isfinite(numeric) else False
+        if not np.isfinite(numeric):
+            return False
+        if numeric in {0.0, 1.0}:
+            return bool(numeric)
+        raise ValueError(f"cannot parse selected_path_update value: {scalar!r}")
 
     raise ValueError(f"cannot parse selected_path_update value: {scalar!r}")
 
