@@ -69,3 +69,34 @@ def test_near_equal_timestamps_are_counted_once(include_sequence_id: bool) -> No
     assert metrics["false_negative"] == 0
     assert metrics["precision"] == 1.0
     assert metrics["recall"] == 1.0
+
+
+def test_tolerance_chain_keeps_cross_boundary_pair_eligible() -> None:
+    estimates = pd.DataFrame(
+        {
+            "sequence_id": ["seqA", "seqA"],
+            "time_s": [0.0, 9.0e-10],
+            "output_track_id": ["early", "eligible"],
+            "state_x_m": [100.0, 0.0],
+            "state_y_m": [0.0, 0.0],
+            "state_z_m": [0.0, 0.0],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seqA"],
+            "time_s": [1.8e-9],
+            "track_id": ["truth1"],
+            "x_m": [0.0],
+            "y_m": [0.0],
+            "z_m": [0.0],
+        }
+    )
+
+    metrics = compute_multi_object_metrics(estimates, truth, match_distance_m=25.0)
+
+    assert metrics["matches"] == 1
+    assert metrics["false_positive"] == 1
+    assert metrics["false_negative"] == 0
+    assert metrics["precision"] == 0.5
+    assert metrics["recall"] == 1.0
