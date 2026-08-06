@@ -8,10 +8,29 @@ import numpy as np
 import pandas as pd
 
 _INSTALLED = False
+_MISSING_SEQUENCE_KEYS = frozenset({"nan", "none", "<na>", "nat"})
+
+
+def _sequence_keys(radar: pd.DataFrame) -> pd.Series:
+    """Return normalized sequence IDs without converting missing values to text."""
+
+    if "sequence_id" not in radar.columns:
+        return pd.Series(None, index=radar.index, dtype=object)
+    keys = pd.Series(
+        radar["sequence_id"],
+        index=radar.index,
+        dtype="string",
+    ).str.strip()
+    missing = keys.isna() | keys.eq("") | keys.str.lower().isin(
+        _MISSING_SEQUENCE_KEYS
+    )
+    normalized = keys.astype(object)
+    normalized.loc[missing] = None
+    return normalized
 
 
 def _radar_frame_groups(radar: pd.DataFrame) -> list[pd.DataFrame]:
-    """Group indexed frames exactly and fall back per row to finite timestamps."""
+    """Group physical frames by sequence, index, and finite timestamp."""
 
     if radar.empty:
         return []
@@ -21,6 +40,7 @@ def _radar_frame_groups(radar: pd.DataFrame) -> list[pd.DataFrame]:
         if column in radar.columns
     ]
     ordered = radar.sort_values(sort_columns).reset_index(drop=True)
+    sequence_keys = _sequence_keys(ordered)
     times = pd.to_numeric(ordered["time_s"], errors="coerce")
     if "frame_index" in ordered.columns:
         frame_indices = pd.to_numeric(ordered["frame_index"], errors="coerce")
@@ -28,14 +48,19 @@ def _radar_frame_groups(radar: pd.DataFrame) -> list[pd.DataFrame]:
         frame_indices = pd.Series(np.nan, index=ordered.index, dtype=float)
     group_keys = pd.Series(
         [
-            ("frame_index_time", float(frame_index), float(time_s))
+            (sequence_id, "frame_index_time", float(frame_index), float(time_s))
             if np.isfinite(frame_index) and np.isfinite(time_s)
-            else ("frame_index", float(frame_index))
+            else (sequence_id, "frame_index", float(frame_index))
             if np.isfinite(frame_index)
-            else ("time_s", float(time_s))
+            else (sequence_id, "time_s", float(time_s))
             if np.isfinite(time_s)
             else None
-            for frame_index, time_s in zip(frame_indices, times, strict=True)
+            for sequence_id, frame_index, time_s in zip(
+                sequence_keys,
+                frame_indices,
+                times,
+                strict=True,
+            )
         ],
         index=ordered.index,
         dtype=object,
