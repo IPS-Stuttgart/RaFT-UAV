@@ -1,8 +1,10 @@
-"""Preserve radar frame identity when frame indices are only partially available."""
+"""Preserve physical radar frame identity in tracklet diagnostics."""
 
 from __future__ import annotations
 
 from importlib import import_module
+from types import ModuleType
+from typing import Iterator
 
 import numpy as np
 import pandas as pd
@@ -13,35 +15,54 @@ _PATCH_MARKER = "_raft_uav_partial_frame_key_patch_applied"
 
 
 def _append_frame_keys(frame: pd.DataFrame) -> pd.DataFrame:
-    """Use finite frame indices and fall back to timestamps row by row."""
+    """Use timestamp-qualified frame indices and row-wise timestamp fallback."""
 
     out = frame.copy()
     times = pd.to_numeric(out["time_s"], errors="coerce")
+    time_keys = times.round(9).astype(str)
     out["frame_key_type"] = "time_s"
-    out["frame_key"] = times.round(9).astype(str)
+    out["frame_key"] = time_keys
 
     if "frame_index" not in out.columns:
         return out
 
     frame_indices = pd.to_numeric(out["frame_index"], errors="coerce")
-    finite = frame_indices.notna() & np.isfinite(frame_indices)
-    if not finite.any():
+    finite_frame = frame_indices.notna() & np.isfinite(frame_indices)
+    if not finite_frame.any():
         return out
 
-    frame_keys = frame_indices.where(finite).round().astype("Int64").astype(str)
-    out.loc[finite, "frame_key_type"] = "frame_index"
-    out.loc[finite, "frame_key"] = frame_keys.loc[finite]
+    frame_keys = frame_indices.where(finite_frame).round().astype("Int64").astype(str)
+    finite_time = times.notna() & np.isfinite(times)
+    indexed_with_time = finite_frame & finite_time
+    indexed_without_time = finite_frame & ~finite_time
+
+    out.loc[indexed_without_time, "frame_key_type"] = "frame_index"
+    out.loc[indexed_without_time, "frame_key"] = frame_keys.loc[indexed_without_time]
+    out.loc[indexed_with_time, "frame_key_type"] = "frame_index_time_s"
+    out.loc[indexed_with_time, "frame_key"] = (
+        frame_keys.loc[indexed_with_time] + "@" + time_keys.loc[indexed_with_time]
+    )
     return out
 
 
+def _patch_targets() -> Iterator[ModuleType]:
+    """Yield the public compatibility module and its implementation modules."""
+
+    seen: set[int] = set()
+    for target in (
+        _feature_store,
+        getattr(_feature_store, "_IMPL", None),
+        getattr(_feature_store, "_LEGACY", None),
+    ):
+        if not isinstance(target, ModuleType) or id(target) in seen:
+            continue
+        seen.add(id(target))
+        yield target
+
+
 def install() -> None:
-    """Install the partial-frame-index fallback once per interpreter."""
+    """Install the frame-key helper at every active compatibility boundary."""
 
-    if getattr(_feature_store, _PATCH_MARKER, False):
-        return
-
-    _feature_store._append_frame_keys = _append_frame_keys
-    legacy = getattr(_feature_store, "_LEGACY", None)
-    if legacy is not None:
-        legacy._append_frame_keys = _append_frame_keys
+    for target in _patch_targets():
+        target._append_frame_keys = _append_frame_keys
     setattr(_feature_store, _PATCH_MARKER, True)
