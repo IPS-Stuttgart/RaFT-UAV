@@ -1,20 +1,22 @@
 name: Apply exported pooled FDE fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/fix-exported-pooled-fde
+      - main
 
 permissions:
   contents: write
 
 jobs:
   patch-and-test:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - name: Check out branch
+      - name: Check out pull request branch
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
       - name: Apply focused source and regression changes
@@ -138,4 +140,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "Fix exported pooled FDE aggregation"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
