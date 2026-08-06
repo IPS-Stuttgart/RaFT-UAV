@@ -61,14 +61,16 @@ def _materialize_timestamp_values(
     *,
     argument_name: str,
 ) -> list[Any]:
-    """Materialize timestamps and reject Boolean or nested non-scalar values."""
+    """Materialize timestamps and reject scalar text or nested non-scalars."""
 
+    shape_error = f"{argument_name} must be one-dimensional"
+    if isinstance(values, (str, bytes, bytearray)):
+        raise ValueError(shape_error)
     try:
         materialized = list(values)
     except TypeError as exc:
-        raise ValueError("timestamp arrays must be one-dimensional") from exc
+        raise ValueError(shape_error) from exc
 
-    shape_error = f"{argument_name} must be one-dimensional"
     value_error = (
         f"{argument_name} must contain only finite real scalar timestamp values"
     )
