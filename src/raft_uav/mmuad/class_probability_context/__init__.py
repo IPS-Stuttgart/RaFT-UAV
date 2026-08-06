@@ -29,6 +29,7 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_LEGACY_CANDIDATE_ROWS = _IMPL._candidate_rows
 _LEGACY_PROBABILITY_ROWS = _IMPL._probability_rows
 _MISSING_SEQUENCE_TEXT = frozenset({"nan", "none", "<na>"})
 
@@ -54,6 +55,42 @@ def _predicted_class_labels(values: pd.Series) -> pd.Series:
             np.rint(numeric_array[positions]).astype(int).astype(str)
         )
     return text
+
+
+def _normalize_sequence_ids(
+    values: pd.Series,
+    *,
+    table_name: str,
+    column: str,
+) -> pd.Series:
+    """Return stripped sequence IDs while rejecting serialized missing values."""
+
+    raw = pd.Series(values, index=values.index)
+    text = raw.where(raw.notna(), "").astype(str).str.strip()
+    missing = text.eq("") | text.str.casefold().isin(_MISSING_SEQUENCE_TEXT)
+    if missing.any():
+        row_position = int(np.flatnonzero(missing.to_numpy(dtype=bool))[0])
+        bad_value = raw.iloc[row_position]
+        raise ValueError(
+            f"{table_name} sequence identifiers must be non-empty; "
+            f"got {bad_value!r} in {column!r} at row {row_position}"
+        )
+    return text
+
+
+def _candidate_rows(candidates: object) -> pd.DataFrame:
+    """Normalize and validate candidate sequence identifiers before joining."""
+
+    rows = _LEGACY_CANDIDATE_ROWS(candidates)
+    if rows.empty:
+        return rows
+    rows = rows.copy()
+    rows["sequence_id"] = _normalize_sequence_ids(
+        rows["sequence_id"],
+        table_name="candidate",
+        column="sequence_id",
+    )
+    return rows
 
 
 def _normalize_probability_input(class_probabilities: pd.DataFrame) -> pd.DataFrame:
@@ -94,17 +131,11 @@ def _normalize_probability_input(class_probabilities: pd.DataFrame) -> pd.DataFr
     )
     normalized_ids: dict[str, pd.Series] = {}
     for column in sequence_columns:
-        raw = rows[column]
-        text = raw.where(raw.notna(), "").astype(str).str.strip()
-        missing = text.eq("") | text.str.casefold().isin(_MISSING_SEQUENCE_TEXT)
-        if missing.any():
-            row_index = int(np.flatnonzero(missing.to_numpy(dtype=bool))[0])
-            bad_value = raw.iloc[row_index]
-            raise ValueError(
-                "class probability sequence identifiers must be non-empty; "
-                f"got {bad_value!r} in {column!r} at row {row_index}"
-            )
-        normalized_ids[column] = text
+        normalized_ids[column] = _normalize_sequence_ids(
+            rows[column],
+            table_name="class probability",
+            column=column,
+        )
 
     preferred_ids = normalized_ids[preferred_column]
     for column, text in normalized_ids.items():
@@ -145,6 +176,7 @@ def _probability_rows(class_probabilities: pd.DataFrame) -> pd.DataFrame:
 
 
 _IMPL._predicted_class_labels = _predicted_class_labels
+_IMPL._candidate_rows = _candidate_rows
 _IMPL._probability_rows = _probability_rows
 
 globals().update(
@@ -155,6 +187,8 @@ globals().update(
     }
 )
 globals()["_predicted_class_labels"] = _predicted_class_labels
+globals()["_normalize_sequence_ids"] = _normalize_sequence_ids
+globals()["_candidate_rows"] = _candidate_rows
 globals()["_normalize_probability_input"] = _normalize_probability_input
 globals()["_sanitize_probability_inputs"] = _sanitize_probability_inputs
 globals()["_probability_rows"] = _probability_rows
