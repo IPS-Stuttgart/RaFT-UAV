@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from raft_uav.runtime_cli_config import (
@@ -27,6 +28,7 @@ _ORIGINAL_MAIN: Any = None
 _ORIGINAL_BASELINE_METRICS: Any = None
 _CURRENT_RUNTIME_CONFIG: dict[str, Any] | None = None
 _RUNTIME_VALUELESS_FLAGS = frozenset({"--disable-tracklet-rf-anchor"})
+_RUNTIME_INVOCATION_LOCK = RLock()
 
 
 def install() -> None:
@@ -65,6 +67,13 @@ def _runtime_aware_command(argv: list[str]) -> str | None:
 
 
 def _main_with_runtime_config(argv: list[str] | None = None) -> int:
+    """Serialize CLI dispatch while runtime settings modify process-global state."""
+
+    with _RUNTIME_INVOCATION_LOCK:
+        return _main_with_runtime_config_locked(argv)
+
+
+def _main_with_runtime_config_locked(argv: list[str] | None = None) -> int:
     """Parse runtime flags before delegating to the original CLI."""
 
     import sys
