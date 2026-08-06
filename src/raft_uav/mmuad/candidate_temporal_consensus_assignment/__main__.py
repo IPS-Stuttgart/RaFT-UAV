@@ -1,0 +1,9 @@
+"""Module entry point for assignment temporal consensus."""
+
+from __future__ import annotations
+
+from . import main
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
