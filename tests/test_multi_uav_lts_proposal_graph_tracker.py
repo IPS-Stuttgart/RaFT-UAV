@@ -5,7 +5,11 @@ from zipfile import ZipFile
 
 import pytest
 
-from raft_uav.multi_uav_lts._records import Detection, format_detection, parse_detection_text
+from raft_uav.multi_uav_lts._records import (
+    Detection,
+    format_detection,
+    parse_detection_text,
+)
 from raft_uav.multi_uav_lts.proposal_graph_tracker import track_proposal_graph
 
 
@@ -246,3 +250,46 @@ def test_rejects_output_nested_in_proposal_input(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="nested in proposals"):
         track_proposal_graph(proposals, labels, proposals / "output")
+
+
+def test_zero_seed_iou_does_not_match_a_disjoint_proposal(tmp_path: Path) -> None:
+    seeds = [row(1, 1, 0.0)]
+    proposals = [
+        row(1, 1, 100.0),
+        row(2, 1, 101.0),
+        row(3, 1, 102.0),
+    ]
+
+    summary, rows = run_tracker(
+        tmp_path,
+        seeds,
+        proposals,
+        min_seed_iou=0.0,
+    )
+
+    by_id = {}
+    for item in rows:
+        by_id.setdefault(item.object_id, []).append(item)
+    assert [item.frame_id for item in by_id[1]] == [1]
+    assert [item.frame_id for item in by_id[2]] == [1, 2, 3]
+    assert summary.confirmed_birth_paths == 1
+
+
+def test_preserves_an_unmatched_seed_as_an_exact_singleton(tmp_path: Path) -> None:
+    seed = row(1, 7, 12.5, y=4.5, width=3.0, height=5.0)
+
+    summary, rows = run_tracker(tmp_path, [seed], [])
+
+    assert rows == [seed]
+    assert summary.seeded_paths == 1
+    assert summary.output_ids == 1
+
+
+def test_rejects_out_of_domain_proposal_confidence(tmp_path: Path) -> None:
+    labels = tmp_path / "labels"
+    proposals = tmp_path / "proposals"
+    write_rows(labels / "SEQ.txt", [row(1, 1, 0.0)])
+    write_rows(proposals / "SEQ.txt", [row(1, 1, 0.0, confidence=1.1)])
+
+    with pytest.raises(ValueError, match=r"confidence must be in \[0, 1\]"):
+        track_proposal_graph(proposals, labels, tmp_path / "output")
