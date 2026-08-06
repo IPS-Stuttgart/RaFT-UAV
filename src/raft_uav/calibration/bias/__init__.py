@@ -4,19 +4,25 @@ The maintained implementation lives in the sibling ``bias.py`` module. This
 package preserves the public import path while ensuring ``correct_frame``
 respects ``keep_uncorrected=False``, serialized truth timestamps are numeric
 before nearest-time calibration sorting, duplicate truth timestamps retain
-their final valid row, and genuinely complex calibration values are not
-silently reduced to their real components.
+their final valid row, genuinely complex calibration values are not silently
+reduced to their real components, and malformed persisted model parameters fail
+before they can contaminate corrected coordinates or uncertainty metadata.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping as _MappingABC
 import importlib.util
+import json
 from pathlib import Path
 import sys
 from typing import Sequence
 
 import numpy as np
 import pandas as pd
+
+from raft_uav.numeric import optional_float as _optional_float
+from raft_uav.numeric import optional_int as _optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "bias.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -30,6 +36,8 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_MAKE_BIAS_TRAINING_EXAMPLES = _IMPL.make_bias_training_examples
+_ORIGINAL_MODEL_POST_INIT = _IMPL.SensorBiasCorrectionModel.__post_init__
+_ORIGINAL_MODEL_FROM_DICT = _IMPL.SensorBiasCorrectionModel.from_dict.__func__
 
 
 def _correct_frame(
@@ -130,8 +138,229 @@ def make_bias_training_examples(
     )
 
 
+def _required_exact_int(value: object, *, field: str, minimum: int = 0) -> int:
+    normalized = _optional_int(value)
+    if normalized is None or normalized < minimum:
+        qualifier = "nonnegative" if minimum == 0 else f"at least {minimum}"
+        raise ValueError(f"{field} must be an exact {qualifier} integer")
+    return normalized
+
+
+def _required_finite_real(value: object, *, field: str, minimum: float = 0.0) -> float:
+    normalized = _optional_float(value)
+    if normalized is None or normalized < minimum:
+        qualifier = "nonnegative" if minimum == 0.0 else f"at least {minimum}"
+        raise ValueError(f"{field} must be a finite real scalar that is {qualifier}")
+    return normalized
+
+
+def _validate_source_name(value: object, *, field: str = "source") -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError(f"{field} must be a nonempty trimmed string")
+    return value
+
+
+def _validate_column_names(
+    value: object,
+    *,
+    field: str,
+    allow_empty: bool,
+) -> tuple[str, ...]:
+    if isinstance(value, str | bytes):
+        raise ValueError(f"{field} must be a sequence of column-name strings")
+    try:
+        names = tuple(value)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise ValueError(f"{field} must be a sequence of column-name strings") from exc
+    if not allow_empty and not names:
+        raise ValueError(f"{field} must contain at least one column")
+    if any(not isinstance(name, str) or not name or name != name.strip() for name in names):
+        raise ValueError(f"{field} must contain only nonempty trimmed strings")
+    if len(set(names)) != len(names):
+        raise ValueError(f"{field} must not contain duplicate columns")
+    return names
+
+
+def _validate_finite_real_array(
+    value: object,
+    *,
+    field: str,
+    nonnegative: bool = False,
+) -> None:
+    if np.ma.isMaskedArray(value) and np.any(np.ma.getmaskarray(value)):
+        raise ValueError(f"{field} must not contain masked values")
+    try:
+        array = np.asanyarray(value, dtype=object)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a finite real array") from exc
+    if np.ma.isMaskedArray(array) and np.any(np.ma.getmaskarray(array)):
+        raise ValueError(f"{field} must not contain masked values")
+    normalized: list[float] = []
+    for item in np.asarray(array).reshape(-1):
+        scalar = _optional_float(item)
+        if scalar is None:
+            raise ValueError(f"{field} must contain only finite real values")
+        normalized.append(scalar)
+    if nonnegative and any(item < 0.0 for item in normalized):
+        raise ValueError(f"{field} must contain only nonnegative values")
+
+
+def _validated_model_post_init(self: object) -> None:
+    """Validate model state before the legacy dataclass normalizes it."""
+
+    source = _validate_source_name(self.source)
+    target_columns = _validate_column_names(
+        self.target_columns,
+        field="target_columns",
+        allow_empty=False,
+    )
+    feature_columns = _validate_column_names(
+        self.feature_columns,
+        field="feature_columns",
+        allow_empty=True,
+    )
+    _validate_finite_real_array(self.intercept, field="intercept")
+    _validate_finite_real_array(self.coefficients, field="coefficients")
+    _validate_finite_real_array(self.feature_mean, field="feature_mean")
+    _validate_finite_real_array(
+        self.feature_scale,
+        field="feature_scale",
+        nonnegative=True,
+    )
+    _validate_finite_real_array(
+        self.residual_std,
+        field="residual_std",
+        nonnegative=True,
+    )
+    training_rows = _required_exact_int(self.training_rows, field="training_rows")
+    ridge_alpha = _required_finite_real(self.ridge_alpha, field="ridge_alpha")
+    time_gate_s = _required_finite_real(self.time_gate_s, field="time_gate_s")
+    object.__setattr__(self, "source", source)
+    object.__setattr__(self, "target_columns", target_columns)
+    object.__setattr__(self, "feature_columns", feature_columns)
+    object.__setattr__(self, "training_rows", training_rows)
+    object.__setattr__(self, "ridge_alpha", ridge_alpha)
+    object.__setattr__(self, "time_gate_s", time_gate_s)
+    _ORIGINAL_MODEL_POST_INIT(self)
+
+
+def _validated_model_from_dict(
+    cls: type,
+    payload: object,
+) -> object:
+    """Reject malformed model mappings before legacy coercions can hide them."""
+
+    if not isinstance(payload, _MappingABC):
+        raise ValueError("bias model payload must be a mapping")
+    version = _required_exact_int(
+        payload.get("version", _IMPL.BIAS_MODEL_VERSION),
+        field="bias model version",
+    )
+    if version != _IMPL.BIAS_MODEL_VERSION:
+        raise ValueError(f"unsupported bias model version {version}")
+    source = _validate_source_name(payload.get("source"))
+    target_columns = _validate_column_names(
+        payload.get("target_columns", payload.get("target_axes")),
+        field="target_columns",
+        allow_empty=False,
+    )
+    feature_columns = _validate_column_names(
+        payload.get("feature_columns"),
+        field="feature_columns",
+        allow_empty=True,
+    )
+    training_rows = _required_exact_int(
+        payload.get("training_rows", payload.get("training_count", 0)),
+        field="training_rows",
+    )
+    ridge_alpha = _required_finite_real(
+        payload.get("ridge_alpha", 0.0),
+        field="ridge_alpha",
+    )
+    time_gate_s = _required_finite_real(
+        payload.get("time_gate_s", 2.0),
+        field="time_gate_s",
+    )
+    _validate_finite_real_array(payload.get("intercept"), field="intercept")
+    _validate_finite_real_array(payload.get("coefficients"), field="coefficients")
+    _validate_finite_real_array(payload.get("feature_mean"), field="feature_mean")
+    _validate_finite_real_array(
+        payload.get("feature_scale"),
+        field="feature_scale",
+        nonnegative=True,
+    )
+    residual_std = payload.get("residual_std")
+    if residual_std is None:
+        fit_rmse = payload.get("fit_rmse_by_axis_m", {})
+        if not isinstance(fit_rmse, _MappingABC):
+            raise ValueError("fit_rmse_by_axis_m must be a mapping")
+        residual_std = [fit_rmse.get(axis, 0.0) for axis in target_columns]
+    _validate_finite_real_array(
+        residual_std,
+        field="residual_std",
+        nonnegative=True,
+    )
+
+    normalized_payload = dict(payload)
+    normalized_payload.update(
+        {
+            "version": version,
+            "source": source,
+            "target_columns": target_columns,
+            "feature_columns": feature_columns,
+            "residual_std": residual_std,
+            "training_rows": training_rows,
+            "ridge_alpha": ridge_alpha,
+            "time_gate_s": time_gate_s,
+        }
+    )
+    return _ORIGINAL_MODEL_FROM_DICT(cls, normalized_payload)
+
+
+def load_bias_correction_models(
+    path: Path,
+) -> dict[str, _IMPL.SensorBiasCorrectionModel]:
+    """Load a validated source-consistent bias-model bundle."""
+
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, _MappingABC):
+        raise ValueError("bias model bundle must contain a JSON object")
+    version = _required_exact_int(
+        payload.get("version", _IMPL.BIAS_MODEL_VERSION),
+        field="bias model bundle version",
+    )
+    if version != _IMPL.BIAS_MODEL_VERSION:
+        raise ValueError(f"unsupported bias model bundle version {version}")
+    models = payload.get("models", {})
+    if not isinstance(models, _MappingABC):
+        raise ValueError("bias model bundle must contain a models mapping")
+
+    loaded: dict[str, _IMPL.SensorBiasCorrectionModel] = {}
+    for raw_source, model_payload in models.items():
+        source = _validate_source_name(raw_source, field="bias model bundle source")
+        if not isinstance(model_payload, _MappingABC):
+            raise ValueError(f"bias model payload for source {source!r} must be a mapping")
+        model = _IMPL.SensorBiasCorrectionModel.from_dict(model_payload)
+        if model.source != source:
+            raise ValueError(
+                f"bias model bundle key {source!r} does not match model source "
+                f"{model.source!r}"
+            )
+        expected_targets = _IMPL.TARGET_COLUMNS_BY_SOURCE.get(source)
+        if expected_targets is not None and tuple(model.target_columns) != tuple(expected_targets):
+            raise ValueError(
+                f"bias model for source {source!r} must target "
+                f"{tuple(expected_targets)!r}; got {tuple(model.target_columns)!r}"
+            )
+        loaded[source] = model
+    return loaded
+
+
 _IMPL.SensorBiasCorrectionModel.correct_frame = _correct_frame
+_IMPL.SensorBiasCorrectionModel.__post_init__ = _validated_model_post_init
+_IMPL.SensorBiasCorrectionModel.from_dict = classmethod(_validated_model_from_dict)
 _IMPL.make_bias_training_examples = make_bias_training_examples
+_IMPL.load_bias_correction_models = load_bias_correction_models
 
 globals().update(
     {
@@ -145,7 +374,15 @@ globals()["_finite_real_numeric_series"] = _finite_real_numeric_series
 globals()["_normalized_bias_frame"] = _normalized_bias_frame
 globals()["_drop_invalid_numeric_rows"] = _drop_invalid_numeric_rows
 globals()["_keep_final_truth_rows"] = _keep_final_truth_rows
+globals()["_required_exact_int"] = _required_exact_int
+globals()["_required_finite_real"] = _required_finite_real
+globals()["_validate_source_name"] = _validate_source_name
+globals()["_validate_column_names"] = _validate_column_names
+globals()["_validate_finite_real_array"] = _validate_finite_real_array
+globals()["_validated_model_post_init"] = _validated_model_post_init
+globals()["_validated_model_from_dict"] = _validated_model_from_dict
 globals()["make_bias_training_examples"] = make_bias_training_examples
+globals()["load_bias_correction_models"] = load_bias_correction_models
 
 __doc__ = _IMPL.__doc__
 __all__ = [
