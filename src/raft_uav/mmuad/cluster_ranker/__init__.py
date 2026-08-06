@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.numeric import optional_float
+from raft_uav.numeric import optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "cluster_ranker.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -40,6 +41,7 @@ _TRUTH_LABEL_COLUMNS = (
     "good_cluster_20m",
     "good_cluster",
 )
+_MAX_RANDOM_STATE = int(np.iinfo(np.uint32).max)
 
 
 def train_cluster_ranker(
@@ -54,7 +56,29 @@ def train_cluster_ranker(
     n_estimators: int = 200,
     score_distance_scale_m: float = 10.0,
 ) -> Any:
-    """Train after parsing persisted classifier targets as actual booleans."""
+    """Train after validating controls and parsing persisted binary targets."""
+
+    normalized_learning_rate = _validated_positive_real(
+        learning_rate,
+        name="learning_rate",
+    )
+    normalized_iterations = _validated_positive_int(
+        iterations,
+        name="iterations",
+    )
+    normalized_l2 = _validated_nonnegative_real(
+        l2,
+        name="l2",
+    )
+    normalized_random_state = _validated_random_state(random_state)
+    normalized_n_estimators = _validated_positive_int(
+        n_estimators,
+        name="n_estimators",
+    )
+    normalized_score_distance_scale_m = _validated_positive_real(
+        score_distance_scale_m,
+        name="score_distance_scale_m",
+    )
 
     normalized = pd.DataFrame(features).copy()
     normalized_model_type = str(model_type)
@@ -74,12 +98,12 @@ def train_cluster_ranker(
         normalized,
         model_type=normalized_model_type,
         target_column=target_column,
-        learning_rate=learning_rate,
-        iterations=iterations,
-        l2=l2,
-        random_state=random_state,
-        n_estimators=n_estimators,
-        score_distance_scale_m=score_distance_scale_m,
+        learning_rate=normalized_learning_rate,
+        iterations=normalized_iterations,
+        l2=normalized_l2,
+        random_state=normalized_random_state,
+        n_estimators=normalized_n_estimators,
+        score_distance_scale_m=normalized_score_distance_scale_m,
     )
 
 
@@ -110,11 +134,19 @@ def label_cluster_features_against_truth(
     if "truth_matched" not in labeled.columns:
         return labeled
 
-    matched = pd.Series(labeled["truth_matched"], index=labeled.index).fillna(False).astype(bool)
+    matched = (
+        pd.Series(labeled["truth_matched"], index=labeled.index)
+        .fillna(False)
+        .astype(bool)
+    )
     for column in _TRUTH_LABEL_COLUMNS:
         if column not in labeled.columns:
             continue
-        labeled[column] = pd.Series(labeled[column], index=labeled.index, dtype="boolean")
+        labeled[column] = pd.Series(
+            labeled[column],
+            index=labeled.index,
+            dtype="boolean",
+        )
         labeled.loc[~matched, column] = pd.NA
     return labeled
 
@@ -143,6 +175,45 @@ def _validated_nonnegative_gate(value: object, *, name: str) -> float:
     normalized = optional_float(value)
     if normalized is None or normalized < 0.0:
         raise ValueError(f"{name} must be a finite non-negative real scalar")
+    return normalized
+
+
+def _validated_positive_real(value: object, *, name: str) -> float:
+    """Return a finite positive real scalar or raise a stable error."""
+
+    normalized = optional_float(value)
+    if normalized is None or normalized <= 0.0:
+        raise ValueError(f"{name} must be a finite positive real scalar")
+    return normalized
+
+
+def _validated_nonnegative_real(value: object, *, name: str) -> float:
+    """Return a finite non-negative real scalar or raise a stable error."""
+
+    normalized = optional_float(value)
+    if normalized is None or normalized < 0.0:
+        raise ValueError(f"{name} must be a finite non-negative real scalar")
+    return normalized
+
+
+def _validated_positive_int(value: object, *, name: str) -> int:
+    """Return an exact positive integer or raise a stable error."""
+
+    normalized = optional_int(value)
+    if normalized is None or normalized <= 0:
+        raise ValueError(f"{name} must be an exact positive integer")
+    return normalized
+
+
+def _validated_random_state(value: object) -> int:
+    """Return an exact seed accepted by NumPy and scikit-learn."""
+
+    normalized = optional_int(value)
+    if normalized is None or not 0 <= normalized <= _MAX_RANDOM_STATE:
+        raise ValueError(
+            "random_state must be an exact integer in "
+            f"[0, {_MAX_RANDOM_STATE}]"
+        )
     return normalized
 
 
@@ -274,6 +345,10 @@ globals()["label_cluster_features_against_truth"] = (
 )
 globals()["_authoritative_truth_rows"] = _authoritative_truth_rows
 globals()["_validated_nonnegative_gate"] = _validated_nonnegative_gate
+globals()["_validated_positive_real"] = _validated_positive_real
+globals()["_validated_nonnegative_real"] = _validated_nonnegative_real
+globals()["_validated_positive_int"] = _validated_positive_int
+globals()["_validated_random_state"] = _validated_random_state
 globals()["_binary_auc"] = _binary_auc
 globals()["_ranker_prediction_summary"] = _ranker_prediction_summary
 globals()["_normalize_binary_targets"] = _normalize_binary_targets
