@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import importlib
+from io import BytesIO, StringIO
 import threading
 from typing import Any
 
@@ -62,6 +63,7 @@ def _normalized_unique_columns(columns: Any) -> list[str]:
 
 
 def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
+    path = _seekable_csv_source(path)
     dtype_arg = kwargs.pop("dtype", None)
     converters = dict(kwargs.pop("converters", {}) or {})
     sequence_columns = _sequence_columns_for_csv(path, *args, **kwargs)
@@ -124,6 +126,19 @@ def _stream_position(path: Any) -> int | None:
     except (OSError, TypeError, ValueError):
         return None
     return position
+
+
+def _seekable_csv_source(path: Any) -> Any:
+    """Buffer one-shot CSV streams so their actual header can be inspected."""
+
+    if not hasattr(path, "read") or _stream_position(path) is not None:
+        return path
+    payload = path.read()
+    if isinstance(payload, str):
+        return StringIO(payload)
+    if isinstance(payload, (bytes, bytearray, memoryview)):
+        return BytesIO(bytes(payload))
+    raise TypeError("non-seekable CSV streams must return text or bytes")
 
 
 def _restore_stream_position(path: Any, position: int) -> None:
