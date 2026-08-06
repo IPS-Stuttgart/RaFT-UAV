@@ -38,7 +38,7 @@ def _candidate_rows() -> pd.DataFrame:
         ),
         (
             "min_per_source",
-            np.nan,
+            -0.5,
             "min_per_source must be a non-negative integer",
         ),
         (
