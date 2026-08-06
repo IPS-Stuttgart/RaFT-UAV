@@ -3,8 +3,9 @@
 The maintained implementation lives in the sibling ``source_calibration.py`` module.
 This package preserves the public import path while validating every loaded or fitted
 source transform before it can contaminate calibrated candidate coordinates, rejecting
-ambiguous case-insensitive transform keys, and preventing source-specific transforms
-from leaking onto unrelated or broader sources.
+ambiguous case-insensitive transform keys, preventing source-specific transforms from
+leaking onto unrelated or broader sources, and retaining the authoritative final truth
+sample at duplicate timestamps.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from pathlib import Path
 import sys
 
 import numpy as np
+import pandas as pd
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "source_calibration.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -27,6 +29,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_SOURCE_TRANSFORM_POST_INIT = _IMPL.SourceTransform.__post_init__
+_ORIGINAL_NORMALIZE_TRUTH_ROWS = _IMPL._normalize_truth_rows
 
 
 def _validated_source_transform_post_init(self: object) -> None:
@@ -37,6 +40,15 @@ def _validated_source_transform_post_init(self: object) -> None:
         raise ValueError("linear transform must contain only finite values")
     if not np.isfinite(self.translation_m).all():
         raise ValueError("translation_m must contain only finite values")
+
+
+def _normalize_truth_rows(truth: pd.DataFrame) -> pd.DataFrame:
+    """Retain the final finite truth row for each normalized timestamp."""
+
+    rows = _ORIGINAL_NORMALIZE_TRUTH_ROWS(truth)
+    return rows.drop_duplicates(["sequence_id", "time_s"], keep="last").reset_index(
+        drop=True
+    )
 
 
 def _source_lookup_key(value: object) -> str:
@@ -118,6 +130,7 @@ def _match_source_transform(source: str, transforms: dict[str, object]) -> objec
 
 
 _IMPL.SourceTransform.__post_init__ = _validated_source_transform_post_init
+_IMPL._normalize_truth_rows = _normalize_truth_rows
 _IMPL._match_source_transform = _match_source_transform
 
 globals().update(
@@ -127,6 +140,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_normalize_truth_rows"] = _normalize_truth_rows
 globals()["_source_lookup_key"] = _source_lookup_key
 globals()["_require_unambiguous_source_transform_keys"] = (
     _require_unambiguous_source_transform_keys
