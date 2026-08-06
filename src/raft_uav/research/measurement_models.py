@@ -38,12 +38,8 @@ def enu_covariance_from_range_az_el(
     """
 
     r = _validate_finite_nonnegative(range_m, "range_m")
-    az = float(azimuth_rad)
-    el = float(elevation_rad)
-    if not np.isfinite(az):
-        raise ValueError("azimuth_rad must be finite")
-    if not np.isfinite(el):
-        raise ValueError("elevation_rad must be finite")
+    az = _validate_finite_real(azimuth_rad, "azimuth_rad")
+    el = _validate_finite_real(elevation_rad, "elevation_rad")
     range_std = _validate_finite_nonnegative(range_std_m, "range_std_m")
     azimuth_std = _validate_finite_nonnegative(azimuth_std_rad, "azimuth_std_rad")
     elevation_std = _validate_finite_nonnegative(elevation_std_rad, "elevation_std_rad")
@@ -82,18 +78,24 @@ def covariance_columns_from_native_radar(
     missing = required - set(frame.columns)
     if missing:
         raise ValueError(f"radar frame is missing native-coordinate columns: {sorted(missing)}")
+    range_std = _validate_finite_nonnegative(range_std_m, "range_std_m")
+    az_std = np.deg2rad(
+        _validate_finite_nonnegative(azimuth_std_deg, "azimuth_std_deg")
+    )
+    el_std = np.deg2rad(
+        _validate_finite_nonnegative(elevation_std_deg, "elevation_std_deg")
+    )
+    min_std = _validate_finite_nonnegative(min_std_m, "min_std_m")
     out = frame.copy()
-    az_std = np.deg2rad(float(azimuth_std_deg))
-    el_std = np.deg2rad(float(elevation_std_deg))
     covariances = [
         enu_covariance_from_range_az_el(
             row.range_m,
             row.azimuth_rad,
             row.elevation_rad,
-            range_std_m=range_std_m,
+            range_std_m=range_std,
             azimuth_std_rad=az_std,
             elevation_std_rad=el_std,
-            min_std_m=min_std_m,
+            min_std_m=min_std,
         )
         for row in out.itertuples(index=False)
     ]
@@ -123,6 +125,7 @@ def fit_linear_radar_bias_model(
 ) -> LinearRadarBiasModel:
     """Fit a LOFO-safe linear radar spatial-bias model."""
 
+    ridge = _validate_finite_nonnegative(ridge_lambda, "ridge_lambda")
     feature_names = tuple(feature_names)
     x = radar_geometry_feature_matrix(examples, feature_names)
     y = examples.loc[:, list(residual_columns)].to_numpy(dtype=float)
@@ -131,7 +134,7 @@ def fit_linear_radar_bias_model(
         raise ValueError("no finite bias-training examples")
     x = x[keep]
     y = y[keep]
-    penalty = float(ridge_lambda) * np.eye(x.shape[1])
+    penalty = ridge * np.eye(x.shape[1])
     for index, name in enumerate(feature_names):
         if name == "intercept":
             penalty[index, index] = 0.0
@@ -146,12 +149,16 @@ def apply_linear_radar_bias_model(frame: pd.DataFrame, model: LinearRadarBiasMod
     bias = model.predict(out)
     for idx, column in enumerate(("east_m", "north_m", "up_m")):
         out[f"bias_{column}"] = bias[:, idx]
-        out[column] = pd.to_numeric(out[column], errors="coerce").to_numpy(dtype=float) - bias[:, idx]
+        positions = pd.to_numeric(out[column], errors="coerce").to_numpy(dtype=float)
+        out[column] = positions - bias[:, idx]
     out["bias_model"] = "linear-geometry"
     return out
 
 
-def radar_geometry_feature_matrix(frame: pd.DataFrame, feature_names: tuple[str, ...]) -> np.ndarray:
+def radar_geometry_feature_matrix(
+    frame: pd.DataFrame,
+    feature_names: tuple[str, ...],
+) -> np.ndarray:
     columns: list[np.ndarray] = []
     for name in feature_names:
         if name == "intercept":
@@ -177,15 +184,17 @@ def rf_quality_covariance_scale(
 ) -> np.ndarray:
     """Return heuristic RF covariance scales from available quality columns."""
 
+    base = _validate_finite_nonnegative(base_scale, "base_scale")
+    penalty = _validate_finite_nonnegative(missing_penalty, "missing_penalty")
     if rf.empty:
         return np.empty(0)
-    scale = np.full(len(rf), float(base_scale), dtype=float)
+    scale = np.full(len(rf), base, dtype=float)
     for column in ("rssi", "snr", "quality", "num_receivers", "num_anchors"):
         if column not in rf.columns:
             continue
         values = pd.to_numeric(rf[column], errors="coerce").to_numpy(dtype=float)
         missing = ~np.isfinite(values)
-        scale[missing] *= float(missing_penalty)
+        scale[missing] *= penalty
         finite = values[np.isfinite(values)]
         if finite.size:
             lo, hi = np.percentile(finite, [10, 90])
@@ -201,11 +210,43 @@ def _numeric(frame: pd.DataFrame, column: str) -> np.ndarray:
     return pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
 
 
-def _validate_finite_nonnegative(value: float, name: str) -> float:
+def _validate_finite_real(value: object, name: str) -> float:
+    error = f"{name} must be a finite real scalar"
+    current = value
+    seen: set[int] = set()
+    while True:
+        if np.ma.is_masked(current) or isinstance(current, (bool, np.bool_)):
+            raise ValueError(error)
+        try:
+            scalar = np.asarray(current)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(error) from exc
+        if scalar.ndim != 0 or np.iscomplexobj(scalar):
+            raise ValueError(error)
+        if scalar.dtype != object:
+            current = scalar.item()
+            break
+        marker = id(current)
+        if marker in seen:
+            raise ValueError(error)
+        seen.add(marker)
+        current = scalar.item()
+
+    if np.ma.is_masked(current) or isinstance(current, (bool, np.bool_)):
+        raise ValueError(error)
+    if np.iscomplexobj(current):
+        raise ValueError(error)
     try:
-        number = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be finite and non-negative") from exc
-    if not np.isfinite(number) or number < 0.0:
-        raise ValueError(f"{name} must be finite and non-negative")
+        number = float(current)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(number):
+        raise ValueError(error)
+    return number
+
+
+def _validate_finite_nonnegative(value: object, name: str) -> float:
+    number = _validate_finite_real(value, name)
+    if number < 0.0:
+        raise ValueError(f"{name} must be non-negative")
     return number
