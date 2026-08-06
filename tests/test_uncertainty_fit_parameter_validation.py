@@ -93,3 +93,23 @@ def test_fit_accepts_zero_penalty_exact_alignment_and_equal_bounds() -> None:
     assert east_head.max_std_m == 10.0
     assert model.metadata["ridge_lambda"] == 0.0
     assert model.metadata["max_time_delta_s"] == 0.0
+
+
+def test_fit_controls_override_colliding_caller_metadata() -> None:
+    metadata = {
+        "ridge_lambda": 999.0,
+        "max_time_delta_s": 999.0,
+        "experiment": "synthetic-regression",
+    }
+
+    model = _fit(
+        ridge_lambda=np.float64(0.25),
+        max_time_delta_s=np.float64(0.5),
+        metadata=metadata,
+    )
+
+    assert model.metadata["ridge_lambda"] == 0.25
+    assert model.metadata["max_time_delta_s"] == 0.5
+    assert model.metadata["experiment"] == "synthetic-regression"
+    assert metadata["ridge_lambda"] == 999.0
+    assert metadata["max_time_delta_s"] == 999.0
