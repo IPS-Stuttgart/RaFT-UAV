@@ -20,6 +20,18 @@ def _results() -> pd.DataFrame:
     )
 
 
+def test_completion_rejects_partially_missing_result_sequence_ids() -> None:
+    results = _results()
+    results.loc[0, "sequence_id"] = None
+    template = pd.DataFrame({"sequence_id": ["seq_a"], "time_s": [0.0]})
+
+    with pytest.raises(
+        ValueError,
+        match="completion results sequence IDs are partially missing",
+    ):
+        complete_results_to_truth_timestamps(results, template)
+
+
 def test_completion_rejects_partially_missing_sequence_ids() -> None:
     template = pd.DataFrame(
         {
