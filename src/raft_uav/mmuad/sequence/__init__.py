@@ -2,9 +2,9 @@
 
 The maintained implementation lives in the sibling ``sequence.py`` module. This
 package preserves the public import path while preventing timestamp sidecars from
-deserializing pickle-backed object arrays, rejecting complex timestamps, and
-preventing directory symlink cycles from recursing indefinitely during sequence
-discovery.
+deserializing pickle-backed object arrays, rejecting complex timestamps, matching
+whitespace-padded filename headers, and preventing directory symlink cycles from
+recursing indefinitely during sequence discovery.
 """
 
 from __future__ import annotations
@@ -107,6 +107,19 @@ def _collect_sequence_dirs(
         ancestor_identities.remove(identity)
 
 
+def _first_matching_column(frame: Any, aliases: tuple[str, ...]) -> Any | None:
+    """Return the first matching column while ignoring header edge whitespace."""
+
+    normalized_columns: dict[str, Any] = {}
+    for column in frame.columns:
+        normalized_columns.setdefault(str(column).strip().casefold(), column)
+    for alias in aliases:
+        column = normalized_columns.get(str(alias).strip().casefold())
+        if column is not None:
+            return column
+    return None
+
+
 def _coerce_timestamp_value(value: Any) -> float:
     """Return one scalar timestamp without discarding complex components."""
 
@@ -197,6 +210,7 @@ def _timestamps_from_numpy_sidecar(path: Path) -> list[float]:
 
 _IMPL._candidate_sequence_dirs = _candidate_sequence_dirs
 _IMPL._collect_sequence_dirs = _collect_sequence_dirs
+_IMPL._first_matching_column = _first_matching_column
 _IMPL._coerce_timestamp_value = _coerce_timestamp_value
 _IMPL._timestamp_map_from_numpy_sidecar = _timestamp_map_from_numpy_sidecar
 _IMPL._timestamps_from_numpy_sidecar = _timestamps_from_numpy_sidecar
@@ -212,6 +226,7 @@ globals()["_candidate_sequence_dirs"] = _candidate_sequence_dirs
 globals()["_collect_sequence_dirs"] = _collect_sequence_dirs
 globals()["_coerce_timestamp_value"] = _coerce_timestamp_value
 globals()["_directory_identity"] = _directory_identity
+globals()["_first_matching_column"] = _first_matching_column
 globals()["_timestamp_map_from_numpy_sidecar"] = _timestamp_map_from_numpy_sidecar
 globals()["_timestamps_from_numpy_sidecar"] = _timestamps_from_numpy_sidecar
 
