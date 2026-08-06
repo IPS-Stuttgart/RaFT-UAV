@@ -4,7 +4,8 @@ The maintained implementation lives in the sibling ``paper_selection.py``
 module. This package preserves the public import path while excluding malformed
 or out-of-range class probabilities, preserving exact integer-like track
 identifiers, splitting reused frame counters into distinct continuous-track
-epochs, and using the acquisition cadence for timestamp-only continuity.
+epochs, using the acquisition cadence for timestamp-only continuity, and
+rejecting pooled sequence inputs at the single-track boundary.
 """
 
 from __future__ import annotations
@@ -105,6 +106,15 @@ def _track_id_from_frame(frame: pd.DataFrame) -> int:
     return -1
 
 
+def _explicit_sequence_ids(radar: pd.DataFrame) -> set[str]:
+    """Return normalized, non-missing sequence identifiers from one radar table."""
+
+    if radar.empty or "sequence_id" not in radar.columns:
+        return set()
+    values = radar["sequence_id"].astype("string").str.strip()
+    return set(values.loc[values.notna() & values.ne("")].tolist())
+
+
 def _timestamp_gap_threshold(radar: pd.DataFrame) -> float:
     """Estimate timestamp continuity from the complete radar acquisition."""
 
@@ -148,8 +158,14 @@ def _timestamp_track_segments(
 
 
 def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
-    """Split tracks at frame restarts or acquisition-scale timestamp gaps."""
+    """Split one sequence at frame restarts or acquisition-scale timestamp gaps."""
 
+    sequence_ids = _explicit_sequence_ids(radar)
+    if len(sequence_ids) > 1:
+        raise ValueError(
+            "paper radar track selection requires one sequence_id; "
+            "split pooled radar data by sequence"
+        )
     if radar.empty or "track_id" not in radar.columns:
         return []
 
@@ -232,6 +248,7 @@ globals()["_finite_catprob_values"] = _finite_catprob_values
 globals()["_catprob_candidate_pool"] = _catprob_candidate_pool
 globals()["_mean_catprob"] = _mean_catprob
 globals()["_track_id_from_frame"] = _track_id_from_frame
+globals()["_explicit_sequence_ids"] = _explicit_sequence_ids
 globals()["_timestamp_gap_threshold"] = _timestamp_gap_threshold
 globals()["_timestamp_track_segments"] = _timestamp_track_segments
 globals()["_continuous_track_segments"] = _continuous_track_segments
