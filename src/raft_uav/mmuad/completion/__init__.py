@@ -31,6 +31,15 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_COMPLETION_SUMMARY = _IMPL.completion_summary
 _ORIGINAL_COMPLETION_TEMPLATE_ROWS = _IMPL._completion_template_rows
 _MISSING_SEQUENCE_ID_STRINGS = {"", "nan", "none", "<na>", "nat"}
+_SEQUENCE_ID_ALIASES = (
+    "sequence_id",
+    "sequence",
+    "seq",
+    "scene",
+    "scene_id",
+    "id",
+    "name",
+)
 
 
 def _normalize_max_interpolation_gap_s(value: object) -> float:
@@ -54,9 +63,54 @@ def _normalize_max_interpolation_gap_s(value: object) -> float:
     return gap
 
 
+def _completion_template_sequence_values(
+    truth_or_template: object,
+) -> pd.Series | None:
+    """Return the raw sequence-ID column used by completion, when available."""
+
+    if isinstance(truth_or_template, pd.DataFrame):
+        frame = truth_or_template
+    else:
+        frame = getattr(truth_or_template, "rows", None)
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return None
+
+    columns: dict[str, object] = {}
+    for column in frame.columns:
+        columns.setdefault(str(column).strip().casefold(), column)
+    for alias in _SEQUENCE_ID_ALIASES:
+        column = columns.get(alias)
+        if column is None:
+            continue
+        values = frame.loc[:, column]
+        if isinstance(values, pd.DataFrame):
+            return None
+        return values
+    return None
+
+
+def _validate_completion_template_sequence_metadata(
+    truth_or_template: object,
+) -> None:
+    """Reject a mix of labeled and unlabeled completion-template rows."""
+
+    values = _completion_template_sequence_values(truth_or_template)
+    if values is None or values.empty:
+        return
+    missing = values.isna()
+    text = values.where(~missing, "").astype(str).str.strip().str.casefold()
+    missing = missing | text.isin(_MISSING_SEQUENCE_ID_STRINGS)
+    if bool(missing.any()) and bool((~missing).any()):
+        raise ValueError(
+            "completion template sequence IDs are partially missing; provide "
+            "sequence IDs for every row or omit them for the entire template"
+        )
+
+
 def _completion_template_rows(truth_or_template: object) -> pd.DataFrame:
     """Canonicalize missing-like template sequence ids before grouping."""
 
+    _validate_completion_template_sequence_metadata(truth_or_template)
     rows = _ORIGINAL_COMPLETION_TEMPLATE_ROWS(truth_or_template)
     if rows.empty or "sequence_id" not in rows.columns:
         return rows
