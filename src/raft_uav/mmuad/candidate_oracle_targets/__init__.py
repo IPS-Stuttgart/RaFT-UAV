@@ -215,10 +215,12 @@ def build_candidate_oracle_targets(
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     """Build targets after validating controls and canonicalizing truth rows."""
 
+    validated_config = _validated_config(config)
+    authoritative_truth = _authoritative_truth_rows(truth)
     return _ORIGINAL_BUILD_CANDIDATE_ORACLE_TARGETS(
         candidates,
-        _authoritative_truth_rows(truth),
-        config=_validated_config(config),
+        authoritative_truth,
+        config=validated_config,
     )
 
 
