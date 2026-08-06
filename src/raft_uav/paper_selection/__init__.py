@@ -3,8 +3,8 @@
 The maintained implementation lives in the sibling ``paper_selection.py``
 module. This package preserves the public import path while excluding malformed
 or out-of-range class probabilities, preserving exact integer-like track
-identifiers, and splitting reused frame counters into distinct continuous-track
-epochs.
+identifiers, splitting reused frame counters into distinct continuous-track
+epochs, and using the acquisition cadence for timestamp-only continuity.
 """
 
 from __future__ import annotations
@@ -105,12 +105,55 @@ def _track_id_from_frame(frame: pd.DataFrame) -> int:
     return -1
 
 
+def _timestamp_gap_threshold(radar: pd.DataFrame) -> float:
+    """Estimate timestamp continuity from the complete radar acquisition."""
+
+    if "time_s" not in radar.columns:
+        return float("inf")
+    values = pd.to_numeric(
+        radar["time_s"],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    return float(_LEGACY._segment_gap_threshold(values))
+
+
+def _timestamp_track_segments(
+    track_rows: pd.DataFrame,
+    *,
+    gap_threshold: float,
+) -> list[pd.DataFrame]:
+    """Split one timestamp-only track using a shared acquisition threshold."""
+
+    sort_columns = [
+        column for column in ("time_s", "track_index") if column in track_rows.columns
+    ]
+    ordered = track_rows.sort_values(
+        sort_columns,
+        kind="mergesort",
+    ).reset_index(drop=True)
+    times = pd.to_numeric(
+        ordered["time_s"],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    split_points = np.r_[
+        0,
+        np.where(np.diff(times) > gap_threshold)[0] + 1,
+        len(ordered),
+    ]
+    return [
+        ordered.iloc[int(start) : int(end)].copy()
+        for start, end in zip(split_points[:-1], split_points[1:])
+        if int(end) > int(start)
+    ]
+
+
 def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
-    """Split complete frame-index tracks at chronological counter restarts."""
+    """Split tracks at frame restarts or acquisition-scale timestamp gaps."""
 
     if radar.empty or "track_id" not in radar.columns:
         return []
 
+    timestamp_gap_threshold = _timestamp_gap_threshold(radar)
     segments: list[pd.DataFrame] = []
     for _, track_rows in radar.groupby("track_id", sort=True):
         frame_index = (
@@ -123,7 +166,19 @@ def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
             or not bool(np.isfinite(frame_index).all())
             or "time_s" not in track_rows.columns
         ):
-            segments.extend(_ORIGINAL_CONTINUOUS_TRACK_SEGMENTS(track_rows))
+            if "time_s" not in track_rows.columns:
+                segments.extend(_ORIGINAL_CONTINUOUS_TRACK_SEGMENTS(track_rows))
+                continue
+            times = pd.to_numeric(track_rows["time_s"], errors="coerce")
+            if not bool(np.isfinite(times).all()):
+                segments.extend(_ORIGINAL_CONTINUOUS_TRACK_SEGMENTS(track_rows))
+                continue
+            segments.extend(
+                _timestamp_track_segments(
+                    track_rows,
+                    gap_threshold=timestamp_gap_threshold,
+                )
+            )
             continue
 
         times = pd.to_numeric(track_rows["time_s"], errors="coerce")
@@ -161,6 +216,8 @@ def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
 _LEGACY._catprob_candidate_pool = _catprob_candidate_pool
 _LEGACY._mean_catprob = _mean_catprob
 _LEGACY._track_id_from_frame = _track_id_from_frame
+_LEGACY._timestamp_gap_threshold = _timestamp_gap_threshold
+_LEGACY._timestamp_track_segments = _timestamp_track_segments
 _LEGACY._continuous_track_segments = _continuous_track_segments
 
 globals().update(
@@ -175,6 +232,8 @@ globals()["_finite_catprob_values"] = _finite_catprob_values
 globals()["_catprob_candidate_pool"] = _catprob_candidate_pool
 globals()["_mean_catprob"] = _mean_catprob
 globals()["_track_id_from_frame"] = _track_id_from_frame
+globals()["_timestamp_gap_threshold"] = _timestamp_gap_threshold
+globals()["_timestamp_track_segments"] = _timestamp_track_segments
 globals()["_continuous_track_segments"] = _continuous_track_segments
 
 __doc__ = _LEGACY.__doc__
