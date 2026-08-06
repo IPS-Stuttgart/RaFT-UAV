@@ -47,6 +47,23 @@ def test_complete_frame_indices_remain_authoritative_for_continuity():
     assert segments[0]["time_s"].tolist() == [0.0, 100.0, 200.0]
 
 
+def test_frame_counter_reset_starts_new_track_segment():
+    radar = pd.DataFrame(
+        {
+            "track_id": [7, 7, 7, 7],
+            "frame_index": [0.0, 1.0, 0.0, 1.0],
+            "time_s": [0.0, 1.0, 100.0, 101.0],
+        }
+    )
+
+    segments = _continuous_track_segments(radar)
+
+    assert [segment["time_s"].tolist() for segment in segments] == [
+        [0.0, 1.0],
+        [100.0, 101.0],
+    ]
+
+
 def test_radar_fingerprint_preserves_large_integer_metadata_exactly():
     assert _optional_int("9007199254740993") == 9007199254740993
 
