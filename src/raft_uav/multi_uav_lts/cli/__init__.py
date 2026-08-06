@@ -3,7 +3,8 @@
 The maintained implementation lives in the sibling ``cli.py`` module. This
 package preserves the public import path while rejecting repeated ZIP member
 names, non-root member paths, non-positive class ids, visibility values outside
-``[0, 1]``, and invalid IoU thresholds used by the diagnostic scorer.
+``[0, 1]``, unsafe template members used during packaging, and invalid IoU
+thresholds used by the diagnostic scorer.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 import importlib.util
 import math
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import sys
 import zipfile
 
@@ -242,8 +243,78 @@ def validate_submission_zip(
     )
 
 
+def _validated_template_member_names(template_zip: Path | None) -> list[str] | None:
+    """Return safe root-level prediction members before touching output files."""
+
+    names = _IMPL.expected_names_from_template(template_zip)
+    if names is None:
+        return None
+
+    counts = Counter(names)
+    duplicates = sorted(name for name, count in counts.items() if count > 1)
+    invalid = sorted(
+        {
+            name
+            for name in names
+            if (
+                not name.endswith(".txt")
+                or PurePosixPath(name).name != name
+                or PureWindowsPath(name).name != name
+            )
+        }
+    )
+    if duplicates or invalid:
+        details: list[str] = []
+        if duplicates:
+            details.append(f"duplicate members={duplicates[:5]}")
+        if invalid:
+            details.append(f"unsafe or non-text members={invalid[:5]}")
+        message = "template ZIP contains unsupported prediction members: " + "; ".join(details)
+        raise ValueError(message)
+    return names
+
+
+def package_submission(
+    prediction_dir: Path,
+    output_zip: Path,
+    *,
+    template_zip: Path | None = None,
+    normalize: bool = False,
+    sort_rows: bool = False,
+) -> SubmissionValidation:
+    """Package predictions without allowing template-controlled file traversal."""
+
+    expected_names = _validated_template_member_names(template_zip)
+    names = expected_names or sorted(path.name for path in prediction_dir.glob("*.txt"))
+    if output_zip.exists():
+        output_zip.unlink()
+    output_zip.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name in names:
+            source = prediction_dir / name
+            if not source.exists():
+                archive.writestr(name, "")
+            elif normalize or sort_rows:
+                archive.writestr(
+                    name,
+                    _IMPL.normalize_prediction_text(
+                        source.read_text(encoding="utf-8"),
+                        sort_rows=sort_rows,
+                    ),
+                )
+            else:
+                archive.write(source, arcname=name)
+    expected_file_count = None if template_zip is not None else len(names)
+    return validate_submission_zip(
+        output_zip,
+        template_zip=template_zip,
+        expected_file_count=expected_file_count,
+    )
+
+
 _IMPL.SubmissionValidation = SubmissionValidation
 _IMPL.validate_submission_zip = validate_submission_zip
+_IMPL.package_submission = package_submission
 
 
 globals().update(
@@ -255,6 +326,8 @@ globals().update(
 )
 globals()["SubmissionValidation"] = SubmissionValidation
 globals()["validate_submission_zip"] = validate_submission_zip
+globals()["package_submission"] = package_submission
+globals()["_validated_template_member_names"] = _validated_template_member_names
 globals()["_normalize_iou_threshold"] = _normalize_iou_threshold
 globals()["_match_rows_by_iou"] = _match_rows_by_iou
 globals()["score_lts_predictions"] = score_lts_predictions
