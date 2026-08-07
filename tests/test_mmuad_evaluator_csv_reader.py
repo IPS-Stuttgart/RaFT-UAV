@@ -72,6 +72,45 @@ def test_mmaud_evaluator_rejects_exact_duplicate_physical_official_headers(
         load_mmaud_results_csv(csv_path)
 
 
+def test_mmaud_evaluator_rejects_ambiguous_programmatic_local_headers() -> None:
+    frame = pd.DataFrame(
+        [["expected", "wrong", 0.0, 1.0, 2.0, 3.0, 2, 1.0]],
+        columns=[
+            "sequence_id",
+            " sequence_id ",
+            "timestamp",
+            "x",
+            "y",
+            "z",
+            "uav_type",
+            "score",
+        ],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"ambiguous columns.*'sequence_id'",
+    ):
+        validate_mmaud_results_frame(frame)
+
+
+def test_mmaud_evaluator_rejects_exact_duplicate_physical_local_headers(
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "mmaud_results.csv"
+    csv_path.write_text(
+        "sequence_id,sequence_id,timestamp,x,y,z,uav_type,score\n"
+        "expected,wrong,0.0,1.0,2.0,3.0,2,1.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"ambiguous columns.*'sequence_id'",
+    ):
+        load_mmaud_results_csv(csv_path)
+
+
 def test_mmaud_evaluator_zip_preserves_zero_padded_official_sequence_ids(tmp_path) -> None:
     zip_path = tmp_path / "ug2_submission.zip"
     with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as archive:

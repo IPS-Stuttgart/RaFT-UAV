@@ -79,17 +79,12 @@ def _normalized_official_track5_header(column: Any) -> str:
 
 
 def _validate_unique_official_track5_headers(columns: Any) -> None:
-    """Reject ambiguous official fields before order-dependent lookup."""
+    """Reject ambiguous result fields before order-dependent lookup."""
 
-    required = {
-        _normalized_official_track5_header(column)
-        for column in _submission_impl.OFFICIAL_UG2_RESULT_COLUMNS
-    }
     physical_by_key: dict[str, list[str]] = {}
     for column in columns:
         key = _normalized_official_track5_header(column)
-        if key in required:
-            physical_by_key.setdefault(key, []).append(str(column))
+        physical_by_key.setdefault(key, []).append(str(column))
     collisions = {
         key: physical
         for key, physical in physical_by_key.items()
@@ -101,7 +96,7 @@ def _validate_unique_official_track5_headers(columns: Any) -> None:
             for key, physical in sorted(collisions.items())
         )
         raise ValueError(
-            "official MMUAD results contain ambiguous columns after trimming "
+            "MMUAD results contain ambiguous columns after trimming "
             f"whitespace and ignoring case: {details}"
         )
 
