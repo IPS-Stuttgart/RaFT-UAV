@@ -82,13 +82,13 @@ def _read_text_csv(source: Any, **kwargs: Any) -> Any:
 
 
 def _physical_csv_columns(path: Path) -> list[str]:
-    """Read the unmangled physical header before pandas deduplicates names."""
+    """Read the first non-blank header before pandas deduplicates names."""
 
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        try:
-            return next(csv.reader(handle))
-        except StopIteration:
-            return []
+        for row in csv.reader(handle):
+            if row and not (len(row) == 1 and not row[0].strip()):
+                return row
+    return []
 
 
 def _normalized_column_key(value: Any) -> str:
