@@ -5,6 +5,7 @@ from . import (
     _radar_oracle_endpoint_tolerance_patch as _radar_oracle_endpoint_tolerance_patch,
 )
 from . import _oracle_gap_sequence_scope_patch as _oracle_gap_sequence_scope_patch
+from . import _oracle_gap_reused_frame_patch as _oracle_gap_reused_frame_patch
 from . import _single_sample_truth_grid_patch as _single_sample_truth_grid_patch
 
 # Oracle-coverage sequence scoping is installed by ``raft_uav.__init__`` after
