@@ -126,6 +126,43 @@ def _sequence_position_groups(values: pd.Series) -> list[list[int]]:
     return list(groups.values())
 
 
+def _sequence_metadata_groups(
+    frame: pd.DataFrame,
+    *,
+    table_name: str,
+    cross_table: bool,
+) -> dict[tuple[object, ...], list[int]] | None:
+    """Return complete sequence groups, or ``None`` for an unlabeled table."""
+
+    if frame.empty or "sequence_id" not in frame.columns:
+        return None
+
+    values = frame["sequence_id"].to_numpy(dtype=object)
+    missing = np.array(
+        [_aerpaw._is_missing_scalar(value) for value in values],
+        dtype=bool,
+    )
+    if bool(missing.all()):
+        return None
+    if bool(missing.any()):
+        missing_positions = np.flatnonzero(missing).tolist()
+        raise ValueError(
+            f"{table_name} sequence_id must be complete when sequence metadata is "
+            f"present; missing row positions: {missing_positions}"
+        )
+    if cross_table:
+        return _sequence_positions_by_match_key(
+            frame["sequence_id"],
+            table_name=table_name,
+        )
+    return {
+        ("group", group_index): positions
+        for group_index, positions in enumerate(
+            _sequence_position_groups(frame["sequence_id"])
+        )
+    }
+
+
 def _sequence_match_key(value: object) -> tuple[object, ...]:
     """Return a cross-table key for radar/truth sequence matching."""
 
@@ -208,7 +245,7 @@ def _select_radar_measurement_rows(
     truth_gate_m: float = 150.0,
     truth_time_gate_s: float = 1.0,
 ) -> pd.DataFrame:
-    """Validate controls and preserve optional sequence boundaries during selection."""
+    """Validate controls and reject ambiguous sequence boundaries during selection."""
 
     catprob_threshold, truth_gate_m, truth_time_gate_s = _validated_selection_controls(
         radar,
@@ -219,15 +256,40 @@ def _select_radar_measurement_rows(
         truth_time_gate_s=truth_time_gate_s,
     )
 
+    radar_groups: dict[tuple[object, ...], list[int]] | None = None
+    truth_groups: dict[tuple[object, ...], list[int]] | None = None
+    if selection in {"catprob", "truth-gated"} and not radar.empty:
+        radar_groups = _sequence_metadata_groups(
+            radar,
+            table_name="radar",
+            cross_table=selection == "truth-gated",
+        )
+    if selection == "truth-gated" and truth is not None and not radar.empty:
+        truth_groups = _sequence_metadata_groups(
+            truth,
+            table_name="truth",
+            cross_table=True,
+        )
+
+    if selection == "truth-gated" and truth is not None and not radar.empty:
+        if radar_groups is not None and truth_groups is None and len(radar_groups) > 1:
+            raise ValueError(
+                "truth-gated radar selection cannot align pooled radar with truth "
+                "that has no complete sequence_id metadata"
+            )
+        if truth_groups is not None and radar_groups is None and len(truth_groups) > 1:
+            raise ValueError(
+                "truth-gated radar selection cannot align radar with no complete "
+                "sequence_id metadata against pooled truth"
+            )
+
     sequence_scoped_catprob = (
-        selection == "catprob" and "sequence_id" in radar.columns and not radar.empty
+        selection == "catprob" and radar_groups is not None and len(radar_groups) > 1
     )
     sequence_scoped_truth_gate = (
         selection == "truth-gated"
-        and truth is not None
-        and "sequence_id" in radar.columns
-        and "sequence_id" in truth.columns
-        and not radar.empty
+        and radar_groups is not None
+        and truth_groups is not None
     )
     if not sequence_scoped_catprob and not sequence_scoped_truth_gate:
         return _select_unscoped_radar_measurement_rows(
@@ -240,30 +302,16 @@ def _select_radar_measurement_rows(
         )
 
     if sequence_scoped_truth_gate:
-        radar_groups = _sequence_positions_by_match_key(
-            radar["sequence_id"],
-            table_name="radar",
-        )
-        truth_groups = _sequence_positions_by_match_key(
-            truth["sequence_id"],
-            table_name="truth",
-        )
+        assert radar_groups is not None
+        assert truth_groups is not None
         position_groups = list(radar_groups.items())
     else:
+        assert radar_groups is not None
         truth_groups = {}
         position_groups = [
             (None, positions)
-            for positions in _sequence_position_groups(radar["sequence_id"])
+            for positions in radar_groups.values()
         ]
-        if len(position_groups) <= 1:
-            return _select_unscoped_radar_measurement_rows(
-                radar,
-                selection=selection,
-                truth=truth,
-                catprob_threshold=catprob_threshold,
-                truth_gate_m=truth_gate_m,
-                truth_time_gate_s=truth_time_gate_s,
-            )
 
     order_column = "__raft_uav_catprob_input_order"
     while order_column in radar.columns:
