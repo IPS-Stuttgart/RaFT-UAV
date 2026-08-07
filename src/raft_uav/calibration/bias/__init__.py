@@ -186,6 +186,7 @@ def _validate_finite_real_array(
     *,
     field: str,
     nonnegative: bool = False,
+    strictly_positive: bool = False,
 ) -> None:
     if np.ma.isMaskedArray(value) and np.any(np.ma.getmaskarray(value)):
         raise ValueError(f"{field} must not contain masked values")
@@ -201,6 +202,8 @@ def _validate_finite_real_array(
         if scalar is None:
             raise ValueError(f"{field} must contain only finite real values")
         normalized.append(scalar)
+    if strictly_positive and any(item <= 0.0 for item in normalized):
+        raise ValueError(f"{field} must contain only positive values")
     if nonnegative and any(item < 0.0 for item in normalized):
         raise ValueError(f"{field} must contain only nonnegative values")
 
@@ -225,7 +228,7 @@ def _validated_model_post_init(self: object) -> None:
     _validate_finite_real_array(
         self.feature_scale,
         field="feature_scale",
-        nonnegative=True,
+        strictly_positive=True,
     )
     _validate_finite_real_array(
         self.residual_std,
@@ -287,7 +290,7 @@ def _validated_model_from_dict(
     _validate_finite_real_array(
         payload.get("feature_scale"),
         field="feature_scale",
-        nonnegative=True,
+        strictly_positive=True,
     )
     residual_std = payload.get("residual_std")
     if residual_std is None:

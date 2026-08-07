@@ -57,6 +57,7 @@ def _write_bundle(
         ("coefficients", [[0.0, float("inf")]]),
         ("feature_mean", [float("nan")]),
         ("feature_scale", [-1.0]),
+        ("feature_scale", [0.0]),
         ("residual_std", [1.0, float("nan")]),
         ("training_rows", 1.5),
         ("ridge_alpha", True),
@@ -91,6 +92,23 @@ def test_direct_constructor_rejects_fractional_training_rows() -> None:
             feature_scale=np.ones(1),
             residual_std=np.ones(2),
             training_rows=3.5,
+            ridge_alpha=0.0,
+            time_gate_s=2.0,
+        )
+
+
+def test_direct_constructor_rejects_zero_feature_scale() -> None:
+    with pytest.raises(ValueError, match="feature_scale"):
+        SensorBiasCorrectionModel(
+            source="rf",
+            target_columns=RF_TARGET_COLUMNS,
+            feature_columns=("time_s",),
+            intercept=np.zeros(2),
+            coefficients=np.zeros((1, 2)),
+            feature_mean=np.zeros(1),
+            feature_scale=np.zeros(1),
+            residual_std=np.ones(2),
+            training_rows=8,
             ridge_alpha=0.0,
             time_gate_s=2.0,
         )
