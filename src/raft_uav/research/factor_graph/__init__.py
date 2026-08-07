@@ -89,6 +89,19 @@ def _real_position_matrix(frame: pd.DataFrame) -> np.ndarray:
     )
 
 
+def _frame_time_s(frame: pd.DataFrame) -> float | None:
+    """Return the finite median timestamp for one grouped radar frame."""
+
+    times = np.asarray(
+        [_real_float(value) for value in frame["time_s"]],
+        dtype=float,
+    )
+    finite = times[np.isfinite(times)]
+    if finite.size == 0:
+        return None
+    return float(np.median(finite))
+
+
 def smooth_position_trajectory(
     measurements: pd.DataFrame,
     *,
@@ -172,7 +185,9 @@ def _select_candidates_against_trajectory(
     trajectory_xyz = trajectory.loc[:, _LEGACY.PositionColumns].to_numpy(dtype=float)
     rows = []
     for _, frame in _LEGACY._radar_frame_groups(radar):
-        time_s = float(frame["time_s"].median())
+        time_s = _frame_time_s(frame)
+        if time_s is None:
+            continue
         pred = np.array(
             [
                 np.interp(time_s, trajectory_times, trajectory_xyz[:, axis])
