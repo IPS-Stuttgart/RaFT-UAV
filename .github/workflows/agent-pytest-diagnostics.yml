@@ -5,6 +5,7 @@ name: Agent pytest diagnostics
   push:
     branches:
       - agent/guard-prospective-lts-package-aliases
+  pull_request:
   workflow_dispatch:
 
 permissions:
