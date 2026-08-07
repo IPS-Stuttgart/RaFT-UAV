@@ -168,6 +168,7 @@ def nis_reliability_summary(
 ) -> pd.DataFrame:
     """Return reliability statistics for normalized innovation squared samples."""
 
+    probabilities = _validated_gate_probabilities(gate_probabilities)
     work = _normalized_nis_frame(frame, group_columns=group_columns, accepted_only=accepted_only)
     if work.empty:
         return pd.DataFrame()
@@ -178,7 +179,7 @@ def nis_reliability_summary(
         row = _group_key_record(groupers, group_key)
         values = group["nis"].to_numpy(dtype=float)
         dim = _single_int_or_nan(group["measurement_dim"])
-        row.update(_nis_stats(values, dim=dim, gate_probabilities=gate_probabilities))
+        row.update(_nis_stats(values, dim=dim, gate_probabilities=probabilities))
         if "accepted" in group.columns:
             accepted = group["accepted"].map(_truthy)
             row["accepted_count"] = int(accepted.sum())
@@ -200,7 +201,9 @@ def _normalized_nis_frame(
         work["source"] = "unknown"
     if "measurement_dim" not in work.columns:
         work["measurement_dim"] = _infer_measurement_dim(work)
-    if accepted_only and "accepted" in work.columns:
+    if accepted_only:
+        if "accepted" not in work.columns:
+            raise KeyError("accepted_only=True requires diagnostics column 'accepted'")
         work = work.loc[work["accepted"].map(_truthy)].copy()
     work["nis"] = pd.to_numeric(work["nis"], errors="coerce")
     work["measurement_dim"] = pd.to_numeric(work["measurement_dim"], errors="coerce")
@@ -303,6 +306,27 @@ def _single_int_or_nan(series: pd.Series) -> int | None:
     if len(unique) != 1:
         return None
     return int(unique[0])
+
+
+def _validated_gate_probabilities(values: Sequence[float]) -> tuple[float, ...]:
+    probabilities = tuple(_validate_probability(value) for value in values)
+    probabilities_by_suffix: dict[str, list[float]] = {}
+    for probability in probabilities:
+        suffix = _probability_suffix(probability)
+        probabilities_by_suffix.setdefault(suffix, []).append(probability)
+
+    collisions = {
+        suffix: colliding
+        for suffix, colliding in probabilities_by_suffix.items()
+        if len(colliding) > 1
+    }
+    if collisions:
+        details = "; ".join(
+            f"{suffix}: {', '.join(str(value) for value in colliding)}"
+            for suffix, colliding in collisions.items()
+        )
+        raise ValueError(f"gate probabilities produce duplicate output column suffixes: {details}")
+    return probabilities
 
 
 def _validate_probability(value: float) -> float:
