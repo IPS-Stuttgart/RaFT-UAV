@@ -52,7 +52,10 @@ def _aggregate_sequence_metrics(
 
     sequence_keys = [_sequence_key(value) for value in selected["sequence_id"]]
     explicit_sequences = {key for key in sequence_keys if key is not None}
-    if len(explicit_sequences) <= 1:
+    has_missing_sequence = any(key is None for key in sequence_keys)
+    if not explicit_sequences or (
+        len(explicit_sequences) == 1 and not has_missing_sequence
+    ):
         return original(selected, long_gap_s=long_gap_s)
 
     normalized = selected.copy()
