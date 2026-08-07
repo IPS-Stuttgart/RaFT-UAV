@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -25,6 +26,12 @@ def _estimates() -> pd.DataFrame:
             "state_z_m": [3.0],
         }
     )
+
+
+def _boxed(value: object) -> np.ndarray:
+    boxed = np.empty((), dtype=object)
+    boxed[()] = value
+    return boxed
 
 
 @pytest.mark.parametrize(
@@ -52,7 +59,19 @@ def test_segment_source_gate_rejects_out_of_range_cost_controls(
         )
 
 
-@pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf, True, np.array([1.0])])
+@pytest.mark.parametrize(
+    "value",
+    [
+        np.nan,
+        np.inf,
+        -np.inf,
+        True,
+        np.array([1.0]),
+        np.ma.masked,
+        np.ma.array(5.0, mask=True),
+        _boxed(np.array([5.0])),
+    ],
+)
 def test_segment_source_gate_rejects_malformed_cost_controls(value: object) -> None:
     config = replace(SegmentSourceGateConfig(), switch_penalty=value)
 
@@ -64,16 +83,73 @@ def test_segment_source_gate_rejects_malformed_cost_controls(value: object) -> N
         )
 
 
+def test_segment_source_gate_rejects_cyclic_boxed_cost_control() -> None:
+    value = np.empty((), dtype=object)
+    value[()] = value
+    config = replace(SegmentSourceGateConfig(), switch_penalty=value)
+
+    with pytest.raises(ValueError, match="switch_penalty"):
+        build_track5_segment_source_gate(
+            [("primary", _estimates(), 1.0)],
+            _template(),
+            config=config,
+        )
+
+
+@pytest.mark.parametrize(
+    "weight",
+    [
+        True,
+        np.ma.masked,
+        np.ma.array(1.0, mask=True),
+        _boxed(np.array([1.0])),
+    ],
+)
+def test_segment_source_gate_rejects_malformed_source_weights(weight: object) -> None:
+    with pytest.raises(ValueError, match="estimate weight"):
+        build_track5_segment_source_gate(
+            [("primary", _estimates(), weight)],
+            _template(),
+        )
+
+
+def test_segment_source_gate_writer_rejects_malformed_weight_before_delegate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delegated = False
+
+    def _unexpected_delegate(**kwargs: object) -> dict[str, Path]:
+        nonlocal delegated
+        delegated = True
+        return {}
+
+    monkeypatch.setattr(segment_gate, "_ORIGINAL_WRITE", _unexpected_delegate)
+    estimate_input = segment_gate.EstimateInput(
+        label="primary",
+        path=Path("unused.csv"),
+        weight=True,
+    )
+
+    with pytest.raises(ValueError, match="estimate weight"):
+        segment_gate.write_track5_segment_source_gate_outputs(
+            estimate_inputs=[estimate_input],
+            template=_template(),
+            output_dir=Path("unused"),
+        )
+
+    assert not delegated
+
+
 def test_segment_source_gate_accepts_zero_dimensional_numeric_scalars() -> None:
     config = replace(
         SegmentSourceGateConfig(),
         speed_limit_mps=np.array(85.0),
         acceleration_limit_mps2=np.float64(45.0),
-        switch_penalty=np.array(5.0),
+        switch_penalty=_boxed(np.array(5.0)),
     )
 
     estimates, diagnostics = build_track5_segment_source_gate(
-        [("primary", _estimates(), 1.0)],
+        [("primary", _estimates(), _boxed(np.array(1.0)))],
         _template(),
         config=config,
     )
