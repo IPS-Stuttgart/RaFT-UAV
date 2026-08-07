@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from raft_uav.mmuad.track5_scorecard import (
     _load_optional_csv,
@@ -85,3 +86,34 @@ def test_scorecard_optional_csvs_preserve_na_like_sequence_identifiers(
     assert pd.isna(loaded.loc[1, "sequence_id"])
     assert pd.isna(loaded.loc[1, "sequence"])
     assert loaded.loc[1, "Sequence"] == "NA"
+
+
+@pytest.mark.parametrize("prefix", ["", "\n", "\n   \n"])
+def test_scorecard_optional_csv_rejects_duplicate_sequence_header(
+    tmp_path: Path,
+    prefix: str,
+) -> None:
+    path = tmp_path / "duplicate_sequence.csv"
+    path.write_text(
+        prefix
+        + "sequence_id,sequence_id,time_s,source\n"
+        + "0001,9999,0.0,radar-enhance-pcl\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate physical CSV columns.*sequence_id"):
+        _load_optional_csv(path)
+
+
+def test_scorecard_optional_csv_rejects_duplicate_non_identifier_header(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "duplicate_sensor.csv"
+    path.write_text(
+        "sequence_id,sensor,sensor\n"
+        "0001,radar,lidar_360\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate physical CSV columns.*sensor"):
+        _load_optional_csv(path)
