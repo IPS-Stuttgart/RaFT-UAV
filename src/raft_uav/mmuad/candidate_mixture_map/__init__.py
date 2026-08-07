@@ -3,8 +3,8 @@
 The maintained implementation lives in the sibling ``candidate_mixture_map.py``
 module. This package keeps the public import path while preserving opaque IDs in
 CSV inputs, retaining complete candidate frames when target-template times fall
-outside the configured matching tolerance, and validating numerical controls
-before inference.
+outside the configured matching tolerance, validating numerical controls, and
+delegating Gaussian-mixture factor calculations to PyRecEst.
 """
 
 from __future__ import annotations
@@ -17,6 +17,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad._candidate_mixture_pyrecest import (
+    build_pyrecest_mixture_response,
+)
 from raft_uav.mmuad.estimate_csv import read_estimate_csv
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_mixture_map.py"
@@ -174,6 +177,10 @@ def _target_time_candidate_groups(
 _IMPL.pd = _PandasCsvProxy(pd)
 _IMPL._validate_config = _validate_config
 _IMPL._target_time_candidate_groups = _target_time_candidate_groups
+_IMPL._mixture_response = build_pyrecest_mixture_response(
+    apply_label_balance=_IMPL._apply_label_balance,
+    normalize_probability=_IMPL._normalize_probability,
+)
 
 globals().update(
     {
