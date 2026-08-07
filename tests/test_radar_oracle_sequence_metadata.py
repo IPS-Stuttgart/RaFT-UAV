@@ -40,8 +40,8 @@ def test_oracle_rejects_pooled_radar_against_unlabeled_truth() -> None:
         nearest_candidate_oracle(radar, truth)
 
 
-def test_oracle_rejects_unlabeled_radar_against_pooled_truth() -> None:
-    radar = _radar(sequences=None)
+def test_oracle_rejects_all_missing_radar_labels_against_pooled_truth() -> None:
+    radar = _radar(sequences=[None, None])
     truth = _truth(sequences=["flight-a", "flight-b"])
 
     with pytest.raises(ValueError, match="pooled truth.*require radar sequence_id"):
