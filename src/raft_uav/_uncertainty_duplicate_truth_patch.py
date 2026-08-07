@@ -14,6 +14,9 @@ def install() -> None:
     """Install final-duplicate truth matching for uncertainty residuals."""
 
     from raft_uav import uncertainty as uncertainty_module
+    from raft_uav._uncertainty_sequence_guard_patch import (
+        install as install_sequence_guard,
+    )
 
     implementation_module = getattr(
         uncertainty_module,
@@ -23,6 +26,7 @@ def install() -> None:
     original: Callable[..., Any] = implementation_module._nearest_time_indices
     if getattr(original, _PATCH_MARKER, False):
         uncertainty_module._nearest_time_indices = original
+        install_sequence_guard()
         return
 
     @wraps(original)
@@ -50,3 +54,4 @@ def install() -> None:
     setattr(nearest_time_indices, _PATCH_MARKER, True)
     implementation_module._nearest_time_indices = nearest_time_indices
     uncertainty_module._nearest_time_indices = nearest_time_indices
+    install_sequence_guard()
