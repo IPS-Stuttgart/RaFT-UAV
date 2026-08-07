@@ -40,6 +40,44 @@ def _sequence_keys(values: pd.Series) -> pd.Series:
     return keys.mask(missing)
 
 
+def _sequence_metadata_state(
+    frame: pd.DataFrame,
+    *,
+    name: str,
+) -> tuple[bool, set[str]]:
+    """Return whether sequence metadata are complete and their explicit identifiers."""
+
+    if "sequence_id" not in frame.columns or frame.empty:
+        return False, set()
+    keys = _sequence_keys(frame["sequence_id"])
+    explicit = keys.dropna()
+    if explicit.empty:
+        return False, set()
+    missing_mask = keys.isna().to_numpy(dtype=bool)
+    if bool(missing_mask.any()):
+        missing_positions = np.flatnonzero(missing_mask).tolist()
+        raise ValueError(
+            f"{name} sequence_id is partially populated; missing row positions: "
+            f"{missing_positions}"
+        )
+    return True, set(explicit.astype(str).tolist())
+
+
+def _validate_sequence_metadata(radar: pd.DataFrame, truth: pd.DataFrame) -> None:
+    """Reject ambiguous pooled or partially labeled sequence metadata."""
+
+    radar_labeled, radar_sequences = _sequence_metadata_state(radar, name="radar")
+    truth_labeled, truth_sequences = _sequence_metadata_state(truth, name="truth")
+    if radar_labeled and not truth_labeled and len(radar_sequences) > 1:
+        raise ValueError(
+            "pooled radar sequence_id metadata require truth sequence_id metadata"
+        )
+    if truth_labeled and not radar_labeled and len(truth_sequences) > 1:
+        raise ValueError(
+            "pooled truth sequence_id metadata require radar sequence_id metadata"
+        )
+
+
 def _radar_frame_key_values(frame: pd.DataFrame) -> pd.Series:
     """Use frame index and time together, falling back to either usable field."""
 
@@ -109,11 +147,13 @@ def _matching_truth_rows(truth: pd.DataFrame, frame: pd.DataFrame) -> pd.DataFra
     if "sequence_id" not in frame.columns or "sequence_id" not in truth.columns:
         return truth
     frame_keys = _sequence_keys(frame["sequence_id"])
+    truth_keys = _sequence_keys(truth["sequence_id"])
+    if frame_keys.dropna().empty or truth_keys.dropna().empty:
+        return truth
     unique_keys = pd.unique(frame_keys)
     if len(unique_keys) != 1:
         return truth.iloc[0:0].copy()
     sequence_key = unique_keys[0]
-    truth_keys = _sequence_keys(truth["sequence_id"])
     if pd.isna(sequence_key):
         mask = truth_keys.isna()
     else:
@@ -174,6 +214,7 @@ def nearest_candidate_oracle(
         raise KeyError(
             f"radar is missing required columns: {sorted(required - set(radar.columns))}"
         )
+    _validate_sequence_metadata(radar, truth)
     rows: list[pd.Series] = []
     for frame in _radar_frame_groups(radar):
         frame_time = float(pd.to_numeric(frame["time_s"], errors="coerce").median())
@@ -234,6 +275,8 @@ globals().update(
     }
 )
 globals()["_sequence_keys"] = _sequence_keys
+globals()["_sequence_metadata_state"] = _sequence_metadata_state
+globals()["_validate_sequence_metadata"] = _validate_sequence_metadata
 globals()["_radar_frame_key_values"] = _radar_frame_key_values
 globals()["_radar_frame_groups"] = _radar_frame_groups
 globals()["_matching_truth_rows"] = _matching_truth_rows
