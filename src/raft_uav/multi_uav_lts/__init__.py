@@ -35,13 +35,23 @@ def _install_lts_input_output_alias_guard() -> None:
         normalize: bool = False,
         sort_rows: bool = False,
     ):
-        for source in Path(prediction_dir).glob("*.txt"):
+        prediction_sources = list(Path(prediction_dir).glob("*.txt"))
+        if template_zip is not None:
+            if _paths_alias(output_zip, template_zip):
+                raise ValueError(
+                    f"output ZIP must differ from template ZIP: {output_zip}"
+                )
+            expected_names = _cli._validated_template_member_names(
+                Path(template_zip)
+            )
+            prediction_sources.extend(
+                Path(prediction_dir) / name for name in expected_names or ()
+            )
+        for source in prediction_sources:
             if _paths_alias(output_zip, source):
                 raise ValueError(
                     f"output ZIP must differ from prediction input: {source}"
                 )
-        if template_zip is not None and _paths_alias(output_zip, template_zip):
-            raise ValueError(f"output ZIP must differ from template ZIP: {output_zip}")
         return original_package_submission(
             prediction_dir,
             output_zip,
