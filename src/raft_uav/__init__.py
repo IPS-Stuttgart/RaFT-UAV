@@ -191,6 +191,12 @@ def _track5_rts_template_validation_install() -> Callable[[], None]:
     return install
 
 
+def _geomedian_template_time_match_install() -> Callable[[], None]:
+    from raft_uav.mmuad._geomedian_template_time_match_patch import install
+
+    return install
+
+
 def _candidate_score_calibration_order_install() -> Callable[[], None]:
     from raft_uav.mmuad._candidate_score_calibration_order_patch import install
 
@@ -240,6 +246,7 @@ _optional_runtime_hook(_paper_selection_numeric_time_install)
 _optional_runtime_hook(_oracle_coverage_sequence_scope_install)
 _optional_runtime_hook(_estimate_sequence_apply_coverage_install)
 _optional_runtime_hook(_track5_rts_template_validation_install)
+_optional_runtime_hook(_geomedian_template_time_match_install)
 _optional_runtime_hook(_candidate_score_calibration_order_install)
 _optional_runtime_hook(_track5_submission_schema_guard_install)
 _optional_runtime_hook(_track5_estimate_calibration_duplicate_truth_install)
