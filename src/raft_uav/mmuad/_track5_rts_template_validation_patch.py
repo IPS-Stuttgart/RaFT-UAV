@@ -1,9 +1,10 @@
-"""Reject malformed Track 5 RTS template rows before smoothing."""
+"""Validate Track 5 RTS template rows and keep exact template matches."""
 
 from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.submission import parse_official_sequence_cell
@@ -65,12 +66,21 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _exact_template_time_matches(values: pd.Series, target: float) -> np.ndarray:
+    """Match the exact timestamp copied into rows during template resampling."""
+
+    numeric = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+    return np.isfinite(numeric) & (numeric == float(target))
+
+
 def install() -> None:
-    """Install strict RTS template validation on public and legacy modules."""
+    """Install strict template validation and exact RTS row matching."""
 
     from raft_uav.mmuad import track5_rts_ensemble as rts
 
     rts._normalize_template_rows = _normalize_template_rows
+    rts._time_matches = _exact_template_time_matches
     implementation: Any = getattr(rts, "_IMPL", None)
     if implementation is not None:
         implementation._normalize_template_rows = _normalize_template_rows
+        implementation._time_matches = _exact_template_time_matches
