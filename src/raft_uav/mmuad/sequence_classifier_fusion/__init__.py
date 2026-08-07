@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import dataclass
 import importlib.util
 from pathlib import Path
 import sys
@@ -28,6 +30,47 @@ FusionModelSpec = _IMPL.FusionModelSpec
 FusionSelectionResult = _IMPL.FusionSelectionResult
 _LEGACY_FUSE_SEQUENCE_PROBABILITIES = _IMPL.fuse_sequence_probabilities
 _LEGACY_SELECT_TRAIN_SAFE_FUSION = _IMPL.select_train_safe_fusion
+
+
+@dataclass(frozen=True)
+class _SelectionModelSpec:
+    """One model specification with a collision-free selection name."""
+
+    method: str
+    n_estimators: int
+    max_depth: int | None
+    random_state: int
+    selection_name: str
+
+    @property
+    def name(self) -> str:
+        return self.selection_name
+
+
+def _distinct_model_specs(
+    model_specs: list[FusionModelSpec],
+) -> list[FusionModelSpec | _SelectionModelSpec]:
+    """Give colliding model specifications stable, seed-aware identities."""
+
+    specs = list(model_specs)
+    name_counts = Counter(spec.name for spec in specs)
+    distinct: list[FusionModelSpec | _SelectionModelSpec] = []
+    for index, spec in enumerate(specs):
+        if name_counts[spec.name] == 1:
+            distinct.append(spec)
+            continue
+        distinct.append(
+            _SelectionModelSpec(
+                method=spec.method,
+                n_estimators=spec.n_estimators,
+                max_depth=spec.max_depth,
+                random_state=spec.random_state,
+                selection_name=(
+                    f"{spec.name}_seed{spec.random_state}_candidate{index}"
+                ),
+            )
+        )
+    return distinct
 
 
 def _validated_image_weight(value: Any, *, name: str = "image_weight") -> float:
@@ -215,7 +258,7 @@ def select_train_safe_fusion(
         nonimage_predict_features=nonimage_predict_features,
         train_labels=train_labels,
         eval_labels=eval_labels,
-        model_specs=model_specs,
+        model_specs=_distinct_model_specs(model_specs),
         image_weights=validated_weights,
         cv_folds=cv_folds,
         cv_random_state=cv_random_state,
@@ -223,6 +266,8 @@ def select_train_safe_fusion(
     )
 
 
+_IMPL._SelectionModelSpec = _SelectionModelSpec
+_IMPL._distinct_model_specs = _distinct_model_specs
 _IMPL._validated_image_weight = _validated_image_weight
 _IMPL._validated_sequence_ids = _validated_sequence_ids
 _IMPL._sequence_indexed = _sequence_indexed
@@ -238,6 +283,8 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_SelectionModelSpec"] = _SelectionModelSpec
+globals()["_distinct_model_specs"] = _distinct_model_specs
 globals()["_validated_image_weight"] = _validated_image_weight
 globals()["_validated_sequence_ids"] = _validated_sequence_ids
 globals()["_sequence_indexed"] = _sequence_indexed
