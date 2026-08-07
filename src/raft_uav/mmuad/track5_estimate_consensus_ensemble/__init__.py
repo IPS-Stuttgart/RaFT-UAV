@@ -110,6 +110,13 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _template_time_matches(values: pd.Series, target: float):
+    """Match rows copied from the template by exact timestamp identity."""
+
+    numeric = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+    return numeric == float(target)
+
+
 def _validate_unique_estimate_labels(estimate_inputs: Any) -> tuple[Any, ...]:
     """Materialize estimate inputs and reject ambiguous normalized labels."""
 
@@ -157,6 +164,7 @@ def _build_track5_consensus_estimate_ensemble(
     )
 
 
+_IMPL._template_time_matches = _template_time_matches
 _IMPL._first_present = _first_present
 _IMPL._normalize_template_rows = _normalize_template_rows
 _IMPL.build_track5_consensus_estimate_ensemble = (
@@ -172,6 +180,7 @@ globals().update(
 )
 
 # Keep the patched helpers visible to tests and exploratory callers.
+globals()["_template_time_matches"] = _template_time_matches
 globals()["_normalized_column_name"] = _normalized_column_name
 globals()["_first_present"] = _first_present
 globals()["_normalize_template_rows"] = _normalize_template_rows
