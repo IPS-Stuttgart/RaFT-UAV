@@ -1,6 +1,10 @@
-"""Keep candidate-pull result labels separate from positional coordinates."""
+"""Keep candidate-pull row indexing safe and artifact outputs distinct."""
 
 from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -45,8 +49,67 @@ def _current_positions(current_xyz: object, *, row_count: int) -> np.ndarray:
     return positions
 
 
+def _canonical_output_path(path: Path) -> str:
+    """Return a normalized path key without requiring the output to exist."""
+
+    candidate = Path(path).expanduser()
+    try:
+        resolved = candidate.resolve(strict=False)
+    except (OSError, RuntimeError):
+        resolved = candidate.absolute()
+    return os.path.normcase(os.fspath(resolved))
+
+
+def _paths_alias(left: Path, right: Path) -> bool:
+    """Return whether two output paths address the same filesystem object."""
+
+    if _canonical_output_path(left) == _canonical_output_path(right):
+        return True
+    try:
+        return left.exists() and right.exists() and os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
+def _validate_artifact_output_paths(
+    *,
+    results_csv: Path,
+    submission_zip: Path | None,
+    provenance_json: Path | None,
+    centers_csv: Path | None,
+    sequence_features_csv: Path | None,
+    alpha_assignments_csv: Path | None,
+) -> None:
+    """Reject colliding candidate-pull outputs before any path is mutated."""
+
+    outputs = [
+        ("results_csv", Path(results_csv)),
+        ("submission_zip", None if submission_zip is None else Path(submission_zip)),
+        ("provenance_json", None if provenance_json is None else Path(provenance_json)),
+        ("centers_csv", None if centers_csv is None else Path(centers_csv)),
+        (
+            "sequence_features_csv",
+            None if sequence_features_csv is None else Path(sequence_features_csv),
+        ),
+        (
+            "alpha_assignments_csv",
+            None if alpha_assignments_csv is None else Path(alpha_assignments_csv),
+        ),
+    ]
+    present = [(name, path) for name, path in outputs if path is not None]
+    for index, (left_name, left_path) in enumerate(present):
+        for right_name, right_path in present[index + 1 :]:
+            if not _paths_alias(left_path, right_path):
+                continue
+            resolved = _canonical_output_path(left_path)
+            raise ValueError(
+                "candidate-pull output paths must be distinct: "
+                f"{left_name} and {right_name} both refer to {resolved}"
+            )
+
+
 def install() -> None:
-    """Install positional candidate-center indexing exactly once."""
+    """Install candidate-pull safety guards exactly once."""
 
     global _INSTALLED
     if _INSTALLED:
@@ -55,6 +118,7 @@ def install() -> None:
     from raft_uav.mmuad import candidate_pull as candidate_pull
 
     original = candidate_pull.candidate_centers_for_results
+    original_write_artifacts = candidate_pull.write_candidate_pull_artifacts
 
     def candidate_centers_for_results(
         candidates: pd.DataFrame,
@@ -96,8 +160,40 @@ def install() -> None:
         out["row_index"] = original_index[row_positions]
         return out
 
+    def write_candidate_pull_artifacts(
+        result: Any,
+        *,
+        results_csv: Path,
+        submission_zip: Path | None = None,
+        provenance_json: Path | None = None,
+        centers_csv: Path | None = None,
+        sequence_features_csv: Path | None = None,
+        alpha_assignments_csv: Path | None = None,
+    ) -> dict[str, str]:
+        """Write candidate-pull artifacts only to mutually distinct paths."""
+
+        _validate_artifact_output_paths(
+            results_csv=results_csv,
+            submission_zip=submission_zip,
+            provenance_json=provenance_json,
+            centers_csv=centers_csv,
+            sequence_features_csv=sequence_features_csv,
+            alpha_assignments_csv=alpha_assignments_csv,
+        )
+        return original_write_artifacts(
+            result,
+            results_csv=results_csv,
+            submission_zip=submission_zip,
+            provenance_json=provenance_json,
+            centers_csv=centers_csv,
+            sequence_features_csv=sequence_features_csv,
+            alpha_assignments_csv=alpha_assignments_csv,
+        )
+
     candidate_pull.candidate_centers_for_results = candidate_centers_for_results
+    candidate_pull.write_candidate_pull_artifacts = write_candidate_pull_artifacts
     implementation = getattr(candidate_pull, "_IMPL", None)
     if implementation is not None:
         implementation.candidate_centers_for_results = candidate_centers_for_results
+        implementation.write_candidate_pull_artifacts = write_candidate_pull_artifacts
     _INSTALLED = True
