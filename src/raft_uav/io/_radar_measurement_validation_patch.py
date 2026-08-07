@@ -29,6 +29,21 @@ def _validated_boolean(value: object, *, name: str) -> bool:
     raise ValueError(f"{name} must be boolean, got {value!r}")
 
 
+def _require_velocity_measurements(measurements: list[Any]) -> None:
+    """Require explicit velocity mode to emit only six-dimensional updates."""
+
+    incomplete = [
+        position
+        for position, measurement in enumerate(measurements)
+        if np.asarray(measurement.vector).reshape(-1).size != 6
+    ]
+    if incomplete:
+        raise ValueError(
+            "include_velocity=True requires finite east/north/down radar velocity "
+            f"components for every emitted row; unavailable at output rows {incomplete}"
+        )
+
+
 @wraps(_ORIGINAL_RADAR_MEASUREMENTS_TO_ENU)
 def _radar_measurements_to_enu(
     radar: pd.DataFrame,
@@ -61,7 +76,7 @@ def _radar_measurements_to_enu(
             name="default_velocity_std_mps",
         )
 
-    return _ORIGINAL_RADAR_MEASUREMENTS_TO_ENU(
+    measurements = _ORIGINAL_RADAR_MEASUREMENTS_TO_ENU(
         radar,
         projector=projector,
         truth_origin_time=truth_origin_time,
@@ -71,6 +86,9 @@ def _radar_measurements_to_enu(
         include_velocity=validated_include_velocity,
         clock_offset_s=clock_offset_s,
     )
+    if validated_include_velocity:
+        _require_velocity_measurements(measurements)
+    return measurements
 
 
 def apply_radar_measurement_validation_patch() -> None:
