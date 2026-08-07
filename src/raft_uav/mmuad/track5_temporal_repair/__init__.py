@@ -33,6 +33,25 @@ _ORIGINAL_WRITE_TRACK5_TEMPORAL_REPAIR_OUTPUTS = (
     _IMPL.write_track5_temporal_repair_outputs
 )
 
+_TRUE_REPAIRED_FLAG_TEXT = frozenset({"true", "t", "yes", "y", "on"})
+_FALSE_REPAIRED_FLAG_TEXT = frozenset(
+    {
+        "",
+        "false",
+        "f",
+        "no",
+        "n",
+        "off",
+        "none",
+        "null",
+        "nan",
+        "na",
+        "n/a",
+        "<na>",
+        "nat",
+    }
+)
+
 
 def _validate_iterations(value: Any) -> int:
     """Return an exact positive integer iteration count."""
@@ -64,23 +83,81 @@ def _validate_iterations(value: Any) -> int:
     return iterations
 
 
-def _boolean_series(values: Any, index: pd.Index) -> pd.Series:
-    """Parse Boolean-like values without making false strings truthy."""
+def _parse_boolean_flag(value: Any) -> bool:
+    """Parse one persisted repair flag without Python truthiness coercion."""
 
-    series = pd.Series(values, index=index)
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if value is None or np.ma.is_masked(value):
+        return False
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, str):
+        text = value.strip().casefold()
+        if text in _TRUE_REPAIRED_FLAG_TEXT:
+            return True
+        if text in _FALSE_REPAIRED_FLAG_TEXT:
+            return False
+        try:
+            numeric = float(text)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError from exc
+        if np.isfinite(numeric) and numeric == 0.0:
+            return False
+        if np.isfinite(numeric) and numeric == 1.0:
+            return True
+        raise ValueError
+
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return False
+
+    try:
+        array = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError from exc
+    if array.ndim != 0 or array.dtype.kind in {"b", "c"}:
+        raise ValueError
+    try:
+        numeric = float(array.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError from exc
+    if np.isfinite(numeric) and numeric == 0.0:
+        return False
+    if np.isfinite(numeric) and numeric == 1.0:
+        return True
+    raise ValueError
+
+
+def _boolean_series(values: Any, index: pd.Index) -> pd.Series:
+    """Parse Boolean-like repair flags and reject malformed persisted values."""
+
+    series = pd.Series(values, index=index, copy=False)
     if series.empty:
         return pd.Series(False, index=index, dtype=bool)
     if pd.api.types.is_bool_dtype(series):
         return series.fillna(False).astype(bool)
-    if pd.api.types.is_numeric_dtype(series):
-        numeric = pd.to_numeric(series, errors="coerce").fillna(0.0)
-        return numeric.ne(0.0)
 
-    text = series.astype("string").str.strip().str.lower()
-    truthy = text.isin({"1", "true", "t", "yes", "y"})
-    falsey = text.isin({"0", "false", "f", "no", "n", "", "none", "null", "nan"})
-    numeric = pd.to_numeric(text, errors="coerce").fillna(0.0).ne(0.0)
-    return (truthy | (~falsey & numeric)).fillna(False).astype(bool)
+    parsed: list[bool] = []
+    invalid_rows: list[Any] = []
+    invalid_values: list[Any] = []
+    for position, value in enumerate(series.tolist()):
+        try:
+            parsed.append(_parse_boolean_flag(value))
+        except ValueError:
+            parsed.append(False)
+            invalid_rows.append(series.index[position])
+            invalid_values.append(value)
+    if invalid_rows:
+        raise ValueError(
+            "repaired contains invalid Boolean values at rows "
+            f"{invalid_rows}: {invalid_values}; expected booleans, exact numeric "
+            "0/1, recognized Boolean text, or missing values"
+        )
+    return pd.Series(parsed, index=series.index, dtype=bool)
 
 
 def repair_track5_temporal_spikes(
@@ -140,6 +217,7 @@ globals().update(
     }
 )
 globals()["_validate_iterations"] = _validate_iterations
+globals()["_parse_boolean_flag"] = _parse_boolean_flag
 globals()["_boolean_series"] = _boolean_series
 globals()["repair_track5_temporal_spikes"] = repair_track5_temporal_spikes
 globals()["write_track5_temporal_repair_outputs"] = (
