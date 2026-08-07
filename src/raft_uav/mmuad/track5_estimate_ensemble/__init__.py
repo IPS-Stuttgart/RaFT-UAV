@@ -109,6 +109,13 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _template_time_matches(values: pd.Series, target: float):
+    """Match rows copied from the template by exact timestamp identity."""
+
+    numeric = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+    return numeric == float(target)
+
+
 def _normalize_estimate_weight_mapping(raw_weights: dict[Any, Any]) -> dict[str, float]:
     safe_labels = _IMPL._normalize_unique_labels(
         raw_weights.keys(),
@@ -272,6 +279,7 @@ def write_track5_estimate_ensemble_outputs(
     )
 
 
+_IMPL._template_time_matches = _template_time_matches
 _IMPL._validate_ensemble_weight = _validate_ensemble_weight
 _IMPL._validate_trim_fraction = _validate_trim_fraction
 _IMPL._normalize_template_rows = _normalize_template_rows
@@ -289,6 +297,7 @@ globals().update(
 )
 
 # Keep the patched helpers available to direct imports and dependent wrappers.
+globals()["_template_time_matches"] = _template_time_matches
 globals()["_validate_ensemble_weight"] = _validate_ensemble_weight
 globals()["_validate_trim_fraction"] = _validate_trim_fraction
 globals()["_normalize_template_rows"] = _normalize_template_rows

@@ -29,6 +29,13 @@ _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_BUILD = _IMPL.build_spread_guarded_estimate_ensemble
 
 
+def _template_time_matches(values: pd.Series, target: float):
+    """Match rows copied from the template by exact timestamp identity."""
+
+    numeric = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+    return numeric == float(target)
+
+
 def _materialize_unique_inputs(
     estimate_inputs: Iterable[tuple[str, pd.DataFrame, float]],
 ) -> tuple[tuple[tuple[str, pd.DataFrame, float], ...], tuple[str, ...]]:
@@ -80,6 +87,7 @@ def build_spread_guarded_estimate_ensemble(
     )
 
 
+_IMPL._template_time_matches = _template_time_matches
 _IMPL.build_spread_guarded_estimate_ensemble = build_spread_guarded_estimate_ensemble
 
 globals().update(
@@ -89,6 +97,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_template_time_matches"] = _template_time_matches
 globals()["_materialize_unique_inputs"] = _materialize_unique_inputs
 globals()["build_spread_guarded_estimate_ensemble"] = (
     build_spread_guarded_estimate_ensemble

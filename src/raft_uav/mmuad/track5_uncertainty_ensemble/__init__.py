@@ -124,6 +124,13 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     return out.loc[finite].sort_values(["sequence_id", "time_s"]).reset_index(drop=True)
 
 
+def _template_time_matches(values: pd.Series, target: float):
+    """Match rows copied from the template by exact timestamp identity."""
+
+    numeric = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+    return numeric == float(target)
+
+
 def _positive_finite_real_scalar(value: Any, *, name: str) -> float:
     """Return one finite positive real scalar without Boolean coercion."""
 
@@ -278,6 +285,7 @@ def build_track5_uncertainty_ensemble(
     return estimates, diagnostics
 
 
+_IMPL._template_time_matches = _template_time_matches
 _IMPL._first_present = _first_present
 _IMPL._normalized_sequence_values = _normalized_sequence_values
 _IMPL._sequence_text_or_none = _sequence_text_or_none
@@ -292,6 +300,7 @@ for _name in dir(_IMPL):
         globals()[_name] = getattr(_IMPL, _name)
 
 # Preserve access to the patched private helpers for tests and exploratory imports.
+globals()["_template_time_matches"] = _template_time_matches
 globals()["_first_present"] = _first_present
 globals()["_normalized_sequence_values"] = _normalized_sequence_values
 globals()["_sequence_text_or_none"] = _sequence_text_or_none
