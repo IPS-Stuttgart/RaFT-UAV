@@ -38,8 +38,7 @@ def position_mixture_from_association_rows(
     if rows.empty:
         raise ValueError("rows must not be empty")
     positions = rows[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
-    scores = pd.to_numeric(rows.get(score_column, pd.Series(0.0, index=rows.index)), errors="coerce")
-    log_weights = -scores.fillna(scores.max() if scores.notna().any() else 0.0).to_numpy(dtype=float)
+    log_weights = _association_log_weights(rows, score_column)
     has_covariance = all(column in rows.columns for column in covariance_columns)
     hypotheses = []
     for index, (_, row) in enumerate(rows.iterrows()):
@@ -57,6 +56,17 @@ def position_mixture_from_association_rows(
             )
         )
     return moment_match_hypotheses(hypotheses)
+
+
+def _association_log_weights(rows: pd.DataFrame, score_column: str) -> np.ndarray:
+    """Return finite log weights, treating malformed scores as worst finite scores."""
+
+    raw_scores = rows.get(score_column, pd.Series(0.0, index=rows.index))
+    numeric_scores = pd.to_numeric(raw_scores, errors="coerce").to_numpy(dtype=float)
+    finite = np.isfinite(numeric_scores)
+    fallback_score = float(numeric_scores[finite].max()) if finite.any() else 0.0
+    safe_scores = np.where(finite, numeric_scores, fallback_score)
+    return -safe_scores
 
 
 def _covariance_from_row(
