@@ -200,7 +200,9 @@ def _normalized_nis_frame(
         work["source"] = "unknown"
     if "measurement_dim" not in work.columns:
         work["measurement_dim"] = _infer_measurement_dim(work)
-    if accepted_only and "accepted" in work.columns:
+    if accepted_only:
+        if "accepted" not in work.columns:
+            raise KeyError("accepted_only=True requires diagnostics column 'accepted'")
         work = work.loc[work["accepted"].map(_truthy)].copy()
     work["nis"] = pd.to_numeric(work["nis"], errors="coerce")
     work["measurement_dim"] = pd.to_numeric(work["measurement_dim"], errors="coerce")
@@ -313,7 +315,12 @@ def _validate_probability(value: float) -> float:
 
 
 def _probability_suffix(value: float) -> str:
-    return f"{float(value):.3f}".replace(".", "p")
+    probability = float(value)
+    text = np.format_float_positional(probability, unique=True, trim="-")
+    whole, separator, fraction = text.partition(".")
+    if not separator:
+        fraction = ""
+    return f"{whole}p{fraction.ljust(3, '0')}"
 
 
 def _truthy(value: object) -> bool:
