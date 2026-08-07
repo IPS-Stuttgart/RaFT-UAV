@@ -1,0 +1,57 @@
+---
+name: Agent pytest diagnostics
+
+"on":
+  push:
+    branches:
+      - agent/guard-prospective-lts-package-aliases
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  pytest-log:
+    name: Python 3.11 main-baseline pytest log
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out current main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package with test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Capture full pytest output
+        run: |
+          set +e
+          pytest -vv --tb=long > pytest.log 2>&1
+          status=$?
+          cat pytest.log
+          printf '%s\n' "$status" > pytest.exit-code
+          exit 0
+
+      - name: Upload pytest diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-diagnostics-main-py311
+          path: |
+            pytest.log
+            pytest.exit-code
+          if-no-files-found: error
+          retention-days: 1

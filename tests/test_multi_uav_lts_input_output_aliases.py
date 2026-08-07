@@ -56,6 +56,40 @@ def test_package_submission_rejects_prediction_output_alias_without_modifying_pr
     assert prediction.read_text(encoding="utf-8") == original
 
 
+def test_package_submission_rejects_prospective_template_input_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prediction_dir = tmp_path / "predictions"
+    prediction_dir.mkdir()
+    template = tmp_path / "template.zip"
+    _write_zip(template, {"S_00.txt": ""})
+    output = prediction_dir / "S_00.txt"
+
+    original_write = zipfile.ZipFile.write
+
+    def _reject_self_copy(
+        archive: zipfile.ZipFile,
+        filename: str | Path,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        if Path(filename).resolve() == output.resolve():
+            raise AssertionError("packager attempted to add the output ZIP to itself")
+        original_write(archive, filename, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "write", _reject_self_copy)
+
+    with pytest.raises(ValueError, match="output ZIP must differ from prediction input"):
+        package_submission(
+            prediction_dir,
+            output,
+            template_zip=template,
+        )
+
+    assert not output.exists()
+
+
 def test_constant_first_frame_rejects_label_output_alias_without_modifying_labels(
     tmp_path: Path,
 ) -> None:
