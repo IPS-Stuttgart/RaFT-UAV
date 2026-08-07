@@ -4,8 +4,8 @@ The maintained implementation lives in the sibling
 ``track5_submission_ensemble.py`` module. This package preserves the public
 import path while rejecting ambiguous CSV headers, preventing malformed
 normalized numeric and classification values from being silently dropped or
-truncated, and keeping weighted ensemble arithmetic finite for very large
-non-negative weights.
+truncated, rejecting missing normalized sequence identifiers, and keeping
+weighted ensemble arithmetic finite for very large non-negative weights.
 """
 
 from __future__ import annotations
@@ -140,6 +140,18 @@ def _normalize_internal_submission_rows(
 
     frame = pd.DataFrame(rows).copy()
     lookup = _normalized_column_lookup(frame)
+    sequence_column = lookup.get("sequence_id")
+    if sequence_column is not None:
+        sequence_text = frame[sequence_column].astype("string").str.strip()
+        invalid_sequence = (sequence_text.isna() | sequence_text.eq("")).fillna(True)
+        if bool(invalid_sequence.any()):
+            _raise_invalid_normalized_rows(
+                source_path=source_path,
+                index=frame.index,
+                invalid=invalid_sequence.to_numpy(dtype=bool),
+                field="sequence_id",
+            )
+
     classification_column = _IMPL._normalized_classification_column(lookup)
     measurement_columns = ("time_s", "state_x_m", "state_y_m", "state_z_m")
     if classification_column is not None and all(
