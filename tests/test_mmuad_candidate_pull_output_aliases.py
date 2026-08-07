@@ -3,28 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 import zipfile
 
-import pandas as pd
 import pytest
 
-from raft_uav.mmuad.candidate_pull import CandidatePullResult
 from raft_uav.mmuad.candidate_pull import write_candidate_pull_artifacts
-
-
-def _result() -> CandidatePullResult:
-    return CandidatePullResult(
-        rows=pd.DataFrame(
-            {
-                "Sequence": ["seq0001"],
-                "Timestamp": [0.0],
-                "Position": ["(0,0,0)"],
-                "Classification": [2],
-            }
-        ),
-        centers=pd.DataFrame({"top1_x": [0.0]}),
-        sequence_features=pd.DataFrame({"Sequence": ["seq0001"]}),
-        alpha_assignments=pd.DataFrame({"Sequence": ["seq0001"]}),
-        provenance={"schema": "test"},
-    )
 
 
 @pytest.mark.parametrize(
@@ -59,7 +40,7 @@ def test_candidate_pull_rejects_result_output_alias_before_mutation(
         match=rf"results_csv and {alias_name}",
     ):
         write_candidate_pull_artifacts(
-            _result(),
+            object(),
             results_csv=shared_path,
             **outputs,
         )
@@ -80,7 +61,7 @@ def test_candidate_pull_rejects_normalized_optional_output_aliases(
         match=r"provenance_json and centers_csv",
     ):
         write_candidate_pull_artifacts(
-            _result(),
+            object(),
             results_csv=results_csv,
             provenance_json=provenance_json,
             centers_csv=centers_csv,
