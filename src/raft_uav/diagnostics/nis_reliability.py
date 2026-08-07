@@ -168,6 +168,7 @@ def nis_reliability_summary(
 ) -> pd.DataFrame:
     """Return reliability statistics for normalized innovation squared samples."""
 
+    probabilities = _validated_gate_probabilities(gate_probabilities)
     work = _normalized_nis_frame(frame, group_columns=group_columns, accepted_only=accepted_only)
     if work.empty:
         return pd.DataFrame()
@@ -178,7 +179,7 @@ def nis_reliability_summary(
         row = _group_key_record(groupers, group_key)
         values = group["nis"].to_numpy(dtype=float)
         dim = _single_int_or_nan(group["measurement_dim"])
-        row.update(_nis_stats(values, dim=dim, gate_probabilities=gate_probabilities))
+        row.update(_nis_stats(values, dim=dim, gate_probabilities=probabilities))
         if "accepted" in group.columns:
             accepted = group["accepted"].map(_truthy)
             row["accepted_count"] = int(accepted.sum())
@@ -307,6 +308,27 @@ def _single_int_or_nan(series: pd.Series) -> int | None:
     return int(unique[0])
 
 
+def _validated_gate_probabilities(values: Sequence[float]) -> tuple[float, ...]:
+    probabilities = tuple(_validate_probability(value) for value in values)
+    probabilities_by_suffix: dict[str, list[float]] = {}
+    for probability in probabilities:
+        suffix = _probability_suffix(probability)
+        probabilities_by_suffix.setdefault(suffix, []).append(probability)
+
+    collisions = {
+        suffix: colliding
+        for suffix, colliding in probabilities_by_suffix.items()
+        if len(colliding) > 1
+    }
+    if collisions:
+        details = "; ".join(
+            f"{suffix}: {', '.join(str(value) for value in colliding)}"
+            for suffix, colliding in collisions.items()
+        )
+        raise ValueError(f"gate probabilities produce duplicate output column suffixes: {details}")
+    return probabilities
+
+
 def _validate_probability(value: float) -> float:
     probability = float(value)
     if not 0.0 < probability < 1.0:
@@ -315,12 +337,7 @@ def _validate_probability(value: float) -> float:
 
 
 def _probability_suffix(value: float) -> str:
-    probability = float(value)
-    text = np.format_float_positional(probability, unique=True, trim="-")
-    whole, separator, fraction = text.partition(".")
-    if not separator:
-        fraction = ""
-    return f"{whole}p{fraction.ljust(3, '0')}"
+    return f"{float(value):.3f}".replace(".", "p")
 
 
 def _truthy(value: object) -> bool:
