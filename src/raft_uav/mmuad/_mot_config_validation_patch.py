@@ -13,8 +13,45 @@ from typing import Any, Callable
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_float
+
 _PATCH_MARKER = "_raft_uav_validates_explicit_mot_config"
+_CONFIG_POST_INIT_MARKER = "_raft_uav_validates_nested_mot_config_scalars"
 _ORDER_HELPER_PREFIX = "_raft_uav_mot_order_"
+_CONFIG_SCALAR_FIELDS = (
+    "acceleration_std_mps2",
+    "max_association_distance_m",
+    "max_track_age_s",
+    "min_new_track_confidence",
+    "covariance_scale",
+)
+
+
+def _normalize_config_scalar_inputs(config: Any) -> None:
+    """Normalize finite real controls without accepting recursively boxed Booleans."""
+
+    for field_name in _CONFIG_SCALAR_FIELDS:
+        number = optional_float(getattr(config, field_name))
+        if number is None:
+            raise ValueError(f"{field_name} must be finite")
+        object.__setattr__(config, field_name, number)
+
+
+def _install_config_scalar_guard(mot: Any) -> None:
+    """Validate raw dataclass inputs before the legacy post-init coerces them."""
+
+    config_type = mot.MultiObjectTrackerConfig
+    original_post_init: Callable[..., Any] = config_type.__post_init__
+    if getattr(original_post_init, _CONFIG_POST_INIT_MARKER, False):
+        return
+
+    @wraps(original_post_init)
+    def validated_post_init(config: Any) -> None:
+        _normalize_config_scalar_inputs(config)
+        original_post_init(config)
+
+    setattr(validated_post_init, _CONFIG_POST_INIT_MARKER, True)
+    setattr(config_type, "__post_init__", validated_post_init)
 
 
 def _finite_real_order_values(values: pd.Series) -> pd.Series:
@@ -115,6 +152,8 @@ def install() -> None:
 
     import raft_uav.mmuad as mmuad
     from raft_uav.mmuad import mot
+
+    _install_config_scalar_guard(mot)
 
     original: Callable[..., Any] = mot.run_mmuad_multi_object_tracker
     if getattr(original, _PATCH_MARKER, False):
