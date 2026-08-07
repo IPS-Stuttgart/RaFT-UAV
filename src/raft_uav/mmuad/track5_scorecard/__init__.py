@@ -2,12 +2,14 @@
 
 The maintained implementation lives in the sibling ``track5_scorecard.py``
 module. This package preserves the public import path while retaining opaque
-sequence identifiers and normalizing serialized Boolean diagnostics without
+sequence identifiers, rejecting duplicate physical CSV headers before pandas
+can mangle them, and normalizing serialized Boolean diagnostics without
 silently accepting malformed flag values.
 """
 
 from __future__ import annotations
 
+import csv
 import importlib.util
 from pathlib import Path
 import sys
@@ -58,15 +60,47 @@ def _opaque_sequence_identifier(value: str) -> object:
     return pd.NA if value == "" else value
 
 
+def _physical_csv_columns(path: Path) -> list[str]:
+    """Read the first non-blank physical CSV header without pandas mangling."""
+
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        for row in csv.reader(handle):
+            if row and not (len(row) == 1 and not row[0].strip()):
+                return row
+    return []
+
+
+def _validate_unique_physical_columns(columns: list[str], *, path: Path) -> None:
+    """Reject duplicate CSV headers before pandas silently renames them."""
+
+    positions_by_name: dict[str, list[int]] = {}
+    for position, name in enumerate(columns):
+        positions_by_name.setdefault(name, []).append(position)
+    collisions = {
+        name: positions
+        for name, positions in positions_by_name.items()
+        if len(positions) > 1
+    }
+    if not collisions:
+        return
+
+    rendered = "; ".join(
+        f"{name!r} at positions {positions}"
+        for name, positions in collisions.items()
+    )
+    raise ValueError(f"{path} has duplicate physical CSV columns: {rendered}")
+
+
 def _load_optional_csv(path: Path | None) -> pd.DataFrame | None:
     """Load optional scorecard diagnostics while preserving opaque IDs."""
 
     if path is None:
         return None
 
-    columns = pd.read_csv(path, nrows=0).columns
+    physical_columns = _physical_csv_columns(path)
+    _validate_unique_physical_columns(physical_columns, path=path)
     identifier_columns = [
-        name for name in _SEQUENCE_IDENTIFIER_DTYPES if name in columns
+        name for name in _SEQUENCE_IDENTIFIER_DTYPES if name in physical_columns
     ]
     frame = pd.read_csv(
         path,
