@@ -3,11 +3,13 @@
 The legacy implementation lives in the sibling ``track5_uncertainty_ensemble.py``
 file. This wrapper preserves public imports while patching the row-normalization
 helpers so official Track 5 ``Sequence`` cells are canonicalized consistently with
-the template resampler.
+the template resampler. Uncertainty samples also honor the configured nearest-time
+freshness gate instead of being held indefinitely across missing-sigma intervals.
 """
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 import importlib.util
 from pathlib import Path
 import sys
@@ -22,6 +24,9 @@ from raft_uav.mmuad.track5_estimate_ensemble import (
     EstimateInput,
     _validate_ensemble_weight,
 )
+from raft_uav.mmuad.track5_template_resample import (
+    _normalize_optional_nonnegative_float,
+)
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_uncertainty_ensemble.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -34,6 +39,11 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 _LEGACY_BUILD = _IMPL.build_track5_uncertainty_ensemble
+_ORIGINAL_RESAMPLE_UNCERTAINTY_COLUMN = _IMPL._resample_uncertainty_column
+_UNCERTAINTY_MAX_NEAREST_TIME_DELTA_S: ContextVar[float | None] = ContextVar(
+    "raft_uav_uncertainty_max_nearest_time_delta_s",
+    default=None,
+)
 
 
 class _PandasCsvProxy:
@@ -203,6 +213,68 @@ def _relative_weight_inputs(
     return relative, weight_scale
 
 
+def _nearest_uncertainty_time_delta_s(
+    source_times_s: np.ndarray,
+    query_times_s: np.ndarray,
+) -> np.ndarray:
+    """Return the distance to the nearest finite uncertainty observation."""
+
+    insertion = np.searchsorted(source_times_s, query_times_s, side="left")
+    right = np.clip(insertion, 0, source_times_s.size - 1)
+    left = np.clip(insertion - 1, 0, source_times_s.size - 1)
+    return np.minimum(
+        np.abs(source_times_s[left] - query_times_s),
+        np.abs(source_times_s[right] - query_times_s),
+    )
+
+
+def _resample_uncertainty_column(
+    estimates: pd.DataFrame,
+    template: pd.DataFrame,
+    *,
+    column: str,
+    fallback_sigma_m: float,
+    sigma_min_m: float,
+    sigma_max_m: float,
+) -> pd.Series:
+    """Use fallback uncertainty when finite sigma observations are too stale."""
+
+    output = _ORIGINAL_RESAMPLE_UNCERTAINTY_COLUMN(
+        estimates,
+        template,
+        column=column,
+        fallback_sigma_m=fallback_sigma_m,
+        sigma_min_m=sigma_min_m,
+        sigma_max_m=sigma_max_m,
+    )
+    max_delta_s = _UNCERTAINTY_MAX_NEAREST_TIME_DELTA_S.get()
+    if max_delta_s is None or output.empty:
+        return output
+
+    rows = _normalize_uncertainty_rows(estimates, column=column)
+    template_rows = _normalize_template_rows(template)
+    if rows.empty or template_rows.empty:
+        return output
+
+    for sequence_id, template_group in template_rows.groupby(
+        "sequence_id",
+        sort=False,
+    ):
+        source = rows.loc[rows["sequence_id"] == sequence_id].sort_values("time_s")
+        if source.empty:
+            continue
+        source_times = source["time_s"].to_numpy(float)
+        query_times = template_group["time_s"].to_numpy(float)
+        nearest_delta_s = _nearest_uncertainty_time_delta_s(
+            source_times,
+            query_times,
+        )
+        stale = nearest_delta_s > max_delta_s
+        if bool(np.any(stale)):
+            output.loc[template_group.index[stale]] = fallback_sigma_m
+    return output.clip(lower=sigma_min_m, upper=sigma_max_m)
+
+
 def _rescale_weight_diagnostics(
     estimates: pd.DataFrame,
     diagnostics: pd.DataFrame,
@@ -266,16 +338,24 @@ def build_track5_uncertainty_ensemble(
         sigma_min_m=sigma_min_m,
         sigma_max_m=sigma_max_m,
     )
-    relative_inputs, weight_scale = _relative_weight_inputs(inputs)
-    estimates, diagnostics = _LEGACY_BUILD(
-        relative_inputs,
-        template=template,
-        uncertainty_column=uncertainty_column,
-        fallback_sigma_m=fallback_sigma_m,
-        sigma_min_m=sigma_min_m,
-        sigma_max_m=sigma_max_m,
-        max_nearest_time_delta_s=max_nearest_time_delta_s,
+    normalized_max_delta_s = _normalize_optional_nonnegative_float(
+        max_nearest_time_delta_s,
+        field="max_nearest_time_delta_s",
     )
+    relative_inputs, weight_scale = _relative_weight_inputs(inputs)
+    token = _UNCERTAINTY_MAX_NEAREST_TIME_DELTA_S.set(normalized_max_delta_s)
+    try:
+        estimates, diagnostics = _LEGACY_BUILD(
+            relative_inputs,
+            template=template,
+            uncertainty_column=uncertainty_column,
+            fallback_sigma_m=fallback_sigma_m,
+            sigma_min_m=sigma_min_m,
+            sigma_max_m=sigma_max_m,
+            max_nearest_time_delta_s=normalized_max_delta_s,
+        )
+    finally:
+        _UNCERTAINTY_MAX_NEAREST_TIME_DELTA_S.reset(token)
     _rescale_weight_diagnostics(
         estimates,
         diagnostics,
@@ -293,6 +373,7 @@ _IMPL._normalize_uncertainty_rows = _normalize_uncertainty_rows
 _IMPL._normalize_template_rows = _normalize_template_rows
 _IMPL._positive_finite = _positive_finite_real_scalar
 _IMPL._validate_sigma_parameters = _validate_sigma_parameters
+_IMPL._resample_uncertainty_column = _resample_uncertainty_column
 _IMPL.build_track5_uncertainty_ensemble = build_track5_uncertainty_ensemble
 
 for _name in dir(_IMPL):
@@ -310,6 +391,10 @@ globals()["_positive_finite_real_scalar"] = _positive_finite_real_scalar
 globals()["_validate_sigma_parameters"] = _validate_sigma_parameters
 globals()["_validated_estimate_inputs"] = _validated_estimate_inputs
 globals()["_relative_weight_inputs"] = _relative_weight_inputs
+globals()["_nearest_uncertainty_time_delta_s"] = (
+    _nearest_uncertainty_time_delta_s
+)
+globals()["_resample_uncertainty_column"] = _resample_uncertainty_column
 globals()["_rescale_weight_diagnostics"] = _rescale_weight_diagnostics
 globals()["build_track5_uncertainty_ensemble"] = build_track5_uncertainty_ensemble
 __doc__ = _IMPL.__doc__
