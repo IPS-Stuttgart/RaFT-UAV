@@ -29,25 +29,98 @@ from raft_uav.mmuad.template_snap_utils import (
 )
 
 
+_INVALID_BOOLEAN = object()
+_TRUE_BOOLEAN_TOKENS = frozenset({"true", "t", "yes", "y", "on"})
+_FALSE_BOOLEAN_TOKENS = frozenset({"false", "f", "no", "n", "off"})
+_MISSING_BOOLEAN_TOKENS = frozenset({"", "nan", "none", "null", "<na>", "nat"})
+
+
+def _boolean_number(value: float) -> bool | object:
+    """Parse one finite numeric Boolean representation."""
+
+    if np.isnan(value):
+        return False
+    if not np.isfinite(value):
+        return _INVALID_BOOLEAN
+    if value == 0.0:
+        return False
+    if value == 1.0:
+        return True
+    return _INVALID_BOOLEAN
+
+
+def _boolean_cell(value: object) -> bool | object:
+    """Parse one persisted diagnostic flag without using generic truthiness."""
+
+    if value is None or value is pd.NA or np.ma.is_masked(value):
+        return False
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().casefold()
+        if text in _TRUE_BOOLEAN_TOKENS:
+            return True
+        if text in _FALSE_BOOLEAN_TOKENS or text in _MISSING_BOOLEAN_TOKENS:
+            return False
+        try:
+            return _boolean_number(float(text))
+        except (TypeError, ValueError, OverflowError):
+            return _INVALID_BOOLEAN
+
+    try:
+        array = np.asanyarray(value)
+    except (TypeError, ValueError):
+        return _INVALID_BOOLEAN
+    if array.ndim != 0 or np.iscomplexobj(array):
+        return _INVALID_BOOLEAN
+    if np.ma.isMaskedArray(array) and bool(np.ma.getmaskarray(array).any()):
+        return False
+
+    scalar = array.item()
+    if isinstance(scalar, (bool, np.bool_)):
+        return bool(scalar)
+    try:
+        if bool(pd.isna(scalar)):
+            return False
+    except (TypeError, ValueError):
+        return _INVALID_BOOLEAN
+    try:
+        return _boolean_number(float(scalar))
+    except (TypeError, ValueError, OverflowError):
+        return _INVALID_BOOLEAN
+
+
 def _bool_column(rows: pd.DataFrame, column: str) -> pd.Series:
-    """Normalize Boolean diagnostics, including serialized numeric flags."""
+    """Return strict Boolean diagnostics while preserving the row index."""
 
     if column not in rows.columns:
-        return pd.Series(False, index=rows.index, dtype=bool)
-    values = pd.Series(rows[column], index=rows.index)
-    if pd.api.types.is_bool_dtype(values.dtype):
-        return values.fillna(False).astype(bool)
+        return pd.Series(False, index=rows.index, name=column, dtype=bool)
 
-    numeric = pd.to_numeric(values, errors="coerce")
-    numeric_mask = numeric.notna()
-    normalized = pd.Series(False, index=rows.index, dtype=bool)
-    normalized.loc[numeric_mask] = numeric.loc[numeric_mask].eq(1.0)
+    values = pd.Series(rows[column], index=rows.index, copy=False)
+    normalized: list[bool] = []
+    invalid: list[tuple[object, object]] = []
+    for index, value in values.items():
+        parsed = _boolean_cell(value)
+        if parsed is _INVALID_BOOLEAN:
+            invalid.append((index, value))
+            normalized.append(False)
+        else:
+            normalized.append(bool(parsed))
 
-    text = values.fillna("").astype(str).str.strip().str.casefold()
-    normalized.loc[~numeric_mask] = text.loc[~numeric_mask].isin(
-        {"1", "true", "t", "yes", "y"}
+    if invalid:
+        preview = ", ".join(
+            f"index {index!r}: {value!r}" for index, value in invalid[:5]
+        )
+        suffix = "" if len(invalid) <= 5 else f"; plus {len(invalid) - 5} more"
+        raise ValueError(
+            f"{column} contains invalid Boolean values: {preview}{suffix}"
+        )
+    return pd.Series(
+        normalized,
+        index=values.index,
+        name=values.name,
+        dtype=bool,
     )
-    return normalized
 
 
 def write_template_snapped_submission(
@@ -65,7 +138,6 @@ def write_template_snapped_submission(
     max_interpolation_gap_s = _normalize_max_interpolation_gap_s(
         max_interpolation_gap_s
     )
-    output_dir.mkdir(parents=True, exist_ok=True)
     snapped, diagnostics = snap_official_results_to_template(
         results,
         template,
@@ -74,6 +146,11 @@ def write_template_snapped_submission(
         classification_policy=classification_policy,
         missing_position_policy=missing_position_policy,
     )
+    valid = _bool_column(diagnostics, "valid")
+    extrapolated = _bool_column(diagnostics, "extrapolated")
+    large_gap_fallback = _bool_column(diagnostics, "large_gap_fallback")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
     paths = {
         "official_results_csv": output_dir / RESULTS_CSV,
         "official_zip": output_dir / OFFICIAL_ZIP,
@@ -93,9 +170,6 @@ def write_template_snapped_submission(
     paths["validation_json"].write_text(json.dumps(_jsonable(validation.summary), indent=2))
     validation.rows.to_csv(paths["validation_rows_csv"], index=False)
 
-    valid = _bool_column(diagnostics, "valid")
-    extrapolated = _bool_column(diagnostics, "extrapolated")
-    large_gap_fallback = _bool_column(diagnostics, "large_gap_fallback")
     manifest = {
         "schema": "raft-uav-mmuad-template-snap-v1",
         "row_count": int(len(snapped)),
