@@ -45,6 +45,35 @@ def test_oracle_coverage_rejects_invalid_truth_distance_gate(gate: object) -> No
         )
 
 
+@pytest.mark.parametrize(
+    "threshold",
+    [-0.1, 1.1, np.nan, np.inf, -np.inf, True, 0.5 + 0.0j, np.array([0.5])],
+)
+def test_oracle_coverage_rejects_invalid_catprob_threshold(threshold: object) -> None:
+    radar, truth = _empty_inputs()
+
+    with pytest.raises(ValueError, match="candidate_catprob_threshold"):
+        build_oracle_candidate_coverage_diagnostics(
+            radar=radar,
+            truth=truth,
+            candidate_catprob_threshold=threshold,
+        )
+
+
+@pytest.mark.parametrize("threshold", [None, 0.0, 0.5, 1.0, np.array(0.5)])
+def test_oracle_coverage_accepts_valid_catprob_thresholds(threshold: object) -> None:
+    radar, truth = _empty_inputs()
+
+    report, summary = build_oracle_candidate_coverage_diagnostics(
+        radar=radar,
+        truth=truth,
+        candidate_catprob_threshold=threshold,
+    )
+
+    assert report.empty
+    assert summary["radar_frame_count"] == 0
+
+
 def test_oracle_coverage_accepts_zero_truth_gates() -> None:
     radar, truth = _empty_inputs()
 
