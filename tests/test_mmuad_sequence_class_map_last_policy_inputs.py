@@ -50,6 +50,8 @@ def test_last_policy_requires_timestamp_column() -> None:
         [0.0, np.nan],
         [0.0, np.inf],
         [0.0, True],
+        [0.0, 1.0 + 0.0j],
+        [0.0, np.ma.masked],
         [0.0, [1.0]],
     ],
 )
