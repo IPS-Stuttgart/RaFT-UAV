@@ -42,7 +42,9 @@ def test_jerk_manifest_parses_csv_style_applied_flags(tmp_path: Path) -> None:
         input_submission_path=tmp_path / "input.csv",
     )
 
-    manifest = json.loads(paths["manifest_json"].read_text(encoding="utf-8"))
+    manifest = json.loads(
+        Path(paths["manifest_json"]).read_text(encoding="utf-8")
+    )
 
     assert manifest["changed_row_count"] == 2
     assert manifest["changed_fraction"] == pytest.approx(0.5)
