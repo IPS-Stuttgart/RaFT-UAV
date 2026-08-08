@@ -46,6 +46,8 @@ def _sequence_id_text(value: Any, *, position: int) -> str:
 
     message = f"Sequence row {position} must contain a non-blank scalar identifier"
     scalar = value
+    if np.ma.is_masked(scalar):
+        raise ValueError(message)
     seen_array_ids: set[int] = set()
     while isinstance(scalar, np.ndarray):
         if scalar.ndim != 0:
