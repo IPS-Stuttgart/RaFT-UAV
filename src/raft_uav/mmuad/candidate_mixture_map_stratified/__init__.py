@@ -59,6 +59,9 @@ globals().update(
 globals()["_validated_integer"] = _validated_integer
 globals()["_validate_config"] = _validate_config
 
+# Keep the dynamically re-exported entry point visible to static analysis.
+main = _IMPL.main
+
 __doc__ = _IMPL.__doc__
 __all__ = [
     name
