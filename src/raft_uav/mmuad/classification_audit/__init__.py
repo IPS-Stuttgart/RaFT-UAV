@@ -28,6 +28,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_BUILD = _IMPL.build_mmuad_classification_audit
+_ORIGINAL_CLASS_ROWS = _IMPL._class_rows
 _MISSING_ROW = "<missing-row>"
 _ALIGNMENT_METRIC_COLUMNS = (
     "row_count",
@@ -38,6 +39,53 @@ _ALIGNMENT_METRIC_COLUMNS = (
     "row_key_parity",
     "per_sequence_accuracy",
 )
+
+
+def _sequence_id_text(value: Any, *, position: int) -> str:
+    """Return one normalized non-missing scalar sequence identifier."""
+
+    message = f"Sequence row {position} must contain a non-blank scalar identifier"
+    scalar = value
+    seen_array_ids: set[int] = set()
+    while isinstance(scalar, np.ndarray):
+        if scalar.ndim != 0:
+            raise ValueError(message)
+        array_id = id(scalar)
+        if array_id in seen_array_ids:
+            raise ValueError(message)
+        seen_array_ids.add(array_id)
+        scalar = scalar.item()
+    if isinstance(scalar, np.generic):
+        scalar = scalar.item()
+    if np.ma.is_masked(scalar):
+        raise ValueError(message)
+    try:
+        missing = pd.isna(scalar)
+    except (TypeError, ValueError):
+        missing = False
+    if not isinstance(missing, (bool, np.bool_)):
+        raise ValueError(message)
+    if bool(missing):
+        raise ValueError(message)
+    text = str(scalar).strip()
+    if not text:
+        raise ValueError(message)
+    return text
+
+
+def _class_rows(frame: pd.DataFrame | None) -> pd.DataFrame:
+    """Normalize sequence IDs before the legacy string coercion can hide missing cells."""
+
+    if frame is None:
+        return _ORIGINAL_CLASS_ROWS(frame)
+    normalized = pd.DataFrame(frame).copy()
+    if "Sequence" not in normalized.columns:
+        return _ORIGINAL_CLASS_ROWS(frame)
+    normalized["Sequence"] = [
+        _sequence_id_text(value, position=position)
+        for position, value in enumerate(normalized["Sequence"].tolist())
+    ]
+    return _ORIGINAL_CLASS_ROWS(normalized)
 
 
 def _valid_class_series(values: pd.Series) -> bool:
@@ -347,6 +395,7 @@ def build_mmuad_classification_audit(
     )
 
 
+_IMPL._class_rows = _class_rows
 _IMPL._valid_class_series = _valid_class_series
 _IMPL.build_mmuad_classification_audit = build_mmuad_classification_audit
 
@@ -357,6 +406,8 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_sequence_id_text"] = _sequence_id_text
+globals()["_class_rows"] = _class_rows
 globals()["_valid_class_series"] = _valid_class_series
 globals()["build_mmuad_classification_audit"] = build_mmuad_classification_audit
 globals()["_build_row_alignment"] = _build_row_alignment
