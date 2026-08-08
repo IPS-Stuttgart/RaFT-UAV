@@ -4,7 +4,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from raft_uav.mmuad.classification_audit import build_mmuad_classification_audit
+from raft_uav.mmuad.classification_audit import (
+    _sequence_id_text,
+    build_mmuad_classification_audit,
+)
 
 
 def _rows(sequence: object) -> pd.DataFrame:
@@ -18,6 +21,15 @@ def _rows(sequence: object) -> pd.DataFrame:
 def test_classification_audit_rejects_missing_or_blank_sequence_ids(sequence: object) -> None:
     with pytest.raises(ValueError, match="Sequence"):
         build_mmuad_classification_audit(truth=_rows(sequence), results=_rows("seq-a"))
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [np.ma.masked, np.ma.array("seq-a", mask=True)],
+)
+def test_classification_audit_rejects_masked_sequence_ids(sequence: object) -> None:
+    with pytest.raises(ValueError, match="Sequence"):
+        _sequence_id_text(sequence, position=0)
 
 
 def test_classification_audit_normalizes_sequence_whitespace_before_alignment() -> None:
