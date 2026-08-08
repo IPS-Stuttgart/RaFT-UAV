@@ -101,8 +101,8 @@ def _validated_sequence_ids(rows: pd.DataFrame, *, name: str) -> pd.DataFrame:
     if "sequence_id" not in out.columns:
         raise ValueError(f"{name} must contain a sequence_id column")
 
-    sequence = out["sequence_id"].astype("string")
-    missing_sequence = sequence.isna() | sequence.str.strip().eq("")
+    sequence = out["sequence_id"].astype("string").str.strip()
+    missing_sequence = sequence.isna() | sequence.eq("")
     if bool(missing_sequence.any()):
         raise ValueError(f"{name} contains missing sequence_id values")
 
