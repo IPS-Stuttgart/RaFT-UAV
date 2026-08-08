@@ -48,7 +48,7 @@ def test_require_improvement_does_not_publish_raw_fallback(tmp_path: Path) -> No
             raw,
             truth,
             output,
-            candidates=(("regression", candidate),),
+            candidates=(("candidate", candidate),),
             fold_count=2,
             expected_sequence_count=2,
             bootstrap_samples=20,
@@ -76,7 +76,7 @@ def test_require_improvement_publishes_supported_candidate(tmp_path: Path) -> No
         raw,
         truth,
         output,
-        candidates=(("perfect", candidate),),
+        candidates=(("candidate", candidate),),
         fold_count=2,
         expected_sequence_count=2,
         bootstrap_samples=20,
@@ -84,9 +84,9 @@ def test_require_improvement_publishes_supported_candidate(tmp_path: Path) -> No
         copy_selected=True,
     )
 
-    assert result.selected_candidate == "perfect"
+    assert result.selected_candidate == "candidate"
     assert (output / "tournament_summary.json").is_file()
-    assert (output / "selected_candidate.txt").read_text(encoding="utf-8") == "perfect\n"
+    assert (output / "selected_candidate.txt").read_text(encoding="utf-8") == "candidate\n"
     for sequence in ("AA_00", "BB_00"):
         copied = output / "selected_predictions" / f"{sequence}.txt"
         assert copied.read_text(encoding="utf-8") == _TRUTH_ROWS
