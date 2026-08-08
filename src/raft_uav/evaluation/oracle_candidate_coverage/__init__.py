@@ -3,8 +3,9 @@
 The maintained implementation lives in the sibling
 ``oracle_candidate_coverage.py`` module. This package preserves the public
 import path while rejecting malformed truth-matching gates, radar standard
-deviations, and explicit tracklet configurations and preventing fractional
-candidate identifiers from being silently truncated.
+deviations, candidate-probability thresholds, and explicit tracklet
+configurations and preventing fractional candidate identifiers from being
+silently truncated.
 """
 
 from __future__ import annotations
@@ -48,6 +49,17 @@ def _positive_finite_scalar(value: object, *, name: str) -> float:
     normalized = optional_float(value)
     if normalized is None or normalized <= 0.0:
         raise ValueError(f"{name} must be a finite positive real scalar")
+    return normalized
+
+
+def _optional_unit_interval_scalar(value: object | None, *, name: str) -> float | None:
+    """Return ``None`` or a finite scalar in the closed unit interval."""
+
+    if value is None:
+        return None
+    normalized = optional_float(value)
+    if normalized is None or not 0.0 <= normalized <= 1.0:
+        raise ValueError(f"{name} must be None or a finite scalar in [0, 1]")
     return normalized
 
 
@@ -103,6 +115,10 @@ def build_oracle_candidate_coverage_diagnostics(
         radar_z_std_m,
         name="radar_z_std_m",
     )
+    normalized_catprob_threshold = _optional_unit_interval_scalar(
+        candidate_catprob_threshold,
+        name="candidate_catprob_threshold",
+    )
     return _ORIGINAL_BUILD_DIAGNOSTICS(
         radar=radar,
         truth=truth,
@@ -110,7 +126,7 @@ def build_oracle_candidate_coverage_diagnostics(
         acceleration_std_mps2=acceleration_std_mps2,
         radar_xy_std_m=normalized_xy_std,
         radar_z_std_m=normalized_z_std,
-        candidate_catprob_threshold=candidate_catprob_threshold,
+        candidate_catprob_threshold=normalized_catprob_threshold,
         truth_time_gate_s=normalized_time_gate,
         truth_gate_m=normalized_distance_gate,
         config=normalized_config,
@@ -131,6 +147,7 @@ globals().update(
 )
 globals()["_nonnegative_finite_scalar"] = _nonnegative_finite_scalar
 globals()["_positive_finite_scalar"] = _positive_finite_scalar
+globals()["_optional_unit_interval_scalar"] = _optional_unit_interval_scalar
 globals()["_validated_tracklet_config"] = _validated_tracklet_config
 globals()["_optional_int"] = _optional_int
 globals()["build_oracle_candidate_coverage_diagnostics"] = (
