@@ -29,7 +29,6 @@ _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_RUN_GUARDED_TOURNAMENT = _IMPL.run_guarded_tournament
 _ORIGINAL_COPY_SELECTED_PREDICTIONS = _IMPL._copy_selected_predictions
-_ORIGINAL_WRITE_OUTPUTS = _IMPL._write_outputs
 _RUN_GUARD = RLock()
 
 
