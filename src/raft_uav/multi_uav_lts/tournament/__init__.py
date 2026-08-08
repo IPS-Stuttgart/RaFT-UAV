@@ -1,8 +1,8 @@
-"""Compatibility guards for guarded-tournament output publication.
+"""Compatibility package guarding tournament selected-prediction copies.
 
 The maintained implementation lives in the sibling ``tournament.py`` module.
-This package preserves the public import path while preventing selected-output
-refreshes from deleting their own candidate input.
+This package preserves the public import path while preventing the destructive
+``selected_predictions`` refresh from deleting its own selected candidate input.
 """
 
 from __future__ import annotations
