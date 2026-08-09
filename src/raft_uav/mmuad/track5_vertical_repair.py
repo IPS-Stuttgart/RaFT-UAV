@@ -35,6 +35,11 @@ MANIFEST_JSON = "mmuad_track5_vertical_repair_manifest.json"
 VALIDATION_JSON = "mmuad_track5_vertical_repair_validation.json"
 VALIDATION_ROWS_CSV = "mmuad_track5_vertical_repair_validation_rows.csv"
 
+_INVALID_BOOLEAN = object()
+_TRUE_BOOLEAN_TOKENS = frozenset({"true", "t", "yes", "y", "on"})
+_FALSE_BOOLEAN_TOKENS = frozenset({"false", "f", "no", "n", "off"})
+_MISSING_BOOLEAN_TOKENS = frozenset({"", "nan", "none", "null", "<na>", "nat"})
+
 
 def repair_track5_vertical_spikes(
     submission: pd.DataFrame,
@@ -89,6 +94,14 @@ def write_track5_vertical_repair_outputs(
 ) -> dict[str, Path]:
     """Write repaired estimates, official CSV/ZIP, diagnostics, and manifest."""
 
+    normalized_diagnostics = pd.DataFrame(diagnostics).copy()
+    if "repaired" in normalized_diagnostics.columns:
+        normalized_diagnostics["repaired"] = _normalized_boolean_column(
+            normalized_diagnostics,
+            "repaired",
+        )
+    diagnostics = normalized_diagnostics
+
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     paths = {
@@ -137,9 +150,7 @@ def write_track5_vertical_repair_outputs(
             raise SystemExit(
                 f"vertical-repaired submission is not leaderboard-ready: {reasons or 'unknown'}"
             )
-    repaired_count = (
-        int(diagnostics["repaired"].astype(bool).sum()) if not diagnostics.empty else 0
-    )
+    repaired_count = int(diagnostics["repaired"].sum()) if not diagnostics.empty else 0
     payload = dict(manifest or {})
     payload.update(
         {
@@ -391,6 +402,89 @@ def _horizontal_speed(a: pd.Series, b: pd.Series, dt: float) -> float:
     dx = float(b["state_x_m"]) - float(a["state_x_m"])
     dy = float(b["state_y_m"]) - float(a["state_y_m"])
     return float(np.hypot(dx, dy) / max(float(dt), 1.0e-9))
+
+
+def _boolean_number(value: float) -> bool | object:
+    """Parse one finite numeric Boolean representation."""
+
+    if np.isnan(value):
+        return False
+    if not np.isfinite(value):
+        return _INVALID_BOOLEAN
+    if value == 0.0:
+        return False
+    if value == 1.0:
+        return True
+    return _INVALID_BOOLEAN
+
+
+def _boolean_cell(value: object) -> bool | object:
+    """Parse one persisted diagnostic flag without generic truthiness."""
+
+    if value is None or value is pd.NA or np.ma.is_masked(value):
+        return False
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().casefold()
+        if text in _TRUE_BOOLEAN_TOKENS:
+            return True
+        if text in _FALSE_BOOLEAN_TOKENS or text in _MISSING_BOOLEAN_TOKENS:
+            return False
+        try:
+            return _boolean_number(float(text))
+        except (TypeError, ValueError, OverflowError):
+            return _INVALID_BOOLEAN
+
+    try:
+        array = np.asanyarray(value)
+    except (TypeError, ValueError):
+        return _INVALID_BOOLEAN
+    if array.ndim != 0 or np.iscomplexobj(array):
+        return _INVALID_BOOLEAN
+    if np.ma.isMaskedArray(array) and bool(np.ma.getmaskarray(array).any()):
+        return False
+
+    scalar = array.item()
+    if isinstance(scalar, (bool, np.bool_)):
+        return bool(scalar)
+    try:
+        if bool(pd.isna(scalar)):
+            return False
+    except (TypeError, ValueError):
+        return _INVALID_BOOLEAN
+    try:
+        return _boolean_number(float(scalar))
+    except (TypeError, ValueError, OverflowError):
+        return _INVALID_BOOLEAN
+
+
+def _normalized_boolean_column(rows: pd.DataFrame, column: str) -> pd.Series:
+    """Return strict Boolean diagnostics while preserving the row index."""
+
+    values = pd.Series(rows[column], index=rows.index, copy=False)
+    normalized: list[bool] = []
+    invalid: list[tuple[object, object]] = []
+    for index, value in values.items():
+        parsed = _boolean_cell(value)
+        if parsed is _INVALID_BOOLEAN:
+            invalid.append((index, value))
+            normalized.append(False)
+        else:
+            normalized.append(bool(parsed))
+
+    if invalid:
+        preview = ", ".join(
+            f"index {index!r}: {value!r}" for index, value in invalid[:5]
+        )
+        suffix = "" if len(invalid) <= 5 else f"; plus {len(invalid) - 5} more"
+        raise ValueError(f"{column} contains invalid Boolean values: {preview}{suffix}")
+    return pd.Series(
+        normalized,
+        index=values.index,
+        name=values.name,
+        dtype=bool,
+    )
 
 
 def _safe_abs_max(values: pd.Series) -> float:
