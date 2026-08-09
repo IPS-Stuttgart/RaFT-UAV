@@ -68,7 +68,9 @@ def test_template_resample_summary_rejects_malformed_boolean_flags(
 def test_template_resample_summary_accepts_scalar_boxes_and_masked_missing() -> None:
     masked = np.ma.array(1.0, mask=True)
     valid_values = np.empty(3, dtype=object)
-    valid_values[:] = [np.array(1.0), np.array(0.0), masked]
+    valid_values[0] = np.array(1.0)
+    valid_values[1] = np.array(0.0)
+    valid_values[2] = masked
     diagnostics = pd.DataFrame(
         {
             "sequence_id": ["seq0001", "seq0001", "seq0001"],
