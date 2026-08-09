@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.class_probability_context import OFFICIAL_CLASS_LABELS
+from raft_uav.numeric import optional_float
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_submission_ensemble.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -192,6 +193,17 @@ def _normalize_internal_submission_rows(
     )
 
 
+def _normalize_submission_weight(value: object, *, label: object) -> float:
+    """Return one finite non-negative real scalar submission weight."""
+
+    weight = optional_float(value)
+    if weight is None or weight < 0.0:
+        raise ValueError(
+            f"submission weight for {label!r} must be a finite non-negative real scalar"
+        )
+    return weight
+
+
 def ensemble_track5_submissions(
     submissions: Iterable[object],
     *,
@@ -213,9 +225,13 @@ def ensemble_track5_submissions(
             class_policy=class_policy,
         )
 
-    weights = np.asarray([float(item.weight) for item in inputs], dtype=float)
-    if not np.isfinite(weights).all() or bool(np.any(weights < 0.0)):
-        raise ValueError("submission weights must be non-negative and finite")
+    weights = np.asarray(
+        [
+            _normalize_submission_weight(item.weight, label=item.label)
+            for item in inputs
+        ],
+        dtype=float,
+    )
 
     scale = float(np.max(weights))
     if scale <= 0.0:
@@ -276,6 +292,7 @@ globals()["_raise_invalid_normalized_rows"] = _raise_invalid_normalized_rows
 globals()["_normalize_internal_submission_rows"] = (
     _normalize_internal_submission_rows
 )
+globals()["_normalize_submission_weight"] = _normalize_submission_weight
 globals()["ensemble_track5_submissions"] = ensemble_track5_submissions
 
 __doc__ = _IMPL.__doc__
