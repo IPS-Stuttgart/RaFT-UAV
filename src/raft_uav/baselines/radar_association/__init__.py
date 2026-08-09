@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from raft_uav.numeric import optional_int
+from raft_uav.numeric import optional_float, optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "radar_association.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -183,26 +183,26 @@ def _initial_mht_tracker(
 
 def _validate_radar_association_parameters(arguments: dict[str, Any]) -> None:
     for name in _POSITIVE_FINITE_RADAR_COVARIANCE_PARAMETERS:
-        _require_finite_positive(name, arguments[name])
+        arguments[name] = _require_finite_positive(name, arguments[name])
     for name in _NONNEGATIVE_FINITE_RADAR_COVARIANCE_PARAMETERS:
-        _require_finite_nonnegative(name, arguments[name])
+        arguments[name] = _require_finite_nonnegative(name, arguments[name])
     for name in _POSITIVE_FINITE_ASSOCIATION_PARAMETERS:
-        _require_finite_positive(name, arguments[name])
+        arguments[name] = _require_finite_positive(name, arguments[name])
     for name in _NONNEGATIVE_FINITE_ASSOCIATION_PARAMETERS:
-        _require_finite_nonnegative(name, arguments[name])
+        arguments[name] = _require_finite_nonnegative(name, arguments[name])
     for name in _OPTIONAL_POSITIVE_FINITE_ASSOCIATION_PARAMETERS:
         value = arguments[name]
         if value is not None:
-            _require_finite_positive(name, value)
+            arguments[name] = _require_finite_positive(name, value)
     for name in _OPTIONAL_UNIT_INTERVAL_ASSOCIATION_PARAMETERS:
         value = arguments[name]
         if value is not None:
-            _require_finite_unit_interval(name, value)
+            arguments[name] = _require_finite_unit_interval(name, value)
     for name in _POSITIVE_INTEGER_ASSOCIATION_PARAMETERS:
         arguments[name] = _require_positive_integer(name, arguments[name])
 
-    crossrange_min = float(arguments["radar_crossrange_min_std_m"])
-    crossrange_max = float(arguments["radar_crossrange_max_std_m"])
+    crossrange_min = arguments["radar_crossrange_min_std_m"]
+    crossrange_max = arguments["radar_crossrange_max_std_m"]
     if crossrange_max < crossrange_min:
         raise ValueError("radar_crossrange_max_std_m must be >= radar_crossrange_min_std_m")
 
@@ -214,11 +214,8 @@ def _validate_radar_covariance_parameters(arguments: dict[str, Any]) -> None:
 
 
 def _finite_float(name: str, value: Any) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be finite") from exc
-    if not np.isfinite(number):
+    number = optional_float(value)
+    if number is None:
         raise ValueError(f"{name} must be finite")
     return number
 
