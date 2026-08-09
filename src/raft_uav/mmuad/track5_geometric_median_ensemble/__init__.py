@@ -69,6 +69,15 @@ def _validate_estimate_weight(value: object, *, label: str) -> float:
     return weight
 
 
+def _require_usable_weight_mass(weights: list[float]) -> None:
+    """Reject ensembles with no inputs or no positive effective weight."""
+
+    if not weights:
+        raise ValueError("at least one estimate input is required")
+    if not any(weight > 0.0 for weight in weights):
+        raise ValueError("estimate weights must have positive finite mass")
+
+
 def _scaled_weights(weights: np.ndarray) -> tuple[np.ndarray, float]:
     """Scale non-negative weights by their maximum without changing ratios."""
 
@@ -96,6 +105,7 @@ def _validated_runtime_inputs(
                 _validate_estimate_weight(weight, label=safe_label),
             )
         )
+    _require_usable_weight_mass([weight for _, _, weight in validated])
     return validated
 
 
@@ -162,6 +172,7 @@ def _validated_estimate_input_objects(
                 weight=_validate_estimate_weight(item.weight, label=safe_label),
             )
         )
+    _require_usable_weight_mass([float(item.weight) for item in validated])
     return validated
 
 
