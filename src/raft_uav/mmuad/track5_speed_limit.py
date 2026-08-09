@@ -39,6 +39,98 @@ SPEED_LIMIT_VALIDATION_JSON = "mmuad_track5_speed_limit_validation.json"
 SPEED_LIMIT_VALIDATION_ROWS_CSV = "mmuad_track5_speed_limit_validation_rows.csv"
 
 _NORMALIZED_SEQUENCE_ID_COLUMNS = ("sequence_id", "Sequence", "sequence", "seq")
+_INVALID_BOOLEAN = object()
+_TRUE_BOOLEAN_TOKENS = frozenset({"true", "t", "yes", "y", "on"})
+_FALSE_BOOLEAN_TOKENS = frozenset({"false", "f", "no", "n", "off"})
+_MISSING_BOOLEAN_TOKENS = frozenset({"", "nan", "none", "null", "<na>", "nat"})
+
+
+def _boolean_number(value: float) -> bool | object:
+    """Parse one finite numeric Boolean representation."""
+
+    if np.isnan(value):
+        return False
+    if not np.isfinite(value):
+        return _INVALID_BOOLEAN
+    if value == 0.0:
+        return False
+    if value == 1.0:
+        return True
+    return _INVALID_BOOLEAN
+
+
+def _boolean_cell(value: object) -> bool | object:
+    """Parse one persisted diagnostic flag without generic truthiness."""
+
+    if value is None or value is pd.NA or np.ma.is_masked(value):
+        return False
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().casefold()
+        if text in _TRUE_BOOLEAN_TOKENS:
+            return True
+        if text in _FALSE_BOOLEAN_TOKENS or text in _MISSING_BOOLEAN_TOKENS:
+            return False
+        try:
+            return _boolean_number(float(text))
+        except (TypeError, ValueError, OverflowError):
+            return _INVALID_BOOLEAN
+
+    try:
+        array = np.asanyarray(value)
+    except (TypeError, ValueError):
+        return _INVALID_BOOLEAN
+    if array.ndim != 0 or np.iscomplexobj(array):
+        return _INVALID_BOOLEAN
+    if np.ma.isMaskedArray(array) and bool(np.ma.getmaskarray(array).any()):
+        return False
+
+    scalar = array.item()
+    if isinstance(scalar, (bool, np.bool_)):
+        return bool(scalar)
+    try:
+        if bool(pd.isna(scalar)):
+            return False
+    except (TypeError, ValueError):
+        return _INVALID_BOOLEAN
+    try:
+        return _boolean_number(float(scalar))
+    except (TypeError, ValueError, OverflowError):
+        return _INVALID_BOOLEAN
+
+
+def _normalized_boolean_column(rows: pd.DataFrame, column: str) -> pd.Series:
+    """Return strict Boolean diagnostics while preserving the row index."""
+
+    if column not in rows.columns:
+        return pd.Series(False, index=rows.index, name=column, dtype=bool)
+
+    values = pd.Series(rows[column], index=rows.index, copy=False)
+    normalized: list[bool] = []
+    invalid: list[tuple[object, object]] = []
+    for index, value in values.items():
+        parsed = _boolean_cell(value)
+        if parsed is _INVALID_BOOLEAN:
+            invalid.append((index, value))
+            normalized.append(False)
+        else:
+            normalized.append(bool(parsed))
+
+    if invalid:
+        preview = ", ".join(
+            f"index {index!r}: {value!r}" for index, value in invalid[:5]
+        )
+        suffix = "" if len(invalid) <= 5 else f"; plus {len(invalid) - 5} more"
+        raise ValueError(
+            f"{column} contains invalid Boolean values: {preview}{suffix}"
+        )
+    return pd.Series(
+        normalized,
+        index=values.index,
+        name=values.name,
+        dtype=bool,
+    )
 
 
 def project_track5_speed_limit(
@@ -95,6 +187,14 @@ def write_track5_speed_limit_outputs(
 ) -> dict[str, Path]:
     """Write speed-limited estimates, official CSV/ZIP, diagnostics, and manifest."""
 
+    normalized_diagnostics = pd.DataFrame(diagnostics).copy()
+    changed = _normalized_boolean_column(
+        normalized_diagnostics,
+        "speed_limit_applied",
+    )
+    if "speed_limit_applied" in normalized_diagnostics.columns:
+        normalized_diagnostics["speed_limit_applied"] = changed
+
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     paths = {
@@ -105,7 +205,7 @@ def write_track5_speed_limit_outputs(
         "manifest_json": output / SPEED_LIMIT_MANIFEST_JSON,
     }
     limited.to_csv(paths["estimates_csv"], index=False)
-    diagnostics.to_csv(paths["diagnostics_csv"], index=False)
+    normalized_diagnostics.to_csv(paths["diagnostics_csv"], index=False)
     official_rows = limited.copy()
     official_rows["classification"] = official_rows["Classification"]
     write_official_mmaud_results_csv(
@@ -136,8 +236,10 @@ def write_track5_speed_limit_outputs(
             raise SystemExit(
                 f"speed-limited submission is not leaderboard-ready: {reasons or 'unknown'}"
             )
-    changed = diagnostics.get("speed_limit_applied", pd.Series(dtype=bool)).astype(bool)
-    applied = pd.to_numeric(diagnostics.get("speed_limit_correction_m", pd.Series(dtype=float)), errors="coerce")
+    applied = pd.to_numeric(
+        normalized_diagnostics.get("speed_limit_correction_m", pd.Series(dtype=float)),
+        errors="coerce",
+    )
     payload = dict(manifest or {})
     payload.update(
         {
@@ -145,8 +247,12 @@ def write_track5_speed_limit_outputs(
             "input_submission": str(input_submission_path),
             "row_count": int(len(limited)),
             "sequence_count": int(limited["sequence_id"].nunique()) if not limited.empty else 0,
-            "changed_row_count": int(changed.sum()) if not diagnostics.empty else 0,
-            "changed_fraction": float(changed.sum() / len(diagnostics)) if len(diagnostics) else 0.0,
+            "changed_row_count": int(changed.sum()) if not normalized_diagnostics.empty else 0,
+            "changed_fraction": (
+                float(changed.sum() / len(normalized_diagnostics))
+                if len(normalized_diagnostics)
+                else 0.0
+            ),
             "max_correction_m": _safe_max(applied),
             "mean_correction_m": _safe_mean(applied),
             "validation": validation_summary,
