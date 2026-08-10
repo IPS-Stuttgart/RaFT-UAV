@@ -35,6 +35,7 @@ _ORIGINAL_BUILD_COUNTERFACTUAL_ASSOCIATION_DASHBOARD = (
 )
 _ORIGINAL_SUMMARIZE_COUNTERFACTUAL_REGRET = _IMPL.summarize_counterfactual_regret
 _ORIGINAL_RUN_TRACKLET_FEATURE_STORE = _IMPL.run_tracklet_feature_store
+_resolve_flights = _IMPL._resolve_flights
 _TRUE_BOOLEAN_TEXT = frozenset({"true", "t", "yes", "y", "on"})
 _FALSE_BOOLEAN_TEXT = frozenset(
     {"false", "f", "no", "n", "off", "", "nan", "none", "null", "<na>", "nat"}
