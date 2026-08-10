@@ -3,8 +3,8 @@
 The maintained implementation lives in the sibling ``track5_acceleration_limit.py``
 module. This package preserves the public import path while rejecting malformed
 scalar controls, missing sequence identifiers, invalid normalized rows, invalid
-classification labels, and duplicate fixed-grid keys, and while keeping zero-blend
-runs diagnostic-only.
+classification labels, duplicate fixed-grid keys, and ambiguous persisted diagnostic
+flags, and while keeping zero-blend runs diagnostic-only.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_REPAIR = _IMPL.repair_track5_acceleration_kinks
 _ORIGINAL_REPAIR_SEQUENCE = _IMPL._repair_sequence
+_ORIGINAL_WRITE_OUTPUTS = _IMPL.write_track5_acceleration_limit_outputs
 _NUMERIC_COLUMNS = (
     "time_s",
     "state_x_m",
@@ -42,6 +43,10 @@ _NUMERIC_COLUMNS = (
     "state_z_m",
     "Classification",
 )
+_INVALID_BOOLEAN = object()
+_TRUE_BOOLEAN_TOKENS = frozenset({"true", "t", "yes", "y", "on"})
+_FALSE_BOOLEAN_TOKENS = frozenset({"false", "f", "no", "n", "off"})
+_MISSING_BOOLEAN_TOKENS = frozenset({"", "nan", "none", "null", "<na>", "nat"})
 
 
 class _Track5AccelerationLimitModule(ModuleType):
@@ -269,6 +274,94 @@ def _validate_unique_fixed_grid_keys(rows: pd.DataFrame) -> None:
     )
 
 
+def _boolean_number(value: float) -> bool | object:
+    """Parse one finite numeric Boolean representation."""
+
+    if np.isnan(value):
+        return False
+    if not np.isfinite(value):
+        return _INVALID_BOOLEAN
+    if value == 0.0:
+        return False
+    if value == 1.0:
+        return True
+    return _INVALID_BOOLEAN
+
+
+def _boolean_cell(value: object) -> bool | object:
+    """Parse one persisted diagnostic flag without generic truthiness."""
+
+    if value is None or value is pd.NA or np.ma.is_masked(value):
+        return False
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().casefold()
+        if text in _TRUE_BOOLEAN_TOKENS:
+            return True
+        if text in _FALSE_BOOLEAN_TOKENS or text in _MISSING_BOOLEAN_TOKENS:
+            return False
+        try:
+            return _boolean_number(float(text))
+        except (TypeError, ValueError, OverflowError):
+            return _INVALID_BOOLEAN
+
+    try:
+        array = np.asanyarray(value)
+    except (TypeError, ValueError):
+        return _INVALID_BOOLEAN
+    if array.ndim != 0 or np.iscomplexobj(array):
+        return _INVALID_BOOLEAN
+    if np.ma.isMaskedArray(array) and bool(np.ma.getmaskarray(array).any()):
+        return False
+
+    scalar = array.item()
+    if isinstance(scalar, (bool, np.bool_)):
+        return bool(scalar)
+    try:
+        if bool(pd.isna(scalar)):
+            return False
+    except (TypeError, ValueError):
+        return _INVALID_BOOLEAN
+    try:
+        return _boolean_number(float(scalar))
+    except (TypeError, ValueError, OverflowError):
+        return _INVALID_BOOLEAN
+
+
+def _normalized_boolean_column(rows: pd.DataFrame, column: str) -> pd.Series:
+    """Return strict Boolean diagnostics while preserving the row index."""
+
+    if column not in rows.columns:
+        return pd.Series(False, index=rows.index, name=column, dtype=bool)
+
+    values = pd.Series(rows[column], index=rows.index, copy=False)
+    normalized: list[bool] = []
+    invalid: list[tuple[object, object]] = []
+    for index, value in values.items():
+        parsed = _boolean_cell(value)
+        if parsed is _INVALID_BOOLEAN:
+            invalid.append((index, value))
+            normalized.append(False)
+        else:
+            normalized.append(bool(parsed))
+
+    if invalid:
+        preview = ", ".join(
+            f"index {index!r}: {value!r}" for index, value in invalid[:5]
+        )
+        suffix = "" if len(invalid) <= 5 else f"; plus {len(invalid) - 5} more"
+        raise ValueError(
+            f"{column} contains invalid Boolean values: {preview}{suffix}"
+        )
+    return pd.Series(
+        normalized,
+        index=values.index,
+        name=values.name,
+        dtype=bool,
+    )
+
+
 def repair_track5_acceleration_kinks(
     submission,
     *,
@@ -320,8 +413,40 @@ def _repair_sequence(group, **kwargs):
     return repaired, diagnostics
 
 
+def write_track5_acceleration_limit_outputs(
+    *,
+    repaired,
+    diagnostics,
+    output_dir,
+    input_submission_path,
+    template=None,
+    manifest=None,
+    require_leaderboard_ready: bool = False,
+):
+    """Write outputs after strictly normalizing persisted applied flags."""
+
+    normalized_diagnostics = pd.DataFrame(diagnostics).copy()
+    changed = _normalized_boolean_column(
+        normalized_diagnostics,
+        "acceleration_limit_applied",
+    )
+    if "acceleration_limit_applied" in normalized_diagnostics.columns:
+        normalized_diagnostics["acceleration_limit_applied"] = changed
+
+    return _ORIGINAL_WRITE_OUTPUTS(
+        repaired=repaired,
+        diagnostics=normalized_diagnostics,
+        output_dir=output_dir,
+        input_submission_path=input_submission_path,
+        template=template,
+        manifest=manifest,
+        require_leaderboard_ready=require_leaderboard_ready,
+    )
+
+
 _IMPL.repair_track5_acceleration_kinks = repair_track5_acceleration_kinks
 _IMPL._repair_sequence = _repair_sequence
+_IMPL.write_track5_acceleration_limit_outputs = write_track5_acceleration_limit_outputs
 
 
 globals().update(
@@ -341,8 +466,14 @@ globals()["_validate_and_normalize_classifications"] = (
     _validate_and_normalize_classifications
 )
 globals()["_validate_unique_fixed_grid_keys"] = _validate_unique_fixed_grid_keys
+globals()["_boolean_number"] = _boolean_number
+globals()["_boolean_cell"] = _boolean_cell
+globals()["_normalized_boolean_column"] = _normalized_boolean_column
 globals()["repair_track5_acceleration_kinks"] = repair_track5_acceleration_kinks
 globals()["_repair_sequence"] = _repair_sequence
+globals()["write_track5_acceleration_limit_outputs"] = (
+    write_track5_acceleration_limit_outputs
+)
 __doc__ = _IMPL.__doc__
 __all__ = [
     name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))
