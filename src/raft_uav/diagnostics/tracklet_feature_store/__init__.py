@@ -215,14 +215,64 @@ def _boolean_series(values: Any, *, column: str) -> pd.Series:
 
 
 def build_counterfactual_association_dashboard(features: Any) -> pd.DataFrame:
-    """Build the dashboard after normalizing persisted selection flags."""
+    """Build the dashboard while preserving candidate identifier provenance."""
 
-    normalized = pd.DataFrame(features).copy()
+    normalized = pd.DataFrame(features).copy().reset_index(drop=True)
     column = "chosen_by_selected_radar"
     if column in normalized.columns:
         normalized[column] = _boolean_series(normalized[column], column=column)
-    normalized = normalized.reset_index(drop=True)
-    return _ORIGINAL_BUILD_COUNTERFACTUAL_ASSOCIATION_DASHBOARD(normalized)
+    if normalized.empty:
+        return pd.DataFrame(columns=_IMPL._REGRET_COLUMNS)
+
+    rows: list[dict[str, Any]] = []
+    for (key_type, key), group in normalized.groupby(
+        ["frame_key_type", "frame_key"], sort=True, dropna=False
+    ):
+        ordered = group.sort_values("oracle_rank_in_frame", na_position="last")
+        finite_errors = pd.to_numeric(ordered["oracle_error_m"], errors="coerce")
+        best = ordered.loc[finite_errors.idxmin()] if finite_errors.notna().any() else None
+        selected = ordered.loc[ordered[column]]
+        selected_row = selected.iloc[0] if not selected.empty else None
+        best_error = _IMPL._row_float(best, "oracle_error_m") if best is not None else np.nan
+        selected_error = (
+            _IMPL._row_float(selected_row, "oracle_error_m")
+            if selected_row is not None
+            else np.nan
+        )
+        selected_rank = (
+            _IMPL._row_float(selected_row, "oracle_rank_in_frame")
+            if selected_row is not None
+            else np.nan
+        )
+        regret = (
+            selected_error - best_error
+            if np.isfinite([selected_error, best_error]).all()
+            else np.nan
+        )
+        rows.append(
+            {
+                "frame_key_type": key_type,
+                "frame_key": key,
+                "time_s": float(pd.to_numeric(group["time_s"], errors="coerce").median()),
+                "candidate_count": int(len(group)),
+                "truth_available": bool(finite_errors.notna().any()),
+                "best_candidate_error_m": best_error,
+                "best_candidate_track_id": _row_value(best, "track_id"),
+                "best_candidate_track_index": _row_value(best, "track_index"),
+                "selected_present": selected_row is not None,
+                "selected_candidate_error_m": selected_error,
+                "selected_candidate_rank": selected_rank,
+                "selected_candidate_track_id": _row_value(selected_row, "track_id"),
+                "selected_candidate_track_index": _row_value(selected_row, "track_index"),
+                "selection_regret_m": regret,
+                "category": _IMPL._regret_category(
+                    best_error,
+                    selected_error,
+                    selected_row is not None,
+                ),
+            }
+        )
+    return pd.DataFrame.from_records(rows, columns=_IMPL._REGRET_COLUMNS)
 
 
 def summarize_counterfactual_regret(regret: Any) -> dict[str, Any]:
