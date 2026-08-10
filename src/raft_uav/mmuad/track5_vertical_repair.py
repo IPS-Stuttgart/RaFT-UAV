@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad._diagnostic_boolean import normalize_persisted_boolean_column
 from raft_uav.mmuad.submission import load_official_track5_template_file
 from raft_uav.mmuad.submission import validate_official_track5_submission
 from raft_uav.mmuad.submission import write_official_mmaud_results_csv
@@ -89,6 +90,14 @@ def write_track5_vertical_repair_outputs(
 ) -> dict[str, Path]:
     """Write repaired estimates, official CSV/ZIP, diagnostics, and manifest."""
 
+    normalized_diagnostics = pd.DataFrame(diagnostics).copy()
+    if "repaired" in normalized_diagnostics.columns:
+        normalized_diagnostics["repaired"] = normalize_persisted_boolean_column(
+            normalized_diagnostics["repaired"],
+            column="repaired",
+        )
+    diagnostics = normalized_diagnostics
+
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     paths = {
@@ -137,9 +146,7 @@ def write_track5_vertical_repair_outputs(
             raise SystemExit(
                 f"vertical-repaired submission is not leaderboard-ready: {reasons or 'unknown'}"
             )
-    repaired_count = (
-        int(diagnostics["repaired"].astype(bool).sum()) if not diagnostics.empty else 0
-    )
+    repaired_count = int(diagnostics["repaired"].sum()) if not diagnostics.empty else 0
     payload = dict(manifest or {})
     payload.update(
         {

@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad._diagnostic_boolean import normalize_persisted_boolean_column
 from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
     validate_official_track5_submission,
@@ -112,6 +113,14 @@ def write_track5_hampel_repair_outputs(
 ) -> dict[str, Path]:
     """Write repaired estimates, official CSV/ZIP, diagnostics, and manifest."""
 
+    normalized_diagnostics = pd.DataFrame(diagnostics).copy()
+    if "hampel_repair_applied" in normalized_diagnostics.columns:
+        normalized_diagnostics["hampel_repair_applied"] = normalize_persisted_boolean_column(
+            normalized_diagnostics["hampel_repair_applied"],
+            column="hampel_repair_applied",
+        )
+    diagnostics = normalized_diagnostics
+
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     paths = {
@@ -151,7 +160,7 @@ def write_track5_hampel_repair_outputs(
         if require_leaderboard_ready and not validation.summary.get("leaderboard_ready", False):
             reasons = ", ".join(validation.summary.get("leaderboard_blocking_reasons", []))
             raise SystemExit(f"Hampel-repaired submission is not leaderboard-ready: {reasons or 'unknown'}")
-    changed = diagnostics.get("hampel_repair_applied", pd.Series(dtype=bool)).astype(bool)
+    changed = diagnostics.get("hampel_repair_applied", pd.Series(dtype=bool))
     correction = pd.to_numeric(
         diagnostics.get("hampel_repair_correction_m", pd.Series(dtype=float)),
         errors="coerce",

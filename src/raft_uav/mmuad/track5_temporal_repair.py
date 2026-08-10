@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad._diagnostic_boolean import normalize_persisted_boolean_column
 from raft_uav.mmuad.submission import normalize_official_track5_results_frame
 from raft_uav.mmuad.submission import parse_official_position_cell
 
@@ -88,6 +89,14 @@ def write_track5_temporal_repair_outputs(
 ) -> dict[str, Path]:
     """Write repaired estimates, official CSV/ZIP, diagnostics, and manifest."""
 
+    normalized_diagnostics = pd.DataFrame(diagnostics).copy()
+    if "repaired" in normalized_diagnostics.columns:
+        normalized_diagnostics["repaired"] = normalize_persisted_boolean_column(
+            normalized_diagnostics["repaired"],
+            column="repaired",
+        )
+    diagnostics = normalized_diagnostics
+
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     paths = {
@@ -131,7 +140,7 @@ def write_track5_temporal_repair_outputs(
                 f"temporal-repaired submission is not leaderboard-ready: {reasons or 'unknown'}"
             )
     payload = dict(manifest or {})
-    repaired_count = int(diagnostics["repaired"].astype(bool).sum()) if not diagnostics.empty else 0
+    repaired_count = int(diagnostics["repaired"].sum()) if not diagnostics.empty else 0
     payload.update(
         {
             "schema": "raft-uav-mmuad-track5-temporal-repair-v1",
