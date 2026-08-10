@@ -32,6 +32,15 @@ _SPEC.loader.exec_module(_IMPL)
 _LEGACY_CANDIDATE_ROWS = _IMPL._candidate_rows
 _LEGACY_PROBABILITY_ROWS = _IMPL._probability_rows
 _MISSING_SEQUENCE_TEXT = frozenset({"nan", "none", "<na>"})
+_CANDIDATE_SEQUENCE_ALIASES = (
+    "sequence_id",
+    "sequence",
+    "seq",
+    "scene",
+    "scene_id",
+    "clip",
+    "clip_id",
+)
 
 
 def _predicted_class_labels(values: pd.Series) -> pd.Series:
@@ -78,8 +87,39 @@ def _normalize_sequence_ids(
     return text
 
 
+def _raw_candidate_sequence_values(
+    candidates: object,
+) -> tuple[pd.Series, str] | None:
+    """Return an explicitly supplied candidate sequence column before normalization."""
+
+    if isinstance(candidates, _IMPL.CandidateFrame):
+        rows = candidates.rows
+    else:
+        rows = pd.DataFrame(candidates)
+    if rows.empty:
+        return None
+
+    columns_by_key: dict[str, object] = {}
+    for column in rows.columns:
+        columns_by_key.setdefault(str(column).strip().casefold(), column)
+    for alias in _CANDIDATE_SEQUENCE_ALIASES:
+        column = columns_by_key.get(alias.casefold())
+        if column is not None:
+            return rows[column], str(column)
+    return None
+
+
 def _candidate_rows(candidates: object) -> pd.DataFrame:
     """Normalize and validate candidate sequence identifiers before joining."""
+
+    raw_sequence = _raw_candidate_sequence_values(candidates)
+    if raw_sequence is not None:
+        values, column = raw_sequence
+        _normalize_sequence_ids(
+            values,
+            table_name="candidate",
+            column=column,
+        )
 
     rows = _LEGACY_CANDIDATE_ROWS(candidates)
     if rows.empty:
@@ -188,6 +228,7 @@ globals().update(
 )
 globals()["_predicted_class_labels"] = _predicted_class_labels
 globals()["_normalize_sequence_ids"] = _normalize_sequence_ids
+globals()["_raw_candidate_sequence_values"] = _raw_candidate_sequence_values
 globals()["_candidate_rows"] = _candidate_rows
 globals()["_normalize_probability_input"] = _normalize_probability_input
 globals()["_sanitize_probability_inputs"] = _sanitize_probability_inputs
