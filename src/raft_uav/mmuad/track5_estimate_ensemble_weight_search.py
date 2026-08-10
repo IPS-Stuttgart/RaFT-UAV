@@ -107,7 +107,10 @@ def search_track5_estimate_ensemble_weights(
             **metrics,
             **objective_metrics,
         }
-        weights_payload = {f"weight_{item.label}": float(weight) for item, weight in zip(inputs, weights, strict=True)}
+        weights_payload = {
+            f"weight_{item.label}": float(weight)
+            for item, weight in zip(inputs, weights, strict=True)
+        }
         record.update(weights_payload)
         records.append(record)
         for _, sequence_row in by_sequence.iterrows():
@@ -126,7 +129,13 @@ def search_track5_estimate_ensemble_weights(
     if grid.empty:
         raise ValueError("weight grid produced no rows")
     by_sequence_grid = pd.DataFrame.from_records(by_sequence_records)
-    best_row = grid.sort_values(
+    scored_grid = _scored_weight_grid_rows(grid)
+    if scored_grid.empty:
+        raise ValueError(
+            "no weight candidate had finite matched truth rows; check truth/template "
+            "sequence ids and timestamps before selecting ensemble weights"
+        )
+    best_row = scored_grid.sort_values(
         ["selection_objective_value", "pose_mse_m2", "pose_p95_m", "pose_max_m"],
         na_position="last",
     ).iloc[0]
@@ -185,7 +194,6 @@ def write_weight_search_outputs(
     """Run weight search and write grid, best config, by-sequence metrics, and optional ZIP."""
 
     output = Path(output_dir)
-    output.mkdir(parents=True, exist_ok=True)
     input_list = list(estimate_inputs)
     grid, best = search_track5_estimate_ensemble_weights(
         input_list,
@@ -198,6 +206,7 @@ def write_weight_search_outputs(
         selection_objective=selection_objective,
         sequence_objective_weight=sequence_objective_weight,
     )
+    output.mkdir(parents=True, exist_ok=True)
     by_sequence = pd.DataFrame(grid.attrs.get("by_sequence", pd.DataFrame()))
     paths = {
         "weight_grid_csv": output / WEIGHT_GRID_CSV,
@@ -336,7 +345,10 @@ def _score_template_estimates(estimates: pd.DataFrame, truth: pd.DataFrame) -> d
     return _metrics_from_errors(np.linalg.norm(estimated_xyz[finite] - truth_xyz[finite], axis=1))
 
 
-def _score_template_estimates_by_sequence(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
+def _score_template_estimates_by_sequence(
+    estimates: pd.DataFrame,
+    truth: pd.DataFrame,
+) -> pd.DataFrame:
     rows = _merge_template_estimates_to_truth(estimates, truth)
     if rows.empty:
         return pd.DataFrame(columns=["sequence_id", *list(_empty_metrics())])
@@ -348,18 +360,28 @@ def _score_template_estimates_by_sequence(estimates: pd.DataFrame, truth: pd.Dat
         if not finite.any():
             metrics = _empty_metrics()
         else:
-            metrics = _metrics_from_errors(np.linalg.norm(estimated_xyz[finite] - truth_xyz[finite], axis=1))
+            metrics = _metrics_from_errors(
+                np.linalg.norm(estimated_xyz[finite] - truth_xyz[finite], axis=1)
+            )
         records.append({"sequence_id": str(sequence_id), **metrics})
     return pd.DataFrame.from_records(records)
 
 
-def _merge_template_estimates_to_truth(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
+def _merge_template_estimates_to_truth(
+    estimates: pd.DataFrame,
+    truth: pd.DataFrame,
+) -> pd.DataFrame:
     rows = pd.DataFrame(estimates).copy()
     if rows.empty or truth.empty:
         return pd.DataFrame()
     rows["sequence_id"] = rows["sequence_id"].astype(str)
     rows["_time_token"] = _time_token(pd.to_numeric(rows["time_s"], errors="coerce"))
-    return rows.merge(truth, on=["sequence_id", "_time_token"], how="inner", suffixes=("", "_truth"))
+    return rows.merge(
+        truth,
+        on=["sequence_id", "_time_token"],
+        how="inner",
+        suffixes=("", "_truth"),
+    )
 
 
 def _sequence_objective_metrics(by_sequence: pd.DataFrame) -> dict[str, Any]:
@@ -427,6 +449,22 @@ def _empty_metrics() -> dict[str, Any]:
         "pose_p95_m": np.nan,
         "pose_max_m": np.nan,
     }
+
+
+def _scored_weight_grid_rows(grid: pd.DataFrame) -> pd.DataFrame:
+    metric_columns = [
+        "selection_objective_value",
+        "pose_mse_m2",
+        "pose_p95_m",
+        "pose_max_m",
+    ]
+    matched_rows = pd.to_numeric(
+        grid.get("matched_rows", pd.Series(dtype=float)),
+        errors="coerce",
+    )
+    metric_values = grid[metric_columns].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+    scored = (matched_rows.fillna(0).to_numpy(float) > 0.0) & np.isfinite(metric_values).all(axis=1)
+    return grid.loc[scored].copy()
 
 
 def _time_token(values: pd.Series) -> pd.Series:
