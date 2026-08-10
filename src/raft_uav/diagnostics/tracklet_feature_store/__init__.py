@@ -35,7 +35,6 @@ _ORIGINAL_BUILD_COUNTERFACTUAL_ASSOCIATION_DASHBOARD = (
 )
 _ORIGINAL_SUMMARIZE_COUNTERFACTUAL_REGRET = _IMPL.summarize_counterfactual_regret
 _ORIGINAL_RUN_TRACKLET_FEATURE_STORE = _IMPL.run_tracklet_feature_store
-_ORIGINAL_RESOLVE_FLIGHTS = _IMPL._resolve_flights
 _TRUE_BOOLEAN_TEXT = frozenset({"true", "t", "yes", "y", "on"})
 _FALSE_BOOLEAN_TEXT = frozenset(
     {"false", "f", "no", "n", "off", "", "nan", "none", "null", "<na>", "nat"}
@@ -236,6 +235,26 @@ def summarize_counterfactual_regret(regret: Any) -> dict[str, Any]:
     return _ORIGINAL_SUMMARIZE_COUNTERFACTUAL_REGRET(normalized)
 
 
+def _validate_external_selected_radar_scope(
+    selected_radar_csv: Path | None,
+    resolved_flights: Iterable[str],
+) -> None:
+    """Reject one unscoped selected-radar file being reused across flights."""
+
+    if selected_radar_csv is None:
+        return
+    unique_flights = list(dict.fromkeys(resolved_flights))
+    if len(unique_flights) <= 1:
+        return
+    rendered = ", ".join(unique_flights)
+    raise ValueError(
+        "selected_radar_csv cannot be applied to multiple flights because "
+        "the external selected-radar format is not flight-scoped; "
+        f"resolved flights: {rendered}. Run one flight at a time or omit "
+        "selected_radar_csv."
+    )
+
+
 def run_tracklet_feature_store(
     *,
     dataset_root: Path,
@@ -256,20 +275,12 @@ def run_tracklet_feature_store(
 
     requested_flights = None if flights is None else list(flights)
     if selected_radar_csv is not None:
-        resolved_flights = _ORIGINAL_RESOLVE_FLIGHTS(
+        resolved_flights = _IMPL._resolve_flights(
             Path(dataset_root),
             requested_flights,
             variant=variant,
         )
-        unique_flights = list(dict.fromkeys(resolved_flights))
-        if len(unique_flights) > 1:
-            rendered = ", ".join(unique_flights)
-            raise ValueError(
-                "selected_radar_csv cannot be applied to multiple flights because "
-                "the external selected-radar format is not flight-scoped; "
-                f"resolved flights: {rendered}. Run one flight at a time or omit "
-                "selected_radar_csv."
-            )
+        _validate_external_selected_radar_scope(selected_radar_csv, resolved_flights)
 
     return _ORIGINAL_RUN_TRACKLET_FEATURE_STORE(
         dataset_root=dataset_root,
@@ -311,6 +322,9 @@ globals()["_selection_mask"] = _selection_mask
 globals()["_diagnostic_identifier_value"] = _diagnostic_identifier_value
 globals()["_row_value"] = _row_value
 globals()["_boolean_series"] = _boolean_series
+globals()["_validate_external_selected_radar_scope"] = (
+    _validate_external_selected_radar_scope
+)
 globals()["build_counterfactual_association_dashboard"] = (
     build_counterfactual_association_dashboard
 )
