@@ -8,8 +8,6 @@ import pytest
 from raft_uav.mmuad.track5_estimate_ensemble import EstimateInput
 from raft_uav.mmuad.track5_estimate_ensemble_weight_search import (
     search_track5_estimate_ensemble_weights,
-)
-from raft_uav.mmuad.track5_estimate_ensemble_weight_search import (
     write_weight_search_outputs,
 )
 
