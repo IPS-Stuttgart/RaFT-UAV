@@ -4,7 +4,9 @@ import pandas as pd
 import pytest
 
 from raft_uav.mmuad.track5_estimate_ensemble import EstimateInput
-from raft_uav.mmuad.track5_uncertainty_ensemble import write_track5_uncertainty_ensemble_outputs
+from raft_uav.mmuad.track5_uncertainty_ensemble import (
+    write_track5_uncertainty_ensemble_outputs,
+)
 
 
 def _template() -> pd.DataFrame:
