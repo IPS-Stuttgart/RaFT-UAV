@@ -56,7 +56,7 @@ def test_external_selected_radar_rejects_multi_flight_reuse(
 ) -> None:
     monkeypatch.setattr(
         feature_store,
-        "_resolve_flights",
+        "_ORIGINAL_RESOLVE_FLIGHTS",
         lambda *_args, **_kwargs: ["flight-a", "flight-b"],
     )
     called = False
@@ -88,7 +88,7 @@ def test_external_selected_radar_keeps_single_flight_behavior(
 ) -> None:
     monkeypatch.setattr(
         feature_store,
-        "_resolve_flights",
+        "_ORIGINAL_RESOLVE_FLIGHTS",
         lambda *_args, **_kwargs: ["flight-a"],
     )
     received: dict[str, object] = {}
