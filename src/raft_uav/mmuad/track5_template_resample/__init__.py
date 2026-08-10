@@ -10,6 +10,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_float
+
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_template_resample.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.mmuad._track5_template_resample_legacy",
@@ -197,7 +199,7 @@ def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
 
 
 def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
-    """Reject complex programmatic timestamps before the legacy real-valued normalization."""
+    """Normalize every requested template row without silently discarding it."""
 
     rows = pd.DataFrame(template).copy()
     if rows.empty:
@@ -207,13 +209,24 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     if sequence_column is None or time_column is None:
         return _ORIGINAL_NORMALIZE_TEMPLATE_ROWS(rows)
 
-    valid_sequence = _IMPL._normalized_sequence_values(rows[sequence_column]).notna()
-    complex_time = valid_sequence & _complex_scalar_mask(rows[time_column])
-    if complex_time.any():
+    normalized_sequence = _IMPL._normalized_sequence_values(rows[sequence_column])
+    invalid_sequence = normalized_sequence.isna()
+    if invalid_sequence.any():
         raise _invalid_row_message(
-            complex_time,
-            prefix="template contains complex timestamp values",
+            invalid_sequence,
+            prefix="template contains invalid sequence identifiers",
         )
+
+    normalized_time = rows[time_column].map(optional_float)
+    invalid_time = normalized_time.isna()
+    if invalid_time.any():
+        raise _invalid_row_message(
+            invalid_time,
+            prefix="template contains non-finite or non-numeric timestamp values",
+        )
+
+    rows[sequence_column] = normalized_sequence
+    rows[time_column] = normalized_time.astype(float)
     return _ORIGINAL_NORMALIZE_TEMPLATE_ROWS(rows)
 
 
