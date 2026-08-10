@@ -255,7 +255,7 @@ def run_tracklet_feature_store(
 
     requested_flights = None if flights is None else list(flights)
     if selected_radar_csv is not None:
-        resolved_flights = _IMPL._resolve_flights(
+        resolved_flights = _resolve_flights(
             Path(dataset_root),
             requested_flights,
             variant=variant,
