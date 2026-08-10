@@ -17,6 +17,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad.track5_template_resample import (
+    _normalize_template_rows as _normalize_resample_template_rows,
+)
+
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_estimate_sequence_gate.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.mmuad._track5_estimate_sequence_gate_legacy",
@@ -88,8 +92,15 @@ def _sequence_weight_map(rows: Any) -> dict[str, float]:
     return result
 
 
+def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
+    """Use the strict shared Track 5 template-row boundary."""
+
+    return _normalize_resample_template_rows(template)
+
+
 _IMPL._validate_weight = _validate_weight
 _IMPL._sequence_weight_map = _sequence_weight_map
+_IMPL._normalize_template_rows = _normalize_template_rows
 
 globals().update(
     {
@@ -100,6 +111,7 @@ globals().update(
 )
 globals()["_validate_weight"] = _validate_weight
 globals()["_sequence_weight_map"] = _sequence_weight_map
+globals()["_normalize_template_rows"] = _normalize_template_rows
 
 __doc__ = _IMPL.__doc__
 __all__ = [
