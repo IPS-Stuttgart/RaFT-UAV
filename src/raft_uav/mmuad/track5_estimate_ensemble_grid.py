@@ -100,7 +100,6 @@ def evaluate_estimate_ensemble_weight_grid(
     class_map = load_sequence_class_map(class_map_path) if class_map_path is not None else {}
     summary_records: list[dict[str, Any]] = []
     sequence_records: list[dict[str, Any]] = []
-    best_row: EnsembleGridRow | None = None
     for policy in policies:
         for weights in weight_rows:
             if len(weights) != len(inputs):
@@ -147,16 +146,19 @@ def evaluate_estimate_ensemble_weight_grid(
                 )
             summary_records.append(_summary_record(inputs, row))
             sequence_records.extend(_sequence_records(inputs, row.weights, evaluation, row))
-            if best_row is None or _row_sort_key(row) < _row_sort_key(best_row):
-                best_row = row
-    summary = pd.DataFrame.from_records(summary_records).sort_values(
-        ["pose_mse", "p95_error_m", "max_error_m"],
-        na_position="last",
+    summary = (
+        pd.DataFrame.from_records(summary_records)
+        .sort_values(
+            ["pose_mse", "p95_error_m", "max_error_m"],
+            na_position="last",
+        )
+        .reset_index(drop=True)
     )
     by_sequence = pd.DataFrame.from_records(sequence_records)
-    if best_row is None:
+    if summary.empty:
         raise ValueError("weight/policy grid produced no rows")
-    return summary.reset_index(drop=True), by_sequence, best_row.weights
+    best_weights = tuple(float(weight) for weight in str(summary.iloc[0]["weights"]).split(";"))
+    return summary, by_sequence, best_weights
 
 
 def write_estimate_ensemble_weight_grid_outputs(
