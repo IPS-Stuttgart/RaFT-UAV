@@ -9,6 +9,7 @@ delegating Gaussian-mixture factor calculations to PyRecEst.
 
 from __future__ import annotations
 
+from functools import wraps
 import importlib.util
 from pathlib import Path
 import sys
@@ -34,6 +35,8 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_VALIDATE_CONFIG = _IMPL._validate_config
+_ORIGINAL_RUN_CANDIDATE_MIXTURE_MAP = _IMPL.run_candidate_mixture_map
+_ORIGINAL_COMPUTE_CANDIDATE_RESPONSIBILITIES = _IMPL.compute_candidate_responsibilities
 
 
 class _PandasCsvProxy:
@@ -137,6 +140,50 @@ def _validate_config(config: Any) -> None:
     _ORIGINAL_VALIDATE_CONFIG(config)
 
 
+def _validate_config_argument(config: Any) -> Any:
+    """Reject explicit values that are not candidate-mixture configurations."""
+
+    if config is not None and not isinstance(config, _IMPL.CandidateMixtureMapConfig):
+        raise TypeError("config must be a CandidateMixtureMapConfig or None")
+    return config
+
+
+@wraps(_ORIGINAL_RUN_CANDIDATE_MIXTURE_MAP)
+def run_candidate_mixture_map(
+    candidates: pd.DataFrame,
+    *,
+    config: Any = None,
+    initial_estimates: pd.DataFrame | None = None,
+    target_template: pd.DataFrame | None = None,
+    truth: pd.DataFrame | None = None,
+) -> Any:
+    """Run candidate-mixture inference after validating an explicit config."""
+
+    return _ORIGINAL_RUN_CANDIDATE_MIXTURE_MAP(
+        candidates,
+        config=_validate_config_argument(config),
+        initial_estimates=initial_estimates,
+        target_template=target_template,
+        truth=truth,
+    )
+
+
+@wraps(_ORIGINAL_COMPUTE_CANDIDATE_RESPONSIBILITIES)
+def compute_candidate_responsibilities(
+    candidates: pd.DataFrame,
+    state_xyz: np.ndarray,
+    *,
+    config: Any = None,
+) -> pd.DataFrame:
+    """Compute responsibilities after validating an explicit config."""
+
+    return _ORIGINAL_COMPUTE_CANDIDATE_RESPONSIBILITIES(
+        candidates,
+        state_xyz,
+        config=_validate_config_argument(config),
+    )
+
+
 def _target_time_candidate_groups(
     sequence_rows: pd.DataFrame,
     *,
@@ -181,6 +228,8 @@ _IMPL._mixture_response = build_pyrecest_mixture_response(
     apply_label_balance=_IMPL._apply_label_balance,
     normalize_probability=_IMPL._normalize_probability,
 )
+_IMPL.run_candidate_mixture_map = run_candidate_mixture_map
+_IMPL.compute_candidate_responsibilities = compute_candidate_responsibilities
 
 globals().update(
     {
@@ -192,6 +241,7 @@ globals().update(
 globals()["_finite_scalar"] = _finite_scalar
 globals()["_integer_scalar"] = _integer_scalar
 globals()["_validate_config"] = _validate_config
+globals()["_validate_config_argument"] = _validate_config_argument
 globals()["_target_time_candidate_groups"] = _target_time_candidate_groups
 
 __doc__ = _IMPL.__doc__
