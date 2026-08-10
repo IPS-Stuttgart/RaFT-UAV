@@ -55,7 +55,7 @@ def test_external_selected_radar_rejects_multi_flight_reuse(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        feature_store._IMPL,
+        feature_store,
         "_resolve_flights",
         lambda *_args, **_kwargs: ["flight-a", "flight-b"],
     )
@@ -87,7 +87,7 @@ def test_external_selected_radar_keeps_single_flight_behavior(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        feature_store._IMPL,
+        feature_store,
         "_resolve_flights",
         lambda *_args, **_kwargs: ["flight-a"],
     )
