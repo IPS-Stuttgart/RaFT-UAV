@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_int
 from raft_uav.mmuad.submission import (
     load_official_track5_template_file,
     normalize_official_track5_results_frame,
@@ -59,6 +60,10 @@ def repair_track5_jerk_kinks(
     repair suitable as a train-fold-selected final Codabench post-processor.
     """
 
+    normalized_iterations = optional_int(iterations)
+    if normalized_iterations is None or normalized_iterations <= 0:
+        raise ValueError("iterations must be a positive finite integer")
+    iterations = normalized_iterations
     max_jerk_mps3 = float(max_jerk_mps3)
     smoothness_weight = float(smoothness_weight)
     min_correction_m = float(min_correction_m)
@@ -89,7 +94,7 @@ def repair_track5_jerk_kinks(
             smoothness_weight=smoothness_weight,
             min_correction_m=min_correction_m,
             max_correction_m=max_correction_m,
-            iterations=max(1, int(iterations)),
+            iterations=iterations,
             repair_blend=repair_blend,
         )
         repaired_parts.append(repaired)
