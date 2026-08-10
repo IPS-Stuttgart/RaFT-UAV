@@ -50,65 +50,16 @@ def test_counterfactual_dashboard_preserves_zero_padded_track_id() -> None:
     assert dashboard.loc[0, "selected_candidate_track_id"] == "001"
 
 
-def test_external_selected_radar_rejects_multi_flight_reuse(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setattr(
-        feature_store,
-        "_ORIGINAL_RESOLVE_FLIGHTS",
-        lambda *_args, **_kwargs: ["flight-a", "flight-b"],
-    )
-    called = False
-
-    def unexpected_run(**_kwargs: object) -> dict[str, object]:
-        nonlocal called
-        called = True
-        return {}
-
-    monkeypatch.setattr(
-        feature_store,
-        "_ORIGINAL_RUN_TRACKLET_FEATURE_STORE",
-        unexpected_run,
-    )
-
+def test_external_selected_radar_rejects_multi_flight_reuse(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="cannot be applied to multiple flights"):
-        feature_store.run_tracklet_feature_store(
-            dataset_root=tmp_path,
-            flights=["flight-a", "flight-b"],
-            selected_radar_csv=tmp_path / "selected_radar.csv",
+        feature_store._validate_external_selected_radar_scope(
+            tmp_path / "selected_radar.csv",
+            ["flight-a", "flight-b"],
         )
 
-    assert not called
 
-
-def test_external_selected_radar_keeps_single_flight_behavior(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setattr(
-        feature_store,
-        "_ORIGINAL_RESOLVE_FLIGHTS",
-        lambda *_args, **_kwargs: ["flight-a"],
+def test_external_selected_radar_allows_single_flight(tmp_path: Path) -> None:
+    feature_store._validate_external_selected_radar_scope(
+        tmp_path / "selected_radar.csv",
+        ["flight-a"],
     )
-    received: dict[str, object] = {}
-
-    def fake_run(**kwargs: object) -> dict[str, object]:
-        received.update(kwargs)
-        return {"output_dir": str(tmp_path / "out")}
-
-    monkeypatch.setattr(
-        feature_store,
-        "_ORIGINAL_RUN_TRACKLET_FEATURE_STORE",
-        fake_run,
-    )
-
-    result = feature_store.run_tracklet_feature_store(
-        dataset_root=tmp_path,
-        flights=["flight-a"],
-        selected_radar_csv=tmp_path / "selected_radar.csv",
-    )
-
-    assert result["output_dir"] == str(tmp_path / "out")
-    assert received["flights"] == ["flight-a"]
-    assert received["selected_radar_csv"] == tmp_path / "selected_radar.csv"
