@@ -295,8 +295,10 @@ def _binary_target_value(value: object) -> object:
             return True
         return _INVALID_BINARY_TARGET
     if isinstance(value, (float, np.floating)):
-        if not bool(np.isfinite(value)):
+        if bool(np.isnan(value)):
             return pd.NA
+        if not bool(np.isfinite(value)):
+            return _INVALID_BINARY_TARGET
         if value == 0.0:
             return False
         if value == 1.0:
@@ -314,8 +316,10 @@ def _binary_target_value(value: object) -> object:
             numeric = float(text)
         except ValueError:
             return _INVALID_BINARY_TARGET
-        if not np.isfinite(numeric):
+        if np.isnan(numeric):
             return pd.NA
+        if not np.isfinite(numeric):
+            return _INVALID_BINARY_TARGET
         if numeric == 0.0:
             return False
         if numeric == 1.0:
