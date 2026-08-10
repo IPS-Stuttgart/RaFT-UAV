@@ -62,7 +62,7 @@ def repair_track5_jerk_kinks(
 
     normalized_iterations = optional_int(iterations)
     if normalized_iterations is None or normalized_iterations <= 0:
-        raise ValueError("iterations must be a positive integer")
+        raise ValueError("iterations must be a positive finite integer")
     iterations = normalized_iterations
     max_jerk_mps3 = float(max_jerk_mps3)
     smoothness_weight = float(smoothness_weight)
