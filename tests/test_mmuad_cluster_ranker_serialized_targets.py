@@ -37,6 +37,29 @@ def test_cluster_ranker_rejects_ambiguous_serialized_target() -> None:
         train_cluster_ranker(_features(["True", "False", "maybe", "0"]))
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        np.inf,
+        -np.inf,
+        np.float64(np.inf),
+        "inf",
+        "-inf",
+        "Infinity",
+        "-Infinity",
+    ],
+)
+def test_cluster_ranker_rejects_infinite_binary_target(value: object) -> None:
+    with pytest.raises(ValueError, match="good_cluster"):
+        train_cluster_ranker(_features(["True", "False", value, "0"]))
+
+
+def test_cluster_ranker_still_treats_nan_binary_target_as_missing() -> None:
+    model = train_cluster_ranker(_features(["True", "False", np.nan, "0"]))
+
+    assert model.constant_score is None
+
+
 def test_cluster_ranker_auc_parses_serialized_binary_targets() -> None:
     auc = _binary_auc(
         pd.Series([0.1, 0.9]),
