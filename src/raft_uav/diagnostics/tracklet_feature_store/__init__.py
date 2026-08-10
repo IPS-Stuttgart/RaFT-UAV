@@ -35,7 +35,7 @@ _ORIGINAL_BUILD_COUNTERFACTUAL_ASSOCIATION_DASHBOARD = (
 )
 _ORIGINAL_SUMMARIZE_COUNTERFACTUAL_REGRET = _IMPL.summarize_counterfactual_regret
 _ORIGINAL_RUN_TRACKLET_FEATURE_STORE = _IMPL.run_tracklet_feature_store
-_resolve_flights = _IMPL._resolve_flights
+_ORIGINAL_RESOLVE_FLIGHTS = _IMPL._resolve_flights
 _TRUE_BOOLEAN_TEXT = frozenset({"true", "t", "yes", "y", "on"})
 _FALSE_BOOLEAN_TEXT = frozenset(
     {"false", "f", "no", "n", "off", "", "nan", "none", "null", "<na>", "nat"}
@@ -256,7 +256,7 @@ def run_tracklet_feature_store(
 
     requested_flights = None if flights is None else list(flights)
     if selected_radar_csv is not None:
-        resolved_flights = _resolve_flights(
+        resolved_flights = _ORIGINAL_RESOLVE_FLIGHTS(
             Path(dataset_root),
             requested_flights,
             variant=variant,
