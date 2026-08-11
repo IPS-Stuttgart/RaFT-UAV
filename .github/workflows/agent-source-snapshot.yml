@@ -1,0 +1,25 @@
+---
+name: Agent source snapshot
+
+on: # yamllint disable-line rule:truthy
+    push:
+        branches:
+            - agent/repair-ci-baseline-2026-08
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+jobs:
+    snapshot:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v7
+            - uses: actions/upload-artifact@v7
+              with:
+                  name: raft-uav-source-snapshot
+                  path: |
+                      .
+                      !.git
+                  include-hidden-files: true
+                  retention-days: 1
