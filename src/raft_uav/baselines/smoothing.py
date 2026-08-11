@@ -38,8 +38,12 @@ def smooth_tracking_records(
         raise ValueError(f"unknown smoother method {method!r}")
     if method == "none" or not records:
         return [copy_record(record) for record in records]
-    if method in ("fixed-lag", "fixed-lag-map") and (lag_s is None or lag_s < 0.0):
-        raise ValueError(f"{method} smoothing requires a nonnegative lag_s")
+    if not np.isfinite(acceleration_std_mps2) or acceleration_std_mps2 < 0.0:
+        raise ValueError("acceleration_std_mps2 must be finite and nonnegative")
+    if method in ("fixed-lag", "fixed-lag-map") and (
+        lag_s is None or not np.isfinite(lag_s) or lag_s < 0.0
+    ):
+        raise ValueError(f"{method} smoothing requires a finite, nonnegative lag_s")
     if method in ("robust-map", "fixed-lag-map"):
         return robust_map_smooth_records(
             records,
