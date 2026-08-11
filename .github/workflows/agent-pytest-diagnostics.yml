@@ -17,12 +17,14 @@ env:
 
 jobs:
   pytest-log:
-    name: Python 3.11 PR-head pytest log
+    name: Python 3.11 main-baseline pytest log
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out pull-request head
+      - name: Check out current main
         uses: actions/checkout@v6
+        with:
+          ref: main
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v6
@@ -47,7 +49,7 @@ jobs:
       - name: Upload pytest diagnostics
         uses: actions/upload-artifact@v4
         with:
-          name: pytest-diagnostics-pr-2327-py311
+          name: pytest-diagnostics-main-py311
           path: |
             pytest.log
             pytest.exit-code
