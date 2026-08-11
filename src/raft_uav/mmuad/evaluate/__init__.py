@@ -501,6 +501,61 @@ def _normalized_match_flags(values: Any) -> pd.Series:
     return truthy.astype(bool)
 
 
+def _trajectory_time_interval(frame: pd.DataFrame) -> tuple[float, float] | None:
+    """Return the preferred finite matched-time interval for one trajectory."""
+
+    for time_column in ("truth_time_s", "time_s"):
+        if time_column not in frame.columns:
+            continue
+        times = pd.to_numeric(frame[time_column], errors="coerce").to_numpy(dtype=float)
+        finite = times[np.isfinite(times)]
+        if finite.size:
+            return float(np.min(finite)), float(np.max(finite))
+    return None
+
+
+def _has_overlapping_track_intervals(frame: pd.DataFrame) -> bool:
+    """Return whether distinct track IDs coexist in the matched time domain."""
+
+    if "track_id" not in frame.columns:
+        return False
+    intervals: list[tuple[float, float]] = []
+    for _, trajectory in frame.groupby("track_id", sort=False, dropna=False):
+        interval = _trajectory_time_interval(trajectory)
+        if interval is not None:
+            intervals.append(interval)
+    for index, (left_start, left_end) in enumerate(intervals):
+        for right_start, right_end in intervals[index + 1 :]:
+            if left_start <= right_end and right_start <= left_end:
+                return True
+    return False
+
+
+def _mean_final_error(frame: pd.DataFrame, column: str) -> float | None:
+    """Average independent endpoints without double-counting track handoffs."""
+
+    if frame.empty:
+        return _IMPL._final_error(frame, column)
+
+    sequence_groups = (
+        [group for _, group in frame.groupby("sequence_id", sort=False, dropna=False)]
+        if "sequence_id" in frame.columns
+        else [frame]
+    )
+    endpoints: list[float] = []
+    for sequence in sequence_groups:
+        if _has_overlapping_track_intervals(sequence):
+            for _, trajectory in sequence.groupby("track_id", sort=False, dropna=False):
+                endpoint = _IMPL._final_error(trajectory, column)
+                if endpoint is not None:
+                    endpoints.append(float(endpoint))
+        else:
+            endpoint = _IMPL._final_error(sequence, column)
+            if endpoint is not None:
+                endpoints.append(float(endpoint))
+    return float(np.mean(endpoints)) if endpoints else None
+
+
 def metrics_from_matches(
     matches: pd.DataFrame,
     *,
@@ -522,6 +577,7 @@ def metrics_from_matches(
 _IMPL.load_submission_csv = load_submission_csv
 _IMPL._authoritative_truth_rows = _authoritative_truth_rows
 _IMPL.match_submission_to_truth = match_submission_to_truth
+_IMPL._mean_final_error = _mean_final_error
 _IMPL.metrics_from_matches = metrics_from_matches
 
 globals().update(
@@ -550,6 +606,9 @@ globals()["_canonical_assignment_order"] = _canonical_assignment_order
 globals()["_optimal_time_assignment"] = _optimal_time_assignment
 globals()["_matched_prediction_row"] = _matched_prediction_row
 globals()["_normalized_match_flags"] = _normalized_match_flags
+globals()["_trajectory_time_interval"] = _trajectory_time_interval
+globals()["_has_overlapping_track_intervals"] = _has_overlapping_track_intervals
+globals()["_mean_final_error"] = _mean_final_error
 globals()["metrics_from_matches"] = metrics_from_matches
 
 __doc__ = _IMPL.__doc__
