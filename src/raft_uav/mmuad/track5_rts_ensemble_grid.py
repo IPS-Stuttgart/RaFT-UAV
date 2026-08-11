@@ -98,6 +98,12 @@ def run_track5_rts_ensemble_grid_search(
     grid = pd.DataFrame.from_records(grid_records)
     if grid.empty:
         raise ValueError("parameter grid produced no rows")
+    score_columns = ["pose_mse_m2", "rmse_3d_m", "mean_3d_m"]
+    scored = grid["matched_row_count"].gt(0) & np.isfinite(
+        grid[score_columns].to_numpy(float)
+    ).all(axis=1)
+    if not bool(scored.any()):
+        raise ValueError("RTS ensemble grid search produced no scored candidates")
     grid = grid.sort_values(
         ["pose_mse_m2", "rmse_3d_m", "mean_3d_m", "process_accel_std_mps2"],
         ascending=[True, True, True, True],
@@ -134,7 +140,6 @@ def write_track5_rts_ensemble_grid_outputs(
 
     input_list = list(estimate_inputs)
     output = Path(output_dir)
-    output.mkdir(parents=True, exist_ok=True)
     grid, best = run_track5_rts_ensemble_grid_search(
         input_list,
         template=template,
@@ -147,6 +152,7 @@ def write_track5_rts_ensemble_grid_outputs(
         max_nearest_time_delta_s=max_nearest_time_delta_s,
         score_time_tolerance_s=score_time_tolerance_s,
     )
+    output.mkdir(parents=True, exist_ok=True)
     paths = {
         "grid_csv": output / GRID_RESULTS_CSV,
         "best_json": output / GRID_BEST_JSON,
