@@ -40,7 +40,7 @@ def validate_paper_manifest(
         if not entry.get("variant"):
             warnings.append(f"missing {modality} file variant")
         if require_file_hashes and not entry.get("sha256"):
-            warnings.append(f"missing {modality} sha256 digest")
+            errors.append(f"missing {modality} sha256 digest")
     if not np.isfinite([rf_clock_offset_s, radar_clock_offset_s]).all():
         errors.append("RF/radar clock offsets must be finite")
     report = {
