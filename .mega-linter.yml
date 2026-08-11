@@ -17,6 +17,10 @@ SHOW_ELAPSED_TIME: true
 FLAVOR_SUGGESTIONS: false
 GITHUB_COMMENT_REPORTER: false
 PYTHON_RUFF_CONFIG_FILE: pyproject.toml
+# Ruff 0.16 expanded its default set from the legacy E4/E7/E9/F baseline to
+# hundreds of additional rules. Preserve the pre-v10 MegaLinter policy here;
+# adopting the new Ruff defaults should be a separate, intentional cleanup.
+PYTHON_RUFF_ARGUMENTS: "--select E4,E7,E9,F"
 
 # actionlint's YAML/workflow checks remain enabled. The embedded shellcheck pass
 # is disabled because the self-hosted data workflow intentionally uses indented
