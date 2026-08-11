@@ -66,9 +66,10 @@ def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
     path = _seekable_csv_source(path)
     dtype_arg = kwargs.pop("dtype", None)
     converters = dict(kwargs.pop("converters", {}) or {})
-    sequence_columns = _sequence_columns_for_csv(path, *args, **kwargs)
+    discovered_columns = _discover_columns_for_csv(path, *args, **kwargs)
+    sequence_columns = _sequence_columns_for_csv(discovered_columns)
     for column in list(converters):
-        if str(column).strip().lower() in _SEQUENCE_COLUMN_KEYS:
+        if _is_sequence_column(column):
             converters.pop(column, None)
     for column in sequence_columns:
         converters[column] = _sequence_id_text
@@ -76,7 +77,13 @@ def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
         dtype = {
             column: value
             for column, value in dtype_arg.items()
-            if str(column).strip().lower() not in _SEQUENCE_COLUMN_KEYS
+            if not _is_sequence_column(column)
+        }
+    elif dtype_arg is not None and discovered_columns:
+        dtype = {
+            column: dtype_arg
+            for column in discovered_columns
+            if not _is_sequence_column(column)
         }
     else:
         dtype = dtype_arg
@@ -90,18 +97,20 @@ def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
     return out
 
 
-def _sequence_columns_for_csv(path: Any, *args: Any, **kwargs: Any) -> list[str]:
-    discovered = _discover_sequence_columns_for_csv(path, *args, **kwargs)
+def _sequence_columns_for_csv(columns: list[Any]) -> list[Any]:
+    discovered = [column for column in columns if _is_sequence_column(column)]
     return list(dict.fromkeys([*_SEQUENCE_COLUMNS, *discovered]))
 
 
-def _discover_sequence_columns_for_csv(path: Any, *args: Any, **kwargs: Any) -> list[str]:
+def _discover_columns_for_csv(path: Any, *args: Any, **kwargs: Any) -> list[Any]:
     position = _stream_position(path)
     if hasattr(path, "read") and position is None:
         return []
     header_kwargs = dict(kwargs)
     header_kwargs.pop("dtype", None)
     header_kwargs.pop("converters", None)
+    header_kwargs.pop("chunksize", None)
+    header_kwargs.pop("iterator", None)
     header_kwargs["nrows"] = 0
     try:
         header = _ORIGINAL_READ_CSV(path, *args, **header_kwargs)
@@ -110,11 +119,11 @@ def _discover_sequence_columns_for_csv(path: Any, *args: Any, **kwargs: Any) -> 
     finally:
         if position is not None:
             _restore_stream_position(path, position)
-    return [
-        str(column)
-        for column in header.columns
-        if str(column).strip().lower() in _SEQUENCE_COLUMN_KEYS
-    ]
+    return list(header.columns)
+
+
+def _is_sequence_column(column: Any) -> bool:
+    return str(column).strip().lower() in _SEQUENCE_COLUMN_KEYS
 
 
 def _stream_position(path: Any) -> int | None:
