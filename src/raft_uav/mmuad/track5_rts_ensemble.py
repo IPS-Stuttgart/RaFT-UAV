@@ -207,7 +207,6 @@ def write_track5_rts_ensemble_outputs(
     input_list = list(estimate_inputs)
     loaded = [(item.label, pd.read_csv(item.path), float(item.weight)) for item in input_list]
     output = Path(output_dir)
-    output.mkdir(parents=True, exist_ok=True)
     estimates, diagnostics = build_track5_rts_ensemble(
         loaded,
         template,
@@ -218,6 +217,7 @@ def write_track5_rts_ensemble_outputs(
         spread_variance_scale=spread_variance_scale,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
     )
+    output.mkdir(parents=True, exist_ok=True)
     paths = {
         "estimates_csv": output / RTS_ESTIMATES_CSV,
         "diagnostics_csv": output / RTS_DIAGNOSTICS_CSV,
