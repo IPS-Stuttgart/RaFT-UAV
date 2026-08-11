@@ -8,6 +8,9 @@ from . import (
 from . import _oracle_gap_sequence_scope_patch as _oracle_gap_sequence_scope_patch
 from . import _oracle_gap_reused_frame_patch as _oracle_gap_reused_frame_patch
 from . import _single_sample_truth_grid_patch as _single_sample_truth_grid_patch
+from . import (
+    _metrics_nested_validation_patch as _metrics_nested_validation_patch,
+)
 
 # Oracle-coverage sequence scoping is installed by ``raft_uav.__init__`` after
 # baseline initialization. Importing it here would re-enter radar association
