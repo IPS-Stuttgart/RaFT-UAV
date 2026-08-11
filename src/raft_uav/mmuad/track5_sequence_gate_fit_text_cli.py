@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from io import BytesIO, StringIO
 import threading
 from typing import Any
 
@@ -36,9 +37,11 @@ class _SequencePreservingPandasProxy:
 
 
 def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
+    path = _seekable_csv_source(path)
     dtype_arg = kwargs.pop("dtype", None)
     converters = dict(kwargs.pop("converters", {}) or {})
-    sequence_columns = _sequence_columns_for_csv(path, *args, **kwargs)
+    discovered_columns = _discover_columns_for_csv(path, *args, **kwargs)
+    sequence_columns = _sequence_columns_for_csv(discovered_columns)
     _drop_sequence_converters(converters)
     if dtype_arg is None:
         dtype = "string"
@@ -46,6 +49,14 @@ def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
         dtype = {
             column: value
             for column, value in dtype_arg.items()
+            if not _is_sequence_column(column)
+        }
+        for column in sequence_columns:
+            converters[column] = _sequence_id_text
+    elif discovered_columns:
+        dtype = {
+            column: dtype_arg
+            for column in discovered_columns
             if not _is_sequence_column(column)
         }
         for column in sequence_columns:
@@ -64,12 +75,12 @@ def _read_csv_preserving_sequence_id(path: Any, *args: Any, **kwargs: Any):
     return out
 
 
-def _sequence_columns_for_csv(path: Any, *args: Any, **kwargs: Any) -> list[str]:
-    discovered = _discover_sequence_columns_for_csv(path, *args, **kwargs)
+def _sequence_columns_for_csv(columns: list[Any]) -> list[Any]:
+    discovered = [column for column in columns if _is_sequence_column(column)]
     return list(dict.fromkeys([*_SEQUENCE_ID_ALIASES, *discovered]))
 
 
-def _discover_sequence_columns_for_csv(path: Any, *args: Any, **kwargs: Any) -> list[str]:
+def _discover_columns_for_csv(path: Any, *args: Any, **kwargs: Any) -> list[Any]:
     position = _stream_position(path)
     if hasattr(path, "read") and position is None:
         return []
@@ -86,11 +97,7 @@ def _discover_sequence_columns_for_csv(path: Any, *args: Any, **kwargs: Any) -> 
     finally:
         if position is not None:
             _restore_stream_position(path, position)
-    return [
-        str(column)
-        for column in header.columns
-        if _is_sequence_column(column)
-    ]
+    return list(header.columns)
 
 
 def _stream_position(path: Any) -> int | None:
@@ -102,6 +109,19 @@ def _stream_position(path: Any) -> int | None:
     except (OSError, TypeError, ValueError):
         return None
     return position
+
+
+def _seekable_csv_source(path: Any) -> Any:
+    """Buffer one-shot CSV streams so their actual header can be inspected."""
+
+    if not hasattr(path, "read") or _stream_position(path) is not None:
+        return path
+    payload = path.read()
+    if isinstance(payload, str):
+        return StringIO(payload)
+    if isinstance(payload, (bytes, bytearray, memoryview)):
+        return BytesIO(bytes(payload))
+    raise TypeError("non-seekable CSV streams must return text or bytes")
 
 
 def _restore_stream_position(path: Any, position: int) -> None:
