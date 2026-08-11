@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from raft_uav.baselines.kalman import TrackingMeasurement, run_async_cv_baseline
 from raft_uav.baselines.smoothing import smooth_tracking_records
@@ -56,3 +57,38 @@ def test_smoothing_does_not_mutate_input_records():
 
     np.testing.assert_allclose(records[0]["state"], original_state)
     assert "filtered_state" not in records[0]
+
+
+@pytest.mark.parametrize("lag_s", [float("nan"), float("inf")])
+def test_fixed_lag_rejects_nonfinite_lag(lag_s: float):
+    records = run_async_cv_baseline(
+        [_measurement(0.0, 0.0), _measurement(1.0, 1.0), _measurement(2.0, 2.0)]
+    )
+
+    with pytest.raises(ValueError, match="lag_s must be a finite nonnegative real scalar or None"):
+        smooth_tracking_records(
+            records,
+            method="fixed-lag",
+            acceleration_std_mps2=4.0,
+            lag_s=lag_s,
+        )
+
+
+@pytest.mark.parametrize(
+    "acceleration_std_mps2",
+    [-1.0, float("nan"), float("inf")],
+)
+def test_smoothing_rejects_invalid_acceleration_std(acceleration_std_mps2: float):
+    records = run_async_cv_baseline(
+        [_measurement(0.0, 0.0), _measurement(1.0, 1.0), _measurement(2.0, 2.0)]
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="acceleration_std_mps2 must be a finite nonnegative real scalar",
+    ):
+        smooth_tracking_records(
+            records,
+            method="rts",
+            acceleration_std_mps2=acceleration_std_mps2,
+        )
