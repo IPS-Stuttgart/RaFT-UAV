@@ -105,7 +105,13 @@ def search_track5_spread_guard_blend_settings(
     grid = pd.DataFrame.from_records(records)
     if grid.empty:
         raise ValueError("spread-guard blend grid produced no rows")
-    best_row = grid.sort_values(
+    scored_grid = _scored_blend_grid_rows(grid)
+    if scored_grid.empty:
+        raise ValueError(
+            "no spread-guard blend candidate had finite matched truth rows; check truth/template "
+            "sequence ids and timestamps before selecting blend settings"
+        )
+    best_row = scored_grid.sort_values(
         ["pose_mse_m2", "pose_p95_m", "pose_max_m"],
         na_position="last",
     ).iloc[0]
@@ -153,7 +159,6 @@ def write_spread_guard_blend_search_outputs(
     """Run blend grid and write artifacts plus optional best guarded submission."""
 
     output = Path(output_dir)
-    output.mkdir(parents=True, exist_ok=True)
     input_list = list(estimate_inputs)
     grid, best = search_track5_spread_guard_blend_settings(
         input_list,
@@ -165,6 +170,7 @@ def write_spread_guard_blend_search_outputs(
         fallback_labels=fallback_labels,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
     )
+    output.mkdir(parents=True, exist_ok=True)
     paths = {
         "grid_csv": output / SPREAD_GUARD_BLEND_GRID_CSV,
         "best_config_json": output / SPREAD_GUARD_BLEND_BEST_JSON,
@@ -329,6 +335,17 @@ def _empty_metrics() -> dict[str, Any]:
         "pose_p95_m": np.nan,
         "pose_max_m": np.nan,
     }
+
+
+def _scored_blend_grid_rows(grid: pd.DataFrame) -> pd.DataFrame:
+    metric_columns = ["pose_mse_m2", "pose_p95_m", "pose_max_m"]
+    matched_rows = pd.to_numeric(
+        grid.get("matched_rows", pd.Series(dtype=float)),
+        errors="coerce",
+    )
+    metric_values = grid[metric_columns].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+    scored = (matched_rows.fillna(0).to_numpy(float) > 0.0) & np.isfinite(metric_values).all(axis=1)
+    return grid.loc[scored].copy()
 
 
 def _time_key(values: pd.Series) -> pd.Series:
