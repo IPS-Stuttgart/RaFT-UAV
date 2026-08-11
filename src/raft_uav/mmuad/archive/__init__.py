@@ -1,8 +1,9 @@
 """Compatibility wrapper protecting deterministic archive extraction roots.
 
 The maintained implementation lives in the sibling ``archive.py`` module. This
-package preserves the public import path while rejecting a pre-existing symlink
-at the hash-derived extraction directory before any archive member is written.
+package preserves the public import path while rejecting pre-existing directory
+links at the output and hash-derived extraction directories before any archive
+member is written.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_EXTRACT_MMUAD_ARCHIVE = _IMPL.extract_mmuad_archive
+_IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003
 
 
 class _ArchiveModule(ModuleType):
@@ -39,6 +41,31 @@ class _ArchiveModule(ModuleType):
             setattr(implementation, name, value)
 
 
+def _directory_link_kind(path: Path) -> str | None:
+    """Return the directory-link kind for a symlink or Windows junction."""
+
+    if path.is_symlink():
+        return "symlink"
+
+    is_junction = getattr(path, "is_junction", None)
+    if callable(is_junction) and is_junction():
+        return "junction"
+
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None
+    if getattr(metadata, "st_reparse_tag", None) == _IO_REPARSE_TAG_MOUNT_POINT:
+        return "junction"
+    return None
+
+
+def _reject_directory_link(path: Path, *, label: str) -> None:
+    kind = _directory_link_kind(path)
+    if kind is not None:
+        raise ValueError(f"unsafe MMUAD {label} {kind}: {path}")
+
+
 def extract_mmuad_archive(archive_path: Path, output_root: Path) -> dict[str, Any]:
     """Extract an archive without following pre-existing output-directory links."""
 
@@ -47,22 +74,20 @@ def extract_mmuad_archive(archive_path: Path, output_root: Path) -> dict[str, An
         return _ORIGINAL_EXTRACT_MMUAD_ARCHIVE(archive, output_root)
 
     output = Path(output_root)
-    if output.is_symlink():
-        raise ValueError(f"unsafe MMUAD output root symlink: {output}")
+    _reject_directory_link(output, label="output root")
 
     archive_sha256 = _IMPL._sha256_file(archive)
     extract_root = output / (
         f"{_IMPL._safe_dir_name(_IMPL.archive_stem(archive))}-{archive_sha256[:12]}"
     )
-    if extract_root.is_symlink():
-        raise ValueError(f"unsafe MMUAD extraction root symlink: {extract_root}")
+    _reject_directory_link(extract_root, label="extraction root")
 
     output.mkdir(parents=True, exist_ok=True)
-    if output.is_symlink():
-        raise ValueError(f"unsafe MMUAD output root symlink: {output}")
+    _reject_directory_link(output, label="output root")
     extract_root.mkdir(exist_ok=True)
     expected_root = output.resolve() / extract_root.name
-    if extract_root.is_symlink() or extract_root.resolve() != expected_root:
+    _reject_directory_link(extract_root, label="extraction root")
+    if extract_root.resolve() != expected_root:
         raise ValueError(f"unsafe MMUAD extraction root: {extract_root}")
 
     return _ORIGINAL_EXTRACT_MMUAD_ARCHIVE(archive, output)
