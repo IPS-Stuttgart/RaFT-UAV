@@ -41,22 +41,41 @@ def search_track5_temporal_repair_parameters(
                     iterations=int(iterations),
                 )
                 metrics = _score_estimates(repaired, truth_rows)
-                repaired_count = int(diagnostics["repaired"].astype(bool).sum()) if not diagnostics.empty else 0
+                repaired_count = (
+                    int(diagnostics["repaired"].astype(bool).sum())
+                    if not diagnostics.empty
+                    else 0
+                )
                 records.append(
                     {
                         "max_speed_mps": float(max_speed_mps),
                         "max_interpolation_residual_m": float(max_interpolation_residual_m),
                         "iterations": int(iterations),
                         "repaired_row_count": repaired_count,
-                        "repaired_fraction": float(repaired_count / len(repaired)) if len(repaired) else 0.0,
-                        "max_repair_displacement_m": _safe_max(diagnostics.get("repair_displacement_m", pd.Series(dtype=float))),
+                        "repaired_fraction": (
+                            float(repaired_count / len(repaired)) if len(repaired) else 0.0
+                        ),
+                        "max_repair_displacement_m": _safe_max(
+                            diagnostics.get("repair_displacement_m", pd.Series(dtype=float))
+                        ),
                         **metrics,
                     }
                 )
     grid = pd.DataFrame.from_records(records)
     if grid.empty:
         raise ValueError("temporal repair search grid produced no rows")
-    best_row = grid.sort_values(
+    matched_rows = pd.to_numeric(grid["matched_rows"], errors="coerce")
+    ranking_metrics = grid[["pose_mse_m2", "pose_p95_m", "pose_max_m"]].apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
+    scored = grid.loc[
+        (matched_rows > 0)
+        & np.isfinite(ranking_metrics.to_numpy(float)).all(axis=1)
+    ]
+    if scored.empty:
+        raise ValueError("temporal repair search produced no scored candidates")
+    best_row = scored.sort_values(
         ["pose_mse_m2", "pose_p95_m", "pose_max_m", "repaired_row_count"],
         na_position="last",
     ).iloc[0]
@@ -98,7 +117,6 @@ def write_temporal_repair_search_outputs(
     require_leaderboard_ready: bool = False,
 ) -> dict[str, Path]:
     output = Path(output_dir)
-    output.mkdir(parents=True, exist_ok=True)
     grid, best = search_track5_temporal_repair_parameters(
         submission,
         truth,
@@ -106,6 +124,7 @@ def write_temporal_repair_search_outputs(
         interpolation_residual_grid=interpolation_residual_grid,
         iterations_grid=iterations_grid,
     )
+    output.mkdir(parents=True, exist_ok=True)
     paths = {
         "grid_csv": output / SEARCH_GRID_CSV,
         "best_config_json": output / BEST_CONFIG_JSON,
@@ -214,11 +233,19 @@ def _time_key(values: pd.Series) -> pd.Series:
 
 
 def _parse_float_grid(text: str) -> list[float]:
-    return [float(item.strip()) for item in str(text).replace(";", ",").split(",") if item.strip()]
+    return [
+        float(item.strip())
+        for item in str(text).replace(";", ",").split(",")
+        if item.strip()
+    ]
 
 
 def _parse_int_grid(text: str) -> list[int]:
-    return [int(item.strip()) for item in str(text).replace(";", ",").split(",") if item.strip()]
+    return [
+        int(item.strip())
+        for item in str(text).replace(";", ",").split(",")
+        if item.strip()
+    ]
 
 
 def _safe_max(values: pd.Series) -> float | None:
