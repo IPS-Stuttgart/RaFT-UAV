@@ -3,10 +3,9 @@
 The maintained I/O compatibility layer lives in the sibling ``io.py`` module.
 This package preserves that public import path while rejecting malformed integer
 controls before dynamic background removal can silently clamp or truncate them.
-It also rejects unsupported PCD field widths and malformed PCD COUNT layouts
-before binary records can be decoded with shifted offsets and corrupted
-coordinates, and rejects ambiguous raw BIN row widths unless the path identifies
-a sensor with a documented export layout.
+It also rejects unsupported PCD field widths and malformed PCD COUNT layouts,
+respects vector-field counts in ASCII PCD rows, and rejects ambiguous raw BIN row
+widths unless the path identifies a sensor with a documented export layout.
 """
 
 from __future__ import annotations
@@ -36,6 +35,7 @@ _SPEC.loader.exec_module(_LEGACY)
 
 _ORIGINAL_DYNAMIC_POINT_RESIDUALS = _LEGACY._dynamic_point_residuals
 _ORIGINAL_PARSE_PCD_HEADER = _LEGACY._impl._parse_pcd_header
+_ORIGINAL_READ_PCD = _LEGACY._impl._read_pcd
 _BINARY_POINT_COLUMNS_ENV = "RAFT_UAV_BINARY_POINT_COLUMNS"
 _PCD_NUMPY_DTYPES: dict[str, dict[int, str]] = {
     "F": {4: "<f4", 8: "<f8"},
@@ -79,6 +79,60 @@ def _parse_pcd_header(header_text: str) -> dict[str, object]:
     """Parse PCD metadata and validate explicit field multiplicities."""
 
     return _validate_pcd_counts(_ORIGINAL_PARSE_PCD_HEADER(header_text))
+
+
+def _read_ascii_pcd_payload(
+    payload: bytes,
+    *,
+    header: dict[str, object],
+    path: Path,
+) -> pd.DataFrame:
+    """Read ASCII PCD rows while advancing over every component in ``COUNT``."""
+
+    fields = list(header.get("fields", []))
+    counts = list(header.get("count", [1] * len(fields)))
+    expected_values = sum(int(count) for count in counts)
+    rows: list[dict[str, str]] = []
+    for line in payload.decode("utf-8", errors="ignore").splitlines():
+        parts = line.split()
+        if len(parts) < expected_values:
+            continue
+        row: dict[str, str] = {}
+        cursor = 0
+        for field, count in zip(fields, counts, strict=True):
+            # The point-frame normalizer consumes scalar coordinate-like fields.
+            # For vector descriptors, matching the binary reader's established
+            # behavior means exposing the first component while still advancing
+            # over the complete vector so later fields keep their true offsets.
+            row[str(field)] = parts[cursor]
+            cursor += int(count)
+        rows.append(row)
+    return _LEGACY._normalize_point_frame(pd.DataFrame.from_records(rows), path=path)
+
+
+def _read_pcd(path: Path) -> pd.DataFrame:
+    """Read PCD data with COUNT-aware ASCII field offsets."""
+
+    path = Path(path)
+    raw = _LEGACY.read_binary_export(path)
+    marker_index = raw.upper().find(b"DATA")
+    if marker_index < 0:
+        raise ValueError(f"invalid PCD file without DATA header: {path}")
+    line_end = raw.find(b"\n", marker_index)
+    if line_end < 0:
+        raise ValueError(f"invalid PCD file without data payload: {path}")
+    header_text = raw[: line_end + 1].decode("utf-8", errors="ignore")
+    header = _parse_pcd_header(header_text)
+    if str(header.get("data", "")).lower() != "ascii":
+        return _ORIGINAL_READ_PCD(path)
+    fields = list(header.get("fields", []))
+    if not fields:
+        raise ValueError(f"invalid PCD file without FIELDS: {path}")
+    return _read_ascii_pcd_payload(
+        raw[line_end + 1 :],
+        header=header,
+        path=path,
+    )
 
 
 def _pcd_numpy_dtype(*, size: int, type_code: str) -> str:
@@ -228,6 +282,8 @@ _LEGACY._dynamic_point_residuals = _dynamic_point_residuals
 _LEGACY._impl._dynamic_point_residuals = _dynamic_point_residuals
 _LEGACY._parse_pcd_header = _parse_pcd_header
 _LEGACY._impl._parse_pcd_header = _parse_pcd_header
+_LEGACY._read_pcd = _read_pcd
+_LEGACY._impl._read_pcd = _read_pcd
 _LEGACY._pcd_numpy_dtype = _pcd_numpy_dtype
 _LEGACY._impl._pcd_numpy_dtype = _pcd_numpy_dtype
 _LEGACY._read_binary_point_cloud = _read_binary_point_cloud
@@ -239,6 +295,8 @@ for _name in dir(_LEGACY):
 globals()["_exact_integer_control"] = _exact_integer_control
 globals()["_validate_pcd_counts"] = _validate_pcd_counts
 globals()["_parse_pcd_header"] = _parse_pcd_header
+globals()["_read_ascii_pcd_payload"] = _read_ascii_pcd_payload
+globals()["_read_pcd"] = _read_pcd
 globals()["_pcd_numpy_dtype"] = _pcd_numpy_dtype
 globals()["_read_binary_point_cloud"] = _read_binary_point_cloud
 globals()["_dynamic_point_residuals"] = _dynamic_point_residuals
@@ -254,7 +312,9 @@ __all__ = sorted(
         "_dynamic_point_residuals",
         "_parse_pcd_header",
         "_pcd_numpy_dtype",
+        "_read_ascii_pcd_payload",
         "_read_binary_point_cloud",
+        "_read_pcd",
         "_validate_pcd_counts",
     }
 )
