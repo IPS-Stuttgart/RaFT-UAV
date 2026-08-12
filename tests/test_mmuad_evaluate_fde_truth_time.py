@@ -10,7 +10,7 @@ def test_submission_eval_fde_uses_latest_matched_truth_time():
             "time_s": [9.9, 10.1],
             "track_id": ["A", "B"],
             "truth_time_s": [10.0, 9.8],
-            "truth_track_id": ["A", "B"],
+            "truth_track_id": ["target", "target"],
             "matched": [True, True],
             "error_3d_m": [5.0, 100.0],
             "error_2d_m": [3.0, 60.0],
@@ -27,7 +27,7 @@ def test_submission_eval_fde_uses_latest_matched_truth_time():
         {
             "sequence_id": ["seq1", "seq1"],
             "time_s": [10.0, 9.8],
-            "track_id": ["A", "B"],
+            "track_id": ["target", "target"],
             "x_m": [0.0, 0.0],
             "y_m": [0.0, 0.0],
             "z_m": [0.0, 0.0],

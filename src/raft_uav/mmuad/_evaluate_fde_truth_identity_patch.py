@@ -7,6 +7,8 @@ from importlib import import_module
 import numpy as np
 import pandas as pd
 
+from raft_uav._main_regression_compat import install as _install_main_regression_compat
+
 
 _evaluate = import_module("raft_uav.mmuad.evaluate")
 
@@ -90,3 +92,4 @@ def install() -> None:
 
 
 install()
+_install_main_regression_compat()
