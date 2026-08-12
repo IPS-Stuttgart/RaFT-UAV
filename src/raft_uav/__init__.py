@@ -71,6 +71,12 @@ def _radar_measurement_validation_install() -> Callable[[], None]:
     return apply_radar_measurement_validation_patch
 
 
+def _radar_velocity_strict_mode_install() -> Callable[[], None]:
+    from raft_uav.io._radar_velocity_strict_mode_patch import install
+
+    return install
+
+
 def _geodetic_input_validation_install() -> Callable[[], None]:
     from raft_uav.io._geodetic_input_validation_patch import install
 
@@ -250,6 +256,7 @@ _optional_runtime_hook(_kalman_timestamp_validation_install)
 _optional_runtime_hook(_imm_bootstrap_timestamp_install)
 _optional_runtime_hook(_rf_measurement_fallback_install)
 _optional_runtime_hook(_radar_measurement_validation_install)
+_optional_runtime_hook(_radar_velocity_strict_mode_install)
 _optional_runtime_hook(_geodetic_input_validation_install)
 _optional_runtime_hook(_catprob_sequence_install)
 _optional_runtime_hook(_uncertainty_payload_validation_install)
