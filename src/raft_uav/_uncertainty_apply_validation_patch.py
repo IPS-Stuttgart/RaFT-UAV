@@ -30,7 +30,13 @@ def install() -> None:
     if not getattr(original_covariance, _COVARIANCE_PATCH_MARKER, False):
 
         @wraps(original_covariance)
-        def validated_covariance_from_row(row, dim, fallback, *, prefixes=("association_cov", "cov")):
+        def validated_covariance_from_row(
+            row,
+            dim,
+            fallback,
+            *,
+            prefixes=("association_cov", "cov"),
+        ):
             covariance = original_covariance(row, dim, fallback, prefixes=prefixes)
             checked = uncertainty_module._finite_positive_definite_covariance(covariance)
             if checked is None or checked.shape != (dim, dim):
