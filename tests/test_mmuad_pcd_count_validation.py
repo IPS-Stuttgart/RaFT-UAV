@@ -79,6 +79,28 @@ def test_pcd_omitted_count_keeps_default_scalar_layout(tmp_path: Path) -> None:
     np.testing.assert_allclose(points[["x_m", "y_m", "z_m"]].iloc[0], [1.25, -2.5, 3.75])
 
 
+def test_ascii_pcd_respects_vector_field_count_offsets(tmp_path: Path) -> None:
+    path = tmp_path / "vector-field.pcd"
+    path.write_bytes(
+        _header(
+            "VERSION .7",
+            "FIELDS x y descriptor z",
+            "SIZE 4 4 4 4",
+            "TYPE F F F F",
+            "COUNT 1 1 3 1",
+            "WIDTH 1",
+            "HEIGHT 1",
+            "POINTS 1",
+            "DATA ascii",
+            "1 2 10 11 12 3",
+        )
+    )
+
+    points = load_point_cloud_file_as_points(path)
+
+    np.testing.assert_allclose(points[["x_m", "y_m", "z_m"]].iloc[0], [1.0, 2.0, 3.0])
+
+
 def test_pcd_parser_preserves_supported_vector_counts() -> None:
     parsed = _parse_pcd_header(
         "\n".join(
