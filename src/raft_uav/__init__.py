@@ -113,6 +113,12 @@ def _point_cloud_source_name_install() -> Callable[[], None]:
     return install
 
 
+def _binary_ply_native_endian_install() -> Callable[[], None]:
+    from raft_uav.mmuad._binary_ply_native_endian_patch import install
+
+    return install
+
+
 def _candidate_reservoir_config_validation_install() -> Callable[[], None]:
     from raft_uav.mmuad._candidate_reservoir_config_validation_patch import install
 
@@ -251,6 +257,7 @@ _optional_runtime_hook(_uncertainty_apply_validation_install)
 _optional_runtime_hook(_uncertainty_duplicate_truth_install)
 _optional_runtime_hook(_radar_text_id_csv_install)
 _optional_runtime_hook(_point_cloud_source_name_install)
+_optional_runtime_hook(_binary_ply_native_endian_install)
 _optional_runtime_hook(_candidate_reservoir_config_validation_install)
 _optional_runtime_hook(_acceleration_limit_displacement_install)
 _optional_runtime_hook(_repair_complex_row_validation_install)
