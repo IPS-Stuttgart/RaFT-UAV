@@ -40,7 +40,7 @@ def _radar_measurements_to_enu(
     include_velocity: bool = False,
     clock_offset_s: float = _aerpaw.DEFAULT_RADAR_CLOCK_OFFSET_S,
 ) -> list[Any]:
-    """Validate controls while preserving per-row velocity availability fallback."""
+    """Validate controls and enforce explicit 6-D velocity measurements."""
 
     validated_include_velocity = _validated_boolean(
         include_velocity,
@@ -61,7 +61,7 @@ def _radar_measurements_to_enu(
             name="default_velocity_std_mps",
         )
 
-    return _ORIGINAL_RADAR_MEASUREMENTS_TO_ENU(
+    measurements = _ORIGINAL_RADAR_MEASUREMENTS_TO_ENU(
         radar,
         projector=projector,
         truth_origin_time=truth_origin_time,
@@ -71,6 +71,22 @@ def _radar_measurements_to_enu(
         include_velocity=validated_include_velocity,
         clock_offset_s=clock_offset_s,
     )
+    if validated_include_velocity:
+        invalid_rows = [
+            index
+            for index, measurement in enumerate(measurements)
+            if np.asarray(measurement.vector).reshape(-1).size != 6
+        ]
+        if invalid_rows:
+            preview = ", ".join(str(index) for index in invalid_rows[:8])
+            if len(invalid_rows) > 8:
+                preview = f"{preview}, ..."
+            raise ValueError(
+                "include_velocity=True requires finite east, north, and down "
+                "radar velocity components for every row; invalid row positions "
+                f"[{preview}]"
+            )
+    return measurements
 
 
 def apply_radar_measurement_validation_patch() -> None:
