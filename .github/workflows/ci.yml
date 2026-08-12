@@ -53,20 +53,5 @@ jobs:
           fi
 
       - name: Run unit tests
-        id: pytest
-        continue-on-error: true
         run: |
-          pytest 2>&1 | tee pytest-${{ matrix.python-version }}.log
-
-      - name: Upload pytest diagnostics
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: pytest-${{ matrix.python-version }}-${{ github.run_id }}
-          path: pytest-${{ matrix.python-version }}.log
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Propagate unit-test failure
-        if: steps.pytest.outcome == 'failure'
-        run: exit 1
+          pytest
