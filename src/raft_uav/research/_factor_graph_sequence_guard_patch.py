@@ -35,7 +35,7 @@ def _normalized_sequence_id(value: object) -> str | None:
 
 
 def _single_sequence_id(frame: pd.DataFrame | None, *, name: str) -> str | None:
-    """Return one complete sequence identifier or reject ambiguous metadata."""
+    """Return the unique non-missing sequence identifier, if one is present."""
 
     if frame is None or "sequence_id" not in frame.columns:
         return None
@@ -53,21 +53,6 @@ def _single_sequence_id(frame: pd.DataFrame | None, *, name: str) -> str | None:
         raise ValueError(
             f"{name} contains multiple sequence_id values; "
             "factor-graph smoothing must be run separately for each sequence"
-        )
-
-    missing_positions = [
-        position
-        for position, identifier in enumerate(normalized)
-        if identifier is None
-    ]
-    if identifiers and missing_positions:
-        preview = ", ".join(str(position) for position in missing_positions[:8])
-        if len(missing_positions) > 8:
-            preview = f"{preview}, ..."
-        raise ValueError(
-            f"{name} contains partially missing sequence_id values at row "
-            f"positions [{preview}]; factor-graph smoothing requires "
-            "sequence_id metadata to be complete or absent"
         )
     return next(iter(identifiers), None)
 
