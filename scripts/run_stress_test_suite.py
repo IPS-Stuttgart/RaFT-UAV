@@ -81,8 +81,8 @@ def _load_configs(path: Path | None) -> list[PerturbationConfig]:
         if "name" not in item:
             raise ValueError(f"stress config at index {index} must define 'name'")
 
+        _validate_config_name(item["name"], index=index)
         config = PerturbationConfig.from_mapping(item)
-        _validate_config_name(config.name, index=index)
         if config.name in seen_names:
             raise ValueError(f"duplicate stress config name: {config.name!r}")
         seen_names.add(config.name)
