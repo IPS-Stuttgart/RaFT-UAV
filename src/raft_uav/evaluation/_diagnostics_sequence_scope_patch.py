@@ -163,10 +163,11 @@ def _track_switch_summary(frame: pd.DataFrame, *, top_n: int) -> dict[str, objec
         sequence_top_n = max(top_n, len(sequence_frame))
         summary = _track_switch_rows(sequence_frame, top_n=sequence_top_n)
 
-        for value in sequence_frame["track_id"].tolist() if "track_id" in sequence_frame else []:
-            track_id = optional_int(value)
-            if track_id is not None:
-                all_track_ids.append(track_id)
+        if "track_id" in sequence_frame.columns:
+            for value in sequence_frame["track_id"].tolist():
+                track_id = optional_int(value)
+                if track_id is not None:
+                    all_track_ids.append(track_id)
 
         if first_track_id is None and summary["first_track_id"] is not None:
             first_track_id = int(summary["first_track_id"])
