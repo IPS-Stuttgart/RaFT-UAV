@@ -212,7 +212,10 @@ def _time_alias_series(
         original = lower_to_original.get(_IMPL._column_key(alias))
         if original is not None:
             candidates.append(_seconds_or_stamp_dict_series(frame[original]))
-    return _IMPL._combine_time_alias_series(candidates)
+    combined = _IMPL._combine_time_alias_series(candidates)
+    if combined is None and candidates:
+        return candidates[0]
+    return combined
 
 
 _IMPL.load_jsonable = load_jsonable

@@ -1,11 +1,11 @@
 """Compatibility fixes for candidate-reservoir inputs, flags, and scores.
 
 The maintained implementation lives in the sibling ``candidate_reservoir.py``
-module. This package preserves opaque sequence identifiers, strictly normalizes
-serialized ``candidate_reservoir_protected`` values before summary counts are
-computed, treats malformed ranking metadata as missing so corrupted scores
-cannot dominate reservoir selection, and applies the shared final-sample
-convention to duplicate truth timestamps in oracle diagnostics.
+module. This package preserves opaque sequence identifiers, normalizes serialized
+``candidate_reservoir_protected`` values for summary counts without inheriting
+pruning-only binary restrictions, treats malformed ranking metadata as missing so
+corrupted scores cannot dominate reservoir selection, and applies the shared
+final-sample convention to duplicate truth timestamps in oracle diagnostics.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 
-from raft_uav.mmuad.candidate_diversity import _parse_protected_flag
+from raft_uav.mmuad.candidate_diversity import _ORIGINAL_PARSE_PROTECTED_FLAG
 from raft_uav.numeric import optional_float
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_reservoir.py"
@@ -120,12 +120,12 @@ def _load_candidate_specs(specs: list[str]) -> pd.DataFrame:
 
 
 def _boolean_series(values: Any, index: pd.Index) -> pd.Series:
-    """Parse protection flags with the same semantics used during pruning."""
+    """Parse summary flags without applying pruning-only binary restrictions."""
 
     series = pd.Series(values, index=index)
     if series.empty:
         return pd.Series(False, index=index, dtype=bool)
-    return series.map(_parse_protected_flag).astype(bool)
+    return series.map(_ORIGINAL_PARSE_PROTECTED_FLAG).astype(bool)
 
 
 def _optional_candidate_score(value: object) -> float | None:

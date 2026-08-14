@@ -76,9 +76,8 @@ def test_factor_graph_coordinate_descent_rejects_mismatched_rf_sequence() -> Non
         coordinate_descent_association_and_smoothing(radar, rf, iterations=0)
 
 
-def test_factor_graph_smoother_accepts_one_sequence_with_missing_labels() -> None:
+def test_factor_graph_smoother_rejects_one_sequence_with_missing_labels() -> None:
     measurements = _positions([" flight-a ", None])
 
-    result = smooth_position_trajectory(measurements)
-
-    assert result.estimates["time_s"].tolist() == [0.0, 1.0]
+    with pytest.raises(ValueError, match="partially missing sequence_id"):
+        smooth_position_trajectory(measurements)
