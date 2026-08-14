@@ -135,7 +135,28 @@ def test_track_switches_are_scoped_to_each_pooled_sequence() -> None:
 
 
 def test_track_switches_preserve_input_order_for_equal_timestamps() -> None:
-    time_s = [2, 1, 1, 0, 0, 0, 0, 0, 0, 2, 1, 2, 1, 1, 2, 2, 1, 1, 1, 2]
+    time_s = [
+        2,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        1,
+        1,
+        1,
+        2,
+    ]
     selected_radar = pd.DataFrame(
         {
             "time_s": time_s,
