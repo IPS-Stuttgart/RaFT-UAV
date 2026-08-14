@@ -89,7 +89,7 @@ def _completion_sequence_values(value: object) -> pd.Series | None:
 
 
 def _validate_completion_sequence_metadata(value: object, *, name: str) -> None:
-    """Reject a mix of labeled and unlabeled completion rows."""
+    """Reject ambiguous mixes of explicit and missing completion sequence IDs."""
 
     values = _completion_sequence_values(value)
     if values is None or values.empty:
@@ -98,6 +98,9 @@ def _validate_completion_sequence_metadata(value: object, *, name: str) -> None:
     text = values.where(~missing, "").astype(str).str.strip().str.casefold()
     missing = missing | text.isin(_MISSING_SEQUENCE_ID_STRINGS)
     if bool(missing.any()) and bool((~missing).any()):
+        explicit_ids = set(text.loc[~missing].tolist())
+        if explicit_ids == {"default"}:
+            return
         raise ValueError(
             f"{name} sequence IDs are partially missing; provide sequence IDs "
             "for every row or omit them for the entire table"

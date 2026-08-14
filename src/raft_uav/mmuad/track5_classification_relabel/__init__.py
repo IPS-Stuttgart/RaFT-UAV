@@ -206,8 +206,8 @@ def _validate_probability_column_schema(rows: pd.DataFrame) -> None:
 
     if unsupported:
         raise ValueError(
-            "sequence prediction table contains probability columns outside official "
-            f"classes {VALID_CLASS_IDS}: {unsupported}"
+            "sequence prediction table contains official-class probability columns outside "
+            f"official classes {VALID_CLASS_IDS}: {unsupported}"
         )
 
     ambiguous = {
