@@ -4,7 +4,8 @@ The maintained implementation lives in the sibling ``image_evidence.py``
 module. This package preserves the public import path while rejecting sampling
 controls that would otherwise be silently truncated, treated as unlimited, or
 allowed to disable timestamp gating through non-finite values. Sequence
-summaries count the actual target timeline selected for each sequence.
+summaries count the actual target timeline selected for each sequence, and
+image rows retain discovery order when multiple files share a timestamp.
 """
 
 from __future__ import annotations
@@ -94,6 +95,22 @@ def _finite_target_times(values: Any) -> list[float]:
         if np.isfinite(number):
             result.append(number)
     return result
+
+
+def _image_file_rows(image_files: list[Path]) -> pd.DataFrame:
+    """Build timestamp rows while preserving discovery order for equal times."""
+
+    records = []
+    for path in image_files:
+        timestamp = _IMPL._timestamp_from_filename(path)
+        if timestamp is None:
+            continue
+        records.append({"image_path": str(path), "image_time_s": float(timestamp)})
+    return (
+        pd.DataFrame.from_records(records, columns=_IMPL.IMAGE_FILE_ROW_COLUMNS)
+        .sort_values("image_time_s", kind="mergesort")
+        .reset_index(drop=True)
+    )
 
 
 def _sample_nearest_image_rows(
@@ -205,6 +222,7 @@ def build_image_evidence(
 _IMPL._normalize_max_frames = _normalize_max_frames
 _IMPL._normalize_max_time_delta = _normalize_max_time_delta
 _IMPL._finite_target_times = _finite_target_times
+_IMPL._image_file_rows = _image_file_rows
 _IMPL._sample_nearest_image_rows = _sample_nearest_image_rows
 _IMPL.build_image_evidence = build_image_evidence
 
@@ -218,6 +236,7 @@ globals().update(
 globals()["_normalize_max_frames"] = _normalize_max_frames
 globals()["_normalize_max_time_delta"] = _normalize_max_time_delta
 globals()["_finite_target_times"] = _finite_target_times
+globals()["_image_file_rows"] = _image_file_rows
 globals()["_sample_nearest_image_rows"] = _sample_nearest_image_rows
 globals()["build_image_evidence"] = build_image_evidence
 
