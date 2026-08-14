@@ -1,5 +1,8 @@
 """Calibration utilities for RaFT-UAV."""
 
+from . import (
+    _bias_training_control_validation_patch as _bias_training_control_validation_patch,
+)
 from raft_uav.calibration.bias import (
     BiasCorrectionBank,
     BiasCorrectionModel,
