@@ -1,10 +1,13 @@
-"""Keep compact diagnostic error alignment within sequence boundaries."""
+"""Keep compact diagnostic computations within sequence boundaries."""
 
 from __future__ import annotations
 
+from collections import Counter
 from importlib import import_module
 
 import pandas as pd
+
+from raft_uav.numeric import optional_int
 
 _diagnostics = import_module("raft_uav.evaluation.diagnostics")
 _ORIGINAL_POSITION_ERROR_FRAME = _diagnostics._position_error_frame
@@ -87,6 +90,109 @@ def _validate_one_sided_sequence_metadata(
             f"cannot align pooled {labeled_name} against {unlabeled_name} "
             "without matching sequence metadata"
         )
+
+
+def _track_switch_rows(frame: pd.DataFrame, *, top_n: int) -> dict[str, object]:
+    """Summarize one chronological scope with deterministic tie ordering."""
+
+    if frame.empty or "track_id" not in frame.columns:
+        return _diagnostics._empty_track_switch_summary()
+
+    work = frame.copy()
+    if "time_s" in work.columns:
+        work["_time_s"] = pd.to_numeric(work["time_s"], errors="coerce")
+        work = work.sort_values("_time_s", kind="mergesort")
+
+    parsed_track_ids: list[tuple[int, int]] = []
+    for position, value in enumerate(work["track_id"].tolist()):
+        track_id = optional_int(value)
+        if track_id is not None:
+            parsed_track_ids.append((position, track_id))
+    if not parsed_track_ids:
+        return _diagnostics._empty_track_switch_summary()
+
+    events: list[dict[str, object]] = []
+    transitions: Counter[tuple[int, int]] = Counter()
+    previous: int | None = None
+    for position, current_id in parsed_track_ids:
+        if previous is not None and current_id != previous:
+            transitions[(previous, current_id)] += 1
+            event: dict[str, object] = {
+                "from_track_id": previous,
+                "to_track_id": current_id,
+            }
+            if "time_s" in work.columns:
+                event["time_s"] = _diagnostics._json_value(
+                    work.iloc[position]["time_s"]
+                )
+            events.append(event)
+        previous = current_id
+
+    track_ids = [track_id for _, track_id in parsed_track_ids]
+    return {
+        "count": int(sum(transitions.values())),
+        "updates_with_track_id": int(len(track_ids)),
+        "unique_track_ids": int(len(set(track_ids))),
+        "first_track_id": track_ids[0],
+        "last_track_id": track_ids[-1],
+        "top_transitions": [
+            {"from_track_id": int(src), "to_track_id": int(dst), "count": int(count)}
+            for (src, dst), count in transitions.most_common(top_n)
+        ],
+        "events": events[:top_n],
+    }
+
+
+def _track_switch_summary(frame: pd.DataFrame, *, top_n: int) -> dict[str, object]:
+    """Count switches within each complete sequence instead of across pooled runs."""
+
+    sequence_ids = _canonical_sequence_column(frame, name="track switch frame")
+    sequence_state, sequence_unique = _sequence_state(sequence_ids)
+    if sequence_state != "complete" or len(sequence_unique) <= 1:
+        return _track_switch_rows(frame, top_n=top_n)
+
+    assert sequence_ids is not None
+    transition_counts: Counter[tuple[int, int]] = Counter()
+    events: list[dict[str, object]] = []
+    all_track_ids: list[int] = []
+    first_track_id: int | None = None
+    last_track_id: int | None = None
+
+    for sequence_id in sequence_unique:
+        sequence_frame = frame.loc[sequence_ids == sequence_id]
+        sequence_top_n = max(top_n, len(sequence_frame))
+        summary = _track_switch_rows(sequence_frame, top_n=sequence_top_n)
+
+        for value in sequence_frame["track_id"].tolist() if "track_id" in sequence_frame else []:
+            track_id = optional_int(value)
+            if track_id is not None:
+                all_track_ids.append(track_id)
+
+        if first_track_id is None and summary["first_track_id"] is not None:
+            first_track_id = int(summary["first_track_id"])
+        if summary["last_track_id"] is not None:
+            last_track_id = int(summary["last_track_id"])
+
+        for transition in summary["top_transitions"]:
+            key = (
+                int(transition["from_track_id"]),
+                int(transition["to_track_id"]),
+            )
+            transition_counts[key] += int(transition["count"])
+        events.extend(summary["events"])
+
+    return {
+        "count": int(sum(transition_counts.values())),
+        "updates_with_track_id": int(len(all_track_ids)),
+        "unique_track_ids": int(len(set(all_track_ids))),
+        "first_track_id": first_track_id,
+        "last_track_id": last_track_id,
+        "top_transitions": [
+            {"from_track_id": int(src), "to_track_id": int(dst), "count": int(count)}
+            for (src, dst), count in transition_counts.most_common(top_n)
+        ],
+        "events": events[:top_n],
+    }
 
 
 def _position_error_frame(
@@ -177,14 +283,16 @@ def _position_error_frame(
 
 
 def install() -> None:
-    """Install sequence-local alignment on public and legacy diagnostics paths."""
+    """Install sequence-local alignment and switch diagnostics."""
 
     if getattr(_diagnostics, "_sequence_scope_patch_applied", False):
         return
     _diagnostics._position_error_frame = _position_error_frame
+    _diagnostics._track_switch_summary = _track_switch_summary
     implementation = getattr(_diagnostics, "_IMPL", None)
     if implementation is not None:
         implementation._position_error_frame = _position_error_frame
+        implementation._track_switch_summary = _track_switch_summary
     _diagnostics._sequence_scope_patch_applied = True
 
 
