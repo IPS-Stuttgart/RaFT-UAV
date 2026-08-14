@@ -195,6 +195,38 @@ def _resolved_mixture_config(config: Any) -> Any:
     return config
 
 
+def _validate_pool_label_uniqueness(
+    candidates: pd.DataFrame,
+    *,
+    config: Any,
+) -> None:
+    """Reject distinct leave-one-out groups that serialize to one pool label."""
+
+    if not config.include_leave_one_out:
+        return
+    rows = _IMPL.normalize_candidate_columns(pd.DataFrame(candidates).copy())
+    if rows.empty:
+        return
+    rows = rows.reset_index(drop=True)
+    group_column = str(config.group_column)
+    if group_column not in rows.columns:
+        rows[group_column] = "unknown"
+    rows[group_column] = _IMPL._clean_labels(rows[group_column])
+
+    label_to_group: dict[str, str] = {}
+    for group_value in _IMPL._eligible_groups(rows, config=config):
+        pool_label = (
+            f"without_{_IMPL._slug(group_column)}_{_IMPL._slug(group_value)}"
+        )
+        previous_group = label_to_group.get(pool_label)
+        if previous_group is not None and previous_group != str(group_value):
+            raise ValueError(
+                "candidate-pool labels collide after normalization: "
+                f"{previous_group!r} and {str(group_value)!r} -> {pool_label!r}"
+            )
+        label_to_group[pool_label] = str(group_value)
+
+
 def run_sequence_pool_selector(
     candidates: pd.DataFrame,
     *,
@@ -225,9 +257,11 @@ def build_sequence_candidate_pool_variants(
 ) -> dict[str, pd.DataFrame]:
     """Build candidate-pool variants after strict config validation."""
 
+    resolved_config = _resolved_selector_config(config)
+    _validate_pool_label_uniqueness(candidates, config=resolved_config)
     return _ORIGINAL_BUILD_SEQUENCE_CANDIDATE_POOL_VARIANTS(
         candidates,
-        config=_resolved_selector_config(config),
+        config=resolved_config,
     )
 
 
@@ -249,6 +283,7 @@ globals()["_validated_selector_config"] = _validated_selector_config
 globals()["_validate_selector_config"] = _validate_selector_config
 globals()["_resolved_selector_config"] = _resolved_selector_config
 globals()["_resolved_mixture_config"] = _resolved_mixture_config
+globals()["_validate_pool_label_uniqueness"] = _validate_pool_label_uniqueness
 
 __all__ = sorted(
     {
