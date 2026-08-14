@@ -8,20 +8,20 @@ from raft_uav.bias_cli import train_bias_model
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("max_time_delta_s", float("nan"), "max_time_delta_s must be finite and positive"),
-        ("max_time_delta_s", float("inf"), "max_time_delta_s must be finite and positive"),
+        ("max_time_delta_s", float("nan"), "max_time_delta_s must be positive"),
+        ("max_time_delta_s", float("inf"), "max_time_delta_s must be positive"),
         (
             "max_position_error_m",
             float("nan"),
-            "max_position_error_m must be finite and positive",
+            "max_position_error_m must be positive",
         ),
         (
             "max_position_error_m",
             float("inf"),
-            "max_position_error_m must be finite and positive",
+            "max_position_error_m must be positive",
         ),
-        ("ridge_alpha", float("nan"), "ridge_alpha must be finite and nonnegative"),
-        ("ridge_alpha", float("inf"), "ridge_alpha must be finite and nonnegative"),
+        ("ridge_alpha", float("nan"), "ridge_alpha must be nonnegative"),
+        ("ridge_alpha", float("inf"), "ridge_alpha must be nonnegative"),
     ],
 )
 def test_train_bias_model_rejects_nonfinite_hyperparameters(
