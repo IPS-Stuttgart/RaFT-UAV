@@ -52,3 +52,16 @@ def test_split_manifest_allows_distinct_paths_with_same_basename(tmp_path):
         "train": ("site_a/seq001",),
         "val": ("site_b/seq001",),
     }
+
+
+def test_split_manifest_allows_window_view_of_same_partition(tmp_path):
+    path = tmp_path / "splits.json"
+    path.write_text(
+        json.dumps({"val": ["val/seq001"], "val_windows": ["val\\seq001"]}),
+        encoding="utf-8",
+    )
+
+    assert load_split_manifest(path) == {
+        "val": ("val/seq001",),
+        "val_windows": ("val\\seq001",),
+    }

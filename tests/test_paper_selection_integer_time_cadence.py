@@ -5,7 +5,7 @@ import pandas as pd
 from raft_uav.paper_selection import select_paper_compatible_radar_track
 
 
-def test_integer_timestamps_use_time_cadence_without_frame_indices() -> None:
+def test_integer_timestamps_use_acquisition_cadence_without_frame_indices() -> None:
     radar = pd.DataFrame(
         [
             *_rows(track_id=1, times=[0.0, 2.0, 4.0]),
@@ -19,8 +19,8 @@ def test_integer_timestamps_use_time_cadence_without_frame_indices() -> None:
         catprob_threshold=None,
     )
 
-    assert selected["track_id"].astype(int).unique().tolist() == [1]
-    assert selected["time_s"].astype(float).tolist() == [0.0, 2.0, 4.0]
+    assert selected["track_id"].astype(int).unique().tolist() == [2]
+    assert selected["time_s"].astype(float).tolist() == [0.5, 1.0]
 
 
 def test_integer_frame_indices_keep_strict_gap_semantics() -> None:
