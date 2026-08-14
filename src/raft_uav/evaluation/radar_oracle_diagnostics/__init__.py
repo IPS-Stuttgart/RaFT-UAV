@@ -269,7 +269,7 @@ def nearest_candidate_oracle(
         frame_truth = _matching_truth_rows(truth, frame)
         if frame_truth.empty:
             continue
-        truth_position, valid = _IMPL.interpolate_truth_positions(
+        truth_position, valid = interpolate_truth_positions(
             frame_truth,
             [frame_time + offset],
             max_time_delta_s=maximum_delta,
