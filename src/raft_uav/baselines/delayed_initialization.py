@@ -287,6 +287,16 @@ def best_initial_hypothesis(
     return min(items, key=lambda item: item.score) if items else None
 
 
+def _measurement_field(
+    measurement: Any,
+    name: str,
+    default: object = None,
+) -> object:
+    if isinstance(measurement, Mapping):
+        return measurement.get(name, default)
+    return getattr(measurement, name, default)
+
+
 def _first_rf_window(
     rf_measurements: Iterable[Any],
     *,
@@ -298,11 +308,11 @@ def _first_rf_window(
     for measurement in rf_measurements:
         try:
             vector = np.asarray(
-                getattr(measurement, "vector", []),
+                _measurement_field(measurement, "vector", []),
                 dtype=float,
             ).reshape(-1)
-            time_s = float(getattr(measurement, "time_s"))
-        except (AttributeError, TypeError, ValueError, OverflowError):
+            time_s = float(_measurement_field(measurement, "time_s"))
+        except (TypeError, ValueError, OverflowError):
             continue
         if vector.size < 2 or not np.isfinite(time_s) or not np.isfinite(vector).all():
             continue
