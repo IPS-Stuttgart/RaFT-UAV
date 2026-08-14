@@ -21,4 +21,7 @@ def test_delayed_initialization_accepts_mapping_rf_measurements() -> None:
     assert hypothesis.source == "rf"
     assert hypothesis.time_s == 1.25
     assert hypothesis.metadata == {"rf_dimension": 3}
-    np.testing.assert_allclose(hypothesis.state, [10.0, 20.0, 30.0, 0.0, 0.0, 0.0])
+    np.testing.assert_allclose(
+        hypothesis.state,
+        [10.0, 20.0, 30.0, 0.0, 0.0, 0.0],
+    )
