@@ -87,6 +87,16 @@ def train_bias_model(
                 + ", ".join(duplicate_flights)
             )
         flights = [select_flight(dataset_root, name) for name in requested_flights]
+        duplicate_selected_flights = [
+            name
+            for name, count in Counter(flight.name for flight in flights).items()
+            if count > 1
+        ]
+        if duplicate_selected_flights:
+            raise ValueError(
+                "requested_flights must not resolve to duplicate flights: "
+                + ", ".join(duplicate_selected_flights)
+            )
     else:
         flights = discover_flights(dataset_root)
 

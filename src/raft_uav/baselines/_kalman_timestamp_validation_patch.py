@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from functools import wraps
 from importlib import import_module
 from typing import Any
 
@@ -17,8 +19,10 @@ _ORIGINAL_IS_BOOTSTRAP_MEASUREMENT = (
 )
 _ORIGINAL_PREDICT_TO = _kalman.AsyncConstantVelocityKalmanTracker.predict_to
 _ORIGINAL_COAST_TO = _kalman.AsyncConstantVelocityKalmanTracker.coast_to
+_ORIGINAL_UPDATE = _kalman.AsyncConstantVelocityKalmanTracker.update
 _ORIGINAL_IMM_TRACKER_INIT = _imm.AsyncInteractingMultipleModelTracker.__init__
 _ORIGINAL_IMM_PREDICT_TO = _imm.AsyncInteractingMultipleModelTracker.predict_to
+_ORIGINAL_IMM_UPDATE = _imm.AsyncInteractingMultipleModelTracker.update
 
 
 def _finite_timestamp_seconds(value: Any, *, field_name: str) -> float:
@@ -210,6 +214,18 @@ def _coast_to(self: Any, time_s: float) -> None:
     _ORIGINAL_COAST_TO(self, validated_time_s)
 
 
+def _chronology_safe_update(original_update: Callable[..., Any]) -> Callable[..., Any]:
+    """Reject backward measurements before legacy update bookkeeping is mutated."""
+
+    @wraps(original_update)
+    def update(self: Any, measurement: Any, *args: Any, **kwargs: Any) -> Any:
+        if float(measurement.time_s) < float(self.current_time_s) - 1.0e-9:
+            raise ValueError("measurements must be processed in chronological order")
+        return original_update(self, measurement, *args, **kwargs)
+
+    return update
+
+
 def _imm_tracker_init(
     self: Any,
     initial_position: np.ndarray,
@@ -267,9 +283,15 @@ def apply_kalman_timestamp_validation_patch() -> None:
         )
         _kalman.AsyncConstantVelocityKalmanTracker.predict_to = _predict_to
         _kalman.AsyncConstantVelocityKalmanTracker.coast_to = _coast_to
+        _kalman.AsyncConstantVelocityKalmanTracker.update = _chronology_safe_update(
+            _ORIGINAL_UPDATE
+        )
         _kalman._timestamp_validation_patch_applied = True
 
     if not getattr(_imm, "_timestamp_validation_patch_applied", False):
         _imm.AsyncInteractingMultipleModelTracker.__init__ = _imm_tracker_init
         _imm.AsyncInteractingMultipleModelTracker.predict_to = _imm_predict_to
+        _imm.AsyncInteractingMultipleModelTracker.update = _chronology_safe_update(
+            _ORIGINAL_IMM_UPDATE
+        )
         _imm._timestamp_validation_patch_applied = True
