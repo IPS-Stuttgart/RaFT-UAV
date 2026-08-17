@@ -376,7 +376,7 @@ def _baseline_cache_key(
         "img_size": 1920,
         "proposal_conf_thres": 0.001,
         "proposal_iou_thres": 0.95,
-        "device_independent": True,
+        "device_independent": False,
     }
     hasher.update(json.dumps(settings, sort_keys=True).encode("utf-8"))
     source_paths = [
