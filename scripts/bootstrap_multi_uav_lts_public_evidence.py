@@ -16,6 +16,8 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -48,8 +50,15 @@ def _request_json(url: str) -> dict[str, Any]:
         url,
         headers={"User-Agent": "RaFT-UAV-evidence-workflow/1.0"},
     )
-    with urllib.request.urlopen(request, timeout=120) as response:
-        return json.load(response)
+    for attempt in range(1, 9):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                return json.load(response)
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+            if attempt == 8:
+                raise
+            time.sleep(min(5 * attempt, 30))
+    raise AssertionError("unreachable")
 
 
 def _digest(path: Path, algorithm: str) -> str:
@@ -99,6 +108,12 @@ def _download(
     partial = destination.with_name(destination.name + ".part")
     if destination.exists():
         destination.unlink()
+    if (
+        partial.exists()
+        and expected_size is not None
+        and partial.stat().st_size >= expected_size
+    ):
+        partial.unlink()
 
     curl = shutil.which("curl")
     if curl is None:
@@ -152,13 +167,36 @@ def _archive_member_suffix(name: str, component: str) -> PurePosixPath | None:
 def _count_public_inputs(extracted_root: Path) -> tuple[int, int, int]:
     labels = extracted_root / "TrainLabels"
     images = extracted_root / "TrainImages"
-    label_count = len(list(labels.glob("*.txt"))) if labels.is_dir() else 0
+    label_count = (
+        sum(
+            path.is_file() and path.suffix.lower() == ".txt"
+            for path in labels.iterdir()
+        )
+        if labels.is_dir()
+        else 0
+    )
     sequence_count = (
-        sum(path.is_dir() and any(path.glob("*.jpg")) for path in images.iterdir())
+        sum(
+            path.is_dir()
+            and any(
+                child.is_file() and child.suffix.lower() == ".jpg"
+                for child in path.iterdir()
+            )
+            for path in images.iterdir()
+        )
         if images.is_dir()
         else 0
     )
-    frame_count = sum(1 for _ in images.glob("*/*.jpg")) if images.is_dir() else 0
+    frame_count = (
+        sum(
+            child.is_file() and child.suffix.lower() == ".jpg"
+            for path in images.iterdir()
+            if path.is_dir()
+            for child in path.iterdir()
+        )
+        if images.is_dir()
+        else 0
+    )
     return label_count, sequence_count, frame_count
 
 
