@@ -50,6 +50,15 @@ def _finite_timestamp_seconds(value: Any, *, field_name: str) -> float:
     return timestamp_s
 
 
+def _finite_positive_seconds(value: Any, *, field_name: str) -> float:
+    """Return a finite strictly positive scalar time interval."""
+
+    seconds = _finite_timestamp_seconds(value, field_name=field_name)
+    if seconds <= 0.0:
+        raise ValueError(f"{field_name} must be positive")
+    return seconds
+
+
 def _finite_nonnegative_scale(value: Any, *, field_name: str) -> float:
     """Return a finite nonnegative scalar uncertainty scale."""
 
@@ -254,6 +263,10 @@ def _imm_tracker_init(
         acceleration_std_mps2,
         field_name="acceleration_std_mps2",
     )
+    validated_mode_switch_time_constant_s = _finite_positive_seconds(
+        mode_switch_time_constant_s,
+        field_name="mode_switch_time_constant_s",
+    )
     _ORIGINAL_IMM_TRACKER_INIT(
         self,
         validated_initial_position,
@@ -263,7 +276,7 @@ def _imm_tracker_init(
         acceleration_std_mps2=validated_acceleration_std_mps2,
         modes=modes,
         initial_mode_probabilities=initial_mode_probabilities,
-        mode_switch_time_constant_s=mode_switch_time_constant_s,
+        mode_switch_time_constant_s=validated_mode_switch_time_constant_s,
     )
 
 
