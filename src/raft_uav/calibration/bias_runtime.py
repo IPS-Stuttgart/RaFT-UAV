@@ -45,10 +45,11 @@ def install() -> None:
 def configured_bias_model_path() -> Path | None:
     """Return the configured model path, if any."""
 
-    raw = os.environ.get(BIAS_MODEL_ENV) or os.environ.get(BIAS_MODEL_PATH_ENV)
-    if raw is None or not raw.strip():
-        return None
-    return Path(raw).expanduser()
+    for env_name in (BIAS_MODEL_ENV, BIAS_MODEL_PATH_ENV):
+        raw = os.environ.get(env_name)
+        if raw is not None and raw.strip():
+            return Path(raw).expanduser()
+    return None
 
 
 def bias_correction_enabled() -> bool:
