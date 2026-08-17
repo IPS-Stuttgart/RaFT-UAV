@@ -92,11 +92,12 @@ def _proposal_source_cache_key(
         "proposal_iou_thres": 0.95,
         "device_independent": False,
     }
-    package_root = repo_root / "src" / "raft_uav" / "multi_uav_lts"
+    source_root = repo_root / "src" / "raft_uav"
+    package_root = source_root / "multi_uav_lts"
     source_paths = [
         repo_root / "scripts" / "run_multi_uav_lts_official_baseline.py",
-        repo_root / "src" / "raft_uav" / "__init__.py",
-        repo_root / "src" / "raft_uav" / "numeric.py",
+        source_root / "__init__.py",
+        *sorted((source_root / "numeric").rglob("*.py")),
         package_root / "__init__.py",
         package_root / "_records.py",
         package_root / "cli.py",
@@ -107,6 +108,11 @@ def _proposal_source_cache_key(
         *sorted((package_root / "_records").rglob("*.py")),
         *sorted((package_root / "cli").rglob("*.py")),
     ]
+    missing = [path for path in source_paths if not path.is_file()]
+    if missing:
+        rendered = ", ".join(str(path) for path in missing)
+        raise FileNotFoundError(f"proposal cache source missing: {rendered}")
+
     hasher = hashlib.sha256()
     hasher.update(json.dumps(settings, sort_keys=True).encode("utf-8"))
     for path in source_paths:
