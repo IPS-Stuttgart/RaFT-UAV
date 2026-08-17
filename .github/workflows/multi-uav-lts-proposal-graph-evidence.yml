@@ -9,9 +9,11 @@ name: Multi-UAV LTS proposal graph evidence
       - "scripts/bootstrap_multi_uav_lts_public_evidence.py"
       - "scripts/install_multi_uav_lts_public_runtime.sh"
       - "scripts/run_multi_uav_lts_public_evidence.py"
+      - "scripts/run_multi_uav_lts_improved_evidence.py"
       - "scripts/run_multi_uav_lts_official_baseline.py"
       - "src/raft_uav/multi_uav_lts/**"
       - "tests/test_multi_uav_lts_proposal_graph_tracker.py"
+      - "tests/test_multi_uav_lts_proposal_graph_improvements.py"
   workflow_dispatch:
     inputs:
       device:
@@ -74,19 +76,24 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
-          python -m pytest -q tests/test_multi_uav_lts_proposal_graph_tracker.py
+          python -m pytest -q \
+            tests/test_multi_uav_lts_proposal_graph_tracker.py \
+            tests/test_multi_uav_lts_proposal_graph_improvements.py
           python -m py_compile \
             scripts/bootstrap_multi_uav_lts_public_evidence.py \
-            scripts/run_multi_uav_lts_public_evidence.py
+            scripts/run_multi_uav_lts_public_evidence.py \
+            scripts/run_multi_uav_lts_improved_evidence.py
           bash -n scripts/install_multi_uav_lts_public_runtime.sh
           python scripts/bootstrap_multi_uav_lts_public_evidence.py --help >/dev/null
-          python scripts/run_multi_uav_lts_public_evidence.py --help >/dev/null
+          python scripts/run_multi_uav_lts_improved_evidence.py --help >/dev/null
           python -m ruff check \
             scripts/bootstrap_multi_uav_lts_public_evidence.py \
             scripts/run_multi_uav_lts_public_evidence.py \
+            scripts/run_multi_uav_lts_improved_evidence.py \
             src/raft_uav/multi_uav_lts/_proposal_graph_core.py \
             src/raft_uav/multi_uav_lts/proposal_graph_tracker.py \
-            tests/test_multi_uav_lts_proposal_graph_tracker.py
+            tests/test_multi_uav_lts_proposal_graph_tracker.py \
+            tests/test_multi_uav_lts_proposal_graph_improvements.py
 
   train-evidence:
     name: Guarded 102-sequence proposal graph tournament
@@ -163,7 +170,9 @@ jobs:
           cache_root="${best_root}"
           work_root="${cache_root}/multi-uav-lts-zenodo-15853476"
           run_dir="${work_root}/evidence-runs/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          venv_path="${work_root}/venvs/proposal-graph-py311-torch222"
+          # The installer derives WORK_ROOT as two parents above the venv directory.
+          # Keep an explicit runtime/venvs nesting so the derived root is exact.
+          venv_path="${work_root}/runtime/venvs/proposal-graph-py311-torch222"
           asset_dir="${work_root}/assets/runtime"
           inputs_json="${run_dir}/public-inputs.json"
           mkdir -p "${run_dir}" "${asset_dir}" "$(dirname "${venv_path}")"
@@ -261,7 +270,7 @@ jobs:
             improvement_args+=(--require-improvement)
           fi
           "${VENV_PATH}/bin/python" \
-            scripts/run_multi_uav_lts_public_evidence.py \
+            scripts/run_multi_uav_lts_improved_evidence.py \
             --inputs-json "${INPUTS_JSON}" \
             --run-dir "${RUN_DIR}" \
             --device "${GPU_DEVICE}" \
