@@ -37,9 +37,16 @@ class ProposalGraphParameters:
     velocity_weight: float
     gap_weight: float
     confidence_weight: float
+    enable_common_motion: bool
+    common_motion_min_pairs: int
+    common_motion_max_normalized_step: float
+    common_motion_max_normalized_residual: float
+    interpolate_max_gap: int
     birth_min_hits: int
     birth_min_span: int
     birth_min_mean_confidence: float
+    birth_require_border_entry: bool
+    birth_min_inward_motion: float
     image_width: float | None
     image_height: float | None
     border_margin_fraction: float
@@ -55,6 +62,8 @@ class SequenceProposalGraphSummary:
     duplicate_suppressed_rows: int
     anchor_tracklets: int
     graph_links: int
+    common_motion_steps: int
+    interpolated_rows: int
     seeded_paths: int
     confirmed_birth_paths: int
     dropped_unseeded_paths: int
@@ -76,6 +85,8 @@ class ProposalGraphSummary:
     duplicate_suppressed_rows: int
     anchor_tracklets: int
     graph_links: int
+    common_motion_steps: int
+    interpolated_rows: int
     seeded_paths: int
     confirmed_birth_paths: int
     dropped_unseeded_paths: int
@@ -103,9 +114,16 @@ def track_proposal_graph(
     velocity_weight: float = 0.5,
     gap_weight: float = 0.04,
     confidence_weight: float = 0.05,
+    enable_common_motion: bool = False,
+    common_motion_min_pairs: int = 4,
+    common_motion_max_normalized_step: float = 8.0,
+    common_motion_max_normalized_residual: float = 1.5,
+    interpolate_max_gap: int = 0,
     birth_min_hits: int = 3,
     birth_min_span: int = 2,
     birth_min_mean_confidence: float = 0.003,
+    birth_require_border_entry: bool = False,
+    birth_min_inward_motion: float = 0.0,
     image_width: float | None = None,
     image_height: float | None = None,
     border_margin_fraction: float = 0.08,
@@ -127,9 +145,16 @@ def track_proposal_graph(
         velocity_weight=velocity_weight,
         gap_weight=gap_weight,
         confidence_weight=confidence_weight,
+        enable_common_motion=enable_common_motion,
+        common_motion_min_pairs=common_motion_min_pairs,
+        common_motion_max_normalized_step=common_motion_max_normalized_step,
+        common_motion_max_normalized_residual=common_motion_max_normalized_residual,
+        interpolate_max_gap=interpolate_max_gap,
         birth_min_hits=birth_min_hits,
         birth_min_span=birth_min_span,
         birth_min_mean_confidence=birth_min_mean_confidence,
+        birth_require_border_entry=birth_require_border_entry,
+        birth_min_inward_motion=birth_min_inward_motion,
         image_width=image_width,
         image_height=image_height,
         border_margin_fraction=border_margin_fraction,
@@ -176,6 +201,8 @@ def track_proposal_graph(
                 duplicate_suppressed_rows=result.suppressed_rows,
                 anchor_tracklets=result.anchor_tracklets,
                 graph_links=result.graph_links,
+                common_motion_steps=result.common_motion_steps,
+                interpolated_rows=result.interpolated_rows,
                 seeded_paths=result.seeded_paths,
                 confirmed_birth_paths=result.birth_paths,
                 dropped_unseeded_paths=result.dropped_paths,
@@ -205,12 +232,21 @@ def _parameters(**raw: object) -> ProposalGraphParameters:
     def integer(key: str) -> int:
         return validate_nonnegative_int(raw[key], name=key)
 
-    global_links = raw["enable_global_links"]
-    if not isinstance(global_links, bool):
-        raise ValueError("enable_global_links must be a Boolean")
+    def boolean(key: str) -> bool:
+        value = raw[key]
+        if not isinstance(value, bool):
+            raise ValueError(f"{key} must be a Boolean")
+        return value
+
+    global_links = boolean("enable_global_links")
+    common_motion = boolean("enable_common_motion")
+    border_birth = boolean("birth_require_border_entry")
     birth_hits = integer("birth_min_hits")
     if birth_hits <= 0:
         raise ValueError("birth_min_hits must be a positive integer")
+    common_pairs = integer("common_motion_min_pairs")
+    if common_pairs <= 0:
+        raise ValueError("common_motion_min_pairs must be a positive integer")
     weights = (
         finite("center_weight"),
         finite("size_weight"),
@@ -222,6 +258,10 @@ def _parameters(**raw: object) -> ProposalGraphParameters:
     height = _optional_positive(raw["image_height"], name="image_height")
     if (width is None) != (height is None):
         raise ValueError("image_width and image_height must be supplied together")
+    if border_birth and width is None:
+        raise ValueError(
+            "image_width and image_height are required for border-gated births"
+        )
     return ProposalGraphParameters(
         min_proposal_confidence=unit("min_proposal_confidence"),
         duplicate_iou=unit("duplicate_iou"),
@@ -237,9 +277,20 @@ def _parameters(**raw: object) -> ProposalGraphParameters:
         velocity_weight=finite("velocity_weight"),
         gap_weight=finite("gap_weight"),
         confidence_weight=finite("confidence_weight"),
+        enable_common_motion=common_motion,
+        common_motion_min_pairs=common_pairs,
+        common_motion_max_normalized_step=positive(
+            "common_motion_max_normalized_step"
+        ),
+        common_motion_max_normalized_residual=positive(
+            "common_motion_max_normalized_residual"
+        ),
+        interpolate_max_gap=integer("interpolate_max_gap"),
         birth_min_hits=birth_hits,
         birth_min_span=integer("birth_min_span"),
         birth_min_mean_confidence=unit("birth_min_mean_confidence"),
+        birth_require_border_entry=border_birth,
+        birth_min_inward_motion=finite("birth_min_inward_motion"),
         image_width=width,
         image_height=height,
         border_margin_fraction=unit("border_margin_fraction"),
@@ -311,7 +362,7 @@ def _summary(
         return sum(int(getattr(row, name)) for row in rows)
 
     return ProposalGraphSummary(
-        schema="raft-uav-multi-uav-lts-proposal-graph-v1",
+        schema="raft-uav-multi-uav-lts-proposal-graph-v2",
         proposal_path=str(proposal_path),
         first_frame_label_dir=str(label_dir),
         output_dir=str(output_dir),
@@ -323,6 +374,8 @@ def _summary(
         duplicate_suppressed_rows=total("duplicate_suppressed_rows"),
         anchor_tracklets=total("anchor_tracklets"),
         graph_links=total("graph_links"),
+        common_motion_steps=total("common_motion_steps"),
+        interpolated_rows=total("interpolated_rows"),
         seeded_paths=total("seeded_paths"),
         confirmed_birth_paths=total("confirmed_birth_paths"),
         dropped_unseeded_paths=total("dropped_unseeded_paths"),
@@ -361,9 +414,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--velocity-weight", type=float, default=0.5)
     parser.add_argument("--gap-weight", type=float, default=0.04)
     parser.add_argument("--confidence-weight", type=float, default=0.05)
+    parser.add_argument("--enable-common-motion", action="store_true")
+    parser.add_argument("--common-motion-min-pairs", type=int, default=4)
+    parser.add_argument(
+        "--common-motion-max-normalized-step", type=float, default=8.0
+    )
+    parser.add_argument(
+        "--common-motion-max-normalized-residual", type=float, default=1.5
+    )
+    parser.add_argument("--interpolate-max-gap", type=int, default=0)
     parser.add_argument("--birth-min-hits", type=int, default=3)
     parser.add_argument("--birth-min-span", type=int, default=2)
     parser.add_argument("--birth-min-mean-confidence", type=float, default=0.003)
+    parser.add_argument("--birth-require-border-entry", action="store_true")
+    parser.add_argument("--birth-min-inward-motion", type=float, default=0.0)
     parser.add_argument("--image-width", type=float)
     parser.add_argument("--image-height", type=float)
     parser.add_argument("--border-margin-fraction", type=float, default=0.08)
@@ -380,6 +444,8 @@ def main(argv: list[str] | None = None) -> int:
         write_summary(summary, output_json)
     print(f"sequence_count={summary.sequence_count}")
     print(f"output_rows={summary.output_rows}")
+    print(f"common_motion_steps={summary.common_motion_steps}")
+    print(f"interpolated_rows={summary.interpolated_rows}")
     print(f"confirmed_birth_paths={summary.confirmed_birth_paths}")
     print(f"dropped_unseeded_paths={summary.dropped_unseeded_paths}")
     return 0
