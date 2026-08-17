@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import math
 from pathlib import Path
 
@@ -77,6 +78,14 @@ def train_bias_model(
         raise ValueError("min_samples must be positive")
 
     if requested_flights:
+        duplicate_flights = [
+            name for name, count in Counter(requested_flights).items() if count > 1
+        ]
+        if duplicate_flights:
+            raise ValueError(
+                "requested_flights must not contain duplicate flight names: "
+                + ", ".join(duplicate_flights)
+            )
         flights = [select_flight(dataset_root, name) for name in requested_flights]
     else:
         flights = discover_flights(dataset_root)
