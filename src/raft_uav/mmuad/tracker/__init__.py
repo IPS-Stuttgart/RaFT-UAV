@@ -81,7 +81,7 @@ _FILTER_HELPER_COLUMNS = (
 
 
 def _normalize_covariance_scale(value: object, *, field_name: str) -> float:
-    """Return a finite non-negative covariance scale."""
+    """Return a finite non-negative covariance/process-noise scale."""
 
     scale = optional_float(value)
     if scale is None or scale < 0.0:
@@ -92,10 +92,14 @@ def _normalize_covariance_scale(value: object, *, field_name: str) -> float:
 
 
 def _validated_tracker_config(config: TrackerConfig) -> TrackerConfig:
-    """Normalize covariance scales before they reach Kalman updates."""
+    """Normalize numeric scales before they reach Kalman prediction/updates."""
 
     return replace(
         config,
+        acceleration_std_mps2=_normalize_covariance_scale(
+            config.acceleration_std_mps2,
+            field_name="acceleration_std_mps2",
+        ),
         primary_covariance_scale=_normalize_covariance_scale(
             config.primary_covariance_scale,
             field_name="primary_covariance_scale",
