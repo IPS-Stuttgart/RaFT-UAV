@@ -59,8 +59,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--proximity-thresh", type=float)
     parser.add_argument("--appearance-thresh", type=float)
     parser.add_argument("--device", default=os.environ.get("GPU_ID", "0"))
-    parser.add_argument("--shard-index", type=int, default=int(os.environ.get("SHARD_INDEX", "0")))
-    parser.add_argument("--shard-count", type=int, default=int(os.environ.get("SHARD_COUNT", "1")))
+    parser.add_argument(
+        "--shard-index",
+        type=int,
+        default=int(os.environ.get("SHARD_INDEX", "0")),
+    )
+    parser.add_argument(
+        "--shard-count",
+        type=int,
+        default=int(os.environ.get("SHARD_COUNT", "1")),
+    )
     parser.add_argument("--sequences", nargs="*", help="optional sequence names to run/package")
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--no-reid", action="store_true")
@@ -132,7 +140,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"multi_uav_lts_submission_zip={paths['submission_zip']}")
     print(
         "multi_uav_lts_valid="
-        + ("not_run_dry_run" if validation_payload is None else str(validation_payload["valid"]))
+        + (
+            "not_run_dry_run"
+            if validation_payload is None
+            else str(validation_payload["valid"])
+        )
     )
     if validation_payload is not None and not validation_payload["valid"]:
         return 1
@@ -229,9 +241,42 @@ def _run_sequences(args: argparse.Namespace, paths: dict[str, Path]) -> list[dic
             record["status"] = "ok" if completed.returncode == 0 else "failed"
             if completed.returncode != 0:
                 records.append(record)
+                _print_failure_log(sequence, log_path)
                 raise RuntimeError(f"{sequence} failed; see {log_path}")
         records.append(record)
     return records
+
+
+def _print_failure_log(
+    sequence: str,
+    log_path: Path,
+    *,
+    max_lines: int = 160,
+    max_characters: int = 30_000,
+) -> None:
+    """Expose a bounded tail of an upstream failure in the Actions job log."""
+
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        print(
+            f"Unable to read failed upstream log for {sequence}: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return
+    tail = "\n".join(lines[-max_lines:])
+    if len(tail) > max_characters:
+        tail = tail[-max_characters:]
+    print(
+        f"--- begin upstream failure log tail: {sequence} ({log_path}) ---",
+        file=sys.stderr,
+    )
+    print(tail or "<empty log>", file=sys.stderr)
+    print(
+        f"--- end upstream failure log tail: {sequence} ---",
+        file=sys.stderr,
+    )
 
 
 def _inference_command(
