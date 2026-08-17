@@ -13,6 +13,8 @@ _INVALID_SCALES = [
     -1.0,
     "not-a-scale",
     True,
+    np.array(True),
+    np.array(False, dtype=object),
     np.array([1.0]),
     np.ma.masked,
     np.ma.array(3.0, mask=True),
