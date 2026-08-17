@@ -82,11 +82,14 @@ def _install_image_row_guard() -> None:
             return _pd.DataFrame(columns=["image_path", "image_time_s"])
         return (
             _pd.DataFrame.from_records(records)
-            .sort_values("image_time_s")
+            .sort_values("image_time_s", kind="mergesort")
             .reset_index(drop=True)
         )
 
     _image_evidence._image_file_rows = _image_file_rows
+    implementation = getattr(_image_evidence, "_IMPL", None)
+    if implementation is not None:
+        implementation._image_file_rows = _image_file_rows
 
 
 def _install_candidate_pool_compare_cli_guard() -> None:
