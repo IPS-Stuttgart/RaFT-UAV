@@ -1,0 +1,461 @@
+---
+name: Multi-UAV LTS proposal graph evidence
+
+"on":
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/multi-uav-lts-proposal-graph-evidence.yml"
+      - "src/raft_uav/multi_uav_lts/_proposal_graph_core.py"
+      - "src/raft_uav/multi_uav_lts/proposal_graph_tracker.py"
+      - "tests/test_multi_uav_lts_proposal_graph_tracker.py"
+  workflow_dispatch:
+    inputs:
+      work_root:
+        description: Multi-UAV LTS work root
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts
+        type: string
+      proposal_path:
+        description: Existing root-level low-threshold proposal directory or ZIP
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/outputs/proposal_bank_1920/proposals
+        type: string
+      raw_prediction_path:
+        description: Existing seeded raw baseline predictions
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/outputs/train_baseline/predictions
+        type: string
+      truth_dir:
+        description: Complete training-label directory
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels
+        type: string
+      first_frame_label_dir:
+        description: First-frame training labels
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels_FirstFrameOnly
+        type: string
+      train_sequence_root:
+        description: Training image sequence root used when proposals are regenerated
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainImages
+        type: string
+      upstream_python:
+        description: Python executable for the external BoT-SORT checkout
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/venvs/yolov12-botsort-py312/bin/python
+        type: string
+      output_root:
+        description: Persistent evidence root
+        required: true
+        default: /mnt/lexar4tb/multi_uav_lts/outputs/proposal_graph_evidence
+        type: string
+      device:
+        description: CUDA device used when proposals are regenerated
+        required: true
+        default: "0"
+        type: string
+      expected_sequence_count:
+        description: Required training sequence count
+        required: true
+        default: "102"
+        type: string
+      regenerate_if_missing:
+        description: Regenerate raw predictions and proposals when stable inputs are absent
+        required: false
+        default: true
+        type: boolean
+      require_improvement:
+        description: Fail when the guarded tournament selects raw
+        required: false
+        default: false
+        type: boolean
+      probe_only:
+        description: Check runner inputs without running inference or evaluation
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multi-uav-lts-proposal-graph-evidence-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  RAFT_UAV_SKIP_RUNTIME_HOOKS: "1"
+
+jobs:
+  focused-tests:
+    name: Proposal graph focused tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out RaFT-UAV
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pytest -q tests/test_multi_uav_lts_proposal_graph_tracker.py
+          python -m ruff check \
+            src/raft_uav/multi_uav_lts/_proposal_graph_core.py \
+            src/raft_uav/multi_uav_lts/proposal_graph_tracker.py \
+            tests/test_multi_uav_lts_proposal_graph_tracker.py
+
+  train-evidence:
+    name: Guarded 102-sequence proposal graph tournament
+    needs: focused-tests
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    timeout-minutes: 720
+
+    env:
+      WORK_ROOT: >-
+        ${{ inputs.work_root || '/mnt/lexar4tb/multi_uav_lts' }}
+      PROPOSAL_PATH: >-
+        ${{ inputs.proposal_path ||
+        '/mnt/lexar4tb/multi_uav_lts/outputs/proposal_bank_1920/proposals' }}
+      RAW_PREDICTION_PATH: >-
+        ${{ inputs.raw_prediction_path ||
+        '/mnt/lexar4tb/multi_uav_lts/outputs/train_baseline/predictions' }}
+      TRUTH_DIR: >-
+        ${{ inputs.truth_dir ||
+        '/mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels' }}
+      FIRST_FRAME_LABEL_DIR: >-
+        ${{ inputs.first_frame_label_dir ||
+        '/mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels_FirstFrameOnly' }}
+      TRAIN_SEQUENCE_ROOT: >-
+        ${{ inputs.train_sequence_root ||
+        '/mnt/lexar4tb/multi_uav_lts/extracted/TrainImages' }}
+      UPSTREAM_PYTHON: >-
+        ${{ inputs.upstream_python ||
+        '/mnt/lexar4tb/multi_uav_lts/venvs/yolov12-botsort-py312/bin/python' }}
+      OUTPUT_ROOT: >-
+        ${{ inputs.output_root ||
+        '/mnt/lexar4tb/multi_uav_lts/outputs/proposal_graph_evidence' }}
+      GPU_DEVICE: ${{ inputs.device || '0' }}
+      EXPECTED_SEQUENCE_COUNT: ${{ inputs.expected_sequence_count || '102' }}
+      REGENERATE_IF_MISSING: >-
+        ${{ github.event_name == 'pull_request' || inputs.regenerate_if_missing }}
+      REQUIRE_IMPROVEMENT: >-
+        ${{ github.event_name == 'pull_request' || inputs.require_improvement }}
+      PROBE_ONLY: >-
+        ${{ github.event_name == 'workflow_dispatch' && inputs.probe_only }}
+      VENV_PATH: ${{ github.workspace }}/.proposal-graph-${{ github.run_id }}
+
+    steps:
+      - name: Check out RaFT-UAV
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+
+      - name: Prepare run directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_DIR="${OUTPUT_ROOT}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${RUN_DIR}"
+          echo "RUN_DIR=${RUN_DIR}" >> "${GITHUB_ENV}"
+          {
+            echo "runner_name=${RUNNER_NAME}"
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "git_commit=${GITHUB_SHA}"
+            echo "event=${GITHUB_EVENT_NAME}"
+            uname -a
+          } | tee "${RUN_DIR}/runner.txt"
+          nvidia-smi -L | tee "${RUN_DIR}/nvidia-smi-L.txt"
+
+      - name: Probe mounted inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          def record(raw: str) -> dict[str, object]:
+              path = Path(raw).expanduser()
+              return {
+                  "path": str(path),
+                  "is_dir": path.is_dir(),
+                  "is_file": path.is_file(),
+                  "txt_count": len(list(path.glob("*.txt")))
+                  if path.is_dir()
+                  else None,
+              }
+
+          paths = {
+              "proposals": record(os.environ["PROPOSAL_PATH"]),
+              "raw": record(os.environ["RAW_PREDICTION_PATH"]),
+              "truth": record(os.environ["TRUTH_DIR"]),
+              "seeds": record(os.environ["FIRST_FRAME_LABEL_DIR"]),
+              "images": record(os.environ["TRAIN_SEQUENCE_ROOT"]),
+              "upstream_python": record(os.environ["UPSTREAM_PYTHON"]),
+          }
+          expected = int(os.environ["EXPECTED_SEQUENCE_COUNT"])
+          regenerate = os.environ["REGENERATE_IF_MISSING"].lower() == "true"
+          stable_ready = all(
+              paths[key]["is_dir"] and paths[key]["txt_count"] == expected
+              for key in ("proposals", "raw")
+          )
+          payload = {
+              "schema": "raft-uav-lts-proposal-graph-evidence-probe-v1",
+              "paths": paths,
+              "expected_sequence_count": expected,
+              "regenerate_if_missing": regenerate,
+              "stable_inputs_ready": stable_ready,
+          }
+          output = Path(os.environ["RUN_DIR"]) / "probe.json"
+          output.write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          failures = []
+          for key in ("truth", "seeds"):
+              if not paths[key]["is_dir"] or paths[key]["txt_count"] != expected:
+                  failures.append(key)
+          if not stable_ready and regenerate:
+              if not paths["images"]["is_dir"]:
+                  failures.append("images")
+              if not paths["upstream_python"]["is_file"]:
+                  failures.append("upstream_python")
+          if not stable_ready and not regenerate:
+              failures.append("stable proposal/raw inputs")
+          if failures:
+              raise SystemExit("invalid evidence inputs: " + ", ".join(failures))
+          PY
+
+      - name: Set up Python 3.11
+        if: env.PROBE_ONLY != 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install isolated environment
+        if: env.PROBE_ONLY != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "${VENV_PATH}"
+          "${VENV_PATH}/bin/python" -m pip install --upgrade pip
+          "${VENV_PATH}/bin/python" -m pip install -e ".[dev]"
+          "${VENV_PATH}/bin/python" -m pip check
+          "${VENV_PATH}/bin/python" -m pip freeze --all \
+            > "${RUN_DIR}/pip-freeze.txt"
+
+      - name: Select or regenerate proposal and raw controls
+        if: env.PROBE_ONLY != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          count_txt() {
+            if [[ -d "$1" ]]; then
+              find "$1" -maxdepth 1 -type f -name '*.txt' | wc -l
+            else
+              printf '0\n'
+            fi
+          }
+          proposal_count="$(count_txt "${PROPOSAL_PATH}")"
+          raw_count="$(count_txt "${RAW_PREDICTION_PATH}")"
+          if [[ "${proposal_count}" == "${EXPECTED_SEQUENCE_COUNT}" \
+             && "${raw_count}" == "${EXPECTED_SEQUENCE_COUNT}" ]]; then
+            proposal_source="${PROPOSAL_PATH}"
+            raw_source="${RAW_PREDICTION_PATH}"
+            source_mode="stable"
+          else
+            if [[ "${REGENERATE_IF_MISSING}" != "true" ]]; then
+              echo "stable evidence inputs are incomplete" >&2
+              exit 1
+            fi
+            baseline_root="${RUN_DIR}/proposal_baseline"
+            "${VENV_PATH}/bin/python" \
+              -m raft_uav.multi_uav_lts.proposal_baseline \
+              --work-root "${WORK_ROOT}" \
+              --sequence-root "${TRAIN_SEQUENCE_ROOT}" \
+              --first-frame-label-dir "${FIRST_FRAME_LABEL_DIR}" \
+              --output-dir "${baseline_root}" \
+              --proposal-output-dir "${baseline_root}/proposals" \
+              --no-template \
+              --python "${UPSTREAM_PYTHON}" \
+              --device "${GPU_DEVICE}" \
+              --img-size 1920 \
+              --proposal-conf-thres 0.001 \
+              --proposal-iou-thres 0.95 \
+              --overwrite \
+              | tee "${RUN_DIR}/proposal-baseline-console.txt"
+            proposal_source="${baseline_root}/proposals"
+            raw_source="${baseline_root}/predictions"
+            source_mode="regenerated"
+          fi
+          if [[ "$(count_txt "${proposal_source}")" \
+             != "${EXPECTED_SEQUENCE_COUNT}" ]]; then
+            echo "proposal source does not cover all sequences" >&2
+            exit 1
+          fi
+          if [[ "$(count_txt "${raw_source}")" \
+             != "${EXPECTED_SEQUENCE_COUNT}" ]]; then
+            echo "raw source does not cover all sequences" >&2
+            exit 1
+          fi
+          echo "PROPOSAL_SOURCE=${proposal_source}" >> "${GITHUB_ENV}"
+          echo "RAW_SOURCE=${raw_source}" >> "${GITHUB_ENV}"
+          echo "SOURCE_MODE=${source_mode}" >> "${GITHUB_ENV}"
+
+      - name: Generate proposal graph candidates
+        if: env.PROBE_ONLY != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_candidate() {
+            local name="$1"
+            shift
+            local root="${RUN_DIR}/${name}"
+            mkdir -p "${root}"
+            "${VENV_PATH}/bin/python" \
+              -m raft_uav.multi_uav_lts.proposal_graph_tracker \
+              "${PROPOSAL_SOURCE}" \
+              --first-frame-label-dir "${FIRST_FRAME_LABEL_DIR}" \
+              --output-dir "${root}/predictions" \
+              --output-json "${root}/summary.json" \
+              --image-width 1920 \
+              --image-height 1080 \
+              "$@" \
+              | tee "${root}/console.txt"
+          }
+          run_candidate graph_default
+          run_candidate graph_conservative \
+            --anchor-max-cost 1.0 \
+            --anchor-min-margin 0.25 \
+            --max-link-gap 15 \
+            --max-link-cost 1.75 \
+            --birth-min-hits 4 \
+            --birth-min-span 3
+          run_candidate graph_permissive \
+            --anchor-max-cost 1.5 \
+            --anchor-min-margin 0.05 \
+            --max-link-gap 45 \
+            --max-link-cost 2.75
+          run_candidate graph_no_global --no-global-links
+          run_candidate graph_no_border --border-gap-discount 1.0
+          run_candidate graph_strict_birth \
+            --birth-min-hits 5 \
+            --birth-min-span 4 \
+            --birth-min-mean-confidence 0.01
+
+      - name: Score candidates and raw control
+        if: env.PROBE_ONLY != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          score() {
+            local name="$1"
+            local predictions="$2"
+            mkdir -p "${RUN_DIR}/${name}"
+            "${VENV_PATH}/bin/python" \
+              -m raft_uav.multi_uav_lts.metrics \
+              "${predictions}" \
+              --truth-dir "${TRUTH_DIR}" \
+              --output-json "${RUN_DIR}/${name}/metrics.json" \
+              --sequence-summary-csv \
+                "${RUN_DIR}/${name}/metrics_by_sequence.csv" \
+              | tee "${RUN_DIR}/${name}/metrics-console.txt"
+          }
+          score raw "${RAW_SOURCE}"
+          for name in \
+            graph_default \
+            graph_conservative \
+            graph_permissive \
+            graph_no_global \
+            graph_no_border \
+            graph_strict_birth
+          do
+            score "${name}" "${RUN_DIR}/${name}/predictions"
+          done
+
+      - name: Run guarded tournament
+        if: env.PROBE_ONLY != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          improvement_args=()
+          if [[ "${REQUIRE_IMPROVEMENT}" == "true" ]]; then
+            improvement_args+=(--require-improvement)
+          fi
+          "${VENV_PATH}/bin/python" \
+            -m raft_uav.multi_uav_lts.tournament \
+            "${RAW_SOURCE}" \
+            --candidate "graph_default=${RUN_DIR}/graph_default/predictions" \
+            --candidate \
+              "graph_conservative=${RUN_DIR}/graph_conservative/predictions" \
+            --candidate \
+              "graph_permissive=${RUN_DIR}/graph_permissive/predictions" \
+            --candidate "graph_no_global=${RUN_DIR}/graph_no_global/predictions" \
+            --candidate "graph_no_border=${RUN_DIR}/graph_no_border/predictions" \
+            --candidate \
+              "graph_strict_birth=${RUN_DIR}/graph_strict_birth/predictions" \
+            --truth-dir "${TRUTH_DIR}" \
+            --output-dir "${RUN_DIR}/tournament" \
+            --fold-count 5 \
+            --seed 0 \
+            --expected-sequence-count "${EXPECTED_SEQUENCE_COUNT}" \
+            --bootstrap-samples 5000 \
+            --min-mean-hota-gain 0.001 \
+            --min-ci-hota-gain 0.0 \
+            --max-mean-mota-drop 0.002 \
+            --max-mean-idf1-drop 0.002 \
+            --max-worst-scenario-hota-drop 0.01 \
+            "${improvement_args[@]}" \
+            | tee "${RUN_DIR}/tournament-console.txt"
+
+      - name: Publish summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Multi-UAV LTS proposal graph evidence"
+            echo
+            echo "- Run directory: \`${RUN_DIR}\`"
+            echo "- Probe only: \`${PROBE_ONLY}\`"
+            echo "- Source mode: \`${SOURCE_MODE:-not-selected}\`"
+            if [[ -f "${RUN_DIR}/tournament/selected_candidate.txt" ]]; then
+              selected="$(cat "${RUN_DIR}/tournament/selected_candidate.txt")"
+              echo "- Selected candidate: \`${selected}\`"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+        with:
+          name: multi-uav-lts-proposal-graph-${{ github.run_id }}
+          path: ${{ env.RUN_DIR }}/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
