@@ -9,7 +9,7 @@ fi
 venv_path="$1"
 asset_dir="$2"
 provenance_json="$3"
-runtime_id="py311-torch222-cu118-flash273-v2"
+runtime_id="py311-torch222-cu118-flash273-v3"
 marker="${venv_path}/.raft-uav-${runtime_id}"
 
 mkdir -p "${asset_dir}" "$(dirname "${provenance_json}")"
@@ -108,39 +108,57 @@ if [[ ! -f "${flash_wheel}" ]]; then
 fi
 flash_sha256="$(sha256sum "${flash_wheel}" | awk '{print $1}')"
 
-find_cuda11_runtime_lib() {
+find_runtime_library_path() {
   local py="$1"
   "${py}" - <<'PY'
 from __future__ import annotations
 
+import importlib.util
 import site
 from pathlib import Path
 
-candidates: list[Path] = []
-for root_text in site.getsitepackages():
-    root = Path(root_text)
-    candidates.extend(
+site_roots = [Path(root) for root in site.getsitepackages()]
+cuda_candidates: list[Path] = []
+for root in site_roots:
+    cuda_candidates.extend(
         (
             root / "nvidia" / "cuda_runtime" / "lib",
             root / "nvidia" / "cuda_runtime" / "lib64",
         )
     )
-for candidate in candidates:
-    if (candidate / "libcudart.so.11.0").is_file():
-        print(candidate)
-        break
-else:
-    rendered = ", ".join(str(candidate) for candidate in candidates)
+cuda_runtime = next(
+    (
+        candidate
+        for candidate in cuda_candidates
+        if (candidate / "libcudart.so.11.0").is_file()
+    ),
+    None,
+)
+if cuda_runtime is None:
+    rendered = ", ".join(str(candidate) for candidate in cuda_candidates)
     raise SystemExit(f"libcudart.so.11.0 not found under: {rendered}")
+
+torch_spec = importlib.util.find_spec("torch")
+if torch_spec is None or torch_spec.origin is None:
+    raise SystemExit("torch package could not be located")
+torch_lib = Path(torch_spec.origin).resolve().parent / "lib"
+if not (torch_lib / "libtorch_cuda.so").is_file():
+    raise SystemExit(f"PyTorch CUDA libraries are missing from {torch_lib}")
+
+paths: list[Path] = []
+for candidate in (cuda_runtime, torch_lib):
+    if candidate not in paths:
+        paths.append(candidate)
+print(":".join(str(path) for path in paths))
 PY
 }
 
 runtime_valid=false
-cuda_runtime_lib=""
+runtime_library_path=""
 if [[ -x "${venv_path}/bin/python" ]] && [[ -f "${marker}" ]]; then
   py="${venv_path}/bin/python"
-  if cuda_runtime_lib="$(find_cuda11_runtime_lib "${py}")"; then
-    export LD_LIBRARY_PATH="${cuda_runtime_lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+  if runtime_library_path="$(find_runtime_library_path "${py}")"; then
+    export LD_LIBRARY_PATH="${runtime_library_path}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
     if "${py}" - <<'PY'
 import torch
 import cv2
@@ -214,8 +232,8 @@ if [[ "${runtime_valid}" != "true" ]]; then
 fi
 
 py="${venv_path}/bin/python"
-cuda_runtime_lib="$(find_cuda11_runtime_lib "${py}")"
-export LD_LIBRARY_PATH="${cuda_runtime_lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+runtime_library_path="$(find_runtime_library_path "${py}")"
+export LD_LIBRARY_PATH="${runtime_library_path}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 if [[ -n "${GITHUB_ENV:-}" ]]; then
   printf 'LD_LIBRARY_PATH=%s\n' "${LD_LIBRARY_PATH}" >> "${GITHUB_ENV}"
 fi
@@ -274,7 +292,7 @@ PY
   "${runtime_id}" \
   "${flash_wheel}" \
   "${flash_sha256}" \
-  "${cuda_runtime_lib}" \
+  "${runtime_library_path}" \
   "${ldd_output}" <<'PY'
 from __future__ import annotations
 
@@ -289,13 +307,13 @@ from pathlib import Path
     runtime_id,
     wheel_path,
     wheel_sha256,
-    cuda_runtime_lib,
+    runtime_library_path,
     ldd_output,
 ) = sys.argv[1:]
 metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
 freeze_path = Path(output_path).parent / "pip-freeze.txt"
 payload = {
-    "schema": "raft-uav-multi-uav-lts-runtime-v2",
+    "schema": "raft-uav-multi-uav-lts-runtime-v3",
     "runtime_id": runtime_id,
     "python": sys.version,
     "python_executable": sys.executable,
@@ -303,7 +321,7 @@ payload = {
     "git_commit": subprocess.check_output(
         ["git", "rev-parse", "HEAD"], text=True
     ).strip(),
-    "cuda_runtime_library_path": cuda_runtime_lib,
+    "runtime_library_path": runtime_library_path,
     "flash_attention_ldd_path": ldd_output,
     "flash_attention": {
         "asset_id": metadata["id"],
