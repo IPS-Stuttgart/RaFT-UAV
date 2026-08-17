@@ -3,6 +3,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+from typing import Any, Mapping
+
 import run_multi_uav_lts_public_evidence as evidence
 
 IMPROVED_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -62,8 +67,59 @@ IMPROVED_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+def _proposal_source_cache_key(
+    payload: Mapping[str, Any],
+    validated: Mapping[str, Any],
+    *,
+    repo_root: Path,
+    expected_sequences: int,
+    expected_frames: int,
+    device: str,
+) -> str:
+    """Hash detector-generation inputs without invalidating on graph-only edits."""
+    settings = {
+        "schema": "raft-uav-multi-uav-lts-proposal-source-key-v2",
+        "upstream_revision": payload["upstream"]["revision"],
+        "archive_md5": payload["dataset"]["archive_md5"],
+        "detector_sha256": validated["detector_sha256"],
+        "reid_model_sha256": validated["reid_model_sha256"],
+        "cython_bbox_version": "0.1.5",
+        "expected_sequences": expected_sequences,
+        "expected_frames": expected_frames,
+        "device": device,
+        "img_size": 1920,
+        "proposal_conf_thres": 0.001,
+        "proposal_iou_thres": 0.95,
+        "device_independent": False,
+    }
+    package_root = repo_root / "src" / "raft_uav" / "multi_uav_lts"
+    source_paths = [
+        repo_root / "scripts" / "run_multi_uav_lts_official_baseline.py",
+        repo_root / "src" / "raft_uav" / "__init__.py",
+        repo_root / "src" / "raft_uav" / "numeric.py",
+        package_root / "__init__.py",
+        package_root / "_records.py",
+        package_root / "cli.py",
+        package_root / "improved_baseline.py",
+        package_root / "proposal_baseline.py",
+        package_root / "proposal_export.py",
+        package_root / "upstream_fixes.py",
+        *sorted((package_root / "_records").rglob("*.py")),
+        *sorted((package_root / "cli").rglob("*.py")),
+    ]
+    hasher = hashlib.sha256()
+    hasher.update(json.dumps(settings, sort_keys=True).encode("utf-8"))
+    for path in source_paths:
+        relative = path.relative_to(repo_root).as_posix().encode("utf-8")
+        hasher.update(len(relative).to_bytes(8, "big"))
+        hasher.update(relative)
+        hasher.update(path.read_bytes())
+    return hasher.hexdigest()
+
+
 def main() -> int:
     evidence.CANDIDATES = (*evidence.CANDIDATES, *IMPROVED_CANDIDATES)
+    evidence._baseline_cache_key = _proposal_source_cache_key
     return evidence.main()
 
 
