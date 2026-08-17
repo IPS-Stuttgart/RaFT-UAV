@@ -224,11 +224,15 @@ def _coast_to(self: Any, time_s: float) -> None:
 
 
 def _chronology_safe_update(original_update: Callable[..., Any]) -> Callable[..., Any]:
-    """Reject backward measurements before legacy update bookkeeping is mutated."""
+    """Validate timestamps before legacy update bookkeeping is mutated."""
 
     @wraps(original_update)
     def update(self: Any, measurement: Any, *args: Any, **kwargs: Any) -> Any:
-        if float(measurement.time_s) < float(self.current_time_s) - 1.0e-9:
+        validated_time_s = _finite_timestamp_seconds(
+            measurement.time_s,
+            field_name="measurement time_s",
+        )
+        if validated_time_s < float(self.current_time_s) - 1.0e-9:
             raise ValueError("measurements must be processed in chronological order")
         return original_update(self, measurement, *args, **kwargs)
 
