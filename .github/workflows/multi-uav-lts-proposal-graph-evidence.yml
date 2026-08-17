@@ -6,70 +6,34 @@ name: Multi-UAV LTS proposal graph evidence
     branches: [main]
     paths:
       - ".github/workflows/multi-uav-lts-proposal-graph-evidence.yml"
+      - "scripts/bootstrap_multi_uav_lts_public_evidence.py"
+      - "scripts/run_multi_uav_lts_official_baseline.py"
       - "src/raft_uav/multi_uav_lts/_proposal_graph_core.py"
+      - "src/raft_uav/multi_uav_lts/proposal_baseline.py"
       - "src/raft_uav/multi_uav_lts/proposal_graph_tracker.py"
+      - "src/raft_uav/multi_uav_lts/tournament.py"
       - "tests/test_multi_uav_lts_proposal_graph_tracker.py"
   workflow_dispatch:
     inputs:
-      work_root:
-        description: Preferred Multi-UAV LTS work root; inaccessible paths are rediscovered
-        required: true
-        default: /mnt/lexar4tb/multi_uav_lts
-        type: string
-      proposal_path:
-        description: Preferred root-level low-threshold proposal directory or ZIP
-        required: true
-        default: /mnt/lexar4tb/multi_uav_lts/outputs/proposal_bank_1920/proposals
-        type: string
-      raw_prediction_path:
-        description: Preferred seeded raw baseline predictions
-        required: true
-        default: /mnt/lexar4tb/multi_uav_lts/outputs/train_baseline/predictions
-        type: string
-      truth_dir:
-        description: Preferred complete training-label directory
-        required: true
-        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels
-        type: string
-      first_frame_label_dir:
-        description: Preferred first-frame training labels
-        required: true
-        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels_FirstFrameOnly
-        type: string
-      train_sequence_root:
-        description: Preferred training-image sequence root
-        required: true
-        default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainImages
-        type: string
-      upstream_python:
-        description: Preferred Python executable for the external BoT-SORT checkout
-        required: true
-        default: /mnt/lexar4tb/multi_uav_lts/venvs/yolov12-botsort-py312/bin/python
-        type: string
       device:
-        description: CUDA device used when proposals are regenerated
+        description: CUDA device used for proposal generation
         required: true
         default: "0"
         type: string
       expected_sequence_count:
-        description: Required training sequence count
+        description: Required number of official training sequences
         required: true
         default: "102"
         type: string
-      regenerate_if_missing:
-        description: Regenerate raw predictions and proposals when stable inputs are absent
+      expected_frame_count:
+        description: Required number of official training frames
+        required: true
+        default: "77293"
+        type: string
+      require_improvement:
+        description: Fail unless a graph candidate passes the guarded tournament
         required: false
         default: true
-        type: boolean
-      require_improvement:
-        description: Fail when the guarded tournament selects raw
-        required: false
-        default: false
-        type: boolean
-      probe_only:
-        description: Inventory runner paths without inference or evaluation
-        required: false
-        default: false
         type: boolean
 
 permissions:
@@ -112,7 +76,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
           python -m pytest -q tests/test_multi_uav_lts_proposal_graph_tracker.py
+          python -m py_compile scripts/bootstrap_multi_uav_lts_public_evidence.py
+          python scripts/bootstrap_multi_uav_lts_public_evidence.py --help >/dev/null
           python -m ruff check \
+            scripts/bootstrap_multi_uav_lts_public_evidence.py \
             src/raft_uav/multi_uav_lts/_proposal_graph_core.py \
             src/raft_uav/multi_uav_lts/proposal_graph_tracker.py \
             tests/test_multi_uav_lts_proposal_graph_tracker.py
@@ -127,35 +94,11 @@ jobs:
     timeout-minutes: 720
 
     env:
-      REQUESTED_WORK_ROOT: >-
-        ${{ inputs.work_root || '/mnt/lexar4tb/multi_uav_lts' }}
-      REQUESTED_PROPOSAL_PATH: >-
-        ${{ inputs.proposal_path ||
-        '/mnt/lexar4tb/multi_uav_lts/outputs/proposal_bank_1920/proposals' }}
-      REQUESTED_RAW_PREDICTION_PATH: >-
-        ${{ inputs.raw_prediction_path ||
-        '/mnt/lexar4tb/multi_uav_lts/outputs/train_baseline/predictions' }}
-      REQUESTED_TRUTH_DIR: >-
-        ${{ inputs.truth_dir ||
-        '/mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels' }}
-      REQUESTED_FIRST_FRAME_LABEL_DIR: >-
-        ${{ inputs.first_frame_label_dir ||
-        '/mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels_FirstFrameOnly' }}
-      REQUESTED_TRAIN_SEQUENCE_ROOT: >-
-        ${{ inputs.train_sequence_root ||
-        '/mnt/lexar4tb/multi_uav_lts/extracted/TrainImages' }}
-      REQUESTED_UPSTREAM_PYTHON: >-
-        ${{ inputs.upstream_python ||
-        '/mnt/lexar4tb/multi_uav_lts/venvs/yolov12-botsort-py312/bin/python' }}
       GPU_DEVICE: ${{ inputs.device || '0' }}
       EXPECTED_SEQUENCE_COUNT: ${{ inputs.expected_sequence_count || '102' }}
-      REGENERATE_IF_MISSING: >-
-        ${{ github.event_name == 'pull_request' || inputs.regenerate_if_missing }}
+      EXPECTED_FRAME_COUNT: ${{ inputs.expected_frame_count || '77293' }}
       REQUIRE_IMPROVEMENT: >-
         ${{ github.event_name == 'pull_request' || inputs.require_improvement }}
-      PROBE_ONLY: >-
-        ${{ github.event_name == 'workflow_dispatch' && inputs.probe_only }}
-      VENV_PATH: ${{ github.workspace }}/.proposal-graph-${{ github.run_id }}
 
     steps:
       - name: Check out RaFT-UAV
@@ -165,13 +108,86 @@ jobs:
           persist-credentials: false
           clean: true
 
-      - name: Prepare safe evidence directory and inventory runner
+      - name: Select writable cache and prepare evidence directory
         shell: bash
         run: |
           set -euo pipefail
-          RUN_DIR="${RUNNER_TEMP}/raft-uav-lts-proposal-graph/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -p "${RUN_DIR}"
-          echo "RUN_DIR=${RUN_DIR}" >> "${GITHUB_ENV}"
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          minimum_free = 16 * 1024**3
+          candidates = [
+              Path("/mnt/corsair/raft-uav-public-evidence"),
+              Path.home() / ".cache" / "raft-uav-public-evidence",
+              Path(os.environ["RUNNER_TEMP"]) / "raft-uav-public-evidence",
+          ]
+          records = []
+          usable = []
+          for candidate in candidates:
+              record = {"path": str(candidate)}
+              try:
+                  candidate.mkdir(parents=True, exist_ok=True)
+                  probe = candidate / f".write-probe-{os.getpid()}"
+                  probe.write_text("ok\n", encoding="utf-8")
+                  probe.unlink()
+                  usage = shutil.disk_usage(candidate)
+                  record.update(
+                      writable=True,
+                      free_bytes=usage.free,
+                      total_bytes=usage.total,
+                  )
+                  usable.append((usage.free, candidate))
+              except OSError as exc:
+                  record.update(
+                      writable=False,
+                      error=f"{type(exc).__name__}: {exc}",
+                  )
+              records.append(record)
+
+          if not usable:
+              raise SystemExit("no writable evidence cache is available")
+          free_bytes, cache_root = max(usable)
+          if free_bytes < minimum_free:
+              raise SystemExit(
+                  f"largest writable evidence cache has only {free_bytes} free bytes; "
+                  f"{minimum_free} required"
+              )
+
+          work_root = cache_root / "multi-uav-lts-zenodo-15853476"
+          run_dir = (
+              work_root
+              / "evidence-runs"
+              / f"run-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
+          )
+          venv_path = work_root / "venvs" / "proposal-graph-py311"
+          run_dir.mkdir(parents=True, exist_ok=True)
+          selection = {
+              "schema": "raft-uav-evidence-cache-selection-v1",
+              "minimum_free_bytes": minimum_free,
+              "selected_cache_root": str(cache_root),
+              "selected_free_bytes": free_bytes,
+              "candidates": records,
+          }
+          (run_dir / "cache-selection.json").write_text(
+              json.dumps(selection, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
+              for name, value in {
+                  "CACHE_ROOT": cache_root,
+                  "WORK_ROOT": work_root,
+                  "RUN_DIR": run_dir,
+                  "VENV_PATH": venv_path,
+              }.items():
+                  handle.write(f"{name}={value}\n")
+          print(json.dumps(selection, indent=2, sort_keys=True))
+          PY
+
           {
             echo "runner_name=${RUNNER_NAME}"
             echo "runner_os=${RUNNER_OS}"
@@ -185,487 +201,237 @@ jobs:
             uname -a
           } | tee "${RUN_DIR}/runner.txt"
           nvidia-smi -L | tee "${RUN_DIR}/nvidia-smi-L.txt"
+          df -hT | tee "${RUN_DIR}/disk-usage.txt"
           findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS \
             > "${RUN_DIR}/mounts.txt" || true
-          {
-            for path in \
-              /mnt \
-              /mnt/lexar4tb \
-              /mnt/lexar4tb/multi_uav_lts \
-              /media \
-              /data \
-              /datasets \
-              /srv \
-              /opt \
-              "${HOME}"
-            do
-              ls -ld "${path}" 2>&1 || true
-            done
-            echo
-            namei -l "${REQUESTED_WORK_ROOT}" 2>&1 || true
-            echo
-            sudo -n true >/dev/null 2>&1 \
-              && echo "passwordless_sudo=true" \
-              || echo "passwordless_sudo=false"
-          } > "${RUN_DIR}/path-permissions.txt"
 
-      - name: Discover accessible Multi-UAV LTS data and toolchain
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install pinned evidence and upstream runtime
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from __future__ import annotations
+          rm -rf "${VENV_PATH}"
+          python -m venv "${VENV_PATH}"
+          py="${VENV_PATH}/bin/python"
+          "${py}" -m pip install --upgrade \
+            "pip==25.1.1" \
+            "setuptools==69.5.1" \
+            "wheel==0.45.1" \
+            "packaging==24.2" \
+            "ninja==1.11.1.3"
 
+          "${py}" -m pip install \
+            --index-url https://download.pytorch.org/whl/cu121 \
+            "torch==2.2.2" \
+            "torchvision==0.17.2"
+
+          flash_wheel="${RUN_DIR}/flash_attn-2.7.3+cu11torch2.2cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
+          curl --location --fail --show-error --silent \
+            --retry 5 --retry-all-errors \
+            --output "${flash_wheel}" \
+            "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.3/flash_attn-2.7.3+cu11torch2.2cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
+          "${py}" -m pip install "${flash_wheel}"
+
+          "${py}" -m pip install \
+            "numpy==1.26.4" \
+            "pandas==2.2.3" \
+            "PyYAML==6.0.1" \
+            "scipy==1.13.0" \
+            "scikit-learn==1.5.2" \
+            "matplotlib==3.9.2" \
+            "timm==1.0.14" \
+            "albumentations==2.0.4" \
+            "pycocotools==2.0.7" \
+            "opencv-python-headless==4.9.0.80" \
+            "psutil==5.9.8" \
+            "py-cpuinfo==9.0.0" \
+            "huggingface-hub==0.23.2" \
+            "safetensors==0.4.3" \
+            "loguru==0.7.2" \
+            "scikit-image==0.24.0" \
+            "tqdm==4.66.5" \
+            "Pillow==10.4.0" \
+            "thop==0.1.1.post2209072238" \
+            "tabulate==0.9.0" \
+            "tensorboard==2.17.1" \
+            "lap==0.5.12" \
+            "motmetrics==1.4.0" \
+            "filterpy==1.4.5" \
+            "h5py==3.11.0" \
+            "prettytable==3.11.0" \
+            "easydict==1.13" \
+            "yacs==0.1.8" \
+            "termcolor==2.4.0" \
+            "gdown==5.2.0"
+
+          "${py}" -m pip install -e . --no-deps
+          "${py}" - <<'PY'
+          import cv2
+          import flash_attn
+          import lap
+          import motmetrics
+          import torch
+
+          if not torch.cuda.is_available():
+              raise SystemExit("CUDA is unavailable in the pinned evidence environment")
+          print(f"torch={torch.__version__}")
+          print(f"cuda_runtime={torch.version.cuda}")
+          print(f"cuda_device={torch.cuda.get_device_name(0)}")
+          print(f"opencv={cv2.__version__}")
+          print(f"flash_attn={getattr(flash_attn, '__version__', 'unknown')}")
+          print(f"lap={getattr(lap, '__version__', 'unknown')}")
+          print(f"motmetrics={getattr(motmetrics, '__version__', 'unknown')}")
+          PY
+          "${py}" -m pip freeze --all > "${RUN_DIR}/pip-freeze.txt"
+
+      - name: Acquire and verify official public evidence inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${VENV_PATH}/bin/python" \
+            scripts/bootstrap_multi_uav_lts_public_evidence.py \
+            --work-root "${WORK_ROOT}" \
+            --output-json "${RUN_DIR}/public-inputs.json" \
+            --expected-sequence-count "${EXPECTED_SEQUENCE_COUNT}" \
+            --expected-frame-count "${EXPECTED_FRAME_COUNT}" \
+            | tee "${RUN_DIR}/public-inputs-console.txt"
+
+          "${VENV_PATH}/bin/python" - <<'PY'
           import json
           import os
           from pathlib import Path
 
-          expected = int(os.environ["EXPECTED_SEQUENCE_COUNT"])
-          run_dir = Path(os.environ["RUN_DIR"])
-          errors: list[str] = []
-
-          def safe_dir(path: Path) -> bool:
-              try:
-                  return path.is_dir() and os.access(path, os.R_OK | os.X_OK)
-              except OSError as exc:
-                  errors.append(f"{path}: {type(exc).__name__}: {exc}")
-                  return False
-
-          def safe_file(path: Path) -> bool:
-              try:
-                  return path.is_file() and os.access(path, os.R_OK)
-              except OSError as exc:
-                  errors.append(f"{path}: {type(exc).__name__}: {exc}")
-                  return False
-
-          def txt_count(path: Path) -> int | None:
-              if not safe_dir(path):
-                  return None
-              try:
-                  return sum(
-                      child.is_file() and child.suffix == ".txt"
-                      for child in path.iterdir()
-                  )
-              except OSError as exc:
-                  errors.append(f"{path}: {type(exc).__name__}: {exc}")
-                  return None
-
-          def complete_text_dir(path: Path) -> bool:
-              return txt_count(path) == expected
-
-          def add_unique(values: list[Path], path: Path) -> None:
-              try:
-                  normalized = path.expanduser().resolve(strict=False)
-              except OSError:
-                  normalized = path.expanduser().absolute()
-              if normalized not in values:
-                  values.append(normalized)
-
-          requested_work_root = Path(os.environ["REQUESTED_WORK_ROOT"])
-          requested_truth = Path(os.environ["REQUESTED_TRUTH_DIR"])
-          candidate_roots: list[Path] = []
-          add_unique(candidate_roots, requested_work_root)
-          if requested_truth.name == "TrainLabels":
-              add_unique(candidate_roots, requested_truth.parent.parent)
-
-          bases: list[Path] = []
-          for value in (
-              Path.home(),
-              Path("/mnt"),
-              Path("/media"),
-              Path("/data"),
-              Path("/datasets"),
-              Path("/srv"),
-              Path("/opt"),
-          ):
-              add_unique(bases, value)
-
-          try:
-              for line in Path("/proc/self/mountinfo").read_text(
+          payload = json.loads(
+              (Path(os.environ["RUN_DIR"]) / "public-inputs.json").read_text(
                   encoding="utf-8"
-              ).splitlines():
-                  fields = line.split()
-                  if len(fields) < 5:
-                      continue
-                  mount = Path(
-                      fields[4]
-                      .replace("\\040", " ")
-                      .replace("\\011", "\t")
-                      .replace("\\134", "\\")
-                  )
-                  text = str(mount)
-                  if text.startswith(
-                      ("/mnt", "/media", "/data", "/datasets", "/srv", "/home")
-                  ):
-                      add_unique(bases, mount)
-          except OSError as exc:
-              errors.append(f"mountinfo: {type(exc).__name__}: {exc}")
-
-          skip_names = {
-              ".cache",
-              ".git",
-              ".pytest_cache",
-              ".ruff_cache",
-              "__pycache__",
-              "_actions",
-              "_temp",
-              "_tool",
-              "node_modules",
-          }
-          scanned_bases: list[str] = []
-          for base in bases:
-              if not safe_dir(base):
-                  continue
-              scanned_bases.append(str(base))
-              for suffix in (
-                  "multi_uav_lts",
-                  "multi-uav-lts",
-                  "Multi-UAV-LTS",
-              ):
-                  add_unique(candidate_roots, base / suffix)
-              base_depth = len(base.parts)
-
-              def onerror(exc: OSError) -> None:
-                  errors.append(f"walk {base}: {type(exc).__name__}: {exc}")
-
-              try:
-                  for root_text, directories, _files in os.walk(
-                      base,
-                      topdown=True,
-                      onerror=onerror,
-                      followlinks=False,
-                  ):
-                      root = Path(root_text)
-                      depth = len(root.parts) - base_depth
-                      directories[:] = [
-                          name for name in directories if name not in skip_names
-                      ]
-                      if depth >= 5:
-                          directories[:] = []
-                      if root.name == "TrainLabels" and root.parent.name == "extracted":
-                          if complete_text_dir(root):
-                              add_unique(candidate_roots, root.parent.parent)
-                      elif complete_text_dir(root / "extracted" / "TrainLabels"):
-                          add_unique(candidate_roots, root)
-              except OSError as exc:
-                  errors.append(f"walk {base}: {type(exc).__name__}: {exc}")
-
-          requested_raw = Path(os.environ["REQUESTED_RAW_PREDICTION_PATH"])
-          requested_proposals = Path(os.environ["REQUESTED_PROPOSAL_PATH"])
-          requested_python = Path(os.environ["REQUESTED_UPSTREAM_PYTHON"])
-
-          def prediction_candidates(root: Path, kind: str) -> list[Path]:
-              result: list[Path] = []
-              requested = requested_raw if kind == "raw" else requested_proposals
-              add_unique(result, requested)
-              relative = (
-                  (
-                      "outputs/train_baseline/predictions",
-                      "outputs/proposal_baseline/predictions",
-                      "outputs/official_baseline_via_first_init/predictions",
-                  )
-                  if kind == "raw"
-                  else (
-                      "outputs/proposal_bank_1920/proposals",
-                      "outputs/proposal_baseline/proposals",
-                  )
               )
-              for value in relative:
-                  add_unique(result, root / value)
-              output_root = root / "outputs"
-              if safe_dir(output_root):
-                  try:
-                      for path in output_root.glob(
-                          "**/predictions" if kind == "raw" else "**/proposals"
-                      ):
-                          if len(path.relative_to(output_root).parts) <= 4:
-                              add_unique(result, path)
-                  except OSError as exc:
-                      errors.append(
-                          f"glob {output_root}: {type(exc).__name__}: {exc}"
-                      )
-              return result
-
-          def first_complete(paths: list[Path]) -> Path | None:
-              return next((path for path in paths if complete_text_dir(path)), None)
-
-          records: list[dict[str, object]] = []
-          valid: list[tuple[int, Path, dict[str, object]]] = []
-          for root in candidate_roots:
-              truth = root / "extracted" / "TrainLabels"
-              seeds = root / "extracted" / "TrainLabels_FirstFrameOnly"
-              images = root / "extracted" / "TrainImages"
-              raw = first_complete(prediction_candidates(root, "raw"))
-              proposals = first_complete(prediction_candidates(root, "proposals"))
-              python_candidates: list[Path] = []
-              add_unique(python_candidates, requested_python)
-              add_unique(
-                  python_candidates,
-                  root / "venvs/yolov12-botsort-py312/bin/python",
-              )
-              venv_root = root / "venvs"
-              if safe_dir(venv_root):
-                  try:
-                      for path in venv_root.glob("*/bin/python"):
-                          add_unique(python_candidates, path)
-                  except OSError as exc:
-                      errors.append(
-                          f"glob {venv_root}: {type(exc).__name__}: {exc}"
-                      )
-              upstream_python = next(
-                  (path for path in python_candidates if safe_file(path)),
-                  None,
-              )
-              botsort_root = root / "repos/YOLOv12-BoT-SORT-ReID/BoT-SORT"
-              botsort_inference = botsort_root / "tools/inference.py"
-              truth_n = txt_count(truth)
-              seed_n = txt_count(seeds)
-              record = {
-                  "root": str(root),
-                  "truth_count": truth_n,
-                  "seed_count": seed_n,
-                  "images": safe_dir(images),
-                  "raw": None if raw is None else str(raw),
-                  "proposals": None if proposals is None else str(proposals),
-                  "upstream_python": (
-                      None if upstream_python is None else str(upstream_python)
-                  ),
-                  "botsort_root": (
-                      str(botsort_root) if safe_file(botsort_inference) else None
-                  ),
-              }
-              records.append(record)
-              if truth_n == expected and seed_n == expected and safe_dir(images):
-                  score = 100
-                  score += 20 if raw is not None else 0
-                  score += 20 if proposals is not None else 0
-                  score += 10 if upstream_python is not None else 0
-                  score += 10 if safe_file(botsort_inference) else 0
-                  score += 5 if root == requested_work_root else 0
-                  valid.append((score, root, record))
-
-          payload: dict[str, object] = {
-              "schema": "raft-uav-lts-root-discovery-v1",
-              "expected_sequence_count": expected,
-              "requested_work_root": str(requested_work_root),
-              "scanned_bases": scanned_bases,
-              "candidate_roots": records,
-              "errors": errors[-200:],
-          }
-          if not valid:
-              payload["selected"] = None
-              (run_dir / "discovery.json").write_text(
-                  json.dumps(payload, indent=2, sort_keys=True) + "\n",
-                  encoding="utf-8",
-              )
-              print(json.dumps(payload, indent=2, sort_keys=True))
-              raise SystemExit(
-                  "no accessible Multi-UAV LTS root with complete truth, seeds, and images"
-              )
-
-          _score, root, selected = max(valid, key=lambda item: (item[0], str(item[1])))
-          payload["selected"] = selected
-          (run_dir / "discovery.json").write_text(
-              json.dumps(payload, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
           )
-          print(json.dumps(payload, indent=2, sort_keys=True))
-
+          checkout = Path(payload["upstream"]["checkout"])
           values = {
-              "EFFECTIVE_WORK_ROOT": str(root),
-              "TRUTH_DIR": str(root / "extracted" / "TrainLabels"),
-              "FIRST_FRAME_LABEL_DIR": str(
-                  root / "extracted" / "TrainLabels_FirstFrameOnly"
-              ),
-              "TRAIN_SEQUENCE_ROOT": str(root / "extracted" / "TrainImages"),
-              "RAW_PREDICTION_PATH": str(selected.get("raw") or ""),
-              "PROPOSAL_PATH": str(selected.get("proposals") or ""),
-              "UPSTREAM_PYTHON": str(selected.get("upstream_python") or ""),
-              "BOTSORT_ROOT": str(selected.get("botsort_root") or ""),
+              "EFFECTIVE_WORK_ROOT": payload["work_root"],
+              "TRUTH_DIR": payload["dataset"]["truth_dir"],
+              "FIRST_FRAME_LABEL_DIR": payload["dataset"]["first_frame_label_dir"],
+              "TRAIN_SEQUENCE_ROOT": payload["dataset"]["train_sequence_root"],
+              "BOTSORT_ROOT": checkout / "BoT-SORT",
+              "UPSTREAM_PYTHON": Path(os.environ["VENV_PATH"]) / "bin" / "python",
           }
           with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
               for name, value in values.items():
                   handle.write(f"{name}={value}\n")
           PY
 
-      - name: Probe selected inputs
+      - name: Gate public data, model, and toolchain integrity
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
+          "${VENV_PATH}/bin/python" - <<'PY'
           from __future__ import annotations
 
+          import hashlib
           import json
           import os
           from pathlib import Path
 
-          expected = int(os.environ["EXPECTED_SEQUENCE_COUNT"])
+          expected_sequences = int(os.environ["EXPECTED_SEQUENCE_COUNT"])
+          expected_frames = int(os.environ["EXPECTED_FRAME_COUNT"])
+          truth_dir = Path(os.environ["TRUTH_DIR"])
+          seed_dir = Path(os.environ["FIRST_FRAME_LABEL_DIR"])
+          image_root = Path(os.environ["TRAIN_SEQUENCE_ROOT"])
+          botsort_root = Path(os.environ["BOTSORT_ROOT"])
 
-          def record(raw: str) -> dict[str, object]:
-              if not raw:
-                  return {
-                      "path": "",
-                      "is_dir": False,
-                      "is_file": False,
-                      "txt_count": None,
-                  }
-              path = Path(raw).expanduser()
-              try:
-                  is_dir = path.is_dir() and os.access(path, os.R_OK | os.X_OK)
-                  is_file = path.is_file() and os.access(path, os.R_OK)
-                  count = (
-                      sum(
-                          child.is_file() and child.suffix == ".txt"
-                          for child in path.iterdir()
-                      )
-                      if is_dir
-                      else None
-                  )
-                  error = None
-              except OSError as exc:
-                  is_dir = False
-                  is_file = False
-                  count = None
-                  error = f"{type(exc).__name__}: {exc}"
-              return {
-                  "path": str(path),
-                  "is_dir": is_dir,
-                  "is_file": is_file,
-                  "txt_count": count,
-                  "error": error,
-              }
+          truth_files = sorted(truth_dir.glob("*.txt"))
+          seed_files = sorted(seed_dir.glob("*.txt"))
+          image_sequences = sorted(path for path in image_root.iterdir() if path.is_dir())
+          frame_count = sum(1 for _ in image_root.glob("*/*.jpg"))
+          model = botsort_root / "logs" / "sbs_S50" / "model_0016.pth"
+          detector = botsort_root / "yolov12" / "weights" / "ViA_yolov12n.pt"
+          inference = botsort_root / "tools" / "inference.py"
+          model_hash = hashlib.sha256(model.read_bytes()).hexdigest()
 
-          paths = {
-              "proposals": record(os.environ.get("PROPOSAL_PATH", "")),
-              "raw": record(os.environ.get("RAW_PREDICTION_PATH", "")),
-              "truth": record(os.environ["TRUTH_DIR"]),
-              "seeds": record(os.environ["FIRST_FRAME_LABEL_DIR"]),
-              "images": record(os.environ["TRAIN_SEQUENCE_ROOT"]),
-              "upstream_python": record(os.environ.get("UPSTREAM_PYTHON", "")),
-              "botsort_inference": record(
-                  str(Path(os.environ.get("BOTSORT_ROOT", "")) / "tools/inference.py")
-                  if os.environ.get("BOTSORT_ROOT")
-                  else ""
-              ),
-          }
-          regenerate = os.environ["REGENERATE_IF_MISSING"].lower() == "true"
-          stable_ready = all(
-              paths[key]["is_dir"] and paths[key]["txt_count"] == expected
-              for key in ("proposals", "raw")
-          )
           payload = {
-              "schema": "raft-uav-lts-proposal-graph-evidence-probe-v2",
-              "effective_work_root": os.environ["EFFECTIVE_WORK_ROOT"],
-              "paths": paths,
-              "expected_sequence_count": expected,
-              "regenerate_if_missing": regenerate,
-              "stable_inputs_ready": stable_ready,
+              "schema": "raft-uav-lts-public-evidence-probe-v1",
+              "truth_sequence_count": len(truth_files),
+              "seed_sequence_count": len(seed_files),
+              "image_sequence_count": len(image_sequences),
+              "frame_count": frame_count,
+              "model_sha256": model_hash,
+              "detector_size": detector.stat().st_size if detector.is_file() else None,
+              "inference_exists": inference.is_file(),
           }
-          output = Path(os.environ["RUN_DIR"]) / "probe.json"
-          output.write_text(
+          (Path(os.environ["RUN_DIR"]) / "probe.json").write_text(
               json.dumps(payload, indent=2, sort_keys=True) + "\n",
               encoding="utf-8",
           )
           print(json.dumps(payload, indent=2, sort_keys=True))
-          if os.environ["PROBE_ONLY"].lower() == "true":
-              raise SystemExit(0)
+
           failures = []
-          for key in ("truth", "seeds"):
-              if not paths[key]["is_dir"] or paths[key]["txt_count"] != expected:
-                  failures.append(key)
-          if not paths["images"]["is_dir"]:
-              failures.append("images")
-          if not stable_ready and regenerate:
-              if not paths["upstream_python"]["is_file"]:
-                  failures.append("upstream_python")
-              if not paths["botsort_inference"]["is_file"]:
-                  failures.append("botsort_inference")
-          if not stable_ready and not regenerate:
-              failures.append("stable proposal/raw inputs")
+          if len(truth_files) != expected_sequences:
+              failures.append("truth sequence count")
+          if len(seed_files) != expected_sequences:
+              failures.append("seed sequence count")
+          if len(image_sequences) != expected_sequences:
+              failures.append("image sequence count")
+          if frame_count != expected_frames:
+              failures.append("frame count")
+          if model_hash != (
+              "7f6e20a9082eb5fe100e005bd5d6f2bf"
+              "9fde7d9aeff5575546ff3c530baf6363"
+          ):
+              failures.append("ReID model digest")
+          if not detector.is_file() or detector.stat().st_size < 1_000_000:
+              failures.append("detector weights")
+          if not inference.is_file():
+              failures.append("upstream inference entry point")
           if failures:
-              raise SystemExit("invalid evidence inputs: " + ", ".join(failures))
+              raise SystemExit("invalid public evidence inputs: " + ", ".join(failures))
           PY
 
-      - name: Set up Python 3.11
-        if: env.PROBE_ONLY != 'true'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install isolated environment
-        if: env.PROBE_ONLY != 'true'
+      - name: Regenerate proposal bank and raw seeded control
         shell: bash
         run: |
           set -euo pipefail
-          python -m venv "${VENV_PATH}"
-          "${VENV_PATH}/bin/python" -m pip install --upgrade pip
-          "${VENV_PATH}/bin/python" -m pip install -e ".[dev]"
-          "${VENV_PATH}/bin/python" -m pip check
-          "${VENV_PATH}/bin/python" -m pip freeze --all \
-            > "${RUN_DIR}/pip-freeze.txt"
+          baseline_root="${RUN_DIR}/proposal_baseline"
+          "${VENV_PATH}/bin/python" \
+            -m raft_uav.multi_uav_lts.proposal_baseline \
+            --work-root "${EFFECTIVE_WORK_ROOT}" \
+            --botsort-root "${BOTSORT_ROOT}" \
+            --sequence-root "${TRAIN_SEQUENCE_ROOT}" \
+            --first-frame-label-dir "${FIRST_FRAME_LABEL_DIR}" \
+            --output-dir "${baseline_root}" \
+            --proposal-output-dir "${baseline_root}/proposals" \
+            --no-template \
+            --python "${UPSTREAM_PYTHON}" \
+            --device "${GPU_DEVICE}" \
+            --img-size 1920 \
+            --proposal-conf-thres 0.001 \
+            --proposal-iou-thres 0.95 \
+            --overwrite \
+            | tee "${RUN_DIR}/proposal-baseline-console.txt"
 
-      - name: Select or regenerate proposal and raw controls
-        if: env.PROBE_ONLY != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          count_txt() {
-            if [[ -n "$1" && -d "$1" ]]; then
-              find "$1" -maxdepth 1 -type f -name '*.txt' | wc -l
-            else
-              printf '0\n'
-            fi
-          }
-          proposal_count="$(count_txt "${PROPOSAL_PATH:-}")"
-          raw_count="$(count_txt "${RAW_PREDICTION_PATH:-}")"
-          if [[ "${proposal_count}" == "${EXPECTED_SEQUENCE_COUNT}" \
-             && "${raw_count}" == "${EXPECTED_SEQUENCE_COUNT}" ]]; then
-            proposal_source="${PROPOSAL_PATH}"
-            raw_source="${RAW_PREDICTION_PATH}"
-            source_mode="stable"
-          else
-            if [[ "${REGENERATE_IF_MISSING}" != "true" ]]; then
-              echo "stable evidence inputs are incomplete" >&2
-              exit 1
-            fi
-            baseline_root="${RUN_DIR}/proposal_baseline"
-            "${VENV_PATH}/bin/python" \
-              -m raft_uav.multi_uav_lts.proposal_baseline \
-              --work-root "${EFFECTIVE_WORK_ROOT}" \
-              --botsort-root "${BOTSORT_ROOT}" \
-              --sequence-root "${TRAIN_SEQUENCE_ROOT}" \
-              --first-frame-label-dir "${FIRST_FRAME_LABEL_DIR}" \
-              --output-dir "${baseline_root}" \
-              --proposal-output-dir "${baseline_root}/proposals" \
-              --no-template \
-              --python "${UPSTREAM_PYTHON}" \
-              --device "${GPU_DEVICE}" \
-              --img-size 1920 \
-              --proposal-conf-thres 0.001 \
-              --proposal-iou-thres 0.95 \
-              --overwrite \
-              | tee "${RUN_DIR}/proposal-baseline-console.txt"
-            proposal_source="${baseline_root}/proposals"
-            raw_source="${baseline_root}/predictions"
-            source_mode="regenerated"
-          fi
-          if [[ "$(count_txt "${proposal_source}")" \
-             != "${EXPECTED_SEQUENCE_COUNT}" ]]; then
-            echo "proposal source does not cover all sequences" >&2
+          proposal_count="$(
+            find "${baseline_root}/proposals" -maxdepth 1 -type f -name '*.txt' | wc -l
+          )"
+          raw_count="$(
+            find "${baseline_root}/predictions" -maxdepth 1 -type f -name '*.txt' | wc -l
+          )"
+          if [[ "${proposal_count}" != "${EXPECTED_SEQUENCE_COUNT}" ]]; then
+            echo "proposal source covers ${proposal_count} sequences" >&2
             exit 1
           fi
-          if [[ "$(count_txt "${raw_source}")" \
-             != "${EXPECTED_SEQUENCE_COUNT}" ]]; then
-            echo "raw source does not cover all sequences" >&2
+          if [[ "${raw_count}" != "${EXPECTED_SEQUENCE_COUNT}" ]]; then
+            echo "raw source covers ${raw_count} sequences" >&2
             exit 1
           fi
-          echo "PROPOSAL_SOURCE=${proposal_source}" >> "${GITHUB_ENV}"
-          echo "RAW_SOURCE=${raw_source}" >> "${GITHUB_ENV}"
-          echo "SOURCE_MODE=${source_mode}" >> "${GITHUB_ENV}"
+          echo "PROPOSAL_SOURCE=${baseline_root}/proposals" >> "${GITHUB_ENV}"
+          echo "RAW_SOURCE=${baseline_root}/predictions" >> "${GITHUB_ENV}"
+          echo "SOURCE_MODE=public-regenerated" >> "${GITHUB_ENV}"
 
       - name: Generate proposal graph candidates
-        if: env.PROBE_ONLY != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -709,7 +475,6 @@ jobs:
             --birth-min-mean-confidence 0.01
 
       - name: Score candidates and raw control
-        if: env.PROBE_ONLY != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -740,7 +505,6 @@ jobs:
           done
 
       - name: Run guarded tournament
-        if: env.PROBE_ONLY != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -775,34 +539,40 @@ jobs:
             "${improvement_args[@]}" \
             | tee "${RUN_DIR}/tournament-console.txt"
 
-      - name: Publish summary
+      - name: Publish evidence summary
         if: always()
         shell: bash
         run: |
           {
             echo "### Multi-UAV LTS proposal graph evidence"
             echo
-            echo "- Run directory: \`${RUN_DIR}\`"
-            echo "- Probe only: \`${PROBE_ONLY}\`"
-            echo "- Work root: \`${EFFECTIVE_WORK_ROOT:-not-discovered}\`"
-            echo "- Source mode: \`${SOURCE_MODE:-not-selected}\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Runner: \`${RUNNER_NAME}\`"
+            echo "- Work root: \`${WORK_ROOT:-not-selected}\`"
+            echo "- Source mode: \`${SOURCE_MODE:-not-generated}\`"
+            echo "- Official sequences required: \`${EXPECTED_SEQUENCE_COUNT}\`"
+            echo "- Official frames required: \`${EXPECTED_FRAME_COUNT}\`"
             if [[ -f "${RUN_DIR}/tournament/selected_candidate.txt" ]]; then
               selected="$(cat "${RUN_DIR}/tournament/selected_candidate.txt")"
               echo "- Selected candidate: \`${selected}\`"
+            else
+              echo "- Selected candidate: not available"
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload compact evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
           name: multi-uav-lts-proposal-graph-${{ github.run_id }}
           path: |
             ${{ env.RUN_DIR }}/runner.txt
             ${{ env.RUN_DIR }}/nvidia-smi-L.txt
+            ${{ env.RUN_DIR }}/disk-usage.txt
             ${{ env.RUN_DIR }}/mounts.txt
-            ${{ env.RUN_DIR }}/path-permissions.txt
-            ${{ env.RUN_DIR }}/discovery.json
+            ${{ env.RUN_DIR }}/cache-selection.json
+            ${{ env.RUN_DIR }}/public-inputs.json
+            ${{ env.RUN_DIR }}/public-inputs-console.txt
             ${{ env.RUN_DIR }}/probe.json
             ${{ env.RUN_DIR }}/pip-freeze.txt
             ${{ env.RUN_DIR }}/*-console.txt
