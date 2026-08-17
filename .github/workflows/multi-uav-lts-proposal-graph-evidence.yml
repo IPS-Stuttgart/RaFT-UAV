@@ -12,44 +12,39 @@ name: Multi-UAV LTS proposal graph evidence
   workflow_dispatch:
     inputs:
       work_root:
-        description: Multi-UAV LTS work root
+        description: Preferred Multi-UAV LTS work root; inaccessible paths are rediscovered
         required: true
         default: /mnt/lexar4tb/multi_uav_lts
         type: string
       proposal_path:
-        description: Existing root-level low-threshold proposal directory or ZIP
+        description: Preferred root-level low-threshold proposal directory or ZIP
         required: true
         default: /mnt/lexar4tb/multi_uav_lts/outputs/proposal_bank_1920/proposals
         type: string
       raw_prediction_path:
-        description: Existing seeded raw baseline predictions
+        description: Preferred seeded raw baseline predictions
         required: true
         default: /mnt/lexar4tb/multi_uav_lts/outputs/train_baseline/predictions
         type: string
       truth_dir:
-        description: Complete training-label directory
+        description: Preferred complete training-label directory
         required: true
         default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels
         type: string
       first_frame_label_dir:
-        description: First-frame training labels
+        description: Preferred first-frame training labels
         required: true
         default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels_FirstFrameOnly
         type: string
       train_sequence_root:
-        description: Training image sequence root used when proposals are regenerated
+        description: Preferred training-image sequence root
         required: true
         default: /mnt/lexar4tb/multi_uav_lts/extracted/TrainImages
         type: string
       upstream_python:
-        description: Python executable for the external BoT-SORT checkout
+        description: Preferred Python executable for the external BoT-SORT checkout
         required: true
         default: /mnt/lexar4tb/multi_uav_lts/venvs/yolov12-botsort-py312/bin/python
-        type: string
-      output_root:
-        description: Persistent evidence root
-        required: true
-        default: /mnt/lexar4tb/multi_uav_lts/outputs/proposal_graph_evidence
         type: string
       device:
         description: CUDA device used when proposals are regenerated
@@ -72,7 +67,7 @@ name: Multi-UAV LTS proposal graph evidence
         default: false
         type: boolean
       probe_only:
-        description: Check runner inputs without running inference or evaluation
+        description: Inventory runner paths without inference or evaluation
         required: false
         default: false
         type: boolean
@@ -132,29 +127,26 @@ jobs:
     timeout-minutes: 720
 
     env:
-      WORK_ROOT: >-
+      REQUESTED_WORK_ROOT: >-
         ${{ inputs.work_root || '/mnt/lexar4tb/multi_uav_lts' }}
-      PROPOSAL_PATH: >-
+      REQUESTED_PROPOSAL_PATH: >-
         ${{ inputs.proposal_path ||
         '/mnt/lexar4tb/multi_uav_lts/outputs/proposal_bank_1920/proposals' }}
-      RAW_PREDICTION_PATH: >-
+      REQUESTED_RAW_PREDICTION_PATH: >-
         ${{ inputs.raw_prediction_path ||
         '/mnt/lexar4tb/multi_uav_lts/outputs/train_baseline/predictions' }}
-      TRUTH_DIR: >-
+      REQUESTED_TRUTH_DIR: >-
         ${{ inputs.truth_dir ||
         '/mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels' }}
-      FIRST_FRAME_LABEL_DIR: >-
+      REQUESTED_FIRST_FRAME_LABEL_DIR: >-
         ${{ inputs.first_frame_label_dir ||
         '/mnt/lexar4tb/multi_uav_lts/extracted/TrainLabels_FirstFrameOnly' }}
-      TRAIN_SEQUENCE_ROOT: >-
+      REQUESTED_TRAIN_SEQUENCE_ROOT: >-
         ${{ inputs.train_sequence_root ||
         '/mnt/lexar4tb/multi_uav_lts/extracted/TrainImages' }}
-      UPSTREAM_PYTHON: >-
+      REQUESTED_UPSTREAM_PYTHON: >-
         ${{ inputs.upstream_python ||
         '/mnt/lexar4tb/multi_uav_lts/venvs/yolov12-botsort-py312/bin/python' }}
-      OUTPUT_ROOT: >-
-        ${{ inputs.output_root ||
-        '/mnt/lexar4tb/multi_uav_lts/outputs/proposal_graph_evidence' }}
       GPU_DEVICE: ${{ inputs.device || '0' }}
       EXPECTED_SEQUENCE_COUNT: ${{ inputs.expected_sequence_count || '102' }}
       REGENERATE_IF_MISSING: >-
@@ -173,58 +165,397 @@ jobs:
           persist-credentials: false
           clean: true
 
-      - name: Prepare run directory
+      - name: Prepare safe evidence directory and inventory runner
         shell: bash
         run: |
           set -euo pipefail
-          RUN_DIR="${OUTPUT_ROOT}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          RUN_DIR="${RUNNER_TEMP}/raft-uav-lts-proposal-graph/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "${RUN_DIR}"
           echo "RUN_DIR=${RUN_DIR}" >> "${GITHUB_ENV}"
           {
             echo "runner_name=${RUNNER_NAME}"
+            echo "runner_os=${RUNNER_OS}"
+            echo "runner_arch=${RUNNER_ARCH}"
             echo "repository=${GITHUB_REPOSITORY}"
             echo "git_commit=${GITHUB_SHA}"
             echo "event=${GITHUB_EVENT_NAME}"
+            echo "home=${HOME}"
+            echo "workspace=${GITHUB_WORKSPACE}"
+            echo "runner_temp=${RUNNER_TEMP}"
             uname -a
           } | tee "${RUN_DIR}/runner.txt"
           nvidia-smi -L | tee "${RUN_DIR}/nvidia-smi-L.txt"
+          findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS \
+            > "${RUN_DIR}/mounts.txt" || true
+          {
+            for path in \
+              /mnt \
+              /mnt/lexar4tb \
+              /mnt/lexar4tb/multi_uav_lts \
+              /media \
+              /data \
+              /datasets \
+              /srv \
+              /opt \
+              "${HOME}"
+            do
+              ls -ld "${path}" 2>&1 || true
+            done
+            echo
+            namei -l "${REQUESTED_WORK_ROOT}" 2>&1 || true
+            echo
+            sudo -n true >/dev/null 2>&1 \
+              && echo "passwordless_sudo=true" \
+              || echo "passwordless_sudo=false"
+          } > "${RUN_DIR}/path-permissions.txt"
 
-      - name: Probe mounted inputs
+      - name: Discover accessible Multi-UAV LTS data and toolchain
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
+          from __future__ import annotations
+
           import json
           import os
           from pathlib import Path
 
+          expected = int(os.environ["EXPECTED_SEQUENCE_COUNT"])
+          run_dir = Path(os.environ["RUN_DIR"])
+          errors: list[str] = []
+
+          def safe_dir(path: Path) -> bool:
+              try:
+                  return path.is_dir() and os.access(path, os.R_OK | os.X_OK)
+              except OSError as exc:
+                  errors.append(f"{path}: {type(exc).__name__}: {exc}")
+                  return False
+
+          def safe_file(path: Path) -> bool:
+              try:
+                  return path.is_file() and os.access(path, os.R_OK)
+              except OSError as exc:
+                  errors.append(f"{path}: {type(exc).__name__}: {exc}")
+                  return False
+
+          def txt_count(path: Path) -> int | None:
+              if not safe_dir(path):
+                  return None
+              try:
+                  return sum(
+                      child.is_file() and child.suffix == ".txt"
+                      for child in path.iterdir()
+                  )
+              except OSError as exc:
+                  errors.append(f"{path}: {type(exc).__name__}: {exc}")
+                  return None
+
+          def complete_text_dir(path: Path) -> bool:
+              return txt_count(path) == expected
+
+          def add_unique(values: list[Path], path: Path) -> None:
+              try:
+                  normalized = path.expanduser().resolve(strict=False)
+              except OSError:
+                  normalized = path.expanduser().absolute()
+              if normalized not in values:
+                  values.append(normalized)
+
+          requested_work_root = Path(os.environ["REQUESTED_WORK_ROOT"])
+          requested_truth = Path(os.environ["REQUESTED_TRUTH_DIR"])
+          candidate_roots: list[Path] = []
+          add_unique(candidate_roots, requested_work_root)
+          if requested_truth.name == "TrainLabels":
+              add_unique(candidate_roots, requested_truth.parent.parent)
+
+          bases: list[Path] = []
+          for value in (
+              Path.home(),
+              Path("/mnt"),
+              Path("/media"),
+              Path("/data"),
+              Path("/datasets"),
+              Path("/srv"),
+              Path("/opt"),
+          ):
+              add_unique(bases, value)
+
+          try:
+              for line in Path("/proc/self/mountinfo").read_text(
+                  encoding="utf-8"
+              ).splitlines():
+                  fields = line.split()
+                  if len(fields) < 5:
+                      continue
+                  mount = Path(
+                      fields[4]
+                      .replace("\\040", " ")
+                      .replace("\\011", "\t")
+                      .replace("\\134", "\\")
+                  )
+                  text = str(mount)
+                  if text.startswith(
+                      ("/mnt", "/media", "/data", "/datasets", "/srv", "/home")
+                  ):
+                      add_unique(bases, mount)
+          except OSError as exc:
+              errors.append(f"mountinfo: {type(exc).__name__}: {exc}")
+
+          skip_names = {
+              ".cache",
+              ".git",
+              ".pytest_cache",
+              ".ruff_cache",
+              "__pycache__",
+              "_actions",
+              "_temp",
+              "_tool",
+              "node_modules",
+          }
+          scanned_bases: list[str] = []
+          for base in bases:
+              if not safe_dir(base):
+                  continue
+              scanned_bases.append(str(base))
+              for suffix in (
+                  "multi_uav_lts",
+                  "multi-uav-lts",
+                  "Multi-UAV-LTS",
+              ):
+                  add_unique(candidate_roots, base / suffix)
+              base_depth = len(base.parts)
+
+              def onerror(exc: OSError) -> None:
+                  errors.append(f"walk {base}: {type(exc).__name__}: {exc}")
+
+              try:
+                  for root_text, directories, _files in os.walk(
+                      base,
+                      topdown=True,
+                      onerror=onerror,
+                      followlinks=False,
+                  ):
+                      root = Path(root_text)
+                      depth = len(root.parts) - base_depth
+                      directories[:] = [
+                          name for name in directories if name not in skip_names
+                      ]
+                      if depth >= 5:
+                          directories[:] = []
+                      if root.name == "TrainLabels" and root.parent.name == "extracted":
+                          if complete_text_dir(root):
+                              add_unique(candidate_roots, root.parent.parent)
+                      elif complete_text_dir(root / "extracted" / "TrainLabels"):
+                          add_unique(candidate_roots, root)
+              except OSError as exc:
+                  errors.append(f"walk {base}: {type(exc).__name__}: {exc}")
+
+          requested_raw = Path(os.environ["REQUESTED_RAW_PREDICTION_PATH"])
+          requested_proposals = Path(os.environ["REQUESTED_PROPOSAL_PATH"])
+          requested_python = Path(os.environ["REQUESTED_UPSTREAM_PYTHON"])
+
+          def prediction_candidates(root: Path, kind: str) -> list[Path]:
+              result: list[Path] = []
+              requested = requested_raw if kind == "raw" else requested_proposals
+              add_unique(result, requested)
+              relative = (
+                  (
+                      "outputs/train_baseline/predictions",
+                      "outputs/proposal_baseline/predictions",
+                      "outputs/official_baseline_via_first_init/predictions",
+                  )
+                  if kind == "raw"
+                  else (
+                      "outputs/proposal_bank_1920/proposals",
+                      "outputs/proposal_baseline/proposals",
+                  )
+              )
+              for value in relative:
+                  add_unique(result, root / value)
+              output_root = root / "outputs"
+              if safe_dir(output_root):
+                  try:
+                      for path in output_root.glob(
+                          "**/predictions" if kind == "raw" else "**/proposals"
+                      ):
+                          if len(path.relative_to(output_root).parts) <= 4:
+                              add_unique(result, path)
+                  except OSError as exc:
+                      errors.append(
+                          f"glob {output_root}: {type(exc).__name__}: {exc}"
+                      )
+              return result
+
+          def first_complete(paths: list[Path]) -> Path | None:
+              return next((path for path in paths if complete_text_dir(path)), None)
+
+          records: list[dict[str, object]] = []
+          valid: list[tuple[int, Path, dict[str, object]]] = []
+          for root in candidate_roots:
+              truth = root / "extracted" / "TrainLabels"
+              seeds = root / "extracted" / "TrainLabels_FirstFrameOnly"
+              images = root / "extracted" / "TrainImages"
+              raw = first_complete(prediction_candidates(root, "raw"))
+              proposals = first_complete(prediction_candidates(root, "proposals"))
+              python_candidates: list[Path] = []
+              add_unique(python_candidates, requested_python)
+              add_unique(
+                  python_candidates,
+                  root / "venvs/yolov12-botsort-py312/bin/python",
+              )
+              venv_root = root / "venvs"
+              if safe_dir(venv_root):
+                  try:
+                      for path in venv_root.glob("*/bin/python"):
+                          add_unique(python_candidates, path)
+                  except OSError as exc:
+                      errors.append(
+                          f"glob {venv_root}: {type(exc).__name__}: {exc}"
+                      )
+              upstream_python = next(
+                  (path for path in python_candidates if safe_file(path)),
+                  None,
+              )
+              botsort_root = root / "repos/YOLOv12-BoT-SORT-ReID/BoT-SORT"
+              botsort_inference = botsort_root / "tools/inference.py"
+              truth_n = txt_count(truth)
+              seed_n = txt_count(seeds)
+              record = {
+                  "root": str(root),
+                  "truth_count": truth_n,
+                  "seed_count": seed_n,
+                  "images": safe_dir(images),
+                  "raw": None if raw is None else str(raw),
+                  "proposals": None if proposals is None else str(proposals),
+                  "upstream_python": (
+                      None if upstream_python is None else str(upstream_python)
+                  ),
+                  "botsort_root": (
+                      str(botsort_root) if safe_file(botsort_inference) else None
+                  ),
+              }
+              records.append(record)
+              if truth_n == expected and seed_n == expected and safe_dir(images):
+                  score = 100
+                  score += 20 if raw is not None else 0
+                  score += 20 if proposals is not None else 0
+                  score += 10 if upstream_python is not None else 0
+                  score += 10 if safe_file(botsort_inference) else 0
+                  score += 5 if root == requested_work_root else 0
+                  valid.append((score, root, record))
+
+          payload: dict[str, object] = {
+              "schema": "raft-uav-lts-root-discovery-v1",
+              "expected_sequence_count": expected,
+              "requested_work_root": str(requested_work_root),
+              "scanned_bases": scanned_bases,
+              "candidate_roots": records,
+              "errors": errors[-200:],
+          }
+          if not valid:
+              payload["selected"] = None
+              (run_dir / "discovery.json").write_text(
+                  json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                  encoding="utf-8",
+              )
+              print(json.dumps(payload, indent=2, sort_keys=True))
+              raise SystemExit(
+                  "no accessible Multi-UAV LTS root with complete truth, seeds, and images"
+              )
+
+          _score, root, selected = max(valid, key=lambda item: (item[0], str(item[1])))
+          payload["selected"] = selected
+          (run_dir / "discovery.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(payload, indent=2, sort_keys=True))
+
+          values = {
+              "EFFECTIVE_WORK_ROOT": str(root),
+              "TRUTH_DIR": str(root / "extracted" / "TrainLabels"),
+              "FIRST_FRAME_LABEL_DIR": str(
+                  root / "extracted" / "TrainLabels_FirstFrameOnly"
+              ),
+              "TRAIN_SEQUENCE_ROOT": str(root / "extracted" / "TrainImages"),
+              "RAW_PREDICTION_PATH": str(selected.get("raw") or ""),
+              "PROPOSAL_PATH": str(selected.get("proposals") or ""),
+              "UPSTREAM_PYTHON": str(selected.get("upstream_python") or ""),
+              "BOTSORT_ROOT": str(selected.get("botsort_root") or ""),
+          }
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
+              for name, value in values.items():
+                  handle.write(f"{name}={value}\n")
+          PY
+
+      - name: Probe selected inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+
+          expected = int(os.environ["EXPECTED_SEQUENCE_COUNT"])
+
           def record(raw: str) -> dict[str, object]:
+              if not raw:
+                  return {
+                      "path": "",
+                      "is_dir": False,
+                      "is_file": False,
+                      "txt_count": None,
+                  }
               path = Path(raw).expanduser()
+              try:
+                  is_dir = path.is_dir() and os.access(path, os.R_OK | os.X_OK)
+                  is_file = path.is_file() and os.access(path, os.R_OK)
+                  count = (
+                      sum(
+                          child.is_file() and child.suffix == ".txt"
+                          for child in path.iterdir()
+                      )
+                      if is_dir
+                      else None
+                  )
+                  error = None
+              except OSError as exc:
+                  is_dir = False
+                  is_file = False
+                  count = None
+                  error = f"{type(exc).__name__}: {exc}"
               return {
                   "path": str(path),
-                  "is_dir": path.is_dir(),
-                  "is_file": path.is_file(),
-                  "txt_count": len(list(path.glob("*.txt")))
-                  if path.is_dir()
-                  else None,
+                  "is_dir": is_dir,
+                  "is_file": is_file,
+                  "txt_count": count,
+                  "error": error,
               }
 
           paths = {
-              "proposals": record(os.environ["PROPOSAL_PATH"]),
-              "raw": record(os.environ["RAW_PREDICTION_PATH"]),
+              "proposals": record(os.environ.get("PROPOSAL_PATH", "")),
+              "raw": record(os.environ.get("RAW_PREDICTION_PATH", "")),
               "truth": record(os.environ["TRUTH_DIR"]),
               "seeds": record(os.environ["FIRST_FRAME_LABEL_DIR"]),
               "images": record(os.environ["TRAIN_SEQUENCE_ROOT"]),
-              "upstream_python": record(os.environ["UPSTREAM_PYTHON"]),
+              "upstream_python": record(os.environ.get("UPSTREAM_PYTHON", "")),
+              "botsort_inference": record(
+                  str(Path(os.environ.get("BOTSORT_ROOT", "")) / "tools/inference.py")
+                  if os.environ.get("BOTSORT_ROOT")
+                  else ""
+              ),
           }
-          expected = int(os.environ["EXPECTED_SEQUENCE_COUNT"])
           regenerate = os.environ["REGENERATE_IF_MISSING"].lower() == "true"
           stable_ready = all(
               paths[key]["is_dir"] and paths[key]["txt_count"] == expected
               for key in ("proposals", "raw")
           )
           payload = {
-              "schema": "raft-uav-lts-proposal-graph-evidence-probe-v1",
+              "schema": "raft-uav-lts-proposal-graph-evidence-probe-v2",
+              "effective_work_root": os.environ["EFFECTIVE_WORK_ROOT"],
               "paths": paths,
               "expected_sequence_count": expected,
               "regenerate_if_missing": regenerate,
@@ -236,15 +567,19 @@ jobs:
               encoding="utf-8",
           )
           print(json.dumps(payload, indent=2, sort_keys=True))
+          if os.environ["PROBE_ONLY"].lower() == "true":
+              raise SystemExit(0)
           failures = []
           for key in ("truth", "seeds"):
               if not paths[key]["is_dir"] or paths[key]["txt_count"] != expected:
                   failures.append(key)
+          if not paths["images"]["is_dir"]:
+              failures.append("images")
           if not stable_ready and regenerate:
-              if not paths["images"]["is_dir"]:
-                  failures.append("images")
               if not paths["upstream_python"]["is_file"]:
                   failures.append("upstream_python")
+              if not paths["botsort_inference"]["is_file"]:
+                  failures.append("botsort_inference")
           if not stable_ready and not regenerate:
               failures.append("stable proposal/raw inputs")
           if failures:
@@ -276,14 +611,14 @@ jobs:
         run: |
           set -euo pipefail
           count_txt() {
-            if [[ -d "$1" ]]; then
+            if [[ -n "$1" && -d "$1" ]]; then
               find "$1" -maxdepth 1 -type f -name '*.txt' | wc -l
             else
               printf '0\n'
             fi
           }
-          proposal_count="$(count_txt "${PROPOSAL_PATH}")"
-          raw_count="$(count_txt "${RAW_PREDICTION_PATH}")"
+          proposal_count="$(count_txt "${PROPOSAL_PATH:-}")"
+          raw_count="$(count_txt "${RAW_PREDICTION_PATH:-}")"
           if [[ "${proposal_count}" == "${EXPECTED_SEQUENCE_COUNT}" \
              && "${raw_count}" == "${EXPECTED_SEQUENCE_COUNT}" ]]; then
             proposal_source="${PROPOSAL_PATH}"
@@ -297,7 +632,8 @@ jobs:
             baseline_root="${RUN_DIR}/proposal_baseline"
             "${VENV_PATH}/bin/python" \
               -m raft_uav.multi_uav_lts.proposal_baseline \
-              --work-root "${WORK_ROOT}" \
+              --work-root "${EFFECTIVE_WORK_ROOT}" \
+              --botsort-root "${BOTSORT_ROOT}" \
               --sequence-root "${TRAIN_SEQUENCE_ROOT}" \
               --first-frame-label-dir "${FIRST_FRAME_LABEL_DIR}" \
               --output-dir "${baseline_root}" \
@@ -362,6 +698,9 @@ jobs:
             --anchor-min-margin 0.05 \
             --max-link-gap 45 \
             --max-link-cost 2.75
+          run_candidate graph_seed_only \
+            --birth-min-hits 1000000 \
+            --birth-min-span 1000000
           run_candidate graph_no_global --no-global-links
           run_candidate graph_no_border --border-gap-discount 1.0
           run_candidate graph_strict_birth \
@@ -392,6 +731,7 @@ jobs:
             graph_default \
             graph_conservative \
             graph_permissive \
+            graph_seed_only \
             graph_no_global \
             graph_no_border \
             graph_strict_birth
@@ -416,6 +756,7 @@ jobs:
               "graph_conservative=${RUN_DIR}/graph_conservative/predictions" \
             --candidate \
               "graph_permissive=${RUN_DIR}/graph_permissive/predictions" \
+            --candidate "graph_seed_only=${RUN_DIR}/graph_seed_only/predictions" \
             --candidate "graph_no_global=${RUN_DIR}/graph_no_global/predictions" \
             --candidate "graph_no_border=${RUN_DIR}/graph_no_border/predictions" \
             --candidate \
@@ -443,6 +784,7 @@ jobs:
             echo
             echo "- Run directory: \`${RUN_DIR}\`"
             echo "- Probe only: \`${PROBE_ONLY}\`"
+            echo "- Work root: \`${EFFECTIVE_WORK_ROOT:-not-discovered}\`"
             echo "- Source mode: \`${SOURCE_MODE:-not-selected}\`"
             if [[ -f "${RUN_DIR}/tournament/selected_candidate.txt" ]]; then
               selected="$(cat "${RUN_DIR}/tournament/selected_candidate.txt")"
@@ -450,12 +792,29 @@ jobs:
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Upload evidence
+      - name: Upload compact evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
         with:
           name: multi-uav-lts-proposal-graph-${{ github.run_id }}
-          path: ${{ env.RUN_DIR }}/
-          if-no-files-found: error
+          path: |
+            ${{ env.RUN_DIR }}/runner.txt
+            ${{ env.RUN_DIR }}/nvidia-smi-L.txt
+            ${{ env.RUN_DIR }}/mounts.txt
+            ${{ env.RUN_DIR }}/path-permissions.txt
+            ${{ env.RUN_DIR }}/discovery.json
+            ${{ env.RUN_DIR }}/probe.json
+            ${{ env.RUN_DIR }}/pip-freeze.txt
+            ${{ env.RUN_DIR }}/*-console.txt
+            ${{ env.RUN_DIR }}/*/console.txt
+            ${{ env.RUN_DIR }}/*/metrics-console.txt
+            ${{ env.RUN_DIR }}/*/summary.json
+            ${{ env.RUN_DIR }}/*/metrics.json
+            ${{ env.RUN_DIR }}/*/metrics_by_sequence.csv
+            ${{ env.RUN_DIR }}/proposal_baseline/*.json
+            ${{ env.RUN_DIR }}/tournament/*.json
+            ${{ env.RUN_DIR }}/tournament/*.csv
+            ${{ env.RUN_DIR }}/tournament/*.txt
+          if-no-files-found: warn
           retention-days: 30
           compression-level: 6
