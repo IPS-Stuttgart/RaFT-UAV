@@ -357,47 +357,12 @@ def _install_numpy_gzip_export_guard() -> None:
     _mmuad_io._impl._read_numpy_trajectory_table = _read_numpy_trajectory_table
 
 
-def _install_track5_scorecard_bool_guard() -> None:
-    try:
-        import numpy as _np
-        import pandas as _pd
-
-        from raft_uav.mmuad import track5_scorecard as _track5_scorecard
-    except Exception:
-        return
-
-    def _bool_series(values):
-        if values is None:
-            return _pd.Series(dtype=bool)
-        series = _pd.Series(values)
-        if series.empty:
-            return _pd.Series(dtype=bool)
-        if _pd.api.types.is_bool_dtype(series.dtype):
-            return series.fillna(False).astype(bool)
-
-        numeric = _pd.to_numeric(series, errors="coerce")
-        numeric_values = numeric.to_numpy(dtype=float)
-        numeric_truthy = _pd.Series(
-            _np.isfinite(numeric_values) & (numeric_values != 0.0),
-            index=series.index,
-        )
-        text = series.where(series.notna(), "").astype(str).str.strip().str.lower()
-        truthy_text = text.isin({"1", "1.0", "true", "t", "yes", "y"})
-        falsy_text = text.isin(
-            {"0", "0.0", "false", "f", "no", "n", "", "nan", "none", "<na>", "nat"}
-        )
-        return truthy_text | (numeric_truthy & ~falsy_text)
-
-    _track5_scorecard._bool_series = _bool_series
-
-
 _install_schema_timestamp_guard()
 _install_image_row_guard()
 _install_candidate_pool_compare_cli_guard()
 _install_temporal_consensus_train_cv_cli_guard()
 _install_candidate_reservoir_topk_guard()
 _install_submission_eval_track_id_guard()
-_install_track5_scorecard_bool_guard()
 
 
 __all__ = [
