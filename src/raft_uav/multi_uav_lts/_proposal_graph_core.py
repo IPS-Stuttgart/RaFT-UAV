@@ -14,6 +14,7 @@ from ._records import Detection, box_iou
 
 _INVALID = 1e9
 _EPS = 1e-12
+_COMMON_MOTION_MAX_ROWS = 96
 
 
 class GraphParameters(Protocol):
@@ -31,9 +32,16 @@ class GraphParameters(Protocol):
     velocity_weight: float
     gap_weight: float
     confidence_weight: float
+    enable_common_motion: bool
+    common_motion_min_pairs: int
+    common_motion_max_normalized_step: float
+    common_motion_max_normalized_residual: float
+    interpolate_max_gap: int
     birth_min_hits: int
     birth_min_span: int
     birth_min_mean_confidence: float
+    birth_require_border_entry: bool
+    birth_min_inward_motion: float
     image_width: float | None
     image_height: float | None
     border_margin_fraction: float
@@ -47,6 +55,8 @@ class CoreResult:
     suppressed_rows: int
     anchor_tracklets: int
     graph_links: int
+    common_motion_steps: int
+    interpolated_rows: int
     seeded_paths: int
     birth_paths: int
     dropped_paths: int
@@ -81,17 +91,22 @@ def track_sequence(
 ) -> CoreResult:
     retained, suppressed = _canonicalize(proposals, parameters)
     nodes = tuple(_Node(index, row) for index, row in enumerate(retained))
-    tracklets = _anchor_tracklets(nodes, parameters)
+    common_motion = _estimate_common_motion(nodes, parameters)
+    tracklets = _anchor_tracklets(nodes, parameters, common_motion)
     tracklets = _attach_seeds(tracklets, nodes, seeds, parameters.min_seed_iou)
-    links = _global_links(tracklets, parameters)
+    links = _global_links(tracklets, parameters, common_motion)
     paths = _paths(tracklets, links)
-    rows, seeded, births, dropped = _materialize(paths, seeds, parameters)
+    rows, seeded, births, dropped, interpolated = _materialize(
+        paths, seeds, parameters
+    )
     return CoreResult(
         rows=rows,
         retained_rows=len(retained),
         suppressed_rows=suppressed,
         anchor_tracklets=len(tracklets),
         graph_links=len(links),
+        common_motion_steps=len(common_motion),
+        interpolated_rows=interpolated,
         seeded_paths=seeded,
         birth_paths=births,
         dropped_paths=dropped,
@@ -130,9 +145,109 @@ def _canonicalize(
     return tuple(kept), suppressed
 
 
+def _estimate_common_motion(
+    nodes: tuple[_Node, ...],
+    p: GraphParameters,
+) -> dict[int, tuple[float, float]]:
+    if not p.enable_common_motion:
+        return {}
+    frames: dict[int, list[_Node]] = {}
+    for node in nodes:
+        frames.setdefault(node.row.frame_id, []).append(node)
+    result: dict[int, tuple[float, float]] = {}
+    for frame in sorted(frames):
+        left = _motion_rows(frames[frame])
+        right = _motion_rows(frames.get(frame + 1, ()))
+        if min(len(left), len(right)) < p.common_motion_min_pairs:
+            continue
+        costs = np.asarray(
+            [[_raw_motion_cost(a.row, b.row) for b in right] for a in left],
+            dtype=float,
+        )
+        rows, cols = linear_sum_assignment(costs)
+        pairs: list[tuple[float, float, float]] = []
+        for left_index, right_index in zip(rows, cols, strict=True):
+            a = left[int(left_index)].row
+            b = right[int(right_index)].row
+            normalized_step = costs[int(left_index), int(right_index)]
+            if normalized_step > p.common_motion_max_normalized_step:
+                continue
+            pairs.append(
+                (
+                    b.center_x - a.center_x,
+                    b.center_y - a.center_y,
+                    _scale(a, b),
+                )
+            )
+        if len(pairs) < p.common_motion_min_pairs:
+            continue
+        dx = np.asarray([pair[0] for pair in pairs], dtype=float)
+        dy = np.asarray([pair[1] for pair in pairs], dtype=float)
+        scales = np.asarray([pair[2] for pair in pairs], dtype=float)
+        median_dx = float(np.median(dx))
+        median_dy = float(np.median(dy))
+        residual = np.hypot(dx - median_dx, dy - median_dy) / scales
+        inliers = residual <= p.common_motion_max_normalized_residual
+        if int(np.count_nonzero(inliers)) < p.common_motion_min_pairs:
+            continue
+        refined_dx = float(np.median(dx[inliers]))
+        refined_dy = float(np.median(dy[inliers]))
+        refined_residual = np.hypot(
+            dx[inliers] - refined_dx,
+            dy[inliers] - refined_dy,
+        ) / scales[inliers]
+        if float(np.median(refined_residual)) > p.common_motion_max_normalized_residual:
+            continue
+        result[frame] = (refined_dx, refined_dy)
+    return result
+
+
+def _motion_rows(nodes: Sequence[_Node]) -> tuple[_Node, ...]:
+    return tuple(
+        sorted(
+            nodes,
+            key=lambda node: (
+                -node.row.confidence,
+                node.row.x1,
+                node.row.y1,
+                node.index,
+            ),
+        )[:_COMMON_MOTION_MAX_ROWS]
+    )
+
+
+def _raw_motion_cost(left: Detection, right: Detection) -> float:
+    scale = _scale(left, right)
+    center = math.hypot(
+        right.center_x - left.center_x,
+        right.center_y - left.center_y,
+    ) / scale
+    size = abs(math.log(right.width / left.width)) + abs(
+        math.log(right.height / left.height)
+    )
+    return center + 0.25 * size
+
+
+def _motion_between(
+    common_motion: dict[int, tuple[float, float]],
+    start_frame: int,
+    end_frame: int,
+) -> tuple[float, float]:
+    if end_frame <= start_frame:
+        return 0.0, 0.0
+    dx = 0.0
+    dy = 0.0
+    for frame in range(start_frame, end_frame):
+        step_dx, step_dy = common_motion.get(frame, (0.0, 0.0))
+        dx += step_dx
+        dy += step_dy
+    return dx, dy
+
+
 def _anchor_tracklets(
     nodes: tuple[_Node, ...],
     p: GraphParameters,
+    common_motion: dict[int, tuple[float, float]],
 ) -> tuple[_Tracklet, ...]:
     frames: dict[int, list[_Node]] = {}
     for node in nodes:
@@ -144,8 +259,12 @@ def _anchor_tracklets(
         right = tuple(frames.get(frame + 1, ()))
         if not left or not right:
             continue
+        motion = common_motion.get(frame, (0.0, 0.0))
         costs = np.asarray(
-            [[_observation_cost(a.row, b.row, p) for b in right] for a in left]
+            [
+                [_observation_cost(a.row, b.row, p, motion) for b in right]
+                for a in left
+            ]
         )
         forward = np.argmin(costs, axis=1)
         backward = np.argmin(costs, axis=0)
@@ -200,21 +319,31 @@ def _margins(costs: np.ndarray) -> np.ndarray:
     return ordered[:, 1] - ordered[:, 0]
 
 
-def _observation_cost(left: Detection, right: Detection, p: GraphParameters) -> float:
-    scale = _scale(left, right)
+def _observation_cost(
+    left: Detection,
+    right: Detection,
+    p: GraphParameters,
+    motion: tuple[float, float] = (0.0, 0.0),
+) -> float:
+    predicted = _translate(left, motion[0], motion[1], right.frame_id)
+    scale = _scale(predicted, right)
     center = math.hypot(
-        right.center_x - left.center_x,
-        right.center_y - left.center_y,
+        right.center_x - predicted.center_x,
+        right.center_y - predicted.center_y,
     ) / scale
-    size = abs(math.log(right.width / left.width)) + abs(
-        math.log(right.height / left.height)
+    size = abs(math.log(right.width / predicted.width)) + abs(
+        math.log(right.height / predicted.height)
     )
     return (
         p.center_weight * center
         + p.size_weight * size
-        + p.iou_weight * (1.0 - box_iou(left, right))
+        + p.iou_weight * (1.0 - box_iou(predicted, right))
         + p.confidence_weight * (1.0 - right.confidence)
     )
+
+
+def _translate(row: Detection, dx: float, dy: float, frame: int) -> Detection:
+    return replace(row, frame_id=frame, x1=row.x1 + dx, y1=row.y1 + dy)
 
 
 def _scale(left: Detection, right: Detection) -> float:
@@ -283,10 +412,11 @@ def _seed_mapping(
 def _global_links(
     tracklets: tuple[_Tracklet, ...],
     p: GraphParameters,
+    common_motion: dict[int, tuple[float, float]],
 ) -> dict[int, int]:
     if not p.enable_global_links or len(tracklets) < 2:
         return {}
-    candidates = _candidate_links(tracklets, p)
+    candidates = _candidate_links(tracklets, p, common_motion)
     if not candidates:
         return {}
     components = _link_components(candidates)
@@ -307,6 +437,7 @@ def _global_links(
 def _candidate_links(
     tracklets: tuple[_Tracklet, ...],
     p: GraphParameters,
+    common_motion: dict[int, tuple[float, float]],
 ) -> dict[tuple[int, int], float]:
     starts: dict[int, list[_Tracklet]] = {}
     for tracklet in tracklets:
@@ -318,7 +449,7 @@ def _candidate_links(
         upper = bisect_right(frames, left.end + p.max_link_gap + 1)
         for frame in frames[lower:upper]:
             for right in starts[frame]:
-                cost = _link_cost(left, right, p)
+                cost = _link_cost(left, right, p, common_motion)
                 if math.isfinite(cost) and cost < p.max_link_cost:
                     candidates[(left.index, right.index)] = cost
     return candidates
@@ -384,13 +515,18 @@ def _solve_link_component(
     return links
 
 
-def _link_cost(left: _Tracklet, right: _Tracklet, p: GraphParameters) -> float:
+def _link_cost(
+    left: _Tracklet,
+    right: _Tracklet,
+    p: GraphParameters,
+    common_motion: dict[int, tuple[float, float]],
+) -> float:
     if left.index == right.index or left.end >= right.start:
         return math.inf
     gap = right.start - left.end - 1
     if gap > p.max_link_gap:
         return math.inf
-    predicted = _predict(left.rows, right.start)
+    predicted = _predict(left.rows, right.start, common_motion)
     first = right.rows[0]
     scale = _scale(predicted, first)
     center = math.hypot(
@@ -407,27 +543,50 @@ def _link_cost(left: _Tracklet, right: _Tracklet, p: GraphParameters) -> float:
         motion
         + p.size_weight * size
         + p.iou_weight * (1.0 - box_iou(predicted, first))
-        + p.velocity_weight * _velocity_cost(left.rows, right.rows, scale)
+        + p.velocity_weight
+        * _velocity_cost(left.rows, right.rows, scale, common_motion)
         + p.confidence_weight * (1.0 - first.confidence)
     )
 
 
-def _predict(rows: tuple[Detection, ...], frame: int) -> Detection:
+def _predict(
+    rows: tuple[Detection, ...],
+    frame: int,
+    common_motion: dict[int, tuple[float, float]],
+) -> Detection:
     last = rows[-1]
-    if len(rows) < 2 or frame <= last.frame_id:
+    if frame <= last.frame_id:
         return replace(last, frame_id=frame)
+    common_dx, common_dy = _motion_between(
+        common_motion, last.frame_id, frame
+    )
+    if len(rows) < 2:
+        return _translate(last, common_dx, common_dy, frame)
     previous = rows[-2]
     history = last.frame_id - previous.frame_id
     if history <= 0:
-        return replace(last, frame_id=frame)
+        return _translate(last, common_dx, common_dy, frame)
+    previous_common_dx, previous_common_dy = _motion_between(
+        common_motion, previous.frame_id, last.frame_id
+    )
     delta = frame - last.frame_id
-    vx = (last.center_x - previous.center_x) / history
-    vy = (last.center_y - previous.center_y) / history
+    residual_vx = (
+        last.center_x - previous.center_x - previous_common_dx
+    ) / history
+    residual_vy = (
+        last.center_y - previous.center_y - previous_common_dy
+    ) / history
     return replace(
         last,
         frame_id=frame,
-        x1=last.center_x + vx * delta - 0.5 * last.width,
-        y1=last.center_y + vy * delta - 0.5 * last.height,
+        x1=last.center_x
+        + common_dx
+        + residual_vx * delta
+        - 0.5 * last.width,
+        y1=last.center_y
+        + common_dy
+        + residual_vy * delta
+        - 0.5 * last.height,
     )
 
 
@@ -435,9 +594,10 @@ def _velocity_cost(
     left: tuple[Detection, ...],
     right: tuple[Detection, ...],
     scale: float,
+    common_motion: dict[int, tuple[float, float]],
 ) -> float:
-    a = _velocity(left, tail=True)
-    b = _velocity(right, tail=False)
+    a = _velocity(left, tail=True, common_motion=common_motion)
+    b = _velocity(right, tail=False, common_motion=common_motion)
     if a is None or b is None:
         return 0.0
     return math.hypot(a[0] - b[0], a[1] - b[1]) / scale
@@ -447,6 +607,7 @@ def _velocity(
     rows: tuple[Detection, ...],
     *,
     tail: bool,
+    common_motion: dict[int, tuple[float, float]],
 ) -> tuple[float, float] | None:
     if len(rows) < 2:
         return None
@@ -454,9 +615,12 @@ def _velocity(
     delta = right.frame_id - left.frame_id
     if delta <= 0:
         return None
+    common_dx, common_dy = _motion_between(
+        common_motion, left.frame_id, right.frame_id
+    )
     return (
-        (right.center_x - left.center_x) / delta,
-        (right.center_y - left.center_y) / delta,
+        (right.center_x - left.center_x - common_dx) / delta,
+        (right.center_y - left.center_y - common_dy) / delta,
     )
 
 
@@ -485,6 +649,38 @@ def _near_border(
     )
 
 
+def _border_distance(row: Detection, width: float, height: float) -> float:
+    return max(
+        0.0,
+        min(
+            row.center_x,
+            row.center_y,
+            width - row.center_x,
+            height - row.center_y,
+        ),
+    )
+
+
+def _is_border_entry(
+    rows: tuple[Detection, ...],
+    p: GraphParameters,
+) -> bool:
+    if p.image_width is None or p.image_height is None or len(rows) < 2:
+        return False
+    margin_x = p.image_width * p.border_margin_fraction
+    margin_y = p.image_height * p.border_margin_fraction
+    first = rows[0]
+    if not _near_border(first, p.image_width, p.image_height, margin_x, margin_y):
+        return False
+    early = rows[: min(len(rows), 4)]
+    initial_distance = _border_distance(first, p.image_width, p.image_height)
+    inward_distance = max(
+        _border_distance(row, p.image_width, p.image_height) for row in early[1:]
+    ) - initial_distance
+    reference = early[-1]
+    return inward_distance / _scale(first, reference) >= p.birth_min_inward_motion
+
+
 def _paths(
     tracklets: tuple[_Tracklet, ...],
     links: dict[int, int],
@@ -508,16 +704,50 @@ def _paths(
     return tuple(result)
 
 
+def _interpolate_rows(
+    rows: tuple[Detection, ...],
+    max_gap: int,
+) -> tuple[tuple[Detection, ...], int]:
+    if max_gap <= 0 or len(rows) < 2:
+        return rows, 0
+    output: list[Detection] = []
+    inserted = 0
+    for left, right in zip(rows, rows[1:], strict=False):
+        output.append(left)
+        missing = right.frame_id - left.frame_id - 1
+        if missing <= 0 or missing > max_gap:
+            continue
+        denominator = missing + 1
+        for step in range(1, denominator):
+            fraction = step / denominator
+            output.append(
+                replace(
+                    left,
+                    frame_id=left.frame_id + step,
+                    x1=left.x1 + fraction * (right.x1 - left.x1),
+                    y1=left.y1 + fraction * (right.y1 - left.y1),
+                    width=left.width + fraction * (right.width - left.width),
+                    height=left.height + fraction * (right.height - left.height),
+                    confidence=min(left.confidence, right.confidence),
+                    visibility=min(left.visibility, right.visibility),
+                )
+            )
+            inserted += 1
+    output.append(rows[-1])
+    return tuple(output), inserted
+
+
 def _materialize(
     paths: tuple[tuple[_Tracklet, ...], ...],
     seeds: tuple[Detection, ...],
     p: GraphParameters,
-) -> tuple[tuple[Detection, ...], int, int, int]:
+) -> tuple[tuple[Detection, ...], int, int, int, int]:
     seeded: list[tuple[int, tuple[Detection, ...]]] = []
     births: list[tuple[tuple[Detection, ...], tuple[float, ...]]] = []
     dropped = 0
+    interpolated = 0
     for path in paths:
-        rows = tuple(
+        observed_rows = tuple(
             sorted(
                 (row for tracklet in path for row in tracklet.rows),
                 key=lambda row: row.frame_id,
@@ -527,19 +757,31 @@ def _materialize(
         if len(seed_ids) > 1:
             raise RuntimeError("proposal graph joined two seeded identities")
         if seed_ids:
+            rows, inserted = _interpolate_rows(
+                observed_rows, p.interpolate_max_gap
+            )
+            interpolated += inserted
             seeded.append((next(iter(seed_ids)), rows))
             continue
-        span = rows[-1].frame_id - rows[0].frame_id
-        mean_confidence = float(np.mean([row.confidence for row in rows]))
+        span = observed_rows[-1].frame_id - observed_rows[0].frame_id
+        mean_confidence = float(np.mean([row.confidence for row in observed_rows]))
+        border_ok = not p.birth_require_border_entry or _is_border_entry(
+            observed_rows, p
+        )
         if (
-            len(rows) >= p.birth_min_hits
+            len(observed_rows) >= p.birth_min_hits
             and span >= p.birth_min_span
             and mean_confidence >= p.birth_min_mean_confidence
+            and border_ok
         ):
+            rows, inserted = _interpolate_rows(
+                observed_rows, p.interpolate_max_gap
+            )
+            interpolated += inserted
             key = (
-                float(rows[0].frame_id),
-                rows[0].center_x,
-                rows[0].center_y,
+                float(observed_rows[0].frame_id),
+                observed_rows[0].center_x,
+                observed_rows[0].center_y,
                 -mean_confidence,
             )
             births.append((rows, key))
@@ -553,4 +795,4 @@ def _materialize(
         output.extend(replace(row, object_id=next_id) for row in rows)
         next_id += 1
     output.sort(key=lambda row: (row.frame_id, row.object_id))
-    return tuple(output), len(seeded), len(births), dropped
+    return tuple(output), len(seeded), len(births), dropped, interpolated
