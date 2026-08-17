@@ -76,6 +76,39 @@ IMPROVED_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "0.0",
         ),
     ),
+    (
+        "graph_seed_calibrated",
+        (
+            "--enable-seed-calibration",
+            "--seed-calibration-min-pairs",
+            "2",
+        ),
+    ),
+    (
+        "graph_seed_calibrated_common_motion",
+        (
+            "--enable-seed-calibration",
+            "--seed-calibration-min-pairs",
+            "2",
+            "--enable-common-motion",
+            "--common-motion-min-pairs",
+            "4",
+            "--common-motion-max-normalized-step",
+            "8.0",
+            "--common-motion-max-normalized-residual",
+            "1.5",
+        ),
+    ),
+    (
+        "graph_seed_calibrated_interpolate",
+        (
+            "--enable-seed-calibration",
+            "--seed-calibration-min-pairs",
+            "2",
+            "--interpolate-max-gap",
+            "1",
+        ),
+    ),
 )
 
 _JPEG_SOF_MARKERS = frozenset(
@@ -287,7 +320,7 @@ def _run_candidates_with_native_dimensions(
                 [
                     sys.executable,
                     "-m",
-                    "raft_uav.multi_uav_lts.proposal_graph_tracker",
+                    "raft_uav.multi_uav_lts.experimental_proposal_graph_tracker",
                     proposal_dir,
                     "--first-frame-label-dir",
                     seed_dir,
