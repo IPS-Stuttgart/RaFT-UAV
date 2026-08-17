@@ -9,7 +9,7 @@ fi
 venv_path="$1"
 asset_dir="$2"
 provenance_json="$3"
-runtime_id="py311-torch222-cu118-flash273-v3"
+runtime_id="py311-torch222-cu118-flash273-v4"
 marker="${venv_path}/.raft-uav-${runtime_id}"
 
 mkdir -p "${asset_dir}" "$(dirname "${provenance_json}")"
@@ -160,11 +160,12 @@ if [[ -x "${venv_path}/bin/python" ]] && [[ -f "${marker}" ]]; then
   if runtime_library_path="$(find_runtime_library_path "${py}")"; then
     export LD_LIBRARY_PATH="${runtime_library_path}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
     if "${py}" - <<'PY'
-import torch
 import cv2
 import flash_attn
 import lap
 import motmetrics
+import seaborn
+import torch
 
 assert torch.__version__.split("+")[0] == "2.2.2"
 assert torch.version.cuda == "11.8"
@@ -173,6 +174,7 @@ assert cv2.__version__ == "4.9.0"
 assert getattr(flash_attn, "__version__", "") == "2.7.3"
 assert lap.__version__ == "0.5.12"
 assert motmetrics.__version__ == "1.4.0"
+assert seaborn.__version__ == "0.13.2"
 PY
     then
       runtime_valid=true
@@ -204,6 +206,7 @@ if [[ "${runtime_valid}" != "true" ]]; then
     "scipy==1.13.0" \
     "scikit-learn==1.5.2" \
     "matplotlib==3.9.2" \
+    "seaborn==0.13.2" \
     "timm==1.0.14" \
     "albumentations==2.0.4" \
     "pycocotools==2.0.7" \
@@ -238,6 +241,68 @@ if [[ -n "${GITHUB_ENV:-}" ]]; then
   printf 'LD_LIBRARY_PATH=%s\n' "${LD_LIBRARY_PATH}" >> "${GITHUB_ENV}"
 fi
 
+work_root="$(cd "$(dirname "${venv_path}")/../.." && pwd)"
+upstream_inference="${work_root}/repos/YOLOv12-BoT-SORT-ReID/BoT-SORT/tools/inference.py"
+"${py}" - "${upstream_inference}" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+old = '''from huggingface_hub import hf_hub_download
+import shutil
+
+# Define your target directory
+target_dir = "logs/sbs_S50"
+os.makedirs(target_dir, exist_ok=True)  # Make sure the directory exists
+
+# List of files to download
+files_to_download = ["model_0016.pth", "config.yaml"]
+
+# Download each file and move it to the target directory
+for filename in files_to_download:
+    downloaded_path = hf_hub_download(
+        repo_id="wish44165/YOLOv12-BoT-SORT-ReID",
+        filename=filename
+    )
+    shutil.copy(downloaded_path, os.path.join(target_dir, filename))
+
+print(f"Downloaded files are saved to: {target_dir}")
+'''
+new = '''from huggingface_hub import hf_hub_download
+import shutil
+
+# RaFT-UAV evidence runs provide checksum-verified assets at these paths. Keep
+# the pinned revision as a deterministic fallback rather than downloading the
+# mutable default branch on every inference process.
+target_dir = "logs/sbs_S50"
+os.makedirs(target_dir, exist_ok=True)
+files_to_download = ["model_0016.pth", "config.yaml"]
+for filename in files_to_download:
+    destination = os.path.join(target_dir, filename)
+    if not os.path.isfile(destination):
+        downloaded_path = hf_hub_download(
+            repo_id="wish44165/YOLOv12-BoT-SORT-ReID",
+            filename=filename,
+            revision="e677d81dac9909ddeabb6bc70ded5510ff4872aa",
+        )
+        shutil.copy2(downloaded_path, destination)
+
+print(f"Using ReID assets from: {target_dir}")
+'''
+marker = "# RaFT-UAV evidence runs provide checksum-verified assets"
+if marker not in source:
+    if source.count(old) != 1:
+        raise SystemExit("upstream ReID download block did not match the pinned source")
+    source = source.replace(old, new)
+    path.write_text(source, encoding="utf-8")
+if marker not in path.read_text(encoding="utf-8"):
+    raise SystemExit("upstream ReID download block was not patched")
+PY
+upstream_inference_sha256="$(sha256sum "${upstream_inference}" | awk '{print $1}')"
+
 flash_extension="$(${py} - <<'PY'
 import importlib.util
 
@@ -258,11 +323,12 @@ fi
 "${py}" - <<'PY'
 import json
 
-import torch
 import cv2
 import flash_attn
 import lap
 import motmetrics
+import seaborn
+import torch
 
 if torch.version.cuda != "11.8":
     raise SystemExit(f"torch CUDA runtime is {torch.version.cuda!r}, expected '11.8'")
@@ -278,6 +344,7 @@ print(
             "flash_attn": getattr(flash_attn, "__version__", "unknown"),
             "lap": getattr(lap, "__version__", "unknown"),
             "motmetrics": getattr(motmetrics, "__version__", "unknown"),
+            "seaborn": seaborn.__version__,
         },
         indent=2,
         sort_keys=True,
@@ -293,7 +360,9 @@ PY
   "${flash_wheel}" \
   "${flash_sha256}" \
   "${runtime_library_path}" \
-  "${ldd_output}" <<'PY'
+  "${ldd_output}" \
+  "${upstream_inference}" \
+  "${upstream_inference_sha256}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -309,11 +378,13 @@ from pathlib import Path
     wheel_sha256,
     runtime_library_path,
     ldd_output,
+    upstream_inference,
+    upstream_inference_sha256,
 ) = sys.argv[1:]
 metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
 freeze_path = Path(output_path).parent / "pip-freeze.txt"
 payload = {
-    "schema": "raft-uav-multi-uav-lts-runtime-v3",
+    "schema": "raft-uav-multi-uav-lts-runtime-v4",
     "runtime_id": runtime_id,
     "python": sys.version,
     "python_executable": sys.executable,
@@ -323,6 +394,8 @@ payload = {
     ).strip(),
     "runtime_library_path": runtime_library_path,
     "flash_attention_ldd_path": ldd_output,
+    "upstream_inference_path": upstream_inference,
+    "upstream_inference_sha256": upstream_inference_sha256,
     "flash_attention": {
         "asset_id": metadata["id"],
         "asset_name": metadata["name"],
