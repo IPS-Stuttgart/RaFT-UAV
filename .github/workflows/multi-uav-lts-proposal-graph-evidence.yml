@@ -8,6 +8,7 @@ name: Multi-UAV LTS proposal graph evidence
       - ".github/workflows/multi-uav-lts-proposal-graph-evidence.yml"
       - "scripts/bootstrap_multi_uav_lts_public_evidence.py"
       - "scripts/install_multi_uav_lts_public_runtime.sh"
+      - "scripts/install_multi_uav_lts_runtime_extras.sh"
       - "scripts/run_multi_uav_lts_public_evidence.py"
       - "scripts/run_multi_uav_lts_improved_evidence.py"
       - "scripts/run_multi_uav_lts_official_baseline.py"
@@ -84,6 +85,7 @@ jobs:
             scripts/run_multi_uav_lts_public_evidence.py \
             scripts/run_multi_uav_lts_improved_evidence.py
           bash -n scripts/install_multi_uav_lts_public_runtime.sh
+          bash -n scripts/install_multi_uav_lts_runtime_extras.sh
           python scripts/bootstrap_multi_uav_lts_public_evidence.py --help >/dev/null
           python scripts/run_multi_uav_lts_improved_evidence.py --help >/dev/null
           python -m ruff check \
@@ -260,6 +262,10 @@ jobs:
             "${ASSET_DIR}" \
             "${RUN_DIR}/runtime-provenance.json" \
             | tee "${RUN_DIR}/runtime-install-console.txt"
+          bash scripts/install_multi_uav_lts_runtime_extras.sh \
+            "${VENV_PATH}" \
+            "${RUN_DIR}/runtime-provenance.json" \
+            | tee -a "${RUN_DIR}/runtime-install-console.txt"
 
       - name: Regenerate and score complete evidence
         shell: bash
