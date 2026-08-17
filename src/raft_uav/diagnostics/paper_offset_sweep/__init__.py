@@ -25,7 +25,7 @@ _LEGACY_RUN_OFFSET_SWEEP = _IMPL.run_offset_sweep
 
 
 def _parse_grid(spec: str) -> np.ndarray:
-    """Parse a finite START,STOP,STEP offset grid."""
+    """Parse a finite inclusive START,STOP,STEP grid without exceeding STOP."""
 
     raw_parts = str(spec).split(",")
     if len(raw_parts) != 3:
@@ -36,7 +36,27 @@ def _parse_grid(spec: str) -> np.ndarray:
         raise ValueError("grid START, STOP, and STEP must be numeric") from exc
     if not bool(np.isfinite(parts).all()):
         raise ValueError("grid START, STOP, and STEP must be finite")
-    return _LEGACY_PARSE_GRID(spec)
+
+    start, stop, step = (float(value) for value in parts)
+    if step <= 0.0:
+        raise ValueError("grid STEP must be positive")
+    if stop < start:
+        raise ValueError("grid STOP must be >= START")
+
+    ratio = (stop - start) / step
+    ratio_tolerance = np.finfo(float).eps * max(1.0, abs(ratio)) * 8.0
+    max_index = int(np.floor(ratio + ratio_tolerance))
+    grid = start + step * np.arange(max_index + 1, dtype=float)
+
+    endpoint_tolerance = (
+        np.finfo(float).eps
+        * max(1.0, abs(start), abs(stop), abs(float(grid[-1])))
+        * 8.0
+    )
+    grid = grid[grid <= stop + endpoint_tolerance]
+    if grid.size and abs(float(grid[-1]) - stop) <= endpoint_tolerance:
+        grid[-1] = stop
+    return grid
 
 
 _IMPL._parse_grid = _parse_grid
