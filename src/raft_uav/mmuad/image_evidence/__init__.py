@@ -33,7 +33,7 @@ _ORIGINAL_SAMPLE_NEAREST_IMAGE_ROWS = _IMPL._sample_nearest_image_rows
 
 
 def _scalar_item(value: Any, *, name: str, contract: str) -> Any:
-    """Return one scalar item or raise a field-specific validation error."""
+    """Return one non-Boolean scalar item or raise a field-specific error."""
 
     if isinstance(value, (bool, np.bool_)):
         raise ValueError(f"{name} must be {contract}")
@@ -43,7 +43,10 @@ def _scalar_item(value: Any, *, name: str, contract: str) -> Any:
         raise ValueError(f"{name} must be {contract}") from exc
     if array.ndim != 0:
         raise ValueError(f"{name} must be {contract}")
-    return array.item()
+    item = array.item()
+    if isinstance(item, (bool, np.bool_)):
+        raise ValueError(f"{name} must be {contract}")
+    return item
 
 
 def _normalize_max_frames(value: Any, *, name: str) -> int:
