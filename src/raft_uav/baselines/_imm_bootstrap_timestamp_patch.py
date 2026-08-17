@@ -30,11 +30,16 @@ def _is_bootstrap_measurement(self: Any, measurement: Any) -> bool:
 
 
 def install() -> None:
-    """Install strict IMM bootstrap timestamp matching once."""
+    """Install strict IMM bootstrap matching and provenance checks once."""
 
-    if getattr(_imm, "_imm_bootstrap_timestamp_patch_applied", False):
-        return
-    _imm.AsyncInteractingMultipleModelTracker._is_bootstrap_measurement = (
-        _is_bootstrap_measurement
+    if not getattr(_imm, "_imm_bootstrap_timestamp_patch_applied", False):
+        _imm.AsyncInteractingMultipleModelTracker._is_bootstrap_measurement = (
+            _is_bootstrap_measurement
+        )
+        _imm._imm_bootstrap_timestamp_patch_applied = True
+
+    from raft_uav.baselines._bootstrap_measurement_provenance_patch import (
+        install as install_provenance,
     )
-    _imm._imm_bootstrap_timestamp_patch_applied = True
+
+    install_provenance()
