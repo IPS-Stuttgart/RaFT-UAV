@@ -3,8 +3,9 @@
 The maintained implementation lives in the sibling ``candidate_mixture_map.py``
 module. This package keeps the public import path while preserving opaque IDs in
 CSV inputs, retaining complete candidate frames when target-template times fall
-outside the configured matching tolerance, validating numerical controls, and
-delegating Gaussian-mixture factor calculations to PyRecEst.
+outside the configured matching tolerance, producing finite velocities for
+repeated target timestamps, validating numerical controls, and delegating
+Gaussian-mixture factor calculations to PyRecEst.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_VALIDATE_CONFIG = _IMPL._validate_config
+_ORIGINAL_TRAJECTORY_VELOCITY = _IMPL._trajectory_velocity
 
 
 class _PandasCsvProxy:
@@ -174,9 +176,35 @@ def _target_time_candidate_groups(
     return groups
 
 
+def _trajectory_velocity(times: np.ndarray, state: np.ndarray) -> np.ndarray:
+    """Differentiate trajectories without zero-spacing failures at repeated times."""
+
+    time_values = np.asarray(times, dtype=float)
+    state_values = np.asarray(state, dtype=float)
+    if len(time_values) <= 1:
+        return np.zeros_like(state_values)
+
+    unique_times, inverse = np.unique(time_values, return_inverse=True)
+    if len(unique_times) == len(time_values):
+        return _ORIGINAL_TRAJECTORY_VELOCITY(time_values, state_values)
+
+    # A submission template may legitimately contain the same timestamp more
+    # than once. np.gradient divides by the timestamp spacing, so differentiating
+    # those rows directly yields NaN/inf. Average co-temporal states, compute the
+    # derivative on strictly increasing unique times, then give every repeated
+    # output row the velocity at its shared timestamp.
+    unique_state = np.zeros((len(unique_times), state_values.shape[1]), dtype=float)
+    np.add.at(unique_state, inverse, state_values)
+    counts = np.bincount(inverse, minlength=len(unique_times)).astype(float)
+    unique_state /= counts[:, None]
+    unique_velocity = _ORIGINAL_TRAJECTORY_VELOCITY(unique_times, unique_state)
+    return unique_velocity[inverse]
+
+
 _IMPL.pd = _PandasCsvProxy(pd)
 _IMPL._validate_config = _validate_config
 _IMPL._target_time_candidate_groups = _target_time_candidate_groups
+_IMPL._trajectory_velocity = _trajectory_velocity
 _IMPL._mixture_response = build_pyrecest_mixture_response(
     apply_label_balance=_IMPL._apply_label_balance,
     normalize_probability=_IMPL._normalize_probability,
@@ -193,6 +221,7 @@ globals()["_finite_scalar"] = _finite_scalar
 globals()["_integer_scalar"] = _integer_scalar
 globals()["_validate_config"] = _validate_config
 globals()["_target_time_candidate_groups"] = _target_time_candidate_groups
+globals()["_trajectory_velocity"] = _trajectory_velocity
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]
