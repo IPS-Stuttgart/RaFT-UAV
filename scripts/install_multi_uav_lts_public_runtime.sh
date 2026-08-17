@@ -9,7 +9,7 @@ fi
 venv_path="$1"
 asset_dir="$2"
 provenance_json="$3"
-runtime_id="py311-torch222-cu121-flash273-v1"
+runtime_id="py311-torch222-cu118-flash273-v2"
 marker="${venv_path}/.raft-uav-${runtime_id}"
 
 mkdir -p "${asset_dir}" "$(dirname "${provenance_json}")"
@@ -108,24 +108,57 @@ if [[ ! -f "${flash_wheel}" ]]; then
 fi
 flash_sha256="$(sha256sum "${flash_wheel}" | awk '{print $1}')"
 
+find_cuda11_runtime_lib() {
+  local py="$1"
+  "${py}" - <<'PY'
+from __future__ import annotations
+
+import site
+from pathlib import Path
+
+candidates: list[Path] = []
+for root_text in site.getsitepackages():
+    root = Path(root_text)
+    candidates.extend(
+        (
+            root / "nvidia" / "cuda_runtime" / "lib",
+            root / "nvidia" / "cuda_runtime" / "lib64",
+        )
+    )
+for candidate in candidates:
+    if (candidate / "libcudart.so.11.0").is_file():
+        print(candidate)
+        break
+else:
+    rendered = ", ".join(str(candidate) for candidate in candidates)
+    raise SystemExit(f"libcudart.so.11.0 not found under: {rendered}")
+PY
+}
+
 runtime_valid=false
+cuda_runtime_lib=""
 if [[ -x "${venv_path}/bin/python" ]] && [[ -f "${marker}" ]]; then
-  if "${venv_path}/bin/python" - <<'PY'
+  py="${venv_path}/bin/python"
+  if cuda_runtime_lib="$(find_cuda11_runtime_lib "${py}")"; then
+    export LD_LIBRARY_PATH="${cuda_runtime_lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+    if "${py}" - <<'PY'
+import torch
 import cv2
 import flash_attn
 import lap
 import motmetrics
-import torch
 
 assert torch.__version__.split("+")[0] == "2.2.2"
+assert torch.version.cuda == "11.8"
 assert torch.cuda.is_available()
 assert cv2.__version__ == "4.9.0"
 assert getattr(flash_attn, "__version__", "") == "2.7.3"
 assert lap.__version__ == "0.5.12"
 assert motmetrics.__version__ == "1.4.0"
 PY
-  then
-    runtime_valid=true
+    then
+      runtime_valid=true
+    fi
   fi
 fi
 
@@ -140,10 +173,12 @@ if [[ "${runtime_valid}" != "true" ]]; then
     "packaging==24.2" \
     "ninja==1.11.1.3"
   "${py}" -m pip install \
-    --index-url https://download.pytorch.org/whl/cu121 \
+    --index-url https://download.pytorch.org/whl/cu118 \
     "torch==2.2.2" \
     "torchvision==0.17.2"
-  "${py}" -m pip install "${flash_wheel}"
+  "${py}" -m pip install \
+    "nvidia-cuda-runtime-cu11==11.8.89" \
+    "${flash_wheel}"
   "${py}" -m pip install \
     "numpy==1.26.4" \
     "pandas==2.2.3" \
@@ -179,16 +214,40 @@ if [[ "${runtime_valid}" != "true" ]]; then
 fi
 
 py="${venv_path}/bin/python"
+cuda_runtime_lib="$(find_cuda11_runtime_lib "${py}")"
+export LD_LIBRARY_PATH="${cuda_runtime_lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  printf 'LD_LIBRARY_PATH=%s\n' "${LD_LIBRARY_PATH}" >> "${GITHUB_ENV}"
+fi
+
+flash_extension="$(${py} - <<'PY'
+import importlib.util
+
+spec = importlib.util.find_spec("flash_attn_2_cuda")
+if spec is None or spec.origin is None:
+    raise SystemExit("flash_attn_2_cuda extension could not be located")
+print(spec.origin)
+PY
+)"
+ldd_output="$(dirname "${provenance_json}")/flash-attention-ldd.txt"
+ldd "${flash_extension}" | tee "${ldd_output}"
+if grep -q 'not found' "${ldd_output}"; then
+  echo "FlashAttention still has unresolved shared libraries." >&2
+  exit 1
+fi
+
 "${py}" -m pip install -e . --no-deps
 "${py}" - <<'PY'
 import json
 
+import torch
 import cv2
 import flash_attn
 import lap
 import motmetrics
-import torch
 
+if torch.version.cuda != "11.8":
+    raise SystemExit(f"torch CUDA runtime is {torch.version.cuda!r}, expected '11.8'")
 if not torch.cuda.is_available():
     raise SystemExit("CUDA is unavailable in the pinned evidence environment")
 print(
@@ -214,7 +273,9 @@ PY
   "${provenance_json}" \
   "${runtime_id}" \
   "${flash_wheel}" \
-  "${flash_sha256}" <<'PY'
+  "${flash_sha256}" \
+  "${cuda_runtime_lib}" \
+  "${ldd_output}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -222,11 +283,19 @@ import subprocess
 import sys
 from pathlib import Path
 
-metadata_path, output_path, runtime_id, wheel_path, wheel_sha256 = sys.argv[1:]
+(
+    metadata_path,
+    output_path,
+    runtime_id,
+    wheel_path,
+    wheel_sha256,
+    cuda_runtime_lib,
+    ldd_output,
+) = sys.argv[1:]
 metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
 freeze_path = Path(output_path).parent / "pip-freeze.txt"
 payload = {
-    "schema": "raft-uav-multi-uav-lts-runtime-v1",
+    "schema": "raft-uav-multi-uav-lts-runtime-v2",
     "runtime_id": runtime_id,
     "python": sys.version,
     "python_executable": sys.executable,
@@ -234,6 +303,8 @@ payload = {
     "git_commit": subprocess.check_output(
         ["git", "rev-parse", "HEAD"], text=True
     ).strip(),
+    "cuda_runtime_library_path": cuda_runtime_lib,
+    "flash_attention_ldd_path": ldd_output,
     "flash_attention": {
         "asset_id": metadata["id"],
         "asset_name": metadata["name"],
