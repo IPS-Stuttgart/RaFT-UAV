@@ -23,7 +23,6 @@ _ORIGINAL_UPDATE = _kalman.AsyncConstantVelocityKalmanTracker.update
 _ORIGINAL_IMM_TRACKER_INIT = _imm.AsyncInteractingMultipleModelTracker.__init__
 _ORIGINAL_IMM_PREDICT_TO = _imm.AsyncInteractingMultipleModelTracker.predict_to
 _ORIGINAL_IMM_UPDATE = _imm.AsyncInteractingMultipleModelTracker.update
-_ORIGINAL_UNIFORM_CTMC_TRANSITION_MATRIX = _imm.uniform_ctmc_transition_matrix
 
 
 def _finite_timestamp_seconds(value: Any, *, field_name: str) -> float:
@@ -286,25 +285,6 @@ def _imm_predict_to(self: Any, time_s: float) -> None:
     _ORIGINAL_IMM_PREDICT_TO(self, validated_time_s)
 
 
-def _uniform_ctmc_transition_matrix(
-    n_modes: int,
-    dt_s: float,
-    mode_switch_time_constant_s: float,
-) -> np.ndarray:
-    """Reject non-finite transition times before IMM matrix construction."""
-
-    validated_dt_s = _finite_timestamp_seconds(dt_s, field_name="dt_s")
-    validated_mode_switch_time_constant_s = _finite_positive_seconds(
-        mode_switch_time_constant_s,
-        field_name="mode_switch_time_constant_s",
-    )
-    return _ORIGINAL_UNIFORM_CTMC_TRANSITION_MATRIX(
-        n_modes,
-        dt_s=validated_dt_s,
-        mode_switch_time_constant_s=validated_mode_switch_time_constant_s,
-    )
-
-
 def apply_kalman_timestamp_validation_patch() -> None:
     """Install scalar validation at public asynchronous tracker boundaries."""
 
@@ -327,5 +307,4 @@ def apply_kalman_timestamp_validation_patch() -> None:
         _imm.AsyncInteractingMultipleModelTracker.update = _chronology_safe_update(
             _ORIGINAL_IMM_UPDATE
         )
-        _imm.uniform_ctmc_transition_matrix = _uniform_ctmc_transition_matrix
         _imm._timestamp_validation_patch_applied = True
