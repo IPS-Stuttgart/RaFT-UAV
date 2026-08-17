@@ -31,7 +31,11 @@ def _finite_timestamp_seconds(value: Any, *, field_name: str) -> float:
         scalar = np.asarray(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(error) from exc
-    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+    if (
+        scalar.ndim != 0
+        or np.iscomplexobj(scalar)
+        or _boolean_scalar_hidden_in_arrays(scalar)
+    ):
         raise ValueError(error)
     try:
         timestamp_s = float(scalar.item())
@@ -52,7 +56,7 @@ def _finite_nonnegative_scale(value: Any, *, field_name: str) -> float:
         scalar = np.asarray(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(error) from exc
-    if scalar.ndim != 0:
+    if scalar.ndim != 0 or _boolean_scalar_hidden_in_arrays(scalar):
         raise ValueError(error)
     try:
         scale = float(scalar.item())
