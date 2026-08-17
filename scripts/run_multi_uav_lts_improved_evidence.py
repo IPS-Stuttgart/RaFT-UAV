@@ -78,12 +78,13 @@ def _proposal_source_cache_key(
 ) -> str:
     """Hash detector-generation inputs without invalidating on graph-only edits."""
     settings = {
-        "schema": "raft-uav-multi-uav-lts-proposal-source-key-v2",
+        "schema": "raft-uav-multi-uav-lts-proposal-source-key-v3",
         "upstream_revision": payload["upstream"]["revision"],
         "archive_md5": payload["dataset"]["archive_md5"],
         "detector_sha256": validated["detector_sha256"],
         "reid_model_sha256": validated["reid_model_sha256"],
         "cython_bbox_version": "0.1.5",
+        "faiss_cpu_version": "1.8.0.post1",
         "expected_sequences": expected_sequences,
         "expected_frames": expected_frames,
         "device": device,
