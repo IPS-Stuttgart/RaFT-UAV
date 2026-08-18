@@ -13,7 +13,7 @@ _PATCH_MARKER = "_raft_uav_imm_cli_numeric_validation_patch_applied"
 _ORIGINAL_RUN_EXPERIMENT: Callable[..., int] = _imm_cli.run_experiment
 
 
-def _require_finite(value: object, *, name: str, message: str) -> None:
+def _require_finite(value: object, *, message: str) -> None:
     """Reject scalar values that coerce to NaN or infinity.
 
     Non-numeric payloads are intentionally left to the maintained implementation
@@ -34,23 +34,19 @@ def _run_experiment(*args: Any, **kwargs: Any) -> int:
 
     _require_finite(
         kwargs.get("imm_mode_switch_time_constant", 20.0),
-        name="imm_mode_switch_time_constant",
         message="imm_mode_switch_time_constant must be positive and finite",
     )
     if kwargs.get("smoother", "none") in {"fixed-lag", "fixed-lag-map"}:
         _require_finite(
             kwargs.get("smoother_lag_s", 20.0),
-            name="smoother_lag_s",
             message="smoother_lag_s must be nonnegative and finite for fixed-lag smoothing",
         )
     _require_finite(
         kwargs.get("rf_inflation_alpha", 1.0),
-        name="rf_inflation_alpha",
         message="inflation alphas must be positive and finite",
     )
     _require_finite(
         kwargs.get("radar_inflation_alpha", 1.0),
-        name="radar_inflation_alpha",
         message="inflation alphas must be positive and finite",
     )
     return _ORIGINAL_RUN_EXPERIMENT(*args, **kwargs)
