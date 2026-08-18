@@ -87,8 +87,12 @@ def _canonical_scope_id(value: object, *, field: str) -> str | None:
     return None if text.casefold() in _MISSING_SCOPE_TEXT else text
 
 
-def _final_truth_snapshots(truth: pd.DataFrame) -> pd.DataFrame:
-    """Return the final finite truth row for each physical-flight timestamp."""
+def _final_truth_snapshots(
+    truth: pd.DataFrame,
+    *,
+    scope_by_flight: bool = False,
+) -> pd.DataFrame:
+    """Return the final finite truth row for each applicable scope timestamp."""
 
     rows = pd.DataFrame(truth).copy()
     order_column = "__raft_uav_truth_input_order__"
@@ -99,7 +103,7 @@ def _final_truth_snapshots(truth: pd.DataFrame) -> pd.DataFrame:
     if normalized.empty:
         return normalized.drop(columns=[order_column], errors="ignore")
     identity_columns = ["sequence_id", "time_s"]
-    if "flight_id" in normalized.columns:
+    if scope_by_flight and "flight_id" in normalized.columns:
         identity_columns.insert(1, "flight_id")
     return (
         normalized.sort_values(
@@ -204,9 +208,17 @@ def build_candidate_assignment_diagnostics(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Build diagnostics within each physical-flight scope when available."""
 
-    truth_rows = _final_truth_snapshots(truth)
+    assignment_rows = pd.DataFrame(assignments).copy()
+    raw_truth = pd.DataFrame(truth).copy()
+    scope_by_flight = (
+        "flight_id" in assignment_rows.columns and "flight_id" in raw_truth.columns
+    )
+    truth_rows = _final_truth_snapshots(
+        raw_truth,
+        scope_by_flight=scope_by_flight,
+    )
     scoped_assignments, scoped_truth, metadata = _scope_rows_by_flight(
-        assignments,
+        assignment_rows,
         truth_rows,
     )
     frames, summary = _ORIGINAL_BUILD_CANDIDATE_ASSIGNMENT_DIAGNOSTICS(
