@@ -52,6 +52,9 @@ env:
 jobs:
   evidence:
     name: Guarded 102-sequence HOTA tube tournament
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, nvidia-smi]
     timeout-minutes: 180
 
