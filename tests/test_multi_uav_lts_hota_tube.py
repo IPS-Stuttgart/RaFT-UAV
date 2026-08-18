@@ -195,6 +195,21 @@ def test_reads_a_root_level_prediction_zip(tmp_path: Path) -> None:
     assert len(read_rows(output / "SEQ.txt")) == 3
 
 
+def test_empty_prediction_input_does_not_delete_existing_output(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    existing = row(1, 9, 12.0)
+    write_rows(output / "existing.txt", [existing])
+
+    with pytest.raises(ValueError, match="contains no .txt files"):
+        apply_hota_tube(source, output)
+
+    assert read_rows(output / "existing.txt") == [existing]
+
+
 def test_subset_mode_rejects_unknown_sequences(tmp_path: Path) -> None:
     source = tmp_path / "source"
     write_rows(source / "SEQ.txt", [row(1, 1, 0.0), row(2, 1, 1.0)])

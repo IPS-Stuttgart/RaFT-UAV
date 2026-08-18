@@ -95,6 +95,8 @@ def apply_hota_tube(
     output_dir = output_dir.expanduser().resolve()
     _guard_paths(prediction_path, output_dir)
     texts = prediction_texts(prediction_path)
+    if not texts:
+        raise ValueError("prediction input contains no .txt files")
     available = {Path(name).stem for name in texts}
     requested = set(sequences or ())
     missing = sorted(requested - available)
