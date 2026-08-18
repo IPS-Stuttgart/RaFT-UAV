@@ -189,15 +189,24 @@ def _numpy_array_from_export(path: Path, *, preferred_keys: Iterable[str]) -> np
         if isinstance(payload, np.lib.npyio.NpzFile):
             if not payload.files:
                 raise ValueError(f"NumPy archive {path} does not contain arrays")
-            lower_to_key = {key.casefold(): key for key in payload.files}
-            key = next(
-                (
-                    lower_to_key[candidate.casefold()]
-                    for candidate in preferred_keys
-                    if candidate.casefold() in lower_to_key
-                ),
-                payload.files[0],
-            )
+            key = payload.files[0]
+            for candidate in preferred_keys:
+                if candidate in payload.files:
+                    key = candidate
+                    break
+                matches = [
+                    available
+                    for available in payload.files
+                    if available.casefold() == candidate.casefold()
+                ]
+                if len(matches) > 1:
+                    raise ValueError(
+                        f"NumPy archive {path} contains ambiguous arrays for preferred "
+                        f"key {candidate!r}: {matches}"
+                    )
+                if matches:
+                    key = matches[0]
+                    break
             return np.asarray(payload[key])
         return np.asarray(payload)
     finally:
