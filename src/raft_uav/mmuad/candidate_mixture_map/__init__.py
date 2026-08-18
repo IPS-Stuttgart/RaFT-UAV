@@ -3,9 +3,10 @@
 The maintained implementation lives in the sibling ``candidate_mixture_map.py``
 module. This package keeps the public import path while preserving opaque IDs in
 CSV inputs, retaining complete candidate frames when target-template times fall
-outside the configured matching tolerance, producing finite velocities for
-repeated target timestamps, validating numerical controls, and delegating
-Gaussian-mixture factor calculations to PyRecEst.
+outside the configured matching tolerance, producing finite velocities and
+well-conditioned acceleration smoothing for repeated target timestamps,
+validating numerical controls, and delegating Gaussian-mixture factor
+calculations to PyRecEst.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_VALIDATE_CONFIG = _IMPL._validate_config
 _ORIGINAL_TRAJECTORY_VELOCITY = _IMPL._trajectory_velocity
+_ORIGINAL_SECOND_DERIVATIVE_MATRIX = _IMPL._second_derivative_matrix
 
 
 class _PandasCsvProxy:
@@ -201,10 +203,34 @@ def _trajectory_velocity(times: np.ndarray, state: np.ndarray) -> np.ndarray:
     return unique_velocity[inverse]
 
 
+def _second_derivative_matrix(times: np.ndarray) -> np.ndarray:
+    """Build acceleration penalties on unique physical timestamps."""
+
+    time_values = np.asarray(times, dtype=float)
+    unique_times, inverse = np.unique(time_values, return_inverse=True)
+    if len(unique_times) == len(time_values):
+        return _ORIGINAL_SECOND_DERIVATIVE_MATRIX(time_values)
+    if len(unique_times) < 3:
+        return np.zeros((0, len(time_values)), dtype=float)
+
+    # Replacing a zero interval by 1e-6 s makes duplicate template rows behave
+    # like distinct physical samples one microsecond apart. The resulting
+    # O(1e6) derivative coefficients dominate the measurement system and can
+    # collapse an otherwise linear trajectory. Smooth the average state at each
+    # physical timestamp instead, while retaining every duplicate output row.
+    unique_operator = _ORIGINAL_SECOND_DERIVATIVE_MATRIX(unique_times)
+    averaging = np.zeros((len(unique_times), len(time_values)), dtype=float)
+    counts = np.bincount(inverse, minlength=len(unique_times)).astype(float)
+    columns = np.arange(len(time_values), dtype=int)
+    averaging[inverse, columns] = 1.0 / counts[inverse]
+    return unique_operator @ averaging
+
+
 _IMPL.pd = _PandasCsvProxy(pd)
 _IMPL._validate_config = _validate_config
 _IMPL._target_time_candidate_groups = _target_time_candidate_groups
 _IMPL._trajectory_velocity = _trajectory_velocity
+_IMPL._second_derivative_matrix = _second_derivative_matrix
 _IMPL._mixture_response = build_pyrecest_mixture_response(
     apply_label_balance=_IMPL._apply_label_balance,
     normalize_probability=_IMPL._normalize_probability,
@@ -222,6 +248,7 @@ globals()["_integer_scalar"] = _integer_scalar
 globals()["_validate_config"] = _validate_config
 globals()["_target_time_candidate_groups"] = _target_time_candidate_groups
 globals()["_trajectory_velocity"] = _trajectory_velocity
+globals()["_second_derivative_matrix"] = _second_derivative_matrix
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]

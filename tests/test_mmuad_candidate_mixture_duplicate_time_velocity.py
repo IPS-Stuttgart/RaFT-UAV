@@ -10,7 +10,7 @@ from raft_uav.mmuad.candidate_mixture_map import (
 )
 
 
-def test_candidate_mixture_duplicate_target_times_keep_velocities_finite() -> None:
+def _linear_candidates_and_duplicate_template() -> tuple[pd.DataFrame, pd.DataFrame]:
     candidates = pd.DataFrame(
         {
             "sequence_id": ["seqA", "seqA", "seqA"],
@@ -30,6 +30,11 @@ def test_candidate_mixture_duplicate_target_times_keep_velocities_finite() -> No
             "Timestamp": [0.0, 1.0, 1.0, 2.0],
         }
     )
+    return candidates, template
+
+
+def test_candidate_mixture_duplicate_target_times_keep_velocities_finite() -> None:
+    candidates, template = _linear_candidates_and_duplicate_template()
 
     result = run_candidate_mixture_map(
         candidates,
@@ -49,3 +54,34 @@ def test_candidate_mixture_duplicate_target_times_keep_velocities_finite() -> No
     assert np.isfinite(velocity).all()
     assert velocity[:, 0] == pytest.approx(np.ones(4))
     assert velocity[:, 1:] == pytest.approx(np.zeros((4, 2)))
+
+
+def test_duplicate_target_times_do_not_create_artificial_acceleration() -> None:
+    candidates, template = _linear_candidates_and_duplicate_template()
+
+    result = run_candidate_mixture_map(
+        candidates,
+        target_template=template,
+        config=CandidateMixtureMapConfig(
+            top_k=1,
+            score_column="ranker_score",
+            sigma_column="predicted_sigma_m",
+            smoothness_weight=7200.0,
+            target_time_tolerance_s=0.01,
+            iterations=1,
+        ),
+    )
+
+    position = result.estimates[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(float)
+    expected = np.column_stack(
+        [
+            np.array([0.0, 1.0, 1.0, 2.0]),
+            np.zeros(4),
+            np.zeros(4),
+        ]
+    )
+    assert position == pytest.approx(expected, abs=2.0e-5)
+    assert result.estimates["v_x_mps"].to_numpy(float) == pytest.approx(
+        np.ones(4),
+        abs=2.0e-5,
+    )
