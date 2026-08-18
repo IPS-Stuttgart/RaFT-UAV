@@ -5,7 +5,10 @@ import raft_uav.imm_cli as imm_cli
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
 def test_imm_cli_rejects_nonfinite_mode_switch_time_constant(tmp_path, value):
-    with pytest.raises(ValueError, match="imm_mode_switch_time_constant must be positive and finite"):
+    with pytest.raises(
+        ValueError,
+        match="imm_mode_switch_time_constant must be positive and finite",
+    ):
         imm_cli.run_experiment(
             dataset_root=tmp_path,
             flight_name="flight",
