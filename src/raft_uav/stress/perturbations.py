@@ -10,6 +10,8 @@ import pandas as pd
 
 from raft_uav.numeric import optional_float, optional_int
 
+_SCOPE_COLUMNS = ("sequence_id", "flight_id")
+
 
 @dataclass(frozen=True)
 class PerturbationConfig:
@@ -76,7 +78,10 @@ def perturb_radar(radar: pd.DataFrame, config: PerturbationConfig) -> pd.DataFra
         rng=rng,
     )
     out["stress_config"] = config.name
-    sort_columns = [c for c in ("time_s", "frame_index", "track_id") if c in out.columns]
+    sort_columns = [
+        *_scope_columns(out),
+        *[c for c in ("time_s", "frame_index", "track_id") if c in out.columns],
+    ]
     return out.sort_values(sort_columns) if sort_columns else out
 
 
@@ -89,7 +94,10 @@ def perturb_rf(rf: pd.DataFrame, config: PerturbationConfig) -> pd.DataFrame:
     out = jitter_timestamps(out, std_s=config.timestamp_jitter_std_s, rng=rng)
     out = scale_covariance_columns(out, scale=config.covariance_scale)
     out["stress_config"] = config.name
-    return out.sort_values("time_s") if "time_s" in out.columns else out
+    sort_columns = [*_scope_columns(out)]
+    if "time_s" in out.columns:
+        sort_columns.append("time_s")
+    return out.sort_values(sort_columns) if sort_columns else out
 
 
 def drop_radar_frames(
@@ -103,9 +111,7 @@ def drop_radar_frames(
         return frame.copy()
 
     frame_column = "frame_index" if "frame_index" in frame.columns else "time_s"
-    group_columns = [frame_column]
-    if "sequence_id" in frame.columns:
-        group_columns.insert(0, "sequence_id")
+    group_columns = [*_scope_columns(frame), frame_column]
 
     valid_group_mask = frame[frame_column].notna().to_numpy()
     group_ids = (
@@ -134,11 +140,11 @@ def drop_rf_bursts(frame: pd.DataFrame, *, rate: float, rng: np.random.Generator
 
     finite_rows = frame.loc[valid_time_mask].copy()
     finite_rows["_stress_time_s"] = times[valid_time_mask]
-    group_columns = ["_stress_burst_bin"]
-    if "sequence_id" in finite_rows.columns:
-        group_columns.insert(0, "sequence_id")
+    scope_columns = _scope_columns(finite_rows)
+    group_columns = [*scope_columns, "_stress_burst_bin"]
+    if scope_columns:
         sequence_start = finite_rows.groupby(
-            "sequence_id",
+            scope_columns,
             sort=False,
             dropna=False,
         )["_stress_time_s"].transform("min")
@@ -173,8 +179,8 @@ def jitter_timestamps(
 
     times = pd.to_numeric(out["time_s"], errors="coerce")
     group_keys = pd.DataFrame(index=out.index)
-    if "sequence_id" in out.columns:
-        group_keys["sequence_id"] = out["sequence_id"]
+    for column in _scope_columns(out):
+        group_keys[column] = out[column]
     if "frame_index" in out.columns:
         frame_index = out["frame_index"]
         group_keys["frame_index"] = frame_index
@@ -238,9 +244,7 @@ def inject_false_tracks(
     if frame.empty or track_count == 0 or not {"east_m", "north_m", "up_m"}.issubset(frame.columns):
         return frame.copy()
     frame_column = "frame_index" if "frame_index" in frame.columns else "time_s"
-    group_columns = [frame_column]
-    if "sequence_id" in frame.columns:
-        group_columns.insert(0, "sequence_id")
+    group_columns = [*_scope_columns(frame), frame_column]
     rows: list[pd.Series] = []
     next_track_id = _next_false_track_id(frame)
     for _, group in frame.groupby(group_columns, sort=True, dropna=False):
@@ -306,6 +310,12 @@ def _nonnegative_int(value: object, *, name: str) -> int:
     if number is None or number < 0:
         raise ValueError(f"{name} must be a nonnegative integer")
     return number
+
+
+def _scope_columns(frame: pd.DataFrame) -> list[str]:
+    """Return all available flight/sequence boundary columns in stable order."""
+
+    return [column for column in _SCOPE_COLUMNS if column in frame.columns]
 
 
 def _next_false_track_id(frame: pd.DataFrame) -> int:
