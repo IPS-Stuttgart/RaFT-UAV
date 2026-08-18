@@ -179,6 +179,12 @@ def _candidate_pull_time_tolerance_install() -> Callable[[], None]:
     return install
 
 
+def _candidate_pull_result_timestamp_install() -> Callable[[], None]:
+    from raft_uav.mmuad._candidate_pull_result_timestamp_patch import install
+
+    return install
+
+
 def _radar_frame_grouping_install() -> Callable[[], None]:
     from raft_uav.baselines._radar_frame_grouping_patch import install
 
@@ -268,6 +274,7 @@ _optional_runtime_hook(_mot_config_validation_install)
 _optional_runtime_hook(_mot_missing_id_index_install)
 _optional_runtime_hook(_candidate_pull_index_install)
 _optional_runtime_hook(_candidate_pull_time_tolerance_install)
+_optional_runtime_hook(_candidate_pull_result_timestamp_install)
 _optional_runtime_hook(_radar_frame_grouping_install)
 _optional_runtime_hook(_paper_selection_numeric_time_install)
 _optional_runtime_hook(_oracle_coverage_sequence_scope_install)
