@@ -28,6 +28,20 @@ for _name in dir(_LEGACY):
         globals()[_name] = getattr(_LEGACY, _name)
 
 
+def _timestamp_gap_threshold(values: np.ndarray) -> float:
+    """Infer a continuity threshold from timestamp cadence, regardless of formatting."""
+
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size < 2:
+        return float("inf")
+    diffs = np.diff(np.sort(finite))
+    positive = diffs[diffs > 1.0e-9]
+    if positive.size == 0:
+        return float("inf")
+    return 1.5 * float(np.median(positive))
+
+
 def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
     """Split tracks chronologically, including at frame-counter resets."""
 
@@ -50,7 +64,11 @@ def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
             errors="coerce",
         ).to_numpy(dtype=float)
         deltas = np.diff(values)
-        threshold = _LEGACY._segment_gap_threshold(values)
+        threshold = (
+            _timestamp_gap_threshold(values)
+            if continuity_key == "time_s"
+            else _LEGACY._segment_gap_threshold(values)
+        )
         discontinuities = (deltas < 0.0) | (deltas > threshold)
         split_points = np.r_[
             0,
