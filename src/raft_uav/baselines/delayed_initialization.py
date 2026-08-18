@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field as dataclass_field
 from typing import Any, Iterable
 
 import numpy as np
@@ -26,7 +26,7 @@ class InitialHypothesis:
     covariance: np.ndarray
     score: float
     source: str
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = dataclass_field(default_factory=dict)
 
     def __post_init__(self) -> None:
         state = np.asarray(self.state, dtype=float).reshape(6)
