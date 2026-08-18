@@ -55,6 +55,12 @@ def _imm_bootstrap_timestamp_install() -> Callable[[], None]:
     return install
 
 
+def _imm_cli_numeric_validation_install() -> Callable[[], None]:
+    from raft_uav._imm_cli_numeric_validation_patch import install
+
+    return install
+
+
 def _rf_measurement_fallback_install() -> Callable[[], None]:
     from raft_uav.io._rf_measurement_fallback_patch import (
         apply_rf_measurement_fallback_patch,
@@ -254,6 +260,7 @@ if os.environ.get("RAFT_UAV_SKIP_RUNTIME_HOOKS") != "1":
 # boundaries, not optional integrations. Keep them active when runtime hooks are skipped.
 _optional_runtime_hook(_kalman_timestamp_validation_install)
 _optional_runtime_hook(_imm_bootstrap_timestamp_install)
+_optional_runtime_hook(_imm_cli_numeric_validation_install)
 _optional_runtime_hook(_rf_measurement_fallback_install)
 _optional_runtime_hook(_radar_measurement_validation_install)
 _optional_runtime_hook(_geodetic_input_validation_install)
