@@ -132,70 +132,92 @@ def _require_single_sequence_inputs(
 ) -> None:
     """Reject pooled inputs that would initialize one track from several flights."""
 
-    radar_ids = _radar_sequence_ids(radar)
-    rf_ids = _rf_sequence_ids(rf_measurements)
-    sequence_ids = radar_ids | rf_ids
-    if len(sequence_ids) <= 1:
+    radar_scope = _radar_scope_ids(radar)
+    rf_scope = _rf_scope_ids(rf_measurements)
+    _reject_multiple_scope_values(source="radar", scope=radar_scope)
+    _reject_multiple_scope_values(source="RF measurements", scope=rf_scope)
+
+    common_fields = set(radar_scope) & set(rf_scope)
+    mismatches = {
+        field: (
+            next(iter(radar_scope[field])),
+            next(iter(rf_scope[field])),
+        )
+        for field in sorted(common_fields)
+        if radar_scope[field] != rf_scope[field]
+    }
+    if mismatches:
+        raise ValueError(
+            "Delayed initialization requires inputs from one sequence; "
+            f"radar and RF sequence/flight metadata disagree {mismatches!r}. "
+            "Filter the RF and radar data to one sequence before initialization."
+        )
+
+    if common_fields or not radar_scope or not rf_scope:
         return
 
-    raise ValueError(
-        "Delayed initialization requires inputs from one sequence; "
-        f"found sequence identifiers {sorted(sequence_ids)!r} "
-        f"(radar={sorted(radar_ids)!r}, rf={sorted(rf_ids)!r}). "
-        "Filter the RF and radar data to one sequence before initialization."
-    )
-
-
-def _radar_sequence_ids(radar: pd.DataFrame) -> set[str]:
-    fields = [field for field in _SEQUENCE_ID_FIELDS if field in radar.columns]
-    if radar.empty or not fields:
-        return set()
-
-    sequence_ids: set[str] = set()
-    missing_count = 0
-    rows = radar.loc[:, fields].itertuples(index=False, name=None)
-    for position, row_values in enumerate(rows):
-        aliases = dict(zip(fields, row_values, strict=True))
-        sequence_id = _canonical_sequence_aliases(
-            aliases,
-            location=f"radar row {position}",
+    # Backward compatibility for legacy inputs that expose only one of the two
+    # historical scope fields per modality.  Once both fields are present they
+    # remain independent dimensions of a joint (sequence_id, flight_id) scope.
+    if len(radar_scope) == 1 and len(rf_scope) == 1:
+        radar_id = next(iter(next(iter(radar_scope.values()))))
+        rf_id = next(iter(next(iter(rf_scope.values()))))
+        if radar_id == rf_id:
+            return
+        raise ValueError(
+            "Delayed initialization requires inputs from one sequence; "
+            f"radar and RF legacy sequence aliases disagree ({radar_id!r} != {rf_id!r}). "
+            "Filter the RF and radar data to one sequence before initialization."
         )
-        if sequence_id is None:
-            missing_count += 1
-        else:
-            sequence_ids.add(sequence_id)
-
-    _reject_partial_sequence_metadata(
-        source="radar",
-        sequence_ids=sequence_ids,
-        missing_count=missing_count,
-        total_count=len(radar),
-    )
-    return sequence_ids
 
 
-def _rf_sequence_ids(rf_measurements: Iterable[Any]) -> set[str]:
-    sequence_ids: set[str] = set()
-    missing_count = 0
-    total_count = 0
-    for position, measurement in enumerate(rf_measurements):
-        total_count += 1
-        sequence_id = _canonical_sequence_aliases(
-            _measurement_sequence_aliases(measurement),
-            location=f"RF measurement {position}",
+def _radar_scope_ids(radar: pd.DataFrame) -> dict[str, set[str]]:
+    if radar.empty:
+        return {}
+
+    scope: dict[str, set[str]] = {}
+    for field in _SEQUENCE_ID_FIELDS:
+        if field not in radar.columns:
+            continue
+        values, missing_count = _canonical_scope_values(radar[field])
+        _reject_partial_sequence_metadata(
+            source="radar",
+            field=field,
+            sequence_ids=values,
+            missing_count=missing_count,
+            total_count=len(radar),
         )
-        if sequence_id is None:
-            missing_count += 1
-        else:
-            sequence_ids.add(sequence_id)
+        if values:
+            scope[field] = values
+    return scope
 
-    _reject_partial_sequence_metadata(
-        source="RF measurements",
-        sequence_ids=sequence_ids,
-        missing_count=missing_count,
-        total_count=total_count,
-    )
-    return sequence_ids
+
+def _rf_scope_ids(rf_measurements: Iterable[Any]) -> dict[str, set[str]]:
+    measurements = list(rf_measurements)
+    if not measurements:
+        return {}
+
+    raw_values: dict[str, list[object]] = {
+        field: [] for field in _SEQUENCE_ID_FIELDS
+    }
+    for measurement in measurements:
+        aliases = _measurement_sequence_aliases(measurement)
+        for field in _SEQUENCE_ID_FIELDS:
+            raw_values[field].append(aliases.get(field))
+
+    scope: dict[str, set[str]] = {}
+    for field, values in raw_values.items():
+        sequence_ids, missing_count = _canonical_scope_values(values)
+        _reject_partial_sequence_metadata(
+            source="RF measurements",
+            field=field,
+            sequence_ids=sequence_ids,
+            missing_count=missing_count,
+            total_count=len(measurements),
+        )
+        if sequence_ids:
+            scope[field] = sequence_ids
+    return scope
 
 
 def _measurement_sequence_aliases(measurement: Any) -> dict[str, object]:
@@ -212,29 +234,41 @@ def _measurement_sequence_aliases(measurement: Any) -> dict[str, object]:
     }
 
 
-def _canonical_sequence_aliases(
-    values: Mapping[str, object],
-    *,
-    location: str,
-) -> str | None:
-    canonical: dict[str, str] = {}
-    for field_name, value in values.items():
+def _canonical_scope_values(values: Iterable[object]) -> tuple[set[str], int]:
+    sequence_ids: set[str] = set()
+    missing_count = 0
+    for value in values:
         sequence_id = _canonical_sequence_id(value)
-        if sequence_id is not None:
-            canonical[field_name] = sequence_id
+        if sequence_id is None:
+            missing_count += 1
+        else:
+            sequence_ids.add(sequence_id)
+    return sequence_ids, missing_count
 
-    distinct_ids = set(canonical.values())
-    if len(distinct_ids) > 1:
-        raise ValueError(
-            "Delayed initialization requires consistent sequence aliases; "
-            f"{location} has {canonical!r}"
-        )
-    return next(iter(distinct_ids), None)
+
+def _reject_multiple_scope_values(
+    *,
+    source: str,
+    scope: Mapping[str, set[str]],
+) -> None:
+    multiple = {
+        field: sorted(values)
+        for field, values in scope.items()
+        if len(values) > 1
+    }
+    if not multiple:
+        return
+    raise ValueError(
+        "Delayed initialization requires inputs from one sequence; "
+        f"{source} spans multiple sequence/flight scopes {multiple!r}. "
+        "Filter the RF and radar data to one sequence before initialization."
+    )
 
 
 def _reject_partial_sequence_metadata(
     *,
     source: str,
+    field: str,
     sequence_ids: set[str],
     missing_count: int,
     total_count: int,
@@ -243,7 +277,8 @@ def _reject_partial_sequence_metadata(
         return
     raise ValueError(
         "Delayed initialization requires complete sequence metadata within "
-        f"each input; {source} has {missing_count} unlabeled of {total_count} rows."
+        f"each input; {source} has {missing_count} unlabeled {field} values "
+        f"of {total_count} rows."
     )
 
 
