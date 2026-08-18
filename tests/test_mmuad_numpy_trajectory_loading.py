@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from raft_uav.mmuad.io import load_candidate_file, load_truth_file
 
@@ -90,3 +91,40 @@ def test_npz_trajectory_preferred_key_matching_is_case_insensitive(tmp_path) -> 
             "confidence": 0.7,
         }
     ]
+
+
+def test_npz_trajectory_exact_key_wins_over_case_insensitive_alias(tmp_path) -> None:
+    path = tmp_path / "candidate.npz"
+    np.savez(
+        path,
+        trajectory=np.array([[9.0, 1.0, 2.0, 3.0, 0.8]], dtype=float),
+        Trajectory=np.array([10.0, 20.0]),
+    )
+
+    frame = load_candidate_file(path, default_sequence_id="seq-e", source="numpy").rows
+
+    assert frame[
+        ["sequence_id", "time_s", "source", "x_m", "y_m", "z_m", "confidence"]
+    ].to_dict("records") == [
+        {
+            "sequence_id": "seq-e",
+            "time_s": 9.0,
+            "source": "numpy",
+            "x_m": 1.0,
+            "y_m": 2.0,
+            "z_m": 3.0,
+            "confidence": 0.8,
+        }
+    ]
+
+
+def test_npz_trajectory_rejects_ambiguous_case_insensitive_aliases(tmp_path) -> None:
+    path = tmp_path / "candidate.npz"
+    np.savez(
+        path,
+        Trajectory=np.array([[9.0, 1.0, 2.0, 3.0, 0.8]], dtype=float),
+        TRAJECTORY=np.array([[10.0, 4.0, 5.0, 6.0, 0.7]], dtype=float),
+    )
+
+    with pytest.raises(ValueError, match="ambiguous arrays for preferred key 'trajectory'"):
+        load_candidate_file(path, default_sequence_id="seq-f", source="numpy")
