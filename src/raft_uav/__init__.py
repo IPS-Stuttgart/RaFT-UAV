@@ -239,6 +239,12 @@ def _track5_estimate_calibration_duplicate_truth_install() -> Callable[[], None]
     return install
 
 
+def _track5_template_resample_template_validation_install() -> Callable[[], None]:
+    from raft_uav.mmuad._track5_template_resample_template_validation_patch import install
+
+    return install
+
+
 def _evaluate_fde_truth_identity_install() -> Callable[[], None]:
     from raft_uav.mmuad._evaluate_fde_truth_identity_patch import install
 
@@ -284,4 +290,5 @@ _optional_runtime_hook(_geomedian_template_time_match_install)
 _optional_runtime_hook(_candidate_score_calibration_order_install)
 _optional_runtime_hook(_track5_submission_schema_guard_install)
 _optional_runtime_hook(_track5_estimate_calibration_duplicate_truth_install)
+_optional_runtime_hook(_track5_template_resample_template_validation_install)
 _optional_runtime_hook(_evaluate_fde_truth_identity_install)
