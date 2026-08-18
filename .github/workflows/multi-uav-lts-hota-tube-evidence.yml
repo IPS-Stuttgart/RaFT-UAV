@@ -1,0 +1,253 @@
+---
+name: Multi-UAV LTS HOTA tube evidence
+
+"on":
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/multi-uav-lts-hota-tube-evidence.yml"
+      - "src/raft_uav/multi_uav_lts/hota_tube.py"
+      - "tests/test_multi_uav_lts_hota_tube.py"
+      - "docs/multi_uav_lts_hota_tube.md"
+  workflow_dispatch:
+    inputs:
+      cache_parent:
+        description: Persistent public-evidence cache parent
+        required: true
+        default: /home/github-runner/.cache/raft-uav-public-evidence
+        type: string
+      cache_name:
+        description: Cached public dataset directory name
+        required: true
+        default: multi-uav-lts-zenodo-15853476
+        type: string
+      raw_predictions:
+        description: Optional complete raw prediction directory or ZIP override
+        required: false
+        default: ""
+        type: string
+      truth_dir:
+        description: Optional complete training truth directory override
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multi-uav-lts-hota-tube-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  RAFT_UAV_SKIP_RUNTIME_HOOKS: "1"
+  CACHE_PARENT_INPUT: ${{ inputs.cache_parent }}
+  CACHE_NAME_INPUT: ${{ inputs.cache_name }}
+  RAW_PREDICTIONS_INPUT: ${{ inputs.raw_predictions }}
+  TRUTH_DIR_INPUT: ${{ inputs.truth_dir }}
+
+jobs:
+  evidence:
+    name: Guarded 102-sequence HOTA tube tournament
+    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out RaFT-UAV
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Validate inputs and prepare isolated output
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_dir="${RUNNER_TEMP}/raft-uav-hota-tube-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cache_parent="${CACHE_PARENT_INPUT:-/home/github-runner/.cache/raft-uav-public-evidence}"
+          cache_name="${CACHE_NAME_INPUT:-multi-uav-lts-zenodo-15853476}"
+          cache_root="${cache_parent}/${cache_name}"
+          baseline_key="ca7bb92afc8d947c1499036c50ea493759c92de2af56f19ee175796c3252f8a6"
+          baseline_root="${cache_root}/baseline-cache/${baseline_key}"
+          raw_default="${baseline_root}/predictions"
+          raw_predictions="${RAW_PREDICTIONS_INPUT:-${raw_default}}"
+          truth_dir="${TRUTH_DIR_INPUT:-${cache_root}/extracted/TrainLabels}"
+          rm -rf "${run_dir}"
+          mkdir -p "${run_dir}"
+          {
+            echo "RUN_DIR=${run_dir}"
+            echo "RAW_PREDICTIONS=${raw_predictions}"
+            echo "TRUTH_DIR=${truth_dir}"
+          } >> "${GITHUB_ENV}"
+
+          python - "${raw_predictions}" "${truth_dir}" "${run_dir}/inputs.json" <<'PY'
+          from __future__ import annotations
+
+          import json
+          import sys
+          from pathlib import Path
+
+          raw_path, truth_path, output_path = map(Path, sys.argv[1:])
+          if not raw_path.exists():
+              raise SystemExit(f"raw predictions are unavailable: {raw_path}")
+          if not truth_path.is_dir():
+              raise SystemExit(f"truth directory is unavailable: {truth_path}")
+          raw_count = (
+              len(list(raw_path.glob("*.txt")))
+              if raw_path.is_dir()
+              else None
+          )
+          truth_count = len(list(truth_path.glob("*.txt")))
+          if raw_count is not None and raw_count != 102:
+              raise SystemExit(
+                  f"raw prediction directory contains {raw_count} files, expected 102"
+              )
+          if truth_count != 102:
+              raise SystemExit(
+                  f"truth directory contains {truth_count} files, expected 102"
+              )
+          payload = {
+              "schema": "raft-uav-lts-hota-tube-inputs-v1",
+              "raw_predictions": str(raw_path.resolve()),
+              "raw_prediction_file_count": raw_count,
+              "truth_dir": str(truth_path.resolve()),
+              "truth_file_count": truth_count,
+          }
+          output_path.write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+
+      - name: Install isolated experiment environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "${RUN_DIR}/venv"
+          "${RUN_DIR}/venv/bin/python" -m pip install --upgrade pip
+          "${RUN_DIR}/venv/bin/python" -m pip install -e ".[dev]"
+          "${RUN_DIR}/venv/bin/python" -m pip check
+          "${RUN_DIR}/venv/bin/python" -m pip freeze --all \
+            > "${RUN_DIR}/pip-freeze.txt"
+
+      - name: Generate and compare guarded candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python_bin="${RUN_DIR}/venv/bin/python"
+          candidate_args=()
+
+          run_candidate() {
+            local name="$1"
+            shift
+            local root="${RUN_DIR}/${name}"
+            "${python_bin}" -m raft_uav.multi_uav_lts.hota_tube \
+              "${RAW_PREDICTIONS}" \
+              --output-dir "${root}/predictions" \
+              --output-json "${root}/summary.json" \
+              --max-gap 1 \
+              --conflict-iou 0.3 \
+              --confidence-decay 0.9 \
+              "$@" \
+              | tee "${root}-console.txt"
+            candidate_args+=(--candidate "${name}=${root}/predictions")
+          }
+
+          run_candidate tube_plain \
+            --base-inflation 0 \
+            --velocity-inflation 0 \
+            --max-scale 1
+          run_candidate tube_small \
+            --base-inflation 0.25 \
+            --velocity-inflation 0.25 \
+            --max-scale 1.5
+          run_candidate tube_default \
+            --base-inflation 0.75 \
+            --velocity-inflation 0.5 \
+            --max-scale 3
+          run_candidate tube_velocity \
+            --base-inflation 0.25 \
+            --velocity-inflation 1 \
+            --max-scale 3
+
+          "${python_bin}" -m raft_uav.multi_uav_lts.tournament \
+            "${RAW_PREDICTIONS}" \
+            "${candidate_args[@]}" \
+            --truth-dir "${TRUTH_DIR}" \
+            --output-dir "${RUN_DIR}/tournament" \
+            --fold-count 5 \
+            --seed 0 \
+            --expected-sequence-count 102 \
+            --bootstrap-samples 5000 \
+            --min-mean-hota-gain 0.001 \
+            --min-ci-hota-gain 0 \
+            --max-mean-mota-drop 0.002 \
+            --max-mean-idf1-drop 0.002 \
+            --max-worst-scenario-hota-drop 0.01 \
+            --no-copy-selected \
+            | tee "${RUN_DIR}/tournament-console.txt"
+
+      - name: Publish result summary
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "${RUN_DIR}" "${GITHUB_STEP_SUMMARY}" <<'PY'
+          from __future__ import annotations
+
+          import json
+          import sys
+          from pathlib import Path
+
+          run_dir = Path(sys.argv[1])
+          summary_path = Path(sys.argv[2])
+          tournament_path = run_dir / "tournament/tournament_summary.json"
+          lines = ["### Multi-UAV LTS HOTA tube evidence", ""]
+          if tournament_path.is_file():
+              payload = json.loads(tournament_path.read_text(encoding="utf-8"))
+              lines.extend(
+                  [
+                      f"- Selected candidate: `{payload.get('selected_candidate')}`",
+                      f"- Raw fallback: `{payload.get('raw_fallback')}`",
+                      f"- Run directory: `{run_dir}`",
+                  ]
+              )
+          else:
+              lines.append("- Tournament summary was not produced.")
+          with summary_path.open("a", encoding="utf-8") as handle:
+              handle.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Remove large prediction payloads from the evidence artifact
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "${RUN_DIR}/venv"
+          find "${RUN_DIR}" -type d \
+            \( -name predictions -o -name selected_predictions \) \
+            -prune -exec rm -rf {} +
+          rm -f "${RUN_DIR}/tournament"/selected_predictions*
+          find "${RUN_DIR}" -maxdepth 4 -type f -printf '%P\t%s\n' \
+            | sort > "${RUN_DIR}/artifact-files.tsv"
+
+      - name: Upload evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        with:
+          name: multi-uav-lts-hota-tube-${{ github.run_id }}-${{ github.run_attempt }}
+          path: >-
+            ${{ runner.temp }}/raft-uav-hota-tube-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 30
