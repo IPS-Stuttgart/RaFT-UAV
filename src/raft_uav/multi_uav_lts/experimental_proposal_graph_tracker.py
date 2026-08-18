@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from . import _proposal_graph_core as graph_core
 from . import proposal_graph_tracker
 from ._proposal_common_motion import estimate_common_motion
+from ._proposal_graph_sparse_matching import solve_link_component
 from ._proposal_seed_calibration import calibrate_proposals
 
 
@@ -22,8 +23,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError("--seed-calibration-min-pairs must be positive")
 
     original_motion = graph_core._estimate_common_motion
+    original_link_solver = graph_core._solve_link_component
     original_track_sequence = proposal_graph_tracker.track_sequence
     graph_core._estimate_common_motion = estimate_common_motion
+    graph_core._solve_link_component = solve_link_component
 
     if custom.enable_seed_calibration:
 
@@ -40,6 +43,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return proposal_graph_tracker.main(remaining)
     finally:
         graph_core._estimate_common_motion = original_motion
+        graph_core._solve_link_component = original_link_solver
         proposal_graph_tracker.track_sequence = original_track_sequence
 
 
