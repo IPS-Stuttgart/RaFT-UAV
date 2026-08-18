@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import shutil
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -17,6 +16,9 @@ from ._records import (
     parse_detection_text,
     prediction_texts,
     reject_duplicate_keys,
+    validate_nonnegative_finite,
+    validate_nonnegative_int,
+    validate_unit_interval,
 )
 
 
@@ -128,65 +130,37 @@ def apply_hota_tube(
 
 
 def _parameters(**raw: object) -> HotaTubeParameters:
-    max_gap = _nonnegative_int(raw["max_gap"], name="max_gap")
-    min_track = _nonnegative_int(
+    max_gap = validate_nonnegative_int(raw["max_gap"], name="max_gap")
+    min_track = validate_nonnegative_int(
         raw["min_track_observations"],
         name="min_track_observations",
     )
     if min_track < 2:
         raise ValueError("min_track_observations must be at least 2")
-    base = _nonnegative_float(raw["base_inflation"], name="base_inflation")
-    velocity = _nonnegative_float(
-        raw["velocity_inflation"],
-        name="velocity_inflation",
-    )
-    maximum = _nonnegative_float(raw["max_scale"], name="max_scale")
+    maximum = validate_nonnegative_finite(raw["max_scale"], name="max_scale")
     if maximum < 1.0:
         raise ValueError("max_scale must be at least 1")
     return HotaTubeParameters(
         max_gap=max_gap,
-        base_inflation=base,
-        velocity_inflation=velocity,
+        base_inflation=validate_nonnegative_finite(
+            raw["base_inflation"],
+            name="base_inflation",
+        ),
+        velocity_inflation=validate_nonnegative_finite(
+            raw["velocity_inflation"],
+            name="velocity_inflation",
+        ),
         max_scale=maximum,
-        conflict_iou=_unit_float(raw["conflict_iou"], name="conflict_iou"),
-        confidence_decay=_unit_float(
+        conflict_iou=validate_unit_interval(
+            raw["conflict_iou"],
+            name="conflict_iou",
+        ),
+        confidence_decay=validate_unit_interval(
             raw["confidence_decay"],
             name="confidence_decay",
         ),
         min_track_observations=min_track,
     )
-
-
-def _nonnegative_int(value: object, *, name: str) -> int:
-    if isinstance(value, bool):
-        raise ValueError(f"{name} must be a nonnegative integer")
-    try:
-        parsed_float = float(value)
-        parsed = int(parsed_float)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{name} must be a nonnegative integer") from exc
-    if not math.isfinite(parsed_float) or parsed_float != parsed or parsed < 0:
-        raise ValueError(f"{name} must be a nonnegative integer")
-    return parsed
-
-
-def _nonnegative_float(value: object, *, name: str) -> float:
-    if isinstance(value, bool):
-        raise ValueError(f"{name} must be finite and nonnegative")
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{name} must be finite and nonnegative") from exc
-    if not math.isfinite(parsed) or parsed < 0.0:
-        raise ValueError(f"{name} must be finite and nonnegative")
-    return parsed
-
-
-def _unit_float(value: object, *, name: str) -> float:
-    parsed = _nonnegative_float(value, name=name)
-    if parsed > 1.0:
-        raise ValueError(f"{name} must be in [0, 1]")
-    return parsed
 
 
 def _guard_paths(prediction_path: Path, output_dir: Path) -> None:
@@ -214,7 +188,9 @@ def _tube_sequence(
         ordered = sorted(track_rows, key=lambda row: row.frame_id)
         if len(ordered) < parameters.min_track_observations:
             continue
-        for index, (left, right) in enumerate(zip(ordered, ordered[1:], strict=False)):
+        for index, (left, right) in enumerate(
+            zip(ordered, ordered[1:], strict=False)
+        ):
             missing = right.frame_id - left.frame_id - 1
             if missing <= 0 or missing > parameters.max_gap:
                 continue
@@ -255,7 +231,7 @@ def _tube_sequence(
         competitors = frame_rows.setdefault(proposal.row.frame_id, [])
         if any(
             row.object_id != proposal.row.object_id
-            and box_iou(row, proposal.row) >= parameters.conflict_iou
+            and _conflicts(row, proposal.row, parameters.conflict_iou)
             for row in competitors
         ):
             rejected += 1
@@ -280,6 +256,11 @@ def _tube_sequence(
         conflict_rejected_rows=rejected,
         maximum_scale=maximum_scale,
     )
+
+
+def _conflicts(left: Detection, right: Detection, threshold: float) -> bool:
+    overlap = box_iou(left, right)
+    return overlap > 0.0 and overlap >= threshold
 
 
 def _interpolated_row(

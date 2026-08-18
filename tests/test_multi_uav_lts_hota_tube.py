@@ -90,7 +90,9 @@ def test_velocity_disagreement_increases_the_tube_width(tmp_path: Path) -> None:
         max_scale=10.0,
     )
 
-    synthetic = next(item for item in read_rows(output / "SEQ.txt") if item.frame_id == 3)
+    synthetic = next(
+        item for item in read_rows(output / "SEQ.txt") if item.frame_id == 3
+    )
     assert synthetic.width > 10.0
     assert summary.maximum_scale > 1.0
 
@@ -119,6 +121,32 @@ def test_conflict_gate_rejects_an_ambiguous_synthetic_box(tmp_path: Path) -> Non
     assert summary.conflict_rejected_rows == 1
 
 
+def test_zero_conflict_threshold_keeps_a_disjoint_identity(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    write_rows(
+        source / "SEQ.txt",
+        [
+            row(1, 1, 0.0),
+            row(3, 1, 4.0),
+            row(2, 2, 100.0),
+        ],
+    )
+
+    summary = apply_hota_tube(source, output, conflict_iou=0.0)
+
+    assert summary.inserted_rows == 1
+    assert {
+        (item.frame_id, item.object_id)
+        for item in read_rows(output / "SEQ.txt")
+    } == {
+        (1, 1),
+        (2, 1),
+        (2, 2),
+        (3, 1),
+    }
+
+
 def test_does_not_fill_a_gap_beyond_the_selected_horizon(tmp_path: Path) -> None:
     source = tmp_path / "source"
     output = tmp_path / "output"
@@ -144,7 +172,9 @@ def test_preserves_the_mot_unknown_confidence_sentinel(tmp_path: Path) -> None:
     )
 
     apply_hota_tube(source, output)
-    synthetic = next(item for item in read_rows(output / "SEQ.txt") if item.frame_id == 2)
+    synthetic = next(
+        item for item in read_rows(output / "SEQ.txt") if item.frame_id == 2
+    )
 
     assert synthetic.confidence == -1.0
 
@@ -181,6 +211,7 @@ def test_subset_mode_rejects_unknown_sequences(tmp_path: Path) -> None:
     ("kwargs", "message"),
     [
         ({"max_gap": -1}, "max_gap"),
+        ({"max_gap": True}, "max_gap"),
         ({"min_track_observations": 1}, "at least 2"),
         ({"max_scale": 0.9}, "max_scale"),
         ({"conflict_iou": 1.1}, "conflict_iou"),
