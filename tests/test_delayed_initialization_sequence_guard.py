@@ -88,17 +88,63 @@ def test_delayed_initialization_rejects_flight_id_mismatch() -> None:
         )
 
 
-def test_delayed_initialization_rejects_conflicting_sequence_aliases() -> None:
+def test_delayed_initialization_accepts_joint_sequence_and_flight_scope() -> None:
     radar = pd.DataFrame(
         {
-            "sequence_id": ["flight-a"],
+            "sequence_id": ["sequence-a"],
             "flight_id": ["flight-b"],
         }
     )
 
-    with pytest.raises(ValueError, match="consistent sequence aliases"):
+    hypotheses = build_delayed_initial_hypotheses(
+        rf_measurements=[_rf("sequence-a", flight_id="flight-b")],
+        radar=radar,
+    )
+
+    assert len(hypotheses) == 1
+
+
+def test_delayed_initialization_rejects_multiple_flights_with_shared_sequence() -> None:
+    radar = pd.DataFrame(
+        {
+            "sequence_id": ["shared", "shared"],
+            "flight_id": ["flight-a", "flight-b"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="inputs from one sequence"):
         build_delayed_initial_hypotheses(
-            rf_measurements=[_rf("flight-a")],
+            rf_measurements=[_rf("shared", flight_id="flight-a")],
+            radar=radar,
+        )
+
+
+def test_delayed_initialization_rejects_joint_flight_mismatch() -> None:
+    radar = pd.DataFrame(
+        {
+            "sequence_id": ["shared"],
+            "flight_id": ["flight-a"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="inputs from one sequence"):
+        build_delayed_initial_hypotheses(
+            rf_measurements=[_rf("shared", flight_id="flight-b")],
+            radar=radar,
+        )
+
+
+def test_delayed_initialization_rejects_partial_flight_labels() -> None:
+    radar = pd.DataFrame(
+        {
+            "sequence_id": ["shared", "shared"],
+            "flight_id": ["flight-a", None],
+        }
+    )
+
+    with pytest.raises(ValueError, match="complete sequence metadata"):
+        build_delayed_initial_hypotheses(
+            rf_measurements=[_rf("shared", flight_id="flight-a")],
             radar=radar,
         )
 
