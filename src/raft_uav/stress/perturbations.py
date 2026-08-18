@@ -78,10 +78,7 @@ def perturb_radar(radar: pd.DataFrame, config: PerturbationConfig) -> pd.DataFra
         rng=rng,
     )
     out["stress_config"] = config.name
-    sort_columns = [
-        *_scope_columns(out),
-        *[c for c in ("time_s", "frame_index", "track_id") if c in out.columns],
-    ]
+    sort_columns = [c for c in ("time_s", "frame_index", "track_id") if c in out.columns]
     return out.sort_values(sort_columns) if sort_columns else out
 
 
@@ -94,10 +91,7 @@ def perturb_rf(rf: pd.DataFrame, config: PerturbationConfig) -> pd.DataFrame:
     out = jitter_timestamps(out, std_s=config.timestamp_jitter_std_s, rng=rng)
     out = scale_covariance_columns(out, scale=config.covariance_scale)
     out["stress_config"] = config.name
-    sort_columns = [*_scope_columns(out)]
-    if "time_s" in out.columns:
-        sort_columns.append("time_s")
-    return out.sort_values(sort_columns) if sort_columns else out
+    return out.sort_values("time_s") if "time_s" in out.columns else out
 
 
 def drop_radar_frames(
