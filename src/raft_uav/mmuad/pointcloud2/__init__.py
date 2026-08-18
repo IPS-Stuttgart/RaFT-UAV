@@ -1,9 +1,9 @@
-"""Strict PointCloud2 endianness metadata compatibility boundary.
+"""Strict PointCloud2 metadata compatibility boundary.
 
 The maintained decoder lives in the sibling ``pointcloud2.py`` module. This
 package preserves the public import path while preventing serialized or malformed
-``is_bigendian`` metadata from selecting the wrong byte order through Python
-truthiness.
+metadata from selecting the wrong byte order or invalid dimensions from being
+treated as a flat point buffer.
 """
 
 from __future__ import annotations
@@ -90,9 +90,19 @@ def _boolean_metadata(value: Any, *, name: str) -> bool:
     raise ValueError(error)
 
 
-def pointcloud2_to_dataframe(message: Any):
-    """Decode a PointCloud2-like message after strict endianness validation."""
+def _validate_nonnegative_dimensions(message: Any) -> None:
+    """Reject invalid dimensions without disabling zero-dimension compatibility."""
 
+    for name, default in (("width", 0), ("height", 1)):
+        value = _IMPL._integer_metadata(getattr(message, name, default), name=name)
+        if value < 0:
+            raise ValueError(f"PointCloud2 {name} must be non-negative")
+
+
+def pointcloud2_to_dataframe(message: Any):
+    """Decode a PointCloud2-like message after strict metadata validation."""
+
+    _validate_nonnegative_dimensions(message)
     is_bigendian = _boolean_metadata(
         getattr(message, "is_bigendian", False),
         name="is_bigendian",
@@ -114,6 +124,7 @@ globals().update(
     }
 )
 globals()["_boolean_metadata"] = _boolean_metadata
+globals()["_validate_nonnegative_dimensions"] = _validate_nonnegative_dimensions
 globals()["pointcloud2_to_dataframe"] = pointcloud2_to_dataframe
 
 __doc__ = _IMPL.__doc__
