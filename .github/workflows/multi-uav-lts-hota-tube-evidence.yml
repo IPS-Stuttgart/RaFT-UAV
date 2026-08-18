@@ -219,10 +219,39 @@ jobs:
           lines = ["### Multi-UAV LTS HOTA tube evidence", ""]
           if tournament_path.is_file():
               payload = json.loads(tournament_path.read_text(encoding="utf-8"))
+              selected_name = payload.get("selected_candidate")
+              selected_row = next(
+                  (
+                      row
+                      for row in payload.get("rows", [])
+                      if row.get("name") == selected_name
+                  ),
+                  {},
+              )
               lines.extend(
                   [
-                      f"- Selected candidate: `{payload.get('selected_candidate')}`",
-                      f"- Raw fallback: `{payload.get('raw_fallback')}`",
+                      f"- Selected candidate: `{selected_name}`",
+                      (
+                          "- Selection status: "
+                          f"`{payload.get('selection_status')}`"
+                      ),
+                      (
+                          "- Mean CV CODABENCH_HOTA gain: "
+                          f"`{selected_row.get('mean_cv_hota_gain_vs_raw')}`"
+                      ),
+                      (
+                          "- Paired HOTA gain CI: "
+                          f"`[{selected_row.get('paired_hota_gain_ci_low')}, "
+                          f"{selected_row.get('paired_hota_gain_ci_high')}]`"
+                      ),
+                      (
+                          "- Mean CV MOTA delta: "
+                          f"`{selected_row.get('mean_cv_mota_delta_vs_raw')}`"
+                      ),
+                      (
+                          "- Mean CV IDF1 delta: "
+                          f"`{selected_row.get('mean_cv_idf1_delta_vs_raw')}`"
+                      ),
                       f"- Run directory: `{run_dir}`",
                   ]
               )
