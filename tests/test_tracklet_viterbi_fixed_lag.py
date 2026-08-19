@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.baselines.kalman import TrackingMeasurement
 from raft_uav.baselines.radar_association import _events
@@ -57,6 +58,29 @@ def test_fixed_lag_tracklet_viterbi_uses_bounded_future_window():
 
     assert viterbi_selected["track_id"].tolist() == [1, 1]
     assert viterbi_selected["association_lag_s"].tolist() == [1.0, 1.0]
+
+
+@pytest.mark.parametrize("lag_s", [np.nan, np.inf, -np.inf])
+def test_fixed_lag_tracklet_viterbi_rejects_nonfinite_lag(lag_s: float):
+    config = TrackletViterbiAssociationConfig()
+
+    with pytest.raises(ValueError, match="lag_s must be finite and positive"):
+        run_async_cv_baseline_with_fixed_lag_tracklet_viterbi_association_and_replay(
+            rf_measurements=[],
+            radar=pd.DataFrame(),
+            lag_s=lag_s,
+            config=config,
+        )
+
+    with pytest.raises(ValueError, match="lag_s must be finite and positive"):
+        select_fixed_lag_tracklet_viterbi_path(
+            events=[],
+            anchors={},
+            covariance=np.eye(3),
+            candidate_catprob_threshold=None,
+            config=config,
+            lag_s=lag_s,
+        )
 
 
 def test_fixed_lag_tracklet_viterbi_conditions_on_previous_committed_choice():

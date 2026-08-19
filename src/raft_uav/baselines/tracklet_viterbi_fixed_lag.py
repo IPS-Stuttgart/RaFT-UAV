@@ -28,6 +28,16 @@ from raft_uav.baselines.tracklet_viterbi_result import (
     _empty_replayed_rows,
     _replay_selected_tracklet_path_with_replay,
 )
+from raft_uav.numeric import optional_float
+
+
+def _validated_lag_s(lag_s: object) -> float:
+    """Return a finite positive fixed-lag horizon."""
+
+    normalized = optional_float(lag_s)
+    if normalized is None or normalized <= 0.0:
+        raise ValueError("lag_s must be finite and positive")
+    return normalized
 
 
 def run_async_cv_baseline_with_fixed_lag_tracklet_viterbi_association_and_replay(
@@ -50,8 +60,7 @@ def run_async_cv_baseline_with_fixed_lag_tracklet_viterbi_association_and_replay
 ) -> tuple[list[dict[str, object]], pd.DataFrame, pd.DataFrame]:
     """Run fixed-lag tracklet-Viterbi and replay committed radar choices."""
 
-    if lag_s <= 0.0:
-        raise ValueError("lag_s must be positive")
+    lag_s = _validated_lag_s(lag_s)
 
     from raft_uav.baselines.radar_association import (
         _empty_selected_radar,
@@ -147,8 +156,7 @@ def select_fixed_lag_tracklet_viterbi_path(
     at most ``lag_s`` seconds of future information.
     """
 
-    if lag_s <= 0.0:
-        raise ValueError("lag_s must be positive")
+    lag_s = _validated_lag_s(lag_s)
 
     radar_indices = [index for index, event in enumerate(events) if event.get("kind") == "radar"]
     committed: dict[tuple[str, int | float], pd.Series] = {}
