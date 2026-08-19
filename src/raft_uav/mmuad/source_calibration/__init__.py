@@ -4,8 +4,8 @@ The maintained implementation lives in the sibling ``source_calibration.py`` mod
 This package preserves the public import path while validating every loaded or fitted
 source transform before it can contaminate calibrated candidate coordinates, rejecting
 ambiguous case-insensitive transform keys, preventing source-specific transforms from
-leaking onto unrelated or broader sources, and retaining the authoritative final truth
-sample at duplicate timestamps.
+leaking onto unrelated or broader sources, retaining the authoritative final truth
+sample at duplicate timestamps, and scoping pooled calibration by physical flight.
 """
 
 from __future__ import annotations
@@ -30,6 +30,8 @@ _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_SOURCE_TRANSFORM_POST_INIT = _IMPL.SourceTransform.__post_init__
 _ORIGINAL_NORMALIZE_TRUTH_ROWS = _IMPL._normalize_truth_rows
+_ORIGINAL_BUILD_SOURCE_CALIBRATION_PAIRS = _IMPL.build_source_calibration_pairs
+_ORIGINAL_FIT_SOURCE_TRANSLATION_ALPHA_CV = _IMPL._fit_source_translation_alpha_cv
 
 
 def _validated_source_transform_post_init(self: object) -> None:
@@ -49,6 +51,158 @@ def _normalize_truth_rows(truth: pd.DataFrame) -> pd.DataFrame:
     return rows.drop_duplicates(["sequence_id", "time_s"], keep="last").reset_index(
         drop=True
     )
+
+
+def _normalized_flight_scope_value(value: object) -> str | None:
+    """Normalize one optional physical-flight identifier for internal scoping."""
+
+    if value is None or value is pd.NA or np.ma.is_masked(value):
+        return None
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
+    text = str(value).strip()
+    if not text or text.casefold() in {"nan", "none", "<na>"}:
+        return None
+    return text
+
+
+def _sequence_column(frame: pd.DataFrame) -> str | None:
+    """Return the source-calibration sequence column before legacy normalization."""
+
+    if "sequence_id" in frame.columns:
+        return "sequence_id"
+    if "Sequence" in frame.columns:
+        return "Sequence"
+    return None
+
+
+def _physical_scope_keys(frame: pd.DataFrame) -> list[tuple[str, str | None]]:
+    """Return joint sequence/flight identities for rows carrying ``flight_id``."""
+
+    sequence_column = _sequence_column(frame)
+    if sequence_column is None:
+        raise ValueError("source calibration requires sequence_id metadata for flight scoping")
+    return [
+        (str(sequence_id), _normalized_flight_scope_value(flight_id))
+        for sequence_id, flight_id in zip(
+            frame[sequence_column],
+            frame["flight_id"],
+            strict=True,
+        )
+    ]
+
+
+def _scope_token_map(
+    *scope_lists: list[tuple[str, str | None]],
+) -> dict[tuple[str, str | None], str]:
+    """Create collision-safe temporary sequence ids for physical scopes."""
+
+    tokens: dict[tuple[str, str | None], str] = {}
+    for scopes in scope_lists:
+        for scope in scopes:
+            if scope not in tokens:
+                tokens[scope] = f"__raft_source_calibration_scope_{len(tokens)}__"
+    return tokens
+
+
+def _has_multiple_flights_per_sequence(frame: pd.DataFrame) -> bool:
+    """Return whether explicit flight metadata disambiguates one sequence."""
+
+    if "flight_id" not in frame.columns or frame.empty:
+        return False
+    by_sequence: dict[str, set[str | None]] = {}
+    for sequence_id, flight_id in _physical_scope_keys(frame):
+        by_sequence.setdefault(sequence_id, set()).add(flight_id)
+    return any(len(flight_ids) > 1 for flight_ids in by_sequence.values())
+
+
+def build_source_calibration_pairs(
+    candidates: object,
+    truth: pd.DataFrame,
+    *,
+    max_truth_time_delta_s: float,
+    max_pair_distance_m: float,
+) -> pd.DataFrame:
+    """Pair calibration rows without crossing physical ``flight_id`` boundaries."""
+
+    candidate_rows = candidates.rows.copy()
+    truth_rows = pd.DataFrame(truth).copy()
+    candidate_has_flight = "flight_id" in candidate_rows.columns
+    truth_has_flight = "flight_id" in truth_rows.columns
+
+    if candidate_has_flight != truth_has_flight:
+        scoped_side = candidate_rows if candidate_has_flight else truth_rows
+        if _has_multiple_flights_per_sequence(scoped_side):
+            raise ValueError(
+                "source calibration cannot disambiguate multiple flight_id values under "
+                "one sequence_id unless candidates and truth both provide flight_id"
+            )
+        return _ORIGINAL_BUILD_SOURCE_CALIBRATION_PAIRS(
+            candidates,
+            truth,
+            max_truth_time_delta_s=max_truth_time_delta_s,
+            max_pair_distance_m=max_pair_distance_m,
+        )
+
+    if not candidate_has_flight:
+        return _ORIGINAL_BUILD_SOURCE_CALIBRATION_PAIRS(
+            candidates,
+            truth,
+            max_truth_time_delta_s=max_truth_time_delta_s,
+            max_pair_distance_m=max_pair_distance_m,
+        )
+
+    candidate_scopes = _physical_scope_keys(candidate_rows)
+    truth_scopes = _physical_scope_keys(truth_rows)
+    token_by_scope = _scope_token_map(candidate_scopes, truth_scopes)
+    sequence_by_token = {
+        token: scope[0]
+        for scope, token in token_by_scope.items()
+    }
+
+    scoped_candidates = candidate_rows.copy()
+    scoped_candidates["sequence_id"] = [token_by_scope[scope] for scope in candidate_scopes]
+    scoped_truth = truth_rows.copy()
+    scoped_truth["sequence_id"] = [token_by_scope[scope] for scope in truth_scopes]
+
+    pairs = _ORIGINAL_BUILD_SOURCE_CALIBRATION_PAIRS(
+        _IMPL.CandidateFrame(scoped_candidates),
+        scoped_truth,
+        max_truth_time_delta_s=max_truth_time_delta_s,
+        max_pair_distance_m=max_pair_distance_m,
+    )
+    if pairs.empty:
+        return pairs
+
+    pairs = pairs.copy()
+    pairs["sequence_id"] = pairs["sequence_id"].map(sequence_by_token)
+    sort_columns = ["sequence_id", "flight_id", "source", "time_s"]
+    return pairs.sort_values(sort_columns, kind="stable").reset_index(drop=True)
+
+
+def _fit_source_translation_alpha_cv(
+    group: pd.DataFrame,
+    alpha_grid: tuple[float, ...],
+) -> dict[str, object]:
+    """Cross-validate source translation over physical flights when available."""
+
+    if "flight_id" not in group.columns or group.empty:
+        return _ORIGINAL_FIT_SOURCE_TRANSLATION_ALPHA_CV(group, alpha_grid)
+
+    scopes = _physical_scope_keys(group)
+    if len(set(scopes)) <= 1:
+        return _ORIGINAL_FIT_SOURCE_TRANSLATION_ALPHA_CV(group, alpha_grid)
+
+    token_by_scope = _scope_token_map(scopes)
+    scoped_group = group.copy()
+    scoped_group["sequence_id"] = [token_by_scope[scope] for scope in scopes]
+    result = dict(_ORIGINAL_FIT_SOURCE_TRANSLATION_ALPHA_CV(scoped_group, alpha_grid))
+    result["source_translation_alpha_cv_scope"] = "sequence_id+flight_id"
+    return result
 
 
 def _source_lookup_key(value: object) -> str:
@@ -131,6 +285,8 @@ def _match_source_transform(source: str, transforms: dict[str, object]) -> objec
 
 _IMPL.SourceTransform.__post_init__ = _validated_source_transform_post_init
 _IMPL._normalize_truth_rows = _normalize_truth_rows
+_IMPL.build_source_calibration_pairs = build_source_calibration_pairs
+_IMPL._fit_source_translation_alpha_cv = _fit_source_translation_alpha_cv
 _IMPL._match_source_transform = _match_source_transform
 
 globals().update(
@@ -141,6 +297,13 @@ globals().update(
     }
 )
 globals()["_normalize_truth_rows"] = _normalize_truth_rows
+globals()["_normalized_flight_scope_value"] = _normalized_flight_scope_value
+globals()["_sequence_column"] = _sequence_column
+globals()["_physical_scope_keys"] = _physical_scope_keys
+globals()["_scope_token_map"] = _scope_token_map
+globals()["_has_multiple_flights_per_sequence"] = _has_multiple_flights_per_sequence
+globals()["build_source_calibration_pairs"] = build_source_calibration_pairs
+globals()["_fit_source_translation_alpha_cv"] = _fit_source_translation_alpha_cv
 globals()["_source_lookup_key"] = _source_lookup_key
 globals()["_require_unambiguous_source_transform_keys"] = (
     _require_unambiguous_source_transform_keys
