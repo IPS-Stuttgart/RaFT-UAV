@@ -19,6 +19,9 @@ from raft_uav.baselines._imm_transition_validation_patch import (
 from raft_uav.baselines._innovation_diagnostic_record_patch import (
     apply_innovation_diagnostic_record_patch,
 )
+from raft_uav.baselines._kalman_model_control_validation_patch import (
+    apply_kalman_model_control_validation_patch,
+)
 from raft_uav.baselines._learned_radar_std_validation_patch import (
     apply_learned_radar_std_validation_patch,
 )
@@ -44,6 +47,7 @@ from raft_uav.baselines._tracking_measurement_source_validation_patch import (
     apply_tracking_measurement_source_validation_patch,
 )
 
+apply_kalman_model_control_validation_patch(_kalman)
 apply_tracking_measurement_source_validation_patch(_kalman)
 apply_imm_measurement_order_patch(_imm)
 apply_imm_mode_validation_patch(_imm)
