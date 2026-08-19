@@ -1,4 +1,4 @@
-"""Compatibility wrapper keeping research aggregations sequence-local."""
+"""Compatibility wrapper keeping research aggregations flight/sequence-local."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_TRACKLET_FEATURE_FRAME = _IMPL.tracklet_feature_frame
+_SCOPE_COLUMN_ALIASES = ("sequence_id", "flight_id")
 
 
 def _validated_max_frame_gap(value: Any) -> float:
@@ -62,33 +63,43 @@ def _validated_max_frame_gap(value: Any) -> float:
     return gap
 
 
+def _scope_columns(radar: pd.DataFrame) -> list[str]:
+    """Return every explicit flight/sequence identifier available on ``radar``."""
+
+    return [column for column in _SCOPE_COLUMN_ALIASES if column in radar.columns]
+
+
 def tracklet_feature_frame(
     radar: pd.DataFrame,
     *,
     max_frame_gap: float = 1.5,
 ) -> pd.DataFrame:
-    """Aggregate tracklets independently for every explicit sequence."""
+    """Aggregate tracklets independently for every explicit flight/sequence."""
 
     normalized_max_frame_gap = _validated_max_frame_gap(max_frame_gap)
-    if radar.empty or "sequence_id" not in radar.columns:
+    scope_columns = _scope_columns(radar)
+    if radar.empty or not scope_columns:
         return _ORIGINAL_TRACKLET_FEATURE_FRAME(
             radar,
             max_frame_gap=normalized_max_frame_gap,
         )
 
+    grouper: str | list[str] = scope_columns[0] if len(scope_columns) == 1 else scope_columns
     feature_frames: list[pd.DataFrame] = []
-    for sequence_id, sequence_rows in radar.groupby(
-        "sequence_id",
+    for scope_key, scoped_rows in radar.groupby(
+        grouper,
         sort=False,
         dropna=False,
     ):
         features = _ORIGINAL_TRACKLET_FEATURE_FRAME(
-            sequence_rows,
+            scoped_rows,
             max_frame_gap=normalized_max_frame_gap,
         )
         if features.empty:
             continue
-        features.insert(0, "sequence_id", sequence_id)
+        scope_values = (scope_key,) if len(scope_columns) == 1 else tuple(scope_key)
+        for column, value in reversed(list(zip(scope_columns, scope_values, strict=True))):
+            features.insert(0, column, value)
         feature_frames.append(features)
     if not feature_frames:
         return pd.DataFrame()
@@ -96,7 +107,7 @@ def tracklet_feature_frame(
 
 
 def estimate_frame_clutter_density(radar: pd.DataFrame) -> dict[str, float]:
-    """Estimate clutter over sequence-local physical radar frames."""
+    """Estimate clutter over flight/sequence-local physical radar frames."""
 
     if radar.empty:
         return {
@@ -104,9 +115,7 @@ def estimate_frame_clutter_density(radar: pd.DataFrame) -> dict[str, float]:
             "p95_candidates_per_frame": 0.0,
         }
     group_key = "frame_index" if "frame_index" in radar.columns else "time_s"
-    group_columns = [group_key]
-    if "sequence_id" in radar.columns:
-        group_columns.insert(0, "sequence_id")
+    group_columns = [*_scope_columns(radar), group_key]
     counts = (
         radar.groupby(group_columns, sort=False, dropna=False)
         .size()
@@ -129,6 +138,7 @@ def estimate_frame_clutter_density(radar: pd.DataFrame) -> dict[str, float]:
 
 
 _IMPL._validated_max_frame_gap = _validated_max_frame_gap
+_IMPL._scope_columns = _scope_columns
 _IMPL.tracklet_feature_frame = tracklet_feature_frame
 _IMPL.estimate_frame_clutter_density = estimate_frame_clutter_density
 
@@ -140,6 +150,7 @@ globals().update(
     }
 )
 globals()["_validated_max_frame_gap"] = _validated_max_frame_gap
+globals()["_scope_columns"] = _scope_columns
 globals()["tracklet_feature_frame"] = tracklet_feature_frame
 globals()["estimate_frame_clutter_density"] = estimate_frame_clutter_density
 
