@@ -2,11 +2,15 @@
 
 from importlib import import_module
 
+from raft_uav.baselines import delayed_initialization as _delayed_initialization
 from raft_uav.baselines import imm as _imm
 from raft_uav.baselines import kalman as _kalman
 from raft_uav.baselines import pyrecest_innovation_diagnostics as _pyrecest_innovation_diagnostics
 from raft_uav.baselines import radar_association as _radar_association
 from raft_uav.baselines import smoothing as _smoothing
+from raft_uav.baselines._delayed_initialization_duplicate_track_patch import (
+    apply_delayed_initialization_duplicate_track_patch,
+)
 from raft_uav.baselines._imm_measurement_order_patch import (
     apply_imm_measurement_order_patch,
 )
@@ -47,6 +51,7 @@ from raft_uav.baselines._tracking_measurement_source_validation_patch import (
     apply_tracking_measurement_source_validation_patch,
 )
 
+apply_delayed_initialization_duplicate_track_patch(_delayed_initialization)
 apply_kalman_model_control_validation_patch(_kalman)
 apply_tracking_measurement_source_validation_patch(_kalman)
 apply_imm_measurement_order_patch(_imm)
