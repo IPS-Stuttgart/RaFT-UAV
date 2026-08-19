@@ -44,7 +44,10 @@ def _attach_truth_errors_by_physical_flight(
         return estimates.copy()
 
     group_columns = ["sequence_id"]
-    if "flight_id" in estimates.columns and "flight_id" in truth_rows.columns:
+    flight_scoped = (
+        "flight_id" in estimates.columns and "flight_id" in truth_rows.columns
+    )
+    if flight_scoped:
         group_columns.append("flight_id")
 
     from raft_uav.mmuad.tracker import add_truth_errors
@@ -52,7 +55,7 @@ def _attach_truth_errors_by_physical_flight(
     frames: list[pd.DataFrame] = []
     for _, group in estimates.groupby(group_columns, sort=True, dropna=False):
         scoped_truth = _truth_for_estimate_group(truth_rows, group)
-        if scoped_truth.empty:
+        if scoped_truth.empty and not flight_scoped:
             frames.append(group.copy())
         else:
             frames.append(add_truth_errors(group.copy(), scoped_truth))
