@@ -1,9 +1,9 @@
 """Compatibility fixes for MMUAD camera loading and model lookup.
 
 The maintained implementation lives in the sibling ``camera.py`` module. This
-package preserves the public import path while validating pinhole intrinsics,
-selecting specific camera models, rejecting ambiguous detection columns, and
-correctly reading gzip-compressed YOLO label exports.
+package preserves the public import path while validating pinhole intrinsics and
+camera time offsets, selecting specific camera models, rejecting ambiguous
+detection columns, and correctly reading gzip-compressed YOLO label exports.
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_LOAD_CAMERA_MODELS = _IMPL.load_camera_models
 _ORIGINAL_INTRINSICS_FROM_CAMERA_ENTRY = _IMPL._intrinsics_from_camera_entry
 _ORIGINAL_BACKPROJECT_PIXEL_TO_CAMERA_XYZ = _IMPL.backproject_pixel_to_camera_xyz
 _ORIGINAL_NORMALIZE_CAMERA_DETECTION_COLUMNS = _IMPL._normalize_camera_detection_columns
@@ -65,12 +66,60 @@ def _validated_camera_intrinsics(intrinsics):
     return _IMPL.CameraIntrinsics(**values)
 
 
+def _validated_camera_time_offset(value):
+    """Return a finite real camera time offset without accepting pseudo-numbers."""
+
+    error = "camera time_offset_s must be a finite real scalar"
+    if isinstance(value, (bool, np.bool_)) or np.ma.is_masked(value):
+        raise ValueError(error)
+    try:
+        scalar = np.asarray(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+        raise ValueError(error)
+    try:
+        item = scalar.item()
+        if isinstance(item, (bool, np.bool_)) or np.ma.is_masked(item):
+            raise ValueError(error)
+        number = float(item)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(number):
+        raise ValueError(error)
+    return number
+
+
+def _validated_camera_model(model):
+    """Return a camera model with validated intrinsics and time offset."""
+
+    try:
+        intrinsics = model.intrinsics
+        time_offset_s = model.time_offset_s
+    except AttributeError as exc:
+        raise ValueError("camera model must provide intrinsics and time_offset_s") from exc
+    return _IMPL.replace(
+        model,
+        intrinsics=_validated_camera_intrinsics(intrinsics),
+        time_offset_s=_validated_camera_time_offset(time_offset_s),
+    )
+
+
 def _intrinsics_from_camera_entry(entry):
     """Load and validate one camera's pinhole intrinsics."""
 
     return _validated_camera_intrinsics(
         _ORIGINAL_INTRINSICS_FROM_CAMERA_ENTRY(entry)
     )
+
+
+def load_camera_models(path):
+    """Load camera models and reject malformed time offsets immediately."""
+
+    return {
+        key: _validated_camera_model(model)
+        for key, model in _ORIGINAL_LOAD_CAMERA_MODELS(path).items()
+    }
 
 
 def backproject_pixel_to_camera_xyz(u_px, v_px, depth_m, intrinsics):
@@ -121,9 +170,9 @@ def _model_for_source(models, source):
     ]
     for key, model in normalized:
         if source_key == key:
-            return model
+            return _validated_camera_model(model)
     if len(models) == 1:
-        return next(iter(models.values()))
+        return _validated_camera_model(next(iter(models.values())))
     matches = [
         (len(key), model)
         for key, model in normalized
@@ -131,7 +180,7 @@ def _model_for_source(models, source):
     ]
     if not matches:
         return None
-    return max(matches, key=lambda item: item[0])[1]
+    return _validated_camera_model(max(matches, key=lambda item: item[0])[1])
 
 
 def _export_stem(path: Path) -> str:
@@ -248,7 +297,10 @@ def _read_yolo_label_table(path: Path):
 
 
 _IMPL._validated_camera_intrinsics = _validated_camera_intrinsics
+_IMPL._validated_camera_time_offset = _validated_camera_time_offset
+_IMPL._validated_camera_model = _validated_camera_model
 _IMPL._intrinsics_from_camera_entry = _intrinsics_from_camera_entry
+_IMPL.load_camera_models = load_camera_models
 _IMPL.backproject_pixel_to_camera_xyz = backproject_pixel_to_camera_xyz
 _IMPL._normalize_camera_detection_columns = _normalize_camera_detection_columns
 _IMPL._model_for_source = _model_for_source
@@ -264,8 +316,12 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_ORIGINAL_LOAD_CAMERA_MODELS"] = _ORIGINAL_LOAD_CAMERA_MODELS
 globals()["_validated_camera_intrinsics"] = _validated_camera_intrinsics
+globals()["_validated_camera_time_offset"] = _validated_camera_time_offset
+globals()["_validated_camera_model"] = _validated_camera_model
 globals()["_intrinsics_from_camera_entry"] = _intrinsics_from_camera_entry
+globals()["load_camera_models"] = load_camera_models
 globals()["backproject_pixel_to_camera_xyz"] = backproject_pixel_to_camera_xyz
 globals()["_normalize_camera_detection_columns"] = _normalize_camera_detection_columns
 globals()["_model_for_source"] = _model_for_source
