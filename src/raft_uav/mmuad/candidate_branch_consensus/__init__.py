@@ -1,9 +1,10 @@
-"""Compatibility fix for canonical branch-consensus identities.
+"""Compatibility fixes for canonical branch-consensus identities and flight scope.
 
 The maintained implementation lives in the sibling
 ``candidate_branch_consensus.py`` module. This package preserves the public
 import path while comparing source and branch labels with whitespace-insensitive,
-Unicode-aware identities. Caller-visible labels remain unchanged.
+Unicode-aware identities and preventing consensus evidence from crossing
+independent physical flights. Caller-visible labels remain unchanged.
 """
 
 from __future__ import annotations
@@ -43,6 +44,54 @@ def _canonical_identity_labels(values: Any, *, default: str) -> np.ndarray:
     return text.where(~missing, str(default).strip().casefold()).to_numpy(object)
 
 
+def _physical_scope_columns(rows: pd.DataFrame) -> tuple[str, ...]:
+    """Return every available physical-flight scope dimension."""
+
+    columns = ["sequence_id"]
+    if "flight_id" in rows.columns:
+        columns.append("flight_id")
+    return tuple(columns)
+
+
+def _pair_consensus_advantage_scoped(
+    rows: pd.DataFrame,
+    *,
+    origin_column: str | None,
+    distance_column: str,
+    missing_support_margin_m: float,
+) -> np.ndarray:
+    """Compare sibling branches only inside the same physical flight."""
+
+    advantage = np.full(len(rows), np.nan, dtype=float)
+    if origin_column is None or origin_column not in rows.columns:
+        return advantage
+    group_keys = [*_physical_scope_columns(rows), "source", origin_column]
+    valid_origin = (
+        rows[origin_column].notna()
+        & rows[origin_column].astype(str).str.strip().ne("")
+    )
+    for _, group in rows.loc[valid_origin].groupby(
+        group_keys,
+        sort=False,
+        dropna=False,
+    ):
+        if len(group) < 2:
+            continue
+        distances = pd.to_numeric(group[distance_column], errors="coerce")
+        for row_index in group.index:
+            current = distances.loc[row_index]
+            siblings = distances.drop(index=row_index)
+            finite_siblings = siblings[np.isfinite(siblings.to_numpy(float))]
+            current_finite = bool(np.isfinite(current))
+            if current_finite and finite_siblings.empty:
+                advantage[int(row_index)] = float(missing_support_margin_m)
+            elif not current_finite and not finite_siblings.empty:
+                advantage[int(row_index)] = -float(missing_support_margin_m)
+            elif current_finite and not finite_siblings.empty:
+                advantage[int(row_index)] = float(finite_siblings.min() - float(current))
+    return advantage
+
+
 def attach_candidate_branch_consensus(
     candidates: CandidateFrame | pd.DataFrame,
     *,
@@ -60,7 +109,7 @@ def attach_candidate_branch_consensus(
     exclude_same_origin_support: bool = True,
     replace_confidence: bool = False,
 ) -> CandidateFrame:
-    """Attach consensus features using canonical source and branch identities."""
+    """Attach consensus features using canonical identities and physical scope."""
 
     rows = _IMPL._candidate_rows(candidates)
     if rows.empty:
@@ -74,6 +123,7 @@ def attach_candidate_branch_consensus(
     resolved_time_scale_s = _IMPL._resolved_time_scale(time_window_s, time_scale_s)
 
     out = rows.copy().reset_index(drop=True)
+    scope_columns = _physical_scope_columns(out)
     resolved_branch = _IMPL._resolve_column(
         out,
         branch_column,
@@ -98,7 +148,7 @@ def attach_candidate_branch_consensus(
         out,
         "branch_consensus_base_score",
         group_columns=(
-            "sequence_id",
+            *scope_columns,
             _SOURCE_IDENTITY_COLUMN,
             _BRANCH_IDENTITY_COLUMN,
         ),
@@ -112,8 +162,17 @@ def attach_candidate_branch_consensus(
     unique_source_count = np.zeros(len(out), dtype=int)
     unique_branch_count = np.zeros(len(out), dtype=int)
 
-    for _, sequence_rows in out.groupby("sequence_id", sort=False):
-        ordered = sequence_rows.sort_values("time_s")
+    scope_group_key: str | list[str]
+    if len(scope_columns) == 1:
+        scope_group_key = scope_columns[0]
+    else:
+        scope_group_key = list(scope_columns)
+    for _, scope_rows in out.groupby(
+        scope_group_key,
+        sort=False,
+        dropna=False,
+    ):
+        ordered = scope_rows.sort_values("time_s")
         ordered_indices = ordered.index.to_numpy(int)
         times = ordered["time_s"].to_numpy(float)
         xyz = ordered[["x_m", "y_m", "z_m"]].to_numpy(float)
@@ -217,7 +276,7 @@ def attach_candidate_branch_consensus(
 
     pair_rows = out.copy()
     pair_rows["source"] = pair_rows[_SOURCE_IDENTITY_COLUMN]
-    pair_advantage = _IMPL._pair_consensus_advantage(
+    pair_advantage = _pair_consensus_advantage_scoped(
         pair_rows,
         origin_column=resolved_origin,
         distance_column="branch_consensus_nearest_cross_source_distance_m",
@@ -241,7 +300,7 @@ def attach_candidate_branch_consensus(
     out["branch_consensus_rank_percentile"] = _IMPL._group_minmax_score(
         out,
         score_output_column,
-        group_columns=("sequence_id",),
+        group_columns=scope_columns,
     )
     if replace_confidence:
         out["confidence"] = rank_score
@@ -262,6 +321,8 @@ globals().update(
     }
 )
 globals()["_canonical_identity_labels"] = _canonical_identity_labels
+globals()["_physical_scope_columns"] = _physical_scope_columns
+globals()["_pair_consensus_advantage_scoped"] = _pair_consensus_advantage_scoped
 globals()["attach_candidate_branch_consensus"] = attach_candidate_branch_consensus
 
 __doc__ = _IMPL.__doc__
