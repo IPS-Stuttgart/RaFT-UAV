@@ -1,14 +1,15 @@
-"""Compatibility fix for MMUAD layout directory-name matching.
+"""Compatibility fixes for MMUAD layout token matching.
 
 The maintained implementation lives in the sibling ``layout.py`` module. This
-package preserves the public import path while requiring a real directory-token
-boundary for separator-free prefix matches.
+package preserves the public import path while requiring real token boundaries
+for directory prefixes and short logical aliases such as ``gt``.
 """
 
 from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import re
 import sys
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "layout.py"
@@ -69,8 +70,29 @@ def _directory_name_matches_any(name: str, tokens: tuple[str, ...]) -> bool:
     return False
 
 
+def _logical_text_has_any(parts: tuple[str, ...], tokens: tuple[str, ...]) -> bool:
+    """Match logical file tokens without letting short aliases hit word interiors."""
+
+    normalized = " ".join(_IMPL._normalized_dir_name(part) for part in parts)
+    folded = _IMPL._folded_dir_name(normalized)
+    lexical_tokens = {
+        item for item in re.split(r"[^a-z0-9]+", normalized) if item
+    }
+    for token in tokens:
+        token_normalized = _IMPL._normalized_dir_name(token)
+        token_folded = _IMPL._folded_dir_name(token)
+        if len(token_folded) <= 2:
+            if token_folded in lexical_tokens:
+                return True
+            continue
+        if token_normalized in normalized or token_folded in folded:
+            return True
+    return False
+
+
 _IMPL._folded_prefix_has_boundary = _folded_prefix_has_boundary
 _IMPL._directory_name_matches_any = _directory_name_matches_any
+_IMPL._logical_text_has_any = _logical_text_has_any
 
 globals().update(
     {
@@ -81,6 +103,7 @@ globals().update(
 )
 globals()["_folded_prefix_has_boundary"] = _folded_prefix_has_boundary
 globals()["_directory_name_matches_any"] = _directory_name_matches_any
+globals()["_logical_text_has_any"] = _logical_text_has_any
 
 __doc__ = _IMPL.__doc__
 __all__ = [
