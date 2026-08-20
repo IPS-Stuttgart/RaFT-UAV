@@ -1,6 +1,9 @@
 """Evaluation utilities."""
 
 from . import _best_time_offset_objective_patch as _best_time_offset_objective_patch
+from . import (
+    _diagnostics_truth_interpolation_patch as _diagnostics_truth_interpolation_patch,
+)
 from . import _diagnostics_sequence_scope_patch as _diagnostics_sequence_scope_patch
 from . import _golden_metrics_schema_patch as _golden_metrics_schema_patch
 from . import (
