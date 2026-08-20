@@ -3,18 +3,22 @@
 The maintained implementation lives in the sibling
 ``candidate_reservoir_grid.py`` module. This package preserves the public import
 path while rejecting ambiguous or non-finite offset-grid specifications, removing
-repeated values that would otherwise rerun identical configurations, and keeping
-distinct floating-point offsets distinct in per-configuration labels.
+repeated values that would otherwise rerun identical configurations, keeping
+distinct floating-point offsets distinct in per-configuration labels, and
+rejecting lossy top-K coercions before oracle diagnostics are selected.
 """
 
 from __future__ import annotations
 
+from functools import wraps
 import importlib.util
 from pathlib import Path
 import sys
 from typing import Sequence
 
 import numpy as np
+
+from raft_uav.numeric import optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_reservoir_grid.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -26,6 +30,9 @@ if _SPEC is None or _SPEC.loader is None:  # pragma: no cover
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+_ORIGINAL_RUN_CANDIDATE_RESERVOIR_OFFSET_GRID = (
+    _IMPL.run_candidate_reservoir_offset_grid
+)
 
 
 def _parse_offset_specs(specs: Sequence[str]) -> list[tuple[str, tuple[float, ...]]]:
@@ -70,8 +77,40 @@ def _format_float(value: float) -> str:
     return text.replace("-", "m").replace(".", "p").replace("+", "")
 
 
+def _validated_top_k_values(values: object) -> tuple[int, ...]:
+    """Normalize exact positive top-K values without lossy integer coercion."""
+
+    if isinstance(values, (str, bytes)):
+        raise ValueError("top_k_values must be a sequence of positive exact integers")
+    try:
+        items = tuple(values)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise ValueError(
+            "top_k_values must be a sequence of positive exact integers"
+        ) from exc
+
+    normalized: list[int] = []
+    for value in items:
+        integer = optional_int(value)
+        if integer is None or integer <= 0:
+            raise ValueError("top_k_values must contain positive exact integers")
+        normalized.append(integer)
+    return tuple(sorted(set(normalized)))
+
+
+@wraps(_ORIGINAL_RUN_CANDIDATE_RESERVOIR_OFFSET_GRID)
+def run_candidate_reservoir_offset_grid(*args, **kwargs):
+    """Run the grid after losslessly normalizing explicit oracle top-K values."""
+
+    if "top_k_values" in kwargs:
+        kwargs = dict(kwargs)
+        kwargs["top_k_values"] = _validated_top_k_values(kwargs["top_k_values"])
+    return _ORIGINAL_RUN_CANDIDATE_RESERVOIR_OFFSET_GRID(*args, **kwargs)
+
+
 _IMPL._parse_offset_specs = _parse_offset_specs
 _IMPL._format_float = _format_float
+_IMPL.run_candidate_reservoir_offset_grid = run_candidate_reservoir_offset_grid
 
 globals().update(
     {
@@ -82,6 +121,8 @@ globals().update(
 )
 globals()["_parse_offset_specs"] = _parse_offset_specs
 globals()["_format_float"] = _format_float
+globals()["_validated_top_k_values"] = _validated_top_k_values
+globals()["run_candidate_reservoir_offset_grid"] = run_candidate_reservoir_offset_grid
 
 __doc__ = _IMPL.__doc__
 __all__ = [
