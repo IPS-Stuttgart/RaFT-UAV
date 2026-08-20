@@ -108,3 +108,73 @@ def test_conflicting_sequence_aliases_are_rejected() -> None:
             truth=truth,
             max_eval_time_delta_s=0.0,
         )
+
+
+def test_track_switches_are_scoped_to_each_pooled_sequence() -> None:
+    selected_radar = pd.DataFrame(
+        {
+            "sequence_id": ["seq_a", "seq_b", "seq_a", "seq_b"],
+            "time_s": [0.0, 0.0, 1.0, 1.0],
+            "track_id": [10, 20, 10, 20],
+        }
+    )
+
+    summary = build_diagnostic_summary(
+        estimate_frame=pd.DataFrame(),
+        selected_radar=selected_radar,
+        truth=pd.DataFrame(),
+        max_eval_time_delta_s=None,
+    )
+
+    switches = summary["track_switches"]["selected_radar"]
+    assert switches["count"] == 0
+    assert switches["updates_with_track_id"] == 4
+    assert switches["unique_track_ids"] == 2
+    assert switches["top_transitions"] == []
+    assert switches["events"] == []
+
+
+def test_track_switches_preserve_input_order_for_equal_timestamps() -> None:
+    time_s = [
+        2,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        2,
+        1,
+        1,
+        2,
+        2,
+        1,
+        1,
+        1,
+        2,
+    ]
+    selected_radar = pd.DataFrame(
+        {
+            "time_s": time_s,
+            "track_id": [1] * 10 + [2] * 10,
+        }
+    )
+
+    summary = build_diagnostic_summary(
+        estimate_frame=pd.DataFrame(),
+        selected_radar=selected_radar,
+        truth=pd.DataFrame(),
+        max_eval_time_delta_s=None,
+    )
+
+    switches = summary["track_switches"]["selected_radar"]
+    assert switches["count"] == 3
+    assert switches["events"] == [
+        {"from_track_id": 1, "to_track_id": 2, "time_s": 1},
+        {"from_track_id": 2, "to_track_id": 1, "time_s": 2},
+        {"from_track_id": 1, "to_track_id": 2, "time_s": 2},
+    ]
