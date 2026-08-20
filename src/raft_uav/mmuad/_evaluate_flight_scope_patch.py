@@ -206,6 +206,11 @@ def _scope_single_frame_by_flight(
     if not _has_usable_flight_ids(flight_ids):
         return rows, None
     assert flight_ids is not None
+    if not bool(flight_ids.notna().all()):
+        raise ValueError(
+            f"{name} flight_id metadata is partially missing; provide labels for every "
+            "row or omit flight_id metadata entirely"
+        )
 
     tokens: dict[tuple[str, str | None], str] = {}
     metadata: dict[str, tuple[str, str | None]] = {}
