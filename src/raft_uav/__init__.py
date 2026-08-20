@@ -251,6 +251,12 @@ def _evaluate_fde_truth_identity_install() -> Callable[[], None]:
     return install
 
 
+def _evaluate_flight_scope_install() -> Callable[[], None]:
+    from raft_uav.mmuad._evaluate_flight_scope_patch import install
+
+    return install
+
+
 if os.environ.get("RAFT_UAV_SKIP_RUNTIME_HOOKS") != "1":
     _optional_runtime_hook(_radar_covariance_install)
     _optional_runtime_hook(_tracklet_viterbi_install)
@@ -292,3 +298,4 @@ _optional_runtime_hook(_track5_submission_schema_guard_install)
 _optional_runtime_hook(_track5_estimate_calibration_duplicate_truth_install)
 _optional_runtime_hook(_track5_template_resample_template_validation_install)
 _optional_runtime_hook(_evaluate_fde_truth_identity_install)
+_optional_runtime_hook(_evaluate_flight_scope_install)
