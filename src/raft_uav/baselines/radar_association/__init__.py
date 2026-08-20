@@ -74,6 +74,8 @@ _NONNEGATIVE_FINITE_ASSOCIATION_PARAMETERS = (
     "stable_segment_interpolation_gap_std_mps",
     "stable_segment_rf_score_weight",
     "stable_segment_rf_time_gate_s",
+    "truth_gate_m",
+    "truth_time_gate_s",
 )
 _OPTIONAL_POSITIVE_FINITE_ASSOCIATION_PARAMETERS = (
     "stable_segment_range_gate_m",
