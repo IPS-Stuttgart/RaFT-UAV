@@ -18,6 +18,8 @@ from raft_uav.mmuad.image_evidence import (
     [
         True,
         np.bool_(False),
+        np.array(True),
+        np.array(False, dtype=object),
         -1,
         1.5,
         np.nan,
@@ -46,6 +48,8 @@ def test_build_image_evidence_rejects_invalid_frame_limits(
     [
         True,
         np.bool_(False),
+        np.array(True),
+        np.array(False, dtype=object),
         -0.1,
         np.nan,
         np.inf,
@@ -79,6 +83,14 @@ def test_direct_sampler_validates_controls_before_iteration() -> None:
             max_time_delta_s=0.1,
         )
 
+    with pytest.raises(ValueError, match="max_frames must be a non-negative integer"):
+        _sample_nearest_image_rows(
+            rows,
+            [0.0],
+            max_frames=np.array(True),
+            max_time_delta_s=0.1,
+        )
+
     with pytest.raises(
         ValueError,
         match="max_time_delta_s must be None or a finite non-negative number",
@@ -88,6 +100,17 @@ def test_direct_sampler_validates_controls_before_iteration() -> None:
             [0.0],
             max_frames=1,
             max_time_delta_s=np.nan,
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="max_time_delta_s must be None or a finite non-negative number",
+    ):
+        _sample_nearest_image_rows(
+            rows,
+            [0.0],
+            max_frames=1,
+            max_time_delta_s=np.array(False, dtype=object),
         )
 
 

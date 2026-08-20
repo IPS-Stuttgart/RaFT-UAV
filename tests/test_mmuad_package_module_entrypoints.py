@@ -14,6 +14,7 @@ import pytest
         "raft_uav.mmuad.candidate_mixture_map_multistart",
         "raft_uav.mmuad.candidate_mixture_map_stratified",
         "raft_uav.mmuad.track5_jerk_limit",
+        "raft_uav.mmuad.track5_sequence_gate_fit",
         "raft_uav.mmuad.candidate_mixture_map_grouped",
         "raft_uav.mmuad.track5_segment_source_gate",
         "raft_uav.mmuad.track5_trajectory_smooth",

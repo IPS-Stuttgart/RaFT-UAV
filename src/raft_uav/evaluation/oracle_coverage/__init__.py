@@ -18,6 +18,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.numeric import optional_float as _shared_optional_float
@@ -76,12 +77,40 @@ def _validated_tracklet_config(config: object | None) -> Any:
     return config
 
 
+def _is_complex_scalar(value: Any) -> bool:
+    """Return whether scalar array wrappers contain a complex value."""
+
+    scalar = value
+    seen_arrays: set[int] = set()
+    while isinstance(scalar, np.ndarray):
+        if scalar.ndim != 0:
+            return False
+        array_id = id(scalar)
+        if array_id in seen_arrays:
+            return False
+        seen_arrays.add(array_id)
+        scalar = scalar.item()
+    if isinstance(scalar, np.generic):
+        scalar = scalar.item()
+    return isinstance(scalar, complex)
+
+
 def _serialized_boolean_series(values: Any, *, column: str) -> pd.Series:
-    """Parse native and serialized Boolean diagnostics without object truthiness."""
+    """Parse native and serialized Boolean diagnostics without lossy coercion."""
 
     series = pd.Series(values)
     if series.empty:
         return pd.Series(index=series.index, dtype=bool)
+
+    complex_values = series.map(_is_complex_scalar).fillna(False).astype(bool)
+    if bool(complex_values.any()):
+        invalid_indices = complex_values[complex_values].index.tolist()
+        invalid_values = series.loc[invalid_indices].tolist()
+        raise ValueError(
+            f"{column} contains invalid Boolean values at rows "
+            f"{invalid_indices}: {invalid_values}"
+        )
+
     if pd.api.types.is_bool_dtype(series.dtype):
         return series.astype("boolean").fillna(False).astype(bool)
 
@@ -271,6 +300,7 @@ globals().update(
 )
 globals()["_positive_standard_deviation"] = _positive_standard_deviation
 globals()["_validated_tracklet_config"] = _validated_tracklet_config
+globals()["_is_complex_scalar"] = _is_complex_scalar
 globals()["_serialized_boolean_series"] = _serialized_boolean_series
 globals()["_normalized_summary_frame"] = _normalized_summary_frame
 globals()["_coverage_summary"] = _coverage_summary

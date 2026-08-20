@@ -32,6 +32,20 @@ def test_partial_frame_indices_fall_back_to_timestamp_continuity(invalid_frame_i
     )
 
 
+def test_integer_timestamp_cadence_without_frame_indices_stays_continuous():
+    radar = pd.DataFrame(
+        {
+            "track_id": [7, 7, 7],
+            "time_s": [0.0, 2.0, 4.0],
+        }
+    )
+
+    segments = _continuous_track_segments(radar)
+
+    assert len(segments) == 1
+    assert segments[0]["time_s"].tolist() == [0.0, 2.0, 4.0]
+
+
 def test_complete_frame_indices_remain_authoritative_for_continuity():
     radar = pd.DataFrame(
         {
@@ -45,6 +59,24 @@ def test_complete_frame_indices_remain_authoritative_for_continuity():
 
     assert len(segments) == 1
     assert segments[0]["time_s"].tolist() == [0.0, 100.0, 200.0]
+
+
+def test_frame_index_gaps_stay_strict_when_timestamps_are_integer_valued():
+    radar = pd.DataFrame(
+        {
+            "track_id": [7, 7, 7],
+            "frame_index": [0.0, 2.0, 4.0],
+            "time_s": [0.0, 2.0, 4.0],
+        }
+    )
+
+    segments = _continuous_track_segments(radar)
+
+    assert [segment["time_s"].tolist() for segment in segments] == [
+        [0.0],
+        [2.0],
+        [4.0],
+    ]
 
 
 def test_frame_counter_reset_starts_new_track_segment():

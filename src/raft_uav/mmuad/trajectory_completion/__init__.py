@@ -6,9 +6,9 @@ module. This package preserves the public import path while parsing serialized
 truthiness, normalizing serialized Boolean completion controls, avoiding
 floating-point undercounting when inferring regular timestamps inside short
 gaps, validating completion controls before they can silently disable
-processing or corrupt finite trajectories, keeping pooled kinematic diagnostics
-from bridging independent trajectories, and preserving the final posterior when
-sequential updates share a timestamp.
+processing or corrupt finite trajectories, scoping completion and pooled
+kinematic diagnostics by physical flight aliases, and preserving the final
+posterior when sequential updates share a timestamp.
 """
 
 from __future__ import annotations
@@ -154,6 +154,35 @@ def _selected_measurements(source: pd.DataFrame) -> pd.DataFrame:
     return _ORIGINAL_SELECTED_MEASUREMENTS(_normalized_selected_path_updates(source))
 
 
+def _trajectory_groups(rows: pd.DataFrame):
+    """Yield trajectories without crossing independent physical flights."""
+
+    work = pd.DataFrame(rows).copy()
+    group_columns = ["sequence_id"]
+    if "flight_id" in work.columns:
+        group_columns.append("flight_id")
+    if "output_track_id" in work.columns:
+        work["output_track_id"] = work["output_track_id"].fillna("single").astype(str)
+        group_columns.append("output_track_id")
+    else:
+        work["_trajectory_id"] = "single"
+        group_columns.append("_trajectory_id")
+
+    for keys, group in work.groupby(
+        group_columns,
+        sort=True,
+        dropna=False,
+    ):
+        key_tuple = keys if isinstance(keys, tuple) else (keys,)
+        sequence_id = key_tuple[0]
+        trajectory_id = key_tuple[-1]
+        yield (
+            str(sequence_id),
+            str(trajectory_id),
+            group.drop(columns=["_trajectory_id"], errors="ignore"),
+        )
+
+
 def _dedupe_by_time(group: pd.DataFrame) -> pd.DataFrame:
     """Keep the final filter posterior for each duplicate timestamp.
 
@@ -253,7 +282,7 @@ def _trajectory_diagnostic_groups(estimates: pd.DataFrame):
 
     group_columns = [
         column
-        for column in ("sequence_id", "output_track_id")
+        for column in ("sequence_id", "flight_id", "output_track_id")
         if column in estimates.columns
     ]
     if not group_columns:
@@ -389,6 +418,22 @@ def _target_times(
 
     original = _IMPL._unique_times(group)
     targets = {float(value) for value in original}
+    scoped_truth = truth_rows
+    if (
+        truth_rows is not None
+        and not truth_rows.empty
+        and "flight_id" in group.columns
+        and "flight_id" in truth_rows.columns
+    ):
+        flight_values = group["flight_id"].drop_duplicates()
+        if len(flight_values) == 1:
+            flight_id = flight_values.iloc[0]
+            if pd.isna(flight_id):
+                scoped_truth = truth_rows.loc[truth_rows["flight_id"].isna()].copy()
+            else:
+                scoped_truth = truth_rows.loc[
+                    truth_rows["flight_id"].astype(str) == str(flight_id)
+                ].copy()
     include_truth_timestamps = _boolean_control(
         config.include_truth_timestamps,
         name="include_truth_timestamps",
@@ -399,11 +444,11 @@ def _target_times(
     )
     if (
         include_truth_timestamps
-        and truth_rows is not None
-        and not truth_rows.empty
+        and scoped_truth is not None
+        and not scoped_truth.empty
     ):
         for timestamp in pd.to_numeric(
-            truth_rows["time_s"],
+            scoped_truth["time_s"],
             errors="coerce",
         ).to_numpy(float):
             if np.isfinite(timestamp) and _IMPL._time_supported_by_short_gap(
@@ -438,6 +483,7 @@ _IMPL._boolean_control = _boolean_control
 _IMPL._normalized_selected_path_updates = _normalized_selected_path_updates
 _IMPL._estimate_rows = _estimate_rows
 _IMPL._selected_measurements = _selected_measurements
+_IMPL._trajectory_groups = _trajectory_groups
 _IMPL._dedupe_by_time = _dedupe_by_time
 _IMPL._finite_nonnegative_control = _finite_nonnegative_control
 _IMPL._unit_interval_control = _unit_interval_control
@@ -462,6 +508,7 @@ globals()["_boolean_control"] = _boolean_control
 globals()["_normalized_selected_path_updates"] = _normalized_selected_path_updates
 globals()["_estimate_rows"] = _estimate_rows
 globals()["_selected_measurements"] = _selected_measurements
+globals()["_trajectory_groups"] = _trajectory_groups
 globals()["_dedupe_by_time"] = _dedupe_by_time
 globals()["_finite_nonnegative_control"] = _finite_nonnegative_control
 globals()["_unit_interval_control"] = _unit_interval_control

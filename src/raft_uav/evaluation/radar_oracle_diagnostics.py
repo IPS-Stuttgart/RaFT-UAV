@@ -151,15 +151,22 @@ def time_offset_sweep(
 
 
 def best_time_offset(sweep: pd.DataFrame, *, metric: str = "mean_3d_error_m") -> float | None:
+    """Return the best finite offset, preferring the smallest correction on ties."""
+
     if sweep.empty or metric not in sweep.columns:
         return None
     values = pd.to_numeric(sweep[metric], errors="coerce").to_numpy(dtype=float)
-    finite = np.isfinite(values)
+    offsets = pd.to_numeric(sweep["time_offset_s"], errors="coerce").to_numpy(dtype=float)
+    finite = np.isfinite(values) & np.isfinite(offsets)
     if not finite.any():
         return None
+
     finite_indices = np.flatnonzero(finite)
-    best = finite_indices[int(np.argmin(values[finite]))]
-    return float(sweep.iloc[best]["time_offset_s"])
+    finite_values = values[finite_indices]
+    best_value = float(np.min(finite_values))
+    tied_indices = finite_indices[finite_values == best_value]
+    best = tied_indices[int(np.argmin(np.abs(offsets[tied_indices])))]
+    return float(offsets[best])
 
 
 def summarize_oracle_selection(selected: pd.DataFrame, *, frame_count: int | None = None) -> dict[str, float]:

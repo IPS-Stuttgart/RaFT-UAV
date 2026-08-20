@@ -189,10 +189,24 @@ def _numpy_array_from_export(path: Path, *, preferred_keys: Iterable[str]) -> np
         if isinstance(payload, np.lib.npyio.NpzFile):
             if not payload.files:
                 raise ValueError(f"NumPy archive {path} does not contain arrays")
-            key = next(
-                (candidate for candidate in preferred_keys if candidate in payload.files),
-                payload.files[0],
-            )
+            key = payload.files[0]
+            for candidate in preferred_keys:
+                if candidate in payload.files:
+                    key = candidate
+                    break
+                matches = [
+                    available
+                    for available in payload.files
+                    if available.casefold() == candidate.casefold()
+                ]
+                if len(matches) > 1:
+                    raise ValueError(
+                        f"NumPy archive {path} contains ambiguous arrays for preferred "
+                        f"key {candidate!r}: {matches}"
+                    )
+                if matches:
+                    key = matches[0]
+                    break
             return np.asarray(payload[key])
         return np.asarray(payload)
     finally:
@@ -228,6 +242,8 @@ def _read_numpy_trajectory_table(path: Path) -> pd.DataFrame:
                 "z_m": pd.Series(dtype=float),
             }
         )
+    if arr.dtype.names:
+        return pd.DataFrame.from_records(arr)
     if arr.ndim == 1 or (arr.ndim == 2 and arr.shape[1] == 1):
         compact = arr.reshape(-1)
         if compact.size >= 3:

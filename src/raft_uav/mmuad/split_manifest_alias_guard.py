@@ -6,8 +6,20 @@ from collections.abc import Mapping
 from typing import Any
 
 
+_WINDOW_VIEW_SUFFIX = "_windows"
+
+
 def _normalized_key(value: Any) -> str:
     return str(value).strip().casefold()
+
+
+def _split_partition(value: Any) -> str:
+    """Return the leakage partition represented by a split or its window view."""
+
+    normalized = _normalized_key(value)
+    if normalized.endswith(_WINDOW_VIEW_SUFFIX):
+        return normalized[: -len(_WINDOW_VIEW_SUFFIX)]
+    return normalized
 
 
 def _unique_normalized_key(mapping: Mapping[Any, Any], key: str) -> Any | None:
@@ -131,8 +143,11 @@ def patch_module(split_module: Any) -> None:
                 normalized = split_module._normalize_sequence_reference(sequence_id)
                 if not normalized:
                     continue
-                previous = owners.setdefault(normalized, split)
-                if previous != split:
+                previous = owners.get(normalized)
+                if previous is None:
+                    owners[normalized] = split
+                    continue
+                if previous != split and _split_partition(previous) != _split_partition(split):
                     conflicts.setdefault(normalized, {previous}).add(split)
         if conflicts:
             details = "; ".join(

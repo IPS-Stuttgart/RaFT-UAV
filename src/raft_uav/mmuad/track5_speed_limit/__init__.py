@@ -112,33 +112,51 @@ def _validate_sequence_ids(submission: object) -> pd.DataFrame:
     return rows
 
 
+def _unwrap_numeric_cell(value: object) -> tuple[object, str | None]:
+    """Recursively unwrap one numeric cell and classify unsafe payloads."""
+
+    scalar = value
+    seen_arrays: set[int] = set()
+    while True:
+        if np.ma.is_masked(scalar):
+            return scalar, "masked"
+        if isinstance(scalar, (bool, np.bool_)):
+            return scalar, "Boolean"
+        if isinstance(scalar, (complex, np.complexfloating)):
+            return scalar, "complex"
+        if isinstance(scalar, np.ndarray):
+            identity = id(scalar)
+            if identity in seen_arrays:
+                return scalar, "non-scalar"
+            seen_arrays.add(identity)
+            if isinstance(scalar, np.ma.MaskedArray):
+                if bool(np.ma.getmaskarray(scalar).any()):
+                    return scalar, "masked"
+                if scalar.ndim != 0:
+                    return scalar, "non-scalar"
+                scalar = scalar.data
+                continue
+            if scalar.ndim != 0:
+                return scalar, "non-scalar"
+            scalar = scalar.item()
+            continue
+        if isinstance(scalar, np.generic):
+            scalar = scalar.item()
+            continue
+        return scalar, None
+
+
 def _numeric_cell_kind(value: object) -> str | None:
     """Classify scalar cell types that pandas would otherwise coerce unsafely."""
 
-    scalar = value
-    if isinstance(value, np.ma.MaskedArray):
-        if bool(np.ma.getmaskarray(value).any()):
-            return "masked"
-        scalar = value.data
-    if isinstance(scalar, np.ndarray):
-        if scalar.ndim != 0:
-            return "non-scalar"
-        scalar = scalar.item()
-    if isinstance(scalar, (bool, np.bool_)):
-        return "Boolean"
-    if isinstance(scalar, (complex, np.complexfloating)):
-        return "complex"
-    return None
+    _, kind = _unwrap_numeric_cell(value)
+    return kind
 
 
 def _numeric_validation_scalar(value: object) -> object:
-    """Unwrap supported zero-dimensional real numeric containers."""
+    """Recursively unwrap supported zero-dimensional real numeric containers."""
 
-    scalar = value
-    if isinstance(value, np.ma.MaskedArray) and not bool(np.ma.getmaskarray(value).any()):
-        scalar = value.data
-    if isinstance(scalar, np.ndarray) and scalar.ndim == 0:
-        return scalar.item()
+    scalar, _ = _unwrap_numeric_cell(value)
     return scalar
 
 
@@ -315,6 +333,7 @@ globals()["_finite_scalar"] = _finite_scalar
 globals()["_positive_integer"] = _positive_integer
 globals()["_reject_boolean_scalar"] = _reject_boolean_scalar
 globals()["_validate_sequence_ids"] = _validate_sequence_ids
+globals()["_unwrap_numeric_cell"] = _unwrap_numeric_cell
 globals()["_numeric_cell_kind"] = _numeric_cell_kind
 globals()["_numeric_validation_scalar"] = _numeric_validation_scalar
 globals()["_validate_classification_values"] = _validate_classification_values

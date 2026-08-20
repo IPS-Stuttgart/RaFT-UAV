@@ -5,13 +5,13 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
-import re
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.evaluator import load_evaluation_truth_file
+from raft_uav.mmuad.io import infer_time_s_from_filename
 from raft_uav.mmuad.sequence import discover_sequence_paths, official_track5_sequence_timestamps
 
 
@@ -474,13 +474,12 @@ def _numeric_image_feature_columns(rows: pd.DataFrame) -> list[str]:
 
 
 def _timestamp_from_filename(path: Path) -> float | None:
-    tokens = re.findall(r"[-+]?\d*\.?\d+", Path(path).stem)
-    if not tokens:
+    """Infer an image timestamp without treating separator hyphens as signs."""
+
+    stem = Path(path).stem
+    if not any(character.isdigit() for character in stem):
         return None
-    try:
-        return float(tokens[-1])
-    except ValueError:
-        return None
+    return infer_time_s_from_filename(path)
 
 
 def main(argv: list[str] | None = None) -> int:

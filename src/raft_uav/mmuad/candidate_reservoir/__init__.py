@@ -1,11 +1,12 @@
 """Compatibility fixes for candidate-reservoir inputs, flags, and scores.
 
 The maintained implementation lives in the sibling ``candidate_reservoir.py``
-module. This package preserves opaque sequence identifiers, strictly normalizes
-serialized ``candidate_reservoir_protected`` values before summary counts are
-computed, treats malformed ranking metadata as missing so corrupted scores
-cannot dominate reservoir selection, and applies the shared final-sample
-convention to duplicate truth timestamps in oracle diagnostics.
+module. This package preserves opaque sequence identifiers, normalizes serialized
+``candidate_reservoir_protected`` values for summary counts without inheriting
+pruning-only binary restrictions, treats malformed ranking metadata as missing so
+corrupted scores cannot dominate reservoir selection, applies the shared
+final-sample convention to duplicate truth timestamps in oracle diagnostics, and
+validates the oracle truth-time matching gate before it can affect diagnostics.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 
-from raft_uav.mmuad.candidate_diversity import _parse_protected_flag
+from raft_uav.mmuad.candidate_diversity import _ORIGINAL_PARSE_PROTECTED_FLAG
 from raft_uav.numeric import optional_float
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "candidate_reservoir.py"
@@ -120,12 +121,12 @@ def _load_candidate_specs(specs: list[str]) -> pd.DataFrame:
 
 
 def _boolean_series(values: Any, index: pd.Index) -> pd.Series:
-    """Parse protection flags with the same semantics used during pruning."""
+    """Parse summary flags without applying pruning-only binary restrictions."""
 
     series = pd.Series(values, index=index)
     if series.empty:
         return pd.Series(False, index=index, dtype=bool)
-    return series.map(_parse_protected_flag).astype(bool)
+    return series.map(_ORIGINAL_PARSE_PROTECTED_FLAG).astype(bool)
 
 
 def _optional_candidate_score(value: object) -> float | None:
@@ -208,6 +209,17 @@ def _truth_with_final_duplicate_samples(truth: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _validated_max_truth_time_delta_s(value: object) -> float:
+    """Return a finite non-negative real scalar oracle time gate."""
+
+    max_delta_s = optional_float(value)
+    if max_delta_s is None or max_delta_s < 0.0:
+        raise ValueError(
+            "max_truth_time_delta_s must be a finite non-negative real scalar"
+        )
+    return max_delta_s
+
+
 def build_oracle_recall_tables(
     reservoir: pd.DataFrame,
     truth: pd.DataFrame,
@@ -217,6 +229,7 @@ def build_oracle_recall_tables(
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Rank candidates against the authoritative final truth sample."""
 
+    max_delta_s = _validated_max_truth_time_delta_s(max_truth_time_delta_s)
     rows = pd.DataFrame(reservoir).copy()
     if "candidate_reservoir_score" in rows.columns:
         rows["candidate_reservoir_score"] = _finite_numeric_column(
@@ -229,7 +242,7 @@ def build_oracle_recall_tables(
         rows,
         truth_rows,
         top_k_values=top_k_values,
-        max_truth_time_delta_s=max_truth_time_delta_s,
+        max_truth_time_delta_s=max_delta_s,
     )
 
 
@@ -267,6 +280,7 @@ _IMPL._optional_candidate_score = _optional_candidate_score
 _IMPL._numeric_column = _finite_numeric_column
 _IMPL._candidate_score = _candidate_score
 _IMPL._truth_with_final_duplicate_samples = _truth_with_final_duplicate_samples
+_IMPL._validated_max_truth_time_delta_s = _validated_max_truth_time_delta_s
 _IMPL.build_oracle_recall_tables = build_oracle_recall_tables
 _IMPL.build_reservoir_summary = build_reservoir_summary
 _IMPL.main = main
@@ -286,6 +300,7 @@ globals()["_optional_candidate_score"] = _optional_candidate_score
 globals()["_finite_numeric_column"] = _finite_numeric_column
 globals()["_candidate_score"] = _candidate_score
 globals()["_truth_with_final_duplicate_samples"] = _truth_with_final_duplicate_samples
+globals()["_validated_max_truth_time_delta_s"] = _validated_max_truth_time_delta_s
 globals()["build_oracle_recall_tables"] = build_oracle_recall_tables
 globals()["build_reservoir_summary"] = build_reservoir_summary
 globals()["main"] = main

@@ -110,9 +110,7 @@ def _finite_real_scalar(value: object, *, name: str) -> float:
     if scalar.ndim != 0 or np.iscomplexobj(scalar):
         raise ValueError(error)
     try:
-        item = scalar.item()
-        if np.ma.is_masked(item) or np.iscomplexobj(item):
-            raise ValueError(error)
+        item = _unwrap_real_object_scalar(scalar, error=error, seen=set())
         number = float(item)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(error) from exc
@@ -135,6 +133,34 @@ def _validate_longitude(value: float | np.ndarray, *, name: str) -> None:
         raise ValueError(f"{name} must be between -180 and 180 degrees")
 
 
+def _unwrap_real_object_scalar(
+    value: object,
+    *,
+    error: str,
+    seen: set[int],
+) -> object:
+    """Unwrap scalar object containers without accepting hidden pseudo-numbers."""
+
+    if np.ma.is_masked(value) or isinstance(value, (bool, np.bool_)):
+        raise ValueError(error)
+    if isinstance(value, np.ndarray):
+        if value.ndim != 0:
+            raise ValueError(error)
+        marker = id(value)
+        if marker in seen:
+            raise ValueError(error)
+        seen.add(marker)
+        try:
+            return _unwrap_real_object_scalar(value.item(), error=error, seen=seen)
+        finally:
+            seen.remove(marker)
+    if isinstance(value, np.generic):
+        return _unwrap_real_object_scalar(value.item(), error=error, seen=seen)
+    if isinstance(value, (list, tuple, set, dict)) or np.iscomplexobj(value):
+        raise ValueError(error)
+    return value
+
+
 def _finite_real_array(value: object, *, name: str) -> np.ndarray:
     """Return finite real numeric values without coercing Boolean pseudo-numbers."""
 
@@ -147,13 +173,12 @@ def _finite_real_array(value: object, *, name: str) -> np.ndarray:
         raise ValueError(error) from exc
     if np.iscomplexobj(array) or np.issubdtype(array.dtype, np.bool_):
         raise ValueError(error)
-    if array.dtype == object and any(
-        isinstance(item, (bool, np.bool_))
-        or np.ma.is_masked(item)
-        or np.iscomplexobj(item)
-        for item in array.flat
-    ):
-        raise ValueError(error)
+    if array.dtype == object:
+        normalized = array.copy()
+        seen: set[int] = set()
+        for index, item in np.ndenumerate(array):
+            normalized[index] = _unwrap_real_object_scalar(item, error=error, seen=seen)
+        array = normalized
     try:
         numeric = np.asarray(array, dtype=float)
     except (TypeError, ValueError, OverflowError) as exc:

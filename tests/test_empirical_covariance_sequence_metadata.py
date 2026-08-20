@@ -57,3 +57,64 @@ def test_empirical_covariance_keeps_sequence_free_alignment() -> None:
     )
 
     assert residuals.tolist() == [[1.0, -1.0]]
+
+
+@pytest.mark.parametrize(
+    ("frame_has_flight_id", "truth_has_flight_id"),
+    [(True, False), (False, True)],
+)
+def test_empirical_covariance_rejects_one_sided_flight_metadata(
+    frame_has_flight_id: bool,
+    truth_has_flight_id: bool,
+) -> None:
+    frame = _rf(include_sequence_id=False)
+    truth = _truth(include_sequence_id=False)
+    if frame_has_flight_id:
+        frame["flight_id"] = ["flight_b"]
+    if truth_has_flight_id:
+        truth["flight_id"] = ["flight_a", "flight_b"]
+
+    with pytest.raises(
+        ValueError,
+        match="frame and truth must either both contain flight_id or both omit it",
+    ):
+        aligned_residuals(
+            frame,
+            truth,
+            source="rf",
+            max_time_delta_s=0.25,
+        )
+
+
+def test_empirical_covariance_scopes_alignment_by_flight_id() -> None:
+    frame = _rf(include_sequence_id=False).assign(flight_id="flight_b")
+    truth = _truth(include_sequence_id=False).assign(
+        flight_id=["flight_a", "flight_b"]
+    )
+
+    residuals = aligned_residuals(
+        frame,
+        truth,
+        source="rf",
+        max_time_delta_s=0.25,
+    )
+
+    assert residuals.tolist() == [[1.0, -1.0]]
+
+
+def test_empirical_covariance_uses_joint_sequence_and_flight_scope() -> None:
+    frame = _rf(include_sequence_id=True).assign(flight_id="flight_b")
+    frame["sequence_id"] = "shared"
+    truth = _truth(include_sequence_id=True).assign(
+        sequence_id=["shared", "shared"],
+        flight_id=["flight_a", "flight_b"],
+    )
+
+    residuals = aligned_residuals(
+        frame,
+        truth,
+        source="rf",
+        max_time_delta_s=0.25,
+    )
+
+    assert residuals.tolist() == [[1.0, -1.0]]
