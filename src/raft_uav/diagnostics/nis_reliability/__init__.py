@@ -31,17 +31,27 @@ _ORIGINAL_NIS_RELIABILITY_SUMMARY = _IMPL.nis_reliability_summary
 _ORIGINAL_NORMALIZED_NIS_FRAME = _IMPL._normalized_nis_frame
 
 
-def _exact_measurement_dimension_mask(values: pd.Series) -> np.ndarray:
-    """Return rows whose dimensions are non-Boolean exact positive integers."""
+def _coerce_real_non_boolean_numeric(values: pd.Series) -> pd.Series:
+    """Coerce scalar numeric values without interpreting Booleans or non-real data."""
 
     raw = pd.Series(values)
     boolean = raw.map(lambda value: isinstance(value, (bool, np.bool_))).to_numpy(dtype=bool)
-    numeric = pd.to_numeric(raw, errors="coerce").to_numpy(dtype=float)
+    numeric = pd.to_numeric(raw.mask(boolean), errors="coerce")
+    complex_values = numeric.to_numpy(dtype=np.complex128, na_value=np.nan)
+    nonreal = np.imag(complex_values) != 0.0
+    real_values = np.real(complex_values).astype(float)
+    real_values[boolean | nonreal] = np.nan
+    return pd.Series(real_values, index=raw.index)
+
+
+def _exact_measurement_dimension_mask(values: pd.Series) -> np.ndarray:
+    """Return rows whose dimensions are non-Boolean exact positive integers."""
+
+    numeric = _coerce_real_non_boolean_numeric(values).to_numpy(dtype=float)
     return (
         np.isfinite(numeric)
         & (numeric > 0.0)
         & (numeric == np.rint(numeric))
-        & ~boolean
     )
 
 
@@ -51,12 +61,16 @@ def _normalized_nis_frame(
     group_columns: Sequence[str],
     accepted_only: bool,
 ) -> pd.DataFrame:
-    """Normalize NIS rows without rounding near-integer or Boolean dimensions."""
+    """Normalize NIS rows without lossy Boolean, complex, or dimension coercion."""
 
     prepared = frame
+    if "nis" in frame.columns or "measurement_dim" in frame.columns:
+        prepared = frame.copy()
+    if "nis" in frame.columns:
+        prepared["nis"] = _coerce_real_non_boolean_numeric(frame["nis"])
+
     validity_column: object | None = None
     if "measurement_dim" in frame.columns:
-        prepared = frame.copy()
         validity_column = object()
         prepared[validity_column] = _exact_measurement_dimension_mask(
             frame["measurement_dim"]
@@ -151,6 +165,7 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_coerce_real_non_boolean_numeric"] = _coerce_real_non_boolean_numeric
 globals()["_exact_measurement_dimension_mask"] = _exact_measurement_dimension_mask
 globals()["_normalized_nis_frame"] = _normalized_nis_frame
 globals()["read_nis_diagnostics"] = read_nis_diagnostics
