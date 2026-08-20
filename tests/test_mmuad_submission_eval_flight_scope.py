@@ -33,6 +33,30 @@ def test_submission_matching_uses_joint_sequence_and_flight_scope() -> None:
     assert matches["unmatched_reason"].tolist() == ["", ""]
 
 
+def test_submission_matching_preserves_empty_truth_behavior_across_flights() -> None:
+    submission = _pooled_flight_rows()
+    truth = pd.DataFrame(
+        columns=[
+            "sequence_id",
+            "time_s",
+            "track_id",
+            "x_m",
+            "y_m",
+            "z_m",
+        ]
+    )
+
+    matches = match_submission_to_truth(submission, truth)
+    matches = matches.sort_values("flight_id", kind="mergesort").reset_index(drop=True)
+
+    assert matches["flight_id"].tolist() == ["flight-a", "flight-b"]
+    assert matches["matched"].tolist() == [False, False]
+    assert matches["unmatched_reason"].tolist() == [
+        "missing_sequence_truth",
+        "missing_sequence_truth",
+    ]
+
+
 def test_submission_fde_is_scoped_by_physical_flight() -> None:
     matches = pd.DataFrame(
         {

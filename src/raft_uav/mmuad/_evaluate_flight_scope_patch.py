@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from importlib import import_module
-
 import pandas as pd
 from pandas.api.types import is_scalar
 
@@ -272,9 +271,29 @@ def match_submission_to_truth(
 ) -> pd.DataFrame:
     """Match predictions and truth only within complete physical-flight scopes."""
 
+    submission_rows = pd.DataFrame(submission).copy()
+    truth_rows = pd.DataFrame(truth).copy()
+    if submission_rows.empty:
+        return _ORIGINAL_MATCH_SUBMISSION_TO_TRUTH(
+            submission_rows,
+            truth_rows,
+            max_time_delta_s=max_time_delta_s,
+        )
+    if truth_rows.empty:
+        scoped_submission, metadata = _scope_single_frame_by_flight(
+            submission_rows,
+            name="submission",
+        )
+        matches = _ORIGINAL_MATCH_SUBMISSION_TO_TRUTH(
+            scoped_submission,
+            truth_rows,
+            max_time_delta_s=max_time_delta_s,
+        )
+        return _restore_scope_columns(matches, metadata)
+
     scoped_submission, scoped_truth, metadata = _scope_frames_by_flight(
-        submission,
-        truth,
+        submission_rows,
+        truth_rows,
     )
     matches = _ORIGINAL_MATCH_SUBMISSION_TO_TRUTH(
         scoped_submission,
