@@ -37,6 +37,14 @@ def _available_scope_columns(frame: pd.DataFrame) -> tuple[str, ...]:
     return tuple(column for column in _SCOPE_COLUMNS if column in frame.columns)
 
 
+def _column_has_scope_value(frame: pd.DataFrame, column: str) -> bool:
+    """Return whether ``column`` contains at least one usable scope identifier."""
+
+    if column not in frame.columns or frame.empty:
+        return False
+    return bool(frame[column].map(_normalized_scope_value).notna().any())
+
+
 def _scope_keys(
     frame: pd.DataFrame,
     columns: tuple[str, ...],
@@ -161,17 +169,23 @@ def make_bias_training_examples(
 
     measurement_columns = _available_scope_columns(measurements)
     truth_columns = _available_scope_columns(truth)
-    shared_columns = tuple(
+    common_columns = tuple(
         column
         for column in _SCOPE_COLUMNS
         if column in measurement_columns and column in truth_columns
     )
+    shared_columns = tuple(
+        column
+        for column in common_columns
+        if _column_has_scope_value(measurements, column)
+        or _column_has_scope_value(truth, column)
+    )
 
     measurement_extra = tuple(
-        column for column in measurement_columns if column not in shared_columns
+        column for column in measurement_columns if column not in common_columns
     )
     truth_extra = tuple(
-        column for column in truth_columns if column not in shared_columns
+        column for column in truth_columns if column not in common_columns
     )
     if _extra_scope_subdivides_shared_scope(
         measurements,
@@ -207,12 +221,7 @@ def make_bias_training_examples(
 
     measurement_keys = _scope_keys(measurements, shared_columns)
     truth_keys = _scope_keys(truth, shared_columns)
-    explicit_scope_keys = {
-        key
-        for key in (*measurement_keys, *truth_keys)
-        if all(value is not None for value in key)
-    }
-    pooled = len(explicit_scope_keys) > 1
+    pooled = len(set((*measurement_keys, *truth_keys))) > 1
     if not pooled:
         return _ORIGINAL_MAKE_BIAS_TRAINING_EXAMPLES(
             measurements,

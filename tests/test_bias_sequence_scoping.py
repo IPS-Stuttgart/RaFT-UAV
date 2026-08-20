@@ -140,3 +140,29 @@ def test_bias_examples_reject_missing_scope_inside_pooled_inputs() -> None:
 
     with pytest.raises(ValueError, match="every measurement row"):
         _bias_examples(measurements, truth)
+
+
+def test_bias_examples_ignore_shared_scope_alias_that_is_entirely_missing() -> None:
+    measurements = pd.DataFrame(
+        {
+            "sequence_id": ["seq-a", "seq-b"],
+            "flight_id": [None, None],
+            "time_s": [0.0, 0.0],
+            "east_m": [11.0, 101.0],
+            "north_m": [1.0, 10.0],
+        }
+    )
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["seq-a", "seq-b"],
+            "flight_id": [None, None],
+            "time_s": [0.0, 0.0],
+            "east_m": [10.0, 100.0],
+            "north_m": [1.0, 10.0],
+        }
+    )
+
+    rows = _bias_examples(measurements, truth)
+
+    assert rows["sequence_id"].tolist() == ["seq-a", "seq-b"]
+    assert rows["bias_east_m"].tolist() == [1.0, 1.0]
