@@ -5,7 +5,7 @@ module. This package preserves the public import path while validating numeric
 gate parameters, excluding malformed or out-of-range class probabilities,
 preserving exact integer-like track identifiers, splitting reused frame counters
 into distinct continuous-track epochs, using the acquisition cadence for
-timestamp-only continuity, and rejecting pooled sequence inputs at the
+timestamp-only continuity, and rejecting pooled physical-flight inputs at the
 single-track boundary.
 """
 
@@ -172,13 +172,25 @@ def _track_id_from_frame(frame: pd.DataFrame) -> int:
     return -1
 
 
+def _explicit_scope_ids(radar: pd.DataFrame, column: str) -> set[str]:
+    """Return normalized, non-missing identifiers for one physical-scope field."""
+
+    if radar.empty or column not in radar.columns:
+        return set()
+    values = radar[column].astype("string").str.strip()
+    return set(values.loc[values.notna() & values.ne("")].tolist())
+
+
 def _explicit_sequence_ids(radar: pd.DataFrame) -> set[str]:
     """Return normalized, non-missing sequence identifiers from one radar table."""
 
-    if radar.empty or "sequence_id" not in radar.columns:
-        return set()
-    values = radar["sequence_id"].astype("string").str.strip()
-    return set(values.loc[values.notna() & values.ne("")].tolist())
+    return _explicit_scope_ids(radar, "sequence_id")
+
+
+def _explicit_flight_ids(radar: pd.DataFrame) -> set[str]:
+    """Return normalized, non-missing physical-flight identifiers from one radar table."""
+
+    return _explicit_scope_ids(radar, "flight_id")
 
 
 def _timestamp_gap_threshold(radar: pd.DataFrame) -> float:
@@ -224,13 +236,19 @@ def _timestamp_track_segments(
 
 
 def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
-    """Split one sequence at frame restarts or acquisition-scale timestamp gaps."""
+    """Split one physical flight at frame restarts or acquisition-scale timestamp gaps."""
 
     sequence_ids = _explicit_sequence_ids(radar)
     if len(sequence_ids) > 1:
         raise ValueError(
             "paper radar track selection requires one sequence_id; "
             "split pooled radar data by sequence"
+        )
+    flight_ids = _explicit_flight_ids(radar)
+    if len(flight_ids) > 1:
+        raise ValueError(
+            "paper radar track selection requires one flight_id; "
+            "split pooled radar data by physical flight"
         )
     if radar.empty or "track_id" not in radar.columns:
         return []
@@ -320,7 +338,9 @@ globals()["_catprob_candidate_pool"] = _catprob_candidate_pool
 globals()["require_fortem_range_m"] = require_fortem_range_m
 globals()["_mean_catprob"] = _mean_catprob
 globals()["_track_id_from_frame"] = _track_id_from_frame
+globals()["_explicit_scope_ids"] = _explicit_scope_ids
 globals()["_explicit_sequence_ids"] = _explicit_sequence_ids
+globals()["_explicit_flight_ids"] = _explicit_flight_ids
 globals()["_timestamp_gap_threshold"] = _timestamp_gap_threshold
 globals()["_timestamp_track_segments"] = _timestamp_track_segments
 globals()["_continuous_track_segments"] = _continuous_track_segments
