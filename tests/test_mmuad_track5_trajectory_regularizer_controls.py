@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import raft_uav.mmuad.track5_trajectory_regularizer as trajectory_regularizer
 from raft_uav.mmuad.track5_trajectory_regularizer import regularize_track5_estimates
 from raft_uav.mmuad.track5_trajectory_regularizer import run_track5_trajectory_regularizer
 
@@ -111,20 +112,42 @@ def test_regularizer_rejects_malformed_controls(
         regularize_track5_estimates(_estimates(), **kwargs)
 
 
-def test_regularizer_accepts_lossless_serialized_scalars() -> None:
-    regularized, diagnostics = regularize_track5_estimates(
-        _estimates(),
+def test_regularizer_accepts_lossless_serialized_scalars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    estimates = _estimates()
+    captured: dict[str, object] = {}
+    expected = (object(), object())
+
+    def capture_controls(
+        received_estimates: pd.DataFrame,
+        **controls: object,
+    ) -> tuple[object, object]:
+        assert received_estimates is estimates
+        captured.update(controls)
+        return expected
+
+    monkeypatch.setattr(
+        trajectory_regularizer,
+        "_ORIGINAL_REGULARIZE_TRACK5_ESTIMATES",
+        capture_controls,
+    )
+
+    result = trajectory_regularizer.regularize_track5_estimates(
+        estimates,
         smoothness_weight="0.0",
         huber_delta_m=np.float64(25.0),
         iterations="2.0",
         observation_sigma_m=_nested_scalar(10.0),
     )
 
-    assert len(regularized) == 3
-    assert diagnostics.loc[0, "smoothness_weight"] == pytest.approx(0.0)
-    assert diagnostics.loc[0, "huber_delta_m"] == pytest.approx(25.0)
-    assert diagnostics.loc[0, "iterations"] == 2
-    assert diagnostics.loc[0, "observation_sigma_m"] == pytest.approx(10.0)
+    assert result is expected
+    assert captured == {
+        "smoothness_weight": 0.0,
+        "huber_delta_m": 25.0,
+        "iterations": 2,
+        "observation_sigma_m": 10.0,
+    }
 
 
 def test_run_rejects_invalid_controls_before_output_creation(tmp_path: Path) -> None:
