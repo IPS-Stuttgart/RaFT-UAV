@@ -35,14 +35,9 @@ def output_x_by_id(path: Path) -> dict[int, list[float]]:
     return result
 
 
-def test_delayed_path_cover_uses_future_evidence_to_resolve_crossing(
-    tmp_path: Path,
-) -> None:
+def _crossing_inputs(tmp_path: Path) -> tuple[Path, Path]:
     labels = tmp_path / "labels"
     proposals = tmp_path / "proposals"
-    raw_output = tmp_path / "raw"
-    delayed_output = tmp_path / "delayed"
-
     seeds = [row(1, 1, 0.0), row(1, 2, 10.0)]
     proposal_rows = [
         row(frame, frame * 10 + index, x)
@@ -54,6 +49,15 @@ def test_delayed_path_cover_uses_future_evidence_to_resolve_crossing(
     ]
     write_rows(labels / "SEQ.txt", seeds)
     write_rows(proposals / "SEQ.txt", proposal_rows)
+    return labels, proposals
+
+
+def test_delayed_path_cover_uses_future_evidence_to_resolve_crossing(
+    tmp_path: Path,
+) -> None:
+    labels, proposals = _crossing_inputs(tmp_path)
+    raw_output = tmp_path / "raw"
+    delayed_output = tmp_path / "delayed"
 
     track_proposal_graph(
         proposals,
@@ -70,6 +74,7 @@ def test_delayed_path_cover_uses_future_evidence_to_resolve_crossing(
     assert (
         experimental_main(
             [
+                "--no-sequence-cache",
                 str(proposals),
                 "--first-frame-label-dir",
                 str(labels),
@@ -98,6 +103,61 @@ def test_delayed_path_cover_uses_future_evidence_to_resolve_crossing(
     }
 
 
+def test_ambiguity_beam_uses_second_order_motion_to_resolve_crossing(
+    tmp_path: Path,
+) -> None:
+    labels, proposals = _crossing_inputs(tmp_path)
+    pairwise_output = tmp_path / "pairwise"
+    beam_output = tmp_path / "beam"
+    common = [
+        "--no-sequence-cache",
+        str(proposals),
+        "--first-frame-label-dir",
+        str(labels),
+        "--max-link-gap",
+        "0",
+        "--birth-min-hits",
+        "100",
+        "--enable-delayed-path-cover",
+        "--delayed-max-gap",
+        "0",
+        "--delayed-lookahead-frames",
+        "2",
+        "--delayed-successors-per-frame",
+        "2",
+        "--delayed-continuation-weight",
+        "0",
+    ]
+
+    assert experimental_main([*common, "--output-dir", str(pairwise_output)]) == 0
+    assert output_x_by_id(pairwise_output / "SEQ.txt") == {
+        1: [0.0, 4.0, 2.0, -2.0],
+        2: [10.0, 6.0, 8.0, 12.0],
+    }
+
+    assert (
+        experimental_main(
+            [
+                *common,
+                "--output-dir",
+                str(beam_output),
+                "--enable-ambiguity-beam",
+                "--ambiguity-beam-width",
+                "8",
+                "--ambiguity-beam-margin",
+                "2",
+                "--ambiguity-acceleration-weight",
+                "1",
+            ]
+        )
+        == 0
+    )
+    assert output_x_by_id(beam_output / "SEQ.txt") == {
+        1: [0.0, 4.0, 8.0, 12.0],
+        2: [10.0, 6.0, 2.0, -2.0],
+    }
+
+
 @pytest.mark.parametrize(
     ("arguments", "message"),
     [
@@ -114,3 +174,27 @@ def test_delayed_path_cover_rejects_invalid_controls(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         experimental_main(["unused", "--enable-delayed-path-cover", *arguments])
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["--ambiguity-beam-width", "0"], "width"),
+        (["--ambiguity-beam-max-component-nodes", "0"], "max_component_nodes"),
+        (["--ambiguity-beam-margin", "nan"], "margin"),
+        (["--ambiguity-acceleration-weight", "-1"], "acceleration_weight"),
+        (["--ambiguity-acceleration-clip", "0"], "acceleration_clip"),
+        (["--ambiguity-beam-expansion-factor", "0"], "expansion_factor"),
+    ],
+)
+def test_ambiguity_beam_rejects_invalid_controls(
+    arguments: list[str],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        experimental_main(["unused", "--enable-delayed-path-cover", *arguments])
+
+
+def test_ambiguity_beam_requires_delayed_path_cover() -> None:
+    with pytest.raises(ValueError, match="requires delayed path cover"):
+        experimental_main(["unused", "--enable-ambiguity-beam"])
