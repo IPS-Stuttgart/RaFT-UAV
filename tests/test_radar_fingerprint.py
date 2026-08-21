@@ -46,6 +46,42 @@ def test_integer_timestamp_cadence_without_frame_indices_stays_continuous():
     assert segments[0]["time_s"].tolist() == [0.0, 2.0, 4.0]
 
 
+def test_numeric_string_timestamps_sort_numerically():
+    radar = pd.DataFrame(
+        {
+            "track_id": [7, 7, 7],
+            "time_s": ["10", "2", "6"],
+        }
+    )
+
+    segments = _continuous_track_segments(radar)
+
+    assert len(segments) == 1
+    assert segments[0]["time_s"].tolist() == [2.0, 6.0, 10.0]
+
+
+@pytest.mark.parametrize("invalid_timestamp", [np.nan, np.inf, -np.inf, "not-a-time"])
+def test_invalid_timestamps_do_not_pollute_radar_segments(invalid_timestamp):
+    radar = pd.DataFrame(
+        {
+            "track_id": [7, 7, 7, 7],
+            "frame_index": [0.0, 1.0, 2.0, 3.0],
+            "time_s": [0.0, invalid_timestamp, 2.0, 3.0],
+        }
+    )
+
+    segments = _continuous_track_segments(radar)
+
+    assert [segment["time_s"].tolist() for segment in segments] == [
+        [0.0],
+        [2.0, 3.0],
+    ]
+    assert all(
+        np.isfinite(segment["time_s"].to_numpy(dtype=float)).all()
+        for segment in segments
+    )
+
+
 def test_complete_frame_indices_remain_authoritative_for_continuity():
     radar = pd.DataFrame(
         {
