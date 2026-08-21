@@ -1,4 +1,4 @@
-"""Keep single-track oracle coverage within one sequence."""
+"""Keep single-track oracle coverage within one physical flight/sequence scope."""
 
 from __future__ import annotations
 
@@ -21,59 +21,81 @@ _ORIGINAL_BUILD_DETAILED_COVERAGE = (
 )
 _COMPACT_SIGNATURE = inspect.signature(_ORIGINAL_BUILD_COMPACT_COVERAGE)
 _DETAILED_SIGNATURE = inspect.signature(_ORIGINAL_BUILD_DETAILED_COVERAGE)
-_SEQUENCE_COLUMN_CANDIDATES = ("sequence_id", "flight_id")
+_SCOPE_FIELDS = ("sequence_id", "flight_id")
 _MISSING_SEQUENCE_TEXT = frozenset({"", "nan", "none", "<na>", "nat"})
 
 
-def _canonical_sequence_id(value: object) -> str | None:
-    """Return a stable scalar sequence identifier, or ``None`` when missing."""
+def _canonical_scope_id(value: object) -> str | None:
+    """Return a stable scalar scope identifier, or ``None`` when missing."""
 
     if not is_scalar(value):
-        raise ValueError("sequence identifiers must be scalar")
+        raise ValueError("scope identifiers must be scalar")
     if value is None or bool(pd.isna(value)):
         return None
     text = str(value).strip()
     return None if text.casefold() in _MISSING_SEQUENCE_TEXT else text
 
 
-def _sequence_keys(
+def _scope_keys(
     frame: pd.DataFrame,
     *,
     diagnostic: str,
     role: str,
-) -> pd.Series:
-    """Return validated canonical sequence identifiers aligned with ``frame``."""
+) -> dict[str, pd.Series]:
+    """Return populated, validated scope identifiers aligned with ``frame``."""
 
-    columns = [
-        column
-        for column in _SEQUENCE_COLUMN_CANDIDATES
-        if column in frame.columns
-    ]
-    if not columns:
-        return pd.Series([None] * len(frame), index=frame.index, dtype=object)
-
-    by_column: dict[str, pd.Series] = {}
-    for column in columns:
+    by_field: dict[str, pd.Series] = {}
+    for field in _SCOPE_FIELDS:
+        if field not in frame.columns:
+            continue
         try:
-            by_column[column] = (
-                frame[column].map(_canonical_sequence_id).astype(object)
-            )
+            keys = frame[field].map(_canonical_scope_id).astype(object)
         except ValueError as exc:
             raise ValueError(
-                f"{diagnostic} requires scalar {column} values on {role} rows"
+                f"{diagnostic} requires scalar {field} values on {role} rows"
             ) from exc
-
-    keys = by_column[columns[0]].copy()
-    for column in columns[1:]:
-        other = by_column[column]
-        conflicts = keys.notna() & other.notna() & keys.ne(other)
-        if bool(conflicts.any()):
+        if not bool(keys.notna().any()):
+            continue
+        if bool(keys.isna().any()):
             raise ValueError(
-                f"{diagnostic} requires matching sequence_id and flight_id "
-                f"on {role} rows"
+                f"{diagnostic} requires a {field} on every {role} row"
             )
-        keys = keys.where(keys.notna(), other)
-    return keys
+        by_field[field] = keys
+    return by_field
+
+
+def _single_radar_scope(
+    radar_scope: dict[str, pd.Series],
+    *,
+    diagnostic: str,
+) -> dict[str, str]:
+    """Return the one scope value represented by radar for every known field."""
+
+    values: dict[str, str] = {}
+    for field, keys in radar_scope.items():
+        unique = tuple(dict.fromkeys(str(value) for value in keys.tolist()))
+        if len(unique) > 1:
+            raise ValueError(
+                f"{diagnostic} requires radar rows from one {field}; "
+                f"found {list(unique)!r}"
+            )
+        if unique:
+            values[field] = unique[0]
+    return values
+
+
+def _filter_truth_to_shared_scope(
+    truth_rows: pd.DataFrame,
+    truth_scope: dict[str, pd.Series],
+    radar_values: dict[str, str],
+    shared_fields: tuple[str, ...],
+) -> tuple[pd.DataFrame, pd.Series]:
+    """Filter truth to all scope dimensions known on both inputs."""
+
+    matching = pd.Series(True, index=truth_rows.index, dtype=bool)
+    for field in shared_fields:
+        matching &= truth_scope[field].eq(radar_values[field]).fillna(False)
+    return truth_rows.loc[matching].copy(), matching
 
 
 def _single_sequence_inputs(
@@ -82,58 +104,89 @@ def _single_sequence_inputs(
     *,
     diagnostic: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Validate one radar sequence and restrict truth to the matching sequence."""
+    """Validate one radar scope and restrict truth to that physical scope."""
 
     radar_rows = pd.DataFrame(radar).copy()
     truth_rows = pd.DataFrame(truth).copy()
     if radar_rows.empty or truth_rows.empty:
         return radar_rows, truth_rows
 
-    radar_keys = _sequence_keys(
+    radar_scope = _scope_keys(
         radar_rows,
         diagnostic=diagnostic,
         role="radar",
     )
-    truth_keys = _sequence_keys(
+    truth_scope = _scope_keys(
         truth_rows,
         diagnostic=diagnostic,
         role="truth",
     )
-    radar_ids = sorted({str(value) for value in radar_keys.dropna().tolist()})
-    truth_ids = sorted({str(value) for value in truth_keys.dropna().tolist()})
-
-    if len(radar_ids) > 1:
-        raise ValueError(
-            f"{diagnostic} requires radar rows from one sequence; found {radar_ids}"
-        )
-    if bool(radar_ids) != bool(truth_ids):
+    if bool(radar_scope) != bool(truth_scope):
         raise ValueError(
             f"{diagnostic} requires sequence_id or flight_id on both radar and "
             "truth or neither"
         )
-    if not radar_ids:
+    if not radar_scope:
         return radar_rows, truth_rows
-    if radar_keys.isna().any():
-        raise ValueError(
-            f"{diagnostic} requires a sequence identifier on every radar row"
-        )
-    if truth_keys.isna().any():
-        raise ValueError(
-            f"{diagnostic} requires a sequence identifier on every truth row"
-        )
 
-    sequence_id = radar_ids[0]
-    matching_truth = truth_keys.eq(sequence_id).fillna(False)
-    if not bool(matching_truth.any()):
-        raise ValueError(
-            f"{diagnostic} radar sequence {sequence_id!r} is absent from truth"
+    radar_values = _single_radar_scope(radar_scope, diagnostic=diagnostic)
+    shared_fields = tuple(
+        field
+        for field in _SCOPE_FIELDS
+        if field in radar_scope and field in truth_scope
+    )
+
+    if shared_fields:
+        matching_truth, matching_mask = _filter_truth_to_shared_scope(
+            truth_rows,
+            truth_scope,
+            radar_values,
+            shared_fields,
         )
-    return radar_rows, truth_rows.loc[matching_truth].copy()
+        if matching_truth.empty:
+            scope_text = ", ".join(
+                f"{field}={radar_values[field]!r}" for field in shared_fields
+            )
+            raise ValueError(
+                f"{diagnostic} radar scope {scope_text} is absent from truth"
+            )
+
+        for field, keys in truth_scope.items():
+            if field in shared_fields:
+                continue
+            matching_keys = keys.loc[matching_mask]
+            if int(matching_keys.nunique(dropna=True)) > 1:
+                raise ValueError(
+                    f"{diagnostic} cannot align one-sided {field} metadata: "
+                    "the matching truth scope contains multiple values"
+                )
+        return radar_rows, matching_truth
+
+    # Historical inputs sometimes expose the same physical identifier under
+    # different column names. Preserve that compatibility only when each side
+    # has exactly one populated scope field; once a same-named field exists,
+    # sequence_id and flight_id are independent dimensions and are never
+    # compared to one another.
+    if len(radar_scope) == 1 and len(truth_scope) == 1:
+        radar_field = next(iter(radar_scope))
+        truth_field = next(iter(truth_scope))
+        radar_value = radar_values[radar_field]
+        matching = truth_scope[truth_field].eq(radar_value).fillna(False)
+        if not bool(matching.any()):
+            raise ValueError(
+                f"{diagnostic} radar identifier {radar_value!r} is absent from truth"
+            )
+        return radar_rows, truth_rows.loc[matching].copy()
+
+    raise ValueError(
+        f"{diagnostic} has no common sequence_id or flight_id scope between "
+        "radar and truth"
+    )
 
 
 @wraps(_ORIGINAL_BUILD_COMPACT_COVERAGE)
 def build_oracle_candidate_coverage(*args: Any, **kwargs: Any) -> Any:
-    """Build compact coverage only from sequence-consistent radar and truth."""
+    """Build compact coverage only from scope-consistent radar and truth."""
 
     bound = _COMPACT_SIGNATURE.bind(*args, **kwargs)
     bound.apply_defaults()
@@ -152,7 +205,7 @@ def build_oracle_candidate_coverage_diagnostics(
     *args: Any,
     **kwargs: Any,
 ) -> Any:
-    """Build detailed coverage only from sequence-consistent radar and truth."""
+    """Build detailed coverage only from scope-consistent radar and truth."""
 
     bound = _DETAILED_SIGNATURE.bind(*args, **kwargs)
     bound.apply_defaults()
