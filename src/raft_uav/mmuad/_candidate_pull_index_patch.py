@@ -9,6 +9,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_float
+
 _INSTALLED = False
 
 
@@ -55,22 +57,7 @@ def _validate_result_timestamps(results: pd.DataFrame) -> None:
     if "Timestamp" not in results.columns:
         return
     for row, raw_value in results["Timestamp"].items():
-        valid = not isinstance(raw_value, (bool, np.bool_))
-        try:
-            scalar = np.asanyarray(raw_value)
-        except (TypeError, ValueError, OverflowError):
-            valid = False
-            scalar = np.asarray(None)
-        if scalar.ndim != 0 or np.iscomplexobj(scalar):
-            valid = False
-        if valid:
-            try:
-                value = float(scalar.item())
-            except (TypeError, ValueError, OverflowError):
-                valid = False
-            else:
-                valid = bool(np.isfinite(value))
-        if not valid:
+        if optional_float(raw_value) is None:
             raise ValueError(
                 "official result Timestamp must be a finite real scalar "
                 f"at row {row!r}: {raw_value!r}"
