@@ -102,6 +102,14 @@ def _normalize_soft_anchor_limit(value: object, *, field_name: str) -> float:
     return limit
 
 
+def _normalize_boolean_control(value: object, *, field_name: str) -> bool:
+    """Return an actual Python/NumPy Boolean scalar without truthy coercion."""
+
+    if not isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{field_name} must be a Boolean scalar")
+    return bool(value)
+
+
 def _validated_tracker_config(config: TrackerConfig) -> TrackerConfig:
     """Normalize guarded tracker scalars before they reach filter logic."""
 
@@ -122,6 +130,10 @@ def _validated_tracker_config(config: TrackerConfig) -> TrackerConfig:
         soft_anchor_gate_m=_normalize_soft_anchor_limit(
             config.soft_anchor_gate_m,
             field_name="soft_anchor_gate_m",
+        ),
+        first_selected_bootstrap=_normalize_boolean_control(
+            config.first_selected_bootstrap,
+            field_name="first_selected_bootstrap",
         ),
     )
 
