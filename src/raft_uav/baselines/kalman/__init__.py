@@ -41,9 +41,11 @@ def _validated_tracking_measurement_post_init(
 ) -> None:
     """Validate the effective covariance after optional runtime calibration."""
 
+    if not isinstance(_apply_runtime_calibration, (bool, np.bool_)):
+        raise ValueError("_apply_runtime_calibration must be a Boolean scalar")
     _ORIGINAL_TRACKING_MEASUREMENT_POST_INIT(
         self,
-        _apply_runtime_calibration,
+        bool(_apply_runtime_calibration),
     )
     covariance = np.asarray(self.covariance, dtype=float)
     if not is_symmetric(covariance):

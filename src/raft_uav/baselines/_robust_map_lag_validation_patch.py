@@ -1,4 +1,4 @@
-"""Validate robust-MAP configuration and lag horizons before smoothing."""
+"""Validate robust-MAP configuration, lag horizons, and record chronology."""
 
 from __future__ import annotations
 
@@ -155,6 +155,28 @@ def _validated_robust_map_config(
     return _validate_robust_map_config_fields(value)
 
 
+def _validate_record_chronology(records: list[dict[str, object]]) -> None:
+    """Reject decreasing record times required to be sorted by search-based helpers.
+
+    Equal timestamps remain valid because asynchronous trackers can emit multiple
+    sequential sensor updates at the same physical time. Malformed timestamps are
+    left to the maintained record parser so its established diagnostics are kept.
+    """
+
+    previous_time: float | None = None
+    for record in records:
+        if "time_s" not in record:
+            return
+        time_s = _optional_float(record["time_s"])
+        if time_s is None:
+            return
+        if previous_time is not None and time_s < previous_time:
+            raise ValueError(
+                "records must be ordered by nondecreasing time_s for robust-map smoothing"
+            )
+        previous_time = time_s
+
+
 @wraps(_ORIGINAL_ROBUST_MAP_SMOOTH_RECORDS)
 def robust_map_smooth_records(
     records: list[dict[str, object]],
@@ -164,7 +186,7 @@ def robust_map_smooth_records(
     config: _robust_map.RobustMapSmootherConfig | None = None,
     lag_s: float | None = None,
 ) -> list[dict[str, object]]:
-    """Run robust-MAP smoothing after validating configuration and lag."""
+    """Run robust-MAP smoothing after validating controls and record chronology."""
 
     normalized_acceleration_std_mps2 = acceleration_std_mps2
     if records:
@@ -172,12 +194,15 @@ def robust_map_smooth_records(
             acceleration_std_mps2,
             name="acceleration_std_mps2",
         )
+    normalized_config = _validated_robust_map_config(config, name="config")
+    normalized_lag_s = _validated_lag_s(lag_s)
+    _validate_record_chronology(records)
     return _ORIGINAL_ROBUST_MAP_SMOOTH_RECORDS(
         records,
         measurements=measurements,
         acceleration_std_mps2=normalized_acceleration_std_mps2,
-        config=_validated_robust_map_config(config, name="config"),
-        lag_s=_validated_lag_s(lag_s),
+        config=normalized_config,
+        lag_s=normalized_lag_s,
     )
 
 
@@ -221,7 +246,7 @@ def smooth_tracking_records(
 
 
 def apply_robust_map_lag_validation_patch() -> None:
-    """Install robust-MAP configuration and lag validation."""
+    """Install robust-MAP configuration, lag, and chronology validation."""
 
     _robust_map.RobustMapSmootherConfig.__post_init__ = _robust_map_config_post_init
     _robust_map.robust_map_smooth_records = robust_map_smooth_records

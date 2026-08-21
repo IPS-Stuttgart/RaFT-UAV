@@ -15,7 +15,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-from raft_uav.numeric import optional_int
+from raft_uav.numeric import optional_float, optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "completion.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -88,6 +88,38 @@ def _completion_sequence_values(value: object) -> pd.Series | None:
     return None
 
 
+def _completion_template_frame(value: object) -> pd.DataFrame | None:
+    """Return the raw completion template frame, when available."""
+
+    if isinstance(value, pd.DataFrame):
+        return value
+    frame = getattr(value, "rows", None)
+    return frame if isinstance(frame, pd.DataFrame) else None
+
+
+def _validate_completion_template_timestamps(value: object) -> None:
+    """Reject template rows whose effective timestamps are malformed."""
+
+    frame = _completion_template_frame(value)
+    if frame is None or frame.empty:
+        return
+    message = "completion template timestamps must be finite real scalars"
+    try:
+        normalized = _IMPL.normalize_time_column_aliases(frame.copy(), target="time_s")
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if "time_s" not in normalized.columns:
+        return
+    values = normalized.loc[:, "time_s"]
+    if isinstance(values, pd.DataFrame):
+        return
+    for row_label, timestamp in values.items():
+        if optional_float(timestamp) is None:
+            raise ValueError(
+                f"{message}; row {row_label!r} has invalid timestamp {timestamp!r}"
+            )
+
+
 def _validate_completion_sequence_metadata(value: object, *, name: str) -> None:
     """Reject ambiguous mixes of explicit and missing completion sequence IDs."""
 
@@ -115,12 +147,13 @@ def _completion_result_rows(results: object) -> pd.DataFrame:
 
 
 def _completion_template_rows(truth_or_template: object) -> pd.DataFrame:
-    """Canonicalize missing-like template sequence ids before grouping."""
+    """Validate and canonicalize completion template metadata."""
 
     _validate_completion_sequence_metadata(
         truth_or_template,
         name="completion template",
     )
+    _validate_completion_template_timestamps(truth_or_template)
     rows = _ORIGINAL_COMPLETION_TEMPLATE_ROWS(truth_or_template)
     if rows.empty or "sequence_id" not in rows.columns:
         return rows

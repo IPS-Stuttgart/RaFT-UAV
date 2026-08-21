@@ -55,6 +55,12 @@ def _imm_bootstrap_timestamp_install() -> Callable[[], None]:
     return install
 
 
+def _imm_cli_numeric_validation_install() -> Callable[[], None]:
+    from raft_uav._imm_cli_numeric_validation_patch import install
+
+    return install
+
+
 def _rf_measurement_fallback_install() -> Callable[[], None]:
     from raft_uav.io._rf_measurement_fallback_patch import (
         apply_rf_measurement_fallback_patch,
@@ -233,8 +239,20 @@ def _track5_estimate_calibration_duplicate_truth_install() -> Callable[[], None]
     return install
 
 
+def _track5_template_resample_template_validation_install() -> Callable[[], None]:
+    from raft_uav.mmuad._track5_template_resample_template_validation_patch import install
+
+    return install
+
+
 def _evaluate_fde_truth_identity_install() -> Callable[[], None]:
     from raft_uav.mmuad._evaluate_fde_truth_identity_patch import install
+
+    return install
+
+
+def _evaluate_flight_scope_install() -> Callable[[], None]:
+    from raft_uav.mmuad._evaluate_flight_scope_patch import install
 
     return install
 
@@ -248,6 +266,7 @@ if os.environ.get("RAFT_UAV_SKIP_RUNTIME_HOOKS") != "1":
 # boundaries, not optional integrations. Keep them active when runtime hooks are skipped.
 _optional_runtime_hook(_kalman_timestamp_validation_install)
 _optional_runtime_hook(_imm_bootstrap_timestamp_install)
+_optional_runtime_hook(_imm_cli_numeric_validation_install)
 _optional_runtime_hook(_rf_measurement_fallback_install)
 _optional_runtime_hook(_radar_measurement_validation_install)
 _optional_runtime_hook(_geodetic_input_validation_install)
@@ -277,4 +296,6 @@ _optional_runtime_hook(_geomedian_template_time_match_install)
 _optional_runtime_hook(_candidate_score_calibration_order_install)
 _optional_runtime_hook(_track5_submission_schema_guard_install)
 _optional_runtime_hook(_track5_estimate_calibration_duplicate_truth_install)
+_optional_runtime_hook(_track5_template_resample_template_validation_install)
 _optional_runtime_hook(_evaluate_fde_truth_identity_install)
+_optional_runtime_hook(_evaluate_flight_scope_install)

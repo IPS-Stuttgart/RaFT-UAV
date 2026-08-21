@@ -7,7 +7,16 @@ from raft_uav.baselines.kalman import (
 )
 
 
-_INVALID_TIMESTAMPS = [np.nan, np.inf, -np.inf, "not-a-time", True, np.array([0.0])]
+_INVALID_TIMESTAMPS = [
+    np.nan,
+    np.inf,
+    -np.inf,
+    "not-a-time",
+    True,
+    np.array(True),
+    np.array(False, dtype=object),
+    np.array([0.0]),
+]
 
 
 @pytest.mark.parametrize("time_s", _INVALID_TIMESTAMPS)
@@ -20,6 +29,12 @@ def test_tracking_measurement_rejects_invalid_timestamp(time_s):
 
 def test_tracking_measurement_preserves_numeric_string_timestamp():
     measurement = TrackingMeasurement("1.25", np.zeros(3), np.eye(3), "radar")
+
+    assert measurement.time_s == 1.25
+
+
+def test_tracking_measurement_accepts_zero_dimensional_numeric_timestamp():
+    measurement = TrackingMeasurement(np.array(1.25), np.zeros(3), np.eye(3), "radar")
 
     assert measurement.time_s == 1.25
 

@@ -3,7 +3,8 @@
 The maintained implementation lives in the sibling
 ``track5_trajectory_regularizer.py`` module. This package preserves the public
 import path while ensuring that reported robust weights correspond to the final
-smoothed trajectory rather than the state from the preceding IRLS iteration.
+smoothed trajectory and that repeated physical timestamps do not create
+ill-conditioned acceleration penalties.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_ROBUST_SMOOTH_SEQUENCE = _IMPL._robust_smooth_sequence
+_ORIGINAL_SECOND_DERIVATIVE_MATRIX = _IMPL._second_derivative_matrix
 
 
 def _robust_smooth_sequence(
@@ -60,7 +62,29 @@ def _robust_smooth_sequence(
     return state, residual, final_weights
 
 
+def _second_derivative_matrix(times: np.ndarray) -> np.ndarray:
+    """Build acceleration penalties on unique physical timestamps."""
+
+    time_values = np.asarray(times, dtype=float)
+    unique_times, inverse = np.unique(time_values, return_inverse=True)
+    if len(unique_times) == len(time_values):
+        return _ORIGINAL_SECOND_DERIVATIVE_MATRIX(time_values)
+    if len(unique_times) < 3:
+        return np.zeros((0, len(time_values)), dtype=float)
+
+    # Replacing a zero interval by 1e-6 s makes duplicate template rows behave
+    # like distinct physical samples one microsecond apart. Smooth the average
+    # state at each physical timestamp instead while retaining every output row.
+    unique_operator = _ORIGINAL_SECOND_DERIVATIVE_MATRIX(unique_times)
+    averaging = np.zeros((len(unique_times), len(time_values)), dtype=float)
+    counts = np.bincount(inverse, minlength=len(unique_times)).astype(float)
+    columns = np.arange(len(time_values), dtype=int)
+    averaging[inverse, columns] = 1.0 / counts[inverse]
+    return unique_operator @ averaging
+
+
 _IMPL._robust_smooth_sequence = _robust_smooth_sequence
+_IMPL._second_derivative_matrix = _second_derivative_matrix
 
 globals().update(
     {
@@ -70,7 +94,9 @@ globals().update(
     }
 )
 globals()["_ORIGINAL_ROBUST_SMOOTH_SEQUENCE"] = _ORIGINAL_ROBUST_SMOOTH_SEQUENCE
+globals()["_ORIGINAL_SECOND_DERIVATIVE_MATRIX"] = _ORIGINAL_SECOND_DERIVATIVE_MATRIX
 globals()["_robust_smooth_sequence"] = _robust_smooth_sequence
+globals()["_second_derivative_matrix"] = _second_derivative_matrix
 
 __doc__ = _IMPL.__doc__
 __all__ = [

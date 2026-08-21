@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from functools import wraps
 from importlib import import_module
 from typing import Any
 
@@ -17,8 +19,10 @@ _ORIGINAL_IS_BOOTSTRAP_MEASUREMENT = (
 )
 _ORIGINAL_PREDICT_TO = _kalman.AsyncConstantVelocityKalmanTracker.predict_to
 _ORIGINAL_COAST_TO = _kalman.AsyncConstantVelocityKalmanTracker.coast_to
+_ORIGINAL_UPDATE = _kalman.AsyncConstantVelocityKalmanTracker.update
 _ORIGINAL_IMM_TRACKER_INIT = _imm.AsyncInteractingMultipleModelTracker.__init__
 _ORIGINAL_IMM_PREDICT_TO = _imm.AsyncInteractingMultipleModelTracker.predict_to
+_ORIGINAL_IMM_UPDATE = _imm.AsyncInteractingMultipleModelTracker.update
 
 
 def _finite_timestamp_seconds(value: Any, *, field_name: str) -> float:
@@ -31,7 +35,11 @@ def _finite_timestamp_seconds(value: Any, *, field_name: str) -> float:
         scalar = np.asarray(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(error) from exc
-    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+    if (
+        scalar.ndim != 0
+        or np.iscomplexobj(scalar)
+        or _boolean_scalar_hidden_in_arrays(scalar)
+    ):
         raise ValueError(error)
     try:
         timestamp_s = float(scalar.item())
@@ -40,6 +48,15 @@ def _finite_timestamp_seconds(value: Any, *, field_name: str) -> float:
     if not np.isfinite(timestamp_s):
         raise ValueError(error)
     return timestamp_s
+
+
+def _finite_positive_seconds(value: Any, *, field_name: str) -> float:
+    """Return a finite strictly positive scalar time interval."""
+
+    seconds = _finite_timestamp_seconds(value, field_name=field_name)
+    if seconds <= 0.0:
+        raise ValueError(f"{field_name} must be positive")
+    return seconds
 
 
 def _finite_nonnegative_scale(value: Any, *, field_name: str) -> float:
@@ -52,7 +69,7 @@ def _finite_nonnegative_scale(value: Any, *, field_name: str) -> float:
         scalar = np.asarray(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(error) from exc
-    if scalar.ndim != 0:
+    if scalar.ndim != 0 or _boolean_scalar_hidden_in_arrays(scalar):
         raise ValueError(error)
     try:
         scale = float(scalar.item())
@@ -206,6 +223,22 @@ def _coast_to(self: Any, time_s: float) -> None:
     _ORIGINAL_COAST_TO(self, validated_time_s)
 
 
+def _chronology_safe_update(original_update: Callable[..., Any]) -> Callable[..., Any]:
+    """Validate timestamps before legacy update bookkeeping is mutated."""
+
+    @wraps(original_update)
+    def update(self: Any, measurement: Any, *args: Any, **kwargs: Any) -> Any:
+        validated_time_s = _finite_timestamp_seconds(
+            measurement.time_s,
+            field_name="measurement time_s",
+        )
+        if validated_time_s < float(self.current_time_s) - 1.0e-9:
+            raise ValueError("measurements must be processed in chronological order")
+        return original_update(self, measurement, *args, **kwargs)
+
+    return update
+
+
 def _imm_tracker_init(
     self: Any,
     initial_position: np.ndarray,
@@ -234,6 +267,10 @@ def _imm_tracker_init(
         acceleration_std_mps2,
         field_name="acceleration_std_mps2",
     )
+    validated_mode_switch_time_constant_s = _finite_positive_seconds(
+        mode_switch_time_constant_s,
+        field_name="mode_switch_time_constant_s",
+    )
     _ORIGINAL_IMM_TRACKER_INIT(
         self,
         validated_initial_position,
@@ -243,7 +280,7 @@ def _imm_tracker_init(
         acceleration_std_mps2=validated_acceleration_std_mps2,
         modes=modes,
         initial_mode_probabilities=initial_mode_probabilities,
-        mode_switch_time_constant_s=mode_switch_time_constant_s,
+        mode_switch_time_constant_s=validated_mode_switch_time_constant_s,
     )
 
 
@@ -263,9 +300,15 @@ def apply_kalman_timestamp_validation_patch() -> None:
         )
         _kalman.AsyncConstantVelocityKalmanTracker.predict_to = _predict_to
         _kalman.AsyncConstantVelocityKalmanTracker.coast_to = _coast_to
+        _kalman.AsyncConstantVelocityKalmanTracker.update = _chronology_safe_update(
+            _ORIGINAL_UPDATE
+        )
         _kalman._timestamp_validation_patch_applied = True
 
     if not getattr(_imm, "_timestamp_validation_patch_applied", False):
         _imm.AsyncInteractingMultipleModelTracker.__init__ = _imm_tracker_init
         _imm.AsyncInteractingMultipleModelTracker.predict_to = _imm_predict_to
+        _imm.AsyncInteractingMultipleModelTracker.update = _chronology_safe_update(
+            _ORIGINAL_IMM_UPDATE
+        )
         _imm._timestamp_validation_patch_applied = True

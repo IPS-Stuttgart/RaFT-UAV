@@ -33,7 +33,7 @@ _ORIGINAL_SAMPLE_NEAREST_IMAGE_ROWS = _IMPL._sample_nearest_image_rows
 
 
 def _scalar_item(value: Any, *, name: str, contract: str) -> Any:
-    """Return one scalar item or raise a field-specific validation error."""
+    """Return one non-Boolean scalar item or raise a field-specific error."""
 
     if isinstance(value, (bool, np.bool_)):
         raise ValueError(f"{name} must be {contract}")
@@ -43,7 +43,10 @@ def _scalar_item(value: Any, *, name: str, contract: str) -> Any:
         raise ValueError(f"{name} must be {contract}") from exc
     if array.ndim != 0:
         raise ValueError(f"{name} must be {contract}")
-    return array.item()
+    item = array.item()
+    if isinstance(item, (bool, np.bool_)):
+        raise ValueError(f"{name} must be {contract}")
+    return item
 
 
 def _normalize_max_frames(value: Any, *, name: str) -> int:
@@ -96,6 +99,22 @@ def _finite_target_times(values: Any) -> list[float]:
     return result
 
 
+def _ensure_unique_sequence_ids(sequences: list[Any]) -> None:
+    """Reject ambiguous physical sequences before their evidence is combined."""
+
+    roots_by_sequence_id: dict[str, Path] = {}
+    for paths in sequences:
+        sequence_id = str(paths.sequence_id)
+        root = Path(paths.root)
+        previous_root = roots_by_sequence_id.get(sequence_id)
+        if previous_root is not None and previous_root != root:
+            raise ValueError(
+                "duplicate sequence_id discovered for image evidence: "
+                f"{sequence_id!r} maps to both {previous_root} and {root}"
+            )
+        roots_by_sequence_id[sequence_id] = root
+
+
 def _sample_nearest_image_rows(
     image_rows,
     target_times,
@@ -146,6 +165,7 @@ def build_image_evidence(
         Path(sequence_root),
         sequence_glob=sequence_glob,
     )
+    _ensure_unique_sequence_ids(sequences)
     truth_by_sequence = _IMPL._truth_times_by_sequence(truth_file)
     frame_records: list[dict[str, Any]] = []
     target_counts: dict[str, int] = {}
@@ -218,6 +238,7 @@ globals().update(
 globals()["_normalize_max_frames"] = _normalize_max_frames
 globals()["_normalize_max_time_delta"] = _normalize_max_time_delta
 globals()["_finite_target_times"] = _finite_target_times
+globals()["_ensure_unique_sequence_ids"] = _ensure_unique_sequence_ids
 globals()["_sample_nearest_image_rows"] = _sample_nearest_image_rows
 globals()["build_image_evidence"] = build_image_evidence
 

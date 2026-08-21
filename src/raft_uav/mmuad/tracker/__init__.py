@@ -91,8 +91,19 @@ def _normalize_covariance_scale(value: object, *, field_name: str) -> float:
     return scale
 
 
+def _normalize_soft_anchor_limit(value: object, *, field_name: str) -> float:
+    """Return a finite non-negative soft-anchor distance control."""
+
+    limit = optional_float(value)
+    if limit is None or limit < 0.0:
+        raise ValueError(
+            f"{field_name} must be a finite non-negative real scalar"
+        )
+    return limit
+
+
 def _validated_tracker_config(config: TrackerConfig) -> TrackerConfig:
-    """Normalize covariance scales before they reach Kalman updates."""
+    """Normalize guarded tracker scalars before they reach filter logic."""
 
     return replace(
         config,
@@ -103,6 +114,14 @@ def _validated_tracker_config(config: TrackerConfig) -> TrackerConfig:
         secondary_covariance_scale=_normalize_covariance_scale(
             config.secondary_covariance_scale,
             field_name="secondary_covariance_scale",
+        ),
+        soft_anchor_cap_m=_normalize_soft_anchor_limit(
+            config.soft_anchor_cap_m,
+            field_name="soft_anchor_cap_m",
+        ),
+        soft_anchor_gate_m=_normalize_soft_anchor_limit(
+            config.soft_anchor_gate_m,
+            field_name="soft_anchor_gate_m",
         ),
     )
 

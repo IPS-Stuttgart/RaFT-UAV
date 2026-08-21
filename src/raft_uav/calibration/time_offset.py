@@ -15,7 +15,8 @@ from pyrecest.calibration.time_offset import (
 from raft_uav.evaluation.radar_oracle_diagnostics import (
     best_time_offset,
     interpolate_truth_positions,
-    time_offset_sweep,
+    nearest_candidate_oracle,
+    summarize_oracle_selection,
 )
 
 PAPER_METRIC_COLUMNS = (
@@ -152,28 +153,29 @@ def aggregate_radar_time_offset_sweep(
 ) -> pd.DataFrame:
     """Aggregate radar nearest-candidate oracle sweeps over training flights."""
 
-    offsets = list(float(offset) for offset in offsets_s)
+    offsets = [float(offset) for offset in offsets_s]
     rows: list[dict[str, float]] = []
     for offset in offsets:
-        selected: list[pd.DataFrame] = []
+        selected_frames: list[pd.DataFrame] = []
         frame_count = 0
         for radar, truth in training_pairs:
             if radar.empty or truth.empty:
                 continue
             frame_count += _radar_frame_count(radar)
-            sweep = time_offset_sweep(
+            selected = nearest_candidate_oracle(
                 radar,
                 truth,
-                [offset],
+                time_offset_s=offset,
                 max_time_delta_s=max_time_delta_s,
             )
-            if sweep.empty:
-                continue
-            row = sweep.iloc[0].to_dict()
-            row_count = _optional_float(row.get("count"))
-            if row_count is not None and row_count > 0.0:
-                selected.append(_radar_selected_errors_from_summary(row))
-        rows.append(_aggregate_error_frames(offset, selected, frame_count))
+            if not selected.empty:
+                selected_frames.append(selected)
+        if selected_frames:
+            pooled = pd.concat(selected_frames, axis=0, ignore_index=True)
+        else:
+            pooled = pd.DataFrame(columns=["oracle_error_3d_m", "oracle_error_2d_m"])
+        summary = summarize_oracle_selection(pooled, frame_count=frame_count)
+        rows.append({"time_offset_s": offset, **summary})
     return pd.DataFrame.from_records(rows, columns=["time_offset_s", *PAPER_METRIC_COLUMNS])
 
 
@@ -242,49 +244,6 @@ def aggregate_measurement_time_offset_sweep(
     return pd.DataFrame.from_records(rows, columns=["time_offset_s", *PAPER_METRIC_COLUMNS])
 
 
-def _radar_selected_errors_from_summary(summary: dict[str, float]) -> pd.DataFrame:
-    # The radar oracle diagnostic only exposes aggregate statistics here.  For
-    # offset selection across flights, weighting by count and combining mean/RMSE
-    # is sufficient and avoids reading every selected row again.
-    return pd.DataFrame([summary])
-
-
-def _aggregate_error_frames(offset: float, frames: list[pd.DataFrame], frame_count: int) -> dict[str, float]:
-    if not frames:
-        row = {
-            "time_offset_s": float(offset),
-            "count": 0.0,
-            "coverage": 0.0 if frame_count else float("nan"),
-        }
-        row.update(_stats(np.array([], dtype=float), "3d"))
-        row.update(_stats(np.array([], dtype=float), "2d"))
-        return row
-    summary = pd.concat(frames, ignore_index=True)
-    counts = pd.to_numeric(summary["count"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
-    total = float(np.sum(counts))
-    coverage_den = float(frame_count) if frame_count > 0 else total
-    row = {"time_offset_s": float(offset), "count": total, "coverage": _coverage(total, coverage_den)}
-    for dims in ("3d", "2d"):
-        mean = _weighted(summary[f"mean_{dims}_error_m"], counts)
-        rmse = np.sqrt(
-            _weighted(
-                np.square(pd.to_numeric(summary[f"rmse_{dims}_error_m"], errors="coerce")),
-                counts,
-            )
-        )
-        p95 = _weighted(summary[f"p95_{dims}_error_m"], counts)
-        max_value = np.nanmax(
-            pd.to_numeric(summary[f"max_{dims}_error_m"], errors="coerce").to_numpy(dtype=float)
-        )
-        std = _weighted(summary[f"std_{dims}_error_m"], counts)
-        row[f"mean_{dims}_error_m"] = float(mean)
-        row[f"std_{dims}_error_m"] = float(std)
-        row[f"rmse_{dims}_error_m"] = float(rmse)
-        row[f"p95_{dims}_error_m"] = float(p95)
-        row[f"max_{dims}_error_m"] = float(max_value)
-    return row
-
-
 def _stats(errors: np.ndarray, suffix: str) -> dict[str, float]:
     errors = np.asarray(errors, dtype=float).reshape(-1)
     errors = errors[np.isfinite(errors)]
@@ -312,17 +271,6 @@ def _coverage(count: float | int, denominator: float | int) -> float:
 
 def _concat(parts: list[np.ndarray]) -> np.ndarray:
     return np.concatenate(parts) if parts else np.array([], dtype=float)
-
-
-def _weighted(values: pd.Series | np.ndarray, weights: np.ndarray) -> float:
-    if isinstance(values, pd.Series):
-        values_array = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
-    else:
-        values_array = np.asarray(values, dtype=float)
-    valid = np.isfinite(values_array) & np.isfinite(weights) & (weights > 0.0)
-    if not valid.any():
-        return float("nan")
-    return float(np.average(values_array[valid], weights=weights[valid]))
 
 
 def _optional_float(value: object) -> float | None:

@@ -31,6 +31,15 @@ def _finite_real_control(value: object, *, name: str) -> float:
     return number
 
 
+def _probability_control(value: object, *, name: str) -> float:
+    """Return a finite probability in the closed interval [0, 1]."""
+
+    number = _finite_real_control(value, name=name)
+    if not 0.0 <= number <= 1.0:
+        raise ValueError(f"{name} must be between 0 and 1")
+    return number
+
+
 def _nonnegative_real_control(value: object, *, name: str) -> float:
     """Return a finite non-negative real scalar control value."""
 
@@ -93,7 +102,7 @@ def _validated_selection_controls(
     if radar.empty:
         return catprob_threshold, truth_gate_m, truth_time_gate_s
     if selection in {"catprob", "catprob-all"}:
-        catprob_threshold = _finite_real_control(
+        catprob_threshold = _probability_control(
             catprob_threshold,
             name="catprob_threshold",
         )

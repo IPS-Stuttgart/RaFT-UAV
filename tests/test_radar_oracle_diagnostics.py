@@ -72,3 +72,37 @@ def test_time_offset_sweep_recovers_known_positive_offset():
     best = sweep.loc[sweep["time_offset_s"] == 1.0].iloc[0]
     assert best["mean_3d_error_m"] == 0.0
     assert best["coverage"] == 1.0
+
+
+def test_best_time_offset_prefers_smallest_absolute_correction_on_ties():
+    sweep = pd.DataFrame(
+        {
+            "time_offset_s": [-1.0, 0.0, 1.0],
+            "mean_3d_error_m": [2.0, 2.0, 2.0],
+        }
+    )
+
+    assert best_time_offset(sweep) == 0.0
+    assert best_time_offset(sweep.iloc[::-1].reset_index(drop=True)) == 0.0
+
+
+def test_best_time_offset_ignores_nonfinite_offsets():
+    sweep = pd.DataFrame(
+        {
+            "time_offset_s": [np.nan, np.inf, 0.25],
+            "mean_3d_error_m": [0.0, 0.5, 1.0],
+        }
+    )
+
+    assert best_time_offset(sweep) == 0.25
+
+
+def test_best_time_offset_returns_none_without_a_finite_pair():
+    sweep = pd.DataFrame(
+        {
+            "time_offset_s": [np.nan, np.inf],
+            "mean_3d_error_m": [0.0, 1.0],
+        }
+    )
+
+    assert best_time_offset(sweep) is None

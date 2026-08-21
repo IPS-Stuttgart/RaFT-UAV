@@ -145,6 +145,50 @@ def _invalid_row_message(mask: pd.Series, *, prefix: str) -> ValueError:
     return ValueError(f"{prefix} at row indices: {preview}{suffix}")
 
 
+def _alias_columns(rows: pd.DataFrame, aliases: tuple[str, ...]) -> list[Any]:
+    """Return every supplied column whose case-insensitive name is a known alias."""
+
+    normalized_aliases = {str(alias).lower() for alias in aliases}
+    return [
+        column
+        for column in rows.columns
+        if str(column).lower() in normalized_aliases
+    ]
+
+
+def _validate_alias_consistency(
+    rows: pd.DataFrame,
+    aliases: tuple[str, ...],
+    *,
+    normalizer: Any,
+    context: str,
+    field: str,
+) -> None:
+    """Reject rows whose redundant schema aliases normalize to different values."""
+
+    columns = _alias_columns(rows, aliases)
+    if len(columns) <= 1:
+        return
+    normalized = pd.concat(
+        [normalizer(pd.Series(rows[column], index=rows.index)) for column in columns],
+        axis=1,
+    )
+    conflicts = normalized.nunique(axis=1, dropna=True) > 1
+    if not conflicts.any():
+        return
+    rendered = ", ".join(repr(str(column)) for column in columns)
+    raise _invalid_row_message(
+        conflicts,
+        prefix=f"{context} contain conflicting {field} aliases {rendered}",
+    )
+
+
+def _numeric_alias_values(values: pd.Series) -> pd.Series:
+    """Normalize numeric aliases without silently changing their relative meaning."""
+
+    return pd.to_numeric(values, errors="coerce")
+
+
 def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
     """Normalize estimates without silently discarding malformed trajectory rows."""
 
@@ -153,6 +197,27 @@ def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(
             columns=["sequence_id", "time_s", "state_x_m", "state_y_m", "state_z_m"]
         )
+    _validate_alias_consistency(
+        rows,
+        _IMPL.SEQUENCE_ALIASES,
+        normalizer=_IMPL._normalized_sequence_values,
+        context="estimates",
+        field="sequence",
+    )
+    _validate_alias_consistency(
+        rows,
+        _IMPL.TIME_ALIASES,
+        normalizer=_numeric_alias_values,
+        context="estimates",
+        field="timestamp",
+    )
+    _validate_alias_consistency(
+        rows,
+        _IMPL.CLASSIFICATION_ALIASES,
+        normalizer=_IMPL._normalized_classification_values,
+        context="estimates",
+        field="classification",
+    )
     sequence_column = _IMPL._first_present(rows, _IMPL.SEQUENCE_ALIASES)
     time_column = _IMPL._first_present(rows, _IMPL.TIME_ALIASES)
     coord_columns = _IMPL._coordinate_columns(rows)
@@ -163,7 +228,7 @@ def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
     normalized_sequence = _IMPL._normalized_sequence_values(rows[sequence_column])
     valid_sequence = normalized_sequence.notna()
     complex_numeric = pd.Series(False, index=rows.index, dtype=bool)
-    for column in (time_column, *coord_columns):
+    for column in (*_alias_columns(rows, _IMPL.TIME_ALIASES), *coord_columns):
         complex_numeric |= _complex_scalar_mask(rows[column])
     if (valid_sequence & complex_numeric).any():
         raise _invalid_row_message(
@@ -201,21 +266,37 @@ def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
 
 
 def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
-    """Reject complex programmatic timestamps before the legacy real-valued normalization."""
+    """Reject ambiguous or complex programmatic template timestamps."""
 
     rows = pd.DataFrame(template).copy()
     if rows.empty:
         return _ORIGINAL_NORMALIZE_TEMPLATE_ROWS(rows)
+    _validate_alias_consistency(
+        rows,
+        _IMPL.SEQUENCE_ALIASES,
+        normalizer=_IMPL._normalized_sequence_values,
+        context="template",
+        field="sequence",
+    )
+    _validate_alias_consistency(
+        rows,
+        _IMPL.TIME_ALIASES,
+        normalizer=_numeric_alias_values,
+        context="template",
+        field="timestamp",
+    )
     sequence_column = _IMPL._first_present(rows, _IMPL.SEQUENCE_ALIASES)
     time_column = _IMPL._first_present(rows, _IMPL.TIME_ALIASES)
     if sequence_column is None or time_column is None:
         return _ORIGINAL_NORMALIZE_TEMPLATE_ROWS(rows)
 
     valid_sequence = _IMPL._normalized_sequence_values(rows[sequence_column]).notna()
-    complex_time = valid_sequence & _complex_scalar_mask(rows[time_column])
-    if complex_time.any():
+    complex_time = pd.Series(False, index=rows.index, dtype=bool)
+    for column in _alias_columns(rows, _IMPL.TIME_ALIASES):
+        complex_time |= _complex_scalar_mask(rows[column])
+    if (valid_sequence & complex_time).any():
         raise _invalid_row_message(
-            complex_time,
+            valid_sequence & complex_time,
             prefix="template contains complex timestamp values",
         )
     return _ORIGINAL_NORMALIZE_TEMPLATE_ROWS(rows)
@@ -403,6 +484,9 @@ globals()["write_track5_template_resample_outputs"] = write_track5_template_resa
 globals()["_is_complex_scalar"] = _is_complex_scalar
 globals()["_complex_scalar_mask"] = _complex_scalar_mask
 globals()["_invalid_row_message"] = _invalid_row_message
+globals()["_alias_columns"] = _alias_columns
+globals()["_validate_alias_consistency"] = _validate_alias_consistency
+globals()["_numeric_alias_values"] = _numeric_alias_values
 globals()["_normalize_estimate_rows"] = _normalize_estimate_rows
 globals()["_normalize_template_rows"] = _normalize_template_rows
 globals()["_boolean_diagnostic_error"] = _boolean_diagnostic_error

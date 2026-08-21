@@ -1,11 +1,12 @@
 """Compatibility fixes for paper-style radar preselection.
 
 The maintained implementation lives in the sibling ``paper_selection.py``
-module. This package preserves the public import path while excluding malformed
-or out-of-range class probabilities, preserving exact integer-like track
-identifiers, splitting reused frame counters into distinct continuous-track
-epochs, using the acquisition cadence for timestamp-only continuity, and
-rejecting pooled sequence inputs at the single-track boundary.
+module. This package preserves the public import path while validating numeric
+gate parameters, excluding malformed or out-of-range class probabilities,
+preserving exact integer-like track identifiers, splitting reused frame counters
+into distinct continuous-track epochs, using the acquisition cadence for
+timestamp-only continuity, and rejecting pooled sequence inputs at the
+single-track boundary.
 """
 
 from __future__ import annotations
@@ -30,6 +31,26 @@ _LEGACY = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _LEGACY
 _SPEC.loader.exec_module(_LEGACY)
 _ORIGINAL_CONTINUOUS_TRACK_SEGMENTS = _LEGACY._continuous_track_segments
+_ORIGINAL_RANGE_CANDIDATE_POOL = _LEGACY._range_candidate_pool
+_ORIGINAL_REQUIRE_FORTEM_RANGE_M = _LEGACY.require_fortem_range_m
+
+
+def _finite_nonnegative_value(value: object, *, name: str) -> float:
+    """Return one finite non-Boolean scalar greater than or equal to zero."""
+
+    parsed = optional_float(value)
+    if parsed is None or parsed < 0.0:
+        raise ValueError(f"{name} must be a finite non-negative real scalar")
+    return parsed
+
+
+def _finite_unit_interval_value(value: object, *, name: str) -> float:
+    """Return one finite non-Boolean scalar in the closed unit interval."""
+
+    parsed = optional_float(value)
+    if parsed is None or not 0.0 <= parsed <= 1.0:
+        raise ValueError(f"{name} must be a finite real scalar in [0, 1]")
+    return parsed
 
 
 def _finite_catprob_value(value: object) -> float | None:
@@ -66,22 +87,67 @@ def _finite_catprob_values(values: pd.Series) -> np.ndarray:
     )
 
 
+def _range_candidate_pool(
+    candidates: pd.DataFrame,
+    *,
+    range_gate_m: float | None,
+    require_range_m: bool,
+) -> pd.DataFrame:
+    """Apply a finite non-negative range gate or preserve the disabled ``None`` gate."""
+
+    validated_range_gate_m = (
+        None
+        if range_gate_m is None
+        else _finite_nonnegative_value(range_gate_m, name="range_gate_m")
+    )
+    return _ORIGINAL_RANGE_CANDIDATE_POOL(
+        candidates,
+        range_gate_m=validated_range_gate_m,
+        require_range_m=require_range_m,
+    )
+
+
 def _catprob_candidate_pool(
     candidates: pd.DataFrame,
     catprob_threshold: float | None,
 ) -> pd.DataFrame:
-    """Apply the class-probability gate without accepting invalid values."""
+    """Apply a valid class-probability gate without accepting invalid values."""
 
-    if catprob_threshold is None or "cat_prob_uav" not in candidates.columns:
+    threshold = (
+        None
+        if catprob_threshold is None
+        else _finite_unit_interval_value(
+            catprob_threshold,
+            name="catprob_threshold",
+        )
+    )
+    if threshold is None or "cat_prob_uav" not in candidates.columns:
         return candidates.copy()
     catprob = _finite_catprob_values(candidates["cat_prob_uav"])
     pool = candidates.loc[
-        np.isfinite(catprob) & (catprob >= float(catprob_threshold))
+        np.isfinite(catprob) & (catprob >= threshold)
     ].copy()
     if not pool.empty:
-        pool["association_catprob_threshold"] = float(catprob_threshold)
+        pool["association_catprob_threshold"] = threshold
         pool["association_catprob_candidate_rows"] = int(len(candidates))
     return pool
+
+
+def require_fortem_range_m(
+    radar: pd.DataFrame,
+    *,
+    minimum_finite_fraction: float = 0.99,
+) -> None:
+    """Validate the requested finite-range fraction before checking Fortem ranges."""
+
+    validated_fraction = _finite_unit_interval_value(
+        minimum_finite_fraction,
+        name="minimum_finite_fraction",
+    )
+    _ORIGINAL_REQUIRE_FORTEM_RANGE_M(
+        radar,
+        minimum_finite_fraction=validated_fraction,
+    )
 
 
 def _mean_catprob(frame: pd.DataFrame) -> float:
@@ -229,7 +295,9 @@ def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
     return segments
 
 
+_LEGACY._range_candidate_pool = _range_candidate_pool
 _LEGACY._catprob_candidate_pool = _catprob_candidate_pool
+_LEGACY.require_fortem_range_m = require_fortem_range_m
 _LEGACY._mean_catprob = _mean_catprob
 _LEGACY._track_id_from_frame = _track_id_from_frame
 _LEGACY._timestamp_gap_threshold = _timestamp_gap_threshold
@@ -243,9 +311,13 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_finite_nonnegative_value"] = _finite_nonnegative_value
+globals()["_finite_unit_interval_value"] = _finite_unit_interval_value
 globals()["_finite_catprob_value"] = _finite_catprob_value
 globals()["_finite_catprob_values"] = _finite_catprob_values
+globals()["_range_candidate_pool"] = _range_candidate_pool
 globals()["_catprob_candidate_pool"] = _catprob_candidate_pool
+globals()["require_fortem_range_m"] = require_fortem_range_m
 globals()["_mean_catprob"] = _mean_catprob
 globals()["_track_id_from_frame"] = _track_id_from_frame
 globals()["_explicit_sequence_ids"] = _explicit_sequence_ids
