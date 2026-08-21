@@ -17,6 +17,7 @@ from . import _proposal_graph_core as graph_core
 from . import _proposal_graph_sparse_matching as sparse_matching
 from . import _proposal_seed_calibration as seed_calibration
 from . import _proposal_sequence_cache as sequence_cache
+from . import _proposal_similarity_motion as similarity_motion
 from . import proposal_graph_tracker
 
 
@@ -27,6 +28,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--sequence-cache-dir", type=Path)
     parser.add_argument("--enable-seed-calibration", action="store_true")
     parser.add_argument("--seed-calibration-min-pairs", type=int, default=2)
+    parser.add_argument(
+        "--common-motion-model",
+        choices=("translation", "similarity"),
+        default="translation",
+    )
+    parser.add_argument("--similarity-min-pairs", type=int, default=4)
+    parser.add_argument("--similarity-max-scale-change", type=float, default=0.12)
+    parser.add_argument("--similarity-max-rotation-deg", type=float, default=10.0)
+    parser.add_argument("--similarity-max-normalized-residual", type=float, default=1.0)
+    parser.add_argument("--similarity-min-normalized-spread", type=float, default=2.0)
+    parser.add_argument("--similarity-min-residual-improvement", type=float, default=0.05)
+    parser.add_argument("--similarity-refinement-iterations", type=int, default=3)
     parser.add_argument("--enable-delayed-path-cover", action="store_true")
     parser.add_argument("--delayed-max-gap", type=int, default=0)
     parser.add_argument("--delayed-lookahead-frames", type=int, default=2)
@@ -63,6 +76,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     custom, remaining = parser.parse_known_args(arguments)
     if custom.seed_calibration_min_pairs <= 0:
         raise ValueError("--seed-calibration-min-pairs must be positive")
+    if custom.common_motion_model == "similarity" and "--enable-common-motion" not in remaining:
+        raise ValueError("similarity common motion requires --enable-common-motion")
     if (
         custom.edge_model_json is not None or custom.swarm_relative_weight > 0.0
     ) and not custom.enable_delayed_path_cover:
@@ -72,6 +87,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if custom.enable_ambiguity_beam and not custom.enable_delayed_path_cover:
         raise ValueError("ambiguity beam reranking requires delayed path cover")
 
+    similarity_config = similarity_motion.SimilarityMotionConfig(
+        min_pairs=custom.similarity_min_pairs,
+        max_scale_change=custom.similarity_max_scale_change,
+        max_rotation_deg=custom.similarity_max_rotation_deg,
+        max_normalized_residual=custom.similarity_max_normalized_residual,
+        min_normalized_spread=custom.similarity_min_normalized_spread,
+        min_residual_improvement=custom.similarity_min_residual_improvement,
+        refinement_iterations=custom.similarity_refinement_iterations,
+    )
+    similarity_config.validate()
     delayed_config = delayed_path_cover.DelayedPathCoverConfig(
         max_gap=custom.delayed_max_gap,
         lookahead_frames=custom.delayed_lookahead_frames,
@@ -109,9 +134,36 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"edge_model_sha256={edge_model_digest}")
 
     original_motion = graph_core._estimate_common_motion
+    original_observation_cost = graph_core._observation_cost
+    original_predict = graph_core._predict
+    original_velocity = graph_core._velocity
     original_link_solver = graph_core._solve_link_component
+    original_continuation = delayed_path_cover._continuation_potential
+    original_future_cost = delayed_path_cover._future_cost
+    original_path_acceleration = ambiguity_beam._path_acceleration
     original_track_sequence = proposal_graph_tracker.track_sequence
-    graph_core._estimate_common_motion = proposal_common_motion.estimate_common_motion
+
+    if custom.common_motion_model == "similarity":
+        def estimate_similarity(nodes, parameters):
+            return similarity_motion.estimate_common_motion(
+                nodes,
+                parameters,
+                config=similarity_config,
+            )
+
+        graph_core._estimate_common_motion = estimate_similarity
+        graph_core._observation_cost = similarity_motion.observation_cost
+        graph_core._predict = similarity_motion.predict
+        graph_core._velocity = similarity_motion.velocity
+        delayed_path_cover._continuation_potential = (
+            similarity_motion.continuation_potential
+        )
+        delayed_path_cover._future_cost = similarity_motion.future_cost
+        ambiguity_beam._path_acceleration = similarity_motion.path_acceleration
+    else:
+        graph_core._estimate_common_motion = (
+            proposal_common_motion.estimate_common_motion
+        )
     graph_core._solve_link_component = sparse_matching.solve_link_component
 
     selected_track_sequence = original_track_sequence
@@ -168,7 +220,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     finally:
         graph_core._estimate_common_motion = original_motion
+        graph_core._observation_cost = original_observation_cost
+        graph_core._predict = original_predict
+        graph_core._velocity = original_velocity
         graph_core._solve_link_component = original_link_solver
+        delayed_path_cover._continuation_potential = original_continuation
+        delayed_path_cover._future_cost = original_future_cost
+        ambiguity_beam._path_acceleration = original_path_acceleration
         proposal_graph_tracker.track_sequence = original_track_sequence
 
 
@@ -192,6 +250,7 @@ def _cache_salt(
         Path(sparse_matching.__file__),
         Path(seed_calibration.__file__),
         Path(sequence_cache.__file__),
+        Path(similarity_motion.__file__),
         Path(proposal_graph_tracker.__file__),
     )
     source_digests = {
@@ -200,7 +259,7 @@ def _cache_salt(
     }
     return json.dumps(
         {
-            "schema": "raft-uav-lts-experimental-proposal-graph-cache-salt-v2",
+            "schema": "raft-uav-lts-experimental-proposal-graph-cache-salt-v3",
             "controls": controls,
             "edge_model_sha256": edge_model_digest,
             "source_sha256": source_digests,
