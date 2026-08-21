@@ -156,6 +156,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     proposal_graph_tracker.track_sequence = selected_track_sequence
     try:
+        if any(str(token) in {"-h", "--help"} for token in remaining):
+            return proposal_graph_tracker.main(remaining)
         if custom.no_sequence_cache:
             return proposal_graph_tracker.main(remaining)
         return sequence_cache.run_cached(
