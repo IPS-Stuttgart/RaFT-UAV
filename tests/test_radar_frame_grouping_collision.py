@@ -80,3 +80,61 @@ def test_radar_frame_groups_are_scoped_by_sequence_id() -> None:
     assert [
         event["candidates"]["track_id"].tolist() for event in radar_events
     ] == [[11, 12], [21, 22]]
+
+
+def test_radar_frame_groups_are_scoped_by_flight_id() -> None:
+    radar = pd.DataFrame(
+        {
+            "flight_id": ["flight-a", " flight-b ", "flight-a", "flight-b"],
+            "frame_index": [0.0, 0.0, 0.0, 0.0],
+            "track_id": [11, 21, 12, 22],
+            "time_s": [0.0, 0.0, 0.0, 0.0],
+            "east_m": [0.0, 100.0, 1.0, 101.0],
+            "north_m": [0.0, 0.0, 0.0, 0.0],
+            "up_m": [0.0, 0.0, 0.0, 0.0],
+        }
+    )
+
+    groups = _radar_frame_groups(radar)
+
+    assert [group["track_id"].tolist() for group in groups] == [
+        [11, 12],
+        [21, 22],
+    ]
+    assert [
+        set(group["flight_id"].str.strip()) for group in groups
+    ] == [{"flight-a"}, {"flight-b"}]
+
+    radar_events = _events([], radar)
+    assert len(radar_events) == 2
+    assert [
+        event["candidates"]["track_id"].tolist() for event in radar_events
+    ] == [[11, 12], [21, 22]]
+
+
+def test_radar_frame_groups_use_joint_sequence_and_flight_scope() -> None:
+    radar = pd.DataFrame(
+        {
+            "sequence_id": ["campaign"] * 4,
+            "flight_id": ["flight-a", "flight-b", "flight-a", "flight-b"],
+            "frame_index": [0.0, 0.0, 0.0, 0.0],
+            "track_id": [11, 21, 12, 22],
+            "time_s": [0.0, 0.0, 0.0, 0.0],
+            "east_m": [0.0, 100.0, 1.0, 101.0],
+            "north_m": [0.0, 0.0, 0.0, 0.0],
+            "up_m": [0.0, 0.0, 0.0, 0.0],
+        }
+    )
+
+    groups = _radar_frame_groups(radar)
+
+    assert [group["track_id"].tolist() for group in groups] == [
+        [11, 12],
+        [21, 22],
+    ]
+    assert [
+        set(group["flight_id"]) for group in groups
+    ] == [{"flight-a"}, {"flight-b"}]
+
+    radar_events = _events([], radar)
+    assert len(radar_events) == 2
