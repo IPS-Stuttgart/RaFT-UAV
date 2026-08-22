@@ -60,6 +60,8 @@ jobs:
           payload = yaml.safe_load(path.read_text(encoding="utf-8"))
           assert payload["name"] == "Multi-UAV LTS proposal graph evidence"
           PY
+          nl -ba scripts/run_multi_uav_lts_cross_fitted_edge_evidence.py \
+            | sed -n '330,395p'
           python -m ruff check \
             scripts/run_multi_uav_lts_cross_fitted_edge_evidence.py \
             tests/test_multi_uav_lts_cross_fitted_edge_evidence.py
