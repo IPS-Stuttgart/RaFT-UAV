@@ -1,0 +1,22 @@
+{
+  "schema": "raft-uav-multi-uav-lts-box-calibration-policy-v1",
+  "default": {
+    "process_accel_sigma": 0.5,
+    "process_log_size_sigma": 0.035,
+    "center_measurement_sigma": 0.3,
+    "log_size_measurement_sigma": 0.12,
+    "recenter_weight": 1.0,
+    "size_smoothing_weight": 0.75,
+    "uncertainty_scale_x": 0.5,
+    "uncertainty_scale_y": 0.5,
+    "velocity_margin_scale": 0.0,
+    "max_area_ratio": 1.5
+  },
+  "prefixes": {
+    "BB2P": {
+      "uncertainty_scale_x": 1.0,
+      "uncertainty_scale_y": 1.0,
+      "max_area_ratio": 2.0
+    }
+  }
+}
