@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -16,6 +17,30 @@ _DEFAULT_TOP_K = _compare._DEFAULT_TOP_K
 _ORIGINAL_READ_ESTIMATE_CSV = read_estimate_csv
 if not hasattr(_compare, "read_estimate_csv"):
     _compare.read_estimate_csv = read_estimate_csv
+
+
+def _positive_int(value: str) -> int:
+    """Parse a strictly positive integer CLI value."""
+
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def _nonnegative_finite_float(value: str) -> float:
+    """Parse a finite non-negative floating-point CLI value."""
+
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("must be a number") from exc
+    if not math.isfinite(parsed) or parsed < 0.0:
+        raise argparse.ArgumentTypeError("must be finite and non-negative")
+    return parsed
 
 
 def load_candidate_inputs(specs: list[str]) -> pd.DataFrame:
@@ -78,10 +103,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--score-column", default=_DEFAULT_SCORE_COLUMN)
     parser.add_argument("--fallback-score-column", default=_DEFAULT_FALLBACK_SCORE_COLUMN)
-    parser.add_argument("--top-k", action="append", type=int, default=None)
-    parser.add_argument("--max-truth-time-delta-s", type=float, default=0.5)
-    parser.add_argument("--good-candidate-threshold-m", type=float, default=5.0)
-    parser.add_argument("--loss-tolerance-m", type=float, default=1.0e-6)
+    parser.add_argument("--top-k", action="append", type=_positive_int, default=None)
+    parser.add_argument(
+        "--max-truth-time-delta-s",
+        type=_nonnegative_finite_float,
+        default=0.5,
+    )
+    parser.add_argument(
+        "--good-candidate-threshold-m",
+        type=_nonnegative_finite_float,
+        default=5.0,
+    )
+    parser.add_argument(
+        "--loss-tolerance-m",
+        type=_nonnegative_finite_float,
+        default=1.0e-6,
+    )
     args = parser.parse_args(argv)
 
     if not args.reference_candidate:
