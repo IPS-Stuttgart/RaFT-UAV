@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from raft_uav.mmuad.track5_submission_ensemble import SubmissionInput
 from raft_uav.mmuad.track5_submission_ensemble import ensemble_track5_submissions
 from raft_uav.mmuad.track5_submission_ensemble import parse_submission_input
 
@@ -52,3 +53,43 @@ def test_track5_submission_ensemble_scales_large_finite_weights(
     assert estimate["Classification"] == 2
     assert np.isfinite(float(diagnostic["position_spread_m"]))
     assert diagnostic["classification_vote_margin"] == pytest.approx(2.0e307)
+
+
+@pytest.mark.parametrize(
+    "weight",
+    [
+        True,
+        np.bool_(True),
+        np.array([0.5]),
+        0.5 + 0.0j,
+        np.ma.array(0.5, mask=True),
+    ],
+    ids=["bool", "numpy-bool", "one-dimensional-array", "complex", "masked"],
+)
+def test_track5_submission_ensemble_rejects_malformed_programmatic_weights_before_io(
+    tmp_path: Path,
+    weight: object,
+) -> None:
+    missing_path = tmp_path / "missing.csv"
+    item = SubmissionInput(label="bad", path=missing_path, weight=weight)
+
+    with pytest.raises(ValueError, match="finite non-negative real scalar"):
+        ensemble_track5_submissions([item])
+
+    assert not missing_path.exists()
+
+
+@pytest.mark.parametrize("weight", [np.array(0.5), np.float64(0.5), "0.5"])
+def test_track5_submission_ensemble_accepts_scalar_like_programmatic_weights(
+    tmp_path: Path,
+    weight: object,
+) -> None:
+    path = tmp_path / "submission.csv"
+    _write_submission(path, x_m=3.0, classification=1)
+    item = SubmissionInput(label="valid", path=path, weight=weight)
+
+    estimates, diagnostics = ensemble_track5_submissions([item])
+
+    assert estimates.iloc[0]["state_x_m"] == pytest.approx(3.0)
+    assert estimates.iloc[0]["ensemble_weight_sum"] == pytest.approx(0.5)
+    assert diagnostics.iloc[0]["weight_sum"] == pytest.approx(0.5)
