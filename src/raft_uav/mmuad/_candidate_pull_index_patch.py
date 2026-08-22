@@ -49,6 +49,31 @@ def _current_positions(current_xyz: object, *, row_count: int) -> np.ndarray:
     return positions
 
 
+def _candidate_row_positions(row_index: pd.Series) -> np.ndarray:
+    """Return candidate row positions without lossy numeric coercion."""
+
+    message = "candidate-pull returned invalid row positions"
+    try:
+        numeric_positions = pd.to_numeric(row_index, errors="raise")
+        validated: list[int] = []
+        for value in numeric_positions.to_numpy():
+            if isinstance(value, (bool, np.bool_, complex, np.complexfloating)):
+                raise ValueError(message)
+            if isinstance(value, (int, np.integer)):
+                position = int(value)
+            else:
+                numeric_value = float(value)
+                if not np.isfinite(numeric_value) or not numeric_value.is_integer():
+                    raise ValueError(message)
+                position = int(numeric_value)
+            if position < np.iinfo(np.int64).min or position > np.iinfo(np.int64).max:
+                raise ValueError(message)
+            validated.append(position)
+        return np.asarray(validated, dtype=np.int64)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError(message) from exc
+
+
 def _canonical_output_path(path: Path) -> str:
     """Return a normalized path key without requiring the output to exist."""
 
@@ -146,13 +171,7 @@ def install() -> None:
         if centers.empty or "row_index" not in centers.columns:
             return centers
 
-        try:
-            row_positions = pd.to_numeric(
-                centers["row_index"],
-                errors="raise",
-            ).to_numpy(dtype=np.int64)
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise RuntimeError("candidate-pull returned invalid row positions") from exc
+        row_positions = _candidate_row_positions(centers["row_index"])
         if np.any((row_positions < 0) | (row_positions >= len(original_index))):
             raise RuntimeError("candidate-pull returned out-of-range row positions")
 

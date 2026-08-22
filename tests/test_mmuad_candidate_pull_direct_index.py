@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from raft_uav.mmuad._candidate_pull_index_patch import _candidate_row_positions
 from raft_uav.mmuad.candidate_pull import (
     align_rowwise_candidate_centers,
     candidate_centers_for_results,
@@ -91,3 +92,30 @@ def test_direct_candidate_centers_reject_invalid_current_positions(
         match="current_xyz must contain only finite real values",
     ):
         candidate_centers_for_results(_candidates(), results, current_xyz)
+
+
+def test_candidate_row_positions_preserve_integral_numeric_values() -> None:
+    row_index = pd.Series([0, 1.0, "2"])
+
+    assert _candidate_row_positions(row_index).tolist() == [0, 1, 2]
+
+
+@pytest.mark.parametrize(
+    "row_index",
+    [
+        pd.Series([1.5]),
+        pd.Series([np.nan]),
+        pd.Series([np.inf]),
+        pd.Series([True]),
+        pd.Series([1.0 + 0.0j]),
+        pd.Series([2**63], dtype="uint64"),
+    ],
+)
+def test_candidate_row_positions_reject_lossy_numeric_coercion(
+    row_index: pd.Series,
+) -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="candidate-pull returned invalid row positions",
+    ):
+        _candidate_row_positions(row_index)
