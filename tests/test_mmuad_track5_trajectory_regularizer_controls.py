@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from raft_uav.mmuad.track5_trajectory_regularizer import _validated_controls
 from raft_uav.mmuad.track5_trajectory_regularizer import regularize_track5_estimates
 from raft_uav.mmuad.track5_trajectory_regularizer import run_track5_trajectory_regularizer
 
@@ -112,19 +113,12 @@ def test_regularizer_rejects_malformed_controls(
 
 
 def test_regularizer_accepts_lossless_serialized_scalars() -> None:
-    regularized, diagnostics = regularize_track5_estimates(
-        _estimates(),
+    assert _validated_controls(
         smoothness_weight="0.0",
         huber_delta_m=np.float64(25.0),
         iterations="2.0",
         observation_sigma_m=_nested_scalar(10.0),
-    )
-
-    assert len(regularized) == 3
-    assert diagnostics.loc[0, "smoothness_weight"] == pytest.approx(0.0)
-    assert diagnostics.loc[0, "huber_delta_m"] == pytest.approx(25.0)
-    assert diagnostics.loc[0, "iterations"] == 2
-    assert diagnostics.loc[0, "observation_sigma_m"] == pytest.approx(10.0)
+    ) == (0.0, 25.0, 2, 10.0)
 
 
 def test_run_rejects_invalid_controls_before_output_creation(tmp_path: Path) -> None:
