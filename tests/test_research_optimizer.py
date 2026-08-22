@@ -86,3 +86,50 @@ def test_constrained_selection_rejects_invalid_thresholds(threshold: object) -> 
             rows,
             constraints={"coverage": (">=", threshold)},
         )
+
+
+@pytest.mark.parametrize(("minimize", "invalid_objective"), [(True, -np.inf), (False, np.inf)])
+def test_constrained_selection_marks_nonfinite_objective_infeasible(
+    minimize: bool,
+    invalid_objective: float,
+) -> None:
+    rows = pd.DataFrame(
+        {
+            "method": ["valid", "invalid"],
+            "error_3d_rmse_m": [1.0, invalid_objective],
+        }
+    )
+
+    ranked = select_constrained_configs(rows, minimize=minimize).set_index("method")
+
+    assert bool(ranked.loc["valid", "constraint_feasible"])
+    assert int(ranked.loc["valid", "constrained_rank"]) == 1
+    assert not bool(ranked.loc["invalid", "constraint_feasible"])
+
+
+@pytest.mark.parametrize(
+    ("operator", "threshold", "valid_value", "invalid_value"),
+    [(">=", 0.9, 0.95, np.inf), ("<=", 1.0, 0.95, -np.inf)],
+)
+def test_constrained_selection_marks_nonfinite_constraint_value_infeasible(
+    operator: str,
+    threshold: float,
+    valid_value: float,
+    invalid_value: float,
+) -> None:
+    rows = pd.DataFrame(
+        {
+            "method": ["valid", "invalid"],
+            "error_3d_rmse_m": [1.0, 0.5],
+            "coverage": [valid_value, invalid_value],
+        }
+    )
+
+    ranked = select_constrained_configs(
+        rows,
+        constraints=[("coverage", operator, threshold)],
+    ).set_index("method")
+
+    assert bool(ranked.loc["valid", "constraint_feasible"])
+    assert int(ranked.loc["valid", "constrained_rank"]) == 1
+    assert not bool(ranked.loc["invalid", "constraint_feasible"])
