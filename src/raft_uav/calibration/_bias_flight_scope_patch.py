@@ -57,10 +57,7 @@ def _scope_keys(
         frame[column].map(_normalized_scope_value).tolist()
         for column in columns
     ]
-    return [
-        tuple(values)
-        for values in zip(*normalized, strict=True)
-    ]
+    return [tuple(values) for values in zip(*normalized)]
 
 
 def _extra_scope_subdivides_shared_scope(
@@ -79,7 +76,7 @@ def _extra_scope_subdivides_shared_scope(
         tuple[str | None, ...],
         set[tuple[str | None, ...]],
     ] = {}
-    for shared_key, extra_key in zip(shared_keys, extra_keys, strict=True):
+    for shared_key, extra_key in zip(shared_keys, extra_keys):
         extras_by_shared.setdefault(shared_key, set()).add(extra_key)
     return any(len(extra_keys_for_scope) > 1 for extra_keys_for_scope in extras_by_shared.values())
 
