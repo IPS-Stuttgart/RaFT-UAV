@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from raft_uav.baselines import robust_map
 from raft_uav.baselines.kalman import TrackingMeasurement
@@ -6,7 +7,7 @@ from raft_uav.baselines.robust_map import RobustMapSmootherConfig
 from raft_uav.baselines.smoothing import smooth_tracking_records
 
 
-def _record(time_s: float, *, accepted: bool) -> dict[str, object]:
+def _record(time_s: float, *, accepted: object) -> dict[str, object]:
     return {
         "time_s": time_s,
         "source": "radar",
@@ -45,6 +46,39 @@ def test_accepted_only_matching_skips_rejected_nearest_record():
 
     assert len(smoothed) == len(records)
     assert all(record["map_matched_measurements"] == 1 for record in smoothed)
+
+
+def test_accepted_only_matching_rejects_truthy_string_flag():
+    records = [_record(0.0, accepted="False")]
+    measurements = [
+        TrackingMeasurement(
+            time_s=0.0,
+            vector=np.zeros(3),
+            covariance=np.eye(3),
+            source="radar",
+        )
+    ]
+
+    with pytest.raises(ValueError, match=r"records\[0\]\.accepted"):
+        robust_map._matched_measurement_factors(
+            records,
+            measurements,
+            np.array([0.0]),
+            time_tolerance_s=1.0e-6,
+            accepted_only=True,
+        )
+
+
+def test_accepted_only_pseudo_measurements_reject_truthy_string_flag():
+    records = [_record(0.0, accepted="False")]
+
+    with pytest.raises(ValueError, match=r"records\[0\]\.accepted"):
+        robust_map._record_pseudo_measurement_factors(
+            records,
+            np.zeros((1, 6)),
+            np.eye(6).reshape(1, 6, 6),
+            accepted_only=True,
+        )
 
 
 def test_measurement_matching_maximizes_factor_count_before_time_error():
