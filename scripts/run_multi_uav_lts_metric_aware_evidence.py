@@ -68,7 +68,10 @@ _CALIBRATION_VARIANTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
 )
-_EXTRA_NAMES = (_METRIC_GRAPH_NAME, *(name for name, _arguments in _CALIBRATION_VARIANTS))
+_EXTRA_NAMES = (
+    _METRIC_GRAPH_NAME,
+    *(name for name, _arguments in _CALIBRATION_VARIANTS),
+)
 
 
 @dataclass(frozen=True)
@@ -90,15 +93,21 @@ def _validate_metric_model_provenance(
     summary = crossfit.evidence._load_json(summary_path)
     expected = list(fold.training_sequences)
     metadata = model.get("metadata")
-    selected_model = metadata.get("selected_sequences") if isinstance(metadata, Mapping) else None
+    selected_model = (
+        metadata.get("selected_sequences") if isinstance(metadata, Mapping) else None
+    )
     if selected_model != expected or summary.get("selected_sequences") != expected:
         raise ValueError(
             f"fold {fold.index} metric-edge provenance does not match its training panel"
         )
     if set(fold.heldout_sequences) & set(fold.training_sequences):
-        raise ValueError(f"fold {fold.index} metric-edge training panel leaks held-out data")
+        raise ValueError(
+            f"fold {fold.index} metric-edge training panel leaks held-out data"
+        )
     if int(model.get("sequence_count", 0)) != len(expected):
-        raise ValueError(f"fold {fold.index} metric-edge sequence_count is inconsistent")
+        raise ValueError(
+            f"fold {fold.index} metric-edge sequence_count is inconsistent"
+        )
     for field in (
         "identity_positive_edges",
         "hota_005_positive_edges",
@@ -173,11 +182,15 @@ def _fit_metric_fold_models(
     return models
 
 
-def _resolve_metric_arguments(arguments: tuple[str, ...], model_path: Path) -> tuple[str, ...]:
+def _resolve_metric_arguments(
+    arguments: tuple[str, ...],
+    model_path: Path,
+) -> tuple[str, ...]:
     if arguments.count(_METRIC_MODEL_TOKEN) != 1:
         raise ValueError("metric candidate arguments must contain one model placeholder")
     return tuple(
-        str(model_path) if value == _METRIC_MODEL_TOKEN else value for value in arguments
+        str(model_path) if value == _METRIC_MODEL_TOKEN else value
+        for value in arguments
     )
 
 
@@ -236,15 +249,22 @@ def _materialize_metric_candidate(
     for fold in folds:
         model = models[fold.index]
         if model.heldout_sequences != fold.heldout_sequences:
-            raise ValueError(f"fold {fold.index} metric model was assigned to the wrong fold")
-        arguments = _resolve_metric_arguments(_METRIC_GRAPH_ARGUMENTS, model.model_path)
+            raise ValueError(
+                f"fold {fold.index} metric model was assigned to the wrong fold"
+            )
+        arguments = _resolve_metric_arguments(
+            _METRIC_GRAPH_ARGUMENTS,
+            model.model_path,
+        )
         groups: list[dict[str, Any]] = []
         for dimensions, sequences in crossfit._selected_resolution_groups(
             resolution_groups,
             fold.heldout_sequences,
         ):
             width, height = dimensions
-            group_root = root / "fold-groups" / f"fold-{fold.index}-{width}x{height}"
+            group_root = (
+                root / "fold-groups" / f"fold-{fold.index}-{width}x{height}"
+            )
             group_output = group_root / "predictions"
             shutil.rmtree(group_output, ignore_errors=True)
             _run_metric_tracker_group(
@@ -257,14 +277,19 @@ def _materialize_metric_candidate(
                 arguments=arguments,
                 sequences=sequences,
             )
-            _digest, total_bytes, count = crossfit.evidence._directory_digest(group_output)
+            _digest, total_bytes, count = crossfit.evidence._directory_digest(
+                group_output
+            )
             if count != len(sequences) or total_bytes <= 0:
                 raise ValueError(
-                    f"metric fold group produced {count} nonempty files for {len(sequences)} sequences"
+                    "metric fold group produced "
+                    f"{count} nonempty files for {len(sequences)} sequences"
                 )
             for source in sorted(group_output.glob("*.txt")):
                 if source.name in copied:
-                    raise ValueError(f"duplicate metric held-out prediction: {source.name}")
+                    raise ValueError(
+                        f"duplicate metric held-out prediction: {source.name}"
+                    )
                 shutil.copy2(source, output_dir / source.name)
                 copied.add(source.name)
             groups.append(
@@ -285,12 +310,15 @@ def _materialize_metric_candidate(
             }
         )
     expected_names = {
-        f"{sequence}.txt" for fold in folds for sequence in fold.heldout_sequences
+        f"{sequence}.txt"
+        for fold in folds
+        for sequence in fold.heldout_sequences
     }
     if copied != expected_names:
         raise ValueError(
             "metric held-out assembly is incomplete: "
-            f"missing={sorted(expected_names - copied)}, extra={sorted(copied - expected_names)}"
+            f"missing={sorted(expected_names - copied)}, "
+            f"extra={sorted(copied - expected_names)}"
         )
     digest, total_bytes, count = crossfit.evidence._directory_digest(output_dir)
     if count != expected_sequences or total_bytes <= 0:
@@ -307,7 +335,9 @@ def _materialize_metric_candidate(
             "sequence_count": count,
             "prediction_content_bytes": total_bytes,
             "prediction_content_sha256": digest,
-            "truth_usage": "metric edge heads only; each prediction uses complementary-fold truth",
+            "truth_usage": (
+                "metric edge heads only; each prediction uses complementary-fold truth"
+            ),
             "folds": fold_records,
         },
     )
@@ -356,15 +386,23 @@ def _materialize_calibration_variant(
         )
         for source in sorted(group_output.glob("*.txt")):
             if source.name in copied:
-                raise ValueError(f"{name}: duplicate calibrated prediction {source.name}")
+                raise ValueError(
+                    f"{name}: duplicate calibrated prediction {source.name}"
+                )
             shutil.copy2(source, output_dir / source.name)
             copied.add(source.name)
         group_records.append(
-            {"width": width, "height": height, "sequences": list(sequences)}
+            {
+                "width": width,
+                "height": height,
+                "sequences": list(sequences),
+            }
         )
     digest, total_bytes, count = crossfit.evidence._directory_digest(output_dir)
     if count != expected_sequences or total_bytes <= 0:
-        raise ValueError(f"{name} covers {count} sequences, expected {expected_sequences}")
+        raise ValueError(
+            f"{name} covers {count} sequences, expected {expected_sequences}"
+        )
     crossfit.evidence._write_json(
         root / "calibration-candidate-summary.json",
         {
@@ -381,8 +419,12 @@ def _materialize_calibration_variant(
     return output_dir
 
 
-def _available_results_with_metric(original, run_dir: Path) -> dict[str, Any]:
-    payload = original(run_dir)
+def _available_results_with_metric(
+    original_available,
+    original_crossfit_helper,
+    run_dir: Path,
+) -> dict[str, Any]:
+    payload = original_crossfit_helper(original_available, run_dir)
     metrics = payload.setdefault("metrics", {})
     for name in _EXTRA_NAMES:
         path = run_dir / name / "metrics.json"
@@ -397,7 +439,7 @@ def _available_results_with_metric(original, run_dir: Path) -> dict[str, Any]:
 
 def main() -> int:
     original_runner = crossfit._run_out_of_fold_candidates
-    original_available = crossfit._available_results_with_out_of_fold
+    original_available_helper = crossfit._available_results_with_out_of_fold
 
     def run_out_of_fold_candidates(
         proposal_dir: Path,
@@ -418,7 +460,10 @@ def main() -> int:
         )
         sequences = crossfit._sequence_manifest(seed_dir, expected_sequences)
         folds = crossfit._build_fold_definitions(sequences)
-        resolution_groups = crossfit.improved._sequence_resolution_groups(image_root, seed_dir)
+        resolution_groups = crossfit.improved._sequence_resolution_groups(
+            image_root,
+            seed_dir,
+        )
         metric_models = _fit_metric_fold_models(
             proposal_dir,
             truth_dir,
@@ -447,19 +492,25 @@ def main() -> int:
         }
         overlap = set(legacy) & ({_METRIC_GRAPH_NAME} | set(derived))
         if overlap:
-            raise ValueError(f"duplicate metric-aware candidate names: {sorted(overlap)}")
+            raise ValueError(
+                f"duplicate metric-aware candidate names: {sorted(overlap)}"
+            )
         return {**legacy, _METRIC_GRAPH_NAME: metric_output, **derived}
 
-    def available_results(run_dir: Path) -> dict[str, Any]:
-        return _available_results_with_metric(original_available, run_dir)
+    def available_results_with_metric(original_available, run_dir: Path):
+        return _available_results_with_metric(
+            original_available,
+            original_available_helper,
+            run_dir,
+        )
 
     crossfit._run_out_of_fold_candidates = run_out_of_fold_candidates
-    crossfit._available_results_with_out_of_fold = available_results
+    crossfit._available_results_with_out_of_fold = available_results_with_metric
     try:
         return crossfit.main()
     finally:
         crossfit._run_out_of_fold_candidates = original_runner
-        crossfit._available_results_with_out_of_fold = original_available
+        crossfit._available_results_with_out_of_fold = original_available_helper
 
 
 if __name__ == "__main__":
