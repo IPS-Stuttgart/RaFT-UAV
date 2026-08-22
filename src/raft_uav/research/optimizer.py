@@ -52,10 +52,11 @@ def select_constrained_configs(
         )
     else:
         grouped = working
-    keep = np.ones(len(grouped), dtype=bool)
+    objective_values = grouped[objective].to_numpy(dtype=float)
+    keep = np.isfinite(objective_values)
     for column, op, threshold in constraint_specs:
         values = grouped[column].to_numpy(dtype=float)
-        keep &= _compare(values, op, threshold)
+        keep &= np.isfinite(values) & _compare(values, op, threshold)
     feasible = grouped.loc[keep].copy()
     feasible["constraint_feasible"] = True
     infeasible = grouped.loc[~keep].copy()
