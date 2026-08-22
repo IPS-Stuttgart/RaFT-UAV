@@ -3,7 +3,7 @@
 The maintained implementation lives in the sibling
 ``track5_uncertainty_column_adapter.py`` module. This package preserves the
 public import path while rejecting labels that would overwrite the same
-normalized estimate CSV.
+normalized estimate CSV and malformed Boolean configuration controls.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 from typing import Iterable
 
+import numpy as np
 import pandas as pd
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_uncertainty_column_adapter.py"
@@ -27,7 +28,16 @@ sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
 _ORIGINAL_NORMALIZE = _IMPL.normalize_uncertainty_estimate_inputs
+_ORIGINAL_WRITE_OUTPUTS = _IMPL.write_uncertainty_column_adapter_outputs
 _ORIGINAL_PARSE_COLUMN_MAP = _IMPL._parse_uncertainty_column_map
+
+
+def _boolean_control(value: object, *, name: str) -> bool:
+    """Return an exact Boolean control without applying Python truthiness."""
+
+    if not isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be a Boolean")
+    return bool(value)
 
 
 def _validate_unique_estimate_labels(estimate_inputs: Iterable[object]) -> list[object]:
@@ -140,8 +150,12 @@ def normalize_uncertainty_estimate_inputs(
     fallback_sigma_m=30.0,
     require_uncertainty=False,
 ):
-    """Normalize inputs only after proving labels and uncertainty columns are distinct."""
+    """Normalize inputs only after validating labels, columns, and Boolean controls."""
 
+    require_uncertainty = _boolean_control(
+        require_uncertainty,
+        name="require_uncertainty",
+    )
     inputs = _validate_unique_estimate_labels(estimate_inputs)
     column_map = _validate_uncertainty_column_mapping(inputs, uncertainty_columns)
     for item in inputs:
@@ -158,6 +172,46 @@ def normalize_uncertainty_estimate_inputs(
         output_uncertainty_column=output_uncertainty_column,
         fallback_sigma_m=fallback_sigma_m,
         require_uncertainty=require_uncertainty,
+    )
+
+
+def write_uncertainty_column_adapter_outputs(
+    *,
+    estimate_inputs,
+    output_dir,
+    uncertainty_columns=None,
+    output_uncertainty_column="predicted_sigma_m",
+    fallback_sigma_m=30.0,
+    require_uncertainty=False,
+    template=None,
+    class_map=None,
+    default_classification=0,
+    sigma_min_m=1.0,
+    sigma_max_m=100.0,
+    max_nearest_time_delta_s=None,
+    run_ensemble=False,
+):
+    """Write adapter outputs only after validating Boolean execution controls."""
+
+    require_uncertainty = _boolean_control(
+        require_uncertainty,
+        name="require_uncertainty",
+    )
+    run_ensemble = _boolean_control(run_ensemble, name="run_ensemble")
+    return _ORIGINAL_WRITE_OUTPUTS(
+        estimate_inputs=estimate_inputs,
+        output_dir=output_dir,
+        uncertainty_columns=uncertainty_columns,
+        output_uncertainty_column=output_uncertainty_column,
+        fallback_sigma_m=fallback_sigma_m,
+        require_uncertainty=require_uncertainty,
+        template=template,
+        class_map=class_map,
+        default_classification=default_classification,
+        sigma_min_m=sigma_min_m,
+        sigma_max_m=sigma_max_m,
+        max_nearest_time_delta_s=max_nearest_time_delta_s,
+        run_ensemble=run_ensemble,
     )
 
 
@@ -182,6 +236,7 @@ def _parse_uncertainty_column_map(values: list[str]) -> dict[str, str]:
 
 
 _IMPL.normalize_uncertainty_estimate_inputs = normalize_uncertainty_estimate_inputs
+_IMPL.write_uncertainty_column_adapter_outputs = write_uncertainty_column_adapter_outputs
 _IMPL._parse_uncertainty_column_map = _parse_uncertainty_column_map
 
 globals().update(
@@ -191,12 +246,16 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_boolean_control"] = _boolean_control
 globals()["_validate_uncertainty_column_mapping"] = _validate_uncertainty_column_mapping
 globals()["_read_physical_header"] = _read_physical_header
 globals()["_validate_unambiguous_uncertainty_columns"] = (
     _validate_unambiguous_uncertainty_columns
 )
 globals()["normalize_uncertainty_estimate_inputs"] = normalize_uncertainty_estimate_inputs
+globals()["write_uncertainty_column_adapter_outputs"] = (
+    write_uncertainty_column_adapter_outputs
+)
 globals()["_parse_uncertainty_column_map"] = _parse_uncertainty_column_map
 
 __doc__ = _IMPL.__doc__
