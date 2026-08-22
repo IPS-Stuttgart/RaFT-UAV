@@ -541,7 +541,6 @@ def _available_results_with_out_of_fold(
 def main() -> int:
     if any(argument in {"-h", "--help"} for argument in sys.argv[1:]):
         return improved.main()
-    image_root = _dataset_path_from_inputs(sys.argv[1:], "train_sequence_root")
     truth_dir = _dataset_path_from_inputs(sys.argv[1:], "truth_dir")
     original_candidates = evidence.CANDIDATES
     original_improved_candidates = improved.IMPROVED_CANDIDATES
