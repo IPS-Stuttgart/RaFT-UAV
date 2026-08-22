@@ -81,7 +81,7 @@ def _covariance_with_partial_learned_overrides(
             candidate[index, index] = value
 
     for first, second, suffix in cross_terms:
-        if learned_diagonal[first] is None or learned_diagonal[second] is None:
+        if learned_diagonal[first] is None and learned_diagonal[second] is None:
             continue
         value = _finite_covariance_value(row.get(f"cov_{suffix}"))
         candidate[first, second] = candidate[second, first] = (
