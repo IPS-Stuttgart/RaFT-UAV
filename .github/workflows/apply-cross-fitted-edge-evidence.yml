@@ -2,8 +2,8 @@
 name: Apply cross-fitted edge evidence
 
 "on":
-  push:
-    branches: [agent/lts-proposal-graph-evidence]
+  pull_request:
+    branches: [main]
     paths:
       - ".github/cross-fitted-edge-evidence.tar.gz"
       - ".github/workflows/apply-cross-fitted-edge-evidence.yml"
@@ -24,6 +24,7 @@ jobs:
       - name: Check out payload commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
           clean: true
 
@@ -72,4 +73,4 @@ jobs:
           git add -A
           git diff --cached --check
           git commit -m "Add cross-fitted learned-edge evidence"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
