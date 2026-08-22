@@ -7,6 +7,8 @@ from collections.abc import Iterable
 import os
 from typing import Any
 
+from raft_uav.numeric import optional_float, optional_int
+
 RADAR_COVARIANCE_MODES = ("fixed", "range-angle")
 TRACKLET_CATPROB_RETENTION_MODES = ("hard", "soft")
 
@@ -453,8 +455,8 @@ def _tracklet_max_candidates_env_value(
 
 
 def _finite_float(value: object, name: str) -> float:
-    number = float(value)
-    if number != number or abs(number) == float("inf"):
+    number = optional_float(value)
+    if number is None:
         raise ValueError(f"{name} must be finite")
     return number
 
@@ -483,14 +485,18 @@ def _nonnegative_float(value: object, name: str) -> float:
 
 
 def _positive_int(value: object, name: str) -> int:
-    number = int(value)
+    number = optional_int(value)
+    if number is None:
+        raise ValueError(f"{name} must be an integer")
     if number < 1:
         raise ValueError(f"{name} must be positive")
     return number
 
 
 def _nonnegative_int(value: object, name: str) -> int:
-    number = int(value)
+    number = optional_int(value)
+    if number is None:
+        raise ValueError(f"{name} must be an integer")
     if number < 0:
         raise ValueError(f"{name} must be nonnegative")
     return number
