@@ -42,6 +42,7 @@ def install() -> None:
     if _INSTALLED:
         return
 
+    import raft_uav.mmuad as mmuad
     from raft_uav.mmuad import mot
 
     implementation = getattr(mot, "_IMPL", mot)
@@ -70,4 +71,8 @@ def install() -> None:
     for target in targets:
         target._normalized_metric_id_series = normalized_metric_id_series
         target._estimate_track_ids_for_metrics = estimate_track_ids_for_metrics
+
+    from raft_uav.mmuad._mot_physical_scope_patch import install as install_physical_scope
+
+    install_physical_scope(mot=mot, mmuad=mmuad)
     _INSTALLED = True
