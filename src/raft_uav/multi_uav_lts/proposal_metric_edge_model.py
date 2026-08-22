@@ -54,7 +54,7 @@ def fit_metric_edge_model_from_lts(
     sequences: Iterable[str] | None = None,
     min_proposal_confidence: float = 0.003,
     duplicate_iou: float = 0.95,
-    min_truth_iou: float = 0.05,
+    min_truth_iou: float = 0.0,
     max_gap: int = 0,
     max_link_cost: float = 2.25,
     negative_candidates_per_left: int = 5,
@@ -370,7 +370,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sequences", nargs="*")
     parser.add_argument("--min-proposal-confidence", type=float, default=0.003)
     parser.add_argument("--duplicate-iou", type=float, default=0.95)
-    parser.add_argument("--min-truth-iou", type=float, default=0.05)
+    parser.add_argument("--min-truth-iou", type=float, default=0.0)
     parser.add_argument("--max-gap", type=int, default=0)
     parser.add_argument("--max-link-cost", type=float, default=2.25)
     parser.add_argument("--negative-candidates-per-left", type=int, default=5)
