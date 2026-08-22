@@ -55,7 +55,11 @@ def test_completion_truth_errors_do_not_cross_reused_sequence_ids_between_flight
     completed = result.estimates.sort_values(["flight_id", "time_s"]).reset_index(
         drop=True
     )
-    np.testing.assert_allclose(completed["error_3d_m"].to_numpy(float), 0.0)
+    np.testing.assert_allclose(
+        completed["error_3d_m"].to_numpy(float),
+        0.0,
+        atol=1e-12,
+    )
     np.testing.assert_allclose(
         completed["truth_x_m"].to_numpy(float),
         [0.0, 1.0, 100.0, 101.0],
@@ -64,13 +68,17 @@ def test_completion_truth_errors_do_not_cross_reused_sequence_ids_between_flight
     ablation = result.smoothing_ablation.loc[
         result.smoothing_ablation["sequence_id"] == "shared"
     ]
-    np.testing.assert_allclose(ablation["mean_3d_m"].to_numpy(float), 0.0)
+    np.testing.assert_allclose(
+        ablation["mean_3d_m"].to_numpy(float),
+        0.0,
+        atol=1e-12,
+    )
 
     summary = result.sequence_error_summary.loc[
         result.sequence_error_summary["sequence_id"] == "shared"
     ].iloc[0]
-    assert float(summary["raw_mean_3d_m"]) == 0.0
-    assert float(summary["final_mean_3d_m"]) == 0.0
+    assert abs(float(summary["raw_mean_3d_m"])) <= 1e-12
+    assert abs(float(summary["final_mean_3d_m"])) <= 1e-12
 
 
 def test_completion_clears_stale_truth_errors_when_flight_truth_is_missing() -> None:

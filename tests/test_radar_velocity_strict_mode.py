@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.io.aerpaw import radar_measurements_to_enu
 
@@ -18,30 +19,32 @@ def _normalized_radar_row() -> dict[str, float]:
     }
 
 
-def test_explicit_velocity_mode_falls_back_for_missing_component() -> None:
+def test_explicit_velocity_mode_rejects_missing_component() -> None:
     row = _normalized_radar_row()
     del row["velocity_down_mps"]
 
-    [measurement] = radar_measurements_to_enu(
-        pd.DataFrame([row]),
-        include_velocity=True,
-    )
+    with pytest.raises(
+        ValueError,
+        match="requires all radar velocity components",
+    ):
+        radar_measurements_to_enu(
+            pd.DataFrame([row]),
+            include_velocity=True,
+        )
 
-    np.testing.assert_allclose(measurement.vector, [10.0, 20.0, 30.0])
-    assert measurement.covariance.shape == (3, 3)
 
-
-def test_explicit_velocity_mode_falls_back_for_nonfinite_component() -> None:
+def test_explicit_velocity_mode_rejects_nonfinite_component() -> None:
     row = _normalized_radar_row()
     row["velocity_north_mps"] = np.nan
 
-    [measurement] = radar_measurements_to_enu(
-        pd.DataFrame([row]),
-        include_velocity=True,
-    )
-
-    np.testing.assert_allclose(measurement.vector, [10.0, 20.0, 30.0])
-    assert measurement.covariance.shape == (3, 3)
+    with pytest.raises(
+        ValueError,
+        match="requires complete finite radar velocity components",
+    ):
+        radar_measurements_to_enu(
+            pd.DataFrame([row]),
+            include_velocity=True,
+        )
 
 
 def test_explicit_velocity_mode_keeps_complete_six_dimensional_measurement() -> None:
