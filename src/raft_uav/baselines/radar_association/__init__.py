@@ -2,8 +2,9 @@
 
 The maintained implementation lives in the sibling ``radar_association.py``
 module. This package preserves the public import path while rejecting non-finite
-numeric parameters and malformed integer controls before they can create NaN/Inf
-tracker state, covariance values, or silently truncated association settings,
+numeric parameters, malformed integer controls, and ambiguous Boolean policy
+flags before they can create NaN/Inf tracker state, silently truncated
+association settings, or unexpectedly enable empirical covariance. It also
 initializes track-bank state from supported position-plus-velocity bootstrap
 measurements without a shape mismatch, and preserves radar frames when
 ``frame_index`` is only partially populated.
@@ -203,6 +204,11 @@ def _validate_radar_association_parameters(arguments: dict[str, Any]) -> None:
     for name in _POSITIVE_INTEGER_ASSOCIATION_PARAMETERS:
         arguments[name] = _require_positive_integer(name, arguments[name])
 
+    arguments["paper_compatible_empirical_covariance"] = _require_boolean(
+        "paper_compatible_empirical_covariance",
+        arguments["paper_compatible_empirical_covariance"],
+    )
+
     crossrange_min = arguments["radar_crossrange_min_std_m"]
     crossrange_max = arguments["radar_crossrange_max_std_m"]
     if crossrange_max < crossrange_min:
@@ -248,6 +254,12 @@ def _require_positive_integer(name: str, value: Any) -> int:
     if number is None or number < 1:
         raise ValueError(f"{name} must be a positive integer")
     return number
+
+
+def _require_boolean(name: str, value: Any) -> bool:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    raise ValueError(f"{name} must be a boolean")
 
 
 _IMPL.run_async_cv_baseline_with_radar_association = (
