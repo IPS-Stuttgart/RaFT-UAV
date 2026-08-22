@@ -1,4 +1,4 @@
-"""Reject lossy coercion in candidate-reservoir configuration files."""
+"""Harden candidate-reservoir config loading and summary frame counting."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 _COUNT_KEYS = (
     "global_top_n",
@@ -14,6 +15,9 @@ _COUNT_KEYS = (
     "max_candidates_per_frame",
 )
 _SCORE_COLUMN_KEYS = ("score_column", "fallback_score_column")
+_SUMMARY_FRAME_COUNT_PATCH_MARKER = (
+    "_raft_uav_summary_frame_count_without_candidate_schema_installed"
+)
 
 
 def _exact_integer_scalar(value: object, *, name: str) -> int:
@@ -109,8 +113,35 @@ def _finite_float_mapping(value: object, *, name: str) -> dict[str, float]:
     }
 
 
+def _install_summary_frame_count_patch() -> None:
+    """Keep summary frame counting independent of candidate geometry columns."""
+
+    from raft_uav.mmuad import candidate_reservoir as reservoir_module
+
+    if getattr(reservoir_module, _SUMMARY_FRAME_COUNT_PATCH_MARKER, False):
+        return
+
+    original_frame_counts = reservoir_module._ORIGINAL_FRAME_COUNTS
+
+    def flight_aware_frame_counts(rows: pd.DataFrame) -> pd.Series:
+        frame = pd.DataFrame(rows).copy()
+        state, _ = reservoir_module._flight_metadata_state(frame)
+        if frame.empty or state == "absent":
+            return original_frame_counts(frame)
+        keys = reservoir_module._joint_scope_keys(frame)
+        key_to_token, _ = reservoir_module._scope_token_maps((keys,))
+        scoped = reservoir_module._apply_scope_tokens(frame, keys, key_to_token)
+        return original_frame_counts(scoped)
+
+    reservoir_module._frame_counts = flight_aware_frame_counts
+    reservoir_module._IMPL._frame_counts = flight_aware_frame_counts
+    setattr(reservoir_module, _SUMMARY_FRAME_COUNT_PATCH_MARKER, True)
+
+
 def install() -> None:
-    """Install strict validation on the train-selected config loader."""
+    """Install strict config validation and schema-light summary frame counting."""
+
+    _install_summary_frame_count_patch()
 
     from raft_uav.mmuad import candidate_reservoir_apply as apply_module
 
