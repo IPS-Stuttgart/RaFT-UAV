@@ -106,11 +106,29 @@ def test_mot_metrics_truth_only_scope_does_not_require_estimate_metadata():
     assert metrics["id_switches"] == 0
 
 
+def test_mot_metrics_allow_one_sided_flight_when_sequence_disambiguates():
+    estimates = _estimate_rows(
+        sequence_id=["sequence_a", "sequence_b"],
+        flight_id=["flight_a", "flight_b"],
+        output_track_id=["mot_1", "mot_1"],
+    )
+    truth = _truth_rows(
+        sequence_id=["sequence_a", "sequence_b"],
+        track_id=["target", "target"],
+    )
+
+    metrics = compute_multi_object_metrics(estimates, truth, match_distance_m=1.0)
+
+    assert metrics["matches"] == 2
+    assert metrics["false_positive"] == 0
+    assert metrics["false_negative"] == 0
+
+
 def test_mot_metrics_reject_ambiguous_one_sided_flight_metadata():
     estimates = _estimate_rows(flight_id=["flight_a", "flight_b"])
     truth = _truth_rows()
 
-    with pytest.raises(ValueError, match="both carry flight_id"):
+    with pytest.raises(ValueError, match="ambiguous flight_id"):
         compute_multi_object_metrics(estimates, truth, match_distance_m=1.0)
 
 
