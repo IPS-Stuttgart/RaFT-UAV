@@ -9,6 +9,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.numeric import optional_float
+
 _INSTALLED = False
 
 
@@ -47,6 +49,19 @@ def _current_positions(current_xyz: object, *, row_count: int) -> np.ndarray:
     if not bool(np.isfinite(positions).all()):
         raise ValueError(value_message)
     return positions
+
+
+def _validate_result_timestamps(results: pd.DataFrame) -> None:
+    """Require every official-result timestamp to be a finite real scalar."""
+
+    if "Timestamp" not in results.columns:
+        return
+    for row, raw_value in results["Timestamp"].items():
+        if optional_float(raw_value) is None:
+            raise ValueError(
+                "official result Timestamp must be a finite real scalar "
+                f"at row {row!r}: {raw_value!r}"
+            )
 
 
 def _canonical_output_path(path: Path) -> str:
@@ -118,7 +133,17 @@ def install() -> None:
     from raft_uav.mmuad import candidate_pull as candidate_pull
 
     original = candidate_pull.candidate_centers_for_results
+    original_normalize = candidate_pull._normalize_official_results
     original_write_artifacts = candidate_pull.write_candidate_pull_artifacts
+
+    def normalize_official_results(
+        results: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, np.ndarray]:
+        """Normalize only official rows with finite real timestamps."""
+
+        result_rows = pd.DataFrame(results)
+        _validate_result_timestamps(result_rows)
+        return original_normalize(results)
 
     def candidate_centers_for_results(
         candidates: pd.DataFrame,
@@ -190,10 +215,12 @@ def install() -> None:
             alpha_assignments_csv=alpha_assignments_csv,
         )
 
+    candidate_pull._normalize_official_results = normalize_official_results
     candidate_pull.candidate_centers_for_results = candidate_centers_for_results
     candidate_pull.write_candidate_pull_artifacts = write_candidate_pull_artifacts
     implementation = getattr(candidate_pull, "_IMPL", None)
     if implementation is not None:
+        implementation._normalize_official_results = normalize_official_results
         implementation.candidate_centers_for_results = candidate_centers_for_results
         implementation.write_candidate_pull_artifacts = write_candidate_pull_artifacts
     _INSTALLED = True
