@@ -3,8 +3,9 @@
 The maintained implementation lives in the sibling ``paper_table.py`` module.
 This package preserves the public import path while excluding malformed radar
 anchors before interpolation, reporting invalid reference counts as failed
-checks instead of raising conversion errors, and validating stable-segment and
-reference-count controls before they can silently distort paper metrics.
+checks instead of raising conversion errors, and validating stable-segment,
+radar-interpolation, and reference-count controls before they can silently
+distort paper metrics.
 """
 
 from __future__ import annotations
@@ -61,12 +62,22 @@ def _interpolate_selected_radar_to_frame_times(
 ) -> pd.DataFrame:
     """Interpolate from usable anchors without letting one bad row erase output."""
 
+    normalized_max_gap_s = (
+        None
+        if max_gap_s is None
+        else _validated_positive_real(max_gap_s, name="max_gap_s")
+    )
+    normalized_max_speed_mps = (
+        None
+        if max_speed_mps is None
+        else _validated_positive_real(max_speed_mps, name="max_speed_mps")
+    )
     return _ORIGINAL_INTERPOLATE_SELECTED_RADAR(
         radar,
         _finite_interpolation_anchors(selected),
         association_mode=association_mode,
-        max_gap_s=max_gap_s,
-        max_speed_mps=max_speed_mps,
+        max_gap_s=normalized_max_gap_s,
+        max_speed_mps=normalized_max_speed_mps,
     )
 
 
@@ -246,6 +257,22 @@ def run_paper_table_diagnostic(
         stable_segment_max_transition_speed_mps,
         name="stable_segment_max_transition_speed_mps",
     )
+    normalized_interpolation_max_gap_s = (
+        None
+        if radar_interpolation_max_gap_s is None
+        else _validated_positive_real(
+            radar_interpolation_max_gap_s,
+            name="radar_interpolation_max_gap_s",
+        )
+    )
+    normalized_interpolation_max_speed_mps = (
+        None
+        if radar_interpolation_max_speed_mps is None
+        else _validated_positive_real(
+            radar_interpolation_max_speed_mps,
+            name="radar_interpolation_max_speed_mps",
+        )
+    )
     normalized_reference_count_tolerance = _validated_nonnegative_integer(
         reference_count_tolerance,
         name="reference_count_tolerance",
@@ -256,8 +283,8 @@ def run_paper_table_diagnostic(
         output_dir=output_dir,
         radar_catprob_threshold=radar_catprob_threshold,
         radar_range_gate_m=radar_range_gate_m,
-        radar_interpolation_max_gap_s=radar_interpolation_max_gap_s,
-        radar_interpolation_max_speed_mps=radar_interpolation_max_speed_mps,
+        radar_interpolation_max_gap_s=normalized_interpolation_max_gap_s,
+        radar_interpolation_max_speed_mps=normalized_interpolation_max_speed_mps,
         stable_segment_min_frames=min_frames,
         stable_segment_max_transition_speed_mps=max_transition_speed_mps,
         empirical_covariance=empirical_covariance,
