@@ -9,7 +9,7 @@ def test_radar_frame_sampling_keeps_rows_without_frame_key():
     radar = pd.DataFrame(
         {
             "frame_index": [0.0, 1.0, np.nan],
-            "time_s": [0.0, 1.0, 2.0],
+            "time_s": [0.0, 1.0, np.nan],
             "east_m": [0.0, 1.0, 2.0],
             "north_m": [0.0, 0.0, 0.0],
             "up_m": [0.0, 0.0, 0.0],
@@ -19,7 +19,7 @@ def test_radar_frame_sampling_keeps_rows_without_frame_key():
     perturbed = drop_radar_frames(radar, rate=1.0, rng=np.random.default_rng(0))
 
     assert perturbed["frame_index"].isna().tolist() == [True]
-    assert perturbed["time_s"].tolist() == [2.0]
+    assert perturbed["time_s"].isna().tolist() == [True]
 
 
 def test_rf_burst_sampling_keeps_nonfinite_timestamps():

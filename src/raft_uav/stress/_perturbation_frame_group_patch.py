@@ -37,8 +37,13 @@ def drop_radar_frames(
     if frame.empty or drop_rate == 0.0:
         return frame.copy()
 
-    frame_column = "frame_index" if "frame_index" in frame.columns else "time_s"
-    valid_group_mask = frame[frame_column].notna().to_numpy()
+    if "frame_index" in frame.columns and "time_s" in frame.columns:
+        valid_group_mask = (
+            frame["frame_index"].notna() | frame["time_s"].notna()
+        ).to_numpy()
+    else:
+        frame_column = "frame_index" if "frame_index" in frame.columns else "time_s"
+        valid_group_mask = frame[frame_column].notna().to_numpy()
     group_columns = _physical_frame_group_columns(frame)
     group_ids = (
         frame.loc[valid_group_mask, group_columns]
