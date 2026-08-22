@@ -3,10 +3,10 @@
 The maintained implementation lives in the sibling ``candidate_mixture_map.py``
 module. This package keeps the public import path while preserving opaque IDs in
 CSV inputs, retaining complete candidate frames when target-template times fall
-outside the configured matching tolerance, producing finite velocities and
-well-conditioned acceleration smoothing for repeated target timestamps,
-validating numerical controls, and delegating Gaussian-mixture factor
-calculations to PyRecEst.
+outside the configured matching tolerance, rejecting ambiguous co-temporal
+initial anchors, producing finite velocities and well-conditioned acceleration
+smoothing for repeated target timestamps, validating numerical controls, and
+delegating Gaussian-mixture factor calculations to PyRecEst.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_NORMALIZE_INITIAL_ESTIMATES = _IMPL._normalize_initial_estimates
 _ORIGINAL_VALIDATE_CONFIG = _IMPL._validate_config
 _ORIGINAL_TRAJECTORY_VELOCITY = _IMPL._trajectory_velocity
 _ORIGINAL_SECOND_DERIVATIVE_MATRIX = _IMPL._second_derivative_matrix
@@ -141,6 +142,35 @@ def _validate_config(config: Any) -> None:
     _ORIGINAL_VALIDATE_CONFIG(config)
 
 
+def _normalize_initial_estimates(
+    estimates: pd.DataFrame | None,
+) -> pd.DataFrame | None:
+    """Reject ambiguous co-temporal anchor states before interpolation."""
+
+    rows = _ORIGINAL_NORMALIZE_INITIAL_ESTIMATES(estimates)
+    if rows is None or rows.empty:
+        return rows
+
+    key_columns = ["sequence_id", "time_s"]
+    duplicate_mask = rows.duplicated(key_columns, keep=False)
+    if duplicate_mask.any():
+        duplicate_keys = rows.loc[duplicate_mask, key_columns].drop_duplicates()
+        preview = ", ".join(
+            f"({str(sequence_id)!r}, {float(time_s):g})"
+            for sequence_id, time_s in duplicate_keys.head(5).itertuples(
+                index=False,
+                name=None,
+            )
+        )
+        if len(duplicate_keys) > 5:
+            preview = f"{preview}, ..."
+        raise ValueError(
+            "initial estimates must contain at most one row per "
+            f"sequence_id/time_s; duplicate keys: {preview}"
+        )
+    return rows
+
+
 def _target_time_candidate_groups(
     sequence_rows: pd.DataFrame,
     *,
@@ -227,6 +257,7 @@ def _second_derivative_matrix(times: np.ndarray) -> np.ndarray:
 
 
 _IMPL.pd = _PandasCsvProxy(pd)
+_IMPL._normalize_initial_estimates = _normalize_initial_estimates
 _IMPL._validate_config = _validate_config
 _IMPL._target_time_candidate_groups = _target_time_candidate_groups
 _IMPL._trajectory_velocity = _trajectory_velocity
@@ -245,6 +276,7 @@ globals().update(
 )
 globals()["_finite_scalar"] = _finite_scalar
 globals()["_integer_scalar"] = _integer_scalar
+globals()["_normalize_initial_estimates"] = _normalize_initial_estimates
 globals()["_validate_config"] = _validate_config
 globals()["_target_time_candidate_groups"] = _target_time_candidate_groups
 globals()["_trajectory_velocity"] = _trajectory_velocity
