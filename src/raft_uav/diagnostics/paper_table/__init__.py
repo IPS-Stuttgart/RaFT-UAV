@@ -86,7 +86,7 @@ def paper_reference_count_check(
             if "method" in table
             else pd.DataFrame()
         )
-        if match.empty or column not in match.columns:
+        if len(match) != 1 or column not in match.columns:
             rows.append(
                 {
                     "method": method,
@@ -101,10 +101,11 @@ def paper_reference_count_check(
             continue
 
         try:
-            numeric = float(pd.to_numeric(match.iloc[0][column], errors="coerce"))
-        except (TypeError, ValueError):
-            numeric = float("nan")
-        if not np.isfinite(numeric):
+            actual = _validated_nonnegative_integer(
+                match.iloc[0][column],
+                name=f"{method}.{column}",
+            )
+        except ValueError:
             rows.append(
                 {
                     "method": method,
@@ -118,7 +119,6 @@ def paper_reference_count_check(
             passed = False
             continue
 
-        actual = int(numeric)
         delta = actual - int(expected)
         ok = abs(delta) <= tolerance_value
         rows.append(

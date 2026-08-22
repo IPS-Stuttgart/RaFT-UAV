@@ -37,6 +37,59 @@ def test_paper_reference_count_check_flags_mismatch():
     assert "mismatch" in check["message"]
 
 
+@pytest.mark.parametrize("invalid_count", [206.9, "206.5", -1, True])
+def test_paper_reference_count_check_rejects_nonintegral_or_invalid_counts(
+    invalid_count,
+):
+    table = _reference_like_table().astype(object)
+    table.loc[
+        table["method"] == "RF raw",
+        "selected_count",
+    ] = invalid_count
+
+    check = paper_reference_count_check(table)
+
+    assert check["passed"] is False
+    failed = next(
+        row
+        for row in check["checks"]
+        if row["method"] == "RF raw" and row["column"] == "selected_count"
+    )
+    assert failed["actual"] is None
+    assert failed["delta"] is None
+    assert failed["passed"] is False
+
+
+def test_paper_reference_count_check_rejects_duplicate_reference_method_rows():
+    table = _reference_like_table()
+    duplicate = table.loc[table["method"] == "RF raw"].copy()
+    table = pd.concat([table, duplicate], ignore_index=True)
+
+    check = paper_reference_count_check(table)
+
+    assert check["passed"] is False
+    failed = next(
+        row
+        for row in check["checks"]
+        if row["method"] == "RF raw" and row["column"] == "selected_count"
+    )
+    assert failed["actual"] is None
+    assert failed["delta"] is None
+    assert failed["passed"] is False
+
+
+def test_paper_reference_count_check_preserves_integral_text_counts():
+    table = _reference_like_table().astype(object)
+    table.loc[
+        table["method"] == "RF raw",
+        "selected_count",
+    ] = "206"
+
+    check = paper_reference_count_check(table)
+
+    assert check["passed"] is True
+
+
 def test_paper_reference_count_check_reports_nonfinite_counts():
     for invalid_count in (float("nan"), float("inf"), float("-inf")):
         table = _reference_like_table()
