@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from raft_uav.multi_uav_lts._records import Detection, parse_detection_text
 from raft_uav.multi_uav_lts.trajectory_box_calibration import (
     BoxCalibrationParameters,
@@ -66,7 +64,7 @@ def test_uncertainty_expansion_is_bounded_and_preserves_metadata() -> None:
         image_height=30.0,
     )
     calibrated, summary = calibrate_sequence("T_00", rows, parameters=parameters)
-    assert summary.max_area_ratio <= pytest.approx(1.5, abs=1e-10)
+    assert summary.max_area_ratio <= 1.5 + 1e-10
     for original, output in zip(rows, calibrated):
         assert output.frame_id == original.frame_id
         assert output.object_id == original.object_id
