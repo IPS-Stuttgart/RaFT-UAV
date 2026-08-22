@@ -130,7 +130,14 @@ def prepare_sequence(
     gt_ids: list[np.ndarray] = []
     tracker_ids: list[np.ndarray] = []
     similarities: list[np.ndarray] = []
+    previous_frame_id: int | None = None
     for frame_id in frame_ids:
+        if previous_frame_id is not None and frame_id > previous_frame_id + 1:
+            # One empty timestep is sufficient to reset adjacent-frame state in
+            # CLEAR while keeping sparse preparation proportional to observations.
+            gt_ids.append(np.empty(0, dtype=int))
+            tracker_ids.append(np.empty(0, dtype=int))
+            similarities.append(np.empty((0, 0), dtype=float))
         gt_frame = truth_by_frame.get(frame_id, ())
         tracker_frame = predictions_by_frame.get(frame_id, ())
         gt_ids.append(np.asarray([gt_map[row.object_id] for row in gt_frame], dtype=int))
@@ -138,6 +145,7 @@ def prepare_sequence(
             np.asarray([tracker_map[row.object_id] for row in tracker_frame], dtype=int)
         )
         similarities.append(iou_matrix(gt_frame, tracker_frame))
+        previous_frame_id = frame_id
     return PreparedSequence(
         frame_count,
         tuple(gt_ids),
