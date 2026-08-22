@@ -71,7 +71,13 @@ def fit_training_time_offset(
 
 
 def aggregate_offset_sweeps(sweep: pd.DataFrame, objective: str) -> pd.DataFrame:
-    """Pool per-flight offset sweeps with matched-row weights."""
+    """Aggregate per-flight offset sweeps using the requested metric semantics.
+
+    Mean and P95 retain the existing matched-row weighted per-flight aggregation.
+    RMSE is pooled exactly from per-flight RMSE/count summaries, while max is the
+    maximum across flights with matched rows. A weighted arithmetic mean is not
+    valid for either RMSE or max and can otherwise select the wrong offset.
+    """
 
     column = OBJECTIVE_COLUMNS[objective]
     rows: list[dict[str, Any]] = []
@@ -81,7 +87,16 @@ def aggregate_offset_sweeps(sweep: pd.DataFrame, objective: str) -> pd.DataFrame
         valid = np.isfinite(values) & (weights > 0.0)
         metric = float("nan")
         if valid.any():
-            metric = float(np.average(values[valid], weights=weights[valid]))
+            valid_values = values[valid]
+            valid_weights = weights[valid]
+            if objective == "rmse":
+                metric = float(
+                    np.sqrt(np.average(np.square(valid_values), weights=valid_weights))
+                )
+            elif objective == "max":
+                metric = float(np.max(valid_values))
+            else:
+                metric = float(np.average(valid_values, weights=valid_weights))
         rows.append(
             {
                 "tau_s": float(tau_s),
