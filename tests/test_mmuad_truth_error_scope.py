@@ -100,6 +100,45 @@ def _pooled_inputs() -> tuple[pd.DataFrame, pd.DataFrame]:
     return estimates, truth
 
 
+def _unique_flight_inputs() -> tuple[pd.DataFrame, pd.DataFrame]:
+    truth = pd.concat(
+        [
+            _scoped_truth(
+                sequence_id="seq-a",
+                flight_id="flight-a",
+                x_offset=0.0,
+            ),
+            _scoped_truth(
+                sequence_id="seq-b",
+                flight_id="flight-b",
+                x_offset=100.0,
+            ),
+        ],
+        ignore_index=True,
+    )
+    estimates = pd.DataFrame(
+        [
+            _estimate_row(
+                sequence_id="seq-a",
+                flight_id="flight-a",
+                time_s=0.5,
+                x_m=5.0,
+                y_m=6.0,
+                z_m=7.0,
+            ),
+            _estimate_row(
+                sequence_id="seq-b",
+                flight_id="flight-b",
+                time_s=0.5,
+                x_m=105.0,
+                y_m=106.0,
+                z_m=107.0,
+            ),
+        ]
+    )
+    return estimates, truth
+
+
 @pytest.mark.parametrize(
     "score_truth_errors",
     [tracker.add_truth_errors, tracker._LEGACY.add_truth_errors],
@@ -159,3 +198,40 @@ def test_add_truth_errors_rejects_ambiguous_one_sided_flight_scope() -> None:
 
     with pytest.raises(ValueError, match="ambiguous flight_id metadata"):
         tracker.add_truth_errors(estimates, truth)
+
+
+@pytest.mark.parametrize(
+    "score_truth_errors",
+    [tracker.add_truth_errors, tracker._LEGACY.add_truth_errors],
+    ids=["public", "legacy"],
+)
+@pytest.mark.parametrize("missing_sequence_from", ["estimates", "truth"])
+def test_add_truth_errors_rejects_ambiguous_one_sided_sequence_scope(
+    score_truth_errors,
+    missing_sequence_from: str,
+) -> None:
+    estimates, truth = _pooled_inputs()
+    if missing_sequence_from == "estimates":
+        estimates = estimates.drop(columns="sequence_id")
+    else:
+        truth = truth.drop(columns="sequence_id")
+
+    with pytest.raises(ValueError, match="ambiguous sequence_id metadata"):
+        score_truth_errors(estimates, truth)
+
+
+@pytest.mark.parametrize("missing_sequence_from", ["estimates", "truth"])
+def test_add_truth_errors_allows_one_sided_sequence_for_unique_flights(
+    missing_sequence_from: str,
+) -> None:
+    estimates, truth = _unique_flight_inputs()
+    if missing_sequence_from == "estimates":
+        estimates = estimates.drop(columns="sequence_id")
+    else:
+        truth = truth.drop(columns="sequence_id")
+
+    scored = tracker.add_truth_errors(estimates, truth)
+
+    assert np.allclose(scored["truth_x_m"], [5.0, 105.0])
+    assert np.allclose(scored["error_2d_m"], 0.0)
+    assert np.allclose(scored["error_3d_m"], 0.0)
