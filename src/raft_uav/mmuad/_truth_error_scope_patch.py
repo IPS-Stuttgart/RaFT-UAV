@@ -25,6 +25,56 @@ def _shared_scope_columns(
     )
 
 
+def _normalized_scope_values(values: pd.Series) -> list[object]:
+    return [scope_patch._scope_scalar(value) for value in values.tolist()]
+
+
+def _has_ambiguous_sequences(
+    richer: pd.DataFrame,
+    poorer: pd.DataFrame,
+) -> bool:
+    """Return whether missing sequence metadata can change physical pairing."""
+
+    if "sequence_id" not in richer.columns or richer.empty or poorer.empty:
+        return False
+
+    if "flight_id" not in richer.columns or "flight_id" not in poorer.columns:
+        return len(set(_normalized_scope_values(richer["sequence_id"]))) > 1
+
+    poorer_flights = set(_normalized_scope_values(poorer["flight_id"]))
+    sequences_by_flight: dict[object, set[object]] = {}
+    sequence_values = _normalized_scope_values(richer["sequence_id"])
+    flight_values = _normalized_scope_values(richer["flight_id"])
+    for sequence_id, flight_id in zip(sequence_values, flight_values, strict=True):
+        if flight_id not in poorer_flights:
+            continue
+        sequences_by_flight.setdefault(flight_id, set()).add(sequence_id)
+    return any(len(sequences) > 1 for sequences in sequences_by_flight.values())
+
+
+def _validate_two_sided_sequence_scope(
+    left: pd.DataFrame,
+    right: pd.DataFrame,
+    *,
+    left_name: str,
+    right_name: str,
+) -> None:
+    """Reject asymmetric sequence metadata only when pairing is ambiguous."""
+
+    left_has_sequence = "sequence_id" in left.columns
+    right_has_sequence = "sequence_id" in right.columns
+    if left_has_sequence == right_has_sequence:
+        return
+
+    richer, poorer = (left, right) if left_has_sequence else (right, left)
+    if _has_ambiguous_sequences(richer, poorer):
+        raise ValueError(
+            f"{left_name} and {right_name} have ambiguous sequence_id metadata; "
+            "both sides must carry sequence_id when the remaining scope aliases "
+            "do not uniquely identify a sequence"
+        )
+
+
 def _helper_column(*frames: pd.DataFrame) -> str:
     """Return a temporary row-position column that cannot overwrite user data."""
 
@@ -43,6 +93,12 @@ def _scoped_truth_errors(
         return original(estimates, truth)
 
     scope_compat._validate_two_sided_flight_scope(
+        estimates,
+        truth,
+        left_name="tracker estimates",
+        right_name="ground truth",
+    )
+    _validate_two_sided_sequence_scope(
         estimates,
         truth,
         left_name="tracker estimates",
