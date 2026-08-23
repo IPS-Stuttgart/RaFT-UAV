@@ -85,6 +85,8 @@ def records_to_frame(records: list[dict[str, object]]) -> pd.DataFrame:
         )
     return (
         pd.DataFrame.from_records(rows, columns=_ESTIMATE_COLUMNS)
-        .sort_values("time_s")
+        # Equal timestamps can contain sequential sensor updates. Preserve their
+        # tracker emission order because downstream metrics keep the final duplicate.
+        .sort_values("time_s", kind="mergesort")
         .reset_index(drop=True)
     )

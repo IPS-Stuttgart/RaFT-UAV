@@ -57,3 +57,33 @@ def test_candidate_rows_reject_missing_sequence_ids(sequence_id: object) -> None
             _probability_rows(),
             interaction_columns=(),
         )
+
+
+def test_candidate_rows_accept_equivalent_sequence_aliases() -> None:
+    candidates = _candidate_rows("001")
+    candidates["Sequence"] = [" 001 "]
+
+    row = attach_class_probability_context(
+        candidates,
+        _probability_rows(),
+        fill_missing="error",
+        interaction_columns=(),
+    ).rows.iloc[0]
+
+    assert row["sequence_id"] == "001"
+    assert row["image_class_prob_2"] == pytest.approx(1.0)
+
+
+def test_candidate_rows_reject_conflicting_sequence_aliases() -> None:
+    candidates = _candidate_rows("001")
+    candidates["Sequence"] = ["002"]
+
+    with pytest.raises(
+        ValueError,
+        match="candidate table has conflicting sequence identifier columns",
+    ):
+        attach_class_probability_context(
+            candidates,
+            _probability_rows(),
+            interaction_columns=(),
+        )

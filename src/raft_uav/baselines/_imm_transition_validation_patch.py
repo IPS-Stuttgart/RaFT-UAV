@@ -67,6 +67,8 @@ def apply_imm_transition_validation_patch(module: ModuleType) -> None:
     @wraps(original_fixed_turn_rate_matrix)
     def fixed_turn_rate_matrix(dt_s: float, turn_rate_radps: float) -> np.ndarray:
         dt = _finite_float(dt_s, name="dt_s")
+        if dt < 0.0:
+            raise ValueError("dt_s must be a finite, non-negative real scalar")
         turn_rate = _finite_float(turn_rate_radps, name="turn_rate_radps")
         return original_fixed_turn_rate_matrix(dt, turn_rate)
 

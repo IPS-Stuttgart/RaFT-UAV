@@ -28,7 +28,7 @@ def test_metrics_check_rejects_non_object_json(tmp_path, payload) -> None:
         "check": "metrics_json_object",
         "file": str(path),
         "passed": False,
-        "message": "metrics JSON must contain an object",
+        "message": "metrics JSON root must be an object",
     }
     assert all(row["check"] != "metrics_required_key" for row in results)
 

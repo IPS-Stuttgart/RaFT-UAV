@@ -46,6 +46,8 @@ def test_empty_radar_rejects_unknown_selection_mode() -> None:
         True,
         np.nan,
         np.inf,
+        -0.01,
+        1.01,
         0.5 + 1.0j,
         np.array([0.5]),
         np.ma.masked,
@@ -63,6 +65,24 @@ def test_catprob_selection_rejects_invalid_thresholds(
             selection=selection,
             catprob_threshold=value,
         )
+
+
+@pytest.mark.parametrize("selection", ["catprob", "catprob-all"])
+@pytest.mark.parametrize("threshold", [0.0, 1.0])
+def test_catprob_selection_accepts_probability_boundaries(
+    selection: str,
+    threshold: float,
+) -> None:
+    selected = select_radar_measurement_rows(
+        _radar(),
+        selection=selection,
+        catprob_threshold=threshold,
+    )
+
+    if threshold == 0.0:
+        assert selected["track_id"].tolist() == [4]
+    else:
+        assert selected.empty
 
 
 @pytest.mark.parametrize(

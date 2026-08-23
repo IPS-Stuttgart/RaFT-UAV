@@ -175,8 +175,7 @@ def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
     finite = rows["Sequence"].notna() & np.isfinite(
         rows["Timestamp"].to_numpy(dtype=float)
     )
-    rows = rows.loc[finite]
-    return rows.sort_values(["Sequence", "Timestamp"]).reset_index(drop=True)
+    return rows.loc[finite].reset_index(drop=True)
 
 
 def _resampled_position(

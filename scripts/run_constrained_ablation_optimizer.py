@@ -4,11 +4,31 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 from pathlib import Path
 
 import pandas as pd
 
 from raft_uav.research.optimizer import pareto_front, select_constrained_configs
+
+
+def _constrained_pareto_front(
+    ranked: pd.DataFrame,
+    *,
+    minimize_columns: Sequence[str],
+    maximize_columns: Sequence[str],
+) -> pd.Series:
+    """Return the Pareto front over feasible configurations only."""
+
+    front = pd.Series(False, index=ranked.index, dtype=bool)
+    feasible = ranked["constraint_feasible"].eq(True)
+    if feasible.any():
+        front.loc[feasible] = pareto_front(
+            ranked.loc[feasible],
+            minimize_columns=minimize_columns,
+            maximize_columns=maximize_columns,
+        )
+    return front
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -39,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
         group_columns=args.group_columns,
     )
     if args.pareto_minimize or args.pareto_maximize:
-        ranked["pareto_front"] = pareto_front(
+        ranked["pareto_front"] = _constrained_pareto_front(
             ranked,
             minimize_columns=args.pareto_minimize,
             maximize_columns=args.pareto_maximize,

@@ -27,6 +27,10 @@ _ORIGINAL_NORMALIZE_TEMPLATE_ROWS = _IMPL._normalize_template_rows
 _ORIGINAL_RESAMPLED_POSITION = _IMPL._resampled_position
 _ORIGINAL_RESAMPLED_CLASSIFICATION = _IMPL._resampled_classification
 
+_TRUE_BOOLEAN_TEXT = frozenset({"1", "1.0", "true", "t", "yes", "y"})
+_FALSE_BOOLEAN_TEXT = frozenset({"0", "0.0", "false", "f", "no", "n"})
+_MISSING_BOOLEAN_TEXT = frozenset({"", "na", "nan", "none", "null", "<na>", "nat"})
+
 
 def _normalize_optional_nonnegative_float(value: Any, *, field: str) -> float | None:
     """Return an optional finite non-negative scalar with a stable error."""
@@ -141,6 +145,50 @@ def _invalid_row_message(mask: pd.Series, *, prefix: str) -> ValueError:
     return ValueError(f"{prefix} at row indices: {preview}{suffix}")
 
 
+def _alias_columns(rows: pd.DataFrame, aliases: tuple[str, ...]) -> list[Any]:
+    """Return every supplied column whose case-insensitive name is a known alias."""
+
+    normalized_aliases = {str(alias).lower() for alias in aliases}
+    return [
+        column
+        for column in rows.columns
+        if str(column).lower() in normalized_aliases
+    ]
+
+
+def _validate_alias_consistency(
+    rows: pd.DataFrame,
+    aliases: tuple[str, ...],
+    *,
+    normalizer: Any,
+    context: str,
+    field: str,
+) -> None:
+    """Reject rows whose redundant schema aliases normalize to different values."""
+
+    columns = _alias_columns(rows, aliases)
+    if len(columns) <= 1:
+        return
+    normalized = pd.concat(
+        [normalizer(pd.Series(rows[column], index=rows.index)) for column in columns],
+        axis=1,
+    )
+    conflicts = normalized.nunique(axis=1, dropna=True) > 1
+    if not conflicts.any():
+        return
+    rendered = ", ".join(repr(str(column)) for column in columns)
+    raise _invalid_row_message(
+        conflicts,
+        prefix=f"{context} contain conflicting {field} aliases {rendered}",
+    )
+
+
+def _numeric_alias_values(values: pd.Series) -> pd.Series:
+    """Normalize numeric aliases without silently changing their relative meaning."""
+
+    return pd.to_numeric(values, errors="coerce")
+
+
 def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
     """Normalize estimates without silently discarding malformed trajectory rows."""
 
@@ -149,6 +197,27 @@ def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(
             columns=["sequence_id", "time_s", "state_x_m", "state_y_m", "state_z_m"]
         )
+    _validate_alias_consistency(
+        rows,
+        _IMPL.SEQUENCE_ALIASES,
+        normalizer=_IMPL._normalized_sequence_values,
+        context="estimates",
+        field="sequence",
+    )
+    _validate_alias_consistency(
+        rows,
+        _IMPL.TIME_ALIASES,
+        normalizer=_numeric_alias_values,
+        context="estimates",
+        field="timestamp",
+    )
+    _validate_alias_consistency(
+        rows,
+        _IMPL.CLASSIFICATION_ALIASES,
+        normalizer=_IMPL._normalized_classification_values,
+        context="estimates",
+        field="classification",
+    )
     sequence_column = _IMPL._first_present(rows, _IMPL.SEQUENCE_ALIASES)
     time_column = _IMPL._first_present(rows, _IMPL.TIME_ALIASES)
     coord_columns = _IMPL._coordinate_columns(rows)
@@ -159,7 +228,7 @@ def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
     normalized_sequence = _IMPL._normalized_sequence_values(rows[sequence_column])
     valid_sequence = normalized_sequence.notna()
     complex_numeric = pd.Series(False, index=rows.index, dtype=bool)
-    for column in (time_column, *coord_columns):
+    for column in (*_alias_columns(rows, _IMPL.TIME_ALIASES), *coord_columns):
         complex_numeric |= _complex_scalar_mask(rows[column])
     if (valid_sequence & complex_numeric).any():
         raise _invalid_row_message(
@@ -197,21 +266,37 @@ def _normalize_estimate_rows(estimates: pd.DataFrame) -> pd.DataFrame:
 
 
 def _normalize_template_rows(template: pd.DataFrame) -> pd.DataFrame:
-    """Reject complex programmatic timestamps before the legacy real-valued normalization."""
+    """Reject ambiguous or complex programmatic template timestamps."""
 
     rows = pd.DataFrame(template).copy()
     if rows.empty:
         return _ORIGINAL_NORMALIZE_TEMPLATE_ROWS(rows)
+    _validate_alias_consistency(
+        rows,
+        _IMPL.SEQUENCE_ALIASES,
+        normalizer=_IMPL._normalized_sequence_values,
+        context="template",
+        field="sequence",
+    )
+    _validate_alias_consistency(
+        rows,
+        _IMPL.TIME_ALIASES,
+        normalizer=_numeric_alias_values,
+        context="template",
+        field="timestamp",
+    )
     sequence_column = _IMPL._first_present(rows, _IMPL.SEQUENCE_ALIASES)
     time_column = _IMPL._first_present(rows, _IMPL.TIME_ALIASES)
     if sequence_column is None or time_column is None:
         return _ORIGINAL_NORMALIZE_TEMPLATE_ROWS(rows)
 
     valid_sequence = _IMPL._normalized_sequence_values(rows[sequence_column]).notna()
-    complex_time = valid_sequence & _complex_scalar_mask(rows[time_column])
-    if complex_time.any():
+    complex_time = pd.Series(False, index=rows.index, dtype=bool)
+    for column in _alias_columns(rows, _IMPL.TIME_ALIASES):
+        complex_time |= _complex_scalar_mask(rows[column])
+    if (valid_sequence & complex_time).any():
         raise _invalid_row_message(
-            complex_time,
+            valid_sequence & complex_time,
             prefix="template contains complex timestamp values",
         )
     return _ORIGINAL_NORMALIZE_TEMPLATE_ROWS(rows)
@@ -230,25 +315,124 @@ def _unique_time_rows(group: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _boolean_diagnostic_error(
+    *,
+    column: str,
+    row_index: object,
+    value: object,
+) -> ValueError:
+    """Build one stable error for malformed Boolean diagnostic cells."""
+
+    return ValueError(
+        f"{column} must contain Boolean diagnostics encoded as true/false or 1/0; "
+        f"got {value!r} at row index {row_index!r}"
+    )
+
+
+def _unwrap_boolean_scalar(
+    value: object,
+    *,
+    column: str,
+    row_index: object,
+) -> object:
+    """Unwrap scalar NumPy containers without exposing masks or cycling forever."""
+
+    seen: set[int] = set()
+    while isinstance(value, np.ndarray):
+        if np.ma.is_masked(value):
+            return pd.NA
+        if value.ndim != 0:
+            raise _boolean_diagnostic_error(
+                column=column,
+                row_index=row_index,
+                value=value,
+            )
+        marker = id(value)
+        if marker in seen:
+            raise _boolean_diagnostic_error(
+                column=column,
+                row_index=row_index,
+                value="cyclic scalar container",
+            )
+        seen.add(marker)
+        value = value.item()
+    return value
+
+
+def _boolean_diagnostic_value(
+    value: object,
+    *,
+    column: str,
+    row_index: object,
+) -> bool:
+    """Parse one strict Boolean diagnostic cell."""
+
+    value = _unwrap_boolean_scalar(
+        value,
+        column=column,
+        row_index=row_index,
+    )
+    if np.ma.is_masked(value) or value is None or value is pd.NA or value is pd.NaT:
+        return False
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (complex, np.complexfloating)):
+        raise _boolean_diagnostic_error(
+            column=column,
+            row_index=row_index,
+            value=value,
+        )
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in _TRUE_BOOLEAN_TEXT:
+            return True
+        if normalized in _FALSE_BOOLEAN_TEXT or normalized in _MISSING_BOOLEAN_TEXT:
+            return False
+        raise _boolean_diagnostic_error(
+            column=column,
+            row_index=row_index,
+            value=value,
+        )
+
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return False
+
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise _boolean_diagnostic_error(
+            column=column,
+            row_index=row_index,
+            value=value,
+        ) from exc
+    if not np.isfinite(numeric) or numeric not in (0.0, 1.0):
+        raise _boolean_diagnostic_error(
+            column=column,
+            row_index=row_index,
+            value=value,
+        )
+    return bool(numeric)
+
+
 def _bool_column(rows: pd.DataFrame, column: str) -> pd.Series:
-    """Normalize Boolean diagnostics, including CSV-style ``1.0`` / ``0.0``."""
+    """Normalize strict Boolean diagnostics, including CSV-style ``1.0`` / ``0.0``."""
 
     if column not in rows.columns:
         return pd.Series(False, index=rows.index, dtype=bool)
     values = pd.Series(rows[column], index=rows.index)
-    if pd.api.types.is_bool_dtype(values.dtype):
-        return values.fillna(False).astype(bool)
-
-    numeric = pd.to_numeric(values, errors="coerce")
-    numeric_mask = numeric.notna()
-    normalized = pd.Series(False, index=rows.index, dtype=bool)
-    normalized.loc[numeric_mask] = numeric.loc[numeric_mask].eq(1.0)
-
-    text = values.astype("string").fillna("").str.strip().str.lower()
-    normalized.loc[~numeric_mask] = text.loc[~numeric_mask].isin(
-        {"1", "true", "t", "yes", "y"}
-    )
-    return normalized
+    normalized = [
+        _boolean_diagnostic_value(
+            value,
+            column=column,
+            row_index=row_index,
+        )
+        for row_index, value in values.items()
+    ]
+    return pd.Series(normalized, index=rows.index, dtype=bool)
 
 
 def _resampled_position(
@@ -300,8 +484,14 @@ globals()["write_track5_template_resample_outputs"] = write_track5_template_resa
 globals()["_is_complex_scalar"] = _is_complex_scalar
 globals()["_complex_scalar_mask"] = _complex_scalar_mask
 globals()["_invalid_row_message"] = _invalid_row_message
+globals()["_alias_columns"] = _alias_columns
+globals()["_validate_alias_consistency"] = _validate_alias_consistency
+globals()["_numeric_alias_values"] = _numeric_alias_values
 globals()["_normalize_estimate_rows"] = _normalize_estimate_rows
 globals()["_normalize_template_rows"] = _normalize_template_rows
+globals()["_boolean_diagnostic_error"] = _boolean_diagnostic_error
+globals()["_unwrap_boolean_scalar"] = _unwrap_boolean_scalar
+globals()["_boolean_diagnostic_value"] = _boolean_diagnostic_value
 globals()["_bool_column"] = _bool_column
 globals()["_resampled_position"] = _resampled_position
 globals()["_resampled_classification"] = _resampled_classification

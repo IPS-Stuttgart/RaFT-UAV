@@ -29,9 +29,11 @@ def select_constrained_configs(
     numeric columns before filtering.
     """
 
+    minimize = _boolean_scalar(minimize, "minimize")
+    group_columns = _column_names(group_columns, "group_columns")
+    constraint_specs = _constraint_specs(constraints)
     if rows.empty:
         return rows.copy()
-    constraint_specs = _constraint_specs(constraints)
     working = rows.copy()
     required_numeric_columns = {
         objective,
@@ -42,7 +44,6 @@ def select_constrained_configs(
             raise KeyError(column)
         working[column] = pd.to_numeric(working[column], errors="coerce")
 
-    group_columns = tuple(group_columns)
     if group_columns:
         grouped = (
             working.groupby(list(group_columns), dropna=False)
@@ -51,10 +52,11 @@ def select_constrained_configs(
         )
     else:
         grouped = working
-    keep = np.ones(len(grouped), dtype=bool)
+    objective_values = grouped[objective].to_numpy(dtype=float)
+    keep = np.isfinite(objective_values)
     for column, op, threshold in constraint_specs:
         values = grouped[column].to_numpy(dtype=float)
-        keep &= _compare(values, op, float(threshold))
+        keep &= np.isfinite(values) & _compare(values, op, threshold)
     feasible = grouped.loc[keep].copy()
     feasible["constraint_feasible"] = True
     infeasible = grouped.loc[~keep].copy()
@@ -62,7 +64,7 @@ def select_constrained_configs(
     ranked = pd.concat([feasible, infeasible], ignore_index=True, sort=False)
     ranked = ranked.sort_values(
         ["constraint_feasible", objective],
-        ascending=[False, bool(minimize)],
+        ascending=[False, minimize],
         kind="mergesort",
     ).reset_index(drop=True)
     ranked["constrained_rank"] = np.arange(1, len(ranked) + 1)
@@ -81,11 +83,22 @@ def _constraint_specs(
     if constraints is None:
         return ()
     if isinstance(constraints, Mapping):
-        return tuple(
+        raw_specs = tuple(
             (column, operator, threshold)
             for column, (operator, threshold) in constraints.items()
         )
-    return tuple(constraints)
+    else:
+        raw_specs = tuple(constraints)
+    normalized: list[tuple[str, str, float]] = []
+    for column, operator, threshold in raw_specs:
+        if not isinstance(column, str) or not column:
+            raise ValueError("constraint columns must be non-empty strings")
+        if operator not in {"<=", "<", ">=", ">", "=="}:
+            raise ValueError(f"unsupported constraint operator {operator!r}")
+        normalized.append(
+            (column, operator, _finite_real_scalar(threshold, "constraint threshold"))
+        )
+    return tuple(normalized)
 
 
 def pareto_front(
@@ -96,6 +109,8 @@ def pareto_front(
 ) -> pd.Series:
     """Return a Boolean mask indicating Pareto-front rows."""
 
+    minimize_columns = _column_names(minimize_columns, "minimize_columns")
+    maximize_columns = _column_names(maximize_columns, "maximize_columns")
     if rows.empty:
         return pd.Series(dtype=bool, index=rows.index)
     values = []
@@ -120,6 +135,37 @@ def pareto_front(
         if np.any(dominates):
             front[i] = False
     return pd.Series(front, index=rows.index)
+
+
+def _boolean_scalar(value: object, name: str) -> bool:
+    if not isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{name} must be a Boolean")
+    return bool(value)
+
+
+def _column_names(value: object, name: str) -> tuple[str, ...]:
+    if isinstance(value, str):
+        columns = (value,)
+    else:
+        try:
+            columns = tuple(value)  # type: ignore[arg-type]
+        except TypeError as exc:
+            raise TypeError(f"{name} must be a string or sequence of strings") from exc
+    if any(not isinstance(column, str) or not column for column in columns):
+        raise ValueError(f"{name} must contain only non-empty strings")
+    return columns
+
+
+def _finite_real_scalar(value: object, name: str) -> float:
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be finite")
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be finite") from exc
+    if not np.isfinite(normalized):
+        raise ValueError(f"{name} must be finite")
+    return normalized
 
 
 def _compare(values: np.ndarray, op: str, threshold: float) -> np.ndarray:

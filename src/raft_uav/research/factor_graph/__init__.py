@@ -25,9 +25,59 @@ _LEGACY = importlib.util.module_from_spec(_SPEC)
 sys.modules[_LEGACY_NAME] = _LEGACY
 _SPEC.loader.exec_module(_LEGACY)
 _ORIGINAL_SMOOTH_POSITION_TRAJECTORY = _LEGACY.smooth_position_trajectory
+_ORIGINAL_FINITE_NONNEGATIVE_SCALAR = _LEGACY._finite_nonnegative_scalar
+_ORIGINAL_FINITE_POSITIVE_SCALAR = _LEGACY._finite_positive_scalar
+_ORIGINAL_NONNEGATIVE_INTEGER = _LEGACY._nonnegative_integer
+_ORIGINAL_POSITIVE_INTEGER = _LEGACY._positive_integer
 
 _TIME_POSITION_COLUMNS = ("time_s", *_LEGACY.PositionColumns)
 _VALID_ROBUST_LOSSES = frozenset({"linear", "huber", "soft_l1", "cauchy", "arctan"})
+
+
+def _is_boolean_scalar_like(value: object) -> bool:
+    """Return whether scalar unboxing reveals a Python/NumPy Boolean."""
+
+    current = value
+    seen: set[int] = set()
+    while isinstance(current, np.ndarray) and current.ndim == 0:
+        object_id = id(current)
+        if object_id in seen:
+            return False
+        seen.add(object_id)
+        current = current.item()
+    return isinstance(current, (bool, np.bool_))
+
+
+def _finite_nonnegative_scalar(value: object, *, name: str) -> float:
+    """Reject boxed Booleans before delegating to the legacy scalar validator."""
+
+    if _is_boolean_scalar_like(value):
+        raise ValueError(f"{name} must be a finite non-negative real scalar")
+    return _ORIGINAL_FINITE_NONNEGATIVE_SCALAR(value, name=name)
+
+
+def _finite_positive_scalar(value: object, *, name: str) -> float:
+    """Reject boxed Booleans before delegating to the legacy scalar validator."""
+
+    if _is_boolean_scalar_like(value):
+        raise ValueError(f"{name} must be a finite positive real scalar")
+    return _ORIGINAL_FINITE_POSITIVE_SCALAR(value, name=name)
+
+
+def _nonnegative_integer(value: object, *, name: str) -> int:
+    """Reject boxed Booleans before delegating to the legacy integer validator."""
+
+    if _is_boolean_scalar_like(value):
+        raise ValueError(f"{name} must be a non-negative integer")
+    return _ORIGINAL_NONNEGATIVE_INTEGER(value, name=name)
+
+
+def _positive_integer(value: object, *, name: str) -> int:
+    """Reject boxed Booleans before delegating to the legacy integer validator."""
+
+    if _is_boolean_scalar_like(value):
+        raise ValueError(f"{name} must be a positive integer")
+    return _ORIGINAL_POSITIVE_INTEGER(value, name=name)
 
 
 def _real_float(value: object) -> float | None:
@@ -214,6 +264,10 @@ def _select_candidates_against_trajectory(
     return pd.DataFrame(rows).reset_index(drop=True) if rows else radar.iloc[0:0].copy()
 
 
+_LEGACY._finite_nonnegative_scalar = _finite_nonnegative_scalar
+_LEGACY._finite_positive_scalar = _finite_positive_scalar
+_LEGACY._nonnegative_integer = _nonnegative_integer
+_LEGACY._positive_integer = _positive_integer
 _LEGACY.smooth_position_trajectory = smooth_position_trajectory
 _LEGACY._row_position_std = _row_position_std
 _LEGACY._initial_radar_selection = _initial_radar_selection

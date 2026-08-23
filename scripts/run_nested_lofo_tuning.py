@@ -135,7 +135,12 @@ def _load_candidates(path: Path | None) -> list[dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, list):
         raise ValueError("candidates JSON must be a list")
-    return [dict(item) for item in payload]
+    candidates: list[dict[str, Any]] = []
+    for index, item in enumerate(payload):
+        if not isinstance(item, dict):
+            raise ValueError(f"candidate entry {index} must be an object")
+        candidates.append(dict(item))
+    return candidates
 
 
 def _run_candidate(args: argparse.Namespace, candidate: dict[str, Any], holdout: str, flight: str, *, split: str) -> Path:
@@ -212,7 +217,11 @@ def _candidate_context(
 
 
 def _format_candidate_values(values: Any, context: dict[str, str]) -> list[Any]:
-    return [_format_candidate_value(value, context) for value in list(values or [])]
+    if values is None:
+        return []
+    if not isinstance(values, list):
+        raise ValueError("candidate options must be a list")
+    return [_format_candidate_value(value, context) for value in values]
 
 
 def _format_candidate_mapping(mapping: Any, context: dict[str, str]) -> dict[str, Any]:

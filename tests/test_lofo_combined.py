@@ -1,6 +1,11 @@
+import numpy as np
 import pandas as pd
 
-from raft_uav.calibration.lofo_combined import apply_time_offsets, shift_time
+from raft_uav.calibration.lofo_combined import (
+    aggregate_offset_sweeps,
+    apply_time_offsets,
+    shift_time,
+)
 
 
 def test_shift_time_preserves_original_time_column():
@@ -36,3 +41,40 @@ def test_apply_time_offsets_shifts_rf_and_radar_only():
     assert shifted["truth"]["time_s"].tolist() == [10.0]
     assert shifted["rf"]["time_s"].tolist() == [0.75]
     assert shifted["radar"]["time_s"].tolist() == [2.75]
+
+
+def test_aggregate_offset_sweeps_pools_rmse_from_squared_error():
+    sweep = pd.DataFrame(
+        {
+            "tau_s": [0.0, 0.0, 1.0, 1.0],
+            "flight": ["a", "b", "a", "b"],
+            "candidate_count": [1, 9, 1, 9],
+            "selected_count": [1, 9, 1, 9],
+            "matched_count": [1, 9, 1, 9],
+            "rmse_error_m": [0.0, 7.0, 10.0, 6.0],
+        }
+    )
+
+    aggregate = aggregate_offset_sweeps(sweep, "rmse")
+
+    expected = [np.sqrt(441.0 / 10.0), np.sqrt(424.0 / 10.0)]
+    assert np.allclose(aggregate["rmse_error_m"].to_numpy(float), expected)
+    assert aggregate.loc[aggregate["rmse_error_m"].idxmin(), "tau_s"] == 1.0
+
+
+def test_aggregate_offset_sweeps_uses_global_maximum_across_flights():
+    sweep = pd.DataFrame(
+        {
+            "tau_s": [0.0, 0.0, 1.0, 1.0],
+            "flight": ["a", "b", "a", "b"],
+            "candidate_count": [1, 9, 1, 9],
+            "selected_count": [1, 9, 1, 9],
+            "matched_count": [1, 9, 1, 9],
+            "max_error_m": [20.0, 0.0, 3.0, 3.0],
+        }
+    )
+
+    aggregate = aggregate_offset_sweeps(sweep, "max")
+
+    assert aggregate["max_error_m"].tolist() == [20.0, 3.0]
+    assert aggregate.loc[aggregate["max_error_m"].idxmin(), "tau_s"] == 1.0

@@ -151,18 +151,34 @@ def _require_unique(values: Sequence[str], *, label: str) -> None:
         raise ValueError(f"{label} values must be unique; duplicate values: {rendered}")
 
 
+def _format_base_command(
+    template: str,
+    *,
+    dataset_root: Path,
+    flight: str,
+    output_dir: Path,
+) -> list[str]:
+    """Render a command template without re-tokenizing substituted values."""
+
+    context = {
+        "python": sys.executable,
+        "dataset_root": str(dataset_root),
+        "flight": str(flight),
+        "output_dir": str(output_dir),
+    }
+    return [token.format(**context) for token in shlex.split(template)]
+
+
 def _run_candidate(args: argparse.Namespace, candidate: Candidate, flight: str, *, split: str) -> Path:
     output_dir = args.output_dir / split / candidate.name
     metrics_path = output_dir / flight / "metrics.json"
     if args.skip_existing and metrics_path.exists():
         return metrics_path
-    command = shlex.split(
-        args.base_command.format(
-            python=sys.executable,
-            dataset_root=str(args.dataset_root),
-            flight=flight,
-            output_dir=str(output_dir),
-        )
+    command = _format_base_command(
+        args.base_command,
+        dataset_root=args.dataset_root,
+        flight=flight,
+        output_dir=output_dir,
     )
     command.extend(candidate.args)
     print(" ".join(shlex.quote(token) for token in command), flush=True)

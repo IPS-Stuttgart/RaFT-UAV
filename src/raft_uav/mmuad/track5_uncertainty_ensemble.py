@@ -188,7 +188,6 @@ def write_track5_uncertainty_ensemble_outputs(
 
     input_list = list(estimate_inputs)
     output = Path(output_dir)
-    output.mkdir(parents=True, exist_ok=True)
     estimates, diagnostics = build_track5_uncertainty_ensemble(
         input_list,
         template=template,
@@ -198,6 +197,7 @@ def write_track5_uncertainty_ensemble_outputs(
         sigma_max_m=sigma_max_m,
         max_nearest_time_delta_s=max_nearest_time_delta_s,
     )
+    output.mkdir(parents=True, exist_ok=True)
     paths = {
         "ensemble_estimates_csv": output / UNCERTAINTY_ENSEMBLE_ESTIMATES_CSV,
         "diagnostics_csv": output / UNCERTAINTY_ENSEMBLE_DIAGNOSTICS_CSV,

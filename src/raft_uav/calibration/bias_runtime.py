@@ -22,7 +22,10 @@ BIAS_MODEL_PATH_ENV = "RAFT_UAV_BIAS_MODEL_PATH"
 _INSTALLED = False
 _ORIGINAL_NORMALIZE_RF: Any = None
 _ORIGINAL_NORMALIZE_RADAR: Any = None
+_BiasModelSignature = tuple[int, int, int, int, int]
+
 _CACHED_MODEL_PATH: Path | None = None
+_CACHED_MODEL_SIGNATURE: _BiasModelSignature | None = None
 _CACHED_BANK: BiasCorrectionBank | None = None
 
 
@@ -45,10 +48,11 @@ def install() -> None:
 def configured_bias_model_path() -> Path | None:
     """Return the configured model path, if any."""
 
-    raw = os.environ.get(BIAS_MODEL_ENV) or os.environ.get(BIAS_MODEL_PATH_ENV)
-    if raw is None or not raw.strip():
-        return None
-    return Path(raw).expanduser()
+    for env_name in (BIAS_MODEL_ENV, BIAS_MODEL_PATH_ENV):
+        raw = os.environ.get(env_name)
+        if raw is not None and raw.strip():
+            return Path(raw).expanduser()
+    return None
 
 
 def bias_correction_enabled() -> bool:
@@ -93,10 +97,21 @@ def _apply_runtime_bias(frame: pd.DataFrame, source: str) -> pd.DataFrame:
     return corrected
 
 
+def _model_signature(path: Path) -> _BiasModelSignature:
+    stat = path.stat()
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
 def _load_bank(path: Path) -> BiasCorrectionBank:
-    global _CACHED_MODEL_PATH, _CACHED_BANK
+    global _CACHED_MODEL_PATH, _CACHED_MODEL_SIGNATURE, _CACHED_BANK
     resolved = path.resolve()
-    if _CACHED_BANK is None or _CACHED_MODEL_PATH != resolved:
+    signature = _model_signature(resolved)
+    if (
+        _CACHED_BANK is None
+        or _CACHED_MODEL_PATH != resolved
+        or _CACHED_MODEL_SIGNATURE != signature
+    ):
         _CACHED_BANK = BiasCorrectionBank.load(resolved)
         _CACHED_MODEL_PATH = resolved
+        _CACHED_MODEL_SIGNATURE = signature
     return _CACHED_BANK

@@ -24,6 +24,7 @@ if _SPEC is None or _SPEC.loader is None:  # pragma: no cover - import machinery
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+_LEGACY_FIT_YAW_OFFSET_ALTITUDE = _IMPL.fit_yaw_offset_altitude
 
 
 def _empty_pairs():
@@ -90,7 +91,32 @@ def pair_measurements_to_truth(
     )
 
 
+def fit_yaw_offset_altitude(pairs):
+    """Fit yaw only when the paired horizontal geometry constrains it."""
+
+    _IMPL._require_pair_count(pairs, minimum=2)
+    measured_xy = np.asarray(pairs.measurement_positions_m[:, :2], dtype=float)
+    truth_xy = np.asarray(pairs.truth_positions_m[:, :2], dtype=float)
+    measured_centered = measured_xy - np.mean(measured_xy, axis=0)
+    truth_centered = truth_xy - np.mean(truth_xy, axis=0)
+    covariance = measured_centered.T @ truth_centered
+
+    # For a 2-D proper rotation R(theta), the Procrustes objective depends on
+    # theta only through these cosine/sine coefficients. If both vanish, every
+    # yaw has the same least-squares cost and the SVD's returned angle is an
+    # arbitrary consequence of its basis choice rather than an observable fit.
+    yaw_cos_information = float(covariance[0, 0] + covariance[1, 1])
+    yaw_sin_information = float(covariance[0, 1] - covariance[1, 0])
+    if float(np.hypot(yaw_cos_information, yaw_sin_information)) == 0.0:
+        raise ValueError(
+            "paired horizontal geometry does not constrain a unique yaw"
+        )
+
+    return _LEGACY_FIT_YAW_OFFSET_ALTITUDE(pairs)
+
+
 _IMPL.pair_measurements_to_truth = pair_measurements_to_truth
+_IMPL.fit_yaw_offset_altitude = fit_yaw_offset_altitude
 
 globals().update(
     {
