@@ -16,6 +16,15 @@ _COVARIANCE_LAYOUTS = {
         ((0, 1, "en"), (0, 2, "eu"), (1, 2, "nu")),
     ),
 }
+_RADAR_VELOCITY_COLUMNS = (
+    "velocity_east_mps",
+    "velocity_north_mps",
+    "velocity_down_mps",
+)
+_RADAR_VELOCITY_ERROR = (
+    "radar velocity components must be all missing or a complete finite "
+    "east/north/down triplet"
+)
 
 
 def _finite_covariance_value(value: object) -> float | None:
@@ -214,12 +223,32 @@ def radar_measurements_to_enu_with_uncertainty(
     return measurements
 
 
-def _radar_velocity_vector_enu(row: pd.Series) -> np.ndarray | None:
-    required = ("velocity_east_mps", "velocity_north_mps", "velocity_down_mps")
-    if not all(column in row.index for column in required):
-        return None
+def _has_velocity_value(value: object) -> bool:
+    """Return whether one component contains information rather than a null marker."""
+
+    if value is None or np.ma.is_masked(value):
+        return False
     try:
-        velocity = np.array(
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return True
+    if isinstance(missing, (bool, np.bool_)):
+        return not bool(missing)
+    return True
+
+
+def _radar_velocity_vector_enu(row: pd.Series) -> np.ndarray | None:
+    available = {
+        column: _has_velocity_value(row[column])
+        for column in _RADAR_VELOCITY_COLUMNS
+        if column in row.index
+    }
+    if not any(available.values()):
+        return None
+    if not all(available.get(column, False) for column in _RADAR_VELOCITY_COLUMNS):
+        raise ValueError(_RADAR_VELOCITY_ERROR)
+    try:
+        return np.array(
             [
                 _finite_real_scalar(
                     row["velocity_east_mps"],
@@ -236,9 +265,8 @@ def _radar_velocity_vector_enu(row: pd.Series) -> np.ndarray | None:
             ],
             dtype=float,
         )
-    except (TypeError, ValueError):
-        return None
-    return velocity if np.isfinite(velocity).all() else None
+    except ValueError as exc:
+        raise ValueError(_RADAR_VELOCITY_ERROR) from exc
 
 
 def _finite_real_scalar(value: object, *, name: str) -> float:
