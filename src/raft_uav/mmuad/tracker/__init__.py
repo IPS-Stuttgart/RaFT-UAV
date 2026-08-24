@@ -115,6 +115,10 @@ def _validated_tracker_config(config: TrackerConfig) -> TrackerConfig:
 
     return replace(
         config,
+        acceleration_std_mps2=_normalize_covariance_scale(
+            config.acceleration_std_mps2,
+            field_name="acceleration_std_mps2",
+        ),
         primary_covariance_scale=_normalize_covariance_scale(
             config.primary_covariance_scale,
             field_name="primary_covariance_scale",
