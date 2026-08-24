@@ -4,8 +4,9 @@ The maintained implementation lives in the sibling ``train_selected_config.py``
 module. This package preserves the public import path while making alias
 selection skip missing values, ensuring component-level fixed updates cannot be
 overridden by summary CSV aliases, rejecting malformed numeric controls before
-Python or NumPy can silently coerce them, and refusing classifier-fusion weights
-that the train-to-validation pipeline does not consume.
+Python or NumPy can silently coerce them, rejecting summary tables without a
+usable finite selection metric, and refusing classifier-fusion weights that the
+train-to-validation pipeline does not consume.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_BEST_ROW = _IMPL._best_row
 _ORIGINAL_SELECT_COMPONENT = _IMPL._select_component
 _ORIGINAL_VALIDATE_TRAIN_SELECTED_CONFIG = _IMPL.validate_train_selected_config
 
@@ -43,6 +45,38 @@ def _first_present(row: pd.Series, columns: tuple[str, ...]) -> Any:
         if not _IMPL._is_nan(value):
             return value
     return None
+
+
+def _best_row(
+    csv_path: Path,
+    metric_columns: tuple[str, ...],
+    *,
+    maximize: bool,
+) -> tuple[pd.Series, str | None, float | None, int]:
+    """Select only from a recognized metric with at least one finite value."""
+
+    row, metric_column, metric_value, row_index = _ORIGINAL_BEST_ROW(
+        csv_path,
+        metric_columns,
+        maximize=maximize,
+    )
+    if metric_column is not None:
+        return row, metric_column, metric_value, row_index
+
+    columns = set(pd.read_csv(csv_path, nrows=0).columns)
+    recognized = tuple(column for column in metric_columns if column in columns)
+    if not recognized:
+        expected = ", ".join(metric_columns)
+        raise ValueError(
+            f"{csv_path} has no recognized selection metric column; "
+            f"expected one of: {expected}"
+        )
+
+    present = ", ".join(recognized)
+    raise ValueError(
+        f"{csv_path} has no finite values in recognized selection metric "
+        f"columns: {present}"
+    )
 
 
 def _select_component(
@@ -118,6 +152,7 @@ def validate_train_selected_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 _IMPL._first_present = _first_present
+_IMPL._best_row = _best_row
 _IMPL._select_component = _select_component
 _IMPL._float = _float
 _IMPL.validate_train_selected_config = validate_train_selected_config
@@ -130,6 +165,7 @@ globals().update(
     }
 )
 globals()["_first_present"] = _first_present
+globals()["_best_row"] = _best_row
 globals()["_select_component"] = _select_component
 globals()["_float"] = _float
 globals()["validate_train_selected_config"] = validate_train_selected_config
