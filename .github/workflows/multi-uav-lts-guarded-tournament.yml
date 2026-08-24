@@ -161,7 +161,7 @@ env:
 jobs:
   tournament:
     name: Guarded 102-sequence LTS tournament
-    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    runs-on: [self-hosted, Linux, X64, nvidia-smi, data-multi-uav-lts-v1]
     timeout-minutes: 720
 
     steps:
