@@ -66,7 +66,7 @@ def _time_field_to_s(value: Any) -> float | None:
         return None
 
     nanoseconds_raw = _IMPL._field_value(value, *_NANOSECONDS_KEYS)
-    if nanoseconds_raw in (None, ""):
+    if nanoseconds_raw is None:
         nanoseconds = 0.0
     else:
         nanoseconds = _finite_float(nanoseconds_raw)
