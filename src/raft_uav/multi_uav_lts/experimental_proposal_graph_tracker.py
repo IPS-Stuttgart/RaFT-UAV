@@ -210,7 +210,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if any(str(token) in {"-h", "--help"} for token in remaining):
             return proposal_graph_tracker.main(remaining)
-        if custom.no_sequence_cache:
+        if custom.no_sequence_cache or not _has_sequence_cache_inputs(remaining):
             return proposal_graph_tracker.main(remaining)
         return sequence_cache.run_cached(
             remaining,
@@ -228,6 +228,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         delayed_path_cover._future_cost = original_future_cost
         ambiguity_beam._path_acceleration = original_path_acceleration
         proposal_graph_tracker.track_sequence = original_track_sequence
+
+
+def _has_sequence_cache_inputs(arguments: Sequence[str]) -> bool:
+    """Return whether the base CLI supplied every cache-routing input."""
+
+    tokens = tuple(str(token) for token in arguments)
+    return all(
+        any(token == option or token.startswith(f"{option}=") for token in tokens)
+        for option in ("--first-frame-label-dir", "--output-dir")
+    )
 
 
 def _cache_salt(
