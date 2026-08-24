@@ -3,9 +3,10 @@
 The maintained implementation lives in the sibling
 ``candidate_temporal_consensus_assignment.py`` module. This package preserves
 the public import path while routing explicit configurations through the shared
-validated temporal-consensus boundary. It also solves each adjacent frame pair
-once and reverses the selected edges for the opposite direction, so tied
-one-to-one optima cannot produce contradictory forward and backward matches.
+validated temporal-consensus boundary. It also scopes pooled candidates by
+physical flight before temporal matching and solves each adjacent frame pair
+once, reversing the selected edges for the opposite direction so tied one-to-one
+optima cannot produce contradictory forward and backward matches.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ _ORIGINAL_ADD_ASSIGNMENT_TEMPORAL_CANDIDATE_CONSENSUS = (
     _IMPL.add_assignment_temporal_candidate_consensus
 )
 _ORIGINAL_WRITE_ASSIGNMENT_MATCH = _IMPL._write_assignment_match
+_SCOPE_TOKEN_PREFIX = "__raft_uav_temporal_assignment_scope_"
 
 
 def _write_assignment_match(
@@ -68,6 +70,86 @@ def _write_assignment_match(
         normalized_match,
         direction=direction,
     )
+
+
+def _flight_scope_key(value: Any) -> tuple[str, str, str, str]:
+    """Return a collision-safe key for one opaque flight identifier."""
+
+    scalar = value.item() if isinstance(value, np.generic) else value
+    try:
+        missing = bool(pd.isna(scalar))
+    except (TypeError, ValueError):
+        missing = False
+    if missing:
+        return ("missing", "", "", "")
+    scalar_type = type(scalar)
+    return (
+        "value",
+        scalar_type.__module__,
+        scalar_type.__qualname__,
+        repr(scalar),
+    )
+
+
+def _scope_candidates_by_flight(
+    candidates: Any,
+) -> tuple[Any, dict[str, str] | None]:
+    """Replace sequence IDs with temporary joint sequence/flight scope tokens."""
+
+    raw_rows = (
+        candidates.rows.copy()
+        if isinstance(candidates, _IMPL.CandidateFrame)
+        else pd.DataFrame(candidates).copy()
+    )
+    if "flight_id" not in raw_rows.columns:
+        return candidates, None
+
+    rows = _IMPL._candidate_rows(candidates)
+    if rows.empty:
+        return rows, None
+
+    scoped_rows = rows.copy()
+    scope_tokens: dict[tuple[str, tuple[str, str, str, str]], str] = {}
+    original_sequence_ids: dict[str, str] = {}
+    row_tokens: list[str] = []
+    for sequence_id, flight_id in zip(
+        scoped_rows["sequence_id"].tolist(),
+        scoped_rows["flight_id"].tolist(),
+        strict=True,
+    ):
+        normalized_sequence_id = str(sequence_id)
+        scope_key = (normalized_sequence_id, _flight_scope_key(flight_id))
+        token = scope_tokens.get(scope_key)
+        if token is None:
+            token = f"{_SCOPE_TOKEN_PREFIX}{len(scope_tokens)}"
+            scope_tokens[scope_key] = token
+            original_sequence_ids[token] = normalized_sequence_id
+        row_tokens.append(token)
+
+    scoped_rows["sequence_id"] = row_tokens
+    return scoped_rows, original_sequence_ids
+
+
+def _restore_sequence_ids(
+    candidates: Any,
+    original_sequence_ids: dict[str, str] | None,
+) -> Any:
+    """Restore public sequence identifiers after temporary flight scoping."""
+
+    if original_sequence_ids is None or candidates.rows.empty:
+        return candidates
+
+    rows = candidates.rows.copy()
+    tokens = rows["sequence_id"].astype(str)
+    unknown = sorted(set(tokens).difference(original_sequence_ids))
+    if unknown:  # pragma: no cover - internal contract guard
+        raise RuntimeError(
+            "temporal assignment returned unknown internal scope token(s): "
+            f"{unknown[:5]}"
+        )
+    rows["sequence_id"] = tokens.map(original_sequence_ids)
+    normalized = _IMPL.normalize_candidate_columns(rows)
+    return _IMPL.CandidateFrame(normalized)
 
 
 def _invert_neighbor_match(
@@ -183,13 +265,17 @@ def add_assignment_temporal_candidate_consensus(
     config: _IMPL.TemporalConsensusConfig | None = None,
     assignment_mode: str = "one-to-one",
 ) -> Any:
-    """Attach assignment consensus after validating the explicit configuration."""
+    """Attach assignment consensus within each physical-flight scope."""
 
-    return _ORIGINAL_ADD_ASSIGNMENT_TEMPORAL_CANDIDATE_CONSENSUS(
-        candidates,
-        config=_validated_config(config),
-        assignment_mode=assignment_mode,
+    validated_config = _validated_config(config)
+    validated_mode = _IMPL._validate_assignment_mode(assignment_mode)
+    scoped_candidates, original_sequence_ids = _scope_candidates_by_flight(candidates)
+    augmented = _ORIGINAL_ADD_ASSIGNMENT_TEMPORAL_CANDIDATE_CONSENSUS(
+        scoped_candidates,
+        config=validated_config,
+        assignment_mode=validated_mode,
     )
+    return _restore_sequence_ids(augmented, original_sequence_ids)
 
 
 _IMPL._write_assignment_match = _write_assignment_match
@@ -205,6 +291,9 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["_flight_scope_key"] = _flight_scope_key
+globals()["_scope_candidates_by_flight"] = _scope_candidates_by_flight
+globals()["_restore_sequence_ids"] = _restore_sequence_ids
 globals()["add_assignment_temporal_candidate_consensus"] = (
     add_assignment_temporal_candidate_consensus
 )

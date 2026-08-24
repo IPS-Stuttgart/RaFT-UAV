@@ -16,6 +16,15 @@ _COVARIANCE_LAYOUTS = {
         ((0, 1, "en"), (0, 2, "eu"), (1, 2, "nu")),
     ),
 }
+_RADAR_VELOCITY_COLUMNS = (
+    "velocity_east_mps",
+    "velocity_north_mps",
+    "velocity_down_mps",
+)
+_RADAR_VELOCITY_ERROR = (
+    "radar velocity components must be all missing or a complete finite "
+    "east/north/down triplet"
+)
 
 
 def _finite_covariance_value(value: object) -> float | None:
@@ -35,6 +44,26 @@ def _positive_covariance_value(value: object) -> float | None:
 
     number = _finite_covariance_value(value)
     return number if number is not None and number > 0.0 else None
+
+
+def _covariance_series(
+    covariance: np.ndarray,
+    names: tuple[str, ...],
+    cross_terms: tuple[tuple[int, int, str], ...],
+    *,
+    prefix: str,
+) -> pd.Series:
+    values = {
+        f"{prefix}_{name}": covariance[index, index]
+        for index, name in enumerate(names)
+    }
+    values.update(
+        {
+            f"{prefix}_{suffix}": covariance[first, second]
+            for first, second, suffix in cross_terms
+        }
+    )
+    return pd.Series(values)
 
 
 def _covariance_with_partial_learned_overrides(
@@ -66,33 +95,51 @@ def _covariance_with_partial_learned_overrides(
     if not any(value is not None for value in learned_diagonal):
         return base
 
-    candidate = base.copy()
+    preferred_candidate = base.copy()
+    salvage_candidate = base.copy()
     for index, value in enumerate(learned_diagonal):
         if value is not None:
-            candidate[index, index] = value
+            preferred_candidate[index, index] = value
+            salvage_candidate[index, index] = value
 
     for first, second, suffix in cross_terms:
-        if learned_diagonal[first] is None or learned_diagonal[second] is None:
-            continue
         value = _finite_covariance_value(row.get(f"cov_{suffix}"))
-        candidate[first, second] = candidate[second, first] = (
-            0.0 if value is None else value
-        )
+        learned_cross_term = 0.0 if value is None else value
+        if (
+            learned_diagonal[first] is not None
+            and learned_diagonal[second] is not None
+        ):
+            preferred_candidate[first, second] = preferred_candidate[second, first] = (
+                learned_cross_term
+            )
+        if (
+            learned_diagonal[first] is not None
+            or learned_diagonal[second] is not None
+        ):
+            salvage_candidate[first, second] = salvage_candidate[second, first] = (
+                learned_cross_term
+            )
 
-    candidate_row = {
-        f"candidate_{name}": candidate[index, index]
-        for index, name in enumerate(names)
-    }
-    candidate_row.update(
-        {
-            f"candidate_{suffix}": candidate[first, second]
-            for first, second, suffix in cross_terms
-        }
-    )
-    return covariance_from_row(
-        pd.Series(candidate_row),
+    salvage = covariance_from_row(
+        _covariance_series(
+            salvage_candidate,
+            names,
+            cross_terms,
+            prefix="salvage",
+        ),
         dim,
         base,
+        prefixes=("salvage",),
+    )
+    return covariance_from_row(
+        _covariance_series(
+            preferred_candidate,
+            names,
+            cross_terms,
+            prefix="candidate",
+        ),
+        dim,
+        salvage,
         prefixes=("candidate",),
     )
 
@@ -214,12 +261,32 @@ def radar_measurements_to_enu_with_uncertainty(
     return measurements
 
 
-def _radar_velocity_vector_enu(row: pd.Series) -> np.ndarray | None:
-    required = ("velocity_east_mps", "velocity_north_mps", "velocity_down_mps")
-    if not all(column in row.index for column in required):
-        return None
+def _has_velocity_value(value: object) -> bool:
+    """Return whether one component contains information rather than a null marker."""
+
+    if value is None or np.ma.is_masked(value):
+        return False
     try:
-        velocity = np.array(
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return True
+    if isinstance(missing, (bool, np.bool_)):
+        return not bool(missing)
+    return True
+
+
+def _radar_velocity_vector_enu(row: pd.Series) -> np.ndarray | None:
+    available = {
+        column: _has_velocity_value(row[column])
+        for column in _RADAR_VELOCITY_COLUMNS
+        if column in row.index
+    }
+    if not any(available.values()):
+        return None
+    if not all(available.get(column, False) for column in _RADAR_VELOCITY_COLUMNS):
+        raise ValueError(_RADAR_VELOCITY_ERROR)
+    try:
+        return np.array(
             [
                 _finite_real_scalar(
                     row["velocity_east_mps"],
@@ -236,9 +303,8 @@ def _radar_velocity_vector_enu(row: pd.Series) -> np.ndarray | None:
             ],
             dtype=float,
         )
-    except (TypeError, ValueError):
-        return None
-    return velocity if np.isfinite(velocity).all() else None
+    except ValueError as exc:
+        raise ValueError(_RADAR_VELOCITY_ERROR) from exc
 
 
 def _finite_real_scalar(value: object, *, name: str) -> float:

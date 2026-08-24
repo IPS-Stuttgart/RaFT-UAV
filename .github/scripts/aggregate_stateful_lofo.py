@@ -86,6 +86,28 @@ def compute_means(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], flo
     return ok_rows, mean_rmse_3d, mean_p95_3d
 
 
+def validate_threshold_inputs(rows: list[dict[str, Any]], expected_flights: list[str]) -> list[str]:
+    """Require one usable summary for every flight participating in a metric gate."""
+    failures: list[str] = []
+    for flight in expected_flights:
+        matching = [row for row in rows if str(row.get("flight")) == str(flight)]
+        if not matching:
+            failures.append(f"{flight}: missing summary artifact")
+            continue
+        if len(matching) != 1:
+            failures.append(f"{flight}: found {len(matching)} summary artifacts; expected exactly one")
+            continue
+        row = matching[0]
+        if row.get("status") != "ok":
+            failures.append(f"{flight}: summary status is {row.get('status')}")
+            continue
+        for metric_name in ("rmse_3d_m", "p95_3d_m"):
+            value = row.get(metric_name)
+            if not is_number(value) or not math.isfinite(float(value)):
+                failures.append(f"{flight}: {metric_name} is unavailable or non-finite")
+    return failures
+
+
 def required_smoke_artifacts(artifact_root: Path, flight: str) -> list[Path]:
     return [
         artifact_root / "radar_assoc.json",
@@ -162,14 +184,19 @@ def aggregate_lofo_artifacts(
     rows = collect_rows(artifacts_dir)
     ok_rows, mean_rmse_3d, mean_p95_3d = compute_means(rows)
     smoke_failures = validate_smoke(rows, expected_flights) if smoke_mode else []
-    threshold_failures = []
+    threshold_failures: list[str] = []
     if enforce_thresholds and not smoke_mode:
-        threshold_failures = validate_thresholds(
-            ok_rows,
-            mean_rmse_3d,
-            target_mean_rmse_3d_m,
-            target_opt1_p95_3d_m,
-        )
+        threshold_failures = validate_threshold_inputs(rows, expected_flights)
+        if not threshold_failures:
+            expected = {str(flight) for flight in expected_flights}
+            threshold_rows = [row for row in ok_rows if str(row.get("flight")) in expected]
+            _, threshold_mean_rmse_3d, _ = compute_means(threshold_rows)
+            threshold_failures = validate_thresholds(
+                threshold_rows,
+                threshold_mean_rmse_3d,
+                target_mean_rmse_3d_m,
+                target_opt1_p95_3d_m,
+            )
     public_rows = [{key: value for key, value in row.items() if not key.startswith("_")} for row in rows]
     summary = {
         "smoke_mode": smoke_mode,

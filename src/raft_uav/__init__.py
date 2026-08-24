@@ -55,6 +55,12 @@ def _imm_bootstrap_timestamp_install() -> Callable[[], None]:
     return install
 
 
+def _imm_cli_numeric_validation_install() -> Callable[[], None]:
+    from raft_uav._imm_cli_numeric_validation_patch import install
+
+    return install
+
+
 def _rf_measurement_fallback_install() -> Callable[[], None]:
     from raft_uav.io._rf_measurement_fallback_patch import (
         apply_rf_measurement_fallback_patch,
@@ -69,6 +75,12 @@ def _radar_measurement_validation_install() -> Callable[[], None]:
     )
 
     return apply_radar_measurement_validation_patch
+
+
+def _radar_velocity_strict_mode_install() -> Callable[[], None]:
+    from raft_uav.io._radar_velocity_strict_mode_patch import install
+
+    return install
 
 
 def _geodetic_input_validation_install() -> Callable[[], None]:
@@ -161,6 +173,18 @@ def _mot_config_validation_install() -> Callable[[], None]:
     return install
 
 
+def _mot_scope_compat_install() -> Callable[[], None]:
+    from raft_uav.mmuad._mot_scope_compat_patch import install
+
+    return install
+
+
+def _truth_error_scope_install() -> Callable[[], None]:
+    from raft_uav.mmuad._truth_error_scope_patch import install
+
+    return install
+
+
 def _mot_missing_id_index_install() -> Callable[[], None]:
     from raft_uav.mmuad._mot_missing_id_index_patch import install
 
@@ -233,8 +257,26 @@ def _track5_estimate_calibration_duplicate_truth_install() -> Callable[[], None]
     return install
 
 
+def _track5_template_resample_template_validation_install() -> Callable[[], None]:
+    from raft_uav.mmuad._track5_template_resample_template_validation_patch import install
+
+    return install
+
+
 def _evaluate_fde_truth_identity_install() -> Callable[[], None]:
     from raft_uav.mmuad._evaluate_fde_truth_identity_patch import install
+
+    return install
+
+
+def _evaluate_flight_scope_install() -> Callable[[], None]:
+    from raft_uav.mmuad._evaluate_flight_scope_patch import install
+
+    return install
+
+
+def _trajectory_completion_truth_scope_install() -> Callable[[], None]:
+    from raft_uav.mmuad._trajectory_completion_truth_scope_patch import install
 
     return install
 
@@ -248,8 +290,10 @@ if os.environ.get("RAFT_UAV_SKIP_RUNTIME_HOOKS") != "1":
 # boundaries, not optional integrations. Keep them active when runtime hooks are skipped.
 _optional_runtime_hook(_kalman_timestamp_validation_install)
 _optional_runtime_hook(_imm_bootstrap_timestamp_install)
+_optional_runtime_hook(_imm_cli_numeric_validation_install)
 _optional_runtime_hook(_rf_measurement_fallback_install)
 _optional_runtime_hook(_radar_measurement_validation_install)
+_optional_runtime_hook(_radar_velocity_strict_mode_install)
 _optional_runtime_hook(_geodetic_input_validation_install)
 _optional_runtime_hook(_catprob_sequence_install)
 _optional_runtime_hook(_uncertainty_payload_validation_install)
@@ -265,6 +309,8 @@ _optional_runtime_hook(_jerk_window_support_install)
 _optional_runtime_hook(_acceleration_sequence_id_install)
 _optional_runtime_hook(_mot_match_distance_complex_install)
 _optional_runtime_hook(_mot_config_validation_install)
+_optional_runtime_hook(_mot_scope_compat_install)
+_optional_runtime_hook(_truth_error_scope_install)
 _optional_runtime_hook(_mot_missing_id_index_install)
 _optional_runtime_hook(_candidate_pull_index_install)
 _optional_runtime_hook(_candidate_pull_time_tolerance_install)
@@ -277,4 +323,7 @@ _optional_runtime_hook(_geomedian_template_time_match_install)
 _optional_runtime_hook(_candidate_score_calibration_order_install)
 _optional_runtime_hook(_track5_submission_schema_guard_install)
 _optional_runtime_hook(_track5_estimate_calibration_duplicate_truth_install)
+_optional_runtime_hook(_track5_template_resample_template_validation_install)
 _optional_runtime_hook(_evaluate_fde_truth_identity_install)
+_optional_runtime_hook(_evaluate_flight_scope_install)
+_optional_runtime_hook(_trajectory_completion_truth_scope_install)

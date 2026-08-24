@@ -67,14 +67,27 @@ def _validated_coefficients(values: object) -> tuple[object, ...]:
     return coefficients
 
 
+def _validated_std_bounds(min_std_m: object, max_std_m: object) -> tuple[float, float]:
+    """Return finite positive standard-deviation bounds in ascending order."""
+
+    minimum = _finite_real_scalar(min_std_m, name="min_std_m")
+    maximum = _finite_real_scalar(max_std_m, name="max_std_m")
+    if minimum <= 0.0:
+        raise ValueError("min_std_m must be positive")
+    if maximum <= 0.0:
+        raise ValueError("max_std_m must be positive")
+    if minimum > maximum:
+        raise ValueError("min_std_m must not exceed max_std_m")
+    return minimum, maximum
+
+
 def _validate_head_payload(item: object) -> Mapping[str, Any]:
     """Validate raw serialized fields before the legacy loader coerces them."""
 
     if not isinstance(item, Mapping):
         raise ValueError("uncertainty variance head must be a mapping")
     _validated_coefficients(item.get("coefficients", ()))
-    _finite_real_scalar(item.get("min_std_m"), name="min_std_m")
-    _finite_real_scalar(item.get("max_std_m"), name="max_std_m")
+    _validated_std_bounds(item.get("min_std_m"), item.get("max_std_m"))
     _nonnegative_integer(item.get("training_rows", 0), name="training_rows")
     return item
 
@@ -143,6 +156,7 @@ def install() -> None:
             training_rows,
         ):
             _validated_coefficients(coefficients)
+            _validated_std_bounds(min_std_m, max_std_m)
             _nonnegative_integer(training_rows, name="training_rows")
             original_init(
                 self,

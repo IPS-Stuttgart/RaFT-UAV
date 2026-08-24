@@ -1,7 +1,8 @@
-"""Compatibility package hardening NIS diagnostics normalization."""
+"""Compatibility package hardening NIS diagnostics and payload validation."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import importlib.util
 from pathlib import Path
 import shlex
@@ -9,6 +10,8 @@ import sys
 
 import numpy as np
 import pandas as pd
+
+from raft_uav.numeric import optional_float, optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "nis_covariance.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -109,6 +112,96 @@ def _validate_measurement_dimensions(values: pd.Series) -> None:
         )
 
 
+def _validate_quantile(value: float) -> float:
+    """Return a scalar probability strictly between zero and one."""
+
+    quantile = optional_float(value)
+    if quantile is None or not 0.0 < quantile < 1.0:
+        raise ValueError("quantile must be in (0, 1)")
+    return quantile
+
+
+def _validate_positive_float(value: float, name: str) -> float:
+    """Return a finite positive real scalar without Boolean coercion."""
+
+    number = optional_float(value)
+    if number is None or number <= 0.0:
+        raise ValueError(f"{name} must be positive and finite")
+    return number
+
+
+def _validate_nonnegative_int(value: int, name: str) -> int:
+    """Return an exact non-negative integer without truncating fractions."""
+
+    number = optional_int(value)
+    if number is None or number < 0:
+        raise ValueError(f"{name} must be a nonnegative integer")
+    return number
+
+
+def _positive_measurement_dim(value: object, *, name: str) -> int:
+    """Return an exact positive measurement dimension."""
+
+    dimension = optional_int(value)
+    if dimension is None or dimension <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return dimension
+
+
+def _enabled_flag(value: object, *, key: object) -> bool:
+    """Return a literal Boolean calibration-enable flag."""
+
+    if not isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"calibration group {key!r} has invalid enabled flag")
+    return bool(value)
+
+
+def validate_nis_covariance_calibration(payload: Mapping[str, object]) -> None:
+    """Validate runtime-relevant NIS calibration metadata without lossy coercion."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("NIS covariance calibration must be an object")
+    if payload.get("schema") != _IMPL.NIS_COVARIANCE_CALIBRATION_SCHEMA:
+        raise ValueError("unknown NIS covariance calibration schema")
+    groups = payload.get("groups")
+    if not isinstance(groups, Mapping):
+        raise ValueError("NIS covariance calibration must contain a groups object")
+    for key, group in groups.items():
+        if not isinstance(group, Mapping):
+            raise ValueError(f"calibration group {key!r} must be an object")
+        source = str(group.get("source", ""))
+        dim = _positive_measurement_dim(
+            group.get("measurement_dim"),
+            name=f"calibration group {key!r} measurement_dim",
+        )
+        if key != _IMPL._group_key(source, dim):
+            raise ValueError(f"calibration group key {key!r} does not match source/dimension")
+        _enabled_flag(group.get("enabled", False), key=key)
+        scale = optional_float(group.get("applied_scale", 1.0))
+        if scale is None or scale <= 0.0:
+            raise ValueError(f"calibration group {key!r} has invalid applied_scale")
+
+
+def covariance_scale_for_source_dim(
+    calibration: Mapping[str, object] | None,
+    source: str,
+    measurement_dim: int,
+) -> float:
+    """Return one validated source/dimension covariance multiplier."""
+
+    dimension = _positive_measurement_dim(measurement_dim, name="measurement_dim")
+    group = _IMPL._calibration_group(calibration, source, dimension)
+    if group is None:
+        return 1.0
+    key = _IMPL._group_key(source, dimension)
+    if not _enabled_flag(group.get("enabled", False), key=key):
+        return 1.0
+    scale = optional_float(group.get("applied_scale", 1.0))
+    if scale is None or scale <= 0.0:
+        raise ValueError(f"invalid covariance scale for {source}:{dimension}")
+    return scale
+
+
 def environment_assignment(path: Path | str) -> str:
     """Return a POSIX-shell-safe environment assignment for a calibration file."""
 
@@ -118,6 +211,11 @@ def environment_assignment(path: Path | str) -> str:
 
 _IMPL._truthy = _truthy
 _IMPL._normalized_diagnostics_frame = _normalized_diagnostics_frame
+_IMPL._validate_quantile = _validate_quantile
+_IMPL._validate_positive_float = _validate_positive_float
+_IMPL._validate_nonnegative_int = _validate_nonnegative_int
+_IMPL.validate_nis_covariance_calibration = validate_nis_covariance_calibration
+_IMPL.covariance_scale_for_source_dim = covariance_scale_for_source_dim
 _IMPL.environment_assignment = environment_assignment
 
 globals().update(
@@ -130,6 +228,13 @@ globals().update(
 globals()["_truthy"] = _truthy
 globals()["_normalized_diagnostics_frame"] = _normalized_diagnostics_frame
 globals()["_validate_measurement_dimensions"] = _validate_measurement_dimensions
+globals()["_validate_quantile"] = _validate_quantile
+globals()["_validate_positive_float"] = _validate_positive_float
+globals()["_validate_nonnegative_int"] = _validate_nonnegative_int
+globals()["_positive_measurement_dim"] = _positive_measurement_dim
+globals()["_enabled_flag"] = _enabled_flag
+globals()["validate_nis_covariance_calibration"] = validate_nis_covariance_calibration
+globals()["covariance_scale_for_source_dim"] = covariance_scale_for_source_dim
 globals()["environment_assignment"] = environment_assignment
 
 __doc__ = _IMPL.__doc__

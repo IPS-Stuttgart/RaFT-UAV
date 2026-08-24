@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -64,17 +66,37 @@ def train_bias_model(
 ) -> int:
     """Train RF/radar bias correction models from selected normalized flights."""
 
-    if max_time_delta_s <= 0.0:
+    if not math.isfinite(max_time_delta_s) or max_time_delta_s <= 0.0:
         raise ValueError("max_time_delta_s must be positive")
-    if max_position_error_m is not None and max_position_error_m <= 0.0:
+    if max_position_error_m is not None and (
+        not math.isfinite(max_position_error_m) or max_position_error_m <= 0.0
+    ):
         raise ValueError("max_position_error_m must be positive")
-    if ridge_alpha < 0.0:
+    if not math.isfinite(ridge_alpha) or ridge_alpha < 0.0:
         raise ValueError("ridge_alpha must be nonnegative")
     if min_samples < 1:
         raise ValueError("min_samples must be positive")
 
     if requested_flights:
+        duplicate_flights = [
+            name for name, count in Counter(requested_flights).items() if count > 1
+        ]
+        if duplicate_flights:
+            raise ValueError(
+                "requested_flights must not contain duplicate flight names: "
+                + ", ".join(duplicate_flights)
+            )
         flights = [select_flight(dataset_root, name) for name in requested_flights]
+        duplicate_selected_flights = [
+            name
+            for name, count in Counter(flight.name for flight in flights).items()
+            if count > 1
+        ]
+        if duplicate_selected_flights:
+            raise ValueError(
+                "requested_flights must not resolve to duplicate flights: "
+                + ", ".join(duplicate_selected_flights)
+            )
     else:
         flights = discover_flights(dataset_root)
 

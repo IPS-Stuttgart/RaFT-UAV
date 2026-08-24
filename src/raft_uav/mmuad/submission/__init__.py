@@ -163,6 +163,14 @@ def _validated_timestamp_tolerance(value: Any) -> float:
     return numeric
 
 
+def _validated_require_zip(value: Any) -> bool:
+    """Return a strict Boolean ZIP-enforcement flag."""
+
+    if not isinstance(value, (bool, _IMPL._impl.np.bool_)):
+        raise ValueError("require_zip must be a Boolean scalar")
+    return bool(value)
+
+
 def _validate_official_track5_submission_with_finite_tolerance(
     path: Path | str,
     *,
@@ -170,13 +178,13 @@ def _validate_official_track5_submission_with_finite_tolerance(
     timestamp_tolerance_s: float = 1.0e-6,
     require_zip: bool = True,
 ) -> Any:
-    """Validate Track 5 submissions with a well-defined timestamp tolerance."""
+    """Validate Track 5 submissions with well-defined scalar controls."""
 
     return _LEGACY_VALIDATE_OFFICIAL_TRACK5_SUBMISSION(
         path,
         template=template,
         timestamp_tolerance_s=_validated_timestamp_tolerance(timestamp_tolerance_s),
-        require_zip=require_zip,
+        require_zip=_validated_require_zip(require_zip),
     )
 
 

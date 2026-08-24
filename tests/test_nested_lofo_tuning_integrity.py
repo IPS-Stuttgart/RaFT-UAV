@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
-from raft_uav.experiments.nested_lofo_tuning import _select_candidate, main
+from raft_uav.experiments.nested_lofo_tuning import Candidate, _run_candidate, _select_candidate, main
 
 
 def test_main_rejects_duplicate_flights(tmp_path) -> None:
@@ -40,6 +42,39 @@ def test_main_rejects_duplicate_candidate_names(tmp_path) -> None:
                 "--dry-run",
             ]
         )
+
+
+def test_run_candidate_preserves_whitespace_in_command_values(tmp_path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset root"
+    output_root = tmp_path / "output root"
+    args = SimpleNamespace(
+        dataset_root=dataset_root,
+        output_dir=output_root,
+        skip_existing=False,
+        dry_run=False,
+        base_command=(
+            "{python} -m raft_uav.cli run-baseline {dataset_root} "
+            "--flight {flight} --output-dir {output_dir}"
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def fake_run(command, *, check):
+        captured["command"] = command
+        captured["check"] = check
+
+    monkeypatch.setattr("raft_uav.experiments.nested_lofo_tuning.subprocess.run", fake_run)
+
+    candidate = Candidate(name="base", args=("--radar-association", "catprob"))
+    _run_candidate(args, candidate, "Opt 1", split="holdout Opt 2/train")
+
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert captured["check"] is True
+    assert command[command.index("run-baseline") + 1] == str(dataset_root)
+    assert command[command.index("--flight") + 1] == "Opt 1"
+    assert command[command.index("--output-dir") + 1] == str(output_root / "holdout Opt 2/train" / "base")
+    assert command[-2:] == ["--radar-association", "catprob"]
 
 
 def test_select_candidate_requires_every_training_flight() -> None:

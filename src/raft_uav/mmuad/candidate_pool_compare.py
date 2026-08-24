@@ -201,8 +201,21 @@ def main(argv: list[str] | None = None) -> int:
 
 def _load_labeled_candidate_pools(specs: Sequence[str]) -> dict[str, pd.DataFrame]:
     pools: dict[str, list[str]] = {}
+    label_origins: dict[str, str] = {}
     for spec in specs:
-        label, path_text = _split_label_path(spec)
+        spec_text = str(spec)
+        label, path_text = _split_label_path(spec_text)
+        if "=" in spec_text:
+            raw_label = spec_text.split("=", 1)[0].strip() or Path(path_text).stem
+        else:
+            raw_label = Path(spec_text).stem
+        previous_origin = label_origins.get(label)
+        if previous_origin is not None and previous_origin != raw_label:
+            raise ValueError(
+                "candidate pool labels collide after normalization: "
+                f"{previous_origin!r} and {raw_label!r} both map to {label!r}",
+            )
+        label_origins[label] = raw_label
         pools.setdefault(label, []).append(f"{label}={path_text}")
     loaded = {label: load_candidate_inputs(label_specs) for label, label_specs in pools.items()}
     empty = [label for label, rows in loaded.items() if rows.empty]

@@ -3,7 +3,9 @@
 The maintained implementation lives in the sibling ``candidate_mixture_map.py``
 module. This package keeps the public import path while preserving opaque IDs in
 CSV inputs, retaining complete candidate frames when target-template times fall
-outside the configured matching tolerance, validating numerical controls, and
+outside the configured matching tolerance, rejecting ambiguous co-temporal
+initial anchors, producing finite velocities and well-conditioned acceleration
+smoothing for repeated target timestamps, validating numerical controls, and
 delegating Gaussian-mixture factor calculations to PyRecEst.
 """
 
@@ -33,7 +35,10 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_NORMALIZE_INITIAL_ESTIMATES = _IMPL._normalize_initial_estimates
 _ORIGINAL_VALIDATE_CONFIG = _IMPL._validate_config
+_ORIGINAL_TRAJECTORY_VELOCITY = _IMPL._trajectory_velocity
+_ORIGINAL_SECOND_DERIVATIVE_MATRIX = _IMPL._second_derivative_matrix
 
 
 class _PandasCsvProxy:
@@ -137,6 +142,35 @@ def _validate_config(config: Any) -> None:
     _ORIGINAL_VALIDATE_CONFIG(config)
 
 
+def _normalize_initial_estimates(
+    estimates: pd.DataFrame | None,
+) -> pd.DataFrame | None:
+    """Reject ambiguous co-temporal anchor states before interpolation."""
+
+    rows = _ORIGINAL_NORMALIZE_INITIAL_ESTIMATES(estimates)
+    if rows is None or rows.empty:
+        return rows
+
+    key_columns = ["sequence_id", "time_s"]
+    duplicate_mask = rows.duplicated(key_columns, keep=False)
+    if duplicate_mask.any():
+        duplicate_keys = rows.loc[duplicate_mask, key_columns].drop_duplicates()
+        preview = ", ".join(
+            f"({str(sequence_id)!r}, {float(time_s):g})"
+            for sequence_id, time_s in duplicate_keys.head(5).itertuples(
+                index=False,
+                name=None,
+            )
+        )
+        if len(duplicate_keys) > 5:
+            preview = f"{preview}, ..."
+        raise ValueError(
+            "initial estimates must contain at most one row per "
+            f"sequence_id/time_s; duplicate keys: {preview}"
+        )
+    return rows
+
+
 def _target_time_candidate_groups(
     sequence_rows: pd.DataFrame,
     *,
@@ -174,9 +208,60 @@ def _target_time_candidate_groups(
     return groups
 
 
+def _trajectory_velocity(times: np.ndarray, state: np.ndarray) -> np.ndarray:
+    """Differentiate trajectories without zero-spacing failures at repeated times."""
+
+    time_values = np.asarray(times, dtype=float)
+    state_values = np.asarray(state, dtype=float)
+    if len(time_values) <= 1:
+        return np.zeros_like(state_values)
+
+    unique_times, inverse = np.unique(time_values, return_inverse=True)
+    if len(unique_times) == len(time_values):
+        return _ORIGINAL_TRAJECTORY_VELOCITY(time_values, state_values)
+
+    # A submission template may legitimately contain the same timestamp more
+    # than once. np.gradient divides by the timestamp spacing, so differentiating
+    # those rows directly yields NaN/inf. Average co-temporal states, compute the
+    # derivative on strictly increasing unique times, then give every repeated
+    # output row the velocity at its shared timestamp.
+    unique_state = np.zeros((len(unique_times), state_values.shape[1]), dtype=float)
+    np.add.at(unique_state, inverse, state_values)
+    counts = np.bincount(inverse, minlength=len(unique_times)).astype(float)
+    unique_state /= counts[:, None]
+    unique_velocity = _ORIGINAL_TRAJECTORY_VELOCITY(unique_times, unique_state)
+    return unique_velocity[inverse]
+
+
+def _second_derivative_matrix(times: np.ndarray) -> np.ndarray:
+    """Build acceleration penalties on unique physical timestamps."""
+
+    time_values = np.asarray(times, dtype=float)
+    unique_times, inverse = np.unique(time_values, return_inverse=True)
+    if len(unique_times) == len(time_values):
+        return _ORIGINAL_SECOND_DERIVATIVE_MATRIX(time_values)
+    if len(unique_times) < 3:
+        return np.zeros((0, len(time_values)), dtype=float)
+
+    # Replacing a zero interval by 1e-6 s makes duplicate template rows behave
+    # like distinct physical samples one microsecond apart. The resulting
+    # O(1e6) derivative coefficients dominate the measurement system and can
+    # collapse an otherwise linear trajectory. Smooth the average state at each
+    # physical timestamp instead, while retaining every duplicate output row.
+    unique_operator = _ORIGINAL_SECOND_DERIVATIVE_MATRIX(unique_times)
+    averaging = np.zeros((len(unique_times), len(time_values)), dtype=float)
+    counts = np.bincount(inverse, minlength=len(unique_times)).astype(float)
+    columns = np.arange(len(time_values), dtype=int)
+    averaging[inverse, columns] = 1.0 / counts[inverse]
+    return unique_operator @ averaging
+
+
 _IMPL.pd = _PandasCsvProxy(pd)
+_IMPL._normalize_initial_estimates = _normalize_initial_estimates
 _IMPL._validate_config = _validate_config
 _IMPL._target_time_candidate_groups = _target_time_candidate_groups
+_IMPL._trajectory_velocity = _trajectory_velocity
+_IMPL._second_derivative_matrix = _second_derivative_matrix
 _IMPL._mixture_response = build_pyrecest_mixture_response(
     apply_label_balance=_IMPL._apply_label_balance,
     normalize_probability=_IMPL._normalize_probability,
@@ -191,8 +276,11 @@ globals().update(
 )
 globals()["_finite_scalar"] = _finite_scalar
 globals()["_integer_scalar"] = _integer_scalar
+globals()["_normalize_initial_estimates"] = _normalize_initial_estimates
 globals()["_validate_config"] = _validate_config
 globals()["_target_time_candidate_groups"] = _target_time_candidate_groups
+globals()["_trajectory_velocity"] = _trajectory_velocity
+globals()["_second_derivative_matrix"] = _second_derivative_matrix
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]

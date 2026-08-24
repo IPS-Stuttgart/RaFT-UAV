@@ -4,9 +4,20 @@ import pandas as pd
 import pytest
 
 from raft_uav.mmuad.track5_scorecard import (
+    _bool_series,
     build_candidate_regret_summary,
     build_pose_by_sequence_table,
 )
+
+
+def test_track5_scorecard_package_export_keeps_strict_boolean_validation() -> None:
+    values = pd.Series([2], name="matched", index=[42])
+
+    with pytest.raises(
+        ValueError,
+        match=r"matched contains invalid Boolean values at rows \[42\]",
+    ):
+        _bool_series(values)
 
 
 def test_track5_scorecard_treats_float_encoded_boolean_flags_as_true() -> None:

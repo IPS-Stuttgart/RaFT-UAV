@@ -51,3 +51,20 @@ def test_nis_reliability_accepted_only_filters_rejected_updates() -> None:
     row = report.iloc[0]
     assert int(row["count"]) == 2
     assert float(row["nis_max"]) == 2.0
+
+
+def test_nis_reliability_filters_boolean_and_nonreal_nis_samples() -> None:
+    frame = pd.DataFrame(
+        {
+            "source": ["radar"] * 5,
+            "measurement_dim": [3] * 5,
+            "nis": [2.0, True, np.bool_(False), 1.0 + 2.0j, np.complex64(3.0 + 4.0j)],
+        }
+    )
+
+    report = nis_reliability_summary(frame, gate_probabilities=(0.95,))
+
+    assert len(report) == 1
+    row = report.iloc[0]
+    assert int(row["count"]) == 1
+    assert float(row["nis_mean"]) == 2.0

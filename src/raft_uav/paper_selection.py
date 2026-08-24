@@ -343,9 +343,13 @@ def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
         frame_values = pd.to_numeric(
             ordered[frame_column], errors="coerce"
         ).to_numpy(dtype=float)
+        gap_threshold = _segment_gap_threshold(
+            frame_values,
+            use_frame_index=use_frame_index,
+        )
         split_points = np.r_[
             0,
-            np.where(np.diff(frame_values) > _segment_gap_threshold(frame_values))[0] + 1,
+            np.where(np.diff(frame_values) > gap_threshold)[0] + 1,
             len(ordered),
         ]
         for start, end in zip(split_points[:-1], split_points[1:]):
@@ -439,7 +443,11 @@ def _mean_catprob(frame: pd.DataFrame) -> float:
     return float(np.nanmean(catprob))
 
 
-def _segment_gap_threshold(frame_values: np.ndarray) -> float:
+def _segment_gap_threshold(
+    frame_values: np.ndarray,
+    *,
+    use_frame_index: bool = False,
+) -> float:
     values = np.sort(np.asarray(frame_values, dtype=float).reshape(-1))
     values = values[np.isfinite(values)]
     if values.size < 2:
@@ -448,7 +456,7 @@ def _segment_gap_threshold(frame_values: np.ndarray) -> float:
     positive = diffs[diffs > 1.0e-9]
     if positive.size == 0:
         return float("inf")
-    if _integer_like(values):
+    if use_frame_index and _integer_like(values):
         return 1.5
     return 1.5 * float(np.median(positive))
 

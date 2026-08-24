@@ -28,6 +28,20 @@ for _name in dir(_LEGACY):
         globals()[_name] = getattr(_LEGACY, _name)
 
 
+def _timestamp_gap_threshold(values: np.ndarray) -> float:
+    """Infer a continuity threshold from timestamp cadence, regardless of formatting."""
+
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size < 2:
+        return float("inf")
+    diffs = np.diff(np.sort(finite))
+    positive = diffs[diffs > 1.0e-9]
+    if positive.size == 0:
+        return float("inf")
+    return 1.5 * float(np.median(positive))
+
+
 def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
     """Split tracks chronologically, including at frame-counter resets."""
 
@@ -35,7 +49,25 @@ def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
         return []
     segments: list[pd.DataFrame] = []
     for _, track_rows in radar.groupby("track_id", sort=True):
+        numeric_time = pd.to_numeric(
+            track_rows["time_s"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+        valid_time = np.isfinite(numeric_time)
+        track_rows = track_rows.iloc[np.flatnonzero(valid_time)].copy()
+        if track_rows.empty:
+            continue
+        # Direct column assignment replaces an object/string dtype with float.
+        # ``.loc[:, ...]`` may preserve the old dtype and reintroduce
+        # lexicographic ordering for numeric strings on some pandas versions.
+        track_rows["time_s"] = numeric_time[valid_time]
+
         continuity_key = _LEGACY._track_continuity_key(track_rows)
+        if continuity_key != "time_s":
+            track_rows[continuity_key] = pd.to_numeric(
+                track_rows[continuity_key],
+                errors="coerce",
+            ).to_numpy(dtype=float)
         order_columns = (
             ["time_s"]
             if continuity_key == "time_s"
@@ -50,7 +82,11 @@ def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
             errors="coerce",
         ).to_numpy(dtype=float)
         deltas = np.diff(values)
-        threshold = _LEGACY._segment_gap_threshold(values)
+        threshold = (
+            _timestamp_gap_threshold(values)
+            if continuity_key == "time_s"
+            else _LEGACY._segment_gap_threshold(values)
+        )
         discontinuities = (deltas < 0.0) | (deltas > threshold)
         split_points = np.r_[
             0,

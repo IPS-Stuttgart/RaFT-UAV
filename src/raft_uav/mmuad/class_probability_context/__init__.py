@@ -90,7 +90,7 @@ def _normalize_sequence_ids(
 def _raw_candidate_sequence_values(
     candidates: object,
 ) -> tuple[pd.Series, str] | None:
-    """Return an explicitly supplied candidate sequence column before normalization."""
+    """Return and cross-check explicitly supplied candidate sequence columns."""
 
     if isinstance(candidates, _IMPL.CandidateFrame):
         rows = candidates.rows
@@ -102,11 +102,35 @@ def _raw_candidate_sequence_values(
     columns_by_key: dict[str, object] = {}
     for column in rows.columns:
         columns_by_key.setdefault(str(column).strip().casefold(), column)
+
+    sequence_columns: list[tuple[pd.Series, str]] = []
     for alias in _CANDIDATE_SEQUENCE_ALIASES:
         column = columns_by_key.get(alias.casefold())
         if column is not None:
-            return rows[column], str(column)
-    return None
+            sequence_columns.append((rows[column], str(column)))
+    if not sequence_columns:
+        return None
+
+    preferred_values, preferred_column = sequence_columns[0]
+    preferred_ids = _normalize_sequence_ids(
+        preferred_values,
+        table_name="candidate",
+        column=preferred_column,
+    )
+    for values, column in sequence_columns[1:]:
+        normalized_ids = _normalize_sequence_ids(
+            values,
+            table_name="candidate",
+            column=column,
+        )
+        conflicts = normalized_ids.ne(preferred_ids)
+        if conflicts.any():
+            row_position = int(np.flatnonzero(conflicts.to_numpy(dtype=bool))[0])
+            raise ValueError(
+                "candidate table has conflicting sequence identifier columns "
+                f"{preferred_column!r} and {column!r} at row {row_position}"
+            )
+    return preferred_values, preferred_column
 
 
 def _candidate_rows(candidates: object) -> pd.DataFrame:

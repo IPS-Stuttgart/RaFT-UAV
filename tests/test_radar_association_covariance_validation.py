@@ -39,7 +39,7 @@ def test_radar_association_rejects_nonfinite_numeric_parameters(
     parameter: str,
     value: float,
 ) -> None:
-    with pytest.raises(ValueError, match=f"{parameter} must be finite"):
+    with pytest.raises(ValueError, match=rf"{parameter} must be (?:a )?finite"):
         run_async_cv_baseline_with_radar_association(
             rf_measurements=[],
             radar=pd.DataFrame(),

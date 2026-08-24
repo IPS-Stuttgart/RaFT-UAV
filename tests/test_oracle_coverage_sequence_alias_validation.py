@@ -36,36 +36,79 @@ def _stub_original_builders(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.parametrize("builder", _BUILDERS)
-def test_oracle_coverage_rejects_conflicting_radar_sequence_aliases(
+def test_oracle_coverage_accepts_independent_sequence_and_flight_ids(
     builder: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_original_builders(monkeypatch)
     radar = pd.DataFrame(
-        {"sequence_id": ["flight-a"], "flight_id": ["flight-b"]}
+        {"sequence_id": ["shared"], "flight_id": ["flight-a"]}
     )
     truth = pd.DataFrame(
-        {"sequence_id": ["flight-a"], "flight_id": ["flight-a"]}
+        {"sequence_id": ["shared"], "flight_id": ["flight-a"]}
     )
 
-    with pytest.raises(ValueError, match="matching sequence_id and flight_id"):
+    result = builder(radar=radar, truth=truth)
+
+    assert result["radar"].equals(radar)
+    assert result["truth"].equals(truth)
+
+
+@pytest.mark.parametrize("builder", _BUILDERS)
+def test_oracle_coverage_filters_truth_by_joint_physical_scope(
+    builder: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_original_builders(monkeypatch)
+    radar = pd.DataFrame(
+        {"sequence_id": ["shared"], "flight_id": ["flight-a"]}
+    )
+    truth = pd.DataFrame(
+        {
+            "sequence_id": ["shared", "shared"],
+            "flight_id": ["flight-a", "flight-b"],
+        }
+    )
+
+    result = builder(radar=radar, truth=truth)
+
+    assert result["truth"]["sequence_id"].tolist() == ["shared"]
+    assert result["truth"]["flight_id"].tolist() == ["flight-a"]
+
+
+@pytest.mark.parametrize("builder", _BUILDERS)
+def test_oracle_coverage_rejects_multiple_radar_flights_for_shared_sequence(
+    builder: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_original_builders(monkeypatch)
+    radar = pd.DataFrame(
+        {
+            "sequence_id": ["shared", "shared"],
+            "flight_id": ["flight-a", "flight-b"],
+        }
+    )
+    truth = radar.copy()
+
+    with pytest.raises(ValueError, match="radar rows from one flight_id"):
         builder(radar=radar, truth=truth)
 
 
 @pytest.mark.parametrize("builder", _BUILDERS)
-def test_oracle_coverage_rejects_conflicting_truth_sequence_aliases(
+def test_oracle_coverage_rejects_ambiguous_one_sided_truth_flights(
     builder: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_original_builders(monkeypatch)
-    radar = pd.DataFrame(
-        {"sequence_id": ["flight-a"], "flight_id": ["flight-a"]}
-    )
+    radar = pd.DataFrame({"sequence_id": ["shared"]})
     truth = pd.DataFrame(
-        {"sequence_id": ["flight-a"], "flight_id": ["flight-b"]}
+        {
+            "sequence_id": ["shared", "shared"],
+            "flight_id": ["flight-a", "flight-b"],
+        }
     )
 
-    with pytest.raises(ValueError, match="matching sequence_id and flight_id"):
+    with pytest.raises(ValueError, match="one-sided flight_id metadata"):
         builder(radar=radar, truth=truth)
 
 
@@ -96,7 +139,7 @@ def test_oracle_coverage_rejects_non_scalar_sequence_ids(
 
 
 @pytest.mark.parametrize("builder", _BUILDERS)
-def test_oracle_coverage_accepts_complementary_sequence_aliases(
+def test_oracle_coverage_accepts_complementary_legacy_identifiers(
     builder: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
