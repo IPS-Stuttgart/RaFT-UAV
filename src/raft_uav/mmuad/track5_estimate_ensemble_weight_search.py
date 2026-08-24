@@ -131,6 +131,18 @@ def search_track5_estimate_ensemble_weights(
     by_sequence_grid = pd.DataFrame.from_records(by_sequence_records)
     scored_grid = _scored_weight_grid_rows(grid)
     if scored_grid.empty:
+        matched_rows = pd.to_numeric(grid.get("matched_rows"), errors="coerce")
+        unmatched_rows = pd.to_numeric(grid.get("unmatched_rows"), errors="coerce")
+        partially_scored = unmatched_rows.loc[
+            (matched_rows > 0)
+            & np.isfinite(matched_rows.to_numpy(dtype=float, na_value=np.nan))
+            & np.isfinite(unmatched_rows.to_numpy(dtype=float, na_value=np.nan))
+        ]
+        if not partially_scored.empty and not bool((partially_scored == 0).any()):
+            raise ValueError(
+                "weight search found no candidate with complete truth support; "
+                f"minimum unmatched rows: {int(partially_scored.min())}"
+            )
         raise ValueError(
             "no weight candidate had finite matched truth rows; check truth/template "
             "sequence ids and timestamps before selecting ensemble weights"
