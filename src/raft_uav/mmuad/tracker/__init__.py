@@ -81,7 +81,7 @@ _FILTER_HELPER_COLUMNS = (
 
 
 def _normalize_covariance_scale(value: object, *, field_name: str) -> float:
-    """Return a finite non-negative covariance scale."""
+    """Return a finite non-negative covariance/process-noise scale."""
 
     scale = optional_float(value)
     if scale is None or scale < 0.0:
@@ -91,30 +91,15 @@ def _normalize_covariance_scale(value: object, *, field_name: str) -> float:
     return scale
 
 
-def _normalize_soft_anchor_limit(value: object, *, field_name: str) -> float:
-    """Return a finite non-negative soft-anchor distance control."""
-
-    limit = optional_float(value)
-    if limit is None or limit < 0.0:
-        raise ValueError(
-            f"{field_name} must be a finite non-negative real scalar"
-        )
-    return limit
-
-
-def _normalize_boolean_control(value: object, *, field_name: str) -> bool:
-    """Return an actual Python/NumPy Boolean scalar without truthy coercion."""
-
-    if not isinstance(value, (bool, np.bool_)):
-        raise ValueError(f"{field_name} must be a Boolean scalar")
-    return bool(value)
-
-
 def _validated_tracker_config(config: TrackerConfig) -> TrackerConfig:
-    """Normalize guarded tracker scalars before they reach filter logic."""
+    """Normalize numeric scales before they reach Kalman prediction/updates."""
 
     return replace(
         config,
+        acceleration_std_mps2=_normalize_covariance_scale(
+            config.acceleration_std_mps2,
+            field_name="acceleration_std_mps2",
+        ),
         primary_covariance_scale=_normalize_covariance_scale(
             config.primary_covariance_scale,
             field_name="primary_covariance_scale",
@@ -122,18 +107,6 @@ def _validated_tracker_config(config: TrackerConfig) -> TrackerConfig:
         secondary_covariance_scale=_normalize_covariance_scale(
             config.secondary_covariance_scale,
             field_name="secondary_covariance_scale",
-        ),
-        soft_anchor_cap_m=_normalize_soft_anchor_limit(
-            config.soft_anchor_cap_m,
-            field_name="soft_anchor_cap_m",
-        ),
-        soft_anchor_gate_m=_normalize_soft_anchor_limit(
-            config.soft_anchor_gate_m,
-            field_name="soft_anchor_gate_m",
-        ),
-        first_selected_bootstrap=_normalize_boolean_control(
-            config.first_selected_bootstrap,
-            field_name="first_selected_bootstrap",
         ),
     )
 
