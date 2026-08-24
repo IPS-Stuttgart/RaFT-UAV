@@ -185,6 +185,12 @@ def _truth_error_scope_install() -> Callable[[], None]:
     return install
 
 
+def _cluster_ranker_flight_scope_install() -> Callable[[], None]:
+    from raft_uav.mmuad._cluster_ranker_flight_scope_patch import install
+
+    return install
+
+
 def _mot_missing_id_index_install() -> Callable[[], None]:
     from raft_uav.mmuad._mot_missing_id_index_patch import install
 
@@ -311,6 +317,7 @@ _optional_runtime_hook(_mot_match_distance_complex_install)
 _optional_runtime_hook(_mot_config_validation_install)
 _optional_runtime_hook(_mot_scope_compat_install)
 _optional_runtime_hook(_truth_error_scope_install)
+_optional_runtime_hook(_cluster_ranker_flight_scope_install)
 _optional_runtime_hook(_mot_missing_id_index_install)
 _optional_runtime_hook(_candidate_pull_index_install)
 _optional_runtime_hook(_candidate_pull_time_tolerance_install)
