@@ -38,6 +38,7 @@ def test_trajectory_smoother_rejects_rows_legacy_normalizer_would_drop_or_coerce
     invalid_value: object,
 ) -> None:
     rows = _rows()
+    rows[column] = rows[column].astype(object)
     rows.loc[2, column] = invalid_value
 
     with pytest.raises(ValueError, match=column):
