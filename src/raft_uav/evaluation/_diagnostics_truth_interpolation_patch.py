@@ -54,9 +54,10 @@ def _position_error_frame(
         estimate_times,
         max_time_delta_s=max_eval_time_delta_s,
     )
-    deltas = estimate_positions - truth_at_estimate
-    error_2d = np.linalg.norm(deltas[:, :2], axis=1)
-    error_3d = np.linalg.norm(deltas, axis=1)
+    with np.errstate(over="ignore", invalid="ignore"):
+        deltas = estimate_positions - truth_at_estimate
+    error_2d = np.hypot.reduce(np.abs(deltas[:, :2]), axis=1)
+    error_3d = np.hypot.reduce(np.abs(deltas), axis=1)
     finite = valid & np.isfinite(error_2d) & np.isfinite(error_3d)
 
     out = estimate_work.loc[finite].copy()
