@@ -324,6 +324,12 @@ def run_guarded_tournament(
         for rank, row in enumerate(ranked, start=1)
     )
 
+    if require_improvement and selected.is_raw:
+        raise RuntimeError(
+            "no transformed candidate cleared the configured guards; "
+            "raw fallback selected"
+        )
+
     output_dir.mkdir(parents=True, exist_ok=True)
     if copy_selected:
         _copy_selected_predictions(Path(selected.prediction_path), output_dir)
@@ -352,11 +358,6 @@ def run_guarded_tournament(
             "require_improvement": require_improvement,
         },
     )
-    if require_improvement and selected.is_raw:
-        raise RuntimeError(
-            "no transformed candidate cleared the configured guards; "
-            "raw fallback selected"
-        )
     return result
 
 
