@@ -85,8 +85,8 @@ def run_cached(
                 entry=entry,
                 key=key,
                 sequence=sequence,
-                proposal_path=proposal_path,
-                label_dir=label_dir,
+                proposal_text=proposal_text.get(proposal_name, ""),
+                seed_path=labels[sequence],
                 tracker_controls=tracker_controls,
                 tracker_main=tracker_main,
             )
@@ -273,8 +273,8 @@ def _generate_entry(
     entry: Path,
     key: str,
     sequence: str,
-    proposal_path: Path,
-    label_dir: Path,
+    proposal_text: str,
+    seed_path: Path,
     tracker_controls: Sequence[str],
     tracker_main: Callable[[list[str] | None], int],
 ) -> tuple[Path, dict[str, Any]]:
@@ -283,12 +283,21 @@ def _generate_entry(
         prefix=f".{sequence}-", dir=entry.parent
     ) as temporary:
         root = Path(temporary)
+        proposals = root / "proposals"
+        seeds = root / "seeds"
         predictions = root / "predictions"
         summary_path = root / "summary.json"
+        proposals.mkdir()
+        seeds.mkdir()
+        (proposals / f"{sequence}.txt").write_text(
+            proposal_text,
+            encoding="utf-8",
+        )
+        shutil.copyfile(seed_path, seeds / f"{sequence}.txt")
         tracker_arguments = [
-            str(proposal_path),
+            str(proposals),
             "--first-frame-label-dir",
-            str(label_dir),
+            str(seeds),
             "--output-dir",
             str(predictions),
             "--output-json",

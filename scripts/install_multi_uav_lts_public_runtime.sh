@@ -9,7 +9,9 @@ fi
 venv_path="$1"
 asset_dir="$2"
 provenance_json="$3"
-runtime_id="py311-torch222-cu118-flash273-v4"
+runtime_id="py311-torch222-cu118-flash273-pyrecest-v5"
+pyrecest_revision="75b3b0b9e8b7a7c1a39fc69cdf85f0af9365f158"
+pyrecest_requirement="pyrecest @ git+https://github.com/FlorianPfaff/PyRecEst.git@${pyrecest_revision}"
 marker="${venv_path}/.raft-uav-${runtime_id}"
 
 mkdir -p "${asset_dir}" "$(dirname "${provenance_json}")"
@@ -160,21 +162,55 @@ if [[ -x "${venv_path}/bin/python" ]] && [[ -f "${marker}" ]]; then
   if runtime_library_path="$(find_runtime_library_path "${py}")"; then
     export LD_LIBRARY_PATH="${runtime_library_path}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
     if "${py}" - <<'PY'
+import importlib.metadata
+import json
+
 import cv2
 import flash_attn
 import lap
 import motmetrics
+import numpy as np
 import seaborn
+import scipy
 import torch
+from pyrecest.evaluation import tracking_metrics
 
 assert torch.__version__.split("+")[0] == "2.2.2"
 assert torch.version.cuda == "11.8"
 assert torch.cuda.is_available()
+assert np.__version__ == "1.26.4"
+assert scipy.__version__ == "1.15.3"
 assert cv2.__version__ == "4.9.0"
 assert getattr(flash_attn, "__version__", "") == "2.7.3"
 assert lap.__version__ == "0.5.12"
 assert motmetrics.__version__ == "1.4.0"
 assert seaborn.__version__ == "0.13.2"
+pyrecest_distribution = importlib.metadata.distribution("pyrecest")
+pyrecest_direct_url = json.loads(
+    pyrecest_distribution.read_text("direct_url.json") or "{}"
+)
+pyrecest_vcs = pyrecest_direct_url.get("vcs_info", {})
+assert pyrecest_vcs.get("commit_id") == (
+    "75b3b0b9e8b7a7c1a39fc69cdf85f0af9365f158"
+)
+clear = tracking_metrics.finalize_clear(
+    tracking_metrics.ClearCounts(
+        tp=1,
+        fp=0,
+        fn=0,
+        id_switches=0,
+        motp_sum=1.0,
+    )
+)
+identity = tracking_metrics.finalize_identity(
+    tracking_metrics.IdentityCounts(tp=1, fp=0, fn=0)
+)
+assert clear == {"mota": 1.0, "motp": 1.0}
+assert identity == {
+    "idf1": 1.0,
+    "id_precision": 1.0,
+    "id_recall": 1.0,
+}
 PY
     then
       runtime_valid=true
@@ -203,9 +239,13 @@ if [[ "${runtime_valid}" != "true" ]]; then
     "numpy==1.26.4" \
     "pandas==2.2.3" \
     "PyYAML==6.0.1" \
-    "scipy==1.13.0" \
+    "scipy==1.15.3" \
     "scikit-learn==1.5.2" \
     "matplotlib==3.9.2" \
+    "mpmath==1.3.0" \
+    "pyshtools==4.14.1" \
+    "beartype==0.22.9" \
+    "shapely==2.1.2" \
     "seaborn==0.13.2" \
     "timm==1.0.14" \
     "albumentations==2.0.4" \
@@ -231,6 +271,12 @@ if [[ "${runtime_valid}" != "true" ]]; then
     "yacs==0.1.8" \
     "termcolor==2.4.0" \
     "gdown==5.2.0"
+  # Torch 2.2 requires the NumPy 1.x ABI. Install the immutable PyRecEst
+  # tracking-metric revision without resolving its broader NumPy >=2 metadata;
+  # every dependency imported by pyrecest.evaluation is pinned above and the
+  # metric contract is exercised both here and when reusing the environment.
+  "${py}" -m pip install --no-deps \
+    "${pyrecest_requirement}"
   touch "${marker}"
 fi
 
@@ -321,29 +367,65 @@ fi
 
 "${py}" -m pip install -e . --no-deps
 "${py}" - <<'PY'
+import importlib.metadata
 import json
 
 import cv2
 import flash_attn
 import lap
 import motmetrics
+import numpy as np
 import seaborn
+import scipy
 import torch
+from pyrecest.evaluation import tracking_metrics
 
 if torch.version.cuda != "11.8":
     raise SystemExit(f"torch CUDA runtime is {torch.version.cuda!r}, expected '11.8'")
 if not torch.cuda.is_available():
     raise SystemExit("CUDA is unavailable in the pinned evidence environment")
+pyrecest_distribution = importlib.metadata.distribution("pyrecest")
+pyrecest_direct_url = json.loads(
+    pyrecest_distribution.read_text("direct_url.json") or "{}"
+)
+pyrecest_revision = pyrecest_direct_url.get("vcs_info", {}).get("commit_id")
+expected_pyrecest_revision = "75b3b0b9e8b7a7c1a39fc69cdf85f0af9365f158"
+if pyrecest_revision != expected_pyrecest_revision:
+    raise SystemExit(
+        f"PyRecEst revision is {pyrecest_revision!r}, "
+        f"expected {expected_pyrecest_revision!r}"
+    )
+clear = tracking_metrics.finalize_clear(
+    tracking_metrics.ClearCounts(
+        tp=1,
+        fp=0,
+        fn=0,
+        id_switches=0,
+        motp_sum=1.0,
+    )
+)
+identity = tracking_metrics.finalize_identity(
+    tracking_metrics.IdentityCounts(tp=1, fp=0, fn=0)
+)
+if clear != {"mota": 1.0, "motp": 1.0}:
+    raise SystemExit(f"PyRecEst CLEAR metric smoke failed: {clear!r}")
+expected_identity = {"idf1": 1.0, "id_precision": 1.0, "id_recall": 1.0}
+if identity != expected_identity:
+    raise SystemExit(f"PyRecEst identity metric smoke failed: {identity!r}")
 print(
     json.dumps(
         {
             "torch": torch.__version__,
             "cuda_runtime": torch.version.cuda,
             "cuda_device": torch.cuda.get_device_name(0),
+            "numpy": np.__version__,
+            "scipy": scipy.__version__,
             "opencv": cv2.__version__,
             "flash_attn": getattr(flash_attn, "__version__", "unknown"),
             "lap": getattr(lap, "__version__", "unknown"),
             "motmetrics": getattr(motmetrics, "__version__", "unknown"),
+            "pyrecest": pyrecest_distribution.version,
+            "pyrecest_revision": pyrecest_revision,
             "seaborn": seaborn.__version__,
         },
         indent=2,
@@ -357,6 +439,7 @@ PY
   "${flash_metadata}" \
   "${provenance_json}" \
   "${runtime_id}" \
+  "${pyrecest_revision}" \
   "${flash_wheel}" \
   "${flash_sha256}" \
   "${runtime_library_path}" \
@@ -374,6 +457,7 @@ from pathlib import Path
     metadata_path,
     output_path,
     runtime_id,
+    pyrecest_revision,
     wheel_path,
     wheel_sha256,
     runtime_library_path,
@@ -384,8 +468,11 @@ from pathlib import Path
 metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
 freeze_path = Path(output_path).parent / "pip-freeze.txt"
 payload = {
-    "schema": "raft-uav-multi-uav-lts-runtime-v4",
+    "schema": "raft-uav-multi-uav-lts-runtime-v5",
     "runtime_id": runtime_id,
+    "pyrecest": {
+        "revision": pyrecest_revision,
+    },
     "python": sys.version,
     "python_executable": sys.executable,
     "pip_freeze_path": str(freeze_path),
