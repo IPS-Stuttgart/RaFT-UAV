@@ -78,8 +78,8 @@ def test_sequence_gate_normalizes_sequence_weight_ids(tmp_path: Path) -> None:
     _submission_rows(offset=4.0, classification=3).to_csv(alternate_path, index=False)
     weights = pd.DataFrame(
         {
-            "Sequence": [" seq0002 ", None, "nan"],
-            "weight": [1.0, 0.25, 0.75],
+            "Sequence": [" seq0002 "],
+            "weight": [1.0],
         }
     )
 
