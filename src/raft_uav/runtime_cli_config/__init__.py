@@ -9,12 +9,13 @@ their meaning.
 from __future__ import annotations
 
 import importlib.util
-import numbers
 import sys
 from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
+
+from raft_uav.numeric import optional_float, optional_int
 
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "runtime_cli_config.py"
 _SPEC = importlib.util.spec_from_file_location(
@@ -87,31 +88,8 @@ def _invalid_float(name: str) -> ValueError:
 def _finite_float(value: object, name: str) -> float:
     """Return a finite real scalar without Boolean or array coercion."""
 
-    if isinstance(value, (bool, np.bool_)):
-        raise _invalid_float(name)
-    if np.ma.isMaskedArray(value):
-        if bool(np.ma.getmaskarray(value).any()):
-            raise _invalid_float(name)
-        value = np.ma.getdata(value)
-
-    try:
-        array = np.asarray(value)
-    except (TypeError, ValueError) as exc:
-        raise _invalid_float(name) from exc
-    if array.ndim != 0 or np.iscomplexobj(array):
-        raise _invalid_float(name)
-
-    scalar = array.item()
-    if np.ma.is_masked(scalar) or isinstance(
-        scalar,
-        (bool, np.bool_, complex, np.complexfloating),
-    ):
-        raise _invalid_float(name)
-    try:
-        number = float(scalar)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise _invalid_float(name) from exc
-    if not np.isfinite(number):
+    number = optional_float(value)
+    if number is None:
         raise _invalid_float(name)
     return number
 
@@ -127,37 +105,10 @@ def _validated_integer(
     minimum: int,
     qualifier: str,
 ) -> int:
-    if isinstance(value, (bool, np.bool_)):
-        raise _invalid_integer(name, qualifier)
-    if np.ma.isMaskedArray(value):
-        if bool(np.ma.getmaskarray(value).any()):
-            raise _invalid_integer(name, qualifier)
-        value = np.ma.getdata(value)
+    """Return an exact integer scalar satisfying the requested lower bound."""
 
-    array = np.asarray(value)
-    if array.ndim != 0:
-        raise _invalid_integer(name, qualifier)
-    scalar = array.item()
-    if isinstance(scalar, (bool, np.bool_)):
-        raise _invalid_integer(name, qualifier)
-
-    if isinstance(scalar, numbers.Integral):
-        number = int(scalar)
-    elif isinstance(scalar, str):
-        try:
-            number = int(scalar.strip())
-        except (TypeError, ValueError, OverflowError):
-            raise _invalid_integer(name, qualifier) from None
-    else:
-        try:
-            numeric = float(scalar)
-        except (TypeError, ValueError, OverflowError):
-            raise _invalid_integer(name, qualifier) from None
-        if not np.isfinite(numeric) or not numeric.is_integer():
-            raise _invalid_integer(name, qualifier)
-        number = int(numeric)
-
-    if number < minimum:
+    number = optional_int(value)
+    if number is None or number < minimum:
         raise _invalid_integer(name, qualifier)
     return number
 
