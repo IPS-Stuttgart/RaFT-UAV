@@ -14,6 +14,7 @@ name: Multi-UAV LTS cross-fitted edge evidence
       - "scripts/run_multi_uav_lts_improved_evidence.py"
       - "scripts/run_multi_uav_lts_official_baseline.py"
       - "scripts/run_multi_uav_lts_public_evidence.py"
+      - "scripts/run_multi_uav_lts_resumable_cross_fitted_edge_evidence.py"
       - "src/raft_uav/multi_uav_lts/_proposal_ambiguity_beam.py"
       - "src/raft_uav/multi_uav_lts/_proposal_delayed_path_cover.py"
       - "src/raft_uav/multi_uav_lts/_proposal_edge_likelihood.py"
@@ -94,11 +95,13 @@ jobs:
             tests/test_multi_uav_lts_proposal_edge_likelihood.py \
             tests/test_multi_uav_lts_similarity_motion.py
           python -m py_compile \
-            scripts/run_multi_uav_lts_cross_fitted_edge_evidence.py
-          python scripts/run_multi_uav_lts_cross_fitted_edge_evidence.py \
+            scripts/run_multi_uav_lts_cross_fitted_edge_evidence.py \
+            scripts/run_multi_uav_lts_resumable_cross_fitted_edge_evidence.py
+          python scripts/run_multi_uav_lts_resumable_cross_fitted_edge_evidence.py \
             --help >/dev/null
           python -m ruff check \
             scripts/run_multi_uav_lts_cross_fitted_edge_evidence.py \
+            scripts/run_multi_uav_lts_resumable_cross_fitted_edge_evidence.py \
             tests/test_multi_uav_lts_cross_fitted_edge_evidence.py
 
   train-evidence:
@@ -218,7 +221,7 @@ jobs:
             improvement_args+=(--require-improvement)
           fi
           "${VENV_PATH}/bin/python" \
-            scripts/run_multi_uav_lts_cross_fitted_edge_evidence.py \
+            scripts/run_multi_uav_lts_resumable_cross_fitted_edge_evidence.py \
             --inputs-json "${INPUTS_JSON}" \
             --run-dir "${RUN_DIR}" \
             --device "${GPU_DEVICE}" \
@@ -291,6 +294,7 @@ jobs:
             ${{ env.RUN_DIR }}/runtime-install-console.txt
             ${{ env.RUN_DIR }}/probe.json
             ${{ env.RUN_DIR }}/progress.json
+            ${{ env.RUN_DIR }}/resumable-plan.json
             ${{ env.RUN_DIR }}/proposal-source-manifest.json
             ${{ env.RUN_DIR }}/proposal-baseline-console.txt
             ${{ env.RUN_DIR }}/cross-fitted-edge-folds.json
