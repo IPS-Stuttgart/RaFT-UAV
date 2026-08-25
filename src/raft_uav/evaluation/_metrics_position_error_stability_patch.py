@@ -1,4 +1,4 @@
-"""Keep shared position-error norms finite for representable finite deltas."""
+"""Keep shared position-error calculations stable for finite inputs."""
 
 from __future__ import annotations
 
@@ -10,6 +10,64 @@ import numpy as np
 _metrics = import_module("raft_uav.evaluation.metrics")
 _IMPL = getattr(_metrics, "_IMPL", _metrics)
 _PATCH_MARKER = "_stable_position_error_norms_patch_applied"
+
+_ORIGINAL_NEAREST_TIME_INDICES = _metrics.nearest_time_indices
+_ORIGINAL_TRUTH_GRID_WITH_ESTIMATE_SUPPORT = _IMPL._truth_grid_with_estimate_support
+_ORIGINAL_INTERPOLATE_POSITIONS_AT_TIMES = _IMPL.interpolate_positions_at_times
+
+
+def nearest_time_indices(
+    reference_times_s: np.ndarray,
+    query_times_s: np.ndarray,
+) -> np.ndarray:
+    """Return nearest timestamps without exposing benign subtraction overflow."""
+
+    # The inputs are validated as finite by the active metrics wrapper.  A
+    # distance to the farther bracketing sample can nevertheless exceed the
+    # float64 range while the nearer distance remains representable.  Infinity
+    # is the correct comparison sentinel in that case; it must not leak the
+    # caller's global ``np.seterr(over="raise")`` policy as an exception.
+    with np.errstate(over="ignore", invalid="ignore"):
+        return _ORIGINAL_NEAREST_TIME_INDICES(
+            reference_times_s,
+            query_times_s,
+        )
+
+
+def _truth_grid_with_estimate_support(
+    estimate_times: np.ndarray,
+    truth_times: np.ndarray,
+    truth_positions: np.ndarray,
+    *,
+    max_time_delta_s: float | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply truth-grid support gates without overflowing finite time deltas."""
+
+    with np.errstate(over="ignore", invalid="ignore"):
+        return _ORIGINAL_TRUTH_GRID_WITH_ESTIMATE_SUPPORT(
+            estimate_times,
+            truth_times,
+            truth_positions,
+            max_time_delta_s=max_time_delta_s,
+        )
+
+
+def interpolate_positions_at_times(
+    reference_times_s: np.ndarray,
+    reference_positions_m: np.ndarray,
+    query_times_s: np.ndarray,
+    *,
+    max_time_delta_s: float | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Interpolate while treating unrepresentable finite time gaps as infinite."""
+
+    with np.errstate(over="ignore", invalid="ignore"):
+        return _ORIGINAL_INTERPOLATE_POSITIONS_AT_TIMES(
+            reference_times_s,
+            reference_positions_m,
+            query_times_s,
+            max_time_delta_s=max_time_delta_s,
+        )
 
 
 def _stable_euclidean_norms(deltas: np.ndarray) -> np.ndarray:
@@ -142,9 +200,10 @@ def position_errors_at_estimates_m(
         return np.array([], dtype=float)
 
     truth_indices = _IMPL.nearest_time_indices(truth_times, estimate_times)
-    time_deltas = np.abs(truth_times[truth_indices] - estimate_times)
     keep = np.ones(estimate_times.size, dtype=bool)
     if max_time_delta_s is not None:
+        with np.errstate(over="ignore", invalid="ignore"):
+            time_deltas = np.abs(truth_times[truth_indices] - estimate_times)
         keep &= time_deltas <= float(max_time_delta_s)
     if not bool(keep.any()):
         return np.array([], dtype=float)
@@ -209,12 +268,15 @@ def position_errors_at_times_m(
 
 
 def install() -> None:
-    """Install stable norm implementations on the legacy and public modules."""
+    """Install stable timestamp and norm implementations on public modules."""
 
     if getattr(_metrics, _PATCH_MARKER, False):
         return
 
     for module in (_IMPL, _metrics):
+        module.nearest_time_indices = nearest_time_indices
+        module._truth_grid_with_estimate_support = _truth_grid_with_estimate_support
+        module.interpolate_positions_at_times = interpolate_positions_at_times
         module._single_sample_position_errors_m = _single_sample_position_errors_m
         module.position_errors_m = position_errors_m
         module.position_errors_at_estimates_m = position_errors_at_estimates_m
