@@ -11,6 +11,7 @@ provenance_json="$2"
 py="${venv_path}/bin/python"
 work_root="$(cd "$(dirname "${venv_path}")/../.." && pwd)"
 botsort_root="${work_root}/repos/YOLOv12-BoT-SORT-ReID/BoT-SORT"
+pyrecest_commit="6e240d27dccc5d938e7432bf5eb70a281982b9d2"
 
 if [[ ! -x "${py}" ]]; then
   echo "runtime Python is not executable: ${py}" >&2
@@ -22,20 +23,36 @@ if [[ ! -d "${botsort_root}/tracker" ]]; then
 fi
 
 runtime_extras_valid=false
-if BOTSORT_ROOT="${botsort_root}" "${py}" - <<'PY'
+if BOTSORT_ROOT="${botsort_root}" PYRECEST_COMMIT="${pyrecest_commit}" \
+  "${py}" - <<'PY'
 from __future__ import annotations
 
+import json
 import os
 import sys
-from importlib.metadata import version
+from importlib.metadata import distribution, version
 
 import faiss
 import numpy as np
 from cython_bbox import bbox_overlaps
+from pyrecest.evaluation.tracking_metrics import (
+    ClearCounts,
+    IdentityCounts,
+    evaluate_clear,
+    evaluate_identity,
+)
 
 assert version("Cython") == "3.0.11"
 assert version("cython-bbox") == "0.1.5"
 assert version("faiss-cpu") == "1.8.0.post1"
+assert version("pyrecest") == "2.4.3"
+direct_url = json.loads(distribution("pyrecest").read_text("direct_url.json") or "{}")
+actual_commit = direct_url.get("vcs_info", {}).get("commit_id")
+assert actual_commit == os.environ["PYRECEST_COMMIT"]
+assert callable(evaluate_clear)
+assert callable(evaluate_identity)
+assert ClearCounts is not None
+assert IdentityCounts is not None
 boxes = np.ascontiguousarray([[0.0, 0.0, 9.0, 9.0]], dtype=np.float64)
 overlaps = bbox_overlaps(boxes, boxes)
 assert overlaps.shape == (1, 1)
@@ -57,19 +74,28 @@ if [[ "${runtime_extras_valid}" != "true" ]]; then
   "${py}" -m pip install "Cython==3.0.11"
   "${py}" -m pip install --no-build-isolation "cython_bbox==0.1.5"
   "${py}" -m pip install --no-deps "faiss-cpu==1.8.0.post1"
+  "${py}" -m pip install --no-deps --force-reinstall \
+    "git+https://github.com/FlorianPfaff/PyRecEst.git@${pyrecest_commit}"
 fi
 
-BOTSORT_ROOT="${botsort_root}" "${py}" - <<'PY'
+BOTSORT_ROOT="${botsort_root}" PYRECEST_COMMIT="${pyrecest_commit}" \
+  "${py}" - <<'PY'
 from __future__ import annotations
 
 import json
 import os
 import sys
-from importlib.metadata import version
+from importlib.metadata import distribution, version
 
 import faiss
 import numpy as np
 from cython_bbox import bbox_overlaps
+from pyrecest.evaluation.tracking_metrics import (
+    ClearCounts,
+    IdentityCounts,
+    evaluate_clear,
+    evaluate_identity,
+)
 
 boxes = np.ascontiguousarray(
     [
@@ -99,6 +125,20 @@ if indices.tolist() != [[0, 1]] or not np.allclose(distances, [[0.0, 1.0]]):
         f"faiss nearest-neighbour smoke test failed: {distances!r}, {indices!r}"
     )
 
+pyrecest_direct_url = json.loads(
+    distribution("pyrecest").read_text("direct_url.json") or "{}"
+)
+pyrecest_actual_commit = pyrecest_direct_url.get("vcs_info", {}).get("commit_id")
+if pyrecest_actual_commit != os.environ["PYRECEST_COMMIT"]:
+    raise SystemExit(
+        "PyRecEst commit mismatch: "
+        f"{pyrecest_actual_commit!r} != {os.environ['PYRECEST_COMMIT']!r}"
+    )
+if not callable(evaluate_clear) or not callable(evaluate_identity):
+    raise SystemExit("PyRecEst tracking metric exports are unavailable")
+if ClearCounts is None or IdentityCounts is None:
+    raise SystemExit("PyRecEst tracking metric count types are unavailable")
+
 sys.path.insert(0, os.environ["BOTSORT_ROOT"])
 from tracker.mc_bot_sort import BoTSORT  # noqa: F401,E402
 
@@ -108,8 +148,11 @@ print(
             "Cython": version("Cython"),
             "cython-bbox": version("cython-bbox"),
             "faiss-cpu": version("faiss-cpu"),
+            "pyrecest": version("pyrecest"),
+            "pyrecest_commit": pyrecest_actual_commit,
             "bbox_overlaps_smoke_test": "passed",
             "faiss_search_smoke_test": "passed",
+            "pyrecest_tracking_metrics_smoke_test": "passed",
             "botsort_import_smoke_test": "passed",
         },
         indent=2,
@@ -119,10 +162,11 @@ print(
 PY
 
 "${py}" -m pip freeze --all > "$(dirname "${provenance_json}")/pip-freeze.txt"
-"${py}" - "${provenance_json}" <<'PY'
+PYRECEST_COMMIT="${pyrecest_commit}" "${py}" - "${provenance_json}" <<'PY'
 from __future__ import annotations
 
 import json
+import os
 import sys
 from importlib.metadata import version
 from pathlib import Path
@@ -133,8 +177,11 @@ payload["runtime_extras"] = {
     "Cython": version("Cython"),
     "cython-bbox": version("cython-bbox"),
     "faiss-cpu": version("faiss-cpu"),
+    "pyrecest": version("pyrecest"),
+    "pyrecest_commit": os.environ["PYRECEST_COMMIT"],
     "bbox_overlaps_smoke_test": "passed",
     "faiss_search_smoke_test": "passed",
+    "pyrecest_tracking_metrics_smoke_test": "passed",
     "botsort_import_smoke_test": "passed",
 }
 path.write_text(
