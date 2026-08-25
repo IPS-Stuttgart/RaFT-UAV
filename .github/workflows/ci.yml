@@ -7,6 +7,11 @@ name: CI
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -52,6 +57,40 @@ jobs:
             ruff check --select E4,E7,E9,F src tests
           fi
 
-      - name: Run unit tests
+      - name: Run unit tests with diagnostic capture
+        id: pytest
+        shell: bash
         run: |
-          pytest
+          set +e
+          pytest 2>&1 | tee pytest-output.txt
+          status=${PIPESTATUS[0]}
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Publish pytest failure on the pull request
+        if: steps.pytest.outputs.status != '0' && github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        with:
+          script: |
+            const fs = require('fs');
+            const raw = fs.readFileSync('pytest-output.txt', 'utf8');
+            const tail = raw.slice(-60000).replaceAll('```', '` ` `');
+            const body = [
+              `### Pytest failure on Python ${process.env.PYTHON_VERSION}`,
+              '',
+              '```text',
+              tail,
+              '```',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Propagate pytest failure
+        if: steps.pytest.outputs.status != '0'
+        run: exit "${{ steps.pytest.outputs.status }}"
