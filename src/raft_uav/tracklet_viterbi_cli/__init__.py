@@ -22,7 +22,9 @@ _IMPL_PATH = Path(__file__).resolve().parent.parent / "tracklet_viterbi_cli.py"
 with _IMPL_PATH.open("rb") as _source:
     exec(compile(_source.read(), str(_IMPL_PATH), "exec"), globals(), globals())
 
-_ORIGINAL_TRACKLET_RUNNER_FROM_ENVIRONMENT = _tracklet_runner_from_environment
+_ORIGINAL_TRACKLET_RUNNER_FROM_ENVIRONMENT = globals()[
+    "_tracklet_runner_from_environment"
+]
 
 
 def _base_config_from_overlay(config: Any) -> Any:
@@ -34,7 +36,7 @@ def _base_config_from_overlay(config: Any) -> Any:
     so the base runner keeps rejecting malformed explicit configurations.
     """
 
-    if isinstance(config, _TrackletConfigOverlay):
+    if isinstance(config, globals()["_TrackletConfigOverlay"]):
         return config._base
     return config
 
@@ -42,7 +44,7 @@ def _base_config_from_overlay(config: Any) -> Any:
 def _tracklet_runner_from_environment() -> Callable[..., Any]:
     """Return the selected runner with base-only config unwrapping."""
 
-    variant = _tracklet_variant_from_environment()
+    variant = globals()["_tracklet_variant_from_environment"]()
     runner = _ORIGINAL_TRACKLET_RUNNER_FROM_ENVIRONMENT()
     if variant != "base":
         return runner
