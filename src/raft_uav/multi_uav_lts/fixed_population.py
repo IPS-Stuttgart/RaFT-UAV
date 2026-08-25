@@ -131,6 +131,14 @@ def postprocess_fixed_population(
         missing = sorted(requested - {path.stem for path in label_paths})
         if missing:
             raise ValueError(f"unknown first-frame sequences: {', '.join(missing)}")
+    else:
+        label_names = {path.name for path in label_paths}
+        unexpected_predictions = sorted(set(predictions) - label_names)
+        if unexpected_predictions:
+            raise ValueError(
+                "prediction input contains unknown sequence files: "
+                + ", ".join(unexpected_predictions)
+            )
 
     results: list[_SequenceResult] = []
     for label_path in label_paths:
