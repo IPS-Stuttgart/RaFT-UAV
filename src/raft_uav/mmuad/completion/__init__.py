@@ -28,6 +28,9 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_COMPLETE_RESULTS_TO_TRUTH_TIMESTAMPS = (
+    _IMPL.complete_results_to_truth_timestamps
+)
 _ORIGINAL_COMPLETION_SUMMARY = _IMPL.completion_summary
 _ORIGINAL_COMPLETION_RESULT_ROWS = _IMPL._completion_result_rows
 _ORIGINAL_COMPLETION_TEMPLATE_ROWS = _IMPL._completion_template_rows
@@ -62,6 +65,38 @@ def _normalize_max_interpolation_gap_s(value: object) -> float:
     if not np.isfinite(gap) or gap < 0.0:
         raise ValueError(message)
     return gap
+
+
+def _normalize_default_score(value: object) -> float:
+    """Return a finite real scalar fallback score."""
+
+    score = optional_float(value)
+    if score is None:
+        raise ValueError("default_score must be a finite real scalar")
+    return score
+
+
+def complete_results_to_truth_timestamps(
+    results,
+    truth_or_template,
+    *,
+    max_interpolation_gap_s: object = 1.0,
+    extrapolation: str = "hold",
+    default_score: object = 1.0,
+):
+    """Complete trajectories after validating every scalar control."""
+
+    if extrapolation not in {"hold", "nan"}:
+        raise ValueError("extrapolation must be 'hold' or 'nan'")
+    gap = _normalize_max_interpolation_gap_s(max_interpolation_gap_s)
+    score = _normalize_default_score(default_score)
+    return _ORIGINAL_COMPLETE_RESULTS_TO_TRUTH_TIMESTAMPS(
+        results,
+        truth_or_template,
+        max_interpolation_gap_s=gap,
+        extrapolation=extrapolation,
+        default_score=score,
+    )
 
 
 def _completion_sequence_values(value: object) -> pd.Series | None:
@@ -203,6 +238,7 @@ def completion_summary(result, *, requested_count: object | None = None):
 
 
 _IMPL._normalize_max_interpolation_gap_s = _normalize_max_interpolation_gap_s
+_IMPL.complete_results_to_truth_timestamps = complete_results_to_truth_timestamps
 _IMPL._completion_result_rows = _completion_result_rows
 _IMPL._completion_template_rows = _completion_template_rows
 _IMPL.completion_summary = completion_summary
@@ -215,6 +251,10 @@ globals().update(
     }
 )
 globals()["_normalize_max_interpolation_gap_s"] = _normalize_max_interpolation_gap_s
+globals()["_normalize_default_score"] = _normalize_default_score
+globals()["complete_results_to_truth_timestamps"] = (
+    complete_results_to_truth_timestamps
+)
 globals()["_completion_result_rows"] = _completion_result_rows
 globals()["_completion_template_rows"] = _completion_template_rows
 globals()["_normalize_requested_count"] = _normalize_requested_count
