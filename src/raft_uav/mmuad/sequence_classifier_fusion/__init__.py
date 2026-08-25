@@ -30,6 +30,7 @@ FusionModelSpec = _IMPL.FusionModelSpec
 FusionSelectionResult = _IMPL.FusionSelectionResult
 _LEGACY_FUSE_SEQUENCE_PROBABILITIES = _IMPL.fuse_sequence_probabilities
 _LEGACY_SELECT_TRAIN_SAFE_FUSION = _IMPL.select_train_safe_fusion
+_LEGACY_MAIN = _IMPL.main
 
 
 @dataclass(frozen=True)
@@ -231,6 +232,33 @@ def _validate_fused_probability_mass(rows: pd.DataFrame) -> None:
     )
 
 
+class _FeatureCsvPandasProxy:
+    """Delegate pandas while preserving opaque sequence ids on CSV reads."""
+
+    def __init__(self, module: Any) -> None:
+        self._module = module
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._module, name)
+
+    def read_csv(self, *args: Any, **kwargs: Any) -> pd.DataFrame:
+        options = dict(kwargs)
+        if "dtype" not in options and "converters" not in options:
+            options["dtype"] = {"sequence_id": "string"}
+        return self._module.read_csv(*args, **options)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the legacy CLI while preserving opaque feature sequence identifiers."""
+
+    original_pd = _IMPL.pd
+    _IMPL.pd = _FeatureCsvPandasProxy(original_pd)
+    try:
+        return _LEGACY_MAIN(argv)
+    finally:
+        _IMPL.pd = original_pd
+
+
 def fuse_sequence_probabilities(
     image_probabilities: pd.DataFrame,
     nonimage_probabilities: pd.DataFrame,
@@ -311,6 +339,7 @@ _IMPL._validated_probability_frame = _validated_probability_frame
 _IMPL._validate_fused_probability_mass = _validate_fused_probability_mass
 _IMPL.fuse_sequence_probabilities = fuse_sequence_probabilities
 _IMPL.select_train_safe_fusion = select_train_safe_fusion
+_IMPL.main = main
 
 globals().update(
     {
@@ -329,6 +358,7 @@ globals()["_validated_probability_frame"] = _validated_probability_frame
 globals()["_validate_fused_probability_mass"] = _validate_fused_probability_mass
 globals()["fuse_sequence_probabilities"] = fuse_sequence_probabilities
 globals()["select_train_safe_fusion"] = select_train_safe_fusion
+globals()["main"] = main
 
 __doc__ = _IMPL.__doc__
 __all__ = [
