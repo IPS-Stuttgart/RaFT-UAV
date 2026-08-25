@@ -63,10 +63,18 @@ class OnlineTimeOffsetEstimator:
         return self._estimator.std
 
     def _sync_to_pyrecest(self) -> None:
-        self._estimator.offset = float(self.offset_s)
-        self._estimator.variance = float(self.variance_s2)
-        self._estimator.process_variance = float(self.process_variance_s2)
-        self._estimator.min_speed = float(self.min_speed_mps)
+        """Validate mutable wrapper state before updating the upstream estimator."""
+
+        validated = _PyRecEstOnlineTimeOffsetEstimator(
+            offset=self.offset_s,
+            variance=self.variance_s2,
+            process_variance=self.process_variance_s2,
+            min_speed=self.min_speed_mps,
+        )
+        self._estimator.offset = validated.offset
+        self._estimator.variance = validated.variance
+        self._estimator.process_variance = validated.process_variance
+        self._estimator.min_speed = validated.min_speed
 
     def _sync_from_pyrecest(self) -> None:
         self.offset_s = float(self._estimator.offset)
@@ -75,7 +83,12 @@ class OnlineTimeOffsetEstimator:
         self.min_speed_mps = float(self._estimator.min_speed)
 
 
-def apply_time_offset(frame: pd.DataFrame, *, offset_s: float, column: str = "time_s") -> pd.DataFrame:
+def apply_time_offset(
+    frame: pd.DataFrame,
+    *,
+    offset_s: float,
+    column: str = "time_s",
+) -> pd.DataFrame:
     """Return a copy of ``frame`` with ``column`` shifted by ``offset_s``."""
 
     out = frame.copy()
