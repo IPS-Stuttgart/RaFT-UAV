@@ -117,6 +117,37 @@ def _validated_sequence_ids(rows: pd.DataFrame, *, name: str) -> pd.DataFrame:
     return out
 
 
+def _validated_label_map(
+    labels: dict[str, str] | None,
+    *,
+    name: str,
+) -> dict[str, str] | None:
+    """Normalize label-map sequence keys using the table sequence-ID boundary."""
+
+    if labels is None:
+        return None
+    items = list(labels.items())
+    if not items:
+        return {}
+
+    sequence = pd.Series([key for key, _ in items], dtype=object).astype("string").str.strip()
+    missing_sequence = sequence.isna() | sequence.eq("")
+    if bool(missing_sequence.any()):
+        raise ValueError(f"{name} contains missing sequence_id keys")
+
+    sequence = sequence.astype(str)
+    duplicates = sequence.loc[sequence.duplicated(keep=False)].drop_duplicates()
+    if not duplicates.empty:
+        duplicate_text = ", ".join(repr(value) for value in duplicates.iloc[:5])
+        raise ValueError(
+            f"{name} contains duplicate sequence_id keys after normalization: {duplicate_text}"
+        )
+    return {
+        sequence_id: str(value)
+        for sequence_id, (_, value) in zip(sequence.tolist(), items, strict=True)
+    }
+
+
 def _sequence_indexed(rows: pd.DataFrame, name: str) -> pd.DataFrame:
     """Index one per-sequence feature table without silently discarding rows."""
 
@@ -224,7 +255,7 @@ def fuse_sequence_probabilities(
         image_rows,
         nonimage_rows,
         image_weight=_validated_image_weight(image_weight),
-        eval_labels=eval_labels,
+        eval_labels=_validated_label_map(eval_labels, name="eval_labels"),
         class_source=class_source,
     )
     _validate_fused_probability_mass(fused)
@@ -251,13 +282,17 @@ def select_train_safe_fusion(
         _validated_image_weight(value, name=f"image_weights[{index}]")
         for index, value in enumerate(image_weights)
     ]
+    normalized_train_labels = _validated_label_map(train_labels, name="train_labels")
+    normalized_eval_labels = _validated_label_map(eval_labels, name="eval_labels")
+    if normalized_train_labels is None:  # pragma: no cover - signature excludes None
+        raise ValueError("train_labels must be a label mapping")
     return _LEGACY_SELECT_TRAIN_SAFE_FUSION(
         image_train_features=image_train_features,
         nonimage_train_features=nonimage_train_features,
         image_predict_features=image_predict_features,
         nonimage_predict_features=nonimage_predict_features,
-        train_labels=train_labels,
-        eval_labels=eval_labels,
+        train_labels=normalized_train_labels,
+        eval_labels=normalized_eval_labels,
         model_specs=_distinct_model_specs(model_specs),
         image_weights=validated_weights,
         cv_folds=cv_folds,
@@ -270,6 +305,7 @@ _IMPL._SelectionModelSpec = _SelectionModelSpec
 _IMPL._distinct_model_specs = _distinct_model_specs
 _IMPL._validated_image_weight = _validated_image_weight
 _IMPL._validated_sequence_ids = _validated_sequence_ids
+_IMPL._validated_label_map = _validated_label_map
 _IMPL._sequence_indexed = _sequence_indexed
 _IMPL._validated_probability_frame = _validated_probability_frame
 _IMPL._validate_fused_probability_mass = _validate_fused_probability_mass
@@ -287,6 +323,7 @@ globals()["_SelectionModelSpec"] = _SelectionModelSpec
 globals()["_distinct_model_specs"] = _distinct_model_specs
 globals()["_validated_image_weight"] = _validated_image_weight
 globals()["_validated_sequence_ids"] = _validated_sequence_ids
+globals()["_validated_label_map"] = _validated_label_map
 globals()["_sequence_indexed"] = _sequence_indexed
 globals()["_validated_probability_frame"] = _validated_probability_frame
 globals()["_validate_fused_probability_mass"] = _validate_fused_probability_mass
