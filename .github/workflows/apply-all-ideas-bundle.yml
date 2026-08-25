@@ -1,0 +1,117 @@
+---
+name: Apply Multi-UAV LTS all-ideas bundle
+
+"on":
+  push:
+    branches:
+      - agent/lts-all-ideas-evidence
+    paths:
+      - ".github/all-ideas-bundle.part*"
+      - ".github/all-ideas-bundle.sha256"
+      - ".github/workflows/apply-all-ideas-bundle.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-multi-uav-lts-all-ideas-bundle
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: Materialize reviewed source files
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out the campaign branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          clean: true
+
+      - name: Verify and extract the source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/all-ideas-bundle.part* | base64 --decode > "${RUNNER_TEMP}/bundle.tar.gz"
+          expected_sha="$(tr -d '[:space:]' < .github/all-ideas-bundle.sha256)"
+          actual_sha="$(sha256sum "${RUNNER_TEMP}/bundle.tar.gz" | awk '{print $1}')"
+          if [[ "${actual_sha}" != "${expected_sha}" ]]; then
+            echo "bundle SHA-256 mismatch: ${actual_sha} != ${expected_sha}" >&2
+            exit 1
+          fi
+          python - "${RUNNER_TEMP}/bundle.tar.gz" <<'PY'
+          from __future__ import annotations
+
+          import sys
+          import tarfile
+          from pathlib import Path, PurePosixPath
+
+          archive = Path(sys.argv[1])
+          root = Path.cwd().resolve()
+          expected = {
+              ".github/workflows/multi-uav-lts-all-ideas-evidence.yml",
+              "docs/multi_uav_lts_all_ideas_evidence.md",
+              "scripts/install_multi_uav_lts_pyrecest_runtime.sh",
+              "scripts/run_multi_uav_lts_all_ideas_evidence.py",
+              "src/raft_uav/multi_uav_lts/_proposal_boosted_metric_edge_likelihood.py",
+              "src/raft_uav/multi_uav_lts/boosted_metric_proposal_graph_tracker.py",
+              "src/raft_uav/multi_uav_lts/image_stabilized_proposals.py",
+              "src/raft_uav/multi_uav_lts/metric_risk_box_decoder.py",
+              "src/raft_uav/multi_uav_lts/proposal_boosted_metric_edge_model.py",
+              "src/raft_uav/multi_uav_lts/seed_conditioned_identity.py",
+              "src/raft_uav/multi_uav_lts/trajectory_existence_smoother.py",
+              "tests/test_multi_uav_lts_all_ideas_evidence.py",
+              "tests/test_multi_uav_lts_boosted_metric_edge.py",
+              "tests/test_multi_uav_lts_image_stabilized_proposals.py",
+              "tests/test_multi_uav_lts_metric_risk_box_decoder.py",
+              "tests/test_multi_uav_lts_seed_conditioned_identity.py",
+              "tests/test_multi_uav_lts_trajectory_existence_smoother.py",
+          }
+          with tarfile.open(archive, "r:gz") as handle:
+              members = handle.getmembers()
+              names = {member.name for member in members}
+              if names != expected:
+                  raise SystemExit(
+                      "bundle member mismatch: "
+                      f"missing={sorted(expected - names)}, extra={sorted(names - expected)}"
+                  )
+              for member in members:
+                  path = PurePosixPath(member.name)
+                  if (
+                      not member.isfile()
+                      or path.is_absolute()
+                      or ".." in path.parts
+                      or not path.parts
+                  ):
+                      raise SystemExit(f"unsafe bundle member: {member.name!r}")
+                  target = (root / Path(*path.parts)).resolve()
+                  if root not in target.parents:
+                      raise SystemExit(f"bundle member escapes repository: {member.name!r}")
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  source = handle.extractfile(member)
+                  if source is None:
+                      raise SystemExit(f"unable to read bundle member: {member.name!r}")
+                  target.write_bytes(source.read())
+                  if member.mode & 0o111:
+                      target.chmod(0o755)
+          PY
+          rm -f .github/all-ideas-bundle.part* \
+            .github/all-ideas-bundle.sha256 \
+            .github/workflows/apply-all-ideas-bundle.yml
+
+      - name: Commit materialized source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          if git diff --cached --quiet; then
+            echo "The source bundle was already materialized."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Add guarded all-ideas LTS evidence campaign"
+          git push origin HEAD:agent/lts-all-ideas-evidence
