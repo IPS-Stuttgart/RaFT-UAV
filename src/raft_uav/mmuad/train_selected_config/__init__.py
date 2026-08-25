@@ -4,8 +4,9 @@ The maintained implementation lives in the sibling ``train_selected_config.py``
 module. This package preserves the public import path while making alias
 selection skip missing values, ensuring component-level fixed updates cannot be
 overridden by summary CSV aliases, rejecting malformed numeric controls before
-Python or NumPy can silently coerce them, rejecting summary tables without a
-usable finite selection metric, and refusing classifier-fusion weights that the
+Python or NumPy can silently coerce them, rejecting out-of-range unit-interval
+controls before they can be clipped or frozen, rejecting summary tables without
+a usable finite selection metric, and refusing classifier-fusion weights that the
 train-to-validation pipeline does not consume.
 """
 
@@ -138,10 +139,24 @@ def _float(value: Any) -> float:
     return number
 
 
-def validate_train_selected_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Reject train-selected settings that the validation harness ignores."""
+def _unit_interval(value: Any, *, field: str) -> float:
+    """Return one finite real control in the closed unit interval."""
 
-    normalized = _ORIGINAL_VALIDATE_TRAIN_SELECTED_CONFIG(config)
+    number = _float(value)
+    if not 0.0 <= number <= 1.0:
+        raise ValueError(f"{field} must be in [0, 1]; got {value!r}")
+    return number
+
+
+def validate_train_selected_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Reject settings that are invalid or ignored by the validation harness."""
+
+    checked = dict(config)
+    for field in ("source_translation_alpha", "smoothing_blend"):
+        if field in checked:
+            checked[field] = _unit_interval(checked[field], field=field)
+
+    normalized = _ORIGINAL_VALIDATE_TRAIN_SELECTED_CONFIG(checked)
     if normalized["image_nonimage_fusion_weight"] != 0.0:
         raise ValueError(
             "image_nonimage_fusion_weight must be 0.0 because the "
@@ -155,6 +170,7 @@ _IMPL._first_present = _first_present
 _IMPL._best_row = _best_row
 _IMPL._select_component = _select_component
 _IMPL._float = _float
+_IMPL._unit_interval = _unit_interval
 _IMPL.validate_train_selected_config = validate_train_selected_config
 
 globals().update(
@@ -168,6 +184,7 @@ globals()["_first_present"] = _first_present
 globals()["_best_row"] = _best_row
 globals()["_select_component"] = _select_component
 globals()["_float"] = _float
+globals()["_unit_interval"] = _unit_interval
 globals()["validate_train_selected_config"] = validate_train_selected_config
 
 __doc__ = _IMPL.__doc__
