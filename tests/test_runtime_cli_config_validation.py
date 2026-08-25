@@ -22,17 +22,17 @@ def _default_runtime_args() -> argparse.Namespace:
         (
             "tracklet_max_candidates",
             1.5,
-            "tracklet_max_candidates must be an integer",
+            "tracklet_max_candidates must be a positive integer",
         ),
         (
             "tracklet_max_candidate_pool_per_frame",
             True,
-            "tracklet_max_candidate_pool_per_frame must be an integer",
+            "tracklet_max_candidate_pool_per_frame must be a positive integer",
         ),
         (
             "tracklet_max_candidates_per_track_id",
             0.5,
-            "tracklet_max_candidates_per_track_id must be an integer",
+            "tracklet_max_candidates_per_track_id must be a nonnegative integer",
         ),
     ],
 )
@@ -52,7 +52,10 @@ def test_runtime_config_rejects_boolean_float_controls() -> None:
     args = _default_runtime_args()
     args.radar_xy_std_m = True
 
-    with pytest.raises(ValueError, match="radar_xy_std_m must be finite"):
+    with pytest.raises(
+        ValueError,
+        match="radar_xy_std_m must be a finite real scalar",
+    ):
         runtime_config_from_args(args)
 
 
