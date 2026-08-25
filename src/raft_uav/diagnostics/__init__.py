@@ -1,5 +1,6 @@
 """Diagnostic utilities for RaFT-UAV experiments."""
 
+from . import _radar_geometry_stability_patch as _radar_geometry_stability_patch
 from . import _time_offset_duplicate_truth_patch as _time_offset_duplicate_truth_patch
 from . import (
     _time_offset_selection_semantics_patch as _time_offset_selection_semantics_patch,
