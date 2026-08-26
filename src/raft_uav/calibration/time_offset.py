@@ -13,6 +13,7 @@ from pyrecest.calibration.time_offset import (
 )
 
 from raft_uav.evaluation.radar_oracle_diagnostics import (
+    _radar_frame_groups as _oracle_radar_frame_groups,
     best_time_offset,
     interpolate_truth_positions,
     nearest_candidate_oracle,
@@ -130,7 +131,9 @@ def fit_measurement_time_offset(
 
     if dimensions not in (2, 3):
         raise ValueError("dimensions must be 2 or 3")
-    selected_metric = metric or ("mean_2d_error_m" if dimensions == 2 else "mean_3d_error_m")
+    selected_metric = metric or (
+        "mean_2d_error_m" if dimensions == 2 else "mean_3d_error_m"
+    )
     sweep = aggregate_measurement_time_offset_sweep(
         training_pairs,
         offsets_s,
@@ -173,21 +176,20 @@ def aggregate_radar_time_offset_sweep(
         if selected_frames:
             pooled = pd.concat(selected_frames, axis=0, ignore_index=True)
         else:
-            pooled = pd.DataFrame(columns=["oracle_error_3d_m", "oracle_error_2d_m"])
+            pooled = pd.DataFrame(
+                columns=["oracle_error_3d_m", "oracle_error_2d_m"]
+            )
         summary = summarize_oracle_selection(pooled, frame_count=frame_count)
         rows.append({"time_offset_s": offset, **summary})
-    return pd.DataFrame.from_records(rows, columns=["time_offset_s", *PAPER_METRIC_COLUMNS])
+    return pd.DataFrame.from_records(
+        rows, columns=["time_offset_s", *PAPER_METRIC_COLUMNS]
+    )
 
 
 def _radar_frame_count(radar: pd.DataFrame) -> int:
-    """Return the coverage denominator used by the radar oracle sweep."""
+    """Return the physical-frame denominator used by the radar oracle sweep."""
 
-    if radar.empty:
-        return 0
-    group_column = "frame_index" if "frame_index" in radar.columns else "time_s"
-    if group_column not in radar.columns:
-        return 0
-    return int(radar[group_column].dropna().nunique())
+    return len(_oracle_radar_frame_groups(radar))
 
 
 def aggregate_measurement_time_offset_sweep(
@@ -213,13 +215,19 @@ def aggregate_measurement_time_offset_sweep(
             if not required.issubset(measurements.columns):
                 continue
             total_rows += len(measurements)
-            query = pd.to_numeric(measurements["time_s"], errors="coerce").to_numpy(dtype=float)
+            query = pd.to_numeric(
+                measurements["time_s"], errors="coerce"
+            ).to_numpy(dtype=float)
             truth_xyz, valid = interpolate_truth_positions(
                 truth,
                 query + float(offset),
                 max_time_delta_s=max_time_delta_s,
             )
-            meas_cols = ["east_m", "north_m", "up_m"] if dimensions == 3 else ["east_m", "north_m"]
+            meas_cols = (
+                ["east_m", "north_m", "up_m"]
+                if dimensions == 3
+                else ["east_m", "north_m"]
+            )
             meas = measurements[meas_cols].to_numpy(dtype=float)
             finite = valid & np.isfinite(meas).all(axis=1)
             if not finite.any():
@@ -241,7 +249,9 @@ def aggregate_measurement_time_offset_sweep(
         row.update(_stats(e3, "3d"))
         row.update(_stats(e2, "2d"))
         rows.append(row)
-    return pd.DataFrame.from_records(rows, columns=["time_offset_s", *PAPER_METRIC_COLUMNS])
+    return pd.DataFrame.from_records(
+        rows, columns=["time_offset_s", *PAPER_METRIC_COLUMNS]
+    )
 
 
 def _stats(errors: np.ndarray, suffix: str) -> dict[str, float]:

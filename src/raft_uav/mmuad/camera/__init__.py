@@ -1,9 +1,10 @@
 """Compatibility fixes for MMUAD camera loading and model lookup.
 
 The maintained implementation lives in the sibling ``camera.py`` module. This
-package preserves the public import path while validating pinhole intrinsics,
-selecting specific camera models, rejecting ambiguous detection columns, and
-correctly reading gzip-compressed YOLO label exports.
+package preserves the public import path while validating pinhole intrinsics and
+metric depth, selecting specific camera models, rejecting ambiguous calibration
+identities/detection columns, and correctly reading gzip-compressed YOLO label
+exports.
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 
+_ORIGINAL_LOAD_CAMERA_MODELS = _IMPL.load_camera_models
 _ORIGINAL_INTRINSICS_FROM_CAMERA_ENTRY = _IMPL._intrinsics_from_camera_entry
 _ORIGINAL_BACKPROJECT_PIXEL_TO_CAMERA_XYZ = _IMPL.backproject_pixel_to_camera_xyz
 _ORIGINAL_NORMALIZE_CAMERA_DETECTION_COLUMNS = _IMPL._normalize_camera_detection_columns
@@ -65,6 +67,61 @@ def _validated_camera_intrinsics(intrinsics):
     return _IMPL.CameraIntrinsics(**values)
 
 
+def _validated_camera_depth(depth_m):
+    """Return a finite positive scalar metric depth."""
+
+    error = "camera depth must be a finite real scalar > 0"
+    if isinstance(depth_m, (bool, np.bool_)) or np.ma.is_masked(depth_m):
+        raise ValueError(error)
+    try:
+        scalar = np.asarray(depth_m)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error) from exc
+    if scalar.ndim != 0 or np.iscomplexobj(scalar):
+        raise ValueError(error)
+    try:
+        depth = float(scalar.item())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(error) from exc
+    if not np.isfinite(depth) or depth <= 0.0:
+        raise ValueError(error)
+    return depth
+
+
+def _camera_source_key(source):
+    """Normalize a camera source identifier the same way lookup does."""
+
+    return str(source).strip().lower()
+
+
+def _validate_camera_source_keys(sources):
+    """Reject camera identifiers that collapse to the same lookup key."""
+
+    seen: dict[str, str] = {}
+    for source in sources:
+        original = str(source)
+        key = _camera_source_key(source)
+        if key in seen:
+            raise ValueError(
+                "camera calibration contains ambiguous source names after trimming "
+                "whitespace and ignoring case: "
+                f"{seen[key]!r}, {original!r}"
+            )
+        seen[key] = original
+
+
+def load_camera_models(path):
+    """Load camera models after checking normalized source-name uniqueness."""
+
+    payload = _IMPL._load_json_or_yaml(path)
+    cameras = payload.get("cameras", payload)
+    if isinstance(cameras, dict) and not _IMPL._looks_like_single_camera(cameras):
+        _validate_camera_source_keys(
+            source for source, entry in cameras.items() if isinstance(entry, dict)
+        )
+    return _ORIGINAL_LOAD_CAMERA_MODELS(path)
+
+
 def _intrinsics_from_camera_entry(entry):
     """Load and validate one camera's pinhole intrinsics."""
 
@@ -74,12 +131,12 @@ def _intrinsics_from_camera_entry(entry):
 
 
 def backproject_pixel_to_camera_xyz(u_px, v_px, depth_m, intrinsics):
-    """Back-project only after validating the supplied camera intrinsics."""
+    """Back-project only after validating intrinsics and metric depth."""
 
     return _ORIGINAL_BACKPROJECT_PIXEL_TO_CAMERA_XYZ(
         u_px,
         v_px,
-        depth_m,
+        _validated_camera_depth(depth_m),
         _validated_camera_intrinsics(intrinsics),
     )
 
@@ -114,9 +171,10 @@ def _normalize_camera_detection_columns(frame):
 def _model_for_source(models, source):
     """Return the exact or longest one-way source-prefix camera model."""
 
-    source_key = str(source).strip().lower()
+    _validate_camera_source_keys(models)
+    source_key = _camera_source_key(source)
     normalized = [
-        (str(key).strip().lower(), model)
+        (_camera_source_key(key), model)
         for key, model in models.items()
     ]
     for key, model in normalized:
@@ -247,7 +305,9 @@ def _read_yolo_label_table(path: Path):
     )
 
 
+_IMPL.load_camera_models = load_camera_models
 _IMPL._validated_camera_intrinsics = _validated_camera_intrinsics
+_IMPL._validated_camera_depth = _validated_camera_depth
 _IMPL._intrinsics_from_camera_entry = _intrinsics_from_camera_entry
 _IMPL.backproject_pixel_to_camera_xyz = backproject_pixel_to_camera_xyz
 _IMPL._normalize_camera_detection_columns = _normalize_camera_detection_columns
@@ -264,7 +324,9 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+globals()["load_camera_models"] = load_camera_models
 globals()["_validated_camera_intrinsics"] = _validated_camera_intrinsics
+globals()["_validated_camera_depth"] = _validated_camera_depth
 globals()["_intrinsics_from_camera_entry"] = _intrinsics_from_camera_entry
 globals()["backproject_pixel_to_camera_xyz"] = backproject_pixel_to_camera_xyz
 globals()["_normalize_camera_detection_columns"] = _normalize_camera_detection_columns

@@ -67,7 +67,38 @@ def _load_configs(path: Path | None) -> list[PerturbationConfig]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, list):
         raise ValueError("stress configs JSON must be a list")
-    return [PerturbationConfig.from_mapping(item) for item in payload]
+
+    fields = PerturbationConfig.__dataclass_fields__
+    configs: list[PerturbationConfig] = []
+    seen_names: set[str] = set()
+    for index, item in enumerate(payload):
+        if not isinstance(item, dict):
+            raise ValueError(f"stress config at index {index} must be a JSON object")
+        unknown = [key for key in item if key not in fields]
+        if unknown:
+            rendered = ", ".join(repr(key) for key in unknown)
+            raise ValueError(f"stress config at index {index} has unknown field(s): {rendered}")
+        if "name" not in item:
+            raise ValueError(f"stress config at index {index} must define 'name'")
+
+        _validate_config_name(item["name"], index=index)
+        config = PerturbationConfig.from_mapping(item)
+        if config.name in seen_names:
+            raise ValueError(f"duplicate stress config name: {config.name!r}")
+        seen_names.add(config.name)
+        configs.append(config)
+    return configs
+
+
+def _validate_config_name(value: object, *, index: int) -> None:
+    """Reject names that can escape or alias a per-config output directory."""
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"stress config at index {index} name must be a non-empty string")
+    if value in {".", ".."} or "/" in value or "\\" in value or "\x00" in value:
+        raise ValueError(
+            f"stress config at index {index} name must be a single safe directory name"
+        )
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from raft_uav.evaluation.radar_oracle_diagnostics import (  # noqa: E402
+    _radar_frame_groups as _oracle_radar_frame_groups,
     best_time_offset,
     nearest_candidate_oracle,
     summarize_oracle_selection,
@@ -33,7 +34,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("dataset_root", type=Path)
     parser.add_argument("--flight", action="append", default=None)
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/radar_oracle_diagnostics"))
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("outputs/radar_oracle_diagnostics"),
+    )
     parser.add_argument("--offset-min-s", type=float, default=-10.0)
     parser.add_argument("--offset-max-s", type=float, default=10.0)
     parser.add_argument("--offset-step-s", type=float, default=0.25)
@@ -65,12 +70,16 @@ def _run_one(args: argparse.Namespace, flight_name: str) -> dict[str, Any]:
     truth_raw = read_truth(flight.truth_txt)
     truth, projector, truth_origin_time = normalize_truth(truth_raw)
     radar = _inside_truth_window(
-        normalize_radar(read_radar_tracks_json(flight.radar_json), projector, truth_origin_time),
+        normalize_radar(
+            read_radar_tracks_json(flight.radar_json), projector, truth_origin_time
+        ),
         truth,
     )
 
     offsets = _offset_grid(args.offset_min_s, args.offset_max_s, args.offset_step_s)
-    sweep = time_offset_sweep(radar, truth, offsets, max_time_delta_s=args.max_time_delta_s)
+    sweep = time_offset_sweep(
+        radar, truth, offsets, max_time_delta_s=args.max_time_delta_s
+    )
     best_offset = best_time_offset(sweep, metric="mean_3d_error_m")
     nominal_oracle = nearest_candidate_oracle(
         radar, truth, time_offset_s=0.0, max_time_delta_s=args.max_time_delta_s
@@ -83,7 +92,9 @@ def _run_one(args: argparse.Namespace, flight_name: str) -> dict[str, Any]:
     )
 
     frame_count = _radar_frame_count(radar)
-    nominal_summary = summarize_oracle_selection(nominal_oracle, frame_count=frame_count)
+    nominal_summary = summarize_oracle_selection(
+        nominal_oracle, frame_count=frame_count
+    )
     best_summary = summarize_oracle_selection(best_oracle, frame_count=frame_count)
 
     flight_output = args.output_dir / flight.name
@@ -153,14 +164,13 @@ def _inside_truth_window(frame: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFra
         return frame
     truth_min = float(truth["time_s"].min())
     truth_max = float(truth["time_s"].max())
-    return frame.loc[(frame["time_s"] >= truth_min) & (frame["time_s"] <= truth_max)].copy()
+    return frame.loc[
+        (frame["time_s"] >= truth_min) & (frame["time_s"] <= truth_max)
+    ].copy()
 
 
 def _radar_frame_count(radar: pd.DataFrame) -> int:
-    if radar.empty:
-        return 0
-    group_column = "frame_index" if "frame_index" in radar.columns else "time_s"
-    return int(radar[group_column].nunique())
+    return len(_oracle_radar_frame_groups(radar))
 
 
 if __name__ == "__main__":

@@ -1,12 +1,13 @@
-"""Compatibility fixes for candidate-reservoir inputs, flags, and scores.
+"""Compatibility fixes for candidate-reservoir inputs, flags, scores, and scope.
 
 The maintained implementation lives in the sibling ``candidate_reservoir.py``
 module. This package preserves opaque sequence identifiers, normalizes serialized
 ``candidate_reservoir_protected`` values for summary counts without inheriting
 pruning-only binary restrictions, treats malformed ranking metadata as missing so
 corrupted scores cannot dominate reservoir selection, applies the shared
-final-sample convention to duplicate truth timestamps in oracle diagnostics, and
-validates the oracle truth-time matching gate before it can affect diagnostics.
+final-sample convention to duplicate truth timestamps, validates the oracle
+truth-time matching gate, and keeps reservoir selection and oracle diagnostics
+inside the complete physical-flight scope.
 """
 
 from __future__ import annotations
@@ -35,9 +36,13 @@ _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
 _ORIGINAL_MAIN = _IMPL.main
+_ORIGINAL_BUILD_CANDIDATE_RESERVOIR = _IMPL.build_candidate_reservoir
 _ORIGINAL_BUILD_RESERVOIR_SUMMARY = _IMPL.build_reservoir_summary
 _ORIGINAL_BUILD_ORACLE_RECALL_TABLES = _IMPL.build_oracle_recall_tables
+_ORIGINAL_FRAME_COUNTS = _IMPL._frame_counts
 _MAIN_LOCK = threading.RLock()
+_MISSING_SCOPE_TEXT = frozenset({"", "nan", "none", "null", "<na>", "nat"})
+_SCOPE_TOKEN_PREFIX = "__raft_uav_candidate_reservoir_scope__"
 
 
 class _TextPreservingPandasProxy:
@@ -182,8 +187,212 @@ def _candidate_score(
     return primary.fillna(fallback).fillna(0.0).astype(float)
 
 
+def _scope_identifier(value: object, *, column: str) -> str | None:
+    """Return one normalized opaque scope identifier without lossy coercion."""
+
+    if isinstance(value, np.ndarray):
+        if value.ndim != 0:
+            raise ValueError(f"{column} values must be scalar identifiers")
+        value = value.item()
+    if not pd.api.types.is_scalar(value):
+        raise ValueError(f"{column} values must be scalar identifiers")
+    missing = pd.isna(value)
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
+    text = str(value).strip()
+    return None if text.casefold() in _MISSING_SCOPE_TEXT else text
+
+
+def _normalized_scope_values(frame: pd.DataFrame, column: str) -> pd.Series:
+    """Normalize one scope column while preserving missing values explicitly."""
+
+    return pd.Series(
+        [_scope_identifier(value, column=column) for value in frame[column]],
+        index=frame.index,
+        dtype=object,
+    )
+
+
+def _joint_scope_keys(frame: pd.DataFrame) -> list[tuple[str, str | None]]:
+    """Return normalized joint sequence/flight keys for every row."""
+
+    sequence = _normalized_scope_values(frame, "sequence_id")
+    if bool(sequence.isna().any()):
+        raise ValueError("sequence_id values must be complete after normalization")
+    flight = _normalized_scope_values(frame, "flight_id")
+    return [
+        (str(sequence_value), flight_value)
+        for sequence_value, flight_value in zip(sequence, flight, strict=True)
+    ]
+
+
+def _scope_token_maps(
+    key_groups: Sequence[Sequence[tuple[str, str | None]]],
+) -> tuple[dict[tuple[str, str | None], str], dict[str, tuple[str, str | None]]]:
+    """Create deterministic collision-free internal tokens for joint scope keys."""
+
+    unique = {key for keys in key_groups for key in keys}
+    ordered = sorted(unique, key=lambda key: (key[0], key[1] is None, key[1] or ""))
+    key_to_token = {
+        key: f"{_SCOPE_TOKEN_PREFIX}{index:012d}"
+        for index, key in enumerate(ordered)
+    }
+    return key_to_token, {token: key for key, token in key_to_token.items()}
+
+
+def _apply_scope_tokens(
+    frame: pd.DataFrame,
+    keys: Sequence[tuple[str, str | None]],
+    key_to_token: dict[tuple[str, str | None], str],
+) -> pd.DataFrame:
+    """Replace public identifiers with an internal joint-scope sequence token."""
+
+    out = frame.copy()
+    out["sequence_id"] = [key_to_token[key] for key in keys]
+    out["flight_id"] = [pd.NA if key[1] is None else key[1] for key in keys]
+    return out
+
+
+def _restore_scope_tokens(
+    frame: pd.DataFrame,
+    token_to_key: dict[str, tuple[str, str | None]],
+) -> pd.DataFrame:
+    """Restore public sequence and flight identifiers on a result table."""
+
+    out = pd.DataFrame(frame).copy()
+    if out.empty or "sequence_id" not in out.columns:
+        return out
+    tokens = out["sequence_id"].astype(str)
+    unknown = sorted(set(tokens).difference(token_to_key))
+    if unknown:
+        raise RuntimeError(f"candidate reservoir returned unknown internal scopes: {unknown}")
+    keys = [token_to_key[token] for token in tokens]
+    out["sequence_id"] = [key[0] for key in keys]
+    flight = pd.Series(
+        [pd.NA if key[1] is None else key[1] for key in keys],
+        index=out.index,
+        dtype=object,
+    )
+    if "flight_id" in out.columns:
+        out["flight_id"] = flight
+    else:
+        location = out.columns.get_loc("sequence_id") + 1
+        out.insert(location, "flight_id", flight)
+    return out
+
+
+def _flight_metadata_state(frame: pd.DataFrame) -> tuple[str, pd.Series | None]:
+    """Classify flight metadata as absent, complete, or partially populated."""
+
+    if "flight_id" not in frame.columns:
+        return "absent", None
+    values = _normalized_scope_values(frame, "flight_id")
+    populated = values.notna()
+    if not bool(populated.any()):
+        return "absent", values
+    if bool(populated.all()):
+        return "complete", values
+    return "partial", values
+
+
+def _sequence_to_flight(
+    frame: pd.DataFrame,
+    flight_values: pd.Series,
+) -> dict[str, str]:
+    """Return one flight per normalized sequence or reject an ambiguous pool."""
+
+    sequence = _normalized_scope_values(frame, "sequence_id")
+    mapping: dict[str, str] = {}
+    for sequence_value, flight_value in zip(sequence, flight_values, strict=True):
+        assert sequence_value is not None
+        assert flight_value is not None
+        previous = mapping.setdefault(sequence_value, flight_value)
+        if previous != flight_value:
+            raise ValueError(
+                "one-sided flight_id metadata is ambiguous because one sequence "
+                "contains multiple physical flights"
+            )
+    return mapping
+
+
+def _attach_sequence_flights(
+    frame: pd.DataFrame,
+    sequence_to_flight: dict[str, str],
+) -> pd.DataFrame:
+    """Attach an unambiguous one-sided flight identifier to result rows."""
+
+    out = pd.DataFrame(frame).copy()
+    if out.empty or "sequence_id" not in out.columns:
+        return out
+    sequence = out["sequence_id"].map(
+        lambda value: _scope_identifier(value, column="sequence_id")
+    )
+    flight = sequence.map(sequence_to_flight)
+    if "flight_id" in out.columns:
+        out["flight_id"] = flight
+    else:
+        location = out.columns.get_loc("sequence_id") + 1
+        out.insert(location, "flight_id", flight)
+    return out
+
+
+def build_candidate_reservoir(
+    candidates: pd.DataFrame,
+    *,
+    config: _IMPL.ReservoirConfig | None = None,
+    top_per_source: int | None = None,
+    top_per_branch: int | None = None,
+    global_top_n: int | None = None,
+    max_candidates_per_frame: int | None = None,
+    score_columns: Sequence[str] | None = None,
+    score_floor_quantile: float | None = None,
+) -> pd.DataFrame:
+    """Build each bounded reservoir independently inside its physical flight."""
+
+    rows = _IMPL.normalize_candidate_columns(pd.DataFrame(candidates).copy())
+    state, _ = _flight_metadata_state(rows)
+    if rows.empty or state == "absent":
+        return _ORIGINAL_BUILD_CANDIDATE_RESERVOIR(
+            rows,
+            config=config,
+            top_per_source=top_per_source,
+            top_per_branch=top_per_branch,
+            global_top_n=global_top_n,
+            max_candidates_per_frame=max_candidates_per_frame,
+            score_columns=score_columns,
+            score_floor_quantile=score_floor_quantile,
+        )
+
+    keys = _joint_scope_keys(rows)
+    key_to_token, token_to_key = _scope_token_maps((keys,))
+    scoped = _apply_scope_tokens(rows, keys, key_to_token)
+    result = _ORIGINAL_BUILD_CANDIDATE_RESERVOIR(
+        scoped,
+        config=config,
+        top_per_source=top_per_source,
+        top_per_branch=top_per_branch,
+        global_top_n=global_top_n,
+        max_candidates_per_frame=max_candidates_per_frame,
+        score_columns=score_columns,
+        score_floor_quantile=score_floor_quantile,
+    )
+    return _restore_scope_tokens(result, token_to_key)
+
+
+def _frame_counts(rows: pd.DataFrame) -> pd.Series:
+    """Count physical frames without merging reused local flight timestamps."""
+
+    frame = _IMPL.normalize_candidate_columns(pd.DataFrame(rows).copy())
+    state, _ = _flight_metadata_state(frame)
+    if frame.empty or state == "absent":
+        return _ORIGINAL_FRAME_COUNTS(frame)
+    keys = _joint_scope_keys(frame)
+    key_to_token, _ = _scope_token_maps((keys,))
+    return _ORIGINAL_FRAME_COUNTS(_apply_scope_tokens(frame, keys, key_to_token))
+
+
 def _truth_with_final_duplicate_samples(truth: pd.DataFrame) -> pd.DataFrame:
-    """Keep the final input row at each normalized sequence/timestamp pair."""
+    """Keep the final input row at each normalized physical-flight timestamp."""
 
     rows = pd.DataFrame(truth).copy()
     order_column = "_candidate_reservoir_truth_row_order"
@@ -195,15 +404,22 @@ def _truth_with_final_duplicate_samples(truth: pd.DataFrame) -> pd.DataFrame:
     if normalized.empty:
         return normalized.drop(columns=[order_column], errors="ignore")
 
-    normalized = normalized.sort_values(
-        ["sequence_id", "time_s", order_column],
-        kind="mergesort",
-    ).drop_duplicates(
-        ["sequence_id", "time_s"],
+    scope_columns = ["sequence_id"]
+    state, flight_values = _flight_metadata_state(normalized)
+    if state == "partial":
+        raise ValueError("truth flight_id metadata must be complete or absent")
+    if state == "complete":
+        assert flight_values is not None
+        normalized["flight_id"] = flight_values
+        scope_columns.append("flight_id")
+    sort_columns = [*scope_columns, "time_s", order_column]
+    duplicate_columns = [*scope_columns, "time_s"]
+    normalized = normalized.sort_values(sort_columns, kind="mergesort").drop_duplicates(
+        duplicate_columns,
         keep="last",
     )
     return (
-        normalized.sort_values(["sequence_id", "time_s"], kind="mergesort")
+        normalized.sort_values([*scope_columns, "time_s"], kind="mergesort")
         .drop(columns=[order_column], errors="ignore")
         .reset_index(drop=True)
     )
@@ -227,23 +443,54 @@ def build_oracle_recall_tables(
     top_k_values: tuple[int, ...] = _IMPL._DEFAULT_TOP_K,
     max_truth_time_delta_s: float = 0.5,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Rank candidates against the authoritative final truth sample."""
+    """Rank candidates against truth only inside the same physical flight."""
 
     max_delta_s = _validated_max_truth_time_delta_s(max_truth_time_delta_s)
-    rows = pd.DataFrame(reservoir).copy()
+    rows = _IMPL.normalize_candidate_columns(pd.DataFrame(reservoir).copy())
+    truth_rows = _IMPL.normalize_truth_columns(pd.DataFrame(truth).copy())
     if "candidate_reservoir_score" in rows.columns:
         rows["candidate_reservoir_score"] = _finite_numeric_column(
             rows,
             "candidate_reservoir_score",
             default=np.nan,
         ).fillna(float("-inf"))
-    truth_rows = _truth_with_final_duplicate_samples(truth)
-    return _ORIGINAL_BUILD_ORACLE_RECALL_TABLES(
+
+    row_state, row_flights = _flight_metadata_state(rows)
+    truth_state, truth_flights = _flight_metadata_state(truth_rows)
+    if "partial" in {row_state, truth_state}:
+        raise ValueError(
+            "reservoir and truth flight_id metadata must each be complete or absent"
+        )
+
+    token_to_key: dict[str, tuple[str, str | None]] = {}
+    sequence_to_flight: dict[str, str] = {}
+    if row_state == "complete" and truth_state == "complete":
+        row_keys = _joint_scope_keys(rows)
+        truth_keys = _joint_scope_keys(truth_rows)
+        key_to_token, token_to_key = _scope_token_maps((row_keys, truth_keys))
+        rows = _apply_scope_tokens(rows, row_keys, key_to_token)
+        truth_rows = _apply_scope_tokens(truth_rows, truth_keys, key_to_token)
+    elif row_state == "complete":
+        assert row_flights is not None
+        sequence_to_flight = _sequence_to_flight(rows, row_flights)
+    elif truth_state == "complete":
+        assert truth_flights is not None
+        sequence_to_flight = _sequence_to_flight(truth_rows, truth_flights)
+
+    truth_rows = _truth_with_final_duplicate_samples(truth_rows)
+    frame_rows, pooled, by_sequence = _ORIGINAL_BUILD_ORACLE_RECALL_TABLES(
         rows,
         truth_rows,
         top_k_values=top_k_values,
         max_truth_time_delta_s=max_delta_s,
     )
+    if token_to_key:
+        frame_rows = _restore_scope_tokens(frame_rows, token_to_key)
+        by_sequence = _restore_scope_tokens(by_sequence, token_to_key)
+    elif sequence_to_flight:
+        frame_rows = _attach_sequence_flights(frame_rows, sequence_to_flight)
+        by_sequence = _attach_sequence_flights(by_sequence, sequence_to_flight)
+    return frame_rows, pooled, by_sequence
 
 
 def build_reservoir_summary(
@@ -279,6 +526,17 @@ _IMPL._boolean_series = _boolean_series
 _IMPL._optional_candidate_score = _optional_candidate_score
 _IMPL._numeric_column = _finite_numeric_column
 _IMPL._candidate_score = _candidate_score
+_IMPL._scope_identifier = _scope_identifier
+_IMPL._normalized_scope_values = _normalized_scope_values
+_IMPL._joint_scope_keys = _joint_scope_keys
+_IMPL._scope_token_maps = _scope_token_maps
+_IMPL._apply_scope_tokens = _apply_scope_tokens
+_IMPL._restore_scope_tokens = _restore_scope_tokens
+_IMPL._flight_metadata_state = _flight_metadata_state
+_IMPL._sequence_to_flight = _sequence_to_flight
+_IMPL._attach_sequence_flights = _attach_sequence_flights
+_IMPL.build_candidate_reservoir = build_candidate_reservoir
+_IMPL._frame_counts = _frame_counts
 _IMPL._truth_with_final_duplicate_samples = _truth_with_final_duplicate_samples
 _IMPL._validated_max_truth_time_delta_s = _validated_max_truth_time_delta_s
 _IMPL.build_oracle_recall_tables = build_oracle_recall_tables
@@ -299,6 +557,17 @@ globals()["_boolean_series"] = _boolean_series
 globals()["_optional_candidate_score"] = _optional_candidate_score
 globals()["_finite_numeric_column"] = _finite_numeric_column
 globals()["_candidate_score"] = _candidate_score
+globals()["_scope_identifier"] = _scope_identifier
+globals()["_normalized_scope_values"] = _normalized_scope_values
+globals()["_joint_scope_keys"] = _joint_scope_keys
+globals()["_scope_token_maps"] = _scope_token_maps
+globals()["_apply_scope_tokens"] = _apply_scope_tokens
+globals()["_restore_scope_tokens"] = _restore_scope_tokens
+globals()["_flight_metadata_state"] = _flight_metadata_state
+globals()["_sequence_to_flight"] = _sequence_to_flight
+globals()["_attach_sequence_flights"] = _attach_sequence_flights
+globals()["build_candidate_reservoir"] = build_candidate_reservoir
+globals()["_frame_counts"] = _frame_counts
 globals()["_truth_with_final_duplicate_samples"] = _truth_with_final_duplicate_samples
 globals()["_validated_max_truth_time_delta_s"] = _validated_max_truth_time_delta_s
 globals()["build_oracle_recall_tables"] = build_oracle_recall_tables

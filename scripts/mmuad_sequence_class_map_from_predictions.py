@@ -68,6 +68,7 @@ def build_sequence_class_map_from_predictions(
     normalized_policy = _normalize_policy(policy)
     rows = _normalize_prediction_rows(
         predictions,
+        policy=normalized_policy,
         allow_non_track5_class_ids=allow_non_track5_class_ids,
     )
     records: list[dict[str, Any]] = []
@@ -212,6 +213,7 @@ def _read_generic_prediction_csv(path: Path) -> pd.DataFrame:
 def _normalize_prediction_rows(
     predictions: pd.DataFrame,
     *,
+    policy: ClassMapPolicy,
     allow_non_track5_class_ids: bool,
 ) -> pd.DataFrame:
     rows = pd.DataFrame(predictions).copy()
@@ -221,15 +223,21 @@ def _normalize_prediction_rows(
         raise ValueError("predictions must contain sequence and classification columns")
     confidence_column = _first_present(rows, CONFIDENCE_ALIASES)
     time_column = _first_present(rows, TIME_ALIASES)
+    if policy == "last" and time_column is None:
+        raise ValueError("policy='last' requires a timestamp column")
     confidence = (
         pd.to_numeric(rows[confidence_column], errors="coerce")
         if confidence_column is not None
         else pd.Series(np.ones(len(rows), dtype=float), index=rows.index)
     )
     time_s = (
-        pd.to_numeric(rows[time_column], errors="coerce")
-        if time_column is not None
-        else pd.Series(np.nan, index=rows.index, dtype=float)
+        _validated_last_policy_timestamps(rows[time_column])
+        if policy == "last"
+        else (
+            pd.to_numeric(rows[time_column], errors="coerce")
+            if time_column is not None
+            else pd.Series(np.nan, index=rows.index, dtype=float)
+        )
     )
     out = pd.DataFrame(
         {
@@ -245,6 +253,40 @@ def _normalize_prediction_rows(
     valid = out["sequence_id"].ne("")
     valid &= out["sequence_id"].str.lower().ne("nan")
     return out.loc[valid].reset_index(drop=True)
+
+
+def _validated_last_policy_timestamps(values: pd.Series) -> pd.Series:
+    """Return finite real timestamps required by the latest-row policy."""
+
+    raw = pd.Series(values, copy=False)
+    invalid_scalar = raw.map(_invalid_real_scalar)
+    safe = raw.astype(object).where(~invalid_scalar, np.nan)
+    numeric = pd.to_numeric(safe, errors="coerce")
+    numeric_values = numeric.to_numpy(dtype=float)
+    invalid = invalid_scalar.to_numpy(dtype=bool) | ~np.isfinite(numeric_values)
+    if bool(invalid.any()):
+        invalid_positions = np.flatnonzero(invalid)
+        invalid_rows = raw.index[invalid_positions].tolist()
+        invalid_values = raw.iloc[invalid_positions].tolist()
+        raise ValueError(
+            "policy='last' requires finite real timestamps; invalid rows "
+            f"{invalid_rows[:5]}: {invalid_values[:5]}"
+        )
+    return pd.Series(numeric_values, index=raw.index, dtype=float)
+
+
+def _invalid_real_scalar(value: Any) -> bool:
+    """Reject Boolean, complex, masked, and non-scalar timestamp cells."""
+
+    if (
+        isinstance(value, (bool, np.bool_, complex, np.complexfloating))
+        or np.ma.is_masked(value)
+    ):
+        return True
+    try:
+        return np.asarray(value).ndim != 0
+    except (TypeError, ValueError):
+        return True
 
 
 def _select_sequence_class(group: pd.DataFrame, *, policy: ClassMapPolicy) -> pd.Series:

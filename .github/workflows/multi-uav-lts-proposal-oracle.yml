@@ -109,7 +109,7 @@ env:
 jobs:
   proposal-oracle:
     name: Export and audit LTS proposals
-    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    runs-on: [self-hosted, Linux, X64, nvidia-smi, data-multi-uav-lts-v1]
     timeout-minutes: 720
 
     steps:

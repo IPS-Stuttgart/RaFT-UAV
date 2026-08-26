@@ -1,9 +1,10 @@
 """Block diagnostics for MMUAD candidate-oracle failures.
 
-The candidate-oracle attribution table is frame-level.  This module converts it
+The candidate-oracle attribution table is frame-level. This module converts it
 into contiguous time blocks so we can distinguish persistent missing-candidate
 intervals from intervals where a good candidate exists but is buried below the
-reservoir top-K.  The output is meant to guide the next reservoir/ranker/MAP
+reservoir top-K. Blocks are scoped by physical flight when ``flight_id`` metadata
+is available. The output is meant to guide the next reservoir/ranker/MAP
 experiments without running an expensive tracker.
 """
 
@@ -16,6 +17,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import is_scalar
 
 
 _TRUE_BOOL_TEXT = frozenset({"true", "t", "yes", "y", "1", "1.0"})
@@ -35,6 +37,7 @@ _FALSE_BOOL_TEXT = frozenset(
         "nat",
     }
 )
+_MISSING_SCOPE_TEXT = frozenset({"", "nan", "none", "null", "<na>", "nat"})
 
 
 def build_candidate_oracle_block_tables(
@@ -49,13 +52,14 @@ def build_candidate_oracle_block_tables(
     ``frame_rows`` should be the output of
     ``raft-uav-mmuad-candidate-oracle-attribution`` or contain compatible
     columns: ``sequence_id``, ``time_s``, ``oracle_all_3d_m``,
-    ``oracle_all_rank``, and optionally ``oracle_in_top{K}``.
+    ``oracle_all_rank``, and optionally ``flight_id`` and ``oracle_in_top{K}``.
     """
 
     rows = pd.DataFrame(frame_rows).copy()
     if rows.empty:
         return pd.DataFrame(), pd.DataFrame()
     _require_columns(rows, ["sequence_id", "time_s", "oracle_all_3d_m"])
+    scope_columns = _physical_scope_columns(rows)
     top_k_column = f"oracle_in_top{int(top_k)}"
     if top_k_column not in rows.columns:
         rows[top_k_column] = pd.to_numeric(
@@ -66,8 +70,9 @@ def build_candidate_oracle_block_tables(
     rows["oracle_all_3d_m"] = pd.to_numeric(rows["oracle_all_3d_m"], errors="coerce")
     rows["oracle_all_rank"] = pd.to_numeric(rows.get("oracle_all_rank", np.nan), errors="coerce")
     rows[top_k_column] = _to_bool_series(rows[top_k_column])
-    rows = rows.dropna(subset=["sequence_id", "time_s"]).sort_values(
-        ["sequence_id", "time_s"],
+    rows = rows.dropna(subset=[*scope_columns, "time_s"]).sort_values(
+        [*scope_columns, "time_s"],
+        kind="mergesort",
     )
     rows["oracle_failure_mode"] = _failure_mode(
         rows,
@@ -76,7 +81,11 @@ def build_candidate_oracle_block_tables(
     )
 
     block_records: list[dict[str, Any]] = []
-    for sequence_id, group in rows.groupby("sequence_id", sort=True):
+    grouping = scope_columns[0] if len(scope_columns) == 1 else scope_columns
+    for scope_key, group in rows.groupby(grouping, sort=True):
+        scope_values = scope_key if isinstance(scope_key, tuple) else (scope_key,)
+        sequence_id = str(scope_values[0])
+        flight_id = str(scope_values[1]) if len(scope_values) > 1 else None
         current: list[dict[str, Any]] = []
         previous_time: float | None = None
         previous_mode: str | None = None
@@ -93,7 +102,8 @@ def build_candidate_oracle_block_tables(
                 block_records.append(
                     _summarize_block(
                         current,
-                        sequence_id=str(sequence_id),
+                        sequence_id=sequence_id,
+                        flight_id=flight_id,
                         block_index=block_index,
                         top_k=top_k,
                     ),
@@ -107,7 +117,8 @@ def build_candidate_oracle_block_tables(
             block_records.append(
                 _summarize_block(
                     current,
-                    sequence_id=str(sequence_id),
+                    sequence_id=sequence_id,
+                    flight_id=flight_id,
                     block_index=block_index,
                     top_k=top_k,
                 ),
@@ -185,6 +196,36 @@ def _require_columns(rows: pd.DataFrame, columns: list[str]) -> None:
         raise ValueError(f"frame rows missing required columns: {missing}")
 
 
+def _canonical_scope_value(value: object) -> str | None:
+    """Return a normalized physical-flight identifier or ``None`` if missing."""
+
+    if not is_scalar(value):
+        raise ValueError("flight_id values must be scalar")
+    if value is None or bool(pd.isna(value)):
+        return None
+    text = str(value).strip()
+    return None if text.casefold() in _MISSING_SCOPE_TEXT else text
+
+
+def _physical_scope_columns(rows: pd.DataFrame) -> list[str]:
+    """Normalize meaningful flight metadata and return physical grouping columns."""
+
+    if "flight_id" not in rows.columns:
+        return ["sequence_id"]
+    try:
+        flight_ids = rows["flight_id"].map(_canonical_scope_value).astype(object)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("frame rows require scalar flight_id values") from exc
+    if not bool(flight_ids.notna().any()):
+        return ["sequence_id"]
+    if bool(flight_ids.isna().any()):
+        raise ValueError(
+            "frame rows require flight_id on every row when flight metadata is provided"
+        )
+    rows["flight_id"] = flight_ids
+    return ["sequence_id", "flight_id"]
+
+
 def _to_bool_series(values: pd.Series) -> pd.Series:
     input_name = getattr(values, "name", None)
     series = pd.Series(values, copy=False)
@@ -233,15 +274,19 @@ def _summarize_block(
     records: list[dict[str, Any]],
     *,
     sequence_id: str,
+    flight_id: str | None,
     block_index: int,
     top_k: int,
 ) -> dict[str, Any]:
     frame = pd.DataFrame.from_records(records)
     errors = pd.to_numeric(frame["oracle_all_3d_m"], errors="coerce").dropna()
-    ranks = pd.to_numeric(frame.get("oracle_all_rank", pd.Series(dtype=float)), errors="coerce").dropna()
+    ranks = pd.to_numeric(
+        frame.get("oracle_all_rank", pd.Series(dtype=float)),
+        errors="coerce",
+    ).dropna()
     start_time_s = float(frame["time_s"].min())
     end_time_s = float(frame["time_s"].max())
-    return {
+    record: dict[str, Any] = {
         "sequence_id": sequence_id,
         "block_id": int(block_index),
         "oracle_failure_mode": str(frame["oracle_failure_mode"].iloc[0]),
@@ -262,25 +307,70 @@ def _summarize_block(
         "dominant_oracle_branch": _mode(frame.get("oracle_all_candidate_branch")),
         "dominant_oracle_source": _mode(frame.get("oracle_all_candidate_source")),
     }
+    if flight_id is not None:
+        record["flight_id"] = flight_id
+    return record
 
 
 def _summary_table(blocks: pd.DataFrame) -> pd.DataFrame:
     if blocks.empty:
         return pd.DataFrame()
+    has_flight = "flight_id" in blocks.columns
+    group_columns = ["sequence_id"]
+    if has_flight:
+        group_columns.append("flight_id")
+    group_columns.append("oracle_failure_mode")
+
     records: list[dict[str, Any]] = []
-    for (sequence_id, mode), group in blocks.groupby(["sequence_id", "oracle_failure_mode"], sort=True):
-        records.append(_summarize_block_group(group, sequence_id=str(sequence_id), mode=str(mode)))
-    records.append(_summarize_block_group(blocks, sequence_id="__pooled__", mode="__all__"))
+    for group_key, group in blocks.groupby(group_columns, sort=True):
+        values = group_key if isinstance(group_key, tuple) else (group_key,)
+        sequence_id = str(values[0])
+        if has_flight:
+            flight_id = str(values[1])
+            mode = str(values[2])
+        else:
+            flight_id = None
+            mode = str(values[1])
+        records.append(
+            _summarize_block_group(
+                group,
+                sequence_id=sequence_id,
+                flight_id=flight_id,
+                mode=mode,
+            )
+        )
+    pooled_flight = "__pooled__" if has_flight else None
+    records.append(
+        _summarize_block_group(
+            blocks,
+            sequence_id="__pooled__",
+            flight_id=pooled_flight,
+            mode="__all__",
+        )
+    )
     for mode, group in blocks.groupby("oracle_failure_mode", sort=True):
-        records.append(_summarize_block_group(group, sequence_id="__pooled__", mode=str(mode)))
+        records.append(
+            _summarize_block_group(
+                group,
+                sequence_id="__pooled__",
+                flight_id=pooled_flight,
+                mode=str(mode),
+            )
+        )
     return pd.DataFrame.from_records(records)
 
 
-def _summarize_block_group(group: pd.DataFrame, *, sequence_id: str, mode: str) -> dict[str, Any]:
+def _summarize_block_group(
+    group: pd.DataFrame,
+    *,
+    sequence_id: str,
+    flight_id: str | None,
+    mode: str,
+) -> dict[str, Any]:
     durations = pd.to_numeric(group["duration_s"], errors="coerce").dropna()
     frames = pd.to_numeric(group["frame_count"], errors="coerce").dropna()
     errors = pd.to_numeric(group["oracle_all_3d_m_max"], errors="coerce").dropna()
-    return {
+    record: dict[str, Any] = {
         "sequence_id": sequence_id,
         "oracle_failure_mode": mode,
         "block_count": int(len(group)),
@@ -290,6 +380,9 @@ def _summarize_block_group(group: pd.DataFrame, *, sequence_id: str, mode: str) 
         "block_max_error_m_max": _max(errors),
         "block_max_error_m_p95": _quantile(errors, 0.95),
     }
+    if flight_id is not None:
+        record["flight_id"] = flight_id
+    return record
 
 
 def _numeric_values(values: Any) -> pd.Series:

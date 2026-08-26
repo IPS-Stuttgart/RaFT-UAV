@@ -29,7 +29,7 @@ def test_rejects_nonfinite_coefficients():
 
 
 def test_rejects_reversed_std_bounds():
-    with pytest.raises(ValueError, match="greater than or equal"):
+    with pytest.raises(ValueError, match="min_std_m must not exceed max_std_m"):
         make_head(min_std_m=5.0, max_std_m=4.0)
 
 

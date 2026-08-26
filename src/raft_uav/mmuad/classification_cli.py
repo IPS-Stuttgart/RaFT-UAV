@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from raft_uav.mmuad.classification import (
@@ -12,6 +13,7 @@ from raft_uav.mmuad.classification import (
     SEQUENCE_CLASSIFIER_LOSO_PREDICTION_COLUMNS,
     SEQUENCE_CLASSIFIER_METHODS,
     _normalize_sequence_classifier_method,
+    _standardized_feature_matrices,
     apply_sequence_loso_labels_to_submission,
     build_sequence_classifier_loso_predictions,
     classify_sequences_from_features,
@@ -172,9 +174,7 @@ def _run_loso_eval(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
     predictions_csv = args.loso_predictions_csv
     if predictions_csv is None:
         output_dir = (
-            args.submission_out.parent
-            if args.submission_out is not None
-            else Path.cwd()
+            args.submission_out.parent if args.submission_out is not None else Path.cwd()
         )
         predictions_csv = output_dir / "mmuad_sequence_classifier_loso_predictions.csv"
     write_sequence_classifier_loso_predictions(predictions, predictions_csv)
@@ -237,7 +237,9 @@ def _build_k_nearest_neighbor_loso_predictions(
 
     records: list[dict[str, object]] = []
     for heldout_sequence in heldout_sequences:
-        train_sequences = [sequence for sequence in heldout_sequences if sequence != heldout_sequence]
+        train_sequences = [
+            sequence for sequence in heldout_sequences if sequence != heldout_sequence
+        ]
         fold_train_features = feature_rows.loc[
             feature_rows["sequence_id"].isin(train_sequences)
         ].reset_index(drop=True)
@@ -255,6 +257,15 @@ def _build_k_nearest_neighbor_loso_predictions(
         prediction = fold_result.predictions.iloc[0]
         truth_class = str(label_map[heldout_sequence])
         predicted_class = str(prediction["predicted_class"])
+        feature_columns = [
+            str(value) for value in fold_result.metrics.get("feature_columns", [])
+        ]
+        probabilities = _nearest_neighbor_vote_probabilities(
+            fold_result.train_features,
+            fold_result.predict_features,
+            feature_columns,
+            k=k,
+        )
         record: dict[str, object] = {
             "sequence": heldout_sequence,
             "heldout_sequence": heldout_sequence,
@@ -263,16 +274,44 @@ def _build_k_nearest_neighbor_loso_predictions(
             "predicted_class": predicted_class,
             "correct": bool(predicted_class == truth_class),
             "train_sequences": ";".join(train_sequences),
-            "feature_columns": ";".join(
-                str(value) for value in fold_result.metrics.get("feature_columns", [])
-            ),
+            "feature_columns": ";".join(feature_columns),
         }
         for class_label in OFFICIAL_SEQUENCE_CLASS_LABELS:
             column = f"predicted_probability_{class_label}"
-            record[column] = float(predicted_class == str(class_label))
+            record[column] = float(probabilities.get(str(class_label), 0.0))
         records.append(record)
 
     return pd.DataFrame.from_records(records, columns=SEQUENCE_CLASSIFIER_LOSO_PREDICTION_COLUMNS)
+
+
+def _nearest_neighbor_vote_probabilities(
+    train_features: pd.DataFrame,
+    predict_features: pd.DataFrame,
+    feature_columns: list[str],
+    *,
+    k: int,
+) -> dict[str, float]:
+    """Return the normalized inverse-distance vote used by the k-NN classifier."""
+
+    train_matrix, predict_matrix = _standardized_feature_matrices(
+        train_features,
+        predict_features,
+        feature_columns,
+    )
+    if len(predict_matrix) == 0:
+        raise ValueError("LOSO nearest-neighbor fold has no held-out feature row")
+    distances = np.linalg.norm(train_matrix - predict_matrix[0], axis=1)
+    nearest = np.argsort(distances)[: min(max(1, int(k)), len(distances))]
+    labels = train_features["uav_type"].astype(str).to_numpy()
+    weights: dict[str, float] = {}
+    for index in nearest:
+        label = str(labels[int(index)])
+        weight = 1.0 / max(float(distances[int(index)]), 1.0e-9)
+        weights[label] = weights.get(label, 0.0) + weight
+    total = float(sum(weights.values()))
+    if total <= 0.0:
+        return {label: 0.0 for label in weights}
+    return {label: float(weight / total) for label, weight in weights.items()}
 
 
 def _require_args(

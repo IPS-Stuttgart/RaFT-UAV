@@ -6,10 +6,11 @@ import path while rejecting malformed truth-matching time gates and top-K values
 before they can silently widen, empty, or change the diagnostic. Equal-score
 candidates are ranked with explicit stable tie-break keys so CSV row order cannot
 change top-K oracle attribution. Duplicate truth timestamps retain the final
-original row so attribution follows the repository-wide authoritative trajectory
-convention. The CLI also reads truth tables through the shared text-preserving
-MMUAD CSV reader so opaque sequence identifiers remain aligned with candidate
-inputs.
+original row within each physical flight so attribution follows the repository-
+wide authoritative trajectory convention. Candidate/truth matching is scoped by
+joint ``(sequence_id, flight_id)`` whenever flight metadata is available. The CLI
+also reads truth tables through the shared text-preserving MMUAD CSV reader so
+opaque sequence identifiers remain aligned with candidate inputs.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import is_scalar
 
 from raft_uav.mmuad.estimate_csv import read_estimate_csv
 
@@ -47,6 +49,7 @@ _RANK_TEXT_COLUMNS = (
     ("candidate_branch", "candidate"),
     ("class_name", ""),
 )
+_MISSING_SCOPE_TEXT = frozenset({"", "nan", "none", "null", "<na>", "nat"})
 
 
 class _TextPreservingPandasProxy:
@@ -107,8 +110,44 @@ def _normalize_top_k_values(values: Sequence[object]) -> tuple[int, ...]:
     return tuple(sorted(set(normalized)))
 
 
+def _canonical_scope_value(value: object, *, role: str) -> str | None:
+    """Return one normalized flight identifier or ``None`` when it is missing."""
+
+    if not is_scalar(value):
+        raise ValueError(
+            f"candidate-oracle attribution requires scalar flight_id values on {role} rows"
+        )
+    if value is None or bool(pd.isna(value)):
+        return None
+    text = str(value).strip()
+    return None if text.casefold() in _MISSING_SCOPE_TEXT else text
+
+
+def _normalized_flight_ids(frame: pd.DataFrame, *, role: str) -> pd.Series | None:
+    """Return complete meaningful flight IDs, or ``None`` when metadata is absent."""
+
+    if "flight_id" not in frame.columns:
+        return None
+    try:
+        values = frame["flight_id"].map(
+            lambda value: _canonical_scope_value(value, role=role)
+        ).astype(object)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"candidate-oracle attribution requires scalar flight_id values on {role} rows"
+        ) from exc
+    if not bool(values.notna().any()):
+        return None
+    if bool(values.isna().any()):
+        raise ValueError(
+            "candidate-oracle attribution requires flight_id on every "
+            f"{role} row when flight metadata is provided"
+        )
+    return values
+
+
 def _normalize_truth_trajectory(truth: pd.DataFrame) -> pd.DataFrame:
-    """Normalize truth and retain the final original row at duplicate times."""
+    """Normalize truth and retain the final row per physical scope and timestamp."""
 
     raw_truth = pd.DataFrame(truth).copy()
     order_column = "_candidate_oracle_attribution_input_order"
@@ -119,16 +158,89 @@ def _normalize_truth_trajectory(truth: pd.DataFrame) -> pd.DataFrame:
     if truth_rows.empty:
         return truth_rows.drop(columns=[order_column], errors="ignore")
 
+    scope_columns = ["sequence_id"]
+    flight_ids = _normalized_flight_ids(truth_rows, role="truth")
+    if flight_ids is not None:
+        truth_rows = truth_rows.copy()
+        truth_rows["flight_id"] = flight_ids
+        scope_columns.append("flight_id")
+    dedup_columns = [*scope_columns, "time_s"]
     return (
         truth_rows.sort_values(
-            ["sequence_id", "time_s", order_column],
+            [*dedup_columns, order_column],
             kind="mergesort",
         )
-        .drop_duplicates(["sequence_id", "time_s"], keep="last")
-        .sort_values(["sequence_id", "time_s"], kind="mergesort")
+        .drop_duplicates(dedup_columns, keep="last")
+        .sort_values(dedup_columns, kind="mergesort")
         .drop(columns=[order_column])
         .reset_index(drop=True)
     )
+
+
+def _single_flight_by_sequence(
+    frame: pd.DataFrame,
+    flight_ids: pd.Series,
+    *,
+    role: str,
+) -> dict[str, str]:
+    """Return a sequence-to-flight map when one-sided metadata is unambiguous."""
+
+    scoped = pd.DataFrame(
+        {
+            "sequence_id": frame["sequence_id"].astype(str),
+            "flight_id": flight_ids.astype(str),
+        },
+        index=frame.index,
+    )
+    mapping: dict[str, str] = {}
+    for sequence_id, group in scoped.groupby("sequence_id", sort=False):
+        flights = tuple(dict.fromkeys(group["flight_id"].tolist()))
+        if len(flights) > 1:
+            raise ValueError(
+                "candidate-oracle attribution cannot align one-sided flight_id "
+                f"metadata: {role} sequence {sequence_id!r} contains multiple "
+                f"physical flights {list(flights)!r}"
+            )
+        mapping[str(sequence_id)] = str(flights[0])
+    return mapping
+
+
+def _align_physical_scope(
+    rows: pd.DataFrame,
+    truth_rows: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, tuple[str, ...]]:
+    """Align candidates and truth to the same physical-flight scope."""
+
+    candidate_rows = rows.copy()
+    aligned_truth = truth_rows.copy()
+    candidate_flights = _normalized_flight_ids(candidate_rows, role="candidate")
+    truth_flights = _normalized_flight_ids(aligned_truth, role="truth")
+
+    if candidate_flights is not None:
+        candidate_rows["flight_id"] = candidate_flights
+    if truth_flights is not None:
+        aligned_truth["flight_id"] = truth_flights
+    if candidate_flights is None and truth_flights is None:
+        return candidate_rows, aligned_truth, ("sequence_id",)
+    if candidate_flights is not None and truth_flights is not None:
+        return candidate_rows, aligned_truth, ("sequence_id", "flight_id")
+
+    if candidate_flights is not None:
+        mapping = _single_flight_by_sequence(
+            candidate_rows,
+            candidate_flights,
+            role="candidate",
+        )
+        aligned_truth["flight_id"] = aligned_truth["sequence_id"].astype(str).map(mapping)
+    else:
+        assert truth_flights is not None
+        mapping = _single_flight_by_sequence(
+            aligned_truth,
+            truth_flights,
+            role="truth",
+        )
+        candidate_rows["flight_id"] = candidate_rows["sequence_id"].astype(str).map(mapping)
+    return candidate_rows, aligned_truth, ("sequence_id", "flight_id")
 
 
 def _stable_text_column(rows: pd.DataFrame, column: str, *, default: str) -> pd.Series:
@@ -165,6 +277,28 @@ def _deterministic_candidate_ranking(group: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _truth_by_scope(
+    truth_rows: pd.DataFrame,
+    scope_fields: tuple[str, ...],
+) -> dict[tuple[str, ...], pd.DataFrame]:
+    """Index normalized truth trajectories by physical scope."""
+
+    if scope_fields == ("sequence_id",):
+        return {
+            (str(sequence_id),): group.sort_values("time_s", kind="mergesort").reset_index(
+                drop=True
+            )
+            for sequence_id, group in truth_rows.groupby("sequence_id", sort=True)
+        }
+    return {
+        tuple(str(value) for value in scope): group.sort_values(
+            "time_s",
+            kind="mergesort",
+        ).reset_index(drop=True)
+        for scope, group in truth_rows.groupby(list(scope_fields), sort=True)
+    }
+
+
 def build_candidate_oracle_attribution_tables(
     candidates: pd.DataFrame,
     truth: pd.DataFrame,
@@ -174,7 +308,7 @@ def build_candidate_oracle_attribution_tables(
     fallback_score_column: str = "ranker_score",
     max_truth_time_delta_s: float = 0.5,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Return oracle-attribution tables with validated deterministic ranking."""
+    """Return oracle-attribution tables with validated physical-flight scoping."""
 
     max_delta = _nonnegative_finite_scalar(
         max_truth_time_delta_s,
@@ -187,6 +321,7 @@ def build_candidate_oracle_attribution_tables(
         empty = pd.DataFrame()
         return empty, empty, empty, empty
 
+    rows, truth_rows, scope_fields = _align_physical_scope(rows, truth_rows)
     rows = rows.copy()
     if "source" not in rows.columns:
         rows["source"] = "unknown"
@@ -199,33 +334,31 @@ def build_candidate_oracle_attribution_tables(
         score_column=score_column,
         fallback_score_column=fallback_score_column,
     )
-    truth_by_sequence = {
-        str(sequence_id): group.sort_values("time_s").reset_index(drop=True)
-        for sequence_id, group in truth_rows.groupby("sequence_id", sort=True)
-    }
+    truth_by_scope = _truth_by_scope(truth_rows, scope_fields)
 
     frame_records: list[dict[str, Any]] = []
-    for (sequence_id, time_s), group in rows.groupby(
-        ["sequence_id", "time_s"],
-        sort=True,
-    ):
-        seq_truth = truth_by_sequence.get(str(sequence_id))
-        if seq_truth is None or seq_truth.empty:
+    grouping_columns = [*scope_fields, "time_s"]
+    for group_key, group in rows.groupby(grouping_columns, sort=True):
+        key_values = group_key if isinstance(group_key, tuple) else (group_key,)
+        scope_key = tuple(str(value) for value in key_values[:-1])
+        time_s = float(key_values[-1])
+        scoped_truth = truth_by_scope.get(scope_key)
+        if scoped_truth is None or scoped_truth.empty:
             continue
-        truth_t = seq_truth["time_s"].to_numpy(float)
-        nearest_idx = int(np.argmin(np.abs(truth_t - float(time_s))))
-        truth_dt = float(time_s) - float(truth_t[nearest_idx])
+        truth_t = scoped_truth["time_s"].to_numpy(float)
+        nearest_idx = int(np.argmin(np.abs(truth_t - time_s)))
+        truth_dt = time_s - float(truth_t[nearest_idx])
         if abs(truth_dt) > max_delta:
             continue
-        truth_xyz = seq_truth.iloc[nearest_idx][["x_m", "y_m", "z_m"]].to_numpy(float)
+        truth_xyz = scoped_truth.iloc[nearest_idx][["x_m", "y_m", "z_m"]].to_numpy(float)
         ranked = _deterministic_candidate_ranking(group)
         candidate_xyz = ranked[["x_m", "y_m", "z_m"]].to_numpy(float)
         distances = np.linalg.norm(candidate_xyz - truth_xyz, axis=1)
         best_pos = int(np.argmin(distances))
         best_row = ranked.iloc[best_pos]
         record: dict[str, Any] = {
-            "sequence_id": str(sequence_id),
-            "time_s": float(time_s),
+            "sequence_id": scope_key[0],
+            "time_s": time_s,
             "truth_time_delta_s": truth_dt,
             "candidate_count": int(len(ranked)),
             "oracle_all_3d_m": float(distances[best_pos]),
@@ -238,6 +371,8 @@ def build_candidate_oracle_attribution_tables(
             ),
             "oracle_all_candidate_track_id": str(best_row.get("track_id", "")),
         }
+        if len(scope_key) > 1:
+            record["flight_id"] = scope_key[1]
         for top_k_value in top_k:
             bounded_k = min(int(top_k_value), len(distances))
             top_distances = distances[:bounded_k]

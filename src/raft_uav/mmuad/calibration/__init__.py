@@ -2,9 +2,10 @@
 
 The maintained implementation lives in the sibling ``calibration.py`` module.
 This package preserves the public import path while rejecting complex-valued
-calibration inputs before NumPy can silently discard their imaginary components
-during real-valued coercion and rejecting ambiguous or blank sensor names before
-calibration selection becomes order dependent.
+calibration inputs before NumPy can silently discard their imaginary components,
+rejecting ambiguous or blank sensor names before calibration selection becomes
+order dependent, and rejecting malformed 4x4 projective matrices before their
+non-homogeneous final row can be silently ignored.
 """
 
 from __future__ import annotations
@@ -35,6 +36,8 @@ _ORIGINAL_RESHAPE_FLAT_MATRIX = _IMPL._reshape_flat_matrix
 _ORIGINAL_ROTATION_FROM_QUATERNION = _IMPL._rotation_from_quaternion_wxyz
 _ORIGINAL_ROTATION_FROM_RPY = _IMPL._rotation_from_rpy_deg
 _ORIGINAL_TRANSFORM_FROM_MATRIX = _IMPL._transform_from_matrix
+_HOMOGENEOUS_LAST_ROW = np.array([0.0, 0.0, 0.0, 1.0], dtype=float)
+_HOMOGENEOUS_LAST_ROW_ATOL = 1.0e-9
 
 
 def _contains_complex(value: Any) -> bool:
@@ -91,6 +94,25 @@ def _validate_sensor_names(payload: dict[str, Any]) -> None:
         normalized[sensor_name] = source
 
 
+def _validate_homogeneous_transform_matrix(matrix: np.ndarray) -> np.ndarray:
+    """Require canonical affine homogeneous coordinates for every 4x4 transform."""
+
+    values = np.asarray(matrix, dtype=float)
+    if values.shape != (4, 4):
+        return values
+    last_row = values[3]
+    if not np.isfinite(last_row).all() or not np.allclose(
+        last_row,
+        _HOMOGENEOUS_LAST_ROW,
+        rtol=0.0,
+        atol=_HOMOGENEOUS_LAST_ROW_ATOL,
+    ):
+        raise ValueError(
+            "4x4 transform matrix must end with homogeneous row [0, 0, 0, 1]"
+        )
+    return values
+
+
 class RigidTransform(_ORIGINAL_RIGID_TRANSFORM):
     """Rigid transform that rejects lossy complex-to-real coercion."""
 
@@ -134,7 +156,38 @@ def _rotation_from_rpy_deg(rpy_deg: np.ndarray) -> np.ndarray:
 
 def _transform_from_matrix(matrix: np.ndarray) -> RigidTransform:
     _reject_complex(matrix, name="transform matrix")
-    return _ORIGINAL_TRANSFORM_FROM_MATRIX(matrix)
+    values = _validate_homogeneous_transform_matrix(matrix)
+    return _ORIGINAL_TRANSFORM_FROM_MATRIX(values)
+
+
+def _load_single_matrix_calibration(path: Path) -> Any:
+    """Load one rigid 4x4 transform without discarding a projective final row."""
+
+    path = Path(path)
+    values = np.loadtxt(
+        path,
+        delimiter="," if path.suffix.lower() == ".csv" else None,
+    )
+    values = np.asarray(values, dtype=float)
+    if values.shape == (4, 4):
+        matrix = values
+    elif values.size == 16:
+        matrix = values.reshape(4, 4)
+    else:
+        raise ValueError("text calibration must contain one 4x4 matrix")
+    matrix = _validate_homogeneous_transform_matrix(matrix)
+    return _IMPL.CalibrationSet(
+        sensors={
+            "default": SensorCalibration(
+                source="default",
+                transform_sensor_to_world=RigidTransform(
+                    rotation=matrix[:3, :3],
+                    translation_m=matrix[:3, 3],
+                ),
+            )
+        },
+        world_frame="world",
+    )
 
 
 def calibration_from_mapping(payload: dict[str, Any]):
@@ -163,6 +216,7 @@ _IMPL._reshape_flat_matrix = _reshape_flat_matrix
 _IMPL._rotation_from_quaternion_wxyz = _rotation_from_quaternion_wxyz
 _IMPL._rotation_from_rpy_deg = _rotation_from_rpy_deg
 _IMPL._transform_from_matrix = _transform_from_matrix
+_IMPL._load_single_matrix_calibration = _load_single_matrix_calibration
 
 globals().update(
     {
@@ -175,6 +229,9 @@ globals()["_contains_complex"] = _contains_complex
 globals()["_reject_complex"] = _reject_complex
 globals()["_normalized_sensor_name"] = _normalized_sensor_name
 globals()["_validate_sensor_names"] = _validate_sensor_names
+globals()["_validate_homogeneous_transform_matrix"] = (
+    _validate_homogeneous_transform_matrix
+)
 globals()["RigidTransform"] = RigidTransform
 globals()["SensorCalibration"] = SensorCalibration
 globals()["calibration_from_mapping"] = calibration_from_mapping
@@ -183,6 +240,7 @@ globals()["_reshape_flat_matrix"] = _reshape_flat_matrix
 globals()["_rotation_from_quaternion_wxyz"] = _rotation_from_quaternion_wxyz
 globals()["_rotation_from_rpy_deg"] = _rotation_from_rpy_deg
 globals()["_transform_from_matrix"] = _transform_from_matrix
+globals()["_load_single_matrix_calibration"] = _load_single_matrix_calibration
 
 __doc__ = _IMPL.__doc__
 __all__ = [name for name in dir(_IMPL) if not (name.startswith("__") and name.endswith("__"))]

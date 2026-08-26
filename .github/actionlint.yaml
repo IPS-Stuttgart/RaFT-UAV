@@ -2,3 +2,4 @@
 self-hosted-runner:
   labels:
     - nvidia-smi
+    - data-multi-uav-lts-v1

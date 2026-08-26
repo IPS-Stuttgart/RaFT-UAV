@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from importlib import import_module
 
-import numpy as np
 import pandas as pd
+
+from raft_uav.mmuad._evaluate_error_stability_patch import _scaled_mean
 
 
 _evaluate = import_module("raft_uav.mmuad.evaluate")
@@ -73,7 +74,7 @@ def _mean_final_error(frame: pd.DataFrame, column: str) -> float | None:
 
         _append_anonymous_final_errors(anonymous, column, final_errors)
 
-    return float(np.mean(final_errors)) if final_errors else None
+    return _scaled_mean(final_errors) if final_errors else None
 
 
 def install() -> None:
