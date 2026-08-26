@@ -48,3 +48,22 @@ def test_radar_offset_sweep_pools_oracle_errors_before_summary_statistics() -> N
     assert row["max_3d_error_m"] == pytest.approx(10.0)
     assert row["p95_2d_error_m"] == pytest.approx(10.0)
     assert row["std_2d_error_m"] == pytest.approx(5.0)
+
+
+def test_radar_offset_sweep_uses_oracle_physical_frame_count_for_coverage() -> None:
+    truth = _constant_truth()
+    radar = pd.DataFrame(
+        {
+            "frame_index": [7, 7],
+            "time_s": [1.0, 4.0],
+            "east_m": [0.0, 0.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+
+    sweep = aggregate_radar_time_offset_sweep([(radar, truth)], [0.0])
+
+    row = sweep.iloc[0]
+    assert row["count"] == pytest.approx(2.0)
+    assert row["coverage"] == pytest.approx(1.0)

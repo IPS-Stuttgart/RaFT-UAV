@@ -1,9 +1,10 @@
-"""Compatibility fix for canonical branch-consensus identities.
+"""Compatibility fixes for canonical branch-consensus identities and flight scope.
 
 The maintained implementation lives in the sibling
 ``candidate_branch_consensus.py`` module. This package preserves the public
 import path while comparing source and branch labels with whitespace-insensitive,
-Unicode-aware identities. Caller-visible labels remain unchanged.
+Unicode-aware identities and keeping consensus calculations inside physical
+flights when ``flight_id`` is available. Caller-visible labels remain unchanged.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ DEFAULT_SCORE_OUTPUT_COLUMN = _IMPL.DEFAULT_SCORE_OUTPUT_COLUMN
 
 _SOURCE_IDENTITY_COLUMN = "_branch_consensus_source_identity"
 _BRANCH_IDENTITY_COLUMN = "_branch_consensus_branch_identity"
+_PHYSICAL_SCOPE_COLUMN = "_branch_consensus_physical_scope"
 _MISSING_IDENTITY_TEXT = frozenset({"", "nan", "none", "<na>", "nat"})
 
 
@@ -41,6 +43,36 @@ def _canonical_identity_labels(values: Any, *, default: str) -> np.ndarray:
     text = pd.Series(values, copy=False).astype("string").str.strip().str.casefold()
     missing = text.isna() | text.isin(_MISSING_IDENTITY_TEXT)
     return text.where(~missing, str(default).strip().casefold()).to_numpy(object)
+
+
+def _physical_scope_labels(rows: pd.DataFrame) -> np.ndarray:
+    """Return collision-free row scopes, including ``flight_id`` when present."""
+
+    sequence = pd.Series(rows["sequence_id"], copy=False).astype("string").str.strip()
+    if "flight_id" not in rows.columns:
+        return sequence.to_numpy(object)
+
+    flight = pd.Series(rows["flight_id"], copy=False).astype("string").str.strip()
+    missing_flight = flight.isna() | flight.str.casefold().isin(_MISSING_IDENTITY_TEXT)
+    scope_keys = pd.Series(
+        [
+            (
+                str(sequence_id),
+                bool(is_missing),
+                None if is_missing else str(flight_id),
+            )
+            for sequence_id, flight_id, is_missing in zip(
+                sequence,
+                flight,
+                missing_flight,
+                strict=True,
+            )
+        ],
+        index=rows.index,
+        dtype=object,
+    )
+    codes, _ = pd.factorize(scope_keys, sort=False)
+    return codes
 
 
 def attach_candidate_branch_consensus(
@@ -60,7 +92,7 @@ def attach_candidate_branch_consensus(
     exclude_same_origin_support: bool = True,
     replace_confidence: bool = False,
 ) -> CandidateFrame:
-    """Attach consensus features using canonical source and branch identities."""
+    """Attach consensus features using canonical identities and physical scopes."""
 
     rows = _IMPL._candidate_rows(candidates)
     if rows.empty:
@@ -93,12 +125,13 @@ def attach_candidate_branch_consensus(
         out["candidate_branch"],
         default="unbranched",
     )
+    out[_PHYSICAL_SCOPE_COLUMN] = _physical_scope_labels(out)
     out["branch_consensus_base_score"] = _IMPL._base_score(out, base_score_column)
     out["branch_consensus_base_score_normalized"] = _IMPL._group_minmax_score(
         out,
         "branch_consensus_base_score",
         group_columns=(
-            "sequence_id",
+            _PHYSICAL_SCOPE_COLUMN,
             _SOURCE_IDENTITY_COLUMN,
             _BRANCH_IDENTITY_COLUMN,
         ),
@@ -112,7 +145,7 @@ def attach_candidate_branch_consensus(
     unique_source_count = np.zeros(len(out), dtype=int)
     unique_branch_count = np.zeros(len(out), dtype=int)
 
-    for _, sequence_rows in out.groupby("sequence_id", sort=False):
+    for _, sequence_rows in out.groupby(_PHYSICAL_SCOPE_COLUMN, sort=False):
         ordered = sequence_rows.sort_values("time_s")
         ordered_indices = ordered.index.to_numpy(int)
         times = ordered["time_s"].to_numpy(float)
@@ -216,6 +249,7 @@ def attach_candidate_branch_consensus(
     out["branch_consensus_score"] = 0.7 * joint_score + 0.3 * support_score
 
     pair_rows = out.copy()
+    pair_rows["sequence_id"] = pair_rows[_PHYSICAL_SCOPE_COLUMN]
     pair_rows["source"] = pair_rows[_SOURCE_IDENTITY_COLUMN]
     pair_advantage = _IMPL._pair_consensus_advantage(
         pair_rows,
@@ -241,12 +275,16 @@ def attach_candidate_branch_consensus(
     out["branch_consensus_rank_percentile"] = _IMPL._group_minmax_score(
         out,
         score_output_column,
-        group_columns=("sequence_id",),
+        group_columns=(_PHYSICAL_SCOPE_COLUMN,),
     )
     if replace_confidence:
         out["confidence"] = rank_score
     out = out.drop(
-        columns=[_SOURCE_IDENTITY_COLUMN, _BRANCH_IDENTITY_COLUMN],
+        columns=[
+            _SOURCE_IDENTITY_COLUMN,
+            _BRANCH_IDENTITY_COLUMN,
+            _PHYSICAL_SCOPE_COLUMN,
+        ],
         errors="ignore",
     )
     return CandidateFrame(_IMPL.normalize_candidate_columns(out))
@@ -262,6 +300,7 @@ globals().update(
     }
 )
 globals()["_canonical_identity_labels"] = _canonical_identity_labels
+globals()["_physical_scope_labels"] = _physical_scope_labels
 globals()["attach_candidate_branch_consensus"] = attach_candidate_branch_consensus
 
 __doc__ = _IMPL.__doc__

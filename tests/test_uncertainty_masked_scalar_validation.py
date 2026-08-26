@@ -37,7 +37,7 @@ def test_variance_head_rejects_masked_scalar_bounds(field):
     }
     values[field] = np.ma.array(values[field], mask=True)
 
-    with pytest.raises(ValueError, match=rf"{field} must be a finite number"):
+    with pytest.raises(ValueError, match=rf"{field} must be a finite real scalar"):
         VarianceHead(**values)
 
 

@@ -43,6 +43,25 @@ def test_validation_failure_preserves_existing_outputs(tmp_path: Path) -> None:
     assert not (output / "A.txt").exists()
 
 
+def test_unknown_prediction_sequence_preserves_existing_outputs(tmp_path: Path) -> None:
+    labels = tmp_path / "labels"
+    predictions = tmp_path / "predictions"
+    output = tmp_path / "output"
+    _write(labels / "A.txt", "1,7,0,0,10,10,1,1,1\n")
+    _write(predictions / "A.txt", "1,1,0,0,10,10,1,1,1\n")
+    _write(predictions / "B.txt", "1,2,0,0,10,10,1,1,1\n")
+    _write(output / "old.txt", "original\n")
+
+    with pytest.raises(
+        ValueError,
+        match=r"prediction input contains unknown sequence files: B\.txt",
+    ):
+        postprocess_fixed_population(predictions, labels, output)
+
+    assert (output / "old.txt").read_text(encoding="utf-8") == "original\n"
+    assert not (output / "A.txt").exists()
+
+
 @pytest.mark.parametrize(
     ("label_state", "error_type", "message"),
     [

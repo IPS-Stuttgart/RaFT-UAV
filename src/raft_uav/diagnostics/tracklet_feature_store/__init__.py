@@ -3,8 +3,10 @@
 The maintained implementation lives in the sibling ``tracklet_feature_store.py``
 module. This package preserves the public import path while matching external
 selected-radar rows by stable opaque track ID, with track-index fallback only when
-an ID is unavailable, and parsing persisted Boolean diagnostics explicitly instead
-of relying on Python string truthiness.
+an ID is unavailable, preserving those identifiers in dashboard provenance, and
+parsing persisted Boolean diagnostics explicitly instead of relying on Python
+string truthiness. External selected-radar CSVs are also rejected for multi-flight
+runs because the legacy format has no flight-scoping contract.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
@@ -32,6 +34,7 @@ _ORIGINAL_BUILD_COUNTERFACTUAL_ASSOCIATION_DASHBOARD = (
     _IMPL.build_counterfactual_association_dashboard
 )
 _ORIGINAL_SUMMARIZE_COUNTERFACTUAL_REGRET = _IMPL.summarize_counterfactual_regret
+_ORIGINAL_RUN_TRACKLET_FEATURE_STORE = _IMPL.run_tracklet_feature_store
 _TRUE_BOOLEAN_TEXT = frozenset({"true", "t", "yes", "y", "on"})
 _FALSE_BOOLEAN_TEXT = frozenset(
     {"false", "f", "no", "n", "off", "", "nan", "none", "null", "<na>", "nat"}
@@ -146,6 +149,45 @@ def _selection_mask(
     )
 
 
+def _diagnostic_identifier_value(value: object) -> object:
+    """Return a dashboard-safe scalar without integer-only identifier coercion."""
+
+    if value is None or np.ma.is_masked(value):
+        return ""
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return ""
+    if isinstance(value, np.generic):
+        return value.item()
+    try:
+        array = np.asarray(value)
+    except (TypeError, ValueError):
+        return value
+    if array.ndim == 0:
+        return array.item()
+    return value
+
+
+def _row_value(row: pd.Series | None, column: str) -> object:
+    """Return dashboard values while preserving opaque candidate identifiers."""
+
+    if row is None or column not in row.index:
+        return ""
+    value = row[column]
+    if column in {"track_id", "track_index"}:
+        return _diagnostic_identifier_value(value)
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return ""
+    return value
+
+
 def _boolean_series(values: Any, *, column: str) -> pd.Series:
     """Parse native and serialized Boolean diagnostics without string truthiness."""
 
@@ -173,14 +215,65 @@ def _boolean_series(values: Any, *, column: str) -> pd.Series:
 
 
 def build_counterfactual_association_dashboard(features: Any) -> pd.DataFrame:
-    """Build the dashboard after normalizing persisted selection flags."""
+    """Build the dashboard while preserving candidate identifier provenance."""
 
     normalized = pd.DataFrame(features).copy()
     column = "chosen_by_selected_radar"
     if column in normalized.columns:
         normalized[column] = _boolean_series(normalized[column], column=column)
     normalized = normalized.reset_index(drop=True)
-    return _ORIGINAL_BUILD_COUNTERFACTUAL_ASSOCIATION_DASHBOARD(normalized)
+    if normalized.empty:
+        return pd.DataFrame(columns=_IMPL._REGRET_COLUMNS)
+
+    rows: list[dict[str, Any]] = []
+    for (key_type, key), group in normalized.groupby(
+        ["frame_key_type", "frame_key"], sort=True, dropna=False
+    ):
+        ordered = group.sort_values("oracle_rank_in_frame", na_position="last")
+        finite_errors = pd.to_numeric(ordered["oracle_error_m"], errors="coerce")
+        best = ordered.loc[finite_errors.idxmin()] if finite_errors.notna().any() else None
+        selected = ordered.loc[ordered[column]]
+        selected_row = selected.iloc[0] if not selected.empty else None
+        best_error = _IMPL._row_float(best, "oracle_error_m") if best is not None else np.nan
+        selected_error = (
+            _IMPL._row_float(selected_row, "oracle_error_m")
+            if selected_row is not None
+            else np.nan
+        )
+        selected_rank = (
+            _IMPL._row_float(selected_row, "oracle_rank_in_frame")
+            if selected_row is not None
+            else np.nan
+        )
+        regret = (
+            selected_error - best_error
+            if np.isfinite([selected_error, best_error]).all()
+            else np.nan
+        )
+        rows.append(
+            {
+                "frame_key_type": key_type,
+                "frame_key": key,
+                "time_s": float(pd.to_numeric(group["time_s"], errors="coerce").median()),
+                "candidate_count": int(len(group)),
+                "truth_available": bool(finite_errors.notna().any()),
+                "best_candidate_error_m": best_error,
+                "best_candidate_track_id": _row_value(best, "track_id"),
+                "best_candidate_track_index": _row_value(best, "track_index"),
+                "selected_present": selected_row is not None,
+                "selected_candidate_error_m": selected_error,
+                "selected_candidate_rank": selected_rank,
+                "selected_candidate_track_id": _row_value(selected_row, "track_id"),
+                "selected_candidate_track_index": _row_value(selected_row, "track_index"),
+                "selection_regret_m": regret,
+                "category": _IMPL._regret_category(
+                    best_error,
+                    selected_error,
+                    selected_row is not None,
+                ),
+            }
+        )
+    return pd.DataFrame.from_records(rows, columns=_IMPL._REGRET_COLUMNS)
 
 
 def summarize_counterfactual_regret(regret: Any) -> dict[str, Any]:
@@ -193,12 +286,78 @@ def summarize_counterfactual_regret(regret: Any) -> dict[str, Any]:
     return _ORIGINAL_SUMMARIZE_COUNTERFACTUAL_REGRET(normalized)
 
 
+def _validate_external_selected_radar_scope(
+    selected_radar_csv: Path | None,
+    resolved_flights: Iterable[str],
+) -> None:
+    """Reject one unscoped selected-radar file being reused across flights."""
+
+    if selected_radar_csv is None:
+        return
+    unique_flights = list(dict.fromkeys(resolved_flights))
+    if len(unique_flights) <= 1:
+        return
+    rendered = ", ".join(unique_flights)
+    raise ValueError(
+        "selected_radar_csv cannot be applied to multiple flights because "
+        "the external selected-radar format is not flight-scoped; "
+        f"resolved flights: {rendered}. Run one flight at a time or omit "
+        "selected_radar_csv."
+    )
+
+
+def run_tracklet_feature_store(
+    *,
+    dataset_root: Path,
+    flights: Iterable[str] | None,
+    output_dir: Path = Path("outputs/tracklet-feature-store"),
+    variant: str = "auto",
+    enu_origin: str = "lw1",
+    enu_origin_lla: str | None = None,
+    lw1_origin_lla: str | None = None,
+    origin_config: Path | None = None,
+    truth_time_gate_s: float = 2.0,
+    range_gate_m: float = _IMPL.PAPER_STRICT_RANGE_GATE_M,
+    radar_catprob_threshold: float | None = None,
+    selected_radar_csv: Path | None = None,
+    rf_default_std_m: float = 75.0,
+) -> dict[str, Any]:
+    """Run the feature store without reusing one external selection across flights."""
+
+    requested_flights = None if flights is None else list(flights)
+    if selected_radar_csv is not None:
+        resolved_flights = _IMPL._resolve_flights(
+            Path(dataset_root),
+            requested_flights,
+            variant=variant,
+        )
+        _validate_external_selected_radar_scope(selected_radar_csv, resolved_flights)
+
+    return _ORIGINAL_RUN_TRACKLET_FEATURE_STORE(
+        dataset_root=dataset_root,
+        flights=requested_flights,
+        output_dir=output_dir,
+        variant=variant,
+        enu_origin=enu_origin,
+        enu_origin_lla=enu_origin_lla,
+        lw1_origin_lla=lw1_origin_lla,
+        origin_config=origin_config,
+        truth_time_gate_s=truth_time_gate_s,
+        range_gate_m=range_gate_m,
+        radar_catprob_threshold=radar_catprob_threshold,
+        selected_radar_csv=selected_radar_csv,
+        rf_default_std_m=rf_default_std_m,
+    )
+
+
 _IMPL._candidate_match_key = _candidate_match_key
 _IMPL._selection_mask = _selection_mask
+_IMPL._row_value = _row_value
 _IMPL.build_counterfactual_association_dashboard = (
     build_counterfactual_association_dashboard
 )
 _IMPL.summarize_counterfactual_regret = summarize_counterfactual_regret
+_IMPL.run_tracklet_feature_store = run_tracklet_feature_store
 
 globals().update(
     {
@@ -211,11 +370,17 @@ globals()["_stable_identifier"] = _stable_identifier
 globals()["_identifier_key"] = _identifier_key
 globals()["_candidate_match_key"] = _candidate_match_key
 globals()["_selection_mask"] = _selection_mask
+globals()["_diagnostic_identifier_value"] = _diagnostic_identifier_value
+globals()["_row_value"] = _row_value
 globals()["_boolean_series"] = _boolean_series
+globals()["_validate_external_selected_radar_scope"] = (
+    _validate_external_selected_radar_scope
+)
 globals()["build_counterfactual_association_dashboard"] = (
     build_counterfactual_association_dashboard
 )
 globals()["summarize_counterfactual_regret"] = summarize_counterfactual_regret
+globals()["run_tracklet_feature_store"] = run_tracklet_feature_store
 
 __doc__ = _IMPL.__doc__
 __all__ = [

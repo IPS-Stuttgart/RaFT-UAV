@@ -34,7 +34,7 @@ jobs:
   probe:
     name: Probe GPU and mounted LTS data
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    runs-on: [self-hosted, Linux, X64, nvidia-smi, data-multi-uav-lts-v1]
     timeout-minutes: 20
 
     steps:

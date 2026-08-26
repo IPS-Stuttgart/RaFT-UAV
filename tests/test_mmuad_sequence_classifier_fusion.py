@@ -99,7 +99,11 @@ def test_sequence_classifier_fusion_cli_writes_train_selected_predictions(
     )
     assert manifest["selection_protocol"].startswith("Stratified train-label CV")
     assert manifest["selected"]["image_weight"] == 0.0
-    selected = pd.read_csv(output_dir / SELECTED_PROBABILITIES_CSV)
+    selected = pd.read_csv(
+        output_dir / SELECTED_PROBABILITIES_CSV,
+        dtype={"sequence_id": "string"},
+    )
+    assert selected["sequence_id"].tolist() == ["007", "008"]
     assert selected["predicted_class"].astype(str).tolist() == ["0", "1"]
     assert selected["correct"].tolist() == [True, True]
     diagnostics = pd.read_csv(
@@ -118,14 +122,14 @@ def _fusion_fixture() -> tuple[
     dict[str, str],
     dict[str, str],
 ]:
-    train_sequences = ["seq0a", "seq0b", "seq0c", "seq1a", "seq1b", "seq1c"]
+    train_sequences = ["001", "002", "003", "004", "005", "006"]
     labels = {
-        "seq0a": "0",
-        "seq0b": "0",
-        "seq0c": "0",
-        "seq1a": "1",
-        "seq1b": "1",
-        "seq1c": "1",
+        "001": "0",
+        "002": "0",
+        "003": "0",
+        "004": "1",
+        "005": "1",
+        "006": "1",
     }
     nonimage_values = [0.0, 0.1, 0.2, 10.0, 9.9, 9.8]
     image_values = [10.0, 9.9, 9.8, 0.0, 0.1, 0.2]
@@ -136,10 +140,10 @@ def _fusion_fixture() -> tuple[
         {"sequence_id": train_sequences, "nonimage_signal": nonimage_values}
     )
     image_predict = pd.DataFrame(
-        {"sequence_id": ["seqVal0", "seqVal1"], "image_signal": [9.85, 0.15]}
+        {"sequence_id": ["007", "008"], "image_signal": [9.85, 0.15]}
     )
     nonimage_predict = pd.DataFrame(
-        {"sequence_id": ["seqVal0", "seqVal1"], "nonimage_signal": [0.15, 9.85]}
+        {"sequence_id": ["007", "008"], "nonimage_signal": [0.15, 9.85]}
     )
-    eval_labels = {"seqVal0": "0", "seqVal1": "1"}
+    eval_labels = {"007": "0", "008": "1"}
     return image_train, nonimage_train, image_predict, nonimage_predict, labels, eval_labels

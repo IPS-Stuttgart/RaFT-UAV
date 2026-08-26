@@ -49,7 +49,25 @@ def _continuous_track_segments(radar: pd.DataFrame) -> list[pd.DataFrame]:
         return []
     segments: list[pd.DataFrame] = []
     for _, track_rows in radar.groupby("track_id", sort=True):
+        numeric_time = pd.to_numeric(
+            track_rows["time_s"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+        valid_time = np.isfinite(numeric_time)
+        track_rows = track_rows.iloc[np.flatnonzero(valid_time)].copy()
+        if track_rows.empty:
+            continue
+        # Direct column assignment replaces an object/string dtype with float.
+        # ``.loc[:, ...]`` may preserve the old dtype and reintroduce
+        # lexicographic ordering for numeric strings on some pandas versions.
+        track_rows["time_s"] = numeric_time[valid_time]
+
         continuity_key = _LEGACY._track_continuity_key(track_rows)
+        if continuity_key != "time_s":
+            track_rows[continuity_key] = pd.to_numeric(
+                track_rows[continuity_key],
+                errors="coerce",
+            ).to_numpy(dtype=float)
         order_columns = (
             ["time_s"]
             if continuity_key == "time_s"

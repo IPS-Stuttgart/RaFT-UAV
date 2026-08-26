@@ -196,24 +196,55 @@ def mean_field(rows: list[dict[str, Any]], field: str) -> float | None:
 def aggregate_variants(
     rows: list[dict[str, Any]], expected_flights: list[str], expected_variants: list[str]
 ) -> list[dict[str, Any]]:
+    expected_variant_set = set(expected_variants)
+    expected_flight_set = set(expected_flights)
+
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        grouped[str(row.get("variant", ""))].append(row)
+        variant = str(row.get("variant", ""))
+        if expected_variant_set and variant not in expected_variant_set:
+            continue
+        grouped[variant].append(row)
     for variant in expected_variants:
         grouped.setdefault(variant, [])
 
     out: list[dict[str, Any]] = []
     for variant, variant_rows in sorted(grouped.items()):
-        ok_rows = [row for row in variant_rows if row.get("status") == "ok"]
-        ok_flights = {str(row.get("flight")) for row in ok_rows}
-        missing = [flight for flight in expected_flights if flight not in ok_flights]
-        failed = [row for row in variant_rows if row.get("status") != "ok"]
+        scoped_rows = [
+            row
+            for row in variant_rows
+            if not expected_flight_set or str(row.get("flight", "")) in expected_flight_set
+        ]
+        rows_by_flight: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in scoped_rows:
+            rows_by_flight[str(row.get("flight", ""))].append(row)
+
+        flights_to_check = expected_flights or sorted(rows_by_flight)
+        ok_rows: list[dict[str, Any]] = []
+        ok_flights: set[str] = set()
+        failed_runs: list[str] = []
+        for flight in flights_to_check:
+            flight_rows = rows_by_flight.get(flight, [])
+            if len(flight_rows) > 1:
+                failed_runs.append(f"{flight}: duplicate summaries ({len(flight_rows)})")
+                continue
+            if len(flight_rows) == 1:
+                row = flight_rows[0]
+                if row.get("status") == "ok":
+                    ok_rows.append(row)
+                    ok_flights.add(flight)
+                else:
+                    failed_runs.append(f"{flight}: {row.get('status')}")
+
+        missing = [
+            flight for flight in expected_flights if not rows_by_flight.get(flight)
+        ]
         selected = aggregate_mot(ok_rows, "selected_radar_mot")
         estimate = aggregate_mot(ok_rows, "estimate_mot")
         status = "ok"
         if missing:
             status = "missing_flights"
-        elif failed:
+        elif failed_runs:
             status = "failed_runs"
         out.append(
             {
@@ -222,23 +253,27 @@ def aggregate_variants(
                 "flights": len(expected_flights),
                 "ok_flights": len(ok_flights),
                 "missing_flights": missing,
-                "failed_runs": [
-                    f"{row.get('flight')}: {row.get('status')}" for row in failed
-                ],
+                "failed_runs": failed_runs,
                 "selected_radar_mot": selected,
                 "estimate_mot": estimate,
                 "selected_radar_idf1": selected.get("idf1"),
                 "selected_radar_mota": selected.get("mota"),
-                "selected_radar_fragmentation_per_match": selected.get("fragmentation_per_match"),
+                "selected_radar_fragmentation_per_match": selected.get(
+                    "fragmentation_per_match"
+                ),
                 "selected_radar_fp": selected.get("fp"),
                 "selected_radar_fn": selected.get("fn"),
                 "selected_radar_idsw": selected.get("idsw"),
                 "estimate_idf1": estimate.get("idf1"),
                 "estimate_mota": estimate.get("mota"),
-                "estimate_fragmentation_per_match": estimate.get("fragmentation_per_match"),
+                "estimate_fragmentation_per_match": estimate.get(
+                    "fragmentation_per_match"
+                ),
                 "mean_rmse_3d_m": mean_field(ok_rows, "rmse_3d_m"),
                 "mean_p95_3d_m": mean_field(ok_rows, "p95_3d_m"),
-                "mean_selected_radar_rows": mean_field(ok_rows, "selected_radar_rows"),
+                "mean_selected_radar_rows": mean_field(
+                    ok_rows, "selected_radar_rows"
+                ),
                 "mean_track_switch_count": mean_field(ok_rows, "track_switch_count"),
             }
         )
@@ -270,13 +305,17 @@ def run_csv_row(row: dict[str, Any]) -> dict[str, Any]:
         {
             "selected_radar_idf1": selected.get("idf1", ""),
             "selected_radar_mota": selected.get("mota", ""),
-            "selected_radar_fragmentation_per_match": selected.get("fragmentation_per_match", ""),
+            "selected_radar_fragmentation_per_match": selected.get(
+                "fragmentation_per_match", ""
+            ),
             "selected_radar_fp": selected.get("fp", ""),
             "selected_radar_fn": selected.get("fn", ""),
             "selected_radar_idsw": selected.get("idsw", ""),
             "estimate_idf1": estimate.get("idf1", ""),
             "estimate_mota": estimate.get("mota", ""),
-            "estimate_fragmentation_per_match": estimate.get("fragmentation_per_match", ""),
+            "estimate_fragmentation_per_match": estimate.get(
+                "fragmentation_per_match", ""
+            ),
         }
     )
     return out
@@ -299,7 +338,10 @@ def aggregate_sweep_artifacts(
     missing: list[str] = []
     failed: list[str] = []
     for variant in variants:
-        missing.extend(f"{flight}/{variant['variant']}" for flight in variant.get("missing_flights", []))
+        missing.extend(
+            f"{flight}/{variant['variant']}"
+            for flight in variant.get("missing_flights", [])
+        )
         failed.extend(str(item) for item in variant.get("failed_runs", []))
     ok_variants = [variant for variant in variants if variant.get("status") == "ok"]
     summary = {
@@ -363,18 +405,34 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     expected_flights = json.loads(args.expected_flights_json)
-    if not isinstance(expected_flights, list) or not all(isinstance(item, str) for item in expected_flights):
+    if not isinstance(expected_flights, list) or not all(
+        isinstance(item, str) for item in expected_flights
+    ):
         raise SystemExit("--expected-flights-json must be a JSON array of strings")
     expected_variants = expected_variant_names(args.expected_variants_json)
-    result = aggregate_sweep_artifacts(args.artifacts_dir, expected_flights, expected_variants)
+    result = aggregate_sweep_artifacts(
+        args.artifacts_dir, expected_flights, expected_variants
+    )
     args.output_json.write_text(json.dumps(result.summary, indent=2), encoding="utf-8")
     write_csv(args.output_csv, result.variants, VARIANT_CSV_FIELDS)
-    write_csv(args.output_runs_csv, [run_csv_row(row) for row in result.rows], RUN_CSV_FIELDS)
+    write_csv(
+        args.output_runs_csv,
+        [run_csv_row(row) for row in result.rows],
+        RUN_CSV_FIELDS,
+    )
     step_summary = args.github_step_summary or os.environ.get("GITHUB_STEP_SUMMARY")
     if step_summary:
         append_step_summary(Path(step_summary), result)
     if result.should_fail:
-        print(json.dumps({"missing_runs": result.summary["missing_runs"], "failed_runs": result.summary["failed_runs"]}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "missing_runs": result.summary["missing_runs"],
+                    "failed_runs": result.summary["failed_runs"],
+                },
+                indent=2,
+            )
+        )
         return 1
     return 0
 

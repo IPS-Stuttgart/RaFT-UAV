@@ -1,4 +1,4 @@
-"""Order research track-switch diagnostics by sequence and numeric time."""
+"""Order research track-switch diagnostics by flight scope and numeric time."""
 
 from __future__ import annotations
 
@@ -13,10 +13,11 @@ from raft_uav.numeric import optional_float
 
 _PATCH_MARKER = "_raft_uav_orders_track_switch_times_numerically"
 _SEQUENCE_KEY_COLUMN = "_raft_uav_track_switch_sequence_key"
+_SCOPE_ALIAS_COLUMNS = ("sequence_id", "flight_id")
 
 
 def _sequence_key(value: object) -> str | None:
-    """Normalize a scalar sequence identifier for diagnostic grouping."""
+    """Normalize one scalar flight/sequence identifier for diagnostic grouping."""
 
     if value is None or not pd.api.types.is_scalar(value):
         return None
@@ -41,6 +42,25 @@ def _track_counts(module: ModuleType, selected: pd.DataFrame) -> list[int]:
     return [int(value) for value in normalized.dropna().value_counts().tolist()]
 
 
+def _scope_keys(selected: pd.DataFrame) -> list[tuple[tuple[str, str | None], ...]]:
+    """Return joint normalized keys for every available flight-scope alias."""
+
+    scope_columns = [
+        column for column in _SCOPE_ALIAS_COLUMNS if column in selected.columns
+    ]
+    if not scope_columns:
+        return []
+
+    column_values = [selected[column].tolist() for column in scope_columns]
+    return [
+        tuple(
+            (column, _sequence_key(value))
+            for column, value in zip(scope_columns, values, strict=True)
+        )
+        for values in zip(*column_values, strict=True)
+    ]
+
+
 def _aggregate_sequence_metrics(
     module: ModuleType,
     original: Callable[..., dict[str, object]],
@@ -48,21 +68,14 @@ def _aggregate_sequence_metrics(
     *,
     long_gap_s: float,
 ) -> dict[str, object]:
-    """Aggregate track-switch diagnostics without crossing sequence boundaries."""
+    """Aggregate track-switch diagnostics without crossing flight boundaries."""
 
-    sequence_keys = [_sequence_key(value) for value in selected["sequence_id"]]
-    explicit_sequences = {key for key in sequence_keys if key is not None}
-    has_missing_sequence = any(key is None for key in sequence_keys)
-    if not explicit_sequences or (
-        len(explicit_sequences) == 1 and not has_missing_sequence
-    ):
+    scope_keys = _scope_keys(selected)
+    if not scope_keys or len(set(scope_keys)) <= 1:
         return original(selected, long_gap_s=long_gap_s)
 
     normalized = selected.copy()
-    normalized[_SEQUENCE_KEY_COLUMN] = [
-        ("sequence", key) if key is not None else ("missing", "")
-        for key in sequence_keys
-    ]
+    normalized[_SEQUENCE_KEY_COLUMN] = scope_keys
 
     track_counts: list[int] = []
     switch_count = 0
@@ -103,7 +116,7 @@ def _aggregate_sequence_metrics(
 
 
 def apply_diagnostics_numeric_time_patch(module: ModuleType) -> None:
-    """Patch track-switch metrics to normalize timestamps and sequence scope."""
+    """Patch track-switch metrics to normalize timestamps and flight scope."""
 
     original: Callable[..., dict[str, object]] = module.track_switch_metrics
     if getattr(original, _PATCH_MARKER, False):
@@ -122,7 +135,7 @@ def apply_diagnostics_numeric_time_patch(module: ModuleType) -> None:
                 index=normalized.index,
                 dtype=float,
             )
-        if "sequence_id" in normalized.columns:
+        if any(column in normalized.columns for column in _SCOPE_ALIAS_COLUMNS):
             return _aggregate_sequence_metrics(
                 module,
                 original,
