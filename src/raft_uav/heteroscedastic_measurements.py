@@ -30,13 +30,7 @@ _RADAR_VELOCITY_ERROR = (
 def _finite_covariance_value(value: object) -> float | None:
     """Return one finite real covariance entry, or ``None`` when unavailable."""
 
-    if isinstance(value, (bool, np.bool_, complex, np.complexfloating)):
-        return None
-    try:
-        number = float(value)
-    except (OverflowError, TypeError, ValueError):
-        return None
-    return number if np.isfinite(number) else None
+    return optional_float(value)
 
 
 def _positive_covariance_value(value: object) -> float | None:
