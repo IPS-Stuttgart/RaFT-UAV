@@ -7,6 +7,15 @@ import numpy as np
 from . import metrics as _metrics
 
 _ORIGINAL_SUMMARIZE_ERRORS = _metrics.summarize_errors
+_SUMMARY_KEYS = (
+    "mean_m",
+    "std_m",
+    "rmse_m",
+    "mae_m",
+    "p50_m",
+    "p95_m",
+    "max_m",
+)
 
 
 def _scaled_error_statistics(errors: np.ndarray) -> dict[str, float]:
@@ -38,7 +47,7 @@ def _scaled_error_statistics(errors: np.ndarray) -> dict[str, float]:
 
 
 def _summarize_errors(errors_m: np.ndarray) -> dict[str, float | None]:
-    """Reject negative magnitudes and summarize finite errors without overflow."""
+    """Reject negative magnitudes and scale only when direct arithmetic overflows."""
 
     # Run the established metric-input validation first. In particular, the
     # active metrics wrapper rejects cyclic object containers before NumPy is
@@ -53,7 +62,14 @@ def _summarize_errors(errors_m: np.ndarray) -> dict[str, float | None]:
     finite_errors = errors[np.isfinite(errors)]
     if bool(np.any(finite_errors < 0.0)):
         raise ValueError("errors_m must contain only non-negative values")
-    if finite_errors.size:
+
+    # Preserve the established bit-for-bit output for ordinary values. Scaling
+    # changes harmless last-bit rounding, so use it only when a direct statistic
+    # is non-finite despite all retained inputs being finite.
+    if finite_errors.size and not all(
+        summary[key] is not None and np.isfinite(float(summary[key]))
+        for key in _SUMMARY_KEYS
+    ):
         summary.update(_scaled_error_statistics(finite_errors))
     return summary
 
