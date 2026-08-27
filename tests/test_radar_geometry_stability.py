@@ -3,10 +3,27 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from raft_uav.diagnostics import _radar_geometry_stability_patch as stability
 from raft_uav.diagnostics.radar_geometry import (
     build_radar_geometry_audit_frame,
     summarize_radar_geometry_audit,
 )
+
+
+def test_radar_geometry_preserves_ordinary_summary_output() -> None:
+    series = pd.Series([0.125, 0.2, 0.375, 0.625], dtype=float)
+
+    with np.errstate(over="ignore", invalid="ignore"):
+        expected = stability._ORIGINAL_SERIES_SUMMARY(series)
+
+    assert stability._stable_series_summary(series) == expected
+
+
+def test_radar_geometry_stability_patch_reaches_backing_implementation() -> None:
+    backing_impl = stability._radar_geometry._IMPL
+
+    assert backing_impl.build_radar_geometry_audit_frame is stability.build_radar_geometry_audit_frame
+    assert backing_impl._series_summary is stability._stable_series_summary
 
 
 def test_radar_geometry_keeps_large_representable_distances_finite() -> None:

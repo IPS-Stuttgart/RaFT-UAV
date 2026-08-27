@@ -13,6 +13,8 @@ import pandas as pd
 _radar_geometry = import_module("raft_uav.diagnostics.radar_geometry")
 _PATCH_MARKER = "_raft_uav_radar_geometry_stability_patch_applied"
 _ORIGINAL_BUILD_AUDIT_FRAME = _radar_geometry.build_radar_geometry_audit_frame
+_ORIGINAL_SERIES_SUMMARY = _radar_geometry._series_summary
+_SUMMARY_KEYS = ("mean", "std", "p50", "p95", "max")
 
 
 def _stable_row_norm(values: np.ndarray) -> np.ndarray:
@@ -23,40 +25,39 @@ def _stable_row_norm(values: np.ndarray) -> np.ndarray:
 
 
 def _stable_series_summary(series: pd.Series) -> dict[str, float | int | None]:
-    """Summarize finite values after scaling them into a safe numeric range."""
+    """Preserve ordinary summaries and scale only when direct arithmetic overflows."""
 
     values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
     values = values[np.isfinite(values)]
+
+    # Keep the established bit-for-bit output for the overwhelmingly common
+    # range. Scaling changes harmless last-bit rounding, so it is used only
+    # when at least one direct statistic suffers avoidable overflow.
+    with np.errstate(over="ignore", invalid="ignore"):
+        direct = _ORIGINAL_SERIES_SUMMARY(series)
+    if all(
+        direct[key] is None or np.isfinite(float(direct[key]))
+        for key in _SUMMARY_KEYS
+    ):
+        return direct
+
     if values.size == 0:
-        return {
-            "count": 0,
-            "mean": None,
-            "std": None,
-            "p50": None,
-            "p95": None,
-            "max": None,
-        }
+        return direct
 
     scale = float(np.max(np.abs(values)))
     if scale == 0.0:
-        return {
-            "count": int(values.size),
-            "mean": 0.0,
-            "std": 0.0,
-            "p50": 0.0,
-            "p95": 0.0,
-            "max": 0.0,
-        }
+        return direct
 
     normalized = values / scale
-    return {
-        "count": int(values.size),
-        "mean": float(scale * np.mean(normalized)),
-        "std": float(scale * np.std(normalized, ddof=1)) if values.size > 1 else 0.0,
-        "p50": float(scale * np.percentile(normalized, 50.0)),
-        "p95": float(scale * np.percentile(normalized, 95.0)),
-        "max": float(scale * np.max(normalized)),
-    }
+    with np.errstate(over="ignore", invalid="ignore"):
+        return {
+            "count": int(values.size),
+            "mean": float(scale * np.mean(normalized)),
+            "std": float(scale * np.std(normalized, ddof=1)) if values.size > 1 else 0.0,
+            "p50": float(scale * np.percentile(normalized, 50.0)),
+            "p95": float(scale * np.percentile(normalized, 95.0)),
+            "max": float(scale * np.max(normalized)),
+        }
 
 
 @wraps(_ORIGINAL_BUILD_AUDIT_FRAME)
@@ -105,13 +106,24 @@ def build_radar_geometry_audit_frame(
 
 
 def install() -> None:
-    """Install stable radar-geometry computations once per interpreter."""
+    """Install stable computations on both radar-geometry import layers."""
 
-    if getattr(_radar_geometry, _PATCH_MARKER, False):
-        return
-    _radar_geometry.build_radar_geometry_audit_frame = build_radar_geometry_audit_frame
-    _radar_geometry._series_summary = _stable_series_summary
-    setattr(_radar_geometry, _PATCH_MARKER, True)
+    # ``raft_uav.diagnostics.radar_geometry`` is a compatibility package that
+    # loads the maintained sibling ``radar_geometry.py`` as ``_IMPL``.  Patching
+    # only the compatibility package leaves function globals inside ``_IMPL``
+    # unchanged, so its summaries and CLI helpers continue to call the unstable
+    # implementations.  Patch both module objects independently.
+    targets = [_radar_geometry]
+    backing_impl = getattr(_radar_geometry, "_IMPL", None)
+    if backing_impl is not None and backing_impl is not _radar_geometry:
+        targets.append(backing_impl)
+
+    for target in targets:
+        if getattr(target, _PATCH_MARKER, False):
+            continue
+        target.build_radar_geometry_audit_frame = build_radar_geometry_audit_frame
+        target._series_summary = _stable_series_summary
+        setattr(target, _PATCH_MARKER, True)
 
 
 install()
