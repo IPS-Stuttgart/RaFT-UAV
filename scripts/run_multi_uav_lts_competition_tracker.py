@@ -12,6 +12,7 @@ import argparse
 from dataclasses import asdict
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -36,8 +37,30 @@ def _bool_text(value: bool) -> str:
     return "true" if value else "false"
 
 
+def _crop_scales(value: str) -> tuple[float, ...]:
+    scales: list[float] = []
+    for item in value.split(","):
+        stripped = item.strip()
+        if not stripped:
+            raise argparse.ArgumentTypeError("crop-scale list contains an empty value")
+        try:
+            scale = float(stripped)
+        except ValueError as error:
+            raise argparse.ArgumentTypeError(
+                "crop scales must be finite real values"
+            ) from error
+        if not math.isfinite(scale) or not 0.5 <= scale <= 3.0:
+            raise argparse.ArgumentTypeError("crop scales must be in [0.5, 3.0]")
+        scales.append(scale)
+    if not scales or len(set(scales)) != len(scales):
+        raise argparse.ArgumentTypeError(
+            "crop scales must be a non-empty list without duplicates"
+        )
+    return tuple(scales)
+
+
 def _competition_environment(args: argparse.Namespace) -> dict[str, str]:
-    return {
+    environment = {
         "RAFT_UAV_LTS_PRESERVE_INITIAL_IDS": _bool_text(args.preserve_initial_ids),
         "RAFT_UAV_LTS_CONFIRMED_OUTPUT": _bool_text(args.confirmed_output),
         "RAFT_UAV_LTS_COAST_FRAMES": str(args.coast_frames),
@@ -48,7 +71,24 @@ def _competition_environment(args: argparse.Namespace) -> dict[str, str]:
         "RAFT_UAV_LTS_APPEARANCE_WEIGHT": str(args.appearance_weight),
         "RAFT_UAV_LTS_APPEARANCE_MIN_SIDE": str(args.appearance_min_side),
         "RAFT_UAV_LTS_MOTION_GATE": _bool_text(args.motion_gate),
+        "RAFT_UAV_LTS_REID_CROP_SCALES": ",".join(
+            format(scale, ".15g") for scale in args.reid_crop_scales
+        ),
+        "RAFT_UAV_LTS_ANCHOR_WEIGHT": str(args.anchor_weight),
     }
+    optional = {
+        "RAFT_UAV_LTS_ANCHOR_WEIGHT_LATE": args.anchor_weight_late,
+        "RAFT_UAV_LTS_APPEARANCE_WEIGHT_LATE": args.appearance_weight_late,
+        "RAFT_UAV_LTS_APPEARANCE_THRESH_LATE": args.appearance_thresh_late,
+    }
+    environment.update(
+        {
+            name: str(value)
+            for name, value in optional.items()
+            if value is not None
+        }
+    )
+    return environment
 
 
 def _baseline_paths(argv: list[str]) -> tuple[Path, Path, Path, bool]:
@@ -86,7 +126,7 @@ def _write_run_metadata(
     baseline_argv: list[str],
 ) -> None:
     payload = {
-        "schema": "raft-uav-multi-uav-lts-competition-tracker-v1",
+        "schema": "raft-uav-multi-uav-lts-competition-tracker-v2",
         "environment": environment,
         "upstream_patch": None if patch_report is None else asdict(patch_report),
         "baseline_argv": baseline_argv,
@@ -114,7 +154,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--nwd-weight", type=float, default=0.5)
     parser.add_argument("--nwd-scale", type=float, default=20.0)
     parser.add_argument("--appearance-weight", type=float, default=0.25)
+    parser.add_argument("--appearance-weight-late", type=float)
+    parser.add_argument("--appearance-thresh-late", type=float)
     parser.add_argument("--appearance-min-side", type=float, default=16.0)
+    parser.add_argument("--anchor-weight", type=float, default=0.0)
+    parser.add_argument("--anchor-weight-late", type=float)
+    parser.add_argument(
+        "--reid-crop-scales",
+        type=_crop_scales,
+        default=(1.0,),
+        metavar="SCALE[,SCALE...]",
+        help="crop expansions whose normalized ReID embeddings are averaged",
+    )
     parser.add_argument("--coast-frames", type=int, default=1)
     parser.add_argument(
         "--closed-world",
@@ -159,14 +210,30 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validate_unit_interval(value: float | None, *, name: str) -> None:
+    if value is not None and (not math.isfinite(value) or not 0.0 <= value <= 1.0):
+        raise ValueError(f"{name} must be in [0, 1]")
+
+
 def _validate_options(args: argparse.Namespace) -> None:
-    if not 0.0 <= args.nwd_weight <= 1.0:
-        raise ValueError("--nwd-weight must be in [0, 1]")
-    if args.nwd_scale <= 0.0:
+    _validate_unit_interval(args.nwd_weight, name="--nwd-weight")
+    if not math.isfinite(args.nwd_scale) or args.nwd_scale <= 0.0:
         raise ValueError("--nwd-scale must be positive")
-    if not 0.0 <= args.appearance_weight <= 1.0:
-        raise ValueError("--appearance-weight must be in [0, 1]")
-    if args.appearance_min_side <= 0.0:
+    _validate_unit_interval(args.appearance_weight, name="--appearance-weight")
+    _validate_unit_interval(
+        args.appearance_weight_late,
+        name="--appearance-weight-late",
+    )
+    _validate_unit_interval(
+        args.appearance_thresh_late,
+        name="--appearance-thresh-late",
+    )
+    _validate_unit_interval(args.anchor_weight, name="--anchor-weight")
+    _validate_unit_interval(args.anchor_weight_late, name="--anchor-weight-late")
+    if (
+        not math.isfinite(args.appearance_min_side)
+        or args.appearance_min_side <= 0.0
+    ):
         raise ValueError("--appearance-min-side must be positive")
     if args.coast_frames < 0:
         raise ValueError("--coast-frames must be non-negative")
@@ -201,7 +268,9 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.verify_upstream_only,
         )
 
-    report_path = args.patch_report_json or output_dir / "competition_tracker_config.json"
+    report_path = args.patch_report_json or (
+        output_dir / "competition_tracker_config.json"
+    )
     _write_run_metadata(
         report_path,
         environment=environment,
