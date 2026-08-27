@@ -13,14 +13,14 @@ _oracle_coverage = import_module("raft_uav.evaluation.oracle_coverage")
 _IMPL = getattr(_oracle_coverage, "_IMPL", _oracle_coverage)
 _PATCH_MARKER = "_oracle_coverage_numeric_stability_patch_applied"
 _ORIGINAL_NUMPY = _IMPL.np
-_ORIGINAL_LINALG = ORIGINAL_NUMPY.linalg
+_ORIGINAL_LINALG = _ORIGINAL_NUMPY.linalg
 
 
 class _StableLinalgProxy:
     """Delegate NumPy linalg calls while hardening the default Euclidean norm."""
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(ORIGINAL_LINALG, name)
+        return getattr(_ORIGINAL_LINALG, name)
 
     def norm(
         self,
@@ -32,7 +32,7 @@ class _StableLinalgProxy:
         """Preserve ordinary results and fall back to scaled Euclidean arithmetic."""
 
         with np.errstate(over="ignore", invalid="ignore"):
-            direct = ORIGINAL_LINALG.norm(
+            direct = _ORIGINAL_LINALG.norm(
                 values,
                 ord=ord,
                 axis=axis,
@@ -69,7 +69,7 @@ class _StableNumpyProxy:
     linalg = _StableLinalgProxy()
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(ORIGINAL_NUMPY, name)
+        return getattr(_ORIGINAL_NUMPY, name)
 
 
 def _nearest_truth_time_delta_s(truth: pd.DataFrame, time_s: float) -> float:
