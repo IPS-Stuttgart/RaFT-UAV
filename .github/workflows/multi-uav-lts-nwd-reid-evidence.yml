@@ -1,0 +1,338 @@
+---
+name: Multi-UAV LTS NWD ReID evidence
+
+"on":
+  pull_request:
+    branches:
+      - agent/multi-uav-lts-competition-tracker
+    paths:
+      - ".github/workflows/multi-uav-lts-nwd-reid-evidence.yml"
+      - "src/raft_uav/multi_uav_lts/_upstream_association_template.py"
+      - "src/raft_uav/multi_uav_lts/_upstream_patch_mc.py"
+      - "src/raft_uav/multi_uav_lts/upstream_patch.py"
+      - "scripts/run_multi_uav_lts_competition_tracker.py"
+  workflow_dispatch:
+    inputs:
+      device:
+        description: CUDA device
+        required: true
+        default: "0"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multi-uav-lts-nwd-reid-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  RAFT_UAV_SKIP_RUNTIME_HOOKS: "1"
+  SUPPORT_COMMIT: fb62a792d41ba03ea46dfa5ba28d6bade5bfc9d4
+  GPU_DEVICE: ${{ inputs.device || '0' }}
+
+jobs:
+  focused-tests:
+    name: NWD/ReID focused tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out RaFT-UAV
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pytest -q \
+            tests/test_multi_uav_lts_upstream_patch.py \
+            tests/test_multi_uav_lts_competition_runner.py
+          python -m ruff check \
+            src/raft_uav/multi_uav_lts/_upstream_association_template.py \
+            src/raft_uav/multi_uav_lts/_upstream_patch_mc.py \
+            src/raft_uav/multi_uav_lts/upstream_patch.py \
+            scripts/run_multi_uav_lts_competition_tracker.py
+
+  train-evidence:
+    name: 102-sequence NWD/ReID versus legacy
+    needs: focused-tests
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    timeout-minutes: 1440
+
+    steps:
+      - name: Check out RaFT-UAV
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Select persistent work root
+        shell: bash
+        run: |
+          set -euo pipefail
+          minimum_free_bytes=$((16 * 1024 * 1024 * 1024))
+          best_root=""
+          best_free=0
+          candidates=(
+            "/mnt/corsair/raft-uav-public-evidence"
+            "${HOME}/.cache/raft-uav-public-evidence"
+            "${RUNNER_TEMP}/raft-uav-public-evidence"
+          )
+          for candidate in "${candidates[@]}"; do
+            free_bytes=0
+            if mkdir -p "${candidate}" 2>/dev/null; then
+              probe="${candidate}/.write-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              if printf 'ok\n' > "${probe}" 2>/dev/null; then
+                rm -f "${probe}"
+                free_bytes="$(df -PB1 "${candidate}" | awk 'NR == 2 {print $4}')"
+              fi
+            fi
+            if (( free_bytes > best_free )); then
+              best_root="${candidate}"
+              best_free="${free_bytes}"
+            fi
+          done
+          if [[ -z "${best_root}" ]] || (( best_free < minimum_free_bytes )); then
+            echo "No evidence cache has the required free space." >&2
+            exit 1
+          fi
+          work_root="${best_root}/multi-uav-lts-zenodo-15853476"
+          run_dir="${work_root}/nwd-reid-runs/${GITHUB_HEAD_SHA:-${GITHUB_SHA}}"
+          venv_path="${work_root}/runtime/venvs/proposal-graph-py311-torch222"
+          asset_dir="${work_root}/assets/runtime"
+          inputs_json="${run_dir}/public-inputs.json"
+          support_dir="${run_dir}/support"
+          mkdir -p "${run_dir}" "${asset_dir}" "${support_dir}"
+          {
+            printf 'WORK_ROOT=%s\n' "${work_root}"
+            printf 'RUN_DIR=%s\n' "${run_dir}"
+            printf 'VENV_PATH=%s\n' "${venv_path}"
+            printf 'ASSET_DIR=%s\n' "${asset_dir}"
+            printf 'INPUTS_JSON=%s\n' "${inputs_json}"
+            printf 'SUPPORT_DIR=%s\n' "${support_dir}"
+          } >> "${GITHUB_ENV}"
+          nvidia-smi -L | tee "${run_dir}/runner.txt"
+
+      - name: Acquire pinned current evidence support
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${SUPPORT_COMMIT}"
+          for name in \
+            bootstrap_multi_uav_lts_public_evidence.py \
+            install_multi_uav_lts_public_runtime.sh \
+            install_multi_uav_lts_runtime_extras.sh; do
+            curl --location --fail --show-error --silent \
+              --retry 5 --output "${SUPPORT_DIR}/${name}" \
+              "${base}/scripts/${name}"
+          done
+          chmod +x "${SUPPORT_DIR}"/*.sh
+
+      - name: Acquire and verify official training inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python "${SUPPORT_DIR}/bootstrap_multi_uav_lts_public_evidence.py" \
+            --work-root "${WORK_ROOT}" \
+            --output-json "${INPUTS_JSON}" \
+            --expected-sequence-count 102 \
+            --expected-frame-count 77293 \
+            | tee "${RUN_DIR}/bootstrap-console.txt"
+          python - "${INPUTS_JSON}" >> "${GITHUB_ENV}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          dataset = payload["dataset"]
+          print(f"SEQUENCE_ROOT={dataset['train_sequence_root']}")
+          print(f"TRUTH_DIR={dataset['truth_dir']}")
+          print(f"SEED_DIR={dataset['first_frame_label_dir']}")
+          print(f"UPSTREAM_ROOT={payload['upstream']['checkout']}/BoT-SORT")
+          PY
+
+      - name: Install pinned GPU runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash "${SUPPORT_DIR}/install_multi_uav_lts_public_runtime.sh" \
+            "${VENV_PATH}" "${ASSET_DIR}" "${RUN_DIR}/runtime-provenance.json" \
+            | tee "${RUN_DIR}/runtime-console.txt"
+          bash "${SUPPORT_DIR}/install_multi_uav_lts_runtime_extras.sh" \
+            "${VENV_PATH}" "${RUN_DIR}/runtime-provenance.json" \
+            | tee -a "${RUN_DIR}/runtime-console.txt"
+
+      - name: Run legacy-min control
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "${RUN_DIR}/legacy"
+          "${VENV_PATH}/bin/python" scripts/run_multi_uav_lts_competition_tracker.py \
+            --association-mode legacy-min \
+            --no-motion-gate \
+            --no-closed-world \
+            --coast-frames 0 \
+            --work-root "${WORK_ROOT}" \
+            --botsort-root "${UPSTREAM_ROOT}" \
+            --sequence-root "${SEQUENCE_ROOT}" \
+            --first-frame-label-dir "${SEED_DIR}" \
+            --no-template \
+            --output-dir "${RUN_DIR}/legacy" \
+            --python "${VENV_PATH}/bin/python" \
+            --device "${GPU_DEVICE}" \
+            --img-size 1920 \
+            --overwrite \
+            | tee "${RUN_DIR}/legacy-console.txt"
+
+      - name: Score legacy-min control
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${VENV_PATH}/bin/python" scripts/score_multi_uav_lts_trackeval.py \
+            "${RUN_DIR}/legacy/predictions" "${TRUTH_DIR}" \
+            --trackeval-root "${UPSTREAM_ROOT}/TrackEval" \
+            --sequence-root "${SEQUENCE_ROOT}" \
+            --output-json "${RUN_DIR}/legacy-score.json" \
+            | tee "${RUN_DIR}/legacy-score-console.txt"
+
+      - name: Reset upstream checkout before NWD/ReID run
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C "${WORK_ROOT}/repos/YOLOv12-BoT-SORT-ReID" reset --hard "${SUPPORT_COMMIT}" 2>/dev/null || true
+          python "${SUPPORT_DIR}/bootstrap_multi_uav_lts_public_evidence.py" \
+            --work-root "${WORK_ROOT}" \
+            --output-json "${INPUTS_JSON}" \
+            --expected-sequence-count 102 \
+            --expected-frame-count 77293 \
+            >/dev/null
+
+      - name: Run NWD/ReID/innovation association
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "${RUN_DIR}/nwd-reid"
+          "${VENV_PATH}/bin/python" scripts/run_multi_uav_lts_competition_tracker.py \
+            --association-mode gated-weighted \
+            --nwd-weight 0.5 \
+            --nwd-scale 20 \
+            --appearance-weight 0.25 \
+            --appearance-min-side 16 \
+            --motion-gate \
+            --no-closed-world \
+            --coast-frames 0 \
+            --work-root "${WORK_ROOT}" \
+            --botsort-root "${UPSTREAM_ROOT}" \
+            --sequence-root "${SEQUENCE_ROOT}" \
+            --first-frame-label-dir "${SEED_DIR}" \
+            --no-template \
+            --output-dir "${RUN_DIR}/nwd-reid" \
+            --python "${VENV_PATH}/bin/python" \
+            --device "${GPU_DEVICE}" \
+            --img-size 1920 \
+            --overwrite \
+            | tee "${RUN_DIR}/nwd-reid-console.txt"
+
+      - name: Score and compare NWD/ReID candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${VENV_PATH}/bin/python" scripts/score_multi_uav_lts_trackeval.py \
+            "${RUN_DIR}/nwd-reid/predictions" "${TRUTH_DIR}" \
+            --trackeval-root "${UPSTREAM_ROOT}/TrackEval" \
+            --sequence-root "${SEQUENCE_ROOT}" \
+            --output-json "${RUN_DIR}/nwd-reid-score.json" \
+            | tee "${RUN_DIR}/nwd-reid-score-console.txt"
+          python - "${RUN_DIR}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          legacy = json.loads((root / "legacy-score.json").read_text(encoding="utf-8"))["combined"]
+          nwd = json.loads((root / "nwd-reid-score.json").read_text(encoding="utf-8"))["combined"]
+          keys = ("hota", "mota", "idf1", "deta", "assa", "loca")
+          payload = {
+              "schema": "raft-uav-multi-uav-lts-nwd-reid-comparison-v1",
+              "legacy": {key: legacy.get(key) for key in keys},
+              "nwd_reid": {key: nwd.get(key) for key in keys},
+              "delta": {
+                  key: float(nwd[key]) - float(legacy[key])
+                  for key in keys
+                  if key in legacy and key in nwd
+              },
+          }
+          (root / "comparison.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+
+      - name: Publish summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY' >> "${GITHUB_STEP_SUMMARY}"
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ.get("RUN_DIR", ".")) / "comparison.json"
+          print("### Multi-UAV LTS NWD/ReID association")
+          if not path.is_file():
+              print("\nComparison has not completed.")
+              raise SystemExit(0)
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          print("\n| Metric | legacy-min | NWD/ReID | delta |")
+          print("|---|---:|---:|---:|")
+          for key in ("hota", "mota", "idf1", "deta", "assa", "loca"):
+              left = payload["legacy"].get(key)
+              right = payload["nwd_reid"].get(key)
+              delta = payload["delta"].get(key)
+              if left is None or right is None or delta is None:
+                  continue
+              print(f"| {key.upper()} | {left:.6f} | {right:.6f} | {delta:+.6f} |")
+          PY
+
+      - name: Upload compact evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: multi-uav-lts-nwd-reid-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            ${{ env.RUN_DIR }}/runner.txt
+            ${{ env.RUN_DIR }}/public-inputs.json
+            ${{ env.RUN_DIR }}/runtime-provenance.json
+            ${{ env.RUN_DIR }}/legacy/competition_tracker_config.json
+            ${{ env.RUN_DIR }}/legacy-score.json
+            ${{ env.RUN_DIR }}/nwd-reid/competition_tracker_config.json
+            ${{ env.RUN_DIR }}/nwd-reid-score.json
+            ${{ env.RUN_DIR }}/comparison.json
