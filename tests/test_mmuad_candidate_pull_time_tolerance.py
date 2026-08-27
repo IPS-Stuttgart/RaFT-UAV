@@ -85,3 +85,29 @@ def test_zero_dimensional_zero_tolerance_keeps_exact_frame_only() -> None:
 
     assert centers["candidate_count"].tolist() == [1]
     assert centers["top1_x"].tolist() == pytest.approx([1.0])
+
+
+def test_exact_candidate_frame_ignores_overflowing_far_timestamp() -> None:
+    candidates = pd.DataFrame(
+        {
+            "Sequence": ["seqA", "seqA"],
+            "Timestamp": [-1.0e308, 1.0e308],
+            "x_m": [-10.0, 10.0],
+            "y_m": [0.0, 0.0],
+            "z_m": [0.0, 0.0],
+            "ranker_score": [1.0, 1.0],
+        }
+    )
+    results = pd.DataFrame({"Sequence": ["seqA"], "Timestamp": [1.0e308]})
+
+    with np.errstate(over="raise", invalid="raise"):
+        centers = candidate_centers_for_results(
+            candidates,
+            results,
+            np.zeros((1, 3), dtype=float),
+            top_k=1,
+            time_tolerance_s=0.0,
+        )
+
+    assert centers["candidate_count"].tolist() == [1]
+    assert centers["top1_x"].tolist() == pytest.approx([10.0])
