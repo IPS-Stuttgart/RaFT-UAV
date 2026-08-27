@@ -75,8 +75,14 @@ _CALIBRATION_VARIANTS: tuple[tuple[str, tuple[str, ...]], ...] = (
 _GAP_VARIANTS: tuple[tuple[str, str, int], ...] = (
     ("raw_gap1", "raw", 1),
     ("raw_gap2", "raw", 2),
+    ("raw_gap5", "raw", 5),
+    ("raw_gap10", "raw", 10),
+    ("raw_gap18", "raw", 18),
     ("raw_rts_gap1", "raw_rts", 1),
+    ("raw_rts_gap5", "raw_rts", 5),
+    ("raw_rts_gap18", "raw_rts", 18),
     ("raw_rts_u050_gap1", "raw_rts_u050", 1),
+    ("raw_rts_u050_gap5", "raw_rts_u050", 5),
 )
 _CANDIDATE_NAMES = tuple(
     [name for name, _arguments in _CALIBRATION_VARIANTS]
