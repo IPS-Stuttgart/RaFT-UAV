@@ -14,6 +14,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from ._upstream_anchor_reid_patch import _patch_anchor_reid
 from ._upstream_patch_common import UpstreamPatchError
 from ._upstream_patch_inference import _patch_inference
 from ._upstream_patch_mc import _patch_mc_bot_sort
@@ -52,6 +53,10 @@ def _write_text(path: Path, text: str) -> None:
     temporary.replace(path)
 
 
+def _patch_tracker(text: str) -> str:
+    return _patch_anchor_reid(_patch_mc_bot_sort(text))
+
+
 def apply_upstream_tracker_patch(
     botsort_root: Path,
     *,
@@ -61,7 +66,7 @@ def apply_upstream_tracker_patch(
 
     root = Path(botsort_root).expanduser().resolve()
     targets = {
-        root / "tracker" / "mc_bot_sort.py": _patch_mc_bot_sort,
+        root / "tracker" / "mc_bot_sort.py": _patch_tracker,
         root / "tools" / "inference.py": _patch_inference,
     }
     records: list[PatchedFile] = []
@@ -123,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-json", type=Path)
     args = parser.parse_args(argv)
 
-    report = apply_upstream_tracker_patch(args.botsort_root, dry_run=args.dry_run)
+    report = apply_upstream_tracker_patch(botsort_root=args.botsort_root, dry_run=args.dry_run)
     payload = asdict(report)
     text = json.dumps(payload, indent=2, sort_keys=True)
     if args.output_json is not None:
