@@ -5,6 +5,9 @@ from . import (
     _diagnostics_truth_interpolation_patch as _diagnostics_truth_interpolation_patch,
 )
 from . import _diagnostics_sequence_scope_patch as _diagnostics_sequence_scope_patch
+from . import (
+    _fifth_wave_error_stability_patch as _fifth_wave_error_stability_patch,
+)
 from . import _golden_metrics_schema_patch as _golden_metrics_schema_patch
 from . import (
     _radar_oracle_endpoint_tolerance_patch as _radar_oracle_endpoint_tolerance_patch,
