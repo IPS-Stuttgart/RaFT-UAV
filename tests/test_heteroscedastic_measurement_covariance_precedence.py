@@ -119,7 +119,8 @@ def test_rf_partial_learned_covariance_ignores_boolean_variance(
             "association_cov_ee": [100.0],
             "association_cov_nn": [121.0],
             "association_cov_en": [2.0],
-        }
+        },
+        dtype=object,
     )
 
     [measurement] = rf_measurements_to_enu_with_uncertainty(frame)
@@ -139,7 +140,8 @@ def test_rf_learned_covariance_ignores_boolean_cross_term(
             "cov_ee": [4.0],
             "cov_nn": [9.0],
             "cov_en": [boolean_value],
-        }
+        },
+        dtype=object,
     )
 
     [measurement] = rf_measurements_to_enu_with_uncertainty(frame)
