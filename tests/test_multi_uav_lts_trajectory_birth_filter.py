@@ -46,7 +46,10 @@ def test_birth_filter_preserves_seed_and_drops_short_birth() -> None:
 
 
 def test_birth_filter_requires_border_entry_and_inward_motion() -> None:
-    accepted = tuple(_row(frame, 4, float(frame - 1) * 4.0) for frame in range(5, 10))
+    accepted = tuple(
+        _row(frame, 4, float(index) * 4.0)
+        for index, frame in enumerate(range(5, 10))
+    )
     rejected = tuple(_row(frame, 5, 45.0 + frame) for frame in range(5, 10))
     parameters = BirthFilterParameters(
         min_hits=5,
