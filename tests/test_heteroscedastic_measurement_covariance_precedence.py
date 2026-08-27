@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from raft_uav.heteroscedastic_measurements import (
     radar_measurements_to_enu_with_uncertainty,
@@ -101,3 +102,46 @@ def test_radar_partial_learned_covariance_keeps_unrelated_association_cross_term
         measurement.covariance,
         [[4.0, 0.0, 0.0], [0.0, 100.0, 20.0], [0.0, 20.0, 100.0]],
     )
+
+
+@pytest.mark.parametrize("boolean_value", [True, np.bool_(True)])
+def test_rf_partial_learned_covariance_ignores_boolean_variance(
+    boolean_value: object,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "time_s": [1.0],
+            "east_m": [10.0],
+            "north_m": [20.0],
+            "cov_ee": [boolean_value],
+            "cov_nn": [9.0],
+            "cov_en": [0.0],
+            "association_cov_ee": [100.0],
+            "association_cov_nn": [121.0],
+            "association_cov_en": [2.0],
+        }
+    )
+
+    [measurement] = rf_measurements_to_enu_with_uncertainty(frame)
+
+    np.testing.assert_allclose(measurement.covariance, [[100.0, 2.0], [2.0, 9.0]])
+
+
+@pytest.mark.parametrize("boolean_value", [True, np.bool_(True)])
+def test_rf_learned_covariance_ignores_boolean_cross_term(
+    boolean_value: object,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "time_s": [1.0],
+            "east_m": [10.0],
+            "north_m": [20.0],
+            "cov_ee": [4.0],
+            "cov_nn": [9.0],
+            "cov_en": [boolean_value],
+        }
+    )
+
+    [measurement] = rf_measurements_to_enu_with_uncertainty(frame)
+
+    np.testing.assert_allclose(measurement.covariance, np.diag([4.0, 9.0]))
