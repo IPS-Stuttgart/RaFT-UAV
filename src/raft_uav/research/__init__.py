@@ -8,6 +8,9 @@ tracking pipeline.
 
 from raft_uav.research import diagnostics as _diagnostics
 from raft_uav.research import factor_graph as _factor_graph
+from raft_uav.research._diagnostics_domain_shift_stability_patch import (
+    apply_diagnostics_domain_shift_stability_patch,
+)
 from raft_uav.research._diagnostics_numeric_frame_patch import (
     apply_diagnostics_numeric_frame_patch,
 )
@@ -24,6 +27,7 @@ from raft_uav.research.uncertainty import ConformalRadius, fit_conformal_radius
 
 apply_diagnostics_numeric_time_patch(_diagnostics)
 apply_diagnostics_numeric_frame_patch(_diagnostics)
+apply_diagnostics_domain_shift_stability_patch(_diagnostics)
 apply_factor_graph_frame_group_patch(_factor_graph)
 apply_factor_graph_sequence_guard_patch(_factor_graph)
 
