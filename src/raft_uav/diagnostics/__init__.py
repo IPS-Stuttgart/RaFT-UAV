@@ -12,6 +12,9 @@ from . import (
     _time_offset_summary_stability_patch as _time_offset_summary_stability_patch,
 )
 from . import (
+    _time_offset_position_stability_patch as _time_offset_position_stability_patch,
+)
+from . import (
     _tracklet_feature_store_frame_key_patch as _tracklet_feature_store_frame_key_patch,
 )
 
